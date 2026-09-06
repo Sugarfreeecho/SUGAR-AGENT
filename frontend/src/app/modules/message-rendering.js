@@ -4417,18 +4417,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     );
     var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'
         && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;
-    if (!isHistoryHydrate && !isInitialLiveStatusRow) {
-        /* 钉底跟随时（当前执行过程框正被平滑跟随器接管），新行直接以最终高度
-           落位：由跟随器把旧内容整体平滑上移，不再播放 0→实际高的“下伸”插入
-           动画，避免出现“框先向下伸长、随后又回弹上移”的抖动。 */
-        var pinnedProcessFollow = (typeof getProcessBodyElForCurrentRun === 'function')
-                && getProcessBodyElForCurrentRun() === body
-            && typeof smoothFollowController !== 'undefined'
-            && smoothFollowController
-            && typeof smoothFollowController.isFollowing === 'function'
-            && smoothFollowController.isFollowing(body);
-        if (!pinnedProcessFollow) animateSmoothTraceRowInsertion(row);
-    }
+    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);
     if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
         markSubagentTurnHasProcess(ctx.currentTurn);

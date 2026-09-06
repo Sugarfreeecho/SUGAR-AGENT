@@ -13580,18 +13580,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     );\r
     var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'\r
         && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;\r
-    if (!isHistoryHydrate && !isInitialLiveStatusRow) {\r
-        /* 钉底跟随时（当前执行过程框正被平滑跟随器接管），新行直接以最终高度\r
-           落位：由跟随器把旧内容整体平滑上移，不再播放 0→实际高的“下伸”插入\r
-           动画，避免出现“框先向下伸长、随后又回弹上移”的抖动。 */\r
-        var pinnedProcessFollow = (typeof getProcessBodyElForCurrentRun === 'function')\r
-                && getProcessBodyElForCurrentRun() === body\r
-            && typeof smoothFollowController !== 'undefined'\r
-            && smoothFollowController\r
-            && typeof smoothFollowController.isFollowing === 'function'\r
-            && smoothFollowController.isFollowing(body);\r
-        if (!pinnedProcessFollow) animateSmoothTraceRowInsertion(row);\r
-    }\r
+    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);\r
     if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);\r
     if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {\r
         markSubagentTurnHasProcess(ctx.currentTurn);\r
@@ -15124,1393 +15113,1393 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,zr=`const humanInteractionStoreBySession = Object.create(null);\r
-const HUMAN_INTERACTION_DRAFT_PREFIX = 'myagent-human-interaction-draft:';\r
-\r
-function humanInteractionSessionState(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    if (!humanInteractionStoreBySession[sid]) {\r
-        humanInteractionStoreBySession[sid] = {\r
-            interactions: Object.create(null),\r
-            approvals: Object.create(null),\r
-            loaded: false,\r
-            refreshEpoch: 0,\r
-        };\r
-    }\r
-    return humanInteractionStoreBySession[sid];\r
-}\r
-\r
-function isHumanInteractionEventType(type) {\r
-    var t = String(type || '');\r
-    return t.indexOf('interaction_') === 0 || t.indexOf('approval_') === 0;\r
-}\r
-\r
-function humanInteractionKindForEvent(event) {\r
-    return String((event && event.type) || '').indexOf('approval_') === 0 ? 'approval' : 'question';\r
-}\r
-\r
-function humanInteractionId(event, kind) {\r
-    return String(kind === 'approval' ? (event.approval_id || '') : (event.interaction_id || ''));\r
-}\r
-\r
-function humanInteractionStatusFromEvent(event) {\r
-    var explicit = String((event && event.status) || '');\r
-    if (explicit) return explicit;\r
-    var type = String((event && event.type) || '');\r
-    if (type.endsWith('_resolved')) return 'resolved';\r
-    if (type.endsWith('_cancelled')) return 'cancelled';\r
-    if (type.endsWith('_expired')) return 'expired';\r
-    return 'pending';\r
-}\r
-\r
-function applyHumanInteractionEvent(sessionId, event) {\r
-    if (!event || !isHumanInteractionEventType(event.type)) return null;\r
-    var sid = String(sessionId || event.session_id || '');\r
-    if (!sid) return null;\r
-    var kind = humanInteractionKindForEvent(event);\r
-    var id = humanInteractionId(event, kind);\r
-    if (!id) return null;\r
-    var state = humanInteractionSessionState(sid);\r
-    state.refreshEpoch += 1;\r
-    var collection = kind === 'approval' ? state.approvals : state.interactions;\r
-    var previous = collection[id] || {};\r
-    var terminalStatuses = { resolved: true, cancelled: true, expired: true };\r
-    var incomingStatus = humanInteractionStatusFromEvent(event);\r
-    var previousVersion = Number(previous.request_version || 0);\r
-    var incomingVersion = Number(event.request_version || previousVersion || 0);\r
-    if (previousVersion && incomingVersion && incomingVersion < previousVersion) return previous;\r
-    if (terminalStatuses[previous.status] && incomingStatus === 'pending') return previous;\r
-    var record = Object.assign({}, previous, event, {\r
-        kind: kind,\r
-        status: incomingStatus,\r
-    });\r
-    collection[id] = record;\r
-    state.loaded = true;\r
-    syncHumanInteractionSessionSummary(sid);\r
-    updateHumanInteractionBanner(currentSessionId);\r
-    return record;\r
-}\r
-\r
-function pendingHumanInteractionRecords(sessionId) {\r
-    var state = humanInteractionSessionState(sessionId);\r
-    var rows = [];\r
-    Object.keys(state.interactions).forEach(function (id) {\r
-        var row = state.interactions[id];\r
-        if (row && row.status === 'pending') rows.push(row);\r
-    });\r
-    Object.keys(state.approvals).forEach(function (id) {\r
-        var row = state.approvals[id];\r
-        if (row && row.status === 'pending') rows.push(row);\r
-    });\r
-    rows.sort(function (a, b) {\r
-        var kindOrder = (a.kind === 'approval' ? 0 : 1) - (b.kind === 'approval' ? 0 : 1);\r
-        if (kindOrder) return kindOrder;\r
-        return String(a.created_at || '').localeCompare(String(b.created_at || ''));\r
-    });\r
-    return rows;\r
-}\r
-\r
-function humanInteractionPendingCounts(sessionId) {\r
-    var rows = pendingHumanInteractionRecords(sessionId);\r
-    var questions = rows.filter(function (row) { return row.kind === 'question'; }).length;\r
-    return { questions: questions, approvals: rows.length - questions, total: rows.length };\r
-}\r
-\r
-function pendingHumanQuestions(sessionId) {\r
-    return pendingHumanInteractionRecords(sessionId).filter(function (row) { return row.kind === 'question'; });\r
-}\r
-\r
-async function confirmAndCancelPendingHumanQuestionsForHistoryMutation(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    var rows = pendingHumanQuestions(sid);\r
-    if (!rows.length) return true;\r
-    var confirmed = typeof openUiModal === 'function'\r
-        ? await openUiModal({\r
-            title: '修改历史并取消待回答问题？',\r
-            message: '这次修改会移除当前问题所属的对话历史。继续前必须先取消待回答问题，避免它变成无法处理的待办。',\r
-            confirmText: '取消问题并继续',\r
-            cancelText: '返回回答问题',\r
-        })\r
-        : false;\r
-    if (!confirmed) return false;\r
-    try {\r
-        var resolved = await Promise.all(rows.map(async function (row) {\r
-            var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/interactions/' + encodeURIComponent(row.interaction_id) + '/cancel', {\r
-                method: 'POST',\r
-                headers: { 'Content-Type': 'application/json' },\r
-                body: JSON.stringify({ reason: 'superseded_by_history_mutation' }),\r
-            });\r
-            var data = await response.json();\r
-            if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));\r
-            return data.interaction || row;\r
-        }));\r
-        resolved.forEach(function (row) {\r
-            clearHumanInteractionDraft(sid, row.interaction_id, row.request_version);\r
-            var record = applyHumanInteractionEvent(sid, Object.assign({ type: 'interaction_cancelled' }, row));\r
-            renderHumanInteractionRecord(record, sid);\r
-        });\r
-        return true;\r
-    } catch (err) {\r
-        if (typeof showUiAlert === 'function') {\r
-            showUiAlert({\r
-                title: '无法修改历史',\r
-                message: '取消待回答问题失败：' + String(err && err.message ? err.message : err),\r
-                variant: 'error',\r
-            });\r
-        }\r
-        return false;\r
-    }\r
-}\r
-\r
-function syncHumanInteractionSessionSummary(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    var counts = humanInteractionPendingCounts(sid);\r
-    var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;\r
-    if (session) session.pending_human_interactions = counts;\r
-    updateHumanInteractionSessionBadge(sid);\r
-    updateHumanInteractionBanner(currentSessionId);\r
-    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sid);\r
-}\r
-\r
-function sessionPendingHumanCounts(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    var state = humanInteractionStoreBySession[sid];\r
-    if (state && state.loaded) return humanInteractionPendingCounts(sid);\r
-    var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;\r
-    var pending = session && session.pending_human_interactions;\r
-    var questions = Math.max(0, Number(pending && pending.questions) || 0);\r
-    var approvals = Math.max(0, Number(pending && pending.approvals) || 0);\r
-    var total = Math.max(questions + approvals, Number(pending && pending.total) || 0);\r
-    return { questions: questions, approvals: approvals, total: total };\r
-}\r
-\r
-function sessionListForPendingCounts() {\r
-    if (typeof sessionStore !== 'undefined' && sessionStore && typeof sessionStore.list === 'function') {\r
-        return sessionStore.list();\r
-    }\r
-    return [];\r
-}\r
-\r
-function globalHumanInteractionPendingCounts() {\r
-    var questions = 0;\r
-    var approvals = 0;\r
-    sessionListForPendingCounts().forEach(function (session) {\r
-        if (!session || !session.id) return;\r
-        var counts = sessionPendingHumanCounts(session.id);\r
-        questions += counts.questions;\r
-        approvals += counts.approvals;\r
-    });\r
-    return { questions: questions, approvals: approvals, total: questions + approvals };\r
-}\r
-\r
-function firstSessionWithPendingHumanInteractions() {\r
-    var sessions = sessionListForPendingCounts();\r
-    for (var i = 0; i < sessions.length; i += 1) {\r
-        var session = sessions[i];\r
-        if (session && session.id && sessionPendingHumanCounts(session.id).total > 0) return session;\r
-    }\r
-    return null;\r
-}\r
-\r
-function pendingCountDetailText(counts) {\r
-    var parts = [];\r
-    if (counts.approvals > 0) parts.push(counts.approvals + ' 个审批');\r
-    if (counts.questions > 0) parts.push(counts.questions + ' 个回答');\r
-    return parts.join('、') || '无待办';\r
-}\r
-\r
-function updateHumanInteractionSessionBadge(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid || !sessionsList) return;\r
-    var row = sessionsList.querySelector('.session-item[data-session-id="' + (window.CSS && CSS.escape ? CSS.escape(sid) : sid.replace(/"/g, '\\\\"')) + '"]');\r
-    if (!row) return;\r
-    var head = row.querySelector('.session-item-head');\r
-    if (!head) return;\r
-    var badge = head.querySelector('.session-human-badge');\r
-    var counts = sessionPendingHumanCounts(sid);\r
-    var count = counts.total;\r
-    if (count <= 0) {\r
-        if (badge) badge.remove();\r
-        row.classList.remove('has-human-pending');\r
-        return;\r
-    }\r
-    if (!badge && count > 0) {\r
-        badge = document.createElement('span');\r
-        badge.className = 'session-human-badge';\r
-        badge.setAttribute('aria-label', '待处理的人机交互');\r
-        var more = head.querySelector('.session-more-wrap');\r
-        head.insertBefore(badge, more || null);\r
-    }\r
-    if (badge) {\r
-        var hasQuestions = counts.questions > 0;\r
-        var hasApprovals = counts.approvals > 0;\r
-        badge.textContent = hasQuestions && hasApprovals\r
-            ? String(count)\r
-            : ((hasQuestions ? '?' : '!') + (count > 1 ? String(count) : ''));\r
-        var badgeLabel = hasQuestions && hasApprovals\r
-            ? ('有 ' + count + ' 项待处理')\r
-            : (hasQuestions ? ('有 ' + count + ' 个问题待回答') : ('有 ' + count + ' 个审批待处理'));\r
-        badge.setAttribute('aria-label', badgeLabel);\r
-        badge.setAttribute('data-ui-tip', badgeLabel);\r
-        if (typeof bindUiHoverTip === 'function') bindUiHoverTip(badge);\r
-    }\r
-    row.classList.add('has-human-pending');\r
-}\r
-\r
-function updateAllHumanInteractionSessionBadges() {\r
-    if (!sessionsList) return;\r
-    sessionsList.querySelectorAll('.session-item[data-session-id]').forEach(function (row) {\r
-        updateHumanInteractionSessionBadge(row.dataset.sessionId || '');\r
-    });\r
-    updateHumanInteractionBanner(currentSessionId);\r
-}\r
-\r
-function updateHumanInteractionBanner(sessionId) {\r
-    var sid = String(sessionId || currentSessionId || '');\r
-    var banner = document.getElementById('human-interaction-banner');\r
-    if (!banner) return;\r
-    var globalCounts = globalHumanInteractionPendingCounts();\r
-    var sessionCounts = sid ? sessionPendingHumanCounts(sid) : { questions: 0, approvals: 0, total: 0 };\r
-    var visible = globalCounts.total > 0;\r
-    banner.classList.toggle('is-on', visible);\r
-    banner.classList.toggle('hidden', !visible);\r
-    var globalCountEl = banner.querySelector('.human-todo-count[data-scope="global"]');\r
-    var globalDetailEl = banner.querySelector('.human-todo-detail[data-scope="global"]');\r
-    var sessionCountEl = banner.querySelector('.human-todo-count[data-scope="session"]');\r
-    var sessionDetailEl = banner.querySelector('.human-todo-detail[data-scope="session"]');\r
-    if (globalCountEl) globalCountEl.textContent = globalCounts.total + ' 项';\r
-    if (globalDetailEl) globalDetailEl.textContent = pendingCountDetailText(globalCounts);\r
-    if (sessionCountEl) sessionCountEl.textContent = sessionCounts.total + ' 项';\r
-    if (sessionDetailEl) sessionDetailEl.textContent = pendingCountDetailText(sessionCounts);\r
-}\r
-\r
-function focusFirstPendingHumanInteraction() {\r
-    var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');\r
-    var card = stream && stream.querySelector('.human-interaction-card[data-status="pending"]');\r
-    if (!card) return;\r
-    var needsLayout = false;\r
-    var collapsedRow = card.closest ? card.closest('.feed-item.is-collapsed') : null;\r
-    if (collapsedRow) {\r
-        collapsedRow.classList.remove('is-collapsed');\r
-        collapsedRow.dataset.manualToggle = '1';\r
-        var rowBtn = collapsedRow.querySelector('.feed-row-collapse');\r
-        if (rowBtn) {\r
-            rowBtn.setAttribute('aria-expanded', 'true');\r
-            rowBtn.setAttribute('aria-label', '收起工具行');\r
-        }\r
-        needsLayout = true;\r
-    }\r
-    var collapsedAgg = card.closest ? card.closest('.process-aggregate.is-collapsed') : null;\r
-    if (collapsedAgg) {\r
-        collapsedAgg.classList.remove('is-collapsed');\r
-        var aggTop = collapsedAgg.querySelector('.process-aggregate-top');\r
-        if (aggTop) aggTop.setAttribute('aria-expanded', 'true');\r
-        needsLayout = true;\r
-    }\r
-    if (needsLayout && collapsedAgg) {\r
-        requestAnimationFrame(function () {\r
-            requestAnimationFrame(function () {\r
-                if (typeof syncProcessAggregateHeightUi === 'function') syncProcessAggregateHeightUi(collapsedAgg);\r
-                collapsedAgg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(function (ch) {\r
-                    if (typeof refreshFeedChunkOverflow === 'function') refreshFeedChunkOverflow(ch);\r
-                });\r
-                if (typeof registerMermaidLazy === 'function') registerMermaidLazy(collapsedAgg);\r
-            });\r
-        });\r
-    }\r
-    requestAnimationFrame(function () {\r
-        card.scrollIntoView({ behavior: 'smooth', block: 'center' });\r
-        var focusTarget = card.querySelector('input:not(:disabled), textarea:not(:disabled), button:not(:disabled)');\r
-        if (focusTarget) focusTarget.focus({ preventScroll: true });\r
-        else {\r
-            card.setAttribute('tabindex', '-1');\r
-            card.focus({ preventScroll: true });\r
-        }\r
-    });\r
-    card.classList.add('is-highlighted');\r
-    setTimeout(function () { card.classList.remove('is-highlighted'); }, 1200);\r
-}\r
-\r
-async function handleHumanTodoFloaterAction() {\r
-    var current = String(currentSessionId || '');\r
-    var currentCounts = current ? sessionPendingHumanCounts(current) : { total: 0 };\r
-    if (currentCounts.total > 0) {\r
-        focusFirstPendingHumanInteraction();\r
-        return;\r
-    }\r
-    var target = firstSessionWithPendingHumanInteractions();\r
-    if (!target) return;\r
-    if (typeof switchSession === 'function') {\r
-        await switchSession(target.id, { forceReload: false });\r
-    }\r
-    requestAnimationFrame(function () { focusFirstPendingHumanInteraction(); });\r
-}\r
-\r
-function humanInteractionDraftKey(sessionId, interactionId, requestVersion) {\r
-    return HUMAN_INTERACTION_DRAFT_PREFIX + String(sessionId || '') + ':' + String(interactionId || '') + ':' + String(requestVersion || 1);\r
-}\r
-\r
-function humanInteractionToolSlot(stream, toolCallId) {\r
-    var tid = String(toolCallId || '');\r
-    if (!stream || !tid || typeof CSS === 'undefined' || !CSS.escape) return null;\r
-    var row = null;\r
-    try {\r
-        row = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]');\r
-    } catch (e) { row = null; }\r
-    if (!row) return null;\r
-    var slot = row.querySelector('.human-interaction-tool-slot');\r
-    if (!slot) {\r
-        slot = document.createElement('div');\r
-        slot.className = 'human-interaction-tool-slot';\r
-        row.appendChild(slot);\r
-    }\r
-    return slot;\r
-}\r
-\r
-function attachHumanInteractionCardsForToolCall(stream, toolCallId) {\r
-    var tid = String(toolCallId || '');\r
-    var slot = humanInteractionToolSlot(stream, tid);\r
-    if (!slot) return false;\r
-    var escaped = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid.replace(/"/g, '\\\\"');\r
-    var cards = Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id="' + escaped + '"]'));\r
-    cards.forEach(function (card) {\r
-        if (card.parentNode !== slot) slot.appendChild(card);\r
-    });\r
-    return true;\r
-}\r
-\r
-function attachAllHumanInteractionCards(stream) {\r
-    if (!stream || !stream.querySelectorAll) return;\r
-    Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id]')).forEach(function (card) {\r
-        var tid = card.getAttribute('data-tool-call-id') || '';\r
-        if (!tid) return;\r
-        var slot = humanInteractionToolSlot(stream, tid);\r
-        if (slot && card.parentNode !== slot) slot.appendChild(card);\r
-    });\r
-}\r
-\r
-function ensurePendingQuestionToolRow(ctx, record, sessionId) {\r
-    if (!record || record.kind === 'approval' || record.status !== 'pending') return false;\r
-    var toolCallId = String(record.tool_call_id || '');\r
-    var stream = ctx && ctx.stream ? ctx.stream : null;\r
-    if (!toolCallId || !stream || typeof appendToolPendingRow !== 'function') return false;\r
-    var existing = null;\r
-    if (typeof CSS !== 'undefined' && CSS.escape) {\r
-        try {\r
-            existing = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');\r
-        } catch (e) { existing = null; }\r
-    }\r
-    if (!existing) {\r
-        appendToolPendingRow(ctx, {\r
-            type: 'tool_pending',\r
-            ephemeral: true,\r
-            tool: 'ask_user',\r
-            args: { questions: record.questions || [] },\r
-            command_preview: 'ask_user',\r
-            tool_call_id: toolCallId,\r
-        }, sessionId);\r
-    }\r
-    return true;\r
-}\r
-\r
-function autoReviewStatusElement(stream, toolCallId) {\r
-    var slot = humanInteractionToolSlot(stream, toolCallId);\r
-    if (!slot) return null;\r
-    var el = slot.querySelector('.auto-review-status');\r
-    if (!el) {\r
-        el = humanElement('div', 'auto-review-status');\r
-        slot.insertBefore(el, slot.firstChild);\r
-    }\r
-    return el;\r
-}\r
-\r
-function interceptReasonFromReviewText(interceptReason, fallbackReason) {\r
-    var text = String(interceptReason || '').trim();\r
-    if (text) return text;\r
-    // 后端 reason 字段形如 "【拦截原因】…\\n【命令风险】…\\n【命令目的】…"。\r
-    // 旧事件未携带独立 intercept_reason 时，从这里把拦截原因摘出来。\r
-    var whole = String(fallbackReason || '').trim();\r
-    var match = /【拦截原因】\\s*([\\s\\S]*?)(?:\\n【命令风险】|$)/.exec(whole);\r
-    if (match) {\r
-        var extracted = match[1].trim();\r
-        if (extracted) return extracted;\r
-    }\r
-    return '';\r
-}\r
-\r
-function splitReviewExplanationText(interceptReason, riskAnalysis, commandPurpose, fallbackReason) {\r
-    // 把 review.reason / subtitle 这类 "【拦截原因】…\\n【命令风险】…\\n【命令目的】…"\r
-    // 文本拆成三段；已提供的独立字段优先。\r
-    var sections = { intercept: '', risk: '', purpose: '' };\r
-    var whole = String(fallbackReason || '').trim();\r
-    var interceptMatch = /【拦截原因】\\s*([\\s\\S]*?)(?:\\n【命令风险】|$)/.exec(whole);\r
-    var riskMatch = /【命令风险】\\s*([\\s\\S]*?)(?:\\n【命令目的】|$)/.exec(whole);\r
-    var purposeMatch = /【命令目的】\\s*([\\s\\S]*)$/.exec(whole);\r
-    sections.intercept = String(interceptReason || '').trim()\r
-        || (interceptMatch && interceptMatch[1].trim() || '');\r
-    sections.risk = String(riskAnalysis || '').trim()\r
-        || (riskMatch && riskMatch[1].trim() || '');\r
-    sections.purpose = String(commandPurpose || '').trim()\r
-        || (purposeMatch && purposeMatch[1].trim() || '');\r
-    return sections;\r
-}\r
-\r
-function appendApprovalReviewExplanation(container, interceptReason, riskAnalysis, commandPurpose, fallbackReason) {\r
-    if (!container) return;\r
-    var interceptText = interceptReasonFromReviewText(interceptReason, fallbackReason);\r
-    var riskText = String(riskAnalysis || fallbackReason || '未提供具体风险说明。').trim();\r
-    var purposeText = String(commandPurpose || '未提供命令用途说明。').trim();\r
-    var explanation = humanElement('div', 'approval-review-explanation');\r
-    if (interceptText) {\r
-        var interceptRow = humanElement('div', 'approval-review-section');\r
-        interceptRow.appendChild(humanElement('strong', 'approval-review-section-label', '【拦截原因】'));\r
-        interceptRow.appendChild(humanElement('span', 'approval-review-section-text', interceptText));\r
-        explanation.appendChild(interceptRow);\r
-    }\r
-    var riskRow = humanElement('div', 'approval-review-section');\r
-    riskRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令风险】'));\r
-    riskRow.appendChild(humanElement('span', 'approval-review-section-text', riskText));\r
-    explanation.appendChild(riskRow);\r
-    var purposeRow = humanElement('div', 'approval-review-section');\r
-    purposeRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令目的】'));\r
-    purposeRow.appendChild(humanElement('span', 'approval-review-section-text', purposeText));\r
-    explanation.appendChild(purposeRow);\r
-    container.appendChild(explanation);\r
-}\r
-\r
-function renderAutoReviewStatusEvent(ctx, event, runSessionId) {\r
-    var stream = ctx && ctx.stream\r
-        ? ctx.stream\r
-        : (typeof getVisibleChatStream === 'function'\r
-            ? getVisibleChatStream()\r
-            : document.getElementById('chat-stream'));\r
-    var tid = String((event && event.tool_call_id) || '');\r
-    var status = String((event && event.status) || '');\r
-    if (!stream || !tid) {\r
-        var fallback = String((event && event.content) || '');\r
-        if (fallback && typeof appendLog === 'function') appendLog(ctx, fallback, 'status', runSessionId);\r
-        return;\r
-    }\r
-    var el = autoReviewStatusElement(stream, tid);\r
-    if (!el) return;\r
-    el.className = 'auto-review-status';\r
-    el.setAttribute('data-status', status);\r
-    // Status events update one persistent row. Clear the previous loading or\r
-    // result content before rendering the new state so in-progress copy and\r
-    // its spinner do not remain beside the final decision.\r
-    el.textContent = '';\r
-    if (status === 'in_progress') {\r
-        el.classList.add('is-in-progress');\r
-        el.appendChild(humanElement('span', 'auto-review-spin'));\r
-        el.appendChild(humanElement(\r
-            'span',\r
-            'auto-review-text',\r
-            '自动审查中：审查 Agent 正在核对你的任务意图与请求风险。'\r
-        ));\r
-        return;\r
-    }\r
-    var approved = status === 'approved';\r
-    var risk = String((event && event.risk) || 'unknown');\r
-    var reason = String((event && event.reason) || '');\r
-    var interceptReason = String((event && event.intercept_reason) || '');\r
-    var riskAnalysis = String((event && event.risk_analysis) || '');\r
-    var commandPurpose = String((event && event.command_purpose) || '');\r
-    var unknown = risk === 'unknown' || risk === 'timed_out';\r
-    el.classList.add(approved ? 'is-approved' : (unknown ? 'is-timedout' : 'is-denied'));\r
-    var text = humanElement('div', 'auto-review-text');\r
-    var title = humanElement(\r
-        'span',\r
-        'auto-review-title',\r
-        approved\r
-            ? '自动审批已批准'\r
-            : (unknown ? '自动审查不可用（已转人工确认）' : '自动审批已拒绝')\r
-    );\r
-    if (!approved && !unknown) {\r
-        title.appendChild(humanElement('span', 'auto-review-risk', risk));\r
-    }\r
-    text.appendChild(title);\r
-    appendApprovalReviewExplanation(text, interceptReason, riskAnalysis, commandPurpose, reason);\r
-    if (!approved && !unknown) {\r
-        text.appendChild(humanElement(\r
-            'div',\r
-            'auto-review-hint',\r
-            '可人工覆盖本次请求（只此一次，不沉淀规则）'\r
-        ));\r
-    }\r
-    el.appendChild(text);\r
-}\r
-\r
-function persistHumanInteractionDraft(card) {\r
-    if (!card || card.dataset.kind !== 'question') return;\r
-    var draft = { selections: {}, others: {}, skipped: {}, step: Number(card.dataset.step || 0), updatedAt: Date.now() };\r
-    card.querySelectorAll('.human-question-pane').forEach(function (pane) {\r
-        var qid = pane.dataset.questionId || '';\r
-        draft.selections[qid] = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) {\r
-            return input.dataset.optionId;\r
-        });\r
-        var other = pane.querySelector('.human-other-input');\r
-        draft.others[qid] = other ? other.value : '';\r
-        draft.skipped[qid] = pane.dataset.skipped === '1';\r
-    });\r
-    try { sessionStorage.setItem(humanInteractionDraftKey(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion), JSON.stringify(draft)); } catch (e) { /* ignore */ }\r
-}\r
-\r
-function restoreHumanInteractionDraft(card) {\r
-    if (!card || card.dataset.kind !== 'question') return null;\r
-    var draft = null;\r
-    try { draft = JSON.parse(sessionStorage.getItem(humanInteractionDraftKey(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion)) || 'null'); } catch (e) { draft = null; }\r
-    if (!draft) return null;\r
-    card.querySelectorAll('.human-question-pane').forEach(function (pane) {\r
-        var qid = pane.dataset.questionId || '';\r
-        var selected = (draft.selections && draft.selections[qid]) || [];\r
-        pane.querySelectorAll('input[data-option-id]').forEach(function (input) {\r
-            input.checked = selected.indexOf(input.dataset.optionId) >= 0;\r
-        });\r
-        var other = pane.querySelector('.human-other-input');\r
-        if (other && draft.others) {\r
-            other.value = draft.others[qid] || '';\r
-            var otherMark = pane.querySelector('.human-other-mark');\r
-            if (otherMark && other.value) otherMark.checked = true;\r
-        }\r
-        pane.dataset.skipped = draft.skipped && draft.skipped[qid] ? '1' : '0';\r
-    });\r
-    return draft;\r
-}\r
-\r
-function clearHumanInteractionDraft(sessionId, interactionId, requestVersion) {\r
-    try { sessionStorage.removeItem(humanInteractionDraftKey(sessionId, interactionId, requestVersion)); } catch (e) { /* ignore */ }\r
-}\r
-\r
-function humanElement(tag, className, text) {\r
-    var el = document.createElement(tag);\r
-    if (className) el.className = className;\r
-    if (text != null) el.textContent = String(text);\r
-    return el;\r
-}\r
-\r
-function appendHumanCardHeader(card, record, kind) {\r
-    var head = humanElement('div', 'human-card-head');\r
-    var icon = humanElement('span', 'human-card-icon', kind === 'approval' ? '!' : '?');\r
-    icon.setAttribute('aria-hidden', 'true');\r
-    var copy = humanElement('div', 'human-card-head-copy');\r
-    copy.appendChild(humanElement('div', 'human-card-kicker', kind === 'approval' ? '安全审批' : '需要你的回答'));\r
-    var title = humanElement('h3', 'human-card-title', kind === 'approval'\r
-        ? (record.title || 'Agent 请求执行操作')\r
-        : ((record.questions && record.questions.length > 1) ? (record.questions.length + ' 个问题待确认') : ((record.questions && record.questions[0] && record.questions[0].header) || '确认下一步')));\r
-    var recordId = String(kind === 'approval' ? (record.approval_id || '') : (record.interaction_id || ''));\r
-    title.id = 'human-card-title-' + recordId.replace(/[^a-zA-Z0-9_-]/g, '-');\r
-    copy.appendChild(title);\r
-    card.setAttribute('aria-labelledby', title.id);\r
-    var statusText = record.status === 'pending'\r
-        ? (kind === 'approval' ? '待审批' : '待回答')\r
-        : ({ resolved: kind === 'approval' ? '已处理' : '已回答', cancelled: '已取消', expired: '已过期' }[record.status] || record.status);\r
-    var status = humanElement('span', 'human-card-status', statusText);\r
-    head.appendChild(icon);\r
-    head.appendChild(copy);\r
-    head.appendChild(status);\r
-    card.appendChild(head);\r
-}\r
-\r
-function humanQuestionPaneState(pane) {\r
-    var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked'));\r
-    var otherMark = pane.querySelector('.human-other-mark');\r
-    var otherInput = pane.querySelector('.human-other-input');\r
-    var otherSelected = !!(otherMark && otherMark.checked);\r
-    var otherText = otherSelected && otherInput ? normalizeSendableText(otherInput.value) : '';\r
-    var skipped = pane.dataset.skipped === '1';\r
-    return {\r
-        selected: selected,\r
-        otherSelected: otherSelected,\r
-        otherText: otherText,\r
-        answered: selected.length > 0 || !!otherText,\r
-        invalidOther: otherSelected && !otherText,\r
-        skipped: skipped,\r
-    };\r
-}\r
-\r
-function validateHumanQuestionPane(card, pane) {\r
-    var error = card.querySelector('.human-card-error');\r
-    var state = humanQuestionPaneState(pane);\r
-    if (state.skipped) {\r
-        if (error) error.textContent = '';\r
-        return true;\r
-    }\r
-    if (state.invalidOther) {\r
-        if (error) error.textContent = '请输入其他答案。';\r
-        var other = pane.querySelector('.human-other-input');\r
-        if (other) other.focus();\r
-        return false;\r
-    }\r
-    if (!state.answered) {\r
-        if (error) error.textContent = pane.querySelector('input[type="checkbox"]') ? '请至少选择一个选项。' : '请选择一个选项。';\r
-        var firstControl = pane.querySelector('input');\r
-        if (firstControl) firstControl.focus();\r
-        return false;\r
-    }\r
-    if (error) error.textContent = '';\r
-    return true;\r
-}\r
-\r
-function isHumanQuestionPaneComplete(pane) {\r
-    var state = humanQuestionPaneState(pane);\r
-    return state.skipped || (state.answered && !state.invalidOther);\r
-}\r
-\r
-function allHumanQuestionsComplete(card) {\r
-    var panes = Array.from(card.querySelectorAll('.human-question-pane'));\r
-    return panes.length > 0 && panes.every(isHumanQuestionPaneComplete);\r
-}\r
-\r
-function nextIncompleteHumanQuestionIndex(panes, current) {\r
-    for (var offset = 1; offset <= panes.length; offset += 1) {\r
-        var index = (current + offset) % panes.length;\r
-        if (!isHumanQuestionPaneComplete(panes[index])) return index;\r
-    }\r
-    return current;\r
-}\r
-\r
-function confirmCurrentHumanQuestion(card) {\r
-    var panes = Array.from(card.querySelectorAll('.human-question-pane'));\r
-    var current = Number(card.dataset.step || 0);\r
-    var pane = panes[current];\r
-    if (!pane || !validateHumanQuestionPane(card, pane)) return;\r
-    setHumanQuestionStep(card, nextIncompleteHumanQuestionIndex(panes, current));\r
-}\r
-\r
-function setHumanQuestionStep(card, index) {\r
-    var panes = Array.from(card.querySelectorAll('.human-question-pane'));\r
-    if (!panes.length) return;\r
-    var next = Math.max(0, Math.min(Number(index) || 0, panes.length - 1));\r
-    card.dataset.step = String(next);\r
-    panes.forEach(function (pane, idx) { pane.classList.toggle('is-active', idx === next); });\r
-    card.querySelectorAll('.human-question-tab').forEach(function (tab, idx) {\r
-        var state = humanQuestionPaneState(panes[idx]);\r
-        tab.classList.toggle('is-active', idx === next);\r
-        tab.classList.toggle('is-answered', state.answered);\r
-        tab.classList.toggle('is-skipped', state.skipped);\r
-        tab.setAttribute('aria-selected', idx === next ? 'true' : 'false');\r
-        tab.setAttribute('tabindex', idx === next ? '0' : '-1');\r
-    });\r
-    var tabs = card.querySelector('.human-question-tabs');\r
-    if (tabs) tabs.classList.remove('hidden');\r
-    var body = card.querySelector('.human-card-body');\r
-    if (body) body.classList.remove('hidden');\r
-    var progress = card.querySelector('.human-question-progress');\r
-    if (progress) progress.textContent = '问题 ' + (next + 1) + '/' + panes.length + ' · ' + String(panes[next].dataset.questionHeader || '');\r
-    var back = card.querySelector('.human-back-btn');\r
-    var confirmBtn = card.querySelector('.human-confirm-btn');\r
-    var multipleQuestions = panes.length > 1;\r
-    var allComplete = panes.every(isHumanQuestionPaneComplete);\r
-    if (back) {\r
-        back.textContent = '上一题';\r
-        back.classList.toggle('hidden', !multipleQuestions);\r
-        back.disabled = next === 0;\r
-    }\r
-    // 单按钮语义：未全部回答时是「确认」，全部回答完后变为「提交答案」\r
-    if (confirmBtn) {\r
-        confirmBtn.textContent = allComplete ? '提交答案' : '确认';\r
-        confirmBtn.classList.toggle('is-ready', allComplete);\r
-        confirmBtn.title = allComplete ? '全部问题已回答，提交答案' : '确认当前回答并进入下一题';\r
-    }\r
-    var shortcut = panes[next].querySelector('.human-other-shortcut');\r
-    if (shortcut) shortcut.textContent = allComplete ? 'Ctrl/Cmd + Enter 提交答案' : 'Ctrl/Cmd + Enter 确认回答';\r
-    if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);\r
-}\r
-\r
-function createHumanQuestionCard(record, sessionId) {\r
-    var card = humanElement('article', 'human-interaction-card human-question-card');\r
-    card.dataset.kind = 'question';\r
-    card.dataset.sessionId = sessionId;\r
-    card.dataset.interactionId = String(record.interaction_id || '');\r
-    card.dataset.requestVersion = String(record.request_version || 1);\r
-    appendHumanCardHeader(card, record, 'question');\r
-    var questions = Array.isArray(record.questions) ? record.questions : [];\r
-    if (questions.length > 1) {\r
-        var tabs = humanElement('div', 'human-question-tabs');\r
-        tabs.setAttribute('role', 'tablist');\r
-        questions.forEach(function (question, index) {\r
-            var tab = humanElement('button', 'human-question-tab', question.header || ('问题 ' + (index + 1)));\r
-            tab.type = 'button';\r
-            tab.id = 'human-tab-' + record.interaction_id + '-' + index;\r
-            tab.setAttribute('role', 'tab');\r
-            tab.setAttribute('aria-controls', 'human-pane-' + record.interaction_id + '-' + index);\r
-            tab.addEventListener('click', function () {\r
-                var current = Number(card.dataset.step || 0);\r
-                if (index > current && !validateHumanQuestionPane(card, card.querySelectorAll('.human-question-pane')[current])) return;\r
-                setHumanQuestionStep(card, index);\r
-            });\r
-            tab.addEventListener('keydown', function (event) {\r
-                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;\r
-                event.preventDefault();\r
-                var target = index + (event.key === 'ArrowRight' ? 1 : -1);\r
-                target = Math.max(0, Math.min(target, questions.length - 1));\r
-                var current = Number(card.dataset.step || 0);\r
-                if (target > current && !validateHumanQuestionPane(card, card.querySelectorAll('.human-question-pane')[current])) return;\r
-                setHumanQuestionStep(card, target);\r
-                var targetTab = card.querySelectorAll('.human-question-tab')[target];\r
-                if (targetTab) targetTab.focus();\r
-            });\r
-            tabs.appendChild(tab);\r
-        });\r
-        card.appendChild(tabs);\r
-        card.appendChild(humanElement('div', 'human-question-progress'));\r
-    }\r
-    var body = humanElement('div', 'human-card-body');\r
-    questions.forEach(function (question, qIndex) {\r
-        var pane = humanElement('fieldset', 'human-question-pane');\r
-        pane.id = 'human-pane-' + record.interaction_id + '-' + qIndex;\r
-        pane.setAttribute('role', 'tabpanel');\r
-        if (questions.length > 1) pane.setAttribute('aria-labelledby', 'human-tab-' + record.interaction_id + '-' + qIndex);\r
-        pane.dataset.questionId = String(question.question_id || ('q' + (qIndex + 1)));\r
-        pane.dataset.questionHeader = String(question.header || ('问题 ' + (qIndex + 1)));\r
-        pane.appendChild(humanElement('legend', 'human-question-text', question.question || ''));\r
-        pane.appendChild(humanElement('div', 'human-question-hint', question.multi_select ? '可多选' : '单选'));\r
-        var options = humanElement('div', 'human-options');\r
-        (question.options || []).forEach(function (option, optionIndex) {\r
-            var label = humanElement('label', 'human-option');\r
-            var input = document.createElement('input');\r
-            input.type = question.multi_select ? 'checkbox' : 'radio';\r
-            input.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;\r
-            input.dataset.optionId = String(option.option_id || '');\r
-            var copy = humanElement('span', 'human-option-copy');\r
-            copy.appendChild(humanElement('span', 'human-option-label', option.label || ''));\r
-            var description = humanElement('span', 'human-option-description', option.description || '');\r
-            description.id = 'human-option-desc-' + record.interaction_id + '-' + qIndex + '-' + optionIndex;\r
-            input.setAttribute('aria-describedby', description.id);\r
-            copy.appendChild(description);\r
-            if (option.preview) {\r
-                var details = humanElement('details', 'human-option-preview');\r
-                details.appendChild(humanElement('summary', '', '查看预览'));\r
-                details.appendChild(humanElement('pre', '', option.preview));\r
-                copy.appendChild(details);\r
-            }\r
-            label.appendChild(input);\r
-            label.appendChild(copy);\r
-            options.appendChild(label);\r
-        });\r
-        var other = humanElement('label', 'human-option human-option-other');\r
-        var otherMark = document.createElement('input');\r
-        otherMark.type = question.multi_select ? 'checkbox' : 'radio';\r
-        otherMark.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;\r
-        otherMark.className = 'human-other-mark';\r
-        var otherCopy = humanElement('span', 'human-option-copy');\r
-        var otherHeader = humanElement('span', 'human-other-header');\r
-        otherHeader.appendChild(humanElement('span', 'human-option-label', '其他'));\r
-        otherHeader.appendChild(humanElement(\r
-            'span',\r
-            'input-shortcut-hint human-other-shortcut',\r
-            'Ctrl/Cmd + Enter 确认回答'\r
-        ));\r
-        otherCopy.appendChild(otherHeader);\r
-        var otherInput = document.createElement('textarea');\r
-        otherInput.className = 'human-other-input';\r
-        otherInput.rows = 2;\r
-        otherInput.maxLength = 2000;\r
-        otherInput.placeholder = '输入你的答案…';\r
-        otherInput.setAttribute('aria-label', '其他答案');\r
-        otherInput.addEventListener('focus', function () {\r
-            pane.dataset.skipped = '0';\r
-            otherMark.checked = true;\r
-            setHumanQuestionStep(card, Number(card.dataset.step || 0));\r
-        });\r
-        otherCopy.appendChild(otherInput);\r
-        other.appendChild(otherMark);\r
-        other.appendChild(otherCopy);\r
-        options.appendChild(other);\r
-        options.addEventListener('change', function () {\r
-            pane.dataset.skipped = '0';\r
-            setHumanQuestionStep(card, Number(card.dataset.step || 0));\r
-        });\r
-        options.addEventListener('input', function () {\r
-            pane.dataset.skipped = '0';\r
-            setHumanQuestionStep(card, Number(card.dataset.step || 0));\r
-        });\r
-        pane.appendChild(options);\r
-        body.appendChild(pane);\r
-    });\r
-    card.appendChild(body);\r
-    var error = humanElement('div', 'human-card-error');\r
-    error.setAttribute('role', 'alert');\r
-    card.appendChild(error);\r
-    var actions = humanElement('div', 'human-card-actions human-question-actions');\r
-    var skip = humanElement('button', 'human-secondary-btn human-skip-btn', '不回答');\r
-    skip.type = 'button';\r
-    skip.title = '只跳过当前题目';\r
-    skip.addEventListener('click', function () {\r
-        var current = Number(card.dataset.step || 0);\r
-        var panes = card.querySelectorAll('.human-question-pane');\r
-        var pane = panes[current];\r
-        if (!pane) return;\r
-        pane.querySelectorAll('input').forEach(function (input) { input.checked = false; });\r
-        var otherInput = pane.querySelector('.human-other-input');\r
-        if (otherInput) otherInput.value = '';\r
-        pane.dataset.skipped = '1';\r
-        var error = card.querySelector('.human-card-error');\r
-        if (error) error.textContent = '';\r
-        persistHumanInteractionDraft(card);\r
-        setHumanQuestionStep(card, nextIncompleteHumanQuestionIndex(Array.from(panes), current));\r
-    });\r
-    var nav = humanElement('div', 'human-card-nav');\r
-    var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一题');\r
-    back.type = 'button';\r
-    back.addEventListener('click', function () {\r
-        setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1);\r
-    });\r
-    var confirmButton = humanElement('button', 'human-primary-btn human-confirm-btn', '确认');\r
-    confirmButton.type = 'button';\r
-    confirmButton.addEventListener('click', function () {\r
-        if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card);\r
-        else confirmCurrentHumanQuestion(card);\r
-    });\r
-    nav.appendChild(back);\r
-    nav.appendChild(confirmButton);\r
-    actions.appendChild(skip);\r
-    actions.appendChild(nav);\r
-    card.appendChild(actions);\r
-    var draft = restoreHumanInteractionDraft(card);\r
-    setHumanQuestionStep(card, draft && Number.isFinite(Number(draft.step)) ? Number(draft.step) : 0);\r
-    card.dataset.draftReady = '1';\r
-    card.addEventListener('keydown', function (event) {\r
-        if (!isInputSubmitShortcut(event, 'editor')) return;\r
-        event.preventDefault();\r
-        if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card);\r
-        else confirmCurrentHumanQuestion(card);\r
-    });\r
-    return card;\r
-}\r
-\r
-function collectHumanQuestionAnswers(card) {\r
-    var answers = [];\r
-    var invalidPane = null;\r
-    card.querySelectorAll('.human-question-pane').forEach(function (pane) {\r
-        var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) { return input.dataset.optionId; });\r
-        var otherMark = pane.querySelector('.human-other-mark');\r
-        var otherInput = pane.querySelector('.human-other-input');\r
-        var skipped = pane.dataset.skipped === '1';\r
-        var otherText = !skipped && otherMark && otherMark.checked && otherInput ? normalizeSendableText(otherInput.value) : '';\r
-        if (!skipped && ((!selected.length && !otherText) || (otherMark && otherMark.checked && !otherText)) && !invalidPane) invalidPane = pane;\r
-        answers.push({\r
-            question_id: pane.dataset.questionId || '',\r
-            selected_option_ids: skipped ? [] : selected,\r
-            other_text: otherText || null,\r
-            notes: null,\r
-            skipped: skipped,\r
-        });\r
-    });\r
-    return { answers: answers, invalidPane: invalidPane };\r
-}\r
-\r
-function setHumanInteractionSubmitting(card, submitting, label) {\r
-    if (!card) return;\r
-    card.dataset.submitting = submitting ? '1' : '0';\r
-    card.classList.toggle('is-submitting', !!submitting);\r
-    card.setAttribute('aria-busy', submitting ? 'true' : 'false');\r
-    var status = card.querySelector('.human-card-status');\r
-    if (status) {\r
-        if (!status.dataset.defaultLabel) status.dataset.defaultLabel = status.textContent || '';\r
-        status.textContent = submitting ? (label || '正在提交…') : status.dataset.defaultLabel;\r
-    }\r
-    var primary = card.querySelector('.human-confirm-btn, .human-allow-btn');\r
-    if (!primary) return;\r
-    if (!primary.dataset.defaultLabel) primary.dataset.defaultLabel = primary.textContent || '';\r
-    primary.textContent = submitting ? (label || '正在提交…') : primary.dataset.defaultLabel;\r
-}\r
-\r
-async function submitHumanQuestion(card) {\r
-    if (!card || card.dataset.submitting === '1') return;\r
-    var collected = collectHumanQuestionAnswers(card);\r
-    var error = card.querySelector('.human-card-error');\r
-    if (collected.invalidPane) {\r
-        var panes = Array.from(card.querySelectorAll('.human-question-pane'));\r
-        setHumanQuestionStep(card, panes.indexOf(collected.invalidPane));\r
-        if (error) error.textContent = '请完成当前问题后再提交。';\r
-        return;\r
-    }\r
-    setHumanInteractionSubmitting(card, true, '正在提交…');\r
-    if (error) error.textContent = '';\r
-    try {\r
-        var recoveryAfterIndex = typeof getUiEventCount === 'function'\r
-            ? await getUiEventCount(card.dataset.sessionId, { timeoutMs: 5000 })\r
-            : 0;\r
-        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/interactions/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {\r
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: collected.answers }),\r
-        });\r
-        var data = await response.json();\r
-        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));\r
-        clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion);\r
-        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_resolved' }, data.interaction || {}));\r
-        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);\r
-        if (data.recovery_scheduled) {\r
-            resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);\r
-        }\r
-    } catch (err) {\r
-        setHumanInteractionSubmitting(card, false);\r
-        if (error) error.textContent = '提交失败：' + String(err && err.message ? err.message : err);\r
-    }\r
-}\r
-\r
-function resumeRecoveredHumanInteractionStream(sessionId, afterIndex) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);\r
-    if (sid !== String(currentSessionId || '')) return;\r
-    var start = function () {\r
-        if (sid !== String(currentSessionId || '')) return;\r
-        if (typeof attachSessionEventStream === 'function') {\r
-            void attachSessionEventStream(sid, {\r
-                skipInitialLoad: true,\r
-                force: true,\r
-                afterIndex: Math.max(0, Number(afterIndex) || 0),\r
-            });\r
-        }\r
-    };\r
-    if (typeof refreshSingleSessionRow === 'function') {\r
-        void Promise.resolve(refreshSingleSessionRow(sid)).then(start, start);\r
-    } else {\r
-        start();\r
-    }\r
-}\r
-\r
-function createHumanApprovalCard(record, sessionId) {\r
-    var danger = record.approval_level === 'danger';\r
-    var forced = !!record.force_approval;\r
-    var workspaceApproval = !forced && !!record.external_workspace_grantable;\r
-    var card = humanElement('article', 'human-interaction-card human-approval-card' + (danger ? ' is-danger' : ''));\r
-    card.dataset.kind = 'approval';\r
-    card.dataset.sessionId = sessionId;\r
-    card.dataset.interactionId = String(record.approval_id || '');\r
-    card.dataset.rejectionReasonSuggestion = String(record.rejection_reason_suggestion || '').trim();\r
-    appendHumanCardHeader(card, record, 'approval');\r
-    var body = humanElement('div', 'human-card-body');\r
-    // 拦截原因 / 命令风险 / 命令目的 三段结构化展示。普通审批卡的\r
-    // subtitle 就是策略给出的拦截原因；自动审查覆盖卡的 subtitle 是\r
-    // "【拦截原因】…\\n【命令风险】…\\n【命令目的】…" 拼接文本，这里拆开。\r
-    var subtitle = String(record.subtitle || '').trim();\r
-    var hasReviewSections = subtitle.indexOf('【命令风险】') >= 0 || subtitle.indexOf('【命令目的】') >= 0;\r
-    if (subtitle) {\r
-        if (hasReviewSections) {\r
-            var sections = splitReviewExplanationText(\r
-                String(record.intercept_reason || ''),\r
-                String(record.risk_analysis || ''),\r
-                String(record.command_purpose || ''),\r
-                subtitle\r
-            );\r
-            if (sections.intercept) {\r
-                var interceptBox = humanElement('div', 'human-approval-review human-approval-review--intercept');\r
-                interceptBox.appendChild(humanElement('div', 'human-approval-review-label', '拦截原因'));\r
-                interceptBox.appendChild(humanElement('div', 'human-approval-review-text', sections.intercept));\r
-                body.appendChild(interceptBox);\r
-            }\r
-            if (sections.risk) {\r
-                var riskBox = humanElement('div', 'human-approval-review human-approval-review--risk');\r
-                riskBox.appendChild(humanElement('div', 'human-approval-review-label', '命令风险'));\r
-                riskBox.appendChild(humanElement('div', 'human-approval-review-text', sections.risk));\r
-                body.appendChild(riskBox);\r
-            }\r
-            if (sections.purpose) {\r
-                var purposeBox = humanElement('div', 'human-approval-review human-approval-review--purpose');\r
-                purposeBox.appendChild(humanElement('div', 'human-approval-review-label', '命令目的'));\r
-                purposeBox.appendChild(humanElement('div', 'human-approval-review-text', sections.purpose));\r
-                body.appendChild(purposeBox);\r
-            }\r
-        } else {\r
-            body.appendChild(humanElement('div', 'human-approval-subtitle', subtitle));\r
-        }\r
-    }\r
-    body.appendChild(humanElement('div', 'human-approval-message', record.message || '是否允许 Agent 执行此操作？'));\r
-    if (danger && record.consequence) {\r
-        body.appendChild(humanElement('div', 'human-approval-consequence', record.consequence));\r
-    }\r
-    if (record.tool) {\r
-        var detail = humanElement('div', 'human-approval-detail');\r
-        detail.appendChild(humanElement('span', '', '工具'));\r
-        detail.appendChild(humanElement('code', '', record.tool));\r
-        body.appendChild(detail);\r
-    }\r
-    var egressIntent = String(record.egress_intent || 'none');\r
-    if (egressIntent !== 'none') {\r
-        var egress = humanElement('div', 'human-egress-summary');\r
-        var intentLabel = egressIntent === 'upload'\r
-            ? '数据发送'\r
-            : (egressIntent === 'read' ? '网络读取' : '未知网络操作');\r
-        egress.appendChild(humanElement('div', 'human-egress-label', intentLabel));\r
-        var destinations = Array.isArray(record.destinations) ? record.destinations : [];\r
-        if (destinations.length) {\r
-            egress.appendChild(humanElement('div', 'human-egress-row', '目标：' + destinations.map(function (item) {\r
-                var host = String((item && item.host) || '未知');\r
-                var port = Number(item && item.port) || 0;\r
-                return host + (port ? ':' + port : '');\r
-            }).join('、')));\r
-        } else {\r
-            egress.appendChild(humanElement('div', 'human-egress-row is-warning', '目标：运行时动态确定'));\r
-        }\r
-        var sources = Array.isArray(record.data_sources) ? record.data_sources : [];\r
-        if (sources.length) egress.appendChild(humanElement('div', 'human-egress-row', '数据来源：' + sources.join('、')));\r
-        var enforcement = String(record.enforcement_level || '');\r
-        if (enforcement) {\r
-            egress.appendChild(humanElement(\r
-                'div',\r
-                'human-egress-enforcement ' + (enforcement === 'strong' ? 'is-strong' : (enforcement === 'partial' ? 'is-partial' : 'is-degraded')),\r
-                enforcement === 'strong'\r
-                    ? '系统级出站防护已启用（目标受限）'\r
-                    : (enforcement === 'partial'\r
-                        ? '系统级出站防护已启用（无网络命令强制断网；获批联网暂不限制目标）'\r
-                        : (enforcement === 'disabled' ? '系统出站助手已关闭' : '降级防护：当前仅使用应用层识别'))\r
-            ));\r
-        }\r
-        body.appendChild(egress);\r
-    }\r
-    if (!forced && !workspaceApproval && record.rule_pattern) {\r
-        body.appendChild(\r
-            humanElement(\r
-                'div',\r
-                'human-approval-rule-hint',\r
-                '“始终允许”将保存为长期规则：' + record.rule_pattern\r
-            )\r
-        );\r
-    } else if (!forced && !workspaceApproval && record.grant_scope === 'task') {\r
-        body.appendChild(\r
-            humanElement(\r
-                'div',\r
-                'human-approval-rule-hint',\r
-                '“始终允许”仅在当前任务内允许同类操作和相同目标，不会保存跨任务规则。'\r
-            )\r
-        );\r
-    }\r
-    card.appendChild(body);\r
-    var analysis = humanElement('div', 'human-approval-analysis');\r
-    analysis.hidden = true;\r
-    analysis.setAttribute('role', 'status');\r
-    card.appendChild(analysis);\r
-    var rejectionEditor = humanElement('div', 'human-approval-rejection-editor');\r
-    rejectionEditor.hidden = true;\r
-    var rejectionLabel = humanElement('label', 'human-approval-rejection-label', '拒绝原因');\r
-    var rejectionInput = document.createElement('textarea');\r
-    rejectionInput.className = 'human-approval-rejection-input';\r
-    rejectionInput.rows = 3;\r
-    rejectionInput.maxLength = 2000;\r
-    rejectionInput.placeholder = '请填写拒绝原因，Agent 会根据原因调整后续操作';\r
-    rejectionLabel.appendChild(rejectionInput);\r
-    rejectionEditor.appendChild(rejectionLabel);\r
-    rejectionEditor.appendChild(humanElement('div', 'human-approval-rejection-hint', '拒绝原因会随审批结果返回给 Agent。'));\r
-    card.appendChild(rejectionEditor);\r
-    var error = humanElement('div', 'human-card-error');\r
-    error.setAttribute('role', 'alert');\r
-    card.appendChild(error);\r
-    var actions = humanElement('div', 'human-card-actions human-approval-actions');\r
-    var analyze = humanElement('button', 'human-secondary-btn human-analyze-btn', '替我分析');\r
-    analyze.type = 'button';\r
-    analyze.title = '调用独立审查模型给出风险解读和审批建议，不会替你执行审批';\r
-    analyze.addEventListener('click', function () { void analyzeHumanApproval(card); });\r
-    actions.appendChild(analyze);\r
-    var decisions = humanElement('div', 'human-approval-decisions');\r
-    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝执行');\r
-    deny.type = 'button';\r
-    deny.addEventListener('click', function () { void requestHumanApprovalDenial(card); });\r
-    decisions.appendChild(deny);\r
-    if (!forced && record.allow_session_available !== false) {\r
-        var durableRuleAvailable = !!record.allow_always_available && !!record.rule_pattern;\r
-        var alwaysDecision = workspaceApproval\r
-            ? 'allow_external_workspace'\r
-            : (durableRuleAvailable ? 'allow_always' : 'allow_session');\r
-        var always = humanElement('button', 'human-secondary-btn human-always-btn', '始终允许');\r
-        always.type = 'button';\r
-        always.title = workspaceApproval\r
-            ? '持续允许写入、删除和 Shell 处理工作区沙箱外内容；随后仍会单独审批本次工具操作'\r
-            : (durableRuleAvailable\r
-                ? '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern\r
-                : (record.grant_scope === 'task'\r
-                    ? '仅在当前任务内自动允许同类操作和相同目标，不会保存跨任务规则'\r
-                    : '无法生成长期规则；改为在当前任务内自动允许完全相同的请求'));\r
-        always.addEventListener('click', function () { void resolveHumanApproval(card, alwaysDecision); });\r
-        decisions.appendChild(always);\r
-    }\r
-    var onceDecision = workspaceApproval ? 'allow_external_workspace_once' : 'allow_once';\r
-    var allow = humanElement('button', 'human-primary-btn human-allow-btn', '本次允许');\r
-    allow.type = 'button';\r
-    allow.title = workspaceApproval\r
-        ? '仅允许本次处理工作区沙箱外内容；随后仍会单独审批本次工具操作'\r
-        : '仅放行这一次；执行后授权立即失效';\r
-    allow.addEventListener('click', function () { void resolveHumanApproval(card, onceDecision); });\r
-    decisions.appendChild(allow);\r
-    actions.appendChild(decisions);\r
-    card.appendChild(actions);\r
-    return card;\r
-}\r
-\r
-async function analyzeHumanApproval(card) {\r
-    if (!card || card.dataset.submitting === '1') return;\r
-    var error = card.querySelector('.human-card-error');\r
-    var panel = card.querySelector('.human-approval-analysis');\r
-    setHumanInteractionSubmitting(card, true, '正在分析…');\r
-    if (error) error.textContent = '';\r
-    if (panel) {\r
-        panel.hidden = false;\r
-        panel.className = 'human-approval-analysis is-loading';\r
-        panel.textContent = '审查 Agent 正在核对任务意图与本次操作风险…';\r
-    }\r
-    try {\r
-        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/analyze', {\r
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',\r
-        });\r
-        var data = await response.json();\r
-        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));\r
-        var result = data.analysis || {};\r
-        var recommendAllow = result.recommendation === 'allow';\r
-        panel.className = 'human-approval-analysis ' + (recommendAllow ? 'is-allow' : 'is-deny');\r
-        panel.textContent = '';\r
-        var heading = humanElement(\r
-            'div',\r
-            'human-approval-analysis-title',\r
-            result.available === false\r
-                ? '暂时无法给出可靠建议'\r
-                : (recommendAllow ? '建议允许' : '建议拒绝')\r
-        );\r
-        var risk = humanElement('span', 'human-approval-analysis-risk', '风险：' + String(result.risk || 'unknown'));\r
-        heading.appendChild(risk);\r
-        panel.appendChild(heading);\r
-        appendApprovalReviewExplanation(\r
-            panel,\r
-            result.intercept_reason,\r
-            result.risk_analysis,\r
-            result.command_purpose,\r
-            result.reason || '审查模型未提供理由。'\r
-        );\r
-        if (!recommendAllow && result.available !== false && String(result.reason || '').trim()) {\r
-            card.dataset.rejectionReasonSuggestion = String(result.reason).trim();\r
-            var rejectionInput = card.querySelector('.human-approval-rejection-input');\r
-            if (rejectionInput && !String(rejectionInput.value || '').trim()) {\r
-                rejectionInput.value = card.dataset.rejectionReasonSuggestion;\r
-            }\r
-        }\r
-        panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));\r
-    } catch (err) {\r
-        if (panel) panel.hidden = true;\r
-        if (error) error.textContent = '分析失败：' + String(err && err.message ? err.message : err);\r
-    } finally {\r
-        setHumanInteractionSubmitting(card, false);\r
-    }\r
-}\r
-\r
-async function requestHumanApprovalDenial(card) {\r
-    if (!card || card.dataset.submitting === '1') return;\r
-    var suggestedReason = String(card.dataset.rejectionReasonSuggestion || '').trim();\r
-    if (suggestedReason) {\r
-        await resolveHumanApproval(card, 'deny', suggestedReason);\r
-        return;\r
-    }\r
-    var editor = card.querySelector('.human-approval-rejection-editor');\r
-    var input = card.querySelector('.human-approval-rejection-input');\r
-    var deny = card.querySelector('.human-deny-btn');\r
-    if (editor && editor.hidden) {\r
-        editor.hidden = false;\r
-        if (deny) deny.textContent = '确认拒绝';\r
-        if (input) input.focus();\r
-        return;\r
-    }\r
-    var reason = String((input && input.value) || '').trim();\r
-    if (!reason) {\r
-        var error = card.querySelector('.human-card-error');\r
-        if (error) error.textContent = '请填写拒绝原因。';\r
-        if (input) input.focus();\r
-        return;\r
-    }\r
-    await resolveHumanApproval(card, 'deny', reason);\r
-}\r
-\r
-async function resolveHumanApproval(card, decision, rejectionReason) {\r
-    if (!card || card.dataset.submitting === '1') return;\r
-    setHumanInteractionSubmitting(card, true, '正在处理…');\r
-    try {\r
-        var payload = { decision: decision };\r
-        if (decision === 'deny') payload.rejection_reason = String(rejectionReason || '').trim();\r
-        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {\r
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),\r
-        });\r
-        var data = await response.json();\r
-        if (!response.ok || !data.ok) {\r
-            if (data.approval) {\r
-                var staleRecord = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'approval_cancelled' }, data.approval));\r
-                renderHumanInteractionRecord(staleRecord, card.dataset.sessionId, card.parentNode);\r
-                return;\r
-            }\r
-            throw new Error(data.error || ('HTTP ' + response.status));\r
-        }\r
-        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'approval_resolved' }, data.approval || {}));\r
-        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);\r
-    } catch (err) {\r
-        setHumanInteractionSubmitting(card, false);\r
-        var error = card.querySelector('.human-card-error');\r
-        if (error) error.textContent = '处理失败：' + String(err && err.message ? err.message : err);\r
-    }\r
-}\r
-\r
-function createHumanTerminalCard(record, sessionId) {\r
-    var kind = record.kind === 'approval' ? 'approval' : 'question';\r
-    var card = humanElement('article', 'human-interaction-card is-terminal');\r
-    card.dataset.kind = kind;\r
-    card.dataset.sessionId = sessionId;\r
-    card.dataset.interactionId = String(kind === 'approval' ? record.approval_id : record.interaction_id);\r
-    appendHumanCardHeader(card, record, kind);\r
-    var summary = humanElement('div', 'human-terminal-summary');\r
-    if (record.status === 'cancelled') {\r
-        summary.textContent = record.reason || '该请求已取消。';\r
-    } else if (record.status === 'expired') {\r
-        summary.textContent = '该请求已过期。';\r
-    } else if (kind === 'approval') {\r
-        summary.textContent = record.decision === 'deny'\r
-            ? '你已拒绝本次操作。'\r
-            : (record.decision === 'allow_external_workspace'\r
-                ? '已始终允许工作区沙箱外处理；本次工具操作仍需单独审批。'\r
-                : (record.decision === 'allow_external_workspace_once'\r
-                    ? '已允许本次工作区沙箱外处理；本次工具操作仍需单独审批。'\r
-                    : (record.decision === 'allow_always'\r
-                        ? ('已保存长期规则，后续匹配的操作将自动放行。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))\r
-                        : (record.decision === 'allow_session'\r
-                            ? (record.grant_scope === 'task'\r
-                                ? '当前任务内将自动允许同类操作和相同目标。'\r
-                                : '当前任务内将自动允许完全相同的请求。')\r
-                            : '已允许这一次；执行后授权失效。'))));\r
-        if (record.decision === 'deny' && record.rejection_reason) {\r
-            summary.appendChild(humanElement(\r
-                'div',\r
-                'human-terminal-rejection-reason',\r
-                '拒绝原因：' + String(record.rejection_reason)\r
-            ));\r
-        }\r
-    } else {\r
-        var answers = Array.isArray(record.answers) ? record.answers : [];\r
-        var questionsById = Object.create(null);\r
-        (record.questions || []).forEach(function (question) {\r
-            questionsById[String(question.question_id || '')] = question;\r
-        });\r
-        answers.forEach(function (answer) {\r
-            var line = humanElement('div', 'human-terminal-answer');\r
-            var values = (answer.selected_labels || []).slice();\r
-            if (answer.other_text) values.push(answer.other_text);\r
-            var question = questionsById[String(answer.question_id || '')] || {};\r
-            line.appendChild(humanElement('span', 'human-terminal-answer-label', question.header || '回答'));\r
-            line.appendChild(humanElement('span', 'human-terminal-answer-value', answer.skipped ? '未回答' : (values.join('、') || '已回答')));\r
-            summary.appendChild(line);\r
-        });\r
-    }\r
-    card.appendChild(summary);\r
-    return card;\r
-}\r
-\r
-function renderHumanInteractionRecord(record, sessionId, stream) {\r
-    if (!record) return null;\r
-    var sid = String(sessionId || record.session_id || '');\r
-    var kind = record.kind === 'approval' ? 'approval' : 'question';\r
-    var id = String(kind === 'approval' ? (record.approval_id || '') : (record.interaction_id || ''));\r
-    if (!id) return null;\r
-    stream = stream && stream.querySelectorAll ? stream : (typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream'));\r
-    if (!stream) return null;\r
-    var existing = Array.from(stream.querySelectorAll('.human-interaction-card')).find(function (card) {\r
-        return card.dataset.kind === kind && card.dataset.interactionId === id;\r
-    });\r
-    var restoreFocus = !!(existing && existing.contains(document.activeElement));\r
-    var card = record.status === 'pending'\r
-        ? (kind === 'approval' ? createHumanApprovalCard(record, sid) : createHumanQuestionCard(record, sid))\r
-        : createHumanTerminalCard(record, sid);\r
-    card.dataset.status = record.status || 'pending';\r
-    var toolCallId = String(record.tool_call_id || '');\r
-    if (toolCallId) card.dataset.toolCallId = toolCallId;\r
-    if (existing && existing.parentNode) existing.parentNode.replaceChild(card, existing);\r
-    else {\r
-        var slot = humanInteractionToolSlot(stream, toolCallId);\r
-        (slot || stream).appendChild(card);\r
-    }\r
-    if (toolCallId) {\r
-        attachHumanInteractionCardsForToolCall(stream, toolCallId);\r
-    }\r
-    if (restoreFocus && record.status !== 'pending') {\r
-        card.setAttribute('tabindex', '-1');\r
-        requestAnimationFrame(function () { card.focus({ preventScroll: true }); });\r
-    }\r
-    return card;\r
-}\r
-\r
-function humanCardVisibleInViewport(card) {\r
-    if (!card || !card.getBoundingClientRect) return true;\r
-    var r = card.getBoundingClientRect();\r
-    if (!r.width && !r.height) return false;\r
-    var vh = window.innerHeight || document.documentElement.clientHeight || 0;\r
-    return r.top >= -8 && r.bottom <= vh + 8;\r
-}\r
-\r
-function autoRevealPendingHumanCard(card) {\r
-    if (!card || card.dataset.status !== 'pending') return;\r
-    requestAnimationFrame(function () {\r
-        if (humanCardVisibleInViewport(card)) return;\r
-        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });\r
-    });\r
-}\r
-\r
-function renderHumanInteractionEvent(ctx, event, runSessionId) {\r
-    var sid = String(runSessionId || event.session_id || currentSessionId || '');\r
-    var record = applyHumanInteractionEvent(sid, event);\r
-    var stream = ctx && ctx.stream ? ctx.stream : null;\r
-    ensurePendingQuestionToolRow(ctx, record, sid);\r
-    var card = renderHumanInteractionRecord(record, sid, stream);\r
-    // Live SSE only: bring a freshly-inserted pending card into view.\r
-    if (card && record.status === 'pending' && !(typeof replayingMessages !== 'undefined' && replayingMessages)) {\r
-        autoRevealPendingHumanCard(card);\r
-    }\r
-    return card;\r
-}\r
-\r
-function renderPendingHumanInteractions(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid || sid !== String(currentSessionId || '')) return;\r
-    var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');\r
-    var ctx = stream && typeof newDomContext === 'function' ? newDomContext(stream) : null;\r
-    pendingHumanInteractionRecords(sid).forEach(function (record) {\r
-        ensurePendingQuestionToolRow(ctx, record, sid);\r
-        renderHumanInteractionRecord(record, sid, stream);\r
-    });\r
-    if (typeof attachAllHumanInteractionCards === 'function') attachAllHumanInteractionCards(stream);\r
-    updateHumanInteractionBanner(sid);\r
-}\r
-\r
-async function refreshHumanInteractions(sessionId, options) {\r
-    var sid = String(sessionId || '');\r
-    if (!sid) return false;\r
-    options = options || {};\r
-    var state = humanInteractionSessionState(sid);\r
-    var refreshEpoch = ++state.refreshEpoch;\r
-    try {\r
-        var responses = await Promise.all([\r
-            fetch('/sessions/' + encodeURIComponent(sid) + '/interactions?status=pending'),\r
-            fetch('/sessions/' + encodeURIComponent(sid) + '/approvals?status=pending'),\r
-        ]);\r
-        if (!responses[0].ok || !responses[1].ok) throw new Error('HTTP ' + responses[0].status + '/' + responses[1].status);\r
-        var payloads = await Promise.all([responses[0].json(), responses[1].json()]);\r
-        if (refreshEpoch !== state.refreshEpoch) return false;\r
-        state.interactions = Object.create(null);\r
-        state.approvals = Object.create(null);\r
-        (payloads[0].interactions || []).forEach(function (row) {\r
-            row.kind = 'question';\r
-            state.interactions[String(row.interaction_id || '')] = row;\r
-        });\r
-        (payloads[1].approvals || []).forEach(function (row) {\r
-            row.kind = 'approval';\r
-            state.approvals[String(row.approval_id || '')] = row;\r
-        });\r
-        state.loaded = true;\r
-        syncHumanInteractionSessionSummary(sid);\r
-        if (options.render !== false && sid === String(currentSessionId || '')) renderPendingHumanInteractions(sid);\r
-        return true;\r
-    } catch (err) {\r
-        console.error('加载待处理交互失败:', err);\r
-        return false;\r
-    }\r
-}\r
-\r
-(function bindHumanInteractionBanner() {\r
-    var button = document.getElementById('human-interaction-banner-btn');\r
-    if (button) button.addEventListener('click', function () { void handleHumanTodoFloaterAction(); });\r
-})();\r
+`,zr=`const humanInteractionStoreBySession = Object.create(null);
+const HUMAN_INTERACTION_DRAFT_PREFIX = 'myagent-human-interaction-draft:';
+
+function humanInteractionSessionState(sessionId) {
+    var sid = String(sessionId || '');
+    if (!humanInteractionStoreBySession[sid]) {
+        humanInteractionStoreBySession[sid] = {
+            interactions: Object.create(null),
+            approvals: Object.create(null),
+            loaded: false,
+            refreshEpoch: 0,
+        };
+    }
+    return humanInteractionStoreBySession[sid];
+}
+
+function isHumanInteractionEventType(type) {
+    var t = String(type || '');
+    return t.indexOf('interaction_') === 0 || t.indexOf('approval_') === 0;
+}
+
+function humanInteractionKindForEvent(event) {
+    return String((event && event.type) || '').indexOf('approval_') === 0 ? 'approval' : 'question';
+}
+
+function humanInteractionId(event, kind) {
+    return String(kind === 'approval' ? (event.approval_id || '') : (event.interaction_id || ''));
+}
+
+function humanInteractionStatusFromEvent(event) {
+    var explicit = String((event && event.status) || '');
+    if (explicit) return explicit;
+    var type = String((event && event.type) || '');
+    if (type.endsWith('_resolved')) return 'resolved';
+    if (type.endsWith('_cancelled')) return 'cancelled';
+    if (type.endsWith('_expired')) return 'expired';
+    return 'pending';
+}
+
+function applyHumanInteractionEvent(sessionId, event) {
+    if (!event || !isHumanInteractionEventType(event.type)) return null;
+    var sid = String(sessionId || event.session_id || '');
+    if (!sid) return null;
+    var kind = humanInteractionKindForEvent(event);
+    var id = humanInteractionId(event, kind);
+    if (!id) return null;
+    var state = humanInteractionSessionState(sid);
+    state.refreshEpoch += 1;
+    var collection = kind === 'approval' ? state.approvals : state.interactions;
+    var previous = collection[id] || {};
+    var terminalStatuses = { resolved: true, cancelled: true, expired: true };
+    var incomingStatus = humanInteractionStatusFromEvent(event);
+    var previousVersion = Number(previous.request_version || 0);
+    var incomingVersion = Number(event.request_version || previousVersion || 0);
+    if (previousVersion && incomingVersion && incomingVersion < previousVersion) return previous;
+    if (terminalStatuses[previous.status] && incomingStatus === 'pending') return previous;
+    var record = Object.assign({}, previous, event, {
+        kind: kind,
+        status: incomingStatus,
+    });
+    collection[id] = record;
+    state.loaded = true;
+    syncHumanInteractionSessionSummary(sid);
+    updateHumanInteractionBanner(currentSessionId);
+    return record;
+}
+
+function pendingHumanInteractionRecords(sessionId) {
+    var state = humanInteractionSessionState(sessionId);
+    var rows = [];
+    Object.keys(state.interactions).forEach(function (id) {
+        var row = state.interactions[id];
+        if (row && row.status === 'pending') rows.push(row);
+    });
+    Object.keys(state.approvals).forEach(function (id) {
+        var row = state.approvals[id];
+        if (row && row.status === 'pending') rows.push(row);
+    });
+    rows.sort(function (a, b) {
+        var kindOrder = (a.kind === 'approval' ? 0 : 1) - (b.kind === 'approval' ? 0 : 1);
+        if (kindOrder) return kindOrder;
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+    return rows;
+}
+
+function humanInteractionPendingCounts(sessionId) {
+    var rows = pendingHumanInteractionRecords(sessionId);
+    var questions = rows.filter(function (row) { return row.kind === 'question'; }).length;
+    return { questions: questions, approvals: rows.length - questions, total: rows.length };
+}
+
+function pendingHumanQuestions(sessionId) {
+    return pendingHumanInteractionRecords(sessionId).filter(function (row) { return row.kind === 'question'; });
+}
+
+async function confirmAndCancelPendingHumanQuestionsForHistoryMutation(sessionId) {
+    var sid = String(sessionId || '');
+    var rows = pendingHumanQuestions(sid);
+    if (!rows.length) return true;
+    var confirmed = typeof openUiModal === 'function'
+        ? await openUiModal({
+            title: '修改历史并取消待回答问题？',
+            message: '这次修改会移除当前问题所属的对话历史。继续前必须先取消待回答问题，避免它变成无法处理的待办。',
+            confirmText: '取消问题并继续',
+            cancelText: '返回回答问题',
+        })
+        : false;
+    if (!confirmed) return false;
+    try {
+        var resolved = await Promise.all(rows.map(async function (row) {
+            var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/interactions/' + encodeURIComponent(row.interaction_id) + '/cancel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason: 'superseded_by_history_mutation' }),
+            });
+            var data = await response.json();
+            if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+            return data.interaction || row;
+        }));
+        resolved.forEach(function (row) {
+            clearHumanInteractionDraft(sid, row.interaction_id, row.request_version);
+            var record = applyHumanInteractionEvent(sid, Object.assign({ type: 'interaction_cancelled' }, row));
+            renderHumanInteractionRecord(record, sid);
+        });
+        return true;
+    } catch (err) {
+        if (typeof showUiAlert === 'function') {
+            showUiAlert({
+                title: '无法修改历史',
+                message: '取消待回答问题失败：' + String(err && err.message ? err.message : err),
+                variant: 'error',
+            });
+        }
+        return false;
+    }
+}
+
+function syncHumanInteractionSessionSummary(sessionId) {
+    var sid = String(sessionId || '');
+    var counts = humanInteractionPendingCounts(sid);
+    var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
+    if (session) session.pending_human_interactions = counts;
+    updateHumanInteractionSessionBadge(sid);
+    updateHumanInteractionBanner(currentSessionId);
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sid);
+}
+
+function sessionPendingHumanCounts(sessionId) {
+    var sid = String(sessionId || '');
+    var state = humanInteractionStoreBySession[sid];
+    if (state && state.loaded) return humanInteractionPendingCounts(sid);
+    var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
+    var pending = session && session.pending_human_interactions;
+    var questions = Math.max(0, Number(pending && pending.questions) || 0);
+    var approvals = Math.max(0, Number(pending && pending.approvals) || 0);
+    var total = Math.max(questions + approvals, Number(pending && pending.total) || 0);
+    return { questions: questions, approvals: approvals, total: total };
+}
+
+function sessionListForPendingCounts() {
+    if (typeof sessionStore !== 'undefined' && sessionStore && typeof sessionStore.list === 'function') {
+        return sessionStore.list();
+    }
+    return [];
+}
+
+function globalHumanInteractionPendingCounts() {
+    var questions = 0;
+    var approvals = 0;
+    sessionListForPendingCounts().forEach(function (session) {
+        if (!session || !session.id) return;
+        var counts = sessionPendingHumanCounts(session.id);
+        questions += counts.questions;
+        approvals += counts.approvals;
+    });
+    return { questions: questions, approvals: approvals, total: questions + approvals };
+}
+
+function firstSessionWithPendingHumanInteractions() {
+    var sessions = sessionListForPendingCounts();
+    for (var i = 0; i < sessions.length; i += 1) {
+        var session = sessions[i];
+        if (session && session.id && sessionPendingHumanCounts(session.id).total > 0) return session;
+    }
+    return null;
+}
+
+function pendingCountDetailText(counts) {
+    var parts = [];
+    if (counts.approvals > 0) parts.push(counts.approvals + ' 个审批');
+    if (counts.questions > 0) parts.push(counts.questions + ' 个回答');
+    return parts.join('、') || '无待办';
+}
+
+function updateHumanInteractionSessionBadge(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || !sessionsList) return;
+    var row = sessionsList.querySelector('.session-item[data-session-id="' + (window.CSS && CSS.escape ? CSS.escape(sid) : sid.replace(/"/g, '\\\\"')) + '"]');
+    if (!row) return;
+    var head = row.querySelector('.session-item-head');
+    if (!head) return;
+    var badge = head.querySelector('.session-human-badge');
+    var counts = sessionPendingHumanCounts(sid);
+    var count = counts.total;
+    if (count <= 0) {
+        if (badge) badge.remove();
+        row.classList.remove('has-human-pending');
+        return;
+    }
+    if (!badge && count > 0) {
+        badge = document.createElement('span');
+        badge.className = 'session-human-badge';
+        badge.setAttribute('aria-label', '待处理的人机交互');
+        var more = head.querySelector('.session-more-wrap');
+        head.insertBefore(badge, more || null);
+    }
+    if (badge) {
+        var hasQuestions = counts.questions > 0;
+        var hasApprovals = counts.approvals > 0;
+        badge.textContent = hasQuestions && hasApprovals
+            ? String(count)
+            : ((hasQuestions ? '?' : '!') + (count > 1 ? String(count) : ''));
+        var badgeLabel = hasQuestions && hasApprovals
+            ? ('有 ' + count + ' 项待处理')
+            : (hasQuestions ? ('有 ' + count + ' 个问题待回答') : ('有 ' + count + ' 个审批待处理'));
+        badge.setAttribute('aria-label', badgeLabel);
+        badge.setAttribute('data-ui-tip', badgeLabel);
+        if (typeof bindUiHoverTip === 'function') bindUiHoverTip(badge);
+    }
+    row.classList.add('has-human-pending');
+}
+
+function updateAllHumanInteractionSessionBadges() {
+    if (!sessionsList) return;
+    sessionsList.querySelectorAll('.session-item[data-session-id]').forEach(function (row) {
+        updateHumanInteractionSessionBadge(row.dataset.sessionId || '');
+    });
+    updateHumanInteractionBanner(currentSessionId);
+}
+
+function updateHumanInteractionBanner(sessionId) {
+    var sid = String(sessionId || currentSessionId || '');
+    var banner = document.getElementById('human-interaction-banner');
+    if (!banner) return;
+    var globalCounts = globalHumanInteractionPendingCounts();
+    var sessionCounts = sid ? sessionPendingHumanCounts(sid) : { questions: 0, approvals: 0, total: 0 };
+    var visible = globalCounts.total > 0;
+    banner.classList.toggle('is-on', visible);
+    banner.classList.toggle('hidden', !visible);
+    var globalCountEl = banner.querySelector('.human-todo-count[data-scope="global"]');
+    var globalDetailEl = banner.querySelector('.human-todo-detail[data-scope="global"]');
+    var sessionCountEl = banner.querySelector('.human-todo-count[data-scope="session"]');
+    var sessionDetailEl = banner.querySelector('.human-todo-detail[data-scope="session"]');
+    if (globalCountEl) globalCountEl.textContent = globalCounts.total + ' 项';
+    if (globalDetailEl) globalDetailEl.textContent = pendingCountDetailText(globalCounts);
+    if (sessionCountEl) sessionCountEl.textContent = sessionCounts.total + ' 项';
+    if (sessionDetailEl) sessionDetailEl.textContent = pendingCountDetailText(sessionCounts);
+}
+
+function focusFirstPendingHumanInteraction() {
+    var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
+    var card = stream && stream.querySelector('.human-interaction-card[data-status="pending"]');
+    if (!card) return;
+    var needsLayout = false;
+    var collapsedRow = card.closest ? card.closest('.feed-item.is-collapsed') : null;
+    if (collapsedRow) {
+        collapsedRow.classList.remove('is-collapsed');
+        collapsedRow.dataset.manualToggle = '1';
+        var rowBtn = collapsedRow.querySelector('.feed-row-collapse');
+        if (rowBtn) {
+            rowBtn.setAttribute('aria-expanded', 'true');
+            rowBtn.setAttribute('aria-label', '收起工具行');
+        }
+        needsLayout = true;
+    }
+    var collapsedAgg = card.closest ? card.closest('.process-aggregate.is-collapsed') : null;
+    if (collapsedAgg) {
+        collapsedAgg.classList.remove('is-collapsed');
+        var aggTop = collapsedAgg.querySelector('.process-aggregate-top');
+        if (aggTop) aggTop.setAttribute('aria-expanded', 'true');
+        needsLayout = true;
+    }
+    if (needsLayout && collapsedAgg) {
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                if (typeof syncProcessAggregateHeightUi === 'function') syncProcessAggregateHeightUi(collapsedAgg);
+                collapsedAgg.querySelectorAll('.process-aggregate-body .feed-chunk').forEach(function (ch) {
+                    if (typeof refreshFeedChunkOverflow === 'function') refreshFeedChunkOverflow(ch);
+                });
+                if (typeof registerMermaidLazy === 'function') registerMermaidLazy(collapsedAgg);
+            });
+        });
+    }
+    requestAnimationFrame(function () {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        var focusTarget = card.querySelector('input:not(:disabled), textarea:not(:disabled), button:not(:disabled)');
+        if (focusTarget) focusTarget.focus({ preventScroll: true });
+        else {
+            card.setAttribute('tabindex', '-1');
+            card.focus({ preventScroll: true });
+        }
+    });
+    card.classList.add('is-highlighted');
+    setTimeout(function () { card.classList.remove('is-highlighted'); }, 1200);
+}
+
+async function handleHumanTodoFloaterAction() {
+    var current = String(currentSessionId || '');
+    var currentCounts = current ? sessionPendingHumanCounts(current) : { total: 0 };
+    if (currentCounts.total > 0) {
+        focusFirstPendingHumanInteraction();
+        return;
+    }
+    var target = firstSessionWithPendingHumanInteractions();
+    if (!target) return;
+    if (typeof switchSession === 'function') {
+        await switchSession(target.id, { forceReload: false });
+    }
+    requestAnimationFrame(function () { focusFirstPendingHumanInteraction(); });
+}
+
+function humanInteractionDraftKey(sessionId, interactionId, requestVersion) {
+    return HUMAN_INTERACTION_DRAFT_PREFIX + String(sessionId || '') + ':' + String(interactionId || '') + ':' + String(requestVersion || 1);
+}
+
+function humanInteractionToolSlot(stream, toolCallId) {
+    var tid = String(toolCallId || '');
+    if (!stream || !tid || typeof CSS === 'undefined' || !CSS.escape) return null;
+    var row = null;
+    try {
+        row = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]');
+    } catch (e) { row = null; }
+    if (!row) return null;
+    var slot = row.querySelector('.human-interaction-tool-slot');
+    if (!slot) {
+        slot = document.createElement('div');
+        slot.className = 'human-interaction-tool-slot';
+        row.appendChild(slot);
+    }
+    return slot;
+}
+
+function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
+    var tid = String(toolCallId || '');
+    var slot = humanInteractionToolSlot(stream, tid);
+    if (!slot) return false;
+    var escaped = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid.replace(/"/g, '\\\\"');
+    var cards = Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id="' + escaped + '"]'));
+    cards.forEach(function (card) {
+        if (card.parentNode !== slot) slot.appendChild(card);
+    });
+    return true;
+}
+
+function attachAllHumanInteractionCards(stream) {
+    if (!stream || !stream.querySelectorAll) return;
+    Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id]')).forEach(function (card) {
+        var tid = card.getAttribute('data-tool-call-id') || '';
+        if (!tid) return;
+        var slot = humanInteractionToolSlot(stream, tid);
+        if (slot && card.parentNode !== slot) slot.appendChild(card);
+    });
+}
+
+function ensurePendingQuestionToolRow(ctx, record, sessionId) {
+    if (!record || record.kind === 'approval' || record.status !== 'pending') return false;
+    var toolCallId = String(record.tool_call_id || '');
+    var stream = ctx && ctx.stream ? ctx.stream : null;
+    if (!toolCallId || !stream || typeof appendToolPendingRow !== 'function') return false;
+    var existing = null;
+    if (typeof CSS !== 'undefined' && CSS.escape) {
+        try {
+            existing = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');
+        } catch (e) { existing = null; }
+    }
+    if (!existing) {
+        appendToolPendingRow(ctx, {
+            type: 'tool_pending',
+            ephemeral: true,
+            tool: 'ask_user',
+            args: { questions: record.questions || [] },
+            command_preview: 'ask_user',
+            tool_call_id: toolCallId,
+        }, sessionId);
+    }
+    return true;
+}
+
+function autoReviewStatusElement(stream, toolCallId) {
+    var slot = humanInteractionToolSlot(stream, toolCallId);
+    if (!slot) return null;
+    var el = slot.querySelector('.auto-review-status');
+    if (!el) {
+        el = humanElement('div', 'auto-review-status');
+        slot.insertBefore(el, slot.firstChild);
+    }
+    return el;
+}
+
+function interceptReasonFromReviewText(interceptReason, fallbackReason) {
+    var text = String(interceptReason || '').trim();
+    if (text) return text;
+    // 后端 reason 字段形如 "【拦截原因】…\\n【命令风险】…\\n【命令目的】…"。
+    // 旧事件未携带独立 intercept_reason 时，从这里把拦截原因摘出来。
+    var whole = String(fallbackReason || '').trim();
+    var match = /【拦截原因】\\s*([\\s\\S]*?)(?:\\n【命令风险】|$)/.exec(whole);
+    if (match) {
+        var extracted = match[1].trim();
+        if (extracted) return extracted;
+    }
+    return '';
+}
+
+function splitReviewExplanationText(interceptReason, riskAnalysis, commandPurpose, fallbackReason) {
+    // 把 review.reason / subtitle 这类 "【拦截原因】…\\n【命令风险】…\\n【命令目的】…"
+    // 文本拆成三段；已提供的独立字段优先。
+    var sections = { intercept: '', risk: '', purpose: '' };
+    var whole = String(fallbackReason || '').trim();
+    var interceptMatch = /【拦截原因】\\s*([\\s\\S]*?)(?:\\n【命令风险】|$)/.exec(whole);
+    var riskMatch = /【命令风险】\\s*([\\s\\S]*?)(?:\\n【命令目的】|$)/.exec(whole);
+    var purposeMatch = /【命令目的】\\s*([\\s\\S]*)$/.exec(whole);
+    sections.intercept = String(interceptReason || '').trim()
+        || (interceptMatch && interceptMatch[1].trim() || '');
+    sections.risk = String(riskAnalysis || '').trim()
+        || (riskMatch && riskMatch[1].trim() || '');
+    sections.purpose = String(commandPurpose || '').trim()
+        || (purposeMatch && purposeMatch[1].trim() || '');
+    return sections;
+}
+
+function appendApprovalReviewExplanation(container, interceptReason, riskAnalysis, commandPurpose, fallbackReason) {
+    if (!container) return;
+    var interceptText = interceptReasonFromReviewText(interceptReason, fallbackReason);
+    var riskText = String(riskAnalysis || fallbackReason || '未提供具体风险说明。').trim();
+    var purposeText = String(commandPurpose || '未提供命令用途说明。').trim();
+    var explanation = humanElement('div', 'approval-review-explanation');
+    if (interceptText) {
+        var interceptRow = humanElement('div', 'approval-review-section');
+        interceptRow.appendChild(humanElement('strong', 'approval-review-section-label', '【拦截原因】'));
+        interceptRow.appendChild(humanElement('span', 'approval-review-section-text', interceptText));
+        explanation.appendChild(interceptRow);
+    }
+    var riskRow = humanElement('div', 'approval-review-section');
+    riskRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令风险】'));
+    riskRow.appendChild(humanElement('span', 'approval-review-section-text', riskText));
+    explanation.appendChild(riskRow);
+    var purposeRow = humanElement('div', 'approval-review-section');
+    purposeRow.appendChild(humanElement('strong', 'approval-review-section-label', '【命令目的】'));
+    purposeRow.appendChild(humanElement('span', 'approval-review-section-text', purposeText));
+    explanation.appendChild(purposeRow);
+    container.appendChild(explanation);
+}
+
+function renderAutoReviewStatusEvent(ctx, event, runSessionId) {
+    var stream = ctx && ctx.stream
+        ? ctx.stream
+        : (typeof getVisibleChatStream === 'function'
+            ? getVisibleChatStream()
+            : document.getElementById('chat-stream'));
+    var tid = String((event && event.tool_call_id) || '');
+    var status = String((event && event.status) || '');
+    if (!stream || !tid) {
+        var fallback = String((event && event.content) || '');
+        if (fallback && typeof appendLog === 'function') appendLog(ctx, fallback, 'status', runSessionId);
+        return;
+    }
+    var el = autoReviewStatusElement(stream, tid);
+    if (!el) return;
+    el.className = 'auto-review-status';
+    el.setAttribute('data-status', status);
+    // Status events update one persistent row. Clear the previous loading or
+    // result content before rendering the new state so in-progress copy and
+    // its spinner do not remain beside the final decision.
+    el.textContent = '';
+    if (status === 'in_progress') {
+        el.classList.add('is-in-progress');
+        el.appendChild(humanElement('span', 'auto-review-spin'));
+        el.appendChild(humanElement(
+            'span',
+            'auto-review-text',
+            '自动审查中：审查 Agent 正在核对你的任务意图与请求风险。'
+        ));
+        return;
+    }
+    var approved = status === 'approved';
+    var risk = String((event && event.risk) || 'unknown');
+    var reason = String((event && event.reason) || '');
+    var interceptReason = String((event && event.intercept_reason) || '');
+    var riskAnalysis = String((event && event.risk_analysis) || '');
+    var commandPurpose = String((event && event.command_purpose) || '');
+    var unknown = risk === 'unknown' || risk === 'timed_out';
+    el.classList.add(approved ? 'is-approved' : (unknown ? 'is-timedout' : 'is-denied'));
+    var text = humanElement('div', 'auto-review-text');
+    var title = humanElement(
+        'span',
+        'auto-review-title',
+        approved
+            ? '自动审批已批准'
+            : (unknown ? '自动审查不可用（已转人工确认）' : '自动审批已拒绝')
+    );
+    if (!approved && !unknown) {
+        title.appendChild(humanElement('span', 'auto-review-risk', risk));
+    }
+    text.appendChild(title);
+    appendApprovalReviewExplanation(text, interceptReason, riskAnalysis, commandPurpose, reason);
+    if (!approved && !unknown) {
+        text.appendChild(humanElement(
+            'div',
+            'auto-review-hint',
+            '可人工覆盖本次请求（只此一次，不沉淀规则）'
+        ));
+    }
+    el.appendChild(text);
+}
+
+function persistHumanInteractionDraft(card) {
+    if (!card || card.dataset.kind !== 'question') return;
+    var draft = { selections: {}, others: {}, skipped: {}, step: Number(card.dataset.step || 0), updatedAt: Date.now() };
+    card.querySelectorAll('.human-question-pane').forEach(function (pane) {
+        var qid = pane.dataset.questionId || '';
+        draft.selections[qid] = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) {
+            return input.dataset.optionId;
+        });
+        var other = pane.querySelector('.human-other-input');
+        draft.others[qid] = other ? other.value : '';
+        draft.skipped[qid] = pane.dataset.skipped === '1';
+    });
+    try { sessionStorage.setItem(humanInteractionDraftKey(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion), JSON.stringify(draft)); } catch (e) { /* ignore */ }
+}
+
+function restoreHumanInteractionDraft(card) {
+    if (!card || card.dataset.kind !== 'question') return null;
+    var draft = null;
+    try { draft = JSON.parse(sessionStorage.getItem(humanInteractionDraftKey(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion)) || 'null'); } catch (e) { draft = null; }
+    if (!draft) return null;
+    card.querySelectorAll('.human-question-pane').forEach(function (pane) {
+        var qid = pane.dataset.questionId || '';
+        var selected = (draft.selections && draft.selections[qid]) || [];
+        pane.querySelectorAll('input[data-option-id]').forEach(function (input) {
+            input.checked = selected.indexOf(input.dataset.optionId) >= 0;
+        });
+        var other = pane.querySelector('.human-other-input');
+        if (other && draft.others) {
+            other.value = draft.others[qid] || '';
+            var otherMark = pane.querySelector('.human-other-mark');
+            if (otherMark && other.value) otherMark.checked = true;
+        }
+        pane.dataset.skipped = draft.skipped && draft.skipped[qid] ? '1' : '0';
+    });
+    return draft;
+}
+
+function clearHumanInteractionDraft(sessionId, interactionId, requestVersion) {
+    try { sessionStorage.removeItem(humanInteractionDraftKey(sessionId, interactionId, requestVersion)); } catch (e) { /* ignore */ }
+}
+
+function humanElement(tag, className, text) {
+    var el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text != null) el.textContent = String(text);
+    return el;
+}
+
+function appendHumanCardHeader(card, record, kind) {
+    var head = humanElement('div', 'human-card-head');
+    var icon = humanElement('span', 'human-card-icon', kind === 'approval' ? '!' : '?');
+    icon.setAttribute('aria-hidden', 'true');
+    var copy = humanElement('div', 'human-card-head-copy');
+    copy.appendChild(humanElement('div', 'human-card-kicker', kind === 'approval' ? '安全审批' : '需要你的回答'));
+    var title = humanElement('h3', 'human-card-title', kind === 'approval'
+        ? (record.title || 'Agent 请求执行操作')
+        : ((record.questions && record.questions.length > 1) ? (record.questions.length + ' 个问题待确认') : ((record.questions && record.questions[0] && record.questions[0].header) || '确认下一步')));
+    var recordId = String(kind === 'approval' ? (record.approval_id || '') : (record.interaction_id || ''));
+    title.id = 'human-card-title-' + recordId.replace(/[^a-zA-Z0-9_-]/g, '-');
+    copy.appendChild(title);
+    card.setAttribute('aria-labelledby', title.id);
+    var statusText = record.status === 'pending'
+        ? (kind === 'approval' ? '待审批' : '待回答')
+        : ({ resolved: kind === 'approval' ? '已处理' : '已回答', cancelled: '已取消', expired: '已过期' }[record.status] || record.status);
+    var status = humanElement('span', 'human-card-status', statusText);
+    head.appendChild(icon);
+    head.appendChild(copy);
+    head.appendChild(status);
+    card.appendChild(head);
+}
+
+function humanQuestionPaneState(pane) {
+    var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked'));
+    var otherMark = pane.querySelector('.human-other-mark');
+    var otherInput = pane.querySelector('.human-other-input');
+    var otherSelected = !!(otherMark && otherMark.checked);
+    var otherText = otherSelected && otherInput ? normalizeSendableText(otherInput.value) : '';
+    var skipped = pane.dataset.skipped === '1';
+    return {
+        selected: selected,
+        otherSelected: otherSelected,
+        otherText: otherText,
+        answered: selected.length > 0 || !!otherText,
+        invalidOther: otherSelected && !otherText,
+        skipped: skipped,
+    };
+}
+
+function validateHumanQuestionPane(card, pane) {
+    var error = card.querySelector('.human-card-error');
+    var state = humanQuestionPaneState(pane);
+    if (state.skipped) {
+        if (error) error.textContent = '';
+        return true;
+    }
+    if (state.invalidOther) {
+        if (error) error.textContent = '请输入其他答案。';
+        var other = pane.querySelector('.human-other-input');
+        if (other) other.focus();
+        return false;
+    }
+    if (!state.answered) {
+        if (error) error.textContent = pane.querySelector('input[type="checkbox"]') ? '请至少选择一个选项。' : '请选择一个选项。';
+        var firstControl = pane.querySelector('input');
+        if (firstControl) firstControl.focus();
+        return false;
+    }
+    if (error) error.textContent = '';
+    return true;
+}
+
+function isHumanQuestionPaneComplete(pane) {
+    var state = humanQuestionPaneState(pane);
+    return state.skipped || (state.answered && !state.invalidOther);
+}
+
+function allHumanQuestionsComplete(card) {
+    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+    return panes.length > 0 && panes.every(isHumanQuestionPaneComplete);
+}
+
+function nextIncompleteHumanQuestionIndex(panes, current) {
+    for (var offset = 1; offset <= panes.length; offset += 1) {
+        var index = (current + offset) % panes.length;
+        if (!isHumanQuestionPaneComplete(panes[index])) return index;
+    }
+    return current;
+}
+
+function confirmCurrentHumanQuestion(card) {
+    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+    var current = Number(card.dataset.step || 0);
+    var pane = panes[current];
+    if (!pane || !validateHumanQuestionPane(card, pane)) return;
+    setHumanQuestionStep(card, nextIncompleteHumanQuestionIndex(panes, current));
+}
+
+function setHumanQuestionStep(card, index) {
+    var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+    if (!panes.length) return;
+    var next = Math.max(0, Math.min(Number(index) || 0, panes.length - 1));
+    card.dataset.step = String(next);
+    panes.forEach(function (pane, idx) { pane.classList.toggle('is-active', idx === next); });
+    card.querySelectorAll('.human-question-tab').forEach(function (tab, idx) {
+        var state = humanQuestionPaneState(panes[idx]);
+        tab.classList.toggle('is-active', idx === next);
+        tab.classList.toggle('is-answered', state.answered);
+        tab.classList.toggle('is-skipped', state.skipped);
+        tab.setAttribute('aria-selected', idx === next ? 'true' : 'false');
+        tab.setAttribute('tabindex', idx === next ? '0' : '-1');
+    });
+    var tabs = card.querySelector('.human-question-tabs');
+    if (tabs) tabs.classList.remove('hidden');
+    var body = card.querySelector('.human-card-body');
+    if (body) body.classList.remove('hidden');
+    var progress = card.querySelector('.human-question-progress');
+    if (progress) progress.textContent = '问题 ' + (next + 1) + '/' + panes.length + ' · ' + String(panes[next].dataset.questionHeader || '');
+    var back = card.querySelector('.human-back-btn');
+    var confirmBtn = card.querySelector('.human-confirm-btn');
+    var multipleQuestions = panes.length > 1;
+    var allComplete = panes.every(isHumanQuestionPaneComplete);
+    if (back) {
+        back.textContent = '上一题';
+        back.classList.toggle('hidden', !multipleQuestions);
+        back.disabled = next === 0;
+    }
+    // 单按钮语义：未全部回答时是「确认」，全部回答完后变为「提交答案」
+    if (confirmBtn) {
+        confirmBtn.textContent = allComplete ? '提交答案' : '确认';
+        confirmBtn.classList.toggle('is-ready', allComplete);
+        confirmBtn.title = allComplete ? '全部问题已回答，提交答案' : '确认当前回答并进入下一题';
+    }
+    var shortcut = panes[next].querySelector('.human-other-shortcut');
+    if (shortcut) shortcut.textContent = allComplete ? 'Ctrl/Cmd + Enter 提交答案' : 'Ctrl/Cmd + Enter 确认回答';
+    if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
+}
+
+function createHumanQuestionCard(record, sessionId) {
+    var card = humanElement('article', 'human-interaction-card human-question-card');
+    card.dataset.kind = 'question';
+    card.dataset.sessionId = sessionId;
+    card.dataset.interactionId = String(record.interaction_id || '');
+    card.dataset.requestVersion = String(record.request_version || 1);
+    appendHumanCardHeader(card, record, 'question');
+    var questions = Array.isArray(record.questions) ? record.questions : [];
+    if (questions.length > 1) {
+        var tabs = humanElement('div', 'human-question-tabs');
+        tabs.setAttribute('role', 'tablist');
+        questions.forEach(function (question, index) {
+            var tab = humanElement('button', 'human-question-tab', question.header || ('问题 ' + (index + 1)));
+            tab.type = 'button';
+            tab.id = 'human-tab-' + record.interaction_id + '-' + index;
+            tab.setAttribute('role', 'tab');
+            tab.setAttribute('aria-controls', 'human-pane-' + record.interaction_id + '-' + index);
+            tab.addEventListener('click', function () {
+                var current = Number(card.dataset.step || 0);
+                if (index > current && !validateHumanQuestionPane(card, card.querySelectorAll('.human-question-pane')[current])) return;
+                setHumanQuestionStep(card, index);
+            });
+            tab.addEventListener('keydown', function (event) {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                event.preventDefault();
+                var target = index + (event.key === 'ArrowRight' ? 1 : -1);
+                target = Math.max(0, Math.min(target, questions.length - 1));
+                var current = Number(card.dataset.step || 0);
+                if (target > current && !validateHumanQuestionPane(card, card.querySelectorAll('.human-question-pane')[current])) return;
+                setHumanQuestionStep(card, target);
+                var targetTab = card.querySelectorAll('.human-question-tab')[target];
+                if (targetTab) targetTab.focus();
+            });
+            tabs.appendChild(tab);
+        });
+        card.appendChild(tabs);
+        card.appendChild(humanElement('div', 'human-question-progress'));
+    }
+    var body = humanElement('div', 'human-card-body');
+    questions.forEach(function (question, qIndex) {
+        var pane = humanElement('fieldset', 'human-question-pane');
+        pane.id = 'human-pane-' + record.interaction_id + '-' + qIndex;
+        pane.setAttribute('role', 'tabpanel');
+        if (questions.length > 1) pane.setAttribute('aria-labelledby', 'human-tab-' + record.interaction_id + '-' + qIndex);
+        pane.dataset.questionId = String(question.question_id || ('q' + (qIndex + 1)));
+        pane.dataset.questionHeader = String(question.header || ('问题 ' + (qIndex + 1)));
+        pane.appendChild(humanElement('legend', 'human-question-text', question.question || ''));
+        pane.appendChild(humanElement('div', 'human-question-hint', question.multi_select ? '可多选' : '单选'));
+        var options = humanElement('div', 'human-options');
+        (question.options || []).forEach(function (option, optionIndex) {
+            var label = humanElement('label', 'human-option');
+            var input = document.createElement('input');
+            input.type = question.multi_select ? 'checkbox' : 'radio';
+            input.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
+            input.dataset.optionId = String(option.option_id || '');
+            var copy = humanElement('span', 'human-option-copy');
+            copy.appendChild(humanElement('span', 'human-option-label', option.label || ''));
+            var description = humanElement('span', 'human-option-description', option.description || '');
+            description.id = 'human-option-desc-' + record.interaction_id + '-' + qIndex + '-' + optionIndex;
+            input.setAttribute('aria-describedby', description.id);
+            copy.appendChild(description);
+            if (option.preview) {
+                var details = humanElement('details', 'human-option-preview');
+                details.appendChild(humanElement('summary', '', '查看预览'));
+                details.appendChild(humanElement('pre', '', option.preview));
+                copy.appendChild(details);
+            }
+            label.appendChild(input);
+            label.appendChild(copy);
+            options.appendChild(label);
+        });
+        var other = humanElement('label', 'human-option human-option-other');
+        var otherMark = document.createElement('input');
+        otherMark.type = question.multi_select ? 'checkbox' : 'radio';
+        otherMark.name = 'human-' + record.interaction_id + '-' + pane.dataset.questionId;
+        otherMark.className = 'human-other-mark';
+        var otherCopy = humanElement('span', 'human-option-copy');
+        var otherHeader = humanElement('span', 'human-other-header');
+        otherHeader.appendChild(humanElement('span', 'human-option-label', '其他'));
+        otherHeader.appendChild(humanElement(
+            'span',
+            'input-shortcut-hint human-other-shortcut',
+            'Ctrl/Cmd + Enter 确认回答'
+        ));
+        otherCopy.appendChild(otherHeader);
+        var otherInput = document.createElement('textarea');
+        otherInput.className = 'human-other-input';
+        otherInput.rows = 2;
+        otherInput.maxLength = 2000;
+        otherInput.placeholder = '输入你的答案…';
+        otherInput.setAttribute('aria-label', '其他答案');
+        otherInput.addEventListener('focus', function () {
+            pane.dataset.skipped = '0';
+            otherMark.checked = true;
+            setHumanQuestionStep(card, Number(card.dataset.step || 0));
+        });
+        otherCopy.appendChild(otherInput);
+        other.appendChild(otherMark);
+        other.appendChild(otherCopy);
+        options.appendChild(other);
+        options.addEventListener('change', function () {
+            pane.dataset.skipped = '0';
+            setHumanQuestionStep(card, Number(card.dataset.step || 0));
+        });
+        options.addEventListener('input', function () {
+            pane.dataset.skipped = '0';
+            setHumanQuestionStep(card, Number(card.dataset.step || 0));
+        });
+        pane.appendChild(options);
+        body.appendChild(pane);
+    });
+    card.appendChild(body);
+    var error = humanElement('div', 'human-card-error');
+    error.setAttribute('role', 'alert');
+    card.appendChild(error);
+    var actions = humanElement('div', 'human-card-actions human-question-actions');
+    var skip = humanElement('button', 'human-secondary-btn human-skip-btn', '不回答');
+    skip.type = 'button';
+    skip.title = '只跳过当前题目';
+    skip.addEventListener('click', function () {
+        var current = Number(card.dataset.step || 0);
+        var panes = card.querySelectorAll('.human-question-pane');
+        var pane = panes[current];
+        if (!pane) return;
+        pane.querySelectorAll('input').forEach(function (input) { input.checked = false; });
+        var otherInput = pane.querySelector('.human-other-input');
+        if (otherInput) otherInput.value = '';
+        pane.dataset.skipped = '1';
+        var error = card.querySelector('.human-card-error');
+        if (error) error.textContent = '';
+        persistHumanInteractionDraft(card);
+        setHumanQuestionStep(card, nextIncompleteHumanQuestionIndex(Array.from(panes), current));
+    });
+    var nav = humanElement('div', 'human-card-nav');
+    var back = humanElement('button', 'human-secondary-btn human-back-btn', '上一题');
+    back.type = 'button';
+    back.addEventListener('click', function () {
+        setHumanQuestionStep(card, Number(card.dataset.step || 0) - 1);
+    });
+    var confirmButton = humanElement('button', 'human-primary-btn human-confirm-btn', '确认');
+    confirmButton.type = 'button';
+    confirmButton.addEventListener('click', function () {
+        if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card);
+        else confirmCurrentHumanQuestion(card);
+    });
+    nav.appendChild(back);
+    nav.appendChild(confirmButton);
+    actions.appendChild(skip);
+    actions.appendChild(nav);
+    card.appendChild(actions);
+    var draft = restoreHumanInteractionDraft(card);
+    setHumanQuestionStep(card, draft && Number.isFinite(Number(draft.step)) ? Number(draft.step) : 0);
+    card.dataset.draftReady = '1';
+    card.addEventListener('keydown', function (event) {
+        if (!isInputSubmitShortcut(event, 'editor')) return;
+        event.preventDefault();
+        if (allHumanQuestionsComplete(card)) void submitHumanQuestion(card);
+        else confirmCurrentHumanQuestion(card);
+    });
+    return card;
+}
+
+function collectHumanQuestionAnswers(card) {
+    var answers = [];
+    var invalidPane = null;
+    card.querySelectorAll('.human-question-pane').forEach(function (pane) {
+        var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked')).map(function (input) { return input.dataset.optionId; });
+        var otherMark = pane.querySelector('.human-other-mark');
+        var otherInput = pane.querySelector('.human-other-input');
+        var skipped = pane.dataset.skipped === '1';
+        var otherText = !skipped && otherMark && otherMark.checked && otherInput ? normalizeSendableText(otherInput.value) : '';
+        if (!skipped && ((!selected.length && !otherText) || (otherMark && otherMark.checked && !otherText)) && !invalidPane) invalidPane = pane;
+        answers.push({
+            question_id: pane.dataset.questionId || '',
+            selected_option_ids: skipped ? [] : selected,
+            other_text: otherText || null,
+            notes: null,
+            skipped: skipped,
+        });
+    });
+    return { answers: answers, invalidPane: invalidPane };
+}
+
+function setHumanInteractionSubmitting(card, submitting, label) {
+    if (!card) return;
+    card.dataset.submitting = submitting ? '1' : '0';
+    card.classList.toggle('is-submitting', !!submitting);
+    card.setAttribute('aria-busy', submitting ? 'true' : 'false');
+    var status = card.querySelector('.human-card-status');
+    if (status) {
+        if (!status.dataset.defaultLabel) status.dataset.defaultLabel = status.textContent || '';
+        status.textContent = submitting ? (label || '正在提交…') : status.dataset.defaultLabel;
+    }
+    var primary = card.querySelector('.human-confirm-btn, .human-allow-btn');
+    if (!primary) return;
+    if (!primary.dataset.defaultLabel) primary.dataset.defaultLabel = primary.textContent || '';
+    primary.textContent = submitting ? (label || '正在提交…') : primary.dataset.defaultLabel;
+}
+
+async function submitHumanQuestion(card) {
+    if (!card || card.dataset.submitting === '1') return;
+    var collected = collectHumanQuestionAnswers(card);
+    var error = card.querySelector('.human-card-error');
+    if (collected.invalidPane) {
+        var panes = Array.from(card.querySelectorAll('.human-question-pane'));
+        setHumanQuestionStep(card, panes.indexOf(collected.invalidPane));
+        if (error) error.textContent = '请完成当前问题后再提交。';
+        return;
+    }
+    setHumanInteractionSubmitting(card, true, '正在提交…');
+    if (error) error.textContent = '';
+    try {
+        var recoveryAfterIndex = typeof getUiEventCount === 'function'
+            ? await getUiEventCount(card.dataset.sessionId, { timeoutMs: 5000 })
+            : 0;
+        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/interactions/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: collected.answers }),
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion);
+        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_resolved' }, data.interaction || {}));
+        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+        if (data.recovery_scheduled) {
+            resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);
+        }
+    } catch (err) {
+        setHumanInteractionSubmitting(card, false);
+        if (error) error.textContent = '提交失败：' + String(err && err.message ? err.message : err);
+    }
+}
+
+function resumeRecoveredHumanInteractionStream(sessionId, afterIndex) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
+    if (sid !== String(currentSessionId || '')) return;
+    var start = function () {
+        if (sid !== String(currentSessionId || '')) return;
+        if (typeof attachSessionEventStream === 'function') {
+            void attachSessionEventStream(sid, {
+                skipInitialLoad: true,
+                force: true,
+                afterIndex: Math.max(0, Number(afterIndex) || 0),
+            });
+        }
+    };
+    if (typeof refreshSingleSessionRow === 'function') {
+        void Promise.resolve(refreshSingleSessionRow(sid)).then(start, start);
+    } else {
+        start();
+    }
+}
+
+function createHumanApprovalCard(record, sessionId) {
+    var danger = record.approval_level === 'danger';
+    var forced = !!record.force_approval;
+    var workspaceApproval = !forced && !!record.external_workspace_grantable;
+    var card = humanElement('article', 'human-interaction-card human-approval-card' + (danger ? ' is-danger' : ''));
+    card.dataset.kind = 'approval';
+    card.dataset.sessionId = sessionId;
+    card.dataset.interactionId = String(record.approval_id || '');
+    card.dataset.rejectionReasonSuggestion = String(record.rejection_reason_suggestion || '').trim();
+    appendHumanCardHeader(card, record, 'approval');
+    var body = humanElement('div', 'human-card-body');
+    // 拦截原因 / 命令风险 / 命令目的 三段结构化展示。普通审批卡的
+    // subtitle 就是策略给出的拦截原因；自动审查覆盖卡的 subtitle 是
+    // "【拦截原因】…\\n【命令风险】…\\n【命令目的】…" 拼接文本，这里拆开。
+    var subtitle = String(record.subtitle || '').trim();
+    var hasReviewSections = subtitle.indexOf('【命令风险】') >= 0 || subtitle.indexOf('【命令目的】') >= 0;
+    if (subtitle) {
+        if (hasReviewSections) {
+            var sections = splitReviewExplanationText(
+                String(record.intercept_reason || ''),
+                String(record.risk_analysis || ''),
+                String(record.command_purpose || ''),
+                subtitle
+            );
+            if (sections.intercept) {
+                var interceptBox = humanElement('div', 'human-approval-review human-approval-review--intercept');
+                interceptBox.appendChild(humanElement('div', 'human-approval-review-label', '拦截原因'));
+                interceptBox.appendChild(humanElement('div', 'human-approval-review-text', sections.intercept));
+                body.appendChild(interceptBox);
+            }
+            if (sections.risk) {
+                var riskBox = humanElement('div', 'human-approval-review human-approval-review--risk');
+                riskBox.appendChild(humanElement('div', 'human-approval-review-label', '命令风险'));
+                riskBox.appendChild(humanElement('div', 'human-approval-review-text', sections.risk));
+                body.appendChild(riskBox);
+            }
+            if (sections.purpose) {
+                var purposeBox = humanElement('div', 'human-approval-review human-approval-review--purpose');
+                purposeBox.appendChild(humanElement('div', 'human-approval-review-label', '命令目的'));
+                purposeBox.appendChild(humanElement('div', 'human-approval-review-text', sections.purpose));
+                body.appendChild(purposeBox);
+            }
+        } else {
+            body.appendChild(humanElement('div', 'human-approval-subtitle', subtitle));
+        }
+    }
+    body.appendChild(humanElement('div', 'human-approval-message', record.message || '是否允许 Agent 执行此操作？'));
+    if (danger && record.consequence) {
+        body.appendChild(humanElement('div', 'human-approval-consequence', record.consequence));
+    }
+    if (record.tool) {
+        var detail = humanElement('div', 'human-approval-detail');
+        detail.appendChild(humanElement('span', '', '工具'));
+        detail.appendChild(humanElement('code', '', record.tool));
+        body.appendChild(detail);
+    }
+    var egressIntent = String(record.egress_intent || 'none');
+    if (egressIntent !== 'none') {
+        var egress = humanElement('div', 'human-egress-summary');
+        var intentLabel = egressIntent === 'upload'
+            ? '数据发送'
+            : (egressIntent === 'read' ? '网络读取' : '未知网络操作');
+        egress.appendChild(humanElement('div', 'human-egress-label', intentLabel));
+        var destinations = Array.isArray(record.destinations) ? record.destinations : [];
+        if (destinations.length) {
+            egress.appendChild(humanElement('div', 'human-egress-row', '目标：' + destinations.map(function (item) {
+                var host = String((item && item.host) || '未知');
+                var port = Number(item && item.port) || 0;
+                return host + (port ? ':' + port : '');
+            }).join('、')));
+        } else {
+            egress.appendChild(humanElement('div', 'human-egress-row is-warning', '目标：运行时动态确定'));
+        }
+        var sources = Array.isArray(record.data_sources) ? record.data_sources : [];
+        if (sources.length) egress.appendChild(humanElement('div', 'human-egress-row', '数据来源：' + sources.join('、')));
+        var enforcement = String(record.enforcement_level || '');
+        if (enforcement) {
+            egress.appendChild(humanElement(
+                'div',
+                'human-egress-enforcement ' + (enforcement === 'strong' ? 'is-strong' : (enforcement === 'partial' ? 'is-partial' : 'is-degraded')),
+                enforcement === 'strong'
+                    ? '系统级出站防护已启用（目标受限）'
+                    : (enforcement === 'partial'
+                        ? '系统级出站防护已启用（无网络命令强制断网；获批联网暂不限制目标）'
+                        : (enforcement === 'disabled' ? '系统出站助手已关闭' : '降级防护：当前仅使用应用层识别'))
+            ));
+        }
+        body.appendChild(egress);
+    }
+    if (!forced && !workspaceApproval && record.rule_pattern) {
+        body.appendChild(
+            humanElement(
+                'div',
+                'human-approval-rule-hint',
+                '“始终允许”将保存为长期规则：' + record.rule_pattern
+            )
+        );
+    } else if (!forced && !workspaceApproval && record.grant_scope === 'task') {
+        body.appendChild(
+            humanElement(
+                'div',
+                'human-approval-rule-hint',
+                '“始终允许”仅在当前任务内允许同类操作和相同目标，不会保存跨任务规则。'
+            )
+        );
+    }
+    card.appendChild(body);
+    var analysis = humanElement('div', 'human-approval-analysis');
+    analysis.hidden = true;
+    analysis.setAttribute('role', 'status');
+    card.appendChild(analysis);
+    var rejectionEditor = humanElement('div', 'human-approval-rejection-editor');
+    rejectionEditor.hidden = true;
+    var rejectionLabel = humanElement('label', 'human-approval-rejection-label', '拒绝原因');
+    var rejectionInput = document.createElement('textarea');
+    rejectionInput.className = 'human-approval-rejection-input';
+    rejectionInput.rows = 3;
+    rejectionInput.maxLength = 2000;
+    rejectionInput.placeholder = '请填写拒绝原因，Agent 会根据原因调整后续操作';
+    rejectionLabel.appendChild(rejectionInput);
+    rejectionEditor.appendChild(rejectionLabel);
+    rejectionEditor.appendChild(humanElement('div', 'human-approval-rejection-hint', '拒绝原因会随审批结果返回给 Agent。'));
+    card.appendChild(rejectionEditor);
+    var error = humanElement('div', 'human-card-error');
+    error.setAttribute('role', 'alert');
+    card.appendChild(error);
+    var actions = humanElement('div', 'human-card-actions human-approval-actions');
+    var analyze = humanElement('button', 'human-secondary-btn human-analyze-btn', '替我分析');
+    analyze.type = 'button';
+    analyze.title = '调用独立审查模型给出风险解读和审批建议，不会替你执行审批';
+    analyze.addEventListener('click', function () { void analyzeHumanApproval(card); });
+    actions.appendChild(analyze);
+    var decisions = humanElement('div', 'human-approval-decisions');
+    var deny = humanElement('button', 'human-secondary-btn human-deny-btn', '拒绝执行');
+    deny.type = 'button';
+    deny.addEventListener('click', function () { void requestHumanApprovalDenial(card); });
+    decisions.appendChild(deny);
+    if (!forced && record.allow_session_available !== false) {
+        var durableRuleAvailable = !!record.allow_always_available && !!record.rule_pattern;
+        var alwaysDecision = workspaceApproval
+            ? 'allow_external_workspace'
+            : (durableRuleAvailable ? 'allow_always' : 'allow_session');
+        var always = humanElement('button', 'human-secondary-btn human-always-btn', '始终允许');
+        always.type = 'button';
+        always.title = workspaceApproval
+            ? '持续允许写入、删除和 Shell 处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
+            : (durableRuleAvailable
+                ? '保存为长期规则，后续匹配时自动放行：' + record.rule_pattern
+                : (record.grant_scope === 'task'
+                    ? '仅在当前任务内自动允许同类操作和相同目标，不会保存跨任务规则'
+                    : '无法生成长期规则；改为在当前任务内自动允许完全相同的请求'));
+        always.addEventListener('click', function () { void resolveHumanApproval(card, alwaysDecision); });
+        decisions.appendChild(always);
+    }
+    var onceDecision = workspaceApproval ? 'allow_external_workspace_once' : 'allow_once';
+    var allow = humanElement('button', 'human-primary-btn human-allow-btn', '本次允许');
+    allow.type = 'button';
+    allow.title = workspaceApproval
+        ? '仅允许本次处理工作区沙箱外内容；随后仍会单独审批本次工具操作'
+        : '仅放行这一次；执行后授权立即失效';
+    allow.addEventListener('click', function () { void resolveHumanApproval(card, onceDecision); });
+    decisions.appendChild(allow);
+    actions.appendChild(decisions);
+    card.appendChild(actions);
+    return card;
+}
+
+async function analyzeHumanApproval(card) {
+    if (!card || card.dataset.submitting === '1') return;
+    var error = card.querySelector('.human-card-error');
+    var panel = card.querySelector('.human-approval-analysis');
+    setHumanInteractionSubmitting(card, true, '正在分析…');
+    if (error) error.textContent = '';
+    if (panel) {
+        panel.hidden = false;
+        panel.className = 'human-approval-analysis is-loading';
+        panel.textContent = '审查 Agent 正在核对任务意图与本次操作风险…';
+    }
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/analyze', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+        var result = data.analysis || {};
+        var recommendAllow = result.recommendation === 'allow';
+        panel.className = 'human-approval-analysis ' + (recommendAllow ? 'is-allow' : 'is-deny');
+        panel.textContent = '';
+        var heading = humanElement(
+            'div',
+            'human-approval-analysis-title',
+            result.available === false
+                ? '暂时无法给出可靠建议'
+                : (recommendAllow ? '建议允许' : '建议拒绝')
+        );
+        var risk = humanElement('span', 'human-approval-analysis-risk', '风险：' + String(result.risk || 'unknown'));
+        heading.appendChild(risk);
+        panel.appendChild(heading);
+        appendApprovalReviewExplanation(
+            panel,
+            result.intercept_reason,
+            result.risk_analysis,
+            result.command_purpose,
+            result.reason || '审查模型未提供理由。'
+        );
+        if (!recommendAllow && result.available !== false && String(result.reason || '').trim()) {
+            card.dataset.rejectionReasonSuggestion = String(result.reason).trim();
+            var rejectionInput = card.querySelector('.human-approval-rejection-input');
+            if (rejectionInput && !String(rejectionInput.value || '').trim()) {
+                rejectionInput.value = card.dataset.rejectionReasonSuggestion;
+            }
+        }
+        panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));
+    } catch (err) {
+        if (panel) panel.hidden = true;
+        if (error) error.textContent = '分析失败：' + String(err && err.message ? err.message : err);
+    } finally {
+        setHumanInteractionSubmitting(card, false);
+    }
+}
+
+async function requestHumanApprovalDenial(card) {
+    if (!card || card.dataset.submitting === '1') return;
+    var suggestedReason = String(card.dataset.rejectionReasonSuggestion || '').trim();
+    if (suggestedReason) {
+        await resolveHumanApproval(card, 'deny', suggestedReason);
+        return;
+    }
+    var editor = card.querySelector('.human-approval-rejection-editor');
+    var input = card.querySelector('.human-approval-rejection-input');
+    var deny = card.querySelector('.human-deny-btn');
+    if (editor && editor.hidden) {
+        editor.hidden = false;
+        if (deny) deny.textContent = '确认拒绝';
+        if (input) input.focus();
+        return;
+    }
+    var reason = String((input && input.value) || '').trim();
+    if (!reason) {
+        var error = card.querySelector('.human-card-error');
+        if (error) error.textContent = '请填写拒绝原因。';
+        if (input) input.focus();
+        return;
+    }
+    await resolveHumanApproval(card, 'deny', reason);
+}
+
+async function resolveHumanApproval(card, decision, rejectionReason) {
+    if (!card || card.dataset.submitting === '1') return;
+    setHumanInteractionSubmitting(card, true, '正在处理…');
+    try {
+        var payload = { decision: decision };
+        if (decision === 'deny') payload.rejection_reason = String(rejectionReason || '').trim();
+        var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        var data = await response.json();
+        if (!response.ok || !data.ok) {
+            if (data.approval) {
+                var staleRecord = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'approval_cancelled' }, data.approval));
+                renderHumanInteractionRecord(staleRecord, card.dataset.sessionId, card.parentNode);
+                return;
+            }
+            throw new Error(data.error || ('HTTP ' + response.status));
+        }
+        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'approval_resolved' }, data.approval || {}));
+        renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+    } catch (err) {
+        setHumanInteractionSubmitting(card, false);
+        var error = card.querySelector('.human-card-error');
+        if (error) error.textContent = '处理失败：' + String(err && err.message ? err.message : err);
+    }
+}
+
+function createHumanTerminalCard(record, sessionId) {
+    var kind = record.kind === 'approval' ? 'approval' : 'question';
+    var card = humanElement('article', 'human-interaction-card is-terminal');
+    card.dataset.kind = kind;
+    card.dataset.sessionId = sessionId;
+    card.dataset.interactionId = String(kind === 'approval' ? record.approval_id : record.interaction_id);
+    appendHumanCardHeader(card, record, kind);
+    var summary = humanElement('div', 'human-terminal-summary');
+    if (record.status === 'cancelled') {
+        summary.textContent = record.reason || '该请求已取消。';
+    } else if (record.status === 'expired') {
+        summary.textContent = '该请求已过期。';
+    } else if (kind === 'approval') {
+        summary.textContent = record.decision === 'deny'
+            ? '你已拒绝本次操作。'
+            : (record.decision === 'allow_external_workspace'
+                ? '已始终允许工作区沙箱外处理；本次工具操作仍需单独审批。'
+                : (record.decision === 'allow_external_workspace_once'
+                    ? '已允许本次工作区沙箱外处理；本次工具操作仍需单独审批。'
+                    : (record.decision === 'allow_always'
+                        ? ('已保存长期规则，后续匹配的操作将自动放行。' + (record.rule_pattern ? '（规则：' + record.rule_pattern + '）' : ''))
+                        : (record.decision === 'allow_session'
+                            ? (record.grant_scope === 'task'
+                                ? '当前任务内将自动允许同类操作和相同目标。'
+                                : '当前任务内将自动允许完全相同的请求。')
+                            : '已允许这一次；执行后授权失效。'))));
+        if (record.decision === 'deny' && record.rejection_reason) {
+            summary.appendChild(humanElement(
+                'div',
+                'human-terminal-rejection-reason',
+                '拒绝原因：' + String(record.rejection_reason)
+            ));
+        }
+    } else {
+        var answers = Array.isArray(record.answers) ? record.answers : [];
+        var questionsById = Object.create(null);
+        (record.questions || []).forEach(function (question) {
+            questionsById[String(question.question_id || '')] = question;
+        });
+        answers.forEach(function (answer) {
+            var line = humanElement('div', 'human-terminal-answer');
+            var values = (answer.selected_labels || []).slice();
+            if (answer.other_text) values.push(answer.other_text);
+            var question = questionsById[String(answer.question_id || '')] || {};
+            line.appendChild(humanElement('span', 'human-terminal-answer-label', question.header || '回答'));
+            line.appendChild(humanElement('span', 'human-terminal-answer-value', answer.skipped ? '未回答' : (values.join('、') || '已回答')));
+            summary.appendChild(line);
+        });
+    }
+    card.appendChild(summary);
+    return card;
+}
+
+function renderHumanInteractionRecord(record, sessionId, stream) {
+    if (!record) return null;
+    var sid = String(sessionId || record.session_id || '');
+    var kind = record.kind === 'approval' ? 'approval' : 'question';
+    var id = String(kind === 'approval' ? (record.approval_id || '') : (record.interaction_id || ''));
+    if (!id) return null;
+    stream = stream && stream.querySelectorAll ? stream : (typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream'));
+    if (!stream) return null;
+    var existing = Array.from(stream.querySelectorAll('.human-interaction-card')).find(function (card) {
+        return card.dataset.kind === kind && card.dataset.interactionId === id;
+    });
+    var restoreFocus = !!(existing && existing.contains(document.activeElement));
+    var card = record.status === 'pending'
+        ? (kind === 'approval' ? createHumanApprovalCard(record, sid) : createHumanQuestionCard(record, sid))
+        : createHumanTerminalCard(record, sid);
+    card.dataset.status = record.status || 'pending';
+    var toolCallId = String(record.tool_call_id || '');
+    if (toolCallId) card.dataset.toolCallId = toolCallId;
+    if (existing && existing.parentNode) existing.parentNode.replaceChild(card, existing);
+    else {
+        var slot = humanInteractionToolSlot(stream, toolCallId);
+        (slot || stream).appendChild(card);
+    }
+    if (toolCallId) {
+        attachHumanInteractionCardsForToolCall(stream, toolCallId);
+    }
+    if (restoreFocus && record.status !== 'pending') {
+        card.setAttribute('tabindex', '-1');
+        requestAnimationFrame(function () { card.focus({ preventScroll: true }); });
+    }
+    return card;
+}
+
+function humanCardVisibleInViewport(card) {
+    if (!card || !card.getBoundingClientRect) return true;
+    var r = card.getBoundingClientRect();
+    if (!r.width && !r.height) return false;
+    var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    return r.top >= -8 && r.bottom <= vh + 8;
+}
+
+function autoRevealPendingHumanCard(card) {
+    if (!card || card.dataset.status !== 'pending') return;
+    requestAnimationFrame(function () {
+        if (humanCardVisibleInViewport(card)) return;
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+}
+
+function renderHumanInteractionEvent(ctx, event, runSessionId) {
+    var sid = String(runSessionId || event.session_id || currentSessionId || '');
+    var record = applyHumanInteractionEvent(sid, event);
+    var stream = ctx && ctx.stream ? ctx.stream : null;
+    ensurePendingQuestionToolRow(ctx, record, sid);
+    var card = renderHumanInteractionRecord(record, sid, stream);
+    // Live SSE only: bring a freshly-inserted pending card into view.
+    if (card && record.status === 'pending' && !(typeof replayingMessages !== 'undefined' && replayingMessages)) {
+        autoRevealPendingHumanCard(card);
+    }
+    return card;
+}
+
+function renderPendingHumanInteractions(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || sid !== String(currentSessionId || '')) return;
+    var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
+    var ctx = stream && typeof newDomContext === 'function' ? newDomContext(stream) : null;
+    pendingHumanInteractionRecords(sid).forEach(function (record) {
+        ensurePendingQuestionToolRow(ctx, record, sid);
+        renderHumanInteractionRecord(record, sid, stream);
+    });
+    if (typeof attachAllHumanInteractionCards === 'function') attachAllHumanInteractionCards(stream);
+    updateHumanInteractionBanner(sid);
+}
+
+async function refreshHumanInteractions(sessionId, options) {
+    var sid = String(sessionId || '');
+    if (!sid) return false;
+    options = options || {};
+    var state = humanInteractionSessionState(sid);
+    var refreshEpoch = ++state.refreshEpoch;
+    try {
+        var responses = await Promise.all([
+            fetch('/sessions/' + encodeURIComponent(sid) + '/interactions?status=pending'),
+            fetch('/sessions/' + encodeURIComponent(sid) + '/approvals?status=pending'),
+        ]);
+        if (!responses[0].ok || !responses[1].ok) throw new Error('HTTP ' + responses[0].status + '/' + responses[1].status);
+        var payloads = await Promise.all([responses[0].json(), responses[1].json()]);
+        if (refreshEpoch !== state.refreshEpoch) return false;
+        state.interactions = Object.create(null);
+        state.approvals = Object.create(null);
+        (payloads[0].interactions || []).forEach(function (row) {
+            row.kind = 'question';
+            state.interactions[String(row.interaction_id || '')] = row;
+        });
+        (payloads[1].approvals || []).forEach(function (row) {
+            row.kind = 'approval';
+            state.approvals[String(row.approval_id || '')] = row;
+        });
+        state.loaded = true;
+        syncHumanInteractionSessionSummary(sid);
+        if (options.render !== false && sid === String(currentSessionId || '')) renderPendingHumanInteractions(sid);
+        return true;
+    } catch (err) {
+        console.error('加载待处理交互失败:', err);
+        return false;
+    }
+}
+
+(function bindHumanInteractionBanner() {
+    var button = document.getElementById('human-interaction-banner-btn');
+    if (button) button.addEventListener('click', function () { void handleHumanTodoFloaterAction(); });
+})();
 `,Wr=`var permissionModeBusy = false;
 var currentPermissionStatus = null;
 var mcpRegistrationPromptBusy = false;
@@ -17340,1413 +17329,1413 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,Qr=`\uFEFFfunction setSendButtonState() {\r
-    syncMessageInputPlaceholder();\r
-    sendBtn.disabled = false;\r
-    const uploadBusy = isChatFileUploadBusy();\r
-    const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;\r
-    if (uploadBusy) {\r
-        sendBtn.textContent = '上传中';\r
-        sendBtn.classList.remove('is-stop');\r
-        sendBtn.classList.remove('is-followup');\r
-        sendBtn.disabled = true;\r
-        return;\r
-    }\r
-    if (isSessionRunning(currentSessionId) || newSessionPreflight) {\r
-        const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);\r
-        const suppressFollowup = !!(run && run.suppressFollowupButton);\r
-        const hasDraft = (typeof inputHasSendableText === 'function')\r
-            ? inputHasSendableText()\r
-            : !!(messageInput && String(messageInput.value || '').trim());\r
-        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);\r
-        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';\r
-        sendBtn.classList.add('is-stop');\r
-        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);\r
-    } else {\r
-        sendBtn.textContent = '发送';\r
-        sendBtn.classList.remove('is-stop');\r
-        sendBtn.classList.remove('is-followup');\r
-        sendBtn.disabled = false;\r
-    }\r
-}\r
-\r
-const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';\r
-const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';\r
-const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送刚加入或第一条待发送任务';\r
-\r
-function syncMessageInputPlaceholder() {\r
-    if (!messageInput) return;\r
-    var queue = currentSessionId && typeof getFollowupQueue === 'function'\r
-        ? getFollowupQueue(currentSessionId)\r
-        : [];\r
-    var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));\r
-    var value = queue.some(function (item) { return item && !item.status; })\r
-        ? MESSAGE_INPUT_PLACEHOLDER_QUEUED\r
-        : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);\r
-    messageInput.placeholder = typeof translateUiString === 'function'\r
-        ? translateUiString(value)\r
-        : value;\r
-}\r
-\r
-function isChatFileUploadBusy() {\r
-    return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');\r
-}\r
-\r
-document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);\r
-document.addEventListener('myagent:language-change', function () {\r
-    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);\r
-});\r
-\r
-async function requestInterrupt(sessionId, runId, reason) {\r
-    if (!sessionId) return;\r
-    try {\r
-        await fetch('/sessions/' + sessionId + '/interrupt', {\r
-            method: 'POST',\r
-            headers: { 'Content-Type': 'application/json' },\r
-            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),\r
-        });\r
-    }\r
-    catch (e) { /* ignore */ }\r
-}\r
-\r
-function pauseCurrentRun() {\r
-    if (!currentSessionId) {\r
-        if (optimisticNewSessionRun) {\r
-            markRunAbortReason(optimisticNewSessionRun, 'user');\r
-            try { optimisticNewSessionRun.controller.abort(); } catch (e) { /* ignore */ }\r
-            optimisticNewSessionRun = null;\r
-            setSendButtonState();\r
-        }\r
-        return;\r
-    }\r
-    const run = getSessionRunState(currentSessionId);\r
-    const sid = currentSessionId;\r
-    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};\r
-    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');\r
-    if (typeof markFollowupQueueManualOnly === 'function') markFollowupQueueManualOnly(sid);\r
-    suppressSessionServerStreamActive(sid);\r
-    if (!run) {\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-        renderSessionListIfChanged(false);\r
-        void requestInterrupt(sid, runId, 'user_button');\r
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);\r
-        return;\r
-    }\r
-    const ctx = run.ctx;\r
-    const reachedServer = run.submitted !== false;\r
-    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立即反映「已停止」状态；\r
-       后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应卡顿。*/\r
-    abortSessionRun(sid, 'user');\r
-    setSendButtonState();\r
-    syncSessionListIndicatorClasses();\r
-    renderSessionListIfChanged(false);\r
-    appendLog(ctx, '已请求停止当前任务', 'status', sid);\r
-    sealProcessGroup(ctx);\r
-    if (reachedServer) void requestInterrupt(sid, runId, 'user_button');\r
-    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);\r
-}\r
-\r
-/** 在当前会话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。*/\r
-function resendLastUserMessage() {\r
-    if (!currentSessionId) return false;\r
-    if (isSessionRunning(currentSessionId)) return false;\r
-    var lastMsg = lastUserMessageBySession[currentSessionId];\r
-    if (!lastMsg || !String(lastMsg).trim()) {\r
-        var chatStream = getVisibleChatStream();\r
-        if (chatStream) {\r
-            var wraps = chatStream.querySelectorAll('.msg-wrap--user');\r
-            if (wraps.length) {\r
-                var lastWrap = wraps[wraps.length - 1];\r
-                lastMsg = messageRawMarkdown.get(lastWrap) || (lastWrap.querySelector('.message.user') && lastWrap.querySelector('.message.user').textContent);\r
-            }\r
-        }\r
-    }\r
-    if (!lastMsg || !String(lastMsg).trim()) {\r
-        lastMsg = draftBySession[currentSessionId];\r
-    }\r
-    if (!lastMsg || !String(lastMsg).trim()) return false;\r
-    messageInput.value = String(lastMsg);\r
-    rewriteInputWorkspacePaths();\r
-    autoResizeTextarea();\r
-    sendMessage();\r
-    return true;\r
-}\r
-\r
-function showLoading() {\r
-    resetSessionHistoryPaging();\r
-    clearTocForSessionLoad();\r
-    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
-    const vs = getVisibleChatStream();\r
-    if (vs) emptyChatStreamKeepingStrip(vs);\r
-    const box = document.createElement('div');\r
-    box.className = 'skeleton';\r
-    box.id = 'chat-loading';\r
-    box.setAttribute('role', 'status');\r
-    box.innerHTML = ''\r
-        + '<div class="skeleton-page" aria-hidden="true">'\r
-        + '<div class="skeleton-mast"><span></span><span></span></div>'\r
-        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'\r
-        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'\r
-        + '</div><div class="skeleton-copy">加载中...</div>';\r
-    box.setAttribute('data-ui-tip', '加载会话');\r
-    bindUiHoverTip(box);\r
-    (getVisibleChatStream() || chatContainer).appendChild(box);\r
-    scrollToBottom();\r
-}\r
-\r
-function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }\r
-\r
-function sessionHasUnsentDraft(sessionId) {\r
-    if (!sessionId) return false;\r
-    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)\r
-        ? draftBySession[sessionId]\r
-        : readStoredInputDraft(sessionId);\r
-    return !!String(draft || '').trim();\r
-}\r
-\r
-function syncSessionDraftBadge(itemDiv, sessionId) {\r
-    if (!itemDiv || !sessionId) return;\r
-    var badge = itemDiv.querySelector('.session-draft-badge');\r
-    if (!badge) return;\r
-    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);\r
-    badge.hidden = !visible;\r
-    itemDiv.classList.toggle('has-unsent-draft', visible);\r
-}\r
-\r
-/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */\r
-function syncSessionDraftBadges(sessionId) {\r
-    if (!sessionsList) return;\r
-    var targetId = sessionId ? String(sessionId) : '';\r
-    sessionsList.querySelectorAll('.session-item').forEach(function (div) {\r
-        var sid = String(div.dataset.sessionId || '');\r
-        if (!sid || (targetId && sid !== targetId)) return;\r
-        syncSessionDraftBadge(div, sid);\r
-    });\r
-}\r
-\r
-/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */\r
-function applySessionItemIndicators(itemDiv, sessionId, opts) {\r
-    opts = opts || {};\r
-    if (!itemDiv || !sessionId) return;\r
-    syncSessionDraftBadge(itemDiv, sessionId);\r
-    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');\r
-    var nameEl = itemDiv.querySelector('.session-name');\r
-    if (nameEl) nameEl.removeAttribute('data-ui-tip');\r
-    var sess = sessionStore.get(sessionId);\r
-    var localUnreadResult = sessionUnreadComplete.has(sessionId);\r
-    var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;\r
-    var failed = !!(sess && sess.unread_result_status === 'failed');\r
-    var running = isSessionRunning(sessionId);\r
-    if (running) {\r
-        itemDiv.classList.add('is-generating');\r
-        if (hasUnreadResult) {\r
-            // A completed queued turn is still unread while the next pending\r
-            // turn is running. Combining the classes keeps the pulse animation\r
-            // but changes the dot to the result color.\r
-            itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');\r
-        }\r
-        if (nameEl) {\r
-            nameEl.setAttribute(\r
-                'data-ui-tip',\r
-                hasUnreadResult\r
-                    ? (failed ? '已有任务失败，仍在生成' : '已有任务完成，仍在生成')\r
-                    : '生成中'\r
-            );\r
-        }\r
-    } else {\r
-        if (!hasUnreadResult) return;\r
-        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');\r
-        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');\r
-    }\r
-    if (nameEl) bindUiHoverTip(nameEl);\r
-}\r
-\r
-/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */\r
-function syncSessionListIndicatorClasses() {\r
-    if (!sessionsList) return;\r
-    sessionsList.querySelectorAll('.session-item').forEach(function (div) {\r
-        var el = div.querySelector('.session-name[data-id]');\r
-        if (!el) return;\r
-        var sid = el.getAttribute('data-id');\r
-        div.classList.toggle('active', !!sid && sid === currentSessionId);\r
-        applySessionItemIndicators(div, sid);\r
-    });\r
-    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();\r
-}\r
-\r
-function sessionSectionExpanded(key) {\r
-    try {\r
-        return localStorage.getItem(LS_SESSION_SECTION_PREFIX + key) !== '0';\r
-    } catch (e) {\r
-        return true;\r
-    }\r
-}\r
-function persistSessionSectionExpanded(key, expanded) {\r
-    try {\r
-        localStorage.setItem(LS_SESSION_SECTION_PREFIX + key, expanded ? '1' : '0');\r
-    } catch (e) { /* ignore */ }\r
-}\r
-function closeAllSessionMenus() {\r
-    document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {\r
-        w.classList.remove('is-open');\r
-        var b = w.querySelector('.session-more-btn');\r
-        if (b) b.setAttribute('aria-expanded', 'false');\r
-    });\r
-}\r
-(function bindSessionMenuDocumentCloserOnce() {\r
-    if (window.__myAgentSessionMenuCloser) return;\r
-    window.__myAgentSessionMenuCloser = true;\r
-    document.addEventListener('click', closeAllSessionMenus);\r
-})();\r
-\r
-(function bindSessionListDelegatedSwitcherOnce() {\r
-    if (!sessionsList || window.__myAgentSessionListSwitcher) return;\r
-    window.__myAgentSessionListSwitcher = true;\r
-    sessionsList.addEventListener('click', function (e) {\r
-        var target = e.target;\r
-        if (!target || !target.closest) return;\r
-        if (target.closest('button, .session-more-wrap, .session-more-menu, input, textarea, a')) return;\r
-        if (target.isContentEditable) return;\r
-        var row = target.closest('.session-item');\r
-        if (!row || !sessionsList.contains(row)) return;\r
-        var sid = row.dataset.sessionId;\r
-        if (!sid) {\r
-            var nameEl = row.querySelector('.session-name[data-id]');\r
-            sid = nameEl ? nameEl.getAttribute('data-id') : '';\r
-        }\r
-        if (sid && sid !== currentSessionId) {\r
-            Promise.resolve(switchSession(sid)).catch(function (err) {\r
-                console.error('切换会话失败:', err);\r
-            });\r
-        }\r
-    });\r
-})();\r
-\r
-function buildSessionMoreMenuMarkup() {\r
-    return '<div class="session-more-wrap">'\r
-        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'\r
-        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'\r
-        + '<div class="session-more-menu" role="menu">'\r
-        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'\r
-        + '<button type="button" class="session-menu-todo" role="menuitem"></button>'\r
-        + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'\r
-        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'\r
-        + '<div class="session-menu-separator" role="separator"></div>'\r
-        + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'\r
-        + '<button type="button" class="session-menu-delete" role="menuitem">删除会话</button>'\r
-        + '</div></div>';\r
-}\r
-\r
-function findSessionForActions(sessionId, fallback) {\r
-    var sid = String(sessionId || '');\r
-    var current = sessionStore.get(sid);\r
-    if (current) return current;\r
-    if (sessionStore.archivedLoaded) {\r
-        current = (sessionStore.archivedSessions || []).find(function (item) {\r
-            return item && String(item.id) === sid;\r
-        });\r
-    }\r
-    return current || fallback || null;\r
-}\r
-\r
-function syncSessionMenuLabels(wrap, sess) {\r
-    if (!wrap || !sess) return;\r
-    wrap._sessionMenuSession = sess;\r
-    var pin = wrap.querySelector('.session-menu-pin');\r
-    var todo = wrap.querySelector('.session-menu-todo');\r
-    var archive = wrap.querySelector('.session-menu-archive');\r
-    if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';\r
-    if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';\r
-    if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';\r
-}\r
-\r
-async function toggleSessionPinnedFromMenu(sess) {\r
-    try {\r
-        const formData = new FormData();\r
-        const nextPinned = !sess.pinned;\r
-        const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });\r
-        formData.append('pinned', nextPinned ? 'true' : 'false');\r
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });\r
-        if (!response.ok) {\r
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
-            throw new Error('pin failed: ' + response.status);\r
-        }\r
-        await refreshSingleSessionRow(sess.id);\r
-    } catch (err) { console.error('置顶失败', err); }\r
-}\r
-\r
-async function toggleSessionTodoFromMenu(sess) {\r
-    try {\r
-        const formData = new FormData();\r
-        const nextTodo = !sess.todo;\r
-        const previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });\r
-        formData.append('todo', nextTodo ? 'true' : 'false');\r
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/todo', { method: 'PUT', body: formData });\r
-        if (!response.ok) {\r
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
-            throw new Error('todo failed: ' + response.status);\r
-        }\r
-        await refreshSingleSessionRow(sess.id);\r
-    } catch (err) { console.error('待办设置失败', err); }\r
-}\r
-\r
-async function toggleSessionArchivedFromMenu(sess) {\r
-    try {\r
-        const formData = new FormData();\r
-        const nextArchived = !sess.archived;\r
-        const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });\r
-        formData.append('archived', nextArchived ? 'true' : 'false');\r
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });\r
-        if (!response.ok) {\r
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
-            throw new Error('archive failed: ' + response.status);\r
-        }\r
-        await refreshSingleSessionRow(sess.id);\r
-        if (!nextArchived && sessionStore.archivedLoaded) {\r
-            await loadArchivedSessions({ background: true, refresh: true, forceRender: true });\r
-        }\r
-    } catch (err) { console.error('归档失败', err); }\r
-}\r
-\r
-async function renameSessionFromMenu(sess) {\r
-    var requestedName = await openUiModal({\r
-        title: '重命名会话',\r
-        subtitle: '编辑会话名称',\r
-        message: '',\r
-        inputLabel: '会话名称',\r
-        inputValue: String(sess.name || ''),\r
-        inputMaxLength: 160,\r
-        inputRequired: true,\r
-        confirmText: '保存名称',\r
-        cancelText: '取消',\r
-    });\r
-    if (typeof requestedName !== 'string') return;\r
-    var newName = requestedName.trim().slice(0, 160);\r
-    if (!newName || newName === String(sess.name || '')) return;\r
-    const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });\r
-    if (currentSessionId === sess.id) updateSessionTitle();\r
-    try {\r
-        const formData = new FormData();\r
-        formData.append('name', newName);\r
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });\r
-        if (!response.ok) throw new Error('rename failed: ' + response.status);\r
-        await refreshSingleSessionRow(sess.id);\r
-        if (currentSessionId === sess.id) updateSessionTitle();\r
-    } catch (err) {\r
-        console.error('重命名失败', err);\r
-        if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
-        if (currentSessionId === sess.id) updateSessionTitle();\r
-    }\r
-}\r
-\r
-async function exportSessionFromMenu(sess) {\r
-    var confirmed = await openUiModal({\r
-        title: '导出会话',\r
-        subtitle: '下载会话文件',\r
-        message: '将会话「' + String(sess.name || '未命名') + '」对应的 session 文件夹压缩为 ZIP 并下载。',\r
-        confirmText: '确认导出',\r
-        cancelText: '取消',\r
-    });\r
-    if (!confirmed) return;\r
-    var link = document.createElement('a');\r
-    link.href = '/sessions/' + encodeURIComponent(sess.id) + '/export';\r
-    link.download = 'session-' + String(sess.id || 'export') + '.zip';\r
-    link.hidden = true;\r
-    document.body.appendChild(link);\r
-    link.click();\r
-    link.remove();\r
-}\r
-\r
-async function deleteSessionFromMenu(sess, rowDiv) {\r
-    const okDel = await openUiModal({\r
-        title: '删除会话',\r
-        subtitle: '此操作不可恢复',\r
-        message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',\r
-        danger: true,\r
-        confirmText: '删除会话',\r
-        cancelText: '取消',\r
-    });\r
-    if (!okDel) return;\r
-    const wasArchivedLoaded = sessionStore.archivedLoaded;\r
-    const deletedSessionId = String(sess.id || '');\r
-    const nextSession = sessionStore.list().find(function (s) {\r
-        return s && s.id && String(s.id) !== deletedSessionId && !s.archived;\r
-    }) || null;\r
-    sessionStore.markDeletedSession(deletedSessionId);\r
-    if (wasArchivedLoaded && sess.archived) {\r
-        const archivedBeforeDelete = sessionStore.archivedSessions || [];\r
-        const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {\r
-            return s && String(s.id) === deletedSessionId;\r
-        });\r
-        sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {\r
-            return s && String(s.id) !== deletedSessionId;\r
-        }), {\r
-            visibleCount: Math.max(\r
-                0,\r
-                sessionStore.archivedVisibleCount\r
-                    - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)\r
-            ),\r
-            totalCount: Math.max(0, sessionStore.archivedCount - 1),\r
-        });\r
-        syncArchivedSessionStateFromStore();\r
-    }\r
-    renderSessionListIfChanged(true);\r
-    if (rowDiv && rowDiv.parentNode) rowDiv.remove();\r
-    sessionUnreadComplete.delete(deletedSessionId);\r
-    scheduleTitleGenerationRefresh(deletedSessionId, false);\r
-    persistSessionUnread();\r
-    delete draftBySession[deletedSessionId];\r
-    removeStoredInputDraft(deletedSessionId);\r
-    if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);\r
-    delete lastUserMessageBySession[deletedSessionId];\r
-    clearContextStateForSession(deletedSessionId);\r
-    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);\r
-    if (isSessionRunning(sess.id)) {\r
-        const r = abortSessionRun(sess.id, 'delete');\r
-        if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();\r
-        setSendButtonState();\r
-        syncSessionListIndicatorClasses();\r
-    }\r
-    if (currentSessionId === deletedSessionId) {\r
-        if (nextSession) await switchSession(nextSession.id);\r
-        else await createNewSession();\r
-    }\r
-    void requestInterrupt(deletedSessionId, '', 'session_deleted');\r
-    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })\r
-        .then(function (resp) {\r
-            if (!resp.ok) throw new Error('delete failed: ' + resp.status);\r
-        })\r
-        .catch(function (err) {\r
-            console.error('删除会话失败:', err);\r
-            sessionStore.clearDeletedSessionTombstone(deletedSessionId);\r
-            void loadSessions({ skipArchivedRefresh: true });\r
-            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });\r
-        });\r
-}\r
-\r
-function bindSessionActionMenu(wrap, getSession, rowDiv) {\r
-    if (!wrap || wrap.dataset.sessionMenuBound === '1') return;\r
-    wrap.dataset.sessionMenuBound = '1';\r
-    var moreBtn = wrap.querySelector('.session-more-btn');\r
-    if (moreBtn) {\r
-        bindUiHoverTip(moreBtn);\r
-        moreBtn.addEventListener('click', function (e) {\r
-            e.stopPropagation();\r
-            var wasOpen = wrap.classList.contains('is-open');\r
-            closeAllSessionMenus();\r
-            var sess = getSession();\r
-            if (!sess) return;\r
-            syncSessionMenuLabels(wrap, sess);\r
-            if (!wasOpen) {\r
-                wrap.classList.add('is-open');\r
-                moreBtn.setAttribute('aria-expanded', 'true');\r
-            }\r
-        });\r
-    }\r
-    wrap.addEventListener('click', function (e) {\r
-        var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;\r
-        if (!target || !wrap.contains(target)) return;\r
-        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu\r
-            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu\r
-                : target.classList.contains('session-menu-rename') ? renameSessionFromMenu\r
-                    : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu\r
-                        : target.classList.contains('session-menu-export') ? exportSessionFromMenu\r
-                            : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu\r
-                                : null;\r
-        if (!handler) return;\r
-        e.stopPropagation();\r
-        closeAllSessionMenus();\r
-        var sess = getSession();\r
-        if (!sess) return;\r
-        Promise.resolve(handler(sess, rowDiv)).catch(function (err) {\r
-            console.error('会话菜单操作失败:', err);\r
-        });\r
-    });\r
-}\r
-\r
-var titlebarSessionMenuSnapshot = null;\r
-\r
-function getTitlebarSessionForActions(host, wrap) {\r
-    var sessionId = (host && host.dataset.sessionId) || currentSessionId;\r
-    return findSessionForActions(sessionId, wrap && wrap._sessionMenuSession)\r
-        || titlebarSessionMenuSnapshot;\r
-}\r
-\r
-function syncTitlebarSessionMenu(sess) {\r
-    var host = document.getElementById('breadcrumb-session-actions');\r
-    if (!host) return;\r
-    titlebarSessionMenuSnapshot = sess ? Object.assign({}, titlebarSessionMenuSnapshot || {}, sess) : null;\r
-    host.dataset.sessionId = titlebarSessionMenuSnapshot ? String(titlebarSessionMenuSnapshot.id || '') : '';\r
-    host.classList.toggle('hidden', !sess);\r
-    var wrap = host.querySelector('.session-more-wrap');\r
-    if (wrap && titlebarSessionMenuSnapshot) syncSessionMenuLabels(wrap, titlebarSessionMenuSnapshot);\r
-}\r
-\r
-(function mountTitlebarSessionMenu() {\r
-    var host = document.getElementById('breadcrumb-session-actions');\r
-    if (!host || host.dataset.sessionMenuMounted === '1') return;\r
-    host.dataset.sessionMenuMounted = '1';\r
-    host.innerHTML = buildSessionMoreMenuMarkup();\r
-    var wrap = host.querySelector('.session-more-wrap');\r
-    bindSessionActionMenu(wrap, function () {\r
-        return getTitlebarSessionForActions(host, wrap);\r
-    }, null);\r
-    syncTitlebarSessionMenu(currentSessionId ? findSessionForActions(currentSessionId, null) : null);\r
-})();\r
-\r
-/** 创建并绑定单条会话及其分区操作菜单。 */\r
-function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {\r
-    const div = document.createElement('div');\r
-    div.className = 'session-item';\r
-    div.dataset.sessionId = sess.id || '';\r
-    if (currentSessionId === sess.id) div.classList.add('active');\r
-    if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;\r
-    if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);\r
-    var displayName = typeof localizeSessionPlaceholderName === 'function'\r
-        ? localizeSessionPlaceholderName(sess.name)\r
-        : (sess.name || '');\r
-    div.innerHTML = '<div class="session-item-head">'\r
-        + '<div class="session-item-main">'\r
-        + '<div class="session-item-title-row">'\r
-        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'\r
-        + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'\r
-        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'\r
-        + '<span class="session-item-date"></span>'\r
-        + '</div>'\r
-        + '<div class="session-last-query"></div>'\r
-        + '</div>'\r
-        + buildSessionMoreMenuMarkup()\r
-        + '</div>';\r
-    if (typeof updateHumanInteractionSessionBadge === 'function') {\r
-        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);\r
-    }\r
-    var wsLine = formatSessionListSubtitle(sess);\r
-    var wsEl = div.querySelector('.session-last-query');\r
-    if (wsEl) wsEl.textContent = wsLine;\r
-    var dateEl = div.querySelector('.session-item-date');\r
-    var dateLine = '';\r
-    if (dateEl) {\r
-        dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';\r
-        if (dateLine) {\r
-            dateEl.innerHTML = (typeof sessionDateIcon === 'function' ? sessionDateIcon() : '') + dateLine;\r
-        } else {\r
-            dateEl.textContent = '';\r
-        }\r
-    }\r
-    var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';\r
-    if (itemTip) {\r
-        div.setAttribute('data-ui-tip', itemTip);\r
-        bindUiHoverTip(div);\r
-    }\r
-    var moreWrap = div.querySelector('.session-more-wrap');\r
-    syncSessionMenuLabels(moreWrap, sess);\r
-    bindSessionActionMenu(moreWrap, function () {\r
-        return findSessionForActions(sess.id, sess);\r
-    }, div);\r
-    var nameEl = div.querySelector('.session-name');\r
-    if (nameEl) {\r
-        nameEl.addEventListener('dblclick', function (e) {\r
-            e.preventDefault();\r
-            e.stopPropagation();\r
-            var current = findSessionForActions(sess.id, sess);\r
-            if (!current) return;\r
-            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {\r
-                console.error('双击重命名会话失败:', err);\r
-            });\r
-        });\r
-    }\r
-    applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });\r
-    return div;\r
-}\r
-\r
-const sessionTitleRefreshState = Object.create(null);\r
-\r
-function scheduleTitleGenerationRefresh(sessionId, pending) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    let state = sessionTitleRefreshState[sid];\r
-    if (!pending) {\r
-        if (state && state.timer) clearTimeout(state.timer);\r
-        delete sessionTitleRefreshState[sid];\r
-        return;\r
-    }\r
-    if (!state) state = sessionTitleRefreshState[sid] = { attempts: 0, timer: null };\r
-    if (state.timer || state.attempts >= 60) return;\r
-    const delayMs = Math.min(10000, Math.round(1000 * Math.pow(1.45, state.attempts)));\r
-    state.timer = setTimeout(function () {\r
-        state.timer = null;\r
-        state.attempts += 1;\r
-        void refreshSingleSessionRow(sid);\r
-    }, delayMs);\r
-}\r
-\r
-async function refreshSingleSessionRow(sessionId) {\r
-    if (!sessionId || !sessionsList) return;\r
-    try {\r
-        const response = await fetch('/sessions/' + encodeURIComponent(sessionId));\r
-        if (!response.ok) return;\r
-        const sess = await response.json();\r
-        if (!sess || !sess.id) return;\r
-        scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);\r
-        applySessionPatch({\r
-            session: sess,\r
-            session_id: sess.id,\r
-            stream_active: !!sess.stream_active,\r
-        });\r
-        setSessionServerStreamActive(sess.id, !!sess.stream_active);\r
-        if (sess.unread_result) {\r
-            if (!sessionUnreadComplete.has(sess.id)) {\r
-                sessionUnreadComplete.add(sess.id);\r
-                persistSessionUnread();\r
-            }\r
-        } else if (sessionUnreadComplete.delete(sess.id)) {\r
-            persistSessionUnread();\r
-        }\r
-        if (Number(sess.subagent_running || 0) > 0) {\r
-            sessionUnreadComplete.delete(sess.id);\r
-            persistSessionUnread();\r
-        }\r
-        renderSessionListIfChanged(false);\r
-        if (typeof maybeAutoResumeInterruptedReact === 'function') {\r
-            maybeAutoResumeInterruptedReact(sessionId, sess);\r
-        }\r
-    } catch (e) {\r
-        console.error('刷新会话摘要失败:', e);\r
-    }\r
-}\r
-\r
-let sessionListLoadEpoch = 0;\r
-let sessionListLoadPromise = null;\r
-let sessionListRenderKey = '';\r
-let createNewSessionQueue = Promise.resolve();\r
-let archivedSessionsLoaded = false;\r
-let archivedSessionsCache = null;\r
-let archivedSessionsCount = 0;\r
-let archivedSessionsLoadEpoch = 0;\r
-\r
-function syncArchivedSessionStateFromStore() {\r
-    archivedSessionsLoaded = !!sessionStore.archivedLoaded;\r
-    archivedSessionsCache = sessionStore.archivedSessions;\r
-    archivedSessionsCount = sessionStore.archivedCount;\r
-}\r
-\r
-function computeSessionListRenderKey() {\r
-    const sessions = sessionStore.list();\r
-    const parts = [\r
-        'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),\r
-        'archivedCount=' + String(sessionStore.archivedCount || 0),\r
-    ];\r
-    for (let i = 0; i < sessions.length; i += 1) {\r
-        const s = sessions[i];\r
-        if (!s || !s.id) continue;\r
-        parts.push([\r
-            s.id,\r
-            s.name || '',\r
-            s.pinned ? 'p' : '',\r
-            s.todo ? 't' : '',\r
-            s.archived ? 'a' : '',\r
-            s.last_activity_at || s.updated_at || '',\r
-            s.last_user_preview || '',\r
-        ].join('\\u001f'));\r
-    }\r
-    const archived = sessionStore.archivedList();\r
-    for (let j = 0; j < archived.length; j += 1) {\r
-        const a = archived[j];\r
-        if (!a || !a.id) continue;\r
-        parts.push('arch=' + [\r
-            a.id,\r
-            a.name || '',\r
-            a.pinned ? 'p' : '',\r
-            a.todo ? 't' : '',\r
-            a.last_activity_at || a.updated_at || '',\r
-            a.last_user_preview || '',\r
-        ].join('\\u001f'));\r
-    }\r
-    return parts.join('\\u001e');\r
-}\r
-\r
-function renderSessionListIfChanged(force) {\r
-    const nextKey = computeSessionListRenderKey();\r
-    if (!force && nextKey === sessionListRenderKey) {\r
-        syncSessionListIndicatorClasses();\r
-        renderSessionTitleFromStore();\r
-        return;\r
-    }\r
-    sessionListRenderKey = nextKey;\r
-    const nextStreamMap = renderSessionListFromStore();\r
-    applyServerStreamActiveMap(nextStreamMap);\r
-    renderSessionTitleFromStore();\r
-}\r
-\r
-function clearSessionListError() {\r
-    if (!sessionsList) return;\r
-    sessionsList.classList.remove('sessions-list--error');\r
-    if (sessionsList.dataset.loadError === '1') delete sessionsList.dataset.loadError;\r
-}\r
-\r
-function renderSessionListError(message) {\r
-    if (!sessionsList) return;\r
-    sessionListRenderKey = '';\r
-    sessionsList.classList.add('sessions-list--error');\r
-    sessionsList.dataset.loadError = '1';\r
-    sessionsList.innerHTML = '';\r
-    const row = document.createElement('div');\r
-    row.className = 'session-list-error';\r
-    row.setAttribute('role', 'status');\r
-    row.textContent = message || '加载会话列表失败';\r
-    sessionsList.appendChild(row);\r
-}\r
-\r
-function applyOptimisticSessionUpdate(sessionId, patch) {\r
-    const sid = String(sessionId || '');\r
-    const current = sessionStore.get(sid) || (sessionStore.archivedLoaded\r
-        ? (sessionStore.archivedSessions || []).find(function (session) {\r
-            return session && String(session.id) === sid;\r
-        })\r
-        : null);\r
-    if (!current) return null;\r
-    const prev = Object.assign({}, current);\r
-    const next = Object.assign({}, current, patch || {});\r
-    if (Object.prototype.hasOwnProperty.call(patch || {}, 'pinned')) {\r
-        next.pinned_at = next.pinned ? (next.pinned_at || new Date().toISOString()) : null;\r
-    }\r
-    sessionStore.upsert(next);\r
-    if (prev.archived || next.archived) {\r
-        if (sessionStore.archivedLoaded) {\r
-            const archivedList = (sessionStore.archivedSessions || []).slice();\r
-            const archivedIndex = archivedList.findIndex(function (s) {\r
-                return s && String(s.id) === sid;\r
-            });\r
-            let visibleCount = sessionStore.archivedVisibleCount;\r
-            let totalCount = sessionStore.archivedCount;\r
-            if (prev.archived && next.archived) {\r
-                if (archivedIndex >= 0) archivedList[archivedIndex] = next;\r
-            } else if (prev.archived) {\r
-                if (archivedIndex >= 0) archivedList.splice(archivedIndex, 1);\r
-                if (archivedIndex >= 0 && archivedIndex < visibleCount) visibleCount -= 1;\r
-                totalCount = Math.max(0, totalCount - 1);\r
-            } else if (next.archived) {\r
-                archivedList.unshift(next);\r
-                visibleCount += 1;\r
-                totalCount += 1;\r
-            }\r
-            sessionStore.setArchivedLoaded(archivedList, {\r
-                visibleCount: visibleCount,\r
-                totalCount: totalCount,\r
-            });\r
-            syncArchivedSessionStateFromStore();\r
-        } else if (!!prev.archived !== !!next.archived) {\r
-            sessionStore.setArchivedCount(Math.max(\r
-                0,\r
-                sessionStore.archivedCount + (next.archived ? 1 : -1)\r
-            ));\r
-        }\r
-    }\r
-    renderSessionListIfChanged(true);\r
-    return prev;\r
-}\r
-\r
-// Event count cache for optimistic UI updates.\r
-const uiEventCountCache = {\r
-    cache: new Map(),\r
-    maxAgeMs: 10000,\r
-    \r
-    get(sessionId) {\r
-        var entry = this.cache.get(sessionId);\r
-        if (entry && typeof entry === 'object') return Number(entry.count) || 0;\r
-        return Number(entry) || 0;\r
-    },\r
-\r
-    has(sessionId) {\r
-        return this.cache.has(sessionId);\r
-    },\r
-\r
-    isFresh(sessionId, maxAgeMs) {\r
-        var entry = this.cache.get(sessionId);\r
-        if (!entry || typeof entry !== 'object') return false;\r
-        var age = Date.now() - Number(entry.updatedAt || 0);\r
-        var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;\r
-        return age >= 0 && age <= limit;\r
-    },\r
-    \r
-    set(sessionId, count) {\r
-        this.cache.set(sessionId, {\r
-            count: Math.max(0, Number(count) || 0),\r
-            updatedAt: Date.now(),\r
-        });\r
-    },\r
-    \r
-    increment(sessionId) {\r
-        const current = this.get(sessionId);\r
-        this.set(sessionId, current + 1);\r
-        return current + 1;\r
-    },\r
-    \r
-    updateFromServer(sessionId, count) {\r
-        this.set(sessionId, count);\r
-    }\r
-};\r
-\r
-async function fetchSessionsStateSnapshot(opts) {\r
-    opts = opts || {};\r
-    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');\r
-    const response = await fetchWithTimeout(url, {}, 12000);\r
-    if (!response.ok) throw new Error('sessions state failed: ' + response.status);\r
-    const snapshot = await response.json();\r
-    if (!snapshot || !Array.isArray(snapshot.sessions)) {\r
-        throw new Error('invalid sessions state response');\r
-    }\r
-    snapshot.include_archived = !!opts.includeArchived;\r
-    return snapshot;\r
-}\r
-\r
-function deriveSidebarRuntimeStatus() {\r
-    var busy = false;\r
-    sessionStore.runsBySession.forEach(function () { busy = true; });\r
-    if (!busy) {\r
-        sessionStore.activeRunInfoBySession.forEach(function (info) {\r
-            if (!info || info.run_active !== false) busy = true;\r
-        });\r
-    }\r
-    if (busy) return 'busy';\r
-    return 'online';\r
-}\r
-\r
-function updateSidebarRuntimeStatus(nextStatus) {\r
-    var footer = document.querySelector('.sidebar-runtime');\r
-    var status = document.getElementById('sidebar-runtime-status');\r
-    if (!footer || !status) return;\r
-    var state = nextStatus === false ? 'offline'\r
-        : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));\r
-    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';\r
-    footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');\r
-    footer.classList.add('is-' + state);\r
-    var labels = {\r
-        online: 'Runtime 在线',\r
-        busy: 'Runtime 繁忙',\r
-        waiting: 'Runtime 待处理',\r
-        alert: 'Runtime 告警',\r
-        offline: 'Runtime 离线'\r
-    };\r
-    setUiRuntimeText(status, labels[state]);\r
-    footer.dataset.runtimeStatus = state;\r
-}\r
-\r
-var runtimeStatusHeartbeatTimer = null;\r
-var lastUiActivationSeq = 0;\r
-var pendingQuerySession = (function () {\r
-    // Deep link support: /?session=<id> selects that conversation once the\r
-    // session list is ready, then the parameter is stripped so a manual\r
-    // refresh does not yank the user back.\r
-    try {\r
-        var params = new URLSearchParams(window.location.search || '');\r
-        var sid = String(params.get('session') || '').trim();\r
-        if (sid && /^[A-Za-z0-9][A-Za-z0-9\\-]{0,63}$/.test(sid)) {\r
-            params.delete('session');\r
-            var nextSearch = params.toString();\r
-            try {\r
-                window.history.replaceState(\r
-                    {}, '',\r
-                    window.location.pathname + (nextSearch ? '?' + nextSearch : '') + (window.location.hash || '')\r
-                );\r
-            } catch (e) { /* history may be unavailable */ }\r
-            return sid;\r
-        }\r
-    } catch (e) { /* ignore */ }\r
-    return '';\r
-})();\r
-async function refreshRuntimeStatus() {\r
-    try {\r
-        var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);\r
-        if (!response.ok) throw new Error('runtime status failed: ' + response.status);\r
-        var payload = await response.json();\r
-        updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);\r
-        var activationSeq = Number(payload && payload.activation_seq) || 0;\r
-        if (activationSeq > lastUiActivationSeq) {\r
-            lastUiActivationSeq = activationSeq;\r
-            try { window.focus(); } catch (e) { /* browser policy may reject focus */ }\r
-            var activationSession = String((payload && payload.activation_session) || '').trim();\r
-            if (activationSession && activationSession !== currentSessionId\r
-                    && typeof switchSession === 'function') {\r
-                void Promise.resolve(switchSession(activationSession)).catch(function (err) { /* session may be gone */ });\r
-            }\r
-        }\r
-    } catch (error) {\r
-        updateSidebarRuntimeStatus(false);\r
-    }\r
-}\r
-\r
-function startRuntimeStatusHeartbeat() {\r
-    if (runtimeStatusHeartbeatTimer) clearInterval(runtimeStatusHeartbeatTimer);\r
-    void refreshRuntimeStatus();\r
-    runtimeStatusHeartbeatTimer = setInterval(refreshRuntimeStatus, 5000);\r
-}\r
-\r
-async function fetchWithTimeout(url, options, timeoutMs) {\r
-    options = options || {};\r
-    const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;\r
-    if (options.signal) return fetch(url, options);\r
-    const controller = new AbortController();\r
-    const timer = setTimeout(function () { controller.abort(); }, ms);\r
-    const nextOptions = Object.assign({}, options, { signal: controller.signal });\r
-    try {\r
-        return await fetch(url, nextOptions);\r
-    } finally {\r
-        clearTimeout(timer);\r
-    }\r
-}\r
-\r
-async function fetchArchivedSessionPage(offset, limit) {\r
-    const url = '/sessions?include_archived=true&archived_only=true&offset=' + String(offset)\r
-        + '&limit=' + String(limit);\r
-    const response = await fetchWithTimeout(url, {}, 15000);\r
-    if (!response.ok) throw new Error('archived sessions failed: ' + response.status);\r
-    const sessions = await response.json();\r
-    const countHeader = response.headers.get('X-Archived-Count');\r
-    const parsedCount = Number(countHeader);\r
-    return {\r
-        sessions: Array.isArray(sessions) ? sessions : [],\r
-        totalCount: Number.isFinite(parsedCount) && parsedCount >= 0\r
-            ? parsedCount\r
-            : Math.max(offset + (Array.isArray(sessions) ? sessions.length : 0), sessionStore.archivedCount),\r
-    };\r
-}\r
-\r
-function appendArchivedSessionPage(page, visibleCount) {\r
-    const combined = (sessionStore.archivedSessions || []).concat(page.sessions || []);\r
-    const seen = new Set();\r
-    const deduplicated = combined.filter(function (s) {\r
-        const sid = s && s.id ? String(s.id) : '';\r
-        if (!sid || seen.has(sid)) return false;\r
-        seen.add(sid);\r
-        return true;\r
-    });\r
-    sessionStore.setArchivedLoaded(deduplicated, {\r
-        visibleCount: visibleCount,\r
-        totalCount: page.totalCount,\r
-    });\r
-}\r
-\r
-async function prefetchNextArchivedPage(loadEpoch) {\r
-    const cachedCount = Array.isArray(sessionStore.archivedSessions)\r
-        ? sessionStore.archivedSessions.length\r
-        : 0;\r
-    const wantedCount = Math.min(\r
-        sessionStore.archivedCount,\r
-        sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE\r
-    );\r
-    if (cachedCount >= wantedCount) return;\r
-    const page = await fetchArchivedSessionPage(cachedCount, wantedCount - cachedCount);\r
-    if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
-    appendArchivedSessionPage(page, sessionStore.archivedVisibleCount);\r
-}\r
-\r
-async function loadArchivedSessions(opts) {\r
-    opts = opts || {};\r
-    const loadEpoch = ++archivedSessionsLoadEpoch;\r
-    try {\r
-        if (!sessionStore.archivedLoaded) {\r
-            const initialPage = await fetchArchivedSessionPage(0, ARCHIVED_SESSIONS_PAGE_SIZE * 2);\r
-            if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
-            sessionStore.setArchivedLoaded(initialPage.sessions, {\r
-                visibleCount: ARCHIVED_SESSIONS_PAGE_SIZE,\r
-                totalCount: initialPage.totalCount,\r
-            });\r
-        } else if (opts.background || opts.refresh || !sessionStore.hasMoreArchivedSessions()) {\r
-            const refreshLimit = Math.max(\r
-                ARCHIVED_SESSIONS_PAGE_SIZE * 2,\r
-                sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE\r
-            );\r
-            const refreshedPage = await fetchArchivedSessionPage(0, refreshLimit);\r
-            if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
-            sessionStore.setArchivedLoaded(refreshedPage.sessions, {\r
-                visibleCount: sessionStore.archivedVisibleCount,\r
-                totalCount: refreshedPage.totalCount,\r
-            });\r
-        } else {\r
-            if (sessionStore.revealNextArchivedPage() === 0) {\r
-                const cachedCount = Array.isArray(sessionStore.archivedSessions)\r
-                    ? sessionStore.archivedSessions.length\r
-                    : 0;\r
-                const nextPage = await fetchArchivedSessionPage(cachedCount, ARCHIVED_SESSIONS_PAGE_SIZE);\r
-                if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
-                appendArchivedSessionPage(nextPage, sessionStore.archivedVisibleCount);\r
-                sessionStore.revealNextArchivedPage();\r
-            }\r
-            syncArchivedSessionStateFromStore();\r
-            renderSessionListIfChanged(true);\r
-            clearSessionListError();\r
-            try {\r
-                await prefetchNextArchivedPage(loadEpoch);\r
-            } catch (prefetchErr) {\r
-                console.error('预加载下一批归档目录失败:', prefetchErr);\r
-            }\r
-        }\r
-        if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
-        syncArchivedSessionStateFromStore();\r
-        renderSessionListIfChanged(!!opts.forceRender);\r
-        clearSessionListError();\r
-    } catch (err) {\r
-        console.error('加载归档目录失败:', err);\r
-        if (!opts.background) throw err;\r
-    }\r
-}\r
-\r
-async function loadSessions(opts) {\r
-    opts = opts || {};\r
-    if (sessionListLoadPromise && !opts.force) return sessionListLoadPromise;\r
-    sessionListLoadPromise = loadSessionsInner(opts);\r
-    try {\r
-        return await sessionListLoadPromise;\r
-    } finally {\r
-        sessionListLoadPromise = null;\r
-    }\r
-}\r
-\r
-async function loadSessionsInner(opts) {\r
-    const loadEpoch = ++sessionListLoadEpoch;\r
-    sessionStore.ui.loadingSessions = true;\r
-    try {\r
-        let allSessions;\r
-        let snapshot = null;\r
-        \r
-        try {\r
-            snapshot = await fetchSessionsStateSnapshot();\r
-            if (loadEpoch !== sessionListLoadEpoch) return;\r
-            updateSidebarRuntimeStatus(true);\r
-            allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];\r
-        } catch (stateErr) {\r
-            console.error('加载会话状态快照失败，回退至旧接口', stateErr);\r
-            const response = await fetchWithTimeout('/sessions', {}, 12000);\r
-            const archivedCountHeader = response.headers.get('X-Archived-Count');\r
-            if (archivedCountHeader != null && archivedCountHeader !== '') {\r
-                const parsedArchivedCount = Number(archivedCountHeader);\r
-                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {\r
-                    sessionStore.setArchivedCount(parsedArchivedCount);\r
-                    syncArchivedSessionStateFromStore();\r
-                }\r
-            }\r
-            const sessions = await response.json();\r
-            if (loadEpoch !== sessionListLoadEpoch) return;\r
-            updateSidebarRuntimeStatus(true);\r
-            allSessions = Array.isArray(sessions) ? sessions : [];\r
-            snapshot = {\r
-                sessions: allSessions,\r
-                archived_count: archivedSessionsCount,\r
-            };\r
-        }\r
-        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });\r
-        syncArchivedSessionStateFromStore();\r
-        allSessions = sessionStore.list();\r
-        \r
-        const idSet = new Set();\r
-        for (let si = 0; si < allSessions.length; si += 1) {\r
-            if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);\r
-        }\r
-        [...sessionUnreadComplete].forEach(function (uid) {\r
-            if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);\r
-        });\r
-        persistSessionUnread();\r
-\r
-        if (pendingQuerySession) {\r
-            var queryTarget = pendingQuerySession;\r
-            pendingQuerySession = '';\r
-            var known = allSessions.some(function (s) { return s && s.id === queryTarget; });\r
-            if (known && queryTarget !== currentSessionId && typeof switchSession === 'function') {\r
-                void Promise.resolve(switchSession(queryTarget)).catch(function (err) { /* ignore */ });\r
-            }\r
-        }\r
-\r
-        renderSessionListIfChanged(!!opts.forceRender);\r
-        clearSessionListError();\r
-        sessionStore.ui.loadingSessions = false;\r
-        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {\r
-            void loadArchivedSessions({ background: true });\r
-        }\r
-        return true;\r
-    } catch (error) {\r
-        sessionStore.ui.loadingSessions = false;\r
-        updateSidebarRuntimeStatus(false);\r
-        console.error('加载会话列表失败:', error);\r
-        if (sessionStore.list().length > 0) {\r
-            renderSessionListIfChanged(true);\r
-            clearSessionListError();\r
-        } else {\r
-            renderSessionListError('加载会话列表失败');\r
-        }\r
-        return false;\r
-    }\r
-}\r
-\r
-async function reconcileRunStateFromServer(opts) {\r
-    opts = opts || {};\r
-    const suppressedBeforeFetch = new Set();\r
-    if (opts.respectStopSuppress) {\r
-        sessionStore.sessionOrder.forEach(function (sid) {\r
-            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));\r
-        });\r
-        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {\r
-            suppressedBeforeFetch.add(String(currentSessionId));\r
-        }\r
-    }\r
-    let snapshot = null;\r
-    try {\r
-        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;\r
-        snapshot = await fetchSessionsStateSnapshot({\r
-            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),\r
-        });\r
-    } catch (e) {\r
-        updateSidebarRuntimeStatus(false);\r
-        if (!opts.silent) console.error('reconcile run state failed:', e);\r
-        return;\r
-    }\r
-    applySessionSnapshot(snapshot);\r
-    updateSidebarRuntimeStatus(true);\r
-    if (opts.respectStopSuppress) {\r
-        suppressedBeforeFetch.forEach(function (sid) {\r
-            if (isSessionStreamStopSuppressed(sid)) {\r
-                sessionStore.setStreamActive(sid, false);\r
-                const sess = sessionStore.get(sid);\r
-                if (sess) {\r
-                    sess.stream_active = false;\r
-                    sess.run_active = false;\r
-                    sess.run_started_at = null;\r
-                }\r
-                sessionStore.activeRunInfoBySession.delete(sid);\r
-            }\r
-        });\r
-    }\r
-    const active = new Set();\r
-    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {\r
-        if (info && info.run_active === true) active.add(String(sid));\r
-    });\r
-    const localIds = [];\r
-    sessionStore.runsBySession.forEach(function (_run, sid) {\r
-        localIds.push(String(sid));\r
-    });\r
-    localIds.forEach(function (sid) {\r
-        if (!active.has(sid)) {\r
-            var run = getSessionRunState(sid);\r
-            if (run && run.reattached) {\r
-                abortSessionRun(sid, 'reconcile-finished');\r
-            }\r
-        }\r
-    });\r
-    if (currentSessionId && active.has(currentSessionId)) {\r
-        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};\r
-        const run = getSessionRunState(currentSessionId);\r
-        const ctx = run && run.ctx;\r
-        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
-            ? ctx.currentProcessGroup\r
-            : (getVisibleChatStream() && getVisibleChatStream().querySelector('.process-aggregate:last-of-type'));\r
-        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);\r
-    }\r
-    syncSessionListIndicatorClasses();\r
-    setSendButtonState();\r
-    renderSessionListIfChanged(false);\r
-}\r
-\r
-function showSessionLoadRetry(sessionId) {\r
-    var sid = String(sessionId || '');\r
-    var stream = getVisibleChatStream();\r
-    if (!sid || !stream) return;\r
-    if (stream.querySelector('.session-load-retry')) return;\r
-    var row = document.createElement('div');\r
-    row.className = 'feed-item feed--err session-load-retry';\r
-    var btn = document.createElement('button');\r
-    btn.type = 'button';\r
-    btn.className = 'history-load-older-btn';\r
-    btn.textContent = '重新加载';\r
-    btn.addEventListener('click', function (e) {\r
-        e.preventDefault();\r
-        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);\r
-        void switchSession(sid, { forceReload: true });\r
-    });\r
-    row.appendChild(btn);\r
-    stream.appendChild(row);\r
-}\r
-\r
-async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
-    const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)\r
-        ? performance.now()\r
-        : Date.now();\r
-    scrollBehavior = scrollBehavior || 'saved-or-bottom';\r
-    opts = opts || {};\r
-    const loadToken = ++messageLoadEpoch;\r
-    let historyHydrationStream = null;\r
-    const finishHistoryHydration = function () {\r
-        if (historyHydrationStream) {\r
-            historyHydrationStream.hidden = false;\r
-            historyHydrationStream = null;\r
-        }\r
-        if (loadToken === messageLoadEpoch) hideLoading();\r
-        if (typeof attachAllHumanInteractionCards === 'function') {\r
-            attachAllHumanInteractionCards(getVisibleChatStream());\r
-        }\r
-    };\r
-    sessionStore.ui.loadingMessages = true;\r
-    suppressTocDuringSessionLoad = true;\r
-    replayingMessages = true;\r
-    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {\r
-        cancelSmoothStreamFollowForHistoryLoad();\r
-    }\r
-    resetSessionHistoryPaging();\r
-    try {\r
-        let raw;\r
-        let snapshotTocTurns = null;\r
-        let historySource = 'messages';\r
-        let snapshotTiming = null;\r
-        const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();\r
-        if (canUseSnapshot) {\r
-            try {\r
-                const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)\r
-                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))\r
-                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))\r
-                    + '&include_aux=false';\r
-                for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {\r
-                    const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);\r
-                    const snapshot = await snapshotResp.json().catch(function () { return null; });\r
-                    if (snapshot && snapshot.migration_pending) {\r
-                        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
-                        const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));\r
-                        await new Promise(function (resolve) { setTimeout(resolve, retryMs); });\r
-                        continue;\r
-                    }\r
-                    if (snapshotResp.ok) {\r
-                    if (snapshot && snapshot.ok && snapshot.messages) {\r
-                        raw = snapshot.messages;\r
-                        historySource = 'history_snapshot';\r
-                        snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'\r
-                            ? snapshot.timing\r
-                            : null;\r
-                        if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {\r
-                            uiEventCountCache.updateFromServer(sessionId, snapshot.count);\r
-                        }\r
-                        if (Array.isArray(snapshot.user_turns)) {\r
-                            snapshotTocTurns = snapshot.user_turns;\r
-                            if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);\r
-                        }\r
-                        if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {\r
-                            recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);\r
-                        }\r
-                        if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {\r
-                            const __snapActive = !!(snapshot.stream_active || snapshot.run_active);\r
-                            if (typeof setSessionServerStreamActive === 'function') setSessionServerStreamActive(sessionId, __snapActive);\r
-                            if (typeof applySessionPatch === 'function') {\r
-                                try { applySessionPatch({ session_id: sessionId, stream_active: __snapActive }); } catch (e) {}\r
-                            }\r
-                            try {\r
-                                const __sess = sessionStore.get(sessionId);\r
-                                if (__sess) { __sess.stream_active = __snapActive; __sess.run_active = __snapActive; }\r
-                            } catch (e) {}\r
-                        }\r
-                    }\r
-                    }\r
-                    break;\r
-                }\r
-            } catch (snapshotErr) {\r
-                console.warn('history snapshot unavailable, falling back to messages:', snapshotErr);\r
-            }\r
-        }\r
-        if (!raw) {\r
-            let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';\r
-            if (!opts.full) {\r
-                url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE\r
-                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));\r
-            }\r
-            const response = await fetchWithTimeout(url, {}, 15000);\r
-            if (!response.ok) throw new Error('messages failed: ' + response.status);\r
-            raw = await response.json();\r
-        }\r
+`,Qr=`\uFEFFfunction setSendButtonState() {
+    syncMessageInputPlaceholder();
+    sendBtn.disabled = false;
+    const uploadBusy = isChatFileUploadBusy();
+    const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
+    if (uploadBusy) {
+        sendBtn.textContent = '上传中';
+        sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
+        sendBtn.disabled = true;
+        return;
+    }
+    if (isSessionRunning(currentSessionId) || newSessionPreflight) {
+        const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);
+        const suppressFollowup = !!(run && run.suppressFollowupButton);
+        const hasDraft = (typeof inputHasSendableText === 'function')
+            ? inputHasSendableText()
+            : !!(messageInput && String(messageInput.value || '').trim());
+        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
+        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
+        sendBtn.classList.add('is-stop');
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);
+    } else {
+        sendBtn.textContent = '发送';
+        sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
+        sendBtn.disabled = false;
+    }
+}
+
+const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';
+const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';
+const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送刚加入或第一条待发送任务';
+
+function syncMessageInputPlaceholder() {
+    if (!messageInput) return;
+    var queue = currentSessionId && typeof getFollowupQueue === 'function'
+        ? getFollowupQueue(currentSessionId)
+        : [];
+    var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));
+    var value = queue.some(function (item) { return item && !item.status; })
+        ? MESSAGE_INPUT_PLACEHOLDER_QUEUED
+        : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);
+    messageInput.placeholder = typeof translateUiString === 'function'
+        ? translateUiString(value)
+        : value;
+}
+
+function isChatFileUploadBusy() {
+    return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');
+}
+
+document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);
+document.addEventListener('myagent:language-change', function () {
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
+});
+
+async function requestInterrupt(sessionId, runId, reason) {
+    if (!sessionId) return;
+    try {
+        await fetch('/sessions/' + sessionId + '/interrupt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),
+        });
+    }
+    catch (e) { /* ignore */ }
+}
+
+function pauseCurrentRun() {
+    if (!currentSessionId) {
+        if (optimisticNewSessionRun) {
+            markRunAbortReason(optimisticNewSessionRun, 'user');
+            try { optimisticNewSessionRun.controller.abort(); } catch (e) { /* ignore */ }
+            optimisticNewSessionRun = null;
+            setSendButtonState();
+        }
+        return;
+    }
+    const run = getSessionRunState(currentSessionId);
+    const sid = currentSessionId;
+    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
+    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
+    if (typeof markFollowupQueueManualOnly === 'function') markFollowupQueueManualOnly(sid);
+    suppressSessionServerStreamActive(sid);
+    if (!run) {
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+        renderSessionListIfChanged(false);
+        void requestInterrupt(sid, runId, 'user_button');
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
+        return;
+    }
+    const ctx = run.ctx;
+    const reachedServer = run.submitted !== false;
+    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立即反映「已停止」状态；
+       后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应卡顿。*/
+    abortSessionRun(sid, 'user');
+    setSendButtonState();
+    syncSessionListIndicatorClasses();
+    renderSessionListIfChanged(false);
+    appendLog(ctx, '已请求停止当前任务', 'status', sid);
+    sealProcessGroup(ctx);
+    if (reachedServer) void requestInterrupt(sid, runId, 'user_button');
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
+}
+
+/** 在当前会话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。*/
+function resendLastUserMessage() {
+    if (!currentSessionId) return false;
+    if (isSessionRunning(currentSessionId)) return false;
+    var lastMsg = lastUserMessageBySession[currentSessionId];
+    if (!lastMsg || !String(lastMsg).trim()) {
+        var chatStream = getVisibleChatStream();
+        if (chatStream) {
+            var wraps = chatStream.querySelectorAll('.msg-wrap--user');
+            if (wraps.length) {
+                var lastWrap = wraps[wraps.length - 1];
+                lastMsg = messageRawMarkdown.get(lastWrap) || (lastWrap.querySelector('.message.user') && lastWrap.querySelector('.message.user').textContent);
+            }
+        }
+    }
+    if (!lastMsg || !String(lastMsg).trim()) {
+        lastMsg = draftBySession[currentSessionId];
+    }
+    if (!lastMsg || !String(lastMsg).trim()) return false;
+    messageInput.value = String(lastMsg);
+    rewriteInputWorkspacePaths();
+    autoResizeTextarea();
+    sendMessage();
+    return true;
+}
+
+function showLoading() {
+    resetSessionHistoryPaging();
+    clearTocForSessionLoad();
+    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+    const vs = getVisibleChatStream();
+    if (vs) emptyChatStreamKeepingStrip(vs);
+    const box = document.createElement('div');
+    box.className = 'skeleton';
+    box.id = 'chat-loading';
+    box.setAttribute('role', 'status');
+    box.innerHTML = ''
+        + '<div class="skeleton-page" aria-hidden="true">'
+        + '<div class="skeleton-mast"><span></span><span></span></div>'
+        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'
+        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'
+        + '</div><div class="skeleton-copy">加载中...</div>';
+    box.setAttribute('data-ui-tip', '加载会话');
+    bindUiHoverTip(box);
+    (getVisibleChatStream() || chatContainer).appendChild(box);
+    scrollToBottom();
+}
+
+function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
+
+function sessionHasUnsentDraft(sessionId) {
+    if (!sessionId) return false;
+    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)
+        ? draftBySession[sessionId]
+        : readStoredInputDraft(sessionId);
+    return !!String(draft || '').trim();
+}
+
+function syncSessionDraftBadge(itemDiv, sessionId) {
+    if (!itemDiv || !sessionId) return;
+    var badge = itemDiv.querySelector('.session-draft-badge');
+    if (!badge) return;
+    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);
+    badge.hidden = !visible;
+    itemDiv.classList.toggle('has-unsent-draft', visible);
+}
+
+/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */
+function syncSessionDraftBadges(sessionId) {
+    if (!sessionsList) return;
+    var targetId = sessionId ? String(sessionId) : '';
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
+        var sid = String(div.dataset.sessionId || '');
+        if (!sid || (targetId && sid !== targetId)) return;
+        syncSessionDraftBadge(div, sid);
+    });
+}
+
+/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
+function applySessionItemIndicators(itemDiv, sessionId, opts) {
+    opts = opts || {};
+    if (!itemDiv || !sessionId) return;
+    syncSessionDraftBadge(itemDiv, sessionId);
+    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
+    var nameEl = itemDiv.querySelector('.session-name');
+    if (nameEl) nameEl.removeAttribute('data-ui-tip');
+    var sess = sessionStore.get(sessionId);
+    var localUnreadResult = sessionUnreadComplete.has(sessionId);
+    var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
+    var failed = !!(sess && sess.unread_result_status === 'failed');
+    var running = isSessionRunning(sessionId);
+    if (running) {
+        itemDiv.classList.add('is-generating');
+        if (hasUnreadResult) {
+            // A completed queued turn is still unread while the next pending
+            // turn is running. Combining the classes keeps the pulse animation
+            // but changes the dot to the result color.
+            itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        }
+        if (nameEl) {
+            nameEl.setAttribute(
+                'data-ui-tip',
+                hasUnreadResult
+                    ? (failed ? '已有任务失败，仍在生成' : '已有任务完成，仍在生成')
+                    : '生成中'
+            );
+        }
+    } else {
+        if (!hasUnreadResult) return;
+        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
+    }
+    if (nameEl) bindUiHoverTip(nameEl);
+}
+
+/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */
+function syncSessionListIndicatorClasses() {
+    if (!sessionsList) return;
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
+        var el = div.querySelector('.session-name[data-id]');
+        if (!el) return;
+        var sid = el.getAttribute('data-id');
+        div.classList.toggle('active', !!sid && sid === currentSessionId);
+        applySessionItemIndicators(div, sid);
+    });
+    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
+}
+
+function sessionSectionExpanded(key) {
+    try {
+        return localStorage.getItem(LS_SESSION_SECTION_PREFIX + key) !== '0';
+    } catch (e) {
+        return true;
+    }
+}
+function persistSessionSectionExpanded(key, expanded) {
+    try {
+        localStorage.setItem(LS_SESSION_SECTION_PREFIX + key, expanded ? '1' : '0');
+    } catch (e) { /* ignore */ }
+}
+function closeAllSessionMenus() {
+    document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {
+        w.classList.remove('is-open');
+        var b = w.querySelector('.session-more-btn');
+        if (b) b.setAttribute('aria-expanded', 'false');
+    });
+}
+(function bindSessionMenuDocumentCloserOnce() {
+    if (window.__myAgentSessionMenuCloser) return;
+    window.__myAgentSessionMenuCloser = true;
+    document.addEventListener('click', closeAllSessionMenus);
+})();
+
+(function bindSessionListDelegatedSwitcherOnce() {
+    if (!sessionsList || window.__myAgentSessionListSwitcher) return;
+    window.__myAgentSessionListSwitcher = true;
+    sessionsList.addEventListener('click', function (e) {
+        var target = e.target;
+        if (!target || !target.closest) return;
+        if (target.closest('button, .session-more-wrap, .session-more-menu, input, textarea, a')) return;
+        if (target.isContentEditable) return;
+        var row = target.closest('.session-item');
+        if (!row || !sessionsList.contains(row)) return;
+        var sid = row.dataset.sessionId;
+        if (!sid) {
+            var nameEl = row.querySelector('.session-name[data-id]');
+            sid = nameEl ? nameEl.getAttribute('data-id') : '';
+        }
+        if (sid && sid !== currentSessionId) {
+            Promise.resolve(switchSession(sid)).catch(function (err) {
+                console.error('切换会话失败:', err);
+            });
+        }
+    });
+})();
+
+function buildSessionMoreMenuMarkup() {
+    return '<div class="session-more-wrap">'
+        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
+        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
+        + '<div class="session-more-menu" role="menu">'
+        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
+        + '<button type="button" class="session-menu-todo" role="menuitem"></button>'
+        + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
+        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
+        + '<div class="session-menu-separator" role="separator"></div>'
+        + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'
+        + '<button type="button" class="session-menu-delete" role="menuitem">删除会话</button>'
+        + '</div></div>';
+}
+
+function findSessionForActions(sessionId, fallback) {
+    var sid = String(sessionId || '');
+    var current = sessionStore.get(sid);
+    if (current) return current;
+    if (sessionStore.archivedLoaded) {
+        current = (sessionStore.archivedSessions || []).find(function (item) {
+            return item && String(item.id) === sid;
+        });
+    }
+    return current || fallback || null;
+}
+
+function syncSessionMenuLabels(wrap, sess) {
+    if (!wrap || !sess) return;
+    wrap._sessionMenuSession = sess;
+    var pin = wrap.querySelector('.session-menu-pin');
+    var todo = wrap.querySelector('.session-menu-todo');
+    var archive = wrap.querySelector('.session-menu-archive');
+    if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
+    if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';
+    if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
+}
+
+async function toggleSessionPinnedFromMenu(sess) {
+    try {
+        const formData = new FormData();
+        const nextPinned = !sess.pinned;
+        const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
+        formData.append('pinned', nextPinned ? 'true' : 'false');
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });
+        if (!response.ok) {
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+            throw new Error('pin failed: ' + response.status);
+        }
+        await refreshSingleSessionRow(sess.id);
+    } catch (err) { console.error('置顶失败', err); }
+}
+
+async function toggleSessionTodoFromMenu(sess) {
+    try {
+        const formData = new FormData();
+        const nextTodo = !sess.todo;
+        const previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });
+        formData.append('todo', nextTodo ? 'true' : 'false');
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/todo', { method: 'PUT', body: formData });
+        if (!response.ok) {
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+            throw new Error('todo failed: ' + response.status);
+        }
+        await refreshSingleSessionRow(sess.id);
+    } catch (err) { console.error('待办设置失败', err); }
+}
+
+async function toggleSessionArchivedFromMenu(sess) {
+    try {
+        const formData = new FormData();
+        const nextArchived = !sess.archived;
+        const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
+        formData.append('archived', nextArchived ? 'true' : 'false');
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
+        if (!response.ok) {
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+            throw new Error('archive failed: ' + response.status);
+        }
+        await refreshSingleSessionRow(sess.id);
+        if (!nextArchived && sessionStore.archivedLoaded) {
+            await loadArchivedSessions({ background: true, refresh: true, forceRender: true });
+        }
+    } catch (err) { console.error('归档失败', err); }
+}
+
+async function renameSessionFromMenu(sess) {
+    var requestedName = await openUiModal({
+        title: '重命名会话',
+        subtitle: '编辑会话名称',
+        message: '',
+        inputLabel: '会话名称',
+        inputValue: String(sess.name || ''),
+        inputMaxLength: 160,
+        inputRequired: true,
+        confirmText: '保存名称',
+        cancelText: '取消',
+    });
+    if (typeof requestedName !== 'string') return;
+    var newName = requestedName.trim().slice(0, 160);
+    if (!newName || newName === String(sess.name || '')) return;
+    const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
+    if (currentSessionId === sess.id) updateSessionTitle();
+    try {
+        const formData = new FormData();
+        formData.append('name', newName);
+        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });
+        if (!response.ok) throw new Error('rename failed: ' + response.status);
+        await refreshSingleSessionRow(sess.id);
+        if (currentSessionId === sess.id) updateSessionTitle();
+    } catch (err) {
+        console.error('重命名失败', err);
+        if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        if (currentSessionId === sess.id) updateSessionTitle();
+    }
+}
+
+async function exportSessionFromMenu(sess) {
+    var confirmed = await openUiModal({
+        title: '导出会话',
+        subtitle: '下载会话文件',
+        message: '将会话「' + String(sess.name || '未命名') + '」对应的 session 文件夹压缩为 ZIP 并下载。',
+        confirmText: '确认导出',
+        cancelText: '取消',
+    });
+    if (!confirmed) return;
+    var link = document.createElement('a');
+    link.href = '/sessions/' + encodeURIComponent(sess.id) + '/export';
+    link.download = 'session-' + String(sess.id || 'export') + '.zip';
+    link.hidden = true;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+}
+
+async function deleteSessionFromMenu(sess, rowDiv) {
+    const okDel = await openUiModal({
+        title: '删除会话',
+        subtitle: '此操作不可恢复',
+        message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',
+        danger: true,
+        confirmText: '删除会话',
+        cancelText: '取消',
+    });
+    if (!okDel) return;
+    const wasArchivedLoaded = sessionStore.archivedLoaded;
+    const deletedSessionId = String(sess.id || '');
+    const nextSession = sessionStore.list().find(function (s) {
+        return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
+    }) || null;
+    sessionStore.markDeletedSession(deletedSessionId);
+    if (wasArchivedLoaded && sess.archived) {
+        const archivedBeforeDelete = sessionStore.archivedSessions || [];
+        const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {
+            return s && String(s.id) === deletedSessionId;
+        });
+        sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {
+            return s && String(s.id) !== deletedSessionId;
+        }), {
+            visibleCount: Math.max(
+                0,
+                sessionStore.archivedVisibleCount
+                    - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)
+            ),
+            totalCount: Math.max(0, sessionStore.archivedCount - 1),
+        });
+        syncArchivedSessionStateFromStore();
+    }
+    renderSessionListIfChanged(true);
+    if (rowDiv && rowDiv.parentNode) rowDiv.remove();
+    sessionUnreadComplete.delete(deletedSessionId);
+    scheduleTitleGenerationRefresh(deletedSessionId, false);
+    persistSessionUnread();
+    delete draftBySession[deletedSessionId];
+    removeStoredInputDraft(deletedSessionId);
+    if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
+    delete lastUserMessageBySession[deletedSessionId];
+    clearContextStateForSession(deletedSessionId);
+    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);
+    if (isSessionRunning(sess.id)) {
+        const r = abortSessionRun(sess.id, 'delete');
+        if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
+        setSendButtonState();
+        syncSessionListIndicatorClasses();
+    }
+    if (currentSessionId === deletedSessionId) {
+        if (nextSession) await switchSession(nextSession.id);
+        else await createNewSession();
+    }
+    void requestInterrupt(deletedSessionId, '', 'session_deleted');
+    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
+        .then(function (resp) {
+            if (!resp.ok) throw new Error('delete failed: ' + resp.status);
+        })
+        .catch(function (err) {
+            console.error('删除会话失败:', err);
+            sessionStore.clearDeletedSessionTombstone(deletedSessionId);
+            void loadSessions({ skipArchivedRefresh: true });
+            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+        });
+}
+
+function bindSessionActionMenu(wrap, getSession, rowDiv) {
+    if (!wrap || wrap.dataset.sessionMenuBound === '1') return;
+    wrap.dataset.sessionMenuBound = '1';
+    var moreBtn = wrap.querySelector('.session-more-btn');
+    if (moreBtn) {
+        bindUiHoverTip(moreBtn);
+        moreBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var wasOpen = wrap.classList.contains('is-open');
+            closeAllSessionMenus();
+            var sess = getSession();
+            if (!sess) return;
+            syncSessionMenuLabels(wrap, sess);
+            if (!wasOpen) {
+                wrap.classList.add('is-open');
+                moreBtn.setAttribute('aria-expanded', 'true');
+            }
+        });
+    }
+    wrap.addEventListener('click', function (e) {
+        var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
+        if (!target || !wrap.contains(target)) return;
+        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
+            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
+                : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
+                    : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
+                        : target.classList.contains('session-menu-export') ? exportSessionFromMenu
+                            : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu
+                                : null;
+        if (!handler) return;
+        e.stopPropagation();
+        closeAllSessionMenus();
+        var sess = getSession();
+        if (!sess) return;
+        Promise.resolve(handler(sess, rowDiv)).catch(function (err) {
+            console.error('会话菜单操作失败:', err);
+        });
+    });
+}
+
+var titlebarSessionMenuSnapshot = null;
+
+function getTitlebarSessionForActions(host, wrap) {
+    var sessionId = (host && host.dataset.sessionId) || currentSessionId;
+    return findSessionForActions(sessionId, wrap && wrap._sessionMenuSession)
+        || titlebarSessionMenuSnapshot;
+}
+
+function syncTitlebarSessionMenu(sess) {
+    var host = document.getElementById('breadcrumb-session-actions');
+    if (!host) return;
+    titlebarSessionMenuSnapshot = sess ? Object.assign({}, titlebarSessionMenuSnapshot || {}, sess) : null;
+    host.dataset.sessionId = titlebarSessionMenuSnapshot ? String(titlebarSessionMenuSnapshot.id || '') : '';
+    host.classList.toggle('hidden', !sess);
+    var wrap = host.querySelector('.session-more-wrap');
+    if (wrap && titlebarSessionMenuSnapshot) syncSessionMenuLabels(wrap, titlebarSessionMenuSnapshot);
+}
+
+(function mountTitlebarSessionMenu() {
+    var host = document.getElementById('breadcrumb-session-actions');
+    if (!host || host.dataset.sessionMenuMounted === '1') return;
+    host.dataset.sessionMenuMounted = '1';
+    host.innerHTML = buildSessionMoreMenuMarkup();
+    var wrap = host.querySelector('.session-more-wrap');
+    bindSessionActionMenu(wrap, function () {
+        return getTitlebarSessionForActions(host, wrap);
+    }, null);
+    syncTitlebarSessionMenu(currentSessionId ? findSessionForActions(currentSessionId, null) : null);
+})();
+
+/** 创建并绑定单条会话及其分区操作菜单。 */
+function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
+    const div = document.createElement('div');
+    div.className = 'session-item';
+    div.dataset.sessionId = sess.id || '';
+    if (currentSessionId === sess.id) div.classList.add('active');
+    if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
+    if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
+    var displayName = typeof localizeSessionPlaceholderName === 'function'
+        ? localizeSessionPlaceholderName(sess.name)
+        : (sess.name || '');
+    div.innerHTML = '<div class="session-item-head">'
+        + '<div class="session-item-main">'
+        + '<div class="session-item-title-row">'
+        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
+        + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
+        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
+        + '<span class="session-item-date"></span>'
+        + '</div>'
+        + '<div class="session-last-query"></div>'
+        + '</div>'
+        + buildSessionMoreMenuMarkup()
+        + '</div>';
+    if (typeof updateHumanInteractionSessionBadge === 'function') {
+        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
+    }
+    var wsLine = formatSessionListSubtitle(sess);
+    var wsEl = div.querySelector('.session-last-query');
+    if (wsEl) wsEl.textContent = wsLine;
+    var dateEl = div.querySelector('.session-item-date');
+    var dateLine = '';
+    if (dateEl) {
+        dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';
+        if (dateLine) {
+            dateEl.innerHTML = (typeof sessionDateIcon === 'function' ? sessionDateIcon() : '') + dateLine;
+        } else {
+            dateEl.textContent = '';
+        }
+    }
+    var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';
+    if (itemTip) {
+        div.setAttribute('data-ui-tip', itemTip);
+        bindUiHoverTip(div);
+    }
+    var moreWrap = div.querySelector('.session-more-wrap');
+    syncSessionMenuLabels(moreWrap, sess);
+    bindSessionActionMenu(moreWrap, function () {
+        return findSessionForActions(sess.id, sess);
+    }, div);
+    var nameEl = div.querySelector('.session-name');
+    if (nameEl) {
+        nameEl.addEventListener('dblclick', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var current = findSessionForActions(sess.id, sess);
+            if (!current) return;
+            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {
+                console.error('双击重命名会话失败:', err);
+            });
+        });
+    }
+    applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
+    return div;
+}
+
+const sessionTitleRefreshState = Object.create(null);
+
+function scheduleTitleGenerationRefresh(sessionId, pending) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    let state = sessionTitleRefreshState[sid];
+    if (!pending) {
+        if (state && state.timer) clearTimeout(state.timer);
+        delete sessionTitleRefreshState[sid];
+        return;
+    }
+    if (!state) state = sessionTitleRefreshState[sid] = { attempts: 0, timer: null };
+    if (state.timer || state.attempts >= 60) return;
+    const delayMs = Math.min(10000, Math.round(1000 * Math.pow(1.45, state.attempts)));
+    state.timer = setTimeout(function () {
+        state.timer = null;
+        state.attempts += 1;
+        void refreshSingleSessionRow(sid);
+    }, delayMs);
+}
+
+async function refreshSingleSessionRow(sessionId) {
+    if (!sessionId || !sessionsList) return;
+    try {
+        const response = await fetch('/sessions/' + encodeURIComponent(sessionId));
+        if (!response.ok) return;
+        const sess = await response.json();
+        if (!sess || !sess.id) return;
+        scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
+        applySessionPatch({
+            session: sess,
+            session_id: sess.id,
+            stream_active: !!sess.stream_active,
+        });
+        setSessionServerStreamActive(sess.id, !!sess.stream_active);
+        if (sess.unread_result) {
+            if (!sessionUnreadComplete.has(sess.id)) {
+                sessionUnreadComplete.add(sess.id);
+                persistSessionUnread();
+            }
+        } else if (sessionUnreadComplete.delete(sess.id)) {
+            persistSessionUnread();
+        }
+        if (Number(sess.subagent_running || 0) > 0) {
+            sessionUnreadComplete.delete(sess.id);
+            persistSessionUnread();
+        }
+        renderSessionListIfChanged(false);
+        if (typeof maybeAutoResumeInterruptedReact === 'function') {
+            maybeAutoResumeInterruptedReact(sessionId, sess);
+        }
+    } catch (e) {
+        console.error('刷新会话摘要失败:', e);
+    }
+}
+
+let sessionListLoadEpoch = 0;
+let sessionListLoadPromise = null;
+let sessionListRenderKey = '';
+let createNewSessionQueue = Promise.resolve();
+let archivedSessionsLoaded = false;
+let archivedSessionsCache = null;
+let archivedSessionsCount = 0;
+let archivedSessionsLoadEpoch = 0;
+
+function syncArchivedSessionStateFromStore() {
+    archivedSessionsLoaded = !!sessionStore.archivedLoaded;
+    archivedSessionsCache = sessionStore.archivedSessions;
+    archivedSessionsCount = sessionStore.archivedCount;
+}
+
+function computeSessionListRenderKey() {
+    const sessions = sessionStore.list();
+    const parts = [
+        'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),
+        'archivedCount=' + String(sessionStore.archivedCount || 0),
+    ];
+    for (let i = 0; i < sessions.length; i += 1) {
+        const s = sessions[i];
+        if (!s || !s.id) continue;
+        parts.push([
+            s.id,
+            s.name || '',
+            s.pinned ? 'p' : '',
+            s.todo ? 't' : '',
+            s.archived ? 'a' : '',
+            s.last_activity_at || s.updated_at || '',
+            s.last_user_preview || '',
+        ].join('\\u001f'));
+    }
+    const archived = sessionStore.archivedList();
+    for (let j = 0; j < archived.length; j += 1) {
+        const a = archived[j];
+        if (!a || !a.id) continue;
+        parts.push('arch=' + [
+            a.id,
+            a.name || '',
+            a.pinned ? 'p' : '',
+            a.todo ? 't' : '',
+            a.last_activity_at || a.updated_at || '',
+            a.last_user_preview || '',
+        ].join('\\u001f'));
+    }
+    return parts.join('\\u001e');
+}
+
+function renderSessionListIfChanged(force) {
+    const nextKey = computeSessionListRenderKey();
+    if (!force && nextKey === sessionListRenderKey) {
+        syncSessionListIndicatorClasses();
+        renderSessionTitleFromStore();
+        return;
+    }
+    sessionListRenderKey = nextKey;
+    const nextStreamMap = renderSessionListFromStore();
+    applyServerStreamActiveMap(nextStreamMap);
+    renderSessionTitleFromStore();
+}
+
+function clearSessionListError() {
+    if (!sessionsList) return;
+    sessionsList.classList.remove('sessions-list--error');
+    if (sessionsList.dataset.loadError === '1') delete sessionsList.dataset.loadError;
+}
+
+function renderSessionListError(message) {
+    if (!sessionsList) return;
+    sessionListRenderKey = '';
+    sessionsList.classList.add('sessions-list--error');
+    sessionsList.dataset.loadError = '1';
+    sessionsList.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'session-list-error';
+    row.setAttribute('role', 'status');
+    row.textContent = message || '加载会话列表失败';
+    sessionsList.appendChild(row);
+}
+
+function applyOptimisticSessionUpdate(sessionId, patch) {
+    const sid = String(sessionId || '');
+    const current = sessionStore.get(sid) || (sessionStore.archivedLoaded
+        ? (sessionStore.archivedSessions || []).find(function (session) {
+            return session && String(session.id) === sid;
+        })
+        : null);
+    if (!current) return null;
+    const prev = Object.assign({}, current);
+    const next = Object.assign({}, current, patch || {});
+    if (Object.prototype.hasOwnProperty.call(patch || {}, 'pinned')) {
+        next.pinned_at = next.pinned ? (next.pinned_at || new Date().toISOString()) : null;
+    }
+    sessionStore.upsert(next);
+    if (prev.archived || next.archived) {
+        if (sessionStore.archivedLoaded) {
+            const archivedList = (sessionStore.archivedSessions || []).slice();
+            const archivedIndex = archivedList.findIndex(function (s) {
+                return s && String(s.id) === sid;
+            });
+            let visibleCount = sessionStore.archivedVisibleCount;
+            let totalCount = sessionStore.archivedCount;
+            if (prev.archived && next.archived) {
+                if (archivedIndex >= 0) archivedList[archivedIndex] = next;
+            } else if (prev.archived) {
+                if (archivedIndex >= 0) archivedList.splice(archivedIndex, 1);
+                if (archivedIndex >= 0 && archivedIndex < visibleCount) visibleCount -= 1;
+                totalCount = Math.max(0, totalCount - 1);
+            } else if (next.archived) {
+                archivedList.unshift(next);
+                visibleCount += 1;
+                totalCount += 1;
+            }
+            sessionStore.setArchivedLoaded(archivedList, {
+                visibleCount: visibleCount,
+                totalCount: totalCount,
+            });
+            syncArchivedSessionStateFromStore();
+        } else if (!!prev.archived !== !!next.archived) {
+            sessionStore.setArchivedCount(Math.max(
+                0,
+                sessionStore.archivedCount + (next.archived ? 1 : -1)
+            ));
+        }
+    }
+    renderSessionListIfChanged(true);
+    return prev;
+}
+
+// Event count cache for optimistic UI updates.
+const uiEventCountCache = {
+    cache: new Map(),
+    maxAgeMs: 10000,
+    
+    get(sessionId) {
+        var entry = this.cache.get(sessionId);
+        if (entry && typeof entry === 'object') return Number(entry.count) || 0;
+        return Number(entry) || 0;
+    },
+
+    has(sessionId) {
+        return this.cache.has(sessionId);
+    },
+
+    isFresh(sessionId, maxAgeMs) {
+        var entry = this.cache.get(sessionId);
+        if (!entry || typeof entry !== 'object') return false;
+        var age = Date.now() - Number(entry.updatedAt || 0);
+        var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;
+        return age >= 0 && age <= limit;
+    },
+    
+    set(sessionId, count) {
+        this.cache.set(sessionId, {
+            count: Math.max(0, Number(count) || 0),
+            updatedAt: Date.now(),
+        });
+    },
+    
+    increment(sessionId) {
+        const current = this.get(sessionId);
+        this.set(sessionId, current + 1);
+        return current + 1;
+    },
+    
+    updateFromServer(sessionId, count) {
+        this.set(sessionId, count);
+    }
+};
+
+async function fetchSessionsStateSnapshot(opts) {
+    opts = opts || {};
+    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
+    const response = await fetchWithTimeout(url, {}, 12000);
+    if (!response.ok) throw new Error('sessions state failed: ' + response.status);
+    const snapshot = await response.json();
+    if (!snapshot || !Array.isArray(snapshot.sessions)) {
+        throw new Error('invalid sessions state response');
+    }
+    snapshot.include_archived = !!opts.includeArchived;
+    return snapshot;
+}
+
+function deriveSidebarRuntimeStatus() {
+    var busy = false;
+    sessionStore.runsBySession.forEach(function () { busy = true; });
+    if (!busy) {
+        sessionStore.activeRunInfoBySession.forEach(function (info) {
+            if (!info || info.run_active !== false) busy = true;
+        });
+    }
+    if (busy) return 'busy';
+    return 'online';
+}
+
+function updateSidebarRuntimeStatus(nextStatus) {
+    var footer = document.querySelector('.sidebar-runtime');
+    var status = document.getElementById('sidebar-runtime-status');
+    if (!footer || !status) return;
+    var state = nextStatus === false ? 'offline'
+        : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));
+    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';
+    footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');
+    footer.classList.add('is-' + state);
+    var labels = {
+        online: 'Runtime 在线',
+        busy: 'Runtime 繁忙',
+        waiting: 'Runtime 待处理',
+        alert: 'Runtime 告警',
+        offline: 'Runtime 离线'
+    };
+    setUiRuntimeText(status, labels[state]);
+    footer.dataset.runtimeStatus = state;
+}
+
+var runtimeStatusHeartbeatTimer = null;
+var lastUiActivationSeq = 0;
+var pendingQuerySession = (function () {
+    // Deep link support: /?session=<id> selects that conversation once the
+    // session list is ready, then the parameter is stripped so a manual
+    // refresh does not yank the user back.
+    try {
+        var params = new URLSearchParams(window.location.search || '');
+        var sid = String(params.get('session') || '').trim();
+        if (sid && /^[A-Za-z0-9][A-Za-z0-9\\-]{0,63}$/.test(sid)) {
+            params.delete('session');
+            var nextSearch = params.toString();
+            try {
+                window.history.replaceState(
+                    {}, '',
+                    window.location.pathname + (nextSearch ? '?' + nextSearch : '') + (window.location.hash || '')
+                );
+            } catch (e) { /* history may be unavailable */ }
+            return sid;
+        }
+    } catch (e) { /* ignore */ }
+    return '';
+})();
+async function refreshRuntimeStatus() {
+    try {
+        var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);
+        if (!response.ok) throw new Error('runtime status failed: ' + response.status);
+        var payload = await response.json();
+        updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);
+        var activationSeq = Number(payload && payload.activation_seq) || 0;
+        if (activationSeq > lastUiActivationSeq) {
+            lastUiActivationSeq = activationSeq;
+            try { window.focus(); } catch (e) { /* browser policy may reject focus */ }
+            var activationSession = String((payload && payload.activation_session) || '').trim();
+            if (activationSession && activationSession !== currentSessionId
+                    && typeof switchSession === 'function') {
+                void Promise.resolve(switchSession(activationSession)).catch(function (err) { /* session may be gone */ });
+            }
+        }
+    } catch (error) {
+        updateSidebarRuntimeStatus(false);
+    }
+}
+
+function startRuntimeStatusHeartbeat() {
+    if (runtimeStatusHeartbeatTimer) clearInterval(runtimeStatusHeartbeatTimer);
+    void refreshRuntimeStatus();
+    runtimeStatusHeartbeatTimer = setInterval(refreshRuntimeStatus, 5000);
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+    options = options || {};
+    const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
+    if (options.signal) return fetch(url, options);
+    const controller = new AbortController();
+    const timer = setTimeout(function () { controller.abort(); }, ms);
+    const nextOptions = Object.assign({}, options, { signal: controller.signal });
+    try {
+        return await fetch(url, nextOptions);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function fetchArchivedSessionPage(offset, limit) {
+    const url = '/sessions?include_archived=true&archived_only=true&offset=' + String(offset)
+        + '&limit=' + String(limit);
+    const response = await fetchWithTimeout(url, {}, 15000);
+    if (!response.ok) throw new Error('archived sessions failed: ' + response.status);
+    const sessions = await response.json();
+    const countHeader = response.headers.get('X-Archived-Count');
+    const parsedCount = Number(countHeader);
+    return {
+        sessions: Array.isArray(sessions) ? sessions : [],
+        totalCount: Number.isFinite(parsedCount) && parsedCount >= 0
+            ? parsedCount
+            : Math.max(offset + (Array.isArray(sessions) ? sessions.length : 0), sessionStore.archivedCount),
+    };
+}
+
+function appendArchivedSessionPage(page, visibleCount) {
+    const combined = (sessionStore.archivedSessions || []).concat(page.sessions || []);
+    const seen = new Set();
+    const deduplicated = combined.filter(function (s) {
+        const sid = s && s.id ? String(s.id) : '';
+        if (!sid || seen.has(sid)) return false;
+        seen.add(sid);
+        return true;
+    });
+    sessionStore.setArchivedLoaded(deduplicated, {
+        visibleCount: visibleCount,
+        totalCount: page.totalCount,
+    });
+}
+
+async function prefetchNextArchivedPage(loadEpoch) {
+    const cachedCount = Array.isArray(sessionStore.archivedSessions)
+        ? sessionStore.archivedSessions.length
+        : 0;
+    const wantedCount = Math.min(
+        sessionStore.archivedCount,
+        sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
+    );
+    if (cachedCount >= wantedCount) return;
+    const page = await fetchArchivedSessionPage(cachedCount, wantedCount - cachedCount);
+    if (loadEpoch !== archivedSessionsLoadEpoch) return;
+    appendArchivedSessionPage(page, sessionStore.archivedVisibleCount);
+}
+
+async function loadArchivedSessions(opts) {
+    opts = opts || {};
+    const loadEpoch = ++archivedSessionsLoadEpoch;
+    try {
+        if (!sessionStore.archivedLoaded) {
+            const initialPage = await fetchArchivedSessionPage(0, ARCHIVED_SESSIONS_PAGE_SIZE * 2);
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;
+            sessionStore.setArchivedLoaded(initialPage.sessions, {
+                visibleCount: ARCHIVED_SESSIONS_PAGE_SIZE,
+                totalCount: initialPage.totalCount,
+            });
+        } else if (opts.background || opts.refresh || !sessionStore.hasMoreArchivedSessions()) {
+            const refreshLimit = Math.max(
+                ARCHIVED_SESSIONS_PAGE_SIZE * 2,
+                sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
+            );
+            const refreshedPage = await fetchArchivedSessionPage(0, refreshLimit);
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;
+            sessionStore.setArchivedLoaded(refreshedPage.sessions, {
+                visibleCount: sessionStore.archivedVisibleCount,
+                totalCount: refreshedPage.totalCount,
+            });
+        } else {
+            if (sessionStore.revealNextArchivedPage() === 0) {
+                const cachedCount = Array.isArray(sessionStore.archivedSessions)
+                    ? sessionStore.archivedSessions.length
+                    : 0;
+                const nextPage = await fetchArchivedSessionPage(cachedCount, ARCHIVED_SESSIONS_PAGE_SIZE);
+                if (loadEpoch !== archivedSessionsLoadEpoch) return;
+                appendArchivedSessionPage(nextPage, sessionStore.archivedVisibleCount);
+                sessionStore.revealNextArchivedPage();
+            }
+            syncArchivedSessionStateFromStore();
+            renderSessionListIfChanged(true);
+            clearSessionListError();
+            try {
+                await prefetchNextArchivedPage(loadEpoch);
+            } catch (prefetchErr) {
+                console.error('预加载下一批归档目录失败:', prefetchErr);
+            }
+        }
+        if (loadEpoch !== archivedSessionsLoadEpoch) return;
+        syncArchivedSessionStateFromStore();
+        renderSessionListIfChanged(!!opts.forceRender);
+        clearSessionListError();
+    } catch (err) {
+        console.error('加载归档目录失败:', err);
+        if (!opts.background) throw err;
+    }
+}
+
+async function loadSessions(opts) {
+    opts = opts || {};
+    if (sessionListLoadPromise && !opts.force) return sessionListLoadPromise;
+    sessionListLoadPromise = loadSessionsInner(opts);
+    try {
+        return await sessionListLoadPromise;
+    } finally {
+        sessionListLoadPromise = null;
+    }
+}
+
+async function loadSessionsInner(opts) {
+    const loadEpoch = ++sessionListLoadEpoch;
+    sessionStore.ui.loadingSessions = true;
+    try {
+        let allSessions;
+        let snapshot = null;
+        
+        try {
+            snapshot = await fetchSessionsStateSnapshot();
+            if (loadEpoch !== sessionListLoadEpoch) return;
+            updateSidebarRuntimeStatus(true);
+            allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+        } catch (stateErr) {
+            console.error('加载会话状态快照失败，回退至旧接口', stateErr);
+            const response = await fetchWithTimeout('/sessions', {}, 12000);
+            const archivedCountHeader = response.headers.get('X-Archived-Count');
+            if (archivedCountHeader != null && archivedCountHeader !== '') {
+                const parsedArchivedCount = Number(archivedCountHeader);
+                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
+                    sessionStore.setArchivedCount(parsedArchivedCount);
+                    syncArchivedSessionStateFromStore();
+                }
+            }
+            const sessions = await response.json();
+            if (loadEpoch !== sessionListLoadEpoch) return;
+            updateSidebarRuntimeStatus(true);
+            allSessions = Array.isArray(sessions) ? sessions : [];
+            snapshot = {
+                sessions: allSessions,
+                archived_count: archivedSessionsCount,
+            };
+        }
+        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
+        syncArchivedSessionStateFromStore();
+        allSessions = sessionStore.list();
+        
+        const idSet = new Set();
+        for (let si = 0; si < allSessions.length; si += 1) {
+            if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);
+        }
+        [...sessionUnreadComplete].forEach(function (uid) {
+            if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);
+        });
+        persistSessionUnread();
+
+        if (pendingQuerySession) {
+            var queryTarget = pendingQuerySession;
+            pendingQuerySession = '';
+            var known = allSessions.some(function (s) { return s && s.id === queryTarget; });
+            if (known && queryTarget !== currentSessionId && typeof switchSession === 'function') {
+                void Promise.resolve(switchSession(queryTarget)).catch(function (err) { /* ignore */ });
+            }
+        }
+
+        renderSessionListIfChanged(!!opts.forceRender);
+        clearSessionListError();
+        sessionStore.ui.loadingSessions = false;
+        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
+            void loadArchivedSessions({ background: true });
+        }
+        return true;
+    } catch (error) {
+        sessionStore.ui.loadingSessions = false;
+        updateSidebarRuntimeStatus(false);
+        console.error('加载会话列表失败:', error);
+        if (sessionStore.list().length > 0) {
+            renderSessionListIfChanged(true);
+            clearSessionListError();
+        } else {
+            renderSessionListError('加载会话列表失败');
+        }
+        return false;
+    }
+}
+
+async function reconcileRunStateFromServer(opts) {
+    opts = opts || {};
+    const suppressedBeforeFetch = new Set();
+    if (opts.respectStopSuppress) {
+        sessionStore.sessionOrder.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));
+        });
+        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {
+            suppressedBeforeFetch.add(String(currentSessionId));
+        }
+    }
+    let snapshot = null;
+    try {
+        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
+        snapshot = await fetchSessionsStateSnapshot({
+            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),
+        });
+    } catch (e) {
+        updateSidebarRuntimeStatus(false);
+        if (!opts.silent) console.error('reconcile run state failed:', e);
+        return;
+    }
+    applySessionSnapshot(snapshot);
+    updateSidebarRuntimeStatus(true);
+    if (opts.respectStopSuppress) {
+        suppressedBeforeFetch.forEach(function (sid) {
+            if (isSessionStreamStopSuppressed(sid)) {
+                sessionStore.setStreamActive(sid, false);
+                const sess = sessionStore.get(sid);
+                if (sess) {
+                    sess.stream_active = false;
+                    sess.run_active = false;
+                    sess.run_started_at = null;
+                }
+                sessionStore.activeRunInfoBySession.delete(sid);
+            }
+        });
+    }
+    const active = new Set();
+    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
+        if (info && info.run_active === true) active.add(String(sid));
+    });
+    const localIds = [];
+    sessionStore.runsBySession.forEach(function (_run, sid) {
+        localIds.push(String(sid));
+    });
+    localIds.forEach(function (sid) {
+        if (!active.has(sid)) {
+            var run = getSessionRunState(sid);
+            if (run && run.reattached) {
+                abortSessionRun(sid, 'reconcile-finished');
+            }
+        }
+    });
+    if (currentSessionId && active.has(currentSessionId)) {
+        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};
+        const run = getSessionRunState(currentSessionId);
+        const ctx = run && run.ctx;
+        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
+            ? ctx.currentProcessGroup
+            : (getVisibleChatStream() && getVisibleChatStream().querySelector('.process-aggregate:last-of-type'));
+        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);
+    }
+    syncSessionListIndicatorClasses();
+    setSendButtonState();
+    renderSessionListIfChanged(false);
+}
+
+function showSessionLoadRetry(sessionId) {
+    var sid = String(sessionId || '');
+    var stream = getVisibleChatStream();
+    if (!sid || !stream) return;
+    if (stream.querySelector('.session-load-retry')) return;
+    var row = document.createElement('div');
+    row.className = 'feed-item feed--err session-load-retry';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'history-load-older-btn';
+    btn.textContent = '重新加载';
+    btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
+        void switchSession(sid, { forceReload: true });
+    });
+    row.appendChild(btn);
+    stream.appendChild(row);
+}
+
+async function loadSessionMessages(sessionId, scrollBehavior, opts) {
+    const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now()
+        : Date.now();
+    scrollBehavior = scrollBehavior || 'saved-or-bottom';
+    opts = opts || {};
+    const loadToken = ++messageLoadEpoch;
+    let historyHydrationStream = null;
+    const finishHistoryHydration = function () {
+        if (historyHydrationStream) {
+            historyHydrationStream.hidden = false;
+            historyHydrationStream = null;
+        }
+        if (loadToken === messageLoadEpoch) hideLoading();
+        if (typeof attachAllHumanInteractionCards === 'function') {
+            attachAllHumanInteractionCards(getVisibleChatStream());
+        }
+    };
+    sessionStore.ui.loadingMessages = true;
+    suppressTocDuringSessionLoad = true;
+    replayingMessages = true;
+    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
+        cancelSmoothStreamFollowForHistoryLoad();
+    }
+    resetSessionHistoryPaging();
+    try {
+        let raw;
+        let snapshotTocTurns = null;
+        let historySource = 'messages';
+        let snapshotTiming = null;
+        const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
+        if (canUseSnapshot) {
+            try {
+                const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
+                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
+                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
+                    + '&include_aux=false';
+                for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
+                    const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);
+                    const snapshot = await snapshotResp.json().catch(function () { return null; });
+                    if (snapshot && snapshot.migration_pending) {
+                        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+                        const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));
+                        await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
+                        continue;
+                    }
+                    if (snapshotResp.ok) {
+                    if (snapshot && snapshot.ok && snapshot.messages) {
+                        raw = snapshot.messages;
+                        historySource = 'history_snapshot';
+                        snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'
+                            ? snapshot.timing
+                            : null;
+                        if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {
+                            uiEventCountCache.updateFromServer(sessionId, snapshot.count);
+                        }
+                        if (Array.isArray(snapshot.user_turns)) {
+                            snapshotTocTurns = snapshot.user_turns;
+                            if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
+                        }
+                        if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
+                            recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);
+                        }
+                        if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
+                            const __snapActive = !!(snapshot.stream_active || snapshot.run_active);
+                            if (typeof setSessionServerStreamActive === 'function') setSessionServerStreamActive(sessionId, __snapActive);
+                            if (typeof applySessionPatch === 'function') {
+                                try { applySessionPatch({ session_id: sessionId, stream_active: __snapActive }); } catch (e) {}
+                            }
+                            try {
+                                const __sess = sessionStore.get(sessionId);
+                                if (__sess) { __sess.stream_active = __snapActive; __sess.run_active = __snapActive; }
+                            } catch (e) {}
+                        }
+                    }
+                    }
+                    break;
+                }
+            } catch (snapshotErr) {
+                console.warn('history snapshot unavailable, falling back to messages:', snapshotErr);
+            }
+        }
+        if (!raw) {
+            let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
+            if (!opts.full) {
+                url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE
+                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
+            }
+            const response = await fetchWithTimeout(url, {}, 15000);
+            if (!response.ok) throw new Error('messages failed: ' + response.status);
+            raw = await response.json();
+        }
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.fetch', elapsedSince(openSessionStartedAt));
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
-        const vis = getVisibleChatStream();\r
-        if (vis) {\r
-            const loader = document.getElementById('chat-loading');\r
-            if (loader && loader.parentNode === vis && chatContainer) {\r
-                chatContainer.insertBefore(loader, vis);\r
-            }\r
-            vis.hidden = true;\r
-            historyHydrationStream = vis;\r
-            emptyChatStreamKeepingStrip(vis);\r
-        }\r
-        else {\r
-            chatContainer.innerHTML = '';\r
-            ensureVisibleChatStreamSlot();\r
-        }\r
-        markVisibleSessionStreamLoadState(sessionId, 'loading');\r
-        let events;\r
-        let pageMeta = null;\r
-        if (Array.isArray(raw)) {\r
-            events = raw;\r
-        } else if (raw && typeof raw === 'object' && Array.isArray(raw.events)) {\r
-            events = raw.events;\r
-            const pageTotal = Number(raw.total) || 0;\r
-            const pageRangeEnd = Number(raw.range_end) || 0;\r
-            pageMeta = {\r
-                total: pageTotal,\r
-                range_start: Number(raw.range_start) || 0,\r
-                range_end: pageRangeEnd,\r
-                has_older: !!raw.has_older,\r
-                has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,\r
-            };\r
-            uiEventCountCache.updateFromServer(sessionId, pageMeta.total);\r
-        } else {\r
-            events = [];\r
-        }\r
-        beginMessageReplay(sessionId, pageMeta || {\r
-            total: events.length,\r
-            range_start: 0,\r
-            range_end: events.length,\r
-        });\r
-        if (!opts.full && pageMeta) {\r
-            setSessionHistoryPaging({\r
-                sessionId: sessionId,\r
-                total: pageMeta.total,\r
-                range_start: pageMeta.range_start,\r
-                range_end: pageMeta.range_end,\r
-                has_older: !!pageMeta.has_older,\r
-                has_newer: !!pageMeta.has_newer,\r
-            });\r
-            ensureHistorySentinel(getVisibleChatStream());\r
-        }\r
-        if (events.length === 0) {\r
-            suppressTocDuringSessionLoad = false;\r
-            setWelcome();\r
-            finishHistoryHydration();\r
-            updateSessionTitle();\r
-            scheduleContextTokensAfterPaint(sessionId);\r
-            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
-            markVisibleSessionStreamLoadState(sessionId, 'ok');\r
-            logOpenSessionTiming(sessionId, {\r
-                source: historySource,\r
-                events: 0,\r
-                snapshotTiming: snapshotTiming,\r
-                totalMs: elapsedSince(openSessionStartedAt),\r
-            });\r
-            return true;\r
-        }\r
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        const vis = getVisibleChatStream();
+        if (vis) {
+            const loader = document.getElementById('chat-loading');
+            if (loader && loader.parentNode === vis && chatContainer) {
+                chatContainer.insertBefore(loader, vis);
+            }
+            vis.hidden = true;
+            historyHydrationStream = vis;
+            emptyChatStreamKeepingStrip(vis);
+        }
+        else {
+            chatContainer.innerHTML = '';
+            ensureVisibleChatStreamSlot();
+        }
+        markVisibleSessionStreamLoadState(sessionId, 'loading');
+        let events;
+        let pageMeta = null;
+        if (Array.isArray(raw)) {
+            events = raw;
+        } else if (raw && typeof raw === 'object' && Array.isArray(raw.events)) {
+            events = raw.events;
+            const pageTotal = Number(raw.total) || 0;
+            const pageRangeEnd = Number(raw.range_end) || 0;
+            pageMeta = {
+                total: pageTotal,
+                range_start: Number(raw.range_start) || 0,
+                range_end: pageRangeEnd,
+                has_older: !!raw.has_older,
+                has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,
+            };
+            uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
+        } else {
+            events = [];
+        }
+        beginMessageReplay(sessionId, pageMeta || {
+            total: events.length,
+            range_start: 0,
+            range_end: events.length,
+        });
+        if (!opts.full && pageMeta) {
+            setSessionHistoryPaging({
+                sessionId: sessionId,
+                total: pageMeta.total,
+                range_start: pageMeta.range_start,
+                range_end: pageMeta.range_end,
+                has_older: !!pageMeta.has_older,
+                has_newer: !!pageMeta.has_newer,
+            });
+            ensureHistorySentinel(getVisibleChatStream());
+        }
+        if (events.length === 0) {
+            suppressTocDuringSessionLoad = false;
+            setWelcome();
+            finishHistoryHydration();
+            updateSessionTitle();
+            scheduleContextTokensAfterPaint(sessionId);
+            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
+            markVisibleSessionStreamLoadState(sessionId, 'ok');
+            logOpenSessionTiming(sessionId, {
+                source: historySource,
+                events: 0,
+                snapshotTiming: snapshotTiming,
+                totalMs: elapsedSince(openSessionStartedAt),
+            });
+            return true;
+        }
         const loadCtx = newDomContext(getVisibleChatStream());
         const hydrationStartedAt = performance.now();
-        loadCtx.lastUserEventIndex = -1;\r
-        const indexBase = pageMeta ? pageMeta.range_start : 0;\r
-        const batchSize = opts.full ? 64 : 512;\r
-        for (let evi = 0; evi < events.length; evi += 1) {\r
-            const ev = events[evi];\r
-            if (ev && typeof ev === 'object' && ev.type) {\r
-                reduceAndRenderMessageEvent(loadCtx, ev, {\r
-                    sessionId: sessionId,\r
-                    eventIndex: indexBase + evi,\r
-                    source: 'history',\r
-                });\r
-            }\r
-            if (evi > 0 && evi % batchSize === 0) {\r
-                await new Promise(function (resolve) { setTimeout(resolve, 0); });\r
-                if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
-            }\r
+        loadCtx.lastUserEventIndex = -1;
+        const indexBase = pageMeta ? pageMeta.range_start : 0;
+        const batchSize = opts.full ? 64 : 512;
+        for (let evi = 0; evi < events.length; evi += 1) {
+            const ev = events[evi];
+            if (ev && typeof ev === 'object' && ev.type) {
+                reduceAndRenderMessageEvent(loadCtx, ev, {
+                    sessionId: sessionId,
+                    eventIndex: indexBase + evi,
+                    source: 'history',
+                });
+            }
+            if (evi > 0 && evi % batchSize === 0) {
+                await new Promise(function (resolve) { setTimeout(resolve, 0); });
+                if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+            }
         }
         if (typeof uiPerformance !== 'undefined') {
             uiPerformance.sample(sessionId, 'history.hydrate', performance.now() - hydrationStartedAt);
@@ -18772,33 +18761,33 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
             if (!historyImagesReady) uiPerformance.count(sessionId, 'history.imageFallbacks');
         }
         finishHistoryHydration();
-        if (!chatStreamHasConversationContent()) {\r
-            suppressTocDuringSessionLoad = false;\r
-            setWelcome();\r
-            updateSessionTitle();\r
-            scheduleContextTokensAfterPaint(sessionId);\r
-            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
-            markVisibleSessionStreamLoadState(sessionId, 'ok');\r
-            logOpenSessionTiming(sessionId, {\r
-                source: historySource,\r
-                events: events.length,\r
-                snapshotTiming: snapshotTiming,\r
-                totalMs: elapsedSince(openSessionStartedAt),\r
-            });\r
-            return true;\r
-        }\r
-        if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {\r
-            await loadOlderHistoryChunk({ keepTocStable: true });\r
-            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
-        }\r
+        if (!chatStreamHasConversationContent()) {
+            suppressTocDuringSessionLoad = false;
+            setWelcome();
+            updateSessionTitle();
+            scheduleContextTokensAfterPaint(sessionId);
+            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
+            markVisibleSessionStreamLoadState(sessionId, 'ok');
+            logOpenSessionTiming(sessionId, {
+                source: historySource,
+                events: events.length,
+                snapshotTiming: snapshotTiming,
+                totalMs: elapsedSince(openSessionStartedAt),
+            });
+            return true;
+        }
+        if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
+            await loadOlderHistoryChunk({ keepTocStable: true });
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+        }
         if (historyLoadScrollsToBottom(sessionId, historyScrollBehavior)) {
-            tocScrollBottomOnNextBuild = true;\r
-        }\r
-        suppressTocDuringSessionLoad = false;\r
-        if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });\r
-        else if (!opts.tocAlreadyStarted) rebuildToc();\r
-        updateSessionTitle();\r
-        updateHistorySentinelVisibility();\r
+            tocScrollBottomOnNextBuild = true;
+        }
+        suppressTocDuringSessionLoad = false;
+        if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });
+        else if (!opts.tocAlreadyStarted) rebuildToc();
+        updateSessionTitle();
+        updateHistorySentinelVisibility();
         bindExistingLogInteractions();
         var historyScrollStartedAt = performance.now();
         applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
@@ -18807,57 +18796,57 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
         finalizeExistingLogLayout();
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
         if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
-            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
-            requestAnimationFrame(function () {\r
-                requestAnimationFrame(function () {\r
-                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
-                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
-                });\r
-            });\r
-        }\r
-        scheduleTocActiveUpdate();\r
-        scheduleContextTokensAfterPaint(sessionId);\r
-        markVisibleSessionStreamLoadState(sessionId, 'ok');\r
-        logOpenSessionTiming(sessionId, {\r
-            source: historySource,\r
-            events: events.length,\r
-            snapshotTiming: snapshotTiming,\r
-            totalMs: elapsedSince(openSessionStartedAt),\r
-        });\r
-        return true;\r
-    } catch (error) {\r
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;\r
-        console.error('加载会话消息失败:', error);\r
-        document.getElementById('chat-loading')?.remove();\r
-        appendLogVisible('加载历史消息失败', 'error-log');\r
-        markVisibleSessionStreamLoadState(sessionId, 'failed');\r
-        showSessionLoadRetry(sessionId);\r
-        return false;\r
-    } finally {\r
-        finishHistoryHydration();\r
-        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;\r
-        if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;\r
-        if (loadToken === messageLoadEpoch) replayingMessages = false;\r
-    }\r
-}\r
-\r
-function chatStreamHasConversationContent() {\r
-    var stream = getVisibleChatStream();\r
-    if (!stream) return false;\r
-    return !!stream.querySelector('.msg-wrap, .process-aggregate, .human-interaction-card, .human-interaction-banner');\r
-}\r
-\r
-function elapsedSince(startedAt) {\r
-    var now = (typeof performance !== 'undefined' && performance.now)\r
-        ? performance.now()\r
-        : Date.now();\r
-    return Math.max(0, Math.round(now - Number(startedAt || now)));\r
-}\r
-\r
+            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+                });
+            });
+        }
+        scheduleTocActiveUpdate();
+        scheduleContextTokensAfterPaint(sessionId);
+        markVisibleSessionStreamLoadState(sessionId, 'ok');
+        logOpenSessionTiming(sessionId, {
+            source: historySource,
+            events: events.length,
+            snapshotTiming: snapshotTiming,
+            totalMs: elapsedSince(openSessionStartedAt),
+        });
+        return true;
+    } catch (error) {
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;
+        console.error('加载会话消息失败:', error);
+        document.getElementById('chat-loading')?.remove();
+        appendLogVisible('加载历史消息失败', 'error-log');
+        markVisibleSessionStreamLoadState(sessionId, 'failed');
+        showSessionLoadRetry(sessionId);
+        return false;
+    } finally {
+        finishHistoryHydration();
+        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
+        if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
+        if (loadToken === messageLoadEpoch) replayingMessages = false;
+    }
+}
+
+function chatStreamHasConversationContent() {
+    var stream = getVisibleChatStream();
+    if (!stream) return false;
+    return !!stream.querySelector('.msg-wrap, .process-aggregate, .human-interaction-card, .human-interaction-banner');
+}
+
+function elapsedSince(startedAt) {
+    var now = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now()
+        : Date.now();
+    return Math.max(0, Math.round(now - Number(startedAt || now)));
+}
+
 function logOpenSessionTiming(sessionId, data) {
-    data = data || {};\r
-    var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};\r
-    var backendTotal = Number(timing.total || 0);\r
+    data = data || {};
+    var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};
+    var backendTotal = Number(timing.total || 0);
     var frontendTotal = Number(data.totalMs || 0);
     if (typeof uiPerformance !== 'undefined') {
         uiPerformance.sample(sessionId, 'history.total', frontendTotal);
@@ -18865,28 +18854,28 @@ function logOpenSessionTiming(sessionId, data) {
             uiPerformance.sample(sessionId, 'history.backend', backendTotal);
         }
     }
-    if (frontendTotal < 500 && backendTotal < 500) return;\r
-    console.info(\r
-        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',\r
-        sessionId,\r
-        data.source || 'unknown',\r
-        frontendTotal,\r
-        Number(data.events || 0),\r
-        backendTotal,\r
-        Number(timing.read_page || 0),\r
-        Number(timing.count || 0),\r
-        Number(timing.user_turns || 0),\r
-        Number(timing.context_tokens || 0)\r
-    );\r
-}\r
-\r
-function beforeSessionMessageSnapshotAvailable() {\r
-    return true;\r
-}\r
-\r
-async function switchSession(sessionId, opts) {\r
-    opts = opts || {};\r
-    if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();\r
+    if (frontendTotal < 500 && backendTotal < 500) return;
+    console.info(
+        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',
+        sessionId,
+        data.source || 'unknown',
+        frontendTotal,
+        Number(data.events || 0),
+        backendTotal,
+        Number(timing.read_page || 0),
+        Number(timing.count || 0),
+        Number(timing.user_turns || 0),
+        Number(timing.context_tokens || 0)
+    );
+}
+
+function beforeSessionMessageSnapshotAvailable() {
+    return true;
+}
+
+async function switchSession(sessionId, opts) {
+    opts = opts || {};
+    if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
     if (currentSessionId === sessionId && !opts.forceReload) return;
     const switchStartedAt = performance.now();
     if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
@@ -18897,232 +18886,232 @@ async function switchSession(sessionId, opts) {\r
     sessionStore.ui.loadingMessages = false;
     replayingMessages = false;
     cancelSmoothStreamFollowForSessionSwitch();
-    suppressTocDuringSessionLoad = true;\r
-    clearTocForSessionLoad();\r
-    clearOptionalPanelsForSessionLoad();\r
-    pendingRewriteTruncate = null;\r
-    hideRewriteUndoToast();\r
-    // A green-dot session represents an unread completed result. Opening it\r
-    // must land at the newest result, never at a stale reading anchor.\r
-    var sessionHadUnreadResult = !!(\r
-        (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)\r
-        || sessionUnreadComplete.has(sessionId)\r
-    );\r
-    clearSessionUnreadState(sessionId);\r
-    const leaving = currentSessionId;\r
-    recentComposerQueuedFollowup = null;\r
-    saveChatScrollForSession(leaving);\r
-    stashInputDraft(leaving);\r
-    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);\r
-    prepareStashLeaving(leaving);\r
-    hideSubagentContinueBanner();\r
-    resetSubagentPanelForSession();\r
-    setCurrentSessionState(sessionId);\r
-    // The session identity and its side-panel contents must cross the switch\r
-    // boundary together. Waiting for history requests leaves the previous\r
-    // session title or plan visible for a frame (and sometimes much longer on\r
-    // a cold load).\r
-    updateSessionTitle();\r
-    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);\r
-    localStorage.setItem('lastSessionId', sessionId);\r
-    if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();\r
-    restoreInputDraft(sessionId);\r
-    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);\r
-    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);\r
-    if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);\r
-    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);\r
-    syncSessionListIndicatorClasses();\r
-    // Refresh extension panels only after the new row owns the active marker;\r
-    // otherwise the projection request can render the session we just left.\r
-    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
-        detail: { sessionId: sessionId },\r
-    }));\r
-    setSendButtonState();\r
-    if (!isSessionRunning(sessionId) && !(typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))) {\r
-        let __shouldPreflight = true;\r
-        try {\r
-            const __sess = sessionStore.get(sessionId);\r
-            const __last = __sess ? Date.parse(__sess.last_activity_at || __sess.updated_at || __sess.created_at || "") : 0;\r
-            if (Number.isFinite(__last) && Date.now() - __last > 12 * 60 * 1000) __shouldPreflight = false;\r
-        } catch (e) {}\r
-        if (__shouldPreflight) {\r
-            try {\r
-                await Promise.race([\r
-                    (async () => {\r
-                        if (typeof refreshSingleSessionRow === 'function') await refreshSingleSessionRow(sessionId);\r
-                    })(),\r
-                    new Promise(resolve => setTimeout(resolve, 450))\r
-                ]);\r
-            } catch (e) { /* preflight best-effort */ }\r
-        }\r
-    }\r
+    suppressTocDuringSessionLoad = true;
+    clearTocForSessionLoad();
+    clearOptionalPanelsForSessionLoad();
+    pendingRewriteTruncate = null;
+    hideRewriteUndoToast();
+    // A green-dot session represents an unread completed result. Opening it
+    // must land at the newest result, never at a stale reading anchor.
+    var sessionHadUnreadResult = !!(
+        (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)
+        || sessionUnreadComplete.has(sessionId)
+    );
+    clearSessionUnreadState(sessionId);
+    const leaving = currentSessionId;
+    recentComposerQueuedFollowup = null;
+    saveChatScrollForSession(leaving);
+    stashInputDraft(leaving);
+    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);
+    prepareStashLeaving(leaving);
+    hideSubagentContinueBanner();
+    resetSubagentPanelForSession();
+    setCurrentSessionState(sessionId);
+    // The session identity and its side-panel contents must cross the switch
+    // boundary together. Waiting for history requests leaves the previous
+    // session title or plan visible for a frame (and sometimes much longer on
+    // a cold load).
+    updateSessionTitle();
+    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
+    localStorage.setItem('lastSessionId', sessionId);
+    if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
+    restoreInputDraft(sessionId);
+    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
+    if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
+    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
+    syncSessionListIndicatorClasses();
+    // Refresh extension panels only after the new row owns the active marker;
+    // otherwise the projection request can render the session we just left.
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+        detail: { sessionId: sessionId },
+    }));
+    setSendButtonState();
+    if (!isSessionRunning(sessionId) && !(typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))) {
+        let __shouldPreflight = true;
+        try {
+            const __sess = sessionStore.get(sessionId);
+            const __last = __sess ? Date.parse(__sess.last_activity_at || __sess.updated_at || __sess.created_at || "") : 0;
+            if (Number.isFinite(__last) && Date.now() - __last > 12 * 60 * 1000) __shouldPreflight = false;
+        } catch (e) {}
+        if (__shouldPreflight) {
+            try {
+                await Promise.race([
+                    (async () => {
+                        if (typeof refreshSingleSessionRow === 'function') await refreshSingleSessionRow(sessionId);
+                    })(),
+                    new Promise(resolve => setTimeout(resolve, 450))
+                ]);
+            } catch (e) { /* preflight best-effort */ }
+        }
+    }
     if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) {
         if (typeof uiPerformance !== 'undefined') uiPerformance.count(sessionId, 'switch.cancelled');
         return false;
     }
     if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.prepare', performance.now() - switchStartedAt);
     var restoredFromCache = false;
-    var restoredRunningStream = false;\r
-    var sessionHasActiveServerRun = !!(\r
-        isSessionRunning(sessionId)\r
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))\r
-    );\r
-    if (!opts.forceReload && (\r
-        (restoredRunningStream = restoreStreamForRunningSession(sessionId))\r
-        || (!sessionHadUnreadResult\r
-            && !sessionHasActiveServerRun\r
-            && (restoredFromCache = restoreCachedSessionStream(sessionId)))\r
-    )) {\r
-        suppressTocDuringSessionLoad = false;\r
-        hideLoading();\r
-        rebuildToc({ localOnly: true });\r
-        updateSessionTitle();\r
-        scheduleContextTokensAfterPaint(sessionId);\r
-        // Only a complete, idle stream restored from the in-memory cache may\r
-        // return to its prior reading position. A live run and a green-dot\r
-        // completion always open on their newest content.\r
-        var sessionIsRunningNow = !!(\r
-            restoredRunningStream\r
-            || isSessionRunning(sessionId)\r
-            || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))\r
-        );\r
-        if (restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow) {\r
-            restoreCachedSessionScrollPosition(sessionId);\r
-        } else {\r
-            streamChatNearBottom = true;\r
-            streamProcNearBottom = true;\r
-            liveAutoFollow = true;\r
-            scrollToBottom();\r
-            if (sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom === 'function') {\r
-                scrollCurrentRunningProcessToBottom(sessionId);\r
-            }\r
-        }\r
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);\r
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;\r
-        /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，\r
-           避免抢占带宽与主线程，让目录最后才稳态。*/\r
-        setTimeout(function () {\r
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {\r
-                refreshSubagentTreePanel(sessionId);\r
-            }\r
-        }, 0);\r
-        void refreshSingleSessionRow(sessionId);\r
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
-            detail: { sessionId: sessionId, phase: 'loaded' },\r
-        }));\r
-        setSendButtonState();\r
+    var restoredRunningStream = false;
+    var sessionHasActiveServerRun = !!(
+        isSessionRunning(sessionId)
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
+    );
+    if (!opts.forceReload && (
+        (restoredRunningStream = restoreStreamForRunningSession(sessionId))
+        || (!sessionHadUnreadResult
+            && !sessionHasActiveServerRun
+            && (restoredFromCache = restoreCachedSessionStream(sessionId)))
+    )) {
+        suppressTocDuringSessionLoad = false;
+        hideLoading();
+        rebuildToc({ localOnly: true });
+        updateSessionTitle();
+        scheduleContextTokensAfterPaint(sessionId);
+        // Only a complete, idle stream restored from the in-memory cache may
+        // return to its prior reading position. A live run and a green-dot
+        // completion always open on their newest content.
+        var sessionIsRunningNow = !!(
+            restoredRunningStream
+            || isSessionRunning(sessionId)
+            || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
+        );
+        if (restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow) {
+            restoreCachedSessionScrollPosition(sessionId);
+        } else {
+            streamChatNearBottom = true;
+            streamProcNearBottom = true;
+            liveAutoFollow = true;
+            scrollToBottom();
+            if (sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom === 'function') {
+                scrollCurrentRunningProcessToBottom(sessionId);
+            }
+        }
+        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
+        /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
+           避免抢占带宽与主线程，让目录最后才稳态。*/
+        setTimeout(function () {
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
+                refreshSubagentTreePanel(sessionId);
+            }
+        }, 0);
+        void refreshSingleSessionRow(sessionId);
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: { sessionId: sessionId, phase: 'loaded' },
+        }));
+        setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId,
             restoredRunningStream ? 'switch.live' : 'switch.cached', performance.now() - switchStartedAt);
-        return;\r
-    }\r
-    const vs = getVisibleChatStream();\r
-    resetSessionHistoryPaging();\r
-    if (vs) emptyChatStreamKeepingStrip(vs);\r
-    else {\r
-        chatContainer.innerHTML = '';\r
-        ensureVisibleChatStreamSlot();\r
-    }\r
-    showLoading();\r
-    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';\r
-    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);\r
-    return new Promise(function (resolve) {\r
-        setTimeout(async function () {\r
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }\r
-        try {\r
-            // A freshly loaded or force-reloaded stream does not restore a\r
-            // persisted reading position. Once its history is rendered, ease\r
-            // the viewport down to the newest message.\r
-            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {\r
-                preloadOlderIfShort: isServerStreamActive(sessionId),\r
-                allowDuringRun: isServerStreamActive(sessionId),\r
-                tocAlreadyStarted: tocAlreadyStarted,\r
-            });\r
-            if (!loadedOk) { resolve(false); return; }\r
-        } catch (error) {\r
-            console.error('切换会话加载失败:', error);\r
-            resolve(false);\r
-            return;\r
-        } finally {\r
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {\r
-                hideLoading();\r
-                sessionStore.ui.loadingMessages = false;\r
-                suppressTocDuringSessionLoad = false;\r
-                replayingMessages = false;\r
-            }\r
-        }\r
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }\r
-        /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一步调用 subagent panel\r
-           重建，保证「目录 → 消息 → 副 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。*/\r
-        setTimeout(function () {\r
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {\r
-                refreshSubagentTreePanel(sessionId);\r
-            }\r
-        }, 0);\r
-        void refreshSingleSessionRow(sessionId);\r
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
-            detail: { sessionId: sessionId, phase: 'loaded' },\r
-        }));\r
-        setSendButtonState();\r
-        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
+        return;
+    }
+    const vs = getVisibleChatStream();
+    resetSessionHistoryPaging();
+    if (vs) emptyChatStreamKeepingStrip(vs);
+    else {
+        chatContainer.innerHTML = '';
+        ensureVisibleChatStreamSlot();
+    }
+    showLoading();
+    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';
+    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);
+    return new Promise(function (resolve) {
+        setTimeout(async function () {
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
+        try {
+            // A freshly loaded or force-reloaded stream does not restore a
+            // persisted reading position. Once its history is rendered, ease
+            // the viewport down to the newest message.
+            var loadedOk = await loadSessionMessages(sessionId, 'smooth-bottom', {
+                preloadOlderIfShort: isServerStreamActive(sessionId),
+                allowDuringRun: isServerStreamActive(sessionId),
+                tocAlreadyStarted: tocAlreadyStarted,
+            });
+            if (!loadedOk) { resolve(false); return; }
+        } catch (error) {
+            console.error('切换会话加载失败:', error);
+            resolve(false);
+            return;
+        } finally {
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
+                hideLoading();
+                sessionStore.ui.loadingMessages = false;
+                suppressTocDuringSessionLoad = false;
+                replayingMessages = false;
+            }
+        }
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
+        /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一步调用 subagent panel
+           重建，保证「目录 → 消息 → 副 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。*/
+        setTimeout(function () {
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
+                refreshSubagentTreePanel(sessionId);
+            }
+        }, 0);
+        void refreshSingleSessionRow(sessionId);
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: { sessionId: sessionId, phase: 'loaded' },
+        }));
+        setSendButtonState();
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.loaded', performance.now() - switchStartedAt);
         resolve(true);
-        }, 20);\r
-    });\r
-}\r
-\r
-async function createNewSession() {\r
-    createNewSessionQueue = createNewSessionQueue.then(\r
-        function () { return createNewSessionInner(); },\r
-        function () { return createNewSessionInner(); }\r
-    );\r
-    return createNewSessionQueue;\r
-}\r
-\r
+        }, 20);
+    });
+}
+
+async function createNewSession() {
+    createNewSessionQueue = createNewSessionQueue.then(
+        function () { return createNewSessionInner(); },
+        function () { return createNewSessionInner(); }
+    );
+    return createNewSessionQueue;
+}
+
 async function createNewSessionInner() {
     try {
         cancelSmoothStreamFollowForSessionSwitch();
         saveChatScrollForSession(currentSessionId);
-        stashInputDraft(currentSessionId);\r
-        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);\r
-        prepareStashLeaving(currentSessionId);\r
-        const response = await fetch('/sessions', { method: 'POST' });\r
-        const data = await response.json();\r
-        if (data && data.session) sessionStore.upsert(data.session);\r
-        resetSubagentPanelForSession();\r
-        switchSessionEpoch += 1;\r
-        messageLoadEpoch += 1;\r
-        setCurrentSessionState(data.session_id);\r
-        if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);\r
-        localStorage.setItem('lastSessionId', currentSessionId);\r
-        restoreInputDraft(currentSessionId);\r
-        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);\r
-        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);\r
-        if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);\r
-        if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);\r
-        if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);\r
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
-        setWelcome();\r
-        replayingMessages = false;\r
-        if (data && data.session) {\r
-            syncArchivedSessionStateFromStore();\r
-            renderSessionListIfChanged(true);\r
-            void refreshSingleSessionRow(data.session_id);\r
-        } else {\r
-            await loadSessions();\r
-        }\r
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
-            detail: { sessionId: currentSessionId, phase: 'created' },\r
-        }));\r
-        setSendButtonState();\r
-        maybeStartStreamPollForSession(currentSessionId);\r
-        scheduleContextTokensAfterPaint(currentSessionId);\r
-    } catch (error) {\r
-        console.error('创建新会话失败', error);\r
-        appendLogVisible('创建新会话失败', 'error-log');\r
-    }\r
-}\r
+        stashInputDraft(currentSessionId);
+        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);
+        prepareStashLeaving(currentSessionId);
+        const response = await fetch('/sessions', { method: 'POST' });
+        const data = await response.json();
+        if (data && data.session) sessionStore.upsert(data.session);
+        resetSubagentPanelForSession();
+        switchSessionEpoch += 1;
+        messageLoadEpoch += 1;
+        setCurrentSessionState(data.session_id);
+        if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);
+        localStorage.setItem('lastSessionId', currentSessionId);
+        restoreInputDraft(currentSessionId);
+        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);
+        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
+        if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);
+        if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
+        if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        setWelcome();
+        replayingMessages = false;
+        if (data && data.session) {
+            syncArchivedSessionStateFromStore();
+            renderSessionListIfChanged(true);
+            void refreshSingleSessionRow(data.session_id);
+        } else {
+            await loadSessions();
+        }
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+            detail: { sessionId: currentSessionId, phase: 'created' },
+        }));
+        setSendButtonState();
+        maybeStartStreamPollForSession(currentSessionId);
+        scheduleContextTokensAfterPaint(currentSessionId);
+    } catch (error) {
+        console.error('创建新会话失败', error);
+        appendLogVisible('创建新会话失败', 'error-log');
+    }
+}
 `,Gr=`const SSE_IDLE_TIMEOUT_MS = 120000;
 const STREAM_RECONNECT_MAX_ATTEMPTS = 10;
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;
