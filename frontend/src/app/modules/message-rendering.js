@@ -2034,6 +2034,8 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
             var lastMovementAt = startedAt;
             var lastTop = chatContainer.scrollTop;
             var retargetCount = 0;
+            var lastBottomGap = -1; // distance from bottom on last check; detects container growth
+            var interrupted = false; // reader grabbed the wheel/pointer during the glide
             var userEvents = ['wheel', 'touchstart', 'pointerdown'];
             function isRunningNow() {
                 try {
@@ -2072,13 +2074,14 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
                     cleanup(true);
                     return;
                 }
-                if (retargetCount < 1) {
+                if (!interrupted && retargetCount < 8) {
                     retargetCount += 1;
                     lastMovementAt = performance.now();
                     chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
                 }
             }
             function onUserInterrupt() {
+                interrupted = true;
                 cleanup(false);
             }
             function check(now) {
@@ -2088,9 +2091,25 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
                     return;
                 }
                 var top = chatContainer.scrollTop;
-                if (Math.abs(top - lastTop) > 0.5) {
+                var moved = Math.abs(top - lastTop) > 0.5;
+                if (moved) {
                     lastTop = top;
                     lastMovementAt = now;
+                }
+                var bottomGap = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight - top);
+                if (lastBottomGap < 0) lastBottomGap = bottomGap;
+                if (bottomGap > lastBottomGap + 8) {
+                    // Async layout (rows/images) grew the container while we
+                    // were gliding: chase the new bottom instead of waiting for
+                    // a quiet 180ms window that may never come.
+                    lastBottomGap = bottomGap;
+                    if (!interrupted && retargetCount < 8) {
+                        retargetCount += 1;
+                        lastMovementAt = now;
+                        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+                    }
+                } else {
+                    lastBottomGap = bottomGap;
                 }
                 if (isAtBottom() && now - lastMovementAt >= 96) {
                     cleanup(true);
@@ -2101,12 +2120,18 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
                     cleanup(true);
                     return;
                 }
-                if (!isAtBottom() && now - lastMovementAt >= 180 && retargetCount < 1) {
+                if (!interrupted && !isAtBottom() && now - lastMovementAt >= 240 && retargetCount < 8) {
                     retargetCount += 1;
                     lastMovementAt = now;
                     chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
                 }
-                if (now - startedAt >= 3200) {
+                if (now - startedAt >= 3600) {
+                    // Timed out without reader interruption: if async layout is
+                    // still growing, end the pass pinned at the current bottom so
+                    // a long session never stops half-way through the load.
+                    if (!interrupted && !isAtBottom() && chatContainer) {
+                        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+                    }
                     cleanup(isAtBottom());
                     return;
                 }
