@@ -1464,27 +1464,13 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         finalizeExistingLogLayout();
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
-        // A bottom-targeted load (plain 'bottom' or an undisturbed 'smooth-bottom')
-        // must end pinned to the newest content even when async layout (rows,
-        // images) grows scrollHeight after the first pass.
-        if ((historyScrollBehavior === 'bottom')
-            || (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom)) {
+        if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
             setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-            var settleRounds = 0;
-            var snapAfterLayout = function () {
-                if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-                if (settleRounds >= 3) {
-                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-                    return;
-                }
-                settleRounds += 1;
-                setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-                requestAnimationFrame(function () {
-                    requestAnimationFrame(snapAfterLayout);
-                });
-            };
             requestAnimationFrame(function () {
-                requestAnimationFrame(snapAfterLayout);
+                requestAnimationFrame(function () {
+                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
+                });
             });
         }
         scheduleTocActiveUpdate();
