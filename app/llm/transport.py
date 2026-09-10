@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
@@ -40,6 +41,9 @@ from .responses import (
     responses_capability_cache,
 )
 from .types import LLMRequestContext, LLMRequestPurpose, TransportEvent
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProvider(str, Enum):
@@ -1459,6 +1463,62 @@ class OpenAIResponsesTransport:
             yield TransportEvent("finish", finish_reason="tool_calls" if saw_tool else "stop", model=fallback_model)
 
 
+def _error_search_text(exc: BaseException) -> str:
+    """Collect provider error text without depending on one SDK exception shape."""
+    values: List[Any] = [
+        getattr(exc, "message", None),
+        getattr(exc, "body", None),
+        getattr(exc, "code", None),
+        exc,
+    ]
+    response = getattr(exc, "response", None)
+    if response is not None:
+        values.extend(
+            [
+                getattr(response, "text", None),
+                getattr(response, "reason_phrase", None),
+            ]
+        )
+    parts: List[str] = []
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, tuple)):
+            try:
+                text = json.dumps(value, ensure_ascii=False)
+            except Exception:
+                text = str(value)
+        else:
+            text = str(value)
+        if text and text not in parts:
+            parts.append(text)
+    return " ".join(parts).lower()
+
+
+def _is_stream_options_error(exc: BaseException) -> bool:
+    """Return True only when retrying without stream_options can help."""
+    msg = _error_search_text(exc)
+    stream_kw = ("stream_options", "include_usage")
+    reason_kw = (
+        "not supported",
+        "does not support",
+        "doesn't support",
+        "unsupported",
+        "unknown",
+        "unexpected",
+        "unrecognized",
+        "extra fields",
+        "extra inputs",
+        "extra_forbidden",
+        "not allowed",
+        "not permitted",
+        "invalid",
+    )
+    return any(keyword in msg for keyword in stream_kw) and any(
+        keyword in msg for keyword in reason_kw
+    )
+
+
 class OpenAICompatibleTransport:
     provider = LLMProvider.OPENAI_COMPATIBLE
 
@@ -1475,7 +1535,21 @@ class OpenAICompatibleTransport:
             for message in (kwargs.get("messages") or [])
         ]
         kwargs["stream"] = True
-        response = self.client.chat.completions.create(**kwargs)
+        # include_usage 让末包携带 usage（DeepSeek 等兼容端点流式下默认不返回，
+        # 统计栏因此显示不出 token/缓存数据）；个别端点不认这个参数，
+        # 报错时去掉重试一次，其余错误保持原样抛出。
+        kwargs["stream_options"] = {"include_usage": True}
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except Exception as stream_options_exc:
+            if not _is_stream_options_error(stream_options_exc):
+                raise
+            logger.debug(
+                "流式 create 不支持 stream_options，去掉后重试: %s",
+                stream_options_exc,
+            )
+            kwargs.pop("stream_options", None)
+            response = self.client.chat.completions.create(**kwargs)
         try:
             iterator = iter(response)
         except TypeError:

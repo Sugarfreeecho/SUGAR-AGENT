@@ -2050,3 +2050,89 @@ def test_session_candidates_only_fallback_to_same_wire_protocol(tmp_path, monkey
     )
     candidates = agent_harness.resolve_executor_candidates_for_session("sess-y")
     assert [str(c.get("model") or "") for c in candidates] == ["deepseek-chat"]
+
+
+def test_compatible_stream_requests_usage_via_stream_options():
+    """DeepSeek 等兼容端点仅在 stream_options.include_usage 时回传 usage，
+    统计栏（token/缓存命中）依赖这个末包。"""
+    seen_kwargs = {}
+    chunks = [
+        {"model": "m", "choices": [{"delta": {"content": "hi"}, "finish_reason": None}]},
+        {
+            "model": "m",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 3,
+                "total_tokens": 15,
+                "prompt_cache_hit_tokens": 8,
+                "prompt_cache_miss_tokens": 4,
+            },
+        },
+    ]
+
+    class _Completions:
+        @staticmethod
+        def create(**kwargs):
+            seen_kwargs.update(kwargs)
+            return iter(chunks)
+
+    client = type(
+        "Client",
+        (),
+        {"chat": type("Chat", (), {"completions": _Completions()})()},
+    )()
+    events = list(OpenAICompatibleTransport(client).stream_completion(model="m", messages=[]))
+
+    assert seen_kwargs["stream_options"] == {"include_usage": True}
+    usage_events = [event for event in events if event.kind == "usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].usage["completion_tokens"] == 3
+    assert usage_events[0].usage["prompt_cache_hit_tokens"] == 8
+
+
+def test_compatible_stream_retries_without_stream_options_when_endpoint_rejects_it():
+    calls = []
+
+    class _Completions:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(dict(kwargs))
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "Error code: 400 - Unrecognized request argument supplied: stream_options"
+                )
+            return iter(
+                [{"model": "m", "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}]
+            )
+
+    client = type(
+        "Client",
+        (),
+        {"chat": type("Chat", (), {"completions": _Completions()})()},
+    )()
+    events = list(OpenAICompatibleTransport(client).stream_completion(model="m", messages=[]))
+
+    assert len(calls) == 2
+    assert calls[0]["stream_options"] == {"include_usage": True}
+    assert "stream_options" not in calls[1]
+    assert [event.text for event in events if event.kind == "content_delta"] == ["ok"]
+
+
+def test_compatible_stream_does_not_retry_unrelated_create_errors():
+    calls = []
+
+    class _Completions:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(dict(kwargs))
+            raise RuntimeError("Connection reset by peer")
+
+    client = type(
+        "Client",
+        (),
+        {"chat": type("Chat", (), {"completions": _Completions()})()},
+    )()
+    with pytest.raises(RuntimeError, match="Connection reset"):
+        list(OpenAICompatibleTransport(client).stream_completion(model="m", messages=[]))
+    assert len(calls) == 1
