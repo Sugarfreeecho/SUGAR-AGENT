@@ -180,9 +180,9 @@ def resolve_prompt_md_path() -> Path:
 AGENT_DEFAULT_WRITE_FILENAME = os.getenv("AGENT_DEFAULT_WRITE_FILENAME", "output.txt")
 SKILLS_DIR = _env_path("SKILLS_DIR", WORK_DIR / "skills")
 LOG_DIR = _env_path("LOG_DIR", PROJECT_ROOT / "logs")
-MAX_REACT_ITER = int(os.getenv("MAX_REACT_ITER", "100"))
+MAX_REACT_ITER = int(os.getenv("MAX_REACT_ITER", "200"))
 SUBAGENT_MAX_DEPTH = max(1, int(os.getenv("SUBAGENT_MAX_DEPTH", "1")))
-SUBAGENT_MAX_REACT_ITER = max(1, int(os.getenv("SUBAGENT_MAX_REACT_ITER", "100")))
+SUBAGENT_MAX_REACT_ITER = max(1, int(os.getenv("SUBAGENT_MAX_REACT_ITER", "200")))
 SUBAGENT_BEST_OF_N = max(2, min(8, int(os.getenv("SUBAGENT_BEST_OF_N", "3"))))
 SUBAGENT_INDEX_FILE = "subagent_index.json"
 SUBAGENT_PENDING_RESULTS_FILE = "pending_subagent_results.json"
@@ -1995,8 +1995,8 @@ def refresh_executor_client_from_env() -> None:
     CONTEXT_KEEP_RECENT_TURNS = _context_env_int("CONTEXT_KEEP_RECENT_TURNS", "3")
     TOOL_RESULT_TRUNCATE_KEEP_CHARS = _tool_result_truncate_keep_chars_from_env()
     LLM_CONTEXT_TRUNCATE_KEEP_CHARS = TOOL_RESULT_TRUNCATE_KEEP_CHARS
-    MAX_REACT_ITER = int(os.getenv("MAX_REACT_ITER", "100"))
-    SUBAGENT_MAX_REACT_ITER = max(1, int(os.getenv("SUBAGENT_MAX_REACT_ITER", "100")))
+    MAX_REACT_ITER = int(os.getenv("MAX_REACT_ITER", "200"))
+    SUBAGENT_MAX_REACT_ITER = max(1, int(os.getenv("SUBAGENT_MAX_REACT_ITER", "200")))
     _failure_cap_raw = os.getenv("CONTEXT_COMPRESS_FAILURE_MAX_TOKENS")
     CONTEXT_COMPRESS_FAILURE_MAX_TOKENS = (
         int(_failure_cap_raw)
