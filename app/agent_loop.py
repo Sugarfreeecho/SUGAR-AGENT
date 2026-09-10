@@ -6847,12 +6847,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         if tag == "usage":
                             llm_call_usage = payload
                             usage_timing = dict((payload or {}).get("_timing") or {})
-                            measured_tps_ms = int(usage_timing.get("measured_total_ms") or 0)
+                            # Token/s 以纯生成段（首 token → 末 token 的可见 delta 区间）为分母，排除首 token 等待与网络往返；
+                            # 该区间不可测（<=0ms，例如整段内容单次 delta 到达）时回退到全程耗时。
+                            tps_window_ms = int(usage_timing.get("token_generation_ms") or 0)
+                            if tps_window_ms <= 0:
+                                tps_window_ms = int(usage_timing.get("measured_total_ms") or 0)
                             measured_tps = round(
                                 int((payload or {}).get("completion_tokens", 0) or 0)
-                                / max(0.001, measured_tps_ms / 1000.0),
+                                / max(0.001, tps_window_ms / 1000.0),
                                 1,
-                            ) if measured_tps_ms > 0 else 0.0
+                            ) if tps_window_ms > 0 else 0.0
                             execution_metrics.record_usage(
                                 state["session_id"],
                                 str(state.get("_runtime_v2_run_id") or ""),
