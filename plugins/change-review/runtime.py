@@ -105,7 +105,7 @@ def initialize(host_module):
                     str(row.get("snapshot_id") or "")
                     for row in changes if isinstance(row, dict) and row.get("snapshot_id")
                 )
-            elif event.get("type") == "file_changes_reverted":
+            elif event.get("type") in ("file_changes_reverted", "file_changes_restored"):
                 ids.update(str(item or "") for item in event.get("snapshot_ids") or [])
         return ids
 

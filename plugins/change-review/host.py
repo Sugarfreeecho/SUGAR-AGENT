@@ -1,4 +1,4 @@
-"""Trusted HTTP adapter for conflict-safe change-review undo."""
+"""Trusted HTTP adapter for conflict-safe change-review undo and restore."""
 
 from __future__ import annotations
 
@@ -106,11 +106,12 @@ def install(app, context, plugin):
     store_module = _store_module()
     router = APIRouter()
 
-    @router.post("/sessions/{session_id}/change-reviews/undo")
-    async def undo_change_review(session_id: str, request: Request):
+    async def run_review_action(session_id: str, request: Request, action: str):
         from plugins.host import bundled_host_plugin_enabled
         from session_event_bus import publish_session_event
 
+        if action not in {"undo", "restore"}:
+            raise ValueError(f"unknown change-review action: {action}")
         if not bundled_host_plugin_enabled(plugin.plugin_id):
             return JSONResponse({"ok": False, "error": "plugin disabled"}, status_code=404)
         try:
@@ -131,7 +132,7 @@ def install(app, context, plugin):
                 {
                     "ok": False,
                     "code": "task_running",
-                    "error": "change review undo is disabled while this workspace has an active task",
+                    "error": f"change review {action} is disabled while this workspace has an active task",
                     "active_session_ids": active,
                 },
                 status_code=409,
@@ -143,23 +144,33 @@ def install(app, context, plugin):
         try:
             # A run may have started while the first activity check waited for
             # the workspace mutex. Re-check while owning the same mutex so an
-            # undo never proceeds on a newly active task.
+            # action never proceeds on a newly active task.
             active = await asyncio.to_thread(_active_in_workspace, manager, session_id)
             if active:
                 return JSONResponse(
                     {
                         "ok": False,
                         "code": "task_running",
-                        "error": "change review undo is disabled while this workspace has an active task",
+                        "error": f"change review {action} is disabled while this workspace has an active task",
                         "active_session_ids": active,
                     },
                     status_code=409,
                 )
-            result = await asyncio.to_thread(store.undo, snapshot_ids, operation_id)
+            if action == "undo":
+                perform = store.undo
+                commit = store.commit_undo
+                rollback = store.rollback_undo
+                event_type = "file_changes_reverted"
+            else:
+                perform = store.restore
+                commit = store.commit_restore
+                rollback = store.rollback_restore
+                event_type = "file_changes_restored"
+            result = await asyncio.to_thread(perform, snapshot_ids, operation_id)
             if result.get("idempotent_replay"):
                 return JSONResponse(result)
             event = {
-                "type": "file_changes_reverted",
+                "type": event_type,
                 "session_id": session_id,
                 "origin_session_id": session_id,
                 "operation_id": operation_id,
@@ -167,21 +178,30 @@ def install(app, context, plugin):
                 "changes": list(result.get("changes") or []),
             }
             paths = [str(row.get("path") or "") for row in result.get("changes") or []]
-            notice = (
-                "[System notification: The user reverted file changes through Change Review. "
-                "Treat the workspace files as restored to their pre-tool contents. Paths: "
-                + ", ".join(paths)
-                + "]"
-            )
+            if action == "undo":
+                notice = (
+                    "[System notification: The user reverted file changes through Change Review. "
+                    "Treat the workspace files as restored to their pre-tool contents. Paths: "
+                    + ", ".join(paths)
+                    + "]"
+                )
+            else:
+                notice = (
+                    "[System notification: The user restored previously reverted file changes through "
+                    "Change Review. Treat the workspace files as re-applied to their post-tool contents. "
+                    "Paths: "
+                    + ", ".join(paths)
+                    + "]"
+                )
             root_id = _root_session_id(manager, session_id)
             try:
                 await asyncio.to_thread(manager.append_ui_event, session_id, event)
                 await asyncio.to_thread(_append_model_notice, manager, session_id, notice)
                 if root_id != session_id:
                     await asyncio.to_thread(_append_model_notice, manager, root_id, notice)
-                await asyncio.to_thread(store.commit_undo, operation_id)
+                await asyncio.to_thread(commit, operation_id)
             except Exception:
-                await asyncio.to_thread(store.rollback_undo, operation_id)
+                await asyncio.to_thread(rollback, operation_id)
                 raise
             await publish_session_event(session_id, dict(event))
             if root_id != session_id:
@@ -196,9 +216,19 @@ def install(app, context, plugin):
                 status_code=exc.status_code,
             )
         except Exception as exc:
-            return JSONResponse({"ok": False, "code": "undo_failed", "error": str(exc)}, status_code=500)
+            return JSONResponse(
+                {"ok": False, "code": f"{action}_failed", "error": str(exc)}, status_code=500
+            )
         finally:
             if lock_acquired:
                 lock.release()
+
+    @router.post("/sessions/{session_id}/change-reviews/undo")
+    async def undo_change_review(session_id: str, request: Request):
+        return await run_review_action(session_id, request, "undo")
+
+    @router.post("/sessions/{session_id}/change-reviews/restore")
+    async def restore_change_review(session_id: str, request: Request):
+        return await run_review_action(session_id, request, "restore")
 
     app.include_router(router)

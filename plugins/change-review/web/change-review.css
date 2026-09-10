@@ -24,12 +24,17 @@
 .change-review-file-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
 .change-review-path { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 .65rem/1.35 var(--mono); }
 .change-review-count { flex: 0 0 auto; color: var(--text-tertiary); font-size: .58rem; }
-.change-review-undo, .change-review-confirm, .change-review-cancel, .change-review-undo-all, .change-review-close, .change-review-view {
+.change-review-undo, .change-review-restore, .change-review-confirm, .change-review-cancel, .change-review-undo-all, .change-review-restore-all, .change-review-close, .change-review-view {
     border: 1px solid var(--border-glass); border-radius: 6px; background: var(--surface-glass2);
     color: var(--text-secondary); font: 600 .61rem/1.2 var(--sans); padding: .27rem .38rem; cursor: pointer;
 }
-.change-review-undo:hover, .change-review-undo-all:hover, .change-review-view:hover { color: var(--text-primary); border-color: rgba(var(--accent-rgb),.45); }
-.change-review-undo:disabled, .change-review-undo-all:disabled { opacity: .42; cursor: not-allowed; }
+.change-review-undo:hover, .change-review-restore:hover, .change-review-undo-all:hover, .change-review-restore-all:hover, .change-review-view:hover { color: var(--text-primary); border-color: rgba(var(--accent-rgb),.45); }
+.change-review-undo:disabled, .change-review-restore:disabled, .change-review-undo-all:disabled, .change-review-restore-all:disabled { opacity: .42; cursor: not-allowed; }
+.change-review-reverted-tag {
+    flex: 0 0 auto; border: 1px solid var(--border-glass); border-radius: 999px;
+    padding: .1rem .32rem; color: var(--text-tertiary); font: 600 .55rem/1.2 var(--sans);
+}
+.change-review-file.is-reverted .change-review-path, .change-review-file.is-reverted .change-review-count { opacity: .62; }
 .change-review-inline-confirm { display: inline-flex; gap: .18rem; }
 .change-review-inline-confirm[hidden] { display: none; }
 .change-review-confirm { border-color: rgba(243,139,168,.5); color: var(--red-accent, #f38ba8); }

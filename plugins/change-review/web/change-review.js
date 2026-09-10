@@ -55,10 +55,30 @@ function changesOf(aggregate) {
     return aggregateChanges.get(aggregate);
 }
 function activeRows(aggregate) {
-    return Array.from(changesOf(aggregate).values()).filter(function (row) {
-        return row && row._rootSessionId === mountedSessionId
-            && row.effective !== false && row.reverted !== true;
+    return sessionRows(aggregate).filter(function (row) {
+        return row.effective !== false && row.reverted !== true;
     });
+}
+function sessionRows(aggregate) {
+    return Array.from(changesOf(aggregate).values()).filter(function (row) {
+        return row && row._rootSessionId === mountedSessionId;
+    });
+}
+function displayRows(aggregate) {
+    // Everything still actionable or still meaningful to show: net changes
+    // plus reverted ones (they can be restored from the same panel).
+    return sessionRows(aggregate).filter(function (row) {
+        return row.reverted === true || row.effective !== false;
+    });
+}
+export function splitReviewRows(rows) {
+    const active = [];
+    const reverted = [];
+    (Array.isArray(rows) ? rows : []).forEach(function (row) {
+        if (!row) return;
+        (row.reverted === true ? reverted : active).push(row);
+    });
+    return { active: active, reverted: reverted };
 }
 function isExpanded(aggregate) {
     if (!aggregate) return false;
@@ -149,7 +169,7 @@ function viewportAggregate() {
     const candidates = [];
     const metrics = [];
     aggregateChanges.forEach(function (_rows, aggregate) {
-        if (!aggregateIsCurrent(aggregate) || !isExpanded(aggregate) || !activeRows(aggregate).length) return;
+        if (!aggregateIsCurrent(aggregate) || !isExpanded(aggregate) || !displayRows(aggregate).length) return;
         candidates.push(aggregate);
         metrics.push(visibilityMetric(aggregate));
     });
@@ -173,14 +193,47 @@ function scheduleViewportSync() {
         syncActiveAggregateToViewport();
     });
 }
-function stats(rows) {
+export function hasLineStats(row) {
+    return row.added != null && row.removed != null
+        && Number.isFinite(Number(row.added)) && Number.isFinite(Number(row.removed));
+}
+function omittedReasonLabel(reason) {
+    return reason === 'binary' ? t('二进制', 'binary')
+        : reason === 'too_many_lines' ? t('超 20,000 行', 'over 20,000 lines')
+        : reason === 'too_complex' ? t('改动过于复杂', 'too complex')
+        : reason === 'snapshot_missing' ? t('未保存基线内容', 'no baseline content')
+        : t('超过 1 MiB', 'over 1 MiB');
+}
+export function stats(rows) {
     let added = 0; let removed = 0; let omitted = 0;
+    const reasons = {};
     rows.forEach(function (row) {
-        if (Number.isFinite(Number(row.added)) && Number.isFinite(Number(row.removed))) {
+        if (hasLineStats(row)) {
             added += Number(row.added); removed += Number(row.removed);
-        } else if (row.diff_omitted_reason !== 'directory') omitted += 1;
+            return;
+        }
+        const reason = String(row.diff_omitted_reason || '');
+        if (reason === 'directory') return;
+        omitted += 1;
+        const key = reason || 'too_large_bytes';
+        reasons[key] = (reasons[key] || 0) + 1;
     });
-    return { added, removed, omitted };
+    return { added, removed, omitted, reasons };
+}
+function statsTitle(value) {
+    const lines = [t(
+        '统计口径：本轮（该执行过程）内相对本轮起点的净变更，同一文件的多次修改已合并；已还原或改回原样的改动不计入。',
+        'Scope: net changes for this run relative to its starting point; repeated edits to one file are merged. Reverted and no-op changes are excluded.')];
+    const reasons = value.reasons || {};
+    const breakdown = Object.keys(reasons).filter(function (reason) {
+        return reasons[reason];
+    }).map(function (reason) {
+        return `${omittedReasonLabel(reason)} ${reasons[reason]}`;
+    });
+    if (breakdown.length) {
+        lines.push(t('未统计行数的文件：', 'Files without line stats: ') + breakdown.join(' · '));
+    }
+    return lines.join('\n');
 }
 function appendColoredStats(container, value, includeOmitted) {
     if (!container) return;
@@ -189,20 +242,33 @@ function appendColoredStats(container, value, includeOmitted) {
     const remove = document.createElement('span'); remove.className = 'change-review-stat-removed';
     remove.textContent = `−${value.removed}`;
     container.append(add, document.createTextNode(' '), remove);
-    if (includeOmitted && value.omitted) {
-        container.append(document.createTextNode(` · ${value.omitted} ${t('个大文件', 'large')}`));
+    if (!includeOmitted) return;
+    if (value.omitted) {
+        container.append(document.createTextNode(
+            ` · ${value.omitted} ${t('个文件未统计行数', 'files without line stats')}`));
     }
+    container.title = statsTitle(value);
 }
-function setSummary(container, rows) {
+function setSummary(container, active, reverted) {
     if (!container) return;
-    const value = stats(rows);
     container.replaceChildren();
-    container.append(document.createTextNode(`${rows.length} ${t('个文件', 'files')} · `));
+    if (!active.length) {
+        if (reverted.length) {
+            container.append(document.createTextNode(
+                `${reverted.length} ${t('个文件已撤销，可恢复', 'files reverted, restorable')}`));
+        }
+        return;
+    }
+    const value = stats(active);
+    container.append(document.createTextNode(`${active.length} ${t('个文件', 'files')} · `));
     appendColoredStats(container, value, true);
+    if (reverted.length) {
+        container.append(document.createTextNode(` · ${reverted.length} ${t('已撤销', 'reverted')}`));
+    }
 }
 function updateBadge(aggregate) {
     if (!aggregate || !aggregate.querySelector) return;
-    const rows = activeRows(aggregate);
+    const rows = displayRows(aggregate);
     let badge = aggregate.querySelector('.change-review-process-badge');
     if (!rows.length) {
         if (badge) badge.remove();
@@ -218,8 +284,16 @@ function updateBadge(aggregate) {
         else if (subagentTitle) subagentTitle.appendChild(badge);
         else if (wrap) wrap.insertBefore(badge, wrap.querySelector('.process-aggregate-stats'));
     }
-    const value = stats(rows);
-    badge.replaceChildren(); appendColoredStats(badge, value, true);
+    const parts = splitReviewRows(rows);
+    badge.replaceChildren();
+    if (parts.active.length) {
+        appendColoredStats(badge, stats(parts.active), true);
+        if (parts.reverted.length) {
+            badge.append(document.createTextNode(` · ${parts.reverted.length} ${t('已撤销', 'reverted')}`));
+        }
+    } else {
+        badge.append(document.createTextNode(`${parts.reverted.length} ${t('已撤销', 'reverted')}`));
+    }
 }
 function isRunning() {
     const stream = document.getElementById('chat-stream');
@@ -247,6 +321,7 @@ function omittedText(row) {
         : reason === 'binary' ? t('二进制文件', 'Binary file')
         : reason === 'too_many_lines' ? t('超过 20,000 行', 'More than 20,000 lines')
         : reason === 'too_complex' ? t('改动较复杂，已省略逐行预览；仍可撤销', 'Line preview omitted for complex changes; undo is available')
+        : reason === 'snapshot_missing' ? t('未保存基线内容，无法预览或撤销', 'No baseline content was saved; preview and undo are unavailable')
             : t('超过 1 MiB', 'Larger than 1 MiB');
     const before = row.before || {}; const after = row.after || {};
     return `${why} · ${formatBytes(before.bytes)} / ${before.lines || 0} ${t('行', 'lines')} → `
@@ -270,12 +345,12 @@ function renderDiff(container, row) {
     });
     container.appendChild(pre);
 }
-function markReverted(snapshotIds) {
+function markRows(snapshotIds, reverted) {
     const ids = new Set(snapshotIds || []);
     aggregateChanges.forEach(function (rows, aggregate) {
         rows.forEach(function (row) {
             if (ids.has(String(row.snapshot_id || ''))) {
-                row.reverted = true; row.effective = false;
+                row.reverted = reverted; row.effective = !reverted;
             }
         });
         updateBadge(aggregate);
@@ -283,26 +358,43 @@ function markReverted(snapshotIds) {
     syncActiveAggregateToViewport({ deferRender: true });
     render();
 }
-async function undo(rows) {
-    if (!rows.length || !request) return;
+function markReverted(snapshotIds) {
+    markRows(snapshotIds, true);
+}
+function markRestored(snapshotIds) {
+    markRows(snapshotIds, false);
+}
+async function postReviewAction(rows, action) {
+    if (!rows.length || !request) return {};
     const sessionId = String(rows[0]._sessionId || '');
-    const response = await request(`/sessions/${encodeURIComponent(sessionId)}/change-reviews/undo`, {
+    const response = await request(`/sessions/${encodeURIComponent(sessionId)}/change-reviews/${action}`, {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({
             snapshot_ids: rows.map(function (row) { return row.snapshot_id; }),
             operation_id: globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
-                ? globalThis.crypto.randomUUID() : `undo-${Date.now()}-${Math.random()}`,
+                ? globalThis.crypto.randomUUID() : `${action}-${Date.now()}-${Math.random()}`,
         }),
     });
     const payload = await response.json().catch(function () { return {}; });
     if (!response.ok || payload.ok !== true) {
         const paths = Array.isArray(payload.paths) && payload.paths.length ? `\n${payload.paths.join('\n')}` : '';
-        throw new Error((payload.code === 'file_changed'
-            ? t('文件已再次修改，撤销已中止', 'The file was modified again; undo was cancelled')
-            : String(payload.error || `HTTP ${response.status}`)) + paths);
+        const conflict = payload.code === 'file_changed'
+            ? (action === 'undo'
+                ? t('文件已再次修改，撤销已中止', 'The file was modified again; undo was cancelled')
+                : t('文件已再次修改，恢复已中止', 'The file was modified again; restore was cancelled'))
+            : String(payload.error || `HTTP ${response.status}`);
+        throw new Error(conflict + paths);
     }
+    return payload;
+}
+async function undo(rows) {
+    const payload = await postReviewAction(rows, 'undo');
     markReverted(payload.snapshot_ids);
+}
+async function restore(rows) {
+    const payload = await postReviewAction(rows, 'restore');
+    markRestored(payload.snapshot_ids);
 }
 function setStatus(text, error) {
     [drawer, sheet].forEach(function (host) {
@@ -313,25 +405,43 @@ function setStatus(text, error) {
 function renderFile(row, options) {
     options = options || {};
     const allowUndo = options.allowUndo !== false;
+    const reverted = row.reverted === true;
     const item = document.createElement('article'); item.className = 'change-review-file';
+    if (reverted) item.classList.add('is-reverted');
     item.dataset.snapshotId = String(row.snapshot_id || '');
     const head = document.createElement('div'); head.className = 'change-review-file-head';
     const toggle = button('', 'change-review-file-toggle');
     toggle.setAttribute('aria-expanded', 'false');
     const path = document.createElement('span'); path.className = 'change-review-path'; path.textContent = row.path || '';
     const count = document.createElement('span'); count.className = 'change-review-count';
-    if (row.added == null) count.textContent = t('统计', 'stats');
-    else appendColoredStats(count, { added: Number(row.added) || 0, removed: Number(row.removed) || 0 }, false);
+    if (!hasLineStats(row)) {
+        count.textContent = t('未统计', 'no line stats');
+        count.title = omittedText(row);
+    } else {
+        appendColoredStats(count, { added: Number(row.added) || 0, removed: Number(row.removed) || 0 }, false);
+    }
     toggle.append(path, count);
     let action = null; let confirm = null; let yes = null; let no = null;
     if (allowUndo) {
-        action = button(t('撤销', 'Undo'), 'change-review-undo');
+        action = button(reverted ? t('恢复', 'Restore') : t('撤销', 'Undo'),
+            reverted ? 'change-review-restore' : 'change-review-undo');
         action.disabled = isRunning();
-        if (action.disabled) action.title = t('任务和子任务全部结束后才可撤销', 'Undo is available after the task tree stops');
+        if (action.disabled) {
+            action.title = reverted
+                ? t('任务和子任务全部结束后才可恢复', 'Restore is available after the task tree stops')
+                : t('任务和子任务全部结束后才可撤销', 'Undo is available after the task tree stops');
+        }
         confirm = document.createElement('span'); confirm.className = 'change-review-inline-confirm'; confirm.hidden = true;
         yes = button(t('确认', 'Confirm'), 'change-review-confirm');
         no = button(t('取消', 'Cancel'), 'change-review-cancel'); confirm.append(yes, no);
-        head.append(toggle, action, confirm);
+        if (reverted) {
+            const tag = document.createElement('span');
+            tag.className = 'change-review-reverted-tag';
+            tag.textContent = t('已撤销', 'Reverted');
+            head.append(toggle, tag, action, confirm);
+        } else {
+            head.append(toggle, action, confirm);
+        }
     } else {
         item.classList.add('change-review-file--link');
         toggle.setAttribute('aria-label', `${t('查看改动', 'View changes')}: ${row.path || ''}`);
@@ -359,8 +469,12 @@ function renderFile(row, options) {
         action.addEventListener('click', function () { action.hidden = true; confirm.hidden = false; yes.focus(); });
         no.addEventListener('click', function () { confirm.hidden = true; action.hidden = false; action.focus(); });
         yes.addEventListener('click', async function () {
-            yes.disabled = true; no.disabled = true; setStatus(t('正在撤销…', 'Undoing…'));
-            try { await undo([row]); setStatus(t('已撤销', 'Undone')); }
+            yes.disabled = true; no.disabled = true;
+            setStatus(reverted ? t('正在恢复…', 'Restoring…') : t('正在撤销…', 'Undoing…'));
+            try {
+                if (reverted) { await restore([row]); setStatus(t('已恢复', 'Restored')); }
+                else { await undo([row]); setStatus(t('已撤销', 'Undone')); }
+            }
             catch (error) { setStatus(String(error.message || error), true); yes.disabled = false; no.disabled = false; }
         });
     }
@@ -375,12 +489,17 @@ function renderReviewHost(host, rows, includeClose, options) {
             onOpen: options.onOpen,
         }));
     });
+    const parts = splitReviewRows(rows);
     const summary = host.querySelector('.change-review-summary');
-    setSummary(summary, rows);
+    setSummary(summary, parts.active, parts.reverted);
+    const running = isRunning();
     const all = host.querySelector('.change-review-undo-all');
-    all.disabled = !rows.length || isRunning();
-    all.title = all.disabled && rows.length ? t('任务和子任务全部结束后才可撤销', 'Wait until all tasks stop') : '';
+    all.hidden = !parts.active.length;
+    all.disabled = running;
+    all.title = running ? t('任务和子任务全部结束后才可撤销', 'Wait until all tasks stop')
+        : t('撤销该执行过程（本轮）内记录的改动', 'Undo the changes recorded for this run');
     all.onclick = async function () {
+        if (!parts.active.length) return;
         const confirmed = typeof globalThis.openMyAgentUiModal === 'function'
             ? await globalThis.openMyAgentUiModal({
                 title: t('撤销全部改动？', 'Undo all changes?'),
@@ -390,9 +509,31 @@ function renderReviewHost(host, rows, includeClose, options) {
             }) : globalThis.confirm(t('撤销全部改动？', 'Undo all changes?'));
         if (!confirmed) return;
         setStatus(t('正在撤销…', 'Undoing…'));
-        try { await undo(rows); setStatus(t('已全部撤销', 'All changes undone')); }
+        try { await undo(parts.active); setStatus(t('已全部撤销', 'All changes undone')); }
         catch (error) { setStatus(String(error.message || error), true); }
     };
+    const restoreAll = host.querySelector('.change-review-restore-all');
+    if (restoreAll) {
+        restoreAll.hidden = !parts.reverted.length;
+        restoreAll.disabled = running;
+        restoreAll.title = running
+            ? t('任务和子任务全部结束后才可恢复', 'Restore is available after the task tree stops')
+            : t('恢复该执行过程（本轮）内已撤销的改动', 'Restore the reverted changes recorded for this run');
+        restoreAll.onclick = async function () {
+            if (!parts.reverted.length) return;
+            const confirmed = typeof globalThis.openMyAgentUiModal === 'function'
+                ? await globalThis.openMyAgentUiModal({
+                    title: t('恢复全部改动？', 'Restore all changes?'),
+                    message: t('将整批已撤销的改动重新应用到工作区。若任一文件已被再次修改，整批都会中止。',
+                        'The batch will re-apply reverted changes to the workspace. If any file changed again, the whole batch is cancelled.'),
+                    confirmText: t('全部恢复', 'Restore all'), cancelText: t('取消', 'Cancel'),
+                }) : globalThis.confirm(t('恢复全部改动？', 'Restore all changes?'));
+            if (!confirmed) return;
+            setStatus(t('正在恢复…', 'Restoring…'));
+            try { await restore(parts.reverted); setStatus(t('已全部恢复', 'All changes restored')); }
+            catch (error) { setStatus(String(error.message || error), true); }
+        };
+    }
     const view = host.querySelector('.change-review-view');
     if (view) {
         view.hidden = !options.showView;
@@ -410,12 +551,13 @@ function shell(className, close) {
         + (close ? `<button type="button" class="change-review-close" aria-label="${t('关闭', 'Close')}">×</button>` : '')
         + `</header><div class="change-review-list"></div><div class="change-review-status" role="status" aria-live="polite"></div>`
         + `<footer><button type="button" class="change-review-undo-all">${t('全部撤销', 'Undo all')}</button>`
+        + `<button type="button" class="change-review-restore-all">${t('全部恢复', 'Restore all')}</button>`
         + `<button type="button" class="change-review-view" hidden>${t('查看', 'View')}</button></footer></div>`;
     return host;
 }
 function openSheet(selectedRow) {
     if (!sheet) return; sheet.hidden = false; document.body.classList.add('change-review-sheet-open');
-    const rows = activeRows(activeAggregate);
+    const rows = displayRows(activeAggregate);
     renderReviewHost(sheet, rows, true, { allowUndo: true, showView: false });
     const close = sheet.querySelector('.change-review-close'); if (close) close.focus();
     if (selectedRow) {
@@ -453,13 +595,13 @@ function updatePlacement(visible) {
     const wide = visible && hasRoom();
     drawer.hidden = !wide; bar.hidden = !visible || wide;
     if (visible && !wide) {
-        const rows = activeRows(activeAggregate);
-        setSummary(bar.querySelector('.change-review-bar-summary'), rows);
+        const parts = splitReviewRows(displayRows(activeAggregate));
+        setSummary(bar.querySelector('.change-review-bar-summary'), parts.active, parts.reverted);
     }
     if (!visible) closeSheet();
 }
 function render() {
-    const rows = activeAggregate ? activeRows(activeAggregate) : [];
+    const rows = activeAggregate ? displayRows(activeAggregate) : [];
     const visible = Boolean(activeAggregate && aggregateIsCurrent(activeAggregate) && rows.length
         && isExpanded(activeAggregate));
     if (visible) renderReviewHost(drawer, rows, false, {
@@ -487,6 +629,15 @@ function scheduleScanExisting() {
         scanExisting();
     }, 0);
 }
+export function acceptChangeUpdate(old, raw) {
+    if (!old) return true;
+    // Revisions restart at 1 for every run.  Only a stale event for the same
+    // snapshot may be ignored; a different snapshot is a newer run's record
+    // and must replace the previous one even at a lower revision.
+    if (!old.snapshot_id || !raw || !raw.snapshot_id) return true;
+    if (String(old.snapshot_id) !== String(raw.snapshot_id)) return true;
+    return !(Number(old.revision || 0) > Number(raw.revision || 0));
+}
 function applyTool(detail, options) {
     options = options || {};
     const event = detail && detail.event; const aggregate = detail && detail.aggregate;
@@ -500,7 +651,7 @@ function applyTool(detail, options) {
     incoming.forEach(function (raw) {
         if (!raw || !raw.snapshot_id || !raw.path) return;
         const old = rows.get(String(raw.path).toLowerCase());
-        if (old && Number(old.revision || 0) > Number(raw.revision || 0)) return;
+        if (!acceptChangeUpdate(old, raw)) return;
         rows.set(String(raw.path).toLowerCase(), Object.assign({}, raw, {
             _sessionId: String(detail.sessionId || ''),
             _rootSessionId: ownerSessionId,
@@ -516,7 +667,7 @@ function applyTool(detail, options) {
 function onToggle(detail) {
     const aggregate = detail && detail.aggregate;
     if (!aggregate || !aggregateChanges.has(aggregate) || !aggregateIsCurrent(aggregate)) return;
-    if (detail.expanded && activeRows(aggregate).length) remember(aggregate);
+    if (detail.expanded && displayRows(aggregate).length) remember(aggregate);
     syncActiveAggregateToViewport({ deferRender: true });
     render();
 }
@@ -525,6 +676,7 @@ function onUiEvent(detail) {
     const ownerSessionId = String((detail && detail.rootSessionId) || (detail && detail.sessionId) || '');
     if (ownerSessionId && ownerSessionId !== mountedSessionId) return;
     if (event && event.type === 'file_changes_reverted') markReverted(event.snapshot_ids || []);
+    if (event && event.type === 'file_changes_restored') markRestored(event.snapshot_ids || []);
 }
 function scanExisting() {
     let found = false;

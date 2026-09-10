@@ -61,6 +61,9 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "span.textContent = line" in source
     assert "snapshot_ids" in source
     assert "operation_id" in source
+    assert "file_changes_restored" in source
+    assert "change-review-restore-all" in source
+    assert "change-review-restore" in source
     assert "myagent:tool-call-rendered" in source
     assert "ResizeObserver" in source
     assert "✏️" not in source
@@ -114,6 +117,22 @@ def test_change_review_prefers_the_expanded_process_visible_in_the_viewport():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "change review visibility runtime checks passed" in result.stdout
+
+
+def test_change_review_stats_treat_missing_line_counts_as_unmeasured():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for frontend runtime checks")
+    result = subprocess.run(
+        [node, str(ROOT / "tests/js/change_review_stats_runtime.mjs")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "change review stats runtime checks passed" in result.stdout
 
 
 def test_plugin_navigation_host_is_removed_from_both_html_sources():

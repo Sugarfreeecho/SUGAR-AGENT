@@ -918,6 +918,13 @@ class FileChangeReviewStore:
                         }
                     elif base_entry is None and path_key in active_entries:
                         active_record = active_entries[path_key]
+                        if bool((active_record.get("before") or {}).get("exists")):
+                            # The path already has a real origin (declared file
+                            # or directory, or an ignored path outside the
+                            # inventory). Re-origining it from a synthesized
+                            # "missing" state would corrupt that history and
+                            # make undo delete the file instead of restoring it.
+                            continue
                         base_entry = {
                             "path_abs": active_record["path_abs"],
                             "path": active_record["path"],
@@ -1131,6 +1138,131 @@ class FileChangeReviewStore:
             index["operations"].pop(str(operation_id or ""), None)
             self._save(index)
 
+    def restore(self, snapshot_ids: Iterable[str], operation_id: str) -> dict:
+        """Re-apply previously undone changes; any conflict aborts the batch."""
+        ids = [str(item or "").strip() for item in snapshot_ids]
+        if not ids or any(not item for item in ids) or len(set(ids)) != len(ids):
+            raise InvalidSnapshotError("snapshot_ids must be a non-empty array of unique ids")
+        operation_id = str(operation_id or "").strip()
+        if not operation_id or len(operation_id) > 200:
+            raise InvalidSnapshotError("operation_id is required")
+        journal_key = "restore:" + operation_id
+        with self.lock:
+            index = self._load()
+            cached = index["operations"].get(journal_key)
+            if isinstance(cached, dict):
+                if cached.get("snapshot_ids") != ids:
+                    raise InvalidSnapshotError("operation_id was already used for another request")
+                replay = dict(cached.get("result") or {})
+                replay["idempotent_replay"] = True
+                return replay
+            records: List[dict] = []
+            for snapshot_id in ids:
+                record = index["records"].get(snapshot_id)
+                if not isinstance(record, dict):
+                    raise InvalidSnapshotError(f"unknown snapshot_id: {snapshot_id}")
+                if not record.get("reverted") or record.get("dropped"):
+                    raise SnapshotGoneError(f"snapshot cannot be restored: {snapshot_id}")
+                records.append(record)
+            conflicts: List[str] = []
+            for record in records:
+                current = _state(Path(record["path_abs"]))
+                if not _same_state(current, record.get("before") or {}):
+                    conflicts.append(str(record.get("path") or record["path_abs"]))
+            if conflicts:
+                raise ChangeConflictError("one or more files were modified again", paths=conflicts)
+            # Ensure every required blob is valid before touching the filesystem.
+            for record in records:
+                if (record.get("before") or {}).get("exists") and str((record.get("before") or {}).get("kind") or "file") == "file":
+                    self._get_blob(record.get("before_blob"))
+                if (record.get("after") or {}).get("exists") and str((record.get("after") or {}).get("kind") or "file") == "file":
+                    self._get_blob(record.get("after_blob"))
+            restored: List[dict] = []
+            try:
+                for record in records:
+                    before_state = record.get("before") or {}
+                    if str(before_state.get("kind") or "") == "directory" and not (record.get("after") or {}).get("exists"):
+                        # An empty-directory row: undo recreated it, and it is
+                        # removed again with its group's directories below.
+                        continue
+                    self._restore_record(record, "after")
+                    restored.append(record)
+                selected = set(ids)
+                for group in index["groups"].values():
+                    group_ids = set(group.get("snapshot_ids") or [])
+                    if group_ids and group_ids.issubset(selected):
+                        for raw_dir in sorted(group.get("directories") or [], key=len, reverse=True):
+                            try:
+                                Path(raw_dir).rmdir()
+                            except OSError:
+                                pass
+            except Exception:
+                for record in reversed(restored):
+                    try:
+                        self._restore_record(record, "before")
+                    except Exception:
+                        pass
+                raise
+            public: List[dict] = []
+            for record in records:
+                record["reverted"] = False
+                record["effective"] = True
+                active_key = str(record.get("run_id") or "") + "\0" + str(record.get("path_key") or "")
+                index["active"][active_key] = record["snapshot_id"]
+                public.append(self.public_record(record))
+            result = {"ok": True, "operation_id": operation_id, "snapshot_ids": ids, "changes": public}
+            index["operations"][journal_key] = {
+                "snapshot_ids": ids,
+                "result": result,
+                "phase": "restored",
+            }
+            self._save(index)
+            return result
+
+    def commit_restore(self, operation_id: str) -> None:
+        """Mark the surrounding history/event transaction durable, then GC bytes."""
+        with self.lock:
+            index = self._load()
+            operation = index["operations"].get("restore:" + str(operation_id or "").strip())
+            if not isinstance(operation, dict):
+                raise InvalidSnapshotError("unknown restore operation")
+            operation["phase"] = "committed"
+            self._save(index)
+            self._gc_blobs(index)
+
+    def rollback_restore(self, operation_id: str) -> None:
+        """Put reverted bytes back if persisting the restore event/notice fails."""
+        with self.lock:
+            index = self._load()
+            journal_key = "restore:" + str(operation_id or "").strip()
+            operation = index["operations"].get(journal_key)
+            if not isinstance(operation, dict) or operation.get("phase") != "restored":
+                return
+            records = [
+                index["records"].get(snapshot_id)
+                for snapshot_id in operation.get("snapshot_ids") or []
+            ]
+            records = [record for record in records if isinstance(record, dict)]
+            restored: List[dict] = []
+            try:
+                for record in records:
+                    self._restore_record(record, "before")
+                    restored.append(record)
+            except Exception:
+                for record in reversed(restored):
+                    try:
+                        self._restore_record(record, "after")
+                    except Exception:
+                        pass
+                raise
+            for record in records:
+                record["reverted"] = True
+                record["effective"] = False
+                active_key = str(record.get("run_id") or "") + "\0" + str(record.get("path_key") or "")
+                index["active"].pop(active_key, None)
+            index["operations"].pop(journal_key, None)
+            self._save(index)
+
     def prune_unreferenced(self, referenced_snapshot_ids: Iterable[str]) -> None:
         """Drop active records hidden by a history truncation, then GC bytes."""
         keep = {str(item or "") for item in referenced_snapshot_ids if str(item or "")}
@@ -1139,7 +1271,7 @@ class FileChangeReviewStore:
             removed = {
                 snapshot_id
                 for snapshot_id, record in index["records"].items()
-                if snapshot_id not in keep and not record.get("reverted")
+                if snapshot_id not in keep and not record.get("dropped")
             }
             if not removed:
                 return
@@ -1147,6 +1279,10 @@ class FileChangeReviewStore:
                 record = index["records"][snapshot_id]
                 record["reverted"] = True
                 record["effective"] = False
+                # Once no history references the record it can no longer be
+                # restored; mark it so commit-time GC may free its bytes even
+                # though `reverted` stays true for UI compatibility.
+                record["dropped"] = True
             index["active"] = {
                 key: value for key, value in index["active"].items() if value not in removed
             }
@@ -1215,7 +1351,11 @@ class FileChangeReviewStore:
                 if entry.get("before_blob"):
                     keep.add(entry["before_blob"])
         for record in index.get("records", {}).values():
-            if record.get("reverted") or record.get("neutralized"):
+            # Bytes survive for any record that can still be acted on: active
+            # records can be undone, and reverted-but-kept records can be
+            # restored.  Records whose history was dropped (or that are
+            # net-zero) can never be undone again, so their bytes are freed.
+            if record.get("dropped") or record.get("neutralized"):
                 continue
             for key in ("before_blob", "after_blob"):
                 if record.get(key):

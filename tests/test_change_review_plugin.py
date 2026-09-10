@@ -726,3 +726,250 @@ def test_undo_api_persists_ui_event_and_notifies_child_and_parent(review, tmp_pa
     assert [session_id for session_id, _text in notices] == ["child", "root"]
     assert [session_id for session_id, _event in published] == ["child", "root"]
     assert published[-1][1]["agent_id"] == "child"
+
+
+def test_non_git_workspace_observes_declared_file_tools_only(review):
+    """Pins the observation surface outside Git: declared paths only."""
+    store, workspace = review
+    path = workspace / "note.txt"
+    path.write_text("one\n", encoding="utf-8")
+    assert capture(
+        store, workspace, "run_shell", {"command": "append"},
+        lambda: path.write_text("one\ntwo\n", encoding="utf-8"),
+    ) == []
+    rows = capture(
+        store, workspace, "write_file", {"path": "note.txt"},
+        lambda: path.write_text("one\ntwo\nthree\n", encoding="utf-8"),
+        call="declared-only",
+    )
+    assert len(rows) == 1
+    assert rows[0]["path"] == "note.txt"
+    assert rows[0]["operation"] == "modify"
+    assert (rows[0]["added"], rows[0]["removed"]) == (1, 0)
+
+
+def test_ignored_file_modify_keeps_origin_and_undo_restores(tmp_path):
+    """A Git-ignored file edited via a declared tool must keep its real origin.
+
+    Regression guard for the double-track case (declared path + Git inventory):
+    re-origining the record from a synthesized "missing" state turned the
+    second capture into a fake create and made undo delete the file.
+    """
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    sys.path.insert(0, str(ROOT / "app"))
+    import agent_tools
+
+    (workspace / ".gitignore").write_text("logs/\n", encoding="utf-8")
+    (workspace / "logs").mkdir()
+    log = workspace / "logs" / "app.log"
+    log.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(workspace), "add", ".gitignore"], check=True)
+    store = module.FileChangeReviewStore(tmp_path / "session")
+
+    with agent_tools.tool_work_dir_override(workspace):
+        first = capture(
+            store, workspace, "write_file", {"path": "logs/app.log"},
+            lambda: log.write_text("new\n", encoding="utf-8"), run="ignored-run",
+        )
+        second = capture(
+            store, workspace, "write_file", {"path": "logs/app.log"},
+            lambda: log.write_text("new2\n", encoding="utf-8"), run="ignored-run", call="c2",
+        )
+    assert first[0]["operation"] == "modify"
+    assert second[0]["snapshot_id"] == first[0]["snapshot_id"]
+    assert second[0]["operation"] == "modify"
+    assert (second[0]["added"], second[0]["removed"]) == (1, 1)
+    store.undo([second[0]["snapshot_id"]], "undo-ignored-modify")
+    assert log.exists()
+    assert log.read_text(encoding="utf-8") == "old\n"
+
+
+def test_undo_then_restore_round_trip(review):
+    store, workspace = review
+    path = workspace / "round.txt"
+    path.write_text("before\n", encoding="utf-8")
+    change = capture(
+        store, workspace, "write_file", {"path": "round.txt"},
+        lambda: path.write_text("after\n", encoding="utf-8"),
+    )[0]
+    store.undo([change["snapshot_id"]], "undo-round")
+    assert path.read_text(encoding="utf-8") == "before\n"
+    # A committed undo must keep the blobs a later restore needs.
+    store.commit_undo("undo-round")
+    result = store.restore([change["snapshot_id"]], "restore-round")
+    assert result["ok"] is True
+    assert path.read_text(encoding="utf-8") == "after\n"
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert index["records"][change["snapshot_id"]]["reverted"] is False
+    assert index["records"][change["snapshot_id"]]["effective"] is True
+    assert index["operations"]["restore:restore-round"]["phase"] == "restored"
+    store.commit_restore("restore-round")
+    replay = store.restore([change["snapshot_id"]], "restore-round")
+    assert replay["idempotent_replay"] is True
+    # A restored change can be undone again.
+    store.undo([change["snapshot_id"]], "undo-round-2")
+    assert path.read_text(encoding="utf-8") == "before\n"
+
+
+def test_restore_conflict_aborts_without_touching_files(review):
+    module = _load_store()
+    store, workspace = review
+    path = workspace / "conflict.txt"
+    path.write_text("before\n", encoding="utf-8")
+    change = capture(
+        store, workspace, "write_file", {"path": "conflict.txt"},
+        lambda: path.write_text("after\n", encoding="utf-8"),
+    )[0]
+    store.undo([change["snapshot_id"]], "undo-conflict-restore")
+    path.write_text("third-party\n", encoding="utf-8")
+    with pytest.raises(module.ChangeConflictError) as raised:
+        store.restore([change["snapshot_id"]], "restore-conflict")
+    assert raised.value.paths == ["conflict.txt"]
+    assert path.read_text(encoding="utf-8") == "third-party\n"
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert index["records"][change["snapshot_id"]]["reverted"] is True
+
+
+def test_restore_requires_a_reverted_snapshot(review):
+    module = _load_store()
+    store, workspace = review
+    path = workspace / "active.txt"
+    path.write_text("old\n", encoding="utf-8")
+    change = capture(
+        store, workspace, "write_file", {"path": "active.txt"},
+        lambda: path.write_text("new\n", encoding="utf-8"),
+    )[0]
+    with pytest.raises(module.SnapshotGoneError):
+        store.restore([change["snapshot_id"]], "restore-active")
+
+
+def test_pruned_records_cannot_be_restored(review):
+    module = _load_store()
+    store, workspace = review
+    first_path = workspace / "f1.txt"
+    second_path = workspace / "f2.txt"
+    first = capture(
+        store, workspace, "write_file", {"path": "f1.txt"},
+        lambda: first_path.write_text("one\n", encoding="utf-8"),
+    )[0]
+    second = capture(
+        store, workspace, "write_file", {"path": "f2.txt"},
+        lambda: second_path.write_text("two\n", encoding="utf-8"), run="run-2",
+    )[0]
+    store.prune_unreferenced([second["snapshot_id"]])
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert index["records"][first["snapshot_id"]]["dropped"] is True
+    with pytest.raises(module.SnapshotGoneError):
+        store.restore([first["snapshot_id"]], "restore-dropped")
+
+
+def test_prepared_restore_can_roll_back_when_event_commit_fails(review):
+    store, workspace = review
+    path = workspace / "rollback-restore.txt"
+    path.write_text("before\n", encoding="utf-8")
+    change = capture(
+        store, workspace, "edit_file", {"path": "rollback-restore.txt"},
+        lambda: path.write_text("after\n", encoding="utf-8"),
+    )[0]
+    store.undo([change["snapshot_id"]], "undo-rb")
+    store.restore([change["snapshot_id"]], "restore-rb")
+    assert path.read_text(encoding="utf-8") == "after\n"
+    store.rollback_restore("restore-rb")
+    assert path.read_text(encoding="utf-8") == "before\n"
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert "restore:restore-rb" not in index["operations"]
+    assert index["records"][change["snapshot_id"]]["reverted"] is True
+
+
+def test_directory_delete_restore_round_trip(review):
+    store, workspace = review
+    root = workspace / "tree"; empty = root / "empty"; nested = root / "nested"
+    empty.mkdir(parents=True); nested.mkdir(); (nested / "value.txt").write_text("value", encoding="utf-8")
+    change = capture(
+        store, workspace, "delete_file", {"path": "tree"},
+        lambda: shutil.rmtree(root),
+    )[0]
+    store.undo([change["snapshot_id"]], "undo-tree")
+    assert (nested / "value.txt").read_text(encoding="utf-8") == "value"
+    assert empty.is_dir()
+    store.restore([change["snapshot_id"]], "restore-tree")
+    assert not root.exists()
+    store.undo([change["snapshot_id"]], "undo-tree-2")
+    assert (nested / "value.txt").read_text(encoding="utf-8") == "value"
+
+    only_empty = workspace / "only-empty"
+    only_empty.mkdir()
+    empty_change = capture(
+        store, workspace, "delete_file", {"path": "only-empty"},
+        lambda: only_empty.rmdir(), run="run-empty",
+    )[0]
+    store.undo([empty_change["snapshot_id"]], "undo-empty-2")
+    assert only_empty.is_dir()
+    store.restore([empty_change["snapshot_id"]], "restore-empty")
+    assert not only_empty.exists()
+    store.undo([empty_change["snapshot_id"]], "undo-empty-3")
+    assert only_empty.is_dir()
+
+
+def test_restore_api_reapplies_and_persists_ui_event(review, tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import plugins.host as plugin_host
+    import session_event_bus
+
+    store, workspace = review
+    path = workspace / "api-restore.txt"; path.write_text("before\n", encoding="utf-8")
+    change = capture(
+        store, workspace, "edit_file", {"path": "api-restore.txt"},
+        lambda: path.write_text("after\n", encoding="utf-8"),
+    )[0]
+    store.undo([change["snapshot_id"]], "api-undo-pre")
+
+    class Manager:
+        repository = SimpleNamespace(sessions_dir=tmp_path, _path_resolver=None)
+
+        def _get_session_path(self, session_id):
+            return tmp_path / "session" if session_id == "child" else tmp_path / session_id
+
+        def _load_metadata(self, session_id):
+            return {"parent_session_id": "root"} if session_id == "child" else {}
+
+        def get_subagent_parent_id(self, session_id):
+            return "root" if session_id == "child" else None
+
+        def list_sessions(self, include_archived=False):
+            return [{"id": "root"}]
+
+        def list_subagent_descendants(self, root):
+            return ["child"] if root == "root" else []
+
+        def append_ui_event(self, session_id, event):
+            persisted.append((session_id, event))
+
+    persisted = []
+    notices = []
+    published = []
+    host = _load_plugin_module("host.py", "test_change_review_host_restore")
+    monkeypatch.setattr(plugin_host, "bundled_host_plugin_enabled", lambda _plugin_id: True)
+    monkeypatch.setattr(host, "_append_model_notice", lambda _manager, sid, text: notices.append((sid, text)))
+
+    async def publish(session_id, event):
+        published.append((session_id, event))
+
+    monkeypatch.setattr(session_event_bus, "publish_session_event", publish)
+    app = FastAPI()
+    host.install(app, {"session_manager": Manager()}, SimpleNamespace(plugin_id="change-review"))
+    with TestClient(app) as client:
+        response = client.post(
+            "/sessions/child/change-reviews/restore",
+            json={"snapshot_ids": [change["snapshot_id"]], "operation_id": "api-restore"},
+        )
+    assert response.status_code == 200, response.text
+    assert path.read_text(encoding="utf-8") == "after\n"
+    assert persisted[0][1]["type"] == "file_changes_restored"
+    assert [session_id for session_id, _text in notices] == ["child", "root"]
+    assert [session_id for session_id, _event in published] == ["child", "root"]
+    assert published[-1][1]["agent_id"] == "child"
