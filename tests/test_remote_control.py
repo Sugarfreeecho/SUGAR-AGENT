@@ -311,9 +311,15 @@ def test_register_remote_control_mounts_routes_when_enabled(tmp_path):
     app = FastAPI()
     gateway = register_remote_control(app, config, _dependencies(_SessionManager()))
     assert gateway is not None
-    paths = {getattr(route, "path", "") for route in app.routes}
-    assert "/api/remote/v1/status" in paths
-    assert "/api/remote/v1/ws" in paths
+    # Exercise the ASGI routes instead of depending on FastAPI's internal
+    # representation. Newer releases retain included routers as lazy route
+    # containers, so their child paths no longer appear directly in app.routes.
+    with TestClient(app) as client:
+        response = client.get("/api/remote/v1/status")
+        assert response.status_code == 200
+        assert response.json()["websocket_path"] == "/api/remote/v1/ws"
+        with client.websocket_connect("/api/remote/v1/ws") as websocket:
+            assert websocket.receive_json()["event"] == "connect.challenge"
     assert state_dir.exists()
 
 
