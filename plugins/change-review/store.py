@@ -345,6 +345,7 @@ class FileChangeReviewStore:
             "groups": {},
             "operations": {},
             "baselines": {},
+            "temporaries": {},
         }
 
     def _load(self) -> dict:
@@ -356,7 +357,7 @@ class FileChangeReviewStore:
             raise SnapshotGoneError("change review metadata is unreadable") from exc
         if not isinstance(data, dict) or int(data.get("version") or 0) != STORE_VERSION:
             raise SnapshotGoneError("change review metadata has an unsupported version")
-        for key in ("pending", "records", "active", "groups", "operations", "baselines"):
+        for key in ("pending", "records", "active", "groups", "operations", "baselines", "temporaries"):
             data.setdefault(key, {})
         return data
 
@@ -417,6 +418,34 @@ class FileChangeReviewStore:
         if before.get("exists") and not after.get("exists"):
             return "delete"
         return "modify"
+
+    @staticmethod
+    def _temporary_entry(index: dict, path_key) -> Optional[dict]:
+        """The shadow record of a temporary path, if the store still tracks it."""
+        entry = (index.get("temporaries") or {}).get(str(path_key or ""))
+        return dict(entry) if isinstance(entry, dict) else None
+
+    def _register_temporary(self, index: dict, *, run_id: str, tool_call_id: str, entry: dict) -> None:
+        """Shadow a temporary write's path so no review row is produced for it.
+
+        The pre-write origin (content or missing state) is captured once, on the
+        path's first temporary write.  If a later normal write targets the same
+        path the shadow graduates: the review record then uses this origin, so
+        the cumulative diff still spans the file's real lifetime.
+        """
+        temporaries = index.setdefault("temporaries", {})
+        key = str(entry["path_key"])
+        if key in temporaries:
+            return
+        temporaries[key] = {
+            "path_abs": entry["path_abs"],
+            "path": entry["path"],
+            "path_key": key,
+            "before": dict(entry.get("before") or {}),
+            "before_blob": entry.get("before_blob"),
+            "registered_run_id": run_id,
+            "registered_tool_call_id": tool_call_id,
+        }
 
     @staticmethod
     def _target_specs(tool_name: str, args: dict) -> tuple[List[dict], Optional[dict]]:
@@ -652,11 +681,13 @@ class FileChangeReviewStore:
         supported_file_tool = tool_name in {
             "write_file", "edit_file", "apply_patch", "delete_file"
         }
+        # A temporary write keeps its path shadowed in the store (no review row
+        # at all).  The resolved spec is still needed to register the path and
+        # capture the pre-write origin for a later graduation.
+        temporary_write = tool_name == "write_file" and bool((args or {}).get("temporary"))
         specs: List[dict] = []
         manifest: Optional[dict] = None
-        if supported_file_tool and not (
-            tool_name == "write_file" and bool((args or {}).get("temporary"))
-        ):
+        if supported_file_tool:
             try:
                 specs, manifest = self._target_specs(tool_name, args)
             except Exception:
@@ -673,6 +704,25 @@ class FileChangeReviewStore:
                 work_root=root,
             )
             if baseline is None and not specs and not manifest:
+                return None
+            if temporary_write:
+                if specs:
+                    path = Path(specs[0]["path"]).resolve()
+                    before_data = _read_regular_file(path)
+                    entry = {
+                        "path_abs": str(path),
+                        "path": self._display_path(path, root),
+                        "path_key": self._key(path),
+                        "before": _state(path, before_data),
+                        "before_blob": self._put_blob(before_data) if before_data is not None else None,
+                    }
+                    self._register_temporary(
+                        index,
+                        run_id=str(run_id or ""),
+                        tool_call_id=str(tool_call_id or ""),
+                        entry=entry,
+                    )
+                    self._save(index)
                 return None
             group_id = uuid.uuid4().hex if manifest is not None else None
             for spec in specs:
@@ -879,6 +929,20 @@ class FileChangeReviewStore:
                 path = Path(entry["path_abs"])
                 after_data = _read_regular_file(path)
                 immediate_after = _state(path, after_data)
+                shadowed = self._temporary_entry(index, entry.get("path_key"))
+                if shadowed is not None:
+                    if not immediate_after.get("exists"):
+                        # Deleting a shadowed path only ends its temporary life;
+                        # it must not surface as an orphan "delete" row.
+                        index["temporaries"].pop(str(entry.get("path_key") or ""), None)
+                        continue
+                    # A normal write graduates the path.  The record keeps the
+                    # origin captured while the path was still temporary, so
+                    # the cumulative diff spans its real lifetime.
+                    entry = dict(entry)
+                    entry["before"] = dict(shadowed.get("before") or {})
+                    entry["before_blob"] = shadowed.get("before_blob")
+                    index["temporaries"].pop(str(entry.get("path_key") or ""), None)
                 public = self._promote_entry(index, pending, entry, after_data, immediate_after)
                 if public is not None:
                     output.append(public)
@@ -900,9 +964,15 @@ class FileChangeReviewStore:
                     record = index["records"].get(snapshot_id)
                     if isinstance(record, dict):
                         active_entries[str(record.get("path_key") or "")] = record
+                temporary_paths = index.get("temporaries") or {}
                 for path_key in sorted(
                     set(baseline_entries) | set(current_entries) | set(active_entries)
                 ):
+                    if str(path_key) in temporary_paths:
+                        # A shadowed path stays invisible to the workspace sweep
+                        # (creation, modification and deletion alike) until a
+                        # normal declared write graduates it.
+                        continue
                     base_entry = baseline_entries.get(path_key)
                     current_entry = current_entries.get(path_key)
                     if base_entry is None and current_entry is not None:
@@ -1338,7 +1408,15 @@ class FileChangeReviewStore:
                     cloned_group = json.loads(json.dumps(group, ensure_ascii=False))
                     cloned_group["snapshot_ids"] = retained
                     target_index["groups"][group_id] = cloned_group
-            if target_index["records"]:
+            for temp_key, temp in (source_index.get("temporaries") or {}).items():
+                if not isinstance(temp, dict):
+                    continue
+                cloned_temp = json.loads(json.dumps(temp, ensure_ascii=False))
+                target_index["temporaries"][temp_key] = cloned_temp
+                digest = cloned_temp.get("before_blob")
+                if digest:
+                    target._put_blob(self._get_blob(digest))
+            if target_index["records"] or target_index["temporaries"]:
                 target._save(target_index)
 
     def _gc_blobs(self, index: Optional[dict] = None) -> None:
@@ -1350,6 +1428,9 @@ class FileChangeReviewStore:
             for entry in pending.get("entries") or []:
                 if entry.get("before_blob"):
                     keep.add(entry["before_blob"])
+        for temp in (index.get("temporaries") or {}).values():
+            if isinstance(temp, dict) and temp.get("before_blob"):
+                keep.add(temp["before_blob"])
         for record in index.get("records", {}).values():
             # Bytes survive for any record that can still be acted on: active
             # records can be undone, and reverted-but-kept records can be

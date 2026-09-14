@@ -973,3 +973,100 @@ def test_restore_api_reapplies_and_persists_ui_event(review, tmp_path, monkeypat
     assert [session_id for session_id, _text in notices] == ["child", "root"]
     assert [session_id for session_id, _event in published] == ["child", "root"]
     assert published[-1][1]["agent_id"] == "child"
+
+
+def test_temporary_write_and_delete_stay_invisible_even_in_git(tmp_path):
+    """A temporary write is shadowed in the store: no row on write or delete."""
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    sys.path.insert(0, str(ROOT / "app"))
+    import agent_tools
+
+    store = module.FileChangeReviewStore(tmp_path / "session")
+    target = workspace / "scratch_probe.py"
+    with agent_tools.tool_work_dir_override(workspace):
+        rows = capture(
+            store, workspace, "write_file",
+            {"path": "scratch_probe.py", "contents": "print(1)\n", "temporary": True},
+            lambda: target.write_text("print(1)\n", encoding="utf-8"),
+        )
+        assert rows == []
+        index = json.loads(store.index_path.read_text(encoding="utf-8"))
+        assert len(index["temporaries"]) == 1
+        assert index["records"] == {}
+
+        rows = capture(
+            store, workspace, "delete_file", {"path": "scratch_probe.py"},
+            lambda: target.unlink(), call="call-2",
+        )
+    assert rows == []
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert index["temporaries"] == {}
+    assert index["records"] == {}
+
+
+def test_temporary_write_shell_delete_stays_invisible(tmp_path):
+    """A Git sweep must not surface a temporary creation (the old +1 row)."""
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    sys.path.insert(0, str(ROOT / "app"))
+    import agent_tools
+
+    store = module.FileChangeReviewStore(tmp_path / "session")
+    target = workspace / "scratch_probe.py"
+    with agent_tools.tool_work_dir_override(workspace):
+        assert capture(
+            store, workspace, "write_file",
+            {"path": "scratch_probe.py", "contents": "print(1)\n", "temporary": True},
+            lambda: target.write_text("print(1)\n", encoding="utf-8"),
+        ) == []
+        assert capture(
+            store, workspace, "run_shell", {"command": "rm scratch_probe.py"},
+            lambda: target.unlink(), call="call-2",
+        ) == []
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert index["records"] == {}
+
+
+def test_temporary_then_normal_write_graduates_with_original_origin(review):
+    store, workspace = review
+    path = workspace / "graduate.txt"
+    assert capture(
+        store, workspace, "write_file",
+        {"path": "graduate.txt", "contents": "v1\n", "temporary": True},
+        lambda: path.write_text("v1\n", encoding="utf-8"),
+    ) == []
+    rows = capture(
+        store, workspace, "write_file", {"path": "graduate.txt", "contents": "v1\nv2\n"},
+        lambda: path.write_text("v1\nv2\n", encoding="utf-8"), call="call-2",
+    )
+    assert len(rows) == 1
+    assert rows[0]["operation"] == "create"
+    assert rows[0]["before"]["exists"] is False
+    assert (rows[0]["added"], rows[0]["removed"]) == (2, 0)
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert index["temporaries"] == {}
+
+
+def test_temporary_graduation_keeps_preexisting_origin(review):
+    store, workspace = review
+    path = workspace / "graduate2.txt"
+    path.write_text("base\n", encoding="utf-8")
+    assert capture(
+        store, workspace, "write_file",
+        {"path": "graduate2.txt", "contents": "temp\n", "temporary": True},
+        lambda: path.write_text("temp\n", encoding="utf-8"),
+    ) == []
+    rows = capture(
+        store, workspace, "edit_file", {"path": "graduate2.txt"},
+        lambda: path.write_text("base\nkept\n", encoding="utf-8"), call="call-2",
+    )
+    assert len(rows) == 1
+    assert rows[0]["operation"] == "modify"
+    assert (rows[0]["added"], rows[0]["removed"]) == (1, 0)
+    store.undo([rows[0]["snapshot_id"]], "undo-graduate")
+    assert path.read_text(encoding="utf-8") == "base\n"
