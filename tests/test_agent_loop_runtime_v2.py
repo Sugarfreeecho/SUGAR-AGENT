@@ -819,6 +819,78 @@ def test_tool_review_context_survives_workflow_plugin_extraction(monkeypatch):
     }
 
 
+def test_tool_review_context_reads_tail_when_it_contains_current_user(monkeypatch):
+    import agent_loop
+
+    class Event:
+        def __init__(self, event_type, content):
+            self.type = event_type
+            self.run_id = "run-1"
+            self.payload = {"content": content}
+
+    class EventLog:
+        def read_tail_window(self, session_id, *, max_bytes, max_events):
+            assert session_id == "s1"
+            assert max_bytes == 4 * 1024 * 1024
+            assert max_events == 4000
+            return [
+                Event("user_turn_committed", "current question"),
+                Event("model_assistant", "current response"),
+            ], False
+
+        def iter_events(self, _session_id):
+            raise AssertionError("a sufficient tail window must not trigger a full read")
+
+    class Ops:
+        event_log = EventLog()
+
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(agent_loop, "_runtime_v2_react_history_ops", lambda: Ops())
+
+    assert agent_loop._tool_review_conversation_from_events("s1") == {
+        "initial_user_question": "current question",
+        "user_followups": [],
+        "assistant_context": [{"kind": "response", "content": "current response"}],
+    }
+
+
+def test_tool_review_context_falls_back_when_tail_has_no_user(monkeypatch):
+    import agent_loop
+
+    class Event:
+        def __init__(self, event_type, content):
+            self.type = event_type
+            self.run_id = "run-1"
+            self.payload = {"content": content}
+
+    class EventLog:
+        full_reads = 0
+
+        def read_tail_window(self, _session_id, *, max_bytes, max_events):
+            return [Event("model_assistant", "tail only")], False
+
+        def iter_events(self, _session_id):
+            self.full_reads += 1
+            return iter([
+                Event("user_turn_committed", "current question"),
+                Event("model_assistant", "current response"),
+            ])
+
+    event_log = EventLog()
+
+    class Ops:
+        pass
+
+    Ops.event_log = event_log
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(agent_loop, "_runtime_v2_react_history_ops", lambda: Ops())
+
+    context = agent_loop._tool_review_conversation_from_events("s1")
+
+    assert event_log.full_reads == 1
+    assert context["initial_user_question"] == "current question"
+
+
 def test_runtime_v2_persist_does_not_save_legacy_histories(monkeypatch, tmp_path):
     import agent_loop
     from runtime_v2 import SnapshotStore

@@ -304,6 +304,20 @@ def test_legacy_event_replay_admits_image_before_redaction(store):
     assert RuntimeEvent.from_dict(event.to_dict()).payload == event.payload
 
 
+def test_text_only_event_replay_returns_original_payload_without_rebuilding():
+    from runtime_v2.attachment_migration import migrate_payload
+
+    payload = {
+        "messages": [
+            {"role": "user", "content": "plain text"},
+            {"role": "assistant", "content": "plain response"},
+        ] * 100,
+        "reason": "history refresh",
+    }
+
+    assert migrate_payload("model_history_replaced", payload) is payload
+
+
 def test_history_cleaning_and_microshrink_keep_tool_images(store, monkeypatch):
     from agent_messages import ToolMessage
     from agent_tokenizer import messages_for_openai_turns

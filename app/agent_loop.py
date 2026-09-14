@@ -375,7 +375,22 @@ def _tool_review_conversation_from_events(session_id: str) -> Dict[str, Any]:
     if not sid or not _runtime_v2_is_primary():
         return {}
     try:
-        events = list(_runtime_v2_react_history_ops().event_log.iter_events(sid))
+        event_log = _runtime_v2_react_history_ops().event_log
+        read_tail_window = getattr(event_log, "read_tail_window", None)
+        if callable(read_tail_window):
+            events, reached_start = read_tail_window(
+                sid,
+                max_bytes=4 * 1024 * 1024,
+                max_events=4000,
+            )
+            user_types = {"message_user", "user_turn_committed", "model_user"}
+            if not reached_start and not any(
+                str(getattr(event, "type", "") or "").strip() in user_types
+                for event in events
+            ):
+                events = list(event_log.iter_events(sid))
+        else:
+            events = list(event_log.iter_events(sid))
     except Exception:
         logger.debug(
             "Could not reconstruct tool-review conversation for session=%s",

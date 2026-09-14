@@ -1166,6 +1166,25 @@ def test_parent_run_consumes_own_result_once_without_final(tmp_path):
     assert store.list_pending_results("parent") == []
 
 
+def test_empty_pending_subagent_notifications_do_not_load_ui_history():
+    import agent_harness
+
+    def fail_ui_load(_session_id):
+        raise AssertionError("empty pending queue must not read the event log")
+
+    mgr = _manager_with(
+        _load_pending_subagent_results=lambda _session_id: [],
+        _load_ui_events_for_active_runtime=fail_ui_load,
+    )
+
+    assert agent_harness.SessionManager.consume_pending_subagent_notifications(
+        mgr, "parent"
+    ) == []
+    assert agent_harness.SessionManager.claim_pending_subagent_notifications(
+        mgr, "parent", "claim-1"
+    ) == []
+
+
 def test_unconsumed_parent_run_result_becomes_actionable_after_final(tmp_path):
     import agent_harness
     from runtime_v2 import RuntimeMirror, RuntimeSubagentStore

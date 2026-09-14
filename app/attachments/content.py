@@ -123,7 +123,7 @@ def chat_tool_images(messages):
     return out
 
 
-def _has_image_payload(value) -> bool:
+def needs_image_migration(value) -> bool:
     """Cheap scan: does anything in ``value`` need redaction at all?
 
     Runtime events are constructed per row; rebuilding every dict/list on the
@@ -137,12 +137,17 @@ def _has_image_payload(value) -> bool:
             return True
         if value.get("type") == "base64":
             return True
-        return any(_has_image_payload(item) for item in value.values())
+        return any(needs_image_migration(item) for item in value.values())
     if isinstance(value, (list, tuple)):
-        return any(_has_image_payload(item) for item in value)
+        return any(needs_image_migration(item) for item in value)
     if isinstance(value, str):
         return bool(DATA_IMAGE_RE.search(value))
     return False
+
+
+# Backward-compatible alias for diagnostics written before the public name was
+# introduced. Runtime code should use ``needs_image_migration``.
+_has_image_payload = needs_image_migration
 
 
 def redact_image_payloads(value):
@@ -153,7 +158,7 @@ def redact_image_payloads(value):
     """
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
-    if not _has_image_payload(value):
+    if not needs_image_migration(value):
         return value
     return _redact_image_payloads_deep(value)
 

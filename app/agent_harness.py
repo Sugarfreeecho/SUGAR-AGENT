@@ -3746,11 +3746,11 @@ class SessionManager:
     ) -> List[str]:
         """读取并消费可注入的后台 subagent 通知，供父 react_node 注入。"""
         rows = self._load_pending_subagent_results(session_id)
+        if not rows:
+            return []
         events = self._load_ui_events_for_active_runtime(session_id)
         last_idx = self._latest_final_index_without_later_user(events)
         run_id = str(parent_run_id or "").strip()
-        if not rows:
-            return []
         lines: List[str] = []
         keep: List[dict] = []
         for item in rows:
@@ -3791,6 +3791,8 @@ class SessionManager:
         if not cid:
             return []
         rows = self._load_pending_subagent_results(session_id)
+        if not rows:
+            return []
         events = self._load_ui_events_for_active_runtime(session_id)
         last_idx = self._latest_final_index_without_later_user(events)
         rid = str(parent_run_id or "").strip()
