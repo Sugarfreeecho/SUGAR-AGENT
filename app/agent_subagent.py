@@ -1526,8 +1526,22 @@ async def _execute_subagent_run(
     parent_emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     run_in_background: bool = False,
     parent_run_id: str = "",
+    image_attachments: Optional[List[dict]] = None,
+    image_paths: Optional[List[str]] = None,
 ) -> str:
     """单次 subagent react_node 执行（可前台或后台）。"""
+    from attachments import get_attachment_store, AttachmentError
+    from attachments.admission import AdmissionContext, admit_content_async
+    from attachments.request_budget import walk_images
+    try:
+        admitted = await admit_content_async(
+            [{"type": "text", "text": user_text},
+             *[{"type": "image", "attachment": ref} for ref in image_attachments or []],
+             *[{"type": "local_file", "local_file": {"path": path}} for path in image_paths or []]],
+            AdmissionContext(get_attachment_store()), scan_paths=True, scan_remote=True, strict=True)
+    except AttachmentError as exc:
+        return f"Subagent image admission failed: {exc.code}"
+    image_attachments = [block["attachment"] for block in walk_images(admitted)]
     subagent_run_id = uuid.uuid4().hex
     if not await subagent_registry.reserve(
         child_id,
@@ -1542,7 +1556,7 @@ async def _execute_subagent_run(
     session_manager.clear_interrupt(child_id)
 
     prev_work, prev_llm, key_context = _load_subagent_run_histories(child_id)
-    user_message = UserMessage(content=user_text)
+    user_message = UserMessage(content=admitted if admitted != [{"type": "text", "text": user_text}] else user_text)
     new_work = prev_work + [user_message]
     new_llm = prev_llm + [user_message]
 
@@ -1562,7 +1576,7 @@ async def _execute_subagent_run(
         **({"_runtime_v2_parent_run_id": parent_run_id} if parent_run_id else {}),
     }
     todo_manager.sync_session_from_key_context(child_id, key_context or "")
-    session_manager.append_ui_event(child_id, {"type": "user", "content": user_text})
+    session_manager.append_ui_event(child_id, {"type": "user", "content": user_text, "attachments": image_attachments or []})
     session_manager.upsert_subagent_task(
         parent_session_id,
         child_id,
@@ -1707,6 +1721,7 @@ async def _execute_subagent_run(
                 {
                     "type": "user",
                     "content": user_text,
+                    "attachments": image_attachments or [],
                     "agent_id": child_id,
                     "_subagent_forward": True,
                 }
@@ -2256,13 +2271,28 @@ async def _run_single_subagent(
             )
             worktree_note = f"\n\nGit worktree（本尝试）: `{wt_path}` — 优先在此目录内修改/验证。"
 
+    from attachments import get_attachment_store, AttachmentError
+    attachment_store = get_attachment_store()
+    image_refs, attachment_paths, image_paths = [], [], []
+    for raw in file_attachments:
+        if isinstance(raw, dict):
+            ref = raw.get("attachment") or raw
+            image_refs.append(ref)
+            attachment_paths.append(attachment_store.image_host_path(ref))
+            continue
+        path = _resolve_attachment_path(str(raw))
+        if path is not None and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+            image_paths.append(str(path))
+            attachment_paths.append(str(path))
+        else:
+            attachment_paths.append(str(raw))
     user_text = build_subagent_user_message(
         prompt=(prompt or "请继续并完成先前任务。") + worktree_note,
         description=description,
         subagent_type=subagent_type,
         is_resume=resumed,
         readonly=readonly_strict,
-        file_attachments=[str(x) for x in file_attachments],
+        file_attachments=attachment_paths,
         best_of_attempt=best_of_attempt,
         best_of_total=best_of_total,
     )
@@ -2277,6 +2307,8 @@ async def _run_single_subagent(
         parent_emit=emit,
         run_in_background=run_in_background,
         parent_run_id=parent_run_id,
+        **({"image_attachments": image_refs} if image_refs else {}),
+        **({"image_paths": image_paths} if image_paths else {}),
     )
 
 

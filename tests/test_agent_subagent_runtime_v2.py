@@ -323,13 +323,14 @@ def test_subagent_prompt_is_self_contained_and_has_a_completion_contract():
     assert "最终输出必须自包含" in instruction
 
 
-def test_subagent_prompt_and_file_attachment_share_image_modality_routing(tmp_path):
+def test_subagent_prompt_and_file_attachment_share_image_modality_routing(tmp_path, monkeypatch):
+    monkeypatch.setenv("MULTIMODAL_REMOTE_IMAGE_MODE", "passthrough")
     import agent_openai
     import agent_subagent
     from agent_messages import UserMessage
 
     image_path = tmp_path / "screen shot.png"
-    image_path.write_bytes(b"\x89PNG\r\n")
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
     quoted_path = f'"{image_path}"'
     prompt_text = agent_subagent.build_subagent_user_message(
         prompt=f"请识别图片 {quoted_path}",
@@ -382,11 +383,8 @@ def test_subagent_prompt_and_file_attachment_share_image_modality_routing(tmp_pa
         fallback_user = next(
             message for message in text_params if message.get("role") == "user"
         )
-        fallback_system = next(
-            message for message in text_params if message.get("role") == "system"
-        )
         assert expected_reference in fallback_user["content"]
-        assert "task 工具" in fallback_system["content"]
+        assert not any(message["role"] == "system" for message in text_params)
 
 
 def test_task_tool_description_explains_uniform_multimodal_routing():
@@ -412,10 +410,8 @@ def test_task_tool_description_explains_uniform_multimodal_routing():
     assert "effective input_modalities are authoritative" in properties[
         "model_profile_id"
     ]["description"]
-    assert "same modality routing" in properties["file_attachments"]["description"]
-    assert "automatically wrapped in double quotes" in properties[
-        "file_attachments"
-    ]["description"]
+    assert "durable image attachment references" in properties["file_attachments"]["description"]
+    assert "deterministic omission text" in properties["file_attachments"]["description"]
 
 
 def test_runtime_v2_subagent_run_uses_projection_not_legacy(monkeypatch, tmp_path):

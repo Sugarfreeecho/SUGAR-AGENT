@@ -89,6 +89,6 @@ class ToolMessage:
 
     __slots__ = ("content", "tool_call_id")
 
-    def __init__(self, content: str = "", tool_call_id: str = ""):
+    def __init__(self, content: str | List[Dict[str, Any]] = "", tool_call_id: str = ""):
         self.content = content
         self.tool_call_id = tool_call_id

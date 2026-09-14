@@ -496,20 +496,15 @@ def get_tool_contract(function_name: str) -> Dict[str, Any]:
 
 
 def _serialize_call_tool_result_for_log(result: Any, max_len: int = 12000) -> str:
+    from attachments.content import redact_image_payloads
     try:
-        if hasattr(result, "model_dump"):
-            dumped = result.model_dump(mode="json")
-            s = json.dumps(dumped, ensure_ascii=False, default=str)
-            return s if len(s) <= max_len else s[:max_len] + "…[truncated]"
+        safe = redact_image_payloads(result)
+        if not isinstance(safe, (dict, list, str, int, float, bool, type(None))):
+            safe = {"content": [redact_image_payloads(vars(b)) for b in getattr(result, "content", [])]}
+        text = json.dumps(safe, ensure_ascii=False, default=lambda _: "[unserializable MCP value]")
+        return text if len(text) <= max_len else text[:max_len] + "…[truncated]"
     except Exception:
-        pass
-    try:
-        s = json.dumps(result, ensure_ascii=False, default=str)
-        return s if len(s) <= max_len else s[:max_len] + "…[truncated]"
-    except Exception:
-        pass
-    r = repr(result)
-    return r if len(r) <= max_len else r[:max_len] + "…[truncated]"
+        return "[MCP result unavailable for logging]"
 
 
 class _PersistentMcpServer:
@@ -1059,31 +1054,61 @@ def list_configured_servers() -> List[Dict[str, Any]]:
     return servers
 
 
-def format_call_tool_result(result: Any) -> str:
+def format_call_tool_result(result: Any, *, image_enabled: bool = False, model: str = "", attachment_store=None):
+    from attachments import get_attachment_store, SaveImageAttachment, AttachmentError
+    from attachments.encoding import decode_base64
+    from attachments.content import redact_image_payloads
+
+    def field(obj, name, default=None):
+        return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
+
     if result is None:
         return ""
-    err = getattr(result, "isError", False)
-    parts: List[str] = []
-    for block in getattr(result, "content", None) or []:
-        btype = getattr(block, "type", None)
-        if btype == "text":
-            parts.append(str(getattr(block, "text", "") or ""))
-        elif btype == "image":
-            parts.append("[image content omitted]")
-        elif btype == "resource":
-            res = getattr(block, "resource", None)
-            txt = getattr(res, "text", None) if res is not None else None
-            if txt:
-                parts.append(str(txt))
-            else:
-                parts.append(f"[resource: {getattr(res, 'uri', res)!s}]")
+    parts, inputs, positions = [], [], []
+    if field(result, "isError", False):
+        parts.append({"type": "text", "text": "MCP tool returned an error."})
+    admission_error = None
+    store = attachment_store or get_attachment_store()
+    for block in field(result, "content", []) or []:
+        kind = field(block, "type")
+        if kind == "text":
+            parts.append({"type": "text", "text": redact_image_payloads(str(field(block, "text", "") or ""))})
+        elif kind == "image":
+            media = str(field(block, "mimeType", "") or "")
+            positions.append(len(parts))
+            if not image_enabled:
+                parts.append({"type": "text", "text": f'[image unavailable: {media}; model "{model}" does not declare image input; raw image data remains available to programmatic callers]'})
+                continue
+            parts.append({"type": "text", "text": "[image unavailable]"})
+            try:
+                encoded = field(block, "data", "")
+                if len(encoded) > ((store.limits.max_image_bytes + 2) // 3) * 4:
+                    raise AttachmentError("Image exceeds byte limit", "IMAGES_TOO_LARGE")
+                data = decode_base64(encoded)
+                store.validate_image(data, media)
+                inputs.append(SaveImageAttachment(data, media))
+            except (AttachmentError, TypeError) as exc:
+                admission_error = getattr(exc, "code", "UNSUPPORTED_IMAGE_TYPE")
+        elif kind == "resource":
+            resource = field(block, "resource")
+            text = field(resource, "text") or f'[resource: {field(resource, "uri", "")}]'
+            parts.append({"type": "text", "text": redact_image_payloads(str(text))})
         else:
-            parts.append(str(block))
-    body = "\n".join(parts).strip()
-    if err:
-        prefix = "MCP tool returned an error."
-        return f"{prefix}\n{body}" if body else prefix
-    return body if body else repr(result)
+            parts.append({"type": "text", "text": f"[MCP content: {kind or 'unknown'}]"})
+    if image_enabled and positions:
+        try:
+            if admission_error:
+                raise AttachmentError("Image batch rejected", admission_error)
+            refs = store.save_images_sync(inputs)
+            for position, ref in zip(positions, refs):
+                parts[position] = {"type": "image", "attachment": ref}
+        except Exception as exc:
+            code = getattr(exc, "code", "ATTACHMENT_WRITE_FAILED")
+            for position in positions:
+                parts[position] = {"type": "text", "text": f"[image unavailable: {code}; entire image batch rejected]"}
+    if any(p["type"] == "image" for p in parts):
+        return parts
+    return "\n".join(p["text"] for p in parts).strip()
 
 
 async def invoke_tool_by_fname(
@@ -1092,7 +1117,9 @@ async def invoke_tool_by_fname(
     *,
     work_dir: str = "",
     require_worktree_isolation: bool = False,
-) -> str:
+    image_enabled: bool = False,
+    model: str = "",
+) -> Any:
     await ensure_started()
     return await _run_on_mcp_loop(
         _invoke_tool_by_fname_impl(
@@ -1100,6 +1127,8 @@ async def invoke_tool_by_fname(
             arguments,
             work_dir=work_dir,
             require_worktree_isolation=require_worktree_isolation,
+            image_enabled=image_enabled,
+            model=model,
         )
     )
 
@@ -1110,7 +1139,9 @@ async def _invoke_tool_by_fname_impl(
     *,
     work_dir: str = "",
     require_worktree_isolation: bool = False,
-) -> str:
+    image_enabled: bool = False,
+    model: str = "",
+) -> Any:
     pair = _fname_to_tool.get(function_name)
     if not pair:
         return f"Error: unknown MCP tool `{function_name}`."
@@ -1181,7 +1212,7 @@ async def _invoke_tool_by_fname_impl(
             elapsed_ms,
             raw_dump,
         )
-        return format_call_tool_result(raw)
+        return format_call_tool_result(raw, image_enabled=image_enabled, model=model)
     except Exception as e:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         logger.warning(

@@ -1105,11 +1105,15 @@ class RuntimeUiProjection:
                     data["steer_id"] = str(steer_id or "")
                 if payload.get("client_id"):
                     data["client_id"] = str(payload.get("client_id") or "")
+                if payload.get("attachments"):
+                    data["attachments"] = payload["attachments"]
                 data["steer_mode"] = (
                     "append" if str(payload.get("steer_mode") or "").strip().lower() == "append" else "interrupt"
                 )
                 return data
             data = {"type": "user", "content": payload.get("ui_content") or payload.get("content") or "", "created_at": event.timestamp}
+            if payload.get("attachments"):
+                data["attachments"] = payload["attachments"]
             if payload.get("branch_source_session_id"):
                 data["branch_source_session_id"] = str(payload.get("branch_source_session_id"))
             if payload.get("branch_source_runtime_seq") is not None:

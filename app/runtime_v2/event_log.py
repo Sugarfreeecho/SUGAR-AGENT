@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from .event_schema import RuntimeEvent
+from .attachment_migration import event_from_record, migrate_payload
 from .versions import SEQ_OFFSET_INDEX_VERSION
 
 
@@ -141,7 +142,7 @@ class SessionEventLog:
                 type=str(row.get("type") or "").strip(),
                 session_id=session_id,
                 run_id=str(row.get("run_id") or "").strip() or None,
-                payload=dict(row.get("payload") or {}) if isinstance(row.get("payload"), dict) else {},
+                payload=migrate_payload(row.get("type"), dict(row.get("payload") or {})) if isinstance(row.get("payload"), dict) else {},
             ))
         path = self.event_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,7 +165,7 @@ class SessionEventLog:
             type=event_type,
             session_id=session_id,
             run_id=run_id,
-            payload=payload or {},
+            payload=migrate_payload(event_type, payload or {}),
         )
         path = self.event_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -178,6 +179,8 @@ class SessionEventLog:
         return event
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
+        from dataclasses import replace
+        event = replace(event, payload=migrate_payload(event.type, event.payload))
         with self.session_transaction(event.session_id):
             expected = self.next_seq(event.session_id)
             if event.seq != expected:
@@ -268,7 +271,7 @@ class SessionEventLog:
                 relative_offset += len(raw_line)
                 continue
             try:
-                rows.append(RuntimeEvent.from_dict(json.loads(line.decode("utf-8"))))
+                rows.append(event_from_record(json.loads(line.decode("utf-8"))))
             except Exception as exc:
                 raise RuntimeEventLogCorruptionError(
                     session_id,
@@ -310,7 +313,7 @@ class SessionEventLog:
                 if not line:
                     continue
                 try:
-                    yield RuntimeEvent.from_dict(json.loads(line.decode("utf-8")))
+                    yield event_from_record(json.loads(line.decode("utf-8")))
                 except Exception as exc:
                     raise RuntimeEventLogCorruptionError(
                         session_id,
@@ -366,7 +369,7 @@ class SessionEventLog:
                 return False
             with event_path.open("rb") as fh:
                 fh.seek(last_offset)
-                row = RuntimeEvent.from_dict(json.loads(fh.readline().decode("utf-8")))
+                row = event_from_record(json.loads(fh.readline().decode("utf-8")))
             return int(row.seq) == last_seq
         except Exception:
             return False
@@ -382,7 +385,7 @@ class SessionEventLog:
                 line = raw_line.strip()
                 if line:
                     try:
-                        event = RuntimeEvent.from_dict(json.loads(line.decode("utf-8")))
+                        event = event_from_record(json.loads(line.decode("utf-8")))
                     except Exception as exc:
                         raise RuntimeEventLogCorruptionError(
                             session_id,
@@ -519,7 +522,7 @@ class SessionEventLog:
             with path.open("r", encoding="utf-8") as fh:
                 for line in fh:
                     try:
-                        ev = RuntimeEvent.from_dict(json.loads(line))
+                        ev = event_from_record(json.loads(line))
                     except Exception:
                         dropped += 1
                         continue

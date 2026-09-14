@@ -323,3 +323,89 @@ function upgradeWorkspaceMedia(root) {
         }
     });
 }
+
+
+// Blob previews share a fetch and URL while any visible node uses the image.
+var durableImagePreviews = new Map();
+var durableImageObserver = null;
+function sweepDurableImagePreviews() {
+    durableImagePreviews.forEach(function (entry, key) {
+        entry.nodes = entry.nodes.filter(function (node) { return node.isConnected; });
+        if (entry.nodes.length) return;
+        if (entry.controller) entry.controller.abort();
+        if (entry.url) URL.revokeObjectURL(entry.url);
+        durableImagePreviews.delete(key);
+    });
+    if (!durableImagePreviews.size && durableImageObserver) {
+        durableImageObserver.disconnect();
+        durableImageObserver = null;
+    }
+}
+
+function durableAttachmentImageHost(container) {
+    if (!container.classList || !container.classList.contains('msg-wrap--user')) {
+        return { host: container, thumbnail: false };
+    }
+    var strip = container.querySelector('.msg-user-attachment-strip');
+    if (!strip) {
+        strip = document.createElement('div');
+        strip.className = 'msg-user-attachment-strip';
+        strip.setAttribute('role', 'group');
+        strip.setAttribute('aria-label', '图片附件');
+        var toolbar = container.querySelector('.msg-toolbar');
+        container.insertBefore(strip, toolbar || null);
+    }
+    return { host: strip, thumbnail: true };
+}
+
+function renderDurableAttachmentImages(container, references) {
+    if (!container || !Array.isArray(references)) return;
+    var imageHost = durableAttachmentImageHost(container);
+    references.forEach(function (item) {
+        var ref = item && (item.attachment || item);
+        if (!ref || !/^sha256:[a-f0-9]{64}$/.test(ref.attachmentId || '')) return;
+        if (container.querySelector('[data-attachment-id="' + ref.attachmentId + '"]')) return;
+        var img = document.createElement('img');
+        img.className = 'msg-workspace-image msg-attachment-image';
+        if (imageHost.thumbnail) img.classList.add('msg-attachment-thumbnail');
+        img.dataset.attachmentId = ref.attachmentId;
+        img.alt = ref.name || 'Image attachment';
+        img.width = ref.width;
+        img.height = ref.height;
+        if (!imageHost.thumbnail) {
+            img.style.maxWidth = '100%';
+            img.style.height = 'auto';
+            img.style.maxHeight = '60vh';
+            img.style.objectFit = 'contain';
+        }
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        imageHost.host.appendChild(img);
+        var entry = durableImagePreviews.get(ref.attachmentId);
+        if (entry) {
+            entry.nodes.push(img);
+            if (entry.url) img.src = entry.url;
+            return;
+        }
+        entry = { nodes: [img], url: '', controller: typeof AbortController === 'function' ? new AbortController() : null };
+        durableImagePreviews.set(ref.attachmentId, entry);
+        if (!durableImageObserver) {
+            durableImageObserver = new MutationObserver(sweepDurableImagePreviews);
+            durableImageObserver.observe(document.body, { childList: true, subtree: true });
+        }
+        var options = { credentials: 'same-origin' };
+        if (entry.controller) options.signal = entry.controller.signal;
+        fetch('/api/attachments/' + encodeURIComponent(ref.attachmentId), options)
+            .then(function (response) { if (!response.ok) throw new Error('Attachment unavailable'); return response.blob(); })
+            .then(function (blob) {
+                sweepDurableImagePreviews();
+                if (durableImagePreviews.get(ref.attachmentId) !== entry) return;
+                entry.url = URL.createObjectURL(blob);
+                entry.nodes.forEach(function (node) { node.src = entry.url; });
+            }).catch(function () {
+                entry.nodes.forEach(function (node) { node.alt = 'Image attachment unavailable'; });
+                if (durableImagePreviews.get(ref.attachmentId) === entry) durableImagePreviews.delete(ref.attachmentId);
+                sweepDurableImagePreviews();
+            });
+    });
+}

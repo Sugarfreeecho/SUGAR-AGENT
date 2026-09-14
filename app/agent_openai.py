@@ -34,6 +34,7 @@ from openai.types.chat import ChatCompletion
 
 from agent_messages import AssistantMessage, SystemMessage, ToolMessage, UserMessage
 from agent_think import strip_think_blocks
+from attachments.content import durable_content, project_request_images, chat_tool_images, scan_enabled
 from llm import TransportEvent, merge_streamed_tool_name
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,8 @@ refresh_request_recovery_config_from_env()
 
 
 def _redact_runtime_log_text(value: Any) -> str:
+    from attachments.content import redact_image_payloads
+    value = redact_image_payloads(value)
     text = value if isinstance(value, str) else str(value)
     for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "LOCAL_LLM_HOST"):
         val = os.getenv(key)
@@ -825,22 +828,9 @@ _MEDIA_TOKEN_RE = re.compile(
     r'(?P<up>(?:[A-Za-z]:[\\/]|/|\.{1,2}[\\/])[^\s<>"\']+?\.(?:png|jpe?g|gif|webp|bmp|mp3|wav|ogg|flac|m4a|aac|mp4|webm|mov|avi))',
     re.IGNORECASE,
 )
-_REMOTE_IMAGE_REF_RE = re.compile(
-    r'!\[[^\]]*\]\((?P<markdown>https?://[^\s)]+)\)'
-    r'|(?P<bare>https?://[^\s<>"\']+?\.(?:png|jpe?g|gif|webp|bmp)(?:\?[^\s<>"\']*)?(?:#[^\s<>"\']*)?)',
-    re.IGNORECASE,
-)
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 _AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 _VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi"}
-_IMAGE_MIME = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".bmp": "image/bmp",
-}
 _AUDIO_MIME = {
     ".mp3": "mp3",
     ".wav": "wav",
@@ -855,11 +845,11 @@ _VIDEO_MIME = {
     ".mov": "video/quicktime",
     ".avi": "video/x-msvideo",
 }
-_MAX_INLINE_MEDIA_BYTES = max(1, int(os.getenv("MULTIMODAL_INLINE_MAX_BYTES", str(10 * 1024 * 1024))))
+_MAX_INLINE_MEDIA_BYTES = max(1, int(os.getenv("MULTIMODAL_NON_IMAGE_MAX_BYTES", str(10 * 1024 * 1024))))
 
 
 def _expand_local_media_paths_in_text(text: str) -> Any:
-    """将文本中的图片/音频/视频路径展开为多模态 content parts；无命中则返回原文本。"""
+    """Legacy audio/video path expansion; images use durable attachment admission."""
     src = str(text or "")
     matches = list(_MEDIA_TOKEN_RE.finditer(src))
     if not matches:
@@ -879,18 +869,16 @@ def _expand_local_media_paths_in_text(text: str) -> Any:
             parts.append({"type": "text", "text": m.group(0)})
             continue
         ext = p.suffix.lower()
+        if ext in _IMAGE_EXTS:
+            parts.append({"type": "text", "text": m.group(0)})
+            continue
         try:
             size = p.stat().st_size
             if size > _MAX_INLINE_MEDIA_BYTES:
                 parts.append({"type": "text", "text": f"{m.group(0)} [skipped: too large]"})
                 continue
             b64 = base64.b64encode(p.read_bytes()).decode("ascii")
-            if ext in _IMAGE_EXTS:
-                mime = _IMAGE_MIME.get(ext, "image/png")
-                parts.append({"type": "text", "text": m.group(0)})
-                parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-                media_found += 1
-            elif ext in _AUDIO_EXTS:
+            if ext in _AUDIO_EXTS:
                 fmt = _AUDIO_MIME.get(ext, ext.lstrip("."))
                 parts.append({"type": "text", "text": m.group(0)})
                 parts.append({"type": "input_audio", "input_audio": {"data": b64, "format": fmt}})
@@ -918,51 +906,9 @@ def _expand_local_media_paths_in_text(text: str) -> Any:
     return merged
 
 
-def _expand_remote_image_urls_in_text(text: str) -> Any:
-    """Expand explicit Markdown or extension-bearing HTTP image URLs."""
-    src = str(text or "")
-    matches = list(_REMOTE_IMAGE_REF_RE.finditer(src))
-    if not matches:
-        return src
-    parts: List[Dict[str, Any]] = []
-    last = 0
-    for match in matches:
-        if match.start() > last:
-            parts.append({"type": "text", "text": src[last:match.start()]})
-        original = match.group(0)
-        url = match.group("markdown") or match.group("bare") or ""
-        parts.append({"type": "text", "text": original})
-        parts.append({"type": "image_url", "image_url": {"url": url}})
-        last = match.end()
-    if last < len(src):
-        parts.append({"type": "text", "text": src[last:]})
-    return parts
-
-
 def _expand_media_paths_in_text(text: str) -> Any:
-    """Expand local media paths and explicit remote image references."""
-    remote_expanded = _expand_remote_image_urls_in_text(text)
-    source_parts = (
-        remote_expanded
-        if isinstance(remote_expanded, list)
-        else [{"type": "text", "text": str(remote_expanded)}]
-    )
-    expanded: List[Dict[str, Any]] = []
-    for part in source_parts:
-        if not isinstance(part, dict) or part.get("type") != "text":
-            expanded.append(part)
-            continue
-        local = _expand_local_media_paths_in_text(str(part.get("text") or ""))
-        if isinstance(local, list):
-            expanded.extend(local)
-        elif local:
-            expanded.append({"type": "text", "text": str(local)})
-    has_media = any(
-        isinstance(part, dict)
-        and part.get("type") in ("image_url", "video_url", "input_audio", "file", "input_file")
-        for part in expanded
-    )
-    return expanded if has_media else str(text or "")
+    """Only legacy audio/video remains here; image sources use admission."""
+    return _expand_local_media_paths_in_text(text)
 
 
 def _exception_search_text(exc: BaseException) -> str:
@@ -1100,7 +1046,7 @@ def _api_messages_have_media(api_messages: List[Dict[str, Any]]) -> bool:
             continue
         if any(
             isinstance(part, dict)
-            and part.get("type") in ("image_url", "video_url", "input_audio", "file", "input_file")
+            and part.get("type") in ("image", "image_url", "video_url", "input_audio", "file", "input_file")
             for part in content
         ):
             return True
@@ -1119,7 +1065,7 @@ def _api_messages_required_modalities(
             if not isinstance(part, dict):
                 continue
             part_type = str(part.get("type") or "").strip().lower()
-            if part_type in {"image_url", "input_image"}:
+            if part_type in {"image", "image_url", "input_image"}:
                 required.add("image")
             elif part_type == "input_audio":
                 required.add("audio")
@@ -1131,69 +1077,65 @@ def _api_messages_required_modalities(
 
 
 def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Replace image/audio/video content parts with placeholder text."""
-    _MEDIA_PLACEHOLDER = "[该消息包含多媒体内容（图片/音频/视频），但当前模型不支持，已用此文本占位]"
-    cleaned: List[Dict[str, Any]] = []
-    for msg in api_messages:
-        c = msg.get("content")
-        if isinstance(c, list):
-            has_media = any(isinstance(p, dict) and p.get("type") in ("image_url", "video_url", "input_audio", "file", "input_file") for p in c)
-            text_parts = [p for p in c if isinstance(p, dict) and p.get("type") == "text"]
-            media_refs: List[str] = []
-            for part in c:
-                if not isinstance(part, dict):
-                    continue
-                part_type = str(part.get("type") or "").strip().lower()
-                raw_ref: Any = None
-                if part_type == "image_url":
-                    raw_ref = part.get("image_url")
-                elif part_type == "video_url":
-                    raw_ref = part.get("video_url")
-                if isinstance(raw_ref, dict):
-                    raw_ref = raw_ref.get("url")
-                ref = str(raw_ref or "").strip()
-                if ref.lower().startswith(("http://", "https://")) and ref not in media_refs:
-                    media_refs.append(ref)
-            reference_text = (
-                " [媒体原始地址: " + " ; ".join(media_refs) + "]"
-                if media_refs
-                else ""
-            )
-            if text_parts:
-                combined = " ".join(str(p.get("text", "")) for p in text_parts).strip()
-                if has_media:
-                    combined = _MEDIA_PLACEHOLDER + reference_text + " " + combined
-                cleaned.append({**msg, "content": combined})
-            elif has_media:
-                cleaned.append({**msg, "content": _MEDIA_PLACEHOLDER + reference_text})
-            else:
-                cleaned.append(msg)
-        else:
-            cleaned.append(msg)
+    """Project rejected media to text; each image occurrence gets its own placeholder."""
+    from attachments.messages_text import text_only_image_text
+    from attachments import prompt_language
+    cleaned = []
+    for message in api_messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            cleaned.append(message)
+            continue
+        text_parts = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("type")
+            if kind == "text":
+                text_parts.append(str(part.get("text") or ""))
+            elif kind in {"image", "image_url", "input_image"}:
+                ref = part.get("attachment")
+                if not ref:
+                    identities = re.findall(r"sha256:[a-f0-9]{64}", " ".join(text_parts))
+                    ref = {"attachmentId": identities[-1]} if identities else None
+                if ref:
+                    text_parts.append(text_only_image_text(ref, prompt_language()))
+                else:
+                    value = part.get("image_url") or {}
+                    url = str(value.get("url") if isinstance(value, dict) else value)
+                    original = f"; original URL: {url}" if url.startswith(("http://", "https://")) else ""
+                    text_parts.append("[image omitted because this model does not declare image input" + original + "]")
+            elif kind in {"video_url", "input_audio", "file", "input_file"}:
+                text_parts.append("[该消息包含音频/视频/文件，但当前模型不支持，已用此文本占位]")
+                value = part.get("video_url") or {}
+                url = str(value.get("url") if isinstance(value, dict) else value)
+                if url.startswith(("http://", "https://")):
+                    text_parts.append(url)
+        cleaned.append({**message, "content": " ".join(text_parts).strip()})
     return cleaned
 
-
-def _inject_multimodal_fallback_instruction(
+def _inject_non_image_fallback_instruction(
     api_messages: List[Dict[str, Any]],
     required_modalities: Optional[set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Inject fallback guidance without creating a trailing system turn."""
+    if required_modalities is not None and not (required_modalities - {"image"}):
+        return api_messages
     modality_labels = {
-        "image": "图片",
         "audio": "音频",
         "video": "视频",
         "file": "文件",
     }
     labels = "、".join(
         modality_labels[item]
-        for item in ("image", "audio", "video", "file")
+        for item in ("audio", "video", "file")
         if item in set(required_modalities or ())
     ) or "多媒体"
     instruction = (
         f"[多模态委派提示] 当前主模型不支持直接读取本次请求中的{labels}。"
         "如果回答需要理解这些内容，请调用 task 工具（action=start，run_in_background=false），"
         "从 model_profile_id 候选中选择明确支持所需输入模态的模型；"
-        "将相邻用户消息中的原始图片 URL 或本地附件路径、用户问题完整写入 prompt；"
+        "将相邻用户消息中的媒体 URL 或本地附件路径、用户问题完整写入 prompt；"
         "prompt 中的本地附件路径必须用英文双引号完整包裹，"
         "取得 subagent 的识别结果后再继续回答。不要猜测媒体内容；"
         "若没有可用的兼容模型，请明确告知用户。"
@@ -1220,7 +1162,7 @@ def _serialized_messages_to_text_only(
     if not _api_messages_have_media(api_messages):
         return api_messages
     required_modalities = _api_messages_required_modalities(api_messages)
-    return _inject_multimodal_fallback_instruction(
+    return _inject_non_image_fallback_instruction(
         _strip_media_from_api_messages(api_messages),
         required_modalities,
     )
@@ -1230,15 +1172,6 @@ def _is_glm_model(model: str) -> bool:
     s = str(model or "").strip().lower()
     return s.startswith("glm-")
 
-
-
-_ANNOTATE_MEDIA_PATH_RE = re.compile(
-    r'"([^"]+?\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif|'
-    r'mp3|wav|m4a|ogg|flac|aac|mp4|webm|mov|mkv))"|'
-    r'([^\s"\']+?\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff?|avif|jfif|'
-    r'mp3|wav|m4a|ogg|flac|aac|mp4|webm|mov|mkv))',
-    re.IGNORECASE,
-)
 
 
 def _media_kind_for_path(p: str) -> str:
@@ -1252,51 +1185,11 @@ def _media_kind_for_path(p: str) -> str:
     return ""
 
 
-def _annotate_local_media_paths(value: str, *, mode: str) -> str:
-    """Prefix local media paths with an attachment label.
-
-    vision mode: media is already attached as image_url/audio/video parts, so the
-    label tells the model the path is only informative.
-    text_only mode: the media was stripped, so the label tells the model to
-    delegate inspection to a multimodal subagent via the task tool.
-    """
-    if mode == "vision":
-        # Aligned with mainstream agent UIs (opencode/hermes): the local path
-        # is replaced by a placeholder in the text part; the media itself is
-        # already attached as image_url/audio/video parts.
-        replacements = {
-            "image": "[图片附件]",
-            "audio": "[音频附件]",
-            "video": "[视频附件]",
-        }
-    else:
-        # Text-only fallback: the path must stay so the model can delegate the
-        # media inspection to a multimodal subagent via the task tool.
-        replacements = {
-            "image": "[图片附件（如需要识图请委派给多模态子代理）]",
-            "audio": "[音频附件（如需要播放请委派给多模态子代理）]",
-            "video": "[视频附件（如需要播放请委派给多模态子代理）]",
-        }
-
-    def _repl(match: "re.Match[str]") -> str:
-        raw = match.group(1) or match.group(2) or ""
-        p = raw.strip()
-        kind = _media_kind_for_path(p)
-        if not kind:
-            return match.group(0)
-        label = replacements.get(kind, "")
-        if mode == "vision":
-            return label
-        return label + match.group(0)
-
-    return _ANNOTATE_MEDIA_PATH_RE.sub(_repl, str(value or ""))
-
-
 def _text_only_media_part(local_path: str) -> Dict[str, str]:
     """Build the delegated text part for a stripped local media attachment."""
     kind = _media_kind_for_path(local_path)
     label = {
-        "image": "[图片附件（如需要识图请委派给多模态子代理）]",
+        "image": "[图片已省略：此模型不接受图片输入]",
         "audio": "[音频附件（如需要播放请委派给多模态子代理）]",
         "video": "[视频附件（如需要播放请委派给多模态子代理）]",
     }.get(kind, "[附件（如需要处理请委派给多模态子代理）]")
@@ -1308,6 +1201,11 @@ def messages_to_openai_params(
     *,
     expand_media_paths: bool = True,
     thinking_format: Optional[str] = None,
+    native_tool_images: bool = False,
+    defer_images: bool = False,
+    image_enabled: Optional[bool] = None,
+    client: Any = None,
+    language: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """将 UserMessage / AssistantMessage / ToolMessage / SystemMessage 转为 API messages 列表。"""
     api_msgs: List[Dict[str, Any]] = []
@@ -1324,6 +1222,7 @@ def messages_to_openai_params(
         if isinstance(m, SystemMessage):
             api_msgs.append({"role": "system", "content": m.content or ""})
         elif isinstance(m, UserMessage):
+            m.content = durable_content(m.content, scan=isinstance(m.content, str), remote=True)
             if isinstance(m.content, list):
                 content_parts: List[Dict[str, Any]] = []
                 for raw_part in m.content:
@@ -1333,24 +1232,8 @@ def messages_to_openai_params(
                     part_type = str(raw_part.get("type") or "").strip().lower()
                     if part_type == "text":
                         raw_text = str(raw_part.get("text") or "")
-                        if expand_media_paths:
-                            annotated_text = _annotate_local_media_paths(
-                                raw_text, mode="vision"
-                            )
-                            remote_parts = _expand_remote_image_urls_in_text(annotated_text)
-                            if isinstance(remote_parts, list):
-                                content_parts.extend(remote_parts)
-                            else:
-                                content_parts.append({"type": "text", "text": annotated_text})
-                        else:
-                            content_parts.append(
-                                {
-                                    "type": "text",
-                                    "text": _annotate_local_media_paths(
-                                        raw_text, mode="text_only"
-                                    ),
-                                }
-                            )
+                        # Images have already been admitted; do not scan handles again.
+                        content_parts.append({"type": "text", "text": raw_text})
                         continue
                     if part_type != "local_file":
                         content_parts.append(raw_part)
@@ -1431,13 +1314,18 @@ def messages_to_openai_params(
                 {
                     "role": "tool",
                     "tool_call_id": m.tool_call_id or "",
-                    "content": m.content if isinstance(m.content, str) else str(m.content),
+                    "content": durable_content(m.content),
                 }
             )
         else:
             c = getattr(m, "content", str(m))
             api_msgs.append({"role": "user", "content": str(c)})
-    return api_msgs
+    if defer_images:
+        return api_msgs
+    api_msgs = project_request_images(
+        api_msgs, image_enabled=expand_media_paths if image_enabled is None else image_enabled,
+        client=client, language=language)
+    return api_msgs if native_tool_images else chat_tool_images(api_msgs)
 
 
 def _messages_to_text_only_params(
@@ -1460,44 +1348,10 @@ def _messages_to_text_only_params(
             thinking_format=thinking_format,
         )
     )
-    return _inject_multimodal_fallback_instruction(
+    return _inject_non_image_fallback_instruction(
         fallback_messages,
-        required_modalities or _messages_required_modalities(messages),
+        required_modalities or _messages_required_modalities(messages) or {"image"},
     )
-
-
-def _messages_have_media_input(messages: List[Any]) -> bool:
-    for message in messages:
-        if not isinstance(message, UserMessage):
-            continue
-        content = message.content
-        if isinstance(content, list):
-            if any(
-                isinstance(part, dict)
-                and part.get("type") in (
-                    "image_url", "video_url", "input_audio", "file", "input_file", "local_file"
-                )
-                for part in content
-            ):
-                return True
-            continue
-        if not isinstance(content, str):
-            continue
-        if _REMOTE_IMAGE_REF_RE.search(content):
-            return True
-        for match in _MEDIA_TOKEN_RE.finditer(content):
-            raw = match.group("qp") or match.group("up") or ""
-            path = Path(raw).expanduser()
-            try:
-                if (
-                    path.is_file()
-                    and path.suffix.lower() in (_IMAGE_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
-                    and path.stat().st_size <= _MAX_INLINE_MEDIA_BYTES
-                ):
-                    return True
-            except OSError:
-                continue
-    return False
 
 
 def _messages_required_modalities(messages: List[Any]) -> set[str]:
@@ -1517,10 +1371,6 @@ def _client_input_modalities(client: Any) -> set[str]:
 
 def _client_supports_modalities(client: Any, required: set[str]) -> bool:
     return set(required).issubset(_client_input_modalities(client))
-
-
-def _client_multimodal_input_enabled(client: Any) -> bool:
-    return bool(getattr(client, "_myagent_multimodal_input", False))
 
 
 def _mark_client_multimodal_failed(client: Any, exc: BaseException) -> None:
@@ -1585,20 +1435,23 @@ def _messages_to_params_for_client(
         fmt = str(getattr(client, "_myagent_thinking_format", "") or "").strip().lower()
     if not fmt:
         fmt = "deepseek"
-    required_modalities = _messages_required_modalities(messages)
-    if required_modalities and not _client_supports_modalities(
-        client, required_modalities
-    ):
-        return _messages_to_text_only_params(
-            messages,
-            required_modalities=required_modalities,
-            thinking_format=fmt,
-        )
-    return messages_to_openai_params(
-        messages,
-        expand_media_paths=bool(required_modalities),
-        thinking_format=fmt,
+    modalities = _client_input_modalities(client)
+    serialized = messages_to_openai_params(
+        messages, expand_media_paths=bool(modalities - {"text"}), thinking_format=fmt,
+        native_tool_images=bool(getattr(client, "_myagent_transport_enabled", False)),
+        defer_images=bool(getattr(client, "_myagent_transport_enabled", False)),
+        image_enabled="image" in modalities, client=client,
+        language=getattr(client, "_myagent_prompt_language", None),
     )
+    if bool(getattr(client, "_myagent_transport_enabled", False)):
+        return serialized
+    missing = _api_messages_required_modalities(serialized) - modalities
+    if missing:
+        return _serialized_messages_to_text_only(serialized)
+    if modalities <= {"text"}:
+        return _strip_media_from_api_messages(serialized)
+    return serialized
+
 
 
 def parse_assistant_message(

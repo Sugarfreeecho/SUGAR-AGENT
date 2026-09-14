@@ -229,7 +229,11 @@ def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_pat
     import webui
 
     monkeypatch.setattr(webui, "WORK_DIR", tmp_path)
-    upload = UploadFile(filename="clipboard-image.png", file=BytesIO(b"\x89PNG\r\nclipboard"))
+    from PIL import Image
+    image_data = BytesIO()
+    Image.new("RGB", (8, 8)).save(image_data, format="PNG")
+    image_data.seek(0)
+    upload = UploadFile(filename="clipboard-image.png", file=image_data)
 
     response = asyncio.run(webui.upload_chat_files([upload]))
     payload = _json_response_payload(response)
@@ -238,10 +242,11 @@ def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_pat
     assert len(payload["files"]) == 1
     saved = payload["files"][0]
     assert saved["name"] == "clipboard-image.png"
-    assert saved["rel"].replace("\\", "/").startswith("uploads/chat/")
+    assert saved["rel"].replace("\\", "/").startswith(".sugaragent/attachments/v1/")
     path = Path(saved["path"])
     assert path.is_file()
-    assert path.read_bytes() == b"\x89PNG\r\nclipboard"
+    assert saved["attachment"]["attachmentId"].startswith("sha256:")
+    assert Image.open(path).size == (8, 8)
 
 
 def test_clipboard_upload_rejects_oversized_file_and_removes_partial_output(monkeypatch, tmp_path):

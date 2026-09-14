@@ -1153,6 +1153,19 @@ def register_legacy_env_model_profile(project_root: Path, env: dict[str, Any]) -
     return {"ok": True, "action": "created", "profile": imported}
 
 
+def normalize_image_request_policy(value):
+    if not isinstance(value, dict):
+        raise ValueError("image_request_policy must be an object")
+    supported = {"maxPixels", "maxBytes", "maxInlineRequestImageBytes", "maxImagesPerRequest", "byteQuantum", "countQuantum"}
+    if set(value) - supported:
+        raise ValueError("Unknown image request policy field")
+    for name, number in value.items():
+        minimum = 0 if name in {"maxInlineRequestImageBytes", "maxImagesPerRequest"} else 1
+        if type(number) is not int or number < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+    return dict(value)
+
+
 def upsert_profile(project_root: Path, payload: dict) -> dict:
     data = load_store(project_root)
     profiles = data.setdefault("profiles", [])
@@ -1262,6 +1275,8 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "updated_at": now,
         }
     )
+    if "image_request_policy" in payload:
+        profile["image_request_policy"] = normalize_image_request_policy(payload["image_request_policy"])
     if "input_modalities" in payload:
         configured_modalities = normalize_input_modalities(payload.get("input_modalities"))
         if configured_modalities:
@@ -1424,6 +1439,7 @@ def profile_cache_key(profile: dict) -> str:
             "multimodal_mode": normalize_multimodal_mode(profile.get("multimodal_mode")),
             "input_modalities": normalize_input_modalities(profile.get("input_modalities")),
             "failed_modalities": normalize_failed_modalities(profile.get("failed_modalities")),
+            "image_request_policy": profile.get("image_request_policy") or {},
         },
         sort_keys=True,
         ensure_ascii=False,

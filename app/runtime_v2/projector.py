@@ -730,7 +730,7 @@ class RuntimeProjector:
                 continue
             msg_payload = dict(item)
             msg_payload["role"] = role
-            msg_payload["content"] = str(item.get("content") or "")
+            msg_payload["content"] = item.get("content") or ""
             row = {
                 "seq": event.seq,
                 "timestamp": event.timestamp,
@@ -854,7 +854,7 @@ class RuntimeProjector:
                         continue
                     msg_payload = dict(item)
                     msg_payload["role"] = role
-                    msg_payload["content"] = str(item.get("content") or "")
+                    msg_payload["content"] = item.get("content") or ""
                     restored_rows.append({
                         "seq": event.seq,
                         "timestamp": event.timestamp,

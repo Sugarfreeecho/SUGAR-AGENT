@@ -372,6 +372,8 @@ SENSITIVE_TOOL_RESOURCE_PATTERNS = tuple(
 
 
 def redact_sensitive_tool_text(value: Any) -> str:
+    from attachments.content import redact_image_payloads
+    value = redact_image_payloads(value)
     text = value if isinstance(value, str) else str(value)
     for pat in SENSITIVE_TOOL_RESOURCE_PATTERNS:
         text = pat.sub("***", text)
@@ -4214,7 +4216,7 @@ def task(
     interrupt: bool = False,
     check_status: bool = False,
     collect_result: bool = False,
-    file_attachments: Optional[List[str]] = None,
+    file_attachments: Optional[List[Any]] = None,
     n: int = 0,
     isolation: str = "auto",
     steer_mode: str = "interrupt",
@@ -4570,8 +4572,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "For image understanding, select a model_profile_id whose effective input modalities include image. In prompt, always "
         "wrap each exact local image path in double quotes; alternatively pass local paths or remote image URLs through "
         "file_attachments, which quotes local image paths automatically. Both inputs use the same routing: an image-capable "
-        "profile receives image_url content, while a text-only profile receives only the recoverable path/URL text plus a "
-        "delegation hint and cannot inspect the image itself. "
+        "profile receives image_url content prepared from durable attachments, while a text-only profile receives "
+        "deterministic omission text and cannot inspect the image itself. "
         "When the user wants details of a subagent's execution process, ask that same existing subagent directly: resume the "
         "relevant resumable direct child in the foreground with focused questions and obtain its complete first-hand account. "
         "Do not infer process details from its final summary, and do not treat status or collect as a complete execution record. "
@@ -4735,14 +4737,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
             "file_attachments": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "start/resume only: WORK_DIR file paths or remote image URLs to attach. Text is inlined up to a cap; "
-                    "local image paths supplied here are automatically wrapped in double quotes, then follow exactly the same modality "
-                    "routing as quoted image paths in prompt: they are serialized as "
-                    "image_url for image-capable profiles, but remain recoverable text references with a delegation hint for "
-                    "text-only profiles. Other binaries remain path metadata."
-                ),
+                "items": {"anyOf": [{"type": "string"}, {"type": "object", "properties": {
+                    "attachmentId": {"type": "string"}, "mediaType": {"type": "string"},
+                    "bytes": {"type": "integer"}, "width": {"type": "integer"}, "height": {"type": "integer"},
+                    "name": {"type": "string"}
+                }, "required": ["attachmentId", "mediaType", "bytes", "width", "height"]}]},
+                "description": "start/resume only: WORK_DIR paths, remote image URLs, or durable image attachment references. Images use the normalized read-only path and reference; image-capable profiles receive request previews, other profiles receive deterministic omission text. Text files are inlined up to a cap.",
             },
             "n": {
                 "type": "integer",

@@ -4255,6 +4255,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     var text = rawContent ? rawContent : formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
     if (row) {
         row._toolCallEvent = parsed;
+        renderDurableAttachmentImages(row, parsed.attachments || []);
         if (tid) row.setAttribute('data-tool-call-id', tid);
         row.removeAttribute('data-tool-draft-key');
         row.removeAttribute('data-tool-pending');
@@ -4296,6 +4297,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     }
     if (newRow) {
         newRow._toolCallEvent = parsed;
+        renderDurableAttachmentImages(newRow, parsed.attachments || []);
         autoCollapseToolRowAfterResult(newRow);
         document.dispatchEvent(new CustomEvent('myagent:tool-call-rendered', {
             detail: {
@@ -4813,6 +4815,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
                 existingUser.setAttribute('data-created-at', String(meta.createdAt || meta.created_at || meta.timestamp));
             }
             if (!replayingMessages) rebuildToc({ localOnly: true });
+            renderDurableAttachmentImages(existingUser, meta.attachments || []);
             return existingUser;
         }
     }
@@ -4903,6 +4906,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     if (role === 'user' && !div.classList.contains('is-collapsible')) {
         renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);
     }
+    renderDurableAttachmentImages(wrap, meta.attachments || []);
     attachMessageToolbar(wrap, role);
     (ctx.stream || chatContainer).appendChild(wrap);
     if (role === 'assistant') {

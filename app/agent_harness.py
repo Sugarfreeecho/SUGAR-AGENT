@@ -134,6 +134,8 @@ def _env_path(name: str, default: Path | str, *, base: Path = PROJECT_ROOT) -> P
 
 
 WORK_DIR = _env_path("WORK_DIR", PROJECT_ROOT / "workspace")
+from attachments import configure_attachment_workspace
+configure_attachment_workspace(WORK_DIR)
 
 
 def _prompt_md_candidate_paths() -> list[Path]:
@@ -658,6 +660,9 @@ def truncate_tool_result_for_llm(text: Any, keep_chars: int) -> str:
 
 # ==================== 日志配置 ====================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+from attachments.logging import ImagePayloadFilter
+for _log_handler in logging.root.handlers:
+    _log_handler.addFilter(ImagePayloadFilter())
 logger = logging.getLogger(__name__)
 
 # ANSI 颜色码
@@ -682,11 +687,13 @@ def setup_logging(user_input: str, session_id: str = ""):
     log_path = LOG_DIR / log_filename
 
     file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    file_handler.addFilter(ImagePayloadFilter())
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
     logger.addHandler(file_handler)
 
     if VERBOSE_LOGGING:
         console_handler = logging.StreamHandler()
+        console_handler.addFilter(ImagePayloadFilter())
         console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logger.addHandler(console_handler)
 
@@ -848,6 +855,8 @@ def _openai_sdk_base_url(for_local: bool) -> Optional[str]:
 
 
 def _redact_runtime_log_text(value: Any) -> str:
+    from attachments.content import redact_image_payloads
+    value = redact_image_payloads(value)
     text = value if isinstance(value, str) else str(value)
     for item in (OPENAI_API_KEY, OPENAI_BASE_URL, LOCAL_LLM_HOST):
         if item:
@@ -1101,6 +1110,7 @@ def create_openai_client_for_profile(
         except Exception:
             logger.debug("模型档案自定义请求头不受支持，忽略", exc_info=True)
     try:
+        setattr(client, "_myagent_image_request_policy", dict(profile.get("image_request_policy") or {}))
         setattr(
             client,
             "_myagent_input_modalities",
@@ -1634,6 +1644,13 @@ class ExecutorLLMClient:
             list(call_kwargs.get("messages") or []),
             candidate.get("thinking_format") or "deepseek",
         )
+        from attachments.content import project_request_images
+        from types import SimpleNamespace
+        call_kwargs["messages"] = project_request_images(
+            call_kwargs["messages"], image_enabled="image" in _candidate_input_modalities(candidate),
+            client=SimpleNamespace(_myagent_image_request_policy=candidate.get("image_request_policy") or {}),
+            language=getattr(self, "_myagent_prompt_language", None),
+        )
         return compact(**call_kwargs)
 
     def complete_text(
@@ -1658,10 +1675,22 @@ class ExecutorLLMClient:
                 last_error = RuntimeError("model candidate has no LLM transport")
                 continue
             call_kwargs = dict(kwargs)
+            from attachments.content import project_request_images
+            from types import SimpleNamespace
+            route_client = SimpleNamespace(
+                _myagent_transport_enabled=True,
+                _myagent_input_modalities=_candidate_input_modalities(item),
+                _myagent_image_request_policy=item.get("image_request_policy") or {},
+                _myagent_prompt_language=getattr(self, "_myagent_prompt_language", None),
+            )
             call_kwargs["messages"] = _messages_to_params_for_client(
-                item.get("client"),
+                route_client,
                 list(call_kwargs.get("messages") or []),
                 thinking_format=item.get("thinking_format") or "deepseek",
+            )
+            call_kwargs["messages"] = project_request_images(
+                call_kwargs["messages"], image_enabled="image" in _candidate_input_modalities(item),
+                client=route_client, language=route_client._myagent_prompt_language,
             )
             call_kwargs["model"] = model
             candidate_max_tokens = int(
@@ -1777,6 +1806,15 @@ class ExecutorLLMClient:
                 call_kwargs["reasoning_effort"] = item.get("reasoning_effort")
             else:
                 call_kwargs.pop("reasoning_effort", None)
+            from attachments.content import project_request_images
+            from types import SimpleNamespace
+            call_kwargs["messages"] = project_request_images(
+                call_kwargs["messages"],
+                image_enabled="image" in _candidate_input_modalities(item),
+                client=SimpleNamespace(_myagent_image_request_policy=item.get("image_request_policy") or {}),
+                language=getattr(self, "_myagent_prompt_language", None),
+            )
+            required_modalities = _api_messages_required_modalities(call_kwargs["messages"])
             request_has_media = _api_messages_have_media(
                 list(call_kwargs.get("messages") or [])
             )
@@ -4441,7 +4479,8 @@ class SessionManager:
         except Exception:
             pass
         try:
-            event_copy = json.loads(json.dumps(event, ensure_ascii=False))
+            from attachments.content import redact_image_payloads
+            event_copy = json.loads(json.dumps(redact_image_payloads(event), ensure_ascii=False))
             event_copy.setdefault(
                 "created_at",
                 datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
@@ -6962,6 +7001,7 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
     try:
         setattr(cached[0], "_myagent_input_modalities", input_modalities)
         setattr(cached[0], "_myagent_multimodal_input", multimodal_input)
+        setattr(cached[0], "_myagent_image_request_policy", dict(profile.get("image_request_policy") or {}))
         setattr(
             cached[0],
             "_myagent_mark_multimodal_failed",
@@ -6988,6 +7028,7 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         "thinking_format": _profile_thinking_format(profile),
         "multimodal_input": multimodal_input,
         "input_modalities": input_modalities,
+        "image_request_policy": dict(profile.get("image_request_policy") or {}),
         "mark_multimodal_failed": mark_multimodal_failed,
         "mark_modalities_failed": mark_modalities_failed,
     }
@@ -7626,6 +7667,12 @@ def _tool_calls_to_serializable(tool_calls) -> Optional[List[Dict[str, Any]]]:
 
 def _message_to_dict(msg):
     """将消息对象转换为可序列化的字典，区分不同类型。"""
+    if isinstance(msg, (UserMessage, ToolMessage)):
+        from attachments.content import durable_content
+        from attachments import get_attachment_store
+        msg.content = durable_content(msg.content, get_attachment_store(WORK_DIR),
+                                      scan=isinstance(msg, UserMessage) and isinstance(msg.content, str),
+                                      remote=isinstance(msg, UserMessage))
     if isinstance(msg, UserMessage):
         d_u: Dict[str, Any] = {"type": "user", "content": msg.content}
         umd = getattr(msg, "metadata", None) or {}

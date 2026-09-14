@@ -389,8 +389,9 @@ def _micro_shrink_truncate_plain(text: str, keep_each_side: int) -> str:
 
 
 def _micro_shrink_tool_message_content_inplace(m: ToolMessage) -> bool:
-    raw = str(m.content or "")
-    t2 = _micro_shrink_truncate_plain(raw, _micro_tool_keep_each_side())
+    from attachments.content import map_text_parts
+    raw = m.content or ""
+    t2 = map_text_parts(raw, lambda text: _micro_shrink_truncate_plain(text, _micro_tool_keep_each_side()))
     if t2 != raw:
         m.content = t2
         return True
@@ -837,7 +838,7 @@ def _dialogue_work_to_chat_messages(
                 continue
             continue
         if isinstance(m, UserMessage):
-            out.append(UserMessage(content=str(m.content or "")))
+            out.append(UserMessage(content=deepcopy(m.content)))
         elif isinstance(m, AssistantMessage):
             mm = deepcopy(m)
             mm.content = content_with_think_excerpt(str(mm.content or ""), keep_each_side=reasoning_max)
@@ -851,9 +852,8 @@ def _dialogue_work_to_chat_messages(
             out.append(mm)
         elif isinstance(m, ToolMessage):
             tm = deepcopy(m)
-            raw = str(tm.content or "")
-            if len(raw) > tool_line_max:
-                tm.content = truncate_head_tail(raw, tool_line_max)
+            from attachments.content import map_text_parts
+            tm.content = map_text_parts(tm.content, lambda text: truncate_head_tail(text, tool_line_max))
             out.append(tm)
         else:
             out.append(deepcopy(m))

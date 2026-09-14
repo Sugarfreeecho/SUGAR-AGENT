@@ -60,7 +60,7 @@ def test_text_only_fallback_preserves_original_local_media_path(tmp_path):
     from agent_messages import UserMessage
 
     image_path = tmp_path / "screen shot.png"
-    image_path.write_bytes(b"\x89PNG\r\n")
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
     prompt = f'请分析 "{image_path}"'
     messages = [UserMessage(content=prompt)]
 
@@ -69,13 +69,9 @@ def test_text_only_fallback_preserves_original_local_media_path(tmp_path):
     assert any(part.get("type") == "image_url" for part in expanded[0]["content"])
 
     fallback = agent_openai._messages_to_text_only_params(messages)
-    assert fallback[-1] == {"role": "user", "content": prompt}
-    assert fallback[0]["role"] == "system"
-    assert "task 工具" in fallback[0]["content"]
-    assert "subagent" in fallback[0]["content"]
-    assert "图片" in fallback[0]["content"]
-    assert "model_profile_id" in fallback[0]["content"]
-    assert "双引号" in fallback[0]["content"]
+    assert prompt in fallback[-1]["content"]
+    assert "sha256:" in fallback[-1]["content"]
+    assert not any(m["role"] == "system" for m in fallback)
 
 
 def test_fallback_instruction_does_not_create_trailing_system_turn():
@@ -86,7 +82,7 @@ def test_fallback_instruction_does_not_create_trailing_system_turn():
         {"role": "user", "content": "分析图片路径"},
     ]
 
-    fallback = agent_openai._inject_multimodal_fallback_instruction(original)
+    fallback = agent_openai._inject_non_image_fallback_instruction(original)
 
     assert [message["role"] for message in fallback] == ["system", "user"]
     assert "基础系统提示" in fallback[0]["content"]
@@ -113,11 +109,10 @@ def test_structured_media_without_local_path_uses_placeholder():
     fallback = agent_openai._messages_to_text_only_params(messages)
 
     user_message = _message_with_role(fallback, "user")
-    system_message = _message_with_role(fallback, "system")
     assert "请分析" in user_message["content"]
-    assert "当前模型不支持" in user_message["content"]
+    assert "UNSUPPORTED_IMAGE_TYPE" in user_message["content"]
     assert "data:image/png" not in user_message["content"]
-    assert "task 工具" in system_message["content"]
+    assert not any(m["role"] == "system" for m in fallback)
 
 
 def test_nonstream_media_fallback_has_its_own_retry_and_preserves_path(
@@ -128,7 +123,7 @@ def test_nonstream_media_fallback_has_its_own_retry_and_preserves_path(
     from agent_messages import UserMessage
 
     image_path = tmp_path / "screen.png"
-    image_path.write_bytes(b"\x89PNG\r\n")
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
     prompt = f'分析 "{image_path}"'
     calls = []
 
@@ -149,10 +144,9 @@ def test_nonstream_media_fallback_has_its_own_retry_and_preserves_path(
     )
 
     assert len(calls) == 2
-    assert _message_with_role(calls[1]["messages"], "user")["content"] == prompt
-    assert "task 工具" in _message_with_role(
-        calls[1]["messages"], "system"
-    )["content"]
+    assert prompt in _message_with_role(calls[1]["messages"], "user")["content"]
+    assert "sha256:" in _message_with_role(calls[1]["messages"], "user")["content"]
+    assert not any(m["role"] == "system" for m in calls[1]["messages"])
 
 
 def test_text_only_profile_skips_media_request_and_keeps_path(tmp_path):
@@ -160,7 +154,7 @@ def test_text_only_profile_skips_media_request_and_keeps_path(tmp_path):
     from agent_messages import UserMessage
 
     image_path = tmp_path / "screen.png"
-    image_path.write_bytes(b"\x89PNG\r\n")
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
     prompt = f'分析 "{image_path}"'
     calls = []
 
@@ -177,10 +171,9 @@ def test_text_only_profile_skips_media_request_and_keeps_path(tmp_path):
     )
 
     assert len(calls) == 1
-    assert _message_with_role(calls[0]["messages"], "user")["content"] == prompt
-    assert "task 工具" in _message_with_role(
-        calls[0]["messages"], "system"
-    )["content"]
+    assert prompt in _message_with_role(calls[0]["messages"], "user")["content"]
+    assert "sha256:" in _message_with_role(calls[0]["messages"], "user")["content"]
+    assert not any(m["role"] == "system" for m in calls[0]["messages"])
     assert not agent_openai._api_messages_have_media(calls[0]["messages"])
 
 
@@ -189,7 +182,7 @@ def test_media_failure_disables_client_for_later_requests(tmp_path):
     from agent_messages import UserMessage
 
     image_path = tmp_path / "screen.png"
-    image_path.write_bytes(b"\x89PNG\r\n")
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
     prompt = f'分析 "{image_path}"'
     calls = []
     failures = []
@@ -232,7 +225,8 @@ def test_media_failure_disables_client_for_later_requests(tmp_path):
     assert len(failures) == 1
 
 
-def test_remote_image_url_is_expanded_only_for_image_capable_client():
+def test_remote_image_url_is_expanded_only_for_image_capable_client(monkeypatch):
+    monkeypatch.setenv("MULTIMODAL_REMOTE_IMAGE_MODE", "passthrough")
     import agent_openai
     from agent_messages import UserMessage
 
@@ -259,7 +253,7 @@ def test_remote_image_url_is_expanded_only_for_image_capable_client():
         for part in image_content
     )
     assert not agent_openai._api_messages_have_media(text_calls[0]["messages"])
-    assert prompt in _message_with_role(text_calls[0]["messages"], "user")["content"]
+    assert "https://cdn.example.com/dashboard.png?size=large" in _message_with_role(text_calls[0]["messages"], "user")["content"]
 
 
 def test_structured_local_attachment_expands_and_survives_history_roundtrip(tmp_path):
@@ -268,7 +262,7 @@ def test_structured_local_attachment_expands_and_survives_history_roundtrip(tmp_
     from agent_messages import UserMessage
 
     image_path = tmp_path / "attached.png"
-    image_path.write_bytes(b"\x89PNG\r\n")
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
     original = UserMessage(content=[
         {"type": "text", "text": "分析附件"},
         {"type": "local_file", "local_file": {"path": str(image_path)}},
@@ -282,7 +276,7 @@ def test_structured_local_attachment_expands_and_survives_history_roundtrip(tmp_
     assert agent_openai._api_messages_required_modalities(api_messages) == {"image"}
     assert any(
         part.get("type") == "image_url"
-        and part["image_url"]["url"].startswith("data:image/png;base64,")
+        and part["image_url"]["url"].startswith("data:image/jpeg;base64,")
         for part in api_messages[0]["content"]
     )
 
@@ -295,7 +289,7 @@ def test_stream_media_fallback_handles_lazy_error_without_duplicate_request(
     from agent_messages import UserMessage
 
     image_path = tmp_path / "screen.png"
-    image_path.write_bytes(b"\x89PNG\r\n")
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
     prompt = f'分析 "{image_path}"'
     calls = []
 
@@ -332,10 +326,9 @@ def test_stream_media_fallback_handles_lazy_error_without_duplicate_request(
         events.append(queue.get())
 
     assert len(calls) == 2
-    assert _message_with_role(calls[1]["messages"], "user")["content"] == prompt
-    assert "task 工具" in _message_with_role(
-        calls[1]["messages"], "system"
-    )["content"]
+    assert prompt in _message_with_role(calls[1]["messages"], "user")["content"]
+    assert "sha256:" in _message_with_role(calls[1]["messages"], "user")["content"]
+    assert not any(m["role"] == "system" for m in calls[1]["messages"])
     assert any(
         event is not None
         and event[0] == "status"

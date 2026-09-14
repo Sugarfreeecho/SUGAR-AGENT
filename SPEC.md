@@ -494,7 +494,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 要求：
 
 - 消息类型命名必须与历史落盘结构兼容，不应随意重命名。
-- `UserMessage.content` 支持字符串和多模态数组。
+- `UserMessage.content` 与 `ToolMessage.content` 支持字符串和有序内容数组；图片块为 `{type:"image", attachment:{attachmentId,mediaType,bytes,width,height,name?}}`，不得持久化图片 base64。
 - `AssistantMessage` 支持 `tool_calls`、`metadata` 和 `additional_kwargs`。
 - `ToolMessage` 必须带 `tool_call_id`，用于对应 assistant 的工具调用。
 - 序列化和反序列化逻辑由 `agent_harness.py` 统一维护。
@@ -512,7 +512,18 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 修改 LLM 配置后必须刷新 executor client。
 - API key 等敏感字段在 UI、日志和工具输出中必须脱敏。
 - OpenAI 兼容接口差异应在 `agent_harness.py` 或 `agent_openai.py` 中适配，避免散落到业务层。
-- 媒体序列化只由目标 model profile 的有效输入模态决定：支持图片时将 prompt 或附件中的图片引用转为 `image_url` content；仅文本时保留路径/URL 文本并注入多模态 `task` 委派指引。主 Agent 和 subagent 必须共用此规则。
+- 图片能力由实际目标 profile 的有效 `input_modalities` 决定：未声明 image 时逐图使用 DSH 确定性省略文本；MCP 在准入期拒绝图片且不写附件库。主 Agent、子 Agent、备用模型共用此规则。
+- 上传、本地路径和 MCP 图片进入 `app/attachments/` 内容寻址库，校验、归一化、复验后批量提交；失败批次回滚新对象。相同 request variant 并发复用缓存。
+- Chat Completions 工具消息仅含文本，图片跟随连续工具结果放入 user；Responses 和 Anthropic 保留工具内嵌图片。每张图为句柄文字加图片块。
+- 请求图先执行目标模型的像素/编码预算，再按 base64 长度和数量执行 oldest-first offload；byte quantum 大于 1 时严格超过移除字节目标才停止，与 DSH 一致。配置默认值见 README「图片附件与请求预算」。
+- Runtime V2 追加、恢复、历史替换、微压缩和 tokenizer 前缀清理必须保留内容块与引用；事件、日志不保存图片 payload。前端持久化引用，使用附件端点创建临时 blob URL。
+- UserMessage、ToolMessage、RuntimeEvent 构造不得读写图片或访问网络。显式 AdmissionContext 在入口汇总整条嵌套消息的图片与已有引用，统一校验数量/字节、提交并回填；旧历史在事件仓库读写边界迁移。应用显式配置默认附件工作区，不反查 sys.modules。
+- 远程图片默认 ingest：固定经 DNS 校验的公网 IP，逐跳重验重定向，限制期限、MIME 和实际字节。passthrough 保留供应商直读 URL 兼容，disabled 保留文字。来源元数据仅含 host，不保存签名 URL。
+- 独立 `POST /api/vision/analyze` 复用 profile 与三协议 transport；owner/requestId 幂等，支持持久状态、SSE 序号续接、协作取消和服务端 JSON Schema 校验。全部图片被省略时返回 VISION_NO_IMAGES，不调用纯文本模型冒充识图。取消请求与实际结束状态分开。
+- 新附件/识图 HTTP 端点复用 remote_control 设备身份和 scopes；非管理员只可使用自己的附件 grant 和 vision 请求。不得宣称这为整个共享工作区 Agent 提供了多租户隔离。
+- 对象提交和 GC 使用跨进程 catalog 锁；请求图按版本键锁定，缓存淘汰不得删除锁文件。对象、缓存分别有字节配额；校验缓存命中仍核对磁盘字节摘要。
+- 队列与识图历史引用写入 registry pins，上传/读取附带 7 天租约。GC 默认 dry-run，综合全部会话引用、pins、租约与宽限期；读取引用失败必须停止清理。会话 ZIP 带图片清单和本体，附件恢复先完整验证再提交，禁止 ZIP 路径穿越。
+- 前端同 ID 的预览跨容器共享 fetch/blob，最后一个使用者移除后取消下载并释放 URL；队列 pin 更新按 scope 串行发送，恢复队列重试离线期间未完成的同步。
 - 配置向导入口只检查是否存在可用 model profile。
 - 检查配置向导入口前必须先完成旧 `.env` 模型配置的自动注册。
 
@@ -735,7 +746,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 子 Agent 输出可展开查看。
 - 可中断和删除子 Agent。
 - 子 Agent 完成后父会话可继续处理结果。
-- `task.prompt` 和 `task.file_attachments` 中的图片引用必须进入同一模态门控：图片模型收到 `image_url` content，纯文本模型只收到可恢复的文本引用与委派提示。
+- `task.prompt` 的兼容路径扫描与 `task.file_attachments` 共用门禁。后者可传路径或附件引用，向子代理传递引用和归一化只读执行路径；纯文本模型收到确定性省略文本。
 
 ### 18.5 上下文验收
 

@@ -353,16 +353,13 @@ def test_fallback_client_marks_media_failure_and_routes_to_next_profile():
     retry_user = next(
         message for message in calls[1]["messages"] if message["role"] == "user"
     )
-    retry_system = next(
-        message for message in calls[1]["messages"] if message["role"] == "system"
-    )
     assert 'D:\\screen.png' in retry_user["content"]
-    assert "task 工具" in retry_system["content"]
+    assert not any(message["role"] == "system" for message in calls[1]["messages"])
     assert calls[1]["messages"][-1]["role"] == "user"
     assert statuses[0]["multimodal_fallback"] is True
 
 
-def test_fallback_client_keeps_text_profile_and_injects_task_delegation():
+def test_fallback_client_keeps_text_profile_and_omits_images():
     import agent_harness
 
     calls = []
@@ -417,15 +414,14 @@ def test_fallback_client_keeps_text_profile_and_injects_task_delegation():
         for message in text_messages
         for part in (message.get("content") if isinstance(message.get("content"), list) else [])
     )
-    system_message = next(message for message in text_messages if message["role"] == "system")
     user_message = next(message for message in text_messages if message["role"] == "user")
-    assert "task 工具" in system_message["content"]
-    assert "model_profile_id" in system_message["content"]
+    assert not any(message["role"] == "system" for message in text_messages)
     assert "https://example.com/image.png" in user_message["content"]
     assert statuses == []
 
 
-def test_chat_completion_does_not_replace_preferred_text_profile_for_image():
+def test_chat_completion_does_not_replace_preferred_text_profile_for_image(monkeypatch):
+    monkeypatch.setenv("MULTIMODAL_REMOTE_IMAGE_MODE", "passthrough")
     import agent_harness
     import agent_openai
     from agent_messages import UserMessage
@@ -470,10 +466,9 @@ def test_chat_completion_does_not_replace_preferred_text_profile_for_image():
 
     assert [name for name, _kwargs in calls] == ["text"]
     sent = calls[0][1]["messages"]
-    assert prompt in next(message for message in sent if message["role"] == "user")["content"]
-    system = next(message for message in sent if message["role"] == "system")["content"]
-    assert "task 工具" in system
-    assert "model_profile_id" in system
+    content = next(message for message in sent if message["role"] == "user")["content"]
+    assert "分析" in content and "https://example.com/image.png" in content
+    assert not any(message["role"] == "system" for message in sent)
 
 
 def test_fallback_candidates_consume_shared_logical_request_budget(monkeypatch):

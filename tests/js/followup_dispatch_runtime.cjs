@@ -29,6 +29,7 @@ function context(extra = {}) {
     Set,
     setTimeout,
     clearTimeout,
+    renderDurableAttachmentImages() {},
   }, extra));
 }
 

@@ -828,7 +828,7 @@ function applyOptimisticSessionUpdate(sessionId, patch) {
 const uiEventCountCache = {
     cache: new Map(),
     maxAgeMs: 10000,
-    
+
     get(sessionId) {
         var entry = this.cache.get(sessionId);
         if (entry && typeof entry === 'object') return Number(entry.count) || 0;
@@ -846,20 +846,20 @@ const uiEventCountCache = {
         var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;
         return age >= 0 && age <= limit;
     },
-    
+
     set(sessionId, count) {
         this.cache.set(sessionId, {
             count: Math.max(0, Number(count) || 0),
             updatedAt: Date.now(),
         });
     },
-    
+
     increment(sessionId) {
         const current = this.get(sessionId);
         this.set(sessionId, current + 1);
         return current + 1;
     },
-    
+
     updateFromServer(sessionId, count) {
         this.set(sessionId, count);
     }
@@ -1089,7 +1089,7 @@ async function loadSessionsInner(opts) {
     try {
         let allSessions;
         let snapshot = null;
-        
+
         try {
             snapshot = await fetchSessionsStateSnapshot();
             if (loadEpoch !== sessionListLoadEpoch) return;
@@ -1120,7 +1120,7 @@ async function loadSessionsInner(opts) {
         applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
-        
+
         const idSet = new Set();
         for (let si = 0; si < allSessions.length; si += 1) {
             if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);

@@ -56,6 +56,8 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
     sid = _sid(session_id)
     if not sid or not isinstance(event, dict):
         return
+    from attachments.content import redact_image_payloads
+    event.update(redact_image_payloads(event))
     with _lock:
         if not event.get("session_id"):
             event["session_id"] = sid

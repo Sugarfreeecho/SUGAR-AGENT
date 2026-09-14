@@ -95,13 +95,17 @@ class RuntimeEvent:
     schema_version: int = EVENT_SCHEMA_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
+        try:
+            from attachments.content import redact_image_payloads
+        except ModuleNotFoundError:
+            from app.attachments.content import redact_image_payloads
         data: Dict[str, Any] = {
             "schema_version": int(self.schema_version),
             "seq": int(self.seq),
             "timestamp": self.timestamp,
             "type": self.type,
             "session_id": self.session_id,
-            "payload": dict(self.payload or {}),
+            "payload": redact_image_payloads(dict(self.payload or {})),
         }
         if self.run_id:
             data["run_id"] = self.run_id

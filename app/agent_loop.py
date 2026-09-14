@@ -2148,7 +2148,7 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
         if role not in {"user", "assistant", "tool", "system"}:
             return
         payload = dict(data)
-        content = str(payload.pop("content", "") or "")
+        content = payload.pop("content", "") or ""
         payload.pop("type", None)
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
         if run_id:
@@ -2243,9 +2243,14 @@ def _runtime_v2_commit_user_turn(
         return False
     try:
         data = _message_to_dict(msg)
-        model_content = str(data.pop("content", "") or "")
+        model_content = data.pop("content", "") or ""
         data.pop("type", None)
         ui_event_metadata = dict(ui_metadata or {})
+        from attachments.request_budget import walk_images
+        attachments = [block["attachment"] for block in walk_images(model_content)]
+        if attachments:
+            ui_event_metadata["attachments"] = attachments
+            data["attachments"] = attachments
         if ui_type == "user_steer":
             op_id = str(operation_id or "").strip()
             if op_id:
@@ -4020,6 +4025,18 @@ def _tool_result_details_for_views(
     state: Dict[str, Any],
 ) -> Tuple[str, str, str]:
     """Return (log, llm, ui) views for a tool result with one shared UI/LLM cap."""
+    if isinstance(result_str, list):
+        from attachments.content import durable_content
+        from agent_openai import normalize_content_text
+        blocks = durable_content(result_str)
+        projected = []
+        for block in blocks:
+            if block.get("type") == "text":
+                _, text, _ = _tool_result_details_for_views(redact_sensitive_tool_text(block.get("text") or ""), tool_name, state)
+                projected.append({**block, "text": text})
+            else:
+                projected.append(block)
+        return truncate_head_tail(normalize_content_text(blocks), LOG_TRUNCATE_KEEP_CHARS), projected, projected
     result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
     limit = max(0, int(LLM_CONTEXT_TRUNCATE_KEEP_CHARS))
     preview_chars = limit // 2
@@ -4105,6 +4122,8 @@ async def _emit_tool_call_sse(
                 "args": redact_sensitive_tool_obj(res["tool_args"]),
                 "command_preview": _tool_command_preview(res["tool_name"], res["tool_args"]),
                 "result": redact_sensitive_tool_text(res.get("result", "")),
+                "attachments": [block["attachment"] for block in res.get("tool_detail_ui", [])
+                                if isinstance(block, dict) and block.get("type") == "image" and block.get("attachment")],
                 "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
                 "tool_call_id": res.get("tool_id") or "",
                 "tool_call_index": res.get("tool_call_index"),
@@ -4849,6 +4868,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             iter_client, iter_model, iter_max_output_tokens, iter_context_window = (
                 resolve_executor_config_for_session(state["session_id"])
             )
+            try:
+                iter_client._myagent_prompt_language = session_manager.get_session_prompt_language(state["session_id"])
+            except (AttributeError, TypeError):
+                pass
             transport_request_context = _llm_request_context(state["session_id"])
             compacted_input_est = _responses_compacted_input_estimate(
                 iter_client,
@@ -5791,9 +5814,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         outcome.kind is ToolOutcomeKind.FAILED
                         or _tool_result_indicates_failure(tool_name, raw_result)
                     )
-                    result_for_log, result_for_llm, result_for_ui = (
-                        _tool_result_details_for_views(result_str, tool_name, state)
+                    structured_result = isinstance(raw_result, list) and any(
+                        isinstance(block, dict) and block.get("type") == "image" for block in raw_result
                     )
+                    result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
+                        raw_result if structured_result else result_str, tool_name, state
+                    )
+                    if structured_result:
+                        from agent_openai import normalize_content_text
+                        result_str = redact_sensitive_tool_text(normalize_content_text(raw_result))
                     response = {
                         "type": "tool",
                         "tool_name": redact_sensitive_tool_text(tool_name),
@@ -5939,6 +5968,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         or session_meta.get("git_worktree_path")
                         or ""
                     ).strip()
+                    active_candidate = iter_client.current_candidate() if callable(getattr(iter_client, "current_candidate", None)) else {}
+                    mcp_modalities = active_candidate.get("input_modalities") or __import__("agent_openai")._client_input_modalities(iter_client)
                     change_review_capture = _begin_change_review_capture(
                         mcp_work_dir, observe_workspace=True
                     )
@@ -5951,6 +5982,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 tool_name,
                                 tool_args if isinstance(tool_args, dict) else {},
                                 work_dir=mcp_work_dir,
+                                image_enabled="image" in mcp_modalities,
+                                model=active_candidate.get("model") or iter_model,
                                 require_worktree_isolation=bool(
                                     mcp_work_dir
                                     and session_meta.get("git_worktree_managed")
@@ -9096,9 +9129,12 @@ async def astream_events(
     )
     _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
 
-    user_message = UserMessage(
-        content=user_content if isinstance(user_content, list) else user_input
-    )
+    from attachments.admission import AdmissionContext, admit_content
+    from attachments import get_attachment_store
+    user_message = UserMessage(content=admit_content(
+        user_content if isinstance(user_content, list) else user_input,
+        AdmissionContext(get_attachment_store(WORK_DIR)), scan_paths=True, scan_remote=True,
+    ))
     context_token_mode = get_context_token_mode(context_token_mode)
 
     new_work_messages = prev_work_messages + [user_message]
@@ -9273,6 +9309,12 @@ async def astream_events(
             _t_run_start = time.perf_counter()
             user_ui_type = "user_steer" if str(ui_user_event_type or "") == "user_steer" else "user"
             user_ui_event = {"type": user_ui_type, "content": ui_user_content if ui_user_content is not None else user_input}
+            from attachments.request_budget import walk_images
+            from attachments.content import redact_image_payloads
+            user_ui_event["content"] = redact_image_payloads(user_ui_event["content"])
+            user_attachments = [block["attachment"] for block in walk_images(user_message.content)]
+            if user_attachments:
+                user_ui_event["attachments"] = user_attachments
             if user_ui_type == "user_steer":
                 user_ui_event["steer"] = True
             if preserve_unread_result:

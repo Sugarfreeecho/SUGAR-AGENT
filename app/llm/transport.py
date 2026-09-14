@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, Iterator, List, Optional
@@ -689,7 +690,7 @@ def chat_messages_to_responses_input(
             out.append({
                 "type": "function_call_output",
                 "call_id": str(message.get("tool_call_id") or ""),
-                "output": _text(message.get("content")),
+                "output": _responses_content(message.get("content"), "user"),
             })
             continue
         if role == "assistant":
@@ -710,6 +711,16 @@ def chat_messages_to_responses_input(
                     "arguments": str(_get(fn, "arguments", default="{}") or "{}"),
                 })
     return out
+
+
+@contextmanager
+def _managed_stream(stream):
+    try:
+        yield stream
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
 
 
 class OpenAIResponsesTransport:
@@ -989,25 +1000,25 @@ class OpenAIResponsesTransport:
                     )
 
         try:
-            stream = self.client.responses.create(**body)
-            for event in self._events(
-                stream,
-                fallback_model=str(request.get("model") or ""),
-                issuer=self.issuer,
-                state_mode=mode.value,
-                stateful_supported=(mode is ResponsesStateMode.STATEFUL),
-                request_plan=plan,
-                wire_transport="http_sse",
-                transport_fallback_reason=websocket_fallback_reason,
-            ):
-                visible_output = visible_output or event.is_first_token
-                yield event
-            capability_updates: Dict[str, Optional[bool]] = {"responses": True}
-            if mode is ResponsesStateMode.STATEFUL:
-                capability_updates.update(store=True, previous_response_id=True)
-            elif "include" in body:
-                capability_updates["encrypted_reasoning_replay"] = True
-            responses_capability_cache.update(self.issuer, **capability_updates)
+            with _managed_stream(self.client.responses.create(**body)) as stream:
+                for event in self._events(
+                    stream,
+                    fallback_model=str(request.get("model") or ""),
+                    issuer=self.issuer,
+                    state_mode=mode.value,
+                    stateful_supported=(mode is ResponsesStateMode.STATEFUL),
+                    request_plan=plan,
+                    wire_transport="http_sse",
+                    transport_fallback_reason=websocket_fallback_reason,
+                ):
+                    visible_output = visible_output or event.is_first_token
+                    yield event
+                capability_updates: Dict[str, Optional[bool]] = {"responses": True}
+                if mode is ResponsesStateMode.STATEFUL:
+                    capability_updates.update(store=True, previous_response_id=True)
+                elif "include" in body:
+                    capability_updates["encrypted_reasoning_replay"] = True
+                responses_capability_cache.update(self.issuer, **capability_updates)
         except Exception as exc:
             error_info = classify_responses_error(exc)
             fallback_reason = error_info.kind.value
@@ -1051,27 +1062,27 @@ class OpenAIResponsesTransport:
                 include_encrypted_reasoning=include_encrypted,
                 drop_encrypted_reasoning=drop_encrypted,
             )
-            fallback_stream = self.client.responses.create(**fallback_body)
-            if error_info.kind is ResponsesErrorKind.INVALID_PREVIOUS and official_openai:
-                stateful_supported: Optional[bool] = True
-            elif error_info.kind in {
-                ResponsesErrorKind.INVALID_PREVIOUS,
-                ResponsesErrorKind.UNSUPPORTED_STATE,
-            }:
-                stateful_supported = False
-            else:
-                stateful_supported = None
-            yield from self._events(
-                fallback_stream,
-                fallback_model=str(request.get("model") or ""),
-                issuer=self.issuer,
-                state_mode=fallback_mode.value,
-                stateful_supported=stateful_supported,
-                fallback_reason=fallback_reason,
-                request_plan=fallback_plan,
-                wire_transport="http_sse",
-                transport_fallback_reason=websocket_fallback_reason,
-            )
+            with _managed_stream(self.client.responses.create(**fallback_body)) as fallback_stream:
+                if error_info.kind is ResponsesErrorKind.INVALID_PREVIOUS and official_openai:
+                    stateful_supported: Optional[bool] = True
+                elif error_info.kind in {
+                    ResponsesErrorKind.INVALID_PREVIOUS,
+                    ResponsesErrorKind.UNSUPPORTED_STATE,
+                }:
+                    stateful_supported = False
+                else:
+                    stateful_supported = None
+                yield from self._events(
+                    fallback_stream,
+                    fallback_model=str(request.get("model") or ""),
+                    issuer=self.issuer,
+                    state_mode=fallback_mode.value,
+                    stateful_supported=stateful_supported,
+                    fallback_reason=fallback_reason,
+                    request_plan=fallback_plan,
+                    wire_transport="http_sse",
+                    transport_fallback_reason=websocket_fallback_reason,
+                )
 
     def complete_text(self, **request: Any) -> Dict[str, Any]:
         # Judge/title/summary calls are one-shot and never need server state.
@@ -1530,9 +1541,10 @@ class OpenAICompatibleTransport:
         kwargs.pop("request_context", None)
         kwargs.pop("history_generation", None)
         kwargs.pop("prompt_cache_key", None)
+        from attachments.content import chat_tool_images
         kwargs["messages"] = [
             {key: value for key, value in message.items() if key != "_myagent_responses"}
-            for message in (kwargs.get("messages") or [])
+            for message in chat_tool_images(kwargs.get("messages") or [])
         ]
         kwargs["stream"] = True
         # include_usage 让末包携带 usage（DeepSeek 等兼容端点流式下默认不返回，
@@ -1555,73 +1567,79 @@ class OpenAICompatibleTransport:
         except TypeError:
             yield from self._complete_response(response, str(request.get("model") or ""))
             return
-        tool_state: Dict[int, Dict[str, str]] = {}
-        for chunk in iterator:
-            model = str(_get(chunk, "model", default="") or "")
-            usage = _get(chunk, "usage")
-            if usage is not None:
-                yield TransportEvent("usage", usage=_usage_dict(usage), model=model)
-            choices = _get(chunk, "choices", default=[]) or []
-            if not choices:
-                continue
-            choice = choices[0]
-            delta = _get(choice, "delta", default={}) or {}
-            reasoning = _get(delta, "reasoning_content") or _get(delta, "reasoning")
-            if reasoning:
-                yield TransportEvent("reasoning_delta", text=_text(reasoning), model=model)
-            content = _get(delta, "content")
-            if content:
-                yield TransportEvent("content_delta", text=_text(content), model=model)
-            for call in _get(delta, "tool_calls", default=[]) or []:
-                fn = _get(call, "function", default={}) or {}
-                index = int(_get(call, "index", default=0) or 0)
-                state = tool_state.setdefault(
-                    index,
-                    {"id": "", "name": "", "arguments": ""},
-                )
-                raw_id = str(_get(call, "id", default="") or "")
-                id_delta = ""
-                if raw_id and raw_id != state["id"]:
-                    state["id"] = raw_id
-                    id_delta = raw_id
-                previous_name = state["name"]
-                state["name"] = merge_streamed_tool_name(
-                    previous_name,
-                    _get(fn, "name", default="") or "",
-                )
-                name_delta = state["name"] if state["name"] != previous_name else ""
-                # Chat Completions arguments are always pure deltas: every
-                # chunk carries a fragment to append, never a snapshot to
-                # dedupe.  Accumulate verbatim — a prefix-dropping merge would
-                # discard recurring fragments like `{"` (every nested object
-                # starts with one) and silently corrupt the JSON.
-                fragment = _get(fn, "arguments", default="") or ""
-                state["arguments"] += str(fragment)
-                yield TransportEvent(
-                    "tool_call_delta",
-                    index=index,
-                    tool_call_id=id_delta,
-                    tool_name=name_delta,
-                    arguments_delta=str(fragment),
-                    model=model,
-                )
-            finish = _get(choice, "finish_reason")
-            if finish is not None:
-                yield TransportEvent(
-                    "finish",
-                    finish_reason=str(finish),
-                    stop_reason=str(_get(choice, "stop_reason", default="") or "") or None,
-                    model=model,
-                )
+        try:
+            tool_state: Dict[int, Dict[str, str]] = {}
+            for chunk in iterator:
+                model = str(_get(chunk, "model", default="") or "")
+                usage = _get(chunk, "usage")
+                if usage is not None:
+                    yield TransportEvent("usage", usage=_usage_dict(usage), model=model)
+                choices = _get(chunk, "choices", default=[]) or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                delta = _get(choice, "delta", default={}) or {}
+                reasoning = _get(delta, "reasoning_content") or _get(delta, "reasoning")
+                if reasoning:
+                    yield TransportEvent("reasoning_delta", text=_text(reasoning), model=model)
+                content = _get(delta, "content")
+                if content:
+                    yield TransportEvent("content_delta", text=_text(content), model=model)
+                for call in _get(delta, "tool_calls", default=[]) or []:
+                    fn = _get(call, "function", default={}) or {}
+                    index = int(_get(call, "index", default=0) or 0)
+                    state = tool_state.setdefault(
+                        index,
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+                    raw_id = str(_get(call, "id", default="") or "")
+                    id_delta = ""
+                    if raw_id and raw_id != state["id"]:
+                        state["id"] = raw_id
+                        id_delta = raw_id
+                    previous_name = state["name"]
+                    state["name"] = merge_streamed_tool_name(
+                        previous_name,
+                        _get(fn, "name", default="") or "",
+                    )
+                    name_delta = state["name"] if state["name"] != previous_name else ""
+                    # Chat Completions arguments are always pure deltas: every
+                    # chunk carries a fragment to append, never a snapshot to
+                    # dedupe.  Accumulate verbatim — a prefix-dropping merge would
+                    # discard recurring fragments like `{"` (every nested object
+                    # starts with one) and silently corrupt the JSON.
+                    fragment = _get(fn, "arguments", default="") or ""
+                    state["arguments"] += str(fragment)
+                    yield TransportEvent(
+                        "tool_call_delta",
+                        index=index,
+                        tool_call_id=id_delta,
+                        tool_name=name_delta,
+                        arguments_delta=str(fragment),
+                        model=model,
+                    )
+                finish = _get(choice, "finish_reason")
+                if finish is not None:
+                    yield TransportEvent(
+                        "finish",
+                        finish_reason=str(finish),
+                        stop_reason=str(_get(choice, "stop_reason", default="") or "") or None,
+                        model=model,
+                    )
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                close()
 
     def complete_text(self, **request: Any) -> Dict[str, Any]:
         kwargs = dict(request)
         kwargs.pop("request_context", None)
         kwargs.pop("history_generation", None)
         kwargs.pop("prompt_cache_key", None)
+        from attachments.content import chat_tool_images
         kwargs["messages"] = [
             {key: value for key, value in message.items() if key != "_myagent_responses"}
-            for message in (kwargs.get("messages") or [])
+            for message in chat_tool_images(kwargs.get("messages") or [])
         ]
         kwargs.pop("parallel_tool_calls", None)
         kwargs["stream"] = False
@@ -1713,7 +1731,7 @@ def chat_messages_to_anthropic(messages: Iterable[Dict[str, Any]]) -> tuple[str,
             append("user", [{
                 "type": "tool_result",
                 "tool_use_id": str(message.get("tool_call_id") or ""),
-                "content": _text(message.get("content")),
+                "content": _anthropic_content(message.get("content")) if isinstance(message.get("content"), list) else _text(message.get("content")),
             }])
             continue
         blocks = _anthropic_content(message.get("content"))

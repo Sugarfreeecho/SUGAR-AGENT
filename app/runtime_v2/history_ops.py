@@ -647,7 +647,7 @@ class RuntimeHistoryOps:
             payload = dict(model_payload or {})
             payload.update({
                 "role": "user",
-                "content": str(content or ""),
+                "content": content or "",
                 "ui_content": str(ui_content if ui_content is not None else content or ""),
                 "ui_type": "user_steer" if ui_type == "user_steer" else "user",
             })

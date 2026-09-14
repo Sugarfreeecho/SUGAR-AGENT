@@ -1331,6 +1331,35 @@ body {
 
 .msg-wrap--user .message { max-width: 88%; }
 .msg-wrap--assistant .message { max-width: 100%; }
+.msg-wrap--user > .msg-user-attachment-strip {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.4rem;
+    width: min(88%, 32rem);
+    margin-top: 0.4rem;
+}
+.msg-wrap--user > .msg-user-attachment-strip:empty { display: none; }
+.msg-wrap--user > .msg-user-attachment-strip .msg-attachment-thumbnail {
+    display: block;
+    flex: 0 0 auto;
+    width: 6.75rem;
+    height: 5rem;
+    max-width: 6.75rem;
+    max-height: 5rem;
+    object-fit: contain;
+    object-position: center;
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    background: rgba(0,0,0,0.18);
+    box-shadow: 0 5px 16px rgba(0,0,0,0.16);
+}
+:root.theme-light .msg-wrap--user > .msg-user-attachment-strip .msg-attachment-thumbnail {
+    border-color: rgba(0,0,0,0.08);
+    background: #f7f8fc;
+    box-shadow: 0 5px 14px rgba(0,0,0,0.08);
+}
 .user-message-time {
     display: inline-flex;
     align-items: center;

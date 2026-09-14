@@ -432,9 +432,66 @@ Slash Command 和生命周期回调，也可在同一插件包中携带 Skill、
 - 上下文窗口与输出限制
 - 思考模式、reasoning effort、temperature 和额外请求体
 - 多模态输入模式：`auto`、`enabled` 或 `disabled`；接口拒绝多模态后自动持久化为仅文本
-- 媒体序列化只由目标 profile 的有效输入模态决定：图片模型收到 `image_url` content，纯文本模型只收到可恢复的文本引用与多模态委派指引（主 Agent 与子 Agent 共用规则）
+- 图片采用 DSH 对齐的附件管线：上传、本地路径、MCP 截图先校验并保存为 sha256 引用；请求时才准备预览。纯文本模型收到确定性省略文本，主 Agent 与子 Agent 共用门禁和预算。
 
 首页是否进入配置向导，只取决于自动导入完成后是否存在可用的 model profile；`.env` 中的旧模型字段只用于一次性迁移，不参与运行时回退。
+
+### 图片附件与请求预算
+
+附件位于 `{WORK_DIR}/.sugaragent/attachments/v1/`，归一化副本只读；请求版缓存位于 `.sugaragent/cache/attachments/request-images/`。消息和事件保存引用，图片 base64 仅存在于请求构造内存。`GET /api/attachments/{sha256:id}` 返回校验后的图片；浏览器为队列、历史和工具行创建临时 blob URL，移除 DOM 时释放。
+
+Chat Completions 将工具图片抽取到连续工具结果之后的 user 消息；Responses 在 `function_call_output.output` 中原生嵌入；Anthropic 在 `tool_result.content` 中原生嵌入。每张图附带 sha256、请求版尺寸和归一化只读路径。超过请求预算时按 DSH quanta 规则从最旧图片开始替换为含身份、路径的占位文字，不修改持久化历史。
+
+`app/.env` 可配置以下默认值（字节/像素）：
+
+| 环境变量 | 默认值 |
+| --- | --- |
+| `ATTACHMENT_MAX_IMAGE_BYTES` | 20971520（20 MiB） |
+| `ATTACHMENT_MAX_IMAGES_PER_MESSAGE` | 20 |
+| `ATTACHMENT_MAX_MESSAGE_IMAGE_BYTES` | 209715200（200 MiB） |
+| `ATTACHMENT_MAX_IMAGE_PIXELS` | 64000000 |
+| `ATTACHMENT_MAX_IMAGE_DIMENSION` | 8192 |
+| `ATTACHMENT_NORMALIZATION_MAX_PIXELS` | 4194304 |
+| `ATTACHMENT_NORMALIZATION_MAX_DIMENSION` | 8192 |
+| `ATTACHMENT_NORMALIZATION_MAX_BYTES` | 4194304 |
+| `MULTIMODAL_REQUEST_IMAGE_MAX_PIXELS` | 4194304 |
+| `MULTIMODAL_REQUEST_IMAGE_MAX_BYTES` | 4194304 |
+| `MULTIMODAL_MAX_INLINE_REQUEST_IMAGE_BYTES` | 20971520（base64 表示后的长度） |
+| `MULTIMODAL_MAX_IMAGES_PER_REQUEST` | 未设置时数量不限 |
+| `MULTIMODAL_IMAGE_BYTE_QUANTUM` | 10485760 |
+| `MULTIMODAL_IMAGE_COUNT_QUANTUM` | 20 |
+| `MULTIMODAL_TEXT_PATH_SCAN` | `on`；`off` 关闭文本图片路径扫描 |
+
+`MULTIMODAL_INLINE_MAX_BYTES` 保留为请求总图片预算的弃用别名，新变量优先。音频/视频单文件上限独立使用 `MULTIMODAL_NON_IMAGE_MAX_BYTES`（默认 10 MiB）。model profile 可用 `image_request_policy` 中的 `maxPixels`、`maxBytes`、`maxInlineRequestImageBytes`、`maxImagesPerRequest`、`byteQuantum`、`countQuantum` 覆盖请求策略，备用模型单独应用自己的策略。编码字节数为软目标，质量阶梯全部超限时保留最小档，再交给请求总预算处理。
+
+接受 PNG/JPEG/WebP/GIF；旧本地 BMP 转为 PNG 后准入。归一化执行 EXIF 旋转、8 位 sRGB、去元数据、等比缩放及质量阶梯；动画取首帧、保留有效透明通道。旧 `local_file` 和 data URL 在消息入口懒迁移，引用不随源文件后续修改而改变。旧会话读取并重新保存时更新，原历史不做破坏性批量重写。
+
+### 独立 API 识图与远程图片
+
+图片链接默认先下载入库，再进入与上传图片相同的预算和历史链路。`MULTIMODAL_REMOTE_IMAGE_MODE=passthrough` 保留旧的供应商直读 URL 行为，`disabled` 保留文字链接。默认阻止私网下载；`ATTACHMENT_REMOTE_ALLOWED_HOSTS` 可显式允许精确主机名。下载默认限时 20 秒、最多 3 次重定向。
+
+先上传图片，或向 `POST /api/attachments/ingest` 发送 `{"urls":["https://example.com/image.png"]}`，再使用返回的附件 ID：
+
+```json
+{
+  "requestId": "image-check-001",
+  "modelProfileId": "你的视觉模型档案ID",
+  "prompt": "描述图片内容",
+  "images": [{"attachmentId": "sha256:<64位摘要>"}],
+  "stream": false,
+  "output": {"format": "text"}
+}
+```
+
+发送到 `POST /api/vision/analyze`。相同设备、requestId 和输入复用已有结果；更改输入须换 ID。`stream:true` 返回 SSE，`GET /api/vision/requests/{id}` 查询，`GET /api/vision/requests/{id}/events?after=N` 续接，`DELETE /api/vision/requests/{id}` 请求取消。取消为协作式，实际结束后才报告 cancelled；断线不会自动取消。JSON Schema 输出采用服务端校验，详情见 [API识图功能设计方案](docs/API识图功能设计方案.md)。
+
+本机直接访问使用本地管理员身份；远程调用复用已配对设备的 Bearer/cookie。新附件 API 按设备授权，识图结果按请求所有者隔离；这不改变整个 Agent 共享工作区的权限模型。
+
+对象文件默认配额 10 GiB（`ATTACHMENT_STORE_MAX_BYTES`），请求图片缓存默认 512 MiB（`ATTACHMENT_CACHE_MAX_BYTES`）；独立识图默认最多 4 个并发请求、10000 条请求历史（`VISION_MAX_CONCURRENT_REQUESTS`、`VISION_MAX_STORED_REQUESTS`）。`VISION_REQUEST_TIMEOUT_SECONDS` 默认 120 秒，在模型流事件边界检查，底层 I/O timeout 最多 30 秒。
+
+管理员可向 `POST /api/vision/gc` 发送 `{"dryRun":true}` 预览回收候选；设 false 才删除。默认保护 7 天内的新对象、上传租约、会话引用、队列和请求历史 pin。`DELETE /api/vision/requests/{id}/history` 删除已结束请求并释放其 pin。会话 ZIP 导出包含引用图片；`POST /api/attachments/export` 与 `/import` 可独立备份恢复附件，缓存无需备份。
+
+修改配置或升级此功能后重启后端。可运行 `python/python.exe -X utf8 scripts/benchmark_attachments.py` 测量本地 1/5/20 张图片的冷/热缓存性能。
 
 ### MCP 配置
 

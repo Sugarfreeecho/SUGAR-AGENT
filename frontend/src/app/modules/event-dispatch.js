@@ -92,6 +92,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         }
         sealProcessGroup(ctx);
         appendMessage(ctx, 'user', event.content || '', {
+            attachments: event.attachments || [],
             eventIndex: eventIndex,
             turnTruncateIdx: eventIndex,
             runtimeSeq: event.runtime_seq || event.runtimeSeq,
@@ -112,10 +113,12 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
                 event.content || '',
                 steerOperationId,
                 event.steer_mode || 'interrupt',
-                false
+                false,
+                event.attachments || []
             );
         } else {
-            appendLog(ctx, event.content || '', 'user-steer', runSessionId);
+            var steerScroller = appendLog(ctx, event.content || '', 'user-steer', runSessionId);
+            renderDurableAttachmentImages(steerScroller, event.attachments || []);
         }
     } else if (event.type === 'final') {
         var finalStream = ctx && ctx.stream ? ctx.stream : getVisibleChatStream();

@@ -65,6 +65,8 @@ from session_event_bus import (
     subscribe_session_events,
 )
 import agent_mcp
+from attachments import get_attachment_store, AttachmentError, SaveImageAttachment
+from attachments.content import durable_content
 from agent_tools import discover_skills, set_skill_enabled
 import model_profiles
 import execution_metrics
@@ -2297,7 +2299,10 @@ async def set_registered_skill_enabled(skill_name: str, request: Request):
 
 
 @fastapi_app.post("/api/upload-chat-files")
-async def upload_chat_files(files: list[UploadFile] = File(...)):
+async def upload_chat_files(files: list[UploadFile] = File(...), request: Request = None):
+    from attachments.access import principal_for_request
+    from attachments.registry import AttachmentRegistry
+    actor = principal_for_request(request, globals().get("_remote_control_gateway"), "write")
     if not files:
         return JSONResponse({"ok": False, "error": "no files"}, status_code=400)
     declared_total = 0
@@ -2320,11 +2325,15 @@ async def upload_chat_files(files: list[UploadFile] = File(...)):
     upload_root = (WORK_DIR / "uploads" / "chat" / datetime.datetime.now().strftime("%Y%m%d")).resolve()
     upload_root.mkdir(parents=True, exist_ok=True)
     saved = []
+    image_items = []
     created_paths: list[Path] = []
     actual_total = 0
     try:
         for uf in files:
             filename = _safe_upload_filename(uf.filename or "")
+            declared_media_type = str(uf.content_type or "").split(";", 1)[0].strip().lower()
+            image_upload = (declared_media_type.startswith("image/") or
+                            Path(filename).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
             dest = _dedupe_upload_path((upload_root / filename).resolve())
             try:
                 dest.relative_to(upload_root)
@@ -2339,6 +2348,8 @@ async def upload_chat_files(files: list[UploadFile] = File(...)):
                         break
                     actual_file_size += len(chunk)
                     actual_total += len(chunk)
+                    if image_upload and actual_file_size > get_attachment_store(WORK_DIR).limits.max_image_bytes:
+                        raise AttachmentError("Image exceeds byte limit", "IMAGES_TOO_LARGE")
                     if actual_file_size > CHAT_UPLOAD_MAX_FILE_BYTES:
                         raise _ChatUploadLimitError(f"文件“{filename}”超过 100 MB 限制。")
                     if actual_total > CHAT_UPLOAD_MAX_TOTAL_BYTES:
@@ -2350,6 +2361,28 @@ async def upload_chat_files(files: list[UploadFile] = File(...)):
                 "rel": str(dest.relative_to(WORK_DIR.resolve())).replace("\\", "/"),
                 "size": dest.stat().st_size,
             })
+            if image_upload:
+                image_items.append((saved[-1], declared_media_type if declared_media_type.startswith("image/") else mimetypes.guess_type(filename)[0]))
+        store = get_attachment_store(WORK_DIR)
+        inputs = []
+        for item, media_type in image_items:
+            source = Path(item["path"])
+            # BMP is a documented legacy local format; convert before strict admission.
+            if source.suffix.lower() == ".bmp":
+                inputs.append(store.prepare_path(source))
+            else:
+                inputs.append(SaveImageAttachment(source.read_bytes(), media_type, item["name"]))
+        refs = await store.save_images(inputs)
+        await run_in_threadpool(AttachmentRegistry(store).grant, actor.device_id, [ref["attachmentId"] for ref in refs])
+        for (item, _), ref in zip(image_items, refs):
+            Path(item["path"]).unlink()
+            item.update({"attachment": ref, "path": store.image_host_path(ref),
+                         "size": ref["bytes"], "url": "/api/attachments/" + ref["attachmentId"]})
+            item["rel"] = str(Path(item["path"]).relative_to(WORK_DIR.resolve())).replace("\\", "/")
+    except AttachmentError as exc:
+        for path in created_paths:
+            path.unlink(missing_ok=True)
+        return JSONResponse({"ok": False, "error": str(exc), "code": exc.code}, status_code=400)
     except _ChatUploadLimitError as exc:
         for path in created_paths:
             path.unlink(missing_ok=True)
@@ -2365,6 +2398,61 @@ async def upload_chat_files(files: list[UploadFile] = File(...)):
             except Exception:
                 pass
     return JSONResponse({"ok": True, "files": saved})
+
+
+@fastapi_app.get("/api/attachments/{attachment_id}")
+async def read_attachment(attachment_id: str, request: Request = None):
+    from attachments.access import principal_for_request, require_attachment
+    store = get_attachment_store(WORK_DIR)
+    actor = principal_for_request(request, globals().get("_remote_control_gateway"))
+    try:
+        ref = await run_in_threadpool(require_attachment, store, actor, attachment_id)
+        if request is not None and request.headers.get("if-none-match") == '"' + attachment_id + '"':
+            return Response(status_code=304, headers={"ETag": '"' + attachment_id + '"'})
+        stored = await store.read_image(ref)
+    except AttachmentError as exc:
+        return JSONResponse({"ok": False, "code": exc.code}, status_code=404)
+    return Response(stored.data, media_type=ref["mediaType"], headers={
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "ETag": '"' + ref["attachmentId"] + '"',
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+@fastapi_app.post("/api/attachments/references")
+async def pin_attachment_references(request: Request):
+    from attachments.access import principal_for_request, require_attachment
+    from attachments.registry import AttachmentRegistry
+    from vision_api import read_json
+    actor = principal_for_request(request, globals().get("_remote_control_gateway"), "write")
+    payload = await read_json(request)
+    scope = str(payload.get("scope") or "")
+    ids = payload.get("attachmentIds")
+    if not scope or len(scope) > 256 or not isinstance(ids, list) or len(ids) > 2000:
+        return JSONResponse({"ok": False, "error": "invalid reference pin"}, status_code=400)
+    store = get_attachment_store(WORK_DIR)
+    for identity in ids:
+        await run_in_threadpool(require_attachment, store, actor, identity)
+    await run_in_threadpool(AttachmentRegistry(store).pin, actor.device_id, "queue:" + scope, ids)
+    return {"ok": True, "count": len(set(ids))}
+
+
+@fastapi_app.post("/api/attachments/grants")
+async def grant_attachment_access(request: Request):
+    from attachments.access import principal_for_request, require_attachment
+    from attachments.registry import AttachmentRegistry
+    from vision_api import read_json
+    actor = principal_for_request(request, globals().get("_remote_control_gateway"), "admin")
+    payload = await read_json(request)
+    owner = str(payload.get("deviceId") or "")
+    ids = payload.get("attachmentIds")
+    if not owner or not isinstance(ids, list) or len(ids) > 2000:
+        return JSONResponse({"ok": False, "error": "invalid grant"}, status_code=400)
+    store = get_attachment_store(WORK_DIR)
+    for identity in ids:
+        await run_in_threadpool(require_attachment, store, actor, identity)
+    await run_in_threadpool(AttachmentRegistry(store).grant, owner, ids)
+    return {"ok": True}
 
 
 @fastapi_app.post("/api/pick-path")
@@ -4723,6 +4811,21 @@ async def chat(
     attachments: str = Form(""),
     preserve_unread_result: bool = Form(False),
 ):
+    # Validate durable references before reserving a session start token.
+    authorized_image_refs = {}
+    try:
+        attachment_input = json.loads(attachments or "[]")
+    except (ValueError, TypeError):
+        return JSONResponse({"ok": False, "error": "Invalid attachments JSON"}, status_code=400)
+    if not isinstance(attachment_input, list):
+        return JSONResponse({"ok": False, "error": "attachments must be an array"}, status_code=400)
+    if attachment_input:
+        from attachments.access import principal_for_request, require_attachment
+        actor = principal_for_request(request, globals().get("_remote_control_gateway"), "write")
+        for item in attachment_input:
+            if isinstance(item, dict) and isinstance(item.get("attachment"), dict):
+                identity = item["attachment"].get("attachmentId")
+                authorized_image_refs[identity] = await run_in_threadpool(require_attachment, get_attachment_store(WORK_DIR), actor, identity)
     sid = (session_id or "").strip() or None
     run_id = str(client_run_id or "").strip()
     steer_operation_id = str(steer_id or "").strip()
@@ -4840,8 +4943,16 @@ async def chat(
         requested_attachments = []
     if isinstance(requested_attachments, list):
         seen_attachment_paths: set[str] = set()
-        for item in requested_attachments[:16]:
+        for item in requested_attachments:
             if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("attachment"), dict):
+                try:
+                    store = get_attachment_store(WORK_DIR)
+                    ref = authorized_image_refs[item["attachment"].get("attachmentId")]
+                    structured_attachments.append({"type": "image", "attachment": ref})
+                except AttachmentError as exc:
+                    return JSONResponse({"ok": False, "code": exc.code}, status_code=400)
                 continue
             raw_path = str(item.get("path") or "").strip()
             if not raw_path:
@@ -4863,6 +4974,10 @@ async def chat(
                     },
                 }
             )
+    store = get_attachment_store(WORK_DIR)
+    if len(structured_attachments) > store.limits.max_images_per_message:
+        return JSONResponse({"ok": False, "code": "TOO_MANY_IMAGES"}, status_code=400)
+    structured_attachments = await run_in_threadpool(durable_content, structured_attachments, store)
     structured_user_content = (
         [{"type": "text", "text": agent_message}, *structured_attachments]
         if structured_attachments
@@ -6222,6 +6337,11 @@ def _build_session_export_archive(session_id: str) -> tuple[Path, str]:
                     raise PermissionError("session export entry is outside the session directory") from exc
                 archive_name = (Path(archive_root) / relative).as_posix()
                 output.write(resolved, archive_name)
+            from attachments.lifecycle import add_bundle, collect_references
+            from attachments.locking import attachment_lock
+            store = get_attachment_store(WORK_DIR)
+            with attachment_lock(store.root.parent, "catalog"):
+                add_bundle(output, store, collect_references([session_path]))
         return archive_path, download_name
     except Exception:
         archive_path.unlink(missing_ok=True)
@@ -7743,10 +7863,30 @@ _remote_control_gateway = _register_remote_control(
     _control_dependencies,
 )
 
+from vision_api import register_vision_api as _register_vision_api
+
+
+def _vision_candidate(profile_id):
+    from agent_harness import _profile_candidate
+    from fastapi import HTTPException
+    profile = model_profiles.get_profile(PROJECT_ROOT, profile_id)
+    if profile is None:
+        raise HTTPException(404, "Model profile not found")
+    return _profile_candidate(profile)
+
+
+_vision_jobs = _register_vision_api(
+    fastapi_app, WORK_DIR, _vision_candidate, lambda: _remote_control_gateway,
+)
+from attachments.api import register_attachment_api as _register_attachment_api
+_register_attachment_api(fastapi_app, WORK_DIR, lambda: _remote_control_gateway)
+
 from fastapi.responses import RedirectResponse as _RedirectResponse
 @fastapi_app.middleware("http")
 async def _config_check(req: _Request, call_next):
     p = req.url.path
+    if p.startswith(("/api/attachments/", "/api/vision/")):
+        return await call_next(req)
     if p == "/api/upload-chat-files":
         try:
             content_length = int(req.headers.get("content-length") or 0)

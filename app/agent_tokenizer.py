@@ -157,7 +157,10 @@ def _is_loop_marker_text(text: str) -> bool:
     return c == "New Agent Loop Start" or c.startswith("Loop finished")
 
 
-def _strip_tool_display_prefix(text: str) -> str:
+def _strip_tool_display_prefix(text: Any) -> Any:
+    if isinstance(text, list):
+        from attachments.content import map_text_parts
+        return map_text_parts(text, _strip_tool_display_prefix)
     s = str(text or "")
     return re.sub(r"^(?:\U0001f527\s*)?Tool Call:\s*[^\n]*?->\s*", "", s, count=1)
 

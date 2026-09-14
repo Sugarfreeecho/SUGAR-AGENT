@@ -1268,6 +1268,7 @@ function normalizeStoredFollowupItem(item) {
                 path: String(attachment.path),
                 name: String(attachment.name || ''),
                 size: Number(attachment.size || 0),
+                attachment: attachment.attachment || null,
             };
         })
         : [];
@@ -1298,6 +1299,31 @@ function normalizeStoredFollowupItem(item) {
     };
 }
 
+// Serialize updates per browser/session so an older request cannot resurrect pins.
+var attachmentPinUpdates = new Map();
+function syncFollowupAttachmentPins(sessionId, items) {
+    try {
+        var browserId = localStorage.getItem('myagent-attachment-owner');
+        if (!browserId) {
+            browserId = 'browser-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+            localStorage.setItem('myagent-attachment-owner', browserId);
+        }
+        var scope = browserId + ':' + sessionId;
+        var ids = [];
+        items.forEach(function (item) { (item.attachments || []).forEach(function (attachment) {
+            var ref = attachment.attachment || attachment;
+            if (/^sha256:[a-f0-9]{64}$/.test(ref.attachmentId || '') && ids.indexOf(ref.attachmentId) < 0) ids.push(ref.attachmentId);
+        }); });
+        var previous = attachmentPinUpdates.get(scope) || Promise.resolve();
+        var update = previous.catch(function () {}).then(function () {
+            return fetch('/api/attachments/references', { method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: scope, attachmentIds: ids }) });
+        }).catch(function () { /* Local queue survives offline; restore retries the pin. */ });
+        attachmentPinUpdates.set(scope, update);
+        update.finally(function () { if (attachmentPinUpdates.get(scope) === update) attachmentPinUpdates.delete(scope); });
+    } catch (e) { /* Storage may be disabled. Uploaded images still have a grace lease. */ }
+}
+
 function readStoredFollowupQueue(sessionId) {
     try {
         var raw = localStorage.getItem(followupQueueStorageKey(sessionId));
@@ -1309,6 +1335,7 @@ function readStoredFollowupQueue(sessionId) {
             var n = Number(item.id);
             if (Number.isFinite(n)) followupQueueSeq = Math.max(followupQueueSeq, Math.floor(n) + 1);
         });
+        if (typeof syncFollowupAttachmentPins === 'function') syncFollowupAttachmentPins(sessionId, out);
         return out;
     } catch (e) {
         return [];
@@ -1348,6 +1375,7 @@ function persistFollowupQueue(sessionId) {
         if (pending.length) localStorage.setItem(key, JSON.stringify(pending));
         else localStorage.removeItem(key);
     } catch (e) { /* ignore */ }
+    if (typeof syncFollowupAttachmentPins === 'function') syncFollowupAttachmentPins(sid, pending);
 }
 
 function removeStoredFollowupQueue(sessionId) {
@@ -1357,6 +1385,7 @@ function removeStoredFollowupQueue(sessionId) {
     delete followupQueueLoadedBySession[sid];
     delete followupManualDispatchEpochBySession[sid];
     try { localStorage.removeItem(followupQueueStorageKey(sid)); } catch (e) { /* ignore */ }
+    if (typeof syncFollowupAttachmentPins === 'function') syncFollowupAttachmentPins(sid, []);
 }
 
 function inputHasSendableText() {
@@ -1853,6 +1882,7 @@ function renderFollowupQueue(sessionId) {
         row.appendChild(sendNow);
         row.appendChild(undo);
         panel.appendChild(row);
+        renderDurableAttachmentImages(text, item.attachments || []);
         if (typeof initUiHoverTips === 'function') initUiHoverTips(row);
     });
     positionFollowupQueuePanel();
@@ -2114,7 +2144,7 @@ function commitPendingSteerProcessRow(sessionId, item, serverItem) {
     return row;
 }
 
-function appendSteerProcessMessage(sessionId, ctx, content, operationId, steerMode, pending) {
+function appendSteerProcessMessage(sessionId, ctx, content, operationId, steerMode, pending, attachments) {
     var sid = String(sessionId || '');
     var key = String(operationId || '');
     if (!sid || !ctx || !key) return null;
@@ -2128,6 +2158,7 @@ function appendSteerProcessMessage(sessionId, ctx, content, operationId, steerMo
             existing.dataset.steerCommitted = '1';
             existing.removeAttribute('data-steer-pending');
         }
+        renderDurableAttachmentImages(existing.querySelector('.feed-chunk-scroller') || existing, attachments);
         return existing;
     }
     var scroller = appendLog(ctx, String(content || ''), 'user-steer', sid);
@@ -2137,6 +2168,7 @@ function appendSteerProcessMessage(sessionId, ctx, content, operationId, steerMo
     row.dataset.steerMode = steerMode === 'append' ? 'append' : 'interrupt';
     if (pending) row.dataset.steerPending = '1';
     else row.dataset.steerCommitted = '1';
+    renderDurableAttachmentImages(scroller || row, attachments);
     return row;
 }
 
@@ -2152,7 +2184,8 @@ function appendPendingSteerToProcess(sessionId, item) {
         buildSelectedSkillsDisplayMessage(item.display || item.text || '', item.skills || []),
         item.clientId || item.steerId || '',
         'append',
-        true
+        true,
+        item.attachments || []
     );
     if (row) {
         if (item.clientId) row.dataset.steerClientId = String(item.clientId);

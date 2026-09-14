@@ -269,7 +269,7 @@
       uploaded.forEach(function (item) {
         if (!item || !item.path) return;
         if (!remembered.some(function (existing) { return existing.path === item.path; })) {
-          remembered.push({ path: item.path, name: item.name || '', size: Number(item.size || 0) });
+          remembered.push({ path: item.path, name: item.name || '', size: Number(item.size || 0), attachment: item.attachment || null });
         }
       });
       textarea._myAgentStructuredAttachments = remembered;
@@ -298,7 +298,7 @@
     Array.prototype.slice.call(attachments || []).forEach(function (item) {
       if (!item || !item.path) return;
       if (!remembered.some(function (existing) { return existing.path === item.path; })) {
-        remembered.push({ path: item.path, name: item.name || '', size: Number(item.size || 0) });
+        remembered.push({ path: item.path, name: item.name || '', size: Number(item.size || 0), attachment: item.attachment || null });
       }
     });
     textarea._myAgentStructuredAttachments = remembered;

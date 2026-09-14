@@ -269,7 +269,7 @@ class RuntimeModelProjection:
             payload = row.get("payload")
             if not isinstance(payload, dict):
                 payload = {}
-            content = str(payload.get("content") or "")
+            content = payload.get("content") or ""
             if role == "user":
                 item: Dict[str, Any] = {"type": "user", "content": content}
                 if isinstance(payload.get("metadata"), dict):
