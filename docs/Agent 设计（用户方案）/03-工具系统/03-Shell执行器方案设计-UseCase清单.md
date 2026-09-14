@@ -1,6 +1,6 @@
 # Shell 执行器 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + 9-14 路径基准修复）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（L574–2331：shell 选择/进程管理/物化/环境）。
 - 上级：`00-工具系统整体设计.md`
@@ -31,10 +31,10 @@
 - **依据**：`_maybe_materialize_python_c_script / _unlink_run_shell_temp`。
 
 ### UC-3C4 工作区收窄
-- **触发**：命令包含绝对路径 / 重定向 / 多命令链。
-- **预期现象**：路径被抽取并检查是否在工作区（或已授权目录）内；越界触发审批（受限模式）；只读 git 命令有专门白名单。
-- **规则与边界**：命令族级解析（head/grep/sed/dd/cd/重定向…）+ 正则兜底；Windows POSIX 路径误报有豁免逻辑。
-- **依据**：`_extract_absolute_paths / _outside_workspace_tokens / _readonly_git_scope_ok / _windows_skip_posix_path_false_positive`。
+- **触发**：命令包含相对/绝对路径（含 `..`）、重定向、多命令链，或显式传入 `workdir`。
+- **预期现象**：路径被抽取并检查是否在工作区（或已授权目录）内；**相对路径按 `workdir`（生效工作目录；未指定 = 工作区根）解析**，与命令执行语义一致，子目录里 `..` 回到工作区其他目录不误判越界；越界触发审批（受限模式），删除类红线维持强制单次；只读 git 命令有专门白名单。
+- **规则与边界**：命令族级解析（head/grep/sed/dd/cd/重定向…）+ 正则兜底；Windows POSIX 路径误报有豁免逻辑；Windows 虚拟根 `/foo` 固定映射工作区根；含空格但未加引号的绝对路径保持保守判定；分类与 `required_dirs` 复核共用同一基准，避免二次判定反转。
+- **依据**：`_resolve_shell_working_dir / _resolve_shell_token_for_workspace_restrict（base）/ _outside_workspace_tokens / _readonly_git_scope_ok / _windows_skip_posix_path_false_positive / security/runtime._effective_shell_base`。
 
 ### UC-3C5 环境与编码
 - **触发**：子进程输出二进制/乱码；需要内置 Python。
@@ -53,9 +53,10 @@
 | UC-3C1 | `agent_tools.py` L1777–1956 |
 | UC-3C2 | L1665–1777 |
 | UC-3C3 | L1478–1627 |
-| UC-3C4 | L670–1427 |
+| UC-3C4 | L670–1454（路径收窄段，含 9-14 基准修复） |
 | UC-3C5 | L1084–1236、L1854–1928 |
 
 ## 5. 版本记录
 
 - 2026-09-13 v1：拆分首版（承接 UC-306/307）。
+- 2026-09-14 v2：UC-3C4 补充"相对路径按生效工作目录（workdir）解析"与只读 git/歧义输入边界（配合当日路径基准修复）。

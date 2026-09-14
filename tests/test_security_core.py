@@ -1342,6 +1342,81 @@ def test_workspace_shell_delete_is_yellow_and_session_grantable(
     assert repeated.rule_id == "grant.session"
 
 
+def test_workdir_relative_parent_paths_inside_workspace_stay_yellow(
+    tmp_path, monkeypatch
+):
+    """run_shell 在 workspace 子目录里用 ``..`` 回到 workspace 其他目录的
+    删除，必须按 workdir 基准解析为工作区内删除（普通审批），不能误判为
+    工作区外而弹红框单次授权。"""
+    workspace = tmp_path / "workspace"
+    (workspace / "skills" / "archify").mkdir(parents=True)
+    (workspace / "archify_study" / "demo").mkdir(parents=True)
+    _isolated_security_store(tmp_path, monkeypatch)
+
+    request, decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={
+            "command": 'Remove-Item "../../archify_study/demo/keep.json" -Force',
+            "workdir": "./skills/archify",
+        },
+        workspace=workspace,
+    )
+
+    assert request.metadata["external_workspace"] is False
+    assert request.metadata["workspace_delete"] is True
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "process.workspace_delete"
+    assert forced_approval_for(decision) is False
+
+
+def test_workdir_relative_parent_paths_outside_workspace_stay_forced(
+    tmp_path, monkeypatch
+):
+    """按 workdir 基准解析后仍然逃出 workspace 的删除保持强制单次审批。"""
+    workspace = tmp_path / "workspace"
+    (workspace / "skills" / "archify").mkdir(parents=True)
+    _isolated_security_store(tmp_path, monkeypatch)
+
+    request, decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={
+            "command": "rm -f ../../../escape.txt",
+            "workdir": "./skills/archify",
+        },
+        workspace=workspace,
+    )
+
+    assert request.metadata["external_workspace"] is True
+    assert request.metadata["workspace_delete"] is False
+    assert decision.rule_id == "process.destructive"
+    assert forced_approval_for(decision) is True
+
+
+def test_readonly_git_scope_is_not_external_through_authorize(
+    tmp_path, monkeypatch
+):
+    """只读 git -C 指向工作区外目录时，authorize_tool 全链路（含 required_dirs
+    复核）也必须维持「非外部访问」，不能被复核环节重新标成外逃。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+
+    request, decision, _ = authorize_tool(
+        session_id="session",
+        tool_name="run_shell",
+        arguments={"command": f'git -C "{outside}" log -1 --format="%h"'},
+        workspace=workspace,
+    )
+
+    assert request.metadata["external_workspace"] is False
+    assert decision.outcome == DecisionOutcome.ALLOW
+    assert decision.rule_id == "process.app_restricted"
+
+
 def test_full_access_does_not_prompt_for_workspace_delete(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

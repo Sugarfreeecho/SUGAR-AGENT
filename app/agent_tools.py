@@ -1241,16 +1241,23 @@ def _is_posix_special_path_skip_workspace_check(raw: str) -> bool:
     return any(low == p or low.startswith(p + "/") for p in _POSIX_SPECIAL_PATH_PREFIXES)
 
 
-def _resolve_shell_token_for_workspace_restrict(raw: str, workspace: Path) -> Path:
+def _resolve_shell_token_for_workspace_restrict(
+    raw: str, workspace: Path, base: Optional[Path] = None
+) -> Path:
     """
     将命令中的路径 token 解析为绝对路径，用于 restrict_to_workspace 判断。
     POSIX 上的 ``/xxx`` 是真实绝对路径；Windows 上保留历史虚拟根语义
     （``/foo/bar`` → WORK_DIR/foo/bar）。Git Bash 盘符路径、Windows 盘符路径、
     UNC 始终按真实绝对路径解析。
+
+    相对路径优先按 ``base``（命令实际生效的工作目录，即 run_shell 的
+    workdir）解析，未提供时回落到 ``workspace`` 根——与
+    ``_resolve_shell_working_dir`` 保持一致，避免「工作区子目录 workdir +
+    ``..`` 回到工作区其他目录」被误判为逃逸到工作区外。
     """
     s = os.path.expandvars((raw or "").strip())
     if not s:
-        return workspace.resolve()
+        return (base or workspace).resolve()
     # Windows “D:\\...”
     if len(s) >= 2 and s[1] == ":":
         return Path(s).expanduser().resolve()
@@ -1270,23 +1277,28 @@ def _resolve_shell_token_for_workspace_restrict(raw: str, workspace: Path) -> Pa
     p = Path(s).expanduser()
     if p.is_absolute():
         return p.resolve()
-    return (workspace / s).resolve()
+    return ((base or workspace) / s).resolve()
 
 
-def _paths_inside_workspace(cmd: str, workspace: Path) -> bool:
+def _paths_inside_workspace(cmd: str, workspace: Path, base: Optional[Path] = None) -> bool:
     """检查命令中的路径 token 是否落在 workspace 根下。"""
-    return not _outside_workspace_tokens(cmd, workspace)
+    return not _outside_workspace_tokens(cmd, workspace, base=base)
 
 
-def _outside_workspace_tokens(cmd: str, workspace: Path) -> list:
+def _outside_workspace_tokens(cmd: str, workspace: Path, base: Optional[Path] = None) -> list:
     """Return the raw path tokens in ``cmd`` that resolve outside ``workspace``.
 
     Mirrors the historical classification inside ``_paths_inside_workspace``
     while exposing *which* tokens caused the escape, so callers can decide
     whether the out-of-workspace access is benign (e.g. a read-only git ``-C``
     pointing at a repository outside the workspace).
+
+    Relative tokens resolve against ``base`` (the effective command working
+    directory) when provided; callers without a working directory keep the
+    legacy behavior of resolving against the workspace root.
     """
     wroot = workspace.resolve()
+    resolve_base = base if base is not None else wroot
     outside = []
     seen = set()
 
@@ -1299,7 +1311,7 @@ def _outside_workspace_tokens(cmd: str, workspace: Path) -> list:
         if _is_posix_special_path_skip_workspace_check(raw_path):
             continue
         try:
-            p = _resolve_shell_token_for_workspace_restrict(raw_path, wroot)
+            p = _resolve_shell_token_for_workspace_restrict(raw_path, wroot, base=resolve_base)
         except Exception:
             continue
         if not _is_path_under(p, wroot):
@@ -1334,7 +1346,7 @@ def _outside_workspace_tokens(cmd: str, workspace: Path) -> list:
         # Drive/UNC/POSIX absolute paths were already checked above. Checking
         # them again is harmless and ensures relative symlinks are resolved.
         try:
-            candidate = _resolve_shell_token_for_workspace_restrict(raw, wroot)
+            candidate = _resolve_shell_token_for_workspace_restrict(raw, wroot, base=resolve_base)
         except Exception:
             return [cmd]
         if _is_posix_special_path_skip_workspace_check(raw):
@@ -1360,7 +1372,7 @@ _READONLY_GIT_SUBCOMMANDS = frozenset(
 )
 
 
-def _readonly_git_scope_ok(cmd: str, workspace: Path) -> bool:
+def _readonly_git_scope_ok(cmd: str, workspace: Path, base: Optional[Path] = None) -> bool:
     """True when every out-of-workspace token comes from a read-only git
     ``-C``/``--git-dir``/``--work-tree`` argument.
 
@@ -1368,7 +1380,7 @@ def _readonly_git_scope_ok(cmd: str, workspace: Path) -> bool:
     an out-of-workspace path token has any other origin (``cat /x/f``,
     ``cd /x``, ...), so write/network/unknown external access keeps asking.
     """
-    outside = _outside_workspace_tokens(cmd, workspace)
+    outside = _outside_workspace_tokens(cmd, workspace, base=base)
     if not outside:
         return True
     try:

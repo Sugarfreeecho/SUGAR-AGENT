@@ -198,6 +198,29 @@ def set_session_permission_mode(session_id: str, mode: object) -> PermissionMode
     return normalized
 
 
+def _effective_shell_base(workdir_value: object, workspace: Path) -> Path | None:
+    """Resolve the run_shell working directory for path classification.
+
+    Mirrors ``agent_tools._resolve_shell_working_dir`` so relative path tokens
+    inside the command are resolved exactly like the shell will resolve them.
+    Returns ``None`` when the caller did not pin a working directory (the
+    command then runs at the workspace root, which is the resolver's default).
+    """
+
+    raw = str(workdir_value or "").strip()
+    if not raw:
+        return None
+    try:
+        from agent_tools import _resolve_shell_working_dir
+
+        return _resolve_shell_working_dir(raw, workspace)
+    except Exception:
+        try:
+            return canonical_path(raw, workspace)
+        except Exception:
+            return None
+
+
 def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) -> CapabilityRequest:
     name = str(tool_name or "").strip()
     args = dict(arguments or {})
@@ -249,6 +272,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         )
     if name == "run_shell":
         command = str(args.get("command") or "")
+        workdir_val = str(args.get("workdir") or args.get("working_dir") or "").strip()
+        exec_base = _effective_shell_base(workdir_val, workspace)
         shell_analysis = analyze_shell_command(command)
         egress_fingerprint = egress_rule_fingerprint(shell_analysis) or ""
         session_grant_digest = (
@@ -289,40 +314,40 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 return False
             try:
                 from agent_tools import _outside_workspace_tokens, _readonly_git_scope_ok, _resolve_shell_token_for_workspace_restrict
-                raw_outside = _outside_workspace_tokens(command, workspace)
+                raw_outside = _outside_workspace_tokens(command, workspace, base=exec_base)
                 outside_tokens = []
                 for raw in raw_outside:
                     try:
-                        pp = _resolve_shell_token_for_workspace_restrict(raw, workspace)
+                        pp = _resolve_shell_token_for_workspace_restrict(raw, workspace, base=exec_base)
                     except Exception:
                         outside_tokens.append(raw)
                         continue
                     if not _is_authorized_path(pp):
                         outside_tokens.append(raw)
-                workdir_val = str(args.get("workdir") or args.get("working_dir") or "").strip()
                 if workdir_val:
                     try:
-                        wd_path = canonical_path(workdir_val, workspace)
+                        wd_path = exec_base if exec_base is not None else canonical_path(workdir_val, workspace)
                         if not _is_authorized_path(wd_path):
                             outside_tokens.append(workdir_val)
                     except Exception:
                         outside_tokens.append(workdir_val)
                 external = bool(outside_tokens)
-                if external and _readonly_git_scope_ok(command, workspace):
+                if external and _readonly_git_scope_ok(command, workspace, base=exec_base):
                     external = False
             except Exception:
                 from agent_tools import _paths_inside_workspace, _readonly_git_scope_ok
-                external = not _paths_inside_workspace(command, workspace)
-                if external and _readonly_git_scope_ok(command, workspace):
+                external = not _paths_inside_workspace(command, workspace, base=exec_base)
+                if external and _readonly_git_scope_ok(command, workspace, base=exec_base):
                     external = False
-            workdir = str(args.get("workdir") or args.get("working_dir") or "").strip()
-            if workdir and not external:
-                try:
-                    wd_path = canonical_path(workdir, workspace)
-                    if not _is_authorized_path(wd_path):
-                        external = True
-                except Exception:
+            if workdir_val and not external:
+                if exec_base is None:
                     external = True
+                else:
+                    try:
+                        if not _is_authorized_path(exec_base):
+                            external = True
+                    except Exception:
+                        external = True
             deletion = bool(_DELETE_COMMAND.search(command))
             destructive = bool(_is_dangerous(command) or deletion)
             workspace_delete = bool(
@@ -332,7 +357,7 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             )
             credential_export = bool(
                 _text_mentions_sensitive_tool_resource(command)
-                or _text_mentions_sensitive_tool_resource(workdir)
+                or _text_mentions_sensitive_tool_resource(workdir_val)
                 or _CREDENTIAL_EXPORT_COMMAND.search(command)
             )
             # Reading credential-bearing files (cat/Get-Content/... a .env,
@@ -363,6 +388,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 "destructive": destructive,
                 "deletion": deletion,
                 "workspace_delete": workspace_delete,
+                "workdir": workdir_val,
+                "effective_workdir": str(exec_base) if exec_base is not None else "",
                 "credential_export": credential_export,
                 "credential_read": credential_read,
                 "policy_change": policy_change,
@@ -680,19 +707,52 @@ def authorize_request(
         needs_recompute = (not has_required) or request.metadata.get("external_workspace")
         if needs_recompute:
             try:
-                from agent_tools import _extract_absolute_paths, _resolve_shell_token_for_workspace_restrict, _is_posix_special_path_skip_workspace_check
+                from agent_tools import (
+                    _has_non_delete_dangerous_pattern,
+                    _is_posix_special_path_skip_workspace_check,
+                    _outside_workspace_tokens,
+                    _readonly_git_scope_ok,
+                    _resolve_shell_token_for_workspace_restrict,
+                )
                 cmd = str(request.resource or "")
-                req = []
-                seen = set()
-                for raw_path in _extract_absolute_paths(cmd):
-                    if _is_posix_special_path_skip_workspace_check(raw_path):
+                workdir_raw = str(request.metadata.get("workdir") or "").strip()
+                exec_base = (
+                    _effective_shell_base(workdir_raw, workspace)
+                    if workdir_raw
+                    else None
+                )
+                outside_tokens = []
+                for raw in _outside_workspace_tokens(cmd, workspace, base=exec_base):
+                    if _is_posix_special_path_skip_workspace_check(raw):
                         continue
                     try:
-                        pp = _resolve_shell_token_for_workspace_restrict(raw_path, workspace)
+                        pp = _resolve_shell_token_for_workspace_restrict(
+                            raw, workspace, base=exec_base
+                        )
                     except Exception:
+                        outside_tokens.append(raw)
                         continue
-                    authorized = any(is_within(pp, ad) for ad in authorized_dirs)
-                    if authorized:
+                    if not any(is_within(pp, ad) for ad in authorized_dirs):
+                        outside_tokens.append(raw)
+                if workdir_raw:
+                    if exec_base is None:
+                        outside_tokens.append(workdir_raw)
+                    elif not any(is_within(exec_base, ad) for ad in authorized_dirs):
+                        outside_tokens.append(workdir_raw)
+                if outside_tokens and _readonly_git_scope_ok(
+                    cmd, workspace, base=exec_base
+                ):
+                    outside_tokens = []
+                req = []
+                seen = set()
+                for raw in outside_tokens:
+                    if _is_posix_special_path_skip_workspace_check(raw):
+                        continue
+                    try:
+                        pp = _resolve_shell_token_for_workspace_restrict(
+                            raw, workspace, base=exec_base
+                        )
+                    except Exception:
                         continue
                     cand = pp.parent if pp.suffix else pp
                     try:
@@ -707,18 +767,12 @@ def authorize_request(
                     req.append(s)
                 new_meta = dict(request.metadata)
                 new_meta["required_dirs"] = req
-                new_meta["external_workspace"] = bool(req)
-                try:
-                    _deletion = bool(new_meta.get("deletion"))
-                    _has_non_delete = False
-                    try:
-                        from agent_tools import _has_non_delete_dangerous_pattern
-                        _has_non_delete = bool(_has_non_delete_dangerous_pattern(str(request.resource or "")))
-                    except Exception:
-                        pass
-                    new_meta["workspace_delete"] = bool(_deletion and not bool(req) and not _has_non_delete)
-                except Exception:
-                    pass
+                new_meta["external_workspace"] = bool(outside_tokens)
+                new_meta["workspace_delete"] = bool(
+                    new_meta.get("deletion")
+                    and not outside_tokens
+                    and not _has_non_delete_dangerous_pattern(cmd)
+                )
                 request = CapabilityRequest(action=request.action, resource=request.resource, effect=request.effect, principal=request.principal, args_digest=request.args_digest, metadata=new_meta)
             except Exception:
                 pass
