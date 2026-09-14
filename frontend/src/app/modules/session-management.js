@@ -913,6 +913,8 @@ function updateSidebarRuntimeStatus(nextStatus) {
 }
 
 var runtimeStatusHeartbeatTimer = null;
+var runtimeStatusHeartbeatPending = false;
+var runtimeTakeoverBySession = Object.create(null);
 var lastUiActivationSeq = 0;
 var pendingQuerySession = (function () {
     // Deep link support: /?session=<id> selects that conversation once the
@@ -935,12 +937,56 @@ var pendingQuerySession = (function () {
     } catch (e) { /* ignore */ }
     return '';
 })();
+
+function maybeTakeOverActiveRuntimeSession(payload) {
+    var sid = String(currentSessionId || '').trim();
+    var activeIds = payload && Array.isArray(payload.active_session_ids)
+        ? payload.active_session_ids.map(function (value) { return String(value || '').trim(); })
+        : [];
+    if (!sid || activeIds.indexOf(sid) < 0) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
+    if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;
+    if (runtimeTakeoverBySession[sid]) return;
+
+    var task = (async function () {
+        try {
+            if (sid !== String(currentSessionId || '')) return;
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
+            if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;
+            // The heartbeat is the authoritative local-process signal. Mark
+            // the selected session active before attaching so the observer's
+            // guards and UI state agree during history catch-up.
+            if (typeof setSessionServerStreamActive === 'function') {
+                setSessionServerStreamActive(sid, true);
+            }
+            if (typeof resetStreamReconnectState === 'function') resetStreamReconnectState(sid);
+            document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+                detail: { sessionId: sid, phase: 'runtime-takeover' },
+            }));
+            if (typeof refreshSingleSessionRow === 'function') void refreshSingleSessionRow(sid);
+            if (typeof attachSessionEventStream === 'function') {
+                await attachSessionEventStream(sid, { skipInitialLoad: true, force: true });
+            }
+        } catch (error) {
+            console.warn('自动接管服务端会话流失败:', error);
+        }
+    })();
+    runtimeTakeoverBySession[sid] = task;
+    void task.finally(function () {
+        if (runtimeTakeoverBySession[sid] === task) delete runtimeTakeoverBySession[sid];
+    });
+}
+
 async function refreshRuntimeStatus() {
+    if (runtimeStatusHeartbeatPending) return;
+    runtimeStatusHeartbeatPending = true;
     try {
         var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);
         if (!response.ok) throw new Error('runtime status failed: ' + response.status);
         var payload = await response.json();
         updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);
+        maybeTakeOverActiveRuntimeSession(payload);
         var activationSeq = Number(payload && payload.activation_seq) || 0;
         if (activationSeq > lastUiActivationSeq) {
             lastUiActivationSeq = activationSeq;
@@ -953,6 +999,8 @@ async function refreshRuntimeStatus() {
         }
     } catch (error) {
         updateSidebarRuntimeStatus(false);
+    } finally {
+        runtimeStatusHeartbeatPending = false;
     }
 }
 

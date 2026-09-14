@@ -4441,23 +4441,25 @@ def _runtime_status_payload() -> dict[str, Any]:
 
     try:
         with session_manager._lock:
-            sessions = [
+            all_sessions = [
                 dict(row)
                 for row in session_manager.index
-                if isinstance(row, dict) and not row.get("archived")
+                if isinstance(row, dict)
             ]
     except Exception:
-        sessions = []
-    active_count = 0
-    for row in sessions:
+        all_sessions = []
+    sessions = [row for row in all_sessions if not row.get("archived")]
+    active_session_ids: list[str] = []
+    for row in all_sessions:
         sid = str((row or {}).get("id") or "").strip()
         if not sid:
             continue
         try:
             if _session_run_state_fields_light(sid).get("run_active"):
-                active_count += 1
+                active_session_ids.append(sid)
         except Exception:
             logger.debug("runtime status read failed for session %s", sid, exc_info=True)
+    active_count = len(active_session_ids)
     if active_count:
         status = "busy"
     else:
@@ -4505,10 +4507,27 @@ def _runtime_status_payload() -> dict[str, Any]:
         "ok": True,
         "status": status,
         "active_run_count": active_count,
+        # This is a control-plane hint for an already-open page. In contrast
+        # to the sidebar list it includes archived sessions because server-owned
+        # workflows may continue while an archived session is selected.
+        "active_session_ids": active_session_ids,
         "activation_seq": activation_seq,
         "activation_path": activation_path,
         "activation_session": activation_session,
     }
+
+
+def _observer_extension_control_event(event: Any) -> Optional[dict]:
+    """Return a non-history notification for a durable extension-state write."""
+
+    if not isinstance(event, dict) or str(event.get("type") or "") != "extension_state_changed":
+        return None
+    control = dict(event)
+    # The browser handles ephemeral events without advancing its UI projection
+    # cursor. Extension state lives in the Runtime snapshot, not chat history.
+    control["ephemeral"] = True
+    control["control_event"] = True
+    return control
 
 
 def _cancel_pending_ui_closed_notify() -> None:
@@ -5248,7 +5267,16 @@ async def stream_session_events(
                             yield payload
                         break
                     next_live_event = asyncio.create_task(subscription.__anext__())
-                    if event.get("ephemeral"):
+                    extension_control = _observer_extension_control_event(event)
+                    if extension_control is not None:
+                        yield f"data: {json.dumps(extension_control, ensure_ascii=False)}\n\n"
+                        await asyncio.sleep(0)
+                        # Preserve the normal durable-event catch-up side effect:
+                        # an extension notification may be queued behind a
+                        # visible event that still needs projection.
+                        async for payload in drain_projection(projection):
+                            yield payload
+                    elif event.get("ephemeral"):
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                         await asyncio.sleep(0)
                     else:

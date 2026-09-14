@@ -312,6 +312,9 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
     } finally {
         clearInterval(progressTimer);
         if (runCtx) runCtx.streamConsuming = false;
+        if (typeof requestExtensionStateConvergence === 'function') {
+            requestExtensionStateConvergence(runSessionId, 'stream-closed');
+        }
         var closingRun = getSessionRunState(runSessionId);
         if (runCtx && closingRun && closingRun.ctx === runCtx && runCtx.terminalSeen !== true
             && getRunAbortReason(runSessionId, runCtx) !== 'user') {
@@ -323,6 +326,23 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             }, 0);
         }
     }
+}
+
+function requestExtensionStateConvergence(sessionId, phase) {
+    var sid = String(sessionId || '').trim();
+    if (!sid || typeof document === 'undefined' || typeof document.dispatchEvent !== 'function'
+        || typeof CustomEvent === 'undefined') return;
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+        detail: { sessionId: sid, phase: String(phase || 'stream-sync') },
+    }));
+}
+
+function consumeExtensionControlEvent(event, sessionId) {
+    if (!event || event.control_event !== true || event.type !== 'extension_state_changed') {
+        return false;
+    }
+    requestExtensionStateConvergence(sessionId, 'control-event');
+    return true;
 }
 
 async function consumeAgentSseResponseInner(response, runCtx, runSessionId, streamEventIdx) {
@@ -379,6 +399,9 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     });
                 }
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
+                // Observer-only control messages refresh extension snapshots;
+                // they are not chat history and must not enter seq/cursor handling.
+                if (consumeExtensionControlEvent(parsed, eventSessionId)) continue;
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
                 if (parsed.type === 'user_steer' && parsed.steer) {
@@ -1058,6 +1081,7 @@ async function attachSessionEventStream(sessionId, opts) {
     var reattachFailed = false;
     try {
         if (runSessionId !== currentSessionId) return;
+        requestExtensionStateConvergence(runSessionId, 'stream-attaching');
         if (!opts.skipInitialLoad) {
             await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;

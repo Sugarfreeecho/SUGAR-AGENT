@@ -109,6 +109,28 @@ def test_runtime_status_reports_busy_when_any_session_is_running(monkeypatch):
 
     assert payload["status"] == "busy"
     assert payload["active_run_count"] == 1
+    assert payload["active_session_ids"] == ["running"]
+
+
+def test_runtime_status_active_ids_include_archived_server_workflows(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(
+        webui.session_manager,
+        "index",
+        [{"id": "visible", "archived": False}, {"id": "archived-running", "archived": True}],
+    )
+    monkeypatch.setattr(
+        webui,
+        "_session_run_state_fields_light",
+        lambda sid: {"run_active": sid == "archived-running"},
+    )
+
+    payload = webui._runtime_status_payload()
+
+    assert payload["status"] == "busy"
+    assert payload["active_run_count"] == 1
+    assert payload["active_session_ids"] == ["archived-running"]
 
 
 def _patch_runtime_status_probes(monkeypatch, runs):

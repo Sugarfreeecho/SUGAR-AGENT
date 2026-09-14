@@ -1638,6 +1638,29 @@ def test_observer_stream_does_not_count_as_local_run_activity(monkeypatch):
     assert webui._has_local_worker_activity("s1") is False
 
 
+def test_observer_extension_state_is_an_out_of_band_control_event():
+    import webui
+
+    original = {
+        "type": "extension_state_changed",
+        "plugin_id": "session-todo",
+        "namespace": "plan",
+        "revision": 4,
+        "seq": 19,
+        "seq_scope": "event_bus",
+    }
+
+    control = webui._observer_extension_control_event(original)
+
+    assert control == {
+        **original,
+        "ephemeral": True,
+        "control_event": True,
+    }
+    assert "ephemeral" not in original
+    assert webui._observer_extension_control_event({"type": "tool_call"}) is None
+
+
 def test_auto_resume_only_for_orphan_interruption(monkeypatch):
     import webui
 

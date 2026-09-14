@@ -9,7 +9,7 @@ function fn(name, source = src) {
   return match[0];
 }
 function fixture() {
-  let visible = false, requests = 0, renders = 0, userIndex = 10, count = 11, aborted = 0;
+  let visible = false, requests = 0, renders = 0, userIndex = 10, count = 11, aborted = 0, extensionRefreshes = 0;
   const stream = {isConnected:true};
   const ctx = {runId:'run-1',stream,streamConsuming:true,streamEventIndex:11,lastBusinessEventAt:Date.now()-40000};
   let run = {runId:'run-1',ctx,controller:{abort(){aborted++;}}};
@@ -26,10 +26,12 @@ function fixture() {
     fetchWithTimeout:async()=>{requests++;return {ok:true,json:async()=>({range_start:11,events:[{type:'status'},{type:'final',content:'done',run_id:'run-1'}]})};},
     applyMessageEvent:(_sid,event,index)=>({event,index,type:event.type}),
     renderFinalRecordIfMissing:(_sid,_ctx,_stream,record)=>{assert.equal(record.index,12);renders++;visible=true;return true;},
+    CustomEvent:class { constructor(type, options) { this.type=type;this.detail=options.detail; } },
+    document:{dispatchEvent:event=>{if(event.type==='myagent:extension-state-changed')extensionRefreshes++;}},
     setInterval:()=>1,clearInterval:()=>{},setTimeout:()=>1,clearTimeout:()=>{},
   });
-  for (const name of ['markRunFinalSeen','ensureFinalVisibleAfterRunIfEnabled','ensureFinalVisibleAfterRun','checkSessionStreamProgress','consumeAgentSseResponse']) vm.runInContext(fn(name),c);
-  return {c,ctx,stream,setRun:r=>{run=r;},setUser:i=>{userIndex=i;},setCount:n=>{count=n;},stats:()=>({requests,renders,aborted,run})};
+  for (const name of ['markRunFinalSeen','ensureFinalVisibleAfterRunIfEnabled','ensureFinalVisibleAfterRun','checkSessionStreamProgress','requestExtensionStateConvergence','consumeExtensionControlEvent','consumeAgentSseResponse']) vm.runInContext(fn(name),c);
+  return {c,ctx,stream,setRun:r=>{run=r;},setUser:i=>{userIndex=i;},setCount:n=>{count=n;},stats:()=>({requests,renders,aborted,extensionRefreshes,run})};
 }
 async function main() {
   const a=fixture();
@@ -72,7 +74,15 @@ async function main() {
   closed.c.consumeAgentSseResponseInner=async()=>{throw new Error('lost socket');};
   await assert.rejects(closed.c.consumeAgentSseResponse({ok:true,body:{},headers:{get:()=> 'text/event-stream'}},closed.ctx,'s',11),/lost socket/);
   assert.equal(cleared,1);assert.equal(closed.ctx.streamConsuming,false);assert.equal(closed.stats().run,null);
+  assert.equal(closed.stats().extensionRefreshes,1,'stream close must converge extension panels');
   assert(closed.c.streamHistoryRecoveryBySession.has('s'));
+  const control=fixture();
+  const controlIndex=control.ctx.streamEventIndex;
+  assert.equal(control.c.consumeExtensionControlEvent({type:'extension_state_changed',control_event:true,ephemeral:true},'s'),true);
+  assert.equal(control.stats().extensionRefreshes,1,'live control event must refresh extension panels');
+  assert.equal(control.ctx.streamEventIndex,controlIndex,'control events must not advance the UI history cursor');
+  assert.equal(control.c.consumeExtensionControlEvent({type:'extension_state_changed',ephemeral:true},'s'),false);
+  assert.equal(control.c.consumeExtensionControlEvent({type:'future_control',control_event:true},'s'),false);
   const replacing=fixture();
   replacing.c.consumeAgentSseResponseInner=async()=>{replacing.setRun({runId:'run-2',ctx:{}});};
   await replacing.c.consumeAgentSseResponse({ok:true,body:{},headers:{get:()=> 'text/event-stream'}},replacing.ctx,'s',11);
