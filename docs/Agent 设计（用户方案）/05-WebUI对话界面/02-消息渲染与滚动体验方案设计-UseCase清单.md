@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v3（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -43,7 +43,7 @@
 ### UC-5B6 长会话性能
 - **触发**：数百条消息的会话。
 - **预期现象**：滚动/输入不卡；历史段懒渲染；内存不持续膨胀。
-- **依据**：`ui-performance.js`、懒渲染标记。
+- **依据**：`message-rendering.js`、`session-scroll-history.js`（懒渲染/裁剪）；`ui-performance.js` 仅做采样与直方图诊断（非渲染层优化）。
 
 ## 3. 边界
 
@@ -56,5 +56,6 @@
 
 ## 5. 版本记录
 
+- 2026-09-14 v3：修正性能实现归属（`ui-performance.js` 为诊断采样；懒渲染在 `message-rendering.js`/`session-scroll-history.js`）并更新版本线至 `d022831`。
 - 2026-09-14 v2：补齐跨容器共享附件 fetch/blob、节点释放与失败重试语义；用户消息图片改为等高横排缩略图。
 - 2026-09-13 v1：拆分首版（承接 UC-503/504/511）。

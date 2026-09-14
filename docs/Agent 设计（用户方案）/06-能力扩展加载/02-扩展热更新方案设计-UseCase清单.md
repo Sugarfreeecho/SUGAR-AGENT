@@ -1,6 +1,6 @@
 # 扩展热更新 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`agent_extensions.py`（`plugin_registry_signature / invalidate_extension_caches / reload_extensions / _schedule_plugin_cache_refresh / SWR`）、`agent_mcp._compute_config_signature`。
 - 上级：`00-能力扩展加载整体设计.md`

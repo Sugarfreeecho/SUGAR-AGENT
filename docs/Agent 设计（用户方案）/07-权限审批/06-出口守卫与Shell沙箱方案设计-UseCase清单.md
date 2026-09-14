@@ -1,6 +1,6 @@
 # 出口守卫与 Shell 沙箱 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`security/egress_guard.py`（172 行）、`security/shell_analysis.py`（403 行）、`security/policy.py`、`security/models.py`（SandboxProfile / SandboxHealth）。
 - 上级：`00-权限审批整体设计.md`
@@ -45,8 +45,9 @@
 |---|---|
 | UC-7F1 | `egress_guard.py`、`web_preapproved.py` |
 | UC-7F2 | `shell_analysis.py`、`policy.py` |
-| UC-7F3/7F4 | `models.py` L26–155、`runtime.py` L900–960 |
+| UC-7F3/7F4 | `models.py` L26–155、`runtime.py` L900–960（`enforce_leaf` 见 L981） |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：补充 `enforce_leaf` 行号（runtime.py L981）并更新版本线至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-710 与出口守卫条目）。

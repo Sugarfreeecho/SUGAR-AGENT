@@ -1,6 +1,6 @@
 # ReAct 运行时 · 模块整体设计
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：本模块总入口——先读本篇了解运行内核定位与功能地图，再进入各功能专项设计逐条审查。
 - 适用实现：`app/agent_loop.py`（≈10k 行主循环）、`app/agent_harness.py`（会话/执行器）、`app/agent_tokenizer.py`、`app/agent_reasoning.py`。
 - 配套：架构图 `workspace/archify_study/react_loop/react-loop.architecture.html`；能力清单 `ReAct循环能力清单.md`（本文件夹）。

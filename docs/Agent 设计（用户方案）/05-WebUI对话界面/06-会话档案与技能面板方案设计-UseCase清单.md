@@ -1,6 +1,6 @@
 # 会话、档案与技能面板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/session-management.js`、`modules/model-profiles.js`、`modules/settings.js`、`modules/skill-picker.js`、`modules/i18n.js`、对应后端 API。
 - 上级：`00-WebUI对话界面整体设计.md`

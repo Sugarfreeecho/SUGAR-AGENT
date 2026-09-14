@@ -1,8 +1,8 @@
 # 标题生成与运行观测 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`app/agent_loop.py`（标题 L8598–8900、计时 L1917–2110）、`app/runtime_observability.py`、`app/execution_metrics.py`。
+- 适用实现：`app/agent_loop.py`（标题 ≈L8694–8918、计时 L1917–2110）、`app/runtime_observability.py`、`app/execution_metrics.py`。
 - 上级：`00-ReAct运行时整体设计.md`
 
 ---
@@ -43,10 +43,11 @@
 
 | 用例 | 代码 |
 |---|---|
-| UC-2H1 | `agent_loop.py` L8598–8898 |
+| UC-2H1 | `agent_loop.py` ≈L8694–8918 |
 | UC-2H2/2H3 | L1917–2110 |
 | UC-2H4 | L4145、`execution_metrics.py` |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：修正标题段行号（≈L8694–8918）；版本线更新至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-212/213）。

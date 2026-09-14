@@ -1,6 +1,6 @@
 # 告警分级与错误卡 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf` + 未提交告警改动）
+- 版本：2026-09-13（覆盖至：HEAD `d022831` + 未提交告警改动）
 - 用途：逐条审查（四字段格式）。**注意：本功能含 🟡 规划项，审查时勿按"应有"验收规划项。**
 - 适用实现：`workspace/alert_spec_myagent/ALERT_SPEC.md`（v1.0，286 行）、`IMPLEMENTATION_20260912.md`、`agent_harness.py / agent_loop.py`（发出点）。
 - 上级：`00-横切能力整体设计.md`

@@ -1,6 +1,6 @@
 # LLM 接入 · 模块整体设计
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：本模块的**总入口**——先读本篇了解模块定位与功能地图，再按需进入各功能专项设计（每篇均按「触发 → 预期现象 → 规则与边界 → 依据」逐条审查）。
 - 适用实现：`app/llm/`（transport / provider_registry / responses/*）、`app/agent_openai.py`、`app/agent_harness.py`（切换/候选链）、`app/model_profiles.py`、`app/agent_reasoning.py`、`app/attachments/`（多模态投影）。
 - 配套：架构图 `workspace/archify_study/llm_provider_api/llm-provider-api-full.architecture.html`；能力清单 `LLMProviderAPI能力清单.md`（本文件夹）。

@@ -1,6 +1,6 @@
 # 扩展、子代理与运行注册 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/extension_state.py`（432 行）、`subagent_store.py`、`subagent_repository.py`、`run_registry.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`

@@ -1,6 +1,6 @@
 # 审批闸口、卡片与人工问答 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + 9-14 路径基准修复）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + 9-14 路径基准修复）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/tool_approval_gate.py`（352 行）、`human_interaction/service.py`、approvals/interactions API。
 - 上级：`00-权限审批整体设计.md`

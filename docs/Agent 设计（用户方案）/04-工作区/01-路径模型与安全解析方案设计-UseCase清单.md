@@ -1,6 +1,6 @@
 # 路径模型与安全解析 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + 9-14 路径基准修复）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + 9-14 路径基准修复）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_harness.py`（WORK_DIR 等）、`app/agent_tools.py`（路径解析）、`app/session_authorized_dirs.py`（规范化）。
 - 上级：`00-工作区整体设计.md`

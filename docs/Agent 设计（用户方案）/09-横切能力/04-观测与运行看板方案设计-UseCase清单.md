@@ -1,6 +1,6 @@
 # 观测与运行看板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/runtime_observability.py`（record_usage L269 等）、`app/execution_metrics.py`（运行看板/心跳）、`agent_loop.py`（埋点调用）。
 - 上级：`00-横切能力整体设计.md`

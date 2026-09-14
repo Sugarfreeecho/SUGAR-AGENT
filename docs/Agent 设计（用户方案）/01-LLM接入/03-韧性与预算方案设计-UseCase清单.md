@@ -1,6 +1,6 @@
 # 韧性与预算（重试 / 对冲 / 预算 / 时限） · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_openai.py`（主战场）、`app/agent_harness.py`（分类联动）。
 - 上级：`00-LLM接入整体设计.md`
@@ -17,7 +17,7 @@
 - **触发**：瞬时错误（429/5xx/连接抖动/流中断）。
 - **预期现象**：自动重试（≤4 次、1s 起的退避）；界面仅见轻量状态（LLM-RETRY 提示，见 ../09-横切能力/03）；模型不切换。
 - **规则与边界**：认证失败/参数错误等**不可重试**类不做重试；重试耗尽才进入候选切换（见 04）。
-- **依据**：`agent_openai.py`（OPENAI_MAX_RETRIES、`_is_retriable_openai_error`）、`_emit_retry_status`。
+- **依据**：`agent_openai.py`（OPENAI_MAX_RETRIES、`_is_retriable_openai_error`）、`agent_harness.py::_emit_retry_status`（L1378 定义）。
 
 ### UC-1C2 首 token 对冲（hedge）
 - **触发**：主请求发出后 30s 未达首 token。

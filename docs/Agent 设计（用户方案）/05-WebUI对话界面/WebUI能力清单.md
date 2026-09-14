@@ -1,14 +1,14 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：HEAD `6acc6bf` + API 识图工作区改动（2026-09-14 扫描）
+> 代码版本：HEAD `d022831` + API 识图工作区改动（2026-09-14 扫描）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | SPA 启动与模块汇聚（raw-source 打包技巧，全局挂载 marked / mermaid） | `frontend/src/app/index.js`、`main.js` | 【卡】 |
-| 状态仓库：session-store / message-store / subagent-store / context-store + selectors/renderers | `frontend/src/app/state/*`（16 个模块） | 【图】 |
+| 状态仓库：session-store / message-store / subagent-store / context-store + selectors/renderers | `frontend/src/app/state/*`（17 个模块，含 session-actions） | 【图】 |
 | 事件派发与 reducer：SSE 事件 → 状态归约 → 渲染 | `modules/event-dispatch.js`、`state/session-event-reducer.js` | 【图】 |
 | 布局面板与 Toast 容器 | `modules/layout-panels.js` | 【单】 |
 | 插件 UI 插槽（插件可注入界面位） | `app/plugin-ui-slots.js` | 【卡】 |
@@ -22,12 +22,12 @@
 | 平滑流式输出（逐帧节流） | `modules/smooth-stream.js` | 【卡】 |
 | 滚动历史锚点与回看 | `modules/session-scroll-history.js` | 【卡】 |
 | TOC 与 Todo 面板 | `modules/toc-todo.js` | 【卡】 |
-| 性能治理（长会话渲染优化） | `modules/ui-performance.js` | 【单】 |
+| 性能采样与诊断（直方图/计时；长会话懒渲染在 `message-rendering.js`、`session-scroll-history.js`） | `modules/ui-performance.js` | 【单】 |
 
 ## 3. 输入与交互
 | 能力 | 位置 | 状态 |
 |---|---|---|
-| 发送流程与失败恢复 | `modules/input-actions.js`、后端 `post_session_steer` | 【图】 |
+| 发送流程与失败恢复（发送主流程在 `sse-handling.js`：`sendMessage`/管道锁；`input-actions.js` 为输入键助手） | `modules/sse-handling.js`、后端 `post_session_steer` | 【图】 |
 | Steer 中断（运行中插入指令，失败可恢复 `recover_session_steer`） | 后端 `webui.py` steer API | 【单】 |
 | 技能选取（skill-picker，随消息注入已选技能） | `modules/skill-picker.js`、`_build_agent_message_with_selected_skills` | 【卡】 |
 | 路径选择器与打开协议（`sugaragent://`） | `vendor/myagent_path_picker.js`、后端 `api_pick_path` | 【单】 |
@@ -41,6 +41,8 @@
 | 断线续看：空闲 120s 探测、重连 ≤10 次（0.5s→15s 退避）、耗尽提示 | `modules/sse-handling.js` 顶部常量 | 【卡】 |
 | 发送管道锁（防重复提交） | `modules/sse-handling.js` `acquireSendPipelineLock` | 【卡】 |
 | 观察者重连开关 | 后端 `MYAGENT_ENABLE_STREAM_RECONNECT`、`streamReconnect` | 【单】 |
+| 服务端自主运行自动接管（心跳 `active_session_ids`→≤5s 挂接观察流） | `webui._runtime_status_payload`、`modules/session-management.js` 心跳接管 | 【单】 |
+| 扩展状态控制事件（observer 流 `ephemeral+control_event`→前端刷新扩展面板） | `webui._observer_extension_control_event`、`modules/sse-handling.js::consumeExtensionControlEvent` | 【单】 |
 
 ## 5. 面板能力
 | 能力 | 位置 | 状态 |
@@ -74,3 +76,7 @@
 - 后端另含 Runtime V2 同步/迁移（legacy→V2）与孤儿运行清理逻辑，归属"会话存储 Runtime V2"模块清单详述。
 - 图片准入、三协议投影、独立识图 API 和生命周期的横切契约见 [识图与多模态投影](../09-横切能力/02-识图与多模态投影方案设计-UseCase清单.md)。
 - 主题/样式细节（`styles/*.css`）、构建工具链（Vite）不在本次清单范围。
+
+## 9. 版本记录
+
+- 2026-09-14（v2）：补录服务端自主运行自动接管与扩展状态控制事件；修正状态模块计数（17）、`ui-performance.js`/`input-actions.js` 职责描述；版本线更新至 `d022831`。

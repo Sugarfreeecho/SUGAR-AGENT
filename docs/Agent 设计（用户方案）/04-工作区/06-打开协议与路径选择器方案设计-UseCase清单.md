@@ -1,6 +1,6 @@
 # 打开协议与路径选择器 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/webui.py`（`open_workspace_file / _resolve_allowed_local_path / api_pick_path`）、`frontend/src/vendor/myagent_path_picker.js`、`app/path_picker_util.py`。
 - 上级：`00-工作区整体设计.md`
@@ -40,8 +40,9 @@
 |---|---|
 | UC-4F1 | `webui.py` L1775–1862 |
 | UC-4F2 | 协议实现（webui/前端） |
-| UC-4F3 | `api_pick_path` L2415；vendor/path_picker_util |
+| UC-4F3 | `api_pick_path` L2459；vendor/path_picker_util |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：修正 `api_pick_path` 行号（L2459）并更新版本线至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-410）。

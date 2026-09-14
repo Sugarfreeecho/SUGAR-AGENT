@@ -1,6 +1,6 @@
 # SSE 管道与断线续看 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（3.6k 行）、`modules/event-dispatch.js`、后端 `runtime_v2_session_stream`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -21,18 +21,24 @@
 ### UC-5C2 断线续看
 - **触发**：网络闪断/代理切断/后台休眠导致 SSE 中断。
 - **预期现象**：自动重连续看——**空闲 120s 触发探测、重连 ≤10 次、退避 0.5s→15s**；从上次游标继续（不丢不重）；次数耗尽后明确提示"刷新页面"。
-- **规则与边界**：续看靠后端游标（after_seq/after_index），不是内存重放；提示写入界面日志（error-log）不弹窗轰炸。
+- **规则与边界**：续看靠后端游标（after_seq/after_index），不是内存重放；提示写入界面日志（error-log）不弹窗轰炸。服务端**自主续跑**（如 goal 工作流）另由 5 秒心跳提示并自动接管（见 UC-5C5）。
 - **依据**：`sse-handling.js` 顶部常量（SSE_IDLE_TIMEOUT_MS / STREAM_RECONNECT_MAX_ATTEMPTS 等）、`runtime_v2_session_stream`。
 
 ### UC-5C3 观察者重连（多视图）
 - **触发**：同一会话在多个视图（主界面/子代理视图）同时打开。
-- **预期现象**：各视图独立续看；互不拖垮；开关受 `MYAGENT_ENABLE_STREAM_RECONNECT` 控制。
-- **依据**：`streamReconnect` 配置、观察者流设计（webui L190）。
+- **预期现象**：各视图独立续看；互不拖垮；开关受 `MYAGENT_ENABLE_STREAM_RECONNECT` 控制；观察者流会把 `extension_state_changed` 以 `ephemeral+control_event` 转发，前端消费后派发 `myagent:extension-state-changed` 刷新扩展面板，且**不推进** UI 投影游标。
+- **依据**：`streamReconnect` 配置、观察者流设计（webui L190）、`_observer_extension_control_event`。
 
 ### UC-5C4 事件回放一致性
 - **触发**：刷新页面 / 打开历史会话。
 - **预期现象**：已渲染内容与历史一致（含已撤销/已恢复类状态）；不发生"重放重复执行"（回放只读）。
-- **依据**：`event-dispatch.js`、历史扫描（scanExisting）。
+- **依据**：`event-dispatch.js`、change-review 前端历史扫描（`plugins/change-review/web/change-review.js::scanExisting`）。
+
+### UC-5C5 服务端自主运行自动接管
+- **触发**：服务端自发的续跑/恢复运行（如 goal 工作流 `workflow-runner-*`），当前会话被打开且本地无流。
+- **预期现象**：≤5 秒内浏览器自动挂接观察流并开始渲染新事件；已手动停止（stop suppress）或已在流中的会话不被重复接管。
+- **规则与边界**：由 5 秒心跳 `GET /api/runtime-status` 的 `active_session_ids` 驱动（`maybeTakeOverActiveRuntimeSession`），接管时伴随一次扩展状态收敛刷新；不改变"停止/插话"语义。
+- **依据**：`webui._runtime_status_payload`、`session-management.js`（心跳接管）、`sse-handling.js::attachSessionEventStream`。
 
 ## 3. 边界
 
@@ -45,9 +51,11 @@
 |---|---|
 | UC-5C1 | `sse-handling.js` L40–120（锁） |
 | UC-5C2 | 常量区 L1–24 + 重连逻辑 |
-| UC-5C3 | `webui.py` L190/1736 |
+| UC-5C3 | `webui.py` L190/1736；`_observer_extension_control_event` |
 | UC-5C4 | `event-dispatch.js` |
+| UC-5C5 | `webui._runtime_status_payload`；`session-management.js` 心跳接管 |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：补录服务端自主运行自动接管（UC-5C5）与扩展状态控制事件（UC-5C3）；澄清 scanExisting 归属；更新版本线至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-505）。

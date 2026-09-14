@@ -1,6 +1,6 @@
 # 审批与交互卡片 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/human-interactions.js`、`modules/permissions.js`、后端 approvals/interactions API。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -51,8 +51,9 @@
 | UC-5E1/5E2 | `human-interactions.js`、approvals API |
 | UC-5E3 | `analyze_session_approval` |
 | UC-5E4 | interaction 恢复段（webui L789–938） |
-| UC-5E5 | `set_session_permissions` L3460+ |
+| UC-5E5 | `set_session_permissions` L3517 |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：修正 `set_session_permissions` 行号（webui.py L3517）并更新版本线至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-508）。

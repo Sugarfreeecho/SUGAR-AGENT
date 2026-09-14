@@ -1,8 +1,8 @@
 # 输入、发送与插话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v3（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`modules/input-actions.js`、`modules/skill-picker.js`、后端 steer API、`webui.py` 消息路径。
+- 适用实现：`modules/sse-handling.js`（发送/插话主流程 `sendMessage`/`acquireSendPipelineLock`）、`modules/input-actions.js`（输入键助手）、`modules/skill-picker.js`、后端 steer API、`webui.py` 消息路径。
 - 上级：`00-WebUI对话界面整体设计.md`
 
 ---
@@ -17,7 +17,7 @@
 - **触发**：输入并发送（含含技能/附件的情况）。
 - **预期现象**：消息立即上屏（乐观渲染）；发送管道锁保证连点不重复提交；失败时有明确错误与"恢复"入口。
 - **规则与边界**：空消息/纯空白不发；发送中再点发送不产生第二条 run。
-- **依据**：`input-actions.js`、`acquireSendPipelineLock`。
+- **依据**：`sse-handling.js::sendMessage`、`acquireSendPipelineLock`（`sse-handling.js` L47–53）。
 
 ### UC-5A2 停止与插话
 - **触发**：运行中点"停止"或发送追加指令。
@@ -38,7 +38,7 @@
 ### UC-5A5 输入体验细节
 - **触发**：常用编辑操作（多行、快捷键、粘贴图片）。
 - **预期现象**：多行输入与发送键行为符合习惯；粘贴/拖拽图片自动上传，回执只保存附件引用；无丢字、重复字符或长期保存的浏览器 blob URL。
-- **依据**：`input-actions.js`（输入事件处理段）。
+- **依据**：`input-actions.js`（Enter/组合键助手）+ `sse-handling.js`（发送/粘贴管道）。
 
 ### UC-5A6 待发送队列中的图片
 
@@ -56,12 +56,13 @@
 
 | 用例 | 代码 |
 |---|---|
-| UC-5A1/5A2 | `webui.py` steer 段 + `input-actions.js` |
+| UC-5A1/5A2 | `webui.py` steer 段 + `sse-handling.js`（发送与管道锁）、`input-actions.js`（输入键） |
 | UC-5A3 | `skill-picker.js`、`_build_*_with_selected_skills` |
 | UC-5A4~5A5 | 上传 API、path picker、统一附件准入 |
 | UC-5A6 | `sse-handling.js`、附件 references API |
 
 ## 5. 版本记录
 
+- 2026-09-14 v3：修正依据归属（发送主流程在 `sse-handling.js`；`input-actions.js` 仅为输入键助手）并更新版本线至 `d022831`。
 - 2026-09-14 v2：补齐图片耐久引用、服务端准入校验和 follow-up 队列 pin。
 - 2026-09-13 v1：拆分首版（承接 UC-501/502/510）。

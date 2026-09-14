@@ -1,6 +1,6 @@
 # 文件工具矩阵 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（read/write/edit/apply_patch/ls/glob/grep，L1956–3650）。
 - 上级：`00-工具系统整体设计.md`

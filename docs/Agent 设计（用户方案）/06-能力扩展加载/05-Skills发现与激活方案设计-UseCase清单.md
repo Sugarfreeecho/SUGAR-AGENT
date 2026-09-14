@@ -1,6 +1,6 @@
 # Skills 发现与激活 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（L109–214、L4055–4199）、`workspace/skills/**`、`skill_states.json`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -17,7 +17,7 @@
 - **触发**：扫描 `workspace/skills/`（含插件携带的技能目录）。
 - **预期现象**：合法技能（frontmatter 含 name+description）进入目录；同名技能按覆盖规则处理（后见者胜/项目优先）；坏技能被跳过并记录。
 - **规则与边界**：发现基于**目录树签名**缓存（改动才重扫）；插件技能与用户技能来源可区分。
-- **依据**：`discover_skills / _skills_tree_signature / _plugin_skill_directories`。
+- **依据**：`discover_skills / _skills_tree_signature / _plugin_skill_directories`（`agent_tools.py` L163）。
 
 ### UC-6E2 启停状态持久化
 - **触发**：开启/关闭某技能。
@@ -47,8 +47,9 @@
 | UC-6E1 | `agent_tools.py` L163–214、L4055 |
 | UC-6E2 | L122–163 |
 | UC-6E3 | L4180 |
-| UC-6E4 | L4157、L118 |
+| UC-6E4 | L4169（get_skills_catalog）、L118（skills_catalog_generation） |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：修正技能符号与行号（`_plugin_skill_directories` L163、L4169/L118）；版本线更新至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-606/607）。

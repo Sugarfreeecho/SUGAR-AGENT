@@ -1,6 +1,6 @@
 # key_context 与恢复装配 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_loop.py`（装载/提交）、`app/agent_memory.py`（写入端）、`runtime_v2/history_ops.py`（commit_context_summary）。
 - 上级：`00-ReAct运行时整体设计.md`

@@ -1,6 +1,6 @@
 # 上下文压缩全链路 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_memory.py`（主实现，`run_context_policy` L1677）、`agent_loop.py`（触发/调度 L4909–5217）、`agent_openai.compact_responses_history`（原生线）。
 - 上级：`00-横切能力整体设计.md`

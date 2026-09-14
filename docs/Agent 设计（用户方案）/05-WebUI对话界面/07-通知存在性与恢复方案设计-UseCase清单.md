@@ -1,6 +1,6 @@
 # 通知、存在性与恢复 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/webui.py`（ui-presence / 通知段）、`modules/layout-panels.js`、恢复 runner（`start_react_recovery_runner`）。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -42,10 +42,11 @@
 
 | 用例 | 代码 |
 |---|---|
-| UC-5G1/5G2 | `webui.py` L4344+（presence）、通知段 |
+| UC-5G1/5G2 | `webui.py` L4388+（presence 工具段；路由 `/api/ui-presence` L4710）、通知段 |
 | UC-5G3 | `recover_interrupted_react_sessions` L938+ |
-| UC-5G4 | `client_timing` L4261 |
+| UC-5G4 | `client_timing` L4305 |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：修正 presence/client_timing 行号并更新版本线至 `d022831`（另：服务端自主运行的自动接管见 05-03 UC-5C5）。
 - 2026-09-13 v1：拆分首版（承接 UC-512/514）。

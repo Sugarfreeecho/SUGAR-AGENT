@@ -1,6 +1,6 @@
 # 规则、授权与存储 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`security/store.py`（680 行）、`security/runtime.py`（规则 L819–960）、`security/web_preapproved.py`。
 - 上级：`00-权限审批整体设计.md`

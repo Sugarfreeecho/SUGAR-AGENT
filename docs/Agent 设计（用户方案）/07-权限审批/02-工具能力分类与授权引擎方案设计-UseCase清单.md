@@ -1,6 +1,6 @@
 # 工具能力分类与授权引擎 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + 9-14 路径基准修复）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + 9-14 路径基准修复）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`security/runtime.py`（classify_tool L201–627、authorize_request L627–819）、`security/policy.py`。
 - 上级：`00-权限审批整体设计.md`

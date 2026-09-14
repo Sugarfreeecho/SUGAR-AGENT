@@ -1,6 +1,6 @@
 # 自动切换与预算阻断 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf` + 未提交告警改动）
+- 版本：2026-09-13（覆盖至：HEAD `d022831` + 未提交告警改动）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_harness.py`（`_FallbackCompletions` 全链路）、`app/model_profiles.py`（候选链）。
 - 上级：`00-LLM接入整体设计.md`

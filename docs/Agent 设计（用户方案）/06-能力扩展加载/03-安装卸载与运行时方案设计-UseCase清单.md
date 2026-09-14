@@ -1,6 +1,6 @@
 # 安装、卸载与运行时 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/installer.py`、`plugins/runtime.py`、`plugins/worker.py`、`worker_node.cjs`、`agent_extensions.install_plugin*`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -43,8 +43,9 @@
 | 用例 | 代码 |
 |---|---|
 | UC-6C1~6C3 | `agent_extensions.py` L1150–1187、`plugins/installer.py` |
-| UC-6C4 | `plugins/runtime.py`、`worker_node.cjs`、L599–621 |
+| UC-6C4 | `plugins/runtime.py`、`worker_node.cjs`；后台服务启停 `agent_extensions.py` L599–621 |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：澄清 L599–621 归属（`agent_extensions.py` 插件后台服务启停）；版本线更新至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-603/604）。

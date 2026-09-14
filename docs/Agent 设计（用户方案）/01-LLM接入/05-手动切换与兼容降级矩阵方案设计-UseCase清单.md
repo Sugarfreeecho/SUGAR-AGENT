@@ -1,6 +1,6 @@
 # 手动切换与兼容降级矩阵 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_harness.py`、`app/agent_subagent.py`、`app/agent_openai.py`（媒体/兼容降级）。
 - 上级：`00-LLM接入整体设计.md`

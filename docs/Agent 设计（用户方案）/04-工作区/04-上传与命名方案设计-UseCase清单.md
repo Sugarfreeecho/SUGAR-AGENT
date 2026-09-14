@@ -1,6 +1,6 @@
 # 上传、附件对象与命名 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：逐条审查上传文件与图片附件在工作区侧的落点、授权、读取和备份边界。
 - 适用实现：`app/webui.py`（`upload_chat_files / _safe_upload_filename / _dedupe_upload_path / read_attachment`）、`app/attachments/{local,registry,access,api,lifecycle}.py`。
 - 上级：`00-工作区整体设计.md`

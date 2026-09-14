@@ -1,6 +1,6 @@
 # 会话存储 Runtime V2 · 模块整体设计
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：本模块总入口；各功能专项设计按四字段逐条审查。
 - 适用实现：`app/runtime_v2/**`（26 文件：event_log / projector / ui_projection / model_projection / snapshot_store / history_ops / migration / repair / log_compaction / extension_state / subagent_store / run_registry / gateway / mirror / legacy_compat …）。
 - 配套：架构图 `workspace/archify_study/runtime_v2/runtime-v2.architecture.html`；能力清单 `会话存储RuntimeV2能力清单.md`（本文件夹）。

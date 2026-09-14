@@ -1,6 +1,6 @@
 # Hooks、信任与审计 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/hooks.json.example`、`agent_extensions.py`（L106–1060、L1202–1398）、`security/extensions.py`。
 - 上级：`00-能力扩展加载整体设计.md`

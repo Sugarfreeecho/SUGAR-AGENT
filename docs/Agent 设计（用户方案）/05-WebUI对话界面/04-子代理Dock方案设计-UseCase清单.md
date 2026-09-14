@@ -1,8 +1,8 @@
 # 子代理 Dock · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`frontend/src/app/state/subagent-*`（10 个模块）、`modules/subagent.js`、后端 subagent API 组。
+- 适用实现：`frontend/src/app/state/subagent-*`（9 个模块）、`modules/subagent.js`、后端 subagent API 组。
 - 上级：`00-WebUI对话界面整体设计.md`
 
 ---
@@ -49,4 +49,5 @@
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：修正子代理状态模块计数（9 个）并更新版本线至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-507 与 UC-1E2 的界面部分）。

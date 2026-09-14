@@ -1,15 +1,15 @@
 # Agent 运行时 ReAct 循环 · 能力清单（代码证据版）
 
 > 对象：MyAgent Agent 运行时（ReAct 主循环及配套运行时能力）
-> 代码版本：HEAD `6acc6bf` + API 识图工作区改动（2026-09-14 扫描）
+> 代码版本：HEAD `d022831` + API 识图工作区改动（2026-09-14 扫描）
 > 图例：【图】见 `react-loop.architecture.html`（10 节点）；【卡】图中卡片；【单】仅本清单
 
 ## 1. 主循环与轮次结构
 | 能力 | 位置 | 状态 |
 |---|---|---|
-| ReAct 主循环 `react_node` / `_react_node_once`（决策-行动-观察），线程外执行避免阻塞事件循环 | `agent_loop.py`（L2853/L4509/L8534） | 【图】 |
+| ReAct 主循环 `react_node` / `_react_node_once`（决策-行动-观察），线程外执行避免阻塞事件循环 | `agent_loop.py`（L2868/L4524/L8549） | 【图】 |
 | 每轮静态 system 多段重建：进程级缓存 + 修订漂移后台重建（最多一次请求陈旧） | `agent_loop.py` `_build_static_segments_for_session`、`_schedule_static_segments_rebuild` | 【图】 |
-| 兜底与收尾：`validate_final` / `prepare_final_event` / `finish`、事件流 `astream_events` / `…_continuation` | `agent_loop.py` | 【单】 |
+| 兜底与收尾：`validate_final`（现为 PASS 占位事件，不调用独立校验模型）/ `prepare_final_event` / `finish`、事件流 `astream_events` / `…_continuation` | `agent_loop.py` | 【单】 |
 | 会话标题后台生成（诊断 + 兜底、worker 队列） | `agent_loop.py` `_session_title_worker` 等 | 【卡】 |
 
 ## 2. 提示与上下文装配

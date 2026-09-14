@@ -1,6 +1,6 @@
 # API 识图与多模态投影 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `6acc6bf` + API 识图工作区改动）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
 - 用途：按「触发 → 预期现象 → 规则与边界 → 依据」逐条审查图片从接入、存储、模型请求到结果和生命周期的完整链路。
 - 适用实现：`app/attachments/**`、`app/vision_api.py`、`app/agent_openai.py`、`app/llm/transport.py`、`app/agent_harness.py`、`app/agent_loop.py`、`app/agent_mcp.py`、`app/agent_subagent.py`、`app/runtime_v2/**`、`app/webui.py`、`frontend/src/app/modules/{workspace-media,sse-handling,event-dispatch,message-rendering}.js`。
 - 上级：`00-横切能力整体设计.md`

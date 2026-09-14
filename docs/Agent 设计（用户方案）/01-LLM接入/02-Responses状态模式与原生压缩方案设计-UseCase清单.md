@@ -1,6 +1,6 @@
 # Responses 状态模式与原生压缩 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（同上级格式）。
 - 适用实现：`app/llm/responses/state.py`、`compact.py`、`capabilities.py`、`app/agent_openai.py`、`app/agent_loop.py`（commit）。
 - 上级：`00-LLM接入整体设计.md`

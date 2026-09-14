@@ -1,7 +1,7 @@
 # LLM Provider API 接入层 · 能力清单（代码证据版）
 
 > 对象：MyAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
-> 代码版本：HEAD `6acc6bf` + API 识图工作区改动（2026-09-14 扫描）
+> 代码版本：HEAD `d022831` + API 识图工作区改动（2026-09-14 扫描）
 > 图例：【图】已画入 v3 全景图节点 / 【卡】在图上卡片中 / 【单】仅本清单（超出 12 主节点容量）
 
 ## 1. 请求生命周期与身份
@@ -31,8 +31,8 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 三条线协议：OpenAI Responses / Chat Completions 兼容 / Anthropic Messages | `llm/transport.py` 三个 Transport 类 | 【图·三端点】 |
-| `auto` 协议判定：官方 host 走原生、其余按兼容；`EXECUTOR_LLM_TYPE=openai` 可显式指定 Responses 代理 | `llm/transport.py` `detect_provider/resolve_provider` | 【图·边标签】 |
-| Responses 状态模式：`stateful`（previous_response_id）/`stateless`（重放）/`auto` | `llm/responses/state.py` `ResponsesStateMode`、`ContinuationAnchor`、`evaluate_continuation` | 【卡】 |
+| `auto` 协议判定：官方 host 走原生、其余按兼容；强制 Responses 用档案 `llm_type:openai-responses`（legacy `openai` 归一为 auto） | `llm/transport.py` `detect_provider/resolve_provider` | 【图·边标签】 |
+| Responses 状态模式：`stateful`（previous_response_id）/`stateless`（重放）/`auto` | `llm/transport.py` `ResponsesStateMode`；续接判定 `llm/responses/state.py` `ContinuationAnchor`、`evaluate_continuation` | 【卡】 |
 | WebSocket 模式协商：`auto/enabled/disabled`（仅官方 host 探测） | `llm/transport.py` `_responses_websocket_mode` | 【卡】 |
 | Responses 原生压缩：checkpoint 与匹配、可续接 | `llm/responses/compact.py` | 【单】 |
 | 结构化错误分类：rate_limit/transient/invalid_previous/encrypted_reasoning/unsupported_compact… | `llm/responses/capabilities.py` | 【单】 |

@@ -1,8 +1,8 @@
 # 主循环与轮次结构 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（触发 → 预期现象 → 规则与边界 → 依据）。
-- 适用实现：`app/agent_loop.py`（`react_node` L8534 / `_react_node_once` L4509 / `finish` L8903 / `astream_events` L8973）。
+- 适用实现：`app/agent_loop.py`（`react_node` L8549 / `_react_node_once` L4524 / `finish` L8918 / `astream_events` L8988）。
 - 上级：`00-ReAct运行时整体设计.md`
 
 ---
@@ -16,7 +16,7 @@
 ### UC-2A1 决策-行动-观察循环
 - **触发**：用户消息进入（或恢复运行继续）。
 - **预期现象**：模型先想（可能有思考计时提示）→ 若调工具则执行并回填 → 再想……循环推进；最终给出答复并结束 run。
-- **规则与边界**：循环在**线程外**执行（不阻塞事件循环，界面保持响应）；"最终答复"前有一次合法性校验（validate_final）。
+- **规则与边界**：循环在**线程外**执行（不阻塞事件循环，界面保持响应）；"最终答复"前会推 `validate_final` 事件——当前实现**不再调用独立校验模型**，仅为 PASS 占位（见 05 写栅栏与提交链）。
 - **依据**：`react_node / _react_node_once / validate_final / prepare_final_event`。
 
 ### UC-2A2 流式事件出口
@@ -45,11 +45,12 @@
 
 | 用例 | 代码 |
 |---|---|
-| UC-2A1 | `agent_loop.py` L4509 / L8534 |
-| UC-2A2 | `_push_stream_event` L2709、`astream_events` L8973 |
-| UC-2A3 | L8903 / L2551 / L2205 |
-| UC-2A4 | L1679–1779 |
+| UC-2A1 | `agent_loop.py` L4524 / L8549 |
+| UC-2A2 | `_push_stream_event` L2724、`astream_events` L8988 |
+| UC-2A3 | L8918 / L2551 / L2205 |
+| UC-2A4 | L1765 起 |
 
 ## 5. 版本记录
 
+- 2026-09-14 v2：修正 agent_loop.py 行号漂移（+15）与 validate_final 描述；版本线更新至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-201/214 等）。

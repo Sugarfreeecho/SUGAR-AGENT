@@ -1,6 +1,6 @@
 # 插件加载与清单 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/manager.py`、`plugins/loader.py`、`agent_extensions.load_plugins`、`plugins/models.py`。
 - 上级：`00-能力扩展加载整体设计.md`

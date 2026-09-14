@@ -1,6 +1,6 @@
 # 流式解析、思考字段与 DSML 救援 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_openai.py`（流解析 + 救援）、`app/agent_reasoning.py`、`app/llm/transport.py`。
 - 上级：`00-LLM接入整体设计.md`

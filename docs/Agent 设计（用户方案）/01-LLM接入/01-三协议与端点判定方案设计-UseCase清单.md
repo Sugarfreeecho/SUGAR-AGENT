@@ -1,6 +1,6 @@
 # 三协议与端点判定 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `6acc6bf`）
+- 版本：2026-09-13（覆盖至：HEAD `d022831`）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用实现：`app/llm/transport.py`、`app/llm/provider_registry.py`、`app/model_profiles.py`（URL/probe）。
 - 上级：`00-LLM接入整体设计.md`
@@ -27,7 +27,7 @@
 ### UC-1A1 三协议自动判别（auto）
 - **触发**：任一模型档案发起对话。
 - **预期现象**：官方 OpenAI host → Responses；官方 Anthropic host → Messages；其余端点一律 → Chat Completions 兼容；用户无感。
-- **规则与边界**：`auto` 规则**故意保守**——只有官方 host 走原生协议，代理/镜像/第三方一律兼容线（避免误判）；如需强制可设 `EXECUTOR_LLM_TYPE=openai`（可让 Responses 代理走原生线）。
+- **规则与边界**：`auto` 规则**故意保守**——只有官方 host 走原生协议，代理/镜像/第三方一律兼容线（避免误判）；如需强制走 Responses，请把档案的 `llm_type` 设为 `openai-responses`（legacy 环境值 `openai` 现已归一为 `auto`，不再用于强制 Responses）。
 - **依据**：`transport.py::detect_provider / resolve_provider / resolve_profile_provider`。
 
 ### UC-1A2 端点 URL 构造
