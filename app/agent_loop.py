@@ -4467,6 +4467,11 @@ def _classify_api_error_leaf(exc: BaseException) -> dict:
                 "msg": "已重试 3 次，服务器仍返回错误。",
                 "solution": "请稍后重试；若持续出现请联系 API 服务商。",
                 "retry": 3}
+    if "budget" in msg and ("exhausted" in msg or "fallback" in msg):
+        return {"code": "BUDGET", "title": "重试预算耗尽",
+                "msg": "已多次重试仍无法获得模型响应。",
+                "solution": "请检查网络、VPN/代理与模型服务状态后重试；必要时切换其他模型。",
+                "retry": 1}
     return {"code": "OTHER", "title": "LLM 调用异常",
             "msg": "发生未知错误。",
             "solution": "请先检查模型配置，或到 GitHub 提交 issue 反馈。",
@@ -4480,14 +4485,25 @@ def _classify_api_error(exc: BaseException) -> dict:
     例如候选切换层抛出的 RuntimeError 往往以底层 403/400 异常为 cause，
     此时应展示 403"访问被拒绝"等可操作信息，而不是笼统的"发生未知错误"。
     """
-    best = None
-    for item in _iter_exception_chain(exc):
-        classified = _classify_api_error_leaf(item)
-        if classified.get("code") != "OTHER":
-            return classified
-        if best is None:
-            best = classified
-    return best if best is not None else _classify_api_error_leaf(exc)
+    leaves: list[dict] = [
+        _classify_api_error_leaf(item) for item in _iter_exception_chain(exc)
+    ]
+    # 优先级：NET/CTX（可操作/可恢复）> 其他具体错误码 > BUDGET > OTHER。
+    # 17bea699：预算耗尽的 RuntimeError 包裹着连接错误 cause，必须让 NET
+    # 胜出，才能给出"网络连接失败"并可进入重连路径，而不是"未知错误"。
+    for preferred in ("NET", "CTX"):
+        for leaf in leaves:
+            if leaf.get("code") == preferred:
+                return leaf
+    for leaf in leaves:
+        if leaf.get("code") not in {"OTHER", "BUDGET"}:
+            return leaf
+    for leaf in leaves:
+        if leaf.get("code") == "BUDGET":
+            return leaf
+    if leaves:
+        return leaves[0]
+    return _classify_api_error_leaf(exc)
 
 
 async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
@@ -7520,7 +7536,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     state.pop("_network_reconnect_attempts", None)
                     if emit:
                         import json as _json
-                        _err_data = {"c": _cls["code"], "t": _cls["title"], "m": _cls["msg"], "s": _cls["solution"], "d": _err_detail}
+                        _err_data = {"c": _cls["code"], "t": _cls["title"], "m": _cls["msg"], "s": _cls["solution"], "d": _err_detail, "retry": int(_cls.get("retry") or 0)}
                         await _push_stream_event(
                             state,
                             {"type": "error", "content": "__ERR_CARD__" + _json.dumps(_err_data, ensure_ascii=False)},

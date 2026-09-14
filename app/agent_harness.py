@@ -1140,6 +1140,23 @@ def _candidate_input_modalities(item: Dict[str, Any]) -> set[str]:
     return {"text"}
 
 
+def _raise_budget_exhausted_before_fallback(
+    last_error: Optional[BaseException],
+) -> None:
+    """Raise the budget-stop error while preserving its real cause.
+
+    17bea699 事故复盘：此前这里裸抛 RuntimeError，丢失了底层
+    Connection error 等真实原因，导致 UI 分类器只能显示"未知错误"，
+    也无法进入网络重连路径。保留 cause 链后分类器可给出 NET 等
+    可操作提示（Alert Spec §8 R1）。
+    """
+
+    message = "LLM request budget exhausted before model fallback"
+    if last_error is not None:
+        raise RuntimeError(message) from last_error
+    raise RuntimeError(message)
+
+
 class _FallbackCompletions:
     def __init__(
         self,
@@ -1200,7 +1217,11 @@ class _FallbackCompletions:
             # hedge claim. Every additional fallback model consumes the same
             # logical request budget instead of multiplying retries invisibly.
             if idx > 0 and not _claim_additional_recovery_request():
-                raise RuntimeError("LLM request budget exhausted before model fallback")
+                self._emit_blocked_switch_status(
+                    last_model,
+                    str(item.get("model") or ""),
+                )
+                _raise_budget_exhausted_before_fallback(last_error)
             call_kwargs = dict(kwargs)
             call_kwargs["messages"] = _remap_serialized_reasoning_format(
                 list(call_kwargs.get("messages") or []),
@@ -1262,6 +1283,13 @@ class _FallbackCompletions:
                             and _claim_additional_recovery_request()
                         ):
                             retry_index += 1
+                            self._emit_retry_status(
+                                str(item.get("model") or ""),
+                                retry_index,
+                                retry_attempts,
+                                retry_backoff,
+                                exc,
+                            )
                             logger.warning(
                                 "模型瞬时故障，同模型重试 %s/%s: model=%s error=%s",
                                 retry_index,
@@ -1345,6 +1373,70 @@ class _FallbackCompletions:
             )
         except Exception:
             logger.debug("多模态回退状态回调失败", exc_info=True)
+
+
+    def _emit_retry_status(
+        self,
+        model: str,
+        retry_index: int,
+        retry_attempts: int,
+        delay_s: float,
+        error: BaseException,
+    ) -> None:
+        """即时推送"同模型重试"过程（Alert Spec: LLM-RETRY，L1/ephemeral）。"""
+
+        cb = self._status_callback
+        if not cb:
+            return
+        try:
+            error_text = _redact_runtime_log_text(error)
+            cb(
+                {
+                    "type": "status",
+                    "content": (
+                        f"模型瞬时故障，正在重试（第 {int(retry_index)}/{int(retry_attempts)} 次，"
+                        f"{float(delay_s):g}s 后重试）…\n错误：{error_text}"
+                    ),
+                    "alert_id": "LLM-RETRY",
+                    "severity": "notice",
+                    "phase": "retry",
+                    "attempt": int(retry_index),
+                    "total": int(retry_attempts),
+                    "delay_s": float(delay_s),
+                    "model": _masked_model_label(model),
+                    "coalesce_key": "LLM-RETRY",
+                    "recoverable": True,
+                    "ephemeral": True,
+                }
+            )
+        except Exception:
+            logger.debug("模型重试状态回调失败", exc_info=True)
+
+    def _emit_blocked_switch_status(self, from_model: str, to_model: str) -> None:
+        """预算耗尽导致无法自动切换备用模型时明确告知用户（LLM-BLOCKED-SWITCH，L2）。"""
+
+        cb = self._status_callback
+        if not cb:
+            return
+        try:
+            content = "连接持续失败，但重试预算已耗尽，无法自动切换备用模型"
+            if str(to_model or "").strip():
+                content += f"（候选：{_masked_model_label(to_model)}）"
+            content += "。请检查网络/代理，或在模型选择器中手动切换。"
+            cb(
+                {
+                    "type": "status",
+                    "content": content,
+                    "alert_id": "LLM-BLOCKED-SWITCH",
+                    "severity": "warning",
+                    "phase": "switch",
+                    "model": _masked_model_label(from_model),
+                    "to_model": _masked_model_label(to_model),
+                    "coalesce_key": "LLM-BLOCKED-SWITCH",
+                }
+            )
+        except Exception:
+            logger.debug("预算阻断切换状态回调失败", exc_info=True)
 
 
 class _ScopeClientRegistry:
@@ -1786,7 +1878,11 @@ class ExecutorLLMClient:
                 )
                 continue
             if attempted_candidates > 0 and not _claim_additional_recovery_request():
-                raise RuntimeError("LLM request budget exhausted before model fallback")
+                self.chat.completions._emit_blocked_switch_status(
+                    last_model,
+                    str(item.get("model") or ""),
+                )
+                _raise_budget_exhausted_before_fallback(last_error)
             call_kwargs = dict(kwargs)
             call_kwargs["messages"] = _remap_serialized_reasoning_format(
                 list(call_kwargs.get("messages") or []),
@@ -1886,6 +1982,13 @@ class ExecutorLLMClient:
                         and _claim_additional_recovery_request()
                     ):
                         retry_index += 1
+                        self.chat.completions._emit_retry_status(
+                            str(item.get("model") or ""),
+                            retry_index,
+                            retry_attempts,
+                            retry_backoff,
+                            exc,
+                        )
                         logger.warning(
                             "模型瞬时故障，同模型重试 %s/%s: model=%s error=%s",
                             retry_index,

@@ -82,9 +82,14 @@ def test_provider_connect_error_uses_backup_when_machine_is_online(monkeypatch):
 
     assert result == {"ok": True}
     assert calls == ["primary", "primary", "backup"]
-    assert len(statuses) == 1
-    assert statuses[0]["model_switch"] is True
-    assert statuses[0]["network_error"] is True
+    # Alert Spec（17bea699 修复）：连接抖动先发一条 LLM-RETRY 重试提示，
+    # 随后才是模型切换事件；两者顺序固定。
+    retry_events = [s for s in statuses if s.get("alert_id") == "LLM-RETRY"]
+    switch_events = [s for s in statuses if s.get("model_switch")]
+    assert len(retry_events) == 1
+    assert len(switch_events) == 1
+    assert statuses.index(retry_events[0]) < statuses.index(switch_events[0])
+    assert switch_events[0]["network_error"] is True
 
 
 def test_offline_machine_still_uses_backup_for_non_network_errors(monkeypatch):
