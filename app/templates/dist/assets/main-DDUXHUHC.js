@@ -27908,6 +27908,9 @@ const DOCK_RIGHT_FILE_PREFIX = 'myagent-resource://file/';
 /** Text reads are capped here; the endpoint truncates and says so. */
 const DOCK_RIGHT_TEXT_MAX_BYTES = 200000;
 
+/** The dsh-style refresh glyph (28px circle, 15px arrow) used by every page head. */
+const DOCK_ICON_REFRESH = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.62-3.76" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/><path d="M13.4 2.6v3.1h-3.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
+
 /** Suffixes rendered as an inline image. Mirrors the backend's viewable image set. */
 const DOCK_RIGHT_IMAGE_SUFFIXES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'jfif', 'tif', 'tiff'];
 
@@ -27929,6 +27932,7 @@ const dockRightState = {
     width: DOCK_RIGHT_WIDTH_DEFAULT,
     tabState: Object.create(null),
     dragging: false,
+    revealFrame: null,
 };
 
 /** Plugin-fed child-agent rows and pending deep links, retained even before the page opens. */
@@ -28172,10 +28176,11 @@ function dockRightEnsureMounted() {
     if (!app || !main) return;
 
     const host = document.createElement('aside');
-    host.className = 'dock-rightbar';
+    host.className = 'dock-rightbar is-collapsed';
     host.setAttribute('data-dock-rightbar', '1');
     host.setAttribute('aria-label', dockRightText('toggle'));
-    host.hidden = true;
+    host.setAttribute('aria-hidden', 'true');
+    host.inert = true;
     host.style.setProperty('--dock-rightbar-width', dockRightState.width + 'px');
 
     const sash = document.createElement('div');
@@ -28424,7 +28429,24 @@ function dockRightRender() {
     const sessionId = dockRightState.sessionId;
     const surface = sessionId ? dockSurfaceOf(sessionId, DOCK_RIGHT_AREA) : null;
     const expanded = !!(surface && surface.layout.expanded);
-    host.hidden = !expanded;
+    const fullscreen = !!(expanded && surface.layout.mode === 'fullscreen');
+    host.classList.toggle('is-fullscreen', fullscreen);
+    host.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+    host.inert = !expanded;
+    if (expanded) {
+        // Let a newly mounted zero-width column paint once before revealing it;
+        // otherwise the browser coalesces both states and skips the transition.
+        if (host.classList.contains('is-collapsed') && dockRightState.revealFrame === null) {
+            dockRightState.revealFrame = requestAnimationFrame(() => {
+                dockRightState.revealFrame = null;
+                if (dockRightExpanded()) host.classList.remove('is-collapsed');
+            });
+        }
+    } else {
+        if (dockRightState.revealFrame !== null) cancelAnimationFrame(dockRightState.revealFrame);
+        dockRightState.revealFrame = null;
+        host.classList.add('is-collapsed');
+    }
     if (dockRightState.button) {
         // dsh's original behaviour (restored on request): the corner button is
         // the way in, shown only while the column is collapsed.
@@ -28436,8 +28458,6 @@ function dockRightRender() {
         if (dockRightState.surface && surface) dockRightState.surface.sync(surface.layout);
         return;
     }
-    const fullscreen = surface.layout.mode === 'fullscreen';
-    host.classList.toggle('is-fullscreen', fullscreen);
     if (dockRightState.surface) {
         dockRightState.surface.intents = dockRightIntents();
         dockRightState.surface.sync(surface.layout);
@@ -28617,33 +28637,39 @@ function dockRightFilesBody(tab) {
     const el = document.createElement('div');
     el.className = 'dock-files';
     el.setAttribute('data-dock-files', tab.id);
-    const head = document.createElement('div');
-    head.className = 'dock-files-head';
-    const title = document.createElement('span');
-    title.className = 'dock-files-title';
-    title.textContent = dockRightText('files');
+    // dsh's files page keeps a path bar under the strip: the current root on
+    // the left (its absolute path) and its refresh control at the right edge.
+    const pathRow = document.createElement('div');
+    pathRow.className = 'dock-files-pathrow';
+    const pathLabel = document.createElement('span');
+    pathLabel.className = 'dock-files-path';
+    pathLabel.setAttribute('data-dock-files-path', '1');
+    pathLabel.textContent = '';
     const refresh = document.createElement('button');
     refresh.type = 'button';
-    refresh.className = 'dock-link-button';
-    refresh.textContent = dockRightText('refresh');
+    refresh.className = 'dock-icon-button dock-files-refresh';
+    refresh.setAttribute('data-dock-files-refresh', '1');
+    refresh.setAttribute('aria-label', dockRightText('refresh'));
+    refresh.title = dockRightText('refresh');
+    refresh.innerHTML = DOCK_ICON_REFRESH;
+    pathRow.appendChild(pathLabel);
+    pathRow.appendChild(refresh);
     const tree = document.createElement('div');
     tree.className = 'dock-files-tree';
     refresh.addEventListener('click', () => {
         tree.replaceChildren();
-        void dockRightLoadDir(tree, '', 0);
+        void dockRightLoadDir(tree, '', 0, { onRoot: (root) => { pathLabel.textContent = root; } });
     });
-    head.appendChild(title);
-    head.appendChild(refresh);
-    el.appendChild(head);
+    el.appendChild(pathRow);
     el.appendChild(tree);
     dockRightTrackScroll(tab.id, tree);
     el.__dockRestore = tree.__dockRestore;
-    void dockRightLoadDir(tree, '', 0);
+    void dockRightLoadDir(tree, '', 0, { onRoot: (root) => { pathLabel.textContent = root; } });
     return el;
 }
 
 /** Load one directory level into \`container\`, recursively expandable. */
-async function dockRightLoadDir(container, dir, depth) {
+async function dockRightLoadDir(container, dir, depth, options) {
     const loading = document.createElement('div');
     loading.className = 'dock-note';
     loading.textContent = dockRightText('loading');
@@ -28655,6 +28681,7 @@ async function dockRightLoadDir(container, dir, depth) {
         if (!response.ok || !data || data.ok !== true || !Array.isArray(data.files)) {
             throw new Error((data && data.error) || ('HTTP ' + response.status));
         }
+        if (options && typeof options.onRoot === 'function' && data.root) options.onRoot(String(data.root));
         const rows = data.files.slice().sort((left, right) => {
             const leftDir = left.kind === 'directory' ? 0 : 1;
             const rightDir = right.kind === 'directory' ? 0 : 1;
@@ -28768,6 +28795,13 @@ function dockRightDocumentBody(tab) {
     name.className = 'dock-doc-name';
     name.textContent = dockRightBasename(rel) || rel;
     name.title = rel;
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.className = 'dock-icon-button dock-doc-refresh';
+    refresh.setAttribute('data-dock-doc-refresh', '1');
+    refresh.setAttribute('aria-label', dockRightText('refresh'));
+    refresh.title = dockRightText('refresh');
+    refresh.innerHTML = DOCK_ICON_REFRESH;
     const openSystem = document.createElement('button');
     openSystem.type = 'button';
     openSystem.className = 'dock-link-button';
@@ -28776,6 +28810,7 @@ function dockRightDocumentBody(tab) {
         void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
     });
     head.appendChild(name);
+    head.appendChild(refresh);
     head.appendChild(openSystem);
     const content = document.createElement('div');
     content.className = 'dock-doc-content';
@@ -28791,18 +28826,26 @@ function dockRightDocumentBody(tab) {
             content.replaceChildren(dockRightSystemCard(rel));
         });
         content.appendChild(image);
+        refresh.addEventListener('click', () => {
+            image.src = '/api/workspace-image?' + new URLSearchParams({ rel: rel, _: String(Date.now()) });
+        });
     } else if (DOCK_RIGHT_AUDIO_SUFFIXES.indexOf(suffix) >= 0 || DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0) {
         const media = document.createElement(DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0 ? 'video' : 'audio');
         media.className = 'dock-doc-media';
         media.controls = true;
         media.src = '/api/workspace-media?' + new URLSearchParams({ rel: rel });
         content.appendChild(media);
+        refresh.addEventListener('click', () => {
+            try { media.load(); } catch (error) { /* ignore */ }
+        });
     } else if (DOCK_RIGHT_BINARY_SUFFIXES.indexOf(suffix) >= 0) {
         // Feedback #5: a non-text file goes straight to the system-app card
         // instead of showing mojibake.
         content.appendChild(dockRightSystemCard(rel));
+        refresh.disabled = true;
     } else {
         void dockRightLoadText(content, state);
+        refresh.addEventListener('click', () => { void dockRightLoadText(content, state); });
     }
     dockRightTrackScroll(tab.id, content);
     el.__dockRestore = content.__dockRestore;
@@ -28893,8 +28936,11 @@ function dockRightChangesBody(tab) {
     title.textContent = dockRightText('changes');
     const refresh = document.createElement('button');
     refresh.type = 'button';
-    refresh.className = 'dock-link-button';
-    refresh.textContent = dockRightText('refresh');
+    refresh.className = 'dock-icon-button dock-changes-refresh';
+    refresh.setAttribute('data-dock-changes-refresh', '1');
+    refresh.setAttribute('aria-label', dockRightText('refresh'));
+    refresh.title = dockRightText('refresh');
+    refresh.innerHTML = DOCK_ICON_REFRESH;
     head.append(title, refresh);
 
     const controls = document.createElement('div');
@@ -28902,10 +28948,12 @@ function dockRightChangesBody(tab) {
     const turnSelect = document.createElement('select');
     turnSelect.className = 'dock-turn-select';
     turnSelect.setAttribute('aria-label', '选择轮次');
+    turnSelect.setAttribute('data-dock-changes-scope', 'turn');
     const sessionScope = document.createElement('button');
     sessionScope.type = 'button';
     sessionScope.className = 'dock-scope-pill';
     sessionScope.textContent = dockRightText('scopeSession');
+    sessionScope.setAttribute('data-dock-changes-scope', 'session');
     controls.append(turnSelect, sessionScope);
 
     const status = document.createElement('div');
@@ -29020,8 +29068,12 @@ function dockRightChangesBody(tab) {
         if (target) {
             const body = target.querySelector('.dock-change-body');
             const toggle = target.querySelector('.dock-change-toggle');
-            if (body) body.hidden = false;
-            if (toggle) { toggle.textContent = '▾'; toggle.setAttribute('aria-expanded', 'true'); toggle.focus(); }
+            if (typeof target.__dockSetExpanded === 'function') target.__dockSetExpanded(true);
+            else {
+                if (body) { body.classList.add('is-open'); body.setAttribute('aria-hidden', 'false'); }
+                if (toggle) { toggle.classList.add('is-open'); toggle.setAttribute('aria-expanded', 'true'); }
+            }
+            if (toggle) toggle.focus();
             requestAnimationFrame(() => target.scrollIntoView({ block: 'center' }));
             state.focusRequest = null;
             dockRightChangeReviewFocus.delete(String(state.sessionId || ''));
@@ -29234,7 +29286,7 @@ function dockRightChangeRow(row, state, rerender) {
     item.setAttribute('data-dock-change-path', String(row.path || ''));
     const head = document.createElement('div'); head.className = 'dock-change-head';
     const toggle = document.createElement('button');
-    toggle.type = 'button'; toggle.className = 'dock-change-toggle'; toggle.textContent = '▸';
+    toggle.type = 'button'; toggle.className = 'dock-change-toggle'; toggle.textContent = '›';
     toggle.setAttribute('aria-expanded', 'false');
     const name = document.createElement('span');
     name.className = 'dock-change-name'; name.textContent = dockRightBasename(row.path); name.title = row.path;
@@ -29263,25 +29315,47 @@ function dockRightChangeRow(row, state, rerender) {
         void dockRightRunChangeAction([row], row._reverted ? 'restore' : 'undo', state, rerender);
     });
     head.append(toggle, name, dir, stats, action);
-    const body = document.createElement('div'); body.className = 'dock-change-body'; body.hidden = true;
-    if (row.diff) {
-        const pre = document.createElement('pre'); pre.className = 'dock-change-diff';
-        String(row.diff).split('\\n').forEach((text) => {
+    const body = document.createElement('div'); body.className = 'dock-change-body'; body.setAttribute('aria-hidden', 'true');
+    const diffLines = row.diff ? String(row.diff).split('\\n') : null;
+    let diffPre = null; let nextDiffLine = 0; let diffFrame = null; let bodyReady = false;
+    const ensureBody = () => {
+        if (bodyReady) return;
+        bodyReady = true;
+        if (diffLines) {
+            diffPre = document.createElement('pre'); diffPre.className = 'dock-change-diff';
+            body.appendChild(diffPre);
+        } else body.appendChild(dockRightNote(dockRightOmittedReason(row)));
+    };
+    const renderDiffChunk = () => {
+        diffFrame = null;
+        if (!diffPre || !body.classList.contains('is-open') || !body.isConnected) return;
+        const fragment = document.createDocumentFragment();
+        const end = Math.min(diffLines.length, nextDiffLine + 240);
+        for (; nextDiffLine < end; nextDiffLine += 1) {
+            const text = diffLines[nextDiffLine];
             const line = document.createElement('span');
             const file = text.startsWith('+++') || text.startsWith('---');
             const prefix = text.charAt(0);
             line.className = 'dock-diff-line' + (file ? ' is-file' : prefix === '+' ? ' is-added' : prefix === '-' ? ' is-removed' : prefix === '@' ? ' is-hunk' : '');
-            line.textContent = text + '\\n'; pre.appendChild(line);
-        });
-        body.appendChild(pre);
-    } else body.appendChild(dockRightNote(dockRightOmittedReason(row)));
-    const toggleBody = () => {
-        body.hidden = !body.hidden; toggle.textContent = body.hidden ? '▸' : '▾';
-        toggle.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
+            line.textContent = text + '\\n'; fragment.appendChild(line);
+        }
+        diffPre.appendChild(fragment);
+        if (nextDiffLine < diffLines.length) diffFrame = requestAnimationFrame(renderDiffChunk);
     };
+    const setExpanded = (opening) => {
+        ensureBody();
+        body.classList.toggle('is-open', opening);
+        body.setAttribute('aria-hidden', opening ? 'false' : 'true');
+        toggle.classList.toggle('is-open', opening);
+        toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        if (opening && diffLines && nextDiffLine < diffLines.length && diffFrame === null) renderDiffChunk();
+        if (!opening && diffFrame !== null) { cancelAnimationFrame(diffFrame); diffFrame = null; }
+    };
+    const toggleBody = () => setExpanded(!body.classList.contains('is-open'));
     toggle.addEventListener('click', (event) => { event.stopPropagation(); toggleBody(); });
     head.addEventListener('click', (event) => { if (event.target !== action) toggleBody(); });
     item.append(head, body);
+    item.__dockSetExpanded = setExpanded;
     return item;
 }
 
