@@ -1,6 +1,7 @@
 import sys
 import socket
 import threading
+import time
 import os
 from pathlib import Path
 
@@ -26,6 +27,8 @@ def make_launcher():
     launcher.exiting = False
     launcher.lifecycle_busy = True
     launcher._lifecycle_lock = threading.Lock()
+    launcher._ui_open_lock = threading.Lock()
+    launcher._last_ui_open_at = None
     return launcher
 
 
@@ -218,6 +221,61 @@ def test_open_main_ui_reuses_visible_window_before_presence_recovers(monkeypatch
     launcher._open_url("/", refresh=True)
 
     assert opened == []
+
+
+def test_open_main_ui_collapses_duplicate_startup_triggers(monkeypatch):
+    """The starter notify and the auto-open thread must yield one window."""
+
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    opened = []
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+    launcher._open_named_browser_window = lambda url: opened.append(url)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+
+    launcher._open_url("/", refresh=True)
+    launcher._open_url("/", refresh=True)
+
+    assert len(opened) == 1
+
+
+def test_open_main_ui_retries_after_failed_browser_launch(monkeypatch):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    attempts = []
+
+    def launch(url):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise OSError("no browser handler")
+
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+    launcher._open_named_browser_window = launch
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+
+    with pytest.raises(OSError):
+        launcher._open_url("/", refresh=False)
+    launcher._open_url("/", refresh=False)
+
+    assert len(attempts) == 2
+
+
+def test_open_main_ui_allows_launch_after_dedupe_window(monkeypatch):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    opened = []
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+    launcher._open_named_browser_window = lambda url: opened.append(url)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+
+    launcher._open_url("/", refresh=False)
+    launcher._last_ui_open_at = time.monotonic() - tray_launcher.UI_OPEN_DEDUPE_SECONDS - 0.1
+    launcher._open_url("/", refresh=False)
+
+    assert len(opened) == 2
 
 
 def test_external_ui_activation_delegates_to_resident_tray(monkeypatch):

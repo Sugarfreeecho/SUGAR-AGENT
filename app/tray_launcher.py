@@ -89,6 +89,11 @@ GRACEFUL_STOP_TIMEOUT_SECONDS = 2
 UNEXPECTED_EXIT_RESTART_LIMIT = 3
 UNEXPECTED_EXIT_WINDOW_SECONDS = 60
 UNEXPECTED_EXIT_POLL_SECONDS = 0.5
+# Both the RUN.bat starter (through the tray restore message) and the tray's
+# own auto-open thread can request a browser launch within the same startup
+# second, before either window is visible.  Collapse those duplicate requests
+# into a single launch.
+UI_OPEN_DEDUPE_SECONDS = 5.0
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_EXE = preferred_python(ROOT)
@@ -435,6 +440,8 @@ class TrayLauncher:
         self.exiting = False
         self.lifecycle_busy = False
         self._lifecycle_lock = threading.Lock()
+        self._ui_open_lock = threading.Lock()
+        self._last_ui_open_at = None
         self._watchdog_thread = None
         self.mutex = win32event.CreateMutex(None, True, "MyAgentTrayLauncher")
         self.already_running = win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
@@ -775,6 +782,28 @@ class TrayLauncher:
         elif command == MENU_EXIT:
             self._exit_agent()
 
+    def _claim_ui_open_slot(self) -> bool:
+        """Return True only for the first browser-launch request in the window.
+
+        Duplicate requests arrive from the tray restore message posted by the
+        RUN.bat starter and from ``_auto_open_webui_when_ready`` at almost the
+        same moment; whichever path runs first owns the launch.
+        """
+        with self._ui_open_lock:
+            now = time.monotonic()
+            if (
+                self._last_ui_open_at is not None
+                and now - self._last_ui_open_at < UI_OPEN_DEDUPE_SECONDS
+            ):
+                return False
+            self._last_ui_open_at = now
+            return True
+
+    def _release_ui_open_slot(self) -> None:
+        """Release the slot so a failed launch can be retried immediately."""
+        with self._ui_open_lock:
+            self._last_ui_open_at = None
+
     def _open_url(self, path: str, refresh: bool = False, session: str = "") -> None:
         if not self._is_listening():
             self._show_console()
@@ -813,7 +842,16 @@ class TrayLauncher:
             url = f"{url}{'&' if '?' in url else '?'}session={session}"
         if refresh:
             url = f"{url}{'&' if '?' in url else '?'}_={int(time.time())}"
-        self._open_named_browser_window(url)
+        if not self._claim_ui_open_slot():
+            _append_log(
+                "Duplicate UI open request ignored; the browser was launched a moment ago"
+            )
+            return
+        try:
+            self._open_named_browser_window(url)
+        except Exception:
+            self._release_ui_open_slot()
+            raise
 
     def _open_named_browser_window(self, url: str) -> None:
         _open_url_in_browser(url.replace(BASE_URL, "", 1) or "/", refresh=False)
