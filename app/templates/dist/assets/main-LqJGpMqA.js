@@ -1,60 +1,60 @@
-var dt=Object.defineProperty;var ct=(t,e,n)=>e in t?dt(t,e,{enumerable:!0,configurable:!0,writable:!0,value:n}):t[e]=n;var q=(t,e,n)=>ct(t,typeof e!="symbol"?e+"":e,n);(function(){const e=document.createElement("link").relList;if(e&&e.supports&&e.supports("modulepreload"))return;for(const s of document.querySelectorAll('link[rel="modulepreload"]'))r(s);new MutationObserver(s=>{for(const i of s)if(i.type==="childList")for(const d of i.addedNodes)d.tagName==="LINK"&&d.rel==="modulepreload"&&r(d)}).observe(document,{childList:!0,subtree:!0});function n(s){const i={};return s.integrity&&(i.integrity=s.integrity),s.referrerPolicy&&(i.referrerPolicy=s.referrerPolicy),s.crossOrigin==="use-credentials"?i.credentials="include":s.crossOrigin==="anonymous"?i.credentials="omit":i.credentials="same-origin",i}function r(s){if(s.ep)return;s.ep=!0;const i=n(s);fetch(s.href,i)}})();(function(t){var e=104857600,n=200*1024*1024,r='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function s(){if(!document.getElementById("myagent-path-picker-styles")){var c=document.createElement("style");c.id="myagent-path-picker-styles",c.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid var(--border-glass,rgba(255,255,255,.08));border:1px solid var(--floating-border,var(--border-glass,rgba(255,255,255,.08)));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.96));background:var(--floating-surface,var(--surface-glass2,rgba(40,40,60,.96)));box-shadow:var(--shadow-soft,0 18px 50px rgba(0,0,0,.34));box-shadow:var(--floating-shadow,var(--shadow-soft,0 18px 50px rgba(0,0,0,.34)));overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.035));color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(var(--accent-rgb,137,180,250),.12);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid var(--border-glass,rgba(255,255,255,.14));border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:rgb(var(--brand-accent-rgb,99,102,241));border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.025));font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid var(--border-glass,rgba(255,255,255,.1));border-radius:8px;padding:.28rem .58rem;background:rgba(255,255,255,.035);color:var(--text-secondary,#a6adc8);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(255,255,255,.07);border-color:var(--border-brand-accent,rgba(124,111,247,.35));color:var(--text-primary,#fff);}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:rgba(255,255,255,.98);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(15,23,42,.025);}.theme-light .workspace-file-item:hover,.theme-light .workspace-file-item.is-active{background:rgba(15,23,42,.05);}.theme-light .workspace-file-outside{background:rgba(15,23,42,.025);}',document.head.appendChild(c)}}async function i(c,v,h){var y=typeof AbortController<"u"?new AbortController:null,b=y?setTimeout(function(){y.abort()},5e4):null,A;try{A=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:c||"directory",initial:v||"",multiple:!!h}),signal:y?y.signal:void 0})}finally{b&&clearTimeout(b)}var x=await A.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!A.ok||!x.ok){if(x&&x.cancelled)return null;var p=x&&x.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(p))return null;throw new Error(p)}return h?Array.isArray(x.paths)?x.paths:x.path?[x.path]:[]:x.path||null}async function d(c,v,h,y,b){c.disabled=!0;try{var A=await i(v,h||"",!!b);y&&y(A)}catch{return}finally{c.disabled=!1}}function a(c){var v=String(c||"").trim();return v?((v.charAt(0)==='"'&&v.charAt(v.length-1)==='"'||v.charAt(0)==="'"&&v.charAt(v.length-1)==="'")&&(v=v.slice(1,-1)),'"'+v.replace(/"/g,'\\"')+'"'):""}function u(c){var v=String(c||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(v)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(v)?"is-audio":""}function o(c,v){var h=c.selectionStart,y=c.selectionEnd,b=c.value.slice(0,h),A=c.value.slice(y),x=String(v||"");b.length&&!/\s$/.test(b)&&(x=" "+x),A.length&&!/^\s/.test(A)&&(x=x+" "),c.value=b+x+A;var p=b.length+x.length;c.selectionStart=c.selectionEnd=p,c.dispatchEvent(new Event("input",{bubbles:!0})),c.focus()}function l(c){var v=Array.prototype.slice.call(c||[]).filter(Boolean),h=0;if(v.forEach(function(y){var b=Number(y&&y.size||0);if(b>e)throw new Error("文件“"+String(y&&y.name||"未命名文件")+"”超过 "+g(e)+" 限制。");h+=Math.max(0,b)}),h>n)throw new Error("本次上传总大小超过 "+g(n)+" 限制。");return v}function S(c,v){var h;try{h=l(c)}catch(b){return Promise.reject(b)}if(!h.length)return Promise.resolve([]);v=v||{};var y=new FormData;return h.forEach(function(b){y.append("files",b,b.name||"upload.bin")}),new Promise(function(b,A){var x=new XMLHttpRequest;x.open("POST","/api/upload-chat-files",!0),x.withCredentials=!0,x.timeout=600*1e3,x.upload&&typeof v.onProgress=="function"&&(x.upload.onprogress=function(p){v.onProgress(p.loaded||0,p.lengthComputable?p.total:0)}),typeof v.registerAbort=="function"&&v.registerAbort(function(){x.abort()}),x.onload=function(){var p;try{p=JSON.parse(x.responseText||"{}")}catch{p={ok:!1,error:"上传失败"}}if(x.status<200||x.status>=300||!p.ok){A(new Error(p&&p.error||"上传失败"));return}b(Array.isArray(p.files)?p.files:[])},x.onerror=function(){A(new Error("上传失败：网络连接异常。"))},x.ontimeout=function(){A(new Error("上传超时，请重试。"))},x.onabort=function(){var p=new Error("上传已取消。");p.name="AbortError",A(p)},x.send(y)})}function g(c){return c=Number(c||0),!isFinite(c)||c<=0?"":c<1024?c+" B":c<1024*1024?Math.round(c/102.4)/10+" KB":c<1024*1024*1024?Math.round(c/104857.6)/10+" MB":Math.round(c/1073741824e-1)/10+" GB"}async function _(c,v,h){var y=[];c?y.push("q="+encodeURIComponent(c)):v&&y.push("dir="+encodeURIComponent(v));var b="/api/workspace-files"+(y.length?"?"+y.join("&"):""),A=await fetch(b,{credentials:"same-origin",signal:h}),x=await A.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!A.ok||!x.ok)throw new Error(x&&x.error||"读取工作区文件失败");return Array.isArray(x.files)?x.files:[]}function E(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function k(c,v,h){if(v){var y=E();if(h&&y&&h!==y){try{if(typeof persistInputDraft=="function"){var b="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,h)?b=String(draftBySession[h]||""):typeof readStoredInputDraft=="function"&&(b=String(readStoredInputDraft(h)||"")),persistInputDraft(h,b.trim()?b+" "+v:v);return}}catch{}return}o(c,v)}}function O(c,v,h){var y=E();return S(v,h).then(function(b){var A=Array.isArray(c._myAgentStructuredAttachments)?c._myAgentStructuredAttachments.slice():[];b.forEach(function(p){!p||!p.path||A.some(function(V){return V.path===p.path})||A.push({path:p.path,name:p.name||"",size:Number(p.size||0),attachment:p.attachment||null})}),c._myAgentStructuredAttachments=A;var x=b.map(function(p){return a(p.path||p.rel||p.name)}).join(" ");k(c,x,y)})}function z(c){return Array.isArray(c&&c._myAgentStructuredAttachments)?c._myAgentStructuredAttachments.slice():[]}function L(c){c&&(c._myAgentStructuredAttachments=[])}function $(c,v){if(c){var h=Array.isArray(c._myAgentStructuredAttachments)?c._myAgentStructuredAttachments.slice():[];Array.prototype.slice.call(v||[]).forEach(function(y){!y||!y.path||h.some(function(b){return b.path===y.path})||h.push({path:y.path,name:y.name||"",size:Number(y.size||0),attachment:y.attachment||null})}),c._myAgentStructuredAttachments=h}}function P(c,v){console.error("chat file upload failed:",v),c.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(v&&v.message||v||"上传失败")}}))}function W(c,v){var h=c.closest?c.closest(".input-wrapper"):null;v?c.dataset.fileUploadBusy="1":delete c.dataset.fileUploadBusy,h&&(h.classList.toggle("is-file-uploading",!!v),v?h.setAttribute("aria-busy","true"):h.removeAttribute("aria-busy")),c.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!v}}))}function j(c,v){var h=c.closest?c.closest(".input-wrapper"):null,y=document.createElement("div");y.className="chat-upload-status",y.setAttribute("role","status"),y.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var b=v.length;return y.querySelector(".chat-upload-status-label").textContent="正在上传 "+b+" 个文件… 0%",h&&h.parentNode&&h.parentNode.insertBefore(y,h.nextSibling),y}function R(c,v){var h;try{h=l(v)}catch(G){return P(c,G),Promise.reject(G)}if(!h.length)return Promise.resolve();if(c._myAgentActiveUpload){var y=new Error("已有文件正在上传，请等待完成或先取消。");return P(c,y),Promise.reject(y)}var b=j(c,h),A=b.querySelector(".chat-upload-status-label"),x=b.querySelector(".chat-upload-progress"),p=b.querySelector(".chat-upload-progress-bar"),V=b.querySelector(".chat-upload-cancel"),X=null,Z=c._myAgentActiveUpload={};return W(c,!0),V.addEventListener("click",function(){V.disabled=!0,A.textContent="正在取消上传…",X&&X()}),O(c,h,{registerAbort:function(G){X=G},onProgress:function(G,de){if(c._myAgentActiveUpload===Z){var ce=de>0?Math.min(100,Math.round(G*100/de)):0;A.textContent="正在上传 "+h.length+" 个文件… "+ce+"%",p.style.width=ce+"%",x.setAttribute("aria-valuenow",String(ce))}}}).catch(function(G){throw(!G||G.name!=="AbortError")&&P(c,G),G}).finally(function(){c._myAgentActiveUpload===Z&&(delete c._myAgentActiveUpload,W(c,!1)),b.parentNode&&b.parentNode.removeChild(b)})}function D(c){var v=c&&c.clipboardData;if(!v)return[];var h=[],y=Array.prototype.slice.call(v.items||[]);return y.forEach(function(b){if(!(!b||b.kind!=="file"||typeof b.getAsFile!="function")){var A=b.getAsFile();A&&h.push(A)}}),h.length||(h=Array.prototype.slice.call(v.files||[]).filter(Boolean)),h.map(function(b,A){if(String(b&&b.name||"").trim())return b;var x=String(b&&b.type||"").split("/")[1]||"bin";x=x.replace(/[^a-z0-9.+-]/gi,"")||"bin";var p="clipboard-"+Date.now()+"-"+(A+1)+"."+x;try{return new File([b],p,{type:b.type||"application/octet-stream",lastModified:Date.now()})}catch{return b}})}function Q(c){var v=c&&c.clipboardData;if(!v||typeof v.getData!="function")return!1;try{return String(v.getData("text/plain")||"").trim().length>0}catch{return!1}}function se(c){!c||c.dataset.filePasteBound==="1"||(c.dataset.filePasteBound="1",c.addEventListener("paste",function(v){if(!Q(v)){var h=D(v);h.length&&(v.preventDefault(),R(c,h).catch(function(){}))}}))}function Gn(c,v){var h=document.createElement("div");h.className="workspace-file-popover",h.setAttribute("aria-hidden","true"),h.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(h);var y=h.querySelector(".workspace-file-search"),b=h.querySelector(".workspace-file-list"),A=h.querySelector(".workspace-file-count"),x=h.querySelector(".workspace-file-outside"),p={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function V(){var m=c.closest?c.closest(".input-wrapper"):c,f=m.getBoundingClientRect(),w=8,T=Math.min(Math.max(f.width,520),window.innerWidth-16),I=Math.max(8,Math.min(f.left,window.innerWidth-T-8)),B=document.querySelector(".titlebar"),C=B?B.getBoundingClientRect().bottom:44,M=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,U=Math.min(44*M,window.innerHeight*.82),J=Math.max(1,f.top-C-w),Y=Math.min(U,J),ue=f.top-Y-w;if(Y<96){var ge=Math.max(1,window.innerHeight-f.bottom-w-8);Y=Math.min(U,ge),ue=f.bottom+w}h.style.left=I+"px",h.style.top=Math.max(C,ue)+"px",h.style.width=T+"px",h.style.height=Math.max(1,Math.floor(Y))+"px",h.style.maxHeight=Math.max(1,Math.floor(Y))+"px"}function X(){var m=Object.keys(p.selected).length;A.textContent=m?"已选择 "+m+" 项":"未选择文件",b.querySelectorAll(".workspace-file-item").forEach(function(f){var w=f.getAttribute("data-path-key")||"",T=!!p.selected[w];f.classList.toggle("is-selected",T);var I=f.querySelector(".workspace-file-check");I&&(I.textContent=T?"✓":"")})}function Z(m){var f=b.querySelectorAll(".workspace-file-item");if(!f.length){p.active=0;return}p.active=Math.max(0,Math.min(m,f.length-1));for(var w=0;w<f.length;w++)f[w].classList.toggle("is-active",w===p.active),f[w].setAttribute("aria-selected",w===p.active?"true":"false");var T=f[p.active];T&&typeof T.scrollIntoView=="function"&&T.scrollIntoView({block:"nearest"})}function G(){p.open=!1,h.classList.remove("is-open"),h.setAttribute("aria-hidden","true"),p.debounce&&clearTimeout(p.debounce),p.controller&&p.controller.abort()}function de(m){return m&&(m.path||m.rel||m.name)||""}function ce(m){return a(de(m))}function Yn(m,f){var w=de(m);if(!w)return!1;var T=String(m&&m.rel||"");return f.indexOf(ce(m))>=0||f.indexOf(w)>=0||T&&f.indexOf(a(T))>=0||T&&f.indexOf(T)>=0}function Xn(m,f){m=String(m||""),f=String(f||"");for(var w=0;w<m.length&&w<f.length&&m.charAt(w)===f.charAt(w);)w++;for(var T=m.length-1,I=f.length-1;T>=w&&I>=w&&m.charAt(T)===f.charAt(I);)T--,I--;return f.slice(w,I+1).trim()}function Zn(m,f){if(f){var w=String(c.value||"");if(!(w.indexOf(f)>=0)){var T=c.value;o(c,f);var I=Xn(T,c.value);m&&I&&(m._inputToken=I)}}}function Jn(m,f){if(!f&&!m)return;var w=String(c.value||""),T=[];function I(C){C=String(C||"").trim(),C&&T.indexOf(C)<0&&T.push(C)}I(m&&m._inputToken),I(f),I(m&&m.path),I(m&&m.rel),I(m&&m.path&&a(m.path)),I(m&&m.rel&&a(m.rel));var B=w;T.sort(function(C,M){return M.length-C.length}).forEach(function(C){var M=C.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),U=new RegExp("(?:^|\\s)"+M+"(?=\\s|$)","g");B=B.replace(U,function(J){return J.charAt(0)&&/\s/.test(J.charAt(0))?" ":""})}),B=B.replace(/[ \t]{2,}/g," ").trim(),B!==w&&(c.value=B,c.selectionStart=c.selectionEnd=c.value.length,c.dispatchEvent(new Event("input",{bubbles:!0})))}function we(m){if(m){var f=de(m);if(f){var w=ce(m);if(p.selected[f]){var T=p.selected[f];delete p.selected[f],Jn(T,w)}else p.selected[f]=m,Zn(m,w);X()}}}function sn(){var m=String(c.value||"");Object.keys(p.selected).forEach(function(f){var w=p.selected[f];Yn(w,m)||delete p.selected[f]})}function et(){sn(),X()}c.addEventListener("input",et),x&&x.addEventListener("click",function(m){m.preventDefault(),m.stopPropagation(),typeof v=="function"&&v()});function an(){var m=String(t.__WORK_DIR__||"workspace"),f=m.split(/[\\/]+/).filter(Boolean);return f[f.length-1]||"workspace"}function on(m,f,w){return{type:"dir",name:m,rel:f,root:!!w,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function nt(m,f){var w=String(m&&m.path||""),T=String(f||"").replace(/\//g,"\\");return w&&T&&w.toLowerCase().slice(-T.length)===T.toLowerCase()?w.slice(0,Math.max(0,w.length-T.length)).replace(/[\\/]+$/,""):String(t.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function ln(m,f){var w=String(m||"").replace(/[\\/]+$/,""),T=String(f||"").replace(/[\\/]+/g,"/");if(!T)return w;var I=w.indexOf("\\")>=0?"\\":"/";return w?w+I+T.replace(/\//g,I):T}function fe(m){return{kind:"directory",name:m.name||m.rel||an(),rel:m.rel||"",path:m.path||ln(String(t.__WORK_DIR__||""),m.rel||"")}}function tt(m){var f=on(an(),"",!0);f.path=String(t.__WORK_DIR__||"").replace(/[\\/]+$/,""),f.loaded=!!p.loadedDirs.__root__;function w(I,B){for(var C=f,M=[],U=0;U<I.length;U++)M.push(I[U]),C.dirs[I[U]]||(C.dirs[I[U]]=on(I[U],M.join("/"),!1),C.dirs[I[U]].path=ln(B||f.path,M.join("/"))),C=C.dirs[I[U]],C.loaded=!!p.loadedDirs[C.rel||"__root__"];return C}(m||[]).forEach(function(I){var B=String(I.rel||I.path||I.name||"").replace(/\\/g,"/"),C=B.split("/").filter(Boolean);if(C.length){var M=nt(I,B);if(!f.path&&M&&(f.path=M),I.kind==="directory"){var U=w(C,M||f.path);U.name=I.name||U.name,U.path=I.path||U.path;return}var J=w(C.slice(0,-1),M||f.path);J.files.push({type:"file",name:I.name||C[C.length-1]||B,rel:B,item:I})}});function T(I){var B=Object.keys(I.dirs).map(function(C){return I.dirs[C]}).sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})});B.forEach(T),I.files.sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})}),I.children=B.concat(I.files)}return T(f),f}function dn(m,f,w){if(!(!m||m.type!=="dir")){w=Number(w||0);var T=m.rel||"__root__";f?p.expanded[T]=!0:typeof p.expanded[T]>"u"&&(p.expanded[T]=w===0),f&&m.children.forEach(function(I){I.type==="dir"&&dn(I,f,w+1)})}}function rt(m){var f=[];function w(T,I){f.push({type:"dir",node:T,depth:I}),p.expanded[T.rel||"__root__"]&&T.children.forEach(function(B){B.type==="dir"?w(B,I+1):f.push({type:"file",node:B,depth:I+1})})}return w(m,0),f}function st(m){return String(m&&(m.kind||"file")||"file")+":"+String(m&&(m.rel||m.path||m.name)||"")}function cn(m){(m||[]).forEach(function(f){var w=st(f);w!==":"&&(p.itemMap[w]=f)}),p.items=Object.keys(p.itemMap).map(function(f){return p.itemMap[f]}),p.items.sort(function(f,w){return String(f.rel||"").localeCompare(String(w.rel||""),void 0,{sensitivity:"base"})})}function it(m){if(m){var f=m.rel||"__root__";p.expanded[f]=!p.expanded[f],ae(p.items,!1),p.expanded[f]&&!y.value&&!p.loadedDirs[f]&&at(m.rel||"")}}function ae(m,f,w){if(sn(),p.items=(m||[]).slice().sort(function(I,B){return String(I.rel||"").localeCompare(String(B.rel||""),void 0,{sensitivity:"base"})}),b.innerHTML="",p.visible=[],f){b.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(w){b.innerHTML='<div class="workspace-file-empty">'+String(w)+"</div>";return}if(!p.items.length){b.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var T=tt(p.items);dn(T,!!y.value),p.visible=rt(T),p.visible.forEach(function(I,B){var C=I.node,M=document.createElement("button");M.type="button",M.className="workspace-file-item "+(I.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),M.setAttribute("role","option"),M.setAttribute("data-row-index",String(B)),M.setAttribute("data-path-key",I.type==="dir"?fe(C).path||fe(C).rel||fe(C).name||"":C.item.path||C.item.rel||C.item.name||"");var U=document.createElement("div");U.className="workspace-file-tree";var J=document.createElement("span");J.className="workspace-file-indent",J.style.setProperty("--indent",Math.min(I.depth,10)*.86+"rem");var Y=document.createElement("span");Y.className="workspace-file-chevron",Y.textContent=I.type==="dir"?p.expanded[C.rel||"__root__"]?"▾":"▸":"",I.type==="dir"?(Y.setAttribute("aria-label",p.expanded[C.rel||"__root__"]?"折叠文件夹":"展开文件夹"),Y.setAttribute("role","button"),Y.addEventListener("click",function(he){he.preventDefault(),he.stopPropagation(),it(C)})):Y.setAttribute("tabindex","-1");var ue=document.createElement("span");ue.className="workspace-file-icon"+(I.type==="file"?" is-file "+u(C.item&&C.item.name):" is-folder-svg"),I.type==="dir"&&(ue.innerHTML=r);var ge=document.createElement("div");ge.className="workspace-file-name",ge.textContent=C.name||C.rel||"";var Ne=document.createElement("div");Ne.className="workspace-file-meta",Ne.textContent=I.type==="dir"?"":g(C.item.size),U.appendChild(J),U.appendChild(Y),U.appendChild(ue),U.appendChild(ge);var mn=document.createElement("span");mn.className="workspace-file-check",M.appendChild(mn),M.appendChild(U),M.appendChild(Ne),M.addEventListener("mouseenter",function(){Z(B)}),M.addEventListener("click",function(he){he.preventDefault(),he.stopPropagation(),I.type==="dir"?we(fe(C)):we(C.item)}),b.appendChild(M)}),Z(0),X()}function un(){var m=y.value||"";p.controller&&p.controller.abort(),p.controller=typeof AbortController<"u"?new AbortController:null,ae(p.items,!0),_(m,"",p.controller?p.controller.signal:void 0).then(function(f){p.open&&(m?ae(f,!1):(p.loadedDirs.__root__=!0,cn(f),ae(p.items,!1)))}).catch(function(f){f&&f.name==="AbortError"||p.open&&ae([],!1,f&&f.message||"读取失败")})}function at(m){var f=m||"__root__";p.loadedDirs[f]||(p.loadedDirs[f]=!0,_("",m||"",void 0).then(function(w){!p.open||y.value||(cn(w),ae(p.items,!1))}).catch(function(){delete p.loadedDirs[f]}))}function ot(){p.debounce&&clearTimeout(p.debounce),p.debounce=setTimeout(un,120)}function pn(){if(p.open){V();try{y.focus(),y.select()}catch{}return}p.open=!0,h.classList.add("is-open"),h.setAttribute("aria-hidden","false"),y.value="",p.expanded=Object.create(null),p.loadedDirs=Object.create(null),p.itemMap=Object.create(null),p.items=[],ae([],!0),V(),un(),setTimeout(function(){V();try{y.focus()}catch{}},0)}function lt(){p.open?G():pn()}return y.addEventListener("input",ot),y.addEventListener("keydown",function(m){if(m.key==="ArrowDown")m.preventDefault(),Z(p.active+1);else if(m.key==="ArrowUp")m.preventDefault(),Z(p.active-1);else if(m.key==="Enter"){if(m.isComposing||m.keyCode===229||m.which===229)return;m.preventDefault();var f=p.visible[p.active];f&&f.type==="dir"?we(fe(f.node)):f&&f.type==="file"&&we(f.node.item)}else m.key==="Escape"&&(m.preventDefault(),G(),c.focus())}),document.addEventListener("click",function(m){p.open&&(h.contains(m.target)||G())}),window.addEventListener("resize",function(){p.open&&V()}),window.addEventListener("scroll",function(){p.open&&V()},!0),{panel:h,open:pn,close:G,toggle:lt}}function rn(c,v,h){if(!c||c.dataset.pathBrowseWrapped==="1")return c;s();var y=document.createElement("div");y.className="path-input-row";var b=c.parentNode;if(!b)return c;b.insertBefore(y,c),y.appendChild(c);var A=document.createElement("button");A.type="button",A.className="path-browse-btn",A.innerHTML=r;var x=h||"浏览路径";return A.setAttribute("aria-label",x),typeof bindUiHoverTip=="function"?(A.setAttribute("data-ui-tip",x),A.removeAttribute("title"),bindUiHoverTip(A)):A.title=x,A.addEventListener("click",function(p){p.stopPropagation();var V=c.getAttribute("data-path-kind")||v;V!=="file"&&V!=="directory"&&(V="directory"),d(A,V,c.value||"",function(X){if(X){var Z=Array.isArray(X)?X[0]||"":String(X);Z&&(c.value=Z,c.dispatchEvent(new Event("input",{bubbles:!0})),c.dispatchEvent(new Event("change",{bubbles:!0})))}})}),y.appendChild(A),c.dataset.pathBrowseWrapped="1",c}function Qn(c){var v=c.closest?c.closest(".input-wrapper"):c;!v||v.dataset.fileDropBound==="1"||(v.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(h){v.addEventListener(h,function(y){!y.dataTransfer||!y.dataTransfer.files||!y.dataTransfer.files.length||(y.preventDefault(),v.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(h){v.addEventListener(h,function(){v.classList.remove("is-drag-over")})}),v.addEventListener("drop",function(h){!h.dataTransfer||!h.dataTransfer.files||!h.dataTransfer.files.length||(h.preventDefault(),R(c,h.dataTransfer.files).catch(function(){}))}))}function Kn(c,v){if(!(!c||!v)){s(),Qn(v),se(v),c.classList.add("path-browse-btn","path-browse-btn--ghost"),c.innerHTML=r,c.setAttribute("aria-label","工作区文件"),c.setAttribute("data-ui-tip","工作区文件"),c.dataset.silentPickerUnavailable="1",c.removeAttribute("title");var h=document.createElement("input");h.type="file",h.multiple=!0,h.style.display="none",h.setAttribute("aria-hidden","true"),document.body.appendChild(h),h.addEventListener("change",function(){var b=h.files;!b||!b.length||(c.disabled=!0,R(v,b).catch(function(){}).finally(function(){h.value="",c.disabled=!1}))});var y=Gn(v,function(){h.click()});c.addEventListener("click",function(b){if(b.stopPropagation(),b.preventDefault(),b.altKey){h.click();return}if(!b.shiftKey){y.toggle();return}var A=t&&typeof t.__WORK_DIR__=="string"?t.__WORK_DIR__:"";d(c,"file",A,function(x){var p=Array.isArray(x)?x:x?[x]:[];p.length&&o(v,p.map(function(V){return a(V)}).join(" "))},!1)})}}function Fe(c){c=c||document;for(var v=c.querySelectorAll("[data-path-kind]"),h=0;h<v.length;h++){var y=v[h],b=y.getAttribute("data-path-kind");(b==="file"||b==="directory")&&rn(y,b)}}t.MyAgentPathPicker={pickPath:i,wrapInputWithBrowse:rn,attachChatPicker:Kn,uploadChatFiles:S,insertUploadedFiles:O,startChatFileUpload:R,clipboardFilesFromEvent:D,clipboardHasUsableText:Q,chatAttachments:z,clearChatAttachments:L,addChatAttachments:$,scan:Fe},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){Fe(document)}):Fe(document)})(typeof window<"u"?window:globalThis);const ut="modulepreload",pt=function(t){return"/"+t},fn={},mt=function(e,n,r){let s=Promise.resolve();if(n&&n.length>0){let d=function(o){return Promise.all(o.map(l=>Promise.resolve(l).then(S=>({status:"fulfilled",value:S}),S=>({status:"rejected",reason:S}))))};document.getElementsByTagName("link");const a=document.querySelector("meta[property=csp-nonce]"),u=(a==null?void 0:a.nonce)||(a==null?void 0:a.getAttribute("nonce"));s=d(n.map(o=>{if(o=pt(o),o in fn)return;fn[o]=!0;const l=o.endsWith(".css"),S=l?'[rel="stylesheet"]':"";if(document.querySelector(`link[href="${o}"]${S}`))return;const g=document.createElement("link");if(g.rel=l?"stylesheet":ut,l||(g.as="script"),g.crossOrigin="",g.href=o,u&&g.setAttribute("nonce",u),document.head.appendChild(g),l)return new Promise((_,E)=>{g.addEventListener("load",_),g.addEventListener("error",()=>E(new Error(`Unable to preload CSS for ${o}`)))})}))}function i(d){const a=new Event("vite:preloadError",{cancelable:!0});if(a.payload=d,window.dispatchEvent(a),!a.defaultPrevented)throw d}return s.then(d=>{for(const a of d||[])a.status==="rejected"&&i(a.reason);return e().catch(i)})};function Qe(){return{async:!1,breaks:!1,extensions:null,gfm:!0,hooks:null,pedantic:!1,renderer:null,silent:!1,tokenizer:null,walkTokens:null}}var le=Qe();function Rn(t){le=t}var be={exec:()=>null};function F(t,e=""){let n=typeof t=="string"?t:t.source;const r={replace:(s,i)=>{let d=typeof i=="string"?i:i.source;return d=d.replace(K.caret,"$1"),n=n.replace(s,d),r},getRegex:()=>new RegExp(n,e)};return r}var K={codeRemoveIndent:/^(?: {1,4}| {0,3}\t)/gm,outputLinkReplace:/\\([\[\]])/g,indentCodeCompensation:/^(\s+)(?:```)/,beginningSpace:/^\s+/,endingHash:/#$/,startingSpaceChar:/^ /,endingSpaceChar:/ $/,nonSpaceChar:/[^ ]/,newLineCharGlobal:/\n/g,tabCharGlobal:/\t/g,multipleSpaceGlobal:/\s+/g,blankLine:/^[ \t]*$/,doubleBlankLine:/\n[ \t]*\n[ \t]*$/,blockquoteStart:/^ {0,3}>/,blockquoteSetextReplace:/\n {0,3}((?:=+|-+) *)(?=\n|$)/g,blockquoteSetextReplace2:/^ {0,3}>[ \t]?/gm,listReplaceTabs:/^\t+/,listReplaceNesting:/^ {1,4}(?=( {4})*[^ ])/g,listIsTask:/^\[[ xX]\] /,listReplaceTask:/^\[[ xX]\] +/,anyLine:/\n.*\n/,hrefBrackets:/^<(.*)>$/,tableDelimiter:/[:|]/,tableAlignChars:/^\||\| *$/g,tableRowBlankLine:/\n[ \t]*$/,tableAlignRight:/^ *-+: *$/,tableAlignCenter:/^ *:-+: *$/,tableAlignLeft:/^ *:-+ *$/,startATag:/^<a /i,endATag:/^<\/a>/i,startPreScriptTag:/^<(pre|code|kbd|script)(\s|>)/i,endPreScriptTag:/^<\/(pre|code|kbd|script)(\s|>)/i,startAngleBracket:/^</,endAngleBracket:/>$/,pedanticHrefTitle:/^([^'"]*[^\s])\s+(['"])(.*)\2/,unicodeAlphaNumeric:/[\p{L}\p{N}]/u,escapeTest:/[&<>"']/,escapeReplace:/[&<>"']/g,escapeTestNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/,escapeReplaceNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g,unescapeTest:/&(#(?:\d+)|(?:#x[0-9A-Fa-f]+)|(?:\w+));?/ig,caret:/(^|[^\[])\^/g,percentDecode:/%25/g,findPipe:/\|/g,splitPipe:/ \|/,slashPipe:/\\\|/g,carriageReturn:/\r\n|\r/g,spaceLine:/^ +$/gm,notSpaceStart:/^\S*/,endingNewline:/\n$/,listItemRegex:t=>new RegExp(`^( {0,3}${t})((?:[	 ][^\\n]*)?(?:\\n|$))`),nextBulletRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`),hrRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`),fencesBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:\`\`\`|~~~)`),headingBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}#`),htmlBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}<(?:[a-z].*>|!--)`,"i")},ft=/^(?:[ \t]*(?:\n|$))+/,gt=/^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,ht=/^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/,ye=/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/,vt=/^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,Ke=/(?:[*+-]|\d{1,9}[.)])/,Pn=/^(?!bull |blockCode|fences|blockquote|heading|html|table)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html|table))+?)\n {0,3}(=+|-+) *(?:\n+|$)/,Ln=F(Pn).replace(/bull/g,Ke).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/\|table/g,"").getRegex(),St=F(Pn).replace(/bull/g,Ke).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/table/g,/ {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/).getRegex(),Ye=/^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/,bt=/^[^\n]+/,Xe=/(?!\s*\])(?:\\.|[^\[\]\\])+/,yt=F(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label",Xe).replace("title",/(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex(),wt=F(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g,Ke).getRegex(),Le="address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul",Ze=/<!--(?:-?>|[\s\S]*?(?:-->|$))/,It=F("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$))","i").replace("comment",Ze).replace("tag",Le).replace("attribute",/ +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex(),Mn=F(Ye).replace("hr",ye).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("|table","").replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),xt=F(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph",Mn).getRegex(),Je={blockquote:xt,code:gt,def:yt,fences:ht,heading:vt,hr:ye,html:It,lheading:Ln,list:wt,newline:ft,paragraph:Mn,table:be,text:bt},gn=F("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr",ye).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("blockquote"," {0,3}>").replace("code","(?: {4}| {0,3}	)[^\\n]").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),kt={...Je,lheading:St,table:gn,paragraph:F(Ye).replace("hr",ye).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("table",gn).replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex()},Ct={...Je,html:F(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment",Ze).replace(/tag/g,"(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),def:/^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,heading:/^(#{1,6})(.*)(?:\n+|$)/,fences:be,lheading:/^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,paragraph:F(Ye).replace("hr",ye).replace("heading",` *#{1,6} *[^
-]`).replace("lheading",Ln).replace("|table","").replace("blockquote"," {0,3}>").replace("|fences","").replace("|list","").replace("|html","").replace("|tag","").getRegex()},Tt=/^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/,Et=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/,Fn=/^( {2,}|\\)\n(?!\s*$)/,At=/^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/,Me=/[\p{P}\p{S}]/u,en=/[\s\p{P}\p{S}]/u,Nn=/[^\s\p{P}\p{S}]/u,_t=F(/^((?![*_])punctSpace)/,"u").replace(/punctSpace/g,en).getRegex(),Bn=/(?!~)[\p{P}\p{S}]/u,Rt=/(?!~)[\s\p{P}\p{S}]/u,Pt=/(?:[^\s\p{P}\p{S}]|~)/u,Lt=/\[[^[\]]*?\]\((?:\\.|[^\\\(\)]|\((?:\\.|[^\\\(\)])*\))*\)|`[^`]*?`|<[^<>]*?>/g,On=/^(?:\*+(?:((?!\*)punct)|[^\s*]))|^_+(?:((?!_)punct)|([^\s_]))/,Mt=F(On,"u").replace(/punct/g,Me).getRegex(),Ft=F(On,"u").replace(/punct/g,Bn).getRegex(),qn="^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)",Nt=F(qn,"gu").replace(/notPunctSpace/g,Nn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),Bt=F(qn,"gu").replace(/notPunctSpace/g,Pt).replace(/punctSpace/g,Rt).replace(/punct/g,Bn).getRegex(),Ot=F("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)","gu").replace(/notPunctSpace/g,Nn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),qt=F(/\\(punct)/,"gu").replace(/punct/g,Me).getRegex(),Ht=F(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme",/[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email",/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex(),Dt=F(Ze).replace("(?:-->|$)","-->").getRegex(),Ut=F("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment",Dt).replace("attribute",/\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex(),Ae=/(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/,jt=F(/^!?\[(label)\]\(\s*(href)(?:(?:[ \t]*(?:\n[ \t]*)?)(title))?\s*\)/).replace("label",Ae).replace("href",/<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]*/).replace("title",/"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex(),Hn=F(/^!?\[(label)\]\[(ref)\]/).replace("label",Ae).replace("ref",Xe).getRegex(),Dn=F(/^!?\[(ref)\](?:\[\])?/).replace("ref",Xe).getRegex(),zt=F("reflink|nolink(?!\\()","g").replace("reflink",Hn).replace("nolink",Dn).getRegex(),nn={_backpedal:be,anyPunctuation:qt,autolink:Ht,blockSkip:Lt,br:Fn,code:Et,del:be,emStrongLDelim:Mt,emStrongRDelimAst:Nt,emStrongRDelimUnd:Ot,escape:Tt,link:jt,nolink:Dn,punctuation:_t,reflink:Hn,reflinkSearch:zt,tag:Ut,text:At,url:be},$t={...nn,link:F(/^!?\[(label)\]\((.*?)\)/).replace("label",Ae).getRegex(),reflink:F(/^!?\[(label)\]\s*\[([^\]]*)\]/).replace("label",Ae).getRegex()},je={...nn,emStrongRDelimAst:Bt,emStrongLDelim:Ft,url:F(/^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/,"i").replace("email",/[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(),_backpedal:/(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,del:/^(~~?)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/,text:/^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|https?:\/\/|ftp:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/},Wt={...je,br:F(Fn).replace("{2,}","*").getRegex(),text:F(je.text).replace("\\b_","\\b_| {2,}\\n").replace(/\{2,\}/g,"*").getRegex()},Ie={normal:Je,gfm:kt,pedantic:Ct},ve={normal:nn,gfm:je,breaks:Wt,pedantic:$t},Vt={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"},hn=t=>Vt[t];function ee(t,e){if(e){if(K.escapeTest.test(t))return t.replace(K.escapeReplace,hn)}else if(K.escapeTestNoEncode.test(t))return t.replace(K.escapeReplaceNoEncode,hn);return t}function vn(t){try{t=encodeURI(t).replace(K.percentDecode,"%")}catch{return null}return t}function Sn(t,e){var i;const n=t.replace(K.findPipe,(d,a,u)=>{let o=!1,l=a;for(;--l>=0&&u[l]==="\\";)o=!o;return o?"|":" |"}),r=n.split(K.splitPipe);let s=0;if(r[0].trim()||r.shift(),r.length>0&&!((i=r.at(-1))!=null&&i.trim())&&r.pop(),e)if(r.length>e)r.splice(e);else for(;r.length<e;)r.push("");for(;s<r.length;s++)r[s]=r[s].trim().replace(K.slashPipe,"|");return r}function Se(t,e,n){const r=t.length;if(r===0)return"";let s=0;for(;s<r&&t.charAt(r-s-1)===e;)s++;return t.slice(0,r-s)}function Gt(t,e){if(t.indexOf(e[1])===-1)return-1;let n=0;for(let r=0;r<t.length;r++)if(t[r]==="\\")r++;else if(t[r]===e[0])n++;else if(t[r]===e[1]&&(n--,n<0))return r;return n>0?-2:-1}function bn(t,e,n,r,s){const i=e.href,d=e.title||null,a=t[1].replace(s.other.outputLinkReplace,"$1");r.state.inLink=!0;const u={type:t[0].charAt(0)==="!"?"image":"link",raw:n,href:i,title:d,text:a,tokens:r.inlineTokens(a)};return r.state.inLink=!1,u}function Qt(t,e,n){const r=t.match(n.other.indentCodeCompensation);if(r===null)return e;const s=r[1];return e.split(`
-`).map(i=>{const d=i.match(n.other.beginningSpace);if(d===null)return i;const[a]=d;return a.length>=s.length?i.slice(s.length):i}).join(`
-`)}var _e=class{constructor(t){q(this,"options");q(this,"rules");q(this,"lexer");this.options=t||le}space(t){const e=this.rules.block.newline.exec(t);if(e&&e[0].length>0)return{type:"space",raw:e[0]}}code(t){const e=this.rules.block.code.exec(t);if(e){const n=e[0].replace(this.rules.other.codeRemoveIndent,"");return{type:"code",raw:e[0],codeBlockStyle:"indented",text:this.options.pedantic?n:Se(n,`
-`)}}}fences(t){const e=this.rules.block.fences.exec(t);if(e){const n=e[0],r=Qt(n,e[3]||"",this.rules);return{type:"code",raw:n,lang:e[2]?e[2].trim().replace(this.rules.inline.anyPunctuation,"$1"):e[2],text:r}}}heading(t){const e=this.rules.block.heading.exec(t);if(e){let n=e[2].trim();if(this.rules.other.endingHash.test(n)){const r=Se(n,"#");(this.options.pedantic||!r||this.rules.other.endingSpaceChar.test(r))&&(n=r.trim())}return{type:"heading",raw:e[0],depth:e[1].length,text:n,tokens:this.lexer.inline(n)}}}hr(t){const e=this.rules.block.hr.exec(t);if(e)return{type:"hr",raw:Se(e[0],`
+var dt=Object.defineProperty;var ct=(t,e,n)=>e in t?dt(t,e,{enumerable:!0,configurable:!0,writable:!0,value:n}):t[e]=n;var D=(t,e,n)=>ct(t,typeof e!="symbol"?e+"":e,n);(function(){const e=document.createElement("link").relList;if(e&&e.supports&&e.supports("modulepreload"))return;for(const s of document.querySelectorAll('link[rel="modulepreload"]'))r(s);new MutationObserver(s=>{for(const a of s)if(a.type==="childList")for(const d of a.addedNodes)d.tagName==="LINK"&&d.rel==="modulepreload"&&r(d)}).observe(document,{childList:!0,subtree:!0});function n(s){const a={};return s.integrity&&(a.integrity=s.integrity),s.referrerPolicy&&(a.referrerPolicy=s.referrerPolicy),s.crossOrigin==="use-credentials"?a.credentials="include":s.crossOrigin==="anonymous"?a.credentials="omit":a.credentials="same-origin",a}function r(s){if(s.ep)return;s.ep=!0;const a=n(s);fetch(s.href,a)}})();(function(t){var e=104857600,n=200*1024*1024,r='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function s(){if(!document.getElementById("myagent-path-picker-styles")){var c=document.createElement("style");c.id="myagent-path-picker-styles",c.textContent='.path-input-row{display:flex;align-items:stretch;gap:.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-.15rem;}.input-wrapper.is-drag-over{border-color:rgba(203,166,247,.62);box-shadow:0 0 0 3px rgba(203,166,247,.12),0 0 28px rgba(139,92,246,.18);}.input-wrapper.is-file-uploading{border-color:rgba(99,102,241,.52);}.chat-upload-status{box-sizing:border-box;width:100%;margin:.38rem 0 0;padding:.42rem .58rem;border:1px solid rgba(99,102,241,.22);border-radius:10px;background:rgba(99,102,241,.08);color:var(--text-secondary,#a6adc8);font-size:.72rem;}.chat-upload-status-row{display:flex;align-items:center;gap:.5rem;}.chat-upload-status-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.chat-upload-cancel{flex:none;border:0;background:transparent;color:var(--accent-2,#d4b8fc);font:inherit;font-weight:700;cursor:pointer;padding:.08rem .2rem;}.chat-upload-cancel:hover{color:var(--text-primary,#fff);}.chat-upload-progress{height:4px;margin-top:.36rem;border-radius:999px;overflow:hidden;background:rgba(255,255,255,.1);}.chat-upload-progress-bar{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#6366f1,#a78bfa);transition:width .12s linear;}.workspace-file-popover{position:fixed;display:none;z-index:260;width:min(46rem,calc(100vw - 1.2rem));height:min(44rem,82vh);max-height:min(44rem,82vh);border:1px solid var(--border-glass,rgba(255,255,255,.08));border:1px solid var(--floating-border,var(--border-glass,rgba(255,255,255,.08)));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.96));background:var(--floating-surface,var(--surface-glass2,rgba(40,40,60,.96)));box-shadow:var(--shadow-soft,0 18px 50px rgba(0,0,0,.34));box-shadow:var(--floating-shadow,var(--shadow-soft,0 18px 50px rgba(0,0,0,.34)));overflow:hidden;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);}.workspace-file-popover.is-open{display:flex;flex-direction:column;}.workspace-file-search{position:relative;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.035));color:var(--text-primary,#cdd6f4);padding:.56rem .72rem;font:inherit;font-size:.78rem;outline:none;}.workspace-file-search::placeholder{color:var(--text-muted,#6c7086);}.workspace-file-list{position:relative;flex:1;min-height:0;overflow:auto;padding:.36rem .38rem .2rem;}.workspace-file-item{width:100%;display:grid;grid-template-columns:1.05rem minmax(0,1fr) auto;gap:.2rem .38rem;align-items:center;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text-secondary,#a6adc8);padding:.22rem .36rem;cursor:pointer;font:inherit;font-size:.74rem;}.workspace-file-item:hover,.workspace-file-item.is-active{background:rgba(255,255,255,.055);color:var(--text-primary,#cdd6f4);}.workspace-file-item.is-selected{background:rgba(var(--accent-rgb,137,180,250),.12);color:var(--text-primary,#cdd6f4);}.workspace-file-check{width:.82rem;height:.82rem;border:1px solid var(--border-glass,rgba(255,255,255,.14));border-radius:4px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:.62rem;line-height:1;background:transparent;}.workspace-file-item.is-selected .workspace-file-check{background:rgb(var(--brand-accent-rgb,99,102,241));border-color:transparent;color:#fff;}.workspace-file-dir-row{grid-template-columns:1.05rem minmax(0,1fr) auto;color:var(--text-primary,#cdd6f4);font-weight:650;}.workspace-file-dir-row .workspace-file-tree{grid-column:2/3;}.workspace-file-file-row{grid-template-columns:1.05rem minmax(0,1fr) auto;}.workspace-file-tree{min-width:0;display:flex;align-items:center;gap:.24rem;}.workspace-file-indent{flex:0 0 auto;width:var(--indent,0);}.workspace-file-chevron{width:.8rem;min-width:.8rem;color:var(--text-muted,#6c7086);font-size:.72rem;text-align:center;border:0;background:transparent;padding:0;cursor:pointer;}.workspace-file-icon{position:relative;width:.98rem;min-width:.98rem;height:.74rem;margin-top:.04rem;border-radius:3px;border:1px solid rgba(203,166,247,.28);background:linear-gradient(135deg,rgba(203,166,247,.18),rgba(99,102,241,.1));box-shadow:inset 0 .12rem .26rem rgba(255,255,255,.08);}.workspace-file-icon:before{content:"";position:absolute;left:.06rem;right:.06rem;top:.12rem;height:.16rem;border-radius:999px;background:rgba(203,166,247,.34);}.workspace-file-icon:after{content:"";position:absolute;left:.06rem;right:.06rem;bottom:.11rem;height:.24rem;border-radius:2px;background:rgba(99,102,241,.16);}.workspace-file-icon.is-file{width:.82rem;min-width:.82rem;height:1rem;margin-top:0;border-radius:3px;background:transparent;border:1.5px solid rgba(166,173,200,.58);box-shadow:none;color:var(--text-muted,#6c7086);}.workspace-file-icon.is-file:before{left:auto;right:-1.5px;top:-1.5px;width:.3rem;height:.3rem;border:0;border-left:1.5px solid rgba(166,173,200,.58);border-bottom:1.5px solid rgba(166,173,200,.58);border-radius:0 3px 0 3px;background:var(--surface-glass2,rgba(40,40,60,.94));}.workspace-file-icon.is-file:after{display:none;}.workspace-file-icon.is-folder-svg{width:1rem;min-width:1rem;height:1rem;margin-top:0;border:0;background:transparent;box-shadow:none;color:var(--text-muted,#6c7086);display:inline-flex;align-items:center;justify-content:center;}.workspace-file-icon.is-folder-svg:before,.workspace-file-icon.is-folder-svg:after{display:none;}.workspace-file-icon.is-folder-svg svg{width:1rem;height:1rem;display:block;}.workspace-file-icon.is-image{border-color:rgba(45,212,191,.72);}.workspace-file-icon.is-image:after{display:block;left:.12rem;right:.12rem;bottom:.15rem;height:.24rem;clip-path:polygon(0 100%,38% 38%,56% 66%,76% 24%,100% 100%);background:rgba(45,212,191,.72);}.workspace-file-icon.is-audio{border-color:rgba(251,191,36,.76);}.workspace-file-icon.is-audio:after{display:block;left:.17rem;right:auto;bottom:.18rem;width:.36rem;height:.4rem;border-radius:0;background:rgba(251,191,36,.76);clip-path:polygon(0 32%,45% 32%,100% 0,100% 100%,45% 68%,0 68%);}.workspace-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.74rem;}.workspace-file-dir{grid-column:2/-1;color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.workspace-file-meta{color:var(--text-muted,#6c7086);font-size:.68rem;white-space:nowrap;}.workspace-file-footer{position:relative;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.42rem .52rem;border-top:1px solid var(--border-glass,rgba(255,255,255,.08));background:var(--surface-glass3,rgba(255,255,255,.025));font-size:.72rem;color:var(--text-muted,#6c7086);}.workspace-file-outside{flex-shrink:0;border:1px solid var(--border-glass,rgba(255,255,255,.1));border-radius:8px;padding:.28rem .58rem;background:rgba(255,255,255,.035);color:var(--text-secondary,#a6adc8);font:inherit;font-size:.7rem;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,color .16s;}.workspace-file-outside:hover{background:rgba(255,255,255,.07);border-color:var(--border-brand-accent,rgba(124,111,247,.35));color:var(--text-primary,#fff);}.workspace-file-insert{border:0;border-radius:8px;padding:.34rem .62rem;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:.72rem;font-weight:700;cursor:pointer;}.workspace-file-insert:disabled{opacity:.45;cursor:not-allowed;}.workspace-file-empty{padding:1rem;text-align:center;color:var(--text-muted,#6c7086);font-size:.78rem;}.theme-light .workspace-file-popover{background:rgba(255,255,255,.98);}.theme-light .workspace-file-search,.theme-light .workspace-file-footer{background:rgba(15,23,42,.025);}.theme-light .workspace-file-item:hover,.theme-light .workspace-file-item.is-active{background:rgba(15,23,42,.05);}.theme-light .workspace-file-outside{background:rgba(15,23,42,.025);}',document.head.appendChild(c)}}async function a(c,v,h){var y=typeof AbortController<"u"?new AbortController:null,b=y?setTimeout(function(){y.abort()},5e4):null,R;try{R=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:c||"directory",initial:v||"",multiple:!!h}),signal:y?y.signal:void 0})}finally{b&&clearTimeout(b)}var I=await R.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!R.ok||!I.ok){if(I&&I.cancelled)return null;var p=I&&I.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(p))return null;throw new Error(p)}return h?Array.isArray(I.paths)?I.paths:I.path?[I.path]:[]:I.path||null}async function d(c,v,h,y,b){c.disabled=!0;try{var R=await a(v,h||"",!!b);y&&y(R)}catch{return}finally{c.disabled=!1}}function i(c){var v=String(c||"").trim();return v?((v.charAt(0)==='"'&&v.charAt(v.length-1)==='"'||v.charAt(0)==="'"&&v.charAt(v.length-1)==="'")&&(v=v.slice(1,-1)),'"'+v.replace(/"/g,'\\"')+'"'):""}function u(c){var v=String(c||"").toLowerCase().split(".").pop()||"";return/^(png|jpe?g|gif|webp|bmp|svg|tiff?|ico|avif)$/.test(v)?"is-image":/^(mp3|wav|flac|aac|m4a|ogg|oga|opus|wma|aiff?)$/.test(v)?"is-audio":""}function o(c,v){var h=c.selectionStart,y=c.selectionEnd,b=c.value.slice(0,h),R=c.value.slice(y),I=String(v||"");b.length&&!/\s$/.test(b)&&(I=" "+I),R.length&&!/^\s/.test(R)&&(I=I+" "),c.value=b+I+R;var p=b.length+I.length;c.selectionStart=c.selectionEnd=p,c.dispatchEvent(new Event("input",{bubbles:!0})),c.focus()}function l(c){var v=Array.prototype.slice.call(c||[]).filter(Boolean),h=0;if(v.forEach(function(y){var b=Number(y&&y.size||0);if(b>e)throw new Error("文件“"+String(y&&y.name||"未命名文件")+"”超过 "+g(e)+" 限制。");h+=Math.max(0,b)}),h>n)throw new Error("本次上传总大小超过 "+g(n)+" 限制。");return v}function S(c,v){var h;try{h=l(c)}catch(b){return Promise.reject(b)}if(!h.length)return Promise.resolve([]);v=v||{};var y=new FormData;return h.forEach(function(b){y.append("files",b,b.name||"upload.bin")}),new Promise(function(b,R){var I=new XMLHttpRequest;I.open("POST","/api/upload-chat-files",!0),I.withCredentials=!0,I.timeout=600*1e3,I.upload&&typeof v.onProgress=="function"&&(I.upload.onprogress=function(p){v.onProgress(p.loaded||0,p.lengthComputable?p.total:0)}),typeof v.registerAbort=="function"&&v.registerAbort(function(){I.abort()}),I.onload=function(){var p;try{p=JSON.parse(I.responseText||"{}")}catch{p={ok:!1,error:"上传失败"}}if(I.status<200||I.status>=300||!p.ok){R(new Error(p&&p.error||"上传失败"));return}b(Array.isArray(p.files)?p.files:[])},I.onerror=function(){R(new Error("上传失败：网络连接异常。"))},I.ontimeout=function(){R(new Error("上传超时，请重试。"))},I.onabort=function(){var p=new Error("上传已取消。");p.name="AbortError",R(p)},I.send(y)})}function g(c){return c=Number(c||0),!isFinite(c)||c<=0?"":c<1024?c+" B":c<1024*1024?Math.round(c/102.4)/10+" KB":c<1024*1024*1024?Math.round(c/104857.6)/10+" MB":Math.round(c/1073741824e-1)/10+" GB"}async function A(c,v,h){var y=[];c?y.push("q="+encodeURIComponent(c)):v&&y.push("dir="+encodeURIComponent(v));var b="/api/workspace-files"+(y.length?"?"+y.join("&"):""),R=await fetch(b,{credentials:"same-origin",signal:h}),I=await R.json().catch(function(){return{ok:!1,error:"读取工作区文件失败"}});if(!R.ok||!I.ok)throw new Error(I&&I.error||"读取工作区文件失败");return Array.isArray(I.files)?I.files:[]}function E(){try{return typeof currentSessionId<"u"?String(currentSessionId||""):""}catch{return""}}function x(c,v,h){if(v){var y=E();if(h&&y&&h!==y){try{if(typeof persistInputDraft=="function"){var b="";typeof draftBySession<"u"&&Object.prototype.hasOwnProperty.call(draftBySession,h)?b=String(draftBySession[h]||""):typeof readStoredInputDraft=="function"&&(b=String(readStoredInputDraft(h)||"")),persistInputDraft(h,b.trim()?b+" "+v:v);return}}catch{}return}o(c,v)}}function B(c,v,h){var y=E();return S(v,h).then(function(b){var R=Array.isArray(c._myAgentStructuredAttachments)?c._myAgentStructuredAttachments.slice():[];b.forEach(function(p){!p||!p.path||R.some(function(K){return K.path===p.path})||R.push({path:p.path,name:p.name||"",size:Number(p.size||0),attachment:p.attachment||null})}),c._myAgentStructuredAttachments=R;var I=b.map(function(p){return i(p.path||p.rel||p.name)}).join(" ");x(c,I,y)})}function z(c){return Array.isArray(c&&c._myAgentStructuredAttachments)?c._myAgentStructuredAttachments.slice():[]}function L(c){c&&(c._myAgentStructuredAttachments=[])}function W(c,v){if(c){var h=Array.isArray(c._myAgentStructuredAttachments)?c._myAgentStructuredAttachments.slice():[];Array.prototype.slice.call(v||[]).forEach(function(y){!y||!y.path||h.some(function(b){return b.path===y.path})||h.push({path:y.path,name:y.name||"",size:Number(y.size||0),attachment:y.attachment||null})}),c._myAgentStructuredAttachments=h}}function P(c,v){console.error("chat file upload failed:",v),c.dispatchEvent(new CustomEvent("myagent:file-paste-error",{bubbles:!0,detail:{message:String(v&&v.message||v||"上传失败")}}))}function G(c,v){var h=c.closest?c.closest(".input-wrapper"):null;v?c.dataset.fileUploadBusy="1":delete c.dataset.fileUploadBusy,h&&(h.classList.toggle("is-file-uploading",!!v),v?h.setAttribute("aria-busy","true"):h.removeAttribute("aria-busy")),c.dispatchEvent(new CustomEvent("myagent:file-upload-state",{bubbles:!0,detail:{busy:!!v}}))}function j(c,v){var h=c.closest?c.closest(".input-wrapper"):null,y=document.createElement("div");y.className="chat-upload-status",y.setAttribute("role","status"),y.innerHTML='<div class="chat-upload-status-row"><span class="chat-upload-status-label"></span><button type="button" class="chat-upload-cancel">取消</button></div><div class="chat-upload-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="chat-upload-progress-bar"></span></div>';var b=v.length;return y.querySelector(".chat-upload-status-label").textContent="正在上传 "+b+" 个文件… 0%",h&&h.parentNode&&h.parentNode.insertBefore(y,h.nextSibling),y}function _(c,v){var h;try{h=l(v)}catch($){return P(c,$),Promise.reject($)}if(!h.length)return Promise.resolve();if(c._myAgentActiveUpload){var y=new Error("已有文件正在上传，请等待完成或先取消。");return P(c,y),Promise.reject(y)}var b=j(c,h),R=b.querySelector(".chat-upload-status-label"),I=b.querySelector(".chat-upload-progress"),p=b.querySelector(".chat-upload-progress-bar"),K=b.querySelector(".chat-upload-cancel"),Y=null,Z=c._myAgentActiveUpload={};return G(c,!0),K.addEventListener("click",function(){K.disabled=!0,R.textContent="正在取消上传…",Y&&Y()}),B(c,h,{registerAbort:function($){Y=$},onProgress:function($,de){if(c._myAgentActiveUpload===Z){var ce=de>0?Math.min(100,Math.round($*100/de)):0;R.textContent="正在上传 "+h.length+" 个文件… "+ce+"%",p.style.width=ce+"%",I.setAttribute("aria-valuenow",String(ce))}}}).catch(function($){throw(!$||$.name!=="AbortError")&&P(c,$),$}).finally(function(){c._myAgentActiveUpload===Z&&(delete c._myAgentActiveUpload,G(c,!1)),b.parentNode&&b.parentNode.removeChild(b)})}function q(c){var v=c&&c.clipboardData;if(!v)return[];var h=[],y=Array.prototype.slice.call(v.items||[]);return y.forEach(function(b){if(!(!b||b.kind!=="file"||typeof b.getAsFile!="function")){var R=b.getAsFile();R&&h.push(R)}}),h.length||(h=Array.prototype.slice.call(v.files||[]).filter(Boolean)),h.map(function(b,R){if(String(b&&b.name||"").trim())return b;var I=String(b&&b.type||"").split("/")[1]||"bin";I=I.replace(/[^a-z0-9.+-]/gi,"")||"bin";var p="clipboard-"+Date.now()+"-"+(R+1)+"."+I;try{return new File([b],p,{type:b.type||"application/octet-stream",lastModified:Date.now()})}catch{return b}})}function V(c){var v=c&&c.clipboardData;if(!v||typeof v.getData!="function")return!1;try{return String(v.getData("text/plain")||"").trim().length>0}catch{return!1}}function se(c){!c||c.dataset.filePasteBound==="1"||(c.dataset.filePasteBound="1",c.addEventListener("paste",function(v){if(!V(v)){var h=q(v);h.length&&(v.preventDefault(),_(c,h).catch(function(){}))}}))}function $n(c,v){var h=document.createElement("div");h.className="workspace-file-popover",h.setAttribute("aria-hidden","true"),h.innerHTML='<input class="workspace-file-search" type="text" autocomplete="off" spellcheck="false" placeholder="搜索工作区文件（↑↓ 移动 · Enter 选择 · Esc 关闭）"><div class="workspace-file-list" role="listbox"></div><div class="workspace-file-footer"><span class="workspace-file-count">未选择文件</span><button type="button" class="workspace-file-outside">选择工作目录外文件</button></div>',document.body.appendChild(h);var y=h.querySelector(".workspace-file-search"),b=h.querySelector(".workspace-file-list"),R=h.querySelector(".workspace-file-count"),I=h.querySelector(".workspace-file-outside"),p={items:[],visible:[],active:0,open:!1,debounce:null,controller:null,selected:Object.create(null),expanded:Object.create(null),loadedDirs:Object.create(null),itemMap:Object.create(null)};function K(){var f=c.closest?c.closest(".input-wrapper"):c,m=f.getBoundingClientRect(),w=8,T=Math.min(Math.max(m.width,520),window.innerWidth-16),k=Math.max(8,Math.min(m.left,window.innerWidth-T-8)),O=document.querySelector(".titlebar"),C=O?O.getBoundingClientRect().bottom:44,M=parseFloat(getComputedStyle(document.documentElement).fontSize||"16")||16,U=Math.min(44*M,window.innerHeight*.82),J=Math.max(1,m.top-C-w),X=Math.min(U,J),ue=m.top-X-w;if(X<96){var ge=Math.max(1,window.innerHeight-m.bottom-w-8);X=Math.min(U,ge),ue=m.bottom+w}h.style.left=k+"px",h.style.top=Math.max(C,ue)+"px",h.style.width=T+"px",h.style.height=Math.max(1,Math.floor(X))+"px",h.style.maxHeight=Math.max(1,Math.floor(X))+"px"}function Y(){var f=Object.keys(p.selected).length;R.textContent=f?"已选择 "+f+" 项":"未选择文件",b.querySelectorAll(".workspace-file-item").forEach(function(m){var w=m.getAttribute("data-path-key")||"",T=!!p.selected[w];m.classList.toggle("is-selected",T);var k=m.querySelector(".workspace-file-check");k&&(k.textContent=T?"✓":"")})}function Z(f){var m=b.querySelectorAll(".workspace-file-item");if(!m.length){p.active=0;return}p.active=Math.max(0,Math.min(f,m.length-1));for(var w=0;w<m.length;w++)m[w].classList.toggle("is-active",w===p.active),m[w].setAttribute("aria-selected",w===p.active?"true":"false");var T=m[p.active];T&&typeof T.scrollIntoView=="function"&&T.scrollIntoView({block:"nearest"})}function $(){p.open=!1,h.classList.remove("is-open"),h.setAttribute("aria-hidden","true"),p.debounce&&clearTimeout(p.debounce),p.controller&&p.controller.abort()}function de(f){return f&&(f.path||f.rel||f.name)||""}function ce(f){return i(de(f))}function Xn(f,m){var w=de(f);if(!w)return!1;var T=String(f&&f.rel||"");return m.indexOf(ce(f))>=0||m.indexOf(w)>=0||T&&m.indexOf(i(T))>=0||T&&m.indexOf(T)>=0}function Yn(f,m){f=String(f||""),m=String(m||"");for(var w=0;w<f.length&&w<m.length&&f.charAt(w)===m.charAt(w);)w++;for(var T=f.length-1,k=m.length-1;T>=w&&k>=w&&f.charAt(T)===m.charAt(k);)T--,k--;return m.slice(w,k+1).trim()}function Zn(f,m){if(m){var w=String(c.value||"");if(!(w.indexOf(m)>=0)){var T=c.value;o(c,m);var k=Yn(T,c.value);f&&k&&(f._inputToken=k)}}}function Jn(f,m){if(!m&&!f)return;var w=String(c.value||""),T=[];function k(C){C=String(C||"").trim(),C&&T.indexOf(C)<0&&T.push(C)}k(f&&f._inputToken),k(m),k(f&&f.path),k(f&&f.rel),k(f&&f.path&&i(f.path)),k(f&&f.rel&&i(f.rel));var O=w;T.sort(function(C,M){return M.length-C.length}).forEach(function(C){var M=C.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),U=new RegExp("(?:^|\\s)"+M+"(?=\\s|$)","g");O=O.replace(U,function(J){return J.charAt(0)&&/\s/.test(J.charAt(0))?" ":""})}),O=O.replace(/[ \t]{2,}/g," ").trim(),O!==w&&(c.value=O,c.selectionStart=c.selectionEnd=c.value.length,c.dispatchEvent(new Event("input",{bubbles:!0})))}function we(f){if(f){var m=de(f);if(m){var w=ce(f);if(p.selected[m]){var T=p.selected[m];delete p.selected[m],Jn(T,w)}else p.selected[m]=f,Zn(f,w);Y()}}}function sn(){var f=String(c.value||"");Object.keys(p.selected).forEach(function(m){var w=p.selected[m];Xn(w,f)||delete p.selected[m]})}function et(){sn(),Y()}c.addEventListener("input",et),I&&I.addEventListener("click",function(f){f.preventDefault(),f.stopPropagation(),typeof v=="function"&&v()});function an(){var f=String(t.__WORK_DIR__||"workspace"),m=f.split(/[\\/]+/).filter(Boolean);return m[m.length-1]||"workspace"}function on(f,m,w){return{type:"dir",name:f,rel:m,root:!!w,path:"",dirs:Object.create(null),files:[],children:[],loaded:!1}}function nt(f,m){var w=String(f&&f.path||""),T=String(m||"").replace(/\//g,"\\");return w&&T&&w.toLowerCase().slice(-T.length)===T.toLowerCase()?w.slice(0,Math.max(0,w.length-T.length)).replace(/[\\/]+$/,""):String(t.__WORK_DIR__||"").replace(/[\\/]+$/,"")}function ln(f,m){var w=String(f||"").replace(/[\\/]+$/,""),T=String(m||"").replace(/[\\/]+/g,"/");if(!T)return w;var k=w.indexOf("\\")>=0?"\\":"/";return w?w+k+T.replace(/\//g,k):T}function me(f){return{kind:"directory",name:f.name||f.rel||an(),rel:f.rel||"",path:f.path||ln(String(t.__WORK_DIR__||""),f.rel||"")}}function tt(f){var m=on(an(),"",!0);m.path=String(t.__WORK_DIR__||"").replace(/[\\/]+$/,""),m.loaded=!!p.loadedDirs.__root__;function w(k,O){for(var C=m,M=[],U=0;U<k.length;U++)M.push(k[U]),C.dirs[k[U]]||(C.dirs[k[U]]=on(k[U],M.join("/"),!1),C.dirs[k[U]].path=ln(O||m.path,M.join("/"))),C=C.dirs[k[U]],C.loaded=!!p.loadedDirs[C.rel||"__root__"];return C}(f||[]).forEach(function(k){var O=String(k.rel||k.path||k.name||"").replace(/\\/g,"/"),C=O.split("/").filter(Boolean);if(C.length){var M=nt(k,O);if(!m.path&&M&&(m.path=M),k.kind==="directory"){var U=w(C,M||m.path);U.name=k.name||U.name,U.path=k.path||U.path;return}var J=w(C.slice(0,-1),M||m.path);J.files.push({type:"file",name:k.name||C[C.length-1]||O,rel:O,item:k})}});function T(k){var O=Object.keys(k.dirs).map(function(C){return k.dirs[C]}).sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})});O.forEach(T),k.files.sort(function(C,M){return C.name.localeCompare(M.name,void 0,{sensitivity:"base"})}),k.children=O.concat(k.files)}return T(m),m}function dn(f,m,w){if(!(!f||f.type!=="dir")){w=Number(w||0);var T=f.rel||"__root__";m?p.expanded[T]=!0:typeof p.expanded[T]>"u"&&(p.expanded[T]=w===0),m&&f.children.forEach(function(k){k.type==="dir"&&dn(k,m,w+1)})}}function rt(f){var m=[];function w(T,k){m.push({type:"dir",node:T,depth:k}),p.expanded[T.rel||"__root__"]&&T.children.forEach(function(O){O.type==="dir"?w(O,k+1):m.push({type:"file",node:O,depth:k+1})})}return w(f,0),m}function st(f){return String(f&&(f.kind||"file")||"file")+":"+String(f&&(f.rel||f.path||f.name)||"")}function cn(f){(f||[]).forEach(function(m){var w=st(m);w!==":"&&(p.itemMap[w]=m)}),p.items=Object.keys(p.itemMap).map(function(m){return p.itemMap[m]}),p.items.sort(function(m,w){return String(m.rel||"").localeCompare(String(w.rel||""),void 0,{sensitivity:"base"})})}function at(f){if(f){var m=f.rel||"__root__";p.expanded[m]=!p.expanded[m],ie(p.items,!1),p.expanded[m]&&!y.value&&!p.loadedDirs[m]&&it(f.rel||"")}}function ie(f,m,w){if(sn(),p.items=(f||[]).slice().sort(function(k,O){return String(k.rel||"").localeCompare(String(O.rel||""),void 0,{sensitivity:"base"})}),b.innerHTML="",p.visible=[],m){b.innerHTML='<div class="workspace-file-empty">加载中</div>';return}if(w){b.innerHTML='<div class="workspace-file-empty">'+String(w)+"</div>";return}if(!p.items.length){b.innerHTML='<div class="workspace-file-empty">没有匹配文件</div>';return}var T=tt(p.items);dn(T,!!y.value),p.visible=rt(T),p.visible.forEach(function(k,O){var C=k.node,M=document.createElement("button");M.type="button",M.className="workspace-file-item "+(k.type==="dir"?"workspace-file-dir-row":"workspace-file-file-row"),M.setAttribute("role","option"),M.setAttribute("data-row-index",String(O)),M.setAttribute("data-path-key",k.type==="dir"?me(C).path||me(C).rel||me(C).name||"":C.item.path||C.item.rel||C.item.name||"");var U=document.createElement("div");U.className="workspace-file-tree";var J=document.createElement("span");J.className="workspace-file-indent",J.style.setProperty("--indent",Math.min(k.depth,10)*.86+"rem");var X=document.createElement("span");X.className="workspace-file-chevron",X.textContent=k.type==="dir"?p.expanded[C.rel||"__root__"]?"▾":"▸":"",k.type==="dir"?(X.setAttribute("aria-label",p.expanded[C.rel||"__root__"]?"折叠文件夹":"展开文件夹"),X.setAttribute("role","button"),X.addEventListener("click",function(he){he.preventDefault(),he.stopPropagation(),at(C)})):X.setAttribute("tabindex","-1");var ue=document.createElement("span");ue.className="workspace-file-icon"+(k.type==="file"?" is-file "+u(C.item&&C.item.name):" is-folder-svg"),k.type==="dir"&&(ue.innerHTML=r);var ge=document.createElement("div");ge.className="workspace-file-name",ge.textContent=C.name||C.rel||"";var Ne=document.createElement("div");Ne.className="workspace-file-meta",Ne.textContent=k.type==="dir"?"":g(C.item.size),U.appendChild(J),U.appendChild(X),U.appendChild(ue),U.appendChild(ge);var fn=document.createElement("span");fn.className="workspace-file-check",M.appendChild(fn),M.appendChild(U),M.appendChild(Ne),M.addEventListener("mouseenter",function(){Z(O)}),M.addEventListener("click",function(he){he.preventDefault(),he.stopPropagation(),k.type==="dir"?we(me(C)):we(C.item)}),b.appendChild(M)}),Z(0),Y()}function un(){var f=y.value||"";p.controller&&p.controller.abort(),p.controller=typeof AbortController<"u"?new AbortController:null,ie(p.items,!0),A(f,"",p.controller?p.controller.signal:void 0).then(function(m){p.open&&(f?ie(m,!1):(p.loadedDirs.__root__=!0,cn(m),ie(p.items,!1)))}).catch(function(m){m&&m.name==="AbortError"||p.open&&ie([],!1,m&&m.message||"读取失败")})}function it(f){var m=f||"__root__";p.loadedDirs[m]||(p.loadedDirs[m]=!0,A("",f||"",void 0).then(function(w){!p.open||y.value||(cn(w),ie(p.items,!1))}).catch(function(){delete p.loadedDirs[m]}))}function ot(){p.debounce&&clearTimeout(p.debounce),p.debounce=setTimeout(un,120)}function pn(){if(p.open){K();try{y.focus(),y.select()}catch{}return}p.open=!0,h.classList.add("is-open"),h.setAttribute("aria-hidden","false"),y.value="",p.expanded=Object.create(null),p.loadedDirs=Object.create(null),p.itemMap=Object.create(null),p.items=[],ie([],!0),K(),un(),setTimeout(function(){K();try{y.focus()}catch{}},0)}function lt(){p.open?$():pn()}return y.addEventListener("input",ot),y.addEventListener("keydown",function(f){if(f.key==="ArrowDown")f.preventDefault(),Z(p.active+1);else if(f.key==="ArrowUp")f.preventDefault(),Z(p.active-1);else if(f.key==="Enter"){if(f.isComposing||f.keyCode===229||f.which===229)return;f.preventDefault();var m=p.visible[p.active];m&&m.type==="dir"?we(me(m.node)):m&&m.type==="file"&&we(m.node.item)}else f.key==="Escape"&&(f.preventDefault(),$(),c.focus())}),document.addEventListener("click",function(f){p.open&&(h.contains(f.target)||$())}),window.addEventListener("resize",function(){p.open&&K()}),window.addEventListener("scroll",function(){p.open&&K()},!0),{panel:h,open:pn,close:$,toggle:lt}}function rn(c,v,h){if(!c||c.dataset.pathBrowseWrapped==="1")return c;s();var y=document.createElement("div");y.className="path-input-row";var b=c.parentNode;if(!b)return c;b.insertBefore(y,c),y.appendChild(c);var R=document.createElement("button");R.type="button",R.className="path-browse-btn",R.innerHTML=r;var I=h||"浏览路径";return R.setAttribute("aria-label",I),typeof bindUiHoverTip=="function"?(R.setAttribute("data-ui-tip",I),R.removeAttribute("title"),bindUiHoverTip(R)):R.title=I,R.addEventListener("click",function(p){p.stopPropagation();var K=c.getAttribute("data-path-kind")||v;K!=="file"&&K!=="directory"&&(K="directory"),d(R,K,c.value||"",function(Y){if(Y){var Z=Array.isArray(Y)?Y[0]||"":String(Y);Z&&(c.value=Z,c.dispatchEvent(new Event("input",{bubbles:!0})),c.dispatchEvent(new Event("change",{bubbles:!0})))}})}),y.appendChild(R),c.dataset.pathBrowseWrapped="1",c}function Vn(c){var v=c.closest?c.closest(".input-wrapper"):c;!v||v.dataset.fileDropBound==="1"||(v.dataset.fileDropBound="1",["dragenter","dragover"].forEach(function(h){v.addEventListener(h,function(y){!y.dataTransfer||!y.dataTransfer.files||!y.dataTransfer.files.length||(y.preventDefault(),v.classList.add("is-drag-over"))})}),["dragleave","drop"].forEach(function(h){v.addEventListener(h,function(){v.classList.remove("is-drag-over")})}),v.addEventListener("drop",function(h){!h.dataTransfer||!h.dataTransfer.files||!h.dataTransfer.files.length||(h.preventDefault(),_(c,h.dataTransfer.files).catch(function(){}))}))}function Qn(c,v){if(!(!c||!v)){s(),Vn(v),se(v),c.classList.add("path-browse-btn","path-browse-btn--ghost"),c.innerHTML=r,c.setAttribute("aria-label","工作区文件"),c.setAttribute("data-ui-tip","工作区文件"),c.dataset.silentPickerUnavailable="1",c.removeAttribute("title");var h=document.createElement("input");h.type="file",h.multiple=!0,h.style.display="none",h.setAttribute("aria-hidden","true"),document.body.appendChild(h),h.addEventListener("change",function(){var b=h.files;!b||!b.length||(c.disabled=!0,_(v,b).catch(function(){}).finally(function(){h.value="",c.disabled=!1}))});var y=$n(v,function(){h.click()});c.addEventListener("click",function(b){if(b.stopPropagation(),b.preventDefault(),b.altKey){h.click();return}if(!b.shiftKey){y.toggle();return}var R=t&&typeof t.__WORK_DIR__=="string"?t.__WORK_DIR__:"";d(c,"file",R,function(I){var p=Array.isArray(I)?I:I?[I]:[];p.length&&o(v,p.map(function(K){return i(K)}).join(" "))},!1)})}}function Fe(c){c=c||document;for(var v=c.querySelectorAll("[data-path-kind]"),h=0;h<v.length;h++){var y=v[h],b=y.getAttribute("data-path-kind");(b==="file"||b==="directory")&&rn(y,b)}}t.MyAgentPathPicker={pickPath:a,wrapInputWithBrowse:rn,attachChatPicker:Qn,uploadChatFiles:S,insertUploadedFiles:B,startChatFileUpload:_,clipboardFilesFromEvent:q,clipboardHasUsableText:V,chatAttachments:z,clearChatAttachments:L,addChatAttachments:W,scan:Fe},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){Fe(document)}):Fe(document)})(typeof window<"u"?window:globalThis);const ut="modulepreload",pt=function(t){return"/"+t},mn={},ft=function(e,n,r){let s=Promise.resolve();if(n&&n.length>0){let d=function(o){return Promise.all(o.map(l=>Promise.resolve(l).then(S=>({status:"fulfilled",value:S}),S=>({status:"rejected",reason:S}))))};document.getElementsByTagName("link");const i=document.querySelector("meta[property=csp-nonce]"),u=(i==null?void 0:i.nonce)||(i==null?void 0:i.getAttribute("nonce"));s=d(n.map(o=>{if(o=pt(o),o in mn)return;mn[o]=!0;const l=o.endsWith(".css"),S=l?'[rel="stylesheet"]':"";if(document.querySelector(`link[href="${o}"]${S}`))return;const g=document.createElement("link");if(g.rel=l?"stylesheet":ut,l||(g.as="script"),g.crossOrigin="",g.href=o,u&&g.setAttribute("nonce",u),document.head.appendChild(g),l)return new Promise((A,E)=>{g.addEventListener("load",A),g.addEventListener("error",()=>E(new Error(`Unable to preload CSS for ${o}`)))})}))}function a(d){const i=new Event("vite:preloadError",{cancelable:!0});if(i.payload=d,window.dispatchEvent(i),!i.defaultPrevented)throw d}return s.then(d=>{for(const i of d||[])i.status==="rejected"&&a(i.reason);return e().catch(a)})};function Ve(){return{async:!1,breaks:!1,extensions:null,gfm:!0,hooks:null,pedantic:!1,renderer:null,silent:!1,tokenizer:null,walkTokens:null}}var le=Ve();function _n(t){le=t}var be={exec:()=>null};function F(t,e=""){let n=typeof t=="string"?t:t.source;const r={replace:(s,a)=>{let d=typeof a=="string"?a:a.source;return d=d.replace(Q.caret,"$1"),n=n.replace(s,d),r},getRegex:()=>new RegExp(n,e)};return r}var Q={codeRemoveIndent:/^(?: {1,4}| {0,3}\t)/gm,outputLinkReplace:/\\([\[\]])/g,indentCodeCompensation:/^(\s+)(?:```)/,beginningSpace:/^\s+/,endingHash:/#$/,startingSpaceChar:/^ /,endingSpaceChar:/ $/,nonSpaceChar:/[^ ]/,newLineCharGlobal:/\n/g,tabCharGlobal:/\t/g,multipleSpaceGlobal:/\s+/g,blankLine:/^[ \t]*$/,doubleBlankLine:/\n[ \t]*\n[ \t]*$/,blockquoteStart:/^ {0,3}>/,blockquoteSetextReplace:/\n {0,3}((?:=+|-+) *)(?=\n|$)/g,blockquoteSetextReplace2:/^ {0,3}>[ \t]?/gm,listReplaceTabs:/^\t+/,listReplaceNesting:/^ {1,4}(?=( {4})*[^ ])/g,listIsTask:/^\[[ xX]\] /,listReplaceTask:/^\[[ xX]\] +/,anyLine:/\n.*\n/,hrefBrackets:/^<(.*)>$/,tableDelimiter:/[:|]/,tableAlignChars:/^\||\| *$/g,tableRowBlankLine:/\n[ \t]*$/,tableAlignRight:/^ *-+: *$/,tableAlignCenter:/^ *:-+: *$/,tableAlignLeft:/^ *:-+ *$/,startATag:/^<a /i,endATag:/^<\/a>/i,startPreScriptTag:/^<(pre|code|kbd|script)(\s|>)/i,endPreScriptTag:/^<\/(pre|code|kbd|script)(\s|>)/i,startAngleBracket:/^</,endAngleBracket:/>$/,pedanticHrefTitle:/^([^'"]*[^\s])\s+(['"])(.*)\2/,unicodeAlphaNumeric:/[\p{L}\p{N}]/u,escapeTest:/[&<>"']/,escapeReplace:/[&<>"']/g,escapeTestNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/,escapeReplaceNoEncode:/[<>"']|&(?!(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);)/g,unescapeTest:/&(#(?:\d+)|(?:#x[0-9A-Fa-f]+)|(?:\w+));?/ig,caret:/(^|[^\[])\^/g,percentDecode:/%25/g,findPipe:/\|/g,splitPipe:/ \|/,slashPipe:/\\\|/g,carriageReturn:/\r\n|\r/g,spaceLine:/^ +$/gm,notSpaceStart:/^\S*/,endingNewline:/\n$/,listItemRegex:t=>new RegExp(`^( {0,3}${t})((?:[	 ][^\\n]*)?(?:\\n|$))`),nextBulletRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:[*+-]|\\d{1,9}[.)])((?:[ 	][^\\n]*)?(?:\\n|$))`),hrRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)`),fencesBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}(?:\`\`\`|~~~)`),headingBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}#`),htmlBeginRegex:t=>new RegExp(`^ {0,${Math.min(3,t-1)}}<(?:[a-z].*>|!--)`,"i")},mt=/^(?:[ \t]*(?:\n|$))+/,gt=/^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/,ht=/^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/,ye=/^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/,vt=/^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/,Qe=/(?:[*+-]|\d{1,9}[.)])/,Pn=/^(?!bull |blockCode|fences|blockquote|heading|html|table)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html|table))+?)\n {0,3}(=+|-+) *(?:\n+|$)/,Ln=F(Pn).replace(/bull/g,Qe).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/\|table/g,"").getRegex(),St=F(Pn).replace(/bull/g,Qe).replace(/blockCode/g,/(?: {4}| {0,3}\t)/).replace(/fences/g,/ {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g,/ {0,3}>/).replace(/heading/g,/ {0,3}#{1,6}/).replace(/html/g,/ {0,3}<[^\n>]+>\n/).replace(/table/g,/ {0,3}\|?(?:[:\- ]*\|)+[\:\- ]*\n/).getRegex(),Xe=/^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/,bt=/^[^\n]+/,Ye=/(?!\s*\])(?:\\.|[^\[\]\\])+/,yt=F(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label",Ye).replace("title",/(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex(),wt=F(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g,Qe).getRegex(),Le="address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul",Ze=/<!--(?:-?>|[\s\S]*?(?:-->|$))/,kt=F("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ 	]*)+\\n|$))","i").replace("comment",Ze).replace("tag",Le).replace("attribute",/ +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex(),Mn=F(Xe).replace("hr",ye).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("|table","").replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),It=F(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph",Mn).getRegex(),Je={blockquote:It,code:gt,def:yt,fences:ht,heading:vt,hr:ye,html:kt,lheading:Ln,list:wt,newline:mt,paragraph:Mn,table:be,text:bt},gn=F("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr",ye).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("blockquote"," {0,3}>").replace("code","(?: {4}| {0,3}	)[^\\n]").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex(),xt={...Je,lheading:St,table:gn,paragraph:F(Xe).replace("hr",ye).replace("heading"," {0,3}#{1,6}(?:\\s|$)").replace("|lheading","").replace("table",gn).replace("blockquote"," {0,3}>").replace("fences"," {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list"," {0,3}(?:[*+-]|1[.)]) ").replace("html","</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag",Le).getRegex()},Ct={...Je,html:F(`^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|'[^']*'|\\s[^'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))`).replace("comment",Ze).replace(/tag/g,"(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),def:/^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,heading:/^(#{1,6})(.*)(?:\n+|$)/,fences:be,lheading:/^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,paragraph:F(Xe).replace("hr",ye).replace("heading",` *#{1,6} *[^
+]`).replace("lheading",Ln).replace("|table","").replace("blockquote"," {0,3}>").replace("|fences","").replace("|list","").replace("|html","").replace("|tag","").getRegex()},Tt=/^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/,Et=/^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/,Fn=/^( {2,}|\\)\n(?!\s*$)/,Rt=/^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/,Me=/[\p{P}\p{S}]/u,en=/[\s\p{P}\p{S}]/u,Nn=/[^\s\p{P}\p{S}]/u,At=F(/^((?![*_])punctSpace)/,"u").replace(/punctSpace/g,en).getRegex(),On=/(?!~)[\p{P}\p{S}]/u,_t=/(?!~)[\s\p{P}\p{S}]/u,Pt=/(?:[^\s\p{P}\p{S}]|~)/u,Lt=/\[[^[\]]*?\]\((?:\\.|[^\\\(\)]|\((?:\\.|[^\\\(\)])*\))*\)|`[^`]*?`|<[^<>]*?>/g,Bn=/^(?:\*+(?:((?!\*)punct)|[^\s*]))|^_+(?:((?!_)punct)|([^\s_]))/,Mt=F(Bn,"u").replace(/punct/g,Me).getRegex(),Ft=F(Bn,"u").replace(/punct/g,On).getRegex(),Dn="^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)punct(\\*+)(?=[\\s]|$)|notPunctSpace(\\*+)(?!\\*)(?=punctSpace|$)|(?!\\*)punctSpace(\\*+)(?=notPunctSpace)|[\\s](\\*+)(?!\\*)(?=punct)|(?!\\*)punct(\\*+)(?!\\*)(?=punct)|notPunctSpace(\\*+)(?=notPunctSpace)",Nt=F(Dn,"gu").replace(/notPunctSpace/g,Nn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),Ot=F(Dn,"gu").replace(/notPunctSpace/g,Pt).replace(/punctSpace/g,_t).replace(/punct/g,On).getRegex(),Bt=F("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)punct(_+)(?=[\\s]|$)|notPunctSpace(_+)(?!_)(?=punctSpace|$)|(?!_)punctSpace(_+)(?=notPunctSpace)|[\\s](_+)(?!_)(?=punct)|(?!_)punct(_+)(?!_)(?=punct)","gu").replace(/notPunctSpace/g,Nn).replace(/punctSpace/g,en).replace(/punct/g,Me).getRegex(),Dt=F(/\\(punct)/,"gu").replace(/punct/g,Me).getRegex(),Ht=F(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme",/[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email",/[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex(),qt=F(Ze).replace("(?:-->|$)","-->").getRegex(),Ut=F("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment",qt).replace("attribute",/\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex(),Re=/(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/,jt=F(/^!?\[(label)\]\(\s*(href)(?:(?:[ \t]*(?:\n[ \t]*)?)(title))?\s*\)/).replace("label",Re).replace("href",/<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]*/).replace("title",/"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex(),Hn=F(/^!?\[(label)\]\[(ref)\]/).replace("label",Re).replace("ref",Ye).getRegex(),qn=F(/^!?\[(ref)\](?:\[\])?/).replace("ref",Ye).getRegex(),zt=F("reflink|nolink(?!\\()","g").replace("reflink",Hn).replace("nolink",qn).getRegex(),nn={_backpedal:be,anyPunctuation:Dt,autolink:Ht,blockSkip:Lt,br:Fn,code:Et,del:be,emStrongLDelim:Mt,emStrongRDelimAst:Nt,emStrongRDelimUnd:Bt,escape:Tt,link:jt,nolink:qn,punctuation:At,reflink:Hn,reflinkSearch:zt,tag:Ut,text:Rt,url:be},Wt={...nn,link:F(/^!?\[(label)\]\((.*?)\)/).replace("label",Re).getRegex(),reflink:F(/^!?\[(label)\]\s*\[([^\]]*)\]/).replace("label",Re).getRegex()},je={...nn,emStrongRDelimAst:Ot,emStrongLDelim:Ft,url:F(/^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/,"i").replace("email",/[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(),_backpedal:/(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,del:/^(~~?)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/,text:/^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|https?:\/\/|ftp:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/},Gt={...je,br:F(Fn).replace("{2,}","*").getRegex(),text:F(je.text).replace("\\b_","\\b_| {2,}\\n").replace(/\{2,\}/g,"*").getRegex()},ke={normal:Je,gfm:xt,pedantic:Ct},ve={normal:nn,gfm:je,breaks:Gt,pedantic:Wt},Kt={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"},hn=t=>Kt[t];function ee(t,e){if(e){if(Q.escapeTest.test(t))return t.replace(Q.escapeReplace,hn)}else if(Q.escapeTestNoEncode.test(t))return t.replace(Q.escapeReplaceNoEncode,hn);return t}function vn(t){try{t=encodeURI(t).replace(Q.percentDecode,"%")}catch{return null}return t}function Sn(t,e){var a;const n=t.replace(Q.findPipe,(d,i,u)=>{let o=!1,l=i;for(;--l>=0&&u[l]==="\\";)o=!o;return o?"|":" |"}),r=n.split(Q.splitPipe);let s=0;if(r[0].trim()||r.shift(),r.length>0&&!((a=r.at(-1))!=null&&a.trim())&&r.pop(),e)if(r.length>e)r.splice(e);else for(;r.length<e;)r.push("");for(;s<r.length;s++)r[s]=r[s].trim().replace(Q.slashPipe,"|");return r}function Se(t,e,n){const r=t.length;if(r===0)return"";let s=0;for(;s<r&&t.charAt(r-s-1)===e;)s++;return t.slice(0,r-s)}function $t(t,e){if(t.indexOf(e[1])===-1)return-1;let n=0;for(let r=0;r<t.length;r++)if(t[r]==="\\")r++;else if(t[r]===e[0])n++;else if(t[r]===e[1]&&(n--,n<0))return r;return n>0?-2:-1}function bn(t,e,n,r,s){const a=e.href,d=e.title||null,i=t[1].replace(s.other.outputLinkReplace,"$1");r.state.inLink=!0;const u={type:t[0].charAt(0)==="!"?"image":"link",raw:n,href:a,title:d,text:i,tokens:r.inlineTokens(i)};return r.state.inLink=!1,u}function Vt(t,e,n){const r=t.match(n.other.indentCodeCompensation);if(r===null)return e;const s=r[1];return e.split(`
+`).map(a=>{const d=a.match(n.other.beginningSpace);if(d===null)return a;const[i]=d;return i.length>=s.length?a.slice(s.length):a}).join(`
+`)}var Ae=class{constructor(t){D(this,"options");D(this,"rules");D(this,"lexer");this.options=t||le}space(t){const e=this.rules.block.newline.exec(t);if(e&&e[0].length>0)return{type:"space",raw:e[0]}}code(t){const e=this.rules.block.code.exec(t);if(e){const n=e[0].replace(this.rules.other.codeRemoveIndent,"");return{type:"code",raw:e[0],codeBlockStyle:"indented",text:this.options.pedantic?n:Se(n,`
+`)}}}fences(t){const e=this.rules.block.fences.exec(t);if(e){const n=e[0],r=Vt(n,e[3]||"",this.rules);return{type:"code",raw:n,lang:e[2]?e[2].trim().replace(this.rules.inline.anyPunctuation,"$1"):e[2],text:r}}}heading(t){const e=this.rules.block.heading.exec(t);if(e){let n=e[2].trim();if(this.rules.other.endingHash.test(n)){const r=Se(n,"#");(this.options.pedantic||!r||this.rules.other.endingSpaceChar.test(r))&&(n=r.trim())}return{type:"heading",raw:e[0],depth:e[1].length,text:n,tokens:this.lexer.inline(n)}}}hr(t){const e=this.rules.block.hr.exec(t);if(e)return{type:"hr",raw:Se(e[0],`
 `)}}blockquote(t){const e=this.rules.block.blockquote.exec(t);if(e){let n=Se(e[0],`
 `).split(`
-`),r="",s="";const i=[];for(;n.length>0;){let d=!1;const a=[];let u;for(u=0;u<n.length;u++)if(this.rules.other.blockquoteStart.test(n[u]))a.push(n[u]),d=!0;else if(!d)a.push(n[u]);else break;n=n.slice(u);const o=a.join(`
+`),r="",s="";const a=[];for(;n.length>0;){let d=!1;const i=[];let u;for(u=0;u<n.length;u++)if(this.rules.other.blockquoteStart.test(n[u]))i.push(n[u]),d=!0;else if(!d)i.push(n[u]);else break;n=n.slice(u);const o=i.join(`
 `),l=o.replace(this.rules.other.blockquoteSetextReplace,`
     $1`).replace(this.rules.other.blockquoteSetextReplace2,"");r=r?`${r}
 ${o}`:o,s=s?`${s}
-${l}`:l;const S=this.lexer.state.top;if(this.lexer.state.top=!0,this.lexer.blockTokens(l,i,!0),this.lexer.state.top=S,n.length===0)break;const g=i.at(-1);if((g==null?void 0:g.type)==="code")break;if((g==null?void 0:g.type)==="blockquote"){const _=g,E=_.raw+`
+${l}`:l;const S=this.lexer.state.top;if(this.lexer.state.top=!0,this.lexer.blockTokens(l,a,!0),this.lexer.state.top=S,n.length===0)break;const g=a.at(-1);if((g==null?void 0:g.type)==="code")break;if((g==null?void 0:g.type)==="blockquote"){const A=g,E=A.raw+`
 `+n.join(`
-`),k=this.blockquote(E);i[i.length-1]=k,r=r.substring(0,r.length-_.raw.length)+k.raw,s=s.substring(0,s.length-_.text.length)+k.text;break}else if((g==null?void 0:g.type)==="list"){const _=g,E=_.raw+`
+`),x=this.blockquote(E);a[a.length-1]=x,r=r.substring(0,r.length-A.raw.length)+x.raw,s=s.substring(0,s.length-A.text.length)+x.text;break}else if((g==null?void 0:g.type)==="list"){const A=g,E=A.raw+`
 `+n.join(`
-`),k=this.list(E);i[i.length-1]=k,r=r.substring(0,r.length-g.raw.length)+k.raw,s=s.substring(0,s.length-_.raw.length)+k.raw,n=E.substring(i.at(-1).raw.length).split(`
-`);continue}}return{type:"blockquote",raw:r,tokens:i,text:s}}}list(t){let e=this.rules.block.list.exec(t);if(e){let n=e[1].trim();const r=n.length>1,s={type:"list",raw:"",ordered:r,start:r?+n.slice(0,-1):"",loose:!1,items:[]};n=r?`\\d{1,9}\\${n.slice(-1)}`:`\\${n}`,this.options.pedantic&&(n=r?n:"[*+-]");const i=this.rules.other.listItemRegex(n);let d=!1;for(;t;){let u=!1,o="",l="";if(!(e=i.exec(t))||this.rules.block.hr.test(t))break;o=e[0],t=t.substring(o.length);let S=e[2].split(`
+`),x=this.list(E);a[a.length-1]=x,r=r.substring(0,r.length-g.raw.length)+x.raw,s=s.substring(0,s.length-A.raw.length)+x.raw,n=E.substring(a.at(-1).raw.length).split(`
+`);continue}}return{type:"blockquote",raw:r,tokens:a,text:s}}}list(t){let e=this.rules.block.list.exec(t);if(e){let n=e[1].trim();const r=n.length>1,s={type:"list",raw:"",ordered:r,start:r?+n.slice(0,-1):"",loose:!1,items:[]};n=r?`\\d{1,9}\\${n.slice(-1)}`:`\\${n}`,this.options.pedantic&&(n=r?n:"[*+-]");const a=this.rules.other.listItemRegex(n);let d=!1;for(;t;){let u=!1,o="",l="";if(!(e=a.exec(t))||this.rules.block.hr.test(t))break;o=e[0],t=t.substring(o.length);let S=e[2].split(`
 `,1)[0].replace(this.rules.other.listReplaceTabs,z=>" ".repeat(3*z.length)),g=t.split(`
-`,1)[0],_=!S.trim(),E=0;if(this.options.pedantic?(E=2,l=S.trimStart()):_?E=e[1].length+1:(E=e[2].search(this.rules.other.nonSpaceChar),E=E>4?1:E,l=S.slice(E),E+=e[1].length),_&&this.rules.other.blankLine.test(g)&&(o+=g+`
-`,t=t.substring(g.length+1),u=!0),!u){const z=this.rules.other.nextBulletRegex(E),L=this.rules.other.hrRegex(E),$=this.rules.other.fencesBeginRegex(E),P=this.rules.other.headingBeginRegex(E),W=this.rules.other.htmlBeginRegex(E);for(;t;){const j=t.split(`
-`,1)[0];let R;if(g=j,this.options.pedantic?(g=g.replace(this.rules.other.listReplaceNesting,"  "),R=g):R=g.replace(this.rules.other.tabCharGlobal,"    "),$.test(g)||P.test(g)||W.test(g)||z.test(g)||L.test(g))break;if(R.search(this.rules.other.nonSpaceChar)>=E||!g.trim())l+=`
-`+R.slice(E);else{if(_||S.replace(this.rules.other.tabCharGlobal,"    ").search(this.rules.other.nonSpaceChar)>=4||$.test(S)||P.test(S)||L.test(S))break;l+=`
-`+g}!_&&!g.trim()&&(_=!0),o+=j+`
-`,t=t.substring(j.length+1),S=R.slice(E)}}s.loose||(d?s.loose=!0:this.rules.other.doubleBlankLine.test(o)&&(d=!0));let k=null,O;this.options.gfm&&(k=this.rules.other.listIsTask.exec(l),k&&(O=k[0]!=="[ ] ",l=l.replace(this.rules.other.listReplaceTask,""))),s.items.push({type:"list_item",raw:o,task:!!k,checked:O,loose:!1,text:l,tokens:[]}),s.raw+=o}const a=s.items.at(-1);if(a)a.raw=a.raw.trimEnd(),a.text=a.text.trimEnd();else return;s.raw=s.raw.trimEnd();for(let u=0;u<s.items.length;u++)if(this.lexer.state.top=!1,s.items[u].tokens=this.lexer.blockTokens(s.items[u].text,[]),!s.loose){const o=s.items[u].tokens.filter(S=>S.type==="space"),l=o.length>0&&o.some(S=>this.rules.other.anyLine.test(S.raw));s.loose=l}if(s.loose)for(let u=0;u<s.items.length;u++)s.items[u].loose=!0;return s}}html(t){const e=this.rules.block.html.exec(t);if(e)return{type:"html",block:!0,raw:e[0],pre:e[1]==="pre"||e[1]==="script"||e[1]==="style",text:e[0]}}def(t){const e=this.rules.block.def.exec(t);if(e){const n=e[1].toLowerCase().replace(this.rules.other.multipleSpaceGlobal," "),r=e[2]?e[2].replace(this.rules.other.hrefBrackets,"$1").replace(this.rules.inline.anyPunctuation,"$1"):"",s=e[3]?e[3].substring(1,e[3].length-1).replace(this.rules.inline.anyPunctuation,"$1"):e[3];return{type:"def",tag:n,raw:e[0],href:r,title:s}}}table(t){var d;const e=this.rules.block.table.exec(t);if(!e||!this.rules.other.tableDelimiter.test(e[2]))return;const n=Sn(e[1]),r=e[2].replace(this.rules.other.tableAlignChars,"").split("|"),s=(d=e[3])!=null&&d.trim()?e[3].replace(this.rules.other.tableRowBlankLine,"").split(`
-`):[],i={type:"table",raw:e[0],header:[],align:[],rows:[]};if(n.length===r.length){for(const a of r)this.rules.other.tableAlignRight.test(a)?i.align.push("right"):this.rules.other.tableAlignCenter.test(a)?i.align.push("center"):this.rules.other.tableAlignLeft.test(a)?i.align.push("left"):i.align.push(null);for(let a=0;a<n.length;a++)i.header.push({text:n[a],tokens:this.lexer.inline(n[a]),header:!0,align:i.align[a]});for(const a of s)i.rows.push(Sn(a,i.header.length).map((u,o)=>({text:u,tokens:this.lexer.inline(u),header:!1,align:i.align[o]})));return i}}lheading(t){const e=this.rules.block.lheading.exec(t);if(e)return{type:"heading",raw:e[0],depth:e[2].charAt(0)==="="?1:2,text:e[1],tokens:this.lexer.inline(e[1])}}paragraph(t){const e=this.rules.block.paragraph.exec(t);if(e){const n=e[1].charAt(e[1].length-1)===`
-`?e[1].slice(0,-1):e[1];return{type:"paragraph",raw:e[0],text:n,tokens:this.lexer.inline(n)}}}text(t){const e=this.rules.block.text.exec(t);if(e)return{type:"text",raw:e[0],text:e[0],tokens:this.lexer.inline(e[0])}}escape(t){const e=this.rules.inline.escape.exec(t);if(e)return{type:"escape",raw:e[0],text:e[1]}}tag(t){const e=this.rules.inline.tag.exec(t);if(e)return!this.lexer.state.inLink&&this.rules.other.startATag.test(e[0])?this.lexer.state.inLink=!0:this.lexer.state.inLink&&this.rules.other.endATag.test(e[0])&&(this.lexer.state.inLink=!1),!this.lexer.state.inRawBlock&&this.rules.other.startPreScriptTag.test(e[0])?this.lexer.state.inRawBlock=!0:this.lexer.state.inRawBlock&&this.rules.other.endPreScriptTag.test(e[0])&&(this.lexer.state.inRawBlock=!1),{type:"html",raw:e[0],inLink:this.lexer.state.inLink,inRawBlock:this.lexer.state.inRawBlock,block:!1,text:e[0]}}link(t){const e=this.rules.inline.link.exec(t);if(e){const n=e[2].trim();if(!this.options.pedantic&&this.rules.other.startAngleBracket.test(n)){if(!this.rules.other.endAngleBracket.test(n))return;const i=Se(n.slice(0,-1),"\\");if((n.length-i.length)%2===0)return}else{const i=Gt(e[2],"()");if(i===-2)return;if(i>-1){const a=(e[0].indexOf("!")===0?5:4)+e[1].length+i;e[2]=e[2].substring(0,i),e[0]=e[0].substring(0,a).trim(),e[3]=""}}let r=e[2],s="";if(this.options.pedantic){const i=this.rules.other.pedanticHrefTitle.exec(r);i&&(r=i[1],s=i[3])}else s=e[3]?e[3].slice(1,-1):"";return r=r.trim(),this.rules.other.startAngleBracket.test(r)&&(this.options.pedantic&&!this.rules.other.endAngleBracket.test(n)?r=r.slice(1):r=r.slice(1,-1)),bn(e,{href:r&&r.replace(this.rules.inline.anyPunctuation,"$1"),title:s&&s.replace(this.rules.inline.anyPunctuation,"$1")},e[0],this.lexer,this.rules)}}reflink(t,e){let n;if((n=this.rules.inline.reflink.exec(t))||(n=this.rules.inline.nolink.exec(t))){const r=(n[2]||n[1]).replace(this.rules.other.multipleSpaceGlobal," "),s=e[r.toLowerCase()];if(!s){const i=n[0].charAt(0);return{type:"text",raw:i,text:i}}return bn(n,s,n[0],this.lexer,this.rules)}}emStrong(t,e,n=""){let r=this.rules.inline.emStrongLDelim.exec(t);if(!r||r[3]&&n.match(this.rules.other.unicodeAlphaNumeric))return;if(!(r[1]||r[2]||"")||!n||this.rules.inline.punctuation.exec(n)){const i=[...r[0]].length-1;let d,a,u=i,o=0;const l=r[0][0]==="*"?this.rules.inline.emStrongRDelimAst:this.rules.inline.emStrongRDelimUnd;for(l.lastIndex=0,e=e.slice(-1*t.length+i);(r=l.exec(e))!=null;){if(d=r[1]||r[2]||r[3]||r[4]||r[5]||r[6],!d)continue;if(a=[...d].length,r[3]||r[4]){u+=a;continue}else if((r[5]||r[6])&&i%3&&!((i+a)%3)){o+=a;continue}if(u-=a,u>0)continue;a=Math.min(a,a+u+o);const S=[...r[0]][0].length,g=t.slice(0,i+r.index+S+a);if(Math.min(i,a)%2){const E=g.slice(1,-1);return{type:"em",raw:g,text:E,tokens:this.lexer.inlineTokens(E)}}const _=g.slice(2,-2);return{type:"strong",raw:g,text:_,tokens:this.lexer.inlineTokens(_)}}}}codespan(t){const e=this.rules.inline.code.exec(t);if(e){let n=e[2].replace(this.rules.other.newLineCharGlobal," ");const r=this.rules.other.nonSpaceChar.test(n),s=this.rules.other.startingSpaceChar.test(n)&&this.rules.other.endingSpaceChar.test(n);return r&&s&&(n=n.substring(1,n.length-1)),{type:"codespan",raw:e[0],text:n}}}br(t){const e=this.rules.inline.br.exec(t);if(e)return{type:"br",raw:e[0]}}del(t){const e=this.rules.inline.del.exec(t);if(e)return{type:"del",raw:e[0],text:e[2],tokens:this.lexer.inlineTokens(e[2])}}autolink(t){const e=this.rules.inline.autolink.exec(t);if(e){let n,r;return e[2]==="@"?(n=e[1],r="mailto:"+n):(n=e[1],r=n),{type:"link",raw:e[0],text:n,href:r,tokens:[{type:"text",raw:n,text:n}]}}}url(t){var n;let e;if(e=this.rules.inline.url.exec(t)){let r,s;if(e[2]==="@")r=e[0],s="mailto:"+r;else{let i;do i=e[0],e[0]=((n=this.rules.inline._backpedal.exec(e[0]))==null?void 0:n[0])??"";while(i!==e[0]);r=e[0],e[1]==="www."?s="http://"+e[0]:s=e[0]}return{type:"link",raw:e[0],text:r,href:s,tokens:[{type:"text",raw:r,text:r}]}}}inlineText(t){const e=this.rules.inline.text.exec(t);if(e){const n=this.lexer.state.inRawBlock;return{type:"text",raw:e[0],text:e[0],escaped:n}}}},te=class ze{constructor(e){q(this,"tokens");q(this,"options");q(this,"state");q(this,"tokenizer");q(this,"inlineQueue");this.tokens=[],this.tokens.links=Object.create(null),this.options=e||le,this.options.tokenizer=this.options.tokenizer||new _e,this.tokenizer=this.options.tokenizer,this.tokenizer.options=this.options,this.tokenizer.lexer=this,this.inlineQueue=[],this.state={inLink:!1,inRawBlock:!1,top:!0};const n={other:K,block:Ie.normal,inline:ve.normal};this.options.pedantic?(n.block=Ie.pedantic,n.inline=ve.pedantic):this.options.gfm&&(n.block=Ie.gfm,this.options.breaks?n.inline=ve.breaks:n.inline=ve.gfm),this.tokenizer.rules=n}static get rules(){return{block:Ie,inline:ve}}static lex(e,n){return new ze(n).lex(e)}static lexInline(e,n){return new ze(n).inlineTokens(e)}lex(e){e=e.replace(K.carriageReturn,`
-`),this.blockTokens(e,this.tokens);for(let n=0;n<this.inlineQueue.length;n++){const r=this.inlineQueue[n];this.inlineTokens(r.src,r.tokens)}return this.inlineQueue=[],this.tokens}blockTokens(e,n=[],r=!1){var s,i,d;for(this.options.pedantic&&(e=e.replace(K.tabCharGlobal,"    ").replace(K.spaceLine,""));e;){let a;if((i=(s=this.options.extensions)==null?void 0:s.block)!=null&&i.some(o=>(a=o.call({lexer:this},e,n))?(e=e.substring(a.raw.length),n.push(a),!0):!1))continue;if(a=this.tokenizer.space(e)){e=e.substring(a.raw.length);const o=n.at(-1);a.raw.length===1&&o!==void 0?o.raw+=`
-`:n.push(a);continue}if(a=this.tokenizer.code(e)){e=e.substring(a.raw.length);const o=n.at(-1);(o==null?void 0:o.type)==="paragraph"||(o==null?void 0:o.type)==="text"?(o.raw+=`
-`+a.raw,o.text+=`
-`+a.text,this.inlineQueue.at(-1).src=o.text):n.push(a);continue}if(a=this.tokenizer.fences(e)){e=e.substring(a.raw.length),n.push(a);continue}if(a=this.tokenizer.heading(e)){e=e.substring(a.raw.length),n.push(a);continue}if(a=this.tokenizer.hr(e)){e=e.substring(a.raw.length),n.push(a);continue}if(a=this.tokenizer.blockquote(e)){e=e.substring(a.raw.length),n.push(a);continue}if(a=this.tokenizer.list(e)){e=e.substring(a.raw.length),n.push(a);continue}if(a=this.tokenizer.html(e)){e=e.substring(a.raw.length),n.push(a);continue}if(a=this.tokenizer.def(e)){e=e.substring(a.raw.length);const o=n.at(-1);(o==null?void 0:o.type)==="paragraph"||(o==null?void 0:o.type)==="text"?(o.raw+=`
-`+a.raw,o.text+=`
-`+a.raw,this.inlineQueue.at(-1).src=o.text):this.tokens.links[a.tag]||(this.tokens.links[a.tag]={href:a.href,title:a.title});continue}if(a=this.tokenizer.table(e)){e=e.substring(a.raw.length),n.push(a);continue}if(a=this.tokenizer.lheading(e)){e=e.substring(a.raw.length),n.push(a);continue}let u=e;if((d=this.options.extensions)!=null&&d.startBlock){let o=1/0;const l=e.slice(1);let S;this.options.extensions.startBlock.forEach(g=>{S=g.call({lexer:this},l),typeof S=="number"&&S>=0&&(o=Math.min(o,S))}),o<1/0&&o>=0&&(u=e.substring(0,o+1))}if(this.state.top&&(a=this.tokenizer.paragraph(u))){const o=n.at(-1);r&&(o==null?void 0:o.type)==="paragraph"?(o.raw+=`
-`+a.raw,o.text+=`
-`+a.text,this.inlineQueue.pop(),this.inlineQueue.at(-1).src=o.text):n.push(a),r=u.length!==e.length,e=e.substring(a.raw.length);continue}if(a=this.tokenizer.text(e)){e=e.substring(a.raw.length);const o=n.at(-1);(o==null?void 0:o.type)==="text"?(o.raw+=`
-`+a.raw,o.text+=`
-`+a.text,this.inlineQueue.pop(),this.inlineQueue.at(-1).src=o.text):n.push(a);continue}if(e){const o="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(o);break}else throw new Error(o)}}return this.state.top=!0,n}inline(e,n=[]){return this.inlineQueue.push({src:e,tokens:n}),n}inlineTokens(e,n=[]){var a,u,o;let r=e,s=null;if(this.tokens.links){const l=Object.keys(this.tokens.links);if(l.length>0)for(;(s=this.tokenizer.rules.inline.reflinkSearch.exec(r))!=null;)l.includes(s[0].slice(s[0].lastIndexOf("[")+1,-1))&&(r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.reflinkSearch.lastIndex))}for(;(s=this.tokenizer.rules.inline.anyPunctuation.exec(r))!=null;)r=r.slice(0,s.index)+"++"+r.slice(this.tokenizer.rules.inline.anyPunctuation.lastIndex);for(;(s=this.tokenizer.rules.inline.blockSkip.exec(r))!=null;)r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.blockSkip.lastIndex);let i=!1,d="";for(;e;){i||(d=""),i=!1;let l;if((u=(a=this.options.extensions)==null?void 0:a.inline)!=null&&u.some(g=>(l=g.call({lexer:this},e,n))?(e=e.substring(l.raw.length),n.push(l),!0):!1))continue;if(l=this.tokenizer.escape(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.tag(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.link(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.reflink(e,this.tokens.links)){e=e.substring(l.raw.length);const g=n.at(-1);l.type==="text"&&(g==null?void 0:g.type)==="text"?(g.raw+=l.raw,g.text+=l.text):n.push(l);continue}if(l=this.tokenizer.emStrong(e,r,d)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.codespan(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.br(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.del(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.autolink(e)){e=e.substring(l.raw.length),n.push(l);continue}if(!this.state.inLink&&(l=this.tokenizer.url(e))){e=e.substring(l.raw.length),n.push(l);continue}let S=e;if((o=this.options.extensions)!=null&&o.startInline){let g=1/0;const _=e.slice(1);let E;this.options.extensions.startInline.forEach(k=>{E=k.call({lexer:this},_),typeof E=="number"&&E>=0&&(g=Math.min(g,E))}),g<1/0&&g>=0&&(S=e.substring(0,g+1))}if(l=this.tokenizer.inlineText(S)){e=e.substring(l.raw.length),l.raw.slice(-1)!=="_"&&(d=l.raw.slice(-1)),i=!0;const g=n.at(-1);(g==null?void 0:g.type)==="text"?(g.raw+=l.raw,g.text+=l.text):n.push(l);continue}if(e){const g="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(g);break}else throw new Error(g)}}return n}},Re=class{constructor(t){q(this,"options");q(this,"parser");this.options=t||le}space(t){return""}code({text:t,lang:e,escaped:n}){var i;const r=(i=(e||"").match(K.notSpaceStart))==null?void 0:i[0],s=t.replace(K.endingNewline,"")+`
+`,1)[0],A=!S.trim(),E=0;if(this.options.pedantic?(E=2,l=S.trimStart()):A?E=e[1].length+1:(E=e[2].search(this.rules.other.nonSpaceChar),E=E>4?1:E,l=S.slice(E),E+=e[1].length),A&&this.rules.other.blankLine.test(g)&&(o+=g+`
+`,t=t.substring(g.length+1),u=!0),!u){const z=this.rules.other.nextBulletRegex(E),L=this.rules.other.hrRegex(E),W=this.rules.other.fencesBeginRegex(E),P=this.rules.other.headingBeginRegex(E),G=this.rules.other.htmlBeginRegex(E);for(;t;){const j=t.split(`
+`,1)[0];let _;if(g=j,this.options.pedantic?(g=g.replace(this.rules.other.listReplaceNesting,"  "),_=g):_=g.replace(this.rules.other.tabCharGlobal,"    "),W.test(g)||P.test(g)||G.test(g)||z.test(g)||L.test(g))break;if(_.search(this.rules.other.nonSpaceChar)>=E||!g.trim())l+=`
+`+_.slice(E);else{if(A||S.replace(this.rules.other.tabCharGlobal,"    ").search(this.rules.other.nonSpaceChar)>=4||W.test(S)||P.test(S)||L.test(S))break;l+=`
+`+g}!A&&!g.trim()&&(A=!0),o+=j+`
+`,t=t.substring(j.length+1),S=_.slice(E)}}s.loose||(d?s.loose=!0:this.rules.other.doubleBlankLine.test(o)&&(d=!0));let x=null,B;this.options.gfm&&(x=this.rules.other.listIsTask.exec(l),x&&(B=x[0]!=="[ ] ",l=l.replace(this.rules.other.listReplaceTask,""))),s.items.push({type:"list_item",raw:o,task:!!x,checked:B,loose:!1,text:l,tokens:[]}),s.raw+=o}const i=s.items.at(-1);if(i)i.raw=i.raw.trimEnd(),i.text=i.text.trimEnd();else return;s.raw=s.raw.trimEnd();for(let u=0;u<s.items.length;u++)if(this.lexer.state.top=!1,s.items[u].tokens=this.lexer.blockTokens(s.items[u].text,[]),!s.loose){const o=s.items[u].tokens.filter(S=>S.type==="space"),l=o.length>0&&o.some(S=>this.rules.other.anyLine.test(S.raw));s.loose=l}if(s.loose)for(let u=0;u<s.items.length;u++)s.items[u].loose=!0;return s}}html(t){const e=this.rules.block.html.exec(t);if(e)return{type:"html",block:!0,raw:e[0],pre:e[1]==="pre"||e[1]==="script"||e[1]==="style",text:e[0]}}def(t){const e=this.rules.block.def.exec(t);if(e){const n=e[1].toLowerCase().replace(this.rules.other.multipleSpaceGlobal," "),r=e[2]?e[2].replace(this.rules.other.hrefBrackets,"$1").replace(this.rules.inline.anyPunctuation,"$1"):"",s=e[3]?e[3].substring(1,e[3].length-1).replace(this.rules.inline.anyPunctuation,"$1"):e[3];return{type:"def",tag:n,raw:e[0],href:r,title:s}}}table(t){var d;const e=this.rules.block.table.exec(t);if(!e||!this.rules.other.tableDelimiter.test(e[2]))return;const n=Sn(e[1]),r=e[2].replace(this.rules.other.tableAlignChars,"").split("|"),s=(d=e[3])!=null&&d.trim()?e[3].replace(this.rules.other.tableRowBlankLine,"").split(`
+`):[],a={type:"table",raw:e[0],header:[],align:[],rows:[]};if(n.length===r.length){for(const i of r)this.rules.other.tableAlignRight.test(i)?a.align.push("right"):this.rules.other.tableAlignCenter.test(i)?a.align.push("center"):this.rules.other.tableAlignLeft.test(i)?a.align.push("left"):a.align.push(null);for(let i=0;i<n.length;i++)a.header.push({text:n[i],tokens:this.lexer.inline(n[i]),header:!0,align:a.align[i]});for(const i of s)a.rows.push(Sn(i,a.header.length).map((u,o)=>({text:u,tokens:this.lexer.inline(u),header:!1,align:a.align[o]})));return a}}lheading(t){const e=this.rules.block.lheading.exec(t);if(e)return{type:"heading",raw:e[0],depth:e[2].charAt(0)==="="?1:2,text:e[1],tokens:this.lexer.inline(e[1])}}paragraph(t){const e=this.rules.block.paragraph.exec(t);if(e){const n=e[1].charAt(e[1].length-1)===`
+`?e[1].slice(0,-1):e[1];return{type:"paragraph",raw:e[0],text:n,tokens:this.lexer.inline(n)}}}text(t){const e=this.rules.block.text.exec(t);if(e)return{type:"text",raw:e[0],text:e[0],tokens:this.lexer.inline(e[0])}}escape(t){const e=this.rules.inline.escape.exec(t);if(e)return{type:"escape",raw:e[0],text:e[1]}}tag(t){const e=this.rules.inline.tag.exec(t);if(e)return!this.lexer.state.inLink&&this.rules.other.startATag.test(e[0])?this.lexer.state.inLink=!0:this.lexer.state.inLink&&this.rules.other.endATag.test(e[0])&&(this.lexer.state.inLink=!1),!this.lexer.state.inRawBlock&&this.rules.other.startPreScriptTag.test(e[0])?this.lexer.state.inRawBlock=!0:this.lexer.state.inRawBlock&&this.rules.other.endPreScriptTag.test(e[0])&&(this.lexer.state.inRawBlock=!1),{type:"html",raw:e[0],inLink:this.lexer.state.inLink,inRawBlock:this.lexer.state.inRawBlock,block:!1,text:e[0]}}link(t){const e=this.rules.inline.link.exec(t);if(e){const n=e[2].trim();if(!this.options.pedantic&&this.rules.other.startAngleBracket.test(n)){if(!this.rules.other.endAngleBracket.test(n))return;const a=Se(n.slice(0,-1),"\\");if((n.length-a.length)%2===0)return}else{const a=$t(e[2],"()");if(a===-2)return;if(a>-1){const i=(e[0].indexOf("!")===0?5:4)+e[1].length+a;e[2]=e[2].substring(0,a),e[0]=e[0].substring(0,i).trim(),e[3]=""}}let r=e[2],s="";if(this.options.pedantic){const a=this.rules.other.pedanticHrefTitle.exec(r);a&&(r=a[1],s=a[3])}else s=e[3]?e[3].slice(1,-1):"";return r=r.trim(),this.rules.other.startAngleBracket.test(r)&&(this.options.pedantic&&!this.rules.other.endAngleBracket.test(n)?r=r.slice(1):r=r.slice(1,-1)),bn(e,{href:r&&r.replace(this.rules.inline.anyPunctuation,"$1"),title:s&&s.replace(this.rules.inline.anyPunctuation,"$1")},e[0],this.lexer,this.rules)}}reflink(t,e){let n;if((n=this.rules.inline.reflink.exec(t))||(n=this.rules.inline.nolink.exec(t))){const r=(n[2]||n[1]).replace(this.rules.other.multipleSpaceGlobal," "),s=e[r.toLowerCase()];if(!s){const a=n[0].charAt(0);return{type:"text",raw:a,text:a}}return bn(n,s,n[0],this.lexer,this.rules)}}emStrong(t,e,n=""){let r=this.rules.inline.emStrongLDelim.exec(t);if(!r||r[3]&&n.match(this.rules.other.unicodeAlphaNumeric))return;if(!(r[1]||r[2]||"")||!n||this.rules.inline.punctuation.exec(n)){const a=[...r[0]].length-1;let d,i,u=a,o=0;const l=r[0][0]==="*"?this.rules.inline.emStrongRDelimAst:this.rules.inline.emStrongRDelimUnd;for(l.lastIndex=0,e=e.slice(-1*t.length+a);(r=l.exec(e))!=null;){if(d=r[1]||r[2]||r[3]||r[4]||r[5]||r[6],!d)continue;if(i=[...d].length,r[3]||r[4]){u+=i;continue}else if((r[5]||r[6])&&a%3&&!((a+i)%3)){o+=i;continue}if(u-=i,u>0)continue;i=Math.min(i,i+u+o);const S=[...r[0]][0].length,g=t.slice(0,a+r.index+S+i);if(Math.min(a,i)%2){const E=g.slice(1,-1);return{type:"em",raw:g,text:E,tokens:this.lexer.inlineTokens(E)}}const A=g.slice(2,-2);return{type:"strong",raw:g,text:A,tokens:this.lexer.inlineTokens(A)}}}}codespan(t){const e=this.rules.inline.code.exec(t);if(e){let n=e[2].replace(this.rules.other.newLineCharGlobal," ");const r=this.rules.other.nonSpaceChar.test(n),s=this.rules.other.startingSpaceChar.test(n)&&this.rules.other.endingSpaceChar.test(n);return r&&s&&(n=n.substring(1,n.length-1)),{type:"codespan",raw:e[0],text:n}}}br(t){const e=this.rules.inline.br.exec(t);if(e)return{type:"br",raw:e[0]}}del(t){const e=this.rules.inline.del.exec(t);if(e)return{type:"del",raw:e[0],text:e[2],tokens:this.lexer.inlineTokens(e[2])}}autolink(t){const e=this.rules.inline.autolink.exec(t);if(e){let n,r;return e[2]==="@"?(n=e[1],r="mailto:"+n):(n=e[1],r=n),{type:"link",raw:e[0],text:n,href:r,tokens:[{type:"text",raw:n,text:n}]}}}url(t){var n;let e;if(e=this.rules.inline.url.exec(t)){let r,s;if(e[2]==="@")r=e[0],s="mailto:"+r;else{let a;do a=e[0],e[0]=((n=this.rules.inline._backpedal.exec(e[0]))==null?void 0:n[0])??"";while(a!==e[0]);r=e[0],e[1]==="www."?s="http://"+e[0]:s=e[0]}return{type:"link",raw:e[0],text:r,href:s,tokens:[{type:"text",raw:r,text:r}]}}}inlineText(t){const e=this.rules.inline.text.exec(t);if(e){const n=this.lexer.state.inRawBlock;return{type:"text",raw:e[0],text:e[0],escaped:n}}}},te=class ze{constructor(e){D(this,"tokens");D(this,"options");D(this,"state");D(this,"tokenizer");D(this,"inlineQueue");this.tokens=[],this.tokens.links=Object.create(null),this.options=e||le,this.options.tokenizer=this.options.tokenizer||new Ae,this.tokenizer=this.options.tokenizer,this.tokenizer.options=this.options,this.tokenizer.lexer=this,this.inlineQueue=[],this.state={inLink:!1,inRawBlock:!1,top:!0};const n={other:Q,block:ke.normal,inline:ve.normal};this.options.pedantic?(n.block=ke.pedantic,n.inline=ve.pedantic):this.options.gfm&&(n.block=ke.gfm,this.options.breaks?n.inline=ve.breaks:n.inline=ve.gfm),this.tokenizer.rules=n}static get rules(){return{block:ke,inline:ve}}static lex(e,n){return new ze(n).lex(e)}static lexInline(e,n){return new ze(n).inlineTokens(e)}lex(e){e=e.replace(Q.carriageReturn,`
+`),this.blockTokens(e,this.tokens);for(let n=0;n<this.inlineQueue.length;n++){const r=this.inlineQueue[n];this.inlineTokens(r.src,r.tokens)}return this.inlineQueue=[],this.tokens}blockTokens(e,n=[],r=!1){var s,a,d;for(this.options.pedantic&&(e=e.replace(Q.tabCharGlobal,"    ").replace(Q.spaceLine,""));e;){let i;if((a=(s=this.options.extensions)==null?void 0:s.block)!=null&&a.some(o=>(i=o.call({lexer:this},e,n))?(e=e.substring(i.raw.length),n.push(i),!0):!1))continue;if(i=this.tokenizer.space(e)){e=e.substring(i.raw.length);const o=n.at(-1);i.raw.length===1&&o!==void 0?o.raw+=`
+`:n.push(i);continue}if(i=this.tokenizer.code(e)){e=e.substring(i.raw.length);const o=n.at(-1);(o==null?void 0:o.type)==="paragraph"||(o==null?void 0:o.type)==="text"?(o.raw+=`
+`+i.raw,o.text+=`
+`+i.text,this.inlineQueue.at(-1).src=o.text):n.push(i);continue}if(i=this.tokenizer.fences(e)){e=e.substring(i.raw.length),n.push(i);continue}if(i=this.tokenizer.heading(e)){e=e.substring(i.raw.length),n.push(i);continue}if(i=this.tokenizer.hr(e)){e=e.substring(i.raw.length),n.push(i);continue}if(i=this.tokenizer.blockquote(e)){e=e.substring(i.raw.length),n.push(i);continue}if(i=this.tokenizer.list(e)){e=e.substring(i.raw.length),n.push(i);continue}if(i=this.tokenizer.html(e)){e=e.substring(i.raw.length),n.push(i);continue}if(i=this.tokenizer.def(e)){e=e.substring(i.raw.length);const o=n.at(-1);(o==null?void 0:o.type)==="paragraph"||(o==null?void 0:o.type)==="text"?(o.raw+=`
+`+i.raw,o.text+=`
+`+i.raw,this.inlineQueue.at(-1).src=o.text):this.tokens.links[i.tag]||(this.tokens.links[i.tag]={href:i.href,title:i.title});continue}if(i=this.tokenizer.table(e)){e=e.substring(i.raw.length),n.push(i);continue}if(i=this.tokenizer.lheading(e)){e=e.substring(i.raw.length),n.push(i);continue}let u=e;if((d=this.options.extensions)!=null&&d.startBlock){let o=1/0;const l=e.slice(1);let S;this.options.extensions.startBlock.forEach(g=>{S=g.call({lexer:this},l),typeof S=="number"&&S>=0&&(o=Math.min(o,S))}),o<1/0&&o>=0&&(u=e.substring(0,o+1))}if(this.state.top&&(i=this.tokenizer.paragraph(u))){const o=n.at(-1);r&&(o==null?void 0:o.type)==="paragraph"?(o.raw+=`
+`+i.raw,o.text+=`
+`+i.text,this.inlineQueue.pop(),this.inlineQueue.at(-1).src=o.text):n.push(i),r=u.length!==e.length,e=e.substring(i.raw.length);continue}if(i=this.tokenizer.text(e)){e=e.substring(i.raw.length);const o=n.at(-1);(o==null?void 0:o.type)==="text"?(o.raw+=`
+`+i.raw,o.text+=`
+`+i.text,this.inlineQueue.pop(),this.inlineQueue.at(-1).src=o.text):n.push(i);continue}if(e){const o="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(o);break}else throw new Error(o)}}return this.state.top=!0,n}inline(e,n=[]){return this.inlineQueue.push({src:e,tokens:n}),n}inlineTokens(e,n=[]){var i,u,o;let r=e,s=null;if(this.tokens.links){const l=Object.keys(this.tokens.links);if(l.length>0)for(;(s=this.tokenizer.rules.inline.reflinkSearch.exec(r))!=null;)l.includes(s[0].slice(s[0].lastIndexOf("[")+1,-1))&&(r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.reflinkSearch.lastIndex))}for(;(s=this.tokenizer.rules.inline.anyPunctuation.exec(r))!=null;)r=r.slice(0,s.index)+"++"+r.slice(this.tokenizer.rules.inline.anyPunctuation.lastIndex);for(;(s=this.tokenizer.rules.inline.blockSkip.exec(r))!=null;)r=r.slice(0,s.index)+"["+"a".repeat(s[0].length-2)+"]"+r.slice(this.tokenizer.rules.inline.blockSkip.lastIndex);let a=!1,d="";for(;e;){a||(d=""),a=!1;let l;if((u=(i=this.options.extensions)==null?void 0:i.inline)!=null&&u.some(g=>(l=g.call({lexer:this},e,n))?(e=e.substring(l.raw.length),n.push(l),!0):!1))continue;if(l=this.tokenizer.escape(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.tag(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.link(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.reflink(e,this.tokens.links)){e=e.substring(l.raw.length);const g=n.at(-1);l.type==="text"&&(g==null?void 0:g.type)==="text"?(g.raw+=l.raw,g.text+=l.text):n.push(l);continue}if(l=this.tokenizer.emStrong(e,r,d)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.codespan(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.br(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.del(e)){e=e.substring(l.raw.length),n.push(l);continue}if(l=this.tokenizer.autolink(e)){e=e.substring(l.raw.length),n.push(l);continue}if(!this.state.inLink&&(l=this.tokenizer.url(e))){e=e.substring(l.raw.length),n.push(l);continue}let S=e;if((o=this.options.extensions)!=null&&o.startInline){let g=1/0;const A=e.slice(1);let E;this.options.extensions.startInline.forEach(x=>{E=x.call({lexer:this},A),typeof E=="number"&&E>=0&&(g=Math.min(g,E))}),g<1/0&&g>=0&&(S=e.substring(0,g+1))}if(l=this.tokenizer.inlineText(S)){e=e.substring(l.raw.length),l.raw.slice(-1)!=="_"&&(d=l.raw.slice(-1)),a=!0;const g=n.at(-1);(g==null?void 0:g.type)==="text"?(g.raw+=l.raw,g.text+=l.text):n.push(l);continue}if(e){const g="Infinite loop on byte: "+e.charCodeAt(0);if(this.options.silent){console.error(g);break}else throw new Error(g)}}return n}},_e=class{constructor(t){D(this,"options");D(this,"parser");this.options=t||le}space(t){return""}code({text:t,lang:e,escaped:n}){var a;const r=(a=(e||"").match(Q.notSpaceStart))==null?void 0:a[0],s=t.replace(Q.endingNewline,"")+`
 `;return r?'<pre><code class="language-'+ee(r)+'">'+(n?s:ee(s,!0))+`</code></pre>
 `:"<pre><code>"+(n?s:ee(s,!0))+`</code></pre>
 `}blockquote({tokens:t}){return`<blockquote>
 ${this.parser.parse(t)}</blockquote>
 `}html({text:t}){return t}heading({tokens:t,depth:e}){return`<h${e}>${this.parser.parseInline(t)}</h${e}>
 `}hr(t){return`<hr>
-`}list(t){const e=t.ordered,n=t.start;let r="";for(let d=0;d<t.items.length;d++){const a=t.items[d];r+=this.listitem(a)}const s=e?"ol":"ul",i=e&&n!==1?' start="'+n+'"':"";return"<"+s+i+`>
+`}list(t){const e=t.ordered,n=t.start;let r="";for(let d=0;d<t.items.length;d++){const i=t.items[d];r+=this.listitem(i)}const s=e?"ol":"ul",a=e&&n!==1?' start="'+n+'"':"";return"<"+s+a+`>
 `+r+"</"+s+`>
 `}listitem(t){var n;let e="";if(t.task){const r=this.checkbox({checked:!!t.checked});t.loose?((n=t.tokens[0])==null?void 0:n.type)==="paragraph"?(t.tokens[0].text=r+" "+t.tokens[0].text,t.tokens[0].tokens&&t.tokens[0].tokens.length>0&&t.tokens[0].tokens[0].type==="text"&&(t.tokens[0].tokens[0].text=r+" "+ee(t.tokens[0].tokens[0].text),t.tokens[0].tokens[0].escaped=!0)):t.tokens.unshift({type:"text",raw:r+" ",text:r+" ",escaped:!0}):e+=r+" "}return e+=this.parser.parse(t.tokens,!!t.loose),`<li>${e}</li>
 `}checkbox({checked:t}){return"<input "+(t?'checked="" ':"")+'disabled="" type="checkbox">'}paragraph({tokens:t}){return`<p>${this.parser.parseInline(t)}</p>
-`}table(t){let e="",n="";for(let s=0;s<t.header.length;s++)n+=this.tablecell(t.header[s]);e+=this.tablerow({text:n});let r="";for(let s=0;s<t.rows.length;s++){const i=t.rows[s];n="";for(let d=0;d<i.length;d++)n+=this.tablecell(i[d]);r+=this.tablerow({text:n})}return r&&(r=`<tbody>${r}</tbody>`),`<table>
+`}table(t){let e="",n="";for(let s=0;s<t.header.length;s++)n+=this.tablecell(t.header[s]);e+=this.tablerow({text:n});let r="";for(let s=0;s<t.rows.length;s++){const a=t.rows[s];n="";for(let d=0;d<a.length;d++)n+=this.tablecell(a[d]);r+=this.tablerow({text:n})}return r&&(r=`<tbody>${r}</tbody>`),`<table>
 <thead>
 `+e+`</thead>
 `+r+`</table>
 `}tablerow({text:t}){return`<tr>
 ${t}</tr>
 `}tablecell(t){const e=this.parser.parseInline(t.tokens),n=t.header?"th":"td";return(t.align?`<${n} align="${t.align}">`:`<${n}>`)+e+`</${n}>
-`}strong({tokens:t}){return`<strong>${this.parser.parseInline(t)}</strong>`}em({tokens:t}){return`<em>${this.parser.parseInline(t)}</em>`}codespan({text:t}){return`<code>${ee(t,!0)}</code>`}br(t){return"<br>"}del({tokens:t}){return`<del>${this.parser.parseInline(t)}</del>`}link({href:t,title:e,tokens:n}){const r=this.parser.parseInline(n),s=vn(t);if(s===null)return r;t=s;let i='<a href="'+t+'"';return e&&(i+=' title="'+ee(e)+'"'),i+=">"+r+"</a>",i}image({href:t,title:e,text:n,tokens:r}){r&&(n=this.parser.parseInline(r,this.parser.textRenderer));const s=vn(t);if(s===null)return ee(n);t=s;let i=`<img src="${t}" alt="${n}"`;return e&&(i+=` title="${ee(e)}"`),i+=">",i}text(t){return"tokens"in t&&t.tokens?this.parser.parseInline(t.tokens):"escaped"in t&&t.escaped?t.text:ee(t.text)}},tn=class{strong({text:t}){return t}em({text:t}){return t}codespan({text:t}){return t}del({text:t}){return t}html({text:t}){return t}text({text:t}){return t}link({text:t}){return""+t}image({text:t}){return""+t}br(){return""}},re=class $e{constructor(e){q(this,"options");q(this,"renderer");q(this,"textRenderer");this.options=e||le,this.options.renderer=this.options.renderer||new Re,this.renderer=this.options.renderer,this.renderer.options=this.options,this.renderer.parser=this,this.textRenderer=new tn}static parse(e,n){return new $e(n).parse(e)}static parseInline(e,n){return new $e(n).parseInline(e)}parse(e,n=!0){var s,i;let r="";for(let d=0;d<e.length;d++){const a=e[d];if((i=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&i[a.type]){const o=a,l=this.options.extensions.renderers[o.type].call({parser:this},o);if(l!==!1||!["space","hr","heading","code","table","blockquote","list","html","paragraph","text"].includes(o.type)){r+=l||"";continue}}const u=a;switch(u.type){case"space":{r+=this.renderer.space(u);continue}case"hr":{r+=this.renderer.hr(u);continue}case"heading":{r+=this.renderer.heading(u);continue}case"code":{r+=this.renderer.code(u);continue}case"table":{r+=this.renderer.table(u);continue}case"blockquote":{r+=this.renderer.blockquote(u);continue}case"list":{r+=this.renderer.list(u);continue}case"html":{r+=this.renderer.html(u);continue}case"paragraph":{r+=this.renderer.paragraph(u);continue}case"text":{let o=u,l=this.renderer.text(o);for(;d+1<e.length&&e[d+1].type==="text";)o=e[++d],l+=`
-`+this.renderer.text(o);n?r+=this.renderer.paragraph({type:"paragraph",raw:l,text:l,tokens:[{type:"text",raw:l,text:l,escaped:!0}]}):r+=l;continue}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}parseInline(e,n=this.renderer){var s,i;let r="";for(let d=0;d<e.length;d++){const a=e[d];if((i=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&i[a.type]){const o=this.options.extensions.renderers[a.type].call({parser:this},a);if(o!==!1||!["escape","html","link","image","strong","em","codespan","br","del","text"].includes(a.type)){r+=o||"";continue}}const u=a;switch(u.type){case"escape":{r+=n.text(u);break}case"html":{r+=n.html(u);break}case"link":{r+=n.link(u);break}case"image":{r+=n.image(u);break}case"strong":{r+=n.strong(u);break}case"em":{r+=n.em(u);break}case"codespan":{r+=n.codespan(u);break}case"br":{r+=n.br(u);break}case"del":{r+=n.del(u);break}case"text":{r+=n.text(u);break}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}},Ue,Te=(Ue=class{constructor(t){q(this,"options");q(this,"block");this.options=t||le}preprocess(t){return t}postprocess(t){return t}processAllTokens(t){return t}provideLexer(){return this.block?te.lex:te.lexInline}provideParser(){return this.block?re.parse:re.parseInline}},q(Ue,"passThroughHooks",new Set(["preprocess","postprocess","processAllTokens"])),Ue),Kt=class{constructor(...t){q(this,"defaults",Qe());q(this,"options",this.setOptions);q(this,"parse",this.parseMarkdown(!0));q(this,"parseInline",this.parseMarkdown(!1));q(this,"Parser",re);q(this,"Renderer",Re);q(this,"TextRenderer",tn);q(this,"Lexer",te);q(this,"Tokenizer",_e);q(this,"Hooks",Te);this.use(...t)}walkTokens(t,e){var r,s;let n=[];for(const i of t)switch(n=n.concat(e.call(this,i)),i.type){case"table":{const d=i;for(const a of d.header)n=n.concat(this.walkTokens(a.tokens,e));for(const a of d.rows)for(const u of a)n=n.concat(this.walkTokens(u.tokens,e));break}case"list":{const d=i;n=n.concat(this.walkTokens(d.items,e));break}default:{const d=i;(s=(r=this.defaults.extensions)==null?void 0:r.childTokens)!=null&&s[d.type]?this.defaults.extensions.childTokens[d.type].forEach(a=>{const u=d[a].flat(1/0);n=n.concat(this.walkTokens(u,e))}):d.tokens&&(n=n.concat(this.walkTokens(d.tokens,e)))}}return n}use(...t){const e=this.defaults.extensions||{renderers:{},childTokens:{}};return t.forEach(n=>{const r={...n};if(r.async=this.defaults.async||r.async||!1,n.extensions&&(n.extensions.forEach(s=>{if(!s.name)throw new Error("extension name required");if("renderer"in s){const i=e.renderers[s.name];i?e.renderers[s.name]=function(...d){let a=s.renderer.apply(this,d);return a===!1&&(a=i.apply(this,d)),a}:e.renderers[s.name]=s.renderer}if("tokenizer"in s){if(!s.level||s.level!=="block"&&s.level!=="inline")throw new Error("extension level must be 'block' or 'inline'");const i=e[s.level];i?i.unshift(s.tokenizer):e[s.level]=[s.tokenizer],s.start&&(s.level==="block"?e.startBlock?e.startBlock.push(s.start):e.startBlock=[s.start]:s.level==="inline"&&(e.startInline?e.startInline.push(s.start):e.startInline=[s.start]))}"childTokens"in s&&s.childTokens&&(e.childTokens[s.name]=s.childTokens)}),r.extensions=e),n.renderer){const s=this.defaults.renderer||new Re(this.defaults);for(const i in n.renderer){if(!(i in s))throw new Error(`renderer '${i}' does not exist`);if(["options","parser"].includes(i))continue;const d=i,a=n.renderer[d],u=s[d];s[d]=(...o)=>{let l=a.apply(s,o);return l===!1&&(l=u.apply(s,o)),l||""}}r.renderer=s}if(n.tokenizer){const s=this.defaults.tokenizer||new _e(this.defaults);for(const i in n.tokenizer){if(!(i in s))throw new Error(`tokenizer '${i}' does not exist`);if(["options","rules","lexer"].includes(i))continue;const d=i,a=n.tokenizer[d],u=s[d];s[d]=(...o)=>{let l=a.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.tokenizer=s}if(n.hooks){const s=this.defaults.hooks||new Te;for(const i in n.hooks){if(!(i in s))throw new Error(`hook '${i}' does not exist`);if(["options","block"].includes(i))continue;const d=i,a=n.hooks[d],u=s[d];Te.passThroughHooks.has(i)?s[d]=o=>{if(this.defaults.async)return Promise.resolve(a.call(s,o)).then(S=>u.call(s,S));const l=a.call(s,o);return u.call(s,l)}:s[d]=(...o)=>{let l=a.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.hooks=s}if(n.walkTokens){const s=this.defaults.walkTokens,i=n.walkTokens;r.walkTokens=function(d){let a=[];return a.push(i.call(this,d)),s&&(a=a.concat(s.call(this,d))),a}}this.defaults={...this.defaults,...r}}),this}setOptions(t){return this.defaults={...this.defaults,...t},this}lexer(t,e){return te.lex(t,e??this.defaults)}parser(t,e){return re.parse(t,e??this.defaults)}parseMarkdown(t){return(n,r)=>{const s={...r},i={...this.defaults,...s},d=this.onError(!!i.silent,!!i.async);if(this.defaults.async===!0&&s.async===!1)return d(new Error("marked(): The async option was set to true by an extension. Remove async: false from the parse options object to return a Promise."));if(typeof n>"u"||n===null)return d(new Error("marked(): input parameter is undefined or null"));if(typeof n!="string")return d(new Error("marked(): input parameter is of type "+Object.prototype.toString.call(n)+", string expected"));i.hooks&&(i.hooks.options=i,i.hooks.block=t);const a=i.hooks?i.hooks.provideLexer():t?te.lex:te.lexInline,u=i.hooks?i.hooks.provideParser():t?re.parse:re.parseInline;if(i.async)return Promise.resolve(i.hooks?i.hooks.preprocess(n):n).then(o=>a(o,i)).then(o=>i.hooks?i.hooks.processAllTokens(o):o).then(o=>i.walkTokens?Promise.all(this.walkTokens(o,i.walkTokens)).then(()=>o):o).then(o=>u(o,i)).then(o=>i.hooks?i.hooks.postprocess(o):o).catch(d);try{i.hooks&&(n=i.hooks.preprocess(n));let o=a(n,i);i.hooks&&(o=i.hooks.processAllTokens(o)),i.walkTokens&&this.walkTokens(o,i.walkTokens);let l=u(o,i);return i.hooks&&(l=i.hooks.postprocess(l)),l}catch(o){return d(o)}}}onError(t,e){return n=>{if(n.message+=`
-Please report this to https://github.com/markedjs/marked.`,t){const r="<p>An error occurred:</p><pre>"+ee(n.message+"",!0)+"</pre>";return e?Promise.resolve(r):r}if(e)return Promise.reject(n);throw n}}},oe=new Kt;function N(t,e){return oe.parse(t,e)}N.options=N.setOptions=function(t){return oe.setOptions(t),N.defaults=oe.defaults,Rn(N.defaults),N};N.getDefaults=Qe;N.defaults=le;N.use=function(...t){return oe.use(...t),N.defaults=oe.defaults,Rn(N.defaults),N};N.walkTokens=function(t,e){return oe.walkTokens(t,e)};N.parseInline=oe.parseInline;N.Parser=re;N.parser=re.parse;N.Renderer=Re;N.TextRenderer=tn;N.Lexer=te;N.lexer=te.lex;N.Tokenizer=_e;N.Hooks=Te;N.parse=N;N.options;N.setOptions;N.use;N.walkTokens;N.parseInline;re.parse;te.lex;const me=/^[a-z0-9][a-z0-9._-]{0,127}$/,ne=/^[a-z][a-z0-9._-]{0,63}$/,We=new Set(["neutral","info","success","warning","danger"]),Ve=new Set(["text","number","boolean","json"]),Yt=new Set(["__proto__","prototype","constructor"]);let Un=new Map,jn=!1,ie=typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null,Be=null,xe=null,Xt=0,ke=!1,pe=new Set,Ee=new Map,Pe=new Map,zn=new Map,Oe=[],yn=[];function Zt(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,64).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="chat.extension"||!n.renderer||typeof n.renderer!="object")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),i=String(n.renderer.module||"").trim(),d=String(n.renderer.style||"").trim(),a=`/plugin-assets/${r}/`,u=function(l,S){if(!l||!l.startsWith(a)||l.includes("..")||l.includes("\\"))return!1;const g=l.split("?",1)[0].toLowerCase();return S.some(function(_){return g.endsWith(_)})},o=`${r}:${s}`;return!me.test(r)||!ne.test(s)||!u(i,[".js",".mjs"])||d&&!u(d,[".css"])||e.has(o)?[]:(e.add(o),[{pluginId:r,id:s,moduleUrl:i,styleUrl:d}])})}async function wn(t){yn.splice(0).forEach(function(n){try{n()}catch(r){console.warn("Plugin chat extension cleanup failed",r)}});const e=Zt(t);await Promise.all(e.map(async function(n){try{if(n.styleUrl&&!document.querySelector(`link[data-plugin-chat-style="${n.pluginId}:${n.id}"]`)){const i=document.createElement("link");i.rel="stylesheet",i.href=n.styleUrl,i.dataset.pluginChatStyle=`${n.pluginId}:${n.id}`,document.head.appendChild(i)}const r=await import(n.moduleUrl);if(!r||typeof r.installChatExtension!="function")return;const s=await r.installChatExtension({pluginId:n.pluginId,id:n.id,request:ie,translate:function(i){return typeof globalThis.translateUiString=="function"?globalThis.translateUiString(i):i}});typeof s=="function"&&yn.push(s)}catch(r){console.warn(`Plugin chat extension failed to load (${n.pluginId})`,r)}}))}function Jt(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,128).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="session.panel"||!n.renderer||typeof n.renderer!="object")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),i=String(n.renderer.module||"").trim(),d=String(n.renderer.style||"").trim(),a=`/plugin-assets/${r}/`,u=function(l,S){if(!l||!l.startsWith(a)||l.includes("..")||l.includes("\\"))return!1;const g=l.split("?",1)[0].toLowerCase();return S.some(function(_){return g.endsWith(_)})},o=`${r}:${s}`;return!me.test(r)||!ne.test(s)||!u(i,[".js",".mjs"])||d&&!u(d,[".css"])||e.has(o)?[]:(e.add(o),[{pluginId:r,id:s,moduleUrl:i,styleUrl:d}])})}async function er(t){const e=Jt(t),n=new Map;await Promise.all(e.map(async function(r){try{if(r.styleUrl&&!document.querySelector(`link[data-plugin-panel-style="${r.pluginId}:${r.id}"]`)){const i=document.createElement("link");i.rel="stylesheet",i.href=r.styleUrl,i.dataset.pluginPanelStyle=`${r.pluginId}:${r.id}`,document.head.appendChild(i)}const s=await import(r.moduleUrl);s&&typeof s.renderSessionPanel=="function"&&n.set(`${r.pluginId}:${r.id}`,s.renderSessionPanel)}catch(s){console.warn(`Plugin session panel renderer failed to load (${r.pluginId})`,s)}})),zn=n}function $n(t){const e=Number(t&&t.order);return Number.isFinite(e)?Math.max(-1e4,Math.min(1e4,e)):100}function nr(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,64).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="settings.section")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),i=H(n.title,64),d=H(n.label,64),a=H(n.description,200),u=String(n.target||"").trim(),o=`/plugins/${r}`,l=`/api/plugins/${r}/settings`,S=`${r}:${s}`;if(!me.test(r)||!ne.test(s)||!i||!d||!new Set(["plugin-page","plugin-settings"]).has(u)||u==="plugin-page"&&String(n.href||"")!==o||u==="plugin-settings"&&String(n.endpoint||"")!==l||e.has(S))return[];e.add(S);const g={pluginId:r,id:s,title:i,label:d,description:a,target:u,order:$n(n)};return u==="plugin-page"?g.href=o:g.endpoint=l,[g]}).sort(function(n,r){return n.order-r.order||n.title.localeCompare(r.title)||n.pluginId.localeCompare(r.pluginId)||n.id.localeCompare(r.id)})}function tr(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,64).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="composer.action")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),i=H(n.label,64),d=H(n.description,200),a=String(n.action||"").trim(),u=`${r}:${s}`;if(!me.test(r)||!ne.test(s)||!i||!new Set(["insert_text","open_plugin_page"]).has(a)||e.has(u))return[];const o={pluginId:r,id:s,label:i,description:d,action:a,order:$n(n)};if(a==="insert_text"){const l=String(n.text||"");if(!l.trim()||l.length>2e3)return[];o.text=l}else{const l=`/plugins/${r}`;if(String(n.href||"")!==l)return[];o.href=l}return e.add(u),[o]}).sort(function(n,r){return n.order-r.order||n.label.localeCompare(r.label)||n.pluginId.localeCompare(r.pluginId)||n.id.localeCompare(r.id)})}function rr(t){if(!t||typeof t!="object")return null;const e=String(t.path||"").trim(),n=String(t.label||"").trim(),r=String(t.format||"text").trim().toLowerCase();return!e.startsWith("/")||e.length>160||!n||n.length>64||!Ve.has(r)||e.slice(1).split("/").map(function(i){return i.replace(/~1/g,"/").replace(/~0/g,"~")}).some(function(i){return!i||Yt.has(i)})?null:{path:e,label:n,format:r,optional:t.optional!==!1}}function sr(t){if(!Array.isArray(t))return[];const e=new Set,n=new Set;return t.slice(0,128).flatMap(function(r){if(!r||typeof r!="object"||r.slot!=="message.renderer")return[];const s=String(r.plugin_id||"").trim(),i=String(r.id||"").trim(),d=String(r.event_name||"").trim(),a=String(r.title||"").trim(),u=String(r.description||"").trim(),o=String(r.variant||"neutral").trim().toLowerCase(),l=Array.isArray(r.fields)?r.fields:[],S=l.map(rr),g=`${s}:${i}`,_=`${s}:${d}`;return!me.test(s)||!ne.test(i)||!ne.test(d)||!a||a.length>64||u.length>200||!We.has(o)||l.length<1||l.length>12||S.some(function(E){return!E})||new Set(S.map(function(E){return E.path})).size!==S.length||e.has(g)||n.has(_)?[]:(e.add(g),n.add(_),[{pluginId:s,id:i,eventName:d,title:a,description:u,variant:o,fields:S}])})}function ir(t,e){const n=e.slice(1).split("/").map(function(s){return s.replace(/~1/g,"/").replace(/~0/g,"~")});let r=t;for(const s of n){if(r==null||typeof r!="object"||!Object.prototype.hasOwnProperty.call(r,s))return{found:!1,value:void 0};r=r[s]}return{found:!0,value:r}}function H(t,e){const n=String(t??"").replace(/[\r\n]+/g," ").trim();return n.length>e?`${n.slice(0,e)}…`:n}function ar(t,e){if(e==="number"){const n=Number(t);return Number.isFinite(n)?String(n):""}if(e==="boolean")return typeof t=="boolean"?t?"true":"false":"";if(e==="json"||t!==null&&typeof t=="object")try{return H(JSON.stringify(t),2e3)}catch{return""}return H(t,1e3)}function In(t){const e=sr(t);return Un=new Map(e.map(function(n){return[`${n.pluginId}:${n.eventName}`,n]})),jn=!0,e}function or(t){if(!t||typeof t!="object"||t.type!=="extension_event")return{handled:!1};if(!jn)return{handled:!0,pending:!0};const e=String(t.plugin_id||"").trim(),n=String(t.event_name||"").trim(),r=Un.get(`${e}:${n}`);if(!r)return{handled:!0,title:"Extension",description:"No active declarative renderer is available for this historical event.",variant:"neutral",content:`${H(e,128)} / ${H(n,64)}`,fallback:!0};const s=t.data&&typeof t.data=="object"?t.data:{},i=[];return r.fields.forEach(function(d){const a=ir(s,d.path),u=a.found?ar(a.value,d.format):"";!u&&d.optional||i.push(`${d.label}: ${u||"—"}`)}),{handled:!0,title:r.title,description:r.description,variant:r.variant,content:i.join(`
-`)}}globalThis.resolvePluginExtensionEvent=or;function xn(t,e){if(!t)return;const n=nr(e),r=document.createDocumentFragment();n.forEach(function(s){const i=document.createElement("div");i.className="settings-modal__section plugin-settings-section",i.dataset.pluginId=s.pluginId,i.dataset.contributionId=s.id;const d=document.createElement("div");if(d.className="settings-modal__label",d.textContent=s.title,i.appendChild(d),s.description){const a=document.createElement("div");a.className="plugin-settings-description",a.textContent=s.description,i.appendChild(a)}if(s.target==="plugin-page"){const a=document.createElement("a");a.className="settings-advanced-btn plugin-settings-link",a.href=s.href,a.target="_blank",a.rel="noopener noreferrer",a.textContent=s.label,i.appendChild(a)}else{const a=document.createElement("form");a.className="plugin-settings-form",a.dataset.endpoint=s.endpoint,a.dataset.saveLabel=s.label;const u=document.createElement("div");u.className="plugin-settings-status",u.setAttribute("role","status"),u.textContent="Loading…",a.appendChild(u),a.addEventListener("submit",function(o){o.preventDefault(),pr(a,s)}),i.appendChild(a),cr(a,s)}r.appendChild(i)}),t.replaceChildren(r),t.hidden=n.length===0}function lr(t){if(!t||typeof t!="object")return null;const e=String(t.id||"").trim(),n=String(t.type||"").trim(),r=H(t.title,64),s=H(t.description,200),i=String(t.format||"").trim();if(!ne.test(e)||!new Set(["string","boolean","integer","number"]).has(n)||!r||i&&!new Set(["text","multiline","secret"]).has(i))return null;const d={id:e,type:n,title:r,description:s,format:i,required:t.required===!0};return i==="secret"?(d.configured=t.configured===!0,d.reference=H(t.reference,128),d):(d.value=t.value,Array.isArray(t.enum)&&t.enum.length<=32&&(d.enum=t.enum.slice()),Number.isFinite(Number(t.minimum))&&(d.minimum=Number(t.minimum)),Number.isFinite(Number(t.maximum))&&(d.maximum=Number(t.maximum)),Number.isInteger(Number(t.min_length))&&(d.minLength=Number(t.min_length)),Number.isInteger(Number(t.max_length))&&(d.maxLength=Number(t.max_length)),d)}function Wn(t,e){const n=t&&t.ok===!0&&t.settings&&typeof t.settings=="object"?t.settings:null;if(!n||String(n.plugin_id||"")!==e||!Array.isArray(n.fields)||n.fields.length>64)return null;const r=n.fields.map(lr);return r.some(function(s){return!s})||new Set(r.map(function(s){return s.id})).size!==r.length?null:{pluginId:e,title:H(n.title,64),description:H(n.description,200),valid:n.valid===!0,missingRequired:Array.isArray(n.missing_required)?n.missing_required.slice(0,64).map(String):[],fields:r}}function dr(t){if(t.format==="secret"){const n=document.createElement("div");return n.className=`plugin-setting-secret ${t.configured?"is-configured":"is-missing"}`,n.textContent=t.configured?`Configured via ${t.reference||"host secret reference"}`:`Missing host secret ${t.reference||"reference"}`,n}let e;return t.enum?(e=document.createElement("select"),t.enum.forEach(function(n){const r=document.createElement("option");r.value=String(n),r.textContent=String(n),r.selected=n===t.value,e.appendChild(r)})):t.type==="boolean"?(e=document.createElement("input"),e.type="checkbox",e.checked=t.value===!0):t.format==="multiline"?(e=document.createElement("textarea"),e.rows=3,e.value=t.value==null?"":String(t.value)):(e=document.createElement("input"),e.type=t.type==="integer"||t.type==="number"?"number":"text",e.value=t.value==null?"":String(t.value),t.type==="integer"&&(e.step="1"),t.type==="number"&&(e.step="any")),e.className="plugin-setting-control",e.dataset.settingId=t.id,e.dataset.settingType=t.type,e.required=t.required,t.minimum!==void 0&&(e.min=String(t.minimum)),t.maximum!==void 0&&(e.max=String(t.maximum)),t.minLength!==void 0&&(e.minLength=t.minLength),t.maxLength!==void 0&&(e.maxLength=t.maxLength),e}function Vn(t,e,n){const r=document.createDocumentFragment();e.fields.forEach(function(d){const a=document.createElement("label");a.className="plugin-setting-field";const u=document.createElement("span");if(u.className="plugin-setting-label",u.textContent=d.title,a.appendChild(u),d.description){const o=document.createElement("span");o.className="plugin-setting-description",o.textContent=d.description,a.appendChild(o)}a.appendChild(dr(d)),r.appendChild(a)});const s=document.createElement("button");s.type="submit",s.className="settings-advanced-btn plugin-settings-save",s.textContent=n.label;const i=document.createElement("div");i.className="plugin-settings-status",i.setAttribute("role","status"),!e.valid&&e.missingRequired.length&&(i.textContent=`Missing required settings: ${e.missingRequired.join(", ")}`,i.classList.add("is-error")),r.append(s,i),t.replaceChildren(r)}async function cr(t,e){try{const n=await ie(e.endpoint,{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}}),r=await n.json(),s=n.ok?Wn(r,e.pluginId):null;if(!s)throw new Error(r&&r.error||`HTTP ${n.status}`);Vn(t,s,e)}catch(n){const r=t.querySelector(".plugin-settings-status");r&&(r.textContent=`Settings unavailable: ${String(n&&n.message?n.message:n)}`,r.classList.add("is-error"))}}function ur(t){const e={};return t.querySelectorAll(".plugin-setting-control[data-setting-id]").forEach(function(n){const r=String(n.dataset.settingId||""),s=String(n.dataset.settingType||"string");n.tagName==="SELECT"&&s==="boolean"?e[r]=n.value==="true":n.tagName==="SELECT"&&s==="integer"?e[r]=Number.parseInt(n.value,10):n.tagName==="SELECT"&&s==="number"?e[r]=Number(n.value):s==="boolean"?e[r]=n.checked===!0:(s==="integer"||s==="number")&&n.value===""?e[r]=null:s==="integer"?e[r]=Number.parseInt(n.value,10):s==="number"?e[r]=Number(n.value):e[r]=n.value}),e}async function pr(t,e){const n=t.querySelector(".plugin-settings-save"),r=t.querySelector(".plugin-settings-status");n&&(n.disabled=!0),r&&(r.textContent="Saving…",r.classList.remove("is-error"));try{const s=await ie(e.endpoint,{method:"PATCH",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({values:ur(t)})}),i=await s.json(),d=s.ok?Wn(i,e.pluginId):null;if(!d)throw new Error(i&&i.error||`HTTP ${s.status}`);Vn(t,d,e);const a=t.querySelector(".plugin-settings-status");a&&d.valid&&(a.textContent="Saved")}catch(s){r&&(r.textContent=`Save failed: ${String(s&&s.message?s.message:s)}`,r.classList.add("is-error"))}finally{n&&n.isConnected&&(n.disabled=!1)}}function mr(t,e){if(!t)return;const n=Number.isInteger(t.selectionStart)?t.selectionStart:t.value.length,r=Number.isInteger(t.selectionEnd)?t.selectionEnd:n;typeof t.setRangeText=="function"?t.setRangeText(e,n,r,"end"):t.value=`${t.value.slice(0,n)}${e}${t.value.slice(r)}`,t.dispatchEvent(new Event("input",{bubbles:!0})),t.focus()}function kn(t,e){if(!t)return;const n=tr(e),r=document.createDocumentFragment();n.forEach(function(s){const i=document.createElement("button");i.type="button",i.className="plugin-composer-action",i.dataset.pluginId=s.pluginId,i.dataset.contributionId=s.id,i.textContent=s.label,s.description&&(i.title=s.description,i.setAttribute("aria-label",`${s.label}: ${s.description}`)),i.addEventListener("click",function(){if(s.action==="insert_text"){mr(document.getElementById("message-input"),s.text);return}if(typeof globalThis.open!="function")return;const d=globalThis.open(s.href,"_blank","noopener,noreferrer");d&&(d.opener=null)}),r.appendChild(i)}),t.replaceChildren(r),t.hidden=n.length===0}function Cn(t,e){if(!t||typeof t!="object")return null;const n=String(t.plugin_id||"").trim(),r=String(t.id||"").trim(),s=String(t.variant||"neutral").trim().toLowerCase();if(!me.test(n)||!ne.test(r)||!We.has(s))return null;if(e==="badge"){const o=H(t.label,64),l=H(t.description,200),S=String(t.display||"badge").trim().toLowerCase();return!o||!new Set(["badge","activity"]).has(S)?null:{pluginId:n,id:r,label:o,description:l,variant:s,display:S}}const i=H(t.title,64),d=H(t.description,200);if(!i||!Array.isArray(t.fields)||t.fields.length>12)return null;const a=t.fields.flatMap(function(o){if(!o||typeof o!="object")return[];const l=H(o.label,64),S=String(o.format||"text").toLowerCase();if(S==="list"){if(!l||!Array.isArray(o.columns)||!Array.isArray(o.rows)||o.columns.length<1||o.columns.length>4||o.rows.length>100)return[];const _=o.columns.map(function(k){const O=H(k&&k.label,64),z=String(k&&k.format||"text").toLowerCase();return O&&Ve.has(z)?{label:O,format:z}:null});if(_.some(function(k){return!k}))return[];const E=o.rows.flatMap(function(k){return!k||!Array.isArray(k.values)||k.values.length!==_.length?[]:[{values:k.values.map(function(O){return H(O,1e3)})}]});return E.length!==o.rows.length?[]:[{label:l,format:S,columns:_,rows:E}]}const g=H(o.value,4e3);return!l||!Ve.has(S)?[]:[{label:l,value:g,format:S}]}),u=(Array.isArray(t.actions)?t.actions:[]).slice(0,4).flatMap(function(o){if(!o||typeof o!="object")return[];const l=String(o.id||"").trim(),S=H(o.label,64),g=String(o.variant||"neutral").trim().toLowerCase(),_=H(o.confirm,200);if(!ne.test(l)||!S||!We.has(g))return[];const E=Array.isArray(o.inputs)?o.inputs.slice(0,8):[],k=new Set,O=E.flatMap(function(L){if(!L||typeof L!="object")return[];const $=String(L.id||"").trim(),P=H(L.label||$,64),W=H(L.description,200),j=String(L.type||"string").trim().toLowerCase();if(!ne.test($)||k.has($)||!P||!new Set(["string","boolean","integer","number"]).has(j))return[];k.add($);const R={id:$,label:P,description:W,type:j,required:L.required===!0};return Array.isArray(L.enum)&&L.enum.length>0&&L.enum.length<=32&&(R.enum=L.enum.slice()),["minimum","maximum","min_length","max_length"].forEach(function(D){Number.isFinite(Number(L[D]))&&(R[D]=Number(L[D]))}),[R]});if(O.length!==E.length)return[];const z={id:l,label:S,variant:g,confirm:_};return O.length&&(z.inputs=O),[z]});return{pluginId:n,id:r,title:i,description:d,variant:s,fields:a,actions:u}}function fr(t,e){const n=t&&t.ok===!0&&t.sessions&&typeof t.sessions=="object"?t.sessions:{},r=Object.create(null);return(Array.isArray(e)?e:[]).slice(0,200).forEach(function(s){const i=String(s||"").trim();if(!i||i.length>256||Object.prototype.hasOwnProperty.call(r,i))return;const d=Object.prototype.hasOwnProperty.call(n,i)&&n[i]&&typeof n[i]=="object"?n[i]:{};r[i]={badges:(Array.isArray(d.badges)?d.badges:[]).slice(0,16).map(function(a){return Cn(a,"badge")}).filter(Boolean),panels:(Array.isArray(d.panels)?d.panels:[]).slice(0,16).map(function(a){return Cn(a,"panel")}).filter(Boolean)}}),r}function Tn(){return Array.from(document.querySelectorAll("#sessions-list .session-item[data-session-id]")).slice(0,200)}function En(t,e){t.forEach(function(n){const r=n.querySelector(".plugin-session-badges");r&&r.remove();const s=String(n.dataset.sessionId||""),i=e[s],d=!!(i&&i.badges.some(function(S){return S.display==="activity"}));n.classList.toggle("has-plugin-activity",d);const a=i?i.badges.filter(function(S){return S.display!=="activity"}):[];if(!a.length)return;const u=n.querySelector(".session-item-title-row");if(!u)return;const o=document.createElement("span");o.className="plugin-session-badges",a.forEach(function(S){const g=document.createElement("span");g.className=`plugin-session-badge plugin-session-badge--${S.variant}`,g.dataset.pluginId=S.pluginId,g.dataset.contributionId=S.id,g.textContent=S.label,S.description&&(g.title=S.description),o.appendChild(g)});const l=u.querySelector(".session-item-date");u.insertBefore(o,l||null)})}function An(t,e){const n=document.getElementById("plugin-session-panels");if(!n)return;const r=t.find(function(l){return l.classList.contains("active")}),s=r?String(r.dataset.sessionId||""):"",i=[];Oe.forEach(function(l){try{l({nextSessionId:s})===!1&&i.push(l)}catch(S){console.warn("Plugin session panel cleanup failed",S)}}),Oe=i;const d=e[s],a=d?d.panels:[],u=document.createDocumentFragment();a.forEach(function(l){const S=document.createElement("section");S.className=`plugin-session-panel plugin-session-panel--${l.variant}`,S.dataset.pluginId=l.pluginId,S.dataset.contributionId=l.id;const g=zn.get(`${l.pluginId}:${l.id}`);if(g){S.classList.add("plugin-session-panel--custom");try{const k=g({container:S,item:l,sessionId:s,request:ie,refresh:Ge,invokeAction:async function(O,z={}){const L=await ie("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:O,inputs:z})});if(!L.ok)throw new Error(`Session extension action failed (${L.status})`);return L},notifyStateChanged:function(){document.dispatchEvent(new CustomEvent("myagent:extension-state-changed",{detail:{sessionId:s}}))}});typeof k=="function"&&Oe.push(k),u.appendChild(S);return}catch(k){console.warn(`Plugin session panel renderer failed (${l.pluginId})`,k),S.replaceChildren(),S.classList.remove("plugin-session-panel--custom")}}const _=document.createElement("div");if(_.className="plugin-session-panel-title",_.textContent=l.title,S.appendChild(_),l.description){const k=document.createElement("div");k.className="plugin-session-panel-description",k.textContent=l.description,S.appendChild(k)}const E=document.createElement("dl");if(E.className="plugin-session-panel-fields",l.fields.forEach(function(k){const O=document.createElement("div");O.className="plugin-session-panel-field";const z=document.createElement("dt");z.textContent=k.label;const L=document.createElement("dd");k.format==="list"?(L.className="plugin-session-panel-list",k.rows.forEach(function($){const P=document.createElement("div");P.className="plugin-session-panel-list-row",$.values.forEach(function(W,j){const R=document.createElement("span");R.className="plugin-session-panel-list-cell";const D=k.columns[j];R.title=D.label;const Q=document.createElement("span");Q.className="plugin-session-panel-list-key",Q.textContent=`${D.label}: `;const se=document.createElement("span");se.textContent=W||"—",R.append(Q,se),P.appendChild(R)}),L.appendChild(P)})):L.textContent=k.value,O.append(z,L),E.appendChild(O)}),S.appendChild(E),l.actions.length){const k=document.createElement("div");k.className="plugin-session-panel-actions",l.actions.forEach(function(O){const z=document.createElement("div");z.className="plugin-session-panel-action-group";const L=new Map;(O.inputs||[]).forEach(function(P){const W=document.createElement("label");W.className="plugin-session-panel-action-field";const j=document.createElement("span");j.textContent=P.label;let R;if(Array.isArray(P.enum)){if(R=document.createElement("select"),!P.required){const D=document.createElement("option");D.value="",D.textContent="—",R.appendChild(D)}P.enum.forEach(function(D,Q){const se=document.createElement("option");se.value=String(Q+1),se.textContent=H(D,200),R.appendChild(se)})}else P.type==="boolean"?(R=document.createElement("input"),R.type="checkbox"):P.type==="string"&&Number(P.max_length||0)>200?R=document.createElement("textarea"):(R=document.createElement("input"),R.type=P.type==="string"?"text":"number",P.type==="integer"&&(R.step="1"),P.type==="number"&&(R.step="any"));R.name=P.id,R.required=P.required,P.description&&(R.title=P.description),Number.isFinite(P.minimum)&&(R.min=String(P.minimum)),Number.isFinite(P.maximum)&&(R.max=String(P.maximum)),Number.isFinite(P.min_length)&&(R.minLength=P.min_length),Number.isFinite(P.max_length)&&(R.maxLength=P.max_length),W.append(j,R),z.appendChild(W),L.set(P.id,{control:R,definition:P})});const $=document.createElement("button");$.type="button",$.className=`plugin-session-panel-action plugin-session-panel-action--${O.variant}`,$.textContent=O.label,$.addEventListener("click",async function(){if(O.confirm&&typeof globalThis.confirm=="function"&&!globalThis.confirm(O.confirm))return;const P=ie;if(typeof P!="function")return;const W={};for(const[j,R]of L){const D=R.control,Q=R.definition;if(typeof D.checkValidity=="function"&&!D.checkValidity()){typeof D.reportValidity=="function"&&D.reportValidity();return}if(Q.type==="boolean"){W[j]=!!D.checked;continue}D.value===""&&!Q.required||(Array.isArray(Q.enum)?W[j]=Q.enum[Number(D.value)-1]:Q.type==="integer"?W[j]=Number.parseInt(D.value,10):Q.type==="number"?W[j]=Number(D.value):W[j]=D.value)}$.disabled=!0;try{const j=await P("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:O.id,inputs:W})});if(!j.ok)throw new Error(`Session extension action failed (${j.status})`);await Ge([s])}catch(j){console.warn("Plugin session action failed",j)}finally{$.disabled=!1}}),z.appendChild($),k.appendChild(z)}),S.appendChild(k)}u.appendChild(S)}),n.replaceChildren(u);const o=Array.from(n.children).filter(function(l){return!l.hidden}).length;n.hidden=o===0,document.dispatchEvent(new CustomEvent("myagent:plugin-session-ui-rendered",{detail:{sessionId:s,panelCount:o}}))}function qe(t){const e=Object.create(null);return t.forEach(function(n){const r=String(n.dataset.sessionId||"");r&&Pe.has(r)&&(e[r]=Pe.get(r))}),e}async function Ge(t){const e=ie;if(typeof e!="function")return;const n=Tn(),r=n.map(function(u){return String(u.dataset.sessionId||"")}).filter(Boolean),s=new Set(r),i=Array.isArray(t)?t.map(function(u){return String(u||"").trim()}):r,d=Array.from(new Set(i)).filter(function(u){return u&&s.has(u)}).slice(0,200),a=++Xt;if(d.forEach(function(u){Ee.set(u,a)}),!d.length){En(n,qe(n)),An(n,qe(n));return}try{const u=await e("/api/extensions/session-ui",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_ids:d})});if(!u.ok)throw new Error(`Session extension UI failed (${u.status})`);const o=await u.json(),l=fr(o,d);d.forEach(function(_){Ee.get(_)===a&&Pe.set(_,l[_])});const S=Tn(),g=qe(S);En(S,g),An(S,g)}catch(u){d.some(function(l){return Ee.get(l)===a})&&console.warn("Plugin session UI refresh failed",u)}}function He(t){if(t&&t.full===!0)ke=!0,pe.clear();else if(!ke&&((Array.isArray(t)?t:[t&&t.detail?t.detail.sessionId:t]).forEach(function(n){const r=String(n||"").trim();r&&pe.add(r)}),!pe.size)){const n=document.querySelector("#sessions-list .session-item.active[data-session-id]");n&&pe.add(String(n.dataset.sessionId||""))}xe!=null&&clearTimeout(xe),xe=setTimeout(function(){xe=null;const e=ke,n=Array.from(pe);ke=!1,pe.clear(),Ge(e?void 0:n)},30)}function _n(t){if(!t||t.nodeType!==1)return[];const e=[];return t.matches&&t.matches(".session-item[data-session-id]")&&e.push(t),t.querySelectorAll&&e.push(...t.querySelectorAll(".session-item[data-session-id]")),e.map(function(n){return String(n.dataset.sessionId||"")}).filter(Boolean)}function gr(){const t=document.getElementById("sessions-list");t&&!Be&&typeof MutationObserver<"u"&&(Be=new MutationObserver(function(e){const n=new Set;e.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){_n(s).forEach(function(i){n.add(i)})}),Array.from(r.removedNodes||[]).forEach(function(s){_n(s).forEach(function(i){Pe.delete(i),Ee.delete(i)})})}),n.size&&He(Array.from(n))}),Be.observe(t,{childList:!0,subtree:!0})),document.addEventListener("myagent:extension-state-changed",He),He({full:!0})}async function hr(t={}){const e=typeof t.fetch=="function"?t.fetch:typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null;if(typeof e=="function"){ie=e;try{const n=await e("/api/extensions",{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});if(!n.ok)throw new Error(`Extension discovery failed (${n.status})`);const r=await n.json(),s=r&&r.ui_contributions;In(s),xn(document.getElementById("plugin-settings-sections"),s),kn(document.getElementById("plugin-composer-actions"),s),await er(s),await wn(s),gr()}catch(n){In([]),xn(document.getElementById("plugin-settings-sections"),[]),kn(document.getElementById("plugin-composer-actions"),[]),await wn([]),console.warn("Plugin UI discovery failed",n)}finally{document.dispatchEvent(new CustomEvent("myagent:plugin-ui-ready"))}}}const vr=`// Lightweight UI internationalisation. The UI is rendered by several legacy
+`}strong({tokens:t}){return`<strong>${this.parser.parseInline(t)}</strong>`}em({tokens:t}){return`<em>${this.parser.parseInline(t)}</em>`}codespan({text:t}){return`<code>${ee(t,!0)}</code>`}br(t){return"<br>"}del({tokens:t}){return`<del>${this.parser.parseInline(t)}</del>`}link({href:t,title:e,tokens:n}){const r=this.parser.parseInline(n),s=vn(t);if(s===null)return r;t=s;let a='<a href="'+t+'"';return e&&(a+=' title="'+ee(e)+'"'),a+=">"+r+"</a>",a}image({href:t,title:e,text:n,tokens:r}){r&&(n=this.parser.parseInline(r,this.parser.textRenderer));const s=vn(t);if(s===null)return ee(n);t=s;let a=`<img src="${t}" alt="${n}"`;return e&&(a+=` title="${ee(e)}"`),a+=">",a}text(t){return"tokens"in t&&t.tokens?this.parser.parseInline(t.tokens):"escaped"in t&&t.escaped?t.text:ee(t.text)}},tn=class{strong({text:t}){return t}em({text:t}){return t}codespan({text:t}){return t}del({text:t}){return t}html({text:t}){return t}text({text:t}){return t}link({text:t}){return""+t}image({text:t}){return""+t}br(){return""}},re=class We{constructor(e){D(this,"options");D(this,"renderer");D(this,"textRenderer");this.options=e||le,this.options.renderer=this.options.renderer||new _e,this.renderer=this.options.renderer,this.renderer.options=this.options,this.renderer.parser=this,this.textRenderer=new tn}static parse(e,n){return new We(n).parse(e)}static parseInline(e,n){return new We(n).parseInline(e)}parse(e,n=!0){var s,a;let r="";for(let d=0;d<e.length;d++){const i=e[d];if((a=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&a[i.type]){const o=i,l=this.options.extensions.renderers[o.type].call({parser:this},o);if(l!==!1||!["space","hr","heading","code","table","blockquote","list","html","paragraph","text"].includes(o.type)){r+=l||"";continue}}const u=i;switch(u.type){case"space":{r+=this.renderer.space(u);continue}case"hr":{r+=this.renderer.hr(u);continue}case"heading":{r+=this.renderer.heading(u);continue}case"code":{r+=this.renderer.code(u);continue}case"table":{r+=this.renderer.table(u);continue}case"blockquote":{r+=this.renderer.blockquote(u);continue}case"list":{r+=this.renderer.list(u);continue}case"html":{r+=this.renderer.html(u);continue}case"paragraph":{r+=this.renderer.paragraph(u);continue}case"text":{let o=u,l=this.renderer.text(o);for(;d+1<e.length&&e[d+1].type==="text";)o=e[++d],l+=`
+`+this.renderer.text(o);n?r+=this.renderer.paragraph({type:"paragraph",raw:l,text:l,tokens:[{type:"text",raw:l,text:l,escaped:!0}]}):r+=l;continue}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}parseInline(e,n=this.renderer){var s,a;let r="";for(let d=0;d<e.length;d++){const i=e[d];if((a=(s=this.options.extensions)==null?void 0:s.renderers)!=null&&a[i.type]){const o=this.options.extensions.renderers[i.type].call({parser:this},i);if(o!==!1||!["escape","html","link","image","strong","em","codespan","br","del","text"].includes(i.type)){r+=o||"";continue}}const u=i;switch(u.type){case"escape":{r+=n.text(u);break}case"html":{r+=n.html(u);break}case"link":{r+=n.link(u);break}case"image":{r+=n.image(u);break}case"strong":{r+=n.strong(u);break}case"em":{r+=n.em(u);break}case"codespan":{r+=n.codespan(u);break}case"br":{r+=n.br(u);break}case"del":{r+=n.del(u);break}case"text":{r+=n.text(u);break}default:{const o='Token with "'+u.type+'" type was not found.';if(this.options.silent)return console.error(o),"";throw new Error(o)}}}return r}},Ue,Te=(Ue=class{constructor(t){D(this,"options");D(this,"block");this.options=t||le}preprocess(t){return t}postprocess(t){return t}processAllTokens(t){return t}provideLexer(){return this.block?te.lex:te.lexInline}provideParser(){return this.block?re.parse:re.parseInline}},D(Ue,"passThroughHooks",new Set(["preprocess","postprocess","processAllTokens"])),Ue),Qt=class{constructor(...t){D(this,"defaults",Ve());D(this,"options",this.setOptions);D(this,"parse",this.parseMarkdown(!0));D(this,"parseInline",this.parseMarkdown(!1));D(this,"Parser",re);D(this,"Renderer",_e);D(this,"TextRenderer",tn);D(this,"Lexer",te);D(this,"Tokenizer",Ae);D(this,"Hooks",Te);this.use(...t)}walkTokens(t,e){var r,s;let n=[];for(const a of t)switch(n=n.concat(e.call(this,a)),a.type){case"table":{const d=a;for(const i of d.header)n=n.concat(this.walkTokens(i.tokens,e));for(const i of d.rows)for(const u of i)n=n.concat(this.walkTokens(u.tokens,e));break}case"list":{const d=a;n=n.concat(this.walkTokens(d.items,e));break}default:{const d=a;(s=(r=this.defaults.extensions)==null?void 0:r.childTokens)!=null&&s[d.type]?this.defaults.extensions.childTokens[d.type].forEach(i=>{const u=d[i].flat(1/0);n=n.concat(this.walkTokens(u,e))}):d.tokens&&(n=n.concat(this.walkTokens(d.tokens,e)))}}return n}use(...t){const e=this.defaults.extensions||{renderers:{},childTokens:{}};return t.forEach(n=>{const r={...n};if(r.async=this.defaults.async||r.async||!1,n.extensions&&(n.extensions.forEach(s=>{if(!s.name)throw new Error("extension name required");if("renderer"in s){const a=e.renderers[s.name];a?e.renderers[s.name]=function(...d){let i=s.renderer.apply(this,d);return i===!1&&(i=a.apply(this,d)),i}:e.renderers[s.name]=s.renderer}if("tokenizer"in s){if(!s.level||s.level!=="block"&&s.level!=="inline")throw new Error("extension level must be 'block' or 'inline'");const a=e[s.level];a?a.unshift(s.tokenizer):e[s.level]=[s.tokenizer],s.start&&(s.level==="block"?e.startBlock?e.startBlock.push(s.start):e.startBlock=[s.start]:s.level==="inline"&&(e.startInline?e.startInline.push(s.start):e.startInline=[s.start]))}"childTokens"in s&&s.childTokens&&(e.childTokens[s.name]=s.childTokens)}),r.extensions=e),n.renderer){const s=this.defaults.renderer||new _e(this.defaults);for(const a in n.renderer){if(!(a in s))throw new Error(`renderer '${a}' does not exist`);if(["options","parser"].includes(a))continue;const d=a,i=n.renderer[d],u=s[d];s[d]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l||""}}r.renderer=s}if(n.tokenizer){const s=this.defaults.tokenizer||new Ae(this.defaults);for(const a in n.tokenizer){if(!(a in s))throw new Error(`tokenizer '${a}' does not exist`);if(["options","rules","lexer"].includes(a))continue;const d=a,i=n.tokenizer[d],u=s[d];s[d]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.tokenizer=s}if(n.hooks){const s=this.defaults.hooks||new Te;for(const a in n.hooks){if(!(a in s))throw new Error(`hook '${a}' does not exist`);if(["options","block"].includes(a))continue;const d=a,i=n.hooks[d],u=s[d];Te.passThroughHooks.has(a)?s[d]=o=>{if(this.defaults.async)return Promise.resolve(i.call(s,o)).then(S=>u.call(s,S));const l=i.call(s,o);return u.call(s,l)}:s[d]=(...o)=>{let l=i.apply(s,o);return l===!1&&(l=u.apply(s,o)),l}}r.hooks=s}if(n.walkTokens){const s=this.defaults.walkTokens,a=n.walkTokens;r.walkTokens=function(d){let i=[];return i.push(a.call(this,d)),s&&(i=i.concat(s.call(this,d))),i}}this.defaults={...this.defaults,...r}}),this}setOptions(t){return this.defaults={...this.defaults,...t},this}lexer(t,e){return te.lex(t,e??this.defaults)}parser(t,e){return re.parse(t,e??this.defaults)}parseMarkdown(t){return(n,r)=>{const s={...r},a={...this.defaults,...s},d=this.onError(!!a.silent,!!a.async);if(this.defaults.async===!0&&s.async===!1)return d(new Error("marked(): The async option was set to true by an extension. Remove async: false from the parse options object to return a Promise."));if(typeof n>"u"||n===null)return d(new Error("marked(): input parameter is undefined or null"));if(typeof n!="string")return d(new Error("marked(): input parameter is of type "+Object.prototype.toString.call(n)+", string expected"));a.hooks&&(a.hooks.options=a,a.hooks.block=t);const i=a.hooks?a.hooks.provideLexer():t?te.lex:te.lexInline,u=a.hooks?a.hooks.provideParser():t?re.parse:re.parseInline;if(a.async)return Promise.resolve(a.hooks?a.hooks.preprocess(n):n).then(o=>i(o,a)).then(o=>a.hooks?a.hooks.processAllTokens(o):o).then(o=>a.walkTokens?Promise.all(this.walkTokens(o,a.walkTokens)).then(()=>o):o).then(o=>u(o,a)).then(o=>a.hooks?a.hooks.postprocess(o):o).catch(d);try{a.hooks&&(n=a.hooks.preprocess(n));let o=i(n,a);a.hooks&&(o=a.hooks.processAllTokens(o)),a.walkTokens&&this.walkTokens(o,a.walkTokens);let l=u(o,a);return a.hooks&&(l=a.hooks.postprocess(l)),l}catch(o){return d(o)}}}onError(t,e){return n=>{if(n.message+=`
+Please report this to https://github.com/markedjs/marked.`,t){const r="<p>An error occurred:</p><pre>"+ee(n.message+"",!0)+"</pre>";return e?Promise.resolve(r):r}if(e)return Promise.reject(n);throw n}}},oe=new Qt;function N(t,e){return oe.parse(t,e)}N.options=N.setOptions=function(t){return oe.setOptions(t),N.defaults=oe.defaults,_n(N.defaults),N};N.getDefaults=Ve;N.defaults=le;N.use=function(...t){return oe.use(...t),N.defaults=oe.defaults,_n(N.defaults),N};N.walkTokens=function(t,e){return oe.walkTokens(t,e)};N.parseInline=oe.parseInline;N.Parser=re;N.parser=re.parse;N.Renderer=_e;N.TextRenderer=tn;N.Lexer=te;N.lexer=te.lex;N.Tokenizer=Ae;N.Hooks=Te;N.parse=N;N.options;N.setOptions;N.use;N.walkTokens;N.parseInline;re.parse;te.lex;const fe=/^[a-z0-9][a-z0-9._-]{0,127}$/,ne=/^[a-z][a-z0-9._-]{0,63}$/,Ge=new Set(["neutral","info","success","warning","danger"]),Ke=new Set(["text","number","boolean","json"]),Xt=new Set(["__proto__","prototype","constructor"]);let Un=new Map,jn=!1,ae=typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null,Oe=null,Ie=null,Yt=0,xe=!1,pe=new Set,Ee=new Map,Pe=new Map,zn=new Map,Be=[],yn=[];function Zt(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,64).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="chat.extension"||!n.renderer||typeof n.renderer!="object")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),a=String(n.renderer.module||"").trim(),d=String(n.renderer.style||"").trim(),i=`/plugin-assets/${r}/`,u=function(l,S){if(!l||!l.startsWith(i)||l.includes("..")||l.includes("\\"))return!1;const g=l.split("?",1)[0].toLowerCase();return S.some(function(A){return g.endsWith(A)})},o=`${r}:${s}`;return!fe.test(r)||!ne.test(s)||!u(a,[".js",".mjs"])||d&&!u(d,[".css"])||e.has(o)?[]:(e.add(o),[{pluginId:r,id:s,moduleUrl:a,styleUrl:d}])})}async function wn(t){yn.splice(0).forEach(function(n){try{n()}catch(r){console.warn("Plugin chat extension cleanup failed",r)}});const e=Zt(t);await Promise.all(e.map(async function(n){try{if(n.styleUrl&&!document.querySelector(`link[data-plugin-chat-style="${n.pluginId}:${n.id}"]`)){const a=document.createElement("link");a.rel="stylesheet",a.href=n.styleUrl,a.dataset.pluginChatStyle=`${n.pluginId}:${n.id}`,document.head.appendChild(a)}const r=await import(n.moduleUrl);if(!r||typeof r.installChatExtension!="function")return;const s=await r.installChatExtension({pluginId:n.pluginId,id:n.id,request:ae,translate:function(a){return typeof globalThis.translateUiString=="function"?globalThis.translateUiString(a):a}});typeof s=="function"&&yn.push(s)}catch(r){console.warn(`Plugin chat extension failed to load (${n.pluginId})`,r)}}))}function Jt(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,128).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="session.panel"||!n.renderer||typeof n.renderer!="object")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),a=String(n.renderer.module||"").trim(),d=String(n.renderer.style||"").trim(),i=`/plugin-assets/${r}/`,u=function(l,S){if(!l||!l.startsWith(i)||l.includes("..")||l.includes("\\"))return!1;const g=l.split("?",1)[0].toLowerCase();return S.some(function(A){return g.endsWith(A)})},o=`${r}:${s}`;return!fe.test(r)||!ne.test(s)||!u(a,[".js",".mjs"])||d&&!u(d,[".css"])||e.has(o)?[]:(e.add(o),[{pluginId:r,id:s,moduleUrl:a,styleUrl:d}])})}async function er(t){const e=Jt(t),n=new Map;await Promise.all(e.map(async function(r){try{if(r.styleUrl&&!document.querySelector(`link[data-plugin-panel-style="${r.pluginId}:${r.id}"]`)){const a=document.createElement("link");a.rel="stylesheet",a.href=r.styleUrl,a.dataset.pluginPanelStyle=`${r.pluginId}:${r.id}`,document.head.appendChild(a)}const s=await import(r.moduleUrl);s&&typeof s.renderSessionPanel=="function"&&n.set(`${r.pluginId}:${r.id}`,s.renderSessionPanel)}catch(s){console.warn(`Plugin session panel renderer failed to load (${r.pluginId})`,s)}})),zn=n}function Wn(t){const e=Number(t&&t.order);return Number.isFinite(e)?Math.max(-1e4,Math.min(1e4,e)):100}function nr(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,64).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="settings.section")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),a=H(n.title,64),d=H(n.label,64),i=H(n.description,200),u=String(n.target||"").trim(),o=`/plugins/${r}`,l=`/api/plugins/${r}/settings`,S=`${r}:${s}`;if(!fe.test(r)||!ne.test(s)||!a||!d||!new Set(["plugin-page","plugin-settings"]).has(u)||u==="plugin-page"&&String(n.href||"")!==o||u==="plugin-settings"&&String(n.endpoint||"")!==l||e.has(S))return[];e.add(S);const g={pluginId:r,id:s,title:a,label:d,description:i,target:u,order:Wn(n)};return u==="plugin-page"?g.href=o:g.endpoint=l,[g]}).sort(function(n,r){return n.order-r.order||n.title.localeCompare(r.title)||n.pluginId.localeCompare(r.pluginId)||n.id.localeCompare(r.id)})}function tr(t){if(!Array.isArray(t))return[];const e=new Set;return t.slice(0,64).flatMap(function(n){if(!n||typeof n!="object"||n.slot!=="composer.action")return[];const r=String(n.plugin_id||"").trim(),s=String(n.id||"").trim(),a=H(n.label,64),d=H(n.description,200),i=String(n.action||"").trim(),u=`${r}:${s}`;if(!fe.test(r)||!ne.test(s)||!a||!new Set(["insert_text","open_plugin_page"]).has(i)||e.has(u))return[];const o={pluginId:r,id:s,label:a,description:d,action:i,order:Wn(n)};if(i==="insert_text"){const l=String(n.text||"");if(!l.trim()||l.length>2e3)return[];o.text=l}else{const l=`/plugins/${r}`;if(String(n.href||"")!==l)return[];o.href=l}return e.add(u),[o]}).sort(function(n,r){return n.order-r.order||n.label.localeCompare(r.label)||n.pluginId.localeCompare(r.pluginId)||n.id.localeCompare(r.id)})}function rr(t){if(!t||typeof t!="object")return null;const e=String(t.path||"").trim(),n=String(t.label||"").trim(),r=String(t.format||"text").trim().toLowerCase();return!e.startsWith("/")||e.length>160||!n||n.length>64||!Ke.has(r)||e.slice(1).split("/").map(function(a){return a.replace(/~1/g,"/").replace(/~0/g,"~")}).some(function(a){return!a||Xt.has(a)})?null:{path:e,label:n,format:r,optional:t.optional!==!1}}function sr(t){if(!Array.isArray(t))return[];const e=new Set,n=new Set;return t.slice(0,128).flatMap(function(r){if(!r||typeof r!="object"||r.slot!=="message.renderer")return[];const s=String(r.plugin_id||"").trim(),a=String(r.id||"").trim(),d=String(r.event_name||"").trim(),i=String(r.title||"").trim(),u=String(r.description||"").trim(),o=String(r.variant||"neutral").trim().toLowerCase(),l=Array.isArray(r.fields)?r.fields:[],S=l.map(rr),g=`${s}:${a}`,A=`${s}:${d}`;return!fe.test(s)||!ne.test(a)||!ne.test(d)||!i||i.length>64||u.length>200||!Ge.has(o)||l.length<1||l.length>12||S.some(function(E){return!E})||new Set(S.map(function(E){return E.path})).size!==S.length||e.has(g)||n.has(A)?[]:(e.add(g),n.add(A),[{pluginId:s,id:a,eventName:d,title:i,description:u,variant:o,fields:S}])})}function ar(t,e){const n=e.slice(1).split("/").map(function(s){return s.replace(/~1/g,"/").replace(/~0/g,"~")});let r=t;for(const s of n){if(r==null||typeof r!="object"||!Object.prototype.hasOwnProperty.call(r,s))return{found:!1,value:void 0};r=r[s]}return{found:!0,value:r}}function H(t,e){const n=String(t??"").replace(/[\r\n]+/g," ").trim();return n.length>e?`${n.slice(0,e)}…`:n}function ir(t,e){if(e==="number"){const n=Number(t);return Number.isFinite(n)?String(n):""}if(e==="boolean")return typeof t=="boolean"?t?"true":"false":"";if(e==="json"||t!==null&&typeof t=="object")try{return H(JSON.stringify(t),2e3)}catch{return""}return H(t,1e3)}function kn(t){const e=sr(t);return Un=new Map(e.map(function(n){return[`${n.pluginId}:${n.eventName}`,n]})),jn=!0,e}function or(t){if(!t||typeof t!="object"||t.type!=="extension_event")return{handled:!1};if(!jn)return{handled:!0,pending:!0};const e=String(t.plugin_id||"").trim(),n=String(t.event_name||"").trim(),r=Un.get(`${e}:${n}`);if(!r)return{handled:!0,title:"Extension",description:"No active declarative renderer is available for this historical event.",variant:"neutral",content:`${H(e,128)} / ${H(n,64)}`,fallback:!0};const s=t.data&&typeof t.data=="object"?t.data:{},a=[];return r.fields.forEach(function(d){const i=ar(s,d.path),u=i.found?ir(i.value,d.format):"";!u&&d.optional||a.push(`${d.label}: ${u||"—"}`)}),{handled:!0,title:r.title,description:r.description,variant:r.variant,content:a.join(`
+`)}}globalThis.resolvePluginExtensionEvent=or;function In(t,e){if(!t)return;const n=nr(e),r=document.createDocumentFragment();n.forEach(function(s){const a=document.createElement("div");a.className="settings-modal__section plugin-settings-section",a.dataset.pluginId=s.pluginId,a.dataset.contributionId=s.id;const d=document.createElement("div");if(d.className="settings-modal__label",d.textContent=s.title,a.appendChild(d),s.description){const i=document.createElement("div");i.className="plugin-settings-description",i.textContent=s.description,a.appendChild(i)}if(s.target==="plugin-page"){const i=document.createElement("a");i.className="settings-advanced-btn plugin-settings-link",i.href=s.href,i.target="_blank",i.rel="noopener noreferrer",i.textContent=s.label,a.appendChild(i)}else{const i=document.createElement("form");i.className="plugin-settings-form",i.dataset.endpoint=s.endpoint,i.dataset.saveLabel=s.label;const u=document.createElement("div");u.className="plugin-settings-status",u.setAttribute("role","status"),u.textContent="Loading…",i.appendChild(u),i.addEventListener("submit",function(o){o.preventDefault(),pr(i,s)}),a.appendChild(i),cr(i,s)}r.appendChild(a)}),t.replaceChildren(r),t.hidden=n.length===0}function lr(t){if(!t||typeof t!="object")return null;const e=String(t.id||"").trim(),n=String(t.type||"").trim(),r=H(t.title,64),s=H(t.description,200),a=String(t.format||"").trim();if(!ne.test(e)||!new Set(["string","boolean","integer","number"]).has(n)||!r||a&&!new Set(["text","multiline","secret"]).has(a))return null;const d={id:e,type:n,title:r,description:s,format:a,required:t.required===!0};return a==="secret"?(d.configured=t.configured===!0,d.reference=H(t.reference,128),d):(d.value=t.value,Array.isArray(t.enum)&&t.enum.length<=32&&(d.enum=t.enum.slice()),Number.isFinite(Number(t.minimum))&&(d.minimum=Number(t.minimum)),Number.isFinite(Number(t.maximum))&&(d.maximum=Number(t.maximum)),Number.isInteger(Number(t.min_length))&&(d.minLength=Number(t.min_length)),Number.isInteger(Number(t.max_length))&&(d.maxLength=Number(t.max_length)),d)}function Gn(t,e){const n=t&&t.ok===!0&&t.settings&&typeof t.settings=="object"?t.settings:null;if(!n||String(n.plugin_id||"")!==e||!Array.isArray(n.fields)||n.fields.length>64)return null;const r=n.fields.map(lr);return r.some(function(s){return!s})||new Set(r.map(function(s){return s.id})).size!==r.length?null:{pluginId:e,title:H(n.title,64),description:H(n.description,200),valid:n.valid===!0,missingRequired:Array.isArray(n.missing_required)?n.missing_required.slice(0,64).map(String):[],fields:r}}function dr(t){if(t.format==="secret"){const n=document.createElement("div");return n.className=`plugin-setting-secret ${t.configured?"is-configured":"is-missing"}`,n.textContent=t.configured?`Configured via ${t.reference||"host secret reference"}`:`Missing host secret ${t.reference||"reference"}`,n}let e;return t.enum?(e=document.createElement("select"),t.enum.forEach(function(n){const r=document.createElement("option");r.value=String(n),r.textContent=String(n),r.selected=n===t.value,e.appendChild(r)})):t.type==="boolean"?(e=document.createElement("input"),e.type="checkbox",e.checked=t.value===!0):t.format==="multiline"?(e=document.createElement("textarea"),e.rows=3,e.value=t.value==null?"":String(t.value)):(e=document.createElement("input"),e.type=t.type==="integer"||t.type==="number"?"number":"text",e.value=t.value==null?"":String(t.value),t.type==="integer"&&(e.step="1"),t.type==="number"&&(e.step="any")),e.className="plugin-setting-control",e.dataset.settingId=t.id,e.dataset.settingType=t.type,e.required=t.required,t.minimum!==void 0&&(e.min=String(t.minimum)),t.maximum!==void 0&&(e.max=String(t.maximum)),t.minLength!==void 0&&(e.minLength=t.minLength),t.maxLength!==void 0&&(e.maxLength=t.maxLength),e}function Kn(t,e,n){const r=document.createDocumentFragment();e.fields.forEach(function(d){const i=document.createElement("label");i.className="plugin-setting-field";const u=document.createElement("span");if(u.className="plugin-setting-label",u.textContent=d.title,i.appendChild(u),d.description){const o=document.createElement("span");o.className="plugin-setting-description",o.textContent=d.description,i.appendChild(o)}i.appendChild(dr(d)),r.appendChild(i)});const s=document.createElement("button");s.type="submit",s.className="settings-advanced-btn plugin-settings-save",s.textContent=n.label;const a=document.createElement("div");a.className="plugin-settings-status",a.setAttribute("role","status"),!e.valid&&e.missingRequired.length&&(a.textContent=`Missing required settings: ${e.missingRequired.join(", ")}`,a.classList.add("is-error")),r.append(s,a),t.replaceChildren(r)}async function cr(t,e){try{const n=await ae(e.endpoint,{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}}),r=await n.json(),s=n.ok?Gn(r,e.pluginId):null;if(!s)throw new Error(r&&r.error||`HTTP ${n.status}`);Kn(t,s,e)}catch(n){const r=t.querySelector(".plugin-settings-status");r&&(r.textContent=`Settings unavailable: ${String(n&&n.message?n.message:n)}`,r.classList.add("is-error"))}}function ur(t){const e={};return t.querySelectorAll(".plugin-setting-control[data-setting-id]").forEach(function(n){const r=String(n.dataset.settingId||""),s=String(n.dataset.settingType||"string");n.tagName==="SELECT"&&s==="boolean"?e[r]=n.value==="true":n.tagName==="SELECT"&&s==="integer"?e[r]=Number.parseInt(n.value,10):n.tagName==="SELECT"&&s==="number"?e[r]=Number(n.value):s==="boolean"?e[r]=n.checked===!0:(s==="integer"||s==="number")&&n.value===""?e[r]=null:s==="integer"?e[r]=Number.parseInt(n.value,10):s==="number"?e[r]=Number(n.value):e[r]=n.value}),e}async function pr(t,e){const n=t.querySelector(".plugin-settings-save"),r=t.querySelector(".plugin-settings-status");n&&(n.disabled=!0),r&&(r.textContent="Saving…",r.classList.remove("is-error"));try{const s=await ae(e.endpoint,{method:"PATCH",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({values:ur(t)})}),a=await s.json(),d=s.ok?Gn(a,e.pluginId):null;if(!d)throw new Error(a&&a.error||`HTTP ${s.status}`);Kn(t,d,e);const i=t.querySelector(".plugin-settings-status");i&&d.valid&&(i.textContent="Saved")}catch(s){r&&(r.textContent=`Save failed: ${String(s&&s.message?s.message:s)}`,r.classList.add("is-error"))}finally{n&&n.isConnected&&(n.disabled=!1)}}function fr(t,e){if(!t)return;const n=Number.isInteger(t.selectionStart)?t.selectionStart:t.value.length,r=Number.isInteger(t.selectionEnd)?t.selectionEnd:n;typeof t.setRangeText=="function"?t.setRangeText(e,n,r,"end"):t.value=`${t.value.slice(0,n)}${e}${t.value.slice(r)}`,t.dispatchEvent(new Event("input",{bubbles:!0})),t.focus()}function xn(t,e){if(!t)return;const n=tr(e),r=document.createDocumentFragment();n.forEach(function(s){const a=document.createElement("button");a.type="button",a.className="plugin-composer-action",a.dataset.pluginId=s.pluginId,a.dataset.contributionId=s.id,a.textContent=s.label,s.description&&(a.title=s.description,a.setAttribute("aria-label",`${s.label}: ${s.description}`)),a.addEventListener("click",function(){if(s.action==="insert_text"){fr(document.getElementById("message-input"),s.text);return}if(typeof globalThis.open!="function")return;const d=globalThis.open(s.href,"_blank","noopener,noreferrer");d&&(d.opener=null)}),r.appendChild(a)}),t.replaceChildren(r),t.hidden=n.length===0}function Cn(t,e){if(!t||typeof t!="object")return null;const n=String(t.plugin_id||"").trim(),r=String(t.id||"").trim(),s=String(t.variant||"neutral").trim().toLowerCase();if(!fe.test(n)||!ne.test(r)||!Ge.has(s))return null;if(e==="badge"){const o=H(t.label,64),l=H(t.description,200),S=String(t.display||"badge").trim().toLowerCase();return!o||!new Set(["badge","activity"]).has(S)?null:{pluginId:n,id:r,label:o,description:l,variant:s,display:S}}const a=H(t.title,64),d=H(t.description,200);if(!a||!Array.isArray(t.fields)||t.fields.length>12)return null;const i=t.fields.flatMap(function(o){if(!o||typeof o!="object")return[];const l=H(o.label,64),S=String(o.format||"text").toLowerCase();if(S==="list"){if(!l||!Array.isArray(o.columns)||!Array.isArray(o.rows)||o.columns.length<1||o.columns.length>4||o.rows.length>100)return[];const A=o.columns.map(function(x){const B=H(x&&x.label,64),z=String(x&&x.format||"text").toLowerCase();return B&&Ke.has(z)?{label:B,format:z}:null});if(A.some(function(x){return!x}))return[];const E=o.rows.flatMap(function(x){return!x||!Array.isArray(x.values)||x.values.length!==A.length?[]:[{values:x.values.map(function(B){return H(B,1e3)})}]});return E.length!==o.rows.length?[]:[{label:l,format:S,columns:A,rows:E}]}const g=H(o.value,4e3);return!l||!Ke.has(S)?[]:[{label:l,value:g,format:S}]}),u=(Array.isArray(t.actions)?t.actions:[]).slice(0,4).flatMap(function(o){if(!o||typeof o!="object")return[];const l=String(o.id||"").trim(),S=H(o.label,64),g=String(o.variant||"neutral").trim().toLowerCase(),A=H(o.confirm,200);if(!ne.test(l)||!S||!Ge.has(g))return[];const E=Array.isArray(o.inputs)?o.inputs.slice(0,8):[],x=new Set,B=E.flatMap(function(L){if(!L||typeof L!="object")return[];const W=String(L.id||"").trim(),P=H(L.label||W,64),G=H(L.description,200),j=String(L.type||"string").trim().toLowerCase();if(!ne.test(W)||x.has(W)||!P||!new Set(["string","boolean","integer","number"]).has(j))return[];x.add(W);const _={id:W,label:P,description:G,type:j,required:L.required===!0};return Array.isArray(L.enum)&&L.enum.length>0&&L.enum.length<=32&&(_.enum=L.enum.slice()),["minimum","maximum","min_length","max_length"].forEach(function(q){Number.isFinite(Number(L[q]))&&(_[q]=Number(L[q]))}),[_]});if(B.length!==E.length)return[];const z={id:l,label:S,variant:g,confirm:A};return B.length&&(z.inputs=B),[z]});return{pluginId:n,id:r,title:a,description:d,variant:s,fields:i,actions:u}}function mr(t,e){const n=t&&t.ok===!0&&t.sessions&&typeof t.sessions=="object"?t.sessions:{},r=Object.create(null);return(Array.isArray(e)?e:[]).slice(0,200).forEach(function(s){const a=String(s||"").trim();if(!a||a.length>256||Object.prototype.hasOwnProperty.call(r,a))return;const d=Object.prototype.hasOwnProperty.call(n,a)&&n[a]&&typeof n[a]=="object"?n[a]:{};r[a]={badges:(Array.isArray(d.badges)?d.badges:[]).slice(0,16).map(function(i){return Cn(i,"badge")}).filter(Boolean),panels:(Array.isArray(d.panels)?d.panels:[]).slice(0,16).map(function(i){return Cn(i,"panel")}).filter(Boolean)}}),r}function Tn(){return Array.from(document.querySelectorAll("#sessions-list .session-item[data-session-id]")).slice(0,200)}function En(t,e){t.forEach(function(n){const r=n.querySelector(".plugin-session-badges");r&&r.remove();const s=String(n.dataset.sessionId||""),a=e[s],d=!!(a&&a.badges.some(function(S){return S.display==="activity"}));n.classList.toggle("has-plugin-activity",d);const i=a?a.badges.filter(function(S){return S.display!=="activity"}):[];if(!i.length)return;const u=n.querySelector(".session-item-title-row");if(!u)return;const o=document.createElement("span");o.className="plugin-session-badges",i.forEach(function(S){const g=document.createElement("span");g.className=`plugin-session-badge plugin-session-badge--${S.variant}`,g.dataset.pluginId=S.pluginId,g.dataset.contributionId=S.id,g.textContent=S.label,S.description&&(g.title=S.description),o.appendChild(g)});const l=u.querySelector(".session-item-date");u.insertBefore(o,l||null)})}function Rn(t,e){const n=document.getElementById("plugin-session-panels");if(!n)return;const r=t.find(function(l){return l.classList.contains("active")}),s=r?String(r.dataset.sessionId||""):"",a=[];Be.forEach(function(l){try{l({nextSessionId:s})===!1&&a.push(l)}catch(S){console.warn("Plugin session panel cleanup failed",S)}}),Be=a;const d=e[s],i=d?d.panels:[],u=document.createDocumentFragment();i.forEach(function(l){const S=document.createElement("section");S.className=`plugin-session-panel plugin-session-panel--${l.variant}`,S.dataset.pluginId=l.pluginId,S.dataset.contributionId=l.id;const g=zn.get(`${l.pluginId}:${l.id}`);if(g){S.classList.add("plugin-session-panel--custom");try{const x=g({container:S,item:l,sessionId:s,request:ae,refresh:$e,invokeAction:async function(B,z={}){const L=await ae("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:B,inputs:z})});if(!L.ok)throw new Error(`Session extension action failed (${L.status})`);return L},notifyStateChanged:function(){document.dispatchEvent(new CustomEvent("myagent:extension-state-changed",{detail:{sessionId:s}}))}});typeof x=="function"&&Be.push(x),u.appendChild(S);return}catch(x){console.warn(`Plugin session panel renderer failed (${l.pluginId})`,x),S.replaceChildren(),S.classList.remove("plugin-session-panel--custom")}}const A=document.createElement("div");if(A.className="plugin-session-panel-title",A.textContent=l.title,S.appendChild(A),l.description){const x=document.createElement("div");x.className="plugin-session-panel-description",x.textContent=l.description,S.appendChild(x)}const E=document.createElement("dl");if(E.className="plugin-session-panel-fields",l.fields.forEach(function(x){const B=document.createElement("div");B.className="plugin-session-panel-field";const z=document.createElement("dt");z.textContent=x.label;const L=document.createElement("dd");x.format==="list"?(L.className="plugin-session-panel-list",x.rows.forEach(function(W){const P=document.createElement("div");P.className="plugin-session-panel-list-row",W.values.forEach(function(G,j){const _=document.createElement("span");_.className="plugin-session-panel-list-cell";const q=x.columns[j];_.title=q.label;const V=document.createElement("span");V.className="plugin-session-panel-list-key",V.textContent=`${q.label}: `;const se=document.createElement("span");se.textContent=G||"—",_.append(V,se),P.appendChild(_)}),L.appendChild(P)})):L.textContent=x.value,B.append(z,L),E.appendChild(B)}),S.appendChild(E),l.actions.length){const x=document.createElement("div");x.className="plugin-session-panel-actions",l.actions.forEach(function(B){const z=document.createElement("div");z.className="plugin-session-panel-action-group";const L=new Map;(B.inputs||[]).forEach(function(P){const G=document.createElement("label");G.className="plugin-session-panel-action-field";const j=document.createElement("span");j.textContent=P.label;let _;if(Array.isArray(P.enum)){if(_=document.createElement("select"),!P.required){const q=document.createElement("option");q.value="",q.textContent="—",_.appendChild(q)}P.enum.forEach(function(q,V){const se=document.createElement("option");se.value=String(V+1),se.textContent=H(q,200),_.appendChild(se)})}else P.type==="boolean"?(_=document.createElement("input"),_.type="checkbox"):P.type==="string"&&Number(P.max_length||0)>200?_=document.createElement("textarea"):(_=document.createElement("input"),_.type=P.type==="string"?"text":"number",P.type==="integer"&&(_.step="1"),P.type==="number"&&(_.step="any"));_.name=P.id,_.required=P.required,P.description&&(_.title=P.description),Number.isFinite(P.minimum)&&(_.min=String(P.minimum)),Number.isFinite(P.maximum)&&(_.max=String(P.maximum)),Number.isFinite(P.min_length)&&(_.minLength=P.min_length),Number.isFinite(P.max_length)&&(_.maxLength=P.max_length),G.append(j,_),z.appendChild(G),L.set(P.id,{control:_,definition:P})});const W=document.createElement("button");W.type="button",W.className=`plugin-session-panel-action plugin-session-panel-action--${B.variant}`,W.textContent=B.label,W.addEventListener("click",async function(){if(B.confirm&&typeof globalThis.confirm=="function"&&!globalThis.confirm(B.confirm))return;const P=ae;if(typeof P!="function")return;const G={};for(const[j,_]of L){const q=_.control,V=_.definition;if(typeof q.checkValidity=="function"&&!q.checkValidity()){typeof q.reportValidity=="function"&&q.reportValidity();return}if(V.type==="boolean"){G[j]=!!q.checked;continue}q.value===""&&!V.required||(Array.isArray(V.enum)?G[j]=V.enum[Number(q.value)-1]:V.type==="integer"?G[j]=Number.parseInt(q.value,10):V.type==="number"?G[j]=Number(q.value):G[j]=q.value)}W.disabled=!0;try{const j=await P("/api/extensions/session-action",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_id:s,plugin_id:l.pluginId,action_id:B.id,inputs:G})});if(!j.ok)throw new Error(`Session extension action failed (${j.status})`);await $e([s])}catch(j){console.warn("Plugin session action failed",j)}finally{W.disabled=!1}}),z.appendChild(W),x.appendChild(z)}),S.appendChild(x)}u.appendChild(S)}),n.replaceChildren(u);const o=Array.from(n.children).filter(function(l){return!l.hidden}).length;n.hidden=o===0,document.dispatchEvent(new CustomEvent("myagent:plugin-session-ui-rendered",{detail:{sessionId:s,panelCount:o}}))}function De(t){const e=Object.create(null);return t.forEach(function(n){const r=String(n.dataset.sessionId||"");r&&Pe.has(r)&&(e[r]=Pe.get(r))}),e}async function $e(t){const e=ae;if(typeof e!="function")return;const n=Tn(),r=n.map(function(u){return String(u.dataset.sessionId||"")}).filter(Boolean),s=new Set(r),a=Array.isArray(t)?t.map(function(u){return String(u||"").trim()}):r,d=Array.from(new Set(a)).filter(function(u){return u&&s.has(u)}).slice(0,200),i=++Yt;if(d.forEach(function(u){Ee.set(u,i)}),!d.length){En(n,De(n)),Rn(n,De(n));return}try{const u=await e("/api/extensions/session-ui",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({session_ids:d})});if(!u.ok)throw new Error(`Session extension UI failed (${u.status})`);const o=await u.json(),l=mr(o,d);d.forEach(function(A){Ee.get(A)===i&&Pe.set(A,l[A])});const S=Tn(),g=De(S);En(S,g),Rn(S,g)}catch(u){d.some(function(l){return Ee.get(l)===i})&&console.warn("Plugin session UI refresh failed",u)}}function He(t){if(t&&t.full===!0)xe=!0,pe.clear();else if(!xe&&((Array.isArray(t)?t:[t&&t.detail?t.detail.sessionId:t]).forEach(function(n){const r=String(n||"").trim();r&&pe.add(r)}),!pe.size)){const n=document.querySelector("#sessions-list .session-item.active[data-session-id]");n&&pe.add(String(n.dataset.sessionId||""))}Ie!=null&&clearTimeout(Ie),Ie=setTimeout(function(){Ie=null;const e=xe,n=Array.from(pe);xe=!1,pe.clear(),$e(e?void 0:n)},30)}function An(t){if(!t||t.nodeType!==1)return[];const e=[];return t.matches&&t.matches(".session-item[data-session-id]")&&e.push(t),t.querySelectorAll&&e.push(...t.querySelectorAll(".session-item[data-session-id]")),e.map(function(n){return String(n.dataset.sessionId||"")}).filter(Boolean)}function gr(){const t=document.getElementById("sessions-list");t&&!Oe&&typeof MutationObserver<"u"&&(Oe=new MutationObserver(function(e){const n=new Set;e.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){An(s).forEach(function(a){n.add(a)})}),Array.from(r.removedNodes||[]).forEach(function(s){An(s).forEach(function(a){Pe.delete(a),Ee.delete(a)})})}),n.size&&He(Array.from(n))}),Oe.observe(t,{childList:!0,subtree:!0})),document.addEventListener("myagent:extension-state-changed",He),He({full:!0})}async function hr(t={}){const e=typeof t.fetch=="function"?t.fetch:typeof globalThis.fetch=="function"?globalThis.fetch.bind(globalThis):null;if(typeof e=="function"){ae=e;try{const n=await e("/api/extensions",{method:"GET",credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});if(!n.ok)throw new Error(`Extension discovery failed (${n.status})`);const r=await n.json(),s=r&&r.ui_contributions;kn(s),In(document.getElementById("plugin-settings-sections"),s),xn(document.getElementById("plugin-composer-actions"),s),await er(s),await wn(s),gr()}catch(n){kn([]),In(document.getElementById("plugin-settings-sections"),[]),xn(document.getElementById("plugin-composer-actions"),[]),await wn([]),console.warn("Plugin UI discovery failed",n)}finally{document.dispatchEvent(new CustomEvent("myagent:plugin-ui-ready"))}}}const vr=`// Lightweight UI internationalisation. The UI is rendered by several legacy
 // modules, so translations are applied at the DOM boundary (including nodes
 // added later) instead of coupling every renderer to a framework.
 const LS_UI_LANGUAGE = 'myagent-language';
@@ -198,6 +198,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '放大显示 Mermaid 流程图': 'Expand Mermaid diagram', '点击查看图片': 'Click to view image',
     '移除文件路径': 'Remove file path', '响应异常': 'Invalid response', '已调用系统打开文件': 'Asked the system to open the file',
     '无法打开文件': 'Could not open file', '无法连接服务': 'Could not connect to the service',
+    '已在详情栏打开': 'Opened in the details column',
     '取消改写': 'Cancel rewrite', '已截断历史，可撤销恢复': 'History truncated; you can undo to restore it',
     '已填入输入框，可撤销': 'Inserted into the input; you can undo',
     '改写待生效：发送消息后才会截断历史并发送；点此取消改写。': 'Rewrite pending: history will be truncated only when the message is sent. Click here to cancel.',
@@ -449,6 +450,33 @@ const UI_I18N_CONTENT_SELECTOR = [
     '.skill-picker-option-desc',
     '[data-i18n-skip]',
 ].join(',');
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Dock surface chrome (split, chips, drop zones)
+    '左右分屏': 'Split right', '分栏数量已达上限': 'Pane limit reached',
+    '栏宽不足，拖宽侧边栏后再分栏': 'Too narrow to split; widen the sidebar first',
+    '关闭标签': 'Close tab', '复制标签': 'Duplicate tab',
+    '此面板暂无内容': 'Nothing open in this pane', '收回到侧边栏': 'Dock back', '关闭浮窗': 'Close panel',
+    '移入此面板': 'Move into this pane', '分屏到左侧': 'Split left', '分屏到右侧': 'Split right',
+    '全屏显示': 'Full screen', '退出全屏': 'Exit full screen',
+    '消息': 'Messages',
+});
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Details column (dsh-style right sidebar)
+    '详情栏': 'Details', '打开侧边栏': 'Open sidebar', '打开右侧边栏': 'Open right sidebar',
+    '收起侧边栏': 'Collapse sidebar', '拖动调整详情栏宽度': 'Drag to resize details column',
+    '开始': 'Start', '浏览会话工作区的文件': 'Browse the session workspace files',
+    '查看本会话的文件改动': 'Review this session\\u2019s file changes', '新建窗口': 'New window',
+    '本轮': 'This round', '本次会话': 'This session', '本轮暂无文件改动': 'No file changes this round',
+    '此文件需在系统应用中打开。': 'Open this file in a system app.',
+    '工作区文件': 'Workspace files', '文件内容': 'File content', '修改历史': 'File changes',
+    '刷新': 'Refresh', '在系统应用中打开': 'Open with system app',
+    '正在载入…': 'Loading…', '载入失败': 'Failed to load', '（空目录）': '(empty folder)',
+    '本会话暂无文件改动': 'No file changes in this session yet',
+    '此文件类型暂不支持内嵌预览，可在系统应用中打开。': 'No inline preview for this file type; open it with a system app.',
+    '文本过长，仅显示前 200 KB。': 'Long text: only the first 200 KB is shown.',
+    '撤销': 'Undo', '恢复': 'Restore', '差分': 'Diff',
+    '文本接口尚不可用（需重启服务加载新接口），可在系统应用中打开。': 'The text endpoint is not live yet (a server restart loads it); open the file with a system app instead.',
+});
 const uiI18nTextOriginal = new WeakMap();
 const uiI18nAttrOriginal = new WeakMap();
 const uiI18nRuntimeOriginal = new WeakMap();
@@ -1810,7 +1838,7 @@ const uiPerformance = (function () {
     window.__MYAGENT_UI_PERF__ = { snapshot: snapshot, reset: reset, download: download, flush: flush };
     return { sample: sample, count: count, flush: flush };
 })();
-`,Ir=`const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
+`,kr=`const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
 
 const sessionStore = {
     seq: 0,\r
@@ -2322,7 +2350,7 @@ function applyServerStreamActiveMap(activeMap) {\r
     });\r
     sessionStore.applyStreamActiveMap(m);\r
 }\r
-`,xr=`function selectCurrentSession() {
+`,Ir=`function selectCurrentSession() {
     return sessionStore.get(sessionStore.currentSessionId);
 }
 
@@ -2404,7 +2432,7 @@ function selectIsSessionRunning(sessionId) {
 function selectRunForSession(sessionId) {
     return sessionStore.getRun(sessionId);
 }
-`,kr=`function applySessionSnapshot(snapshot) {
+`,xr=`function applySessionSnapshot(snapshot) {
     snapshot = snapshot || {};
     const requestSeq = Number(snapshot.client_request_seq || 0);
     if (requestSeq > 0 && requestSeq < sessionStore.lastAppliedSnapshotRequestSeq) return false;
@@ -2826,7 +2854,7 @@ function renderMessageRecords(ctx, records, sessionId) {
         renderMessageRecord(ctx, list[i], sessionId);
     }
 }
-`,Ar=`const subagentStore = {
+`,Rr=`const subagentStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -2997,7 +3025,7 @@ function selectSubagentList(sessionId) {
 function selectSubagentRunningCount(sessionId) {
     return subagentStore.runningCount(sessionId);
 }
-`,_r=`var subagentContinueInFlight = false;
+`,Ar=`var subagentContinueInFlight = false;
 var subagentContinueSessionId = null;
 var subagentContinueBannerTimer = null;
 var subagentContinueDismissedForSession = Object.create(null);
@@ -3090,7 +3118,7 @@ async function tryMarkSessionUnreadComplete(sessionId) {
         syncSessionListIndicatorClasses();
     } catch (e) { /* ignore */ }
 }
-`,Rr=`function setSubagentCardEventCount(agentId, count) {
+`,_r=`function setSubagentCardEventCount(agentId, count) {
     var aid = String(agentId || '');
     var n = Number(count);
     if (!aid || !Number.isFinite(n)) return;
@@ -4545,7 +4573,7 @@ function bindSubagentGridActions(grid, sessionId) {
     syncSubagentExpandButtons(grid);
     initUiHoverTips(grid);
 }
-`,Br=`function onSubagentDockWheel(e) {
+`,Or=`function onSubagentDockWheel(e) {
     var dock = document.getElementById('subagent-dock');
     if (!dock || dock.classList.contains('hidden') || !dock.contains(e.target)) return;
     var dy = e.deltaY;
@@ -4651,7 +4679,7 @@ function bindSubagentPanelOnce() {
         closeSubagentPanel();
     });
 }
-`,Or=`const contextStore = {
+`,Br=`const contextStore = {
     tokensBySession: new Map(),
     progressBySession: new Map(),
 
@@ -4729,7 +4757,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,qr=`function markUiEventStoreApplied(event) {
+`,Dr=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -5313,7 +5341,7 @@ document.addEventListener('myagent:language-change', function () {
 window.refreshModelProfileSelector = refreshModelProfileSelector;
 window.refreshModelProfileSelectorInBackground = refreshModelProfileSelectorInBackground;
 window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;
-`,Dr=`let skillPickerCache = null;
+`,qr=`let skillPickerCache = null;
 let skillPickerRefreshPromise = null;
 let selectedSkillNames = [];
 let skillPickerActiveTab = 'skills';
@@ -8346,6 +8374,20 @@ function showOpenFileFeedback(msg) {
         if (!a) return;
         ev.preventDefault();
         var rel = a.getAttribute('data-workspace-open') || '';
+        // The details column owns the file-open policy now: text files open
+        // inline there, everything else still goes to the system app. Older
+        // bundles without the dock keep the plain system-open path below.
+        if (rel && typeof globalThis !== 'undefined' && globalThis.MyAgentDock
+            && typeof globalThis.MyAgentDock.isTextPath === 'function'
+            && typeof globalThis.MyAgentDock.openPathSmart === 'function') {
+            if (globalThis.MyAgentDock.isTextPath(rel)) {
+                globalThis.MyAgentDock.openPathSmart(rel);
+                showOpenFileFeedback('已在详情栏打开');
+            } else {
+                globalThis.MyAgentDock.openPathSmart(rel);
+            }
+            return;
+        }
         var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
         fetch('/api/open-workspace-file?rel=' + encodeURIComponent(rel), controller ? { signal: controller.signal } : undefined)
@@ -9146,7 +9188,7 @@ function syncExtensionPanelVisibility() {
 }
 
 document.addEventListener('myagent:plugin-session-ui-rendered', syncExtensionPanelVisibility);
-`,$r=`var WORKSPACE_MEDIA_EXTENSIONS = Object.freeze({\r
+`,Wr=`var WORKSPACE_MEDIA_EXTENSIONS = Object.freeze({\r
     image: Object.freeze(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tif', 'tiff', 'avif', 'jfif']),\r
     audio: Object.freeze(['mp3', 'wav', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'flac']),\r
     video: Object.freeze(['mp4', 'webm', 'ogv', 'mov']),\r
@@ -9557,7 +9599,7 @@ function renderDurableAttachmentImages(container, references) {
             });\r
     });\r
 }\r
-`,Wr=`function removeMessagesFromNode(startWrap) {\r
+`,Gr=`function removeMessagesFromNode(startWrap) {\r
     const stream = getVisibleChatStream() || chatContainer;\r
     if (!stream) return;\r
     const kids = Array.from(stream.children);\r
@@ -14817,7 +14859,7 @@ function finalizeProgressStreamForType(ctx, logType) {\r
 }\r
 \r
 /* ── Subagent 浮层 / 过程块 ── */\r
-`,Vr=`var subagentPanelOpen = false;
+`,Kr=`var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
 
@@ -15618,7 +15660,7 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,Gr=`const humanInteractionStoreBySession = Object.create(null);
+`,$r=`const humanInteractionStoreBySession = Object.create(null);
 const HUMAN_INTERACTION_DRAFT_PREFIX = 'myagent-human-interaction-draft:';
 
 function humanInteractionSessionState(sessionId) {
@@ -17102,7 +17144,7 @@ async function refreshHumanInteractions(sessionId, options) {
     var button = document.getElementById('human-interaction-banner-btn');
     if (button) button.addEventListener('click', function () { void handleHumanTodoFloaterAction(); });
 })();
-`,Qr=`var permissionModeBusy = false;
+`,Vr=`var permissionModeBusy = false;
 var currentPermissionStatus = null;
 var newSessionPermissionMode = '';
 var LS_NEW_SESSION_PERMISSION_MODE = 'myagent-new-session-permission-mode';
@@ -17781,7 +17823,7 @@ if (document.readyState === 'loading') {
 } else {
     initPermissionControls();
 }
-`,Kr=`function applyPluginExtensionEventView(row, event) {\r
+`,Qr=`function applyPluginExtensionEventView(row, event) {\r
     if (!row || !event || typeof globalThis.resolvePluginExtensionEvent !== 'function') return;\r
     var view = globalThis.resolvePluginExtensionEvent(event);\r
     if (!view || !view.handled || view.pending) {\r
@@ -18012,7 +18054,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {\r
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);\r
     }\r
 }\r
-`,Yr=`\uFEFFfunction setSendButtonState() {
+`,Xr=`\uFEFFfunction setSendButtonState() {
     syncMessageInputPlaceholder();
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
@@ -20007,7 +20049,7 @@ async function materializeNewSessionInner() {
         return null;
     }
 }
-`,Xr=`const SSE_IDLE_TIMEOUT_MS = 120000;\r
+`,Yr=`const SSE_IDLE_TIMEOUT_MS = 120000;\r
 const SSE_RESUME_PROBE_TIMEOUT_MS = 20000;\r
 const STREAM_RECONNECT_MAX_ATTEMPTS = 10;\r
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;\r
@@ -24092,8 +24134,5107 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`;globalThis.marked=N;const Jr="/assets/vendor/mermaid.min.js";let Ce=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(Ce||(Ce=new Promise(function(e,n){const r=document.createElement("script");r.src=Jr,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),n(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),n(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw Ce=null,e})),Ce)};let De=null;globalThis.loadMyAgentHtml2Canvas=function(){return De||(De=mt(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),De};const es=[vr,Sr,br,yr,wr,Ir,xr,kr,Cr,Tr,Er,Ar,_r,Rr,Pr,Lr,Mr,Fr,Nr,Br,Or,qr,Hr,Dr,Ur,jr,zr,$r,Wr,Vr,Gr,Qr,Kr,Yr,Xr,Zr];Function(`"use strict";
-`+es.join(`
+`,Jr=`/**
+ * Dock layout model — types, id minting, and structural predicates.
+ *
+ * Mirrors dsh's \`ui-dockkit/src/contract/types.ts\`: a normalized recursive
+ * split tree. \`nodes\` holds every split and pane keyed by id; \`rootId\` names
+ * the docked root; \`floats\` lists floating panes bottom-to-top. A floating
+ * panel is not a second concept — it is a pane whose \`host\` is 'float',
+ * capacity 1 tab, drawn without a tab strip.
+ *
+ *   LayoutState = {
+ *     nodes:  { [id]: SplitNode | PaneNode },
+ *     tabs:   { [id]: TabRecord },
+ *     rootId, floats: [], activePaneId, expanded, mode,
+ *   }
+ *   SplitNode = { kind:'split', id, axis:'row'|'column', children:[], sizes:[] }
+ *   PaneNode  = { kind:'pane', id, host:'dock'|'float', tabs:[], activeTabId, rect? }
+ *   TabRecord = { id, kind, contentId, title }   // kind is opaque to the engine
+ *
+ * Ids are branded by convention: \`pane-…\`, \`split-…\`, \`tab-…\`, \`float-…\` are
+ * minted only by a minter, so a pane id, a split id, and a tab id never stand
+ * in for one another. Every writer returns a new state and keeps untouched
+ * nodes at their old identity, so consumers can compare by reference.
+ *
+ * This file is part of the shared-scope bundle: no modules, no DOM, no host
+ * concepts. It can also be evaluated standalone under node:vm (see
+ * frontend/tests/dock-engine.test.mjs).
+ */
+
+/** Prefix under which docked pane ids are minted. */
+const DOCK_PANE_PREFIX = 'pane-';
+
+/** Prefix under which floating pane ids are minted. */
+const DOCK_FLOAT_PREFIX = 'float-';
+
+/** Prefix under which split node ids are minted. */
+const DOCK_SPLIT_PREFIX = 'split-';
+
+/** Prefix under which tab ids are minted. */
+const DOCK_TAB_PREFIX = 'tab-';
+
+/**
+ * Create an id source. One instance belongs to one surface's sequence, so the
+ * counter (and the ids built from it) are part of what a recorded surface
+ * carries forward for replay.
+ * @param {number} seed Number the first id counts from; defaults to 0.
+ * @returns {{ next: (prefix: string) => string }} the monotonic mint.
+ */
+function dockCreateMinter(seed) {
+    let counter = Number.isFinite(Number(seed)) ? Math.floor(Number(seed)) : 0;
+    return {
+        next(prefix) {
+            counter += 1;
+            return String(prefix) + counter;
+        },
+        used() {
+            return counter;
+        },
+    };
+}
+
+/** Whether a node is a pane. @param {*} node Candidate. @returns {boolean} */
+function dockIsPaneNode(node) {
+    return !!node && node.kind === 'pane';
+}
+
+/** Whether a node is a split. @param {*} node Candidate. @returns {boolean} */
+function dockIsSplitNode(node) {
+    return !!node && node.kind === 'split';
+}
+
+/**
+ * Reject an unhandled discriminant at the end of a closed switch.
+ * @param {never} value The discriminant the switch did not handle.
+ * @param {string} what The union being switched on, for the message.
+ * @throws {Error} always.
+ */
+function dockAssertNever(value, what) {
+    throw new Error(what + ': unhandled ' + JSON.stringify(value));
+}
+`,es=`/**
+ * Pure tree helpers over the dock layout. Every reader throws on a dangling id
+ * (the operation vocabulary is closed, so a miss is a caller defect, never
+ * silently tolerated), and every writer returns a new state that keeps
+ * untouched nodes at their old identity.
+ */
+
+/**
+ * Read any node.
+ * @param {object} state Current layout.
+ * @param {string} id The node.
+ * @returns {object} the split or pane.
+ * @throws when \`id\` is not in the tree.
+ */
+function dockGetNode(state, id) {
+    const node = state.nodes[id];
+    if (node === undefined) throw new Error('layout: unknown node ' + id);
+    return node;
+}
+
+/**
+ * Read a pane.
+ * @param {object} state Current layout.
+ * @param {string} id The pane.
+ * @returns {object} the pane node.
+ * @throws when \`id\` is missing or names a split.
+ */
+function dockGetPane(state, id) {
+    const node = dockGetNode(state, id);
+    if (node.kind !== 'pane') throw new Error('layout: ' + id + ' is not a pane');
+    return node;
+}
+
+/**
+ * Read a split.
+ * @param {object} state Current layout.
+ * @param {string} id The split.
+ * @returns {object} the split node.
+ * @throws when \`id\` is missing or names a pane.
+ */
+function dockGetSplit(state, id) {
+    const node = dockGetNode(state, id);
+    if (node.kind !== 'split') throw new Error('layout: ' + id + ' is not a split');
+    return node;
+}
+
+/**
+ * Read a tab record.
+ * @param {object} state Current layout.
+ * @param {string} id The tab.
+ * @returns {object} the record.
+ * @throws when \`id\` is not open.
+ */
+function dockGetTab(state, id) {
+    const tab = state.tabs[id];
+    if (tab === undefined) throw new Error('layout: unknown tab ' + id);
+    return tab;
+}
+
+/**
+ * A floating pane's rectangle.
+ * @param {object} pane The pane.
+ * @returns {{x:number,y:number,width:number,height:number}} its viewport rectangle.
+ * @throws when \`pane\` is docked.
+ */
+function dockFloatRect(pane) {
+    if (pane.host !== 'float' || pane.rect === undefined) throw new Error('layout: ' + pane.id + ' is not floating');
+    return pane.rect;
+}
+
+/**
+ * A floating pane's position in the z order.
+ * @param {object} state Current layout.
+ * @param {string} id The floating pane.
+ * @returns {number} its index in \`floats\`, bottom first.
+ * @throws when \`id\` is not listed in \`floats\`.
+ */
+function dockFloatIndex(state, id) {
+    const index = state.floats.indexOf(id);
+    if (index < 0) throw new Error('layout: floating pane ' + id + ' is not in the z order');
+    return index;
+}
+
+/**
+ * The one tab a pane holds.
+ * @param {object} pane The pane.
+ * @returns {string} its tab's id.
+ * @throws when \`pane\` holds any other number of tabs.
+ */
+function dockOnlyTabId(pane) {
+    const tabId = pane.tabs[0];
+    if (tabId === undefined || pane.tabs.length !== 1) throw new Error('layout: ' + pane.id + ' does not hold exactly one tab');
+    return tabId;
+}
+
+/**
+ * The split holding a node.
+ * @param {object} state Current layout.
+ * @param {string} id The node.
+ * @returns {object|undefined} its parent split, or undefined for the docked root and floating panes.
+ */
+function dockFindParent(state, id) {
+    const nodes = Object.keys(state.nodes);
+    for (let i = 0; i < nodes.length; i += 1) {
+        const node = state.nodes[nodes[i]];
+        if (node.kind === 'split' && node.children.indexOf(id) >= 0) return node;
+    }
+    return undefined;
+}
+
+/**
+ * The pane holding a tab.
+ * @param {object} state Current layout.
+ * @param {string} tabId The tab.
+ * @returns {object} the pane whose strip lists it.
+ * @throws when no pane lists it.
+ */
+function dockFindTabPane(state, tabId) {
+    const nodes = Object.keys(state.nodes);
+    for (let i = 0; i < nodes.length; i += 1) {
+        const node = state.nodes[nodes[i]];
+        if (node.kind === 'pane' && node.tabs.indexOf(tabId) >= 0) return node;
+    }
+    throw new Error('layout: tab ' + tabId + ' has no pane');
+}
+
+/**
+ * Docked pane ids in visual order (depth-first through the split tree).
+ * @param {object} state Current layout.
+ * @returns {string[]} every docked pane's id; floating panes are absent.
+ */
+function dockPaneIds(state) {
+    const out = [];
+    const walk = (id) => {
+        const node = dockGetNode(state, id);
+        if (node.kind === 'pane') {
+            out.push(node.id);
+            return;
+        }
+        for (let i = 0; i < node.children.length; i += 1) walk(node.children[i]);
+    };
+    walk(state.rootId);
+    return out;
+}
+
+/**
+ * Scale \`sizes\` so they sum to 1. Input that already sums to 1 is copied
+ * unchanged, so restoring recorded sizes never drifts.
+ * @param {number[]} sizes Fractions or any positive weights.
+ * @returns {number[]} the fractions, summing to 1.
+ * @throws when the input cannot be normalized.
+ */
+function dockNormalizeSizes(sizes) {
+    let total = 0;
+    for (let i = 0; i < sizes.length; i += 1) total += sizes[i];
+    if (!(total > 0)) throw new Error('layout: sizes must sum above zero');
+    if (Math.abs(total - 1) < 1e-12) return sizes.slice();
+    return sizes.map((size) => size / total);
+}
+
+/**
+ * Replace or delete nodes.
+ * @param {object} state Current layout.
+ * @param {object} updates Nodes by id; a null update deletes that id.
+ * @returns {object} the layout with those nodes replaced; untouched nodes keep their identity.
+ */
+function dockWithNodes(state, updates) {
+    const nodes = {};
+    const keys = Object.keys(state.nodes);
+    for (let i = 0; i < keys.length; i += 1) {
+        const id = keys[i];
+        if (!Object.prototype.hasOwnProperty.call(updates, id)) nodes[id] = state.nodes[id];
+    }
+    const updateKeys = Object.keys(updates);
+    for (let i = 0; i < updateKeys.length; i += 1) {
+        const id = updateKeys[i];
+        if (updates[id] !== null) nodes[id] = updates[id];
+    }
+    return Object.assign({}, state, { nodes: nodes });
+}
+
+/**
+ * Replace or delete tab records.
+ * @param {object} state Current layout.
+ * @param {object} updates Records by id; a null update deletes that id.
+ * @returns {object} the layout with those records replaced; untouched records keep their identity.
+ */
+function dockWithTabs(state, updates) {
+    const tabs = {};
+    const keys = Object.keys(state.tabs);
+    for (let i = 0; i < keys.length; i += 1) {
+        const id = keys[i];
+        if (!Object.prototype.hasOwnProperty.call(updates, id)) tabs[id] = state.tabs[id];
+    }
+    const updateKeys = Object.keys(updates);
+    for (let i = 0; i < updateKeys.length; i += 1) {
+        const id = updateKeys[i];
+        if (updates[id] !== null) tabs[id] = updates[id];
+    }
+    return Object.assign({}, state, { tabs: tabs });
+}
+
+/**
+ * Insert a value into a list.
+ * @param {Array} items The list.
+ * @param {number} index The slot, clamped to the list's bounds.
+ * @param {*} value What to insert.
+ * @returns {Array} a new list with the value at the slot.
+ */
+function dockInsertAt(items, index, value) {
+    const at = Math.max(0, Math.min(index, items.length));
+    return items.slice(0, at).concat([value], items.slice(at));
+}
+
+/**
+ * Remove one entry from a list.
+ * @param {Array} items The list.
+ * @param {number} index The entry to drop.
+ * @returns {Array} a new list without it.
+ */
+function dockRemoveAt(items, index) {
+    return items.slice(0, index).concat(items.slice(index + 1));
+}
+
+/**
+ * Which tab a pane focuses after one leaves it.
+ * @param {string[]} tabs The strip before the removal.
+ * @param {number} removedIndex The leaving tab's slot.
+ * @returns {string|undefined} the previous neighbour when one exists, otherwise the next, otherwise undefined.
+ */
+function dockNeighbourTabId(tabs, removedIndex) {
+    const remaining = dockRemoveAt(tabs, removedIndex);
+    if (remaining.length === 0) return undefined;
+    return remaining[Math.max(0, removedIndex - 1)];
+}
+
+/**
+ * Copy a pane with a new tab list.
+ * @param {object} pane The pane.
+ * @param {string[]} tabs Its new strip.
+ * @param {string|undefined} activeTabId The active tab, which the caller keeps consistent with \`tabs\`.
+ * @returns {object} the copied pane.
+ */
+function dockPaneWithTabs(pane, tabs, activeTabId) {
+    return Object.assign({}, pane, { tabs: tabs, activeTabId: activeTabId });
+}
+
+/**
+ * Swap a node for another in its parent's slot, or make the replacement the docked root.
+ * @param {object} state Current layout.
+ * @param {string} targetId The node to swap out.
+ * @param {string} replacementId The node taking its slot.
+ * @returns {object} the layout with the slot rewritten.
+ * @throws when \`targetId\` is neither rooted nor parented.
+ */
+function dockReplaceInParent(state, targetId, replacementId) {
+    const parent = dockFindParent(state, targetId);
+    if (parent === undefined) {
+        if (state.rootId !== targetId) throw new Error('layout: ' + targetId + ' is neither rooted nor parented');
+        return Object.assign({}, state, { rootId: replacementId });
+    }
+    const children = parent.children.map((child) => (child === targetId ? replacementId : child));
+    const updates = {};
+    updates[parent.id] = Object.assign({}, parent, { children: children });
+    return dockWithNodes(state, updates);
+}
+
+/** Walk from the docked root to a pane, taking the child \`choose\` names at every split. */
+function dockDescend(state, choose) {
+    let node = dockGetNode(state, state.rootId);
+    while (node.kind === 'split') {
+        const next = choose(node);
+        if (next === undefined) throw new Error('layout: split ' + node.id + ' has no children');
+        node = dockGetNode(state, next);
+    }
+    return node.id;
+}
+
+/**
+ * The first docked pane in visual order: the docked root, or the first leaf
+ * under it. Focus falls back here when the focused pane is removed, and a new
+ * tab lands here when the focused pane floats.
+ * @param {object} state Current layout.
+ * @returns {string} the first docked pane's id.
+ */
+function dockFirstPaneId(state) {
+    return dockDescend(state, (split) => split.children[0]);
+}
+
+/**
+ * The docked pane in the top-right corner: from the root, the last child of
+ * every row split and the first child of every column split. Its tab strip is
+ * where the surface-wide controls sit, so they read as the surface's own
+ * top-right corner however the tree is divided.
+ * @param {object} state Current layout.
+ * @returns {string} the top-right docked pane's id.
+ */
+function dockTopRightPaneId(state) {
+    return dockDescend(state, (split) => (split.axis === 'row' ? split.children[split.children.length - 1] : split.children[0]));
+}
+`,ns=`/**
+ * Interaction limits and dock geometry. The model itself is unbounded; these
+ * are the rules the interaction layer enforces before it dispatches, kept pure
+ * so they can be asserted without a browser.
+ */
+
+/** Caps the docked grid; floating panes do not count. */
+const DOCK_MAX_PANES = 4;
+
+/** Smallest fraction a divider drag may leave a pane, as a share of its split. */
+const DOCK_MIN_PANE_FRACTION = 0.12;
+
+/** Size a tab takes when it first floats, in CSS pixels. */
+const DOCK_FLOAT_DEFAULT_SIZE = { width: 380, height: 300 };
+
+/** Smallest size a floating panel may be resized to, in CSS pixels. */
+const DOCK_FLOAT_MIN_SIZE = { width: 220, height: 140 };
+
+/** Fraction of a pane's width or height that counts as its dock edge. */
+const DOCK_EDGE_FRACTION = 0.25;
+
+/** The five dock regions a tab can be dropped on. */
+const DOCK_ZONES = ['center', 'top', 'right', 'bottom', 'left'];
+
+/**
+ * Number of docked panes.
+ * @param {object} state Current layout.
+ * @returns {number} how many panes the docked tree holds; floating panes do not count.
+ */
+function dockPaneCount(state) {
+    return dockPaneIds(state).length;
+}
+
+/**
+ * Whether another docked pane is allowed by the engine budget.
+ * @param {object} state Current layout.
+ * @returns {boolean} whether the docked tree is under \`DOCK_MAX_PANES\`.
+ */
+function dockCanSplit(state) {
+    return dockPaneCount(state) < DOCK_MAX_PANES;
+}
+
+/**
+ * Which dock region a pointer sits in.
+ * @param {number} x Pointer x as a fraction of pane width.
+ * @param {number} y Pointer y as a fraction of pane height.
+ * @param {number} [edge] Edge band width as a fraction; defaults to \`DOCK_EDGE_FRACTION\`.
+ * @returns {string} the closest edge when the pointer is inside its band, else 'center'.
+ */
+function dockZoneAt(x, y, edge) {
+    const band = typeof edge === 'number' ? edge : DOCK_EDGE_FRACTION;
+    let zone = 'left';
+    let distance = x;
+    if (1 - x < distance) { zone = 'right'; distance = 1 - x; }
+    if (y < distance) { zone = 'top'; distance = y; }
+    if (1 - y < distance) { zone = 'bottom'; distance = 1 - y; }
+    return distance < band ? zone : 'center';
+}
+
+/**
+ * How a dock region splits the pane it targets.
+ * @param {string} zone The region the pointer released in.
+ * @returns {{axis:string,direction:string}|undefined} the split's axis and
+ *   direction, or undefined for 'center', which moves the tab into the pane.
+ */
+function dockZoneSplit(zone) {
+    switch (zone) {
+        case 'center': return undefined;
+        case 'left': return { axis: 'row', direction: 'before' };
+        case 'right': return { axis: 'row', direction: 'after' };
+        case 'top': return { axis: 'column', direction: 'before' };
+        case 'bottom': return { axis: 'column', direction: 'after' };
+        default: return dockAssertNever(zone, 'layout: dock zone');
+    }
+}
+
+/**
+ * Clamp divider sizes so no pane falls under the minimum fraction.
+ * @param {number[]} sizes Candidate fractions from the drag preview.
+ * @param {number} [minimum] Smallest allowed share; defaults to \`DOCK_MIN_PANE_FRACTION\`.
+ * @returns {number[]} fractions summing to 1 with every entry at or above the minimum.
+ */
+function dockClampSizes(sizes, minimum) {
+    if (sizes.length === 0) return [];
+    const floor = Math.min(typeof minimum === 'number' ? minimum : DOCK_MIN_PANE_FRACTION, 1 / sizes.length);
+    const positive = sizes.map((size) => (size > 0 ? size : 0));
+    let total = 0;
+    for (let i = 0; i < positive.length; i += 1) total += positive[i];
+    let shares = total > 0 ? positive.map((size) => size / total) : positive.map(() => 1 / sizes.length);
+    // Pin every share under the floor at the floor and hand the remainder to
+    // the others in proportion; a share that only now drops under joins the
+    // pinned set on the next pass, so the result holds the floor exactly.
+    const pinned = [];
+    for (;;) {
+        const under = [];
+        for (let i = 0; i < shares.length; i += 1) {
+            if (pinned.indexOf(i) < 0 && shares[i] < floor) under.push(i);
+        }
+        if (under.length === 0) return shares;
+        for (let i = 0; i < under.length; i += 1) pinned.push(under[i]);
+        const remainder = 1 - pinned.length * floor;
+        let freeTotal = 0;
+        for (let i = 0; i < shares.length; i += 1) {
+            if (pinned.indexOf(i) < 0) freeTotal += shares[i];
+        }
+        shares = shares.map((share, index) => (pinned.indexOf(index) >= 0 ? floor : (share / freeTotal) * remainder));
+    }
+}
+`,ts=`/**
+ * Pure geometry for the drag interaction: point tests, dock-zone resolution
+ * against a real element rectangle, tab-strip insertion slots, and the room
+ * rule. Kept free of DOM types so the drop rules can be asserted without a
+ * browser; the renderer layer measures rectangles and calls in.
+ */
+
+/**
+ * Whether a point is inside a rectangle, edges included.
+ * @param {{x:number,y:number,width:number,height:number}} rect The rectangle.
+ * @param {number} x Point x in the same coordinates.
+ * @param {number} y Point y in the same coordinates.
+ * @returns {boolean} whether the point lies on or inside the rectangle.
+ */
+function dockContainsPoint(rect, x, y) {
+    return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+}
+
+/**
+ * Dock region a point falls in, relative to one pane's rectangle.
+ * @param {{x:number,y:number,width:number,height:number}} rect The pane's measured box.
+ * @param {number} x Pointer x in the same coordinates.
+ * @param {number} y Pointer y in the same coordinates.
+ * @param {number} [edge] Edge band as a fraction; defaults to the model's value.
+ * @returns {string} the region; 'center' when the point is not in an edge band.
+ */
+function dockZoneInRect(rect, x, y, edge) {
+    if (!(rect.width > 0) || !(rect.height > 0)) return 'center';
+    return dockZoneAt((x - rect.x) / rect.width, (y - rect.y) / rect.height, edge);
+}
+
+/**
+ * Slot a tab would take in a strip, by comparing the pointer with each tab's midpoint.
+ * @param {Array<{x:number,width:number}>} tabRects The strip's tab boxes in strip order.
+ * @param {number} x Pointer x.
+ * @returns {number} the insertion index, from 0 to \`tabRects.length\`.
+ */
+function dockInsertionIndex(tabRects, x) {
+    let index = 0;
+    for (let i = 0; i < tabRects.length; i += 1) {
+        const rect = tabRects[i];
+        if (x < rect.x + rect.width / 2) break;
+        index += 1;
+    }
+    return index;
+}
+
+/**
+ * Pixel minimums the room rule holds each half to.
+ * Mirrors the stylesheet: a chip is 100px (80px min-width + 10px padding a
+ * side, content-box); the divider takes no layout room (its hairline paints
+ * over the seam, so a body's own rules run unbroken past it); a column half
+ * must carry the strip plus a minimum body.
+ */
+const DOCK_SPLIT_MINIMUMS = { divider: 0, chip: 100, body: 48, stripHeight: 34 };
+
+/**
+ * The room rule. After an equal split each half must hold what cannot shrink:
+ * horizontally the strip's fixed part — its width minus the chip box, the
+ * fill, and the rendered split control's footprint — plus one chip at its
+ * minimum; vertically the strip plus a minimum body. An unmeasured pane (no
+ * layout) fits: the rule only blocks on a positive reading.
+ * @param {{pane:object,strip:object,chipsWidth:number,fillWidth:number,splitControlWidth:number}} measure The pane's rectangles.
+ * @param {object} [minimums] The pixel minimums; defaults to the stylesheet's.
+ * @returns {{row:boolean,column:boolean}} whether a row and a column split each leave two working halves.
+ */
+function dockHalvesFit(measure, minimums) {
+    const mins = minimums || DOCK_SPLIT_MINIMUMS;
+    const pane = measure.pane;
+    const strip = measure.strip;
+    if (!(pane.width > 0) || !(pane.height > 0) || !(strip.width > 0)) return { row: true, column: true };
+    const borders = Math.max(0, pane.width - strip.width);
+    const control = Number(measure.splitControlWidth) || 0;
+    const fixed = Math.max(0, strip.width - measure.chipsWidth - measure.fillWidth - control);
+    const halfWidth = (pane.width - mins.divider) / 2 - borders;
+    const halfHeight = (pane.height - mins.divider) / 2 - borders;
+    return {
+        row: halfWidth >= fixed + mins.chip,
+        column: halfHeight >= (mins.stripHeight || DOCK_SPLIT_MINIMUMS.stripHeight) + mins.body,
+    };
+}
+
+/** How far a pointer must travel before a press becomes a drag, in pixels. */
+const DOCK_DRAG_THRESHOLD = 4;
+
+/**
+ * Whether a press has travelled far enough to be a drag.
+ * @param {number} startX Press x.
+ * @param {number} startY Press y.
+ * @param {number} x Current pointer x.
+ * @param {number} y Current pointer y.
+ * @returns {boolean} whether either axis moved at least \`DOCK_DRAG_THRESHOLD\`.
+ */
+function dockPassedThreshold(startX, startY, x, y) {
+    return Math.abs(x - startX) >= DOCK_DRAG_THRESHOLD || Math.abs(y - startY) >= DOCK_DRAG_THRESHOLD;
+}
+
+/**
+ * Split fractions after a divider drag.
+ * @param {number[]} sizes The split's current fractions.
+ * @param {number} index Divider position: the boundary between \`index\` and \`index + 1\`.
+ * @param {number} delta Pointer travel along the split axis, as a fraction of the split's extent.
+ * @returns {number[]} new fractions; the two neighbours absorb the whole change.
+ */
+function dockDividerSizes(sizes, index, delta) {
+    const before = sizes[index];
+    const after = sizes[index + 1];
+    if (before === undefined || after === undefined) return sizes.slice();
+    const next = sizes.slice();
+    next[index] = before + delta;
+    next[index + 1] = after - delta;
+    return next;
+}
+
+/**
+ * A floating panel's rectangle after a drag.
+ * @param {object} rect The rectangle the gesture started from.
+ * @param {number} dx Pointer travel on x.
+ * @param {number} dy Pointer travel on y.
+ * @returns {object} the moved rectangle; the size is unchanged.
+ */
+function dockMovedRect(rect, dx, dy) {
+    return Object.assign({}, rect, { x: rect.x + dx, y: rect.y + dy });
+}
+
+/**
+ * A floating panel's rectangle after a bottom-right resize.
+ * @param {object} rect The rectangle the gesture started from.
+ * @param {number} dx Pointer travel on x.
+ * @param {number} dy Pointer travel on y.
+ * @param {{width:number,height:number}} min Smallest size the panel may take.
+ * @returns {object} the resized rectangle; the origin is unchanged.
+ */
+function dockResizedRect(rect, dx, dy, min) {
+    return Object.assign({}, rect, {
+        width: Math.max(min.width, rect.width + dx),
+        height: Math.max(min.height, rect.height + dy),
+    });
+}
+
+/** How far a new panel's origin sits above and left of the drop point. */
+const DOCK_FLOAT_GRAB_OFFSET = { x: 60, y: 14 };
+
+/**
+ * Where a panel should appear when a tab is dropped outside the docked area.
+ * @param {number} x Drop point x.
+ * @param {number} y Drop point y.
+ * @param {{width:number,height:number}} size The panel's size.
+ * @returns {object} a rectangle whose header sits under the drop point.
+ */
+function dockFloatRectAt(x, y, size) {
+    return {
+        x: Math.max(0, x - DOCK_FLOAT_GRAB_OFFSET.x),
+        y: Math.max(0, y - DOCK_FLOAT_GRAB_OFFSET.y),
+        width: size.width,
+        height: size.height,
+    };
+}
+`,rs=`/**
+ * The operation engine: one pure \`dockApplyOp\` that returns the next state plus
+ * the operations that undo it. No DOM, no framework, no ambient state —
+ * replaying the same operations over the same initial state always yields the
+ * same result, because every id an operation creates travels inside the
+ * operation itself.
+ *
+ * Interaction limits (pane count, drag preview) are not enforced here; they
+ * belong to the interaction layer (constraints.js and the planner).
+ */
+
+/** Capture the focus facts of \`paneIds\` plus global focus, as the operation that restores them. */
+function dockFocusSnapshot(state, paneIds) {
+    const paneActiveTabs = {};
+    for (let i = 0; i < paneIds.length; i += 1) {
+        paneActiveTabs[paneIds[i]] = dockGetPane(state, paneIds[i]).activeTabId;
+    }
+    return {
+        type: 'restoreFocus',
+        activePaneId: state.activePaneId,
+        floats: state.floats,
+        paneActiveTabs: paneActiveTabs,
+    };
+}
+
+/** Move \`paneId\` to the top of the floating z order. */
+function dockRaise(floats, paneId) {
+    return floats.filter((id) => id !== paneId).concat([paneId]);
+}
+
+/** Keep \`activePaneId\` on a live pane after \`state\` lost the focused one. */
+function dockReseatFocus(state, removedPaneId) {
+    if (state.activePaneId !== removedPaneId) return state;
+    return Object.assign({}, state, { activePaneId: dockFirstPaneId(state) });
+}
+
+/** A fresh empty docked pane. */
+function dockEmptyDockPane(id) {
+    return { kind: 'pane', id: id, host: 'dock', tabs: [], activeTabId: undefined, rect: undefined };
+}
+
+/** Reject an id that a creating operation expects to be free. */
+function dockAssertFreeNode(state, id) {
+    if (state.nodes[id] !== undefined) throw new Error('layout: node ' + id + ' already exists');
+}
+
+/** Reject a tab id that an opening operation expects to be free. */
+function dockAssertFreeTab(state, id) {
+    if (state.tabs[id] !== undefined) throw new Error('layout: tab ' + id + ' already exists');
+}
+
+/** Give \`paneId\` an empty sibling along \`axis\`. */
+function dockApplySplit(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    if (pane.host !== 'dock') throw new Error('layout: split requires a docked pane');
+    dockAssertFreeNode(state, op.newPaneId);
+    const newPane = dockEmptyDockPane(op.newPaneId);
+    const parent = dockFindParent(state, op.paneId);
+
+    if (parent !== undefined && parent.axis === op.axis) {
+        const index = parent.children.indexOf(op.paneId);
+        const at = op.direction === 'after' ? index + 1 : index;
+        const children = dockInsertAt(parent.children, at, op.newPaneId);
+        // The reference pane's share is halved between it and the new pane; the
+        // two halves are equal, so the sizes align with \`children\` whichever
+        // side it took.
+        const sizes = [];
+        for (let i = 0; i < parent.sizes.length; i += 1) {
+            if (i === index) sizes.push(parent.sizes[i] / 2, parent.sizes[i] / 2);
+            else sizes.push(parent.sizes[i]);
+        }
+        const updates = {};
+        updates[op.newPaneId] = newPane;
+        updates[parent.id] = Object.assign({}, parent, { children: children, sizes: sizes });
+        return {
+            state: dockWithNodes(state, updates),
+            inverse: [
+                { type: 'merge', paneId: op.newPaneId },
+                { type: 'resize', splitId: parent.id, sizes: parent.sizes },
+            ],
+        };
+    }
+
+    dockAssertFreeNode(state, op.newSplitId);
+    // The reference pane's slot takes the new split; compute that swap before
+    // the split node exists, or findParent would find the split itself.
+    const rehomed = dockReplaceInParent(state, op.paneId, op.newSplitId);
+    const children = op.direction === 'after' ? [op.paneId, op.newPaneId] : [op.newPaneId, op.paneId];
+    const splitUpdates = {};
+    splitUpdates[op.newPaneId] = newPane;
+    splitUpdates[op.newSplitId] = { kind: 'split', id: op.newSplitId, axis: op.axis, children: children, sizes: [0.5, 0.5] };
+    return {
+        state: dockWithNodes(rehomed, splitUpdates),
+        inverse: [{ type: 'merge', paneId: op.newPaneId }],
+    };
+}
+
+/** Drop an empty pane; a two-child split collapses into its surviving child. */
+function dockApplyMerge(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    if (pane.tabs.length > 0) throw new Error('layout: merge requires an empty pane');
+    const focus = dockFocusSnapshot(state, []);
+
+    if (pane.host === 'float') {
+        const index = dockFloatIndex(state, op.paneId);
+        const updates = {};
+        updates[op.paneId] = null;
+        const dropped = dockWithNodes(Object.assign({}, state, { floats: dockRemoveAt(state.floats, index) }), updates);
+        return {
+            state: dockReseatFocus(dropped, op.paneId),
+            inverse: [{ type: 'insertPane', pane: pane, tabs: [], attach: { mode: 'float', index: index } }, focus],
+        };
+    }
+
+    const parent = dockFindParent(state, op.paneId);
+    if (parent === undefined) throw new Error('layout: the docked root pane cannot be merged');
+    const index = parent.children.indexOf(op.paneId);
+
+    if (parent.children.length > 2) {
+        const children = dockRemoveAt(parent.children, index);
+        const sizes = dockNormalizeSizes(dockRemoveAt(parent.sizes, index));
+        const updates = {};
+        updates[op.paneId] = null;
+        updates[parent.id] = Object.assign({}, parent, { children: children, sizes: sizes });
+        const dropped = dockWithNodes(state, updates);
+        return {
+            state: dockReseatFocus(dropped, op.paneId),
+            inverse: [
+                {
+                    type: 'insertPane',
+                    pane: pane,
+                    tabs: [],
+                    attach: { mode: 'child', parentId: parent.id, index: index, sizes: parent.sizes },
+                },
+                focus,
+            ],
+        };
+    }
+
+    const siblingId = parent.children[1 - index];
+    if (siblingId === undefined) throw new Error('layout: merge found a split without a sibling');
+    const updates = {};
+    updates[op.paneId] = null;
+    updates[parent.id] = null;
+    const collapsed = dockWithNodes(dockReplaceInParent(state, parent.id, siblingId), updates);
+    return {
+        state: dockReseatFocus(collapsed, op.paneId),
+        inverse: [
+            { type: 'insertPane', pane: pane, tabs: [], attach: { mode: 'wrap', targetId: siblingId, split: parent } },
+            focus,
+        ],
+    };
+}
+
+/** Add a new tab to a docked pane and focus it. */
+function dockApplyOpenTab(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    if (pane.host !== 'dock') throw new Error('layout: openTab requires a docked pane');
+    dockAssertFreeTab(state, op.tab.id);
+    const focus = dockFocusSnapshot(state, [pane.id]);
+    const tabUpdates = {};
+    tabUpdates[op.tab.id] = op.tab;
+    const nodeUpdates = {};
+    nodeUpdates[pane.id] = dockPaneWithTabs(pane, dockInsertAt(pane.tabs, op.index, op.tab.id), op.tab.id);
+    const seated = dockWithNodes(dockWithTabs(state, tabUpdates), nodeUpdates);
+    return {
+        state: Object.assign({}, seated, { activePaneId: pane.id }),
+        inverse: [{ type: 'closeTab', tabId: op.tab.id }, focus],
+    };
+}
+
+/** Put one tab record back where it was, without stealing focus. */
+function dockApplyInsertTab(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    if (pane.host !== 'dock') throw new Error('layout: insertTab requires a docked pane');
+    dockAssertFreeTab(state, op.tab.id);
+    const focus = dockFocusSnapshot(state, [pane.id]);
+    const tabs = dockInsertAt(pane.tabs, op.index, op.tab.id);
+    const tabUpdates = {};
+    tabUpdates[op.tab.id] = op.tab;
+    const nodeUpdates = {};
+    nodeUpdates[pane.id] = dockPaneWithTabs(pane, tabs, pane.activeTabId === undefined ? op.tab.id : pane.activeTabId);
+    return {
+        state: dockWithNodes(dockWithTabs(state, tabUpdates), nodeUpdates),
+        inverse: [{ type: 'closeTab', tabId: op.tab.id }, focus],
+    };
+}
+
+/** Destroy a tab and its content state; a floating host pane goes with its only tab. */
+function dockApplyCloseTab(state, op) {
+    const tab = dockGetTab(state, op.tabId);
+    const pane = dockFindTabPane(state, op.tabId);
+    const index = pane.tabs.indexOf(op.tabId);
+    const focus = dockFocusSnapshot(state, [pane.id]);
+
+    if (pane.host === 'float') {
+        const floatIndex = dockFloatIndex(state, pane.id);
+        const updates = {};
+        updates[pane.id] = null;
+        const tabUpdates = {};
+        tabUpdates[op.tabId] = null;
+        const dropped = dockWithTabs(
+            dockWithNodes(Object.assign({}, state, { floats: dockRemoveAt(state.floats, floatIndex) }), updates),
+            tabUpdates
+        );
+        return {
+            state: dockReseatFocus(dropped, pane.id),
+            inverse: [{ type: 'insertPane', pane: pane, tabs: [tab], attach: { mode: 'float', index: floatIndex } }, focus],
+        };
+    }
+
+    const activeTabId = pane.activeTabId === op.tabId ? dockNeighbourTabId(pane.tabs, index) : pane.activeTabId;
+    const nodeUpdates = {};
+    nodeUpdates[pane.id] = dockPaneWithTabs(pane, dockRemoveAt(pane.tabs, index), activeTabId);
+    const tabUpdates = {};
+    tabUpdates[op.tabId] = null;
+    return {
+        state: dockWithTabs(dockWithNodes(state, nodeUpdates), tabUpdates),
+        inverse: [{ type: 'insertTab', paneId: pane.id, tab: tab, index: index }, focus],
+    };
+}
+
+/**
+ * Put a pane back, with the tab records it owned. A docked pane returns empty
+ * (its tabs return through \`insertTab\`, as \`closeTab\` records them); a
+ * floating pane returns with its one tab, or empty.
+ */
+function dockApplyInsertPane(state, op) {
+    dockAssertFreeNode(state, op.pane.id);
+    if (op.pane.tabs.length !== op.tabs.length) throw new Error('layout: insertPane tab records do not match the pane');
+    if (op.pane.host === 'dock' && op.tabs.length > 0) throw new Error('layout: insertPane returns a docked pane empty');
+    const tabUpdates = {};
+    for (let i = 0; i < op.tabs.length; i += 1) {
+        dockAssertFreeTab(state, op.tabs[i].id);
+        tabUpdates[op.tabs[i].id] = op.tabs[i];
+    }
+    const restoredTab = op.tabs[0];
+    const inverse = restoredTab === undefined
+        ? [{ type: 'merge', paneId: op.pane.id }]
+        : [{ type: 'closeTab', tabId: restoredTab.id }, dockFocusSnapshot(state, [])];
+
+    const attach = op.attach;
+    if (attach.mode === 'child') {
+        const parent = dockGetSplit(state, attach.parentId);
+        const children = dockInsertAt(parent.children, attach.index, op.pane.id);
+        if (attach.sizes.length !== children.length) throw new Error('layout: insertPane sizes do not match the split');
+        inverse.push({ type: 'resize', splitId: parent.id, sizes: parent.sizes });
+        const nodeUpdates = {};
+        nodeUpdates[op.pane.id] = op.pane;
+        nodeUpdates[parent.id] = Object.assign({}, parent, { children: children, sizes: attach.sizes });
+        return { state: dockWithNodes(dockWithTabs(state, tabUpdates), nodeUpdates), inverse: inverse };
+    }
+    if (attach.mode === 'wrap') {
+        if (attach.split.children.indexOf(op.pane.id) < 0) {
+            throw new Error('layout: insertPane wrap split does not list the pane');
+        }
+        const rehomed = dockReplaceInParent(state, attach.targetId, attach.split.id);
+        const nodeUpdates = {};
+        nodeUpdates[op.pane.id] = op.pane;
+        nodeUpdates[attach.split.id] = attach.split;
+        return { state: dockWithNodes(dockWithTabs(rehomed, tabUpdates), nodeUpdates), inverse: inverse };
+    }
+    if (attach.mode === 'float') {
+        if (op.pane.host !== 'float') throw new Error('layout: float attachment requires a floating pane');
+        const floats = dockInsertAt(state.floats, attach.index, op.pane.id);
+        const nodeUpdates = {};
+        nodeUpdates[op.pane.id] = op.pane;
+        return {
+            state: dockWithNodes(dockWithTabs(Object.assign({}, state, { floats: floats }), tabUpdates), nodeUpdates),
+            inverse: inverse,
+        };
+    }
+    return dockAssertNever(attach, 'layout: insertPane attachment');
+}
+
+/** Move a tab to a different docked pane and focus it there. */
+function dockApplyMoveTab(state, op) {
+    const from = dockFindTabPane(state, op.tabId);
+    if (from.host !== 'dock') throw new Error('layout: moveTab source must be docked; use unfloat');
+    const to = dockGetPane(state, op.toPaneId);
+    if (to.host !== 'dock') throw new Error('layout: moveTab target must be docked');
+    if (to.id === from.id) throw new Error('layout: moveTab across one pane; use reorderTab');
+    const index = from.tabs.indexOf(op.tabId);
+    const focus = dockFocusSnapshot(state, [from.id, to.id]);
+    const activeTabId = from.activeTabId === op.tabId ? dockNeighbourTabId(from.tabs, index) : from.activeTabId;
+    const updates = {};
+    updates[from.id] = dockPaneWithTabs(from, dockRemoveAt(from.tabs, index), activeTabId);
+    updates[to.id] = dockPaneWithTabs(to, dockInsertAt(to.tabs, op.index, op.tabId), op.tabId);
+    const moved = dockWithNodes(state, updates);
+    return {
+        state: Object.assign({}, moved, { activePaneId: to.id }),
+        inverse: [{ type: 'moveTab', tabId: op.tabId, toPaneId: from.id, index: index }, focus],
+    };
+}
+
+/** Move a tab within its own pane. */
+function dockApplyReorderTab(state, op) {
+    const pane = dockFindTabPane(state, op.tabId);
+    const from = pane.tabs.indexOf(op.tabId);
+    const tabs = dockInsertAt(dockRemoveAt(pane.tabs, from), op.index, op.tabId);
+    const updates = {};
+    updates[pane.id] = Object.assign({}, pane, { tabs: tabs });
+    return {
+        state: dockWithNodes(state, updates),
+        inverse: [{ type: 'reorderTab', tabId: op.tabId, index: from }],
+    };
+}
+
+/** Focus a tab, its pane, and raise that pane when floating. */
+function dockApplyFocusTab(state, op) {
+    const pane = dockFindTabPane(state, op.tabId);
+    const focus = dockFocusSnapshot(state, [pane.id]);
+    const updates = {};
+    updates[pane.id] = Object.assign({}, pane, { activeTabId: op.tabId });
+    const focused = dockWithNodes(state, updates);
+    const floats = pane.host === 'float' ? dockRaise(focused.floats, pane.id) : focused.floats;
+    return { state: Object.assign({}, focused, { activePaneId: pane.id, floats: floats }), inverse: [focus] };
+}
+
+/** Focus a pane and raise it when floating. */
+function dockApplyFocusPane(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    const focus = dockFocusSnapshot(state, []);
+    const floats = pane.host === 'float' ? dockRaise(state.floats, pane.id) : state.floats;
+    return { state: Object.assign({}, state, { activePaneId: pane.id, floats: floats }), inverse: [focus] };
+}
+
+/** Record the net result of a divider drag. */
+function dockApplyResize(state, op) {
+    const split = dockGetSplit(state, op.splitId);
+    if (op.sizes.length !== split.children.length) throw new Error('layout: resize sizes do not match the split');
+    for (let i = 0; i < op.sizes.length; i += 1) {
+        if (!(op.sizes[i] > 0)) throw new Error('layout: resize sizes must all be above zero');
+    }
+    const updates = {};
+    updates[split.id] = Object.assign({}, split, { sizes: dockNormalizeSizes(op.sizes) });
+    return {
+        state: dockWithNodes(state, updates),
+        inverse: [{ type: 'resize', splitId: split.id, sizes: split.sizes }],
+    };
+}
+
+/** Take a tab out of the docked tree into a new floating pane on top. */
+function dockApplyFloat(state, op) {
+    dockGetTab(state, op.tabId);
+    const from = dockFindTabPane(state, op.tabId);
+    if (from.host !== 'dock') throw new Error('layout: float requires a docked tab');
+    dockAssertFreeNode(state, op.newPaneId);
+    const index = from.tabs.indexOf(op.tabId);
+    const focus = dockFocusSnapshot(state, [from.id]);
+    const activeTabId = from.activeTabId === op.tabId ? dockNeighbourTabId(from.tabs, index) : from.activeTabId;
+    const updates = {};
+    updates[from.id] = dockPaneWithTabs(from, dockRemoveAt(from.tabs, index), activeTabId);
+    updates[op.newPaneId] = {
+        kind: 'pane',
+        id: op.newPaneId,
+        host: 'float',
+        tabs: [op.tabId],
+        activeTabId: op.tabId,
+        rect: op.rect,
+    };
+    const floated = dockWithNodes(state, updates);
+    return {
+        state: Object.assign({}, floated, { floats: floated.floats.concat([op.newPaneId]), activePaneId: op.newPaneId }),
+        inverse: [{ type: 'unfloat', paneId: op.newPaneId, toPaneId: from.id, index: index }, focus],
+    };
+}
+
+/** Return a floating pane's only tab to a docked pane and destroy the floating pane. */
+function dockApplyUnfloat(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    const rect = dockFloatRect(pane);
+    const tabId = dockOnlyTabId(pane);
+    const to = dockGetPane(state, op.toPaneId);
+    if (to.host !== 'dock') throw new Error('layout: unfloat target must be docked');
+    const focus = dockFocusSnapshot(state, [to.id]);
+    const updates = {};
+    updates[op.paneId] = null;
+    updates[to.id] = dockPaneWithTabs(to, dockInsertAt(to.tabs, op.index, tabId), tabId);
+    const docked = dockWithNodes(
+        Object.assign({}, state, { floats: dockRemoveAt(state.floats, dockFloatIndex(state, op.paneId)) }),
+        updates
+    );
+    return {
+        state: Object.assign({}, docked, { activePaneId: to.id }),
+        inverse: [{ type: 'float', tabId: tabId, newPaneId: op.paneId, rect: rect }, focus],
+    };
+}
+
+/** Give a floating pane a new rectangle, focus it, and raise it. */
+function dockReshapeFloat(state, pane, rect) {
+    const updates = {};
+    updates[pane.id] = Object.assign({}, pane, { rect: rect });
+    const reshaped = dockWithNodes(state, updates);
+    return Object.assign({}, reshaped, { activePaneId: pane.id, floats: dockRaise(reshaped.floats, pane.id) });
+}
+
+/** Record the net result of dragging a floating pane, which also focuses and raises it. */
+function dockApplyMoveFloat(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    const rect = dockFloatRect(pane);
+    return {
+        state: dockReshapeFloat(state, pane, Object.assign({}, rect, { x: op.x, y: op.y })),
+        inverse: [{ type: 'moveFloat', paneId: op.paneId, x: rect.x, y: rect.y }, dockFocusSnapshot(state, [])],
+    };
+}
+
+/** Record the net result of resizing a floating pane, which also focuses and raises it. */
+function dockApplyResizeFloat(state, op) {
+    const pane = dockGetPane(state, op.paneId);
+    const rect = dockFloatRect(pane);
+    if (!(op.rect.width > 0) || !(op.rect.height > 0)) throw new Error('layout: float size must be above zero');
+    return {
+        state: dockReshapeFloat(state, pane, op.rect),
+        inverse: [{ type: 'resizeFloat', paneId: op.paneId, rect: rect }, dockFocusSnapshot(state, [])],
+    };
+}
+
+/** Restore focus facts a previous operation displaced. */
+function dockApplyRestoreFocus(state, op) {
+    const inverse = dockFocusSnapshot(state, Object.keys(op.paneActiveTabs));
+    for (let i = 0; i < op.floats.length; i += 1) {
+        const pane = dockGetPane(state, op.floats[i]);
+        if (pane.host !== 'float') throw new Error('layout: restoreFocus lists docked pane ' + op.floats[i] + ' as floating');
+    }
+    let next = state;
+    const paneIds = Object.keys(op.paneActiveTabs);
+    for (let i = 0; i < paneIds.length; i += 1) {
+        const paneId = paneIds[i];
+        const pane = dockGetPane(next, paneId);
+        const updates = {};
+        updates[paneId] = Object.assign({}, pane, { activeTabId: op.paneActiveTabs[paneId] });
+        next = dockWithNodes(next, updates);
+    }
+    dockGetPane(next, op.activePaneId);
+    return {
+        state: Object.assign({}, next, { activePaneId: op.activePaneId, floats: op.floats }),
+        inverse: [inverse],
+    };
+}
+
+/**
+ * Apply one operation.
+ * @param {object} state State the operation reads; never mutated.
+ * @param {object} op The operation, carrying every id it creates.
+ * @returns {{state:object,inverse:object[]}} the next state and the operations that undo it, applied in order.
+ * @throws when the operation addresses missing nodes or breaks a model rule.
+ */
+function dockApplyOp(state, op) {
+    switch (op.type) {
+        case 'split': return dockApplySplit(state, op);
+        case 'merge': return dockApplyMerge(state, op);
+        case 'openTab': return dockApplyOpenTab(state, op);
+        case 'insertTab': return dockApplyInsertTab(state, op);
+        case 'closeTab': return dockApplyCloseTab(state, op);
+        case 'insertPane': return dockApplyInsertPane(state, op);
+        case 'moveTab': return dockApplyMoveTab(state, op);
+        case 'reorderTab': return dockApplyReorderTab(state, op);
+        case 'focusTab': return dockApplyFocusTab(state, op);
+        case 'focusPane': return dockApplyFocusPane(state, op);
+        case 'resize': return dockApplyResize(state, op);
+        case 'float': return dockApplyFloat(state, op);
+        case 'unfloat': return dockApplyUnfloat(state, op);
+        case 'moveFloat': return dockApplyMoveFloat(state, op);
+        case 'resizeFloat': return dockApplyResizeFloat(state, op);
+        case 'setExpanded':
+            return {
+                state: Object.assign({}, state, { expanded: op.expanded }),
+                inverse: [{ type: 'setExpanded', expanded: state.expanded }],
+            };
+        case 'setMode':
+            return {
+                state: Object.assign({}, state, { mode: op.mode }),
+                inverse: [{ type: 'setMode', mode: state.mode }],
+            };
+        case 'restoreFocus': return dockApplyRestoreFocus(state, op);
+        default: return dockAssertNever(op, 'layout: operation');
+    }
+}
+
+/**
+ * Fold operations forward, discarding inverses.
+ * @param {object} state Starting state.
+ * @param {object[]} ops Operations in recorded order.
+ * @returns {object} the state after every operation.
+ */
+function dockReplay(state, ops) {
+    let current = state;
+    for (let i = 0; i < ops.length; i += 1) current = dockApplyOp(current, ops[i]).state;
+    return current;
+}
+`,ss=`/**
+ * Intent planning: each interaction, as a pure function from the current state
+ * to the operations that carry it out.
+ *
+ * Planners mint the ids their operations create and enforce the interaction
+ * limits, but they hold no state and apply nothing. A planner returning no
+ * operations means the intent changes nothing; the caller records nothing and
+ * notifies nobody.
+ */
+
+/** Distance each newly floated panel steps down and right from the last. */
+const DOCK_FLOAT_CASCADE_STEP = 24;
+
+/** Where the first floating panel appears, in viewport pixels. */
+const DOCK_FLOAT_ORIGIN = { x: 160, y: 120 };
+
+/** No operations: the intent is a no-op against this state. */
+const DOCK_NOTHING = [];
+
+/**
+ * First tab in one pane carrying \`contentId\`, in strip order.
+ * @param {object} state Current layout.
+ * @param {string} paneId The pane to search, docked or floating.
+ * @param {string} contentId The content identity.
+ * @param {string} [kind] Restrict to tabs of this kind; omit to match any kind.
+ * @returns {string|undefined} the tab, or undefined when that pane shows no such content.
+ */
+function dockFindPaneContentTab(state, paneId, contentId, kind) {
+    const tabs = dockGetPane(state, paneId).tabs;
+    for (let i = 0; i < tabs.length; i += 1) {
+        const tab = state.tabs[tabs[i]];
+        if (tab && tab.contentId === contentId && (kind === undefined || tab.kind === kind)) return tabs[i];
+    }
+    return undefined;
+}
+
+/**
+ * First tab carrying \`contentId\`, searched docked panes first, in visual order.
+ * @param {object} state Current layout.
+ * @param {string} contentId The content identity.
+ * @param {string} [kind] Restrict to tabs of this kind; omit to match any kind.
+ * @returns {string|undefined} the tab, or undefined when nothing shows the content.
+ */
+function dockFindContentTab(state, contentId, kind) {
+    const order = dockPaneIds(state).concat(state.floats);
+    for (let i = 0; i < order.length; i += 1) {
+        const found = dockFindPaneContentTab(state, order[i], contentId, kind);
+        if (found !== undefined) return found;
+    }
+    return undefined;
+}
+
+/**
+ * The pane a new tab lands in.
+ * @param {object} state Current layout.
+ * @returns {string} the active pane when docked, else the first docked pane.
+ */
+function dockActiveDockPaneId(state) {
+    const active = dockGetPane(state, state.activePaneId);
+    return active.host === 'dock' ? active.id : dockFirstPaneId(state);
+}
+
+/** Send a tab into a docked pane, choosing the operation its current host needs. */
+function dockTabInto(source, tabId, toPaneId, index) {
+    return source.host === 'float'
+        ? { type: 'unfloat', paneId: source.id, toPaneId: toPaneId, index: index }
+        : { type: 'moveTab', tabId: tabId, toPaneId: toPaneId, index: index };
+}
+
+/**
+ * Expand or collapse the docked area.
+ * @param {object} state Current layout.
+ * @param {boolean} expanded Whether the docked area is shown.
+ * @returns {object[]} the operation, or none when the value is already current.
+ */
+function dockPlanSetExpanded(state, expanded) {
+    return state.expanded === expanded ? DOCK_NOTHING : [{ type: 'setExpanded', expanded: expanded }];
+}
+
+/**
+ * Switch the presentation.
+ * @param {object} state Current layout.
+ * @param {string} mode The presentation to record.
+ * @returns {object[]} the operation, or none when the value is already current.
+ */
+function dockPlanSetMode(state, mode) {
+    return state.mode === mode ? DOCK_NOTHING : [{ type: 'setMode', mode: mode }];
+}
+
+/**
+ * Split a pane to its right and seed the new pane.
+ * @param {object} state Current layout.
+ * @param {{next:Function}} mint Id source for the pane, split, and seeded tab.
+ * @param {string} [paneId] Pane to split; defaults to the active docked pane.
+ * @param {Function} [makePaneTab] Builds the seeded tab; omit to leave the new pane empty.
+ * @returns {object[]} the operations, or none when the pane budget is spent.
+ */
+function dockPlanSplitPane(state, mint, paneId, makePaneTab) {
+    if (!dockCanSplit(state)) return DOCK_NOTHING;
+    const target = paneId === undefined ? dockActiveDockPaneId(state) : paneId;
+    if (dockGetPane(state, target).host !== 'dock') return DOCK_NOTHING;
+    const newPaneId = mint.next(DOCK_PANE_PREFIX);
+    const ops = [{
+        type: 'split',
+        paneId: target,
+        axis: 'row',
+        direction: 'after',
+        newPaneId: newPaneId,
+        newSplitId: mint.next(DOCK_SPLIT_PREFIX),
+    }];
+    // Seeding is its own operation inside the same intent: the record keeps the
+    // two apart, one step back undoes both — and the factory decides whether
+    // there is anything to seat.
+    const seed = makePaneTab === undefined ? undefined : makePaneTab(mint.next(DOCK_TAB_PREFIX));
+    if (seed !== undefined) ops.push({ type: 'openTab', paneId: newPaneId, tab: seed, index: 0 });
+    return ops;
+}
+
+/**
+ * Seat the embedder's seeded tab at the end of a docked pane's strip.
+ * @param {object} state Current layout.
+ * @param {{next:Function}} mint Id source for the new tab.
+ * @param {string} paneId The pane whose strip asked; must be docked.
+ * @param {Function} [makeTab] Builds the seeded tab; omit to plan nothing.
+ * @returns {object[]} the operations, or none when there is nothing to seat.
+ */
+function dockPlanAddTab(state, mint, paneId, makeTab) {
+    if (makeTab === undefined) return DOCK_NOTHING;
+    const pane = dockGetPane(state, paneId);
+    if (pane.host !== 'dock') return DOCK_NOTHING;
+    return [{ type: 'openTab', paneId: paneId, tab: makeTab(mint.next(DOCK_TAB_PREFIX)), index: pane.tabs.length }];
+}
+
+/**
+ * Open content, or focus the tab already showing it.
+ * @param {object} state Current layout.
+ * @param {{next:Function}} mint Id source for a newly opened tab.
+ * @param {object} input Identity, copy, and optional placement.
+ * @returns {{ops:object[],tabId:string}} the operations plus the tab they settle on.
+ */
+function dockPlanOpenContent(state, mint, input) {
+    const existing = input.revealIfOpened === false
+        ? undefined
+        : dockFindContentTab(state, input.contentId, input.kind);
+    if (existing !== undefined) return { ops: [{ type: 'focusTab', tabId: existing }], tabId: existing };
+    const paneId = input.paneId === undefined ? dockActiveDockPaneId(state) : input.paneId;
+    const index = input.index === undefined ? dockGetPane(state, paneId).tabs.length : input.index;
+    const tab = {
+        id: mint.next(DOCK_TAB_PREFIX),
+        kind: input.kind,
+        contentId: input.contentId,
+        title: input.title,
+    };
+    return { ops: [{ type: 'openTab', paneId: paneId, tab: tab, index: index }], tabId: tab.id };
+}
+
+/**
+ * Open a second, independent tab on the same content, beside the original.
+ * @param {object} state Current layout.
+ * @param {{next:Function}} mint Id source for the copy.
+ * @param {string} tabId Tab to copy.
+ * @returns {{ops:object[],tabId:string}} the operations plus the new tab's id.
+ */
+function dockPlanDuplicateTab(state, mint, tabId) {
+    const source = dockGetTab(state, tabId);
+    const pane = dockFindTabPane(state, tabId);
+    const host = pane.host === 'dock' ? pane.id : dockActiveDockPaneId(state);
+    const index = pane.host === 'dock' ? pane.tabs.indexOf(tabId) + 1 : dockGetPane(state, host).tabs.length;
+    const tab = Object.assign({}, source, { id: mint.next(DOCK_TAB_PREFIX) });
+    return { ops: [{ type: 'openTab', paneId: host, tab: tab, index: index }], tabId: tab.id };
+}
+
+/**
+ * Put a tab at an explicit strip slot: a reorder inside its own pane, otherwise a
+ * move, or a return when it currently floats.
+ * @param {object} state Current layout.
+ * @param {string} tabId The tab being placed.
+ * @param {string} toPaneId Destination docked pane.
+ * @param {number} index Caret slot in the destination strip, counted over the
+ *   chips as drawn — the dragged chip included when the destination is its own
+ *   pane, so the slot just before or just after it is where it already sits.
+ * @returns {object[]} the operations, or none when the placement changes nothing.
+ */
+function dockPlanPlaceTab(state, tabId, toPaneId, index) {
+    const source = dockFindTabPane(state, tabId);
+    if (dockGetPane(state, toPaneId).host !== 'dock') return DOCK_NOTHING;
+    if (source.id === toPaneId) {
+        // \`reorderTab\` indexes the strip without the tab: a caret past the chip
+        // counts one slot the chip itself vacates.
+        const from = source.tabs.indexOf(tabId);
+        const to = index > from ? index - 1 : index;
+        return to === from ? DOCK_NOTHING : [{ type: 'reorderTab', tabId: tabId, index: to }];
+    }
+    return [dockTabInto(source, tabId, toPaneId, index)];
+}
+
+/**
+ * Resolve a tab release on a pane body: the centre moves the tab in, an edge
+ * splits the pane and seats the tab in the new half. A pane's only tab released
+ * on that pane's centre changes nothing; released on its edge it splits, and
+ * the factory's tab backfills the pane the drag would otherwise empty — without
+ * a factory that release also changes nothing, since the split would empty the
+ * pane and seat the tab beside where it already was.
+ * @param {object} state Current layout.
+ * @param {{next:Function}} mint Id source for a pane an edge release creates.
+ * @param {string} tabId The dragged tab.
+ * @param {string} targetPaneId Pane under the pointer.
+ * @param {string} zone Dock region the pointer released in.
+ * @param {Function} [makeTab] Builds the tab that backfills a pane its only tab splits away from.
+ * @returns {object[]} the operations, or none when the release changes nothing.
+ */
+function dockPlanDropTab(state, mint, tabId, targetPaneId, zone, makeTab) {
+    const source = dockFindTabPane(state, tabId);
+    const target = dockGetPane(state, targetPaneId);
+    if (target.host !== 'dock') return DOCK_NOTHING;
+    const split = dockZoneSplit(zone);
+
+    if (split === undefined) {
+        if (source.id === targetPaneId) return DOCK_NOTHING;
+        return [dockTabInto(source, tabId, targetPaneId, target.tabs.length)];
+    }
+
+    const vacates = source.id === targetPaneId && source.tabs.length === 1;
+    if (vacates && makeTab === undefined) return DOCK_NOTHING;
+    if (!dockCanSplit(state)) return DOCK_NOTHING;
+    const newPaneId = mint.next(DOCK_PANE_PREFIX);
+    const ops = [{
+        type: 'split',
+        paneId: targetPaneId,
+        axis: split.axis,
+        direction: split.direction,
+        newPaneId: newPaneId,
+        newSplitId: mint.next(DOCK_SPLIT_PREFIX),
+    }];
+    // The backfill seats before the move so the moved tab ends focused, as any
+    // other drop leaves it.
+    if (vacates && makeTab !== undefined) {
+        ops.push({ type: 'openTab', paneId: targetPaneId, tab: makeTab(mint.next(DOCK_TAB_PREFIX)), index: source.tabs.length });
+    }
+    ops.push(dockTabInto(source, tabId, newPaneId, 0));
+    return ops;
+}
+
+/**
+ * Take a tab out into a floating panel.
+ * @param {object} state Current layout.
+ * @param {{next:Function}} mint Id source for the floating pane.
+ * @param {string} tabId Tab to float.
+ * @param {object} [rect] Explicit rectangle; defaults to a cascade from the last panel.
+ * @returns {{ops:object[],paneId:string}} the operations plus the floating pane's id.
+ */
+function dockPlanFloatTab(state, mint, tabId, rect) {
+    const step = state.floats.length * DOCK_FLOAT_CASCADE_STEP;
+    const newPaneId = mint.next(DOCK_FLOAT_PREFIX);
+    return {
+        ops: [{
+            type: 'float',
+            tabId: tabId,
+            newPaneId: newPaneId,
+            rect: rect === undefined
+                ? {
+                    x: DOCK_FLOAT_ORIGIN.x + step,
+                    y: DOCK_FLOAT_ORIGIN.y + step,
+                    width: DOCK_FLOAT_DEFAULT_SIZE.width,
+                    height: DOCK_FLOAT_DEFAULT_SIZE.height,
+                }
+                : rect,
+        }],
+        paneId: newPaneId,
+    };
+}
+
+/**
+ * Send a floating panel's tab back into the docked tree.
+ * @param {object} state Current layout.
+ * @param {string} paneId The floating pane.
+ * @param {string} [toPaneId] Destination docked pane; defaults to the active one.
+ * @returns {object[]} the operations.
+ */
+function dockPlanUnfloatPane(state, paneId, toPaneId) {
+    const destination = toPaneId === undefined ? dockActiveDockPaneId(state) : toPaneId;
+    return [{
+        type: 'unfloat',
+        paneId: paneId,
+        toPaneId: destination,
+        index: dockGetPane(state, destination).tabs.length,
+    }];
+}
+
+/**
+ * Record the net sizes of a divider drag, clamped to the pane minimum.
+ * @param {string} splitId The split whose divider moved.
+ * @param {number[]} sizes The fractions the drag reached.
+ * @param {number} [minimum] Smallest pane share; defaults to the kit's fraction.
+ * @returns {object[]} the resize operation.
+ */
+function dockPlanResizeSplit(splitId, sizes, minimum) {
+    return [{ type: 'resize', splitId: splitId, sizes: dockClampSizes(sizes, minimum) }];
+}
+
+/**
+ * Keep the docked area populated after an intent: drop every docked pane the
+ * intent left empty, and when the surviving root pane is itself empty, seed it.
+ *
+ * A pane empties when its last tab is closed, moved out, or floated; each such
+ * pane is merged away, innermost first, until none remains. The root pane cannot
+ * be merged, so it is reseeded instead — with the factory's tab, or left empty
+ * when the embedder supplies none. The returned operations continue the intent
+ * they follow, so a caller records both as one entry.
+ * @param {object} state The layout after the intent's own operations.
+ * @param {{next:Function}} mint Id source for the reseeded tab.
+ * @param {Function} [makeTab] Builds the tab an emptied root pane is reseeded with.
+ * @returns {object[]} the follow-up operations, or none when every docked pane holds a tab.
+ */
+function dockPlanSettle(state, mint, makeTab) {
+    const ops = [];
+    let current = state;
+    for (;;) {
+        const ids = dockPaneIds(current);
+        let emptied;
+        for (let i = 0; i < ids.length; i += 1) {
+            if (ids[i] !== current.rootId && dockGetPane(current, ids[i]).tabs.length === 0) { emptied = ids[i]; break; }
+        }
+        if (emptied === undefined) break;
+        const merge = { type: 'merge', paneId: emptied };
+        ops.push(merge);
+        current = dockApplyOp(current, merge).state;
+    }
+    const root = dockGetNode(current, current.rootId);
+    if (root.kind === 'pane' && root.tabs.length === 0 && makeTab !== undefined) {
+        ops.push({ type: 'openTab', paneId: root.id, tab: makeTab(mint.next(DOCK_TAB_PREFIX)), index: 0 });
+    }
+    return ops;
+}
+`,as=`/**
+ * Linear operation history over \`dockApplyOp\`. Recording is total — every
+ * operation lands in the sequence, focus moves included — and grouped by
+ * intent: the operations one gesture or command produced form one entry, so
+ * stepping lands on a point the user actually stopped at. Stepping is coarser
+ * still across focus: a run of consecutive focus-only entries undoes and redoes
+ * as one step.
+ *
+ * Redoing re-applies the recorded operations; undoing applies the inverses that
+ * were captured when they ran, so both directions stay exact. A new entry after
+ * an undo drops the redo branch.
+ */
+
+/** A sequence that has recorded nothing. */
+const DOCK_EMPTY_HISTORY = { entries: [], cursor: 0 };
+
+/** Operation kinds that only move focus. */
+const DOCK_FOCUS_OP_TYPES = { focusTab: true, focusPane: true, restoreFocus: true };
+
+/**
+ * Whether an operation only moves focus, and so merges into its neighbours' undo step.
+ * @param {object} op The operation.
+ * @returns {boolean} whether its type is focus-only.
+ */
+function dockIsFocusOp(op) {
+    return DOCK_FOCUS_OP_TYPES[op.type] === true;
+}
+
+/** Whether the entry at \`index\` only moves focus. */
+function dockIsFocusEntry(history, index) {
+    const entry = history.entries[index];
+    return entry !== undefined && entry.ops.every(dockIsFocusOp);
+}
+
+/**
+ * Whether a step back exists.
+ * @param {object} history The sequence so far.
+ * @returns {boolean} whether any entry is applied.
+ */
+function dockCanStepBack(history) {
+    return history.cursor > 0;
+}
+
+/**
+ * Whether a step forward exists.
+ * @param {object} history The sequence so far.
+ * @returns {boolean} whether a redo branch remains.
+ */
+function dockCanStepForward(history) {
+    return history.cursor < history.entries.length;
+}
+
+/**
+ * The operations a sequence has recorded, redo branch included.
+ * @param {object} history The sequence so far.
+ * @returns {object[]} every entry's operations, in recorded order.
+ */
+function dockRecordedOps(history) {
+    const out = [];
+    for (let i = 0; i < history.entries.length; i += 1) {
+        const ops = history.entries[i].ops;
+        for (let j = 0; j < ops.length; j += 1) out.push(ops[j]);
+    }
+    return out;
+}
+
+/**
+ * Apply one intent's operations and record them as one entry, dropping any redo
+ * branch first. An intent with no operations records nothing.
+ * @param {object} history The sequence so far.
+ * @param {object} state The state the operations apply to.
+ * @param {object[]} ops The intent's operations, in application order.
+ * @returns {{history:object,state:object}} the extended history and the state after the operations.
+ * @throws when an operation is invalid against the state it reaches; nothing is recorded.
+ */
+function dockRecord(history, state, ops) {
+    if (ops.length === 0) return { history: history, state: state };
+    let next = state;
+    const inverse = [];
+    for (let i = 0; i < ops.length; i += 1) {
+        const result = dockApplyOp(next, ops[i]);
+        next = result.state;
+        // Undo runs the inverses in reverse operation order.
+        for (let j = result.inverse.length - 1; j >= 0; j -= 1) inverse.unshift(result.inverse[j]);
+    }
+    const kept = history.cursor === history.entries.length
+        ? history.entries
+        : history.entries.slice(0, history.cursor);
+    return {
+        history: { entries: kept.concat([{ ops: ops, inverse: inverse }]), cursor: history.cursor + 1 },
+        state: next,
+    };
+}
+
+/**
+ * Step back one intent, or one whole run of consecutive focus-only intents.
+ * @param {object} history The sequence so far.
+ * @param {object} state The current state.
+ * @returns {{history:object,state:object}|undefined} the stepped-back pair, or undefined when nothing can be undone.
+ */
+function dockStepBack(history, state) {
+    if (!dockCanStepBack(history)) return undefined;
+    let count = 1;
+    if (dockIsFocusEntry(history, history.cursor - 1)) {
+        while (dockIsFocusEntry(history, history.cursor - 1 - count)) count += 1;
+    }
+    let next = state;
+    const entries = history.entries.slice(history.cursor - count, history.cursor);
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const inverse = entries[i].inverse;
+        for (let j = 0; j < inverse.length; j += 1) next = dockApplyOp(next, inverse[j]).state;
+    }
+    return { history: { entries: history.entries, cursor: history.cursor - count }, state: next };
+}
+
+/**
+ * Step forward over the intents the matching step back undid.
+ * @param {object} history The sequence so far.
+ * @param {object} state The current state.
+ * @returns {{history:object,state:object}|undefined} the stepped-forward pair, or undefined when nothing can be redone.
+ */
+function dockStepForward(history, state) {
+    if (!dockCanStepForward(history)) return undefined;
+    let count = 1;
+    if (dockIsFocusEntry(history, history.cursor)) {
+        while (dockIsFocusEntry(history, history.cursor + count)) count += 1;
+    }
+    let next = state;
+    const entries = history.entries.slice(history.cursor, history.cursor + count);
+    for (let i = 0; i < entries.length; i += 1) {
+        const ops = entries[i].ops;
+        for (let j = 0; j < ops.length; j += 1) next = dockApplyOp(next, ops[j]).state;
+    }
+    return { history: { entries: history.entries, cursor: history.cursor + count }, state: next };
+}
+
+/**
+ * Layout state plus its history cursor, held here instead of by the embedder.
+ * Same implementation as the pure functions above, one mutable wrapper.
+ */
+class DockSequencer {
+    /** @param {object} initial State the sequence replays from; never mutated. */
+    constructor(initial) {
+        this.current = initial;
+        this.recorded = DOCK_EMPTY_HISTORY;
+    }
+
+    /** Current state. */
+    get state() {
+        return this.current;
+    }
+
+    /** The recorded sequence as plain data. */
+    get history() {
+        return this.recorded;
+    }
+
+    /** The whole recorded sequence, including a redo branch that is not applied. */
+    get ops() {
+        return dockRecordedOps(this.recorded);
+    }
+
+    /** How many recorded operations are currently applied. */
+    get cursor() {
+        return this.recorded.cursor;
+    }
+
+    /** Whether a step back exists. */
+    get canUndo() {
+        return dockCanStepBack(this.recorded);
+    }
+
+    /** Whether a step forward exists. */
+    get canRedo() {
+        return dockCanStepForward(this.recorded);
+    }
+
+    /**
+     * Apply and record one operation as its own entry, dropping any redo branch first.
+     * @param {object} op The operation to record.
+     * @returns {object} the state after it.
+     */
+    dispatch(op) {
+        return this.dispatchAll([op]);
+    }
+
+    /**
+     * Apply and record one intent's operations as one entry, dropping any redo
+     * branch first.
+     * @param {object[]} ops The intent's operations; none records nothing.
+     * @returns {object} the state after them.
+     */
+    dispatchAll(ops) {
+        const stepped = dockRecord(this.recorded, this.current, ops);
+        this.recorded = stepped.history;
+        this.current = stepped.state;
+        return this.current;
+    }
+
+    /** Step back one intent, or one whole run of consecutive focus-only intents. @returns {boolean} false when there is nothing to undo. */
+    undo() {
+        const stepped = dockStepBack(this.recorded, this.current);
+        if (stepped === undefined) return false;
+        this.recorded = stepped.history;
+        this.current = stepped.state;
+        return true;
+    }
+
+    /** Step forward over the intents the matching undo stepped back. @returns {boolean} false when there is nothing to redo. */
+    redo() {
+        const stepped = dockStepForward(this.recorded, this.current);
+        if (stepped === undefined) return false;
+        this.recorded = stepped.history;
+        this.current = stepped.state;
+        return true;
+    }
+}
+`,is=`/**
+ * The intent layer's stateful embedding: one controller per docking surface,
+ * itself the observable source the renderer subscribes to (\`subscribe\` plus
+ * \`getSnapshot\`, whose reference only changes when the layout does).
+ *
+ * Every method here is a planner call plus recording plus one notification. The
+ * decisions live in planner.js so an embedder holding its layout in an external
+ * store shares them rather than reimplementing them; a planner that returns no
+ * operations records nothing and notifies nobody.
+ *
+ * The controller holds no host concepts: what a seeded tab contains arrives as
+ * a factory, and a tab's \`kind\` is an opaque string.
+ */
+
+/**
+ * The state a surface starts in: collapsed, one docked pane, and whatever tab
+ * \`makeInitialTab\` supplies.
+ *
+ * The first tab belongs to the initial state rather than to an operation, so
+ * expanding and collapsing never accumulates copies of it.
+ * @param {{next:Function}} minter Id source this surface's sequence will keep using.
+ * @param {Function} [makeInitialTab] Builds the starting tab; omit for an empty pane.
+ * @param {string} [mode] Starting presentation; the embedder's product default.
+ * @returns {object} the collapsed single-pane starting state.
+ */
+function dockCreateInitialState(minter, makeInitialTab, mode) {
+    const paneId = minter.next(DOCK_PANE_PREFIX);
+    const initial = makeInitialTab === undefined ? undefined : makeInitialTab(minter.next(DOCK_TAB_PREFIX));
+    const pane = {
+        kind: 'pane',
+        id: paneId,
+        host: 'dock',
+        tabs: initial === undefined ? [] : [initial.id],
+        activeTabId: initial === undefined ? undefined : initial.id,
+        rect: undefined,
+    };
+    const nodes = {};
+    nodes[paneId] = pane;
+    const tabs = {};
+    if (initial !== undefined) tabs[initial.id] = initial;
+    return {
+        nodes: nodes,
+        tabs: tabs,
+        rootId: paneId,
+        floats: [],
+        activePaneId: paneId,
+        expanded: false,
+        mode: mode === undefined ? 'push' : mode,
+    };
+}
+
+/** One docking surface: history, interaction limits, and change notification. */
+class DockController {
+    /**
+     * @param {object} [options] The tab factories this surface seeds panes with.
+     * @param {Function} [options.makeInitialTab] Builds the tab the starting pane holds; omit to start empty.
+     * @param {Function} [options.makePaneTab] Builds the tab a pane created by \`splitPane\` holds; omit to leave it empty.
+     * @param {string} [options.mode] Starting presentation; defaults to 'push'.
+     */
+    constructor(options) {
+        const config = options || {};
+        this.minter = dockCreateMinter(0);
+        this.makePaneTab = config.makePaneTab;
+        this.sequencer = new DockSequencer(dockCreateInitialState(this.minter, config.makeInitialTab, config.mode));
+        this.listeners = [];
+        this.snapshot = this.buildSnapshot();
+    }
+
+    /**
+     * Observe layout changes.
+     * @param {Function} listener Called after every committed change.
+     * @returns {Function} disposer removing the listener.
+     */
+    subscribe(listener) {
+        this.listeners.push(listener);
+        return () => {
+            const index = this.listeners.indexOf(listener);
+            if (index >= 0) this.listeners.splice(index, 1);
+        };
+    }
+
+    /** Current snapshot; the same reference until the layout changes. @returns {object} */
+    getSnapshot() {
+        return this.snapshot;
+    }
+
+    /** Recorded sequence, for tests and the operation readout. @returns {object[]} */
+    get ops() {
+        return this.sequencer.ops;
+    }
+
+    buildSnapshot() {
+        const state = this.sequencer.state;
+        return {
+            state: state,
+            canUndo: this.sequencer.canUndo,
+            canRedo: this.sequencer.canRedo,
+            canSplit: dockCanSplit(state),
+            opCount: this.sequencer.ops.length,
+            cursor: this.sequencer.cursor,
+        };
+    }
+
+    commit() {
+        this.snapshot = this.buildSnapshot();
+        const listeners = this.listeners.slice();
+        for (let i = 0; i < listeners.length; i += 1) listeners[i]();
+    }
+
+    get state() {
+        return this.sequencer.state;
+    }
+
+    /** Record a planned intent as one history entry. @returns {boolean} whether anything was recorded. */
+    run(ops) {
+        if (ops.length === 0) return false;
+        this.sequencer.dispatchAll(ops);
+        this.commit();
+        return true;
+    }
+
+    /** Expand or collapse the docked area. Floating panels are unaffected. */
+    setExpanded(expanded) {
+        this.run(dockPlanSetExpanded(this.state, expanded));
+    }
+
+    /** Flip the docked area between expanded and collapsed. */
+    toggleExpanded() {
+        this.setExpanded(!this.state.expanded);
+    }
+
+    /** Switch how the docked area is presented. */
+    setMode(mode) {
+        this.run(dockPlanSetMode(this.state, mode));
+    }
+
+    /**
+     * Split a pane to its right and seat the embedder's pane tab in the new pane.
+     * @returns {boolean} false when the docked grid is already at the engine cap.
+     */
+    splitPane(paneId) {
+        return this.run(dockPlanSplitPane(this.state, this.minter, paneId, this.makePaneTab));
+    }
+
+    /** Seat the pane-tab factory's tab at the end of a pane's strip. */
+    addTab(paneId) {
+        return this.run(dockPlanAddTab(this.state, this.minter, paneId, this.makePaneTab));
+    }
+
+    /**
+     * Open content, or focus the tab already showing it.
+     * @returns {string} the tab now focused.
+     */
+    openContent(input) {
+        const planned = dockPlanOpenContent(this.state, this.minter, input);
+        this.run(planned.ops);
+        return planned.tabId;
+    }
+
+    /** Open a second, independent tab on the same content. @returns {string} the new tab id. */
+    duplicateTab(tabId) {
+        const planned = dockPlanDuplicateTab(this.state, this.minter, tabId);
+        this.run(planned.ops);
+        return planned.tabId;
+    }
+
+    /** Destroy a tab and its content state. A floating host panel goes with it. */
+    closeTab(tabId) {
+        this.run([{ type: 'closeTab', tabId: tabId }]);
+    }
+
+    /** Focus a tab, its pane, and raise that pane when it floats. */
+    focusTab(tabId) {
+        this.run([{ type: 'focusTab', tabId: tabId }]);
+    }
+
+    /** Focus a pane, raising it when it floats. */
+    focusPane(paneId) {
+        this.run([{ type: 'focusPane', paneId: paneId }]);
+    }
+
+    /** Move a tab inside its own pane. */
+    reorderTab(tabId, index) {
+        this.run([{ type: 'reorderTab', tabId: tabId, index: index }]);
+    }
+
+    /** Put a tab at an explicit slot: a reorder, a move, or a return. */
+    placeTab(tabId, toPaneId, index) {
+        return this.run(dockPlanPlaceTab(this.state, tabId, toPaneId, index));
+    }
+
+    /** Resolve a tab drop inside the docked area. */
+    dropTab(tabId, targetPaneId, zone) {
+        return this.run(dockPlanDropTab(this.state, this.minter, tabId, targetPaneId, zone, this.makePaneTab));
+    }
+
+    /** Take a tab out into a floating panel. @returns {string} the new floating pane id. */
+    floatTab(tabId, rect) {
+        const planned = dockPlanFloatTab(this.state, this.minter, tabId, rect);
+        this.run(planned.ops);
+        return planned.paneId;
+    }
+
+    /** Send a floating panel's tab back into the docked tree. */
+    unfloatPane(paneId, toPaneId) {
+        this.run(dockPlanUnfloatPane(this.state, paneId, toPaneId));
+    }
+
+    /** Record the net position of a floating-panel drag; the panel is focused and raised with it. */
+    moveFloat(paneId, x, y) {
+        this.run([{ type: 'moveFloat', paneId: paneId, x: x, y: y }]);
+    }
+
+    /** Record the net rectangle of a floating-panel resize; the panel is focused and raised with it. */
+    resizeFloat(paneId, rect) {
+        this.run([{ type: 'resizeFloat', paneId: paneId, rect: rect }]);
+    }
+
+    /** Record the net sizes of a divider drag, clamped to the pane minimum. */
+    resizeSplit(splitId, sizes) {
+        this.run(dockPlanResizeSplit(splitId, sizes));
+    }
+
+    /** Keep the docked area populated after an intent: merge emptied panes, reseed an emptied root. */
+    settle() {
+        return this.run(dockPlanSettle(this.state, this.minter, this.makePaneTab));
+    }
+
+    /** Step back one intent, or one run of consecutive focus-only intents. */
+    undo() {
+        if (!this.sequencer.undo()) return false;
+        this.commit();
+        return true;
+    }
+
+    /** Step forward over what the matching undo stepped back. */
+    redo() {
+        if (!this.sequencer.redo()) return false;
+        this.commit();
+        return true;
+    }
+
+    /** The pane a new tab lands in, for an embedder that needs to name it. */
+    activeDockPaneId() {
+        return dockActiveDockPaneId(this.state);
+    }
+}
+`,os=`/**\r
+ * Chrome glyphs, lifted verbatim from dsh's own sources (paths unmodified):\r
+ *   - split: \`ui-dockkit/src/components/TabPanel.tsx\` SplitGlyph (panel frame\r
+ *     with the divider at the centre)\r
+ *   - fullscreen / exit fullscreen: \`ui-sidebar-right/src/client/shell/\r
+ *     SidebarRight.tsx\` (figma extracts, four frame corners / two inward corners)\r
+ *   - collapse: the panel-left outline from \`ui-primitives\`, mirrored by CSS\r
+ *     (same glyph the expand button uses).\r
+ * Generated from source; size is set by the stylesheet (15px inside a 28px\r
+ * circle, like dsh's iconButton).\r
+ */\r
+/* eslint-disable */\r
+const DOCK_ICON_SPLIT = \`<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM4.1828 14.0873L5.54303 14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715L4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873ZM7.31989 1.88307H8.68012V14.1169H7.31989V1.88307Z"/></svg>\`;\r
+const DOCK_ICON_FULLSCREEN = \`<svg viewBox="0 0 16 16" fill="none" >\r
+      <g fill="currentColor" stroke="currentColor" stroke-width="0.105646" stroke-linecap="square">\r
+        <path d="M6.04798 2.13627V0.815964H5.99549L5.36158 0.817345V0.815964L3.39978 0.815274C3.01892 0.815274 2.67749 0.814821 2.39919 0.844967C2.10813 0.87655 1.80506 0.949512 1.52981 1.14949C1.3822 1.25681 1.25251 1.38652 1.14518 1.53412C0.945217 1.80935 0.872245 2.11246 0.840659 2.4035C0.810509 2.68178 0.810965 3.02324 0.810966 3.40409L0.811656 5.36589V5.9998L0.810966 6.05297L0.864137 6.05228H2.13196L2.18513 6.05297L2.18444 5.9998V5.36589L2.18513 3.40409C2.18513 2.99322 2.18631 2.73978 2.20653 2.55266C2.22499 2.38234 2.25273 2.34575 2.25556 2.34204C2.27837 2.31066 2.30635 2.28267 2.33774 2.25987C2.34207 2.25657 2.37978 2.22911 2.54835 2.21084C2.73548 2.19063 2.98893 2.18944 3.39978 2.18944L5.36158 2.18875L5.9948 2.18944H6.04867L6.04798 2.13627Z" />\r
+        <path d="M9.94031 13.86L9.94031 15.1803L9.99279 15.1803L10.6267 15.179L10.6267 15.1803L12.5885 15.181C12.9694 15.181 13.3108 15.1815 13.5891 15.1513C13.8801 15.1198 14.1832 15.0468 14.4585 14.8468C14.6061 14.7395 14.7358 14.6098 14.8431 14.4622C15.0431 14.187 15.116 13.8838 15.1476 13.5928C15.1778 13.3145 15.1773 12.9731 15.1773 12.5922L15.1766 10.6304L15.1766 9.9965L15.1773 9.94333L15.1241 9.94402L13.8563 9.94402L13.8032 9.94333L13.8038 9.9965L13.8038 10.6304L13.8032 12.5922C13.8032 13.0031 13.802 13.2565 13.7817 13.4437C13.7633 13.614 13.7355 13.6506 13.7327 13.6543C13.7099 13.6856 13.6819 13.7136 13.6505 13.7364C13.6462 13.7397 13.6085 13.7672 13.4399 13.7855C13.2528 13.8057 12.9993 13.8069 12.5885 13.8069L10.6267 13.8076L9.99348 13.8069L9.93962 13.8069L9.94031 13.86Z" />\r
+        <path d="M13.8568 6.05243H15.1771V5.99995L15.1757 5.36604H15.1771L15.1778 3.40423C15.1778 3.02337 15.1783 2.68194 15.1481 2.40365C15.1165 2.11259 15.0436 1.80952 14.8436 1.53427C14.7363 1.38666 14.6066 1.25697 14.459 1.14964C14.1837 0.949672 13.8806 0.8767 13.5896 0.845114C13.3113 0.814965 12.9698 0.815421 12.589 0.815421L10.6272 0.816112H9.99329L9.94011 0.815421L9.9408 0.868592V2.13641L9.94011 2.18958L9.99329 2.18889H10.6272L12.589 2.18958C12.9999 2.18958 13.2533 2.19077 13.4404 2.21099C13.6107 2.22944 13.6473 2.25719 13.651 2.26002C13.6824 2.28282 13.7104 2.31081 13.7332 2.34219C13.7365 2.34653 13.764 2.38424 13.7822 2.5528C13.8025 2.73993 13.8037 2.99339 13.8037 3.40423L13.8043 5.36604L13.8037 5.99926V6.05312L13.8568 6.05243Z" />\r
+        <path d="M2.12951 9.94389L0.809205 9.94389L0.809205 9.99637L0.810586 10.6303L0.809205 10.6303L0.808514 12.5921C0.808514 12.9729 0.808061 13.3144 0.838207 13.5927C0.86979 13.8837 0.942753 14.1868 1.14273 14.4621C1.25005 14.6097 1.37976 14.7394 1.52736 14.8467C1.80259 15.0467 2.1057 15.1196 2.39674 15.1512C2.67502 15.1814 3.01648 15.1809 3.39733 15.1809L5.35913 15.1802L5.99304 15.1802L6.04621 15.1809L6.04552 15.1277L6.04552 13.8599L6.04621 13.8067L5.99304 13.8074L5.35913 13.8074L3.39733 13.8067C2.98646 13.8067 2.73302 13.8056 2.5459 13.7853C2.37559 13.7669 2.33899 13.7391 2.33528 13.7363C2.3039 13.7135 2.27591 13.6855 2.25311 13.6541C2.24981 13.6498 2.22235 13.6121 2.20408 13.4435C2.18387 13.2564 2.18268 13.0029 2.18268 12.5921L2.18199 10.6303L2.18268 9.99706L2.18268 9.9432L2.12951 9.94389Z" />\r
+      </g>\r
+    </svg>\`;\r
+const DOCK_ICON_EXIT_FULLSCREEN = \`<svg viewBox="0 0 16 16" fill="none" >\r
+      <g fill="currentColor" stroke="currentColor" stroke-width="0.105646" stroke-linecap="square">\r
+        <path d="M10.698 0.379607H9.43015L9.37698 0.378916L9.37767 0.432087V1.066L9.37698 4.0277C9.37698 4.40856 9.37653 4.74998 9.40667 5.02828C9.43826 5.31934 9.51053 5.62311 9.71051 5.89835C9.81779 6.04587 9.94762 6.1757 10.0951 6.28298C10.3704 6.48296 10.6741 6.55523 10.9652 6.58682C11.2435 6.61696 11.5849 6.61651 11.9658 6.61651L14.9275 6.61582H15.5614L15.6146 6.61651L15.6139 6.56334V5.29552L15.6146 5.24235L15.5614 5.24304H14.9275L11.9658 5.24235C11.5545 5.24235 11.3009 5.24191 11.1137 5.22163C10.9443 5.20329 10.9078 5.17501 10.9038 5.17191C10.8724 5.14911 10.8444 5.12112 10.8216 5.08974C10.8185 5.08566 10.7902 5.04908 10.7719 4.87982C10.7516 4.69263 10.7511 4.439 10.7511 4.0277L10.7505 1.066V0.432087L10.7511 0.378916L10.698 0.379607Z" />\r
+        <path d="M5.29031 15.6167L6.55813 15.6167L6.6113 15.6174L6.61061 15.5642L6.61061 14.9303L6.6113 11.9686C6.6113 11.5878 6.61176 11.2463 6.58161 10.968C6.55003 10.677 6.47775 10.3732 6.27777 10.098C6.17049 9.95045 6.04067 9.82062 5.89315 9.71334C5.6179 9.51336 5.31413 9.44109 5.02307 9.40951C4.74478 9.37936 4.40335 9.37981 4.02249 9.37981L1.06079 9.3805L0.426879 9.3805L0.373708 9.37981L0.374398 9.43298L0.374398 10.7008L0.373708 10.754L0.426879 10.7533L1.06079 10.7533L4.02249 10.754C4.43379 10.754 4.68742 10.7544 4.87461 10.7747C5.04393 10.793 5.08047 10.8213 5.08453 10.8244C5.11591 10.8472 5.1439 10.8752 5.1667 10.9066C5.16982 10.9107 5.19808 10.9472 5.21642 11.1165C5.2367 11.3037 5.23714 11.5573 5.23714 11.9686L5.23783 14.9303L5.23783 15.5642L5.23714 15.6174L5.29031 15.6167Z" />\r
+      </g>\r
+    </svg>\`;\r
+`,ls=`/**
+ * Pointer ownership shared by the docked surface and the float layer.
+ *
+ * Capture is hardening, not the mechanism: the window listeners carry the
+ * gesture either way. Capture is what stops a scroll container the pointer
+ * crosses from claiming it, which Chromium reports as a cancelled pointer and
+ * an abandoned drag. Environments without the API simply go unhardened.
+ */
+
+/**
+ * Take ownership of the pointer for the rest of the gesture.
+ * @param {Element} element The element the gesture started on.
+ * @param {number} pointerId The pointer to capture.
+ */
+function dockCapturePointer(element, pointerId) {
+    if (!element || typeof element.setPointerCapture !== 'function') return;
+    try {
+        element.setPointerCapture(pointerId);
+    } catch (error) {
+        // A pointer that already left cannot be captured; the window listeners still carry the gesture.
+    }
+}
+
+/**
+ * Capture the pointer, then follow it on the window until release or cancel.
+ * Only that pointer's events count: a second finger or a pen beside the mouse
+ * neither moves nor ends the gesture. The listeners remove themselves before
+ * \`up\` or \`cancel\` runs; the returned callback ends the gesture early.
+ * @param {Element} element The element the gesture started on.
+ * @param {number} pointerId The pointer to capture and follow.
+ * @param {{move:Function,up:Function,cancel:Function}} followers Listeners for move, release, and cancel.
+ * @returns {Function} detach callback removing the listeners.
+ */
+function dockFollowPointer(element, pointerId, followers) {
+    dockCapturePointer(element, pointerId);
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const options = controller ? { signal: controller.signal } : undefined;
+    const own = (event) => event.pointerId === pointerId;
+    const onMove = (event) => { if (own(event)) followers.move(event); };
+    const onUp = (event) => {
+        if (!own(event)) return;
+        stop();
+        followers.up(event);
+    };
+    const onCancel = (event) => {
+        if (!own(event)) return;
+        stop();
+        followers.cancel();
+    };
+    function stop() {
+        if (controller) controller.abort();
+        else {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onCancel);
+        }
+    }
+    window.addEventListener('pointermove', onMove, options);
+    window.addEventListener('pointerup', onUp, options);
+    window.addEventListener('pointercancel', onCancel, options);
+    return stop;
+}
+
+/**
+ * One pointer gesture at a time for a component. A gesture ends on release, on
+ * cancel, or when a new press supersedes it; \`reset\` runs at each of those ends
+ * so the component clears its preview. Unmounting mid-gesture removes the
+ * listeners without resetting anything.
+ * @param {Function} reset Clears the component's gesture preview.
+ * @returns {Function} the gesture starter, called from a pointer-down handler:
+ *   \`begin(element, pointerId, { move, up })\`.
+ */
+function dockCreateGestureController(reset) {
+    let inFlight;
+    return function begin(element, pointerId, followers) {
+        if (inFlight) inFlight.end();
+        const settle = () => {
+            inFlight = undefined;
+            reset();
+        };
+        const stop = dockFollowPointer(element, pointerId, {
+            move: followers.move,
+            up: (event) => {
+                settle();
+                followers.up(event);
+            },
+            cancel: settle,
+        });
+        inFlight = {
+            stop: stop,
+            end: () => {
+                stop();
+                settle();
+            },
+        };
+    };
+}
+`,ds=`/**
+ * DOM side of the room rule: read each docked pane's rectangles after a commit
+ * and ask \`dockHalvesFit\` whether a split would leave two working halves.
+ * Pixels live here and in geometry.js; the engine's planners never see them.
+ */
+
+/** What an unmeasured pane is taken to be: fitting, until a reading says otherwise. */
+const DOCK_UNMEASURED_FIT = { row: true, column: true };
+
+/** Nothing measured yet. */
+function dockNoFits() {
+    return new Map();
+}
+
+function dockRectOf(element) {
+    if (!element) return { x: 0, y: 0, width: 0, height: 0 };
+    return element.getBoundingClientRect();
+}
+
+function dockPx(value) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Every docked pane element under \`root\`, in document order, with the pane id
+ * each carries.
+ * @param {Element} root The docked surface's element.
+ * @returns {Array<[string,Element]>} pane ids paired with their elements.
+ */
+function dockPaneElements(root) {
+    const panes = [];
+    if (!root || !root.querySelectorAll) return panes;
+    const found = root.querySelectorAll('[data-dock-pane]');
+    for (let i = 0; i < found.length; i += 1) {
+        const paneId = found[i].getAttribute('data-dock-pane');
+        if (paneId) panes.push([paneId, found[i]]);
+    }
+    return panes;
+}
+
+/**
+ * One chip's minimum footprint from a rendered chip's computed style; the
+ * stylesheet fallback where none is rendered or styles are not applied.
+ */
+function dockChipMinimum(root) {
+    const chip = root.querySelector('[data-dock-tab]');
+    if (!chip) return DOCK_SPLIT_MINIMUMS.chip;
+    const style = getComputedStyle(chip);
+    const min = dockPx(style.minWidth);
+    if (min <= 0) return DOCK_SPLIT_MINIMUMS.chip;
+    if (style.boxSizing === 'border-box') return min;
+    return min + dockPx(style.paddingLeft) + dockPx(style.paddingRight) + dockPx(style.borderLeftWidth) + dockPx(style.borderRightWidth);
+}
+
+/** A rendered divider's thickness, or the stylesheet fallback before the first split. */
+function dockDividerSize(root) {
+    const divider = root.querySelector('[data-dock-divider]');
+    if (!divider) return DOCK_SPLIT_MINIMUMS.divider;
+    const rect = divider.getBoundingClientRect();
+    const thickness = Math.min(rect.width, rect.height);
+    return thickness > 0 ? thickness : DOCK_SPLIT_MINIMUMS.divider;
+}
+
+/**
+ * The rendered split control's footprint in the strip's fixed part: its box
+ * plus the strip's own gap, both of which the strip sheds when the control
+ * hides. 0 while the control is hidden or unmeasured.
+ */
+function dockSplitControlFootprint(pane) {
+    const control = pane.querySelector('[data-dock-split-button]');
+    if (!control) return 0;
+    const width = control.getBoundingClientRect().width;
+    if (!(width > 0)) return 0;
+    const strip = pane.querySelector('[data-dock-strip]');
+    return width + (strip ? dockPx(getComputedStyle(strip).columnGap) : 0);
+}
+
+/**
+ * Measure every docked pane under \`root\`.
+ * @param {Element} root The docked surface's element.
+ * @param {boolean} [splitHiddenWhenBlocked] Whether the embedder hides blocked
+ *   split controls; the room rule then leaves the control's footprint out of
+ *   each strip's fixed part, so the reading cannot flip with the control's
+ *   visibility.
+ * @returns {Map<string,{row:boolean,column:boolean}>} each pane's fit, keyed by pane id.
+ */
+function dockMeasurePaneFits(root, splitHiddenWhenBlocked) {
+    const minimums = {
+        divider: dockDividerSize(root),
+        chip: dockChipMinimum(root),
+        body: DOCK_SPLIT_MINIMUMS.body,
+        stripHeight: DOCK_SPLIT_MINIMUMS.stripHeight,
+    };
+    const fits = new Map();
+    const panes = dockPaneElements(root);
+    for (let i = 0; i < panes.length; i += 1) {
+        const paneId = panes[i][0];
+        const pane = panes[i][1];
+        fits.set(paneId, dockHalvesFit({
+            pane: dockRectOf(pane),
+            strip: dockRectOf(pane.querySelector('[data-dock-strip]')),
+            chipsWidth: dockRectOf(pane.querySelector('[data-dock-strip-tabs]')).width,
+            fillWidth: dockRectOf(pane.querySelector('[data-dock-strip-fill]')).width,
+            splitControlWidth: splitHiddenWhenBlocked ? dockSplitControlFootprint(pane) : 0,
+        }, minimums));
+    }
+    return fits;
+}
+
+/**
+ * One pane's latest reading. A pane the map does not name has not been
+ * measured and fits: the rule only blocks on a positive reading.
+ * @param {Map} fits The latest measurement.
+ * @param {string} paneId The pane asked about.
+ * @returns {{row:boolean,column:boolean}} whether each split axis leaves two working halves.
+ */
+function dockFitOf(fits, paneId) {
+    return (fits && fits.get(paneId)) || DOCK_UNMEASURED_FIT;
+}
+
+/**
+ * Whether two measurements agree, so a re-measure that changed nothing
+ * re-renders nothing.
+ * @param {Map} a One measurement.
+ * @param {Map} b The other.
+ * @returns {boolean} whether both name the same panes with the same readings.
+ */
+function dockSameFits(a, b) {
+    if (!a || !b || a.size !== b.size) return false;
+    for (const entry of a) {
+        const other = b.get(entry[0]);
+        if (!other || other.row !== entry[1].row || other.column !== entry[1].column) return false;
+    }
+    return true;
+}
+`,cs=`/**
+ * The docked surface: the split tree plus the tab and divider gestures over it.
+ * This is the whole dock surface as far as the app's layout area is concerned —
+ * chrome around it (a tool button, a collapsed presentation) belongs to the
+ * embedder.
+ *
+ * A gesture only previews until it ends, then leaves through one intent call,
+ * so the embedder's operation sequence stays the single source of truth.
+ * Releasing a tab clear of this surface floats it; releasing inside it but on
+ * no pane is not a move at all.
+ *
+ * Interaction rules copied from dsh's DockSurface/TabPanel, each one fixing a
+ * defect found in a real browser:
+ *   - the pointer is captured when a gesture starts;
+ *   - the chips give way, the strip's end controls never do (CSS-side);
+ *   - the chip box scrolls but never claims a gesture (touch-action: none);
+ *   - focus lands on click, not on press;
+ *   - a control nested inside a draggable chip stops its own press;
+ *   - a divider drag is absorbed by its two neighbours and clamped.
+ */
+
+/** Width of the chip box's fade at a hidden side; mirrors the stylesheet's 24px. */
+const DOCK_STRIP_FADE = 24;
+
+/** The default policy for omitted callbacks: every pane offers add, every tab its close. */
+function dockAlwaysTrue() {
+    return true;
+}
+
+/** Fractions closer than this are the same split. */
+const DOCK_SIZE_TOLERANCE = 1e-9;
+
+function dockSameSizes(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (Math.abs(a[i] - b[i]) >= DOCK_SIZE_TOLERANCE) return false;
+    }
+    return true;
+}
+
+/**
+ * One docked surface view: renders a layout snapshot into DOM and reports
+ * settled intents. No framework; the embedder drives \`sync(state)\` whenever the
+ * store's snapshot changes.
+ */
+class DockSurfaceView {
+    /**
+     * @param {object} config The surface's wiring.
+     */
+    constructor(config) {
+        this.root = config.root;
+        this.labels = config.labels || {};
+        this.renderTab = config.renderTab;
+        this.renderTabTitle = config.renderTabTitle;
+        this.canAddTab = config.canAddTab || dockAlwaysTrue;
+        this.canCloseTab = config.canCloseTab || dockAlwaysTrue;
+        this.canSplitSurface = config.canSplitSurface || dockAlwaysTrue;
+        this.hideSplitWhenBlocked = !!config.hideSplitWhenBlocked;
+        this.dropZones = config.dropZones === 'horizontal' ? 'horizontal' : 'edges';
+        this.minPaneFraction = typeof config.minPaneFraction === 'number' ? config.minPaneFraction : DOCK_MIN_PANE_FRACTION;
+        this.intents = config.intents;
+        this.onRoom = config.onRoom;
+        this.onTabRemoved = config.onTabRemoved;
+        this.chrome = config.chrome || null;
+
+        this.state = null;
+        this.paneEls = Object.create(null);
+        this.tabBodies = Object.create(null);
+        this.fits = dockNoFits();
+        this.preview = { draggingTabId: undefined, dropTarget: undefined, sizes: undefined };
+        this.beginGesture = dockCreateGestureController(() => {
+            this.preview = { draggingTabId: undefined, dropTarget: undefined, sizes: undefined };
+            this.applyPreview();
+        });
+        this.el = null;
+        this.observer = null;
+        this.menu = null;
+    }
+
+    /** Create the surface element and start watching for room-rule readings. */
+    mount() {
+        const el = document.createElement('div');
+        el.className = 'dock-surface';
+        el.setAttribute('data-dock-surface', '1');
+        el.setAttribute('data-dock-drop-zones', this.dropZones);
+        this.el = el;
+        if (this.root) this.root.appendChild(el);
+        if (typeof ResizeObserver === 'function') {
+            this.observer = new ResizeObserver(() => this.remeasure());
+            this.observer.observe(el);
+        }
+        return el;
+    }
+
+    /** Remove the surface and every listener it owns. */
+    destroy() {
+        this.dismissMenu();
+        if (this.observer) this.observer.disconnect();
+        this.observer = null;
+        this.paneEls = Object.create(null);
+        this.tabBodies = Object.create(null);
+        if (this.el && this.el.parentNode) this.el.parentNode.removeChild(this.el);
+        this.el = null;
+    }
+
+    /**
+     * Reconcile the whole surface against a layout snapshot.
+     * @param {object} state Current layout.
+     */
+    sync(state) {
+        this.state = state;
+        this.renderTree();
+        this.renderFloatsRemovedTabs(state);
+        this.applyPreview();
+        this.updateStripFades();
+        this.remeasure();
+    }
+
+    /** Hand a tab body to the embedder when the tab is gone, so it can stop what it started. */
+    renderFloatsRemovedTabs(state) {
+        const ids = Object.keys(this.tabBodies);
+        for (let i = 0; i < ids.length; i += 1) {
+            if (state.tabs[ids[i]] === undefined) {
+                const element = this.tabBodies[ids[i]];
+                delete this.tabBodies[ids[i]];
+                if (this.onTabRemoved) this.onTabRemoved(ids[i], element);
+            }
+        }
+        // A tab can move to a floating pane: its body leaves the docked surface.
+        const docked = {};
+        const panes = dockPaneIds(state);
+        for (let i = 0; i < panes.length; i += 1) {
+            const tabs = state.nodes[panes[i]].tabs;
+            for (let j = 0; j < tabs.length; j += 1) docked[tabs[j]] = true;
+        }
+        const bodyIds = Object.keys(this.tabBodies);
+        for (let i = 0; i < bodyIds.length; i += 1) {
+            if (docked[bodyIds[i]] !== true) {
+                const element = this.tabBodies[bodyIds[i]];
+                if (element && element.parentNode) element.parentNode.removeChild(element);
+            }
+        }
+    }
+
+    /** Rebuild the split shell, reusing pane elements (and their focus) by id. */
+    renderTree() {
+        const state = this.state;
+        const shell = this.buildNode(state.rootId);
+        const current = this.el.firstChild;
+        if (current !== shell) this.el.replaceChildren(shell);
+        const ids = dockPaneIds(state);
+        for (let i = 0; i < ids.length; i += 1) this.renderPane(state, ids[i]);
+    }
+
+    buildNode(nodeId) {
+        const state = this.state;
+        const node = dockGetNode(state, nodeId);
+        if (node.kind === 'pane') return this.ensurePane(node);
+        const split = document.createElement('div');
+        split.className = 'dock-split dock-split--' + node.axis;
+        split.setAttribute('data-dock-split', node.id);
+        const sizes = this.preview.sizes && this.preview.sizes.splitId === node.id ? this.preview.sizes.sizes : node.sizes;
+        for (let i = 0; i < node.children.length; i += 1) {
+            if (i > 0) {
+                const divider = document.createElement('div');
+                divider.className = 'dock-divider';
+                divider.setAttribute('data-dock-divider', node.id + ':' + (i - 1));
+                divider.addEventListener('pointerdown', (event) => this.onDividerPressed(node.id, i - 1, event));
+                split.appendChild(divider);
+            }
+            const cell = document.createElement('div');
+            cell.className = 'dock-cell';
+            cell.setAttribute('data-dock-cell', node.id + ':' + i);
+            cell.style.flexGrow = String(sizes[i]);
+            cell.appendChild(this.buildNode(node.children[i]));
+            split.appendChild(cell);
+        }
+        return split;
+    }
+
+    ensurePane(pane) {
+        let entry = this.paneEls[pane.id];
+        if (entry) return entry.el;
+        const el = document.createElement('section');
+        el.className = 'dock-pane';
+        el.setAttribute('data-dock-pane', pane.id);
+        el.addEventListener('click', () => {
+            if (!this.state || this.state.activePaneId === pane.id) return;
+            this.intents.focusPane(pane.id);
+        });
+        const strip = document.createElement('div');
+        strip.className = 'dock-strip';
+        strip.setAttribute('data-dock-strip', pane.id);
+        strip.setAttribute('role', 'tablist');
+        const tabsBox = document.createElement('div');
+        tabsBox.className = 'dock-strip-tabs';
+        tabsBox.setAttribute('data-dock-strip-tabs', pane.id);
+        tabsBox.addEventListener('scroll', () => this.updateStripFadeFor(tabsBox), { passive: true });
+        const fill = document.createElement('div');
+        fill.className = 'dock-strip-fill';
+        fill.setAttribute('data-dock-strip-fill', pane.id);
+        const addButton = document.createElement('button');
+        addButton.type = 'button';
+        addButton.className = 'dock-icon-button dock-add-tab';
+        addButton.setAttribute('aria-label', this.labels.addTab || '添加标签');
+        addButton.textContent = '+';
+        addButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.intents.addTab(pane.id);
+        });
+        const splitButton = document.createElement('button');
+        splitButton.type = 'button';
+        splitButton.className = 'dock-icon-button dock-split-button';
+        splitButton.setAttribute('data-dock-split-button', pane.id);
+        // The embedder may hand in its own glyph markup (the console's split
+        // icon is the dock frame with the divider at its centre); the text
+        // glyph is only a fallback for contexts that pass none.
+        splitButton.innerHTML = this.labels.splitIconSVG || '<span aria-hidden="true">▥</span>';
+        splitButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const block = this.splitBlock(pane.id);
+            if (block) return;
+            this.intents.splitPane(pane.id);
+        });
+        const chrome = document.createElement('div');
+        chrome.className = 'dock-strip-chrome';
+        chrome.setAttribute('data-dock-strip-chrome', pane.id);
+        chrome.addEventListener('click', (event) => event.stopPropagation());
+        const body = document.createElement('div');
+        body.className = 'dock-pane-body';
+        body.setAttribute('data-dock-pane-body', pane.id);
+        strip.appendChild(tabsBox);
+        strip.appendChild(addButton);
+        strip.appendChild(fill);
+        strip.appendChild(splitButton);
+        strip.appendChild(chrome);
+        el.appendChild(strip);
+        el.appendChild(body);
+        entry = { el: el, strip: strip, tabsBox: tabsBox, addButton: addButton, splitButton: splitButton, chrome: chrome, body: body, chips: Object.create(null), bodyTabId: undefined };
+        this.paneEls[pane.id] = entry;
+        return el;
+    }
+
+    /** Update one pane: active flag, chips, strip controls, and the active body. */
+    renderPane(state, paneId) {
+        const pane = dockGetPane(state, paneId);
+        const entry = this.paneEls[paneId];
+        if (!entry) return;
+        if (state.activePaneId === paneId) entry.el.setAttribute('data-dock-pane-active', '1');
+        else entry.el.removeAttribute('data-dock-pane-active');
+
+        this.renderChips(state, pane, entry);
+
+        const addAllowed = this.canAddTab(paneId);
+        entry.addButton.hidden = !addAllowed;
+        const block = this.splitBlock(paneId);
+        const hide = this.hideSplitWhenBlocked && block !== undefined;
+        entry.splitButton.hidden = hide;
+        entry.splitButton.disabled = block !== undefined;
+        entry.splitButton.setAttribute('data-dock-split-blocked', block || '');
+        entry.splitButton.setAttribute('aria-label', block === 'width'
+            ? (this.labels.splitPaneNarrow || '当前面板宽度不足以再分屏')
+            : block === 'budget'
+                ? (this.labels.splitPaneDisabled || '分屏数量已达上限')
+                : (this.labels.splitPane || '左右分屏'));
+        entry.splitButton.title = block === 'width'
+            ? (this.labels.splitPaneNarrow || '当前面板宽度不足以再分屏')
+            : block === 'budget'
+                ? (this.labels.splitPaneDisabled || '分屏数量已达上限')
+                : (this.labels.splitPane || '左右分屏');
+
+        const topRight = dockTopRightPaneId(state);
+        const wantsChrome = paneId === topRight && this.chrome;
+        if (wantsChrome && entry.chrome.childNodes.length === 0) entry.chrome.appendChild(this.chrome);
+        entry.chrome.hidden = !wantsChrome;
+
+        // The active tab's body: cached by tab id so a conversation view keeps
+        // its scroll position, its stream, and its listeners across commits.
+        const activeTab = pane.activeTabId === undefined ? undefined : state.tabs[pane.activeTabId];
+        if (activeTab === undefined) {
+            if (entry.bodyTabId !== undefined) {
+                entry.body.replaceChildren();
+                entry.bodyTabId = undefined;
+            }
+            if (!entry.emptyLabel) {
+                entry.emptyLabel = document.createElement('p');
+                entry.emptyLabel.className = 'dock-empty';
+            }
+            entry.emptyLabel.textContent = this.labels.emptyPane || '此面板暂无内容';
+            if (entry.body.firstChild !== entry.emptyLabel) entry.body.replaceChildren(entry.emptyLabel);
+            return;
+        }
+        let bodyEl = this.tabBodies[activeTab.id];
+        if (bodyEl === undefined) {
+            bodyEl = this.renderTab(activeTab);
+            this.tabBodies[activeTab.id] = bodyEl;
+        }
+        if (entry.body.firstChild !== bodyEl) entry.body.replaceChildren(bodyEl);
+        // A body re-attached after another tab held the pane restores its own
+        // scroll position: detaching a scroller drops it in the browser.
+        if (typeof bodyEl.__dockRestore === 'function') bodyEl.__dockRestore();
+        entry.bodyTabId = activeTab.id;
+    }
+
+    renderChips(state, pane, entry) {
+        const focusedChip = document.activeElement && document.activeElement.closest ? document.activeElement.closest('[data-dock-tab]') : null;
+        const focusedTabId = focusedChip && entry.tabsBox.contains(focusedChip) ? focusedChip.getAttribute('data-dock-tab') : null;
+        const target = this.preview.dropTarget;
+        const stripIndex = target && target.kind === 'strip' && target.paneId === pane.id ? target.index : undefined;
+
+        const children = [];
+        for (let i = 0; i < pane.tabs.length; i += 1) {
+            if (i > 0 || stripIndex === i) {
+                children.push(this.makeSlot(i, stripIndex === i));
+            }
+            children.push(this.makeChip(state, pane, pane.tabs[i]));
+        }
+        if (stripIndex === pane.tabs.length && pane.tabs.length > 0) children.push(this.makeSlot(pane.tabs.length, true));
+        entry.tabsBox.replaceChildren.apply(entry.tabsBox, children);
+        entry.chips = Object.create(null);
+        for (let i = 0; i < pane.tabs.length; i += 1) entry.chips[pane.tabs[i]] = true;
+
+        if (focusedTabId) {
+            const chip = entry.tabsBox.querySelector('[data-dock-tab="' + this.escapeAttr(focusedTabId) + '"]');
+            if (chip && typeof chip.focus === 'function') chip.focus({ preventScroll: true });
+        }
+        if (pane.activeTabId !== undefined) this.scrollChipIntoView(entry, pane.activeTabId);
+    }
+
+    makeSlot(index, caret) {
+        const slot = document.createElement('div');
+        slot.className = 'dock-slot' + (caret ? ' dock-slot--caret' : '');
+        slot.setAttribute('data-dock-slot', String(index));
+        return slot;
+    }
+
+    makeChip(state, pane, tabId) {
+        const tab = state.tabs[tabId];
+        const selected = tabId === pane.activeTabId;
+        const closable = this.canCloseTab(tabId);
+        const quiet = !closable && pane.tabs.length === 1;
+        const chip = document.createElement('div');
+        chip.className = 'dock-chip' + (selected ? ' is-active' : '') + (quiet ? ' is-quiet' : '') + (this.preview.draggingTabId === tabId ? ' is-dragging' : '');
+        chip.setAttribute('role', 'tab');
+        chip.setAttribute('aria-selected', selected ? 'true' : 'false');
+        chip.setAttribute('tabindex', selected ? '0' : '-1');
+        chip.setAttribute('data-dock-tab', tabId);
+        chip.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            this.openMenu(tabId, event.currentTarget);
+        });
+        chip.addEventListener('pointerdown', (event) => {
+            // A secondary press is the menu, never a drag.
+            if (event.button === 2) return;
+            this.onChipPressed(tabId, event);
+        });
+        chip.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.activateTab(state, pane, tabId);
+        });
+        chip.addEventListener('keydown', (event) => {
+            if (event.target !== event.currentTarget) return;
+            const next = this.chipToFocus(event.key, pane.tabs, tabId);
+            if (next !== undefined) {
+                event.preventDefault();
+                const nextChip = this.paneEls[pane.id] && this.paneEls[pane.id].tabsBox.querySelector('[data-dock-tab="' + this.escapeAttr(next) + '"]');
+                if (nextChip) nextChip.focus();
+                return;
+            }
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                this.activateTab(state, pane, tabId);
+            }
+        });
+        chip.addEventListener('dragstart', (event) => event.preventDefault());
+        const title = document.createElement('span');
+        title.className = 'dock-chip-title';
+        if (this.renderTabTitle) {
+            const rendered = this.renderTabTitle(tab);
+            if (rendered && rendered.nodeType === 1) title.appendChild(rendered);
+            else title.textContent = String(rendered === undefined || rendered === null ? tab.title : rendered);
+        } else {
+            title.textContent = tab.title;
+        }
+        chip.appendChild(title);
+        if (closable) {
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'dock-chip-close';
+            close.setAttribute('data-dock-tab-close', tabId);
+            close.setAttribute('aria-label', this.labels.closeTab || '关闭标签');
+            close.textContent = '×';
+            close.addEventListener('pointerdown', (event) => event.stopPropagation());
+            close.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this.intents.closeTab(tabId);
+            });
+            chip.appendChild(close);
+        }
+        return chip;
+    }
+
+    chipToFocus(key, tabs, tabId) {
+        const count = tabs.length;
+        const index = tabs.indexOf(tabId);
+        if (key === 'ArrowLeft') return tabs[(index - 1 + count) % count];
+        if (key === 'ArrowRight') return tabs[(index + 1) % count];
+        if (key === 'Home') return tabs[0];
+        if (key === 'End') return tabs[tabs.length - 1];
+        return undefined;
+    }
+
+    activateTab(state, pane, tabId) {
+        if (state.activePaneId === pane.id && pane.activeTabId === tabId) return;
+        this.intents.focusTab(tabId);
+    }
+
+    scrollChipIntoView(entry, tabId) {
+        const chip = entry.tabsBox.querySelector('[data-dock-tab="' + this.escapeAttr(tabId) + '"]');
+        if (!chip) return;
+        const bounds = entry.tabsBox.getBoundingClientRect();
+        const rect = chip.getBoundingClientRect();
+        if (rect.left < bounds.left) entry.tabsBox.scrollLeft += rect.left - bounds.left - DOCK_STRIP_FADE;
+        else if (rect.right > bounds.right) entry.tabsBox.scrollLeft += rect.right - bounds.right + DOCK_STRIP_FADE;
+    }
+
+    updateStripFades() {
+        const entries = Object.keys(this.paneEls);
+        for (let i = 0; i < entries.length; i += 1) this.updateStripFadeFor(this.paneEls[entries[i]].tabsBox);
+    }
+
+    updateStripFadeFor(box) {
+        if (!box) return;
+        const start = box.scrollLeft > 1;
+        const end = box.scrollLeft + box.clientWidth < box.scrollWidth - 1;
+        if (start && end) box.setAttribute('data-dock-strip-scroll', 'start end');
+        else if (start) box.setAttribute('data-dock-strip-scroll', 'start');
+        else if (end) box.setAttribute('data-dock-strip-scroll', 'end');
+        else box.removeAttribute('data-dock-strip-scroll');
+    }
+
+    /**
+     * Why a pane cannot split right now: the engine budget first, the
+     * embedder's product budget, then the pane's own width.
+     */
+    splitBlock(paneId) {
+        if (!this.state) return undefined;
+        if (!dockCanSplit(this.state) || !this.canSplitSurface()) return 'budget';
+        return dockFitOf(this.fits, paneId).row ? undefined : 'width';
+    }
+
+    /** Read every pane's room-rule verdict after a commit or a resize. */
+    remeasure() {
+        if (!this.el) return;
+        const next = dockMeasurePaneFits(this.el, this.hideSplitWhenBlocked);
+        if (!dockSameFits(this.fits, next)) {
+            this.fits = next;
+            if (this.state) {
+                const ids = dockPaneIds(this.state);
+                for (let i = 0; i < ids.length; i += 1) this.renderPane(this.state, ids[i]);
+            }
+        }
+        if (this.onRoom) this.onRoom(this.fits);
+    }
+
+    /**
+     * Resolve where a pointer sits inside the docked surface. An edge zone is
+     * only offered where the split it would make is allowed: within the pane
+     * budget and with room for two halves; otherwise the release is not a move.
+     */
+    hitTest(x, y) {
+        const canSplit = !!this.state && dockCanSplit(this.state) && this.canSplitSurface();
+        const panes = dockPaneElements(this.el);
+        for (let i = 0; i < panes.length; i += 1) {
+            const paneId = panes[i][0];
+            const paneEl = panes[i][1];
+            const rect = paneEl.getBoundingClientRect();
+            if (!dockContainsPoint(rect, x, y)) continue;
+            const strip = paneEl.querySelector('[data-dock-strip]');
+            if (strip && dockContainsPoint(strip.getBoundingClientRect(), x, y)) {
+                const chipEls = strip.querySelectorAll('[data-dock-tab]');
+                const chipRects = [];
+                for (let c = 0; c < chipEls.length; c += 1) chipRects.push(chipEls[c].getBoundingClientRect());
+                return { kind: 'strip', paneId: paneId, index: dockInsertionIndex(chipRects, x) };
+            }
+            const zone = this.dropZones === 'horizontal'
+                ? canSplit && dockFitOf(this.fits, paneId).row
+                    ? (x < rect.x + rect.width / 2 ? 'left' : 'right')
+                    : 'center'
+                : dockZoneInRect(rect, x, y);
+            if (zone !== 'center') {
+                const fit = dockFitOf(this.fits, paneId);
+                const room = zone === 'left' || zone === 'right' ? fit.row : fit.column;
+                if (!canSplit || !room) return undefined;
+            }
+            return { kind: 'zone', paneId: paneId, zone: zone };
+        }
+        return undefined;
+    }
+
+    draggedSizes(drag, x, y) {
+        const moved = (drag.axis === 'row' ? x : y) - drag.origin;
+        const delta = drag.extent > 0 ? moved / drag.extent : 0;
+        return dockClampSizes(dockDividerSizes(drag.sizes, drag.index, delta), this.minPaneFraction);
+    }
+
+    onDividerPressed(splitId, index, event) {
+        if (event.button !== 0) return;
+        const container = event.currentTarget.parentElement;
+        if (!container || !this.state) return;
+        event.preventDefault();
+        const split = dockGetSplit(this.state, splitId);
+        const box = container.getBoundingClientRect();
+        const drag = {
+            splitId: splitId,
+            index: index,
+            axis: split.axis,
+            origin: split.axis === 'row' ? event.clientX : event.clientY,
+            extent: split.axis === 'row' ? box.width : box.height,
+            sizes: split.sizes,
+        };
+        const element = event.currentTarget;
+        this.beginGesture(element, event.pointerId, {
+            move: (moved) => {
+                this.preview = {
+                    draggingTabId: undefined,
+                    dropTarget: undefined,
+                    sizes: { splitId: splitId, sizes: this.draggedSizes(drag, moved.clientX, moved.clientY) },
+                };
+                this.renderTree();
+            },
+            up: (released) => {
+                const sizes = this.draggedSizes(drag, released.clientX, released.clientY);
+                if (dockSameSizes(sizes, drag.sizes)) return;
+                this.intents.resizeSplit(splitId, sizes);
+            },
+        });
+    }
+
+    onChipPressed(tabId, event) {
+        const chip = event.currentTarget;
+        const startX = event.clientX;
+        const startY = event.clientY;
+        let dragging = false;
+        // No preventDefault here: a cancelled pointerdown suppresses the
+        // compatibility click, and the chip's click is what selects the tab.
+        // Text selection and native drag are already off (user-select: none,
+        // touch-action: none, dragstart prevented on the chip).
+        this.beginGesture(chip, event.pointerId, {
+            move: (moved) => {
+                if (!dragging) {
+                    if (!dockPassedThreshold(startX, startY, moved.clientX, moved.clientY)) return;
+                    dragging = true;
+                }
+                this.preview = {
+                    draggingTabId: tabId,
+                    dropTarget: this.hitTest(moved.clientX, moved.clientY),
+                    sizes: undefined,
+                };
+                this.applyPreview();
+            },
+            up: (released) => {
+                if (!dragging) return;
+                const target = this.hitTest(released.clientX, released.clientY);
+                if (target === undefined) {
+                    const rect = this.el.getBoundingClientRect();
+                    if (dockContainsPoint(rect, released.clientX, released.clientY)) return;
+                    this.intents.floatTab(tabId, dockFloatRectAt(released.clientX, released.clientY, DOCK_FLOAT_DEFAULT_SIZE));
+                    return;
+                }
+                if (target.kind === 'strip') this.intents.placeTab(tabId, target.paneId, target.index);
+                else this.intents.dropTab(tabId, target.paneId, target.zone);
+            },
+        });
+    }
+
+    /** Repaint the local gesture preview: caret slots, chip lift, drop hints. */
+    applyPreview() {
+        if (!this.state || !this.el) return;
+        const entries = Object.keys(this.paneEls);
+        for (let i = 0; i < entries.length; i += 1) this.updateStripFadeFor(this.paneEls[entries[i]].tabsBox);
+        // Chips: lift the dragged one.
+        const chips = this.el.querySelectorAll('[data-dock-tab]');
+        for (let i = 0; i < chips.length; i += 1) {
+            if (chips[i].getAttribute('data-dock-tab') === this.preview.draggingTabId) chips[i].classList.add('is-dragging');
+            else chips[i].classList.remove('is-dragging');
+        }
+        // Clear every hint, then redraw the ones the preview names.
+        const oldHints = this.el.querySelectorAll('.dock-hint, .dock-scrim, .dock-slot--caret');
+        for (let i = 0; i < oldHints.length; i += 1) oldHints[i].remove();
+        const target = this.preview.dropTarget;
+        if (!target) return;
+        if (target.kind === 'strip') {
+            const entry = this.paneEls[target.paneId];
+            if (!entry) return;
+            const chipEls = entry.tabsBox.querySelectorAll('[data-dock-tab]');
+            const slot = document.createElement('div');
+            slot.className = 'dock-slot dock-slot--caret';
+            if (target.index >= chipEls.length) entry.tabsBox.appendChild(slot);
+            else entry.tabsBox.insertBefore(slot, chipEls[target.index]);
+            return;
+        }
+        const entry = this.paneEls[target.paneId];
+        if (!entry) return;
+        const scrim = document.createElement('div');
+        scrim.className = 'dock-scrim';
+        entry.body.appendChild(scrim);
+        const zones = this.dropZones === 'horizontal' && target.zone !== 'center' ? ['left', 'right'] : [target.zone];
+        for (let i = 0; i < zones.length; i += 1) {
+            const hint = document.createElement('div');
+            hint.className = 'dock-hint dock-hint--' + zones[i];
+            if (zones[i] === target.zone) hint.classList.add('is-active');
+            const card = document.createElement('div');
+            card.className = 'dock-hint-card';
+            const label = document.createElement('span');
+            label.textContent = this.dropZoneLabel(zones[i]);
+            card.appendChild(label);
+            hint.appendChild(card);
+            entry.body.appendChild(hint);
+        }
+    }
+
+    dropZoneLabel(zone) {
+        const map = this.labels.dropZone || {};
+        return map[zone] || map.center || '移入此面板';
+    }
+
+    /** A small context menu for a chip: duplicate and close. */
+    openMenu(tabId, anchor) {
+        this.dismissMenu();
+        const state = this.state;
+        if (!state || !state.tabs[tabId]) return;
+        const menu = document.createElement('div');
+        menu.className = 'dock-menu';
+        menu.setAttribute('role', 'menu');
+        const rect = anchor.getBoundingClientRect();
+        menu.style.left = Math.round(rect.left) + 'px';
+        menu.style.top = Math.round(rect.bottom + 4) + 'px';
+        const duplicate = document.createElement('button');
+        duplicate.type = 'button';
+        duplicate.className = 'dock-menu-item';
+        duplicate.setAttribute('role', 'menuitem');
+        duplicate.textContent = this.labels.duplicateTab || '复制标签';
+        duplicate.addEventListener('click', () => {
+            this.dismissMenu();
+            this.intents.duplicateTab(tabId);
+        });
+        menu.appendChild(duplicate);
+        if (this.canCloseTab(tabId)) {
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'dock-menu-item';
+            close.setAttribute('role', 'menuitem');
+            close.textContent = this.labels.closeTab || '关闭标签';
+            close.addEventListener('click', () => {
+                this.dismissMenu();
+                this.intents.closeTab(tabId);
+            });
+            menu.appendChild(close);
+        }
+        const dismiss = (event) => {
+            if (menu.contains(event.target)) return;
+            this.dismissMenu();
+        };
+        menu.__dockDismiss = dismiss;
+        document.body.appendChild(menu);
+        this.menu = menu;
+        setTimeout(() => document.addEventListener('pointerdown', dismiss, true), 0);
+    }
+
+    dismissMenu() {
+        if (!this.menu) return;
+        if (this.menu.__dockDismiss) document.removeEventListener('pointerdown', this.menu.__dockDismiss, true);
+        if (this.menu.parentNode) this.menu.parentNode.removeChild(this.menu);
+        this.menu = null;
+    }
+
+    escapeAttr(value) {
+        return String(value).replace(/["\\\\]/g, '\\\\$&');
+    }
+}
+`,us=`/**
+ * The floating layer: one overlay panel per floating pane, bottom-to-top in the
+ * model's z order. A floating pane hosts exactly one tab; its header is the
+ * strip's row holding that tab's chip, never selectable or closable from the
+ * chip, and the send-back and close controls. Pressing a panel's body raises it.
+ * Its grip and corner report through their gesture instead: a press released in
+ * place is a click and raises the panel; a drag records the move or resize, and
+ * that operation raises the panel itself, so one gesture is one intent.
+ *
+ * The layer owns its own drag and resize gestures, so where it mounts is not
+ * part of its contract: panels are positioned in viewport coordinates.
+ */
+
+/** One floating-panel gesture: what it moves and where it started. */
+function dockDraggedFloatRect(drag, x, y) {
+    const dx = x - drag.originX;
+    const dy = y - drag.originY;
+    return drag.mode === 'move'
+        ? dockMovedRect(drag.rect, dx, dy)
+        : dockResizedRect(drag.rect, dx, dy, DOCK_FLOAT_MIN_SIZE);
+}
+
+function dockSameRect(a, b) {
+    return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+/** One floating layer view: renders \`state.floats\` and reports settled intents. */
+class DockFloatLayerView {
+    /**
+     * @param {object} config The layer's wiring.
+     * @param {Element} config.root The host element (its own stacking area).
+     * @param {object} config.intents Settled gesture results.
+     * @param {object} config.labels Rendered strings.
+     * @param {Function} config.renderTab Renders one tab's body.
+     * @param {Function} [config.canCloseTab] Whether a tab offers its close control.
+     * @param {Function} [config.renderTabTitle] What a chip shows as its title.
+     */
+    constructor(config) {
+        this.root = config.root;
+        this.intents = config.intents;
+        this.labels = config.labels || {};
+        this.renderTab = config.renderTab;
+        this.renderTabTitle = config.renderTabTitle;
+        this.canCloseTab = config.canCloseTab || dockAlwaysTrue;
+        this.state = null;
+        this.entries = Object.create(null);
+        this.preview = undefined;
+        this.beginGesture = dockCreateGestureController(() => {
+            this.preview = undefined;
+            this.applyPreview();
+        });
+        this.el = null;
+    }
+
+    /** Create the layer element. @returns {Element} */
+    mount() {
+        const el = document.createElement('div');
+        el.className = 'dock-float-layer';
+        el.setAttribute('data-dock-float-layer', '1');
+        this.el = el;
+        if (this.root) this.root.appendChild(el);
+        return el;
+    }
+
+    /** Remove the layer and every panel in it. */
+    destroy() {
+        this.entries = Object.create(null);
+        if (this.el && this.el.parentNode) this.el.parentNode.removeChild(this.el);
+        this.el = null;
+    }
+
+    /** Reconcile the layer against a layout snapshot. */
+    sync(state) {
+        this.state = state;
+        const wanted = {};
+        for (let i = 0; i < state.floats.length; i += 1) wanted[state.floats[i]] = i;
+        const existing = Object.keys(this.entries);
+        for (let i = 0; i < existing.length; i += 1) {
+            if (wanted[existing[i]] === undefined) {
+                const entry = this.entries[existing[i]];
+                if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el);
+                delete this.entries[existing[i]];
+            }
+        }
+        for (let i = 0; i < state.floats.length; i += 1) this.renderPanel(state, state.floats[i], i);
+    }
+
+    renderPanel(state, paneId, depth) {
+        const pane = dockGetPane(state, paneId);
+        const tab = dockGetTab(state, dockOnlyTabId(pane));
+        let entry = this.entries[paneId];
+        if (!entry) {
+            const el = document.createElement('div');
+            el.className = 'dock-float';
+            el.setAttribute('data-dock-float', paneId);
+            el.addEventListener('pointerdown', () => this.raise(paneId));
+            const header = document.createElement('header');
+            header.className = 'dock-float-header';
+            header.setAttribute('data-dock-float-grip', paneId);
+            header.addEventListener('pointerdown', (event) => this.drag('move', paneId, event));
+            const title = document.createElement('div');
+            title.className = 'dock-chip dock-float-title';
+            const titleText = document.createElement('span');
+            titleText.className = 'dock-chip-title';
+            title.appendChild(titleText);
+            const fill = document.createElement('div');
+            fill.className = 'dock-strip-fill';
+            const dockButton = document.createElement('button');
+            dockButton.type = 'button';
+            dockButton.className = 'dock-icon-button';
+            dockButton.setAttribute('data-dock-float-dock', paneId);
+            dockButton.setAttribute('aria-label', this.labels.dockFloat || '放回主区');
+            dockButton.innerHTML = '<span aria-hidden="true">⇤</span>';
+            dockButton.addEventListener('pointerdown', (event) => event.stopPropagation());
+            dockButton.addEventListener('click', () => this.intents.unfloatPane(paneId));
+            const closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.className = 'dock-icon-button';
+            closeButton.setAttribute('data-dock-float-close', paneId);
+            closeButton.setAttribute('aria-label', this.labels.closeFloat || '关闭浮窗');
+            closeButton.innerHTML = '<span aria-hidden="true">×</span>';
+            closeButton.addEventListener('pointerdown', (event) => event.stopPropagation());
+            closeButton.addEventListener('click', () => this.intents.closeTab(tab.id));
+            header.appendChild(title);
+            header.appendChild(fill);
+            header.appendChild(dockButton);
+            header.appendChild(closeButton);
+            const body = document.createElement('div');
+            body.className = 'dock-float-body';
+            const resize = document.createElement('div');
+            resize.className = 'dock-float-resize';
+            resize.setAttribute('data-dock-float-resize', paneId);
+            resize.addEventListener('pointerdown', (event) => this.drag('resize', paneId, event));
+            el.appendChild(header);
+            el.appendChild(body);
+            el.appendChild(resize);
+            entry = { el: el, titleText: titleText, body: body, tabId: undefined, closeButton: closeButton };
+            this.entries[paneId] = entry;
+            this.el.appendChild(el);
+        }
+        if (entry.tabId !== tab.id) {
+            const bodyEl = this.renderTab(tab);
+            entry.body.replaceChildren(bodyEl);
+            entry.tabId = tab.id;
+            entry.closeButton.hidden = !this.canCloseTab(tab.id);
+        }
+        const titleValue = this.renderTabTitle ? this.renderTabTitle(tab) : tab.title;
+        entry.titleText.textContent = String(titleValue === undefined || titleValue === null ? tab.title : titleValue);
+        entry.el.setAttribute('data-dock-float-active', state.activePaneId === paneId ? '1' : '');
+        const live = this.preview && this.preview.paneId === paneId ? this.preview.rect : dockFloatRect(pane);
+        entry.el.style.left = Math.round(live.x) + 'px';
+        entry.el.style.top = Math.round(live.y) + 'px';
+        entry.el.style.width = Math.round(live.width) + 'px';
+        entry.el.style.height = Math.round(live.height) + 'px';
+        entry.el.style.zIndex = String(this.preview && this.preview.paneId === paneId ? state.floats.length + 1 : depth + 1);
+    }
+
+    applyPreview() {
+        if (!this.state) return;
+        for (let i = 0; i < this.state.floats.length; i += 1) this.renderPanel(this.state, this.state.floats[i], i);
+    }
+
+    /** Focus and raise a panel from a press, unless it is raised already. */
+    raise(paneId) {
+        const state = this.state;
+        if (!state) return;
+        const top = state.floats[state.floats.length - 1];
+        if (state.activePaneId === paneId && top === paneId) return;
+        this.intents.focusPane(paneId);
+    }
+
+    /** Start a move or resize from a press on the panel's grip or corner. */
+    drag(mode, paneId, event) {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        event.preventDefault();
+        if (!this.state) return;
+        const start = {
+            mode: mode,
+            originX: event.clientX,
+            originY: event.clientY,
+            rect: dockFloatRect(dockGetPane(this.state, paneId)),
+        };
+        this.beginGesture(event.currentTarget, event.pointerId, {
+            move: (moved) => {
+                this.preview = { paneId: paneId, rect: dockDraggedFloatRect(start, moved.clientX, moved.clientY) };
+                this.applyPreview();
+            },
+            up: (released) => {
+                const rect = dockDraggedFloatRect(start, released.clientX, released.clientY);
+                if (dockSameRect(rect, start.rect)) {
+                    this.raise(paneId);
+                    return;
+                }
+                if (mode === 'move') this.intents.moveFloat(paneId, rect.x, rect.y);
+                else this.intents.resizeFloat(paneId, rect);
+            },
+        });
+    }
+}
+`,ps=`/**
+ * The store shell over the docking engine: one surface per session, held as
+ * plain data so the engine's pure functions are the only thing that ever
+ * computes a layout.
+ *
+ * Every action follows the same steps — mint the ids the intent needs, ask the
+ * engine's planner what operations carry it out, let the settle planner keep
+ * every pane populated, record it all as one history entry — and then assigns
+ * the session's whole surface back in one go. Nothing here reaches into a
+ * surface to edit a layout in place.
+ *
+ * The settle step is this product's rule, not the engine's: an intent never
+ * leaves an expanded column with an empty pane — emptied side panes merge away,
+ * and an empty root pane seeds the default tab. A collapsed column may stand
+ * empty; the seed waits for the expansion that would otherwise show nothing.
+ *
+ * Page uniqueness is this product's rule too: a pane holds at most one tab of
+ * each page kind (a tab whose content is the kind's own page address). A page
+ * dragged into a pane that shows it merges into the pane's own — the arriving
+ * tab closes and the pane's own is focused. The engine plans none of this; it
+ * is decided here before its planners run.
+ *
+ * The product also tightens the engine's limits: at most two horizontal docked
+ * panes here (the engine keeps its tree, other split directions, and the wider
+ * pane budget).
+ */
+
+/** This product's ceiling on docked panes. */
+const DOCK_PRODUCT_MAX_PANES = 2;
+
+/** This product's divider floor, as a share of the split. */
+const DOCK_PRODUCT_MIN_FRACTION = 0.2;
+
+/**
+ * Every session's surface, keyed by area then session id. Two areas exist —
+ * \`main\` (the conversation split view) and \`right\` (the dsh-style details
+ * column) — and neither can see the other's layouts. Plain data, safe to store.
+ */
+const dockSurfacesByArea = Object.create(null);
+
+/**
+ * One area's surface map, materialized on first use.
+ * @param {string} [area] Area id; defaults to 'main'.
+ * @returns {object} session id -> surface.
+ */
+function dockAreaSurfaces(area) {
+    const id = String(area || 'main');
+    if (!dockSurfacesByArea[id]) dockSurfacesByArea[id] = Object.create(null);
+    return dockSurfacesByArea[id];
+}
+
+/**
+ * The surface a session starts with: collapsed, one pane, no tabs. The default
+ * tab is not seeded here — the settle rule seeds it when the dock first expands
+ * still empty, so an open into a fresh surface shows only what it opened.
+ * @returns {object} the initial surface.
+ */
+function dockCreateSurface() {
+    const counter = dockCreateMinter(0);
+    return {
+        layout: dockCreateInitialState(counter, undefined, 'push'),
+        history: DOCK_EMPTY_HISTORY,
+        minted: counter.used(),
+    };
+}
+
+/** The surface for a session, materializing it on first read. */
+function dockSurfaceOf(sessionId, area) {
+    const sid = String(sessionId || '');
+    const surfaces = dockAreaSurfaces(area);
+    if (!sid) return undefined;
+    if (!surfaces[sid]) surfaces[sid] = dockCreateSurface();
+    return surfaces[sid];
+}
+
+/** Whether a surface has been materialized for a session. */
+function dockSurfaceExists(sessionId, area) {
+    return !!dockAreaSurfaces(area)[String(sessionId || '')];
+}
+
+/** Replace one session's surface, leaving every other session by reference. */
+function dockSeat(sessionId, next, area) {
+    const sid = String(sessionId || '');
+    if (!sid) return false;
+    const surfaces = dockAreaSurfaces(area);
+    const existing = surfaces[sid] || dockCreateSurface();
+    const updated = next(existing);
+    if (updated === existing) {
+        surfaces[sid] = existing;
+        return false;
+    }
+    surfaces[sid] = updated;
+    return true;
+}
+
+/** A mint that counts, so the surface can carry its position forward. */
+function dockCountingMint(from) {
+    const minter = dockCreateMinter(from);
+    return minter;
+}
+
+/**
+ * Run one planner against a surface, settle what it left behind, and record the
+ * whole intent as one history entry.
+ * @param {object} surface The session's current surface.
+ * @param {Function} plan \`(state, mint) => ops\`.
+ * @param {Function} seed Thunk returning the tab a reseeded pane should hold.
+ * @returns {object} the next surface, or the same one when nothing changed.
+ */
+function dockAdvance(surface, plan, seed) {
+    const minter = dockCountingMint(surface.minted);
+    const makeTab = (id) => {
+        const spec = seed();
+        return { id: id, kind: spec.kind, contentId: spec.contentId, title: spec.title };
+    };
+    const planned = plan(surface.layout, minter) || [];
+    if (planned.length === 0) return surface;
+    // The settle planner reads the state the intent produces, so it is applied
+    // to a scratch copy first; the record then applies both parts once. The
+    // seed factory is withheld while the intent leaves the column collapsed.
+    const after = dockReplay(surface.layout, planned);
+    const settled = dockPlanSettle(after, minter, after.expanded ? makeTab : undefined);
+    const stepped = dockRecord(surface.history, surface.layout, planned.concat(settled));
+    return { layout: stepped.state, history: stepped.history, minted: minter.used() };
+}
+
+/** Whether the product allows another split: engine budget plus this product's two-pane ceiling. */
+function dockProductCanSplit(state) {
+    return dockCanSplit(state) && dockPaneIds(state).length < DOCK_PRODUCT_MAX_PANES;
+}
+
+/** The kind whose page a tab shows, or undefined for a resource tab. */
+function dockPageKind(state, tabId) {
+    const tab = state.tabs[tabId];
+    return tab !== undefined && tab.contentId === 'myagent-page://' + tab.kind ? tab.kind : undefined;
+}
+
+/** The tab showing \`kind\`'s page in a pane, if any. */
+function dockPanePage(state, paneId, kind) {
+    return dockFindPaneContentTab(state, paneId, 'myagent-page://' + kind, kind);
+}
+
+/** Focus a tab: nothing to plan while it is its pane's active tab and its pane is the active one. */
+function dockPlanFocusTab(state, tabId) {
+    const pane = dockFindTabPane(state, tabId);
+    return pane.activeTabId === tabId && state.activePaneId === pane.id ? [] : [{ type: 'focusTab', tabId: tabId }];
+}
+
+/** Focus a pane: nothing to plan while it is the active one. */
+function dockPlanFocusPane(state, paneId) {
+    return state.activePaneId === paneId ? [] : [{ type: 'focusPane', paneId: paneId }];
+}
+
+/**
+ * Plan a tab's arrival in a docked pane: a page arriving where its kind's page
+ * already shows merges into it, anything else plans as the engine does.
+ */
+function dockArriving(state, tabId, toPaneId, otherwise) {
+    const kind = dockPageKind(state, tabId);
+    if (kind === undefined) return otherwise();
+    const existing = dockPanePage(state, toPaneId, kind);
+    if (existing === undefined || existing === tabId) return otherwise();
+    return [{ type: 'closeTab', tabId: tabId }, { type: 'focusTab', tabId: existing }];
+}
+
+/**
+ * The default tab an empty pane is seeded with: the seed thunk decides its
+ * content; here it is stamped at the page address of its kind so uniqueness and
+ * open-by-kind agree on one identity.
+ */
+function dockSeedRecord(id, spec) {
+    return { id: id, kind: spec.kind, contentId: spec.contentId, title: spec.title };
+}
+
+// ── actions ──────────────────────────────────────────────────────────────────
+
+/** Materialize a session's surface without changing it. */
+function dockActionOpen(sessionId, area) {
+    return dockSeat(sessionId, (surface) => surface, area);
+}
+
+/** Expand or collapse the docked area. */
+function dockActionSetExpanded(sessionId, expanded, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state) => dockPlanSetExpanded(state, expanded), seed), area);
+}
+
+/** Flip the docked area between expanded and collapsed. */
+function dockActionToggleExpanded(sessionId, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state) => dockPlanSetExpanded(state, !state.expanded), seed), area);
+}
+
+/** Switch how the docked area is presented. */
+function dockActionSetMode(sessionId, mode, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state) => dockPlanSetMode(state, mode), seed), area);
+}
+
+/**
+ * Split a docked pane to its right and seed the new pane. Product rules: at
+ * most two panes, and an empty pane is not split (nothing to put beside).
+ */
+function dockActionSplitPane(sessionId, paneId, seed, settled, area) {
+    let created;
+    const changed = dockSeat(sessionId, (surface) => {
+        const next = dockAdvance(surface, (state, mint) => {
+            const target = paneId === undefined ? dockActiveDockPaneId(state) : paneId;
+            if (!dockProductCanSplit(state)) return [];
+            if (dockGetPane(state, target).tabs.length === 0) return [];
+            return dockPlanSplitPane(state, mint, target, (id) => dockSeedRecord(id, seed()));
+        }, seed);
+        if (next !== surface && settled) {
+            const before = dockPaneIds(surface.layout);
+            const ids = dockPaneIds(next.layout);
+            for (let i = 0; i < ids.length; i += 1) {
+                if (before.indexOf(ids[i]) < 0) created = ids[i];
+            }
+        }
+        return next;
+    }, area);
+    if (changed && settled) settled(created);
+    return changed;
+}
+
+/**
+ * One entry carries the whole open: revealing the column (an open behind a
+ * collapsed panel is not an open), focusing or seating the tab, and closing the
+ * tab it replaces.
+ * @param {string} sessionId The session whose surface receives the open.
+ * @param {object} intent \`{ kind, contentId, title, paneId?, replaceTab?, revealIfOpened? }\`.
+ * @param {Function} seed Thunk returning the default tab for an emptied pane.
+ * @param {Function} [settled] Called synchronously with the tab the open landed on.
+ */
+function dockActionOpenContent(sessionId, intent, seed, settled, area) {
+    dockSeat(sessionId, (surface) => dockAdvance(surface, (state, mint) => {
+        const ops = dockPlanSetExpanded(state, true).slice();
+        const replace = intent.replaceTab;
+        const replaced = replace === undefined ? undefined : dockFindTabPane(state, replace);
+        const lent = replace !== undefined && replaced !== undefined && replaced.host === 'dock' ? replaced : undefined;
+        const paneId = lent ? lent.id : intent.paneId;
+        const index = lent === undefined || replace === undefined ? undefined : lent.tabs.indexOf(replace);
+        // A page is unique per pane, not per surface: the pane it would land in
+        // may already show it, which is then the tab this open settles on.
+        const page = intent.contentId === 'myagent-page://' + intent.kind;
+        const held = page ? dockPanePage(state, paneId === undefined ? dockActiveDockPaneId(state) : paneId, intent.kind) : undefined;
+        let planned;
+        if (held !== undefined) {
+            planned = { ops: [{ type: 'focusTab', tabId: held }], tabId: held };
+        } else {
+            const input = {
+                kind: intent.kind,
+                contentId: intent.contentId,
+                title: intent.title,
+                revealIfOpened: page ? false : intent.revealIfOpened,
+            };
+            if (paneId !== undefined) input.paneId = paneId;
+            if (index !== undefined) input.index = index;
+            planned = dockPlanOpenContent(state, mint, input);
+        }
+        for (let i = 0; i < planned.ops.length; i += 1) ops.push(planned.ops[i]);
+        if (replace !== undefined && replace !== planned.tabId) ops.push({ type: 'closeTab', tabId: replace });
+        if (settled) settled(planned.tabId);
+        return ops;
+    }, seed), area);
+}
+
+/** Open a page kind by kind, at the page address the kind records. */
+function dockActionOpenPage(sessionId, kind, options, seed, settled, area) {
+    const opts = options || {};
+    dockActionOpenContent(sessionId, {
+        kind: kind,
+        contentId: 'myagent-page://' + kind,
+        title: opts.title,
+        paneId: opts.paneId,
+        replaceTab: opts.replaceTab,
+        revealIfOpened: false,
+    }, seed, settled, area);
+}
+
+/** A page is never copied: the copy would sit beside it in the same pane. */
+function dockActionDuplicateTab(sessionId, tabId, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(
+        surface,
+        (state, mint) => (dockPageKind(state, tabId) !== undefined ? [] : dockPlanDuplicateTab(state, mint, tabId).ops),
+        seed
+    ), area);
+}
+
+/**
+ * Close a tab. A tab already gone is left alone. A pane emptied by the close
+ * is backfilled by \`dockAdvance\`'s settle step with the seed default (the
+ * column's "start" page) — except the column's very last tab when that tab is
+ * the start page itself: closing the lone start page closes the column
+ * (feedback #5).
+ */
+function dockActionCloseTab(sessionId, tabId, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state) => {
+        const tab = state.tabs[tabId];
+        if (tab === undefined) return [];
+        const lastOne = dockPaneIds(state).length === 1 && Object.keys(state.tabs).length === 1;
+        if (area === 'right' && lastOne && tab.kind === 'guide') {
+            return [
+                { type: 'closeTab', tabId: tabId },
+                ...dockPlanSetExpanded(state, false),
+            ];
+        }
+        return [{ type: 'closeTab', tabId: tabId }];
+    }, seed), area);
+}
+
+/** Focus a tab and the pane holding it. */
+function dockActionFocusTab(sessionId, tabId, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state) => (state.tabs[tabId] === undefined ? [] : dockPlanFocusTab(state, tabId)), seed), area);
+}
+
+/** Focus a pane, raising it when it floats. */
+function dockActionFocusPane(sessionId, paneId, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state) => (state.nodes[paneId] === undefined ? [] : dockPlanFocusPane(state, paneId)), seed), area);
+}
+
+/** Put a tab at an explicit slot: a reorder, a move, or a return. */
+function dockActionPlaceTab(sessionId, tabId, toPaneId, index, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(
+        surface,
+        (state) => (state.tabs[tabId] === undefined ? [] : dockArriving(state, tabId, toPaneId, () => dockPlanPlaceTab(state, tabId, toPaneId, index))),
+        seed
+    ), area);
+}
+
+/**
+ * Resolve a tab drop inside the docked area. Product rules: this product only
+ * accepts horizontal edges and its two-pane ceiling; a second-pane release
+ * falls back to a move in the target pane's centre.
+ */
+function dockActionDropTab(sessionId, tabId, paneId, zone, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state, mint) => {
+        if (state.tabs[tabId] === undefined) return [];
+        const productZone = zone === 'top' || zone === 'bottom' ? 'center' : zone;
+        if (productZone !== 'center' && !dockProductCanSplit(state)) return dockArriving(state, tabId, paneId, () => dockPlanDropTab(state, mint, tabId, paneId, 'center', (id) => dockSeedRecord(id, seed())));
+        const plan = () => dockPlanDropTab(state, mint, tabId, paneId, productZone, (id) => dockSeedRecord(id, seed()));
+        return productZone === 'center' ? dockArriving(state, tabId, paneId, plan) : plan();
+    }, seed), area);
+}
+
+/** Take a tab out into a floating panel. */
+function dockActionFloatTab(sessionId, tabId, rect, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(
+        surface,
+        (state, mint) => (state.tabs[tabId] === undefined ? [] : dockPlanFloatTab(state, mint, tabId, rect).ops),
+        seed
+    ), area);
+}
+
+/** Return a floating panel's tab to the docked tree. */
+function dockActionUnfloatPane(sessionId, paneId, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, (state) => {
+        const node = state.nodes[paneId];
+        if (node === undefined || node.kind !== 'pane' || node.host !== 'float') return [];
+        const floated = node.tabs[0];
+        const plan = () => dockPlanUnfloatPane(state, paneId);
+        return floated === undefined ? plan() : dockArriving(state, floated, dockActiveDockPaneId(state), plan);
+    }, seed), area);
+}
+
+/** Record the net position of a floating-panel drag. */
+function dockActionMoveFloat(sessionId, paneId, x, y, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, () => [{ type: 'moveFloat', paneId: paneId, x: x, y: y }], seed), area);
+}
+
+/** Record the net rectangle of a floating-panel resize. */
+function dockActionResizeFloat(sessionId, paneId, rect, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, () => [{ type: 'resizeFloat', paneId: paneId, rect: rect }], seed), area);
+}
+
+/** Record the net sizes of a divider drag, clamped to this product's floor. */
+function dockActionResizeSplit(sessionId, splitId, sizes, seed, area) {
+    return dockSeat(sessionId, (surface) => dockAdvance(surface, () => dockPlanResizeSplit(splitId, sizes, DOCK_PRODUCT_MIN_FRACTION), seed), area);
+}
+
+/** Step a surface through the history in one direction. */
+function dockActionStep(sessionId, direction, area) {
+    return dockSeat(sessionId, (surface) => {
+        const moved = direction === 'redo'
+            ? dockStepForward(surface.history, surface.layout)
+            : dockStepBack(surface.history, surface.layout);
+        if (moved === undefined) return surface;
+        return { layout: moved.state, history: moved.history, minted: surface.minted };
+    }, area);
+}
+
+/** Undo one intent, or one run of consecutive focus-only intents. */
+function dockActionUndo(sessionId, area) {
+    return dockActionStep(sessionId, 'undo', area);
+}
+
+/** Redo one intent the matching undo stepped back. */
+function dockActionRedo(sessionId, area) {
+    return dockActionStep(sessionId, 'redo', area);
+}
+`,fs=`/**
+ * Tab-type registration: what a type IS and how an address resolves to one.
+ *
+ * A registration is purely static — which addresses the type recognizes, how it
+ * ranks against other types that recognize the same one, what the tab chip
+ * says, and which element renders its body. Nothing here is per-tab or
+ * per-session: the body renderer receives the tab record and the host context
+ * and returns an element; everything else about a body (its stream, its scroll)
+ * belongs to the embedder's renderer for that kind.
+ *
+ * Address recognition follows the dsh/VS Code editor resolver shape: a glob
+ * declaration narrows the candidates, an optional \`canOpen\` predicate vetoes,
+ * and the survivors rank by priority band, then by matched-pattern length, then
+ * by registration order. Addresses are \`myagent-resource://<type>/…\` URIs; a
+ * pattern containing \`:\` matches the whole address, one without matches the
+ * path at any depth.
+ *
+ * Three bands, highest first:
+ *   - 'extension' — a type from outside the product; a type that declares
+ *     nothing is one of these, exactly as in VS Code;
+ *   - 'builtin'   — the ordinary band for types shipped with the product;
+ *   - 'fallback'  — plain-content viewers that anything more specific beats.
+ */
+
+/** Rank of each band, highest first. */
+const DOCK_TAB_BAND_RANKS = { extension: 3, builtin: 2, fallback: 1 };
+
+/** The band a definition that names none is in. */
+const DOCK_TAB_DEFAULT_BAND = 'extension';
+
+/**
+ * Compile one declared glob into the test the router runs. \`**\` crosses
+ * separators, \`*\` does not, \`?\` matches one character, and the whole match is
+ * anchored the way an editor resolver globs an address.
+ * @param {string} pattern The declared pattern.
+ * @returns {Function} \`(address) => boolean\`.
+ */
+function dockCompileGlob(pattern) {
+    let source = '';
+    const text = String(pattern);
+    for (let i = 0; i < text.length; i += 1) {
+        const ch = text[i];
+        if (ch === '*') {
+            if (text[i + 1] === '*') {
+                source += '.*';
+                i += 1;
+            } else {
+                source += '[^/]*';
+            }
+        } else if (ch === '?') {
+            source += '[^/]';
+        } else if ('\\\\^$.|+()[]{}'.indexOf(ch) >= 0) {
+            source += '\\\\' + ch;
+        } else {
+            source += ch;
+        }
+    }
+    const re = new RegExp('^' + source + '$', 'i');
+    return (address) => re.test(String(address));
+}
+
+/** The address's URI path, or undefined when it is not a URI. */
+function dockAddressPath(address) {
+    const text = String(address);
+    const match = /^[a-z][a-z0-9+.-]*:\\/\\/[^/]*(\\/.*)?$/i.exec(text);
+    if (!match) return undefined;
+    return match[1] || '';
+}
+
+/**
+ * One registry of tab types. Registration order is part of the contract: it
+ * breaks ties between types that recognize an address equally well.
+ */
+class DockTabRegistry {
+    constructor() {
+        this.byKind = new Map();
+        this.byId = new Map();
+        this.bodies = new Map();
+        this.registrations = 0;
+        this.listeners = [];
+    }
+
+    /**
+     * Register one tab type.
+     * @param {object} definition \`{ id, kind, patterns?, priority?, canOpen?, title, body? }\`.
+     * @returns {Function} idempotent disposer.
+     * @throws when the id is taken or the kind is already held in a way this one cannot coexist with.
+     */
+    register(definition) {
+        if (!definition || !definition.id || !definition.kind) {
+            throw new Error('dock: a tab type needs an id and a kind');
+        }
+        const id = String(definition.id);
+        const kind = String(definition.kind);
+        const band = definition.priority === undefined ? DOCK_TAB_DEFAULT_BAND : definition.priority;
+        if (!DOCK_TAB_BAND_RANKS[band]) throw new Error('dock: unknown tab priority "' + band + '"');
+        if (this.byId.has(id)) throw new Error('dock: tab type id "' + id + '" is already registered');
+        const held = this.byKind.get(kind);
+        if (held !== undefined && !this.canCoexist(held, band)) {
+            throw new Error('dock: tab kind "' + kind + '" is already registered (' + held.inForce.band + ')');
+        }
+        this.registrations += 1;
+        const entry = {
+            definition: definition,
+            band: band,
+            patterns: (definition.patterns || []).map((pattern) => ({ pattern: pattern, test: dockCompileGlob(pattern) })),
+            order: this.registrations,
+        };
+        this.byId.set(id, entry);
+        this.enter(kind, entry);
+        if (typeof definition.body === 'function') this.bodies.set(kind, definition.body);
+        this.notify();
+        return () => {
+            if (this.byId.get(id) !== entry) return;
+            this.byId.delete(id);
+            this.leave(kind, entry);
+            this.bodies.delete(kind);
+            this.notify();
+        };
+    }
+
+    /** Whether a band may join a held kind: an extension and a builtin pair once; a fallback shares with nothing. */
+    canCoexist(slot, band) {
+        return band !== 'fallback' && slot.inForce.band !== 'fallback' && slot.inForce.band !== band && slot.shadowed === undefined;
+    }
+
+    /** Add a registration to its kind's slot, the higher band in force. */
+    enter(kind, entry) {
+        const held = this.byKind.get(kind);
+        if (held === undefined) {
+            this.byKind.set(kind, { inForce: entry, shadowed: undefined });
+            return;
+        }
+        if (DOCK_TAB_BAND_RANKS[entry.band] > DOCK_TAB_BAND_RANKS[held.inForce.band]) {
+            held.shadowed = held.inForce;
+            held.inForce = entry;
+        } else {
+            held.shadowed = entry;
+        }
+    }
+
+    /** Remove a registration from its kind's slot: a shadowed builtin resumes, an emptied kind is freed. */
+    leave(kind, entry) {
+        const slot = this.byKind.get(kind);
+        if (!slot) return;
+        if (slot.inForce !== entry) {
+            slot.shadowed = undefined;
+        } else if (slot.shadowed === undefined) {
+            this.byKind.delete(kind);
+        } else {
+            slot.inForce = slot.shadowed;
+            slot.shadowed = undefined;
+        }
+    }
+
+    /** Registered types in registration order. @returns {object[]} */
+    entries() {
+        const out = [];
+        for (const slot of this.byKind.values()) out.push(slot.inForce);
+        out.sort((left, right) => left.order - right.order);
+        return out.map((entry) => entry.definition);
+    }
+
+    /** The type in force for a kind, or undefined. */
+    get(kind) {
+        const slot = this.byKind.get(String(kind));
+        return slot === undefined ? undefined : slot.inForce.definition;
+    }
+
+    /** The body renderer registered for a kind, or undefined. */
+    bodyFor(kind) {
+        return this.bodies.get(String(kind));
+    }
+
+    /**
+     * Every type that would open an address, best first.
+     * Ranked by priority band, then by the length of the pattern that matched,
+     * then by registration order. Types whose \`canOpen\` vetoes are absent.
+     */
+    candidates(address) {
+        const ranked = [];
+        for (const slot of this.byKind.values()) {
+            const entry = slot.inForce;
+            let length = -1;
+            for (let i = 0; i < entry.patterns.length; i += 1) {
+                const matcher = entry.patterns[i];
+                if (matcher.test(address) && matcher.pattern.length > length) length = matcher.pattern.length;
+            }
+            if (length < 0) continue;
+            const definition = entry.definition;
+            if (definition.canOpen && !definition.canOpen(address)) continue;
+            ranked.push({ definition: definition, rank: DOCK_TAB_BAND_RANKS[entry.band], length: length, order: entry.order });
+        }
+        ranked.sort((left, right) => right.rank - left.rank || right.length - left.length || left.order - right.order);
+        return ranked.map((entry) => entry.definition);
+    }
+
+    /**
+     * Decide which type opens an address, and as what.
+     * @param {string} address A \`myagent-resource://<type>/…\` address.
+     * @param {string} [kind] A type named by the caller, overriding the ranking.
+     * @returns {{kind:string,contentId:string,title:string}}
+     * @throws when nothing registered will open it — a wiring mistake, not a user error.
+     */
+    claim(address, kind) {
+        if (kind !== undefined) {
+            const definition = this.get(kind);
+            if (!definition) throw new Error('dock: no tab type is registered as "' + kind + '"');
+            if (definition.canOpen && !definition.canOpen(address)) throw new Error('dock: tab type "' + kind + '" refuses "' + address + '"');
+            return { kind: definition.kind, contentId: address, title: dockTitleOf(definition, address) };
+        }
+        const candidates = this.candidates(address);
+        if (candidates.length === 0) throw new Error('dock: no registered tab type claims "' + address + '"');
+        return { kind: candidates[0].kind, contentId: address, title: dockTitleOf(candidates[0], address) };
+    }
+
+    /** Observe low-frequency registry changes. */
+    subscribe(listener) {
+        this.listeners.push(listener);
+        return () => {
+            const index = this.listeners.indexOf(listener);
+            if (index >= 0) this.listeners.splice(index, 1);
+        };
+    }
+
+    notify() {
+        const listeners = this.listeners.slice();
+        for (let i = 0; i < listeners.length; i += 1) listeners[i]();
+    }
+}
+
+/** The title a definition gives an address, read again on every use so a language change needs no re-registration. */
+function dockTitleOf(definition, address) {
+    const title = typeof definition.title === 'function' ? definition.title(address) : definition.title;
+    return String(title === undefined || title === null ? address : title);
+}
+
+/** The product's page address for a kind: what makes a page tab's identity its kind. */
+function dockPageAddress(kind) {
+    return 'myagent-page://' + String(kind);
+}
+
+/** The one tab-type registry the embedder fills. */
+const dockTabRegistry = new DockTabRegistry();
+`,ms=`/**
+ * The right details column: dsh's third column, built on the same dock engine
+ * and renderer as the main split view.
+ *
+ * dsh divides the page into three parts — the session list on the left, the
+ * conversation in the middle, and a details column on the right that opens from
+ * a button at the conversation header's top-right corner and shows the file
+ * tree, document previews, and file-change history. This module is that column:
+ *
+ *   - it mounts a dock surface in an area of its own (\`right\`), so its layouts
+ *     are per session and completely separate from the main split view's;
+ *   - it pushes the workspace (the column takes width; the conversation gives
+ *     it up) and covers the viewport in fullscreen, which narrow screens use;
+ *   - it ships three built-in page types, plus resource viewers:
+ *       \`files\`     — the workspace tree            (/api/workspace-files)
+ *       \`document\`  — one file's content           (images/media/text via the
+ *                                                    workspace endpoints)
+ *       \`changes\`   — the session's file changes   (the \`ui.changes\` payloads
+ *                                                    already in the session's
+ *                                                    history, with the same
+ *                                                    undo/restore routes the
+ *                                                    Change Review plugin uses)
+ *   - opening a file from the tree lands in a \`document\` tab, exactly as dsh's
+ *     tree opens \`dsh-resource://file/…\` addresses in its preview types.
+ *
+ * The column's width is draggable and remembered per browser; its surfaces stay
+ * memory-only like dsh's.
+ */
+
+/** The area id this column's surfaces live under. */
+const DOCK_RIGHT_AREA = 'right';
+
+/** localStorage key for the column width. */
+const DOCK_RIGHT_WIDTH_KEY = 'myagent-dock-rightbar-width';
+
+/** Default column width in pixels. */
+const DOCK_RIGHT_WIDTH_DEFAULT = 460;
+
+/** Smallest and largest column widths in pixels. */
+const DOCK_RIGHT_WIDTH_MIN = 320;
+const DOCK_RIGHT_WIDTH_MAX = 960;
+
+/** How much of the session history the change list scans, in pages of 500 events. */
+const DOCK_RIGHT_CHANGE_PAGE_LIMIT = 500;
+const DOCK_RIGHT_CHANGE_PAGE_MAX = 8;
+
+/** Address prefix resource viewers claim. */
+const DOCK_RIGHT_FILE_PREFIX = 'myagent-resource://file/';
+
+/** Text reads are capped here; the endpoint truncates and says so. */
+const DOCK_RIGHT_TEXT_MAX_BYTES = 200000;
+
+/** Suffixes rendered as an inline image. Mirrors the backend's viewable image set. */
+const DOCK_RIGHT_IMAGE_SUFFIXES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'jfif', 'tif', 'tiff'];
+
+/** Suffixes rendered with a media element. */
+const DOCK_RIGHT_AUDIO_SUFFIXES = ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'weba'];
+const DOCK_RIGHT_VIDEO_SUFFIXES = ['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'];
+
+/** Suffixes that go straight to the system app: never read as text (feedback #5). */
+const DOCK_RIGHT_BINARY_SUFFIXES = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'epub', 'zip', '7z', 'rar', 'gz', 'tar', 'exe', 'msi', 'dll', 'so', 'dylib', 'bin', 'pyc', 'class', 'jar', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'db', 'sqlite', 'mp3', 'wav', 'flac', 'aac', 'ogg', 'mp4', 'mov', 'mkv', 'avi'];
+
+/** The column's private state. */
+const dockRightState = {
+    host: null,
+    sash: null,
+    surface: null,
+    floats: null,
+    button: null,
+    sessionId: null,
+    width: DOCK_RIGHT_WIDTH_DEFAULT,
+    tabState: Object.create(null),
+    dragging: false,
+};
+
+/** The column's rendered strings; the i18n observer translates them in English. */
+function dockRightLabels() {
+    return {
+        toggle: '详情栏',
+        open: '打开侧边栏',
+        openAria: '打开右侧边栏',
+        close: '收起侧边栏',
+        fullscreen: '全屏显示',
+        exitFullscreen: '退出全屏',
+        guide: '开始',
+        guideFiles: '工作区文件',
+        guideFilesDesc: '浏览会话工作区的文件',
+        guideChanges: '修改历史',
+        guideChangesDesc: '查看本会话的文件改动',
+        newTab: '新建窗口',
+        files: '工作区文件',
+        document: '文件内容',
+        changes: '修改历史',
+        refresh: '刷新',
+        openSystem: '在系统应用中打开',
+        loading: '正在载入…',
+        loadFailed: '载入失败',
+        emptyDir: '（空目录）',
+        emptyChanges: '本会话暂无文件改动',
+        emptyTurnChanges: '本轮暂无文件改动',
+        scopeTurn: '本轮',
+        scopeSession: '本次会话',
+        unsupported: '此文件类型暂不支持内嵌预览，可在系统应用中打开。',
+        textUnavailable: '文本接口尚不可用（需重启服务加载新接口），可在系统应用中打开。',
+        truncated: '文本过长，仅显示前 200 KB。',
+        undo: '撤销',
+        restore: '恢复',
+        undone: '已撤销',
+        restored: '已恢复',
+        fileSize: '大小',
+        diff: '差分',
+        added: '新增',
+        removed: '删除',
+        modified: '修改',
+        renamed: '重命名',
+    };
+}
+
+/** The labels the surface/float renderers read (split, chips, drop zones). */
+function dockRightSurfaceLabels() {
+    return {
+        emptyPane: '此面板暂无内容',
+        splitPane: '左右分屏',
+        splitPaneDisabled: '分栏数量已达上限',
+        splitPaneNarrow: '栏宽不足，拖宽侧边栏后再分栏',
+        // Exact dsh glyph (dock frame with the divider at its centre).
+        splitIconSVG: DOCK_ICON_SPLIT,
+        closeTab: '关闭标签',
+        addTab: '新建窗口',
+        duplicateTab: '复制标签',
+        dockFloat: '收回到侧边栏',
+        closeFloat: '关闭浮窗',
+        dropZone: { center: '移入此面板', left: '分屏到左侧', right: '分屏到右侧' },
+    };
+}
+
+/** One label. */
+function dockRightText(key) {
+    const labels = dockRightLabels();
+    return labels[key] || key;
+}
+
+/** The suffix of a path, lower-case and without the dot. */
+function dockRightSuffix(path) {
+    const text = String(path || '');
+    const index = text.lastIndexOf('.');
+    if (index < 0 || index === text.length - 1) return '';
+    return text.slice(index + 1).toLowerCase();
+}
+
+/** A human size. */
+function dockRightSize(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value < 0) return '';
+    if (value < 1024) return value + ' B';
+    if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
+    if (value < 1024 * 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MB';
+    return (value / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+/** The workspace-relative form of an absolute path, when it is inside the workspace. */
+function dockRightRelPath(path) {
+    const text = String(path || '');
+    const marker = 'workspace' + (text.indexOf('\\\\') >= 0 ? '\\\\' : '/');
+    const index = text.toLowerCase().lastIndexOf(marker.toLowerCase());
+    if (index < 0) return text;
+    return text.slice(index + marker.length).replace(/\\\\/g, '/');
+}
+
+/** The basename of a path. */
+function dockRightBasename(path) {
+    const text = String(path || '').replace(/\\\\/g, '/');
+    const index = text.lastIndexOf('/');
+    return index < 0 ? text : text.slice(index + 1);
+}
+
+/**
+ * Remember one page's scroll position per tab, so switching tabs away and
+ * back lands where the reader left it (feedback #4). The positions live in
+ * the tab's state object, next to the body's other bookkeeping.
+ */
+function dockRightTrackScroll(tabId, el) {
+    if (!el) return;
+    const state = dockRightState.tabState[tabId] || (dockRightState.tabState[tabId] = {});
+    const apply = () => {
+        if (!state.scroll) return;
+        el.scrollTop = state.scroll.y;
+        el.scrollLeft = state.scroll.x;
+    };
+    // Re-attached by the surface on every commit that shows this body again:
+    // the browser drops a detached scroller's position, so the body carries
+    // its own restore hook (feedback #4).
+    el.__dockRestore = apply;
+    if (state.scroll) requestAnimationFrame(apply);
+    el.addEventListener('scroll', () => {
+        state.scroll = { x: el.scrollLeft, y: el.scrollTop };
+    }, { passive: true });
+}
+
+/** A JSON fetch with its own deadline, so a stalled request cannot wedge a scan. */
+async function dockRightFetchJSON(url, timeoutMs) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(() => {
+        if (controller) {
+            try { controller.abort(); } catch (error) { /* ignore */ }
+        }
+    }, Math.max(1000, Number(timeoutMs) || 15000));
+    try {
+        const response = await fetch(url, controller ? { signal: controller.signal } : undefined);
+        let data = null;
+        try { data = await response.json(); } catch (error) { data = null; }
+        return { response: response, data: data };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** A small per-category glyph for the file tree, in dsh's spirit (feedback #6). */
+function dockRightFileIcon(name) {
+    const ext = dockRightSuffix(name);
+    const groups = [
+        { test: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'jfif', 'tif', 'tiff'], color: '#61afef',
+          body: '<rect x="2.5" y="3" width="11" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="6" cy="6.6" r="1.15" fill="currentColor"/><path d="M4 11.4l2.6-2.6 1.9 1.8 2.2-2.2 2.3 2.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>' },
+        { test: ['js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'css', 'scss', 'html', 'htm', 'sh', 'ps1', 'bat', 'java', 'go', 'rs', 'c', 'cpp', 'h'], color: '#c678dd',
+          body: '<path d="M6 4.2L3.2 8l2.8 3.8M10 4.2L12.8 8 10 11.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' },
+        { test: ['json', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'lock'], color: '#e5c07b',
+          body: '<path d="M6.4 3.4C4.9 3.4 5 5.4 5 6.6c0 1-1 1.2-1.4 1.4.4.2 1.4.4 1.4 1.4 0 1.2-.1 3.2 1.4 3.2M9.6 3.4c1.5 0 1.4 2 1.4 3.2 0 1 1 1.2 1.4 1.4-.4.2-1.4.4-1.4 1.4 0 1.2.1 3.2-1.4 3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' },
+        { test: ['md', 'markdown', 'txt', 'rst', 'log', 'csv', 'tsv'], color: '#98c379',
+          body: '<rect x="2.5" y="3" width="11" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 6.2h6M5 8.4h6M5 10.6h3.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>' },
+        { test: ['pdf'], color: '#e06c75',
+          body: '<rect x="2.5" y="3" width="11" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.2 11V5.4h2a1.6 1.6 0 010 3.2h-2" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>' },
+    ];
+    let hit = groups.find((group) => group.test.indexOf(ext) >= 0);
+    const color = hit ? hit.color : 'var(--text-tertiary)';
+    const body = hit ? hit.body
+        : '<path d="M4.6 2.8h4.2L12 6v7.2H4.6z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8.8 2.8V6H12" fill="none" stroke="currentColor" stroke-width="1.3"/>';
+    return '<svg class="dock-files-icon" viewBox="0 0 16 16" aria-hidden="true" style="color:' + color + '">' + body + '</svg>';
+}
+
+/** The folder glyph for the tree's directories. */
+const DOCK_FOLDER_ICON = '<svg class="dock-files-icon" viewBox="0 0 16 16" aria-hidden="true" style="color:#e5c07b"><path d="M2 4.2A1.2 1.2 0 013.2 3h2.9l1.4 1.5H13A1.2 1.2 0 0114.2 5.7v6.1A1.2 1.2 0 0113 13H3.2A1.2 1.2 0 012 11.8z" fill="currentColor" opacity="0.9"/></svg>';
+
+/** The card a file that cannot be shown inline falls back to: open it in the system app. */
+function dockRightSystemCard(rel) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dock-doc-fallback';
+    const note = document.createElement('div');
+    note.className = 'dock-note';
+    note.textContent = dockRightText('unsupported');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'dock-link-button';
+    open.textContent = dockRightText('openSystem');
+    open.addEventListener('click', () => {
+        void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
+    });
+    wrap.appendChild(note);
+    wrap.appendChild(open);
+    return wrap;
+}
+
+/** Suffixes the column shows inline as text; everything else goes to the system app. */
+const DOCK_RIGHT_TEXT_SUFFIXES = ['md', 'markdown', 'txt', 'log', 'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'py', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'html', 'htm', 'css', 'scss', 'less', 'sql', 'sh', 'bash', 'zsh', 'bat', 'cmd', 'ps1', 'psm1', 'c', 'cc', 'cpp', 'h', 'hpp', 'java', 'go', 'rs', 'rb', 'php', 'pl', 'lua', 'r', 'swift', 'kt', 'gradle', 'gitignore', 'editorconfig'];
+
+/** Whether a workspace path should open as text in the details column. */
+function dockRightIsTextPath(path) {
+    const suffix = dockRightSuffix(path);
+    if (!suffix) return false;
+    if (DOCK_RIGHT_BINARY_SUFFIXES.indexOf(suffix) >= 0) return false;
+    if (DOCK_RIGHT_IMAGE_SUFFIXES.indexOf(suffix) >= 0) return false;
+    if (DOCK_RIGHT_AUDIO_SUFFIXES.indexOf(suffix) >= 0 || DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0) return false;
+    return DOCK_RIGHT_TEXT_SUFFIXES.indexOf(suffix) >= 0;
+}
+
+/**
+ * The shared "open a file" policy for the app: text opens in the details
+ * column, everything else goes to the system app — the same rule the tree's
+ * click follows. Session file links call this through \`MyAgentDock\`.
+ */
+function dockRightOpenPathSmart(pathValue) {
+    const rel = String(pathValue || '');
+    if (!rel) return;
+    if (dockRightIsTextPath(rel)) {
+        dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(rel));
+        return;
+    }
+    void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
+}
+
+/** The seed thunk for this column: an emptied pane is backfilled with its "start" page. */
+function dockRightSeed() {
+    return () => ({ kind: 'guide', contentId: dockPageAddress('guide'), title: dockRightText('guide') });
+}
+
+// ── mount ────────────────────────────────────────────────────────────────────
+
+/** Build the column's DOM and views; idempotent. */
+function dockRightEnsureMounted() {
+    if (dockRightState.host) return;
+    const app = document.querySelector('.app');
+    const main = document.querySelector('.main');
+    if (!app || !main) return;
+
+    const host = document.createElement('aside');
+    host.className = 'dock-rightbar';
+    host.setAttribute('data-dock-rightbar', '1');
+    host.setAttribute('aria-label', dockRightText('toggle'));
+    host.hidden = true;
+    host.style.setProperty('--dock-rightbar-width', dockRightState.width + 'px');
+
+    const sash = document.createElement('div');
+    sash.className = 'dock-rightbar-sash';
+    sash.setAttribute('role', 'separator');
+    sash.setAttribute('aria-orientation', 'vertical');
+    sash.setAttribute('aria-label', '拖动调整详情栏宽度');
+    sash.addEventListener('pointerdown', (event) => dockRightStartResize(event));
+    sash.addEventListener('dblclick', () => {
+        dockRightState.width = DOCK_RIGHT_WIDTH_DEFAULT;
+        dockRightApplyWidth();
+        try { localStorage.setItem(DOCK_RIGHT_WIDTH_KEY, String(DOCK_RIGHT_WIDTH_DEFAULT)); } catch (error) { /* ignore */ }
+    });
+    host.appendChild(sash);
+
+    if (app.lastElementChild === main) app.appendChild(host);
+    else app.insertBefore(host, main.nextSibling);
+
+    dockRightState.host = host;
+    dockRightState.sash = sash;
+    dockRightLoadWidth();
+
+    const labels = dockRightSurfaceLabels();
+    dockRightState.surface = new DockSurfaceView({
+        root: host,
+        labels: labels,
+        renderTab: (tab) => dockRightRenderTabBody(tab),
+        // \`+\` opens a fresh "start" page in that pane, exactly like dsh: a
+        // pane may hold one start page, so the control hides once it has one.
+        canAddTab: (paneId) => {
+            const surface = dockRightState.sessionId ? dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA) : null;
+            return !!surface && dockPanePage(surface.layout, paneId, 'guide') === undefined;
+        },
+        canCloseTab: () => true,
+        // Two panes is the column's ceiling: with two already open the split
+        // control hides (below), so a dead button never lingers (feedback #8).
+        canSplitSurface: () => {
+            const surface = dockRightState.sessionId ? dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA) : null;
+            return !!surface && dockPaneIds(surface.layout).length < 2;
+        },
+        // dsh's right column hides the split control while it cannot act
+        // (\`hideSplitWhenBlocked\`), rather than leaving a dead button.
+        hideSplitWhenBlocked: true,
+        dropZones: 'horizontal',
+        minPaneFraction: DOCK_PRODUCT_MIN_FRACTION,
+        intents: dockRightIntents(),
+        onRoom: () => {},
+        onTabRemoved: (tabId) => dockRightDisposeTab(tabId),
+        chrome: dockRightBuildChrome(),
+    });
+    dockRightState.surface.mount();
+    dockRightState.floats = new DockFloatLayerView({
+        root: host,
+        labels: labels,
+        intents: dockRightIntents(),
+        renderTab: (tab) => dockRightRenderTabBody(tab),
+        canCloseTab: () => true,
+    });
+    dockRightState.floats.mount();
+
+    dockRightEnsureButton();
+    dockRightRegisterTabs();
+    if (!dockRightState.viewportHooked) {
+        dockRightState.viewportHooked = true;
+        window.addEventListener('resize', () => {
+            if (!dockRightExpanded()) return;
+            if (window.innerWidth < 768 && dockRightState.sessionId) {
+                const surface = dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA);
+                if (surface && surface.layout.mode !== 'fullscreen') {
+                    dockActionSetMode(dockRightState.sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+                }
+            }
+            dockRightRender();
+        }, { passive: true });
+    }
+}
+
+/** The column's surface-wide controls: fullscreen and collapse. */
+function dockRightBuildChrome() {
+    const wrap = document.createElement('div');
+    wrap.className = 'dock-chrome-controls';
+    const fullscreenButton = document.createElement('button');
+    fullscreenButton.type = 'button';
+    fullscreenButton.className = 'dock-icon-button';
+    fullscreenButton.setAttribute('data-dock-rightbar-fullscreen', '1');
+    fullscreenButton.innerHTML = DOCK_ICON_FULLSCREEN;
+    fullscreenButton.addEventListener('click', () => {
+        const sessionId = dockRightState.sessionId;
+        if (!sessionId) return;
+        const surface = dockSurfaceOf(sessionId, DOCK_RIGHT_AREA);
+        if (!surface) return;
+        dockActionSetMode(sessionId, surface.layout.mode === 'fullscreen' ? 'push' : 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+        dockRightRender();
+    });
+    const collapseButton = document.createElement('button');
+    collapseButton.type = 'button';
+    collapseButton.className = 'dock-icon-button';
+    collapseButton.setAttribute('data-dock-rightbar-collapse', '1');
+    collapseButton.setAttribute('aria-label', dockRightText('close'));
+    // The collapse glyph is the panel icon mirrored, exactly like dsh's.
+    collapseButton.innerHTML = DOCK_EXPAND_ICON;
+    collapseButton.addEventListener('click', () => dockRightToggle());
+    wrap.appendChild(fullscreenButton);
+    wrap.appendChild(collapseButton);
+    return wrap;
+}
+
+/**
+ * The header corner button that opens the column, the same control dsh puts in
+ * \`conversation.session.header.corner\`: an icon-only 28px circle holding the
+ * left sidebar's panel glyph mirrored (the divider on the right), shown only
+ * while the column is collapsed — an open column costs the header nothing.
+ * The glyph is the icon primitive's path, inlined because this page has no
+ * icon library.
+ */
+const DOCK_EXPAND_ICON = '<svg class="dock-expand-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873V1.91166Z"/></svg>';
+
+function dockRightEnsureButton() {
+    if (dockRightState.button && dockRightState.button.isConnected) return;
+    const right = document.querySelector('.titlebar-right');
+    if (!right) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'dock-rightbar-toggle-btn';
+    button.className = 'dock-expand-btn';
+    button.setAttribute('aria-label', dockRightText('openAria'));
+    button.setAttribute('title', dockRightText('open'));
+    button.innerHTML = DOCK_EXPAND_ICON;
+    button.addEventListener('click', () => dockRightToggle());
+    // The header's own corner, past the utilities' edge (the seat's last slot).
+    right.appendChild(button);
+    dockRightState.button = button;
+}
+
+/** Restore the remembered column width. */
+function dockRightLoadWidth() {
+    let width = DOCK_RIGHT_WIDTH_DEFAULT;
+    try {
+        const saved = parseInt(localStorage.getItem(DOCK_RIGHT_WIDTH_KEY), 10);
+        if (Number.isFinite(saved)) width = saved;
+    } catch (error) { /* ignore */ }
+    dockRightState.width = dockRightClampWidth(width);
+    dockRightApplyWidth();
+}
+
+/** Clamp a width to the column's bounds and the viewport. */
+function dockRightClampWidth(width) {
+    const viewport = Math.max(0, window.innerWidth || DOCK_RIGHT_WIDTH_MAX);
+    const max = Math.max(DOCK_RIGHT_WIDTH_MIN, Math.min(DOCK_RIGHT_WIDTH_MAX, Math.floor(viewport * 0.72)));
+    return Math.max(DOCK_RIGHT_WIDTH_MIN, Math.min(max, Math.round(Number(width) || DOCK_RIGHT_WIDTH_DEFAULT)));
+}
+
+/** Write the width onto the element. */
+function dockRightApplyWidth() {
+    if (dockRightState.host) dockRightState.host.style.setProperty('--dock-rightbar-width', dockRightState.width + 'px');
+}
+
+/** Drag the sash to resize the column. */
+function dockRightStartResize(event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = dockRightState.host ? dockRightState.host.getBoundingClientRect().width : dockRightState.width;
+    const onMove = (moved) => {
+        dockRightState.width = dockRightClampWidth(startWidth - (moved.clientX - startX));
+        dockRightApplyWidth();
+    };
+    const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        try { localStorage.setItem(DOCK_RIGHT_WIDTH_KEY, String(dockRightState.width)); } catch (error) { /* ignore */ }
+        if (dockRightState.surface) dockRightState.surface.remeasure();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+}
+
+// ── intents and rendering ────────────────────────────────────────────────────
+
+/** Settled intent results for the column, routed into the \`right\` area's store. */
+function dockRightIntents() {
+    const redraw = () => dockRightRender();
+    const session = () => dockRightState.sessionId;
+    return {
+        focusTab: (tabId) => { if (dockActionFocusTab(session(), tabId, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        focusPane: (paneId) => { if (dockActionFocusPane(session(), paneId, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        splitPane: (paneId) => { if (dockActionSplitPane(session(), paneId, dockRightSeed(), null, DOCK_RIGHT_AREA)) redraw(); },
+        // \`+\`: a fresh start page in that pane — the "new empty window".
+        addTab: (paneId) => dockRightOpenPageKind('guide', undefined, paneId),
+        closeTab: (tabId) => { if (dockActionCloseTab(session(), tabId, dockRightSeed(), DOCK_RIGHT_AREA)) { dockRightDisposeTab(tabId); redraw(); } },
+        duplicateTab: (tabId) => { if (dockActionDuplicateTab(session(), tabId, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        floatTab: (tabId, rect) => { if (dockActionFloatTab(session(), tabId, rect, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        unfloatPane: (paneId) => { if (dockActionUnfloatPane(session(), paneId, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        moveFloat: (paneId, x, y) => { if (dockActionMoveFloat(session(), paneId, x, y, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        resizeFloat: (paneId, rect) => { if (dockActionResizeFloat(session(), paneId, rect, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        placeTab: (tabId, toPaneId, index) => { if (dockActionPlaceTab(session(), tabId, toPaneId, index, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        dropTab: (tabId, paneId, zone) => { if (dockActionDropTab(session(), tabId, paneId, zone, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+        resizeSplit: (splitId, sizes) => { if (dockActionResizeSplit(session(), splitId, sizes, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
+    };
+}
+
+/** Whether the column is shown. */
+function dockRightExpanded() {
+    const surface = dockRightState.sessionId ? dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA) : null;
+    return !!(surface && surface.layout.expanded);
+}
+
+/**
+ * Open the column for the current session, or collapse it. Opening a collapsed
+ * column that still holds tabs only re-expands it — the earlier code asked for
+ * the files page and, seeing it already there, planned nothing at all, which
+ * made the second click a no-op. Only an empty column is seeded with a page.
+ */
+function dockRightToggle() {
+    const sessionId = currentSessionId;
+    if (!sessionId) return;
+    dockRightEnsureMounted();
+    if (!dockRightState.host) return;
+    dockActionOpen(sessionId, DOCK_RIGHT_AREA);
+    const surface = dockSurfaceOf(sessionId, DOCK_RIGHT_AREA);
+    dockRightState.sessionId = sessionId;
+    if (surface.layout.expanded) {
+        dockActionToggleExpanded(sessionId, dockRightSeed(), DOCK_RIGHT_AREA);
+        dockRightRender();
+        return;
+    }
+    const hasTabs = Object.keys(surface.layout.tabs).length > 0;
+    if (hasTabs) {
+        dockActionSetExpanded(sessionId, true, dockRightSeed(), DOCK_RIGHT_AREA);
+    } else {
+        dockActionOpenContent(sessionId, {
+            kind: 'guide',
+            contentId: dockPageAddress('guide'),
+            title: dockRightText('guide'),
+            revealIfOpened: false,
+        }, dockRightSeed(), null, DOCK_RIGHT_AREA);
+    }
+    if (window.innerWidth < 768) dockActionSetMode(sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+    dockRightRender();
+}
+
+/** Show or hide the column and sync everything the current snapshot implies. */
+function dockRightRender() {
+    const host = dockRightState.host;
+    if (!host) return;
+    const sessionId = dockRightState.sessionId;
+    const surface = sessionId ? dockSurfaceOf(sessionId, DOCK_RIGHT_AREA) : null;
+    const expanded = !!(surface && surface.layout.expanded);
+    host.hidden = !expanded;
+    if (dockRightState.button) {
+        // dsh's original behaviour (restored on request): the corner button is
+        // the way in, shown only while the column is collapsed.
+        dockRightState.button.hidden = expanded;
+        dockRightState.button.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+        dockRightState.button.title = dockRightText('open');
+    }
+    if (!surface || !expanded) {
+        if (dockRightState.surface && surface) dockRightState.surface.sync(surface.layout);
+        return;
+    }
+    const fullscreen = surface.layout.mode === 'fullscreen';
+    host.classList.toggle('is-fullscreen', fullscreen);
+    if (dockRightState.surface) {
+        dockRightState.surface.intents = dockRightIntents();
+        dockRightState.surface.sync(surface.layout);
+    }
+    if (dockRightState.floats) {
+        dockRightState.floats.intents = dockRightIntents();
+        dockRightState.floats.sync(surface.layout);
+    }
+    const fullscreenButton = host.querySelector('[data-dock-rightbar-fullscreen]');
+    if (fullscreenButton) {
+        fullscreenButton.setAttribute('aria-label', fullscreen ? dockRightText('exitFullscreen') : dockRightText('fullscreen'));
+        fullscreenButton.innerHTML = fullscreen ? DOCK_ICON_EXIT_FULLSCREEN : DOCK_ICON_FULLSCREEN;
+    }
+}
+
+/** The session-switch hook: show the entering session's own column surface. */
+function dockRightHandleSessionSwitch(sessionId) {
+    if (!dockRightState.host) return;
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    if (dockRightState.sessionId === sid) return;
+    if (!dockSurfaceExists(sid, DOCK_RIGHT_AREA)) {
+        dockRightState.sessionId = sid;
+        dockRightRender();
+        return;
+    }
+    dockRightState.sessionId = sid;
+    dockRightRender();
+}
+
+/**
+ * A belt-and-braces session watcher: the list's active marker is the app's
+ * authoritative "current session" signal, so watching it keeps the column in
+ * step even on a path that reaches \`switchSession\` without the wrapper.
+ */
+function dockRightWatchSessions() {
+    if (dockRightState.sessionWatch) return;
+    const list = document.querySelector('#sessions-list');
+    if (!list) return;
+    const sync = () => {
+        const row = list.querySelector('.session-item.active[data-session-id]');
+        const sid = row ? String(row.getAttribute('data-session-id') || '') : '';
+        if (sid) dockRightHandleSessionSwitch(sid);
+    };
+    dockRightState.sessionWatch = new MutationObserver(sync);
+    dockRightState.sessionWatch.observe(list, { subtree: true, attributes: true, attributeFilter: ['class', 'data-session-id'] });
+    sync();
+}
+
+// ── tab bodies ───────────────────────────────────────────────────────────────
+
+/** The body for one tab of this column. */
+function dockRightRenderTabBody(tab) {
+    if (tab.kind === 'guide') return dockRightGuideBody(tab);
+    if (tab.kind === 'files') return dockRightFilesBody(tab);
+    if (tab.kind === 'document') return dockRightDocumentBody(tab);
+    if (tab.kind === 'changes') return dockRightChangesBody(tab);
+    const fallback = document.createElement('div');
+    fallback.className = 'dock-unknown-tab';
+    fallback.textContent = tab.title || tab.kind;
+    return fallback;
+}
+
+/** Register the column's built-in page types. Called once at mount. */
+function dockRightRegisterTabs() {
+    if (dockRightState.registered) return;
+    dockRightState.registered = true;
+    const register = (definition) => {
+        try {
+            dockTabRegistry.register(definition);
+        } catch (error) {
+            console.warn('dock details tab registration skipped', definition && definition.id, error && error.message);
+        }
+    };
+    register({
+        id: 'myagent.details.guide',
+        kind: 'guide',
+        priority: 'builtin',
+        title: () => dockRightText('guide'),
+        body: dockRightGuideBody,
+    });
+    register({
+        id: 'myagent.details.files',
+        kind: 'files',
+        priority: 'builtin',
+        title: () => dockRightText('files'),
+        body: dockRightFilesBody,
+    });
+    register({
+        id: 'myagent.details.document',
+        kind: 'document',
+        priority: 'builtin',
+        patterns: ['myagent-resource://file/**'],
+        canOpen: () => true,
+        title: (address) => dockRightBasename(decodeURIComponent(String(address).slice(DOCK_RIGHT_FILE_PREFIX.length)) || 'file'),
+        body: dockRightDocumentBody,
+    });
+    register({
+        id: 'myagent.details.changes',
+        kind: 'changes',
+        priority: 'builtin',
+        title: () => dockRightText('changes'),
+        body: dockRightChangesBody,
+    });
+}
+
+// ── files page ───────────────────────────────────────────────────────────────
+
+/**
+ * The "start" page: the column's home and the pane's fallback. Closing the
+ * last tab never collapses the column — the settle step re-seeds this page —
+ * and opening the column for the first time lands here, exactly like dsh's
+ * guide page (feedback #3 and #7).
+ */
+function dockRightGuideBody(tab) {
+    const el = document.createElement('div');
+    el.className = 'dock-guide';
+    el.setAttribute('data-dock-guide', tab.id);
+    const glyph = document.createElement('div');
+    glyph.className = 'dock-guide-glyph';
+    glyph.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M15.6 8.4l-2.2 5-5 2.2 2.2-5z" fill="currentColor"/></svg>';
+    const entries = document.createElement('div');
+    entries.className = 'dock-guide-entries';
+    const cards = [
+        { label: dockRightText('guideFiles'), desc: dockRightText('guideFilesDesc'), icon: DOCK_FOLDER_ICON, kind: 'files' },
+        { label: dockRightText('guideChanges'), desc: dockRightText('guideChangesDesc'), icon: dockRightFileIcon('changes.md'), kind: 'changes' },
+    ];
+    for (let i = 0; i < cards.length; i += 1) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'dock-guide-card';
+        card.setAttribute('data-dock-guide-entry', cards[i].kind);
+        const icon = document.createElement('span');
+        icon.className = 'dock-guide-card-icon';
+        icon.innerHTML = cards[i].icon;
+        const text = document.createElement('span');
+        text.className = 'dock-guide-card-text';
+        const title = document.createElement('span');
+        title.className = 'dock-guide-card-title';
+        title.textContent = cards[i].label;
+        const desc = document.createElement('span');
+        desc.className = 'dock-guide-card-desc';
+        desc.textContent = cards[i].desc;
+        text.appendChild(title);
+        text.appendChild(desc);
+        card.appendChild(icon);
+        card.appendChild(text);
+        card.addEventListener('click', () => dockRightOpenPageKind(cards[i].kind, tab.id));
+        entries.appendChild(card);
+    }
+    el.appendChild(glyph);
+    el.appendChild(entries);
+    return el;
+}
+
+/** Open one of the column's pages (guide entries, \`+\`, the public API) in a pane. */
+function dockRightOpenPageKind(kind, replaceTab, paneId) {
+    dockRightEnsureMounted();
+    const sessionId = dockRightState.sessionId || currentSessionId;
+    if (!sessionId) return;
+    const address = dockPageAddress(String(kind));
+    const definition = dockTabRegistry.get(String(kind));
+    dockActionOpenContent(sessionId, {
+        kind: String(kind),
+        contentId: address,
+        title: definition ? dockTitleOf(definition, address) : String(kind),
+        replaceTab: replaceTab,
+        paneId: paneId,
+        revealIfOpened: false,
+    }, dockRightSeed(), null, DOCK_RIGHT_AREA);
+    dockRightState.sessionId = sessionId;
+    dockRightRender();
+}
+
+/** The workspace tree page. */
+function dockRightFilesBody(tab) {
+    const el = document.createElement('div');
+    el.className = 'dock-files';
+    el.setAttribute('data-dock-files', tab.id);
+    const head = document.createElement('div');
+    head.className = 'dock-files-head';
+    const title = document.createElement('span');
+    title.className = 'dock-files-title';
+    title.textContent = dockRightText('files');
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.className = 'dock-link-button';
+    refresh.textContent = dockRightText('refresh');
+    const tree = document.createElement('div');
+    tree.className = 'dock-files-tree';
+    refresh.addEventListener('click', () => {
+        tree.replaceChildren();
+        void dockRightLoadDir(tree, '', 0);
+    });
+    head.appendChild(title);
+    head.appendChild(refresh);
+    el.appendChild(head);
+    el.appendChild(tree);
+    dockRightTrackScroll(tab.id, tree);
+    el.__dockRestore = tree.__dockRestore;
+    void dockRightLoadDir(tree, '', 0);
+    return el;
+}
+
+/** Load one directory level into \`container\`, recursively expandable. */
+async function dockRightLoadDir(container, dir, depth) {
+    const loading = document.createElement('div');
+    loading.className = 'dock-note';
+    loading.textContent = dockRightText('loading');
+    container.appendChild(loading);
+    try {
+        const response = await fetch('/api/workspace-files?' + new URLSearchParams({ dir: dir || '' }));
+        const data = await response.json();
+        loading.remove();
+        if (!response.ok || !data || data.ok !== true || !Array.isArray(data.files)) {
+            throw new Error((data && data.error) || ('HTTP ' + response.status));
+        }
+        const rows = data.files.slice().sort((left, right) => {
+            const leftDir = left.kind === 'directory' ? 0 : 1;
+            const rightDir = right.kind === 'directory' ? 0 : 1;
+            if (leftDir !== rightDir) return leftDir - rightDir;
+            return String(left.name).localeCompare(String(right.name), 'zh-Hans-CN');
+        });
+        if (rows.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'dock-note';
+            empty.textContent = dockRightText('emptyDir');
+            container.appendChild(empty);
+            return;
+        }
+        for (let i = 0; i < rows.length; i += 1) container.appendChild(dockRightFileRow(rows[i], depth));
+    } catch (error) {
+        loading.textContent = dockRightText('loadFailed') + ': ' + (error && error.message ? error.message : error);
+    }
+}
+
+/** One row of the tree: a directory that expands, or a file that opens. */
+function dockRightFileRow(item, depth) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dock-files-node';
+    const isDir = item.kind === 'directory';
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'dock-files-row' + (isDir ? ' dock-files-row--dir' : '');
+    row.style.paddingLeft = (8 + depth * 14) + 'px';
+    row.setAttribute('data-rel', item.rel);
+    row.title = item.path || item.rel;
+    const marker = document.createElement('span');
+    marker.className = 'dock-files-marker';
+    if (isDir) {
+        marker.classList.add('dock-files-marker--dir');
+        marker.innerHTML = '<span class="dock-files-caret">▸</span>' + DOCK_FOLDER_ICON;
+    }
+    else {
+        marker.classList.add('dock-files-marker--icon');
+        marker.innerHTML = dockRightFileIcon(item.name);
+    }
+    const name = document.createElement('span');
+    name.className = 'dock-files-name';
+    name.textContent = item.name;
+    row.appendChild(marker);
+    row.appendChild(name);
+    if (!isDir && Number.isFinite(Number(item.size))) {
+        const size = document.createElement('span');
+        size.className = 'dock-files-size';
+        size.textContent = dockRightSize(item.size);
+        row.appendChild(size);
+    }
+    wrap.appendChild(row);
+    if (!isDir) {
+        row.addEventListener('click', () => dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(item.rel)));
+        return wrap;
+    }
+    const children = document.createElement('div');
+    children.className = 'dock-files-children';
+    children.hidden = true;
+    let loaded = false;
+    row.addEventListener('click', () => {
+        const expanding = children.hidden;
+        children.hidden = !expanding;
+        const caret = marker.querySelector('.dock-files-caret');
+        if (caret) caret.textContent = expanding ? '▾' : '▸';
+        if (expanding && !loaded) {
+            loaded = true;
+            void dockRightLoadDir(children, item.rel, depth + 1);
+        }
+    });
+    wrap.appendChild(children);
+    return wrap;
+}
+
+/** Open a resource address in the column (expanding it), focusing it if open. */
+function dockRightOpenResource(address) {
+    dockRightEnsureMounted();
+    const sessionId = dockRightState.sessionId || currentSessionId;
+    if (!sessionId) return;
+    let claim;
+    try {
+        claim = dockTabRegistry.claim(address);
+    } catch (error) {
+        console.warn('dock details: no tab type claims', address, error && error.message);
+        return;
+    }
+    dockActionOpenContent(sessionId, {
+        kind: claim.kind,
+        contentId: claim.contentId,
+        title: claim.title,
+    }, dockRightSeed(), null, DOCK_RIGHT_AREA);
+    dockRightState.sessionId = sessionId;
+    dockRightRender();
+}
+
+// ── document page ────────────────────────────────────────────────────────────
+
+/** One file's content: image, media, or text, with an open-in-system fallback. */
+function dockRightDocumentBody(tab) {
+    const el = document.createElement('div');
+    el.className = 'dock-doc';
+    el.setAttribute('data-dock-document', tab.id);
+    const rel = decodeURIComponent(String(tab.contentId || '').slice(DOCK_RIGHT_FILE_PREFIX.length));
+    const suffix = dockRightSuffix(rel);
+    const state = { abort: null, released: false, rel: rel, suffix: suffix };
+    dockRightState.tabState[tab.id] = state;
+
+    const head = document.createElement('div');
+    head.className = 'dock-doc-head';
+    const name = document.createElement('span');
+    name.className = 'dock-doc-name';
+    name.textContent = dockRightBasename(rel) || rel;
+    name.title = rel;
+    const openSystem = document.createElement('button');
+    openSystem.type = 'button';
+    openSystem.className = 'dock-link-button';
+    openSystem.textContent = dockRightText('openSystem');
+    openSystem.addEventListener('click', () => {
+        void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
+    });
+    head.appendChild(name);
+    head.appendChild(openSystem);
+    const content = document.createElement('div');
+    content.className = 'dock-doc-content';
+    el.appendChild(head);
+    el.appendChild(content);
+
+    if (DOCK_RIGHT_IMAGE_SUFFIXES.indexOf(suffix) >= 0) {
+        const image = document.createElement('img');
+        image.className = 'dock-doc-image';
+        image.alt = name.textContent;
+        image.src = '/api/workspace-image?' + new URLSearchParams({ rel: rel });
+        image.addEventListener('error', () => {
+            content.replaceChildren(dockRightSystemCard(rel));
+        });
+        content.appendChild(image);
+    } else if (DOCK_RIGHT_AUDIO_SUFFIXES.indexOf(suffix) >= 0 || DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0) {
+        const media = document.createElement(DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0 ? 'video' : 'audio');
+        media.className = 'dock-doc-media';
+        media.controls = true;
+        media.src = '/api/workspace-media?' + new URLSearchParams({ rel: rel });
+        content.appendChild(media);
+    } else if (DOCK_RIGHT_BINARY_SUFFIXES.indexOf(suffix) >= 0) {
+        // Feedback #5: a non-text file goes straight to the system-app card
+        // instead of showing mojibake.
+        content.appendChild(dockRightSystemCard(rel));
+    } else {
+        void dockRightLoadText(content, state);
+    }
+    dockRightTrackScroll(tab.id, content);
+    el.__dockRestore = content.__dockRestore;
+    return el;
+}
+
+/** Read a text file into a \`<pre>\`. */
+async function dockRightLoadText(content, state) {
+    const loading = dockRightNote(dockRightText('loading'));
+    content.replaceChildren(loading);
+    try {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        state.abort = controller;
+        const response = await fetch('/api/workspace-file-text?' + new URLSearchParams({
+            rel: state.rel,
+            max_bytes: String(DOCK_RIGHT_TEXT_MAX_BYTES),
+        }), controller ? { signal: controller.signal } : undefined);
+        const data = await response.json().catch(() => null);
+        if (state.released) return;
+        if (!response.ok || !data || data.ok !== true) {
+            if (response.status === 404 || response.status === 405 || response.status === 501) {
+                content.replaceChildren(dockRightNote(dockRightText('textUnavailable')));
+                return;
+            }
+            throw new Error((data && data.error) || ('HTTP ' + response.status));
+        }
+        const text = String(data.text || '');
+        const replacements = (text.match(/\\uFFFD/g) || []).length;
+        if (replacements > 0 && replacements > text.length * 0.02) {
+            // Undecodable bytes: this is not a text file after all; hand it to
+            // the system app instead of displaying replacement glyphs.
+            content.replaceChildren(dockRightSystemCard(state.rel));
+            return;
+        }
+        const pre = document.createElement('pre');
+        pre.className = 'dock-doc-text';
+        pre.textContent = text;
+        const nodes = [pre];
+        if (data.truncated) nodes.push(dockRightNote(dockRightText('truncated')));
+        content.replaceChildren.apply(content, nodes);
+    } catch (error) {
+        if (error && error.name === 'AbortError') return;
+        content.replaceChildren(dockRightNote(dockRightText('loadFailed') + ': ' + (error && error.message ? error.message : error)));
+    }
+}
+
+/** A quiet note line. */
+function dockRightNote(text) {
+    const note = document.createElement('div');
+    note.className = 'dock-note';
+    note.textContent = text;
+    return note;
+}
+
+// ── changes page ─────────────────────────────────────────────────────────────
+
+/**
+ * The session's file changes, aggregated from the \`ui.changes\` payloads in its
+ * history, in two scopes: the current round (everything after the latest user
+ * turn — the default, matching the Change Review plugin's "this run" wording)
+ * and the whole session (feedback #4).
+ */
+function dockRightChangesBody(tab) {
+    const el = document.createElement('div');
+    el.className = 'dock-changes';
+    el.setAttribute('data-dock-changes', tab.id);
+    const sessionId = dockRightState.sessionId || currentSessionId;
+    const state = {
+        sessionId: sessionId,
+        rows: new Map(),
+        released: false,
+        listener: null,
+        abort: null,
+        sequence: 0,
+        turnStart: -1,
+        scope: 'turn',
+        pills: null,
+        loaded: false,
+    };
+    dockRightState.tabState[tab.id] = state;
+
+    const head = document.createElement('div');
+    head.className = 'dock-changes-head';
+    const title = document.createElement('span');
+    title.className = 'dock-changes-title';
+    title.textContent = dockRightText('changes');
+    const pills = document.createElement('div');
+    pills.className = 'dock-changes-scope';
+    const scopeDefs = [
+        { id: 'turn', label: dockRightText('scopeTurn') },
+        { id: 'session', label: dockRightText('scopeSession') },
+    ];
+    for (let i = 0; i < scopeDefs.length; i += 1) {
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        pill.className = 'dock-scope-pill' + (scopeDefs[i].id === 'turn' ? ' is-active' : '');
+        pill.setAttribute('data-dock-changes-scope', scopeDefs[i].id);
+        pill.textContent = scopeDefs[i].label;
+        pill.addEventListener('click', () => {
+            state.scope = scopeDefs[i].id;
+            render();
+        });
+        pills.appendChild(pill);
+    }
+    state.pills = pills;
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.className = 'dock-link-button';
+    refresh.textContent = dockRightText('refresh');
+    head.appendChild(title);
+    head.appendChild(pills);
+    head.appendChild(refresh);
+    const list = document.createElement('div');
+    list.className = 'dock-changes-list';
+    el.appendChild(head);
+    el.appendChild(list);
+    dockRightTrackScroll(tab.id, list);
+    el.__dockRestore = list.__dockRestore;
+
+    const scopedRows = () => {
+        const all = Array.from(state.rows.values());
+        const rows = state.scope === 'turn'
+            ? all.filter((row) => Number(row.at || 0) > state.turnStart)
+            : all;
+        return rows.sort((left, right) => String(left.path).localeCompare(String(right.path)));
+    };
+    const render = () => {
+        if (state.released) return;
+        const buttons = pills.querySelectorAll('.dock-scope-pill');
+        for (let i = 0; i < buttons.length; i += 1) {
+            const active = buttons[i].getAttribute('data-dock-changes-scope') === state.scope;
+            buttons[i].classList.toggle('is-active', active);
+        }
+        list.replaceChildren();
+        list.setAttribute('data-dock-turn-start', String(state.turnStart));
+        list.setAttribute('data-dock-sequence', String(state.sequence));
+        list.setAttribute('data-dock-session', String(state.sessionId || ''));
+        const rows = scopedRows();
+        if (rows.length === 0) {
+            list.appendChild(dockRightNote(state.scope === 'turn' ? dockRightText('emptyTurnChanges') : dockRightText('emptyChanges')));
+            return;
+        }
+        for (let i = 0; i < rows.length; i += 1) list.appendChild(dockRightChangeRow(rows[i], state, render));
+    };
+    const accept = (raw, at) => {
+        if (!raw || !raw.path) return;
+        const key = String(raw.path).toLowerCase();
+        const previous = state.rows.get(key);
+        if (previous && Number(previous.revision) > Number(raw.revision)) return;
+        state.rows.set(key, Object.assign({}, raw, {
+            at: at === undefined ? (state.sequence += 1) : at,
+            _reverted: raw.reverted === true || raw.effective === false,
+        }));
+    };
+    const load = async () => {
+        try {
+            const pages = [];
+            let before = null;
+            for (let page = 0; page < DOCK_RIGHT_CHANGE_PAGE_MAX; page += 1) {
+                const params = new URLSearchParams({
+                    limit: String(DOCK_RIGHT_CHANGE_PAGE_LIMIT),
+                    turns: '50',
+                    event_budget: '5000',
+                    include_aux: 'false',
+                });
+                if (before !== null) params.set('before_index', String(before));
+                const url = '/sessions/' + encodeURIComponent(state.sessionId) + '/history_snapshot?' + params.toString();
+                const scanned = await dockRightFetchJSON(url, 20000);
+                const response = scanned.response;
+                const data = scanned.data;
+                if (state.released) return;
+                if (!response.ok || !data || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + response.status));
+                const pageData = data.messages && typeof data.messages === 'object' ? data.messages : {};
+                pages.push({ start: Number(pageData.range_start) || 0, events: Array.isArray(pageData.events) ? pageData.events : [] });
+                const start = Number(pageData.range_start);
+                if (!pageData.has_older || !Number.isFinite(start) || start <= 0) break;
+                before = start;
+            }
+            // Pages arrive newest-first: walk the oldest run's events first so
+            // \`sequence\` grows with time and the latest user turn is the last
+            // boundary seen.
+            pages.sort((left, right) => left.start - right.start);
+            let sequence = 0;
+            let turnStart = -1;
+            for (let p = 0; p < pages.length; p += 1) {
+                const events = pages[p].events;
+                for (let i = 0; i < events.length; i += 1) {
+                    sequence += 1;
+                    if (events[i] && events[i].type === 'user') turnStart = sequence;
+                    const ui = events[i] && events[i].ui;
+                    const changes = ui && Array.isArray(ui.changes) ? ui.changes : null;
+                    if (changes) for (let j = 0; j < changes.length; j += 1) accept(changes[j], sequence);
+                }
+            }
+            state.sequence = sequence;
+            state.turnStart = turnStart;
+            state.loadTries = 0;
+            state.loaded = true;
+            render();
+        } catch (error) {
+            if (state.released) return;
+            state.loadTries = (state.loadTries || 0) + 1;
+            if (state.loadTries <= 2) {
+                // One silent retry: the first attempt can lose a race with the
+                // app's own session-switch traffic.
+                setTimeout(() => { void load(); }, 400);
+                return;
+            }
+            console.warn('[dock details] changes load failed', error);
+            list.replaceChildren(dockRightNote(dockRightText('loadFailed') + ': ' + (error && error.message ? error.message : error)));
+        }
+    };
+    refresh.addEventListener('click', () => {
+        state.rows.clear();
+        state.sequence = 0;
+        state.loadTries = 0;
+        void load();
+    });
+    state.listener = (event) => {
+        const detail = event && event.detail ? event.detail : {};
+        if (detail.sessionId && String(detail.sessionId) !== String(state.sessionId)) return;
+        // A new user turn moves the "this round" boundary forward the moment
+        // it happens; without this the scope kept showing the previous round's
+        // changes until the next full rescan.
+        if (detail.event && detail.event.type === 'user') {
+            state.sequence += 1;
+            state.turnStart = state.sequence;
+            render();
+            return;
+        }
+        const ui = detail.event && detail.event.ui;
+        const changes = ui && Array.isArray(ui.changes) ? ui.changes : null;
+        if (!changes) return;
+        for (let i = 0; i < changes.length; i += 1) accept(changes[i]);
+        render();
+    };
+    document.addEventListener('myagent:ui-event', state.listener);
+    // The initial scan starts a beat after the body mounts: opening a tab
+    // happens in the middle of the app's own session-switch fetches, and the
+    // very first attempt raced them into an early failure (the refresh button
+    // always worked). A short delay plus the retry below makes the first open
+    // as reliable as refresh.
+    void load();
+    // Watchdog: if neither the scan nor the live stream has produced anything
+    // two seconds in, run the scan again (a dropped first attempt must not
+    // leave the page empty until the user finds the refresh button).
+    setTimeout(() => {
+        if (state.released || state.loaded) return;
+        void load();
+    }, 2000);
+    return el;
+}
+
+/** One change row: path, operation, line counts, expandable diff, undo/restore. */
+function dockRightChangeRow(row, state, rerender) {
+    const item = document.createElement('article');
+    item.className = 'dock-change' + (row._reverted ? ' is-reverted' : '');
+    item.setAttribute('data-dock-change-at', String(row.at === undefined ? '' : row.at));
+    const head = document.createElement('div');
+    head.className = 'dock-change-head';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'dock-change-toggle';
+    toggle.textContent = '▸';
+    const name = document.createElement('span');
+    name.className = 'dock-change-name';
+    name.textContent = dockRightBasename(row.path);
+    name.title = row.path;
+    const dir = document.createElement('span');
+    dir.className = 'dock-change-dir';
+    dir.textContent = dockRightRelPath(row.path).replace(/[^/]+$/, '');
+    const stats = document.createElement('span');
+    stats.className = 'dock-change-stats';
+    if (Number.isFinite(Number(row.added)) && Number(row.added) > 0) {
+        const added = document.createElement('span');
+        added.className = 'dock-change-added';
+        added.textContent = '+' + row.added;
+        stats.appendChild(added);
+    }
+    if (Number.isFinite(Number(row.removed)) && Number(row.removed) > 0) {
+        const removed = document.createElement('span');
+        removed.className = 'dock-change-removed';
+        removed.textContent = '-' + row.removed;
+        stats.appendChild(removed);
+    }
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'dock-link-button dock-change-action';
+    action.textContent = row._reverted ? dockRightText('restore') : dockRightText('undo');
+    action.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void dockRightChangeAction(row, action, state, rerender);
+    });
+    head.appendChild(toggle);
+    head.appendChild(name);
+    head.appendChild(dir);
+    head.appendChild(stats);
+    head.appendChild(action);
+    const body = document.createElement('div');
+    body.className = 'dock-change-body';
+    body.hidden = true;
+    if (row.diff) {
+        const pre = document.createElement('pre');
+        pre.className = 'dock-change-diff';
+        const lines = String(row.diff).split('\\n');
+        for (let i = 0; i < lines.length; i += 1) {
+            const line = document.createElement('span');
+            const prefix = lines[i].charAt(0);
+            line.className = 'dock-diff-line'
+                + (prefix === '+' ? ' is-added' : prefix === '-' ? ' is-removed' : prefix === '@' ? ' is-hunk' : '');
+            line.textContent = lines[i] + '\\n';
+            pre.appendChild(line);
+        }
+        body.appendChild(pre);
+    } else {
+        body.appendChild(dockRightNote(row.diff_omitted_reason || dockRightText('diff')));
+    }
+    toggle.addEventListener('click', () => {
+        body.hidden = !body.hidden;
+        toggle.textContent = body.hidden ? '▸' : '▾';
+    });
+    head.addEventListener('click', (event) => {
+        if (event.target === action) return;
+        body.hidden = !body.hidden;
+        toggle.textContent = body.hidden ? '▸' : '▾';
+    });
+    item.appendChild(head);
+    item.appendChild(body);
+    return item;
+}
+
+/** Undo or restore one change through the Change Review routes. */
+async function dockRightChangeAction(row, button, state, rerender) {
+    const action = row._reverted ? 'restore' : 'undo';
+    button.disabled = true;
+    try {
+        const response = await fetch('/sessions/' + encodeURIComponent(state.sessionId) + '/change-reviews/' + action, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ snapshot_ids: [row.snapshot_id] }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data || data.ok !== true) {
+            throw new Error((data && data.error) || ('HTTP ' + response.status));
+        }
+        row._reverted = action === 'undo';
+        row.effective = action !== 'undo';
+        rerender();
+    } catch (error) {
+        button.disabled = false;
+        button.textContent = dockRightText(action === 'undo' ? 'undo' : 'restore');
+        button.title = String(error && error.message ? error.message : error);
+        button.classList.add('is-error');
+    }
+}
+
+/** Release whatever a tab's body started. */
+function dockRightDisposeTab(tabId) {
+    const state = dockRightState.tabState[tabId];
+    if (!state) return;
+    state.released = true;
+    if (state.listener) document.removeEventListener('myagent:ui-event', state.listener);
+    if (state.abort) {
+        try { state.abort.abort(); } catch (error) { /* ignore */ }
+    }
+    delete dockRightState.tabState[tabId];
+}
+
+// ── init ─────────────────────────────────────────────────────────────────────
+
+/** Wire the column's session hook and expose its public API. */
+function dockRightInit() {
+    if (typeof document === 'undefined') return;
+    dockRightEnsureMounted();
+    dockRightWatchSessions();
+    if (typeof switchSession === 'function' && !dockRightState.switchWrapped) {
+        dockRightState.switchWrapped = true;
+        const original = switchSession;
+        switchSession = async function dockRightWrappedSwitchSession(sessionId, opts) {
+            const result = await original(sessionId, opts);
+            try {
+                if (result !== false) dockRightHandleSessionSwitch(sessionId);
+            } catch (error) {
+                console.warn('dock details column switch failed', error);
+            }
+            return result;
+        };
+    }
+    globalThis.MyAgentDock = Object.assign(globalThis.MyAgentDock || {}, {
+            /** Register one content type; the column renders tabs it claims. */
+            registerTabType: (definition) => dockTabRegistry.register(definition),
+            /** Open a resource address (\`myagent-resource://<type>/…\`) in the column. */
+            openResource: (address) => dockRightOpenResource(String(address || '')),
+            /** Switch the app to another session; its own column state follows. */
+            openSession: (sessionId) => {
+                const sid = String(sessionId || '');
+                if (!sid || typeof switchSession !== 'function') return undefined;
+                // The wrapper above keeps the app's own sidebar clicks in sync;
+                // calling the hook here as well makes this API deterministic
+                // even if some path reaches switchSession before the wrapper
+                // is installed.
+                return Promise.resolve(switchSession(sid)).then((result) => {
+                    try {
+                        if (result !== false) dockRightHandleSessionSwitch(sid);
+                    } catch (error) {
+                        console.warn('dock details column switch failed', error);
+                    }
+                    return result;
+                });
+            },
+            /** Open (or keep) the details column. */
+            openDetails: () => {
+                dockRightEnsureMounted();
+                if (!dockRightExpanded()) dockRightToggle();
+                else dockRightRender();
+            },
+            /** Collapse the details column. */
+            closeDetails: () => {
+                if (dockRightExpanded() && dockRightState.sessionId) {
+                    dockActionToggleExpanded(dockRightState.sessionId, dockRightSeed(), DOCK_RIGHT_AREA);
+                    dockRightRender();
+                }
+            },
+            /** Toggle the details column. */
+            toggleDetails: () => dockRightToggle(),
+            /** Open one of the column's pages by kind ('guide' | 'files' | 'changes'). */
+            openDetailsTab: (kind) => dockRightOpenPageKind(String(kind)),
+            /** Open a file in the column by workspace-relative path. */
+            openDetailsFile: (rel) => dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(String(rel || ''))),
+            /** The tree's open policy: text in the column, anything else in the system app. */
+            openPathSmart: (pathValue) => dockRightOpenPathSmart(String(pathValue || '')),
+            /** Whether a path would open inline (text) rather than through the system app. */
+            isTextPath: (pathValue) => dockRightIsTextPath(String(pathValue || '')),
+            /** The details column's state, for tests and plugins. */
+            detailsState: () => {
+                const surface = dockRightState.sessionId ? dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA) : null;
+                return surface ? surface.layout : null;
+            },
+            /** The current session id, for scripts and tests. */
+            sessionId: () => (typeof currentSessionId === 'string' ? currentSessionId : null),
+    });
+    document.dispatchEvent(new CustomEvent('myagent:dock-ready', { detail: { api: globalThis.MyAgentDock } }));
+}
+
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', dockRightInit);
+    else dockRightInit();
+}
+`;globalThis.marked=N;const gs="/assets/vendor/mermaid.min.js";let Ce=null;globalThis.loadMyAgentMermaid=function(){return globalThis.mermaid?Promise.resolve(globalThis.mermaid):(Ce||(Ce=new Promise(function(e,n){const r=document.createElement("script");r.src=gs,r.async=!0,r.dataset.myagentMermaidVendor="true",r.onload=function(){if(!globalThis.mermaid){r.remove(),n(new Error("Mermaid vendor loaded without exposing its API"));return}e(globalThis.mermaid)},r.onerror=function(){r.remove(),n(new Error("Failed to load Mermaid vendor asset"))},document.head.appendChild(r)}).catch(function(e){throw Ce=null,e})),Ce)};let qe=null;globalThis.loadMyAgentHtml2Canvas=function(){return qe||(qe=ft(()=>import("./html2canvas.esm-QH1iLAAe.js"),[]).then(function(e){return e.default||e})),qe};const hs=[vr,Sr,br,yr,wr,kr,Ir,xr,Cr,Tr,Er,Rr,Ar,_r,Pr,Lr,Mr,Fr,Nr,Or,Br,Dr,Hr,qr,Ur,jr,zr,Wr,Gr,Kr,$r,Vr,Qr,Xr,Yr,Zr,Jr,es,ns,ts,rs,ss,as,is,os,ls,ds,cs,us,ps,fs,ms];Function(`"use strict";
+`+hs.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();hr();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
