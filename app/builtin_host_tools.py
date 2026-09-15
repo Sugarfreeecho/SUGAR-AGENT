@@ -169,6 +169,9 @@ async def _invoke_task(
                 parent_key_context=context.state.get("key_context", ""),
                 emit=context.services.get("raw_emit"),
                 parent_run_id=context.run_id,
+                parent_change_review_turn_id=str(
+                    context.state.get("_change_review_turn_id") or context.run_id or ""
+                ),
             ),
             "tool_task",
         )

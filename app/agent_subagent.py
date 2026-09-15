@@ -1526,6 +1526,7 @@ async def _execute_subagent_run(
     parent_emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     run_in_background: bool = False,
     parent_run_id: str = "",
+    parent_change_review_turn_id: str = "",
     image_attachments: Optional[List[dict]] = None,
     image_paths: Optional[List[str]] = None,
 ) -> str:
@@ -1573,6 +1574,7 @@ async def _execute_subagent_run(
         "key_context": key_context,
         "_subagent_parent_session_id": parent_session_id,
         "_subagent_run_id": subagent_run_id,
+        "_change_review_turn_id": str(parent_change_review_turn_id or parent_run_id or subagent_run_id),
         **({"_runtime_v2_parent_run_id": parent_run_id} if parent_run_id else {}),
     }
     todo_manager.sync_session_from_key_context(child_id, key_context or "")
@@ -1934,6 +1936,7 @@ async def _run_single_subagent(
     best_of_attempt: int = 0,
     best_of_total: int = 0,
     parent_run_id: str = "",
+    parent_change_review_turn_id: str = "",
     parent_runtime_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     action = str(tool_args.get("action") or "").strip().lower()
@@ -2307,6 +2310,7 @@ async def _run_single_subagent(
         parent_emit=emit,
         run_in_background=run_in_background,
         parent_run_id=parent_run_id,
+        parent_change_review_turn_id=parent_change_review_turn_id,
         **({"image_attachments": image_refs} if image_refs else {}),
         **({"image_paths": image_paths} if image_paths else {}),
     )
@@ -2319,6 +2323,7 @@ async def _run_best_of_n(
     parent_key_context: str = "",
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     parent_run_id: str = "",
+    parent_change_review_turn_id: str = "",
     parent_runtime_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     n = int(tool_args.get("n") or SUBAGENT_BEST_OF_N)
@@ -2349,6 +2354,7 @@ async def _run_best_of_n(
             best_of_attempt=i + 1,
             best_of_total=n,
             parent_run_id=parent_run_id,
+            parent_change_review_turn_id=parent_change_review_turn_id,
             parent_runtime_config=parent_runtime_config,
         )
 
@@ -2516,6 +2522,7 @@ async def run_subagent_task(
     parent_key_context: str = "",
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     parent_run_id: str = "",
+    parent_change_review_turn_id: str = "",
     parent_runtime_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     """task 工具入口。"""
@@ -2527,6 +2534,7 @@ async def run_subagent_task(
             parent_key_context=parent_key_context,
             emit=emit,
             parent_run_id=parent_run_id,
+            parent_change_review_turn_id=parent_change_review_turn_id,
             parent_runtime_config=parent_runtime_config,
         )
     return await _run_single_subagent(
@@ -2535,5 +2543,6 @@ async def run_subagent_task(
         parent_key_context=parent_key_context,
         emit=emit,
         parent_run_id=parent_run_id,
+        parent_change_review_turn_id=parent_change_review_turn_id,
         parent_runtime_config=parent_runtime_config,
     )

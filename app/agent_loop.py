@@ -2315,6 +2315,40 @@ def _runtime_v2_commit_user_turn(
         raise
 
 
+def _latest_official_user_turn_id(session_id: str) -> str:
+    """Return the durable id of the latest non-steer user turn.
+
+    A turn starts only at a visible user message. ``user_steer`` records are
+    deliberately skipped so continuations, follow-ups and child work keep the
+    same change-review baseline until the next ordinary user input.
+    """
+    sid = str(session_id or "").strip()
+    if not sid or not _runtime_v2_is_primary():
+        return ""
+    try:
+        event_log = _runtime_v2_react_history_ops().event_log
+        reader = getattr(event_log, "read_tail_window", None)
+        if callable(reader):
+            events, _ = reader(sid, max_bytes=2 * 1024 * 1024, max_events=4000)
+        else:
+            events = list(event_log.iter_events(sid))
+        for event in reversed(events):
+            if str(getattr(event, "type", "") or "") not in {"message_user", "user_turn_committed"}:
+                continue
+            payload = dict(getattr(event, "payload", {}) or {})
+            if str(payload.get("ui_type") or "user") == "user_steer":
+                continue
+            run_id = str(getattr(event, "run_id", "") or "").strip()
+            if run_id:
+                return run_id
+            seq = getattr(event, "seq", None)
+            if seq is not None:
+                return f"turn:{seq}"
+    except Exception:
+        logger.debug("Could not resolve latest official user turn: session=%s", sid, exc_info=True)
+    return ""
+
+
 def _snapshot_assistant_ui_content(session_id: str, content: str) -> str:
     try:
         return snapshot_workspace_images(str(content or ""), WORK_DIR)
@@ -9080,11 +9114,17 @@ async def astream_events(
         # UserPromptSubmit runs before the main state/runner exists. Pump its
         # approval events through this generator so the UI can resolve them
         # before any Hook-controlled process starts.
+        change_review_turn_id = (
+            runtime_v2_run_id
+            if str(ui_user_event_type or "") != "user_steer"
+            else (_latest_official_user_turn_id(session_id) or runtime_v2_run_id)
+        )
         pre_hook_state: Dict[str, Any] = {
             "session_id": session_id,
             "user_input": user_input,
             "stream_events": [],
             "_runtime_v2_run_id": runtime_v2_run_id,
+            "_change_review_turn_id": change_review_turn_id,
             "_submitted_user_input": submitted_user_input,
         }
         pre_hook_events: asyncio.Queue = asyncio.Queue()
@@ -9192,6 +9232,7 @@ async def astream_events(
         "llm_calls": [],
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
+        "_change_review_turn_id": change_review_turn_id,
         "_submitted_user_input": submitted_user_input,
         "_tool_review_assistant_context": [],
         "_tool_review_user_followups": [],
@@ -9709,6 +9750,7 @@ async def astream_events_continuation(
         "llm_calls": [],
         "key_context": key_context,
         "_runtime_v2_run_id": runtime_v2_run_id,
+        "_change_review_turn_id": _latest_official_user_turn_id(session_id) or runtime_v2_run_id,
         "_tool_review_assistant_context": [],
         "_tool_review_user_followups": [],
         "_pre_run_timings": pre_run_timings,

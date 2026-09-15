@@ -11,6 +11,24 @@ from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeUiProjectionTests(unittest.TestCase):
+    def test_user_projection_exposes_stable_turn_id_and_steer_is_not_a_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            history = RuntimeHistoryOps(tmp)
+            history.commit_user_turn("s1", "question", run_id="user-turn-1")
+            history.commit_user_turn(
+                "s1", "follow-up", ui_type="user_steer", run_id="steer-run-2"
+            )
+
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual(events[0]["type"], "user")
+            self.assertEqual(events[0]["turn_id"], "user-turn-1")
+            self.assertEqual(events[1]["type"], "user_steer")
+            self.assertEqual(
+                RuntimeUiProjection(tmp).read_user_turns_light("s1"),
+                [{"event_index": 0, "preview": "question"}],
+            )
+
     def test_extension_state_is_not_projected_as_a_chat_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             goal = {
