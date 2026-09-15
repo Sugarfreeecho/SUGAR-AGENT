@@ -58,10 +58,22 @@ def initialize(host_module):
             work_root = active_tool_work_dir()
         store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
         started = time.perf_counter()
+        turn_id = str(
+            (state or {}).get("_change_review_turn_id")
+            or (state or {}).get("_runtime_v2_run_id")
+            or ""
+        )
+        # The arrival of work in a different official turn is the durable end
+        # boundary for the previous turn. Keep the current baseline across idle
+        # gaps and automatic continuations.
+        store.finish_other_runs(turn_id)
         capture = store.begin_capture(
             tool_name,
             tool_args if isinstance(tool_args, dict) else {},
-            run_id=str((state or {}).get("_runtime_v2_run_id") or ""),
+            # The baseline belongs to the official user turn, not to one
+            # execution process. Follow-ups and automatic continuations keep
+            # this id until the next ordinary user input.
+            run_id=turn_id,
             tool_call_id=str(tool_call_id or ""),
             work_root=work_root,
         )
@@ -86,12 +98,16 @@ def initialize(host_module):
 
     def after_run(state):
         session_id = str((state or {}).get("session_id") or "")
-        run_id = str((state or {}).get("_runtime_v2_run_id") or "")
+        run_id = str(
+            (state or {}).get("_change_review_turn_id")
+            or (state or {}).get("_runtime_v2_run_id")
+            or ""
+        )
         if not session_id or not run_id:
             return None
-        store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
-        if store.index_path.is_file():
-            store.finish_run(run_id)
+        # A process ending does not end a user turn: a goal/continuation may
+        # resume without another user message. Stale baselines are retired when
+        # the next turn first captures a change.
         return None
 
     def referenced_snapshot_ids(session_id):

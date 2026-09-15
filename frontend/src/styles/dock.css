@@ -582,7 +582,18 @@
     overflow: auto;
     padding: 4px 0 12px;
 }
+.dock-change-turn { margin: 8px; overflow: hidden; border: 1px solid var(--border-glass); border-radius: 12px; }
+.dock-change-turn-head {
+    display: flex; gap: 8px; align-items: center; justify-content: space-between;
+    padding: 8px 10px; background: var(--surface-glass2); border-bottom: 1px solid var(--border-glass);
+}
+.dock-change-turn-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.dock-change-turn-copy strong { color: var(--text-primary); font-size: 0.75rem; }
+.dock-change-turn-copy > span:not(.dock-change-turn-summary) { overflow: hidden; color: var(--text-secondary); font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
+.dock-change-turn-summary { color: var(--text-tertiary); font-family: var(--mono); font-size: 0.62rem; }
+.dock-change-turn-actions { display: flex; flex: none; gap: 2px; }
 .dock-change { border-bottom: 1px solid var(--border-glass); }
+.dock-change:last-child { border-bottom: 0; }
 .dock-change.is-reverted { opacity: 0.62; }
 .dock-change-head {
     display: flex;
@@ -598,6 +609,10 @@
 .dock-change-stats { flex: none; display: flex; gap: 4px; font-family: var(--mono); font-size: 0.64rem; font-variant-numeric: tabular-nums; }
 .dock-change-added { color: var(--green-accent); }
 .dock-change-removed { color: var(--red-accent); }
+.dock-change-reverted { margin-left: 2px; padding: 1px 5px; border: 1px solid var(--border-glass); border-radius: 999px; color: var(--text-tertiary); font-family: var(--sans); font-size: 0.58rem; }
+.dock-change-status { min-height: 22px; padding: 5px 10px 2px; color: var(--green-accent); font-size: 0.66rem; white-space: pre-wrap; }
+.dock-change-status:empty { min-height: 0; padding-block: 0; }
+.dock-change-status.is-error { color: var(--red-accent); }
 .dock-change-body { padding: 0 10px 8px; }
 .dock-change-diff {
     max-height: 320px;
@@ -615,6 +630,7 @@
 .dock-diff-line.is-added { color: var(--green-accent); }
 .dock-diff-line.is-removed { color: var(--red-accent); }
 .dock-diff-line.is-hunk { color: var(--blue-accent); }
+.dock-diff-line.is-file { color: var(--text-tertiary); font-weight: 600; }
 
 @media (max-width: 767px) {
     .dock-rightbar { width: 100% !important; }
@@ -638,9 +654,7 @@ html.theme-light .dock-chip.is-active {
     border-color: var(--border-accent);
 }
 
-/* The change rows borrow the Change Review card's look: full-row +/- tints,
-   an accent file header, and a quiet status row (feedback #3). */
-.dock-change { border: 1px solid var(--border-glass); border-radius: 10px; margin: 6px 8px; overflow: hidden; }
+/* The change rows borrow the Change Review card's full-row +/- tints. */
 .dock-change-head { border-bottom: 1px solid var(--border-glass); background: var(--surface-glass1, transparent); }
 .dock-change-diff { background: var(--code-surface-bg); padding: 6px 0; }
 .dock-diff-line { padding: 0 10px; }
@@ -648,8 +662,40 @@ html.theme-light .dock-chip.is-active {
 .dock-diff-line.is-removed { background: rgba(198, 40, 40, 0.14); color: var(--text-soft); }
 .dock-diff-line.is-hunk { background: rgba(30, 136, 229, 0.10); color: var(--blue-accent, var(--text-soft)); }
 
-/* Two scopes for the change list: this round (default) and this session. */
-.dock-changes-scope { display: flex; gap: 4px; }
+/* Keep the review surface visually native to the light theme.  The base
+   --code-surface-bg is dark, so an explicit palette is needed for diffs rather
+   than leaving a black editor island inside the pale details pane. */
+html.theme-light .dock-change-turn {
+    background: rgba(255, 255, 255, 0.88);
+    border-color: rgba(15, 23, 42, 0.10);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
+}
+html.theme-light .dock-change-turn-head {
+    background: #f7f9fc;
+    border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+html.theme-light .dock-change,
+html.theme-light .dock-change-head { border-color: rgba(15, 23, 42, 0.075); }
+html.theme-light .dock-change-head { background: rgba(255, 255, 255, 0.72); }
+html.theme-light .dock-change-head:hover { background: #f3f6fb; }
+html.theme-light .dock-change-diff {
+    color: #334155;
+    background: #f5f7fb;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+}
+html.theme-light .dock-diff-line.is-file { color: #64748b; }
+html.theme-light .dock-diff-line.is-added { color: #166534; background: rgba(22, 163, 74, 0.095); }
+html.theme-light .dock-diff-line.is-removed { color: #991b1b; background: rgba(220, 38, 38, 0.085); }
+html.theme-light .dock-diff-line.is-hunk { color: #1d4ed8; background: rgba(37, 99, 235, 0.075); }
+
+/* Explicit user-turn picker plus the optional session overview. */
+.dock-changes-scope { display: flex; flex: none; gap: 6px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--border-glass); }
+.dock-turn-select {
+    min-width: 0; flex: 1 1 auto; padding: 4px 8px; overflow: hidden; color: var(--text-secondary);
+    font-size: 0.68rem; text-overflow: ellipsis; background: var(--surface-glass2);
+    border: 1px solid var(--border-glass); border-radius: 8px;
+}
+.dock-turn-select.is-active { color: var(--text-primary); border-color: var(--border-accent); }
 .dock-scope-pill {
     padding: 3px 10px;
     color: var(--text-tertiary);

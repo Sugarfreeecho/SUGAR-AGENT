@@ -1070,6 +1070,7 @@ class FileChangeReviewStore:
             "path": record.get("path") or "",
             "operation": record.get("operation") or "modify",
             "snapshot_id": record.get("snapshot_id") or "",
+            "turn_id": record.get("run_id") or "",
             "revision": int(record.get("revision") or 0),
             "diff": record.get("diff"),
             "added": record.get("added"),
@@ -1375,6 +1376,24 @@ class FileChangeReviewStore:
             if changed:
                 self._save(index)
             self._gc_blobs(index)
+
+    def finish_other_runs(self, current_run_id: str) -> None:
+        """Discard baselines from completed user turns, retaining the current one."""
+        keep = str(current_run_id or "")
+        if not keep:
+            return
+        with self.lock:
+            index = self._load()
+            changed = False
+            for key, baseline in list(index["baselines"].items()):
+                if not isinstance(baseline, dict) or str(baseline.get("run_id") or "") == keep:
+                    continue
+                self._remove_baseline(baseline)
+                index["baselines"].pop(key, None)
+                changed = True
+            if changed:
+                self._save(index)
+                self._gc_blobs(index)
 
     def copy_referenced_to(
         self,

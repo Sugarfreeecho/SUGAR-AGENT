@@ -133,6 +133,8 @@
     --panel-bg: #ffffff;
     --modal-bg: #ffffff;
     --popover-bg: var(--floating-surface);
+    --code-surface-bg: #f5f7fb;
+    --table-header-bg: #eef2f7;
     --blue-accent: #2563eb;
     --text-muted: #484a5e;
     --export-bg: #ffffff;

@@ -1499,8 +1499,8 @@ function refreshProcessAggregateStats(agg) {
 
 /* ═══ 术语统一（执行过程面板） ═══
    会话：侧边栏一条 = 一个会话（session）。
-   轮：会话内一次对话 = 一轮（一条用户提问到最终回复完成；
-       分页/TOC/user_turns 里的「轮次」均指此，不用于 API 计数）。
+   轮：一条非追问用户输入开始，到下一条非追问用户输入或链路结束；
+       user_steer 是轮内消息、不切轮。分页/TOC/user_turns/改动审查均用此口径。
    步：每次 API 发送 = 一步（对应 react_iter，面板统计「N 步」）。
    条：每一步期间产生的一条思考/回复/工具/状态记录（feed item 行单位）。 */
 function ensureProcessGroup(ctx) {

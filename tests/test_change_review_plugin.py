@@ -139,10 +139,42 @@ def test_runtime_callback_can_observe_an_unknown_external_tool(tmp_path):
     assert changes[0]["path"] == "external.txt"
     assert changes[0]["operation"] == "create"
     callbacks["after_run"](state)
+    continuation_state = {
+        "session_id": "external-session",
+        "_runtime_v2_run_id": "continuation-process",
+        "_change_review_turn_id": "external-run",
+    }
+    continued_capture = callbacks["before_native_file_tool"](
+        continuation_state, "third_party_writer", {}, "continuation-call", str(workspace), True
+    )
+    (workspace / "external.txt").write_text(
+        "created externally\ncontinued in same turn\n", encoding="utf-8"
+    )
+    continued = callbacks["after_native_file_tool"](
+        continuation_state, continued_capture, True
+    )
+    assert continued[0]["snapshot_id"] == changes[0]["snapshot_id"]
+    assert continued[0]["turn_id"] == "external-run"
+    assert continued[0]["added"] == 2
+    callbacks["after_run"](continuation_state)
     stored = json.loads((session_dir / "change_reviews/index.json").read_text(encoding="utf-8"))
-    assert stored["baselines"] == {}
-    assert not list((session_dir / "change_reviews/baselines").glob("*.zip"))
+    # A process ending is not a user-turn boundary: keep its workspace baseline
+    # for an automatic continuation in the same turn.
+    assert stored["baselines"]
+    next_state = {
+        "session_id": "external-session",
+        "_runtime_v2_run_id": "next-process",
+        "_change_review_turn_id": "next-user-turn",
+    }
+    pending = callbacks["before_native_file_tool"](
+        next_state, "third_party_writer", {}, "next-call", str(workspace), True
+    )
+    callbacks["after_native_file_tool"](next_state, pending, True)
+    stored = json.loads((session_dir / "change_reviews/index.json").read_text(encoding="utf-8"))
+    assert {row["run_id"] for row in stored["baselines"].values()} == {"next-user-turn"}
     store = _load_store().FileChangeReviewStore(session_dir)
+    store.finish_run("next-user-turn")
+    assert not list((session_dir / "change_reviews/baselines").glob("*.zip"))
     store.undo([changes[0]["snapshot_id"]], "undo-after-baseline-cleanup")
     assert not (workspace / "external.txt").exists()
 
@@ -230,6 +262,7 @@ def test_same_round_same_file_is_cumulative(review):
         lambda: path.write_text("a\nc\nd\n", encoding="utf-8"), call="call-2",
     )[0]
     assert second["snapshot_id"] == first["snapshot_id"]
+    assert second["turn_id"] == "run-1"
     assert second["revision"] == 2
     assert (second["added"], second["removed"]) == (2, 1)
     store.undo([second["snapshot_id"]], "undo-cumulative")

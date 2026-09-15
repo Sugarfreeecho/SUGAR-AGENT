@@ -57,18 +57,23 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     event_dispatch = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(
         encoding="utf-8"
     )
+    right_column = (ROOT / "frontend/src/app/modules/dock/embedder/right-column.js").read_text(
+        encoding="utf-8"
+    )
+    dock_styles = (ROOT / "frontend/src/styles/dock.css").read_text(encoding="utf-8")
+    app_styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
     assert "installChatExtension" in source
-    assert "span.textContent = line" in source
-    assert "snapshot_ids" in source
-    assert "operation_id" in source
+    assert "openChangeReview" in source
+    assert "registerChangeReviewRows" in source
     assert "file_changes_restored" in source
-    assert "change-review-restore-all" in source
-    assert "change-review-restore" in source
     assert "myagent:tool-call-rendered" in source
     assert "ResizeObserver" in source
     assert "✏️" not in source
     assert "subagent-card-title-row" in source
     assert "change-review-view" in source
+    assert "change-review-sheet" not in source
+    assert "openSheet" not in source
+    assert "closeSheet" not in source
     assert "switchSessionView" in source
     assert "sessionObserver" in source
     assert "aggregateSessionId" in source
@@ -82,7 +87,6 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "rootSessionId: rootSessionIdForRenderedNode" in message_rendering
     assert "rootSessionId: typeof rootSessionIdForRenderedNode" in event_dispatch
     assert "document.querySelectorAll('.change-review-process-badge')" in source
-    assert "allowUndo: false" in source
     assert "Only rescan when a real tool row was inserted" in source
     assert "{ deferRender: true }" in source
     assert "if (hasInsertedRows) scheduleScanExisting();" in source
@@ -91,15 +95,23 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "document.addEventListener('scroll', viewportListener, true)" in source
     assert "document.removeEventListener('scroll', viewportListener, true)" in source
     assert "if (shouldSync) syncActiveAggregateToViewport();" in source
-    assert "if (allowUndo) item.appendChild(body);" in source
-    assert "body.dataset.rendered === '1'" in source
     assert "new ResizeObserver(function ()" in source
     assert "scheduleScanExisting();" in source
     assert "if (!options.deferRender) {" in source
     assert "requestAnimationFrame" in source
-    assert ".diff-add" in styles and ".diff-remove" in styles
     assert ".change-review-bar[hidden]" in styles
+    assert ".change-review-sheet" not in styles
     assert "change-review-stat-added" in styles and "change-review-stat-removed" in styles
+    assert "event.type === 'user'" in right_column
+    assert "user_steer" in right_column
+    assert "dock-turn-select" in right_column
+    assert "dockRightChangeGroup" in right_column
+    assert "dockRightBulkChangeAction" in right_column
+    assert "openChangeReview" in right_column
+    assert "myagent:change-review-state" in right_column
+    assert "operation_id" in right_column
+    assert "html.theme-light .dock-change-diff" in dock_styles
+    assert "--code-surface-bg: #f5f7fb" in app_styles
     assert "change-review" not in (ROOT / "frontend/index.html").read_text(encoding="utf-8")
 
 

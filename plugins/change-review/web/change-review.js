@@ -1,10 +1,8 @@
 const aggregateChanges = new Map();
 const aggregateRecency = [];
 let activeAggregate = null;
-let request = null;
 let drawer = null;
 let bar = null;
-let sheet = null;
 let resizeObserver = null;
 let processObserver = null;
 let sessionObserver = null;
@@ -53,6 +51,45 @@ function aggregateIsCurrent(aggregate) {
 function changesOf(aggregate) {
     if (!aggregateChanges.has(aggregate)) aggregateChanges.set(aggregate, new Map());
     return aggregateChanges.get(aggregate);
+}
+function latestRootTurnId() {
+    const stream = document.getElementById('chat-stream');
+    if (!stream) return '';
+    const turns = stream.querySelectorAll('.msg-wrap--user[data-event-index]');
+    if (!turns.length) return '';
+    return String(turns[turns.length - 1].getAttribute('data-event-index') || '');
+}
+function inferredAggregateTurnId(aggregate) {
+    if (!aggregate) return '';
+    const remembered = String(aggregate.dataset.changeReviewTurnId || '');
+    if (remembered) return remembered;
+    if (!aggregate.classList.contains('subagent-grid-card')) {
+        let sibling = aggregate.previousElementSibling;
+        while (sibling) {
+            if (sibling.matches && sibling.matches('.msg-wrap--user[data-event-index]')) {
+                return String(sibling.getAttribute('data-event-index') || '');
+            }
+            sibling = sibling.previousElementSibling;
+        }
+    }
+    return latestRootTurnId();
+}
+function turnKeyOf(aggregate) {
+    return String(aggregate && aggregate.dataset.changeReviewTurnToken
+        || inferredAggregateTurnId(aggregate) || '');
+}
+function displayTurnRows(aggregate) {
+    const key = turnKeyOf(aggregate);
+    const merged = new Map();
+    aggregateChanges.forEach(function (_rows, candidate) {
+        if (!aggregateIsCurrent(candidate) || turnKeyOf(candidate) !== key) return;
+        displayRows(candidate).forEach(function (row) {
+            const rowKey = `${row._sessionId || ''}\0${row.snapshot_id || row.path || ''}`;
+            const previous = merged.get(rowKey);
+            if (!previous || Number(previous.revision || 0) <= Number(row.revision || 0)) merged.set(rowKey, row);
+        });
+    });
+    return Array.from(merged.values());
 }
 function activeRows(aggregate) {
     return sessionRows(aggregate).filter(function (row) {
@@ -222,8 +259,8 @@ export function stats(rows) {
 }
 function statsTitle(value) {
     const lines = [t(
-        '统计口径：本轮（该执行过程）内相对本轮起点的净变更，同一文件的多次修改已合并；已还原或改回原样的改动不计入。',
-        'Scope: net changes for this run relative to its starting point; repeated edits to one file are merged. Reverted and no-op changes are excluded.')];
+        '统计口径：一条非追问用户输入到下一条非追问用户输入（或链路结束）为一轮；追问不切轮。显示该用户轮内的净变更，已还原或改回原样的改动不计入。',
+        'Scope: one user turn runs from a non-follow-up user message to the next such message (or the end of the chain). Follow-ups stay in the same turn. Reverted and no-op changes are excluded.')];
     const reasons = value.reasons || {};
     const breakdown = Object.keys(reasons).filter(function (reason) {
         return reasons[reason];
@@ -268,15 +305,21 @@ function setSummary(container, active, reverted) {
 }
 function updateBadge(aggregate) {
     if (!aggregate || !aggregate.querySelector) return;
-    const rows = displayRows(aggregate);
+    const rows = displayTurnRows(aggregate);
     let badge = aggregate.querySelector('.change-review-process-badge');
     if (!rows.length) {
         if (badge) badge.remove();
         return;
     }
     if (!badge) {
-        badge = document.createElement('span');
+        badge = document.createElement('button');
+        badge.type = 'button';
         badge.className = 'change-review-process-badge';
+        badge.setAttribute('aria-label', t('查看本轮改动', 'View changes for this turn'));
+        badge.addEventListener('click', function (event) {
+            event.stopPropagation();
+            openDetails();
+        });
         const title = aggregate.querySelector('.process-aggregate-title');
         const subagentTitle = aggregate.querySelector('.subagent-card-title-row');
         const wrap = aggregate.querySelector('.process-aggregate-title-wrap');
@@ -295,25 +338,23 @@ function updateBadge(aggregate) {
         badge.append(document.createTextNode(`${parts.reverted.length} ${t('已撤销', 'reverted')}`));
     }
 }
-function isRunning() {
-    const stream = document.getElementById('chat-stream');
-    const grid = document.getElementById('subagent-grid');
-    return Boolean(
-        (stream && stream.querySelector('.process-aggregate.is-running'))
-        || (grid && String(grid.dataset.sessionId || '') === mountedSessionId
-            && grid.querySelector('.subagent-grid-card[data-subagent-running="1"]'))
-    );
-}
-function button(label, className) {
-    const el = document.createElement('button');
-    el.type = 'button'; el.className = className || ''; el.textContent = label;
-    return el;
+function updateTurnBadges(turnKey) {
+    aggregateChanges.forEach(function (_rows, aggregate) {
+        if (!turnKey || turnKeyOf(aggregate) === turnKey) updateBadge(aggregate);
+    });
 }
 function formatBytes(value) {
     const number = Number(value) || 0;
     if (number < 1024) return `${number} B`;
     if (number < 1048576) return `${(number / 1024).toFixed(1)} KiB`;
     return `${(number / 1048576).toFixed(1)} MiB`;
+}
+function button(label, className) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = className || '';
+    el.textContent = label;
+    return el;
 }
 function omittedText(row) {
     const reason = String(row.diff_omitted_reason || '');
@@ -327,24 +368,6 @@ function omittedText(row) {
     return `${why} · ${formatBytes(before.bytes)} / ${before.lines || 0} ${t('行', 'lines')} → `
         + `${formatBytes(after.bytes)} / ${after.lines || 0} ${t('行', 'lines')}`;
 }
-function renderDiff(container, row) {
-    container.replaceChildren();
-    if (!row.diff) {
-        const omitted = document.createElement('div');
-        omitted.className = 'change-review-omitted'; omitted.textContent = omittedText(row);
-        container.appendChild(omitted); return;
-    }
-    const pre = document.createElement('pre'); pre.className = 'change-review-diff';
-    String(row.diff).split('\n').forEach(function (line) {
-        const span = document.createElement('span');
-        if (line.startsWith('+++') || line.startsWith('---')) span.className = 'diff-file';
-        else if (line.startsWith('@@')) span.className = 'diff-hunk';
-        else if (line.startsWith('+')) span.className = 'diff-add';
-        else if (line.startsWith('-')) span.className = 'diff-remove';
-        span.textContent = line + '\n'; pre.appendChild(span);
-    });
-    container.appendChild(pre);
-}
 function markRows(snapshotIds, reverted) {
     const ids = new Set(snapshotIds || []);
     aggregateChanges.forEach(function (rows, aggregate) {
@@ -355,6 +378,7 @@ function markRows(snapshotIds, reverted) {
         });
         updateBadge(aggregate);
     });
+    updateTurnBadges();
     syncActiveAggregateToViewport({ deferRender: true });
     render();
 }
@@ -364,47 +388,8 @@ function markReverted(snapshotIds) {
 function markRestored(snapshotIds) {
     markRows(snapshotIds, false);
 }
-async function postReviewAction(rows, action) {
-    if (!rows.length || !request) return {};
-    const sessionId = String(rows[0]._sessionId || '');
-    const response = await request(`/sessions/${encodeURIComponent(sessionId)}/change-reviews/${action}`, {
-        method: 'POST', credentials: 'same-origin', cache: 'no-store',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            snapshot_ids: rows.map(function (row) { return row.snapshot_id; }),
-            operation_id: globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
-                ? globalThis.crypto.randomUUID() : `${action}-${Date.now()}-${Math.random()}`,
-        }),
-    });
-    const payload = await response.json().catch(function () { return {}; });
-    if (!response.ok || payload.ok !== true) {
-        const paths = Array.isArray(payload.paths) && payload.paths.length ? `\n${payload.paths.join('\n')}` : '';
-        const conflict = payload.code === 'file_changed'
-            ? (action === 'undo'
-                ? t('文件已再次修改，撤销已中止', 'The file was modified again; undo was cancelled')
-                : t('文件已再次修改，恢复已中止', 'The file was modified again; restore was cancelled'))
-            : String(payload.error || `HTTP ${response.status}`);
-        throw new Error(conflict + paths);
-    }
-    return payload;
-}
-async function undo(rows) {
-    const payload = await postReviewAction(rows, 'undo');
-    markReverted(payload.snapshot_ids);
-}
-async function restore(rows) {
-    const payload = await postReviewAction(rows, 'restore');
-    markRestored(payload.snapshot_ids);
-}
-function setStatus(text, error) {
-    [drawer, sheet].forEach(function (host) {
-        const target = host && host.querySelector('.change-review-status');
-        if (target) { target.textContent = text || ''; target.classList.toggle('is-error', Boolean(error)); }
-    });
-}
 function renderFile(row, options) {
     options = options || {};
-    const allowUndo = options.allowUndo !== false;
     const reverted = row.reverted === true;
     const item = document.createElement('article'); item.className = 'change-review-file';
     if (reverted) item.classList.add('is-reverted');
@@ -421,167 +406,60 @@ function renderFile(row, options) {
         appendColoredStats(count, { added: Number(row.added) || 0, removed: Number(row.removed) || 0 }, false);
     }
     toggle.append(path, count);
-    let action = null; let confirm = null; let yes = null; let no = null;
-    if (allowUndo) {
-        action = button(reverted ? t('恢复', 'Restore') : t('撤销', 'Undo'),
-            reverted ? 'change-review-restore' : 'change-review-undo');
-        action.disabled = isRunning();
-        if (action.disabled) {
-            action.title = reverted
-                ? t('任务和子任务全部结束后才可恢复', 'Restore is available after the task tree stops')
-                : t('任务和子任务全部结束后才可撤销', 'Undo is available after the task tree stops');
-        }
-        confirm = document.createElement('span'); confirm.className = 'change-review-inline-confirm'; confirm.hidden = true;
-        yes = button(t('确认', 'Confirm'), 'change-review-confirm');
-        no = button(t('取消', 'Cancel'), 'change-review-cancel'); confirm.append(yes, no);
-        if (reverted) {
-            const tag = document.createElement('span');
-            tag.className = 'change-review-reverted-tag';
-            tag.textContent = t('已撤销', 'Reverted');
-            head.append(toggle, tag, action, confirm);
-        } else {
-            head.append(toggle, action, confirm);
-        }
-    } else {
-        item.classList.add('change-review-file--link');
-        toggle.setAttribute('aria-label', `${t('查看改动', 'View changes')}: ${row.path || ''}`);
-        head.append(toggle);
-    }
-    const body = document.createElement('div'); body.className = 'change-review-file-body'; body.hidden = true;
-    body.dataset.rendered = '0';
-    const ensureDiffRendered = function () {
-        if (body.dataset.rendered === '1') return;
-        renderDiff(body, row);
-        body.dataset.rendered = '1';
-    };
-    // The wide drawer is only a file picker. Building thousands of diff-line
-    // nodes there made history hydration and every observer-driven refresh
-    // needlessly expensive even though the user had not opened the review.
+    item.classList.add('change-review-file--link');
+    toggle.setAttribute('aria-label', `${t('查看改动', 'View changes')}: ${row.path || ''}`);
+    if (reverted) {
+        const tag = document.createElement('span');
+        tag.className = 'change-review-reverted-tag';
+        tag.textContent = t('已撤销', 'Reverted');
+        head.append(toggle, tag);
+    } else head.append(toggle);
     item.appendChild(head);
-    if (allowUndo) item.appendChild(body);
     toggle.addEventListener('click', function () {
-        if (!allowUndo && typeof options.onOpen === 'function') { options.onOpen(row); return; }
-        const opening = body.hidden;
-        if (opening) ensureDiffRendered();
-        body.hidden = !opening; toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        if (typeof options.onOpen === 'function') options.onOpen(row);
     });
-    if (allowUndo) {
-        action.addEventListener('click', function () { action.hidden = true; confirm.hidden = false; yes.focus(); });
-        no.addEventListener('click', function () { confirm.hidden = true; action.hidden = false; action.focus(); });
-        yes.addEventListener('click', async function () {
-            yes.disabled = true; no.disabled = true;
-            setStatus(reverted ? t('正在恢复…', 'Restoring…') : t('正在撤销…', 'Undoing…'));
-            try {
-                if (reverted) { await restore([row]); setStatus(t('已恢复', 'Restored')); }
-                else { await undo([row]); setStatus(t('已撤销', 'Undone')); }
-            }
-            catch (error) { setStatus(String(error.message || error), true); yes.disabled = false; no.disabled = false; }
-        });
-    }
     return item;
 }
-function renderReviewHost(host, rows, includeClose, options) {
+function renderReviewHost(host, rows, options) {
     options = options || {};
     const list = host.querySelector('.change-review-list'); list.replaceChildren();
     rows.forEach(function (row) {
         list.appendChild(renderFile(row, {
-            allowUndo: options.allowUndo !== false,
             onOpen: options.onOpen,
         }));
     });
     const parts = splitReviewRows(rows);
     const summary = host.querySelector('.change-review-summary');
     setSummary(summary, parts.active, parts.reverted);
-    const running = isRunning();
-    const all = host.querySelector('.change-review-undo-all');
-    all.hidden = !parts.active.length;
-    all.disabled = running;
-    all.title = running ? t('任务和子任务全部结束后才可撤销', 'Wait until all tasks stop')
-        : t('撤销该执行过程（本轮）内记录的改动', 'Undo the changes recorded for this run');
-    all.onclick = async function () {
-        if (!parts.active.length) return;
-        const confirmed = typeof globalThis.openMyAgentUiModal === 'function'
-            ? await globalThis.openMyAgentUiModal({
-                title: t('撤销全部改动？', 'Undo all changes?'),
-                message: t('将整批恢复到工具修改前的文件内容。若任一文件已被再次修改，整批都会中止。',
-                    'The batch will restore pre-tool contents. If any file changed again, the whole batch is cancelled.'),
-                confirmText: t('全部撤销', 'Undo all'), cancelText: t('取消', 'Cancel'), danger: true,
-            }) : globalThis.confirm(t('撤销全部改动？', 'Undo all changes?'));
-        if (!confirmed) return;
-        setStatus(t('正在撤销…', 'Undoing…'));
-        try { await undo(parts.active); setStatus(t('已全部撤销', 'All changes undone')); }
-        catch (error) { setStatus(String(error.message || error), true); }
-    };
-    const restoreAll = host.querySelector('.change-review-restore-all');
-    if (restoreAll) {
-        restoreAll.hidden = !parts.reverted.length;
-        restoreAll.disabled = running;
-        restoreAll.title = running
-            ? t('任务和子任务全部结束后才可恢复', 'Restore is available after the task tree stops')
-            : t('恢复该执行过程（本轮）内已撤销的改动', 'Restore the reverted changes recorded for this run');
-        restoreAll.onclick = async function () {
-            if (!parts.reverted.length) return;
-            const confirmed = typeof globalThis.openMyAgentUiModal === 'function'
-                ? await globalThis.openMyAgentUiModal({
-                    title: t('恢复全部改动？', 'Restore all changes?'),
-                    message: t('将整批已撤销的改动重新应用到工作区。若任一文件已被再次修改，整批都会中止。',
-                        'The batch will re-apply reverted changes to the workspace. If any file changed again, the whole batch is cancelled.'),
-                    confirmText: t('全部恢复', 'Restore all'), cancelText: t('取消', 'Cancel'),
-                }) : globalThis.confirm(t('恢复全部改动？', 'Restore all changes?'));
-            if (!confirmed) return;
-            setStatus(t('正在恢复…', 'Restoring…'));
-            try { await restore(parts.reverted); setStatus(t('已全部恢复', 'All changes restored')); }
-            catch (error) { setStatus(String(error.message || error), true); }
-        };
-    }
     const view = host.querySelector('.change-review-view');
     if (view) {
         view.hidden = !options.showView;
-        view.onclick = function () { openSheet(); };
-    }
-    if (includeClose) {
-        const close = host.querySelector('.change-review-close');
-        close.onclick = closeSheet;
+        view.onclick = function () { openDetails(); };
     }
 }
-function shell(className, close) {
-    const host = document.createElement(close ? 'div' : 'aside'); host.className = className;
+function shell(className) {
+    const host = document.createElement('aside'); host.className = className;
     host.innerHTML = `<div class="change-review-card"><header class="change-review-head">`
         + `<div><strong>${t('改动审查', 'Change review')}</strong><div class="change-review-summary"></div></div>`
-        + (close ? `<button type="button" class="change-review-close" aria-label="${t('关闭', 'Close')}">×</button>` : '')
-        + `</header><div class="change-review-list"></div><div class="change-review-status" role="status" aria-live="polite"></div>`
-        + `<footer><button type="button" class="change-review-undo-all">${t('全部撤销', 'Undo all')}</button>`
-        + `<button type="button" class="change-review-restore-all">${t('全部恢复', 'Restore all')}</button>`
-        + `<button type="button" class="change-review-view" hidden>${t('查看', 'View')}</button></footer></div>`;
+        + `</header><div class="change-review-list"></div>`
+        + `<footer><button type="button" class="change-review-view">${t('查看', 'View')}</button></footer></div>`;
     return host;
 }
-function openSheet(selectedRow) {
-    if (!sheet) return; sheet.hidden = false; document.body.classList.add('change-review-sheet-open');
-    const rows = displayRows(activeAggregate);
-    renderReviewHost(sheet, rows, true, { allowUndo: true, showView: false });
-    const close = sheet.querySelector('.change-review-close'); if (close) close.focus();
-    if (selectedRow) {
-        const item = Array.from(sheet.querySelectorAll('.change-review-file')).find(function (node) {
-            return node.dataset.snapshotId === String(selectedRow.snapshot_id || '');
-        });
-        if (item) {
-            const toggle = item.querySelector('.change-review-file-toggle');
-            const body = item.querySelector('.change-review-file-body');
-            if (body) {
-                if (body.dataset.rendered !== '1') {
-                    renderDiff(body, selectedRow);
-                    body.dataset.rendered = '1';
-                }
-                body.hidden = false;
-            }
-            if (toggle) { toggle.setAttribute('aria-expanded', 'true'); toggle.focus(); }
-            item.scrollIntoView({ block: 'nearest' });
+function openDetails(selectedRow) {
+    const aggregate = activeAggregate;
+    const payload = {
+        turnId: inferredAggregateTurnId(aggregate),
+        turnToken: turnKeyOf(aggregate),
+        snapshotId: selectedRow && selectedRow.snapshot_id,
+        path: selectedRow && selectedRow.path,
+    };
+    const open = function () {
+        if (globalThis.MyAgentDock && typeof globalThis.MyAgentDock.openChangeReview === 'function') {
+            globalThis.MyAgentDock.openChangeReview(payload);
         }
-    }
-}
-function closeSheet() {
-    if (!sheet) return; sheet.hidden = true; document.body.classList.remove('change-review-sheet-open');
-    const view = bar && !bar.hidden && bar.querySelector('.change-review-view'); if (view) view.focus();
+    };
+    if (globalThis.MyAgentDock && typeof globalThis.MyAgentDock.openChangeReview === 'function') open();
+    else document.addEventListener('myagent:dock-ready', open, { once: true });
 }
 function hasRoom() {
     const stage = document.querySelector('.chat-stage'); const panel = document.querySelector('.panel-inner');
@@ -595,22 +473,19 @@ function updatePlacement(visible) {
     const wide = visible && hasRoom();
     drawer.hidden = !wide; bar.hidden = !visible || wide;
     if (visible && !wide) {
-        const parts = splitReviewRows(displayRows(activeAggregate));
+        const parts = splitReviewRows(displayTurnRows(activeAggregate));
         setSummary(bar.querySelector('.change-review-bar-summary'), parts.active, parts.reverted);
     }
-    if (!visible) closeSheet();
 }
 function render() {
-    const rows = activeAggregate ? displayRows(activeAggregate) : [];
+    const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
     const visible = Boolean(activeAggregate && aggregateIsCurrent(activeAggregate) && rows.length
         && isExpanded(activeAggregate));
-    if (visible) renderReviewHost(drawer, rows, false, {
-        allowUndo: false,
+    if (visible) renderReviewHost(drawer, rows, {
         showView: true,
-        onOpen: openSheet,
+        onOpen: openDetails,
     });
     updatePlacement(visible);
-    if (sheet && !sheet.hidden) renderReviewHost(sheet, rows, true, { allowUndo: true, showView: false });
 }
 function scheduleRender() {
     if (renderFrame !== null) return;
@@ -647,17 +522,27 @@ function applyTool(detail, options) {
     if (!ownerSessionId || ownerSessionId !== mountedSessionId || !aggregateIsCurrent(aggregate)) return false;
     aggregateOwners.set(aggregate, ownerSessionId);
     aggregate.dataset.changeReviewSessionId = ownerSessionId;
+    const fallbackTurnId = inferredAggregateTurnId(aggregate);
+    const incomingTurnToken = String((incoming[0] && incoming[0].turn_id) || fallbackTurnId || '');
+    if (fallbackTurnId) aggregate.dataset.changeReviewTurnId = fallbackTurnId;
+    if (incomingTurnToken) aggregate.dataset.changeReviewTurnToken = incomingTurnToken;
     const rows = changesOf(aggregate);
     incoming.forEach(function (raw) {
         if (!raw || !raw.snapshot_id || !raw.path) return;
         const old = rows.get(String(raw.path).toLowerCase());
         if (!acceptChangeUpdate(old, raw)) return;
-        rows.set(String(raw.path).toLowerCase(), Object.assign({}, raw, {
+        const enriched = Object.assign({}, raw, {
             _sessionId: String(detail.sessionId || ''),
             _rootSessionId: ownerSessionId,
-        }));
+            _turnId: fallbackTurnId,
+            _turnToken: String(raw.turn_id || incomingTurnToken || fallbackTurnId),
+        });
+        rows.set(String(raw.path).toLowerCase(), enriched);
+        if (globalThis.MyAgentDock && typeof globalThis.MyAgentDock.registerChangeReviewRows === 'function') {
+            globalThis.MyAgentDock.registerChangeReviewRows({ sessionId: ownerSessionId, rows: [enriched] });
+        }
     });
-    remember(aggregate); updateBadge(aggregate);
+    remember(aggregate); updateTurnBadges(turnKeyOf(aggregate));
     if (!options.deferRender) {
         syncActiveAggregateToViewport({ deferRender: true });
         scheduleRender();
@@ -722,26 +607,22 @@ function resetForSession(nextSessionId) {
     aggregateChanges.clear();
     aggregateRecency.splice(0);
     clippingAncestors = new WeakMap();
-    closeSheet();
     render();
 }
 function mount() {
     const stage = document.querySelector('.chat-stage'); const inner = document.querySelector('.panel-inner');
     if (!stage || !inner) return false;
-    drawer = shell('change-review-drawer', false); drawer.hidden = true; stage.appendChild(drawer);
+    drawer = shell('change-review-drawer'); drawer.hidden = true; stage.appendChild(drawer);
     bar = document.createElement('div'); bar.className = 'change-review-bar'; bar.hidden = true;
     bar.innerHTML = `<strong>${t('改动审查', 'Change review')}</strong>`
         + `<span class="change-review-bar-summary"></span><button type="button" class="change-review-view">${t('查看', 'View')}</button>`;
     inner.insertBefore(bar, inner.querySelector('.composer-row'));
-    sheet = shell('change-review-sheet', true); sheet.hidden = true; sheet.setAttribute('role', 'dialog');
-    sheet.setAttribute('aria-modal', 'true'); document.body.appendChild(sheet);
-    bar.querySelector('.change-review-view').addEventListener('click', openSheet);
-    document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && sheet && !sheet.hidden) closeSheet(); });
+    bar.querySelector('.change-review-view').addEventListener('click', function () { openDetails(); });
     // Resizing only changes drawer-vs-bar placement; rebuilding the complete
     // file list on every geometry notification caused ResizeObserver feedback
     // and long main-thread stalls on large histories.
     resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(function () {
-        const rows = activeAggregate ? activeRows(activeAggregate) : [];
+        const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
         updatePlacement(Boolean(activeAggregate && aggregateIsCurrent(activeAggregate)
             && rows.length && isExpanded(activeAggregate)));
         scheduleViewportSync();
@@ -752,7 +633,7 @@ function mount() {
         let shouldSync = false;
         mutations.forEach(function (mutation) {
             if (mutation.type === 'childList' && mutation.addedNodes && mutation.addedNodes.length) {
-                // The review drawer/sheet is also mounted under chat-stage.
+                // The compact review drawer is also mounted under chat-stage.
                 // Only rescan when a real tool row was inserted; otherwise a
                 // review render would observe itself and spin indefinitely.
                 hasInsertedRows = hasInsertedRows || Array.from(mutation.addedNodes).some(function (node) {
@@ -785,12 +666,15 @@ function mount() {
 }
 
 export async function installChatExtension(context) {
-    request = context.request;
     if (!mount()) return;
     mountedSessionId = activeSessionId();
     const toolListener = function (event) { applyTool(event.detail || {}); };
     const toggleListener = function (event) { onToggle(event.detail || {}); };
     const uiListener = function (event) { onUiEvent(event.detail || {}); };
+    const reviewStateListener = function (event) {
+        const detail = event && event.detail ? event.detail : {};
+        markRows(detail.snapshotIds || [], detail.reverted === true);
+    };
     const viewportListener = function () { scheduleViewportSync(); };
     const switchSessionView = function (next) {
         next = String(next || '');
@@ -816,6 +700,7 @@ export async function installChatExtension(context) {
     document.addEventListener('myagent:tool-call-rendered', toolListener);
     document.addEventListener('myagent:process-aggregate-toggle', toggleListener);
     document.addEventListener('myagent:ui-event', uiListener);
+    document.addEventListener('myagent:change-review-state', reviewStateListener);
     document.addEventListener('myagent:extension-state-changed', sessionListener);
     document.addEventListener('myagent:language-change', render);
     // Scroll events do not bubble, so capture them to cover both the main chat
@@ -831,6 +716,7 @@ export async function installChatExtension(context) {
         document.removeEventListener('myagent:tool-call-rendered', toolListener);
         document.removeEventListener('myagent:process-aggregate-toggle', toggleListener);
         document.removeEventListener('myagent:ui-event', uiListener);
+        document.removeEventListener('myagent:change-review-state', reviewStateListener);
         document.removeEventListener('myagent:extension-state-changed', sessionListener);
         document.removeEventListener('scroll', viewportListener, true);
         if (typeof globalThis.removeEventListener === 'function') {
@@ -861,7 +747,7 @@ export async function installChatExtension(context) {
         });
         activeAggregate = null; aggregateChanges.clear(); aggregateRecency.splice(0);
         clippingAncestors = new WeakMap();
-        [drawer, bar, sheet].forEach(function (node) { if (node) node.remove(); });
-        drawer = bar = sheet = null;
+        [drawer, bar].forEach(function (node) { if (node) node.remove(); });
+        drawer = bar = null;
     };
 }
