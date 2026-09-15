@@ -1663,6 +1663,20 @@ function showOpenFileFeedback(msg) {
         if (!a) return;
         ev.preventDefault();
         var rel = a.getAttribute('data-workspace-open') || '';
+        // The details column owns the file-open policy now: text files open
+        // inline there, everything else still goes to the system app. Older
+        // bundles without the dock keep the plain system-open path below.
+        if (rel && typeof globalThis !== 'undefined' && globalThis.MyAgentDock
+            && typeof globalThis.MyAgentDock.isTextPath === 'function'
+            && typeof globalThis.MyAgentDock.openPathSmart === 'function') {
+            if (globalThis.MyAgentDock.isTextPath(rel)) {
+                globalThis.MyAgentDock.openPathSmart(rel);
+                showOpenFileFeedback('已在详情栏打开');
+            } else {
+                globalThis.MyAgentDock.openPathSmart(rel);
+            }
+            return;
+        }
         var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
         fetch('/api/open-workspace-file?rel=' + encodeURIComponent(rel), controller ? { signal: controller.signal } : undefined)

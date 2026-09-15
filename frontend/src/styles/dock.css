@@ -1,0 +1,667 @@
+/*
+ * Dock split view (dsh-style dockkit embedder).
+ *
+ * One sheet, loaded after app.css. Every colour, radius, shadow, and type step
+ * comes from the existing theme variables, so the three themes restyle the dock
+ * with no extra rules. The metrics mirror the dsh dockkit contract:
+ *   - the strip is a 38px row whose 28px content band sits at its bottom, so
+ *     chips end flush with the strip's bottom edge and every control centres on
+ *     that one band;
+ *   - the chips are the strip's one shrinking part (down to an 80px floor, then
+ *     scroll on the wheel with no scrollbar) and the controls after them never
+ *     shrink;
+ *   - a chip's close control paints over its title's end instead of sitting
+ *     beside it, so a chip is the same width with and without a close;
+ *   - the divider owns no layout room: a 0.5px hairline paints over the seam and
+ *     a ::after widens the pointer target to 8px.
+ */
+
+/* ── the surface (shared by every dock area) ──────────────────────────────── */
+.dock-surface {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* ── split tree ───────────────────────────────────────────────────────────── */
+.dock-split { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.dock-split--row { flex-direction: row; }
+.dock-split--column { flex-direction: column; }
+.dock-cell { display: flex; flex-basis: 0; min-width: 0; min-height: 0; }
+
+/* The divider owns no layout room (`DOCK_SPLIT_MINIMUMS.divider` mirrors the 0);
+   its hairline paints over the seam so a pane's own rules run unbroken past it,
+   and the ::after reaches 4px over each neighbour to widen the hit target. */
+.dock-divider { position: relative; z-index: 1; flex: none; touch-action: none; }
+.dock-divider::before,
+.dock-divider::after { content: ''; position: absolute; }
+.dock-divider::before { background: var(--border-glass); }
+.dock-divider::after { opacity: 0; transition: opacity 120ms ease-out; }
+.dock-divider:hover::after { opacity: 1; }
+.dock-split--row > .dock-divider { width: 0; cursor: col-resize; }
+.dock-split--row > .dock-divider::before { top: 0; bottom: 0; left: -0.25px; width: 0.5px; }
+.dock-split--row > .dock-divider::after { top: 0; bottom: 0; left: -4px; right: -4px; background: linear-gradient(to bottom, transparent, var(--text-tertiary) 50%, transparent) center / 1px 100% no-repeat; }
+.dock-split--column > .dock-divider { height: 0; cursor: row-resize; }
+.dock-split--column > .dock-divider::before { left: 0; right: 0; top: -0.25px; height: 0.5px; }
+.dock-split--column > .dock-divider::after { left: 0; right: 0; top: -4px; bottom: -4px; background: linear-gradient(to right, transparent, var(--text-tertiary) 50%, transparent) center / 100% 1px no-repeat; }
+
+/* ── pane ─────────────────────────────────────────────────────────────────── */
+.dock-pane {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    transition: box-shadow 160ms var(--ease-out-expo);
+}
+.dock-rightbar.is-fullscreen .dock-pane[data-dock-pane-active] { box-shadow: inset 0 0 0 1px var(--border-accent); }
+
+/* The strip never clips: the chip box below is its one shrinking part and every
+   control after it is flex: none, so a narrow pane costs chips, never controls. */
+.dock-strip {
+    display: flex;
+    flex: none;
+    gap: 4px;
+    align-items: center;
+    height: 38px;
+    /* 28px content in a 38px row: 5px above and below keeps chips truly
+       vertically centred (feedback #9). */
+    padding: 5px 6px 5px 10px;
+    touch-action: none;
+}
+
+/* The chips: shrinks to nothing before any control after it moves; chips keep
+   their 80px floor, so what no longer fits scrolls here on the wheel, with no
+   scrollbar drawn. `touch-action: none` keeps a touch press-and-move a tab drag
+   rather than a pan the scroller would claim and cancel the pointer for. */
+.dock-strip-tabs {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+    touch-action: none;
+}
+.dock-strip-tabs::-webkit-scrollbar { display: none; }
+.dock-strip-tabs[data-dock-strip-scroll='end'] { mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
+.dock-strip-tabs[data-dock-strip-scroll='start'] { mask-image: linear-gradient(to right, transparent, black 24px); }
+.dock-strip-tabs[data-dock-strip-scroll='start end'] { mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent); }
+
+/* Takes the free space and gives it all back first: a zero basis shrinks
+   nothing, so shortage lands on the chip box alone. */
+.dock-strip-fill { flex: 1 1 0; min-width: 0; }
+
+/* The slot between two chips: a 10px box with a hairline down its centre.
+   Targeted by a drag, the same box draws the caret instead, so the chips
+   around it never move. */
+.dock-slot { display: flex; flex: none; align-items: center; justify-content: center; width: 10px; height: 28px; }
+.dock-slot::before { content: ''; width: 0.5px; height: 14px; background: var(--border-glass); }
+.dock-chip.is-active + .dock-slot:not(.dock-slot--caret)::before,
+.dock-slot:not(.dock-slot--caret):has(+ .dock-chip.is-active)::before { background: transparent; }
+/* `--accent-1` is only defined in the two dark themes; the accent read as
+   rgb components (+`--accent-rgb`) exists in all three, so the caret and the
+   drop hint keep their colour in the light theme too. */
+.dock-slot--caret::before { width: 2px; height: 20px; background: rgb(var(--accent-rgb)); }
+
+/* The chip: a 28px capsule whose title runs to the right inset. The close
+   control is not in the flow — it sits over the title's last 14px and shows
+   while the chip is active, hovered, or holds focus. */
+.dock-chip {
+    position: relative;
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    min-width: 96px;
+    max-width: 230px;
+    height: 28px;
+    padding: 0 12px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1;
+    white-space: nowrap;
+    border-radius: 12px;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+}
+.dock-chip:hover { background: var(--surface-glass2); }
+.dock-chip.is-active { color: var(--text-primary); background: var(--surface-glass3); }
+.dock-chip.is-dragging { opacity: 0.5; }
+.dock-chip.is-quiet { color: var(--text-primary); background: transparent; cursor: default; }
+.dock-chip-title {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+    line-height: 1.4;
+}
+.dock-chip-title[data-dock-tab-clipped] { mask-image: linear-gradient(to right, black calc(100% - 16px), transparent); }
+.dock-chip:hover .dock-chip-title,
+.dock-chip:focus-within .dock-chip-title,
+.dock-chip.is-active .dock-chip-title { mask-image: linear-gradient(to right, black calc(100% - 30px), transparent calc(100% - 14px)); }
+.dock-chip.is-quiet .dock-chip-title { mask-image: none; }
+
+/* A 20px icon button inset 4px from the chip's end, holding a glyph in the
+   tertiary ink; hidden means untouchable too. */
+.dock-chip-close {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    color: var(--text-tertiary);
+    font-size: 0.8rem;
+    line-height: 1;
+    background: transparent;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+}
+.dock-chip:hover .dock-chip-close,
+.dock-chip:focus-within .dock-chip-close,
+.dock-chip.is-active .dock-chip-close { opacity: 1; pointer-events: auto; }
+.dock-chip-close:hover { color: var(--text-primary); background: var(--surface-glass2); }
+
+/* The strip's end controls: 28px, `flex: none`, never shrink. */
+.dock-icon-button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1;
+    background: transparent;
+    border: none;
+    border-radius: 28px;
+    cursor: pointer;
+}
+.dock-icon-button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-glass2); }
+.dock-icon-button:disabled { opacity: 0.4; cursor: default; }
+/* The chrome glyphs are 28px circles around 15px icons, exactly like the
+   console's iconButton: split (in the strip), fullscreen and collapse. */
+.dock-icon-button svg { width: 15px; height: 15px; }
+.dock-add-tab[hidden], .dock-split-button[hidden], .dock-strip-chrome[hidden] { display: none; }
+.dock-strip-chrome { display: flex; flex: none; gap: 4px; align-items: center; height: 28px; margin-left: 0; }
+.dock-chrome-controls { display: flex; flex: none; gap: 4px; align-items: center; }
+
+/* ── pane body ────────────────────────────────────────────────────────────── */
+.dock-pane-body {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border-top: 1px solid var(--border-glass);
+}
+.dock-empty {
+    margin: 0;
+    padding: 12px;
+    color: var(--text-tertiary);
+    font-size: 0.76rem;
+}
+
+/* ── drop hints ───────────────────────────────────────────────────────────── */
+.dock-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--space-bg) 72%, transparent);
+    backdrop-filter: blur(6px);
+}
+.dock-hint { position: absolute; z-index: 10; display: flex; box-sizing: border-box; padding: 8px; pointer-events: none; }
+.dock-hint--center { inset: 0; }
+.dock-hint--left { top: 0; bottom: 0; left: 0; width: 50%; padding-right: 4px; }
+.dock-hint--right { top: 0; right: 0; bottom: 0; width: 50%; padding-left: 4px; }
+.dock-hint--top { top: 0; right: 0; left: 0; height: 40%; }
+.dock-hint--bottom { right: 0; bottom: 0; left: 0; height: 40%; }
+.dock-hint-card {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 0.76rem;
+    border: 1.5px dashed var(--border-hover);
+    border-radius: var(--radius-md);
+}
+.dock-hint.is-active .dock-hint-card {
+    color: var(--text-secondary);
+    background: color-mix(in srgb, rgb(var(--accent-rgb)) 8%, transparent);
+    border-color: rgb(var(--accent-rgb));
+}
+
+/* ── floating layer ───────────────────────────────────────────────────────── */
+.dock-float-layer { position: fixed; inset: 0; z-index: 700; pointer-events: none; }
+.dock-float {
+    position: fixed;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    pointer-events: auto;
+    background: var(--floating-surface);
+    border: 1px solid var(--floating-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--floating-shadow);
+}
+.dock-float-header { cursor: move; user-select: none; }
+.dock-float-title { flex: 0 1 auto; cursor: inherit; }
+.dock-float-title:hover { background: transparent; }
+.dock-float-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.dock-float-resize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; touch-action: none; }
+.dock-float-resize::after {
+    content: '';
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 16px;
+    height: 16px;
+    border-right: 1.5px solid var(--text-tertiary);
+    border-bottom: 1.5px solid var(--text-tertiary);
+    border-bottom-right-radius: 16px;
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+}
+.dock-float:hover .dock-float-resize::after, .dock-float-resize:active::after { opacity: 1; }
+
+/* ── chip context menu ────────────────────────────────────────────────────── */
+.dock-menu {
+    position: fixed;
+    z-index: 80;
+    display: flex;
+    flex-direction: column;
+    min-width: 96px;
+    padding: 4px;
+    background: var(--popover-bg);
+    border: 0.5px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-soft);
+}
+.dock-menu-item {
+    padding: 5px 8px;
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.dock-menu-item:hover { background: var(--surface-glass2); }
+
+.dock-unknown-tab { padding: 12px; color: var(--text-tertiary); font-size: 0.76rem; }
+
+/* ── narrow screens: the column is fullscreen by policy ───────────────────── */
+@media (max-width: 767px) {
+    .dock-strip { padding-left: 6px; }
+    .dock-chip { max-width: 120px; min-width: 64px; }
+}
+
+/* ═══ details column (dsh-style right sidebar) ═══════════════════════════════
+   The column is a track beside the workspace: when it takes width the
+   conversation gives it up, and in fullscreen it covers the viewport. It is a
+   sibling of `.main`, so the sidebar's own geometry is untouched. */
+.dock-rightbar {
+    position: relative;
+    /* Above `.main` (z-index: 2): the sash overhangs the column's left edge,
+       and a lower stacking order would hand its presses to the workspace. */
+    z-index: 3;
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    width: var(--dock-rightbar-width, 460px);
+    background: var(--main-area-bg);
+    border-left: 1px solid var(--border-glass);
+    backdrop-filter: blur(2px);
+    /* Collapse/expand animates the track's width and opacity so the workspace
+       gives room smoothly instead of snapping (feedback #2). */
+    overflow: hidden;
+    transition: width 180ms var(--ease-out-expo), opacity 180ms ease-out;
+}
+.dock-rightbar[hidden] { width: 0; opacity: 0; pointer-events: none; }
+.dock-rightbar[hidden] .dock-rightbar-sash { display: none; }
+.dock-rightbar > .dock-surface { flex: 1 1 auto; min-height: 0; }
+.dock-rightbar .dock-pane { border-radius: 0; }
+.dock-rightbar.is-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    width: 100% !important;
+    border-left: none;
+    background: var(--space-bg);
+}
+
+/* The 8px invisible hot zone on the column's left edge. */
+.dock-rightbar-sash {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    z-index: 12;
+    width: 8px;
+    cursor: col-resize;
+    touch-action: none;
+}
+.dock-rightbar-sash::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3.75px;
+    width: 0.5px;
+    background: transparent;
+    transition: background-color 120ms ease-out;
+}
+.dock-rightbar-sash:hover::before { background: var(--text-tertiary); }
+.dock-rightbar.is-fullscreen .dock-rightbar-sash { display: none; }
+
+/* The header corner button, same as dsh's `ExpandButton`: a 28px circle around
+   a 15px panel glyph, the left sidebar's icon mirrored so the divider reads on
+   the right side. Hidden while the column is shown — the column's own strip
+   carries the collapse control, and a collapsed column costs the header
+   nothing but this one button. */
+.dock-expand-btn {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 6px;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: 28px;
+    cursor: pointer;
+}
+.dock-expand-btn svg { width: 15px; height: 15px; }
+.dock-expand-btn[hidden] { display: none; }
+.dock-expand-btn:hover { color: var(--text-primary); background: var(--surface-glass2); }
+.dock-expand-btn[aria-pressed='true'] { color: var(--text-primary); background: var(--surface-glass2); }
+.dock-expand-icon { transform: scaleX(-1); }
+
+/* ── files page ───────────────────────────────────────────────────────────── */
+.dock-files,
+.dock-changes {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+.dock-files-head,
+.dock-changes-head,
+.dock-doc-head {
+    display: flex;
+    flex: none;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-glass);
+}
+.dock-files-title,
+.dock-changes-title,
+.dock-doc-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dock-link-button {
+    flex: none;
+    padding: 3px 8px;
+    color: var(--text-tertiary);
+    font-size: 0.68rem;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.dock-link-button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-glass2); }
+.dock-link-button:disabled { opacity: 0.5; cursor: default; }
+.dock-link-button.is-error { color: var(--red-accent); }
+
+.dock-files-tree {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 4px 0 12px;
+}
+.dock-files-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    padding: 6px 10px;
+    color: var(--text-soft);
+    /* Same scale as the change list's rows: one type size across the column. */
+    font-size: 0.78rem;
+    text-align: left;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+}
+.dock-files-row:hover { color: var(--text-primary); background: var(--surface-glass2); }
+.dock-files-row--dir { color: var(--text-secondary); }
+.dock-files-marker {
+    flex: none;
+    width: 12px;
+    color: var(--text-tertiary);
+    font-size: 0.62rem;
+}
+.dock-files-marker--icon,
+.dock-files-marker--dir {
+    display: inline-flex;
+    gap: 2px;
+    align-items: center;
+    width: auto;
+}
+.dock-files-caret { display: inline-block; width: 10px; text-align: center; font-size: 0.66rem; }
+.dock-files-icon { display: block; width: 16px; height: 16px; }
+.dock-files-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dock-files-size {
+    flex: none;
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── document page ────────────────────────────────────────────────────────── */
+.dock-doc {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+}
+.dock-doc-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+}
+.dock-doc-text {
+    margin: 0;
+    color: var(--text-soft);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.dock-doc-image { display: block; max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+.dock-doc-media { display: block; width: 100%; }
+.dock-note { padding: 8px 4px; color: var(--text-tertiary); font-size: 0.7rem; }
+
+/* ── start ("guide") page ─────────────────────────────────────────────────── */
+.dock-guide {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    justify-content: center;
+    gap: 26px;
+    align-items: center;
+    min-height: 0;
+    padding: 24px 18px;
+}
+.dock-guide-glyph { color: var(--text-tertiary); opacity: 0.55; }
+.dock-guide-glyph svg { width: 44px; height: 44px; }
+.dock-guide-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    max-width: 320px;
+}
+.dock-guide-card {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    width: 100%;
+    padding: 10px 12px;
+    color: var(--text-primary);
+    text-align: left;
+    background: var(--surface-glass2);
+    border: 1px solid var(--border-glass);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+.dock-guide-card:hover { background: var(--surface-glass3); border-color: var(--border-accent); }
+.dock-guide-card-icon { flex: none; display: inline-flex; }
+.dock-guide-card-icon svg { width: 20px; height: 20px; }
+.dock-guide-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dock-guide-card-title { font-size: 0.82rem; font-weight: 600; }
+.dock-guide-card-desc { color: var(--text-tertiary); font-size: 0.7rem; }
+.dock-doc-fallback {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 12px 4px;
+}
+
+/* ── changes page ─────────────────────────────────────────────────────────── */
+.dock-changes-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 4px 0 12px;
+}
+.dock-change { border-bottom: 1px solid var(--border-glass); }
+.dock-change.is-reverted { opacity: 0.62; }
+.dock-change-head {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 6px 10px;
+    cursor: pointer;
+}
+.dock-change-head:hover { background: var(--surface-glass2); }
+.dock-change-toggle { flex: none; width: 12px; color: var(--text-tertiary); font-size: 0.66rem; background: transparent; border: none; cursor: pointer; }
+.dock-change-name { flex: none; max-width: 45%; overflow: hidden; color: var(--text-primary); font-size: 0.78rem; text-overflow: ellipsis; white-space: nowrap; }
+.dock-change-dir { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: 0.66rem; text-overflow: ellipsis; white-space: nowrap; }
+.dock-change-stats { flex: none; display: flex; gap: 4px; font-family: var(--mono); font-size: 0.64rem; font-variant-numeric: tabular-nums; }
+.dock-change-added { color: var(--green-accent); }
+.dock-change-removed { color: var(--red-accent); }
+.dock-change-body { padding: 0 10px 8px; }
+.dock-change-diff {
+    max-height: 320px;
+    margin: 0;
+    overflow: auto;
+    color: var(--text-soft);
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    line-height: 1.5;
+    background: var(--code-surface-bg);
+    border-radius: var(--radius-sm);
+    padding: 8px;
+}
+.dock-diff-line { display: block; white-space: pre; }
+.dock-diff-line.is-added { color: var(--green-accent); }
+.dock-diff-line.is-removed { color: var(--red-accent); }
+.dock-diff-line.is-hunk { color: var(--blue-accent); }
+
+@media (max-width: 767px) {
+    .dock-rightbar { width: 100% !important; }
+}
+
+/* ── feedback round 3 ─────────────────────────────────────────────────────── */
+
+/* Chips carry ink of their own: in the light theme a transparent capsule over
+   a pale ground was nearly invisible (feedback #6). */
+.dock-chip {
+    background: var(--surface-glass2);
+}
+.dock-chip:hover { background: var(--surface-glass3); }
+html.theme-light .dock-chip {
+    background: rgba(15, 23, 42, 0.055);
+    border: 1px solid rgba(15, 23, 42, 0.06);
+}
+html.theme-light .dock-chip:hover { background: rgba(15, 23, 42, 0.09); }
+html.theme-light .dock-chip.is-active {
+    background: var(--surface-glass3);
+    border-color: var(--border-accent);
+}
+
+/* The change rows borrow the Change Review card's look: full-row +/- tints,
+   an accent file header, and a quiet status row (feedback #3). */
+.dock-change { border: 1px solid var(--border-glass); border-radius: 10px; margin: 6px 8px; overflow: hidden; }
+.dock-change-head { border-bottom: 1px solid var(--border-glass); background: var(--surface-glass1, transparent); }
+.dock-change-diff { background: var(--code-surface-bg); padding: 6px 0; }
+.dock-diff-line { padding: 0 10px; }
+.dock-diff-line.is-added { background: rgba(46, 125, 50, 0.14); color: var(--text-soft); }
+.dock-diff-line.is-removed { background: rgba(198, 40, 40, 0.14); color: var(--text-soft); }
+.dock-diff-line.is-hunk { background: rgba(30, 136, 229, 0.10); color: var(--blue-accent, var(--text-soft)); }
+
+/* Two scopes for the change list: this round (default) and this session. */
+.dock-changes-scope { display: flex; gap: 4px; }
+.dock-scope-pill {
+    padding: 3px 10px;
+    color: var(--text-tertiary);
+    font-size: 0.68rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.dock-scope-pill:hover { color: var(--text-primary); background: var(--surface-glass2); }
+.dock-scope-pill.is-active {
+    color: var(--text-primary);
+    background: var(--surface-glass3);
+    border-color: var(--border-glass);
+}

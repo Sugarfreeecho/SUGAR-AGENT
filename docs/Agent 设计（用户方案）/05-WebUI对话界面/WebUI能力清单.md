@@ -53,6 +53,9 @@
 | 模型档案管理（增删改、排序、启用、发现、探测） | `modules/model-profiles.js`、后端 model-profile API | 【图】 |
 | 工作区文件与媒体（目录浏览、图片元数据/预览、上传） | `modules/workspace-media.js`、后端 workspace API | 【卡】 |
 | 通知与 UI 存在性（presence 上报驱动桌面提醒策略） | 后端 `ui-presence`、`_ui_presence_has_active` | 【卡】 |
+| 右侧详情栏（dockkit 三层：引擎/渲染/嵌入；dsh 式第三列 + 开始/文件/内容/修改历史四类页；角落按钮与条尾控件图形同 dsh 源码） | `frontend/src/app/modules/dock/**`（engine 8 / renderer 5 / embedder 3）、`styles/dock.css`、`app/index.js` 登记 | 【单】 |
+| 统一开文件策略（文本→详情栏，其余→系统应用；`MyAgentDock.openPathSmart` / `isTextPath`，会话文件链接与文件树共用） | `modules/dock/embedder/right-column.js`、`modules/session-scroll-history.js`（链接委托） | 【单】 |
+| 修改历史双档（本轮/本次会话，默认本轮；边界随用户消息即时推进；扫描带超时/重试/看门狗；撤销/恢复走 Change Review 路由） | `modules/dock/embedder/right-column.js`、`plugins/change-review/host.py` | 【单】 |
 
 ## 6. 会话管理
 | 能力 | 位置 | 状态 |
@@ -67,6 +70,7 @@
 | 页面与静态资源（index.html、dist 资源、路径选择器 JS、setup i18n） | 由 Vite 构建产物驱动 | 【单】 |
 | Runtime V2：state / events / runs / stream / subagents | 事件与快照读取、游标、SSE | 【图】 |
 | 工作区：文件列表、目录浏览、图片元数据、媒体响应、打开文件 | 含路径越界防护 `_resolve_allowed_local_path` | 【单】 |
+| 工作区：文本只读接口（`GET /api/workspace-file-text`，UTF-8 截断 + `truncated` 标记，供详情栏文件内容页） | `webui.py::workspace_file_text`；需重启服务生效 | 【单】 |
 | 附件：授权读取、queue pin、grant、URL 入库、ZIP 导入/导出 | `webui.py`、`attachments/api.py` | 【单】 |
 | 独立识图：创建/查询/SSE 续接/取消/清理/GC/指标 | `vision_api.py` 的 `/api/vision/*` 路由 | 【单】 |
 | 运行恢复：interrupted ReAct 会话自动恢复、human interaction 恢复 | 后台 runner（`start_react_recovery_runner`） | 【单】 |
@@ -79,4 +83,6 @@
 
 ## 9. 版本记录
 
+- 2026-09-14（v4）：详情栏三轮反馈收编——开始引导页、统一开文件策略（`openPathSmart`）、修改历史双档与扫描健壮性；renderer 计 5 件（新增 `icons.js`）；说明见 05/08 专项设计。
+- 2026-09-14（v3）：补录右侧详情栏（`modules/dock/**` 三层与 `styles/dock.css`）及工作区文本只读接口；说明见 05/08 专项设计。主区会话分屏随后按用户要求移除。
 - 2026-09-14（v2）：补录服务端自主运行自动接管与扩展状态控制事件；修正状态模块计数（17）、`ui-performance.js`/`input-actions.js` 职责描述；版本线更新至 `d022831`。

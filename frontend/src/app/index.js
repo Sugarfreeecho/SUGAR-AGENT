@@ -36,6 +36,22 @@ import eventDispatchSource from './modules/event-dispatch.js?raw';
 import sessionManagementSource from './modules/session-management.js?raw';
 import sseHandlingSource from './modules/sse-handling.js?raw';
 import layoutPanelsSource from './modules/layout-panels.js?raw';
+import dockTypesSource from './modules/dock/engine/types.js?raw';
+import dockTreeSource from './modules/dock/engine/tree.js?raw';
+import dockConstraintsSource from './modules/dock/engine/constraints.js?raw';
+import dockGeometrySource from './modules/dock/engine/geometry.js?raw';
+import dockOperationsSource from './modules/dock/engine/operations.js?raw';
+import dockPlannerSource from './modules/dock/engine/planner.js?raw';
+import dockSequenceSource from './modules/dock/engine/sequence.js?raw';
+import dockControllerSource from './modules/dock/engine/controller.js?raw';
+import dockIconsSource from './modules/dock/renderer/icons.js?raw';
+import dockGestureSource from './modules/dock/renderer/gesture.js?raw';
+import dockMeasureSource from './modules/dock/renderer/measure.js?raw';
+import dockSurfaceSource from './modules/dock/renderer/dock-surface.js?raw';
+import dockFloatLayerSource from './modules/dock/renderer/float-layer.js?raw';
+import dockSurfaceStoreSource from './modules/dock/embedder/surface-store.js?raw';
+import dockTabRegistrySource from './modules/dock/embedder/tab-registry.js?raw';
+import dockRightColumnSource from './modules/dock/embedder/right-column.js?raw';
 
 globalThis.marked = marked;
 
@@ -117,6 +133,22 @@ const uiSources = [
     sessionManagementSource,
     sseHandlingSource,
     layoutPanelsSource,
+    dockTypesSource,
+    dockTreeSource,
+    dockConstraintsSource,
+    dockGeometrySource,
+    dockOperationsSource,
+    dockPlannerSource,
+    dockSequenceSource,
+    dockControllerSource,
+    dockIconsSource,
+    dockGestureSource,
+    dockMeasureSource,
+    dockSurfaceSource,
+    dockFloatLayerSource,
+    dockSurfaceStoreSource,
+    dockTabRegistrySource,
+    dockRightColumnSource,
 ];
 
 Function('"use strict";\n' + uiSources.join('\n\n') + '\n//# sourceURL=myagent-ui.js')();

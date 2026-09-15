@@ -142,6 +142,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '放大显示 Mermaid 流程图': 'Expand Mermaid diagram', '点击查看图片': 'Click to view image',
     '移除文件路径': 'Remove file path', '响应异常': 'Invalid response', '已调用系统打开文件': 'Asked the system to open the file',
     '无法打开文件': 'Could not open file', '无法连接服务': 'Could not connect to the service',
+    '已在详情栏打开': 'Opened in the details column',
     '取消改写': 'Cancel rewrite', '已截断历史，可撤销恢复': 'History truncated; you can undo to restore it',
     '已填入输入框，可撤销': 'Inserted into the input; you can undo',
     '改写待生效：发送消息后才会截断历史并发送；点此取消改写。': 'Rewrite pending: history will be truncated only when the message is sent. Click here to cancel.',
@@ -393,6 +394,33 @@ const UI_I18N_CONTENT_SELECTOR = [
     '.skill-picker-option-desc',
     '[data-i18n-skip]',
 ].join(',');
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Dock surface chrome (split, chips, drop zones)
+    '左右分屏': 'Split right', '分栏数量已达上限': 'Pane limit reached',
+    '栏宽不足，拖宽侧边栏后再分栏': 'Too narrow to split; widen the sidebar first',
+    '关闭标签': 'Close tab', '复制标签': 'Duplicate tab',
+    '此面板暂无内容': 'Nothing open in this pane', '收回到侧边栏': 'Dock back', '关闭浮窗': 'Close panel',
+    '移入此面板': 'Move into this pane', '分屏到左侧': 'Split left', '分屏到右侧': 'Split right',
+    '全屏显示': 'Full screen', '退出全屏': 'Exit full screen',
+    '消息': 'Messages',
+});
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Details column (dsh-style right sidebar)
+    '详情栏': 'Details', '打开侧边栏': 'Open sidebar', '打开右侧边栏': 'Open right sidebar',
+    '收起侧边栏': 'Collapse sidebar', '拖动调整详情栏宽度': 'Drag to resize details column',
+    '开始': 'Start', '浏览会话工作区的文件': 'Browse the session workspace files',
+    '查看本会话的文件改动': 'Review this session\u2019s file changes', '新建窗口': 'New window',
+    '本轮': 'This round', '本次会话': 'This session', '本轮暂无文件改动': 'No file changes this round',
+    '此文件需在系统应用中打开。': 'Open this file in a system app.',
+    '工作区文件': 'Workspace files', '文件内容': 'File content', '修改历史': 'File changes',
+    '刷新': 'Refresh', '在系统应用中打开': 'Open with system app',
+    '正在载入…': 'Loading…', '载入失败': 'Failed to load', '（空目录）': '(empty folder)',
+    '本会话暂无文件改动': 'No file changes in this session yet',
+    '此文件类型暂不支持内嵌预览，可在系统应用中打开。': 'No inline preview for this file type; open it with a system app.',
+    '文本过长，仅显示前 200 KB。': 'Long text: only the first 200 KB is shown.',
+    '撤销': 'Undo', '恢复': 'Restore', '差分': 'Diff',
+    '文本接口尚不可用（需重启服务加载新接口），可在系统应用中打开。': 'The text endpoint is not live yet (a server restart loads it); open the file with a system app instead.',
+});
 const uiI18nTextOriginal = new WeakMap();
 const uiI18nAttrOriginal = new WeakMap();
 const uiI18nRuntimeOriginal = new WeakMap();

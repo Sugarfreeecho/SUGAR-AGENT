@@ -2065,6 +2065,59 @@ async def workspace_image(
     )
 
 
+@fastapi_app.get("/api/workspace-file-text")
+async def workspace_file_text(
+    rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径"),
+    max_bytes: int = Query(200000, ge=1024, le=2000000),
+):
+    """Read one workspace file's text for the details column's document page.
+
+    Read-only: the file is never written, and the read is cut at ``max_bytes``
+    with ``truncated`` reported so the UI can say so. The path resolves through
+    the same allowed-root gate as the workspace media endpoints.
+    """
+    try:
+        path = await run_in_threadpool(_resolve_workspace_view_path, rel)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
+    except PermissionError:
+        return JSONResponse({"ok": False, "error": "path outside allowed roots"}, status_code=403)
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "file not found"}, status_code=404)
+    except Exception as exc:
+        logger.warning("workspace text resolve failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid file path"}, status_code=400)
+    if not path.is_file():
+        return JSONResponse({"ok": False, "error": "not a file"}, status_code=404)
+    try:
+        size = int(path.stat().st_size)
+    except OSError as exc:
+        logger.warning("workspace text stat failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "cannot read file"}, status_code=500)
+    limit = int(max_bytes)
+    try:
+        with path.open("rb") as handle:
+            chunk = handle.read(limit + 1)
+    except OSError as exc:
+        logger.warning("workspace text read failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "cannot read file"}, status_code=500)
+    truncated = len(chunk) > limit
+    try:
+        text = chunk[:limit].decode("utf-8")
+    except UnicodeDecodeError:
+        text = chunk[:limit].decode("utf-8", "replace")
+    return JSONResponse(
+        {
+            "ok": True,
+            "rel": str(rel or ""),
+            "size": size,
+            "truncated": bool(truncated),
+            "text": text,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _html_with_path_picker_script(body: str) -> str:
     try:
         v = int(_PATH_PICKER_JS_PATH.stat().st_mtime)
