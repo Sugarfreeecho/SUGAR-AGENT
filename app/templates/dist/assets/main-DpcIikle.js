@@ -466,7 +466,13 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '收起侧边栏': 'Collapse sidebar', '拖动调整详情栏宽度': 'Drag to resize details column',
     '开始': 'Start', '浏览会话工作区的文件': 'Browse the session workspace files',
     '查看本会话的文件改动': 'Review this session\\u2019s file changes', '新建窗口': 'New window',
-    '本轮': 'This round', '本次会话': 'This session', '本轮暂无文件改动': 'No file changes this round',
+    '本轮': 'This round', '本次会话': 'This session', '会话总览': 'Session overview', '本轮暂无文件改动': 'No file changes this round',
+    '未命名提问': 'Untitled prompt', '未统计行数': 'No line stats',
+    '全部撤销': 'Undo all', '全部恢复': 'Restore all', '正在撤销…': 'Undoing…', '正在恢复…': 'Restoring…',
+    '已全部撤销': 'All changes undone', '已全部恢复': 'All changes restored',
+    '任务和子任务全部结束后才可撤销或恢复': 'Undo and restore are available after the task tree stops',
+    '撤销本轮全部改动？': 'Undo all changes in this turn?', '恢复本轮全部改动？': 'Restore all changes in this turn?',
+    '若任一文件已被再次修改，该批次会中止。': 'If any file changed again, the batch is cancelled.',
     '此文件需在系统应用中打开。': 'Open this file in a system app.',
     '工作区文件': 'Workspace files', '文件内容': 'File content', '修改历史': 'File changes',
     '刷新': 'Refresh', '在系统应用中打开': 'Open with system app',
@@ -11100,8 +11106,8 @@ function refreshProcessAggregateStats(agg) {\r
 \r
 /* ═══ 术语统一（执行过程面板） ═══\r
    会话：侧边栏一条 = 一个会话（session）。\r
-   轮：会话内一次对话 = 一轮（一条用户提问到最终回复完成；\r
-       分页/TOC/user_turns 里的「轮次」均指此，不用于 API 计数）。\r
+   轮：一条非追问用户输入开始，到下一条非追问用户输入或链路结束；
+       user_steer 是轮内消息、不切轮。分页/TOC/user_turns/改动审查均用此口径。
    步：每次 API 发送 = 一步（对应 react_iter，面板统计「N 步」）。\r
    条：每一步期间产生的一条思考/回复/工具/状态记录（feed item 行单位）。 */\r
 function ensureProcessGroup(ctx) {\r
@@ -27925,6 +27931,10 @@ const dockRightState = {
     dragging: false,
 };
 
+/** Plugin-fed child-agent rows and pending deep links, retained even before the page opens. */
+const dockRightChangeReviewRows = new Map();
+const dockRightChangeReviewFocus = new Map();
+
 /** The column's rendered strings; the i18n observer translates them in English. */
 function dockRightLabels() {
     return {
@@ -27950,8 +27960,16 @@ function dockRightLabels() {
         emptyDir: '（空目录）',
         emptyChanges: '本会话暂无文件改动',
         emptyTurnChanges: '本轮暂无文件改动',
-        scopeTurn: '本轮',
-        scopeSession: '本次会话',
+        scopeSession: '会话总览',
+        turnFallback: '未命名提问',
+        noLineStats: '未统计行数',
+        undoAll: '全部撤销',
+        restoreAll: '全部恢复',
+        undoing: '正在撤销…',
+        restoring: '正在恢复…',
+        allUndone: '已全部撤销',
+        allRestored: '已全部恢复',
+        taskRunningReview: '任务和子任务全部结束后才可撤销或恢复',
         unsupported: '此文件类型暂不支持内嵌预览，可在系统应用中打开。',
         textUnavailable: '文本接口尚不可用（需重启服务加载新接口），可在系统应用中打开。',
         truncated: '文本过长，仅显示前 200 KB。',
@@ -28576,7 +28594,7 @@ function dockRightGuideBody(tab) {
 }
 
 /** Open one of the column's pages (guide entries, \`+\`, the public API) in a pane. */
-function dockRightOpenPageKind(kind, replaceTab, paneId) {
+function dockRightOpenPageKind(kind, replaceTab, paneId, revealIfOpened) {
     dockRightEnsureMounted();
     const sessionId = dockRightState.sessionId || currentSessionId;
     if (!sessionId) return;
@@ -28588,7 +28606,7 @@ function dockRightOpenPageKind(kind, replaceTab, paneId) {
         title: definition ? dockTitleOf(definition, address) : String(kind),
         replaceTab: replaceTab,
         paneId: paneId,
-        revealIfOpened: false,
+        revealIfOpened: Boolean(revealIfOpened),
     }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     dockRightState.sessionId = sessionId;
     dockRightRender();
@@ -28842,10 +28860,8 @@ function dockRightNote(text) {
 // ── changes page ─────────────────────────────────────────────────────────────
 
 /**
- * The session's file changes, aggregated from the \`ui.changes\` payloads in its
- * history, in two scopes: the current round (everything after the latest user
- * turn — the default, matching the Change Review plugin's "this run" wording)
- * and the whole session (feedback #4).
+ * Official turn boundary: a non-follow-up \`user\` event starts a turn; \`user_steer\`
+ * remains inside it. Every review row is assigned to the latest such boundary.
  */
 function dockRightChangesBody(tab) {
     const el = document.createElement('div');
@@ -28853,16 +28869,20 @@ function dockRightChangesBody(tab) {
     el.setAttribute('data-dock-changes', tab.id);
     const sessionId = dockRightState.sessionId || currentSessionId;
     const state = {
+        changeReview: true,
         sessionId: sessionId,
         rows: new Map(),
+        turns: new Map(),
+        turnTokens: new Map(),
+        selectedTurnId: null,
+        scope: 'turn',
+        focusRequest: dockRightChangeReviewFocus.get(String(sessionId || '')) || null,
         released: false,
         listener: null,
         abort: null,
-        sequence: 0,
-        turnStart: -1,
-        scope: 'turn',
-        pills: null,
         loaded: false,
+        status: '',
+        statusError: false,
     };
     dockRightState.tabState[tab.id] = state;
 
@@ -28871,274 +28891,503 @@ function dockRightChangesBody(tab) {
     const title = document.createElement('span');
     title.className = 'dock-changes-title';
     title.textContent = dockRightText('changes');
-    const pills = document.createElement('div');
-    pills.className = 'dock-changes-scope';
-    const scopeDefs = [
-        { id: 'turn', label: dockRightText('scopeTurn') },
-        { id: 'session', label: dockRightText('scopeSession') },
-    ];
-    for (let i = 0; i < scopeDefs.length; i += 1) {
-        const pill = document.createElement('button');
-        pill.type = 'button';
-        pill.className = 'dock-scope-pill' + (scopeDefs[i].id === 'turn' ? ' is-active' : '');
-        pill.setAttribute('data-dock-changes-scope', scopeDefs[i].id);
-        pill.textContent = scopeDefs[i].label;
-        pill.addEventListener('click', () => {
-            state.scope = scopeDefs[i].id;
-            render();
-        });
-        pills.appendChild(pill);
-    }
-    state.pills = pills;
     const refresh = document.createElement('button');
     refresh.type = 'button';
     refresh.className = 'dock-link-button';
     refresh.textContent = dockRightText('refresh');
-    head.appendChild(title);
-    head.appendChild(pills);
-    head.appendChild(refresh);
+    head.append(title, refresh);
+
+    const controls = document.createElement('div');
+    controls.className = 'dock-changes-scope';
+    const turnSelect = document.createElement('select');
+    turnSelect.className = 'dock-turn-select';
+    turnSelect.setAttribute('aria-label', '选择轮次');
+    const sessionScope = document.createElement('button');
+    sessionScope.type = 'button';
+    sessionScope.className = 'dock-scope-pill';
+    sessionScope.textContent = dockRightText('scopeSession');
+    controls.append(turnSelect, sessionScope);
+
+    const status = document.createElement('div');
+    status.className = 'dock-change-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
     const list = document.createElement('div');
     list.className = 'dock-changes-list';
-    el.appendChild(head);
-    el.appendChild(list);
+    el.append(head, controls, status, list);
     dockRightTrackScroll(tab.id, list);
     el.__dockRestore = list.__dockRestore;
 
-    const scopedRows = () => {
-        const all = Array.from(state.rows.values());
-        const rows = state.scope === 'turn'
-            ? all.filter((row) => Number(row.at || 0) > state.turnStart)
-            : all;
-        return rows.sort((left, right) => String(left.path).localeCompare(String(right.path)));
+    const turnRows = (turnId) => Array.from(state.rows.values()).filter((row) => (
+        String(row._turnId || '') === String(turnId || '')
+        && (row._reverted || row.effective !== false)
+    )).sort((left, right) => String(left.path).localeCompare(String(right.path)));
+
+    const addTurn = (id, preview, createdAt, token) => {
+        const key = String(id === undefined || id === null ? '' : id);
+        if (!key) return null;
+        const old = state.turns.get(key) || {};
+        const row = {
+            id: key,
+            preview: String(preview || old.preview || '').replace(/\\s+/g, ' ').trim(),
+            createdAt: createdAt || old.createdAt || '',
+            token: String(token || old.token || ''),
+        };
+        state.turns.set(key, row);
+        if (row.token) state.turnTokens.set(row.token, key);
+        return row;
     };
-    const render = () => {
-        if (state.released) return;
-        const buttons = pills.querySelectorAll('.dock-scope-pill');
-        for (let i = 0; i < buttons.length; i += 1) {
-            const active = buttons[i].getAttribute('data-dock-changes-scope') === state.scope;
-            buttons[i].classList.toggle('is-active', active);
-        }
-        list.replaceChildren();
-        list.setAttribute('data-dock-turn-start', String(state.turnStart));
-        list.setAttribute('data-dock-sequence', String(state.sequence));
-        list.setAttribute('data-dock-session', String(state.sessionId || ''));
-        const rows = scopedRows();
-        if (rows.length === 0) {
-            list.appendChild(dockRightNote(state.scope === 'turn' ? dockRightText('emptyTurnChanges') : dockRightText('emptyChanges')));
-            return;
-        }
-        for (let i = 0; i < rows.length; i += 1) list.appendChild(dockRightChangeRow(rows[i], state, render));
-    };
-    const accept = (raw, at) => {
+
+    const accept = (raw, at, turnId, originSessionId) => {
         if (!raw || !raw.path) return;
-        const key = String(raw.path).toLowerCase();
+        const token = String(raw._turnToken || raw.turn_id || '');
+        let resolvedTurn = String(raw._turnId || turnId || '');
+        if (token && state.turnTokens.has(token)) resolvedTurn = state.turnTokens.get(token);
+        if (!resolvedTurn) resolvedTurn = String(state.selectedTurnId || '');
+        if (resolvedTurn && !state.turns.has(resolvedTurn)) addTurn(resolvedTurn, '', '', token);
+        const origin = String(raw._sessionId || originSessionId || state.sessionId || '');
+        const key = String(raw.snapshot_id || (origin + '\\0' + resolvedTurn + '\\0' + String(raw.path).toLowerCase()));
         const previous = state.rows.get(key);
-        if (previous && Number(previous.revision) > Number(raw.revision)) return;
-        state.rows.set(key, Object.assign({}, raw, {
-            at: at === undefined ? (state.sequence += 1) : at,
-            _reverted: raw.reverted === true || raw.effective === false,
+        if (previous && Number(previous.revision || 0) > Number(raw.revision || 0)) return;
+        state.rows.set(key, Object.assign({}, previous || {}, raw, {
+            at: at === undefined ? Number((previous || {}).at || 0) : at,
+            _turnId: resolvedTurn,
+            _turnToken: token,
+            _sessionId: origin,
+            _reverted: raw.reverted === true || raw.effective === false || raw._reverted === true,
         }));
     };
+    state.acceptExternal = (payload) => {
+        const rows = payload && Array.isArray(payload.rows) ? payload.rows : [];
+        for (let i = 0; i < rows.length; i += 1) accept(rows[i], undefined, rows[i]._turnId, rows[i]._sessionId);
+        render();
+    };
+
+    const resolveFocus = () => {
+        const focus = state.focusRequest;
+        if (!focus) return;
+        let turnId = String(focus.turnId === undefined ? '' : focus.turnId);
+        const token = String(focus.turnToken || '');
+        if (token && state.turnTokens.has(token)) turnId = state.turnTokens.get(token);
+        if (turnId && state.turns.has(turnId)) {
+            state.scope = 'turn';
+            state.selectedTurnId = turnId;
+        }
+    };
+
+    const render = () => {
+        if (state.released) return;
+        resolveFocus();
+        const turns = Array.from(state.turns.values()).sort((left, right) => Number(left.id) - Number(right.id));
+        if (!state.selectedTurnId && turns.length) state.selectedTurnId = turns[turns.length - 1].id;
+        turnSelect.replaceChildren();
+        for (let i = 0; i < turns.length; i += 1) {
+            const option = document.createElement('option');
+            option.value = turns[i].id;
+            const preview = turns[i].preview || dockRightText('turnFallback');
+            option.textContent = '第 ' + (i + 1) + ' 轮 · ' + (preview.length > 42 ? preview.slice(0, 42) + '…' : preview);
+            option.selected = state.scope === 'turn' && turns[i].id === String(state.selectedTurnId || '');
+            turnSelect.appendChild(option);
+        }
+        turnSelect.disabled = turns.length === 0;
+        turnSelect.classList.toggle('is-active', state.scope === 'turn');
+        sessionScope.classList.toggle('is-active', state.scope === 'session');
+        status.textContent = state.status || '';
+        status.classList.toggle('is-error', Boolean(state.statusError));
+        list.replaceChildren();
+        list.setAttribute('data-dock-selected-turn', String(state.selectedTurnId || ''));
+        list.setAttribute('data-dock-session', String(state.sessionId || ''));
+
+        let visibleTurns = state.scope === 'session'
+            ? turns.slice().reverse()
+            : turns.filter((turn) => turn.id === String(state.selectedTurnId || ''));
+        visibleTurns = visibleTurns.filter((turn) => turnRows(turn.id).length > 0);
+        if (!visibleTurns.length) {
+            list.appendChild(dockRightNote(state.scope === 'turn' ? dockRightText('emptyTurnChanges') : dockRightText('emptyChanges')));
+        } else {
+            for (let i = 0; i < visibleTurns.length; i += 1) {
+                const turnIndex = turns.findIndex((turn) => turn.id === visibleTurns[i].id);
+                list.appendChild(dockRightChangeGroup(visibleTurns[i], turnIndex, turnRows(visibleTurns[i].id), state, render));
+            }
+        }
+
+        const focus = state.focusRequest;
+        if (!focus) return;
+        const selector = focus.snapshotId
+            ? '[data-dock-snapshot-id="' + CSS.escape(String(focus.snapshotId)) + '"]'
+            : focus.path ? '[data-dock-change-path="' + CSS.escape(String(focus.path)) + '"]' : '';
+        const target = selector ? list.querySelector(selector) : null;
+        if (target) {
+            const body = target.querySelector('.dock-change-body');
+            const toggle = target.querySelector('.dock-change-toggle');
+            if (body) body.hidden = false;
+            if (toggle) { toggle.textContent = '▾'; toggle.setAttribute('aria-expanded', 'true'); toggle.focus(); }
+            requestAnimationFrame(() => target.scrollIntoView({ block: 'center' }));
+            state.focusRequest = null;
+            dockRightChangeReviewFocus.delete(String(state.sessionId || ''));
+        } else if (!focus.snapshotId && !focus.path && state.selectedTurnId) {
+            state.focusRequest = null;
+            dockRightChangeReviewFocus.delete(String(state.sessionId || ''));
+        }
+    };
+    state.render = render;
+
+    const mergeCachedRows = () => {
+        const cached = dockRightChangeReviewRows.get(String(state.sessionId || ''));
+        if (!cached) return;
+        cached.forEach((row) => accept(row, undefined, row._turnId, row._sessionId));
+    };
+
     const load = async () => {
         try {
             const pages = [];
             let before = null;
             for (let page = 0; page < DOCK_RIGHT_CHANGE_PAGE_MAX; page += 1) {
                 const params = new URLSearchParams({
-                    limit: String(DOCK_RIGHT_CHANGE_PAGE_LIMIT),
-                    turns: '50',
-                    event_budget: '5000',
-                    include_aux: 'false',
+                    limit: String(DOCK_RIGHT_CHANGE_PAGE_LIMIT), turns: '50', event_budget: '5000', include_aux: 'false',
                 });
                 if (before !== null) params.set('before_index', String(before));
-                const url = '/sessions/' + encodeURIComponent(state.sessionId) + '/history_snapshot?' + params.toString();
-                const scanned = await dockRightFetchJSON(url, 20000);
+                const scanned = await dockRightFetchJSON('/sessions/' + encodeURIComponent(state.sessionId)
+                    + '/history_snapshot?' + params.toString(), 20000);
                 const response = scanned.response;
                 const data = scanned.data;
                 if (state.released) return;
                 if (!response.ok || !data || data.ok !== true) throw new Error((data && data.error) || ('HTTP ' + response.status));
                 const pageData = data.messages && typeof data.messages === 'object' ? data.messages : {};
                 pages.push({ start: Number(pageData.range_start) || 0, events: Array.isArray(pageData.events) ? pageData.events : [] });
+                const indexedTurns = Array.isArray(data.user_turns) ? data.user_turns : [];
+                for (let i = 0; i < indexedTurns.length; i += 1) {
+                    addTurn(indexedTurns[i].event_index, indexedTurns[i].preview, indexedTurns[i].created_at, indexedTurns[i].turn_id);
+                }
                 const start = Number(pageData.range_start);
                 if (!pageData.has_older || !Number.isFinite(start) || start <= 0) break;
                 before = start;
             }
-            // Pages arrive newest-first: walk the oldest run's events first so
-            // \`sequence\` grows with time and the latest user turn is the last
-            // boundary seen.
             pages.sort((left, right) => left.start - right.start);
-            let sequence = 0;
-            let turnStart = -1;
+            let currentTurnId = '';
+            const reviewStates = new Map();
             for (let p = 0; p < pages.length; p += 1) {
                 const events = pages[p].events;
                 for (let i = 0; i < events.length; i += 1) {
-                    sequence += 1;
-                    if (events[i] && events[i].type === 'user') turnStart = sequence;
-                    const ui = events[i] && events[i].ui;
-                    const changes = ui && Array.isArray(ui.changes) ? ui.changes : null;
-                    if (changes) for (let j = 0; j < changes.length; j += 1) accept(changes[j], sequence);
+                    const event = events[i] || {};
+                    const at = pages[p].start + i;
+                    // \`user_steer\` deliberately does not enter this branch.
+                    if (event.type === 'user') {
+                        currentTurnId = String(at);
+                        addTurn(currentTurnId, event.content, event.created_at, event.turn_id);
+                    }
+                    if (event.type === 'file_changes_reverted') {
+                        (event.snapshot_ids || []).forEach((id) => reviewStates.set(String(id), true));
+                    } else if (event.type === 'file_changes_restored') {
+                        (event.snapshot_ids || []).forEach((id) => reviewStates.set(String(id), false));
+                    }
+                    const ui = event.ui;
+                    const changes = ui && Array.isArray(ui.changes) ? ui.changes : [];
+                    for (let j = 0; j < changes.length; j += 1) accept(changes[j], at, currentTurnId, state.sessionId);
                 }
             }
-            state.sequence = sequence;
-            state.turnStart = turnStart;
+            mergeCachedRows();
+            state.rows.forEach((row) => {
+                const snapshotId = String(row.snapshot_id || '');
+                if (!reviewStates.has(snapshotId)) return;
+                const isReverted = reviewStates.get(snapshotId) === true;
+                row._reverted = isReverted;
+                row.reverted = isReverted;
+                row.effective = !isReverted;
+            });
+            const sortedTurns = Array.from(state.turns.values()).sort((left, right) => Number(left.id) - Number(right.id));
+            if (!state.selectedTurnId && sortedTurns.length) state.selectedTurnId = sortedTurns[sortedTurns.length - 1].id;
             state.loadTries = 0;
             state.loaded = true;
             render();
         } catch (error) {
             if (state.released) return;
             state.loadTries = (state.loadTries || 0) + 1;
-            if (state.loadTries <= 2) {
-                // One silent retry: the first attempt can lose a race with the
-                // app's own session-switch traffic.
-                setTimeout(() => { void load(); }, 400);
-                return;
-            }
+            if (state.loadTries <= 2) { setTimeout(() => { void load(); }, 400); return; }
             console.warn('[dock details] changes load failed', error);
             list.replaceChildren(dockRightNote(dockRightText('loadFailed') + ': ' + (error && error.message ? error.message : error)));
         }
     };
+
+    turnSelect.addEventListener('change', () => {
+        state.scope = 'turn';
+        state.selectedTurnId = turnSelect.value;
+        render();
+    });
+    sessionScope.addEventListener('click', () => { state.scope = 'session'; render(); });
     refresh.addEventListener('click', () => {
-        state.rows.clear();
-        state.sequence = 0;
-        state.loadTries = 0;
+        state.rows.clear(); state.turns.clear(); state.turnTokens.clear(); state.selectedTurnId = null;
+        state.loadTries = 0; state.loaded = false; state.status = '';
         void load();
     });
     state.listener = (event) => {
         const detail = event && event.detail ? event.detail : {};
-        if (detail.sessionId && String(detail.sessionId) !== String(state.sessionId)) return;
-        // A new user turn moves the "this round" boundary forward the moment
-        // it happens; without this the scope kept showing the previous round's
-        // changes until the next full rescan.
-        if (detail.event && detail.event.type === 'user') {
-            state.sequence += 1;
-            state.turnStart = state.sequence;
+        const ownerSessionId = String(detail.rootSessionId || detail.sessionId || '');
+        if (ownerSessionId && ownerSessionId !== String(state.sessionId)) return;
+        const incoming = detail.event || {};
+        if (incoming.type === 'user') {
+            const id = String(Number.isFinite(Number(detail.eventIndex)) ? Number(detail.eventIndex) : Date.now());
+            addTurn(id, incoming.content, incoming.created_at, incoming.turn_id);
+            state.selectedTurnId = id;
+            state.scope = 'turn';
             render();
             return;
         }
-        const ui = detail.event && detail.event.ui;
-        const changes = ui && Array.isArray(ui.changes) ? ui.changes : null;
-        if (!changes) return;
-        for (let i = 0; i < changes.length; i += 1) accept(changes[i]);
-        render();
+        if (incoming.type === 'run_started' || incoming.type === 'run_finished'
+            || incoming.type === 'run_failed' || incoming.type === 'run_cancelled'
+            || incoming.type === 'subagent_start' || incoming.type === 'subagent_finish') {
+            requestAnimationFrame(render);
+            return;
+        }
+        if (incoming.type === 'file_changes_reverted' || incoming.type === 'file_changes_restored') {
+            dockRightMarkChangeRows(incoming.snapshot_ids || [], incoming.type === 'file_changes_reverted', state);
+            render();
+            return;
+        }
+        const changes = incoming.ui && Array.isArray(incoming.ui.changes) ? incoming.ui.changes : [];
+        for (let i = 0; i < changes.length; i += 1) accept(changes[i], undefined, state.selectedTurnId, detail.sessionId);
+        if (changes.length) render();
     };
     document.addEventListener('myagent:ui-event', state.listener);
-    // The initial scan starts a beat after the body mounts: opening a tab
-    // happens in the middle of the app's own session-switch fetches, and the
-    // very first attempt raced them into an early failure (the refresh button
-    // always worked). A short delay plus the retry below makes the first open
-    // as reliable as refresh.
+    mergeCachedRows();
+    render();
     void load();
-    // Watchdog: if neither the scan nor the live stream has produced anything
-    // two seconds in, run the scan again (a dropped first attempt must not
-    // leave the page empty until the user finds the refresh button).
-    setTimeout(() => {
-        if (state.released || state.loaded) return;
-        void load();
-    }, 2000);
+    setTimeout(() => { if (!state.released && !state.loaded) void load(); }, 2000);
     return el;
 }
 
-/** One change row: path, operation, line counts, expandable diff, undo/restore. */
+function dockRightReviewRunning() {
+    const stream = document.getElementById('chat-stream');
+    const grid = document.getElementById('subagent-grid');
+    return Boolean((stream && stream.querySelector('.process-aggregate.is-running'))
+        || (grid && grid.querySelector('.subagent-grid-card[data-subagent-running="1"]')));
+}
+
+function dockRightReviewSummary(rows) {
+    let added = 0; let removed = 0; let omitted = 0;
+    rows.filter((row) => !row._reverted).forEach((row) => {
+        if (Number.isFinite(Number(row.added)) && Number.isFinite(Number(row.removed))) {
+            added += Number(row.added); removed += Number(row.removed);
+        } else if (row.diff_omitted_reason !== 'directory') omitted += 1;
+    });
+    return rows.length + ' 个文件 · +' + added + ' −' + removed + (omitted ? ' · ' + omitted + ' 个未统计' : '');
+}
+
+function dockRightOmittedReason(row) {
+    const reason = String(row.diff_omitted_reason || '');
+    const labels = {
+        directory: '目录结构改动，无逐行差分', binary: '二进制文件，无逐行差分',
+        too_many_lines: '文件超过 20,000 行，已省略逐行差分',
+        too_complex: '改动过于复杂，已省略逐行差分；仍可撤销',
+        snapshot_missing: '未保存基线内容，无法预览或撤销',
+        too_large_bytes: '文件超过 1 MiB，已省略逐行差分',
+    };
+    const before = row.before || {}; const after = row.after || {};
+    return (labels[reason] || dockRightText('diff')) + ' · '
+        + dockRightSize(before.bytes || 0) + ' / ' + (before.lines || 0) + ' 行 → '
+        + dockRightSize(after.bytes || 0) + ' / ' + (after.lines || 0) + ' 行';
+}
+
+function dockRightChangeGroup(turn, turnIndex, rows, state, rerender) {
+    const section = document.createElement('section');
+    section.className = 'dock-change-turn';
+    section.setAttribute('data-dock-turn-id', turn.id);
+    const head = document.createElement('div');
+    head.className = 'dock-change-turn-head';
+    const copy = document.createElement('div');
+    copy.className = 'dock-change-turn-copy';
+    const name = document.createElement('strong');
+    name.textContent = '第 ' + (turnIndex + 1) + ' 轮';
+    const preview = document.createElement('span');
+    preview.textContent = turn.preview || dockRightText('turnFallback');
+    preview.title = turn.preview || '';
+    const summary = document.createElement('span');
+    summary.className = 'dock-change-turn-summary';
+    summary.textContent = dockRightReviewSummary(rows);
+    copy.append(name, preview, summary);
+    const actions = document.createElement('div');
+    actions.className = 'dock-change-turn-actions';
+    const active = rows.filter((row) => !row._reverted && row.undoable !== false && row.diff_omitted_reason !== 'snapshot_missing');
+    const reverted = rows.filter((row) => row._reverted && row.undoable !== false && row.diff_omitted_reason !== 'snapshot_missing');
+    const running = dockRightReviewRunning();
+    const undoAll = document.createElement('button');
+    undoAll.type = 'button'; undoAll.className = 'dock-link-button'; undoAll.textContent = dockRightText('undoAll');
+    undoAll.hidden = active.length === 0; undoAll.disabled = running;
+    const restoreAll = document.createElement('button');
+    restoreAll.type = 'button'; restoreAll.className = 'dock-link-button'; restoreAll.textContent = dockRightText('restoreAll');
+    restoreAll.hidden = reverted.length === 0; restoreAll.disabled = running;
+    if (running) { undoAll.title = dockRightText('taskRunningReview'); restoreAll.title = dockRightText('taskRunningReview'); }
+    undoAll.addEventListener('click', () => { void dockRightBulkChangeAction(active, 'undo', state, rerender); });
+    restoreAll.addEventListener('click', () => { void dockRightBulkChangeAction(reverted, 'restore', state, rerender); });
+    actions.append(undoAll, restoreAll);
+    head.append(copy, actions);
+    section.appendChild(head);
+    for (let i = 0; i < rows.length; i += 1) section.appendChild(dockRightChangeRow(rows[i], state, rerender));
+    return section;
+}
+
+/** One complete change row: path, counts/omission, diff, reverted state and action. */
 function dockRightChangeRow(row, state, rerender) {
     const item = document.createElement('article');
     item.className = 'dock-change' + (row._reverted ? ' is-reverted' : '');
-    item.setAttribute('data-dock-change-at', String(row.at === undefined ? '' : row.at));
-    const head = document.createElement('div');
-    head.className = 'dock-change-head';
+    item.setAttribute('data-dock-snapshot-id', String(row.snapshot_id || ''));
+    item.setAttribute('data-dock-change-path', String(row.path || ''));
+    const head = document.createElement('div'); head.className = 'dock-change-head';
     const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'dock-change-toggle';
-    toggle.textContent = '▸';
+    toggle.type = 'button'; toggle.className = 'dock-change-toggle'; toggle.textContent = '▸';
+    toggle.setAttribute('aria-expanded', 'false');
     const name = document.createElement('span');
-    name.className = 'dock-change-name';
-    name.textContent = dockRightBasename(row.path);
-    name.title = row.path;
+    name.className = 'dock-change-name'; name.textContent = dockRightBasename(row.path); name.title = row.path;
     const dir = document.createElement('span');
-    dir.className = 'dock-change-dir';
-    dir.textContent = dockRightRelPath(row.path).replace(/[^/]+$/, '');
-    const stats = document.createElement('span');
-    stats.className = 'dock-change-stats';
-    if (Number.isFinite(Number(row.added)) && Number(row.added) > 0) {
-        const added = document.createElement('span');
-        added.className = 'dock-change-added';
-        added.textContent = '+' + row.added;
-        stats.appendChild(added);
+    dir.className = 'dock-change-dir'; dir.textContent = dockRightRelPath(row.path).replace(/[^/]+$/, '');
+    const stats = document.createElement('span'); stats.className = 'dock-change-stats';
+    if (Number.isFinite(Number(row.added)) && Number.isFinite(Number(row.removed))) {
+        const added = document.createElement('span'); added.className = 'dock-change-added'; added.textContent = '+' + Number(row.added);
+        const removed = document.createElement('span'); removed.className = 'dock-change-removed'; removed.textContent = '−' + Number(row.removed);
+        stats.append(added, removed);
+    } else {
+        stats.textContent = dockRightText('noLineStats');
+        stats.title = dockRightOmittedReason(row);
     }
-    if (Number.isFinite(Number(row.removed)) && Number(row.removed) > 0) {
-        const removed = document.createElement('span');
-        removed.className = 'dock-change-removed';
-        removed.textContent = '-' + row.removed;
-        stats.appendChild(removed);
+    if (row._reverted) {
+        const tag = document.createElement('span'); tag.className = 'dock-change-reverted'; tag.textContent = dockRightText('undone');
+        stats.appendChild(tag);
     }
     const action = document.createElement('button');
-    action.type = 'button';
-    action.className = 'dock-link-button dock-change-action';
+    action.type = 'button'; action.className = 'dock-link-button dock-change-action';
     action.textContent = row._reverted ? dockRightText('restore') : dockRightText('undo');
+    action.disabled = dockRightReviewRunning() || row.undoable === false || row.diff_omitted_reason === 'snapshot_missing';
+    if (dockRightReviewRunning()) action.title = dockRightText('taskRunningReview');
     action.addEventListener('click', (event) => {
         event.stopPropagation();
-        void dockRightChangeAction(row, action, state, rerender);
+        void dockRightRunChangeAction([row], row._reverted ? 'restore' : 'undo', state, rerender);
     });
-    head.appendChild(toggle);
-    head.appendChild(name);
-    head.appendChild(dir);
-    head.appendChild(stats);
-    head.appendChild(action);
-    const body = document.createElement('div');
-    body.className = 'dock-change-body';
-    body.hidden = true;
+    head.append(toggle, name, dir, stats, action);
+    const body = document.createElement('div'); body.className = 'dock-change-body'; body.hidden = true;
     if (row.diff) {
-        const pre = document.createElement('pre');
-        pre.className = 'dock-change-diff';
-        const lines = String(row.diff).split('\\n');
-        for (let i = 0; i < lines.length; i += 1) {
+        const pre = document.createElement('pre'); pre.className = 'dock-change-diff';
+        String(row.diff).split('\\n').forEach((text) => {
             const line = document.createElement('span');
-            const prefix = lines[i].charAt(0);
-            line.className = 'dock-diff-line'
-                + (prefix === '+' ? ' is-added' : prefix === '-' ? ' is-removed' : prefix === '@' ? ' is-hunk' : '');
-            line.textContent = lines[i] + '\\n';
-            pre.appendChild(line);
-        }
+            const file = text.startsWith('+++') || text.startsWith('---');
+            const prefix = text.charAt(0);
+            line.className = 'dock-diff-line' + (file ? ' is-file' : prefix === '+' ? ' is-added' : prefix === '-' ? ' is-removed' : prefix === '@' ? ' is-hunk' : '');
+            line.textContent = text + '\\n'; pre.appendChild(line);
+        });
         body.appendChild(pre);
-    } else {
-        body.appendChild(dockRightNote(row.diff_omitted_reason || dockRightText('diff')));
-    }
-    toggle.addEventListener('click', () => {
-        body.hidden = !body.hidden;
-        toggle.textContent = body.hidden ? '▸' : '▾';
-    });
-    head.addEventListener('click', (event) => {
-        if (event.target === action) return;
-        body.hidden = !body.hidden;
-        toggle.textContent = body.hidden ? '▸' : '▾';
-    });
-    item.appendChild(head);
-    item.appendChild(body);
+    } else body.appendChild(dockRightNote(dockRightOmittedReason(row)));
+    const toggleBody = () => {
+        body.hidden = !body.hidden; toggle.textContent = body.hidden ? '▸' : '▾';
+        toggle.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
+    };
+    toggle.addEventListener('click', (event) => { event.stopPropagation(); toggleBody(); });
+    head.addEventListener('click', (event) => { if (event.target !== action) toggleBody(); });
+    item.append(head, body);
     return item;
 }
 
-/** Undo or restore one change through the Change Review routes. */
-async function dockRightChangeAction(row, button, state, rerender) {
-    const action = row._reverted ? 'restore' : 'undo';
-    button.disabled = true;
-    try {
-        const response = await fetch('/sessions/' + encodeURIComponent(state.sessionId) + '/change-reviews/' + action, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ snapshot_ids: [row.snapshot_id] }),
-        });
-        const data = await response.json().catch(() => null);
-        if (!response.ok || !data || data.ok !== true) {
-            throw new Error((data && data.error) || ('HTTP ' + response.status));
+function dockRightOperationId(action) {
+    return globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID() : action + '-' + Date.now() + '-' + Math.random();
+}
+
+function dockRightMarkChangeRows(snapshotIds, reverted, onlyState) {
+    const ids = new Set((snapshotIds || []).map(String));
+    const states = onlyState ? [onlyState] : Object.values(dockRightState.tabState).filter((state) => state && state.changeReview);
+    states.forEach((state) => state.rows.forEach((row) => {
+        if (ids.has(String(row.snapshot_id || ''))) {
+            row._reverted = reverted; row.reverted = reverted; row.effective = !reverted;
         }
-        row._reverted = action === 'undo';
-        row.effective = action !== 'undo';
-        rerender();
+    }));
+    states.forEach((state) => {
+        if (state !== onlyState && typeof state.render === 'function') state.render();
+    });
+    dockRightChangeReviewRows.forEach((rows) => rows.forEach((row) => {
+        if (ids.has(String(row.snapshot_id || ''))) {
+            row._reverted = reverted; row.reverted = reverted; row.effective = !reverted;
+        }
+    }));
+}
+
+async function dockRightRunChangeAction(rows, action, state, rerender) {
+    if (!rows.length || dockRightReviewRunning()) return;
+    state.status = action === 'undo' ? dockRightText('undoing') : dockRightText('restoring');
+    state.statusError = false; rerender();
+    const groups = new Map();
+    rows.forEach((row) => {
+        const sid = String(row._sessionId || state.sessionId || '');
+        if (!groups.has(sid)) groups.set(sid, []);
+        groups.get(sid).push(row);
+    });
+    const changed = [];
+    try {
+        for (const [sid, group] of groups.entries()) {
+            const response = await fetch('/sessions/' + encodeURIComponent(sid) + '/change-reviews/' + action, {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    snapshot_ids: group.map((row) => row.snapshot_id), operation_id: dockRightOperationId(action),
+                }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || data.ok !== true) {
+                const paths = Array.isArray(data.paths) && data.paths.length ? '\\n' + data.paths.join('\\n') : '';
+                throw new Error(String(data.error || ('HTTP ' + response.status)) + paths);
+            }
+            changed.push.apply(changed, data.snapshot_ids || group.map((row) => row.snapshot_id));
+        }
+        dockRightMarkChangeRows(changed, action === 'undo');
+        state.status = rows.length > 1
+            ? (action === 'undo' ? dockRightText('allUndone') : dockRightText('allRestored'))
+            : (action === 'undo' ? dockRightText('undone') : dockRightText('restored'));
+        document.dispatchEvent(new CustomEvent('myagent:change-review-state', {
+            detail: { snapshotIds: changed, reverted: action === 'undo' },
+        }));
     } catch (error) {
-        button.disabled = false;
-        button.textContent = dockRightText(action === 'undo' ? 'undo' : 'restore');
-        button.title = String(error && error.message ? error.message : error);
-        button.classList.add('is-error');
+        state.status = String(error && error.message ? error.message : error); state.statusError = true;
     }
+    rerender();
+}
+
+async function dockRightBulkChangeAction(rows, action, state, rerender) {
+    if (!rows.length) return;
+    await dockRightRunChangeAction(rows, action, state, rerender);
+}
+
+/** Keep plugin-owned child-agent rows available to the built-in details page. */
+function dockRightRegisterChangeReviewRows(payload) {
+    const sessionId = String(payload && payload.sessionId || dockRightState.sessionId || currentSessionId || '');
+    const incoming = payload && Array.isArray(payload.rows) ? payload.rows : [];
+    if (!sessionId || !incoming.length) return;
+    let cached = dockRightChangeReviewRows.get(sessionId);
+    if (!cached) { cached = new Map(); dockRightChangeReviewRows.set(sessionId, cached); }
+    incoming.forEach((row) => {
+        if (!row || !row.path) return;
+        const key = String(row._sessionId || '') + '\\0' + String(row.snapshot_id || row.path);
+        const previous = cached.get(key);
+        if (!previous || Number(previous.revision || 0) <= Number(row.revision || 0)) cached.set(key, Object.assign({}, row));
+    });
+    Object.values(dockRightState.tabState).forEach((state) => {
+        if (state && state.changeReview && String(state.sessionId || '') === sessionId
+            && typeof state.acceptExternal === 'function') state.acceptExternal(payload);
+    });
+}
+
+/** Expand the details column, open Modification History, and deep-link to a turn/file. */
+function dockRightOpenChangeReview(options) {
+    const sessionId = String(dockRightState.sessionId || currentSessionId || '');
+    if (!sessionId) return;
+    const focus = Object.assign({}, options || {});
+    dockRightChangeReviewFocus.set(sessionId, focus);
+    Object.values(dockRightState.tabState).forEach((state) => {
+        if (state && state.changeReview && String(state.sessionId || '') === sessionId) {
+            state.focusRequest = focus;
+            state.scope = 'turn';
+            if (typeof state.render === 'function') state.render();
+        }
+    });
+    dockRightOpenPageKind('changes', undefined, undefined, true);
+    if (!dockRightExpanded()) dockRightToggle();
+    else dockRightRender();
 }
 
 /** Release whatever a tab's body started. */
@@ -29212,6 +29461,10 @@ function dockRightInit() {
             toggleDetails: () => dockRightToggle(),
             /** Open one of the column's pages by kind ('guide' | 'files' | 'changes'). */
             openDetailsTab: (kind) => dockRightOpenPageKind(String(kind)),
+            /** Open Modification History at a specific official user turn/file. */
+            openChangeReview: (options) => dockRightOpenChangeReview(options),
+            /** Feed child-agent review rows into the session-level details page. */
+            registerChangeReviewRows: (payload) => dockRightRegisterChangeReviewRows(payload),
             /** Open a file in the column by workspace-relative path. */
             openDetailsFile: (rel) => dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(String(rel || ''))),
             /** The tree's open policy: text in the column, anything else in the system app. */
