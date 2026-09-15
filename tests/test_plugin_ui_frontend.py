@@ -110,6 +110,15 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "openChangeReview" in right_column
     assert "myagent:change-review-state" in right_column
     assert "operation_id" in right_column
+    assert "host.hidden = !expanded" not in right_column
+    assert "host.classList.add('is-collapsed')" in right_column
+    assert "body.classList.toggle('is-open', opening)" in right_column
+    assert "nextDiffLine + 240" in right_column
+    assert "requestAnimationFrame(renderDiffChunk)" in right_column
+    assert ".dock-rightbar.is-collapsed" in dock_styles
+    assert "transform: translate3d(100%, 0, 0)" in dock_styles
+    assert "contain: layout paint" in dock_styles
+    assert ".dock-change-body.is-open" in dock_styles
     assert "html.theme-light .dock-change-diff" in dock_styles
     assert "--code-surface-bg: #f5f7fb" in app_styles
     assert "change-review" not in (ROOT / "frontend/index.html").read_text(encoding="utf-8")

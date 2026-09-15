@@ -328,22 +328,44 @@
        and a lower stacking order would hand its presses to the workspace. */
     z-index: 3;
     flex: 0 0 auto;
-    display: flex;
-    flex-direction: column;
+    display: block;
     min-width: 0;
     min-height: 0;
     width: var(--dock-rightbar-width, 460px);
+    /* This element is only the layout track.  The fixed-width surface below is
+       compositor-slid independently, matching DeepSeek Harness: animating a
+       content-bearing width would reflow every tab and diff on every frame. */
+    overflow: visible;
+    visibility: visible;
+    transition: width 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.dock-rightbar.is-collapsed {
+    width: 0;
+    pointer-events: none;
+}
+.dock-rightbar.is-collapsed .dock-rightbar-sash { display: none; }
+.dock-rightbar > .dock-surface {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    width: var(--dock-rightbar-width, 460px);
+    min-height: 0;
+    overflow: hidden;
+    visibility: visible;
     background: var(--main-area-bg);
     border-left: 1px solid var(--border-glass);
-    backdrop-filter: blur(2px);
-    /* Collapse/expand animates the track's width and opacity so the workspace
-       gives room smoothly instead of snapping (feedback #2). */
-    overflow: hidden;
-    transition: width 180ms var(--ease-out-expo), opacity 180ms ease-out;
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+    contain: layout paint;
+    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 0s;
 }
-.dock-rightbar[hidden] { width: 0; opacity: 0; pointer-events: none; }
-.dock-rightbar[hidden] .dock-rightbar-sash { display: none; }
-.dock-rightbar > .dock-surface { flex: 1 1 auto; min-height: 0; }
+.dock-rightbar.is-collapsed > .dock-surface {
+    visibility: hidden;
+    transform: translate3d(100%, 0, 0);
+    transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1), visibility 0s linear 300ms;
+}
 .dock-rightbar .dock-pane { border-radius: 0; }
 .dock-rightbar.is-fullscreen {
     position: fixed;
@@ -353,6 +375,7 @@
     border-left: none;
     background: var(--space-bg);
 }
+.dock-rightbar.is-fullscreen > .dock-surface { width: 100%; border-left: none; }
 
 /* The 8px invisible hot zone on the column's left edge. */
 .dock-rightbar-sash {
@@ -420,7 +443,11 @@
     gap: 8px;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 10px;
+    /* One head band across every page: the path bar, the changes head and the
+       document head all measure the same 44px row, so the refresh control
+       never jumps height when switching tabs (feedback). */
+    min-height: 44px;
+    padding: 0 10px;
     border-bottom: 1px solid var(--border-glass);
 }
 .dock-files-title,
@@ -454,6 +481,27 @@
     overflow: auto;
     padding: 4px 0 12px;
 }
+/* dsh's files page: a path bar under the strip (root on the left, refresh at
+   the right edge), then the listing. */
+.dock-files-pathrow {
+    display: flex;
+    flex: none;
+    gap: 8px;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--border-glass);
+}
+.dock-files-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 0.74rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dock-files-pathrow .dock-icon-button svg { width: 15px; height: 15px; }
 .dock-files-row {
     display: flex;
     gap: 8px;
@@ -603,7 +651,12 @@
     cursor: pointer;
 }
 .dock-change-head:hover { background: var(--surface-glass2); }
-.dock-change-toggle { flex: none; width: 12px; color: var(--text-tertiary); font-size: 0.66rem; background: transparent; border: none; cursor: pointer; }
+.dock-change-toggle {
+    flex: none; width: 12px; color: var(--text-tertiary); font-size: 0.9rem; line-height: 1;
+    background: transparent; border: none; cursor: pointer; transform: rotate(0deg);
+    transition: transform 170ms var(--ease-out-expo), color 120ms ease-out;
+}
+.dock-change-toggle.is-open { color: var(--text-secondary); transform: rotate(90deg); }
 .dock-change-name { flex: none; max-width: 45%; overflow: hidden; color: var(--text-primary); font-size: 0.78rem; text-overflow: ellipsis; white-space: nowrap; }
 .dock-change-dir { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: 0.66rem; text-overflow: ellipsis; white-space: nowrap; }
 .dock-change-stats { flex: none; display: flex; gap: 4px; font-family: var(--mono); font-size: 0.64rem; font-variant-numeric: tabular-nums; }
@@ -613,7 +666,15 @@
 .dock-change-status { min-height: 22px; padding: 5px 10px 2px; color: var(--green-accent); font-size: 0.66rem; white-space: pre-wrap; }
 .dock-change-status:empty { min-height: 0; padding-block: 0; }
 .dock-change-status.is-error { color: var(--red-accent); }
-.dock-change-body { padding: 0 10px 8px; }
+.dock-change-body {
+    max-height: 0;
+    overflow: hidden;
+    padding: 0 10px;
+    opacity: 0;
+    contain: paint;
+    transition: max-height 210ms var(--ease-out-expo), opacity 140ms ease-out, padding-bottom 210ms var(--ease-out-expo);
+}
+.dock-change-body.is-open { max-height: 340px; padding-bottom: 8px; opacity: 1; }
 .dock-change-diff {
     max-height: 320px;
     margin: 0;
@@ -687,6 +748,15 @@ html.theme-light .dock-diff-line.is-file { color: #64748b; }
 html.theme-light .dock-diff-line.is-added { color: #166534; background: rgba(22, 163, 74, 0.095); }
 html.theme-light .dock-diff-line.is-removed { color: #991b1b; background: rgba(220, 38, 38, 0.085); }
 html.theme-light .dock-diff-line.is-hunk { color: #1d4ed8; background: rgba(37, 99, 235, 0.075); }
+
+@media (prefers-reduced-motion: reduce) {
+    .dock-rightbar,
+    .dock-rightbar.is-collapsed,
+    .dock-rightbar > .dock-surface,
+    .dock-rightbar.is-collapsed > .dock-surface,
+    .dock-change-body,
+    .dock-change-toggle { transition-duration: 0.01ms; }
+}
 
 /* Explicit user-turn picker plus the optional session overview. */
 .dock-changes-scope { display: flex; flex: none; gap: 6px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--border-glass); }
