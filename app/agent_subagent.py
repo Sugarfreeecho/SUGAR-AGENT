@@ -34,6 +34,7 @@ from agent_harness import (
     inherited_executor_selection,
     list_executor_model_profile_choices,
     logger,
+    reset_executor_failure_state_for_session,
     session_manager,
     todo_manager,
 )
@@ -443,6 +444,14 @@ async def switch_subagent_model_profile(
             "error": str(exc),
             "status_code": 500,
         }
+
+    # 手动切换需立即生效：清掉该子会话 live run 的模型熔断记录。否则续跑时
+    # 新选模型可能被“本轮运行跳过已失败模型”静默跳过，回退到旧模型并被
+    # fallback 接管写回旧绑定。
+    try:
+        reset_executor_failure_state_for_session(child_id)
+    except Exception:
+        logger.debug("reset subagent executor failure state failed: %s", child_id, exc_info=True)
 
     queued = False
     aborted = False

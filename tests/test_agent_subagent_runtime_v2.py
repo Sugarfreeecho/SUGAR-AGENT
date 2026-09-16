@@ -142,6 +142,13 @@ def test_running_subagent_model_switch_interrupts_at_safe_boundary(monkeypatch):
         lambda session_id, reason="": captured.setdefault("abort", (session_id, reason)) is not None,
     )
 
+    reset_calls = []
+    monkeypatch.setattr(
+        agent_subagent,
+        "reset_executor_failure_state_for_session",
+        lambda child: reset_calls.append(child) or 1,
+    )
+
     result = asyncio.run(
         agent_subagent.switch_subagent_model_profile(
             "parent",
@@ -166,6 +173,9 @@ def test_running_subagent_model_switch_interrupts_at_safe_boundary(monkeypatch):
     assert captured["abort"] == ("child", "model_switch")
     assert captured["task_patches"][-1][2]["model_switch_status"] == "continuation_queued"
     assert captured["events"][0][1]["model_switch"] is True
+    # Manual switch must clear the child run's model circuit so the newly
+    # selected profile is not skipped by "本轮运行跳过已失败模型".
+    assert reset_calls == ["child"]
 
 
 def test_task_schema_injects_registered_profiles_without_mutating_static_schema(monkeypatch):

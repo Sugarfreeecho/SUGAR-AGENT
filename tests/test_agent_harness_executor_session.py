@@ -686,3 +686,119 @@ def test_executor_hedge_retries_stalled_logical_request_and_still_switches_to_ba
     ]
     assert ("primary", "backup") in switch_edges
     assert len({edge for edge in switch_edges if edge == ("primary", "backup")}) == 1
+
+
+def test_manual_model_switch_clears_run_scoped_circuit_so_new_selection_is_served(monkeypatch):
+    """Regression: a mid-run manual switch must drop the run's failure circuit.
+
+    Without the reset, the rebuilt client for the same run scope skips the
+    newly selected profile ("本轮运行跳过已失败模型"), keeps serving the old
+    model, and the fallback takeover writes the old binding back — the user
+    sees the switch as reverted. ``reset_executor_failure_state_for_session``
+    is what the session/subagent switch endpoints now call.
+    """
+    import agent_harness
+    from llm import TransportEvent
+
+    monkeypatch.setattr(agent_harness, "_claim_additional_recovery_request", lambda: True)
+
+    class _MetaStub:
+        """Keep the fallback-adoption metadata writes inside the test."""
+
+        def __init__(self):
+            self.meta = {}
+            self._lock = agent_harness.threading.RLock()
+
+        def _load_metadata(self, _sid):
+            return dict(self.meta)
+
+        def _session_metadata_lock(self, _sid):
+            lock = self._lock
+
+            class _Ctx:
+                def __enter__(self):
+                    lock.acquire()
+                    return self
+
+                def __exit__(self, *exc):
+                    lock.release()
+                    return False
+
+            return _Ctx()
+
+        def _save_metadata_unlocked(self, _sid, meta):
+            self.meta = dict(meta)
+
+    monkeypatch.setattr(agent_harness, "session_manager", _MetaStub())
+    calls = []
+    shared_lock = agent_harness.threading.RLock()
+    shared_failures = {}
+
+    class _Transport:
+        def __init__(self, name, fail=False):
+            self.name = name
+            self.fail = fail
+
+        def stream_completion(self, **_kwargs):
+            calls.append(self.name)
+            if self.fail:
+                raise RuntimeError(f"{self.name} failed")
+            yield TransportEvent("content_delta", text="ok", model=self.name)
+            yield TransportEvent("finish", finish_reason="stop", model=self.name)
+
+    def make_candidates(target_fail):
+        return [
+            {
+                "profile_id": "target",
+                "transport": _Transport("target", fail=target_fail),
+                "provider": "openai",
+                "model": "target",
+                "max_output_tokens": 128,
+            },
+            {
+                "profile_id": "original",
+                "transport": _Transport("original"),
+                "provider": "openai-compatible",
+                "model": "original",
+                "max_output_tokens": 128,
+            },
+        ]
+
+    request = {"model": "ignored", "messages": [], "max_tokens": 32}
+
+    # Run starts on "target"; it fails once, "original" fills in, so the
+    # run-scoped circuit records "target".
+    first = agent_harness.ExecutorLLMClient(
+        make_candidates(True),
+        failure_lock=shared_lock,
+        failed_candidates_by_scope=shared_failures,
+    )
+    first.set_request_scope("run-R")
+    first.note_scope_session("session-S")
+    list(first.stream_completion(**request))
+    assert sorted(shared_failures["run-R"]) == ["target"]
+
+    # Mid-run the user actively switches back to "target"; the rebuilt client
+    # for the same run scope still fences it until the endpoint resets.
+    calls.clear()
+    fenced = agent_harness.ExecutorLLMClient(
+        make_candidates(False),
+        failure_lock=shared_lock,
+        failed_candidates_by_scope=shared_failures,
+    )
+    fenced.set_request_scope("run-R")
+    list(fenced.stream_completion(**request))
+    assert calls == ["original"]
+
+    # The manual switch endpoints call the reset helper; afterwards the new
+    # selection is served immediately.
+    assert agent_harness.reset_executor_failure_state_for_session("session-S") >= 1
+    calls.clear()
+    honored = agent_harness.ExecutorLLMClient(
+        make_candidates(False),
+        failure_lock=shared_lock,
+        failed_candidates_by_scope=shared_failures,
+    )
+    honored.set_request_scope("run-R")
+    list(honored.stream_completion(**request))
+    assert calls == ["target"]

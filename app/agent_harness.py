@@ -1536,9 +1536,11 @@ def adopt_fallback_profile_for_session(session_id: str, profile_id: str) -> bool
 def reset_executor_failure_state_for_session(session_id: str) -> int:
     """Clear run-scoped model circuits for a session's live runs.
 
-    Manual profile switches keep the failure circuit and the sticky
-    last-successful candidate by design; this helper exists for paths that
-    explicitly need a clean slate (currently unused by the switch endpoint).
+    Manual profile switches (``POST /sessions/{id}/model_profile`` and
+    ``switch_subagent_model_profile``) call this so the newly selected
+    profile is retried immediately even if it failed earlier in the same
+    run; otherwise the run-scoped circuit would silently skip it and the
+    fallback takeover would write the previous binding back.
     """
     sid = str(session_id or "").strip()
     if not sid:

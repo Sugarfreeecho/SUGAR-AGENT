@@ -45,6 +45,7 @@ from agent_harness import (
     key_context_body_for_system_prompt,
     normalize_prompt_language,
     refresh_executor_client_from_env,
+    reset_executor_failure_state_for_session,
 )
 from human_interaction import ASK_USER_ENV_VAR, ask_user_enabled
 from agent_loop import (
@@ -3733,6 +3734,14 @@ async def set_session_model_profile(session_id: str, req: Request):
         meta["updated_at"] = __import__("datetime").datetime.now().isoformat()
         session_manager._save_metadata_unlocked(sid, meta)
         _invalidate_executor_config_cache(sid)
+    # 手动切换需立即生效：清掉本会话 live run 的模型熔断记录。否则同一 run
+    # 内已失败过（含曾作为备选被试探失败）的新选模型会在下一次迭代被
+    # “本轮运行跳过已失败模型”静默跳过，请求继续由旧模型服务，并因
+    # fallback 接管把会话绑定写回旧模型——用户看到的就是“切换失效、被切回原模型”。
+    try:
+        reset_executor_failure_state_for_session(sid)
+    except Exception:
+        logger.debug("reset executor failure state after model switch failed: %s", sid, exc_info=True)
     return JSONResponse({"ok": True, "profile_id": pid})
 
 @fastapi_app.delete("/sessions/{session_id}")
