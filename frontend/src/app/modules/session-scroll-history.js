@@ -163,18 +163,8 @@ function refreshLiveAutoFollowPins() {
     }
 }
 
-function isSubagentStreamCtx(ctx) {
-    if (!ctx) return false;
-    if (ctx._subagentBody && ctx._subagentBody.isConnected) return true;
-    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-        && ctx.currentProcessGroup.classList.contains('subagent-grid-card')) return true;
-    return false;
-}
-
-/** 子 agent 卡片流式更新用 agentId 作 runSessionId，不能按主会话 currentSessionId 拦截滚动 */
 function shouldGateScrollByRunSession(ctx, runSessionId) {
     if (!runSessionId) return false;
-    if (isSubagentStreamCtx(ctx)) return false;
     return runSessionId !== currentSessionId;
 }
 
@@ -187,8 +177,6 @@ function collectFeedChunkRootsFromCtx(ctx) {
         roots.push(root);
     }
     if (ctx && ctx.stream && ctx.stream.isConnected) addRoot(ctx.stream);
-    if (ctx && ctx._subagentTurnProcess) addRoot(ctx._subagentTurnProcess);
-    if (ctx && ctx._subagentBody) addRoot(ctx._subagentBody);
     return roots;
 }
 
@@ -213,216 +201,6 @@ function refreshFeedChunksInCtx(ctx, selector) {
     });
 }
 
-function ensureSubagentTurnProcessOpen(ctx) {
-    /* 默认折叠执行过程，不在自动滚动时强制展开 */
-}
-
-function shouldDeferSubagentProcessDom(ctx) {
-    if (!ctx || !ctx.currentTurn || !ctx.currentTurn.isConnected) return true;
-    return !ctx.currentTurn.classList.contains('is-process-open');
-}
-
-function deferSubagentProcessEvent(turn, event, eventIndex) {
-    if (!turn || !event) return;
-    if (!turn._deferredProcessEvents) turn._deferredProcessEvents = [];
-    turn._deferredProcessEvents.push({ event: event, eventIndex: eventIndex });
-    turn.dataset.processDeferred = '1';
-}
-
-function pinSubagentCardScrollForManualExpand(body) {
-    if (!body) return { savedScroll: 0, release: function () {} };
-    var ctx = body._subagentStreamCtx;
-    var savedScroll = body.scrollTop;
-    if (ctx) ctx._suppressSubagentScrollFollow = true;
-    return {
-        savedScroll: savedScroll,
-        release: function () {
-            if (ctx) ctx._suppressSubagentScrollFollow = false;
-        },
-        restoreScroll: function () {
-            if (body.isConnected) body.scrollTop = savedScroll;
-        }
-    };
-}
-
-function restoreSubagentCardScrollAfterLayout(body, savedScroll) {
-    if (!body) return;
-    requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-            if (body.isConnected) body.scrollTop = savedScroll;
-        });
-    });
-}
-
-var SUBAGENT_PROCESS_HYDRATE_BATCH = 24;
-var SUBAGENT_PROCESS_REFRESH_CHUNK_LIMIT = 80;
-
-function runSubagentProcessBatch(fn) {
-    if (typeof requestIdleCallback === 'function') {
-        requestIdleCallback(fn, { timeout: 120 });
-    } else {
-        requestAnimationFrame(fn);
-    }
-}
-
-function refreshSubagentProcessChunksLightly(turn) {
-    if (!turn || !turn.querySelectorAll) return;
-    var chunks = turn.querySelectorAll('.feed-chunk');
-    var limit = Math.min(chunks.length, SUBAGENT_PROCESS_REFRESH_CHUNK_LIMIT);
-    for (var i = 0; i < limit; i += 1) {
-        scheduleFeedChunkOverflowRefresh(chunks[i]);
-    }
-}
-
-function hydrateSubagentTurnProcess(turn, ctx, agentId) {
-    if (!turn || !ctx) return;
-    var processEl = turn.querySelector('.subagent-turn-process');
-    if (turn.dataset.processHydrated === '1' && processEl && processEl.children.length) return;
-    var items = turn._deferredProcessEvents;
-    if (!items || !items.length) {
-        turn.dataset.processHydrated = '1';
-        return;
-    }
-    var body = ctx._subagentBody;
-    var pin = pinSubagentCardScrollForManualExpand(body);
-    ctx.currentTurn = turn;
-    ctx._subagentTurnProcess = processEl;
-    ctx._subagentTurnFinalSlot = turn.querySelector('.subagent-turn-final-slot');
-    resetLlmState(ctx);
-    finalizeProgressStreamChunks(ctx);
-    function replayDeferredProcessEvent(item) {
-        var ev = item && item.event;
-        if (!ev || typeof ev !== 'object') return;
-        if (shouldSkipSubagentProcessEvent(ev)) return;
-        if (ev.ephemeral) {
-            return;
-        }
-        reduceAndRenderMessageEvent(ctx, ev, {
-            sessionId: agentId,
-            eventIndex: item.eventIndex,
-            source: 'subagent-history',
-        });
-    }
-    var index = 0;
-    turn.dataset.processLoading = '1';
-    function finishHydrate() {
-        finalizeLlmStreamChunks(ctx);
-        finalizeProgressStreamChunks(ctx);
-        delete turn._deferredProcessEvents;
-        delete turn.dataset.processDeferred;
-        delete turn.dataset.processLoading;
-        turn.dataset.processHydrated = '1';
-        markSubagentTurnHasProcess(turn);
-        refreshSubagentProcessChunksLightly(turn);
-        pin.release();
-        restoreSubagentCardScrollAfterLayout(body, pin.savedScroll);
-    }
-    function step() {
-        if (!turn.isConnected || !body || !body.isConnected) {
-            delete turn.dataset.processLoading;
-            pin.release();
-            return;
-        }
-        var end = Math.min(index + SUBAGENT_PROCESS_HYDRATE_BATCH, items.length);
-        for (; index < end; index += 1) {
-            replayDeferredProcessEvent(items[index]);
-        }
-        if (index < items.length) {
-            runSubagentProcessBatch(step);
-        } else {
-            finishHydrate();
-        }
-    }
-    step();
-}
-
-function repairMisplacedSubagentFeedItems(body, turn) {
-    if (!body || !turn) return;
-    var proc = turn.querySelector('.subagent-turn-process');
-    if (!proc) return;
-    Array.prototype.slice.call(body.children).forEach(function (node) {
-        if (!node || !node.classList || !node.classList.contains('feed-item')) return;
-        proc.appendChild(node);
-    });
-}
-
-function collectSubagentTurnProcessSlice(events, userEventIndex) {
-    var slice = [];
-    if (!events || !events.length || !Number.isFinite(userEventIndex) || userEventIndex < 0) return slice;
-    for (var i = userEventIndex + 1; i < events.length; i += 1) {
-        var ev = events[i];
-        if (!ev || typeof ev !== 'object') continue;
-        var t = ev.type;
-        if (t === 'user') break;
-        if (t === 'final') break;
-        if (t === 'subagent_start' || t === 'subagent_finish') continue;
-        if (shouldSkipSubagentProcessEvent(ev)) continue;
-        slice.push({ event: ev, eventIndex: i });
-    }
-    return slice;
-}
-
-async function fetchAndHydrateSubagentTurnProcess(turn, body) {
-    if (!turn || !body || turn.dataset.processLoading === '1' || turn.dataset.processFetching === '1') return;
-    var card = body.closest('.subagent-grid-card');
-    var agentId = (card && card.getAttribute('data-agent-id')) || body.getAttribute('data-agent-id') || '';
-    if (!agentId) return;
-    var userWrap = turn.querySelector('.msg-wrap--user');
-    var userIdx = userWrap ? parseInt(userWrap.getAttribute('data-event-index') || '-1', 10) : -1;
-    if (!Number.isFinite(userIdx) || userIdx < 0) return;
-    var pin = pinSubagentCardScrollForManualExpand(body);
-    turn.dataset.processFetching = '1';
-    try {
-        var resp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages');
-        if (!resp.ok) return;
-        var events = normalizeSubagentMessagesPayload(await resp.json());
-        if (!turn.isConnected) return;
-        turn._deferredProcessEvents = collectSubagentTurnProcessSlice(events, userIdx);
-        delete turn.dataset.processHydrated;
-        hydrateSubagentTurnProcessFromEl(turn, body);
-    } catch (e) { /* ignore */ }
-    finally {
-        delete turn.dataset.processFetching;
-        pin.release();
-        restoreSubagentCardScrollAfterLayout(body, pin.savedScroll);
-    }
-}
-
-function ensureSubagentTurnProcessContent(turn, body) {
-    if (!turn || !body) return;
-    repairMisplacedSubagentFeedItems(body, turn);
-    var processEl = turn.querySelector('.subagent-turn-process');
-    if (processEl && processEl.children.length) return;
-    if (turn._deferredProcessEvents && turn._deferredProcessEvents.length) {
-        hydrateSubagentTurnProcessFromEl(turn, body);
-        return;
-    }
-    if (turn.dataset.processDeferred === '1' || turn.querySelector('.msg-wrap--user.has-turn-process')) {
-        void fetchAndHydrateSubagentTurnProcess(turn, body);
-    }
-}
-
-function toggleSubagentTurnProcess(turn, body, userWrap) {
-    if (!turn || !body || !userWrap) return;
-    var open = !turn.classList.contains('is-process-open');
-    turn.classList.toggle('is-process-open', open);
-    userWrap.classList.toggle('is-process-open', open);
-    delete body.dataset.cacheClean;
-    if (open) {
-        ensureSubagentTurnProcessContent(turn, body);
-        refreshSubagentProcessChunksLightly(turn);
-        return;
-    }
-}
-
-function hydrateSubagentTurnProcessFromEl(turn, body) {
-    if (!turn || !body) return;
-    var card = body.closest('.subagent-grid-card');
-    var agentId = (card && card.getAttribute('data-agent-id')) || body.getAttribute('data-agent-id') || '';
-    var ctx = body._subagentStreamCtx || (agentId && card ? getSubagentCardStreamCtx(body, card, agentId) : null);
-    if (ctx && agentId) hydrateSubagentTurnProcess(turn, ctx, agentId);
-}
-
 function feedChunkCollapsedMax(chunk) {
     var styles = getComputedStyle(chunk);
     var line = parseFloat(styles.getPropertyValue('--line')) || 21.6;
@@ -430,79 +208,16 @@ function feedChunkCollapsedMax(chunk) {
     return line * 2.5 + pad * 2;
 }
 
-function feedChunkInHiddenSubagentProcess(chunk) {
-    var process = chunk.closest('.subagent-turn-process');
-    if (!process || !process.children.length) return false;
-    var turn = process.closest('.subagent-turn');
-    return !!(turn && !turn.classList.contains('is-process-open'));
-}
-
 function measureFeedChunkScrollerHeight(sc, chunk) {
     if (!sc) return 0;
     var h = sc.scrollHeight;
     if (h > 1) return h;
-    var process = chunk && chunk.closest('.subagent-turn-process');
-    var turn = process && process.closest('.subagent-turn');
-    if (!process || !turn || turn.classList.contains('is-process-open')) return h;
-    var prevDisplay = process.style.display;
-    var prevVis = process.style.visibility;
-    var prevPos = process.style.position;
-    var prevLeft = process.style.left;
-    var prevRight = process.style.right;
-    var prevPointer = process.style.pointerEvents;
-    process.style.display = 'block';
-    process.style.visibility = 'hidden';
-    process.style.position = 'absolute';
-    process.style.left = '0';
-    process.style.right = '0';
-    process.style.pointerEvents = 'none';
-    h = sc.scrollHeight;
-    process.style.display = prevDisplay;
-    process.style.visibility = prevVis;
-    process.style.position = prevPos;
-    process.style.left = prevLeft;
-    process.style.right = prevRight;
-    process.style.pointerEvents = prevPointer;
     return h;
 }
 
 function refreshAllFeedChunksUnder(root) {
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('.feed-chunk').forEach(scheduleFeedChunkOverflowRefresh);
-}
-
-function shouldFollowSubagentCard(ctx) {
-    if (!ctx || ctx._suppressSubagentScrollFollow) return false;
-    if (!ctx._subagentBody || !ctx._subagentBody.isConnected) return false;
-    var aid = ctx._subagentBody.getAttribute('data-agent-id') || '';
-    if (aid && subagentCardNearBottom[aid] === false) return false;
-    return liveAutoFollow || subagentCardNearBottom[aid] !== false;
-}
-
-function bindSubagentCardBodyScrollFollow(body) {
-    if (!body || body.dataset.subagentScrollFollowBound) return;
-    body.dataset.subagentScrollFollowBound = '1';
-    var aid = body.getAttribute('data-agent-id') || ('body-' + Math.random());
-    if (subagentCardNearBottom[aid] == null) subagentCardNearBottom[aid] = true;
-    body.addEventListener('scroll', function () {
-        subagentCardNearBottom[aid] = isSmoothStreamPortNearBottom(
-            body,
-            SUBAGENT_CARD_NEAR_BOTTOM_PX
-        );
-    }, { passive: true });
-}
-
-function scrollSubagentCardBodyToBottom(ctx) {
-    if (!ctx || !ctx._subagentBody || !ctx._subagentBody.isConnected) return;
-    var body = ctx._subagentBody;
-    var aid = body.getAttribute('data-agent-id') || '';
-    if (aid) subagentCardNearBottom[aid] = true;
-    requestAnimationFrame(function () {
-        body.scrollTop = body.scrollHeight;
-        requestAnimationFrame(function () {
-            body.scrollTop = body.scrollHeight;
-        });
-    });
 }
 
 function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
@@ -515,11 +230,6 @@ function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
         followStreamProcessScroll(ctx, runSessionId, channel || 'row');
         return;
     }
-    if (isSubagentStreamCtx(ctx)) {
-        if (!shouldFollowSubagentCard(ctx)) return;
-        scrollSubagentCardBodyToBottom(ctx);
-        return;
-    }
     if (!liveAutoFollow) return;
     scrollProcessBodyToBottom(ctx, runSessionId);
     scrollChatToBottomIfFollow(runSessionId, {});
@@ -528,10 +238,6 @@ function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
 /** 将当前步的执行框滚到底（流式增量主要长在这里，必须滚 procBody 而不是只滚对话区） */
 function scrollProcessBodyToBottom(ctx, runSessionId) {
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-    if (isSubagentStreamCtx(ctx)) {
-        scrollSubagentCardBodyToBottom(ctx);
-        return;
-    }
     if (!ctx || !ctx.stream) return;
     var agg = (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected)
         ? ctx.currentProcessGroup
@@ -551,38 +257,6 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
         && typeof isHistorySmoothScrollActive === 'function'
         && isHistorySmoothScrollActive()
     ) return;
-    if (isSubagentStreamCtx(ctx)) {
-        if (!shouldFollowSubagentCard(ctx)) return;
-        if (isSmoothStreamActive()) {
-            var smoothSubagentBody = ctx && ctx._subagentBody;
-            if (!smoothSubagentBody || !smoothSubagentBody.isConnected) return;
-            var smoothAgentId = smoothSubagentBody.getAttribute('data-agent-id') || '';
-            smoothFollowController.request(smoothSubagentBody, {
-                speedCps: ctx && ctx.llm ? ctx.llm.llmRevealCpsEma : 35,
-                channel: followChannel,
-                traceHeightSource: ctx && ctx._subagentTurnProcess
-                    ? ctx._subagentTurnProcess
-                    : smoothSubagentBody,
-                onUnpin: function () {
-                    if (smoothAgentId) subagentCardNearBottom[smoothAgentId] = false;
-                },
-            });
-            if (!subagentScrollFollowRaf) {
-                subagentScrollFollowRaf = requestAnimationFrame(function () {
-                    subagentScrollFollowRaf = 0;
-                    refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');
-                });
-            }
-            return;
-        }
-        if (subagentScrollFollowRaf) return;
-        subagentScrollFollowRaf = requestAnimationFrame(function () {
-            subagentScrollFollowRaf = 0;
-            scrollSubagentCardBodyToBottom(ctx);
-            refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');
-        });
-        return;
-    }
     if (!liveAutoFollow) return;
     if (isSmoothStreamActive()) {
         if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
@@ -645,13 +319,6 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
 function finishStreamScrollIfFollow(ctx, runSessionId) {
     if (isSmoothStreamActive()) {
         if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-        if (isSubagentStreamCtx(ctx)) {
-            if (shouldFollowSubagentCard(ctx) && ctx._subagentBody) {
-                settleSmoothTraceHeightAnimations(ctx._subagentBody);
-                smoothFollowController.snapToBottom(ctx._subagentBody);
-            }
-            return;
-        }
         if (!liveAutoFollow) return;
         var processBody = getProcessBodyElForCurrentRun();
         if (processBody) {
@@ -668,13 +335,11 @@ function finishStreamScrollIfFollow(ctx, runSessionId) {
 /** Final answer cards keep the legacy snap and must not race an active glide. */
 function cancelSmoothStreamFollowForFinal(ctx) {
     if (!isSmoothStreamActive()) return;
-    if (ctx && ctx.stream === getVisibleChatStream() && !isSubagentStreamCtx(ctx)) {
+    if (ctx && ctx.stream === getVisibleChatStream()) {
         smoothFollowController.cancel(chatContainer);
     }
     var processBody = null;
-    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) {
-        processBody = ctx._subagentBody;
-    } else if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
+    if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
         processBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
     }
     if (processBody) smoothFollowController.cancel(processBody);
@@ -695,7 +360,7 @@ function cancelSmoothStreamFollowForSessionSwitch() {
     }
     smoothFollowController.reset(chatContainer);
     var stream = getVisibleChatStream();
-    if (stream) stream.querySelectorAll('.process-aggregate-body, .subagent-card-body').forEach(function (port) {
+    if (stream) stream.querySelectorAll('.process-aggregate-body').forEach(function (port) {
         smoothFollowController.reset(port);
     });
 }
@@ -1417,12 +1082,9 @@ function finalizeLlmStreamChunks(ctx) {
         l.llmThinkTagAllowLeading = true;
     }
     var bodies = [];
-    if (ctx.currentProcessGroup && !isSubagentStreamCtx(ctx)) {
+    if (ctx.currentProcessGroup) {
         var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
         if (mainBody) bodies.push(mainBody);
-    }
-    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) {
-        bodies.push(ctx._subagentTurnProcess);
     }
     bodies.forEach(function (body) {
         body.querySelectorAll('.feed-item.feed--llm, .feed-item.feed--llm2').forEach(function (el) {
@@ -1468,12 +1130,9 @@ function discardLlmStreamChunks(ctx, ev) {
         l.llmThinkTagAllowLeading = true;
     }
     var bodies = [];
-    if (ctx.currentProcessGroup && !isSubagentStreamCtx(ctx)) {
+    if (ctx.currentProcessGroup) {
         var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
         if (mainBody) bodies.push(mainBody);
-    }
-    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) {
-        bodies.push(ctx._subagentTurnProcess);
     }
     var reactIter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
         ? String(Math.max(1, Math.floor(Number(ev.react_iter))))

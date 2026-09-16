@@ -124,10 +124,5 @@ function applySessionEvent(event, opts) {
         appendContextProgressForSession(sessionId, 'key-context', event.delta);
         return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
-    if (type === 'subagent_start' || type === 'subagent_finish'
-        || type === 'subagent_started' || type === 'subagent_finished') {
-        applySubagentLifecycleToStore(sessionId, event);
-        return { handled: false, subagentStateChanged: true, messageRecord: messageRecord };
-    }
     return { handled: false, messageRecord: messageRecord };
 }

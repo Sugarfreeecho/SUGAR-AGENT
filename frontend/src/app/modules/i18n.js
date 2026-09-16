@@ -6,10 +6,10 @@ const UI_TRANSLATIONS_EN = {
     '自优化通用智能平台': 'Self-optimizing general intelligence platform',
     '界面设置': 'Interface settings', '新建会话': 'New session', '新建对话': 'New chat', '切换语言': 'Switch language', '切换为英文': 'Switch to English', '切换为中文': 'Switch to Chinese',
     '会话列表': 'Session list', '拖动调整侧栏宽度': 'Drag to resize sidebar', '聊天': 'Chat',
-    '选择或新建会话': 'Select or create a session', '展开 Subagent 面板': 'Expand Subagent panel',
+    '选择或新建会话': 'Select or create a session',
     '会话扩展面板': 'Session extensions', '折叠会话扩展面板': 'Collapse session extensions',
     '消息': 'Messages', '历史记录': 'History',
-    '折叠历史面板': 'Collapse history panel', '继续综合子任务': 'Continue synthesizing subtasks',
+    '折叠历史面板': 'Collapse history panel',
     '撤销': 'Undo', '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）': 'What would you like to do? (Enter to send · Shift/Ctrl/Cmd + Enter for a new line)', 'Agent运行中，输入后续任务': 'Agent is running; enter a follow-up task', '按 Enter 发送刚加入或第一条待发送任务': 'Press Enter to send the newly queued or first pending task', '选择文件': 'Choose file',
     '选择 Skill': 'Select Skill', '发送 / 停止': 'Send / Stop', '发送': 'Send', '停止': 'Stop',
     'Enter 提交': 'Enter to submit', 'Ctrl/Cmd + Enter 提交': 'Ctrl/Cmd + Enter to submit',
@@ -106,15 +106,9 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '未选择会话': 'No session selected', '暂无提问': 'No questions yet', '打开工作目录': 'Open workspace',
     '打开会话目录': 'Open session folder', '确定删除会话': 'Delete this session',
 
-    // Subagents
-    '后台运行': 'Running in background', '运行中': 'Running', '完成': 'Completed', '失败': 'Failed',
-    '已中断': 'Interrupted', '缺少 final 结果': 'Missing final result', '查看输出': 'View output',
-    '放大显示': 'Expand view', '在浮窗内全屏显示': 'Show full-size in overlay', '无 Subagent': 'No subagents',
-    '(暂无事件)': '(No events yet)', '(暂无 final 结果)': '(No final result)', '(无输出)': '(No output)',
-    '删除 Subagent': 'Delete subagent', '删除失败': 'Deletion failed',
-    '将删除该 subagent 的会话记录、过程卡片及其嵌套子任务。该操作不可撤销。': 'This will delete the subagent session, process card, and nested subtasks. This cannot be undone.',
-    '无法删除该 Subagent，请稍后重试。': 'Could not delete this subagent. Please try again later.',
-    '继续任务': 'Continue task', '继续中…': 'Continuing…', '等待主任务完成': 'Waiting for main task',
+    // Subagents — 面板已移除；「后台 Subagent 已完成」等仍由后端通知文案使用。
+    '后台运行': 'Running in background', '运行中': 'Running', '失败': 'Failed',
+    '已中断': 'Interrupted',
 
     // Model and skill controls
     '默认方案': 'Default profile', '未命名方案': 'Unnamed profile', '未加载模型配置': 'Model configuration not loaded',
@@ -190,13 +184,10 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '展开或收起完整请求': 'Expand or collapse the full request',
     '此请求已处理，仅供查看，无法再次操作。': 'This request has been processed. It is read-only and cannot be changed.',
     '此请求已结束，仅供查看，无法再次操作。': 'This request has ended. It is read-only and cannot be changed.',
-    // Session grouping and subagent continuation
+    // Session grouping
     '刷新归档目录': 'Refresh archived sessions', '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '加载中...': 'Loading...',
-    '个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。': ' subtasks completed. Click continue to let the main Agent synthesize their results (no automatic continuation).',
-    '个子任务结果尚未纳入上方回答，点击补充综合。': ' subtask results are not included in the answer above. Click to add a synthesis.',
-    // Subagent controls
+    // Subagent controls（面板已移除，保留通用文案）
     '任务': 'Tasks', '会话': 'Sessions', '允许一次': 'Allow once', '拒绝': 'Deny',
-    '收起 Subagent 面板': 'Collapse Subagent panel',
     '展开查看执行过程': 'Expand to view process', '退出全屏': 'Exit full screen', '停止': 'Stop',
     '加载失败': 'Load failed',
     // File picker dynamic errors
@@ -227,8 +218,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '模型配置切换失败: ': 'Failed to switch model configuration: ', '模型配置启停失败: ': 'Failed to change model profile status: ',
     '模型配置加载失败: ': 'Failed to load model configuration: ', '上下文窗口：': 'Context window: ', '接口类型：': 'Interface type: ',
     '最大输出：': 'Maximum output: ', '能力：': 'Capabilities: ', '状态：': 'Status: ', '可用': 'Available', '未就绪': 'Not ready', '未设置': 'Not set',
-    '加载subagent历史失败:': 'Failed to load subagent history:', '加载详情中…': 'Loading details…', '加载失败: ': 'Load failed: ',
-    '暂无事件': 'No events yet', '暂无 final 结果': 'No final result', '无 Subagent': 'No subagents',
+    '加载详情中…': 'Loading details…', '加载失败: ': 'Load failed: ',
     '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
     'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
     '原因：': 'Reason: ', '找不到可保存的 Final 卡片': 'No Final card is available to save', '操作失败': 'Operation failed', '确认': 'Confirm',
@@ -386,11 +376,7 @@ const UI_I18N_CONTENT_SELECTOR = [
     '.human-approval-subtitle',
     '.human-approval-message',
     '.human-terminal-answer',
-    '.subagent-card-name',
-    '.subagent-card-summary',
-    '.subagent-output-content',
-    '.subagent-block-body',
-    '.subagent-block-preview',
+
     '.skill-picker-option-desc',
     '[data-i18n-skip]',
 ].join(',');
@@ -477,8 +463,7 @@ function translateUiString(value) {
         .replace(/文件“(.+)”超过 (.+) 限制。/g, 'File “$1” exceeds the $2 limit.')
         .replace(/本次上传总大小超过 (.+) 限制。/g, 'The total upload exceeds the $1 limit.')
         .replace(/正在上传 (\d+) 个文件… (\d+)%/g, 'Uploading $1 files… $2%')
-        .replace(/^(\d+) 个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。$/g, '$1 subtasks completed. Click continue to let the main Agent synthesize their results (no automatic continuation).')
-        .replace(/^(\d+) 个子任务结果尚未纳入上方回答，点击补充综合。$/g, '$1 subtask results are not included in the answer above. Click to add a synthesis.')
+
         .replace(/^提交失败：(.+)$/g, 'Submission failed: $1')
         .replace(/^取消失败：(.+)$/g, 'Cancellation failed: $1')
         .replace(/^处理失败：(.+)$/g, 'Failed to process: $1')

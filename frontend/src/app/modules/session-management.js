@@ -684,6 +684,9 @@ async function refreshSingleSessionRow(sessionId) {
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
         }
+        if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
+            subagentComposerUi.syncFromSessionSummary(sess.id, sess);
+        }
         renderSessionListIfChanged(false);
         if (typeof maybeAutoResumeInterruptedReact === 'function') {
             maybeAutoResumeInterruptedReact(sessionId, sess);
@@ -1640,6 +1643,14 @@ function beforeSessionMessageSnapshotAvailable() {
 async function switchSession(sessionId, opts) {
     opts = opts || {};
     if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
+    // 子代理寻址：任何不是"由寻址栈驱动"的会话切换都退出寻址态
+    // （返回父会话时栈已先弹出，此处同样得到正确结果）。
+    if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {
+        var addressingTop = subagentAddressing.current();
+        if (!addressingTop || String(addressingTop.childSessionId || '') !== String(sessionId || '')) {
+            subagentAddressing.reset();
+        }
+    }
     if (currentSessionId === sessionId && !opts.forceReload) {
         clearSessionUnreadState(sessionId);
         return true;
@@ -1653,9 +1664,19 @@ async function switchSession(sessionId, opts) {
     sessionStore.ui.loadingMessages = false;
     replayingMessages = false;
     cancelSmoothStreamFollowForSessionSwitch();
+    // 子代理会话寻址：子会话在主对话区打开时，右侧扩展面板/历史面板保持与
+    // 主 Agent 一致（不清空、不收起），只有普通会话切换才重置这些面板。
+    var addressingChildSwitch = false;
+    if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {
+        var __addrTop = subagentAddressing.current();
+        addressingChildSwitch = !!__addrTop
+            && String(__addrTop.childSessionId || '') === String(sessionId || '');
+    }
     suppressTocDuringSessionLoad = true;
-    clearTocForSessionLoad();
-    clearOptionalPanelsForSessionLoad();
+    if (!addressingChildSwitch) {
+        clearTocForSessionLoad();
+        clearOptionalPanelsForSessionLoad();
+    }
     pendingRewriteTruncate = null;
     hideRewriteUndoToast();
     // A green-dot session represents an unread completed result. Opening it
@@ -1671,8 +1692,6 @@ async function switchSession(sessionId, opts) {
     stashInputDraft(leaving);
     if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);
     prepareStashLeaving(leaving);
-    hideSubagentContinueBanner();
-    resetSubagentPanelForSession();
     setCurrentSessionState(sessionId);
     // The session identity and its side-panel contents must cross the switch
     // boundary together. Waiting for history requests leaves the previous
@@ -1755,13 +1774,6 @@ async function switchSession(sessionId, opts) {
         }
         if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        /* 让 rebuildToc 的 /user_turns fetch 先发出，subagent 面板（含 N 个 /messages）顺序后置，
-           避免抢占带宽与主线程，让目录最后才稳态。*/
-        setTimeout(function () {
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
-                refreshSubagentTreePanel(sessionId);
-            }
-        }, 0);
         void refreshSingleSessionRow(sessionId);
         document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
             detail: { sessionId: sessionId, phase: 'loaded' },
@@ -1807,13 +1819,6 @@ async function switchSession(sessionId, opts) {
             }
         }
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
-        /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一步调用 subagent panel
-           重建，保证「目录 → 消息 → 副 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。*/
-        setTimeout(function () {
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
-                refreshSubagentTreePanel(sessionId);
-            }
-        }, 0);
         void refreshSingleSessionRow(sessionId);
         document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
             detail: { sessionId: sessionId, phase: 'loaded' },
@@ -1849,8 +1854,6 @@ async function createNewSession() {
     stashInputDraft(leavingSessionId);
     if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leavingSessionId);
     prepareStashLeaving(leavingSessionId);
-    hideSubagentContinueBanner();
-    resetSubagentPanelForSession();
     clearOptionalPanelsForSessionLoad();
     clearTocForSessionLoad();
     switchSessionEpoch += 1;

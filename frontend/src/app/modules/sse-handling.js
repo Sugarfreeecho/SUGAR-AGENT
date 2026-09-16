@@ -5,6 +5,11 @@ const STREAM_RECONNECT_BASE_DELAY_MS = 500;
 const STREAM_RECONNECT_MAX_DELAY_MS = 15000;
 const streamReconnectStateBySession = Object.create(null);
 
+/* 子代理续接（continue-subagents）运行态。原属子代理前端模块；
+   面板移除后暂存于此，供后续 dsh 式子代理 UI 重新接线。 */
+var subagentContinueInFlight = false;
+var subagentContinueSessionId = null;
+
 function resetStreamReconnectState(sessionId) {
     var sid = String(sessionId || '');
     var state = streamReconnectStateBySession[sid];
@@ -157,8 +162,7 @@ function endRunForClient(sessionId, ctx, opts) {
     var allowCollapse = isTrueTerminal && opts.collapseProcess !== false;
     if (allowCollapse) {
         var terminalAggregate = ctx && ctx.currentProcessGroup;
-        if (terminalAggregate && terminalAggregate.isConnected
-            && !terminalAggregate.classList.contains('subagent-grid-card')) {
+        if (terminalAggregate && terminalAggregate.isConnected) {
             terminalAggregate.classList.add('is-collapsed');
             var terminalTop = terminalAggregate.querySelector('.process-aggregate-top');
             if (terminalTop) terminalTop.setAttribute('aria-expanded', 'false');
@@ -480,9 +484,13 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     if (parsed.type === 'context_tokens') continue;
                 }
                 if (parsed.ephemeral) {
-                    /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
-                       到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */
-                    if (parsed.agent_id) { handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId); continue; }
+                    /* 任何携带 agent_id 的 ephemeral 都属于子 agent；不能 fall-through
+                       到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。
+                       只把"该子代理在活动"作为成员帧喂给目录对象层（学 dsh：不建专属事件流）。 */
+                    if (parsed.agent_id) {
+                        if (typeof noteSubagentActivity === 'function') noteSubagentActivity(parsed.agent_id, true);
+                        continue;
+                    }
                     if (parsed.type === 'llm_stream_aborted') {
                         removeTemporaryStatus(runCtx);
                         var preserveInterruptedPartial = parsed.cleanup_scope === 'none'
@@ -577,9 +585,9 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     continue;
                 }
                 if (parsed.agent_id) {
-                    /* 非 ephemeral 子 agent 事件：必须走子 agent 通道，绝不能落到 renderEvent(runCtx,...) */
-                    handleSubagentStreamEvent(parsed, streamEventIdx, runSessionId);
-                    streamEventIdx += 1;
+                    /* 非 ephemeral 子 agent 事件：绝不能落到 renderEvent(runCtx,...)；
+                       生命周期事件喂给目录对象层作为成员帧。 */
+                    if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(parsed);
                     continue;
                 }
                 finalizeLlmStreamChunks(runCtx);
@@ -780,16 +788,12 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
 
 async function startContinueAfterSubagents(sessionId) {
     if (!sessionId || sessionId !== currentSessionId) return;
-    delete subagentContinueDismissedForSession[sessionId];
     if (isSessionRunning(sessionId) || subagentContinueInFlight) {
-        updateSubagentContinueBanner(sessionId);
         return;
     }
     if (isSendPipelineLocked(sessionId)) {
-        updateSubagentContinueBanner(sessionId);
         return;
     }
-    hideSubagentContinueBanner();
     subagentContinueSessionId = sessionId;
     subagentContinueInFlight = true;
     var runCtx = null;
@@ -810,11 +814,9 @@ async function startContinueAfterSubagents(sessionId) {
     var continueUrl = '/sessions/' + encodeURIComponent(sessionId) + '/continue-subagents';
         const response = await fetch(continueUrl, { method: 'POST' });
         if (response.status === 204) {
-            hideSubagentContinueBanner();
             return;
         }
         if (response.status === 409) {
-            updateSubagentContinueBanner(sessionId);
             return;
         }
         var ct = (response.headers.get('content-type') || '').toLowerCase();
@@ -881,8 +883,6 @@ async function startContinueAfterSubagents(sessionId) {
                 resetStreamReconnectState(runSessionId);
             }
         }
-        hideSubagentContinueBanner();
-        if (!subagentContinueDismissedForSession[sessionId]) updateSubagentContinueBanner(sessionId);
     } finally {
         if (subagentContinueSessionId === runSessionId) subagentContinueSessionId = null;
         subagentContinueInFlight = false;
@@ -1166,9 +1166,6 @@ async function attachSessionEventStream(sessionId, opts) {
             resetStreamReconnectState(runSessionId);
         }
         applyContextTokenLabelForCurrentSession();
-        if (runSessionId === currentSessionId) {
-            updateSubagentContinueBanner(runSessionId);
-        }
     }
 }
 
@@ -3179,7 +3176,6 @@ async function sendMessage(options) {
     }
     hideRewriteUndoToast();
 
-    hideSubagentContinueBanner();
     const userSentAt = new Date().toISOString();
 
     let submitSessionId = submitSessionIdInitial;
@@ -3420,8 +3416,6 @@ async function sendMessage(options) {
         }
         if (runSessionId !== currentSessionId) {
             void tryMarkSessionUnreadComplete(runSessionId);
-        } else {
-            updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId) && runCtx && runCtx.terminalSeen === true) {
             clearSessionRunStateIfMatch(runSessionId, clientRunId);
@@ -3465,9 +3459,6 @@ async function sendMessage(options) {
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
         applyContextTokenLabelForCurrentSession();
-        if (runSessionId === currentSessionId && countRunningSubagentCards() > 0) {
-            scheduleSubagentIncrementalSync();
-        }
         reportClientPipelineStep(clientTimingCtx, 'finalize_visible_state', _clientStepStart, {
             disconnected: !!streamDisconnectedUnexpectedly,
             currentSession: runSessionId === currentSessionId
@@ -3622,22 +3613,6 @@ window.addEventListener('scroll', positionFollowupQueuePanel, true);
             } catch (err) { console.error(err); alert('撤销失败，请重试。'); return; }
         }
         hideRewriteUndoToast();
-    });
-})();
-(function bindSubagentContinueBannerOnce() {
-    if (window.__myAgentSubagentContinueBound) return;
-    window.__myAgentSubagentContinueBound = true;
-    var btn = document.getElementById('subagent-continue-btn');
-    var dismissBtn = document.getElementById('subagent-continue-dismiss');
-    if (btn) btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        if (!currentSessionId || subagentContinueInFlight) return;
-        void startContinueAfterSubagents(currentSessionId);
-    });
-    if (dismissBtn) dismissBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        dismissSubagentContinueBanner(currentSessionId);
     });
 })();
 initUiHoverTips(document);

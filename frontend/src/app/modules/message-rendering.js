@@ -759,7 +759,6 @@ function measureFeedChunkOverflow(chunk) {
     if (!chunk || !chunk.isConnected) return;
     const sc = chunk.querySelector('.feed-chunk-scroller');
     if (!sc) return;
-    if (feedChunkInHiddenSubagentProcess(chunk)) return;
     if (chunk.classList.contains('expanded')) {
         chunk.classList.remove('is-overflowing');
         return;
@@ -780,8 +779,6 @@ var feedChunkOverflowRaf = 0;
 
 function scheduleFeedChunkOverflowRefresh(chunk) {
     if (!chunk) return;
-    var card = chunk.closest && chunk.closest('.subagent-grid-card');
-    if (card && subagentPanelOpen && !card.classList.contains('is-expanded') && card.dataset.viewportVisible !== '1') return;
     feedChunkOverflowQueue.add(chunk);
     if (feedChunkOverflowRaf) return;
     feedChunkOverflowRaf = requestAnimationFrame(function () {
@@ -1034,7 +1031,7 @@ function syncProcessAggregateHeightUi(agg) {
 }
 
 function scheduleProcessAggregateHeightUi(agg) {
-    if (!agg || agg.classList.contains('subagent-grid-card')) return;
+    if (!agg) return;
     if (agg._processHeightUiRaf) cancelAnimationFrame(agg._processHeightUiRaf);
     agg._processHeightUiRaf = requestAnimationFrame(function () {
         agg._processHeightUiRaf = 0;
@@ -1043,7 +1040,7 @@ function scheduleProcessAggregateHeightUi(agg) {
 }
 
 function bindProcessAggregateHeightButton(agg) {
-    if (!agg || agg.classList.contains('subagent-grid-card')) return;
+    if (!agg) return;
     var btn = agg.querySelector('.process-aggregate-resize');
     if (!btn) {
         btn = document.createElement('button');
@@ -1102,7 +1099,7 @@ function alignProcessAggregateToViewportTop(agg) {
 }
 
 function bindProcessAggregateInteractions(agg) {
-    const procBody = agg.querySelector('.process-aggregate-body, .subagent-card-body');
+    const procBody = agg.querySelector('.process-aggregate-body');
     if (procBody && !procBody._streamFollowScrollBound) {
         procBody._streamFollowScrollBound = true;
         procBody.addEventListener('scroll', function () {
@@ -1112,7 +1109,6 @@ function bindProcessAggregateInteractions(agg) {
             refreshLiveAutoFollowPins();
         }, { passive: true });
     }
-    if (agg.classList.contains('subagent-grid-card')) return;
     const top = agg.querySelector('.process-aggregate-top');
     if (top && !top.dataset.bound) {
         top.dataset.bound = '1';
@@ -1147,7 +1143,7 @@ function bindProcessAggregateInteractions(agg) {
 
 function bindProcessAggregate(agg) {
     bindProcessAggregateInteractions(agg);
-    if (!agg || agg.classList.contains('subagent-grid-card')) return;
+    if (!agg) return;
     bindProcessAggregateHeightButton(agg);
 }
 
@@ -1223,66 +1219,6 @@ function bumpAggregateMaxReactIter(agg, reactIter) {
     if (flo > cur) agg.dataset.maxReactIter = String(flo);
 }
 
-function resolveSubagentAggFromCtx(ctx) {
-    if (!ctx) return null;
-    if (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-        && ctx.currentProcessGroup.classList.contains('subagent-grid-card')) {
-        return ctx.currentProcessGroup;
-    }
-    if (ctx._subagentBody && ctx._subagentBody.isConnected) {
-        var card = ctx._subagentBody.closest('.subagent-grid-card');
-        if (card) return card;
-    }
-    return null;
-}
-
-function applySubagentSessionMetricsToCard(card, metrics) {
-    if (!card || !metrics || typeof metrics !== 'object') return;
-    if (metrics.duration_ms != null && Number.isFinite(Number(metrics.duration_ms))) {
-        card.dataset.procDurationMs = String(Math.max(0, Math.floor(Number(metrics.duration_ms))));
-    }
-    if (metrics.react_loops != null && Number.isFinite(Number(metrics.react_loops))) {
-        card.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(metrics.react_loops))));
-    }
-    if (metrics.tool_calls != null && Number.isFinite(Number(metrics.tool_calls))) {
-        card.dataset.procToolCalls = String(Math.max(0, Math.floor(Number(metrics.tool_calls))));
-    }
-    if (metrics.tool_failures != null && Number.isFinite(Number(metrics.tool_failures))) {
-        card.dataset.procToolFails = String(Math.max(0, Math.floor(Number(metrics.tool_failures))));
-    }
-}
-
-function applySubagentProcessMetricsToCard(card, event) {
-    if (!card || !event) return;
-    var isRunEnd = event.duration_ms != null && Number.isFinite(Number(event.duration_ms));
-    if (isRunEnd) {
-        var runDur = Math.max(0, Math.round(Number(event.duration_ms)));
-        var runLoops = event.react_loops != null && Number.isFinite(Number(event.react_loops))
-            ? Math.max(0, Math.floor(Number(event.react_loops))) : 0;
-        var runTools = event.tool_calls != null && Number.isFinite(Number(event.tool_calls))
-            ? Math.max(0, Math.floor(Number(event.tool_calls))) : 0;
-        var runFails = event.tool_failures != null && Number.isFinite(Number(event.tool_failures))
-            ? Math.max(0, Math.floor(Number(event.tool_failures))) : 0;
-        card.dataset.procDurationMs = String((parseInt(card.dataset.procDurationMs || '0', 10) || 0) + runDur);
-        card.dataset.procReactLoops = String((parseInt(card.dataset.procReactLoops || '0', 10) || 0) + runLoops);
-        card.dataset.procToolCalls = String((parseInt(card.dataset.procToolCalls || '0', 10) || 0) + runTools);
-        card.dataset.procToolFails = String((parseInt(card.dataset.procToolFails || '0', 10) || 0) + runFails);
-        delete card.dataset.procLiveToolCalls;
-        delete card.dataset.procLiveToolFails;
-    } else {
-        if (event.tool_calls != null && Number.isFinite(Number(event.tool_calls))) {
-            var liveTools = Math.max(0, Math.floor(Number(event.tool_calls)));
-            var prevTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;
-            card.dataset.procLiveToolCalls = String(Math.max(prevTools, liveTools));
-        }
-        if (event.tool_failures != null && Number.isFinite(Number(event.tool_failures))) {
-            var liveFails = Math.max(0, Math.floor(Number(event.tool_failures)));
-            var prevFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;
-            card.dataset.procLiveToolFails = String(Math.max(prevFails, liveFails));
-        }
-    }
-}
-
 function uiEventReactIter(ev) {
     if (!ev || ev.react_iter == null) return null;
     var n = Number(ev.react_iter);
@@ -1292,13 +1228,10 @@ function uiEventReactIter(ev) {
 
 function applyCacheStatsFromEvent(ctx, event, runSessionId) {
     if (!event || typeof event !== 'object') return;
-    var agg = resolveSubagentAggFromCtx(ctx);
+    var agg = ctx && ctx.currentProcessGroup;
     if (!agg || !agg.isConnected) {
-        agg = ctx && ctx.currentProcessGroup;
-        if (!agg || !agg.isConnected) {
-            var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();
-            if (st) agg = st.querySelector('.process-aggregate:last-of-type');
-        }
+        var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();
+        if (st) agg = st.querySelector('.process-aggregate:last-of-type');
     }
     if (!agg) return;
     if (event.cache_hit != null) agg.dataset.procCacheHit = String(Math.max(0, Math.floor(Number(event.cache_hit))));
@@ -1319,12 +1252,6 @@ function applyCacheStatsFromEvent(ctx, event, runSessionId) {
 
 function applyProcessMetricsFromEvent(ctx, event) {
     if (!event || typeof event !== 'object') return;
-    var subCard = resolveSubagentAggFromCtx(ctx);
-    if (subCard && subCard.isConnected) {
-        applySubagentProcessMetricsToCard(subCard, event);
-        scheduleSubagentCardStats(subCard);
-        return;
-    }
     var agg = ctx && ctx.currentProcessGroup;
     if (!agg || !agg.isConnected) {
         var st = (ctx && ctx.stream) ? ctx.stream : getVisibleChatStream();
@@ -1354,8 +1281,7 @@ function applyProcessMetricsFromEvent(ctx, event) {
 }
 
 function refreshAggregateStatsSmart(agg) {
-    if (agg && agg.classList && agg.classList.contains('subagent-grid-card')) refreshSubagentCardStats(agg);
-    else refreshProcessAggregateStats(agg);
+    refreshProcessAggregateStats(agg);
 }
 
 function renderProcessAggregateStats(el, sourceText, tailText) {
@@ -1370,73 +1296,6 @@ function renderProcessAggregateStats(el, sourceText, tailText) {
     tail.textContent = String(tailText == null ? '' : tailText);
     el.appendChild(head);
     el.appendChild(tail);
-}
-
-function refreshSubagentCardStats(card) {
-    if (!card) return;
-    var el = card.querySelector('.process-aggregate-stats');
-    if (!el) return;
-    var body = card.querySelector('.subagent-card-body');
-    var pDur = card.dataset.procDurationMs != null && card.dataset.procDurationMs !== ''
-        ? parseInt(card.dataset.procDurationMs, 10) : NaN;
-    var pLoops = card.dataset.procReactLoops != null && card.dataset.procReactLoops !== ''
-        ? parseInt(card.dataset.procReactLoops, 10) : NaN;
-    var pTools = card.dataset.procToolCalls != null && card.dataset.procToolCalls !== ''
-        ? parseInt(card.dataset.procToolCalls, 10) : NaN;
-    var pFails = card.dataset.procToolFails != null && card.dataset.procToolFails !== ''
-        ? parseInt(card.dataset.procToolFails, 10) : NaN;
-    var maxFromRows = 0;
-    var bodyLoaded = subagentBodyIsLoaded(body) && body.dataset.stashed !== '1';
-    if (bodyLoaded) {
-        body.querySelectorAll('.subagent-turn-process .feed-item[data-react-iter]').forEach(function (row) {
-            var v = parseInt(row.getAttribute('data-react-iter'), 10);
-            if (Number.isFinite(v) && v > maxFromRows) maxFromRows = v;
-        });
-    }
-    var dsRi = card.dataset.maxReactIter ? parseInt(card.dataset.maxReactIter, 10) : 0;
-    var reactLoops = Math.max(maxFromRows, dsRi);
-    if (!reactLoops && bodyLoaded) {
-        reactLoops = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="llm-response"]').length;
-    }
-    if (Number.isFinite(pLoops) && pLoops > 0) reactLoops = pLoops;
-    var sessionTools = Number.isFinite(pTools) && pTools >= 0 ? pTools : 0;
-    var liveTools = parseInt(card.dataset.procLiveToolCalls || '0', 10) || 0;
-    var toolN = sessionTools + liveTools;
-    if (!toolN && bodyLoaded) {
-        toolN = body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').length;
-    }
-    var sessionFails = Number.isFinite(pFails) && pFails >= 0 ? pFails : 0;
-    var liveFails = parseInt(card.dataset.procLiveToolFails || '0', 10) || 0;
-    var failN = sessionFails + liveFails;
-    if (!failN && bodyLoaded) {
-        body.querySelectorAll('.subagent-turn-process .feed-item[data-log-type="tool-call"]').forEach(function (row) {
-            var sc = row.querySelector('.feed-chunk-scroller');
-            var txt = sc ? String(sc.textContent || '') : '';
-            if (/Error:|失败|异常|error executing command:/i.test(txt)) failN += 1;
-        });
-    }
-    var t0s = card.dataset.procStartedAt;
-    var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;
-    var parts = [];
-    var durStr = null;
-    if (Number.isFinite(pDur) && pDur >= 0) durStr = formatProcDurationMs(pDur);
-    else if (Number.isFinite(t0)) {
-        var t1s = card.dataset.procEndedAt;
-        var t1 = (t1s != null && t1s !== '') ? Number(t1s) : procNow();
-        durStr = formatProcDurationMs(t1 - t0);
-    }
-    if (durStr) parts.push(durStr);
-    parts.push(String(reactLoops) + ' 步');
-    parts.push('工具 ' + String(toolN) + ' 次');
-    parts.push('失败 ' + String(failN) + ' 次');
-    var modelStr = card.dataset.procCacheModel || card.dataset.executorModel || '—';
-    var est = card.dataset.procCtxEstimated;
-    var thr = card.dataset.procCtxThreshold;
-    var pctStr = '—';
-    if (est != null && est !== '' && thr != null && thr !== '' && Number(thr) > 0) {
-        pctStr = (Math.round(Number(est) / Number(thr) * 1000) / 10) + '%';
-    }
-    renderProcessAggregateStats(el, parts.join(' · '), modelStr + ' · ' + pctStr);
 }
 
 function refreshProcessAggregateStats(agg) {
@@ -1563,15 +1422,6 @@ function sealProcessGroup(ctx) {
 }
 
 function getProcessBody(ctx) {
-    if (ctx && ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;
-    if (ctx && ctx.currentTurn && ctx.currentTurn.isConnected) {
-        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');
-        if (subProc) {
-            ctx._subagentTurnProcess = subProc;
-            return subProc;
-        }
-    }
-    if (ctx && ctx._subagentBody && ctx._subagentBody.isConnected) return null;
     const w = ensureProcessGroup(ctx);
     if (!w) return null;
     return w.querySelector('.process-aggregate-body');
@@ -1579,15 +1429,6 @@ function getProcessBody(ctx) {
 
 function getExistingProcessBody(ctx) {
     if (!ctx) return null;
-    if (ctx._subagentTurnProcess && ctx._subagentTurnProcess.isConnected) return ctx._subagentTurnProcess;
-    if (ctx.currentTurn && ctx.currentTurn.isConnected) {
-        var subProc = ctx.currentTurn.querySelector('.subagent-turn-process');
-        if (subProc) {
-            ctx._subagentTurnProcess = subProc;
-            return subProc;
-        }
-    }
-    if (ctx._subagentBody && ctx._subagentBody.isConnected) return null;
     var current = ctx.currentProcessGroup;
     if (!current || !current.isConnected) return null;
     return current.querySelector('.process-aggregate-body');
@@ -2156,7 +1997,6 @@ function setWelcome() {
 }
 
 function stripWelcome(ctx) {
-    if (ctx && ctx._subagentBody) return;
     const root = (ctx && ctx.stream) ? ctx.stream : (getVisibleChatStream() || chatContainer);
     if (root) root.querySelector('.welcome')?.remove();
 }
@@ -2516,10 +2356,27 @@ function updateSessionTitle() {
     const br = document.getElementById('breadcrumb-text');
     const sub = document.getElementById('breadcrumb-sub');
     if (!br || !sub) return;
+    // 防御：寻址态标记还在，但寻址栈已空（例如返回父会话时 switchSession 提前
+    // 返回、没走到重渲染）→ 强制刷掉旧面包屑，避免残留地址栏。
+    var addressingActive = typeof subagentAddressing !== 'undefined' && subagentAddressing
+        && subagentAddressing.current();
+    if (br.dataset && br.dataset.addressing === 'child' && !addressingActive) {
+        // 防御：寻址栈已空 → 强制刷掉残留的面包屑与标记
+        delete br.dataset.addressing;
+        br.textContent = '';
+    } else if (br.dataset && br.dataset.addressing === 'child') {
+        // 仍在寻址态：先清标记，让 renderSubagentAddressedTitle 重建
+        delete br.dataset.addressing;
+    }
     if (!currentSessionId) {
         br.textContent = '未选择会话';
         sub.textContent = '';
         if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(null);
+        setContextTokenLabel(null, null);
+        return;
+    }
+    // 子代理会话寻址：标题栏显示「返回 chip + 子会话名」，不再显示普通会话菜单
+    if (typeof renderSubagentAddressedTitle === 'function' && renderSubagentAddressedTitle(br, sub)) {
         setContextTokenLabel(null, null);
         return;
     }
@@ -2529,8 +2386,77 @@ function updateSessionTitle() {
     const name = localizeSessionPlaceholderName((raw && raw.trim()) ? raw.trim() : 'Session');
     br.textContent = name;
     sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);
+    if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi) {
+        const titleRow = br.closest('.breadcrumb-title-row') || br.parentNode;
+        subagentCatalogUi.renderTrigger(titleRow, currentSessionId);
+        subagentCatalogUi.noteCurrentSession(currentSessionId);
+    }
+    if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
+        subagentComposerUi.syncComposer();
+    }
     if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(sess || { id: currentSessionId, name: raw });
     initUiHoverTips(sub);
+}
+
+/**
+ * 子代理会话寻址下的标题渲染：显示「返回 chip + 子会话名」，副标题给出
+ * 子会话 id；返回按钮点击回到父会话（父会话的滚动位置由既有 stash/restore 恢复）。
+ */
+function renderSubagentAddressedTitle(br, sub) {
+    var info = (typeof subagentAddressing !== 'undefined' && subagentAddressing)
+        ? subagentAddressing.current()
+        : null;
+    if (!info) return false;
+    var childId = String(info.childSessionId || '');
+    var parentId = String(info.parentSessionId || '');
+    var parentSess = null;
+    if (typeof sessionStore !== 'undefined' && sessionStore && sessionStore.get) {
+        parentSess = sessionStore.get(parentId);
+    }
+    var parentName = (parentSess && parentSess.name)
+        ? String(parentSess.name)
+        : (String(info.parentTitle || '') || parentId.slice(0, 12));
+    var childName = String(info.title || '').trim() || childId.slice(0, 12);
+
+    br.textContent = '';
+    var backChip = document.createElement('button');
+    backChip.type = 'button';
+    backChip.className = 'breadcrumb-back-chip';
+    backChip.setAttribute('data-addressing-back', '1');
+    backChip.setAttribute('aria-label', '返回父会话');
+    backChip.setAttribute('data-ui-tip', '返回：' + parentName);
+    backChip.textContent = '\u2039 ' + parentName;
+    backChip.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {
+            void subagentAddressing.returnToParent();
+        }
+    });
+    var separator = document.createElement('span');
+    separator.className = 'breadcrumb-addressing-sep';
+    separator.setAttribute('aria-hidden', 'true');
+    separator.textContent = '/';
+    var childTitle = document.createElement('span');
+    childTitle.className = 'breadcrumb-addressing-name';
+    childTitle.textContent = childName;
+    br.appendChild(backChip);
+    br.appendChild(separator);
+    br.appendChild(childTitle);
+
+    if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi) {
+        const titleRow = br.closest('.breadcrumb-title-row') || br.parentNode;
+        subagentCatalogUi.renderTrigger(titleRow, parentId);
+    }
+    if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
+        subagentComposerUi.removeContinueHint();
+        subagentComposerUi.syncComposer();
+    }
+    sub.textContent = 'subagent ' + childId;
+    br.dataset.addressing = 'child';
+    if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(null);
+    initUiHoverTips(br);
+    return true;
 }
 
 function ensureMermaidInitialized(api) {
@@ -4105,8 +4031,6 @@ function formatToolDoneLine(tool, args, result, commandPreview) {
 
 function rootSessionIdForRenderedNode(row, runSessionId) {
     if (row && row.closest) {
-        var grid = row.closest('#subagent-grid[data-session-id]');
-        if (grid && grid.dataset.sessionId) return String(grid.dataset.sessionId);
         var stream = row.closest('.chat-stream');
         if (stream) {
             var owner = String(stream.dataset.sessionId || stream.dataset.cacheSessionId || '');
@@ -4526,9 +4450,6 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
         && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;
     if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);
     if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);
-    if (ctx && ctx.currentTurn && body.classList && body.classList.contains('subagent-turn-process')) {
-        markSubagentTurnHasProcess(ctx.currentTurn);
-    }
     if (type === 'error-log') {
         var errHint = document.createElement('div');
         errHint.className = 'feed-error-contact-hint';
@@ -4995,7 +4916,7 @@ function finalizeExistingLogLayout(root) {
         scheduleFeedChunkOverflowRefresh(ch);
     });
     el.querySelectorAll('.process-aggregate').forEach(function (agg) {
-        if (!agg.classList.contains('subagent-grid-card')) bindProcessAggregateHeightButton(agg);
+        bindProcessAggregateHeightButton(agg);
         if (agg.classList.contains('is-collapsed')) updateProcessBrief(agg);
         refreshAggregateStatsSmart(agg);
     });
@@ -5080,7 +5001,7 @@ function finalizeProgressStreamChunks(ctx) {
     if (!ctx) return;
     var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
     for (var i = 0; i < types.length; i += 1) flushProgressDeltaText(ctx, types[i]);
-    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;
+    var streamRoot = ctx.stream;
     if (streamRoot) {
         streamRoot.querySelectorAll('.feed-item .feed-chunk.is-streaming').forEach(function (ch) {
             ch.classList.remove('is-streaming');
@@ -5092,7 +5013,7 @@ function finalizeProgressStreamChunks(ctx) {
 
 function discardProgressStreamChunks(ctx) {
     if (!ctx) return;
-    var streamRoot = (ctx._subagentBody && ctx._subagentBody.isConnected) ? ctx._subagentBody : ctx.stream;
+    var streamRoot = ctx.stream;
     var rows = [];
     var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
     for (var i = 0; i < types.length; i += 1) {
@@ -5256,5 +5177,3 @@ function finalizeProgressStreamForType(ctx, logType) {
         delete ctx.progressStream[logType];
     }
 }
-
-/* ── Subagent 浮层 / 过程块 ── */

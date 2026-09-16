@@ -1328,8 +1328,7 @@ function dockRightChangesBody(tab) {
             return;
         }
         if (incoming.type === 'run_started' || incoming.type === 'run_finished'
-            || incoming.type === 'run_failed' || incoming.type === 'run_cancelled'
-            || incoming.type === 'subagent_start' || incoming.type === 'subagent_finish') {
+            || incoming.type === 'run_failed' || incoming.type === 'run_cancelled') {
             requestAnimationFrame(render);
             return;
         }
@@ -1352,9 +1351,7 @@ function dockRightChangesBody(tab) {
 
 function dockRightReviewRunning() {
     const stream = document.getElementById('chat-stream');
-    const grid = document.getElementById('subagent-grid');
-    return Boolean((stream && stream.querySelector('.process-aggregate.is-running'))
-        || (grid && grid.querySelector('.subagent-grid-card[data-subagent-running="1"]')));
+    return Boolean(stream && stream.querySelector('.process-aggregate.is-running'));
 }
 
 function dockRightReviewSummary(rows) {

@@ -75,9 +75,6 @@ const defaultCtxThreshold = (typeof window.__CONTEXT_WINDOW__ === 'number' && wi
     ? window.__CONTEXT_WINDOW__
     : 90000;
 let streamScrollFollowRaf = 0;
-let subagentScrollFollowRaf = 0;
-var subagentCardNearBottom = Object.create(null);
-const SUBAGENT_CARD_NEAR_BOTTOM_PX = 48;
 const USER_MESSAGE_COLLAPSE_LINES = 10;
 const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
 

@@ -80,10 +80,6 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     }
     if (eventSessionId && !event.__storeApplied) {
         applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
-        if (event.type === 'subagent_start' || event.type === 'subagent_finish'
-            || event.type === 'subagent_started' || event.type === 'subagent_finished') {
-            applySubagentLifecycleToStore(eventSessionId, event);
-        }
     }
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
@@ -217,13 +213,6 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         appendLog(ctx, '[历史/旧版事件] ' + leg.trim(), 'status', runSessionId);
     } else if (event.type === 'warning') {
         appendLog(ctx, String(event.content || ''), 'status', runSessionId);
-    } else if (event.type === 'subagent_start' || event.type === 'subagent_finish') {
-        if (!ctx._subagentBody) {
-            handleSubagentLifecycleEvent(event);
-            return;
-        }
-        if (event.type === 'subagent_start') ensureSubagentBlock(ctx, event);
-        else updateSubagentBlockFinish(ctx, event);
     } else {
         var fallbackContent = String(event.content || '');
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);

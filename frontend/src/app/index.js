@@ -5,22 +5,20 @@ import settingsSource from './modules/settings.js?raw';
 import inputActionsSource from './modules/input-actions.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
 import uiPerformanceSource from './modules/ui-performance.js?raw';
+import uiSlotRegistrySource from './modules/ui-slot-registry.js?raw';
 import sessionStoreSource from './state/session-store.js?raw';
 import sessionSelectorsSource from './state/session-selectors.js?raw';
 import sessionActionsSource from './state/session-actions.js?raw';
 import sessionRenderersSource from './state/session-renderers.js?raw';
 import messageStoreSource from './state/message-store.js?raw';
 import messageRenderersSource from './state/message-renderers.js?raw';
-import subagentStoreSource from './state/subagent-store.js?raw';
-import subagentContinueSource from './state/subagent-continue.js?raw';
-import subagentEventStateSource from './state/subagent-event-state.js?raw';
-import subagentRenderersSource from './state/subagent-renderers.js?raw';
-import subagentCacheSource from './state/subagent-cache.js?raw';
-import subagentLoaderSource from './state/subagent-loader.js?raw';
-import subagentSyncSource from './state/subagent-sync.js?raw';
-import subagentActionsSource from './state/subagent-actions.js?raw';
-import subagentDockSource from './state/subagent-dock.js?raw';
 import contextStoreSource from './state/context-store.js?raw';
+import subagentCatalogStoreSource from './state/subagent-catalog-store.js?raw';
+import subagentAddressingSource from './state/subagent-addressing.js?raw';
+import subagentFramesSource from './modules/subagent-frames.js?raw';
+import subagentCatalogUiSource from './modules/subagent-catalog-ui.js?raw';
+import subagentUiDecisionsSource from './state/subagent-ui-decisions.js?raw';
+import subagentComposerUiSource from './modules/subagent-composer-ui.js?raw';
 import sessionEventReducerSource from './state/session-event-reducer.js?raw';
 import modelProfilesSource from './modules/model-profiles.js?raw';
 import skillPickerSource from './modules/skill-picker.js?raw';
@@ -29,7 +27,6 @@ import sessionScrollHistorySource from './modules/session-scroll-history.js?raw'
 import tocTodoSource from './modules/toc-todo.js?raw';
 import workspaceMediaSource from './modules/workspace-media.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
-import subagentSource from './modules/subagent.js?raw';
 import humanInteractionsSource from './modules/human-interactions.js?raw';
 import permissionsSource from './modules/permissions.js?raw';
 import eventDispatchSource from './modules/event-dispatch.js?raw';
@@ -96,28 +93,72 @@ globalThis.loadMyAgentHtml2Canvas = function loadMyAgentHtml2Canvas() {
     return html2canvasImportPromise;
 };
 
+// 闭包内的接线代码：必须与模块同一作用域（Function() 体内的 var 是局部绑定，
+// 模块外部看不到），否则 bindStore / subscribe / 探针都会静默失效。
+const uiWiring = `
+// 子代理目录对象层 ↔ 表现层接线
+if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi) {
+    subagentCatalogUi.bindStore();
+}
+if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {
+    subagentAddressing.subscribe(function () {
+        if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
+            subagentComposerUi.syncComposer();
+        }
+    });
+}
+// 编辑器接管座位：登记进 slot 注册表（chain 选举）
+if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
+    subagentComposerUi.registerComposerSeat();
+}
+// 子代理 UI 运行时探针：供自动化冒烟/排障读取寻址与目录状态（只读）。
+globalThis.__myagentSubagentProbe = {
+    addressing: function () {
+        return (typeof subagentAddressing !== 'undefined' && subagentAddressing)
+            ? subagentAddressing.snapshot()
+            : null;
+    },
+    catalog: function (parentId) {
+        if (typeof subagentCatalogStore === 'undefined' || !subagentCatalogStore) return null;
+        var catalog = subagentCatalogStore.getCatalog(parentId);
+        return catalog ? {
+            state: catalog.state,
+            entries: (catalog.entries || []).map(function (entry) {
+                return {
+                    childId: entry.childId, label: entry.label, activity: entry.activity,
+                    mode: entry.mode, diagnostic: !!entry.diagnostic,
+                };
+            }),
+        } : null;
+    },
+    ui: function () {
+        return (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi)
+            ? { menuOpen: subagentCatalogUi.isMenuOpen() }
+            : null;
+    },
+};
+`;
+
 const uiSources = [
     i18nSource,
     settingsSource,
     inputActionsSource,
     sharedStateAndDialogsSource,
     uiPerformanceSource,
+    uiSlotRegistrySource,
     sessionStoreSource,
     sessionSelectorsSource,
     sessionActionsSource,
     sessionRenderersSource,
     messageStoreSource,
     messageRenderersSource,
-    subagentStoreSource,
-    subagentContinueSource,
-    subagentEventStateSource,
-    subagentRenderersSource,
-    subagentCacheSource,
-    subagentLoaderSource,
-    subagentSyncSource,
-    subagentActionsSource,
-    subagentDockSource,
     contextStoreSource,
+    subagentCatalogStoreSource,
+    subagentAddressingSource,
+    subagentFramesSource,
+    subagentCatalogUiSource,
+    subagentUiDecisionsSource,
+    subagentComposerUiSource,
     sessionEventReducerSource,
     modelProfilesSource,
     skillPickerSource,
@@ -126,7 +167,6 @@ const uiSources = [
     tocTodoSource,
     workspaceMediaSource,
     messageRenderingSource,
-    subagentSource,
     humanInteractionsSource,
     permissionsSource,
     eventDispatchSource,
@@ -151,7 +191,7 @@ const uiSources = [
     dockRightColumnSource,
 ];
 
-Function('"use strict";\n' + uiSources.join('\n\n') + '\n//# sourceURL=myagent-ui.js')();
+Function('"use strict";\n' + uiSources.join('\n\n') + '\n\n' + uiWiring + '\n//# sourceURL=myagent-ui.js')();
 
 void initPluginUiSlots();
 

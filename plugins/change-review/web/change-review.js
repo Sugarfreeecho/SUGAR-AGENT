@@ -27,8 +27,6 @@ function aggregateSessionId(aggregate, detail) {
     if (!aggregate || !aggregate.closest) return '';
     const explicit = String((detail && detail.rootSessionId) || '');
     if (explicit) return explicit;
-    const grid = aggregate.closest('#subagent-grid[data-session-id]');
-    if (grid && grid.dataset.sessionId) return String(grid.dataset.sessionId);
     const stream = aggregate.closest('.chat-stream');
     if (stream) {
         const streamSession = String(stream.dataset.sessionId || stream.dataset.cacheSessionId || '');
@@ -41,10 +39,6 @@ function aggregateIsCurrent(aggregate) {
     if (!aggregate || !aggregate.isConnected || !mountedSessionId) return false;
     const owner = aggregateOwners.get(aggregate) || aggregateSessionId(aggregate);
     if (owner && owner !== mountedSessionId) return false;
-    if (aggregate.classList.contains('subagent-grid-card')) {
-        const grid = aggregate.closest('#subagent-grid');
-        return Boolean(grid && String(grid.dataset.sessionId || '') === mountedSessionId);
-    }
     const stream = aggregate.closest('.chat-stream');
     return Boolean(stream && stream.id === 'chat-stream');
 }
@@ -63,14 +57,12 @@ function inferredAggregateTurnId(aggregate) {
     if (!aggregate) return '';
     const remembered = String(aggregate.dataset.changeReviewTurnId || '');
     if (remembered) return remembered;
-    if (!aggregate.classList.contains('subagent-grid-card')) {
-        let sibling = aggregate.previousElementSibling;
-        while (sibling) {
-            if (sibling.matches && sibling.matches('.msg-wrap--user[data-event-index]')) {
-                return String(sibling.getAttribute('data-event-index') || '');
-            }
-            sibling = sibling.previousElementSibling;
+    let sibling = aggregate.previousElementSibling;
+    while (sibling) {
+        if (sibling.matches && sibling.matches('.msg-wrap--user[data-event-index]')) {
+            return String(sibling.getAttribute('data-event-index') || '');
         }
+        sibling = sibling.previousElementSibling;
     }
     return latestRootTurnId();
 }
@@ -119,9 +111,7 @@ export function splitReviewRows(rows) {
 }
 function isExpanded(aggregate) {
     if (!aggregate) return false;
-    return aggregate.classList.contains('subagent-grid-card')
-        ? aggregate.classList.contains('is-expanded')
-        : !aggregate.classList.contains('is-collapsed');
+    return !aggregate.classList.contains('is-collapsed');
 }
 function remember(aggregate) {
     const index = aggregateRecency.indexOf(aggregate);
@@ -321,10 +311,8 @@ function updateBadge(aggregate) {
             openDetails();
         });
         const title = aggregate.querySelector('.process-aggregate-title');
-        const subagentTitle = aggregate.querySelector('.subagent-card-title-row');
         const wrap = aggregate.querySelector('.process-aggregate-title-wrap');
         if (title) title.appendChild(badge);
-        else if (subagentTitle) subagentTitle.appendChild(badge);
         else if (wrap) wrap.insertBefore(badge, wrap.querySelector('.process-aggregate-stats'));
     }
     const parts = splitReviewRows(rows);
@@ -568,14 +556,11 @@ function scanExisting() {
     const roots = [];
     const stream = document.getElementById('chat-stream');
     if (stream) roots.push(stream);
-    const grid = document.getElementById('subagent-grid');
-    if (grid && String(grid.dataset.sessionId || '') === mountedSessionId) roots.push(grid);
     roots.forEach(function (root) { root.querySelectorAll('.feed-item.feed--tool').forEach(function (row) {
         if (!row._toolCallEvent) return;
-        const child = row.closest('.subagent-grid-card[data-agent-id]');
         const aggregate = row.closest('.process-aggregate');
         const applied = applyTool({ event: row._toolCallEvent, row, aggregate,
-            sessionId: row._toolCallEvent.session_id || (child && child.dataset.agentId) || mountedSessionId,
+            sessionId: row._toolCallEvent.session_id || mountedSessionId,
             rootSessionId: aggregateSessionId(aggregate) || mountedSessionId },
         { deferRender: true });
         found = found || Boolean(applied);
@@ -648,7 +633,7 @@ function mount() {
             // it must not rebuild the review UI.
             if (mutation.type !== 'attributes') return;
             const aggregate = mutation.target && mutation.target.matches
-                && mutation.target.matches('.process-aggregate, .subagent-grid-card')
+                && mutation.target.matches('.process-aggregate')
                 ? mutation.target : null;
             if (!aggregate || !aggregateChanges.has(aggregate) || !aggregateIsCurrent(aggregate)) return;
             shouldSync = true;
