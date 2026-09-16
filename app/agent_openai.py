@@ -723,10 +723,13 @@ def _normalize_content_text(content: Any) -> str:
     return normalize_content_text(content)
 
 
-def _coerce_text_or_none(raw: Any) -> Optional[str]:
+def _coerce_text_or_none(raw: Any, *, keep_ws: bool = False) -> Optional[str]:
     if raw is None:
         return None
     if isinstance(raw, str):
+        if keep_ws:
+            # 流式分片：原样保留（含纯空白分片），仅真正空串返回 None
+            return raw if raw != "" else None
         text = raw.strip()
         return text or None
     text = str(raw).strip()
@@ -780,11 +783,11 @@ def _extract_reasoning_from_content(value: Any) -> Tuple[Optional[str], Optional
     return (None, None)
 
 
-def _extract_reasoning_text_and_field(obj: Any) -> Tuple[Optional[str], Optional[str]]:
-    text = _coerce_text_or_none(_get_nested_attr_or_key(obj, "reasoning_content"))
+def _extract_reasoning_text_and_field(obj: Any, *, keep_ws: bool = False) -> Tuple[Optional[str], Optional[str]]:
+    text = _coerce_text_or_none(_get_nested_attr_or_key(obj, "reasoning_content"), keep_ws=keep_ws)
     if text:
         return (text, "reasoning_content")
-    text = _coerce_text_or_none(_get_nested_attr_or_key(obj, "reasoning"))
+    text = _coerce_text_or_none(_get_nested_attr_or_key(obj, "reasoning"), keep_ws=keep_ws)
     if text:
         return (text, "reasoning")
     return _extract_reasoning_from_content(_get_nested_attr_or_key(obj, "content"))
@@ -2441,7 +2444,7 @@ def run_chat_completion_stream_worker(
             delta = choice0.delta
             if not delta:
                 continue
-            rc, rc_field = _extract_reasoning_text_and_field(delta)
+            rc, rc_field = _extract_reasoning_text_and_field(delta, keep_ws=True)
             if rc:
                 piece = rc if isinstance(rc, str) else str(rc)
                 last_delta_at_ms = api_elapsed_ms()
@@ -2452,12 +2455,14 @@ def run_chat_completion_stream_worker(
                 )
                 if reasoning_field is None and rc_field:
                     reasoning_field = rc_field
-                if visible_piece and not first_delta_seen:
+                # 纯空白分片照常入队（用于重组换行），但不计作「首个 token」
+                visible_for_flags = visible_piece.strip()
+                if visible_for_flags and not first_delta_seen:
                     first_delta_seen = True
                     first_delta_at_ms = last_delta_at_ms
                     put_stream_timing("first_delta", delta_type="reasoning", chars=len(visible_piece), chunk_count=chunk_count)
                     emit_transport_breakdown_once()
-                if visible_piece and not first_reasoning_seen:
+                if visible_for_flags and not first_reasoning_seen:
                     first_reasoning_seen = True
                     put_stream_timing("first_reasoning_delta", chars=len(visible_piece), chunk_count=chunk_count)
                 if visible_piece and emit_deltas:
