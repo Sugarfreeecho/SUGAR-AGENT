@@ -161,6 +161,22 @@ def _request_existing_ui_activation(path: str = "/", session: str = "") -> bool:
     return request_webui_activation(path, base_url=BASE_URL, session=session)
 
 
+def _request_webui_activation_with_retry(path: str = "/", session: str = "") -> bool:
+    """Try the activation heartbeat twice before trusting a negative answer.
+
+    A transient hiccup (backend busy or just restarting) used to look
+    identical to "no page is open" and sent notification clicks straight to a
+    fresh browser tab while the real page stayed open.
+    """
+
+    for attempt in range(2):
+        if _request_existing_ui_activation(path, session=session):
+            return True
+        if attempt == 0:
+            time.sleep(0.15)
+    return False
+
+
 def _session_from_protocol_uri(raw_uri: str) -> str:
     """Extract ``session`` from a ``sugaragent://open-ui?session=...`` URI."""
     import re as _re
@@ -264,6 +280,47 @@ def _focus_existing_webui_window() -> bool:
         return False
 
 
+_BROWSER_WINDOW_CLASSES = {"Chrome_WidgetWin_1", "MozillaWindowClass"}
+
+
+def _visible_browser_windows() -> list[int]:
+    """Visible top-level browser windows regardless of the active tab title."""
+
+    matches: list[int] = []
+
+    def collect(hwnd, _extra):
+        try:
+            class_name = str(win32gui.GetClassName(hwnd) or "")
+            if win32gui.IsWindowVisible(hwnd) and class_name in _BROWSER_WINDOW_CLASSES:
+                matches.append(int(hwnd))
+        except win32gui.error:
+            return True
+        return True
+
+    try:
+        win32gui.EnumWindows(collect, None)
+    except win32gui.error:
+        pass
+    return matches
+
+
+def _focus_any_browser_window() -> bool:
+    """Focus a browser window by class when the tab-title match failed.
+
+    Only used after the backend confirmed a live WebUI page heartbeat, so a
+    visible browser window is far more likely to host that page than the
+    "open a fresh tab" fallback.
+    """
+
+    try:
+        for hwnd in _visible_browser_windows():
+            if _bring_window_to_foreground(hwnd):
+                return True
+        return False
+    except win32gui.error:
+        return False
+
+
 def _find_existing_tray_window() -> int:
     try:
         return int(win32gui.FindWindow(WINDOW_CLASS_NAME, None) or 0)
@@ -301,8 +358,13 @@ def _activate_webui_from_external(session: str = "") -> bool:
     # heartbeat contract before falling back to the default browser handler.
     # Focus must verify success: a reused page inside an unfocusable host
     # (embedded automation browser) falls through to a real browser window.
-    if _request_existing_ui_activation("/", session=session) and _focus_existing_webui_window():
-        return True
+    activation_reused = _request_webui_activation_with_retry("/", session=session)
+    if activation_reused:
+        if _focus_existing_webui_window():
+            return True
+        if _focus_any_browser_window():
+            _append_log("UI activation: page heartbeat found; focused browser window by class")
+            return True
     # During a backend restart the old page can still be visible before its
     # first presence heartbeat reaches the new process. The browser title is an
     # immediate secondary reuse signal on Windows.
@@ -315,6 +377,7 @@ def _activate_webui_from_external(session: str = "") -> bool:
             "WebUI window visible but could not be foregrounded; not opening a duplicate"
         )
         return True
+    _append_log(f"UI activation: opening a new browser page (session={session or '-'})")
     _open_url_in_browser(
         f"/?session={session}" if session else "/",
         refresh=False,
@@ -811,7 +874,7 @@ class TrayLauncher:
             return
         session = str(session or "").strip()
         activation_reused = (
-            path == "/" and _request_existing_ui_activation(path, session=session)
+        path == "/" and _request_webui_activation_with_retry(path, session=session)
         )
         if _focus_existing_webui_window():
             if session and not activation_reused:
@@ -827,6 +890,9 @@ class TrayLauncher:
             _append_log(
                 "WebUI window visible but could not be foregrounded; not opening a duplicate"
             )
+            return
+        if activation_reused and _focus_any_browser_window():
+            _append_log("UI activation: page heartbeat found; focused browser window by class")
             return
         if activation_reused:
             # The backend sees a live page heartbeat, but no visible browser

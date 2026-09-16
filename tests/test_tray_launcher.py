@@ -327,6 +327,7 @@ def test_external_ui_activation_opens_page_only_when_none_is_reusable(monkeypatc
     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
     monkeypatch.setattr(
         tray_launcher,
         "_open_url_in_browser",
@@ -335,6 +336,38 @@ def test_external_ui_activation_opens_page_only_when_none_is_reusable(monkeypatc
 
     assert tray_launcher._activate_webui_from_external() is False
     assert opened == [("/", False)]
+
+
+def test_external_ui_activation_retries_once_before_giving_up(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        tray_launcher,
+        "_request_existing_ui_activation",
+        lambda path, session="": calls.append(path) or len(calls) == 2,
+    )
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: True)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
+
+    assert tray_launcher._activate_webui_from_external("abc123") is True
+    assert calls == ["/", "/"]
+
+
+def test_external_ui_activation_focuses_browser_window_by_class(monkeypatch):
+    opened = []
+    monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
+    monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": True)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_focus_any_browser_window", lambda: True)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
+    monkeypatch.setattr(
+        tray_launcher,
+        "_open_url_in_browser",
+        lambda path, refresh=True: opened.append((path, refresh)),
+    )
+
+    assert tray_launcher._activate_webui_from_external("abc123") is True
+    assert opened == []
 
 
 def test_tray_information_is_delivered_as_system_notification(monkeypatch):
