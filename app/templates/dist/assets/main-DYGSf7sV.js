@@ -453,6 +453,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '开始': 'Start', '浏览会话工作区的文件': 'Browse the session workspace files',
     '查看本会话的文件改动': 'Review this session\\u2019s file changes', '新建窗口': 'New window',
     '本轮': 'This round', '本次会话': 'This session', '会话总览': 'Session overview', '本轮暂无文件改动': 'No file changes this round',
+    '网页预览': 'Web preview', '查看源码': 'View source', '预览网页': 'Preview page',
     '未命名提问': 'Untitled prompt', '未统计行数': 'No line stats',
     '全部撤销': 'Undo all', '全部恢复': 'Restore all', '正在撤销…': 'Undoing…', '正在恢复…': 'Restoring…',
     '已全部撤销': 'All changes undone', '已全部恢复': 'All changes restored',
@@ -15249,27 +15250,40 @@ function attachAllHumanInteractionCards(stream) {
     });
 }
 
-function ensurePendingQuestionToolRow(ctx, record, sessionId) {
-    if (!record || record.kind === 'approval' || record.status !== 'pending') return false;
+function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
+    // tool_pending rows are ephemeral: any stream rebuild (page refresh,
+    // reconnect, history recovery) removes them. A durable interaction card
+    // must recreate that anchor row, otherwise it renders at the bottom of the
+    // stream - outside the process block that owns the tool call. Both
+    // approvals and ask_user questions share this path; tool_call_id is the
+    // stable identity that later merges the placeholder with the real row.
+    if (!record || record.status !== 'pending') return false;
     var toolCallId = String(record.tool_call_id || '');
+    if (!toolCallId) return false;
+    if (!ctx || !ctx.stream) {
+        var visibleStream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : null;
+        if (!visibleStream || typeof newDomContext !== 'function') return false;
+        ctx = newDomContext(visibleStream);
+    }
     var stream = ctx && ctx.stream ? ctx.stream : null;
-    if (!toolCallId || !stream || typeof appendToolPendingRow !== 'function') return false;
+    if (!stream || typeof appendToolPendingRow !== 'function') return false;
     var existing = null;
     if (typeof CSS !== 'undefined' && CSS.escape) {
         try {
             existing = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');
         } catch (e) { existing = null; }
     }
-    if (!existing) {
-        appendToolPendingRow(ctx, {
-            type: 'tool_pending',
-            ephemeral: true,
-            tool: 'ask_user',
-            args: { questions: record.questions || [] },
-            command_preview: 'ask_user',
-            tool_call_id: toolCallId,
-        }, sessionId);
-    }
+    if (existing) return true;
+    var isApproval = record.kind === 'approval';
+    var toolName = isApproval ? String(record.tool || 'tool') : 'ask_user';
+    appendToolPendingRow(ctx, {
+        type: 'tool_pending',
+        ephemeral: true,
+        tool: toolName,
+        args: isApproval ? {} : { questions: record.questions || [] },
+        command_preview: toolName,
+        tool_call_id: toolCallId,
+    }, sessionId);
     return true;
 }
 
@@ -16308,7 +16322,7 @@ function renderHumanInteractionEvent(ctx, event, runSessionId) {
     var sid = String(runSessionId || event.session_id || currentSessionId || '');
     var record = applyHumanInteractionEvent(sid, event);
     var stream = ctx && ctx.stream ? ctx.stream : null;
-    ensurePendingQuestionToolRow(ctx, record, sid);
+    ensurePendingHumanInteractionToolRow(ctx, record, sid);
     var card = renderHumanInteractionRecord(record, sid, stream);
     // Live SSE only: bring a freshly-inserted pending card into view.
     if (card && record.status === 'pending' && !(typeof replayingMessages !== 'undefined' && replayingMessages)) {
@@ -16323,7 +16337,7 @@ function renderPendingHumanInteractions(sessionId) {
     var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
     var ctx = stream && typeof newDomContext === 'function' ? newDomContext(stream) : null;
     pendingHumanInteractionRecords(sid).forEach(function (record) {
-        ensurePendingQuestionToolRow(ctx, record, sid);
+        ensurePendingHumanInteractionToolRow(ctx, record, sid);
         renderHumanInteractionRecord(record, sid, stream);
     });
     if (typeof attachAllHumanInteractionCards === 'function') attachAllHumanInteractionCards(stream);
@@ -20353,6 +20367,12 @@ async function attachSessionEventStream(sessionId, opts) {
             await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
             streamHistoryRecoveryBySession.delete(runSessionId);
+            // A history rebuild drops the ephemeral tool_pending rows. Re-render
+            // the durable human-interaction cards so they anchor to replayed
+            // tool rows instead of landing at the bottom of the stream.
+            if (typeof refreshHumanInteractions === 'function') {
+                void refreshHumanInteractions(runSessionId);
+            }
         } else if (!Number.isFinite(Number(opts.afterIndex)) && typeof ensureLatestHistoryTailForLiveAppend === 'function') {
             var attachTailReady = await ensureLatestHistoryTailForLiveAppend(runSessionId);
             if (!attachTailReady || runSessionId !== currentSessionId) return;
@@ -27103,6 +27123,9 @@ const DOCK_RIGHT_IMAGE_SUFFIXES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', '
 const DOCK_RIGHT_AUDIO_SUFFIXES = ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'weba'];
 const DOCK_RIGHT_VIDEO_SUFFIXES = ['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'];
 
+/** Suffixes rendered as a sandboxed web page (with a source toggle). */
+const DOCK_RIGHT_HTML_SUFFIXES = ['html', 'htm'];
+
 /** Suffixes that go straight to the system app: never read as text (feedback #5). */
 const DOCK_RIGHT_BINARY_SUFFIXES = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'epub', 'zip', '7z', 'rar', 'gz', 'tar', 'exe', 'msi', 'dll', 'so', 'dylib', 'bin', 'pyc', 'class', 'jar', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'db', 'sqlite', 'mp3', 'wav', 'flac', 'aac', 'ogg', 'mp4', 'mov', 'mkv', 'avi'];
 
@@ -27139,6 +27162,9 @@ function dockRightLabels() {
         guideChanges: '修改历史',
         guideChangesDesc: '查看本会话的文件改动',
         newTab: '新建窗口',
+        preview: '网页预览',
+        viewSource: '查看源码',
+        viewPreview: '预览网页',
         files: '工作区文件',
         document: '文件内容',
         changes: '修改历史',
@@ -27994,9 +28020,12 @@ function dockRightDocumentBody(tab) {
     openSystem.addEventListener('click', () => {
         void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
     });
+    // The refresh control keeps the head's far right corner on every page;
+    // the system-open action sits beside the title instead (it ran between
+    // the name and the corner and pushed the refresh icon into the middle).
     head.appendChild(name);
-    head.appendChild(refresh);
     head.appendChild(openSystem);
+    head.appendChild(refresh);
     const content = document.createElement('div');
     content.className = 'dock-doc-content';
     el.appendChild(head);
@@ -28028,6 +28057,45 @@ function dockRightDocumentBody(tab) {
         // instead of showing mojibake.
         content.appendChild(dockRightSystemCard(rel));
         refresh.disabled = true;
+    } else if (DOCK_RIGHT_HTML_SUFFIXES.indexOf(suffix) >= 0) {
+        // HTML renders as a page by default — sandboxed iframe, its own
+        // origin, sibling assets resolved through /api/workspace-assets/ —
+        // with a one-click switch to the source view.
+        let mode = 'preview';
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'dock-link-button dock-doc-source-toggle';
+        toggle.setAttribute('data-dock-doc-source-toggle', '1');
+        const assetUrl = '/api/workspace-assets/' + String(rel).split(/[\\\\/]/).map(encodeURIComponent).join('/');
+        const renderPreview = () => {
+            mode = 'preview';
+            content.style.padding = '0';
+            const frame = document.createElement('iframe');
+            frame.className = 'dock-doc-frame';
+            frame.setAttribute('data-dock-doc-frame', '1');
+            frame.setAttribute('sandbox', 'allow-scripts');
+            frame.setAttribute('referrerpolicy', 'no-referrer');
+            frame.title = name.textContent;
+            frame.src = assetUrl + '?_=' + String(Date.now());
+            content.replaceChildren(frame);
+            toggle.textContent = dockRightText('viewSource');
+        };
+        const renderSource = () => {
+            mode = 'source';
+            content.style.padding = '';
+            void dockRightLoadText(content, state);
+            toggle.textContent = dockRightText('viewPreview');
+        };
+        toggle.addEventListener('click', () => {
+            if (mode === 'preview') renderSource();
+            else renderPreview();
+        });
+        head.insertBefore(toggle, openSystem);
+        refresh.addEventListener('click', () => {
+            if (mode === 'preview') renderPreview();
+            else void dockRightLoadText(content, state);
+        });
+        renderPreview();
     } else {
         void dockRightLoadText(content, state);
         refresh.addEventListener('click', () => { void dockRightLoadText(content, state); });
