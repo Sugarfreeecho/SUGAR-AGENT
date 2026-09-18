@@ -363,27 +363,40 @@ function attachAllHumanInteractionCards(stream) {
     });
 }
 
-function ensurePendingQuestionToolRow(ctx, record, sessionId) {
-    if (!record || record.kind === 'approval' || record.status !== 'pending') return false;
+function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
+    // tool_pending rows are ephemeral: any stream rebuild (page refresh,
+    // reconnect, history recovery) removes them. A durable interaction card
+    // must recreate that anchor row, otherwise it renders at the bottom of the
+    // stream - outside the process block that owns the tool call. Both
+    // approvals and ask_user questions share this path; tool_call_id is the
+    // stable identity that later merges the placeholder with the real row.
+    if (!record || record.status !== 'pending') return false;
     var toolCallId = String(record.tool_call_id || '');
+    if (!toolCallId) return false;
+    if (!ctx || !ctx.stream) {
+        var visibleStream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : null;
+        if (!visibleStream || typeof newDomContext !== 'function') return false;
+        ctx = newDomContext(visibleStream);
+    }
     var stream = ctx && ctx.stream ? ctx.stream : null;
-    if (!toolCallId || !stream || typeof appendToolPendingRow !== 'function') return false;
+    if (!stream || typeof appendToolPendingRow !== 'function') return false;
     var existing = null;
     if (typeof CSS !== 'undefined' && CSS.escape) {
         try {
             existing = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');
         } catch (e) { existing = null; }
     }
-    if (!existing) {
-        appendToolPendingRow(ctx, {
-            type: 'tool_pending',
-            ephemeral: true,
-            tool: 'ask_user',
-            args: { questions: record.questions || [] },
-            command_preview: 'ask_user',
-            tool_call_id: toolCallId,
-        }, sessionId);
-    }
+    if (existing) return true;
+    var isApproval = record.kind === 'approval';
+    var toolName = isApproval ? String(record.tool || 'tool') : 'ask_user';
+    appendToolPendingRow(ctx, {
+        type: 'tool_pending',
+        ephemeral: true,
+        tool: toolName,
+        args: isApproval ? {} : { questions: record.questions || [] },
+        command_preview: toolName,
+        tool_call_id: toolCallId,
+    }, sessionId);
     return true;
 }
 
@@ -1422,7 +1435,7 @@ function renderHumanInteractionEvent(ctx, event, runSessionId) {
     var sid = String(runSessionId || event.session_id || currentSessionId || '');
     var record = applyHumanInteractionEvent(sid, event);
     var stream = ctx && ctx.stream ? ctx.stream : null;
-    ensurePendingQuestionToolRow(ctx, record, sid);
+    ensurePendingHumanInteractionToolRow(ctx, record, sid);
     var card = renderHumanInteractionRecord(record, sid, stream);
     // Live SSE only: bring a freshly-inserted pending card into view.
     if (card && record.status === 'pending' && !(typeof replayingMessages !== 'undefined' && replayingMessages)) {
@@ -1437,7 +1450,7 @@ function renderPendingHumanInteractions(sessionId) {
     var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
     var ctx = stream && typeof newDomContext === 'function' ? newDomContext(stream) : null;
     pendingHumanInteractionRecords(sid).forEach(function (record) {
-        ensurePendingQuestionToolRow(ctx, record, sid);
+        ensurePendingHumanInteractionToolRow(ctx, record, sid);
         renderHumanInteractionRecord(record, sid, stream);
     });
     if (typeof attachAllHumanInteractionCards === 'function') attachAllHumanInteractionCards(stream);

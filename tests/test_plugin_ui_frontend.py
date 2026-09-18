@@ -69,7 +69,6 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "myagent:tool-call-rendered" in source
     assert "ResizeObserver" in source
     assert "✏️" not in source
-    assert "subagent-card-title-row" in source
     assert "change-review-view" in source
     assert "change-review-sheet" not in source
     assert "openSheet" not in source

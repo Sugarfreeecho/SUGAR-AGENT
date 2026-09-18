@@ -60,6 +60,9 @@ const DOCK_RIGHT_IMAGE_SUFFIXES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', '
 const DOCK_RIGHT_AUDIO_SUFFIXES = ['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'weba'];
 const DOCK_RIGHT_VIDEO_SUFFIXES = ['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'];
 
+/** Suffixes rendered as a sandboxed web page (with a source toggle). */
+const DOCK_RIGHT_HTML_SUFFIXES = ['html', 'htm'];
+
 /** Suffixes that go straight to the system app: never read as text (feedback #5). */
 const DOCK_RIGHT_BINARY_SUFFIXES = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'epub', 'zip', '7z', 'rar', 'gz', 'tar', 'exe', 'msi', 'dll', 'so', 'dylib', 'bin', 'pyc', 'class', 'jar', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'db', 'sqlite', 'mp3', 'wav', 'flac', 'aac', 'ogg', 'mp4', 'mov', 'mkv', 'avi'];
 
@@ -96,6 +99,9 @@ function dockRightLabels() {
         guideChanges: '修改历史',
         guideChangesDesc: '查看本会话的文件改动',
         newTab: '新建窗口',
+        preview: '网页预览',
+        viewSource: '查看源码',
+        viewPreview: '预览网页',
         files: '工作区文件',
         document: '文件内容',
         changes: '修改历史',
@@ -951,9 +957,12 @@ function dockRightDocumentBody(tab) {
     openSystem.addEventListener('click', () => {
         void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
     });
+    // The refresh control keeps the head's far right corner on every page;
+    // the system-open action sits beside the title instead (it ran between
+    // the name and the corner and pushed the refresh icon into the middle).
     head.appendChild(name);
-    head.appendChild(refresh);
     head.appendChild(openSystem);
+    head.appendChild(refresh);
     const content = document.createElement('div');
     content.className = 'dock-doc-content';
     el.appendChild(head);
@@ -985,6 +994,45 @@ function dockRightDocumentBody(tab) {
         // instead of showing mojibake.
         content.appendChild(dockRightSystemCard(rel));
         refresh.disabled = true;
+    } else if (DOCK_RIGHT_HTML_SUFFIXES.indexOf(suffix) >= 0) {
+        // HTML renders as a page by default — sandboxed iframe, its own
+        // origin, sibling assets resolved through /api/workspace-assets/ —
+        // with a one-click switch to the source view.
+        let mode = 'preview';
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'dock-link-button dock-doc-source-toggle';
+        toggle.setAttribute('data-dock-doc-source-toggle', '1');
+        const assetUrl = '/api/workspace-assets/' + String(rel).split(/[\\/]/).map(encodeURIComponent).join('/');
+        const renderPreview = () => {
+            mode = 'preview';
+            content.style.padding = '0';
+            const frame = document.createElement('iframe');
+            frame.className = 'dock-doc-frame';
+            frame.setAttribute('data-dock-doc-frame', '1');
+            frame.setAttribute('sandbox', 'allow-scripts');
+            frame.setAttribute('referrerpolicy', 'no-referrer');
+            frame.title = name.textContent;
+            frame.src = assetUrl + '?_=' + String(Date.now());
+            content.replaceChildren(frame);
+            toggle.textContent = dockRightText('viewSource');
+        };
+        const renderSource = () => {
+            mode = 'source';
+            content.style.padding = '';
+            void dockRightLoadText(content, state);
+            toggle.textContent = dockRightText('viewPreview');
+        };
+        toggle.addEventListener('click', () => {
+            if (mode === 'preview') renderSource();
+            else renderPreview();
+        });
+        head.insertBefore(toggle, openSystem);
+        refresh.addEventListener('click', () => {
+            if (mode === 'preview') renderPreview();
+            else void dockRightLoadText(content, state);
+        });
+        renderPreview();
     } else {
         void dockRightLoadText(content, state);
         refresh.addEventListener('click', () => { void dockRightLoadText(content, state); });

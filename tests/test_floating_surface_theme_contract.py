@@ -37,7 +37,6 @@ def test_floating_components_share_the_theme_surface_contract() -> None:
     raised_surface_selectors = (
         ".session-more-menu",
         ".msg-copy-popover",
-        ".subagent-card-menu-pop",
     )
     for selector in raised_surface_selectors:
         block = styles.split(selector + " {", 1)[1].split("}", 1)[0]

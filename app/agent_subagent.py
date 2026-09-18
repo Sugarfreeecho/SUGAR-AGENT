@@ -347,12 +347,20 @@ async def switch_subagent_model_profile(
     instruction: str = "",
     source_run_id: str = "",
     requested_by: str = "user",
+    handover: bool = True,
 ) -> Dict[str, Any]:
     """Switch an existing subagent at a safe ReAct boundary.
 
-    The active provider request is interrupted, its durable partial checkpoint is
-    preserved by ``agent_loop``, and the same subagent continues with the target
-    profile. This keeps the child ID, history, worktree, and task ownership.
+    ``handover=True`` (task tool / dedicated API): the active provider request
+    is interrupted, its durable partial checkpoint is preserved by
+    ``agent_loop``, and the same subagent continues with the target profile.
+    This keeps the child ID, history, worktree, and task ownership.
+
+    ``handover=False`` (bottom-right selector while the subagent conversation is
+    open): every durable data action is kept — switch record, fork-freeze
+    release, parent task row, circuit reset, status event — but the
+    interrupt/continuation is skipped, matching the main-session selector
+    semantics where the new profile applies on the next model call.
     """
     child_id = session_manager.validate_subagent_resume(
         parent_session_id, child_session_id
@@ -398,6 +406,7 @@ async def switch_subagent_model_profile(
             "profile_id": target_profile_id,
             "model": target_model,
             "running": running,
+            "handover": bool(handover),
             "deduplicated": True,
             "interrupted_current_step": False,
             "continuation_queued": False,
@@ -419,7 +428,7 @@ async def switch_subagent_model_profile(
                 "model_profile_id": target_profile_id,
                 "executor_model": target_model,
                 "last_model_switch": record,
-                "model_switch_status": "interrupting" if running else "ready",
+                "model_switch_status": "interrupting" if (running and handover) else "ready",
             },
         )
         session_manager.append_ui_event(
@@ -429,7 +438,15 @@ async def switch_subagent_model_profile(
                 "content": (
                     f"Model switched to profile {target_profile_id}"
                     + (f" ({target_model})" if target_model else "")
-                    + ("; continuing current task." if running else "; applies on next resume.")
+                    + (
+                        "; continuing current task."
+                        if (running and handover)
+                        else (
+                            "; applies on the next model call."
+                            if running
+                            else "; applies on next resume."
+                        )
+                    )
                 ),
                 "model_switch": True,
                 "profile_id": target_profile_id,
@@ -456,7 +473,7 @@ async def switch_subagent_model_profile(
     queued = False
     aborted = False
     queue_error = ""
-    if running:
+    if running and handover:
         from agent_loop import abort_session_steer_run, enqueue_session_steer
 
         continuation = (
@@ -500,6 +517,7 @@ async def switch_subagent_model_profile(
         "previous_profile_id": previous_profile_id,
         "running": running,
         "switch_id": switch_id,
+        "handover": bool(handover),
         "interrupted_current_step": aborted,
         "continuation_queued": queued,
         **({"warning": queue_error} if queue_error else {}),

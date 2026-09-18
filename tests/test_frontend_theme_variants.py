@@ -138,11 +138,12 @@ def test_execution_process_panel_styles_are_the_single_skin() -> None:
 def test_execution_process_copy_uses_execution_process() -> None:
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     translations = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
-    subagent = (ROOT / "frontend/src/app/modules/subagent.js").read_text(encoding="utf-8")
 
     assert '<span class="process-aggregate-title">执行过程</span>' in rendering
     assert "'执行过程': 'Execution process'" in translations
     assert "展开执行过程高度" in rendering
     assert "收起执行过程高度" in rendering
-    assert "展开查看执行过程" in subagent
+    # The old subagent dock module was removed in the addressed-conversation
+    # rebuild; the label survives in the shared translation table.
+    assert "'展开查看执行过程': 'Expand to view process'" in translations
     assert '<span class="process-aggregate-title">执行轨迹</span>' not in rendering

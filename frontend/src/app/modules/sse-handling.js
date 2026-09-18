@@ -1086,6 +1086,12 @@ async function attachSessionEventStream(sessionId, opts) {
             await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
             streamHistoryRecoveryBySession.delete(runSessionId);
+            // A history rebuild drops the ephemeral tool_pending rows. Re-render
+            // the durable human-interaction cards so they anchor to replayed
+            // tool rows instead of landing at the bottom of the stream.
+            if (typeof refreshHumanInteractions === 'function') {
+                void refreshHumanInteractions(runSessionId);
+            }
         } else if (!Number.isFinite(Number(opts.afterIndex)) && typeof ensureLatestHistoryTailForLiveAppend === 'function') {
             var attachTailReady = await ensureLatestHistoryTailForLiveAppend(runSessionId);
             if (!attachTailReady || runSessionId !== currentSessionId) return;

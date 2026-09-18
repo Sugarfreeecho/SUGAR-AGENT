@@ -237,6 +237,7 @@ _UI_CLOSED_NOTIFY_GRACE_SEC = max(
 _UI_PRESENCE_TOKEN_TTL_SEC = max(90.0, float(os.getenv("MYAGENT_UI_PRESENCE_TTL_SEC", "300")))
 _ui_presence_lock = threading.Lock()
 _hook_pipeline_warmup_task: Optional[asyncio.Task] = None
+_prompt_build_warmup_task: Optional[asyncio.Task] = None
 _ui_presence_tokens: dict[str, dict[str, Any]] = {}
 _ui_activation_seq = 0
 _ui_activation_path = "/"
@@ -2119,6 +2120,39 @@ async def workspace_file_text(
     )
 
 
+@fastapi_app.get("/api/workspace-assets/{rel:path}")
+async def workspace_assets(rel: str):
+    """Serve one workspace file as-is, for the details column's HTML preview.
+
+    The URL shape keeps sibling assets resolvable: a document at
+    ``/api/workspace-assets/<dir>/page.html`` loads ``./style.css`` from
+    ``/api/workspace-assets/<dir>/style.css``. The path goes through the same
+    allowed-root gate as the other workspace readers; the response is no-store
+    so a reload always reflects the file on disk.
+    """
+    try:
+        path = await run_in_threadpool(_resolve_workspace_view_path, rel)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
+    except PermissionError:
+        return JSONResponse({"ok": False, "error": "path outside allowed roots"}, status_code=403)
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "file not found"}, status_code=404)
+    except Exception as exc:
+        logger.warning("workspace asset resolve failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid file path"}, status_code=400)
+    if not path.is_file():
+        return JSONResponse({"ok": False, "error": "not a file"}, status_code=404)
+    import mimetypes
+    guessed, _ = mimetypes.guess_type(str(path))
+    media_type = guessed or "application/octet-stream"
+    return FileResponse(
+        str(path),
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _html_with_path_picker_script(body: str) -> str:
     try:
         v = int(_PATH_PICKER_JS_PATH.stat().st_mtime)
@@ -3726,11 +3760,40 @@ async def set_session_model_profile(session_id: str, req: Request):
     pid = str((data or {}).get("profile_id") or "").strip()
     if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, pid)):
         return JSONResponse({"ok": False, "error": "unknown profile_id"}, status_code=404)
+    # 子代理会话复用同一个选择器端点：转交子代理切换管线处理——释放 fork 冻结、
+    # 同步父任务行、写切换历史；按主会话语义不做安全中断交接（下一次模型调用生效）。
+    try:
+        target_meta = session_manager._load_metadata(sid)
+    except Exception:
+        target_meta = {}
+    if isinstance(target_meta, dict) and target_meta.get("is_subagent"):
+        parent_id = str(target_meta.get("parent_session_id") or "").strip()
+        if not parent_id:
+            return JSONResponse({"ok": False, "error": "subagent parent is missing"}, status_code=409)
+        try:
+            from agent_subagent import switch_subagent_model_profile
+
+            result = await switch_subagent_model_profile(
+                parent_id,
+                sid,
+                pid,
+                requested_by="user",
+                handover=False,
+            )
+        except Exception as exc:
+            logger.exception("switch subagent model via session endpoint failed: %s", exc)
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        status_code = int(result.pop("status_code", 200) or 200)
+        if not result.get("ok"):
+            return JSONResponse(content=result, status_code=status_code)
+        result.setdefault("profile_id", pid)
+        return JSONResponse(content=result)
     with session_manager._session_metadata_lock(sid):
         meta = session_manager._load_metadata_unlocked(sid)
         if not isinstance(meta, dict):
             meta = {}
         meta["model_profile_id"] = pid
+        meta["model_profile_selection_id"] = uuid.uuid4().hex
         meta["updated_at"] = __import__("datetime").datetime.now().isoformat()
         session_manager._save_metadata_unlocked(sid, meta)
         _invalidate_executor_config_cache(sid)
@@ -8249,6 +8312,34 @@ async def start_webui_lifecycle() -> None:
 
     global _hook_pipeline_warmup_task
     _hook_pipeline_warmup_task = asyncio.create_task(_warm_hook_pipeline_task())
+
+    # Warm the first request's prompt path too: a fresh process builds the skills
+    # catalog (~198 ms of directory walks and stat calls) and the environment
+    # block (~36 ms) on whichever request arrives first. Both are process-wide
+    # caches and session-independent, so doing it here keeps that off the user's
+    # first message. Same reasoning as the hook pipeline above.
+    async def _warm_first_request_task() -> None:
+        await asyncio.sleep(3.5)
+        try:
+            from agent_loop import warm_prompt_build_path
+
+            warm_prompt_build_path()
+        except Exception:
+            logger.warning("prompt build path warmup failed", exc_info=True)
+        # Then open the pooled LLM connection: the first request of a process
+        # pays TCP + TLS (~330 ms) plus a cold request write (~590 ms), and every
+        # later step reuses that connection. Sending one 1-token request here
+        # moves it off the user's first message. Failures are non-fatal.
+        try:
+            from agent_harness import warm_llm_connections
+
+            warmed = await asyncio.to_thread(warm_llm_connections)
+            logger.info("llm connection pre-warm done hosts=%s", warmed)
+        except Exception:
+            logger.warning("llm connection warmup failed", exc_info=True)
+
+    global _prompt_build_warmup_task
+    _prompt_build_warmup_task = asyncio.create_task(_warm_first_request_task())
 
 
 async def refresh_web_plugin_lifecycle() -> None:

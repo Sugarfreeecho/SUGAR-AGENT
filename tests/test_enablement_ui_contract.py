@@ -16,35 +16,28 @@ def test_model_profile_switcher_and_configuration_page_expose_enablement_control
     assert '@fastapi_app.post("/api/model_profiles/{profile_id}/enabled")' in backend
 
 
-def test_running_subagent_model_switch_is_exposed_in_tool_api_and_ui():
+def test_running_subagent_model_switch_is_exposed_in_tool_api_and_selector():
     tools = (ROOT / "app/agent_tools.py").read_text(encoding="utf-8")
     backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
-    frontend_entry = (ROOT / "frontend/index.html").read_text(encoding="utf-8")
-    shell_body = (ROOT / "frontend/src/shell-body.html").read_text(encoding="utf-8")
-    renderers = (ROOT / "frontend/src/app/state/subagent-renderers.js").read_text(encoding="utf-8")
-    actions = (ROOT / "frontend/src/app/state/subagent-actions.js").read_text(encoding="utf-8")
-    dialogs = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(encoding="utf-8")
-    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    selector = (ROOT / "frontend/src/app/modules/model-profiles.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    addressing = (ROOT / "frontend/src/app/state/subagent-addressing.js").read_text(encoding="utf-8")
 
+    # The task tool still exposes the running-subagent switch.
     assert '"switch_model"' in tools
     assert "use action=switch_model to change it" in tools
     assert '@fastapi_app.post("/sessions/{parent_id}/subagents/{child_id}/model_profile")' in backend
-    assert "subagent-card-switch-model" in renderers
-    assert "chooseSubagentModelProfile" in actions
-    assert "/model_profile'" in actions
-    assert "selectOptions" in dialogs
-    assert 'id="ui-modal-select"' in frontend_entry
-    assert 'id="ui-modal-select"' in shell_body
-    assert 'id="ui-modal-select-control"' in frontend_entry
-    assert 'id="ui-modal-select-control"' in shell_body
-    assert ".ui-modal-select-trigger" in styles
-    assert ".ui-modal-select-menu" in styles
-    assert ".ui-modal-select-option.is-selected" in styles
-    assert "background: var(--floating-surface); box-shadow: var(--floating-shadow);" in styles
-    assert "--floating-surface: rgba(255, 255, 255, 0.99);" in styles
-    assert "subagentModelProfileOptionMeta" in actions
-    assert "ui-modal-select-control" in dialogs
-    assert "setSelectMenuOpen" in dialogs
+
+    # The rebuilt subagent UI has no card menu: the bottom-right model selector
+    # is the entry. It follows the addressed session (a child session opens in
+    # the main conversation area), and the session endpoint routes subagent
+    # targets into the switch pipeline (fork-freeze release + parent task row).
+    assert "switchSession(" in addressing
+    assert "refreshModelProfileSelector(sessionId)" in sessions
+    assert "/model_profile'" in selector
+    assert "is_subagent" in backend
+    assert "switch_subagent_model_profile" in backend
+    assert "handover=False" in backend
 
 
 def test_model_profile_hover_detail_exposes_profile_id():

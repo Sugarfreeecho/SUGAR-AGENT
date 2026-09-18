@@ -453,6 +453,7 @@
 .dock-files-title,
 .dock-changes-title,
 .dock-doc-name {
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     color: var(--text-secondary);
@@ -573,6 +574,9 @@
 }
 .dock-doc-image { display: block; max-width: 100%; height: auto; border-radius: var(--radius-sm); }
 .dock-doc-media { display: block; width: 100%; }
+/* The HTML preview fills the body edge to edge; the page itself paints its
+   own background, so the frame keeps a neutral ground under transparent ones. */
+.dock-doc-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
 .dock-note { padding: 8px 4px; color: var(--text-tertiary); font-size: 0.7rem; }
 
 /* ── start ("guide") page ─────────────────────────────────────────────────── */

@@ -397,6 +397,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '开始': 'Start', '浏览会话工作区的文件': 'Browse the session workspace files',
     '查看本会话的文件改动': 'Review this session\u2019s file changes', '新建窗口': 'New window',
     '本轮': 'This round', '本次会话': 'This session', '会话总览': 'Session overview', '本轮暂无文件改动': 'No file changes this round',
+    '网页预览': 'Web preview', '查看源码': 'View source', '预览网页': 'Preview page',
     '未命名提问': 'Untitled prompt', '未统计行数': 'No line stats',
     '全部撤销': 'Undo all', '全部恢复': 'Restore all', '正在撤销…': 'Undoing…', '正在恢复…': 'Restoring…',
     '已全部撤销': 'All changes undone', '已全部恢复': 'All changes restored',

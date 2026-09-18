@@ -997,9 +997,9 @@ def test_pending_question_switch_and_history_mutation_frontend_contract():
     rendering = (root / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     sse = (root / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
 
-    assert "function ensurePendingQuestionToolRow" in interactions
+    assert "function ensurePendingHumanInteractionToolRow" in interactions
     assert "appendToolPendingRow(ctx" in interactions
-    assert "ensurePendingQuestionToolRow(ctx, record, sid);" in interactions
+    assert "ensurePendingHumanInteractionToolRow(ctx, record, sid);" in interactions
     assert "refreshEpoch !== state.refreshEpoch" in interactions
     assert "resumeRecoveredHumanInteractionStream" in interactions
     submit = interactions.split("async function submitHumanQuestion", 1)[1].split(
@@ -1017,6 +1017,41 @@ def test_pending_question_switch_and_history_mutation_frontend_contract():
     assert "Number.isFinite(Number(opts.afterIndex))" in sse
     assert "detail.pending_human_interactions || {}" in sse
     assert "pendingHumanInteractionRecords(sid).length > 0" in sse
+
+
+def test_pending_approval_card_reanchors_after_stream_recovery():
+    """tool_pending rows are ephemeral, so a stream rebuild (refresh,
+    reconnect, history recovery) drops the anchor of a still-pending approval
+    card. Recovery must rebuild that row for approvals too - not only for
+    ask_user - and the history-recovery path must refresh durable human
+    interactions so the cards render inside a tool row again."""
+    root = Path(__file__).resolve().parents[1]
+    interactions = (root / "frontend/src/app/modules/human-interactions.js").read_text(
+        encoding="utf-8"
+    )
+    sse = (root / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    ensure = interactions.split("function ensurePendingHumanInteractionToolRow", 1)[1].split(
+        "function autoReviewStatusElement", 1
+    )[0]
+    assert "record.status !== 'pending'" in ensure
+    assert "record.kind === 'approval'" in ensure
+    assert "record.tool" in ensure
+    assert "appendToolPendingRow(ctx" in ensure
+    # The anchor rebuild must not depend on a live ctx/stream surviving the
+    # rebuild: it falls back to the visible chat stream.
+    assert "getVisibleChatStream()" in ensure
+    assert "newDomContext(visibleStream)" in ensure
+
+    attach = sse.split("async function attachSessionEventStream", 1)[1].split(
+        "function scheduleActiveSessionReconnect", 1
+    )[0]
+    assert "refreshHumanInteractions(runSessionId)" in attach
+    # The recovery marker is cleared before the refresh, so the refresh path
+    # cannot force a second history reload loop.
+    assert attach.index("streamHistoryRecoveryBySession.delete(runSessionId)") < attach.index(
+        "refreshHumanInteractions(runSessionId)"
+    )
 
 
 def test_pending_question_tool_row_is_merged_by_stable_call_id():
