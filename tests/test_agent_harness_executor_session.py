@@ -712,6 +712,9 @@ def test_manual_model_switch_clears_run_scoped_circuit_so_new_selection_is_serve
         def _load_metadata(self, _sid):
             return dict(self.meta)
 
+        def _load_metadata_unlocked(self, _sid):
+            return dict(self.meta)
+
         def _session_metadata_lock(self, _sid):
             lock = self._lock
 

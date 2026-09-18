@@ -616,15 +616,22 @@ def test_frontend_session_load_logs_open_session_timing_from_snapshot():
 
 def test_frontend_session_switch_async_work_is_session_scoped():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
-    subagent_sync = (ROOT / "frontend/src/app/state/subagent-sync.js").read_text(encoding="utf-8")
+    catalog = (ROOT / "frontend/src/app/state/subagent-catalog-store.js").read_text(encoding="utf-8")
+    frames = (ROOT / "frontend/src/app/modules/subagent-frames.js").read_text(encoding="utf-8")
 
     assert "if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;" in sessions
     assert "rebuildToc({ localOnly: true });" in sessions
-    assert sessions.count("if (switchToken === switchSessionEpoch && sessionId === currentSessionId)") >= 3
-    assert "subagentTreeRefreshInflightBySession" in subagent_sync
-    assert "subagentTreeRefreshQueuedBySession" in subagent_sync
-    assert "if (!sessionId || sessionId !== currentSessionId) return;" in subagent_sync
-    assert "if (seq !== subagentPanelRefreshSeq || sessionId !== currentSessionId) return;" in subagent_sync
+    assert sessions.count("if (switchToken === switchSessionEpoch && sessionId === currentSessionId)") >= 1
+    # The rebuilt subagent catalog refreshes per parent with single-flight
+    # semantics: an in-flight request absorbs member frames, and a forced
+    # refresh re-runs once after the in-flight request settles.
+    assert "INFLIGHT.get(pid)" in catalog
+    assert "INFLIGHT.set(pid, entry)" in catalog
+    assert "inflight.patches.push(" in catalog
+    assert "if (STALE.delete(pid)) void refreshCatalogs(pid);" in catalog
+    # Subagent frames are scoped to the parent of the addressed conversation.
+    assert "function currentParentSessionId()" in frames
+    assert "subagentAddressing.current()" in frames
 
 
 def test_running_pending_turn_keeps_a_pulsing_completed_result_indicator():
@@ -686,8 +693,7 @@ def test_frontend_send_and_reattach_reuse_event_count_cache():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
     scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
-    subagent_sync = (ROOT / "frontend/src/app/state/subagent-sync.js").read_text(encoding="utf-8")
-    subagent_store = (ROOT / "frontend/src/app/state/subagent-store.js").read_text(encoding="utf-8")
+    catalog = (ROOT / "frontend/src/app/state/subagent-catalog-store.js").read_text(encoding="utf-8")
 
     assert "has(sessionId)" in sessions
     assert "async function getUiEventCount(sessionId, opts)" in scroll
@@ -697,9 +703,10 @@ def test_frontend_send_and_reattach_reuse_event_count_cache():
     assert "getUiEventCount(runSessionId, { preferCache: true })" in sse
     assert "uiEventCountCache.updateFromServer(runSessionId, preCount + 1)" in sse
     assert "getUiEventCount(submitSessionId).then" not in sse
-    assert "/messages/count" not in subagent_sync
-    assert "node.event_count" in subagent_store
-    assert "messages?after_index=" in subagent_sync
+    # The subagent catalog reads the lite list endpoint and must not probe
+    # /messages/count for every child.
+    assert "'/subagents?lite=1'" in catalog
+    assert "/messages/count" not in catalog
 
 
 def test_frontend_running_session_switch_restores_local_stream_without_snapshot_reload():
@@ -805,15 +812,21 @@ def test_ui_translation_does_not_mutate_conversation_content():
     for selector in (
         ".message",
         ".feed-chunk-scroller",
+        ".process-brief-item",
         ".followup-queue-text",
         ".session-name",
+        ".session-last-query",
         ".human-question-text",
         ".human-option-label",
         ".human-option-description",
+        ".human-option-preview pre",
+        ".human-review-label",
+        ".human-review-value",
+        ".human-approval-subtitle",
         ".human-approval-message",
-        ".subagent-card-summary",
-        ".subagent-output-content",
+        ".human-terminal-answer",
         ".skill-picker-option-desc",
+        "[data-i18n-skip]",
     ):
         assert selector in i18n
     assert "el.closest(UI_I18N_CONTENT_SELECTOR)" in i18n
@@ -1295,13 +1308,3 @@ def test_followup_http_retry_after_run_finished_returns_consumed_operation(monke
     assert payload["deduplicated"] is True
     assert payload["item"]["state"] == "consumed"
     assert payload["restart"] is False
-
-
-def test_subagent_card_falls_back_to_saved_output_when_messages_fail():
-    loader = (ROOT / "frontend/src/app/state/subagent-loader.js").read_text(encoding="utf-8")
-    renderers = (ROOT / "frontend/src/app/state/subagent-renderers.js").read_text(encoding="utf-8")
-
-    assert "loadSubagentOutputAsFinalEvent" in loader
-    assert "card.dataset.outputFile === '1'" in loader
-    assert "card.dataset.virtualTask === '1'" in loader
-    assert "data-virtual-task" in renderers

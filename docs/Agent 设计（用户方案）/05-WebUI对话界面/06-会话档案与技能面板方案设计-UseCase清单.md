@@ -1,6 +1,6 @@
 # 会话、档案与技能面板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `d022831`）
+- 版本：2026-09-18 v2（覆盖至：HEAD `1fd80ca` + 模型选择器接线）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/session-management.js`、`modules/model-profiles.js`、`modules/settings.js`、`modules/skill-picker.js`、`modules/i18n.js`、对应后端 API。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -38,6 +38,12 @@
 - **预期现象**：设置页可看到扩展项与信任状态；变更即时反映到工具/面板可见性。
 - **依据**：`get_security_extensions / trust_security_extension`。
 
+### UC-5F6 对话区模型选择器（切换使用）
+- **触发**：在右下角模型选择器点选档案。
+- **预期现象**：选择器跟随**当前打开的会话**（含经寻址打开的子代理会话）；切换立即写会话绑定与选择纪元——**主会话**：清空本 run 熔断记录（同 run 内失败过的目标档案立即重试）、不打断当前请求、下一次模型调用生效；**子代理会话**：走子代理切换链路（数据动作全保留、不打断）。成功后选择器即时刷新；失败给出可见错误。
+- **规则与边界**：连续切换以后者为准（选择纪元守卫）；档案排序仍是候选链优先级（见 UC-5F2）。语义细则见 ../01-LLM接入/05·UC-1E1/1E2/1E4。
+- **依据**：`model-profiles.js`（`setCurrentSessionModelProfile` / `refreshModelProfileSelector`）、`session-management.js`（切会话刷新选择器）、`webui.set_session_model_profile`。
+
 ## 3. 边界
 
 - 档案的**业务语义**（协议/能力/切换）见 ../01-LLM接入；
@@ -50,3 +56,4 @@
 ## 5. 版本记录
 
 - 2026-09-13 v1：拆分首版（承接 UC-509/506 与设置面板条目）。
+- 2026-09-18 v2：新增 UC-5F6（对话区模型选择器）——选择器跟随当前会话；主会话清熔断即时重试、子代理会话按数据动作切换（不打断，见 04·UC-5D15）。

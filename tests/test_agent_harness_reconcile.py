@@ -715,6 +715,13 @@ def test_switch_subagent_model_profile_releases_frozen_runtime(monkeypatch, tmp_
     )
     invalidated = []
     monkeypatch.setattr(agent_harness, "_invalidate_executor_config_cache", invalidated.append)
+    monkeypatch.setattr(agent_harness, "session_manager", mgr)
+
+    old_client = agent_harness.ExecutorLLMClient(
+        [{"profile_id": "profile-fast", "model": "model-fast"}]
+    )
+    old_client.set_request_scope("subagent-old-run")
+    old_client.note_scope_session(child_id)
 
     record = mgr.switch_subagent_model_profile(
         child_id,
@@ -728,6 +735,7 @@ def test_switch_subagent_model_profile_releases_frozen_runtime(monkeypatch, tmp_
     assert record["from_profile_id"] == "profile-fast"
     assert record["to_profile_id"] == "profile-deep"
     assert metadata["model_profile_id"] == "profile-deep"
+    assert metadata["model_profile_selection_id"] == "switch-1"
     assert metadata["executor_model"] == "model-deep"
     assert metadata["fork_model_runtime"] == {}
     assert "model_runtime" not in metadata["fork_runtime_config"]
@@ -735,6 +743,10 @@ def test_switch_subagent_model_profile_releases_frozen_runtime(monkeypatch, tmp_
     assert metadata["last_model_switch"] == record
     assert metadata["model_switch_history"][-1] == record
     assert invalidated == [child_id]
+
+    # A response from the old child request may arrive after the switch.
+    old_client._maybe_adopt_fallback_profile(old_client.candidates[0])
+    assert mgr._load_metadata(child_id)["model_profile_id"] == "profile-deep"
 
 
 def test_runtime_v2_fork_subagent_uses_v2_projection_not_legacy(monkeypatch, tmp_path):

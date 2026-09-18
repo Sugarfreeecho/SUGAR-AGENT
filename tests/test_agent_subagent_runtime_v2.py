@@ -178,6 +178,96 @@ def test_running_subagent_model_switch_interrupts_at_safe_boundary(monkeypatch):
     assert reset_calls == ["child"]
 
 
+def test_selector_subagent_switch_keeps_data_actions_without_interrupting(monkeypatch):
+    """handover=False (bottom-right selector): data actions only, no steer/abort."""
+    import agent_loop
+    import agent_subagent
+
+    captured = {"task_patches": [], "events": []}
+    steer_calls = []
+    abort_calls = []
+
+    class _SessionManager:
+        def validate_subagent_resume(self, parent, child):
+            return child if parent == "parent" and child == "child" else None
+
+        def _load_metadata(self, child):
+            assert child == "child"
+            return {"model_profile_id": "profile-fast", "is_subagent": True}
+
+        def switch_subagent_model_profile(self, child, profile_id, **kwargs):
+            captured["metadata_switch"] = (child, profile_id, kwargs)
+            return {
+                "switch_id": kwargs["switch_id"],
+                "from_profile_id": "profile-fast",
+                "to_profile_id": profile_id,
+            }
+
+        def upsert_subagent_task(self, parent, child, patch):
+            captured["task_patches"].append((parent, child, dict(patch)))
+
+        def append_ui_event(self, child, event):
+            captured["events"].append((child, dict(event)))
+
+    class _Registry:
+        @staticmethod
+        def is_running(child):
+            return child == "child"
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", _Registry())
+    monkeypatch.setattr(
+        agent_subagent,
+        "list_executor_model_profile_choices",
+        lambda: [
+            {"id": "profile-fast", "model": "fast-model"},
+            {"id": "profile-deep", "model": "deep-model"},
+        ],
+    )
+    monkeypatch.setattr(
+        agent_loop,
+        "enqueue_session_steer",
+        lambda *args, **kwargs: steer_calls.append((args, kwargs))
+        or {"ok": True, "item": {"id": "steer-1"}},
+    )
+    monkeypatch.setattr(
+        agent_loop,
+        "abort_session_steer_run",
+        lambda *args, **kwargs: abort_calls.append((args, kwargs)) or True,
+    )
+    reset_calls = []
+    monkeypatch.setattr(
+        agent_subagent,
+        "reset_executor_failure_state_for_session",
+        lambda child: reset_calls.append(child) or 1,
+    )
+
+    result = asyncio.run(
+        agent_subagent.switch_subagent_model_profile(
+            "parent",
+            "child",
+            "profile-deep",
+            handover=False,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["handover"] is False
+    assert result["continuation_queued"] is False
+    assert result["interrupted_current_step"] is False
+    # Durable data actions still ran: metadata switch, parent task row, event.
+    assert captured["metadata_switch"][0:2] == ("child", "profile-deep")
+    assert captured["task_patches"][0][2]["model_profile_id"] == "profile-deep"
+    assert captured["task_patches"][0][2]["model_switch_status"] == "ready"
+    assert len(captured["task_patches"]) == 1
+    assert captured["events"][0][1]["model_switch"] is True
+    assert "next model call" in captured["events"][0][1]["content"]
+    assert reset_calls == ["child"]
+    # No handover: the running child is neither interrupted nor restarted.
+    assert steer_calls == []
+    assert abort_calls == []
+
+
 def test_task_schema_injects_registered_profiles_without_mutating_static_schema(monkeypatch):
     import agent_subagent
     import agent_tools

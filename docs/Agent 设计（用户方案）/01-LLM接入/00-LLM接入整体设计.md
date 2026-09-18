@@ -1,6 +1,6 @@
 # LLM 接入 · 模块整体设计
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
+- 版本：2026-09-18 v3（覆盖至：HEAD `1fd80ca` + 运行中切换一致性修复）
 - 用途：本模块的**总入口**——先读本篇了解模块定位与功能地图，再按需进入各功能专项设计（每篇均按「触发 → 预期现象 → 规则与边界 → 依据」逐条审查）。
 - 适用实现：`app/llm/`（transport / provider_registry / responses/*）、`app/agent_openai.py`、`app/agent_harness.py`（切换/候选链）、`app/model_profiles.py`、`app/agent_reasoning.py`、`app/attachments/`（多模态投影）。
 - 配套：架构图 `workspace/archify_study/llm_provider_api/llm-provider-api-full.architecture.html`；能力清单 `LLMProviderAPI能力清单.md`（本文件夹）。
@@ -56,3 +56,4 @@
 
 - 2026-09-13 v1：从《MyAgent 全模块功能方案设计-UseCase 清单》拆分为模块文件夹结构，内容扩充为专项设计。
 - 2026-09-14 v2：补充独立识图 API 对既有 profile、transport 和候选投影规则的复用约束。
+- 2026-09-18 v3：05《手动切换》升级 v3（运行中切换一致性修复：熔断清理、选择纪元、fork 冻结释放、选择器承接子代理入口）；04 同步"接管改写绑定 + 选择纪元守卫"表述。

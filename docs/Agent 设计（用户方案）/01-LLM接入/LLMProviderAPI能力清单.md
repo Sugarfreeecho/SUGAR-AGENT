@@ -1,7 +1,7 @@
 # LLM Provider API 接入层 · 能力清单（代码证据版）
 
 > 对象：MyAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
-> 代码版本：HEAD `d022831` + API 识图工作区改动（2026-09-14 扫描）
+> 代码版本：HEAD `1fd80ca` + 运行中切换修复（2026-09-18 复核）
 > 图例：【图】已画入 v3 全景图节点 / 【卡】在图上卡片中 / 【单】仅本清单（超出 12 主节点容量）
 
 ## 1. 请求生命周期与身份
@@ -83,10 +83,12 @@
 ## 7. 切换与降级（自动 / 手动）
 | 能力 | 位置 | 状态 |
 |---|---|---|
-| 自动：候选链切换（【模型自动切换】状态事件）、同模型重试、媒体降级、adopt 备选档案 | `agent_harness.py` `_FallbackCompletions` | 【图·切换节点】 |
+| 自动：候选链切换（【模型自动切换】状态事件）、同模型重试、媒体降级、adopt 备选档案（受选择纪元守卫，不覆盖更新的手动选择） | `agent_harness.py` `_FallbackCompletions` | 【图·切换节点】 |
 | 预算阻断：想切换但预算不足 → `LLM-BLOCKED-SWITCH` | `agent_harness.py` `_emit_blocked_switch_status` | 【卡】 |
-| 手动：模型选择器 / 子代理 `switch_model`（中断并恢复） | `agent_harness.py`、`agent_subagent.py` | 【卡】 |
-| 切换历史记录：`model_switch_history` / `last_model_switch`（含子代理切换状态） | `agent_harness.py` | 【单】 |
+| 手动：模型选择器（主会话/子代理会话均可用；清熔断立即重试、下一次模型调用生效） | `webui.py`、`agent_harness.py` | 【卡】 |
+| 手动：子代理 `switch_model`（安全边界中断并恢复）/ 选择器路径（数据动作、不打断） | `agent_subagent.py::switch_subagent_model_profile(handover=…)` | 【卡】 |
+| 手动切换一致性：选择纪元（旧请求接管不改写新选择）、熔断代际（重置后不重新污染）、配置缓存代际 | `agent_harness.py` | 【单】 |
+| 切换历史记录：`model_switch_history` / `last_model_switch`（自动与手动；含子代理切换状态） | `agent_harness.py` | 【单】 |
 
 ## 8. 网络与安全
 | 能力 | 位置 | 状态 |

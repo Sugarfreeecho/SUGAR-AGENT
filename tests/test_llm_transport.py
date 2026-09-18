@@ -1893,12 +1893,18 @@ def test_fallback_takeover_rebinds_session_profile(tmp_path, monkeypatch):
     }), encoding="utf-8")
 
     real_load = agent_harness.session_manager._load_metadata
+    real_load_unlocked = agent_harness.session_manager._load_metadata_unlocked
     real_save = agent_harness.session_manager._save_metadata_unlocked
 
     def fake_load(target):
         if str(target) == sid:
             return _json.loads(meta_path.read_text(encoding="utf-8"))
         return real_load(target)
+
+    def fake_load_unlocked(target):
+        if str(target) == sid:
+            return _json.loads(meta_path.read_text(encoding="utf-8"))
+        return real_load_unlocked(target)
 
     saves = []
 
@@ -1910,6 +1916,9 @@ def test_fallback_takeover_rebinds_session_profile(tmp_path, monkeypatch):
         real_save(target, metadata)
 
     monkeypatch.setattr(agent_harness.session_manager, "_load_metadata", fake_load)
+    monkeypatch.setattr(
+        agent_harness.session_manager, "_load_metadata_unlocked", fake_load_unlocked
+    )
     monkeypatch.setattr(
         agent_harness.session_manager, "_save_metadata_unlocked", fake_save
     )
