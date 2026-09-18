@@ -109,9 +109,14 @@ _read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
 def invalidate_skills_cache() -> None:
     """Invalidate project and Plugin-provided Skill discovery snapshots."""
 
-    global _skills_catalog_generation
     _skills_cache.update({"sig": None, "skills": None, "catalog": None})
     _skills_full_cache.update({"sig": None, "skills": None})
+    _bump_skills_catalog_generation()
+
+
+def _bump_skills_catalog_generation() -> None:
+    """Advance the catalog revision so revision-keyed prompt caches rebuild."""
+    global _skills_catalog_generation
     _skills_catalog_generation += 1
 
 
@@ -4170,6 +4175,15 @@ def get_skills_catalog() -> str:
     sig = _skills_tree_signature()
     if _skills_cache.get("sig") == sig and _skills_cache.get("catalog") is not None:
         return str(_skills_cache["catalog"])
+
+    # The tree signature changed, so anything derived from the catalog is stale.
+    # Bumping the generation here is what makes the static-prompt segment cache
+    # rebuild: its revision key includes skills_catalog_generation(), and an
+    # on-disk skill edit only ever shows up as a signature change -- it does not
+    # go through invalidate_skills_cache(). Without this bump the catalog was
+    # refreshed while the cached system segment kept advertising the old skills.
+    with _skills_scan_lock:
+        _bump_skills_catalog_generation()
 
     skills = discover_skills()
     if not skills:

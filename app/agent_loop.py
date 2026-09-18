@@ -1973,6 +1973,34 @@ def _build_static_segments_for_session(
     return segments
 
 
+def warm_prompt_build_path(prompt_language: str = "zh-CN") -> None:
+    """Pre-build the session-independent parts of the first request's prompt.
+
+    A fresh process builds the skills catalog and the environment block on the
+    first request; measured cold that is ~235 ms of directory walks and stat
+    calls (skills catalog alone ~198 ms, env block ~36 ms). Both are cached
+    process-wide and are the same for every session, so warming them at startup
+    moves that cost off the user's first message. ``_STATIC_SEGMENTS_PROCESS_CACHE``
+    is keyed by session id and cannot be pre-seeded, so the segment assembly
+    itself (~25 ms) still runs once per session.
+
+    Safe to call repeatedly and safe to fail: every step is cache-backed and a
+    failure only leaves the work for the first request, as before.
+    """
+    try:
+        started = time.perf_counter()
+        get_skills_catalog()
+        build_env_static(None)
+        prompt_template_revision(prompt_language)
+        logger.info(
+            "prompt build path warmed ms=%.0f language=%s",
+            (time.perf_counter() - started) * 1000.0,
+            prompt_language,
+        )
+    except Exception:
+        logger.debug("prompt build path warm-up failed", exc_info=True)
+
+
 def _schedule_static_segments_rebuild(
     state: State,
     session_meta: Any,
@@ -4791,12 +4819,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state, session_meta, prompt_language, static_revision, _static_key
                     )
             else:
+                _t_build = time.perf_counter()
                 static_segments = _build_static_segments_for_session(
                     str(state.get("session_id") or ""), session_meta, prompt_language
                 )
+                # Split out from the aggregate mark below so a cold process can
+                # be told apart from a cold cache: this is the part a pre-warm
+                # removes, the remainder is per-request work either way.
+                _pre_api_timing_mark(pre_api_timings, "static_segments_build", _t_build)
                 _STATIC_SEGMENTS_PROCESS_CACHE[_static_key] = (static_revision, static_segments)
             # key_context body（随压缩变化）
+            _t_kc = time.perf_counter()
             kc_body = key_context_body_for_system_prompt(state.get("key_context", "") or "")
+            _pre_api_timing_mark(pre_api_timings, "key_context_body", _t_kc)
             _pre_api_timing_mark(pre_api_timings, "static_segments", _t_pre_api)
             _t_pre_api = time.perf_counter()
 
@@ -9041,6 +9076,24 @@ async def astream_events(
     run_bootstrap: Optional[Dict[str, Any]] = None
     _t_stream_entry = time.perf_counter()
     logger.info("run_phase astream_entry session=%s", session_id)
+
+    # A message can arrive long after the startup pre-warm: the pool drops idle
+    # connections after 300 s, and a 310 s gap measured a fresh 371 ms connect.
+    # Re-warm on arrival, in a worker thread so it overlaps the prompt build
+    # below instead of delaying it, and only when the pool has actually gone
+    # cold (no-op otherwise).
+    try:
+        import threading as _threading
+
+        from agent_harness import warm_llm_connections_if_stale
+
+        _threading.Thread(
+            target=warm_llm_connections_if_stale,
+            name="llm-conn-rewarm",
+            daemon=True,
+        ).start()
+    except Exception:
+        logger.debug("message-time connection re-warm skipped", exc_info=True)
 
     requested_prompt_language = str(prompt_language or "").strip()
     sid_in = str(session_id or "").strip()

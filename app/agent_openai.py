@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -1042,6 +1042,371 @@ def _is_stream_options_error(exc: BaseException) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Raw-httpx streaming transport.
+#
+# The OpenAI Python SDK drops the pooled connection on every streamed request,
+# so each agent step re-runs TCP + TLS (measured ~240 ms + ~250 ms per step,
+# 4/4 requests over 1 s / 3 s / 6 s gaps). The same request sent through the
+# shared ``executor_http_client`` reuses the connection instead (verified with
+# the transport trace). This path therefore talks to the endpoint directly and
+# hands the consumer the exact chunk shape it already accepts: the loop below
+# reads ``chunk.choices[0].delta`` / ``chunk.model`` / ``chunk.usage`` through
+# ``getattr``, so a SimpleNamespace tree is a drop-in replacement.
+#
+# Selected by ``LLM_STREAM_TRANSPORT=httpx``; the default stays on the SDK.
+# ---------------------------------------------------------------------------
+
+STREAM_TRANSPORT_ENV = "LLM_STREAM_TRANSPORT"
+
+
+def _stream_transport_mode() -> str:
+    """Which transport serves streamed chat completions.
+
+    Defaults to ``httpx``: the SDK's ``Stream`` stops at the ``[DONE]`` sentinel
+    without draining the response body, so httpx never records
+    ``receive_response_body.complete`` and discards the connection. Every step
+    then paid a fresh TCP + TLS handshake. Measured on the real worker with 6 s
+    step gaps: median first chunk 2167 ms (sdk) vs 1929 ms (httpx), with 5/5
+    connection reuse on the httpx path.
+
+    Set ``LLM_STREAM_TRANSPORT=sdk`` to fall back to the SDK path (kept for
+    comparison and as an escape hatch if an endpoint rejects the direct call).
+    """
+    raw = str(os.getenv(STREAM_TRANSPORT_ENV) or "").strip().lower()
+    if raw in {"sdk", "openai", "legacy"}:
+        return "sdk"
+    return "httpx"
+
+
+def _direct_stream_target(client: Any) -> Any:
+    """The object the raw-httpx transport should drive for this client.
+
+    A bare OpenAI client exposes ``_client``/``base_url`` itself. The executor
+    facade (``ExecutorLLMClient``) exposes neither; each of its ``candidates``
+    carries the OpenAI client instead, and all candidates share one httpx client.
+    Resolve through the facade so the direct path can be selected and measured on
+    the production client shape.
+    """
+    inner = getattr(client, "_client", None)
+    if callable(getattr(inner, "stream", None)) and str(getattr(client, "base_url", "") or "").strip():
+        return client
+    candidates = getattr(client, "candidates", None)
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            target = candidate.get("client")
+            target_inner = getattr(target, "_client", None)
+            if callable(getattr(target_inner, "stream", None)) and str(
+                getattr(target, "base_url", "") or ""
+            ).strip():
+                return target
+    return None
+
+
+def _supports_raw_http_stream(client: Any) -> bool:
+    """Whether the raw-httpx transport can serve this client."""
+    return _direct_stream_target(client) is not None
+
+
+PREFER_DIRECT_ENV = "LLM_STREAM_PREFER_DIRECT"
+
+
+def _prefer_direct_stream() -> bool:
+    """Whether the preferred candidate streams over the shared httpx client.
+
+    The executor facade advertises ``stream_completion`` and
+    ``_myagent_transport_enabled`` whenever every candidate carries a transport,
+    and that branch is checked first. Its transports read the response through
+    the shared httpx client from pool threads, so this module's per-request trace
+    never sees them and the transport metrics stay zero. Enabling this routes the
+    stream through the direct path instead -- inside the facade's candidate loop,
+    so candidate fallback and modality routing are preserved. Disable with
+    ``LLM_STREAM_PREFER_DIRECT=0``.
+    """
+    raw = str(os.getenv(PREFER_DIRECT_ENV) or "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+class HttpStreamTransportError(RuntimeError):
+    """Transport failure raised by the raw-httpx stream path.
+
+    Carries ``status_code`` so the existing retry / model-fallback classifiers
+    (``_is_retriable_openai_error``, ``_classify_candidate_failure``) and the
+    media-input diagnostics keep working without knowing which transport ran.
+    """
+
+    def __init__(self, message: str, *, status_code: Optional[int] = None,
+                 body: str = "", provider_code: str = "") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+        self.provider_code = provider_code
+
+
+def _http_stream_chat_completion(
+    client: Any,
+    *,
+    url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    timeout: Optional[float],
+    should_abort: Optional[Callable[[], bool]] = None,
+) -> Iterator[Any]:
+    """Yield OpenAI-shaped chunk objects parsed from an SSE response.
+
+    Reads to the terminal ``[DONE]`` (or a clean EOF) so the connection returns
+    to the pool; only an abort closes early, and that is the one case where the
+    connection is intentionally not reused.
+    """
+    http_client = getattr(client, "_client", None)
+    if not hasattr(http_client, "stream"):
+        raise HttpStreamTransportError("raw httpx transport requested but the client exposes no httpx.Client")
+    # The SDK path starts the transport trace inside its own request handling;
+    # this path bypasses that, so start it here. Without it the trace extension
+    # is never installed and every transport metric reads back as zero.
+    start_trace = getattr(http_client, "start_transport_trace", None)
+    if callable(start_trace):
+        try:
+            start_trace()
+        except Exception:
+            logger.debug("无法启动传输 trace", exc_info=True)
+    request_timeout = float(timeout) if timeout else None
+    done = False
+    finish_trace = getattr(http_client, "finish_transport_trace", None)
+
+    def _publish_trace() -> None:
+        """Settle the trace so its snapshot is published for later readers."""
+        if not callable(finish_trace):
+            return
+        try:
+            finish_trace()
+        except Exception:
+            logger.debug("无法结算传输 trace", exc_info=True)
+
+    try:
+        with http_client.stream(
+            "POST", url, json=payload, headers=headers,
+            **({"timeout": request_timeout} if request_timeout else {}),
+        ) as response:
+            if response.status_code >= 400:
+                try:
+                    error_body = response.read().decode("utf-8", "replace")
+                except Exception:
+                    error_body = ""
+                message = "HTTP %s" % response.status_code
+                provider_code = ""
+                try:
+                    parsed = json.loads(error_body)
+                    err = parsed.get("error") if isinstance(parsed, dict) else None
+                    if isinstance(err, dict):
+                        message = str(err.get("message") or message)
+                        provider_code = str(err.get("code") or err.get("type") or "")
+                    elif isinstance(err, str) and err:
+                        message = err
+                except Exception:
+                    if error_body:
+                        message = "%s: %s" % (message, error_body[:500])
+                raise HttpStreamTransportError(
+                    message, status_code=int(response.status_code),
+                    body=error_body, provider_code=provider_code,
+                )
+            for line in response.iter_lines():
+                if should_abort is not None and should_abort():
+                    return
+                if not line:
+                    continue
+                if line.startswith("data:"):
+                    data = line[5:].strip()
+                elif line.startswith(":"):
+                    continue
+                else:
+                    continue
+                if not data:
+                    continue
+                if data == "[DONE]":
+                    # The sentinel ends the protocol, not the HTTP body. Stopping
+                    # here leaves the response unconsumed, and httpx then discards
+                    # the connection instead of pooling it -- the transport trace
+                    # shows ``receive_response_body.started`` followed by
+                    # ``response_closed`` + ``receive_response_body.failed``, i.e.
+                    # every step paid a fresh TCP + TLS handshake. Keep draining
+                    # until the iterator ends so the connection returns to the pool.
+                    done = True
+                    continue
+                try:
+                    body = json.loads(data)
+                except Exception:
+                    logger.debug("跳过无法解析的流式分片: %s", data[:200])
+                    continue
+                yield _chunk_namespace(body)
+            # The `with` block just closed the response; publish the metrics now
+            # so the consumer's transport_breakdown is populated even though it
+            # reads from a different thread than the one that ran the request.
+            _publish_trace()
+    except HttpStreamTransportError:
+        _publish_trace()
+        raise
+    except Exception as exc:
+        _publish_trace()
+        if should_abort is not None and should_abort():
+            return
+        raise HttpStreamTransportError(
+            "raw httpx stream failed: %s" % exc,
+            status_code=getattr(exc, "status_code", None),
+        ) from exc
+
+
+def _drain_response(response: Any) -> None:
+    """Read any bytes left after the terminal sentinel so the connection pools.
+
+    httpx discards a connection whose response was not fully consumed; the SSE
+    ``[DONE]`` marker is a protocol sentinel, not a transport EOF.
+    """
+    try:
+        for _ in response.iter_bytes():
+            pass
+    except Exception:
+        logger.debug("流式响应收尾读取失败", exc_info=True)
+
+
+def _chunk_namespace(body: Dict[str, Any]) -> Any:
+    """Mirror the SDK chunk shape the consumer reads through ``getattr``."""
+    choices: List[Any] = []
+    for raw_choice in body.get("choices") or []:
+        if not isinstance(raw_choice, dict):
+            continue
+        raw_delta = raw_choice.get("delta")
+        delta = None
+        if isinstance(raw_delta, dict):
+            delta = SimpleNamespace(
+                content=raw_delta.get("content"),
+                tool_calls=_tool_call_deltas_namespace(raw_delta.get("tool_calls")),
+            )
+            for field in ("reasoning_content", "reasoning"):
+                if raw_delta.get(field) is not None:
+                    setattr(delta, field, raw_delta.get(field))
+        choices.append(SimpleNamespace(
+            delta=delta,
+            finish_reason=raw_choice.get("finish_reason"),
+            stop_reason=raw_choice.get("stop_reason"),
+        ))
+    return SimpleNamespace(
+        model=body.get("model"),
+        usage=body.get("usage"),
+        choices=choices,
+    )
+
+
+def _tool_call_deltas_namespace(raw_calls: Any) -> Optional[List[Any]]:
+    if not isinstance(raw_calls, list):
+        return None
+    out: List[Any] = []
+    for index, call in enumerate(raw_calls):
+        if not isinstance(call, dict):
+            continue
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        out.append(SimpleNamespace(
+            index=call.get("index", index),
+            id=call.get("id"),
+            function=SimpleNamespace(
+                name=fn.get("name"),
+                arguments=fn.get("arguments"),
+            ),
+        ))
+    return out or None
+
+
+# Keys owned by the SDK call signature; everything else (model, messages,
+# tools, temperature, ...) is the wire payload.
+_SDK_ONLY_KWARGS = frozenset({"timeout", "extra_headers", "extra_query", "extra_body", "request_context", "stream"})
+
+
+def _openai_base_url(client: Any) -> str:
+    base = str(getattr(client, "base_url", "") or "").strip().rstrip("/")
+    if not base:
+        raise HttpStreamTransportError("raw httpx transport requested but the client exposes no base_url")
+    return base
+
+
+def _openai_request_headers(client: Any) -> Dict[str, str]:
+    """Auth + default headers the SDK would have attached, as a plain dict.
+
+    ``Omit`` sentinels are dropped: the SDK substitutes those with absence, so
+    stringifying them would put a bogus header value on the wire.
+    """
+    from openai._types import NotGiven as _NotGiven
+    from openai._types import Omit as _Omit
+
+    def usable(value: Any) -> bool:
+        return value is not None and not isinstance(value, _Omit) and not isinstance(value, _NotGiven)
+
+    headers: Dict[str, str] = {"Content-Type": "application/json", "Accept": "application/json"}
+    try:
+        auth_headers = client.auth_headers()
+        if isinstance(auth_headers, dict):
+            headers.update({str(k): str(v) for k, v in auth_headers.items() if usable(v)})
+    except Exception:
+        api_key = str(getattr(client, "api_key", "") or "").strip()
+        if api_key:
+            headers["Authorization"] = "Bearer %s" % api_key
+    for attr in ("default_headers", "_custom_headers"):
+        extra = getattr(client, attr, None)
+        if not extra:
+            continue
+        try:
+            headers.update({str(k): str(v) for k, v in dict(extra).items() if usable(v)})
+        except Exception:
+            pass
+    try:
+        user_agent = client.user_agent
+        if usable(user_agent) and "User-Agent" not in headers:
+            headers["User-Agent"] = str(user_agent)
+    except Exception:
+        pass
+    return headers
+
+
+def _open_raw_http_stream(
+    client: Any,
+    request_kwargs: Dict[str, Any],
+    *,
+    include_usage: bool,
+    request_context: Optional[Any] = None,
+    should_abort: Optional[Callable[[], bool]] = None,
+) -> Iterator[Any]:
+    """Send one streamed chat completion over the shared httpx client.
+
+    Reuses the caller's request kwargs verbatim so the two transports are
+    comparable field for field; ``tools`` / ``messages`` are passed by
+    reference, exactly as the SDK path passes them.
+    """
+    payload: Dict[str, Any] = {}
+    for key, value in request_kwargs.items():
+        if key in _SDK_ONLY_KWARGS or value is None:
+            continue
+        payload[key] = value
+    extra_body = request_kwargs.get("extra_body")
+    if isinstance(extra_body, dict):
+        for key, value in extra_body.items():
+            payload.setdefault(key, value)
+    payload["stream"] = True
+    if include_usage:
+        payload["stream_options"] = {"include_usage": True}
+    url = _openai_base_url(client).rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url = url + "/chat/completions"
+    return _http_stream_chat_completion(
+        client,
+        url=url,
+        payload=payload,
+        headers=_openai_request_headers(client),
+        timeout=request_kwargs.get("timeout"),
+        should_abort=should_abort,
+    )
+
+
 def _api_messages_have_media(api_messages: List[Dict[str, Any]]) -> bool:
     for message in api_messages:
         content = message.get("content")
@@ -2047,9 +2412,43 @@ def run_chat_completion_stream_worker(
                 chunks: List[Any] = []
                 try:
                     stream_completion = getattr(client, "stream_completion", None)
-                    if callable(stream_completion) and bool(
-                        getattr(client, "_myagent_transport_enabled", False)
-                    ):
+                    transport_enabled = bool(getattr(client, "_myagent_transport_enabled", False))
+                    raw_ok = _supports_raw_http_stream(client)
+                    mode = _stream_transport_mode()
+                    observer = transport_observer
+                    inner = getattr(client, "_client", None)
+                    facade_available = callable(stream_completion) and transport_enabled
+                    direct_available = mode == "httpx" and raw_ok
+                    prefer_direct = _prefer_direct_stream()
+                    # With a facade, the direct preference is applied *inside* it
+                    # (its candidate loop swaps only the stream source), so this
+                    # level must not short-circuit the facade -- doing so would
+                    # drop candidate fallback, circuits and modality routing.
+                    use_direct = direct_available and not facade_available
+                    # Which streamed transport actually served this request. Only
+                    # the direct path populates the transport metrics, so a
+                    # breakdown full of zeros is explained by this line.
+                    logger.info(
+                        "stream_transport_select model=%s mode=%s "
+                        "has_stream_completion=%s transport_enabled=%s raw_ok=%s "
+                        "prefer_direct=%s chosen=%s "
+                        "observer_is_client_http=%s inner=%s",
+                        _masked_model_label(model),
+                        mode, callable(stream_completion), transport_enabled, raw_ok,
+                        prefer_direct,
+                        "http-direct" if use_direct else ("facade" if facade_available else "sdk"),
+                        (observer is inner) if observer is not None else "no-observer",
+                        type(inner).__name__ if inner is not None else "none",
+                    )
+                    if use_direct:
+                        local_stream = _open_raw_http_stream(
+                            _direct_stream_target(client) or client,
+                            request_kwargs,
+                            include_usage=True,
+                            request_context=request_context,
+                            should_abort=should_abort,
+                        )
+                    elif facade_available:
                         request_kwargs.pop("stream", None)
                         local_stream = stream_completion(**request_kwargs)
                     else:
@@ -2358,6 +2757,19 @@ def run_chat_completion_stream_worker(
                     trace_elapsed_ms=int(snapshot.get("elapsed_ms") or 0),
                     request_bytes=int(metrics.get("request_bytes") or 0),
                     response_content_length=int(metrics.get("response_content_length") or 0),
+                    # Request-phase metrics, in the order they happen:
+                    #   connect_done_ms / tls_done_ms  connection setup (0 when pooled)
+                    #   body_handed_off_ms             request write finished; DOES
+                    #                                  scale with body size, so
+                    #                                  this is the real upload end
+                    #   server_wait_ms                 write end -> response headers
+                    #   send_delegate_ms               total write + server + headers
+                    body_handed_off_ms=int(metrics.get("body_handed_off_ms") or 0),
+                    server_wait_ms=int(metrics.get("server_wait_ms") or 0),
+                    send_delegate_ms=int(metrics.get("send_delegate_ms") or 0),
+                    response_headers_ms=int(metrics.get("response_headers_ms") or 0),
+                    connect_done_ms=int(metrics.get("connect_done_ms") or 0),
+                    tls_done_ms=int(metrics.get("tls_done_ms") or 0),
                     **phases,
                 )
             except Exception:
@@ -2516,6 +2928,12 @@ def run_chat_completion_stream_worker(
                     trace_elapsed_ms=int(final_transport.get("elapsed_ms") or 0),
                     request_bytes=int(transport_metrics.get("request_bytes") or 0),
                     response_content_length=int(transport_metrics.get("response_content_length") or 0),
+                    body_handed_off_ms=int(transport_metrics.get("body_handed_off_ms") or 0),
+                    server_wait_ms=int(transport_metrics.get("server_wait_ms") or 0),
+                    send_delegate_ms=int(transport_metrics.get("send_delegate_ms") or 0),
+                    response_headers_ms=int(transport_metrics.get("response_headers_ms") or 0),
+                    connect_done_ms=int(transport_metrics.get("connect_done_ms") or 0),
+                    tls_done_ms=int(transport_metrics.get("tls_done_ms") or 0),
                     response_payload_bytes_estimated=int(response_payload_bytes_estimated),
                 )
             except Exception:

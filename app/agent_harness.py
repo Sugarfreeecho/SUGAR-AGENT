@@ -27,7 +27,7 @@ import ctypes
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 
 import dotenv
 import httpx
@@ -367,6 +367,97 @@ def _executor_reasoning_effort() -> Optional[str]:
 
 # 主模型：思考开时带 reasoning_effort，关时为 None
 EXECUTOR_REASONING_EFFORT: Optional[str] = _executor_reasoning_effort()
+
+
+def warm_llm_connections(timeout: float = 20.0, include_fallbacks: bool = False) -> int:
+    """Open one pooled connection per LLM endpoint so the first message does not.
+
+    The first request of a process pays TCP + TLS setup; measured on the shared
+    client that is ~330 ms of connection time plus ~590 ms of request write, and
+    the pooled connection then serves every later step. A minimal request at
+    startup moves that cost off the user's first message.
+
+    Cheap and safe: a 1-token request per endpoint, any status code still leaves
+    a live pooled connection behind, and failures are swallowed so a bad endpoint
+    cannot break startup.
+    """
+    warmed = 0
+    seen_hosts = set()
+    try:
+        candidates = resolve_executor_candidates_for_session("")
+    except Exception:
+        logger.debug("connection warm-up skipped: no candidates", exc_info=True)
+        return 0
+    for candidate in (candidates if include_fallbacks else candidates[:1]):
+        client = candidate.get("client")
+        base_url = str(getattr(client, "base_url", "") or "").strip()
+        api_key = str(getattr(client, "api_key", "") or "").strip()
+        if not base_url or not api_key:
+            continue
+        # One connection per host is enough: several candidates share an endpoint.
+        try:
+            host = httpx.URL(base_url).host
+        except Exception:
+            host = base_url
+        if host in seen_hosts:
+            continue
+        seen_hosts.add(host)
+        try:
+            executor_http_client.post(
+                base_url.rstrip("/") + "/chat/completions",
+                headers={"Authorization": "Bearer " + api_key,
+                         "Content-Type": "application/json"},
+                json={"model": str(candidate.get("model") or ""),
+                      "messages": [{"role": "user", "content": "hi"}],
+                      "max_tokens": 1},
+                timeout=timeout,
+            )
+            warmed += 1
+        except Exception as exc:
+            logger.debug("connection warm-up failed host=%s: %s", host, exc)
+    if warmed:
+        logger.info("llm connection warmed hosts=%d", warmed)
+    return warmed
+
+
+def _pool_idle_connection_count() -> int:
+    try:
+        return len(executor_http_client._transport._pool._connections)
+    except Exception:
+        return -1
+
+
+# Monotonic timestamp of the last request that exercised the pooled LLM
+# connection, used to decide whether a message-time warm-up is needed.
+_last_llm_connection_use: Optional[float] = None
+
+
+def warm_llm_connections_if_stale(idle_seconds: float = 240.0, timeout: float = 20.0) -> bool:
+    """Warm the pooled LLM connection only when it has probably been evicted.
+
+    The pool drops idle connections after ``keepalive_expiry`` (300 s). Startup
+    warming therefore goes stale for a user who leaves the window open longer than
+    that; measured, a 310 s idle gap costs a fresh 371 ms connect. Pre-warming at
+    the moment a message arrives covers exactly that case, and the check keeps it
+    free the rest of the time: if a connection was used recently there is nothing
+    to do.
+
+    Returns True when a warm-up actually ran.
+    """
+    global _last_llm_connection_use
+    if _pool_idle_connection_count() == 0:
+        pass  # nothing pooled: definitely worth warming
+    elif _last_llm_connection_use is not None and (
+        time.monotonic() - _last_llm_connection_use
+    ) < idle_seconds:
+        return False
+    return bool(warm_llm_connections(timeout=timeout))
+
+
+def _note_llm_connection_use() -> None:
+    """Record that the pooled connection was just exercised."""
+    global _last_llm_connection_use
+    _last_llm_connection_use = time.monotonic()
 
 
 def _profile_extra_body(profile: dict) -> Optional[Dict[str, Any]]:
@@ -745,24 +836,133 @@ def prompt_template_revision(language: str = "zh-CN") -> tuple[str, int, int]:
         return str(path), 0, 0
 
 # ==================== 自定义 HTTP 客户端（记录 OpenAI 请求/响应，供日志中的 token 统计）====================
+PREFER_DIRECT_ENV = "LLM_STREAM_PREFER_DIRECT"
+
+
+def _prefer_direct_stream() -> bool:
+    """Whether the preferred candidate streams over the shared httpx client.
+
+    Defaults to enabled: reading the response to EOF returns the connection to
+    the pool, which measured ~850 ms faster per step, and the adapter inside the
+    candidate loop keeps fallback, circuits, modality routing and the request
+    budget intact. Set ``LLM_STREAM_PREFER_DIRECT=0`` to fall back to the in-house
+    transports.
+    """
+    raw = str(os.getenv(PREFER_DIRECT_ENV) or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+class _DirectStreamTransport:
+    """Stream one candidate over the shared httpx client, as ``TransportEvent``s.
+
+    The in-house transports hand the loop ``TransportEvent`` objects; this adapter
+    produces the same contract directly, so the facade's fallback / circuit /
+    modality / budget logic is untouched. Its reason to exist is the response
+    drain: reading to EOF is what returns the connection to the pool.
+    """
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def stream_completion(self, **request: Any) -> Iterator["TransportEvent"]:
+        # Imported lazily: agent_openai imports this module.
+        from agent_openai import _open_raw_http_stream
+        kwargs = dict(request)
+        kwargs.pop("stream", None)
+        for chunk in _open_raw_http_stream(self._client, kwargs, include_usage=True):
+            event = self._to_event(chunk)
+            if event is not None:
+                yield event
+
+    @staticmethod
+    def _to_event(chunk: Any) -> Optional["TransportEvent"]:
+        # Lazily imported: agent_openai imports this module at top level, so a
+        # module-scope import here would be circular. ``extract_usage_dict`` lives
+        # there, and a bare reference raised NameError at streaming time.
+        from agent_openai import extract_usage_dict
+
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            return TransportEvent(kind="usage", usage=extract_usage_dict(usage),
+                                  model=str(getattr(chunk, "model", "") or ""))
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            return None
+        choice = choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        stop_reason = getattr(choice, "stop_reason", None)
+        delta = getattr(choice, "delta", None)
+        model = str(getattr(chunk, "model", "") or "")
+        if delta is None:
+            if finish_reason or stop_reason:
+                return TransportEvent(kind="finish", finish_reason=finish_reason,
+                                      stop_reason=stop_reason, model=model)
+            return None
+        reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+        if reasoning:
+            return TransportEvent(kind="reasoning_delta", text=str(reasoning), model=model)
+        content = getattr(delta, "content", None)
+        if content:
+            return TransportEvent(kind="content_delta", text=str(content), model=model)
+        calls = getattr(delta, "tool_calls", None) or []
+        if calls:
+            call = calls[0]
+            function = getattr(call, "function", None)
+            return TransportEvent(
+                kind="tool_call_delta",
+                index=int(getattr(call, "index", 0) or 0),
+                tool_call_id=str(getattr(call, "id", "") or ""),
+                tool_name=str(getattr(function, "name", "") or "") if function else "",
+                arguments_delta=str(getattr(function, "arguments", "") or "") if function else "",
+                model=model,
+            )
+        if finish_reason or stop_reason:
+            return TransportEvent(kind="finish", finish_reason=finish_reason,
+                                  stop_reason=stop_reason, model=model)
+        return None
+
+
 class RequestResponseLogger(httpx.Client):
     """包装 httpx.Client，在 interactions 中追加脱敏后的请求与 usage。"""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.interactions = []
+        # Two hazards shape this design:
+        #   * hedged calls issue concurrent requests, so a shared slot would
+        #     cross-contaminate them;
+        #   * httpx can drive the actual send on a pool thread while the trace was
+        #     armed on the caller's thread (measured: arming on the caller, the
+        #     real `send` inside a worker thread).
+        # So the armed context is thread-local (concurrency-safe) and every trace
+        # event also publishes the newest snapshot. A reader prefers its own
+        # thread's context and otherwise takes the published one, which is the
+        # request that actually ran.
         self._trace_local = threading.local()
+        self._trace_pending: Optional[Dict[str, Any]] = None
+        self._last_trace: Optional[Dict[str, Any]] = None
 
     def start_transport_trace(self) -> None:
-        """Start a per-thread httpcore trace for the next OpenAI request."""
+        """Arm a trace for the next request issued from this thread.
+
+        Deliberately thread-local only. A shared slot would let concurrent
+        (hedged) requests overwrite each other, which is a worse failure than a
+        missing metric.
+        """
         self._trace_local.current = {
             "started_at": time.perf_counter(),
             "events": [],
             "metrics": {},
         }
 
-    def snapshot_transport_trace(self) -> Dict[str, Any]:
+    def _armed_context(self) -> Optional[Dict[str, Any]]:
         current = getattr(self._trace_local, "current", None)
+        return current if isinstance(current, dict) else None
+
+    @staticmethod
+    def _snapshot_of(current: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not isinstance(current, dict):
             return {}
         started_at = float(current.get("started_at") or time.perf_counter())
@@ -772,6 +972,22 @@ class RequestResponseLogger(httpx.Client):
             "metrics": dict(current.get("metrics") or {}),
         }
 
+    def snapshot_transport_trace(self) -> Dict[str, Any]:
+        """This thread's in-flight trace when it has one, else the published one.
+
+        The local slot is authoritative when populated: concurrent requests each
+        own theirs. It is empty for the thread that armed the trace but delegated
+        the send to a pool thread, and there the published snapshot is the
+        request that actually ran.
+        """
+        local = self._snapshot_of(self._armed_context())
+        if local.get("metrics"):
+            return local
+        published = self._snapshot_of(self._last_trace)
+        if published.get("metrics"):
+            return published
+        return local or published
+
     def finish_transport_trace(self) -> Dict[str, Any]:
         snapshot = self.snapshot_transport_trace()
         try:
@@ -780,33 +996,105 @@ class RequestResponseLogger(httpx.Client):
             pass
         return snapshot
 
+    @staticmethod
+    def _request_body_bytes(request) -> int:
+        """Actual outbound body size in bytes.
+
+        ``content-length`` is not a reliable source here: httpx may omit the
+        header (chunked/streaming bodies) or record the pre-encoding length, and
+        an absent header previously collapsed the metric to 0. Fall back to
+        ``request.content``, which httpx materializes for non-streaming bodies.
+        """
+        headers = getattr(request, "headers", None) or {}
+        for header in ("content-length", "Content-Length"):
+            try:
+                value = int(headers.get(header) or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                return value
+        content = getattr(request, "content", None)
+        if isinstance(content, (bytes, bytearray)):
+            return len(content)
+        if isinstance(content, str):
+            return len(content.encode("utf-8", "replace"))
+        return 0
+
     def send(self, request, *args, **kwargs):
-        current = getattr(self._trace_local, "current", None)
-        if isinstance(current, dict):
-            started_at = float(current.get("started_at") or time.perf_counter())
-            try:
-                content_length = int(request.headers.get("content-length") or 0)
-            except (TypeError, ValueError):
-                content_length = 0
-            current.setdefault("metrics", {})["request_bytes"] = max(0, content_length)
+        # Bind the armed context to this request so the callbacks keep writing
+        # into it regardless of which thread drives the request, and so
+        # concurrent requests cannot share one slot.
+        extensions = dict(getattr(request, "extensions", {}) or {})
+        current = self._armed_context()
+        if not isinstance(current, dict):
+            # No trace armed on this thread: the transport metrics for this
+            # request will be empty. Logged sparingly -- this is a hot path.
+            self._trace_miss_count = getattr(self, "_trace_miss_count", 0) + 1
+            if self._trace_miss_count <= 3 or self._trace_miss_count % 50 == 0:
+                logger.warning(
+                    "transport_trace_missing thread=%s count=%s url=%s",
+                    threading.get_ident(), self._trace_miss_count, request.url,
+                )
+            request.extensions = extensions
+            return super().send(request, *args, **kwargs)
 
-            def _trace(event_name: str, info: Dict[str, Any]) -> None:
-                # httpcore trace names are intentionally retained verbatim so
-                # upgrades do not silently collapse new transport phases.
-                current["events"].append({
-                    "event": str(event_name),
-                    "at_ms": int(max(0.0, (time.perf_counter() - started_at) * 1000.0)),
-                })
+        extensions["_myagent_trace_context"] = current
+        started_at = float(current.get("started_at") or time.perf_counter())
+        metrics = current.setdefault("metrics", {})
+        metrics["request_bytes"] = self._request_body_bytes(request)
+        self._last_trace = self._snapshot_of(current)
 
-            request.extensions = dict(getattr(request, "extensions", {}) or {})
-            request.extensions["trace"] = _trace
+        def _trace(event_name: str, info: Dict[str, Any]) -> None:
+            # httpcore trace names are intentionally retained verbatim so
+            # upgrades do not silently collapse new transport phases.
+            name = str(event_name)
+            at_ms = int(max(0.0, (time.perf_counter() - started_at) * 1000.0))
+            events = current.setdefault("events", [])
+            events.append({"event": name, "at_ms": at_ms})
+            if name.endswith("send_request_body.started"):
+                metrics["body_started_ms"] = at_ms
+            elif name.endswith("send_request_body.complete"):
+                # NOTE: with a buffered body this fires as soon as the body is
+                # handed to the connection -- it does NOT grow with body size
+                # (measured: 491 ms at 10 KB, 285 ms at 2 MB). Read it as
+                # "request write finished", never as "upload complete".
+                metrics["body_handed_off_ms"] = at_ms
+            elif name.endswith("connection.connect_tcp.complete") or name.endswith("connection.connect_unix_socket.complete"):
+                metrics["connect_done_ms"] = at_ms
+            elif name.endswith("connection.start_tls.complete"):
+                metrics["tls_done_ms"] = at_ms
+            elif name.endswith("receive_response_headers.started"):
+                # httpcore fires this in the same tick as the body handoff, so
+                # this is not itself a wait; it is the anchor for how long the
+                # response took.
+                metrics["response_wait_started_ms"] = at_ms
+            elif name.endswith("receive_response_headers.complete"):
+                metrics["response_headers_ms"] = at_ms
+                # Server-side latency: from finishing the request write to the
+                # response headers arriving. Independent of the write itself.
+                wait_started = metrics.get("response_wait_started_ms")
+                if isinstance(wait_started, int):
+                    metrics["server_wait_ms"] = max(0, at_ms - wait_started)
+            # Publish continuously: a reader that arrives before the request
+            # finishes still sees this request's numbers instead of zero.
+            self._last_trace = self._snapshot_of(current)
+
+        extensions["trace"] = _trace
+        request.extensions = extensions
+
+        _send_started = time.perf_counter()
         response = super().send(request, *args, **kwargs)
-        if isinstance(current, dict):
-            try:
-                response_length = int(response.headers.get("content-length") or 0)
-            except (TypeError, ValueError):
-                response_length = 0
-            current.setdefault("metrics", {})["response_content_length"] = max(0, response_length)
+        _note_llm_connection_use()
+        # Wall time of the whole delegate call: request write + server + the
+        # response-header round trip. Subtracting ``server_wait_ms`` leaves the
+        # time spent writing the request, the part that scales with body size.
+        metrics["send_delegate_ms"] = int(max(0.0, (time.perf_counter() - _send_started) * 1000.0))
+        try:
+            response_length = int(response.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            response_length = 0
+        metrics["response_content_length"] = max(0, response_length)
+        self._last_trace = self._snapshot_of(current)
         return response
 
     def request(self, method, url, **kwargs):
@@ -841,7 +1129,20 @@ class RequestResponseLogger(httpx.Client):
         return response
 
 OPENAI_HTTP_TIMEOUT = float(os.getenv("OPENAI_HTTP_TIMEOUT", "300"))
-executor_http_client = RequestResponseLogger(timeout=OPENAI_HTTP_TIMEOUT)
+# Connection reuse across agent steps. httpx defaults to keepalive_expiry=5 s,
+# shorter than a ReAct step, but raising it was measured NOT to stop the client
+# from re-running TCP+TLS on every step (~240 ms + ~250 ms), so the reconnect
+# cause is still open. Kept configurable because the setting itself is correct
+# for pooled transports and costs nothing.
+OPENAI_KEEPALIVE_EXPIRY = float(os.getenv("OPENAI_KEEPALIVE_EXPIRY_SEC", "300"))
+executor_http_client = RequestResponseLogger(
+    timeout=OPENAI_HTTP_TIMEOUT,
+    limits=httpx.Limits(
+        max_keepalive_connections=int(os.getenv("OPENAI_MAX_KEEPALIVE_CONNECTIONS", "20")),
+        max_connections=int(os.getenv("OPENAI_MAX_CONNECTIONS", "100")),
+        keepalive_expiry=OPENAI_KEEPALIVE_EXPIRY,
+    ),
+)
 
 MAX_OUTPUT_TOKENS = model_profiles._safe_int(_INITIAL_MODEL_PROFILE.get("max_output_tokens"), 8192)
 
@@ -1470,7 +1771,9 @@ class _ScopeClientRegistry:
             return 0
         reset_count = 0
         with self._lock:
-            clients = list(self._by_scope.get(key, []))
+            # Remove only the clients that existed at this reset. A client
+            # registered while they are being reset must remain discoverable.
+            clients = self._by_scope.pop(key, [])
         for client in clients:
             reset = getattr(client, "reset_failure_state", None)
             if callable(reset):
@@ -1479,8 +1782,6 @@ class _ScopeClientRegistry:
                     reset_count += 1
                 except Exception:
                     logger.debug("重置客户端模型熔断状态失败", exc_info=True)
-        with self._lock:
-            self._by_scope.pop(key, None)
         return reset_count
 
 
@@ -1491,7 +1792,12 @@ _scope_client_registry = _ScopeClientRegistry()
 _session_run_scopes: Dict[str, set] = {}
 
 
-def adopt_fallback_profile_for_session(session_id: str, profile_id: str) -> bool:
+def adopt_fallback_profile_for_session(
+    session_id: str,
+    profile_id: str,
+    *,
+    expected_selection_id: Optional[str] = None,
+) -> bool:
     """Persist a fallback takeover as the session's bound model profile.
 
     用户要求：右下角选择器与实际使用的模型绑定。fallback 接管后把会话的
@@ -1503,28 +1809,36 @@ def adopt_fallback_profile_for_session(session_id: str, profile_id: str) -> bool
     if not sid or not pid:
         return False
     try:
-        meta = session_manager._load_metadata(sid)
-        if not isinstance(meta, dict):
-            meta = {}
-        previous_pid = str(meta.get("model_profile_id") or "").strip()
-        if previous_pid == pid:
-            return True
-        meta["model_profile_id"] = pid
-        meta["updated_at"] = datetime.now().isoformat()
-        history = meta.get("model_switch_history")
-        if not isinstance(history, list):
-            history = []
-        meta["model_switch_history"] = [
-            *history[-49:],
-            {
-                "switch_id": uuid.uuid4().hex,
-                "from_profile_id": previous_pid,
-                "to_profile_id": pid,
-                "requested_by": "fallback",
-                "switched_at": datetime.now(timezone.utc).isoformat(),
-            },
-        ]
         with session_manager._session_metadata_lock(sid):
+            meta = session_manager._load_metadata_unlocked(sid)
+            if not isinstance(meta, dict):
+                meta = {}
+            # The request may have started before a manual model switch. Its
+            # eventual completion must not undo that newer choice.
+            if (
+                expected_selection_id is not None
+                and str(meta.get("model_profile_selection_id") or "")
+                != expected_selection_id
+            ):
+                return False
+            previous_pid = str(meta.get("model_profile_id") or "").strip()
+            if previous_pid == pid:
+                return False
+            meta["model_profile_id"] = pid
+            meta["updated_at"] = datetime.now().isoformat()
+            history = meta.get("model_switch_history")
+            if not isinstance(history, list):
+                history = []
+            meta["model_switch_history"] = [
+                *history[-49:],
+                {
+                    "switch_id": uuid.uuid4().hex,
+                    "from_profile_id": previous_pid,
+                    "to_profile_id": pid,
+                    "requested_by": "fallback",
+                    "switched_at": datetime.now(timezone.utc).isoformat(),
+                },
+            ]
             session_manager._save_metadata_unlocked(sid, meta)
         _invalidate_executor_config_cache(sid)
         return True
@@ -1545,13 +1859,11 @@ def reset_executor_failure_state_for_session(session_id: str) -> int:
     sid = str(session_id or "").strip()
     if not sid:
         return 0
-    scopes: List[str] = []
     with _executor_failure_lock:
-        scopes = list(_session_run_scopes.get(sid, set()))
-    reset_count = 0
-    for scope in scopes:
-        reset_count += _scope_client_registry.reset_scope(scope)
-    _session_run_scopes.pop(sid, None)
+        # Keep registration and removal in one critical section. Otherwise a
+        # newly registered scope can be erased by the final pop below.
+        scopes = list(_session_run_scopes.pop(sid, set()))
+        reset_count = sum(_scope_client_registry.reset_scope(scope) for scope in scopes)
     return reset_count
 
 
@@ -1587,6 +1899,8 @@ class ExecutorLLMClient:
         self._failure_lock = failure_lock or threading.RLock()
         self._request_scope = ""
         self._bound_session_id = ""
+        self._bound_model_selection_id: Optional[str] = None
+        self._failure_state_generation = 0
         self._fallback_adopted_callback: Optional[Callable[[str, str, str], None]] = None
         self._failed_candidates_by_scope = (
             failed_candidates_by_scope
@@ -1642,6 +1956,7 @@ class ExecutorLLMClient:
         replaced.
         """
         with self._failure_lock:
+            self._failure_state_generation += 1
             scope = self._request_scope
             if scope:
                 self._failed_candidates_by_scope.pop(scope, None)
@@ -1667,6 +1982,14 @@ class ExecutorLLMClient:
         if not sid or not scope:
             return
         self._bound_session_id = sid
+        if self._bound_model_selection_id is None:
+            try:
+                meta = session_manager._load_metadata(sid)
+                self._bound_model_selection_id = str(
+                    (meta or {}).get("model_profile_selection_id") or ""
+                )
+            except Exception:
+                self._bound_model_selection_id = ""
         with _executor_failure_lock:
             scopes = _session_run_scopes.setdefault(sid, set())
             scopes.add(scope)
@@ -1689,14 +2012,9 @@ class ExecutorLLMClient:
         pid = str(candidate.get("profile_id") or "").strip()
         if not pid:
             return
-        try:
-            meta = session_manager._load_metadata(sid)
-            bound = str((meta or {}).get("model_profile_id") or "").strip()
-        except Exception:
-            bound = ""
-        if bound == pid:
-            return
-        if adopt_fallback_profile_for_session(sid, pid):
+        if adopt_fallback_profile_for_session(
+            sid, pid, expected_selection_id=self._bound_model_selection_id
+        ):
             cb = self._fallback_adopted_callback
             if callable(cb):
                 try:
@@ -1852,6 +2170,26 @@ class ExecutorLLMClient:
     def _candidate_circuit_key(index: int, item: Dict[str, Any]) -> str:
         return str(item.get("profile_id") or f"candidate:{index}")
 
+    @staticmethod
+    def _direct_transport(item: Dict[str, Any]) -> Optional["_DirectStreamTransport"]:
+        """A transport that streams candidate ``item`` over the shared httpx client.
+
+        Used only when ``LLM_STREAM_PREFER_DIRECT`` is set and only for the first
+        candidate: the facade keeps owning fallback, circuits, modality routing
+        and budget, so replacing just the stream source cannot remove any of it.
+        """
+        if not _prefer_direct_stream():
+            return None
+        target = item.get("client")
+        if target is None:
+            return None
+        inner = getattr(target, "_client", None)
+        if not callable(getattr(inner, "stream", None)):
+            return None
+        if not str(getattr(target, "base_url", "") or "").strip():
+            return None
+        return _DirectStreamTransport(target)
+
     def stream_completion(self, **kwargs: Any) -> Any:
         """Return a normalized stream, switching profiles only before first output."""
         return self._stream_completion_iter(dict(kwargs))
@@ -1863,6 +2201,7 @@ class ExecutorLLMClient:
         background_text_request = request_context.purpose is not LLMRequestPurpose.MAIN
         with self._failure_lock:
             request_scope = self._request_scope
+            failure_state_generation = self._failure_state_generation
             failed_candidates = set(
                 self._failed_candidates_by_scope.get(request_scope, set())
             )
@@ -1925,6 +2264,15 @@ class ExecutorLLMClient:
             transport = item.get("transport")
             if transport is None:
                 raise RuntimeError("model candidate has no LLM transport")
+            # Optional direct stream for the preferred candidate: same
+            # TransportEvent contract and same shared httpx client, but the
+            # response is drained to EOF so the connection returns to the pool
+            # (measured ~850 ms faster per step). Only the stream source is
+            # replaced -- fallback, circuits, modality routing and the request
+            # budget all stay owned by the loop below.
+            direct_transport = self._direct_transport(item) if idx == 0 else None
+            if direct_transport is not None:
+                transport = direct_transport
             emitted_output = False
             retry_attempts, retry_backoff = _candidate_retry_policy()
             retry_index = 0
@@ -2025,28 +2373,26 @@ class ExecutorLLMClient:
                     media_only_failure = request_has_media and _is_media_input_error(exc)
                     if request_scope and not media_only_failure:
                         with self._failure_lock:
-                            scoped_failures = self._failed_candidates_by_scope.get(
-                                request_scope
-                            )
-                            if not isinstance(scoped_failures, dict):
-                                # Normalize a legacy in-memory set after hot reload.
-                                scoped_failures = {}
-                                self._failed_candidates_by_scope[request_scope] = (
-                                    scoped_failures
+                            if self._failure_state_generation == failure_state_generation:
+                                scoped_failures = self._failed_candidates_by_scope.get(
+                                    request_scope
                                 )
-                            # 保留该候选最近一次的真实异常，供"全部候选不可用"
-                            # 时沿异常链透传真实原因（403/400/429…），避免
-                            # 错误信息被笼统的 RuntimeError 覆盖。
-                            snapshot = CandidateFailureSnapshot(
-                                candidate_key=circuit_key,
-                                model=str(item.get("model") or ""),
-                                provider=str(item.get("provider") or "unknown"),
-                                error=exc,
-                            )
-                            # Reinsert so dict order represents failure recency even
-                            # when concurrent hedges update the same candidate.
-                            scoped_failures.pop(circuit_key, None)
-                            scoped_failures[circuit_key] = snapshot
+                                if not isinstance(scoped_failures, dict):
+                                    # Normalize a legacy in-memory set after hot reload.
+                                    scoped_failures = {}
+                                    self._failed_candidates_by_scope[request_scope] = (
+                                        scoped_failures
+                                    )
+                                # Keep the real error for an exhausted circuit.
+                                snapshot = CandidateFailureSnapshot(
+                                    candidate_key=circuit_key,
+                                    model=str(item.get("model") or ""),
+                                    provider=str(item.get("provider") or "unknown"),
+                                    error=exc,
+                                )
+                                # Preserve failure recency across concurrent hedges.
+                                scoped_failures.pop(circuit_key, None)
+                                scoped_failures[circuit_key] = snapshot
                         failed_candidates.add(circuit_key)
                     last_error = exc
                     last_model = str(item.get("model") or "")
@@ -4363,6 +4709,7 @@ class SessionManager:
                 "switched_at": now,
             }
             meta["model_profile_id"] = target_profile_id
+            meta["model_profile_selection_id"] = record["switch_id"]
             meta["executor_model"] = str(executor_model or "").strip()
             # A fork snapshot intentionally freezes its original model runtime.
             # Once the user switches profiles, keep the inherited tools/system
@@ -7226,15 +7573,8 @@ def resolve_executor_for_session(session_id: str) -> Tuple[Any, str]:
     return client, model
 
 
-def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int, int]:
-    """Resolve executor client/model plus per-session model limits."""
-    sid = (session_id or "").strip()
-    now = time.monotonic()
-    if sid:
-        with _executor_config_cache_lock:
-            cached_config = _executor_config_cache.get(sid)
-            if cached_config and now - cached_config[0] <= _EXECUTOR_CONFIG_CACHE_TTL_SEC:
-                return cached_config[1]
+def _build_executor_config_for_session(sid: str) -> Tuple[Any, str, int, int]:
+    """Build a client from one metadata snapshot, without touching the cache."""
     try:
         meta = session_manager._load_metadata(sid)
     except Exception:
@@ -7282,15 +7622,39 @@ def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int,
         if profile_id or len(candidates) > 1 or first.get("transport") is not None
         else first.get("client")
     )
-    result = (
+    if isinstance(client, ExecutorLLMClient):
+        client._bound_model_selection_id = str(
+            (meta if isinstance(meta, dict) else {}).get("model_profile_selection_id") or ""
+        )
+    return (
         client,
         str(first.get("model") or ""),
         int(first.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
         int(first.get("context_window") or CONTEXT_WINDOW),
     )
-    if sid:
+
+
+def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int, int]:
+    """Resolve executor client/model plus per-session model limits."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return _build_executor_config_for_session(sid)
+    for _attempt in range(3):
+        now = time.monotonic()
         with _executor_config_cache_lock:
-            _executor_config_cache[sid] = (now, result)
+            cached_config = _executor_config_cache.get(sid)
+            if cached_config and now - cached_config[0] <= _EXECUTOR_CONFIG_CACHE_TTL_SEC:
+                return cached_config[1]
+            generation = _executor_config_generation
+        result = _build_executor_config_for_session(sid)
+        with _executor_config_cache_lock:
+            # A manual switch may invalidate the cache while the client is
+            # being built. Never reinsert that pre-switch client afterward.
+            if generation == _executor_config_generation:
+                _executor_config_cache[sid] = (time.monotonic(), result)
+                return result
+    # Config churn can continue indefinitely. Return the latest uncached
+    # snapshot; the next boundary will resolve again.
     return result
 
 # ==================== Todo 计划（todo_plan.md）与 key_context 兼容 ====================
