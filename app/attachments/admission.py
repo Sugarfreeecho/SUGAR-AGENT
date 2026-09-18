@@ -22,8 +22,72 @@ class AdmissionContext:
     verify_refs: bool = True
 
 
+def _holds_no_admissible_block(value) -> bool:
+    """Whether a content value provably admits nothing, whatever the store's limits.
+
+    Only block kinds that can never reference, stage, or inherit an attachment
+    count as provably empty, so the fast path cannot hide a real admission.
+    """
+    if isinstance(value, str):
+        return True
+    if not isinstance(value, list):
+        return False
+    for block in value:
+        if not isinstance(block, dict):
+            return False
+        if block.get("type") in {"image", "image_url", "input_image", "local_file"}:
+            return False
+        if block.get("attachment") or block.get("data") or block.get("source"):
+            return False
+        nested = block.get("content")
+        if nested is not None and not _holds_no_admissible_block(nested):
+            return False
+    return True
+
+
 def admit_content(content, context, *, scan_paths=False, scan_remote=False, strict=False):
     from .content import DATA_IMAGE_RE, IMAGE_PATH_RE, scan_enabled
+
+    # Fast path: a message with no image-capable block and no scanned token in
+    # its text is already its own admitted form. This runs once per message
+    # while projecting a request, so the full pipeline below (store limits,
+    # remote policy, recursive block rewrite) must not be paid for plain text.
+    if _holds_no_admissible_block(content):
+        if isinstance(content, str):
+            if not DATA_IMAGE_RE.search(content) and not (
+                scan_remote and REMOTE_IMAGE_RE.search(content)
+            ) and not (scan_paths and scan_enabled() and IMAGE_PATH_RE.search(content)):
+                return content
+        elif scan_remote or scan_paths:
+            probes = [(str(block.get("text") or ""), block.get("content"))
+                      for block in content if isinstance(block, dict)]
+            hit = False
+            for text, nested in probes:
+                if DATA_IMAGE_RE.search(text):
+                    hit = True
+                    break
+                if scan_remote and REMOTE_IMAGE_RE.search(text):
+                    hit = True
+                    break
+                if scan_paths and scan_enabled() and IMAGE_PATH_RE.search(text):
+                    hit = True
+                    break
+                if nested is not None and not _holds_no_admissible_block(nested):
+                    hit = True
+                    break
+            if not hit:
+                return content
+        else:
+            hit = False
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if DATA_IMAGE_RE.search(str(block.get("text") or "")):
+                    hit = True
+                    break
+            if not hit:
+                return content
+
     store = context.store
     policy = context.remote_policy or RemoteImagePolicy.from_env()
     pending, placeholders, references = [], [], []

@@ -29,10 +29,31 @@ class RemoteImagePolicy:
 
     @classmethod
     def from_env(cls):
-        return cls(os.getenv("MULTIMODAL_REMOTE_IMAGE_MODE", "ingest"),
-                   float(os.getenv("ATTACHMENT_REMOTE_TIMEOUT_SECONDS", "20")),
-                   int(os.getenv("ATTACHMENT_REMOTE_MAX_REDIRECTS", "3")),
-                   tuple(h.strip().lower() for h in os.getenv("ATTACHMENT_REMOTE_ALLOWED_HOSTS", "").split(",") if h.strip()))
+        global _REMOTE_POLICY_CACHE
+        raw = (
+            os.getenv("MULTIMODAL_REMOTE_IMAGE_MODE", "ingest"),
+            os.getenv("ATTACHMENT_REMOTE_TIMEOUT_SECONDS", "20"),
+            os.getenv("ATTACHMENT_REMOTE_MAX_REDIRECTS", "3"),
+            os.getenv("ATTACHMENT_REMOTE_ALLOWED_HOSTS", ""),
+        )
+        cached = _REMOTE_POLICY_CACHE
+        if cached is not None and cached[0] == raw:
+            return cached[1]
+        policy = cls(raw[0], float(raw[1]), int(raw[2]),
+                     tuple(h.strip().lower() for h in raw[3].split(",") if h.strip()))
+        _REMOTE_POLICY_CACHE = (raw, policy)
+        return policy
+
+
+def invalidate_remote_policy_cache() -> None:
+    """Drop the memoized environment-derived policy (tests, embedders)."""
+    global _REMOTE_POLICY_CACHE
+    _REMOTE_POLICY_CACHE = None
+
+
+# The policy is rebuilt once per admitted message; the environment does not
+# change during a run, so keep the parsed result keyed by its raw inputs.
+_REMOTE_POLICY_CACHE: tuple | None = None
 
 
 _dns_slots = threading.BoundedSemaphore(4)
