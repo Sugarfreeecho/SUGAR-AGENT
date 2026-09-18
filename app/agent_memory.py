@@ -1160,23 +1160,67 @@ def _run_compress_executor_dialogue(
         return _compress_executor_excerpt_fallback(dialogue_msgs, suffix=suffix), ""
 
 
+def _llm_history_step_ranges(messages: List) -> List[Tuple[int, int]]:
+    """把消息序列切成「步」的 [start, end) 区间：一次工具调用及其结果不可拆分。
+
+    步口径（与压缩链一致）：
+    - assistant：与其后连续 ToolMessage 合并为一步（缺结果的 assistant 也自成一步）；
+    - 无前置 assistant 的连续 ToolMessage（历史异常数据）：整段一步，交给调用侧安全化；
+    - system / user / 其它：单条一步。
+    """
+    steps: List[Tuple[int, int]] = []
+    n = len(messages or [])
+    i = 0
+    while i < n:
+        m = messages[i]
+        if isinstance(m, AssistantMessage):
+            j = i + 1
+            while j < n and isinstance(messages[j], ToolMessage):
+                j += 1
+            steps.append((i, j))
+            i = j
+            continue
+        if isinstance(m, ToolMessage):
+            j = i
+            while j < n and isinstance(messages[j], ToolMessage):
+                j += 1
+            steps.append((i, j))
+            i = j
+            continue
+        steps.append((i, i + 1))
+        i += 1
+    return steps
+
+
 def _llm_history_tail_within_token_budget_with_start(
     llm_history: List, max_tokens: int
 ) -> Tuple[List, int]:
-    """返回 (尾部 deepcopy, 丢弃的前缀消息条数)。"""
+    """返回 (尾部 deepcopy, 丢弃的前缀消息条数)。
+
+    以「步」为单位做 token 预算二分：切点只落在步边界上，不拆开
+    assistant(tool_calls) 与其 tool 回复；若边界步是「无主 tool」异常段，
+    继续向后跳过，避免产出 role=tool 开头的非法消息链。
+    """
     full = list(llm_history or [])
     if not full:
         return [], 0
     mt = int(max_tokens)
-    best_start = len(full)
-    lo, hi = 0, len(full)
-    while lo <= hi:
+    steps = _llm_history_step_ranges(full)
+    lo, hi = 0, len(steps)
+    best_k = len(steps)
+    while lo < hi:
         mid = (lo + hi) // 2
-        if estimate_tokens(full[mid:]) <= mt:
-            best_start = mid
-            hi = mid - 1
+        if estimate_tokens(full[steps[mid][0]:]) <= mt:
+            best_k = mid
+            hi = mid
         else:
             lo = mid + 1
+    # 安全化：保留段不得以「无主 tool 步」开头（对 provider 是非法消息链）
+    while best_k < len(steps) and isinstance(full[steps[best_k][0]], ToolMessage):
+        best_k += 1
+    if best_k >= len(steps):
+        return [], len(full)
+    best_start = steps[best_k][0]
     return deepcopy(full[best_start:]), int(best_start)
 
 
