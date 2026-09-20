@@ -1,26 +1,21 @@
 .plugin-session-panel--custom.agent-goal-panel-host { padding:0; border:0; background:transparent; box-shadow:none; backdrop-filter:none; }
 .agent-goal-panel-host .chat-goal-card {
-    flex:0 0 auto; min-height:0; overflow:hidden; padding:.45rem .4rem;
-    border:1px solid rgba(137,180,250,.28); border-radius:var(--radius-sm);
-    background:color-mix(in srgb,var(--surface-glass3) 86%,rgba(137,180,250,.22));
-    backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
-    box-shadow:0 6px 28px rgba(0,0,0,.22),0 2px 8px rgba(0,0,0,.1);
+    flex:0 0 auto; min-height:0;
 }
 .agent-goal-panel-host .chat-goal-card[hidden],
 .agent-goal-panel-host .chat-goal-icon-btn[hidden],
 .agent-goal-panel-host .chat-goal-review-btn[hidden] { display:none !important; }
 .agent-goal-panel-host .chat-goal-heading {
-    display:flex; justify-content:space-between; font-size:.62rem; font-weight:600;
-    color:var(--text-tertiary); letter-spacing:.05em; text-transform:uppercase;
+    justify-content:space-between;
 }
 .agent-goal-panel-host .chat-goal-heading span:last-child { margin-left:.5rem; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .agent-goal-panel-host .chat-goal-objective {
-    margin-top:.28rem; font-size:.68rem; line-height:1.4; color:var(--text-primary);
+    color:var(--text-primary);
     display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:6; line-clamp:6;
     overflow:hidden; overflow-wrap:anywhere; cursor:default;
 }
 .agent-goal-panel-host .chat-goal-objective:focus-visible { outline:1px solid var(--accent-2); outline-offset:2px; border-radius:3px; }
-.agent-goal-panel-host .chat-goal-actions { display:flex; align-items:center; gap:.25rem; margin-top:.38rem; }
+.agent-goal-panel-host .chat-goal-actions { display:flex; align-items:center; gap:.25rem; margin-top:.3rem; }
 .agent-goal-panel-host .chat-goal-icon-btn {
     display:inline-flex; align-items:center; justify-content:center; flex:0 0 1.65rem;
     width:1.65rem; height:1.45rem; padding:0; border:1px solid var(--border-glass); border-radius:5px;

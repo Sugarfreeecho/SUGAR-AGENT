@@ -41,6 +41,55 @@ def test_theme_labels_are_translated() -> None:
     assert "'紫色': 'Purple'" in translations
 
 
+def test_workspace_side_panels_share_the_same_visual_system() -> None:
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    shell = (ROOT / "frontend/src/shell-body.html").read_text(encoding="utf-8")
+    toc_source = (
+        ROOT / "frontend/src/app/modules/toc-todo.js"
+    ).read_text(encoding="utf-8")
+    todo_source = (
+        ROOT / "plugins/session-todo/web/session-panel.js"
+    ).read_text(encoding="utf-8")
+    todo_styles = (
+        ROOT / "plugins/session-todo/web/session-panel.css"
+    ).read_text(encoding="utf-8")
+    goal_source = (
+        ROOT / "plugins/agent-goal/web/session-panel.js"
+    ).read_text(encoding="utf-8")
+    goal_styles = (
+        ROOT / "plugins/agent-goal/web/session-panel.css"
+    ).read_text(encoding="utf-8")
+
+    light = styles.split(":root.theme-light {", 1)[1].split("}", 1)[0]
+    panel = styles.split(".workspace-side-panel {", 1)[1].split("}", 1)[0]
+    title = styles.split(".workspace-side-panel-title {", 1)[1].split("}", 1)[0]
+    item = styles.split(".workspace-side-panel-item {", 1)[1].split("}", 1)[0]
+
+    assert "--workspace-side-panel-bg: rgba(255, 255, 255, 0.58);" in light
+    assert "--workspace-side-panel-shadow:" in light
+    assert "--workspace-side-panel-item-bg:" in light
+    assert "background: var(--workspace-side-panel-bg);" in panel
+    assert "box-shadow: var(--workspace-side-panel-shadow);" in panel
+    assert "padding: 0.4rem 0.35rem;" in panel
+    assert "font: 650 0.62rem/1.3 var(--sans);" in title
+    assert "font: 400 0.68rem/1.45 var(--sans);" in item
+    assert 'chat-toc-panel workspace-side-panel' in shell
+    assert 'chat-toc-title workspace-side-panel-title' in shell
+    assert 'chat-toc-stats workspace-side-panel-meta' in shell
+    assert 'chat-toc-list workspace-side-panel-list' in shell
+    assert "workspace-side-panel-item workspace-side-panel-item--interactive" in toc_source
+    assert "chat-todo-plan-panel workspace-side-panel" in todo_source
+    assert "chat-todo-plan-title workspace-side-panel-title" in todo_source
+    assert "chat-todo-plan-stats workspace-side-panel-meta" in todo_source
+    assert "chat-todo-plan-list workspace-side-panel-list" in todo_source
+    assert "workspace-side-panel-item todo-plan--" in todo_source
+    assert "background:var(--workspace-side-panel-bg" not in todo_styles
+    assert "chat-goal-card workspace-side-panel" in goal_source
+    assert "chat-goal-heading workspace-side-panel-title" in goal_source
+    assert "chat-goal-objective workspace-side-panel-item" in goal_source
+    assert "background:color-mix" not in goal_styles
+
+
 def test_neutral_dark_message_content_uses_blue_accents() -> None:
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
 

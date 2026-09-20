@@ -18,9 +18,9 @@ export function renderSessionPanel(context) {
     panel.classList.add('session-todo-panel-host');
 
     const card = document.createElement('div');
-    card.className = 'chat-todo-plan-panel';
+    card.className = 'chat-todo-plan-panel workspace-side-panel';
     const heading = document.createElement('div');
-    heading.className = 'chat-todo-plan-title';
+    heading.className = 'chat-todo-plan-title workspace-side-panel-title';
     heading.appendChild(document.createTextNode(translated('当前计划')));
     const clear = document.createElement('button');
     clear.type = 'button';
@@ -40,18 +40,18 @@ export function renderSessionPanel(context) {
         return;
     }
     const stats = document.createElement('div');
-    stats.className = 'chat-todo-plan-stats';
+    stats.className = 'chat-todo-plan-stats workspace-side-panel-meta';
     stats.setAttribute('aria-live', 'polite');
     stats.textContent = `${done} / ${total} ${translated('已完成')}`;
 
     const list = document.createElement('ul');
-    list.className = 'chat-todo-plan-list';
+    list.className = 'chat-todo-plan-list workspace-side-panel-list';
     const rows = itemsField && Array.isArray(itemsField.rows) ? itemsField.rows : [];
     rows.forEach(function (row) {
         const status = String(row.values && row.values[0] || 'pending');
         const text = String(row.values && row.values[1] || '');
         const li = document.createElement('li');
-        li.className = `todo-plan-item todo-plan--${status}`;
+        li.className = `todo-plan-item workspace-side-panel-item todo-plan--${status}`;
         const tag = document.createElement('span');
         tag.className = 'todo-plan-status-tag';
         tag.textContent = statusLabel(status);

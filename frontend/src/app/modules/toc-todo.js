@@ -244,8 +244,10 @@ function updateTocActiveFromViewport() {
 function clearTocForSessionLoad() {
     const toc = document.getElementById('chat-toc');
     const list = document.getElementById('chat-toc-list');
+    const stats = document.getElementById('chat-toc-stats');
     tocRebuildEpoch += 1;
     if (list) list.textContent = '';
+    if (stats) stats.textContent = '';
     if (toc) toc.classList.remove('is-open');
     notifyPanelContentChanged();
 }
@@ -292,6 +294,7 @@ function rebuildToc(options) {
     options = options || {};
     const toc = document.getElementById('chat-toc');
     const list = document.getElementById('chat-toc-list');
+    const stats = document.getElementById('chat-toc-stats');
     if (!toc || !list) return;
     if (suppressTocDuringSessionLoad) {
         return;
@@ -301,6 +304,7 @@ function rebuildToc(options) {
         list.addEventListener('scroll', hideUiHoverTooltip, { passive: true });
     }
     list.textContent = '';
+    if (stats) stats.textContent = '';
     const sid = currentSessionId;
     const epoch = ++tocRebuildEpoch;
     (async function () {
@@ -358,6 +362,7 @@ function rebuildToc(options) {
         });
         function appendTocLink(label, titleFull, scrollToWrap, eventIndex) {
             const a = document.createElement('a');
+            a.className = 'workspace-side-panel-item workspace-side-panel-item--interactive';
             a.href = '#';
             if (eventIndex != null) a.setAttribute('data-event-index', String(eventIndex));
             var tipText = (titleFull != null && String(titleFull).trim() !== '')
@@ -407,6 +412,11 @@ function rebuildToc(options) {
                     void scrollToUserTurnOrLoadOlder(ei);
                 }, ei);
             });
+        }
+        if (stats) {
+            const itemLabel = typeof translateUiString === 'function'
+                ? translateUiString('条记录') : '条记录';
+            stats.textContent = list.childElementCount + ' ' + itemLabel;
         }
         notifyPanelContentChanged();
         if (tocScrollBottomOnNextBuild) {

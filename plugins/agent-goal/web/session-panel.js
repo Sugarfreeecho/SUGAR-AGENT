@@ -94,11 +94,11 @@ export function renderSessionPanel(context) {
     let receivedAt = Date.now();
     let activeModal = null;
 
-    const card = element('section', 'chat-goal-card');
-    const heading = element('div', 'chat-goal-heading');
+    const card = element('section', 'chat-goal-card workspace-side-panel');
+    const heading = element('div', 'chat-goal-heading workspace-side-panel-title');
     const status = element('span');
     heading.append(element('span', '', 'GOAL'), status);
-    const objective = element('div', 'chat-goal-objective');
+    const objective = element('div', 'chat-goal-objective workspace-side-panel-item');
     objective.tabIndex = 0;
     const actions = element('div', 'chat-goal-actions');
     actions.setAttribute('role', 'toolbar');

@@ -8,7 +8,7 @@ const UI_TRANSLATIONS_EN = {
     '会话列表': 'Session list', '拖动调整侧栏宽度': 'Drag to resize sidebar', '聊天': 'Chat',
     '选择或新建会话': 'Select or create a session',
     '会话扩展面板': 'Session extensions', '折叠会话扩展面板': 'Collapse session extensions',
-    '消息': 'Messages', '历史记录': 'History',
+    '消息': 'Messages', '历史记录': 'History', '条记录': 'items',
     '折叠历史面板': 'Collapse history panel',
     '撤销': 'Undo', '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）': 'What would you like to do? (Enter to send · Shift/Ctrl/Cmd + Enter for a new line)', 'Agent运行中，输入后续任务': 'Agent is running; enter a follow-up task', '按 Enter 发送刚加入或第一条待发送任务': 'Press Enter to send the newly queued or first pending task', '选择文件': 'Choose file',
     '选择 Skill': 'Select Skill', '发送 / 停止': 'Send / Stop', '发送': 'Send', '停止': 'Stop',
