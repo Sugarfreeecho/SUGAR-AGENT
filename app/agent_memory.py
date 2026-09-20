@@ -84,10 +84,11 @@ from __future__ import annotations
 import re
 from contextvars import ContextVar
 from copy import deepcopy
-from typing import Any, Callable, List, Literal, Optional, Tuple
+from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple
 
 from agent_tokenizer import estimate_full_input_tokens_for_llm_history
 from agent_think import content_with_think_excerpt, strip_think_blocks, think_excerpt
+from history_context import active_excerpt, archive_messages
 
 from agent_harness import (
     COMPACT_BOUNDARY_SYSTEM_EXACT,
@@ -716,6 +717,18 @@ def _compress_summary_round(
         if hint_sink is not None:
             hint_sink({"progress_kind": "summary", "stream_delta": piece})
 
+    archive: dict[str, Any] = {}
+    if str(session_id or "").strip() and prefix:
+        try:
+            archive = archive_messages(
+                session_manager,
+                session_id,
+                prefix,
+                reason=f"context_summary_round_{int(round_idx)}",
+            )
+        except Exception as exc:
+            logger.warning("压缩前缀归档失败（继续摘要）: %s", exc)
+
     summary, key_body = _run_compress_executor_dialogue(
         key_context,
         prefix,
@@ -724,7 +737,15 @@ def _compress_summary_round(
         hints=hint_list,
         session_id=session_id,
         prompt_language=prompt_language,
+        archive=archive,
     )
+    archive_pointer = str(archive.get("ref") or "").strip()
+    if archive_pointer and summary and archive_pointer not in summary:
+        summary = (
+            summary.rstrip()
+            + "\n"
+            + f"[压缩原文已归档 ref={archive_pointer}；需要细节时使用 history_context(action=read)]"
+        )
     _push_progress_persist_body(hint_sink, summary, kind="summary")
     _push_progress_persist_body(hint_sink, key_body, kind="key")
     if hint_sink is not None and (summary or "").strip():
@@ -1034,13 +1055,17 @@ def _compress_executor_excerpt_fallback(
     dialogue_msgs: List,
     *,
     suffix: str,
+    archive: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    fb = _format_conversation_excerpt(
-        dialogue_msgs,
-        tool_line_max=8_000,
-        reasoning_max=8_000,
-    )
-    body = ((fb or "")[:8000]).strip()
+    if archive and archive.get("rows"):
+        body = active_excerpt(archive, max_chars=8_000).strip()
+    else:
+        fb = _format_conversation_excerpt(
+            dialogue_msgs,
+            tool_line_max=8_000,
+            reasoning_max=8_000,
+        )
+        body = ((fb or "")[:8000]).strip()
     if not body:
         return suffix.strip()
     return body + "\n" + suffix.strip()
@@ -1065,6 +1090,38 @@ def _parse_compress_dialogue_output(raw: str) -> Tuple[str, str]:
     return recap, key_body
 
 
+_COMPRESS_DRAFT_PATTERNS = (
+    re.compile(r"[（(]\s*草稿\s*[)）]", re.IGNORECASE),
+    re.compile(r"再想想(?:开头|结尾|怎么|一下|措辞)", re.IGNORECASE),
+    re.compile(r"关于\s*(?:recap|summary|摘要)\s*(?:的长度|怎么写|如何写)", re.IGNORECASE),
+    re.compile(r"标签外(?:无|不要|不能|不应)", re.IGNORECASE),
+    re.compile(r"(?:^|\n)\s*(?:draft|working draft|analysis|plan)\s*[:：]", re.IGNORECASE),
+    re.compile(r"\b(?:let me|i need to|i should)\s+(?:think|plan|draft|write|organize)\b", re.IGNORECASE),
+)
+
+
+def _compress_dialogue_quality_issue(recap: str, key_body: str) -> str:
+    """Return a short reason when a tagged answer still looks like model scratch work.
+
+    Tag presence alone is not enough: some reasoning models place their planning
+    prose inside ``<recap>`` or ``<summary>``.  Inspect only the leading portion
+    and use high-signal phrases so ordinary historical mentions of a draft are
+    not rejected merely because they occur later in a legitimate recap.
+    """
+    for label, body in (("recap", recap), ("summary", key_body)):
+        sample = str(body or "").strip()[:1600]
+        if not sample:
+            continue
+        if re.search(r"</?(?:analysis|thinking|reasoning)\b", sample, re.IGNORECASE):
+            return f"{label} contains a reasoning tag"
+        for pattern in _COMPRESS_DRAFT_PATTERNS:
+            match = pattern.search(sample)
+            if match:
+                marker = match.group(0).replace("\n", " ").strip()
+                return f"{label} contains draft marker: {marker[:80]}"
+    return ""
+
+
 def _run_compress_executor_dialogue(
     key_context: str,
     dialogue_msgs: List,
@@ -1074,6 +1131,7 @@ def _run_compress_executor_dialogue(
     hints: Optional[List[str]] = None,
     session_id: str = "",
     prompt_language: str = "zh-CN",
+    archive: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, str]:
     """组包 → trim → 执行端 chat（compress_history_and_key）→ 解析 recap + key。"""
     if not (key_context or "").strip() and not dialogue_msgs:
@@ -1107,7 +1165,9 @@ def _run_compress_executor_dialogue(
             return "（无来源文本，未生成 summary）", ""
         if not _compress_executor_dialogue_api_valid(msgs):
             logger.warning("compress_history_and_key 消息链无效，改用摘录兜底")
-            return _compress_executor_excerpt_fallback(dialogue_msgs, suffix=suffix), ""
+            return _compress_executor_excerpt_fallback(
+                dialogue_msgs, suffix=suffix, archive=archive
+            ), ""
         for attempt in range(2):
             def _buffer_delta(piece: str) -> None:
                 if stream_sink is not None:
@@ -1118,7 +1178,8 @@ def _run_compress_executor_dialogue(
                 strict = (
                     "上一次摘要输出格式无效，已丢弃。请重新输出，且只能使用：\n"
                     "<recap>历史前情摘要</recap>\n<summary>key_context 要点</summary>\n"
-                    "不要输出 analysis、解释、Markdown 围栏或其它标签。"
+                    "只写已完成的成品；不要写草稿、计划、自我对话、analysis、解释、"
+                    "Markdown 围栏或其它标签。"
                 )
                 call_msgs = list(msgs) + [UserMessage(content=strict)]
             if stream_sink is not None:
@@ -1126,13 +1187,33 @@ def _run_compress_executor_dialogue(
             else:
                 raw = executor_chat_complete(call_msgs, session_id=session_id).strip()
             recap, key_body = _parse_compress_dialogue_output(raw)
-            if recap and key_body:
+            quality_issue = (
+                _compress_dialogue_quality_issue(recap, key_body)
+                if recap and key_body
+                else ""
+            )
+            if recap and key_body and not quality_issue:
                 return recap, key_body
-            logger.warning("compress_history_and_key 格式无效，已丢弃输出并准备重试 attempt=%s", attempt + 1)
+            if quality_issue:
+                logger.warning(
+                    "compress_history_and_key 成品质量校验失败，已丢弃输出并准备重试 "
+                    "attempt=%s reason=%s",
+                    attempt + 1,
+                    quality_issue,
+                )
+            else:
+                logger.warning(
+                    "compress_history_and_key 格式无效，已丢弃输出并准备重试 attempt=%s",
+                    attempt + 1,
+                )
             _push_progress_hint(
                 hints if hints is not None else [],
                 hint_sink,
-                f"【上下文摘要】第 {attempt + 1} 次摘要输出格式无效，已丢弃并准备重试…",
+                (
+                    f"【上下文摘要】第 {attempt + 1} 次摘要仍含草稿/规划内容，已丢弃并准备重试…"
+                    if quality_issue
+                    else f"【上下文摘要】第 {attempt + 1} 次摘要输出格式无效，已丢弃并准备重试…"
+                ),
                 kind="summary",
                 session_id=session_id,
                 with_pct=False,
@@ -1146,7 +1227,9 @@ def _run_compress_executor_dialogue(
             session_id=session_id,
             with_pct=False,
         )
-        return _compress_executor_excerpt_fallback(dialogue_msgs, suffix=suffix), ""
+        return _compress_executor_excerpt_fallback(
+            dialogue_msgs, suffix=suffix, archive=archive
+        ), ""
     except Exception as e:
         logger.warning("compress_history_and_key 调用失败: %s", e)
         _push_progress_hint(
@@ -1157,7 +1240,9 @@ def _run_compress_executor_dialogue(
             session_id=session_id,
             with_pct=False,
         )
-        return _compress_executor_excerpt_fallback(dialogue_msgs, suffix=suffix), ""
+        return _compress_executor_excerpt_fallback(
+            dialogue_msgs, suffix=suffix, archive=archive
+        ), ""
 
 
 def _llm_history_step_ranges(messages: List) -> List[Tuple[int, int]]:
@@ -1541,18 +1626,33 @@ def _compress_unified_in_place(
             round_idx += 1
             prefix, tail = _split_prefix_tail_for_summary_round(work, round_idx, tail_keep)
             if not prefix:
-                # 第 1 轮可能因完整尾窗较宽而没有可摘要前缀；第 2 轮会缩至
-                # 单个 user 尾窗，仍有机会正常继续。之后无前缀才是结构性兜底。
-                if round_idx == 1 and tail_keep > 1:
+                # “按 user 轮”切不出前缀，不代表当前长 user 轮内没有可摘要
+                # 的 ReAct 步。逐档探测至第 3 轮的步口径；只在确有非空
+                # prefix 时推进，避免轮口径枯竭后过早截尾。
+                next_round: Optional[int] = None
+                for candidate_round in range(round_idx + 1, 4):
+                    probe_prefix, _probe_tail = _split_prefix_tail_for_summary_round(
+                        work,
+                        candidate_round,
+                        tail_keep,
+                    )
+                    if probe_prefix:
+                        next_round = candidate_round
+                        break
+                if next_round is not None:
                     _push_progress_hint(
                         hints,
                         hint_sink,
-                        f"【上下文摘要】第 {round_idx} 轮没有足够可摘要的历史前缀，继续尝试更窄尾窗…",
+                        (
+                            f"【上下文摘要】第 {round_idx} 轮没有足够可摘要的历史前缀，"
+                            f"继续尝试第 {next_round} 轮的更窄尾窗…"
+                        ),
                         kind="summary",
                         session_id=session_id,
                         preview_llm_history=_preview_llm_for_ui_estimate(work),
                         key_context=cur_key,
                     )
+                    round_idx = next_round - 1
                     continue
                 fallback_reason = "no_prefix"
                 _push_progress_hint(
