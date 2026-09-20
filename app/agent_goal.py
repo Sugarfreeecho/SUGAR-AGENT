@@ -819,10 +819,12 @@ class GoalManager:
             if run_id:
                 accounted.append(run_id)
                 goal["accounted_run_ids"] = accounted[-512:]
-            if outcome in {"failed", "error"}:
+            if outcome in {"failed", "error", "interrupted"}:
                 failures = int(goal.get("consecutive_failures") or 0) + 1
                 goal["consecutive_failures"] = failures
-                goal["last_error"] = str(error or "run_failed")[:2000]
+                goal["last_error"] = str(
+                    error or ("run_interrupted" if outcome == "interrupted" else "run_failed")
+                )[:2000]
                 goal["next_retry_at"] = _future_iso(min(300, 2 ** min(failures, 8)))
                 max_failures = max(1, int(os.getenv("GOAL_MAX_CONSECUTIVE_FAILURES", "3") or 3))
                 if goal.get("status") == "active" and failures >= max_failures:
@@ -865,6 +867,9 @@ class GoalManager:
                 raise GoalError("No goal exists for this session.")
             if current.get("status") != "active":
                 raise GoalError(f"Cannot continue a goal in status {current.get('status')}.")
+            current_run_id = str(current.get("current_run_id") or "").strip()
+            if current_run_id:
+                raise GoalError(f"Goal already has an active continuation run: {current_run_id}")
             budget = current.get("token_budget")
             if budget is not None and int(current.get("used_tokens") or 0) >= int(budget):
                 raise GoalError("Token budget is exhausted.")
@@ -883,6 +888,8 @@ class GoalManager:
             return False
         goal = self.get(session_id)
         if not goal or goal.get("status") != "active":
+            return False
+        if str(goal.get("current_run_id") or "").strip():
             return False
         budget = goal.get("token_budget")
         if budget is not None and int(goal.get("used_tokens") or 0) >= int(budget):

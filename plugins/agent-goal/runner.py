@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -14,6 +15,80 @@ _POLL_SECONDS = max(0.5, float(os.getenv("GOAL_RUNNER_POLL_SECONDS", "2")))
 _scheduler: asyncio.Task | None = None
 _workers: dict[str, asyncio.Task] = {}
 _host: Any = None
+_RECOVERY_GRACE_SECONDS = max(
+    5.0,
+    float(os.getenv("GOAL_RUNNER_RECOVERY_GRACE_SECONDS", "30")),
+)
+
+
+def _parse_iso_age_seconds(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def _reconcile_incomplete_run(manager: Any, session_id: str) -> bool:
+    """Account an abandoned continuation before allowing a replacement.
+
+    Returns True only when no continuation lease remains. A locally active or
+    still-running durable row is never taken over.
+    """
+
+    getter = getattr(manager, "get", None)
+    if not callable(getter):
+        return True
+    goal = getter(session_id) or {}
+    current_run_id = str(goal.get("current_run_id") or "").strip()
+    if not current_run_id:
+        return True
+    if _host._has_local_worker_activity(session_id):
+        return False
+
+    status = ""
+    try:
+        import runtime_observability
+
+        rows = runtime_observability.snapshot(session_id).get("runs") or []
+        row = next(
+            (
+                item for item in reversed(rows)
+                if isinstance(item, dict)
+                and str(item.get("run_id") or "").strip() == current_run_id
+            ),
+            None,
+        )
+        status = str((row or {}).get("status") or "").strip().lower()
+    except Exception:
+        logger.debug("Goal run reconciliation could not read observability", exc_info=True)
+
+    if status == "running":
+        return False
+    if not status:
+        age = _parse_iso_age_seconds(goal.get("last_continuation_started_at"))
+        if age is None or age < _RECOVERY_GRACE_SECONDS:
+            return False
+
+    recorder = getattr(manager, "record_run", None)
+    if not callable(recorder):
+        return False
+    recorder(
+        session_id,
+        0,
+        continuation=True,
+        run_id=current_run_id,
+        outcome="interrupted",
+        error=f"abandoned_continuation:{status or 'missing_observability'}",
+    )
+    # record_run applies backoff (and may trip the failure fuse), so discovery
+    # must wait for a later tick instead of immediately starting a replacement.
+    return False
 
 
 def _discover(candidate_session_ids: list[str] | None = None) -> list[str]:
@@ -34,6 +109,8 @@ def _discover(candidate_session_ids: list[str] | None = None) -> list[str]:
             continue
         try:
             if _host._session_was_manually_stopped(sid):
+                continue
+            if not _reconcile_incomplete_run(manager, sid):
                 continue
             if manager.should_continue(sid) and _host._session_pending_human_count(sid) <= 0:
                 runnable.append(sid)
@@ -62,7 +139,7 @@ async def _continue(session_id: str) -> None:
         manager.mark_continuation_started(sid, run_id=run_id)
 
         def should_stop(value: str) -> bool:
-            return _host.session_manager.is_interrupt_requested(value)
+            return _host.session_manager.is_interrupt_requested(value, run_id)
 
         async for _event in _host.astream_events_continuation(
             sid,
@@ -83,6 +160,17 @@ async def _continue(session_id: str) -> None:
                 error="continuation_produced_no_events",
             )
     except asyncio.CancelledError:
+        try:
+            manager.record_run(
+                sid,
+                0,
+                continuation=True,
+                run_id=run_id,
+                outcome="interrupted",
+                error="scheduler_cancelled",
+            )
+        except Exception:
+            logger.debug("Goal workflow cancellation accounting failed", exc_info=True)
         raise
     except Exception as exc:
         logger.warning("Goal workflow continuation failed for %s: %s", sid, exc)

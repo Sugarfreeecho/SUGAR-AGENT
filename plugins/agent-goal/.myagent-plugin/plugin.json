@@ -22,7 +22,7 @@
       }],
       "session.badge": [{
         "id": "active-goal", "namespace": "goal", "path": "/status",
-        "label": "Goal", "variant": "info", "display": "activity",
+        "label": "Goal", "variant": "info", "display": "badge",
         "when": "equals", "equals": "active"
       }, {
         "id": "review-goal", "namespace": "goal", "path": "/review_status",

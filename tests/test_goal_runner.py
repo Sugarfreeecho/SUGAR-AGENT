@@ -71,6 +71,46 @@ def test_discover_runnable_goal_sessions(monkeypatch):
     assert goal_runner._discover() == ["active"]
 
 
+def test_discover_accounts_abandoned_goal_run_before_replacement(monkeypatch):
+    import runtime_observability
+    import webui
+
+    recorded = []
+
+    class Manager:
+        @staticmethod
+        def get(_session_id):
+            return {
+                "current_run_id": "old-run",
+                "last_continuation_started_at": "2000-01-01T00:00:00Z",
+            }
+
+        @staticmethod
+        def record_run(session_id, used_tokens, **kwargs):
+            recorded.append((session_id, used_tokens, kwargs))
+
+    monkeypatch.setattr(webui, "_has_local_worker_activity", lambda _sid: False)
+    monkeypatch.setattr(
+        runtime_observability,
+        "snapshot",
+        lambda _sid: {"runs": [{"run_id": "old-run", "status": "stale"}]},
+    )
+
+    assert goal_runner._reconcile_incomplete_run(Manager(), "s1") is False
+    assert recorded == [
+        (
+            "s1",
+            0,
+            {
+                "continuation": True,
+                "run_id": "old-run",
+                "outcome": "interrupted",
+                "error": "abandoned_continuation:stale",
+            },
+        )
+    ]
+
+
 def test_background_goal_runner_drains_continuation_without_browser(monkeypatch):
     import agent_goal
     import webui

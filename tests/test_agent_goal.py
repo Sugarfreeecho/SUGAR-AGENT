@@ -397,6 +397,22 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(goal["pause_reason"], "consecutive_run_failures")
         self.assertEqual(goal["consecutive_failures"], 3)
 
+    def test_three_interrupted_runs_pause_goal(self):
+        self.manager.create("s1", "Stop interruption retry storms")
+        for index in range(1, 4):
+            goal = self.manager.record_run(
+                "s1",
+                0,
+                continuation=True,
+                run_id=f"interrupted-{index}",
+                outcome="interrupted",
+                error="runtime_watchdog",
+            )
+        self.assertEqual(goal["status"], "paused")
+        self.assertEqual(goal["pause_reason"], "consecutive_run_failures")
+        self.assertEqual(goal["consecutive_failures"], 3)
+        self.assertEqual(goal["last_error"], "runtime_watchdog")
+
     def test_react_iteration_limit_keeps_goal_active_for_auto_continuation(self):
         self.manager.create("s1", "Continue across bounded ReAct runs")
 
@@ -421,6 +437,13 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(started["current_run_id"], "scheduler-1")
         self.assertEqual(started["last_run_id"], "scheduler-1")
         self.assertGreaterEqual(started["version"], 2)
+
+    def test_continuation_start_rejects_overlapping_run(self):
+        self.manager.create("s1", "Do not overlap continuations")
+        self.manager.mark_continuation_started("s1", run_id="scheduler-1")
+        self.assertFalse(self.manager.should_continue("s1"))
+        with self.assertRaisesRegex(GoalError, "already has an active continuation"):
+            self.manager.mark_continuation_started("s1", run_id="scheduler-2")
 
     def test_concurrent_run_accounting_does_not_lose_updates(self):
         self.manager.create("s1", "Atomic accounting", token_budget=1000)
