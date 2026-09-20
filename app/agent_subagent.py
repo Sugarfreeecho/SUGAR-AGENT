@@ -7,6 +7,7 @@ agent_subagent — 子 Agent（task 工具）运行器。
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import copy
 import hashlib
 import json
@@ -90,6 +91,103 @@ SUBAGENT_RUN_INSTRUCTION = (
     "4. 最终输出按顺序给出：结果或结论、关键证据、修改文件与验证、假设/风险/未完成项。"
     "省略空项和过程性寒暄。"
 )
+
+
+class _BackgroundSubagentLoop:
+    """Lazy process-wide event loop that owns background subagent tasks."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._ready: Optional[threading.Event] = None
+
+    def _run(self, ready: threading.Event) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        with self._lock:
+            self._loop = loop
+        ready.set()
+        loop.run_forever()
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            loop = self._loop
+            if loop is not None and loop.is_running() and not loop.is_closed():
+                return loop
+            ready = self._ready
+            thread = self._thread
+            if ready is None or thread is None or not thread.is_alive():
+                ready = threading.Event()
+                thread = threading.Thread(
+                    target=self._run,
+                    args=(ready,),
+                    name="subagent-background-loop",
+                    daemon=True,
+                )
+                self._ready = ready
+                self._thread = thread
+                thread.start()
+        if not ready.wait(timeout=5.0):
+            raise RuntimeError("background subagent event loop did not start")
+        with self._lock:
+            loop = self._loop
+        if loop is None or not loop.is_running() or loop.is_closed():
+            raise RuntimeError("background subagent event loop is unavailable")
+        return loop
+
+    async def submit(
+        self,
+        coroutine: Any,
+        on_created: Callable[[asyncio.Task], bool],
+    ) -> bool:
+        """Create and register a task atomically before its coroutine can run."""
+        try:
+            loop = await asyncio.to_thread(self._ensure_loop)
+        except BaseException:
+            try:
+                coroutine.close()
+            except Exception:
+                pass
+            raise
+        created: "concurrent.futures.Future[bool]" = concurrent.futures.Future()
+
+        def _create() -> None:
+            try:
+                task = loop.create_task(coroutine)
+                accepted = bool(on_created(task))
+                if not accepted:
+                    task.cancel()
+                created.set_result(accepted)
+            except BaseException as exc:
+                try:
+                    coroutine.close()
+                except Exception:
+                    pass
+                created.set_exception(exc)
+
+        try:
+            loop.call_soon_threadsafe(_create)
+        except BaseException:
+            try:
+                coroutine.close()
+            except Exception:
+                pass
+            raise
+        wrapped = asyncio.wrap_future(created)
+        try:
+            return bool(await asyncio.shield(wrapped))
+        except asyncio.CancelledError:
+            # Complete the atomic create/register hand-off before propagating
+            # cancellation so the registry can reliably cancel the new task.
+            try:
+                await asyncio.shield(wrapped)
+            except Exception:
+                pass
+            raise
+
+
+_background_subagent_loop = _BackgroundSubagentLoop()
 
 
 def _runtime_v2_primary() -> bool:
@@ -215,6 +313,56 @@ class SubagentTaskRegistry:
             self._tasks[child_id] = task
             return True
 
+    async def start_background(
+        self,
+        child_id: str,
+        run_id: str,
+        coroutine: Any,
+    ) -> bool:
+        """Attach a reserved run to the persistent background task loop."""
+
+        def _attach(task: asyncio.Task) -> bool:
+            with self._lock:
+                if self._run_ids.get(child_id) != run_id:
+                    return False
+                self._tasks[child_id] = task
+
+            def _release_finished(done_task: asyncio.Task) -> None:
+                with self._lock:
+                    if (
+                        self._run_ids.get(child_id) == run_id
+                        and self._tasks.get(child_id) is done_task
+                    ):
+                        self._tasks.pop(child_id, None)
+                        self._run_ids.pop(child_id, None)
+                        self._parent_by_child.pop(child_id, None)
+                try:
+                    done_task.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.debug(
+                        "background subagent task failed: %s",
+                        child_id,
+                        exc_info=True,
+                    )
+
+            task.add_done_callback(_release_finished)
+            return True
+
+        try:
+            return await _background_subagent_loop.submit(coroutine, _attach)
+        except asyncio.CancelledError:
+            # The caller may be interrupted during the cross-thread hand-off.
+            # By this point submit() has finished attaching (or failed), so a
+            # registry cancellation cannot miss a just-created background run.
+            await self.cancel(child_id)
+            await self.unregister(child_id, run_id)
+            raise
+        except BaseException:
+            await self.unregister(child_id, run_id)
+            raise
+
     async def register(
         self,
         child_id: str,
@@ -327,9 +475,60 @@ class SubagentTaskRegistry:
         if t is None:
             return None
         try:
+            current_loop = asyncio.get_running_loop()
+            task_loop = t.get_loop()
+            if task_loop is current_loop:
+                if timeout is not None:
+                    return await asyncio.wait_for(asyncio.shield(t), timeout=timeout)
+                # Preserve the original same-loop cancellation semantics: a
+                # cancelled parent waiting without a timeout cancels its child.
+                return await t
+            elif t.done():
+                return t.result()
+            elif task_loop.is_running():
+                # asyncio Tasks cannot be awaited from another loop. Bridge
+                # completion back to the caller without moving or cancelling
+                # the owner-loop task when a status wait times out.
+                completion = current_loop.create_future()
+
+                def _copy_result(done_task: asyncio.Task) -> None:
+                    def _settle() -> None:
+                        if completion.done():
+                            return
+                        if done_task.cancelled():
+                            completion.cancel()
+                            return
+                        exc = done_task.exception()
+                        if exc is not None:
+                            completion.set_exception(exc)
+                        else:
+                            completion.set_result(done_task.result())
+
+                    try:
+                        current_loop.call_soon_threadsafe(_settle)
+                    except RuntimeError:
+                        pass
+
+                def _subscribe_on_owner_loop() -> None:
+                    if t.done():
+                        _copy_result(t)
+                    else:
+                        t.add_done_callback(_copy_result)
+
+                try:
+                    task_loop.call_soon_threadsafe(_subscribe_on_owner_loop)
+                except RuntimeError:
+                    return t.result() if t.done() else None
+                # Cancelling this bridge (including on timeout) does not
+                # cancel the task on its owner loop.
+                waiter = completion
+            else:
+                # The owner loop is already gone. A completed task can still
+                # expose its result; an unfinished one cannot make progress.
+                return t.result() if t.done() else None
             if timeout is not None:
-                return await asyncio.wait_for(asyncio.shield(t), timeout=timeout)
-            return await t
+                return await asyncio.wait_for(waiter, timeout=timeout)
+            return await waiter
         except asyncio.TimeoutError:
             return None
         except asyncio.CancelledError:
@@ -1666,7 +1865,11 @@ async def _execute_subagent_run(
                         files_touched.add(match.group(1).strip()[:2000])
         if should_persist_ui_event(ev, session_meta={"is_subagent": True}):
             session_manager.append_ui_event(child_id, ev)
-        if parent_emit and should_forward_subagent_event_to_parent(ev):
+        # A background run outlives the temporary parent ReAct loop. Its
+        # durable child events and pending result remain available, but live
+        # forwarding through the parent emit callback is no longer safe after
+        # that loop closes.
+        if parent_emit and not run_in_background and should_forward_subagent_event_to_parent(ev):
             tagged = tag_subagent_forward_event(ev, agent_id=child_id)
             r = parent_emit(tagged)
             if hasattr(r, "__await__"):
@@ -1745,7 +1948,7 @@ async def _execute_subagent_run(
             )
             if hasattr(r, "__await__"):
                 await r
-        if parent_emit:
+        if parent_emit and not background:
             r = parent_emit(
                 {
                     "type": "user",
@@ -1773,7 +1976,7 @@ async def _execute_subagent_run(
                 output_file=output_file,
                 write_pending=background,
             )
-            if parent_emit:
+            if parent_emit and not background:
                 r = parent_emit(
                     {
                         "type": "subagent_finish",
@@ -1800,7 +2003,7 @@ async def _execute_subagent_run(
                 output_file=output_file,
                 write_pending=background,
             )
-            if parent_emit:
+            if parent_emit and not background:
                 r = parent_emit(
                     {
                         "type": "subagent_finish",
@@ -1854,7 +2057,7 @@ async def _execute_subagent_run(
             session_manager.patch_subagent_metadata(
                 child_id, {"subagent_ok": True, "subagent_error": ""}
             )
-        if parent_emit:
+        if parent_emit and not background:
             r = parent_emit(
                 {
                     "type": "subagent_finish",
@@ -1890,20 +2093,14 @@ async def _execute_subagent_run(
             )
             if hasattr(r, "__await__"):
                 await r
-        task = asyncio.create_task(_run_owned(background=True, emit_start=False))
-        if not await subagent_registry.attach(child_id, subagent_run_id, task):
-            task.cancel()
+        background_run = _run_owned(background=True, emit_start=False)
+        if not await subagent_registry.start_background(
+            child_id,
+            subagent_run_id,
+            background_run,
+        ):
+            await subagent_registry.unregister(child_id, subagent_run_id)
             return f"Error: subagent {child_id} execution reservation was lost before start."
-
-        async def _bg_done(t: asyncio.Task) -> None:
-            try:
-                await t
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-
-        task.add_done_callback(lambda t: asyncio.create_task(_bg_done(t)))
         return _format_subagent_result(
             child_session_id=child_id,
             description=description,
@@ -2435,19 +2632,6 @@ async def _run_best_of_n(
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
-                if emit:
-                    r = emit(
-                        {
-                            "type": "subagent_finish",
-                            "agent_id": run_id,
-                            "description": description,
-                            "ok": True,
-                            "subagent_type": "best-of-n-runner",
-                            "result_preview": combined[:500],
-                        }
-                    )
-                    if hasattr(r, "__await__"):
-                        await r
             except Exception as e:
                 err = f"Error: best-of-n-runner 执行异常：{e}"
                 output_file = session_manager.write_subagent_task_output(
@@ -2479,24 +2663,24 @@ async def _run_best_of_n(
                         "finished_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
-                if emit:
-                    r = emit(
-                        {
-                            "type": "subagent_finish",
-                            "agent_id": run_id,
-                            "description": description,
-                            "ok": False,
-                            "subagent_type": "best-of-n-runner",
-                            "error": str(e),
-                        }
-                    )
-                    if hasattr(r, "__await__"):
-                        await r
             finally:
                 cleanup_best_of_run_worktrees(parent_session_id, run_id)
 
-        task = asyncio.create_task(_bg_best_of())
-        await subagent_registry.register(run_id, task, parent_session_id=parent_session_id)
+        registry_run_id = uuid.uuid4().hex
+        if not await subagent_registry.reserve(
+            run_id,
+            registry_run_id,
+            parent_session_id=parent_session_id,
+        ):
+            return f"Error: best-of-n run {run_id} is already running."
+        background_run = _bg_best_of()
+        if not await subagent_registry.start_background(
+            run_id,
+            registry_run_id,
+            background_run,
+        ):
+            await subagent_registry.unregister(run_id, registry_run_id)
+            return f"Error: best-of-n run {run_id} lost its execution reservation."
         return (
             f"Best-of-{n} subagents started in background (run_id: {run_id}, description: {description}). "
             f"Results will appear in pending notifications when all attempts finish."

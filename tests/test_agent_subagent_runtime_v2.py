@@ -978,3 +978,146 @@ def test_cancelling_parent_still_cancels_foreground_subagent(monkeypatch, tmp_pa
         assert agent_subagent.subagent_registry.is_running("child") is False
 
     asyncio.run(scenario())
+
+
+def test_background_registry_task_survives_launching_loop_shutdown():
+    import agent_subagent
+
+    registry = agent_subagent.SubagentTaskRegistry()
+    child_finished = threading.Event()
+
+    async def launch_from_temporary_loop():
+        async def background_child():
+            await asyncio.sleep(0.05)
+            child_finished.set()
+            return "child done"
+
+        assert await registry.reserve("child", "run-1", parent_session_id="parent")
+        assert await registry.start_background("child", "run-1", background_child())
+        assert not child_finished.is_set()
+
+    asyncio.run(launch_from_temporary_loop())
+
+    assert child_finished.wait(timeout=1.0)
+    assert registry.is_running("child") is False
+
+
+def test_real_off_loop_task_chain_keeps_background_subagent_alive(monkeypatch, tmp_path):
+    import agent_loop
+    import agent_subagent
+    from agent_harness import AssistantMessage
+
+    loop_ids = {}
+    child_cancelled = threading.Event()
+    pending_results = []
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, session_id, *args, **kwargs):
+            pass
+
+        def append_ui_event(self, *args, **kwargs):
+            pass
+
+        def upsert_subagent_task(self, *args, **kwargs):
+            pass
+
+        def append_pending_subagent_result(self, parent_id, result):
+            pending_results.append((parent_id, dict(result)))
+
+        def patch_subagent_metadata(self, *args, **kwargs):
+            pass
+
+        def write_subagent_output(self, child_session_id, text):
+            return str(tmp_path / child_session_id / "output.md")
+
+        def _load_metadata(self, child_session_id):
+            return {}
+
+    async def fake_react_node(state, emit=None):
+        session_id = str(state.get("session_id") or "")
+        if session_id == "parent":
+            loop_ids["react"] = id(asyncio.get_running_loop())
+            result = await agent_subagent.run_subagent_task(
+                tool_args={
+                    "description": "background",
+                    "prompt": "finish later",
+                    "run_in_background": True,
+                },
+                parent_session_id="parent",
+            )
+            assert "running in background" in result
+            return state
+
+        loop_ids["child"] = id(asyncio.get_running_loop())
+        try:
+            await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            child_cancelled.set()
+            raise
+        final = AssistantMessage(content="done")
+        final.metadata = {"is_final": True}
+        out = dict(state)
+        out["llm_history"] = list(state.get("llm_history") or []) + [final]
+        out["work_messages"] = list(state.get("work_messages") or []) + [final]
+        out["final_response"] = "done"
+        return out
+
+    async def run_single_through_real_entrypoint(*, tool_args, **kwargs):
+        return await agent_subagent._execute_subagent_run(
+            child_id="child",
+            parent_session_id=kwargs["parent_session_id"],
+            user_text=str(tool_args.get("prompt") or ""),
+            description=str(tool_args.get("description") or ""),
+            subagent_type="generalPurpose",
+            resumed=False,
+            parent_emit=kwargs.get("emit"),
+            run_in_background=bool(tool_args.get("run_in_background")),
+        )
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", agent_subagent.SubagentTaskRegistry())
+    monkeypatch.setattr(agent_subagent, "_run_single_subagent", run_single_through_real_entrypoint)
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda child_id: ([], [], ""))
+    monkeypatch.setattr(agent_subagent, "_persist_subagent_run_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_subagent, "cleanup_git_worktree_for_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "react_node", fake_react_node)
+
+    async def scenario():
+        loop_ids["worker"] = id(asyncio.get_running_loop())
+        await agent_loop._run_react_node_off_loop({"session_id": "parent"}, emit=None)
+        assert agent_subagent.subagent_registry.is_running("child") is True
+        return await agent_subagent.subagent_registry.wait("child", timeout=1.0)
+
+    result = asyncio.run(scenario())
+
+    assert "done" in result
+    assert loop_ids["react"] != loop_ids["worker"]
+    assert loop_ids["child"] != loop_ids["react"]
+    assert child_cancelled.is_set() is False
+    assert pending_results[-1][1]["status"] == "completed"
+
+
+def test_registry_wait_bridges_background_task_from_another_loop():
+    import agent_subagent
+
+    registry = agent_subagent.SubagentTaskRegistry()
+    release_child = threading.Event()
+
+    async def launch_from_temporary_loop():
+        async def background_child():
+            while not release_child.is_set():
+                await asyncio.sleep(0.01)
+            return "child done"
+
+        assert await registry.reserve("child", "run-1", parent_session_id="parent")
+        assert await registry.start_background("child", "run-1", background_child())
+
+    asyncio.run(launch_from_temporary_loop())
+    threading.Timer(0.05, release_child.set).start()
+
+    result = asyncio.run(registry.wait("child", timeout=1.0))
+
+    assert result == "child done"
