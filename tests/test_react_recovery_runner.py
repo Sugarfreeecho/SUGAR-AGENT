@@ -1,6 +1,8 @@
 import asyncio
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -28,6 +30,9 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
     monkeypatch.setattr(session_workflows, "continuation_source", lambda sid: "agent-goal" if sid == "goal" else "")
     monkeypatch.setattr(webui, "_has_local_worker_activity", lambda sid: sid == "running")
     monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(webui, "_runtime_v2_active_runs_are_recent", lambda _snapshot: False)
+    monkeypatch.setattr(webui, "_runtime_observability_active_runs_are_recent", lambda _sid, _snapshot: False)
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {})
     monkeypatch.setattr(
         webui,
         "_cleanup_orphan_runtime_v2_active_runs",
@@ -42,7 +47,95 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
 
     assert webui._discover_recoverable_react_sessions() == ["current", "background"]
     assert cleaned
-    assert all(reason == "no_local_activity" and respect_grace is False for _, reason, respect_grace in cleaned)
+    assert all(reason == "no_local_activity" and respect_grace is True for _, reason, respect_grace in cleaned)
+
+
+def test_recovery_scan_does_not_take_over_a_fresh_cross_process_run(monkeypatch):
+    import webui
+    from workflow_extensions import session_workflows
+
+    class FakeSessionManager:
+        def list_sessions(self, include_archived=False):
+            assert include_archived is False
+            return [{"id": "foreign-live"}]
+
+    monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
+    monkeypatch.setattr(session_workflows, "continuation_source", lambda _sid: "")
+    monkeypatch.setattr(webui, "_has_local_worker_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {"active_runs": [{"run_id": "live"}]})
+    monkeypatch.setattr(webui, "_runtime_v2_active_runs_are_recent", lambda _snapshot: False)
+    monkeypatch.setattr(webui, "_runtime_observability_active_runs_are_recent", lambda _sid, _snapshot: True)
+    monkeypatch.setattr(
+        webui,
+        "_cleanup_orphan_runtime_v2_active_runs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fresh foreign run must not be cleaned")),
+    )
+    monkeypatch.setattr(
+        webui,
+        "_runtime_v2_auto_resume_pending",
+        lambda _sid: (_ for _ in ()).throw(AssertionError("fresh foreign run must not be resumed")),
+    )
+
+    assert webui._discover_recoverable_react_sessions() == []
+
+
+def test_cross_process_run_lease_reads_the_uncached_observability_heartbeat(monkeypatch, tmp_path):
+    import webui
+
+    session_dir = tmp_path / "foreign-live"
+    session_dir.mkdir()
+    (session_dir / "runtime_observability.json").write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {
+                        "run_id": "run-live",
+                        "status": "running",
+                        "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        webui.session_manager,
+        "_resolve_session_path",
+        lambda sid: session_dir if sid == "foreign-live" else tmp_path / sid,
+    )
+    snapshot = {"active_runs": [{"run_id": "run-live"}]}
+
+    assert webui._runtime_observability_active_runs_are_recent("foreign-live", snapshot)
+
+
+def test_ui_verify_server_is_isolated_from_live_sessions_and_cleans_before_shutdown():
+    source = (ROOT / "scripts/subagent_ui_verify.py").read_text(encoding="utf-8")
+
+    assert 'env["WORK_DIR"] = str(owned_work_dir)' in source
+    assert 'env["MYAGENT_DOTENV_OVERRIDE"] = "0"' in source
+    assert "_seed_subagents(session_root / session_sub)" in source
+    assert 'ROOT / "workspace" / "sessions" / session_sub' not in source
+    cleanup = source.split("finally:", 1)[1]
+    assert cleanup.index("for sid in created_sessions:") < cleanup.index("server.terminate()")
+
+
+def test_load_app_dotenv_can_preserve_an_explicit_child_environment(monkeypatch, tmp_path):
+    import agent_harness
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("WORK_DIR=from-dotenv\n", encoding="utf-8")
+    monkeypatch.setattr(agent_harness, "dotenv_file_path", lambda: env_path)
+
+    monkeypatch.setenv("WORK_DIR", "explicit-child-workspace")
+    monkeypatch.setenv("MYAGENT_DOTENV_OVERRIDE", "0")
+    agent_harness.load_app_dotenv()
+    assert os.environ["WORK_DIR"] == "explicit-child-workspace"
+
+    monkeypatch.setenv("WORK_DIR", "explicit-child-workspace")
+    monkeypatch.setenv("MYAGENT_DOTENV_OVERRIDE", "1")
+    agent_harness.load_app_dotenv()
+    assert os.environ["WORK_DIR"] == "from-dotenv"
 
 
 def test_runtime_state_read_is_observational_and_never_cleans_orphans(monkeypatch):

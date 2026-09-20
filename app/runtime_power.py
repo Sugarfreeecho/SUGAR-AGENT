@@ -236,7 +236,15 @@ class RuntimeSuspensionMonitor:
             name="myagent-runtime-watchdog",
             daemon=True,
         )
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError:
+            # Sleep detection is an auxiliary guard. If native threads are
+            # exhausted, keep the run alive and wait for normal shutdown.
+            logger.warning("Runtime suspension monitor disabled: cannot start watchdog thread")
+            self._thread = None
+            await self._stop.wait()
+            return
         while not self._stop.is_set():
             await asyncio.sleep(min(self.interval_seconds, 0.25))
             while True:

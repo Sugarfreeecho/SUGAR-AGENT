@@ -238,6 +238,7 @@ _UI_PRESENCE_TOKEN_TTL_SEC = max(90.0, float(os.getenv("MYAGENT_UI_PRESENCE_TTL_
 _ui_presence_lock = threading.Lock()
 _hook_pipeline_warmup_task: Optional[asyncio.Task] = None
 _prompt_build_warmup_task: Optional[asyncio.Task] = None
+_tokenizer_warmup_task: Optional[asyncio.Task] = None
 _ui_presence_tokens: dict[str, dict[str, Any]] = {}
 _ui_activation_seq = 0
 _ui_activation_path = "/"
@@ -798,7 +799,7 @@ async def _run_human_interaction_recovery_background(session_id: str) -> None:
         return
     try:
         def should_stop(sid_: str) -> bool:
-            return session_manager.is_interrupt_requested(sid_)
+            return session_manager.is_interrupt_requested(sid_, recovery_run_id)
 
         async for _event in astream_events_continuation(
             sid,
@@ -855,12 +856,26 @@ def _discover_recoverable_react_sessions() -> list[str]:
             # must not be started a second time by generic ReAct recovery.
             if session_workflows.continuation_source(sid):
                 continue
-            # The normal app lifespan reconciles orphan runs before this scan.
-            # Keep direct `uvicorn webui:fastapi_app` startup equally correct.
+            # The task registry is process-local.  Fresh durable activity can
+            # therefore belong to another WebUI process even though this
+            # process has no registered worker for the session.  Runtime V2
+            # advances at event boundaries; the shared observability heartbeat
+            # keeps the lease fresh during a long model or tool call.
+            snapshot = _runtime_v2_snapshot(sid)
+            if (
+                _runtime_v2_active_runs_are_recent(snapshot)
+                or _runtime_observability_active_runs_are_recent(sid, snapshot)
+            ):
+                continue
+            # A second local WebUI process (for example a browser smoke test)
+            # cannot see tasks registered in the primary process.  Respect the
+            # durable cross-process lease; otherwise it can append a false
+            # no_local_activity terminal while the primary run still produces
+            # events.
             _cleanup_orphan_runtime_v2_active_runs(
                 sid,
                 reason="no_local_activity",
-                respect_grace=False,
+                respect_grace=True,
             )
             if _session_pending_human_count(sid) > 0:
                 continue
@@ -891,7 +906,7 @@ async def _run_react_recovery_background(session_id: str) -> None:
             return
 
         def should_stop(sid_: str) -> bool:
-            return session_manager.is_interrupt_requested(sid_)
+            return session_manager.is_interrupt_requested(sid_, recovery_run_id)
 
         async for _event in astream_events_continuation(
             sid,
@@ -1003,6 +1018,38 @@ def _runtime_v2_active_runs_are_recent(snapshot: dict, max_age_seconds: Optional
                 return True
     age = _runtime_v2_timestamp_age_seconds(snapshot.get("updated_at"))
     return bool(age is not None and age <= max_age)
+
+
+def _runtime_observability_active_runs_are_recent(
+    sid: str,
+    snapshot: dict,
+    max_age_seconds: Optional[int] = None,
+) -> bool:
+    """Read the cross-process heartbeat file without using a process cache."""
+    max_age = int(max_age_seconds if max_age_seconds is not None else _RUNTIME_V2_ORPHAN_GRACE_SEC)
+    active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
+    wanted = {
+        str(run.get("run_id") or "").strip()
+        for run in (active_runs or [])
+        if isinstance(run, dict) and str(run.get("run_id") or "").strip()
+    }
+    if not sid or max_age <= 0 or not wanted:
+        return False
+    try:
+        path = Path(session_manager._resolve_session_path(sid)) / "runtime_observability.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+    for row in reversed(data.get("runs") or []):
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("run_id") or "").strip()
+        if rid not in wanted or str(row.get("status") or "").strip().lower() != "running":
+            continue
+        age = _runtime_v2_timestamp_age_seconds(row.get("heartbeat_at") or row.get("started_at"))
+        if age is not None and age <= max_age:
+            return True
+    return False
 
 
 def _has_running_subagent_activity(sid: str) -> bool:
@@ -1128,7 +1175,10 @@ def _cleanup_orphan_runtime_v2_active_runs(
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
     if not isinstance(active_runs, list) or not active_runs:
         return 0
-    if respect_grace and _runtime_v2_active_runs_are_recent(snapshot):
+    if respect_grace and (
+        _runtime_v2_active_runs_are_recent(snapshot)
+        or _runtime_observability_active_runs_are_recent(sid, snapshot)
+    ):
         logger.debug(
             "Skip orphan Runtime V2 cleanup for recent active run(s): session=%s grace=%ss",
             sid,
@@ -1858,6 +1908,64 @@ async def open_workspace_file(
             subprocess.Popen(["xdg-open", p], close_fds=True)
 
     threading.Thread(target=_open_detached, name="open-workspace-file", daemon=True).start()
+    return JSONResponse({"ok": True, "path": str(safe_path)})
+
+
+@fastapi_app.get("/api/open-workspace-dir")
+async def open_workspace_dir(
+    rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径（文件或目录）"),
+    probe: int = Query(0, description="1=只做路径校验，不真的唤出文件管理器（供测试）"),
+):
+    """Reveal a file's folder in the system file manager (or open the folder).
+
+    Windows uses `explorer /select,<file>` so the file itself is highlighted;
+    macOS uses `open -R`; Linux opens the containing directory. The path goes
+    through the same allowed-root gate as `/api/open-workspace-file`.
+    """
+    import os
+    import platform
+    import subprocess
+
+    raw = unquote(rel or "").strip().strip('"').strip("'")
+    if not raw:
+        return JSONResponse({"ok": False, "error": "路径为空"}, status_code=400)
+    try:
+        safe_path = await asyncio.wait_for(
+            run_in_threadpool(_resolve_allowed_local_path, raw, False),
+            timeout=5.0,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse({"ok": False, "error": "path check timed out"}, status_code=504)
+    except PermissionError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+    except FileNotFoundError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    def _reveal_detached() -> None:
+        target = str(safe_path)
+        folder = target if safe_path.is_dir() else str(safe_path.parent)
+        sysname = platform.system()
+        try:
+            # Same mechanism as the existing "open session folder / open
+            # workspace" links: hand the FOLDER to the platform opener
+            # (`os.startfile` / `open` / `xdg-open`). `explorer /select,<path>`
+            # looked nicer but mis-parsed under a child-process argument list
+            # and fell back to the shell's default folder (the user's
+            # Documents), so the folder itself is opened instead.
+            if sysname == "Windows":
+                os.startfile(folder)  # type: ignore[attr-defined]
+            elif sysname == "Darwin":
+                subprocess.Popen(["open", folder], close_fds=True)
+            else:
+                subprocess.Popen(["xdg-open", folder], close_fds=True)
+        except Exception as exc:  # pragma: no cover - platform dependent
+            logger.warning("open-workspace-dir failed: %s", exc)
+
+    if int(probe or 0) == 1:
+        return JSONResponse({"ok": True, "path": str(safe_path), "probe": True})
+    threading.Thread(target=_reveal_detached, name="open-workspace-dir", daemon=True).start()
     return JSONResponse({"ok": True, "path": str(safe_path)})
 
 
@@ -5512,7 +5620,7 @@ async def continue_react_session(
         return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
 
     def should_stop(sid_: str) -> bool:
-        return session_manager.is_interrupt_requested(sid_)
+        return session_manager.is_interrupt_requested(sid_, continuation_run_id)
 
     async def event_generator():
         _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
@@ -7072,7 +7180,7 @@ _ENV_HINTS: dict[str, str] = {
     "GLOB_MAX_MATCHES": "glob 最多返回的路径条数。",
     "GLOB_USE_WINDOWS_INDEX": "Windows 文件名索引加速，默认 1；设为 0 关闭。无结果或不可用时回退文件系统。",
     "LS_MAX_ENTRIES": "ls/list_dir 单层目录最多列出的条目数。",
-    "LS_INCLUDE_LINE_COUNTS": "是否读取可识别的文本/源码文件统计行数；默认 1，设为 0 可切换为轻量目录列表。",
+    "LS_INCLUDE_LINE_COUNTS": "是否读取可识别的文本/源码文件统计行数；默认 0（轻量目录列表），设为 1 后启用。",
     "LS_LINE_COUNT_MAX_BYTES": "ls 统计单个文本文件行数的大小上限，默认 5242880（5 MiB）；超过后跳过。",
     "READ_FILE_RANGE_MAX_BYTES": "使用 start_line/line_count 按行读取时的文件大小安全上限。",
     "MICRO_SHRINK_REASONING_CHARS": "微压：推理内容字符上限。",
@@ -8286,6 +8394,20 @@ async def start_webui_lifecycle() -> None:
     _warm_ui_caches()
     initialize_ui_attention_notifications()
     await start_react_recovery_runner()
+    # Tokenizer JSON loading cost 621 ms on the first request in production.
+    # Start it immediately in a worker thread; the loader lock makes racing with
+    # an early user request safe and avoids parsing the vocabulary twice.
+    async def _warm_tokenizer_task() -> None:
+        try:
+            from agent_tokenizer import warm_tokenizer
+
+            warmed = await asyncio.to_thread(warm_tokenizer)
+            logger.info("tokenizer pre-warm done warmed=%s", warmed)
+        except Exception:
+            logger.warning("tokenizer warmup failed", exc_info=True)
+
+    global _tokenizer_warmup_task
+    _tokenizer_warmup_task = asyncio.create_task(_warm_tokenizer_task())
     try:
         from agent_extensions import start_plugin_background_services
         from plugins.host import start_bundled_host_extensions

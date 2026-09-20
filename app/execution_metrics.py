@@ -16,7 +16,9 @@ _path_resolver: Optional[Callable[[str], str | Path]] = None
 _sessions: Dict[str, dict] = {}
 _last_started_order_ns = 0
 _MAX_RUNS = max(1, int(os.getenv("EXECUTION_DASHBOARD_MAX_RUNS", "100")))
-_heartbeat_controls: Dict[tuple[str, str], threading.Event] = {}
+_heartbeat_controls: set[tuple[str, str]] = set()
+_heartbeat_thread: Optional[threading.Thread] = None
+_heartbeat_wakeup = threading.Event()
 _flush_timers: Dict[str, threading.Timer] = {}
 _FLUSH_DELAY_SEC = max(
     0.05,
@@ -56,6 +58,9 @@ def configure(
     global _root, _path_resolver
     _root = Path(root)
     _path_resolver = path_resolver
+    with _lock:
+        _heartbeat_controls.clear()
+        _heartbeat_wakeup.set()
     try:
         import runtime_observability
 
@@ -128,7 +133,13 @@ def _save(session_id: str, data: dict, *, force: bool = False) -> None:
     timer = threading.Timer(_FLUSH_DELAY_SEC, _flush_timer_fired, args=(session_id,))
     timer.daemon = True
     _flush_timers[session_id] = timer
-    timer.start()
+    try:
+        timer.start()
+    except RuntimeError:
+        # Metrics are best-effort diagnostics. Fall back to an immediate write
+        # instead of aborting the run when native threads are exhausted.
+        _flush_timers.pop(session_id, None)
+        _write_now(session_id, data)
 
 
 def flush(session_id: Optional[str] = None) -> None:
@@ -211,28 +222,47 @@ def start_run(
         pass
     key = (str(session_id), str(run_id))
     with _lock:
-        previous = _heartbeat_controls.pop(key, None)
-        if previous is not None:
-            previous.set()
-        stop = threading.Event()
-        _heartbeat_controls[key] = stop
+        _heartbeat_controls.add(key)
+    _ensure_heartbeat_thread()
 
-    def _pulse() -> None:
-        while not stop.wait(_HEARTBEAT_INTERVAL_SEC):
+
+def _heartbeat_pump() -> None:
+    """Pulse every active run from one process-level native thread."""
+
+    while True:
+        _heartbeat_wakeup.wait(_HEARTBEAT_INTERVAL_SEC)
+        _heartbeat_wakeup.clear()
+        with _lock:
+            active = list(_heartbeat_controls)
+        for session_id, run_id in active:
             heartbeat_run(session_id, run_id, "running")
 
-    threading.Thread(
-        target=_pulse,
-        name=f"run-heartbeat-{str(run_id)[:12]}",
-        daemon=True,
-    ).start()
 
-
-def finish_run(session_id: str, run_id: str, status: str) -> None:
+def _ensure_heartbeat_thread() -> bool:
+    global _heartbeat_thread
     with _lock:
-        stop = _heartbeat_controls.pop((str(session_id), str(run_id)), None)
-    if stop is not None:
-        stop.set()
+        if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+            return True
+        thread = threading.Thread(
+            target=_heartbeat_pump,
+            name="run-heartbeat-shared",
+            daemon=True,
+        )
+        try:
+            thread.start()
+        except RuntimeError:
+            # The watchdog also consults the precise asyncio task registry, so
+            # loss of this diagnostic heartbeat must degrade gracefully.
+            _heartbeat_thread = None
+            return False
+        _heartbeat_thread = thread
+        return True
+
+
+def finish_run(session_id: str, run_id: str, status: str, *, reason: str = "") -> None:
+    with _lock:
+        _heartbeat_controls.discard((str(session_id), str(run_id)))
+        _heartbeat_wakeup.set()
     with _lock:
         data = _load(session_id)
         run = _run(data, run_id, create=False)
@@ -253,7 +283,7 @@ def finish_run(session_id: str, run_id: str, status: str) -> None:
     try:
         import runtime_observability
 
-        runtime_observability.finish_run(session_id, run_id, status)
+        runtime_observability.finish_run(session_id, run_id, status, reason=reason)
     except Exception:
         pass
 

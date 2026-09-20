@@ -148,7 +148,13 @@ def _schedule_write(session_id: str, data: dict, *, force: bool = False) -> None
     timer = threading.Timer(_FLUSH_DELAY_SEC, _flush_timer_fired, args=(sid,))
     timer.daemon = True
     _flush_timers[sid] = timer
-    timer.start()
+    try:
+        timer.start()
+    except RuntimeError:
+        # Diagnostics must never make an agent run fail when the process is
+        # temporarily unable to allocate another native thread.
+        _flush_timers.pop(sid, None)
+        _write(sid, data)
 
 
 def flush(session_id: Optional[str] = None) -> None:

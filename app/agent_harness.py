@@ -25,6 +25,7 @@ import tempfile
 import time
 import ctypes
 import socket
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
@@ -80,8 +81,18 @@ def dotenv_file_path() -> Path:
 
 def load_app_dotenv() -> None:
     primary = dotenv_file_path()
+    # Normal app startup keeps the historical "app/.env wins" behavior.  A
+    # child process that deliberately supplies an isolated WORK_DIR (for
+    # example the UI verifier) can opt out so its explicit environment is not
+    # silently redirected back to the live workspace.
+    override_primary = os.getenv("MYAGENT_DOTENV_OVERRIDE", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
     if primary.is_file():
-        dotenv.load_dotenv(primary, override=True)
+        dotenv.load_dotenv(primary, override=override_primary)
     dotenv.load_dotenv(override=False)
 
 
@@ -534,13 +545,41 @@ def _profile_temperature(profile: dict) -> float:
         return float(EXECUTOR_TEMPERATURE)
 
 
+_STRIP_REASONING_LIST_CACHE: "deque" = deque(maxlen=8)
+_STRIP_REASONING_LIST_CACHE_LOCK = threading.RLock()
+
+
+def _clear_strip_reasoning_cache() -> None:
+    with _STRIP_REASONING_LIST_CACHE_LOCK:
+        _STRIP_REASONING_LIST_CACHE.clear()
+
+
 def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
     """?????? reasoning_content ?? token??????????????"""
     from agent_think import strip_think_blocks
 
     thinking_on = _extra_body_thinking_enabled()
-    out: List[Any] = []
-    for m in messages:
+    items = list(messages or [])
+    # ReAct histories are append-only. Reusing the transformed prefix preserves
+    # object identity for the incremental token-hash cache and avoids recreating
+    # every historical AssistantMessage on each round. Keep references (not ids)
+    # so object-id reuse after collection cannot produce a false match.
+    with _STRIP_REASONING_LIST_CACHE_LOCK:
+        cached_rows = tuple(_STRIP_REASONING_LIST_CACHE)
+    best_items: List[Any] = []
+    best_out: List[Any] = []
+    for cached_thinking, cached_items, cached_out in cached_rows:
+        cached_len = len(cached_items)
+        if cached_thinking != thinking_on or cached_len <= len(best_items) or cached_len > len(items):
+            continue
+        if all(left is right for left, right in zip(items[:cached_len], cached_items)):
+            best_items = cached_items
+            best_out = cached_out
+            if cached_len == len(items):
+                break
+
+    out: List[Any] = list(best_out)
+    for m in items[len(best_items):]:
         if not isinstance(m, AssistantMessage):
             out.append(m)
             continue
@@ -571,7 +610,11 @@ def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
             new_ak["reasoning_field"] = reasoning_field
 
         out.append(m.model_copy(update={"content": clean_content, "additional_kwargs": new_ak}))
-    return out
+    cached_items = list(items)
+    cached_out = list(out)
+    with _STRIP_REASONING_LIST_CACHE_LOCK:
+        _STRIP_REASONING_LIST_CACHE.append((thinking_on, cached_items, cached_out))
+    return list(cached_out)
 
 
 def _remap_serialized_reasoning_format(
@@ -2295,12 +2338,17 @@ class ExecutorLLMClient:
                     _attempt_started = time.perf_counter()
                     for event in transport.stream_completion(**call_kwargs):
                         if background_text_request and not emitted_content:
-                            pending_events.append(event)
-                            if (
+                            # Reasoning is live stream progress, not evidence that
+                            # final text will be absent.  The transport's read
+                            # timeout handles a truly silent connection; only a
+                            # clean EOF with no content makes this result unusable.
+                            is_content = (
                                 isinstance(event, TransportEvent)
                                 and event.kind == "content_delta"
                                 and bool(event.text)
-                            ):
+                            )
+                            pending_events.append(event)
+                            if is_content:
                                 emitted_content = True
                                 emitted_output = True
                                 yield from pending_events
@@ -7185,6 +7233,7 @@ class SessionManager:
                 metadata = {}
             metadata["interrupt_requested"] = True
             metadata["interrupt_reason"] = interrupt_reason
+            metadata["updated_at"] = datetime.now().isoformat()
             if rid:
                 metadata["interrupt_run_id"] = rid
             elif metadata.get("active_run_id"):
@@ -7215,6 +7264,7 @@ class SessionManager:
             metadata["interrupt_requested"] = False
             metadata.pop("interrupt_run_id", None)
             metadata.pop("interrupt_reason", None)
+            metadata["updated_at"] = datetime.now().isoformat()
             self._save_metadata_unlocked(sid, metadata)
             self._set_interrupt_cache_from_metadata(sid, metadata)
 
@@ -7247,19 +7297,25 @@ class SessionManager:
         interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
         return not interrupt_run_id or interrupt_run_id == rid
 
-    def get_interrupt_reason(self, session_id: str) -> str:
+    def get_interrupt_reason(self, session_id: str, run_id: str = "") -> str:
         sid = (session_id or "").strip()
         if not sid:
             return ""
+        rid = str(run_id or "").strip()
         cached = self._get_interrupt_cache(sid)
         if cached is not None:
-            requested, _run_id, reason = cached
+            requested, interrupt_run_id, reason = cached
             if not requested:
+                return ""
+            if rid and interrupt_run_id and interrupt_run_id != rid:
                 return ""
             return reason or "user"
         metadata = self._load_metadata(sid)
         self._set_interrupt_cache_from_metadata(sid, metadata)
         if not bool(metadata.get("interrupt_requested", False)):
+            return ""
+        interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
+        if rid and interrupt_run_id and interrupt_run_id != rid:
             return ""
         return str(metadata.get("interrupt_reason") or "user").strip() or "user"
 
@@ -7944,8 +8000,12 @@ class TodoManager:
     def has_active_plan(self, session_id: str) -> bool:
         if not session_id:
             return False
-        if self._runtime_v2_primary():
-            self._by_session[session_id] = self._load_runtime_v2_items(session_id)
+        # Runtime V2 state is loaded once by ``initialize_state`` at run start and
+        # refreshed by ``context_changed`` after compaction.  Tool updates and UI
+        # clears also update this in-memory map directly.  Reloading the extension
+        # row plus a consistent snapshot here put two filesystem reads on every
+        # ReAct round (123-183 ms warm and 1.6 s cold on a large production
+        # session) merely to answer a boolean question.
         items = self._by_session.get(session_id, [])
         if not items:
             return False

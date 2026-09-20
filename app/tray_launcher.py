@@ -89,11 +89,17 @@ GRACEFUL_STOP_TIMEOUT_SECONDS = 2
 UNEXPECTED_EXIT_RESTART_LIMIT = 3
 UNEXPECTED_EXIT_WINDOW_SECONDS = 60
 UNEXPECTED_EXIT_POLL_SECONDS = 0.5
-# Both the RUN.bat starter (through the tray restore message) and the tray's
-# own auto-open thread can request a browser launch within the same startup
-# second, before either window is visible.  Collapse those duplicate requests
-# into a single launch.
-UI_OPEN_DEDUPE_SECONDS = 5.0
+# Collapse accidental double-clicks without making a failed asynchronous
+# browser launch suppress explicit retries for several seconds. Startup now has
+# one launch owner, so this guard no longer needs to mask a cross-thread race.
+UI_OPEN_DEDUPE_SECONDS = 1.5
+# The backend can briefly be unable to answer while synchronous startup or
+# session-index work occupies its event loop.  The old 0.8 second request
+# timeout routinely expired even though /api/ui-activation eventually returned
+# 200, which made the launcher open a duplicate page.  Keep this bounded, but
+# long enough to survive those short stalls.
+UI_ACTIVATION_TIMEOUT_SECONDS = 2.5
+UI_TAB_SELECT_TIMEOUT_SECONDS = 4.0
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_EXE = preferred_python(ROOT)
@@ -158,7 +164,12 @@ def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
 def _request_existing_ui_activation(path: str = "/", session: str = "") -> bool:
     """Ask a live WebUI page to foreground itself instead of opening a duplicate."""
 
-    return request_webui_activation(path, base_url=BASE_URL, session=session)
+    return request_webui_activation(
+        path,
+        base_url=BASE_URL,
+        session=session,
+        timeout=UI_ACTIVATION_TIMEOUT_SECONDS,
+    )
 
 
 def _request_webui_activation_with_retry(path: str = "/", session: str = "") -> bool:
@@ -304,21 +315,99 @@ def _visible_browser_windows() -> list[int]:
     return matches
 
 
-def _focus_any_browser_window() -> bool:
-    """Focus a browser window by class when the tab-title match failed.
+def _select_webui_browser_tab() -> int:
+    """Select a background WebUI tab through Windows UI Automation.
 
-    Only used after the backend confirmed a live WebUI page heartbeat, so a
-    visible browser window is far more likely to host that page than the
-    "open a fresh tab" fallback.
+    Top-level browser window titles only expose the active tab. Consequently a
+    healthy WebUI in a background tab used to be invisible to the launcher: it
+    either opened a duplicate, or focused an arbitrary browser window and
+    falsely reported success. Chromium and Firefox expose their tab strips to
+    the built-in Windows UI Automation API, so use that to select the matching
+    tab and return its owning HWND.
+
+    This helper is best-effort. Accessibility can be disabled by browser or
+    enterprise policy; callers must still retain the normal open-page fallback.
     """
 
+    handles = _visible_browser_windows()
+    if not handles:
+        return 0
+    handle_list = ",".join(str(int(hwnd)) for hwnd in handles)
+    script = rf"""
+Add-Type -AssemblyName UIAutomationClient
+$handles = @({handle_list})
+$tabCondition = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::TabItem
+)
+foreach ($rawHandle in $handles) {{
+    try {{
+        $window = [System.Windows.Automation.AutomationElement]::FromHandle(
+            [IntPtr][int64]$rawHandle
+        )
+        if ($null -eq $window) {{ continue }}
+        $tabs = $window.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $tabCondition
+        )
+        foreach ($tab in $tabs) {{
+            $name = [string]$tab.Current.Name
+            if ($name -notmatch 'General Agent|SugarAgent') {{ continue }}
+            $pattern = $tab.GetCurrentPattern(
+                [System.Windows.Automation.SelectionItemPattern]::Pattern
+            )
+            $pattern.Select()
+            try {{ $tab.SetFocus() }} catch {{}}
+            [Console]::Out.WriteLine([string]$rawHandle)
+            exit 0
+        }}
+    }} catch {{}}
+}}
+exit 1
+"""
     try:
-        for hwnd in _visible_browser_windows():
-            if _bring_window_to_foreground(hwnd):
-                return True
+        completed = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                script,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=UI_TAB_SELECT_TIMEOUT_SECONDS,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        _append_log(f"WebUI tab selection unavailable: {type(exc).__name__}: {exc}")
+        return 0
+    if completed.returncode != 0:
+        return 0
+    try:
+        return int(str(completed.stdout or "").strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def _focus_existing_webui_tab() -> bool:
+    """Focus the WebUI whether it is the active or a background browser tab."""
+
+    if _focus_existing_webui_window():
+        return True
+    hwnd = _select_webui_browser_tab()
+    if not hwnd:
         return False
-    except win32gui.error:
-        return False
+    if _bring_window_to_foreground(hwnd):
+        _append_log("UI activation: selected and focused existing WebUI browser tab")
+        return True
+    return False
 
 
 def _find_existing_tray_window() -> int:
@@ -358,25 +447,16 @@ def _activate_webui_from_external(session: str = "") -> bool:
     # heartbeat contract before falling back to the default browser handler.
     # Focus must verify success: a reused page inside an unfocusable host
     # (embedded automation browser) falls through to a real browser window.
-    activation_reused = _request_webui_activation_with_retry("/", session=session)
-    if activation_reused:
-        if _focus_existing_webui_window():
-            return True
-        if _focus_any_browser_window():
-            _append_log("UI activation: page heartbeat found; focused browser window by class")
-            return True
-    # During a backend restart the old page can still be visible before its
-    # first presence heartbeat reaches the new process. The browser title is an
-    # immediate secondary reuse signal on Windows.
-    if _focus_existing_webui_window():
+    _request_webui_activation_with_retry("/", session=session)
+    if _focus_existing_webui_tab():
         return True
     if _visible_webui_windows():
-        # Same anti-duplication guard as the tray open path: a visible page
-        # exists even though foregrounding failed — never pile up windows.
+        # The exact page exists but Windows refused every foreground strategy.
+        # Do not report success while the user still sees nothing; opening the
+        # URL is the last-resort way to let the browser surface it.
         _append_log(
-            "WebUI window visible but could not be foregrounded; not opening a duplicate"
+            "WebUI window found but could not be foregrounded; opening a browser page"
         )
-        return True
     _append_log(f"UI activation: opening a new browser page (session={session or '-'})")
     _open_url_in_browser(
         f"/?session={session}" if session else "/",
@@ -460,13 +540,14 @@ def run_starter() -> int:
         print(MSG_RESTARTING)
         _append_log(MSG_RESTARTING)
         if _request_existing_restart():
-            _activate_webui_from_external()
+            # The resident tray owns the restart and its _start_agent() path
+            # already auto-opens/reuses the UI. Sending a second restore
+            # request here races that worker and creates duplicate windows.
             return 0
         _stop_listener_on_port()
         stop_deadline = time.monotonic() + 5
         while _is_port_listening() and time.monotonic() < stop_deadline:
             time.sleep(0.1)
-        _spawn_daemon()
 
     _reset_log()
     _append_log("=" * 50)
@@ -483,7 +564,8 @@ def run_starter() -> int:
         if _is_port_listening():
             print(f"\n{MSG_READY}")
             _append_log(MSG_READY)
-            _activate_webui_from_external()
+            # The daemon tray's auto-open worker is the single owner of the
+            # initial browser launch.
             return 0
         print("." if dots else MSG_LOADING, end="", flush=True)
         dots = (dots + 1) % 24
@@ -848,9 +930,8 @@ class TrayLauncher:
     def _claim_ui_open_slot(self) -> bool:
         """Return True only for the first browser-launch request in the window.
 
-        Duplicate requests arrive from the tray restore message posted by the
-        RUN.bat starter and from ``_auto_open_webui_when_ready`` at almost the
-        same moment; whichever path runs first owns the launch.
+        This is now only a short double-click/concurrent-notification guard.
+        Startup itself has one launch owner: ``_auto_open_webui_when_ready``.
         """
         with self._ui_open_lock:
             now = time.monotonic()
@@ -873,35 +954,29 @@ class TrayLauncher:
             print(MSG_NOT_READY)
             return
         session = str(session or "").strip()
+        if path == "/" and _focus_existing_webui_tab():
+            if session:
+                _request_webui_activation_with_retry(path, session=session)
+            return
         activation_reused = (
-        path == "/" and _request_webui_activation_with_retry(path, session=session)
+            path == "/" and _request_webui_activation_with_retry(path, session=session)
         )
-        if _focus_existing_webui_window():
-            if session and not activation_reused:
-                # The page the user sees is already up; deliver the session
-                # target through the activation channel so it navigates.
-                _request_existing_ui_activation(path, session=session)
+        if activation_reused and _focus_existing_webui_tab():
             return
         if _visible_webui_windows():
-            # A visible WebUI window exists; opening another would pile up
-            # duplicate pages.  The focus escalation above has already
-            # flashed it (minimize/restore) — surface why nothing more
-            # happened instead of spawning duplicates.
+            # The exact page exists but could not be surfaced. Falling through
+            # is deliberate: a duplicate is preferable to a tray action that
+            # claims success while showing no UI.
             _append_log(
-                "WebUI window visible but could not be foregrounded; not opening a duplicate"
+                "WebUI window found but could not be foregrounded; opening a browser page"
             )
-            return
-        if activation_reused and _focus_any_browser_window():
-            _append_log("UI activation: page heartbeat found; focused browser window by class")
-            return
         if activation_reused:
             # The backend sees a live page heartbeat, but no visible browser
-            # window could be brought to the foreground (e.g. an embedded
-            # automation browser pane).  Short-circuiting here left users
-            # with a tray click that visibly did nothing — open a real
-            # browser window instead.
+            # tab could be selected (e.g. a stale heartbeat or an embedded
+            # automation pane). Never focus an arbitrary browser window and
+            # call that success; opening a real page is the truthful fallback.
             _append_log(
-                "WebUI activation reused but no focusable window; opening a new browser window"
+                "WebUI heartbeat found but no selectable browser tab; opening a new browser page"
             )
         url = f"{BASE_URL}{path}"
         if session:

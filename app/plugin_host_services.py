@@ -96,7 +96,7 @@ def _run_session_background(
         async for _event in astream_events(
             request.prompt,
             session_id=request.session_id,
-            should_stop=lambda sid: session_manager.is_interrupt_requested(sid),
+            should_stop=lambda sid: session_manager.is_interrupt_requested(sid, request.run_id),
             run_id=request.run_id,
         ):
             pass

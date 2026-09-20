@@ -73,12 +73,19 @@ def register_run_task(
     task.add_done_callback(_on_done)
 
 
-def is_run_active(session_id: str) -> bool:
+def is_run_active(session_id: str, run_id: str = "") -> bool:
     sid = (session_id or "").strip()
     if not sid:
         return False
+    rid = str(run_id or "").strip()
     with _lock:
         tasks = list(_run_tasks.get(sid, ()))
+        if rid:
+            tasks = [
+                task
+                for task in tasks
+                if str((_run_info_by_task.get(task) or {}).get("run_id") or "").strip() == rid
+            ]
     return any(t and not t.done() for t in tasks)
 
 
@@ -184,6 +191,34 @@ async def cancel_run_tasks(session_ids: Iterable[str]) -> None:
         to_cancel: List[asyncio.Task] = []
         for sid in ids:
             to_cancel.extend(list(_run_tasks.get(sid, ())))
+    await _cancel_tasks(to_cancel)
+
+
+async def cancel_run_tasks_by_id(run_keys: Iterable[tuple[str, str]]) -> None:
+    """Cancel only the registered tasks matching the supplied run identities.
+
+    A stale observability row belongs to one run, not to the whole session.  In
+    particular, a replacement run may already be active by the time the
+    watchdog acts on an older heartbeat.  Session-wide cancellation in that
+    window kills the healthy replacement and creates a retry storm.
+    """
+
+    keys = {
+        ((session_id or "").strip(), str(run_id or "").strip())
+        for session_id, run_id in run_keys
+        if (session_id or "").strip() and str(run_id or "").strip()
+    }
+    if not keys:
+        return
+    with _lock:
+        to_cancel = [
+            task
+            for task, info in _run_info_by_task.items()
+            if (
+                str((info or {}).get("session_id") or "").strip(),
+                str((info or {}).get("run_id") or "").strip(),
+            ) in keys
+        ]
     await _cancel_tasks(to_cancel)
 
 

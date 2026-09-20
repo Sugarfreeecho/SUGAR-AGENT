@@ -80,16 +80,16 @@ if __name__ == "__main__":
         await asyncio.to_thread(reconcile_orphaned_subagent_runs)
         import runtime_observability
         from agent_harness import session_manager
-        from session_lifecycle import cancel_run_tasks, is_run_active
+        from session_lifecycle import cancel_run_tasks_by_id, is_run_active
 
         runtime_observability.configure(
             session_manager.sessions_dir,
             path_resolver=session_manager._resolve_session_path,
         )
 
-        def runtime_run_is_locally_active(session_id: str, _run_id: str) -> bool:
+        def runtime_run_is_locally_active(session_id: str, run_id: str) -> bool:
             """Keep stale heartbeat records alive while their local task still exists."""
-            return is_run_active(session_id) or subagent_registry.is_running(session_id)
+            return is_run_active(session_id, run_id) or subagent_registry.is_running(session_id)
 
         await asyncio.to_thread(
             runtime_observability.reconcile_orphaned_runs,
@@ -115,20 +115,25 @@ if __name__ == "__main__":
                     live_checker=runtime_run_is_locally_active,
                 )
                 targets = {
-                    str(item.get("session_id") or "")
+                    (
+                        str(item.get("session_id") or "").strip(),
+                        str(item.get("run_id") or "").strip(),
+                    )
                     for item in stale
-                    if str(item.get("session_id") or "")
+                    if str(item.get("session_id") or "").strip()
+                    and str(item.get("run_id") or "").strip()
                 }
-                for sid in targets:
+                for sid, run_id in targets:
                     try:
                         session_manager.request_interrupt(
                             sid,
+                            run_id=run_id,
                             reason="runtime_watchdog",
                         )
                     except Exception:
                         pass
                 if targets:
-                    await cancel_run_tasks(targets)
+                    await cancel_run_tasks_by_id(targets)
 
         watchdog_task = asyncio.create_task(runtime_watchdog())
         schedule_runtime_auto_migration()

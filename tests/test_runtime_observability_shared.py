@@ -148,6 +148,8 @@ def test_runtime_watchdog_has_no_wall_clock_hard_timeout():
     assert "AGENT_RUN_TIMEOUT_SECONDS" not in main_source
     assert "live_checker=runtime_run_is_locally_active" in main_source
     assert "subagent_registry.is_running(session_id)" in main_source
+    assert "cancel_run_tasks_by_id" in main_source
+    assert "run_id=run_id" in main_source
 
 
 def test_reference_fork_uses_immutable_parent_prefix(tmp_path, monkeypatch):

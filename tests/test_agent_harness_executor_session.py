@@ -558,6 +558,107 @@ def test_transport_fallback_circuit_skips_failed_profile_for_same_run(monkeypatc
     assert calls[-2:] == ["primary", "backup"]
 
 
+def test_background_stream_keeps_waiting_while_reasoning_is_active(monkeypatch):
+    import time
+
+    import agent_harness
+    from llm import LLMRequestContext, LLMRequestPurpose, TransportEvent
+
+    monkeypatch.setattr(agent_harness, "_claim_additional_recovery_request", lambda: True)
+    monkeypatch.setattr(agent_harness, "machine_network_available", lambda: True)
+    calls = []
+
+    class _Transport:
+        def __init__(self, name, slow_reasoning=False):
+            self.name = name
+            self.slow_reasoning = slow_reasoning
+
+        def stream_completion(self, **_kwargs):
+            calls.append(self.name)
+            if self.slow_reasoning:
+                yield TransportEvent("reasoning_delta", text="thinking")
+                time.sleep(0.02)
+                yield TransportEvent("reasoning_delta", text="still thinking")
+            yield TransportEvent("content_delta", text="finished", model=self.name)
+            yield TransportEvent("finish", finish_reason="stop", model=self.name)
+
+    client = agent_harness.ExecutorLLMClient([
+        {
+            "profile_id": "primary",
+            "transport": _Transport("primary", slow_reasoning=True),
+            "provider": "openai",
+            "model": "primary",
+            "max_output_tokens": 128,
+        },
+        {
+            "profile_id": "backup",
+            "transport": _Transport("backup"),
+            "provider": "openai-compatible",
+            "model": "backup",
+            "max_output_tokens": 128,
+        },
+    ])
+
+    events = list(client.stream_completion(
+        messages=[],
+        request_context=LLMRequestContext(purpose=LLMRequestPurpose.SUMMARY),
+    ))
+
+    assert calls == ["primary"]
+    assert [event.text for event in events if event.kind == "content_delta"] == ["finished"]
+    assert [event.text for event in events if event.kind == "reasoning_delta"] == [
+        "thinking",
+        "still thinking",
+    ]
+
+
+def test_background_stream_preserves_transport_idle_timeout(monkeypatch):
+    import agent_harness
+    from llm import LLMRequestContext, LLMRequestPurpose, TransportEvent
+
+    monkeypatch.setattr(agent_harness, "_candidate_retry_policy", lambda: (0, 0.0))
+    monkeypatch.setattr(agent_harness, "_claim_additional_recovery_request", lambda: True)
+    monkeypatch.setattr(agent_harness, "machine_network_available", lambda: True)
+    calls = []
+
+    class _SilentTimeoutTransport:
+        def stream_completion(self, **kwargs):
+            calls.append(("primary", kwargs.get("timeout")))
+            raise TimeoutError("read timed out")
+            yield  # pragma: no cover
+
+    class _BackupTransport:
+        def stream_completion(self, **kwargs):
+            calls.append(("backup", kwargs.get("timeout")))
+            yield TransportEvent("content_delta", text="finished")
+
+    client = agent_harness.ExecutorLLMClient([
+        {
+            "profile_id": "primary",
+            "transport": _SilentTimeoutTransport(),
+            "provider": "openai",
+            "model": "primary",
+            "max_output_tokens": 128,
+        },
+        {
+            "profile_id": "backup",
+            "transport": _BackupTransport(),
+            "provider": "openai-compatible",
+            "model": "backup",
+            "max_output_tokens": 128,
+        },
+    ])
+
+    events = list(client.stream_completion(
+        messages=[],
+        timeout=300,
+        request_context=LLMRequestContext(purpose=LLMRequestPurpose.SUMMARY),
+    ))
+
+    assert calls == [("primary", 300), ("backup", 300)]
+    assert [event.text for event in events] == ["finished"]
+
+
 def test_transport_failure_circuit_survives_executor_client_rebuild(monkeypatch):
     import agent_harness
     from llm import TransportEvent

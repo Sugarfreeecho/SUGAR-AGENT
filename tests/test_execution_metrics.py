@@ -128,3 +128,46 @@ def test_execution_metrics_list_sessions_is_lightweight(tmp_path, monkeypatch):
     assert sessions[0]["session_id"] == "s5"
     execution_metrics._root = old_root
     execution_metrics._sessions.clear()
+
+
+def test_execution_metrics_uses_one_shared_heartbeat_thread(monkeypatch):
+    import execution_metrics
+
+    starts = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            self.alive = False
+
+        def start(self):
+            self.alive = True
+            starts.append(1)
+
+        def is_alive(self):
+            return self.alive
+
+    monkeypatch.setattr(execution_metrics, "_heartbeat_thread", None)
+    monkeypatch.setattr(execution_metrics.threading, "Thread", FakeThread)
+
+    assert execution_metrics._ensure_heartbeat_thread() is True
+    assert execution_metrics._ensure_heartbeat_thread() is True
+    assert len(starts) == 1
+
+
+def test_execution_metrics_heartbeat_thread_exhaustion_is_nonfatal(monkeypatch):
+    import execution_metrics
+
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+        @staticmethod
+        def is_alive():
+            return False
+
+    monkeypatch.setattr(execution_metrics, "_heartbeat_thread", None)
+    monkeypatch.setattr(execution_metrics.threading, "Thread", FailingThread)
+    assert execution_metrics._ensure_heartbeat_thread() is False

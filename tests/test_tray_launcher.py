@@ -187,7 +187,7 @@ def test_open_main_ui_reuses_live_frontend_page(monkeypatch):
     focused = []
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path, session="": path == "/")
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: focused.append(True) or True)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: focused.append(True) or True)
 
     launcher._open_url("/", refresh=True)
 
@@ -202,7 +202,26 @@ def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
     monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+
+    launcher._open_url("/", refresh=False)
+
+    assert opened == [tray_launcher.BASE_URL + "/"]
+
+
+def test_open_main_ui_falls_back_when_detected_window_cannot_be_focused(monkeypatch):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    opened = []
+    launcher._open_named_browser_window = lambda url: opened.append(url)
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [4321])
+    monkeypatch.setattr(
+        tray_launcher,
+        "_request_existing_ui_activation",
+        lambda _path, session="": True,
+    )
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
 
     launcher._open_url("/", refresh=False)
 
@@ -216,7 +235,7 @@ def test_open_main_ui_reuses_visible_window_before_presence_recovers(monkeypatch
     monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: True)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: True)
 
     launcher._open_url("/", refresh=True)
 
@@ -232,7 +251,7 @@ def test_open_main_ui_collapses_duplicate_startup_triggers(monkeypatch):
     monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
 
     launcher._open_url("/", refresh=True)
     launcher._open_url("/", refresh=True)
@@ -253,7 +272,7 @@ def test_open_main_ui_retries_after_failed_browser_launch(monkeypatch):
     monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = launch
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
 
     with pytest.raises(OSError):
         launcher._open_url("/", refresh=False)
@@ -269,7 +288,7 @@ def test_open_main_ui_allows_launch_after_dedupe_window(monkeypatch):
     monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
 
     launcher._open_url("/", refresh=False)
     launcher._last_ui_open_at = time.monotonic() - tray_launcher.UI_OPEN_DEDUPE_SECONDS - 0.1
@@ -307,7 +326,7 @@ def test_external_ui_activation_reuses_page_without_tray(monkeypatch):
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda path, session="": path == "/")
     monkeypatch.setattr(
         tray_launcher,
-        "_focus_existing_webui_window",
+        "_focus_existing_webui_tab",
         lambda: focused.append(True) or True,
     )
     monkeypatch.setattr(
@@ -326,7 +345,7 @@ def test_external_ui_activation_opens_page_only_when_none_is_reusable(monkeypatc
     monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
     monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
     monkeypatch.setattr(
         tray_launcher,
@@ -346,19 +365,19 @@ def test_external_ui_activation_retries_once_before_giving_up(monkeypatch):
         "_request_existing_ui_activation",
         lambda path, session="": calls.append(path) or len(calls) == 2,
     )
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: True)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: True)
     monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
 
     assert tray_launcher._activate_webui_from_external("abc123") is True
     assert calls == ["/", "/"]
 
 
-def test_external_ui_activation_focuses_browser_window_by_class(monkeypatch):
+def test_external_ui_activation_opens_when_heartbeat_has_no_selectable_tab(monkeypatch):
     opened = []
     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": True)
-    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
-    monkeypatch.setattr(tray_launcher, "_focus_any_browser_window", lambda: True)
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
     monkeypatch.setattr(
         tray_launcher,
@@ -366,8 +385,112 @@ def test_external_ui_activation_focuses_browser_window_by_class(monkeypatch):
         lambda path, refresh=True: opened.append((path, refresh)),
     )
 
-    assert tray_launcher._activate_webui_from_external("abc123") is True
-    assert opened == []
+    assert tray_launcher._activate_webui_from_external("abc123") is False
+    assert opened == [("/?session=abc123", False)]
+
+
+def test_background_webui_tab_is_selected_and_its_window_is_focused(monkeypatch):
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+    monkeypatch.setattr(tray_launcher, "_select_webui_browser_tab", lambda: 4321)
+    monkeypatch.setattr(tray_launcher, "_bring_window_to_foreground", lambda hwnd: hwnd == 4321)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
+
+    assert tray_launcher._focus_existing_webui_tab() is True
+
+
+def test_tab_selector_returns_uia_selected_browser_handle(monkeypatch):
+    captured = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "4321\n"
+
+    monkeypatch.setattr(tray_launcher, "_visible_browser_windows", lambda: [1234, 4321])
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Completed()
+
+    monkeypatch.setattr(tray_launcher.subprocess, "run", fake_run)
+
+    assert tray_launcher._select_webui_browser_tab() == 4321
+    assert "1234,4321" in captured["command"][-1]
+    assert "SelectionItemPattern" in captured["command"][-1]
+    assert captured["kwargs"]["timeout"] == tray_launcher.UI_TAB_SELECT_TIMEOUT_SECONDS
+
+
+def test_activation_request_uses_stall_tolerant_timeout(monkeypatch):
+    captured = {}
+
+    def fake_request(path, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(tray_launcher, "request_webui_activation", fake_request)
+
+    assert tray_launcher._request_existing_ui_activation("/", session="abc") is True
+    assert captured == {
+        "path": "/",
+        "base_url": tray_launcher.BASE_URL,
+        "session": "abc",
+        "timeout": tray_launcher.UI_ACTIVATION_TIMEOUT_SECONDS,
+    }
+
+
+def test_starter_lets_resident_tray_own_restart_ui_open(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tray_launcher, "_is_port_listening", lambda: True)
+    monkeypatch.setattr(
+        tray_launcher,
+        "_request_existing_restart",
+        lambda: calls.append("restart") or True,
+    )
+    monkeypatch.setattr(
+        tray_launcher,
+        "_activate_webui_from_external",
+        lambda: calls.append("activate"),
+    )
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
+
+    assert tray_launcher.run_starter() == 0
+    assert calls == ["restart"]
+
+
+def test_starter_spawns_one_daemon_and_does_not_race_its_auto_open(monkeypatch):
+    listening = iter([False, True])
+    calls = []
+    monkeypatch.setattr(tray_launcher, "_is_port_listening", lambda: next(listening))
+    monkeypatch.setattr(tray_launcher, "_spawn_daemon", lambda: calls.append("spawn"))
+    monkeypatch.setattr(tray_launcher, "_reset_log", lambda: None)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
+    monkeypatch.setattr(
+        tray_launcher,
+        "_activate_webui_from_external",
+        lambda: calls.append("activate"),
+    )
+
+    assert tray_launcher.run_starter() == 0
+    assert calls == ["spawn"]
+
+
+def test_starter_replaces_stale_listener_with_only_one_daemon(monkeypatch):
+    listening = iter([True, False, True])
+    calls = []
+    monkeypatch.setattr(tray_launcher, "_is_port_listening", lambda: next(listening))
+    monkeypatch.setattr(tray_launcher, "_request_existing_restart", lambda: False)
+    monkeypatch.setattr(
+        tray_launcher,
+        "_stop_listener_on_port",
+        lambda: calls.append("stop-listener"),
+    )
+    monkeypatch.setattr(tray_launcher, "_spawn_daemon", lambda: calls.append("spawn"))
+    monkeypatch.setattr(tray_launcher, "_reset_log", lambda: None)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
+
+    assert tray_launcher.run_starter() == 0
+    assert calls == ["stop-listener", "spawn"]
 
 
 def test_tray_information_is_delivered_as_system_notification(monkeypatch):
