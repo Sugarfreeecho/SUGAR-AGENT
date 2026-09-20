@@ -40,6 +40,11 @@ const DOCK_RIGHT_WIDTH_DEFAULT = 460;
 const DOCK_RIGHT_WIDTH_MIN = 320;
 const DOCK_RIGHT_WIDTH_MAX = 960;
 
+/** An expanded column must leave the workspace at least this many pixels of
+    usable width; a narrower window keeps the column collapsed instead
+    (feedback: a half-screen snap must not squeeze the workspace into a sliver). */
+const DOCK_RIGHT_WORKSPACE_FLOOR = 560;
+
 /** How much of the session history the change list scans, in pages of 500 events. */
 const DOCK_RIGHT_CHANGE_PAGE_LIMIT = 500;
 const DOCK_RIGHT_CHANGE_PAGE_MAX = 8;
@@ -53,6 +58,9 @@ const DOCK_RIGHT_TEXT_MAX_BYTES = 200000;
 /** The dsh-style refresh glyph (28px circle, 15px arrow) used by every page head. */
 const DOCK_ICON_REFRESH = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.62-3.76" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/><path d="M13.4 2.6v3.1h-3.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>';
 
+/** Reveal-in-folder glyph, verbatim from dsh `ui-primitives` `IconFolderOpenOutline16`. */
+const DOCK_ICON_REVEAL = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path fill="currentColor" d="M5.19629 1.57104C5.81144 1.5711 6.38623 1.8786 6.72754 2.39038L7.19922 3.09839C7.28454 3.22635 7.42824 3.30344 7.58203 3.30347H12.1699C13.5039 3.30348 14.5859 4.38548 14.5859 5.71948V6.62671C15.2694 7.02689 15.6605 7.85012 15.4385 8.68726L14.3848 12.658C14.1037 13.7164 13.1449 14.4527 12.0498 14.4529H2.91699C1.51651 14.4529 0.451662 13.2814 0.501954 11.9519V3.98706C0.501954 2.65305 1.58396 1.57104 2.91797 1.57104H5.19629ZM3.7793 7.75562C3.30994 7.75562 2.89883 8.07153 2.77832 8.52515L1.91602 11.7722C1.74167 12.4291 2.23734 13.073 2.91699 13.073H12.0498C12.5191 13.0728 12.9304 12.757 13.0508 12.3035L14.1045 8.33374C14.1819 8.04202 13.9619 7.756 13.6602 7.75562H3.7793ZM2.91797 2.9519C2.34625 2.9519 1.88281 3.41534 1.88281 3.98706V7.2937C2.33068 6.7269 3.02249 6.37476 3.7793 6.37476H13.2051V5.71948C13.2051 5.14777 12.7416 4.68434 12.1699 4.68433H7.58203C6.96675 4.6843 6.39209 4.37595 6.05078 3.86401L5.5791 3.15601C5.49379 3.02821 5.34995 2.95196 5.19629 2.9519H2.91797Z"/></svg>';
+
 /** Suffixes rendered as an inline image. Mirrors the backend's viewable image set. */
 const DOCK_RIGHT_IMAGE_SUFFIXES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'jfif', 'tif', 'tiff'];
 
@@ -62,6 +70,9 @@ const DOCK_RIGHT_VIDEO_SUFFIXES = ['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'];
 
 /** Suffixes rendered as a sandboxed web page (with a source toggle). */
 const DOCK_RIGHT_HTML_SUFFIXES = ['html', 'htm'];
+
+/** Suffixes rendered as a document (rich markdown, with a source toggle). */
+const DOCK_RIGHT_MD_SUFFIXES = ['md', 'markdown'];
 
 /** Suffixes that go straight to the system app: never read as text (feedback #5). */
 const DOCK_RIGHT_BINARY_SUFFIXES = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'epub', 'zip', '7z', 'rar', 'gz', 'tar', 'exe', 'msi', 'dll', 'so', 'dylib', 'bin', 'pyc', 'class', 'jar', 'woff', 'woff2', 'ttf', 'otf', 'eot', 'db', 'sqlite', 'mp3', 'wav', 'flac', 'aac', 'ogg', 'mp4', 'mov', 'mkv', 'avi'];
@@ -102,6 +113,8 @@ function dockRightLabels() {
         preview: '网页预览',
         viewSource: '查看源码',
         viewPreview: '预览网页',
+        previewDoc: '预览文档',
+        reveal: '打开文件目录',
         files: '工作区文件',
         document: '文件内容',
         changes: '修改历史',
@@ -395,6 +408,17 @@ function dockRightEnsureMounted() {
         dockRightState.viewportHooked = true;
         window.addEventListener('resize', () => {
             if (!dockRightExpanded()) return;
+            // The column yields by closing when the window can no longer hold
+            // both: the workspace keeps a usable width and the details column
+            // stays collapsed (a half-screen snap must not crush the chat).
+            if (dockRightState.sessionId && dockRightWouldCrushWorkspace()) {
+                const surface = dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA);
+                if (surface && surface.layout.mode !== 'fullscreen') {
+                    dockActionToggleExpanded(dockRightState.sessionId, dockRightSeed(), DOCK_RIGHT_AREA);
+                    dockRightRender();
+                    return;
+                }
+            }
             if (window.innerWidth < 768 && dockRightState.sessionId) {
                 const surface = dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA);
                 if (surface && surface.layout.mode !== 'fullscreen') {
@@ -420,8 +444,16 @@ function dockRightBuildChrome() {
         if (!sessionId) return;
         const surface = dockSurfaceOf(sessionId, DOCK_RIGHT_AREA);
         if (!surface) return;
+        // Fullscreen is a snap, not a slide: the column goes straight to the
+        // viewport (and straight back). The push-mode open/close animation is
+        // untouched.
+        const host = dockRightState.host;
+        if (host) host.classList.add('is-instant');
         dockActionSetMode(sessionId, surface.layout.mode === 'fullscreen' ? 'push' : 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
         dockRightRender();
+        if (host) {
+            requestAnimationFrame(() => requestAnimationFrame(() => host.classList.remove('is-instant')));
+        }
     });
     const collapseButton = document.createElement('button');
     collapseButton.type = 'button';
@@ -472,6 +504,36 @@ function dockRightLoadWidth() {
     } catch (error) { /* ignore */ }
     dockRightState.width = dockRightClampWidth(width);
     dockRightApplyWidth();
+}
+
+/** Would an expanded column leave the workspace below its usable floor? */
+function dockRightWouldCrushWorkspace() {
+    const app = document.querySelector('.app');
+    const appWidth = app ? app.clientWidth : (window.innerWidth || 0);
+    let reserved = 0;
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+        const rect = sidebar.getBoundingClientRect();
+        if (rect.width > 0) reserved += rect.width;
+    }
+    const sash = document.getElementById('sash');
+    if (sash) {
+        const rect = sash.getBoundingClientRect();
+        if (rect.width > 0) reserved += rect.width;
+    }
+    const frame = Math.max(0, appWidth - reserved);
+    return frame - dockRightState.width < DOCK_RIGHT_WORKSPACE_FLOOR;
+}
+
+/** A narrow window covers with the fullscreen mode instead of squeezing the
+    workspace: every open path (button, file link, review) goes through here. */
+function dockRightEnsureNarrowOpenMode(sessionId) {
+    if (!sessionId) return;
+    if (!(window.innerWidth < 768 || dockRightWouldCrushWorkspace())) return;
+    const surface = dockSurfaceOf(sessionId, DOCK_RIGHT_AREA);
+    if (surface && surface.layout.expanded && surface.layout.mode !== 'fullscreen') {
+        dockActionSetMode(sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+    }
 }
 
 /** Clamp a width to the column's bounds and the viewport. */
@@ -543,7 +605,8 @@ function dockRightExpanded() {
  * made the second click a no-op. Only an empty column is seeded with a page.
  */
 function dockRightToggle() {
-    const sessionId = currentSessionId;
+    // A subagent view toggles the parent session's column (see the key above).
+    const sessionId = dockRightSurfaceKey(currentSessionId);
     if (!sessionId) return;
     dockRightEnsureMounted();
     if (!dockRightState.host) return;
@@ -566,7 +629,7 @@ function dockRightToggle() {
             revealIfOpened: false,
         }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     }
-    if (window.innerWidth < 768) dockActionSetMode(sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+    dockRightEnsureNarrowOpenMode(sessionId);
     dockRightRender();
 }
 
@@ -621,10 +684,37 @@ function dockRightRender() {
     }
 }
 
+/**
+ * The surface key for a session: a subagent's addressed view belongs to its
+ * parent session, so entering or leaving a child keeps the parent column's
+ * state (open, on the same page) instead of collapsing it.
+ */
+function dockRightSurfaceKey(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return sid;
+    try {
+        if (typeof subagentAddressing !== 'undefined' && subagentAddressing
+            && typeof subagentAddressing.current === 'function') {
+            const info = subagentAddressing.current();
+            if (info && String(info.childSessionId) === sid && info.parentSessionId) {
+                return String(info.parentSessionId);
+            }
+        }
+    } catch (error) { /* ignore */ }
+    try {
+        if (typeof subagentCatalogStore !== 'undefined' && subagentCatalogStore
+            && typeof subagentCatalogStore.getAddress === 'function') {
+            const address = subagentCatalogStore.getAddress(sid);
+            if (address && address.parentSessionId) return String(address.parentSessionId);
+        }
+    } catch (error) { /* ignore */ }
+    return sid;
+}
+
 /** The session-switch hook: show the entering session's own column surface. */
 function dockRightHandleSessionSwitch(sessionId) {
     if (!dockRightState.host) return;
-    const sid = String(sessionId || '');
+    const sid = dockRightSurfaceKey(sessionId);
     if (!sid) return;
     if (dockRightState.sessionId === sid) return;
     if (!dockSurfaceExists(sid, DOCK_RIGHT_AREA)) {
@@ -634,6 +724,11 @@ function dockRightHandleSessionSwitch(sessionId) {
     }
     dockRightState.sessionId = sid;
     dockRightRender();
+        // The entering session's own open state still yields to a narrow window.
+        if (dockRightExpanded() && dockRightWouldCrushWorkspace()) {
+            dockActionToggleExpanded(sid, dockRightSeed(), DOCK_RIGHT_AREA);
+            dockRightRender();
+        }
 }
 
 /**
@@ -764,7 +859,7 @@ function dockRightGuideBody(tab) {
 /** Open one of the column's pages (guide entries, `+`, the public API) in a pane. */
 function dockRightOpenPageKind(kind, replaceTab, paneId, revealIfOpened) {
     dockRightEnsureMounted();
-    const sessionId = dockRightState.sessionId || currentSessionId;
+    const sessionId = dockRightSurfaceKey(dockRightState.sessionId || currentSessionId);
     if (!sessionId) return;
     const address = dockPageAddress(String(kind));
     const definition = dockTabRegistry.get(String(kind));
@@ -907,7 +1002,7 @@ function dockRightFileRow(item, depth) {
 /** Open a resource address in the column (expanding it), focusing it if open. */
 function dockRightOpenResource(address) {
     dockRightEnsureMounted();
-    const sessionId = dockRightState.sessionId || currentSessionId;
+    const sessionId = dockRightSurfaceKey(dockRightState.sessionId || currentSessionId);
     if (!sessionId) return;
     let claim;
     try {
@@ -922,6 +1017,7 @@ function dockRightOpenResource(address) {
         title: claim.title,
     }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     dockRightState.sessionId = sessionId;
+    dockRightEnsureNarrowOpenMode(sessionId);
     dockRightRender();
 }
 
@@ -950,6 +1046,26 @@ function dockRightDocumentBody(tab) {
     refresh.setAttribute('aria-label', dockRightText('refresh'));
     refresh.title = dockRightText('refresh');
     refresh.innerHTML = DOCK_ICON_REFRESH;
+    const reveal = document.createElement('button');
+    reveal.type = 'button';
+    reveal.className = 'dock-icon-button dock-doc-reveal';
+    reveal.setAttribute('data-dock-doc-reveal', '1');
+    reveal.setAttribute('aria-label', dockRightText('reveal'));
+    reveal.title = dockRightText('reveal');
+    reveal.innerHTML = DOCK_ICON_REVEAL;
+    reveal.addEventListener('click', () => {
+        void fetch('/api/open-workspace-dir?' + new URLSearchParams({ rel: rel }))
+            .then((response) => response.json().catch(() => null))
+            .then((data) => {
+                if (typeof showOpenFileFeedback === 'function') {
+                    if (data && data.ok) showOpenFileFeedback('已打开文件目录');
+                    else showOpenFileFeedback('无法打开文件目录：' + ((data && data.error) || '服务未就绪'));
+                }
+            })
+            .catch(() => {
+                if (typeof showOpenFileFeedback === 'function') showOpenFileFeedback('无法打开文件目录：无法连接服务');
+            });
+    });
     const openSystem = document.createElement('button');
     openSystem.type = 'button';
     openSystem.className = 'dock-link-button';
@@ -962,6 +1078,7 @@ function dockRightDocumentBody(tab) {
     // the name and the corner and pushed the refresh icon into the middle).
     head.appendChild(name);
     head.appendChild(openSystem);
+    head.appendChild(reveal);
     head.appendChild(refresh);
     const content = document.createElement('div');
     content.className = 'dock-doc-content';
@@ -1033,6 +1150,69 @@ function dockRightDocumentBody(tab) {
             else void dockRightLoadText(content, state);
         });
         renderPreview();
+    } else if (DOCK_RIGHT_MD_SUFFIXES.indexOf(suffix) >= 0) {
+        // Markdown renders through the app's own pipeline (`renderMarkdown`,
+        // the same parser the chat uses), so documents look identical in the
+        // column and the timeline; a toggle keeps the raw source one click away.
+        const baseDir = String(rel).replace(/[\\/][^\\/]*$/, '');
+        const assetBase = '/api/workspace-assets/' + (baseDir ? baseDir.split(/[\\/]/).map(encodeURIComponent).join('/') + '/' : '');
+        let mode = 'rendered';
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'dock-link-button dock-doc-source-toggle';
+        toggle.setAttribute('data-dock-doc-source-toggle', '1');
+        const resolveRelative = (text) => String(text).replace(
+            /(!?\[[^\]]*\]\()(?!(?:[a-z][a-z0-9+.-]*:|\/|#))([^)]+)(\))/gi,
+            (whole, head, target, tail) => head + assetBase + target.split(/[\\/]/).map(encodeURIComponent).join('/') + tail,
+        );
+        const renderDoc = async () => {
+            mode = 'rendered';
+            content.style.padding = '';
+            content.replaceChildren(dockRightNote(dockRightText('loading')));
+            try {
+                const scanned = await dockRightFetchJSON('/api/workspace-file-text?' + new URLSearchParams({
+                    rel: rel,
+                    max_bytes: String(DOCK_RIGHT_TEXT_MAX_BYTES),
+                }));
+                const data = scanned.data;
+                if (state.released) return;
+                if (!scanned.response.ok || !data || data.ok !== true) {
+                    throw new Error((data && data.error) || ('HTTP ' + scanned.response.status));
+                }
+                const body = document.createElement('div');
+                body.className = 'dock-doc-markdown';
+                body.setAttribute('data-dock-doc-markdown', '1');
+                const html = typeof renderMarkdown === 'function'
+                    ? renderMarkdown(resolveRelative(String(data.text || '')))
+                    : null;
+                if (html === null) {
+                    throw new Error(dockRightText('loadFailed'));
+                }
+                body.innerHTML = html;
+                content.replaceChildren(body);
+                if (data.truncated) content.appendChild(dockRightNote(dockRightText('truncated')));
+                toggle.textContent = dockRightText('viewSource');
+            } catch (error) {
+                if (state.released) return;
+                content.replaceChildren(dockRightNote(dockRightText('loadFailed') + ': ' + (error && error.message ? error.message : error)));
+            }
+        };
+        const renderSource = () => {
+            mode = 'source';
+            content.style.padding = '';
+            void dockRightLoadText(content, state);
+            toggle.textContent = dockRightText('previewDoc');
+        };
+        toggle.addEventListener('click', () => {
+            if (mode === 'rendered') renderSource();
+            else void renderDoc();
+        });
+        head.insertBefore(toggle, openSystem);
+        refresh.addEventListener('click', () => {
+            if (mode === 'rendered') void renderDoc();
+            else void dockRightLoadText(content, state);
+        });
+        void renderDoc();
     } else {
         void dockRightLoadText(content, state);
         refresh.addEventListener('click', () => { void dockRightLoadText(content, state); });
@@ -1100,7 +1280,7 @@ function dockRightChangesBody(tab) {
     const el = document.createElement('div');
     el.className = 'dock-changes';
     el.setAttribute('data-dock-changes', tab.id);
-    const sessionId = dockRightState.sessionId || currentSessionId;
+    const sessionId = dockRightSurfaceKey(dockRightState.sessionId || currentSessionId);
     const state = {
         changeReview: true,
         sessionId: sessionId,
@@ -1110,6 +1290,7 @@ function dockRightChangesBody(tab) {
         selectedTurnId: null,
         scope: 'turn',
         focusRequest: dockRightChangeReviewFocus.get(String(sessionId || '')) || null,
+        expandedChanges: new Set(),
         released: false,
         listener: null,
         abort: null,
@@ -1467,6 +1648,7 @@ function dockRightChangeGroup(turn, turnIndex, rows, state, rerender) {
 
 /** One complete change row: path, counts/omission, diff, reverted state and action. */
 function dockRightChangeRow(row, state, rerender) {
+    const expandKey = String(row.snapshot_id || row.path || '');
     const item = document.createElement('article');
     item.className = 'dock-change' + (row._reverted ? ' is-reverted' : '');
     item.setAttribute('data-dock-snapshot-id', String(row.snapshot_id || ''));
@@ -1530,6 +1712,10 @@ function dockRightChangeRow(row, state, rerender) {
         if (nextDiffLine < diffLines.length) diffFrame = requestAnimationFrame(renderDiffChunk);
     };
     const setExpanded = (opening) => {
+        if (state && state.expandedChanges) {
+            if (opening) state.expandedChanges.add(expandKey);
+            else state.expandedChanges.delete(expandKey);
+        }
         ensureBody();
         body.classList.toggle('is-open', opening);
         body.setAttribute('aria-hidden', opening ? 'false' : 'true');
@@ -1543,6 +1729,8 @@ function dockRightChangeRow(row, state, rerender) {
     head.addEventListener('click', (event) => { if (event.target !== action) toggleBody(); });
     item.append(head, body);
     item.__dockSetExpanded = setExpanded;
+    // 执行期间新改动注册会全量重建列表；恢复用户此前打开的详情，避免"被关掉"。
+    if (state && state.expandedChanges && state.expandedChanges.has(expandKey)) setExpanded(true);
     return item;
 }
 
@@ -1616,7 +1804,7 @@ async function dockRightBulkChangeAction(rows, action, state, rerender) {
 
 /** Keep plugin-owned child-agent rows available to the built-in details page. */
 function dockRightRegisterChangeReviewRows(payload) {
-    const sessionId = String(payload && payload.sessionId || dockRightState.sessionId || currentSessionId || '');
+    const sessionId = String(payload && payload.sessionId || dockRightSurfaceKey(dockRightState.sessionId || currentSessionId) || '');
     const incoming = payload && Array.isArray(payload.rows) ? payload.rows : [];
     if (!sessionId || !incoming.length) return;
     let cached = dockRightChangeReviewRows.get(sessionId);
@@ -1635,7 +1823,7 @@ function dockRightRegisterChangeReviewRows(payload) {
 
 /** Expand the details column, open Modification History, and deep-link to a turn/file. */
 function dockRightOpenChangeReview(options) {
-    const sessionId = String(dockRightState.sessionId || currentSessionId || '');
+    const sessionId = String(dockRightSurfaceKey(dockRightState.sessionId || currentSessionId) || '');
     if (!sessionId) return;
     const focus = Object.assign({}, options || {});
     dockRightChangeReviewFocus.set(sessionId, focus);
@@ -1732,6 +1920,8 @@ function dockRightInit() {
             openPathSmart: (pathValue) => dockRightOpenPathSmart(String(pathValue || '')),
             /** Whether a path would open inline (text) rather than through the system app. */
             isTextPath: (pathValue) => dockRightIsTextPath(String(pathValue || '')),
+            /** The surface key a session resolves to (a subagent maps to its parent). */
+            surfaceKey: (sessionId) => dockRightSurfaceKey(String(sessionId || '')),
             /** The details column's state, for tests and plugins. */
             detailsState: () => {
                 const surface = dockRightState.sessionId ? dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA) : null;

@@ -876,6 +876,11 @@ async function startContinueAfterSubagents(sessionId) {
             setSendButtonState();
             syncSessionListIndicatorClasses();
             void refreshSingleSessionRow(runSessionId);
+            if (typeof scheduleSessionNameRecheck === 'function') {
+                scheduleSessionNameRecheck(runSessionId, {
+                    baseline: (sessionStore.get(runSessionId) || {}).name || '',
+                });
+            }
             applyContextTokenLabelForCurrentSession();
             if (continuationFailed || isServerStreamActive(runSessionId)) {
                 scheduleActiveSessionReconnect(runSessionId, { delayMs: 120, failure: continuationFailed });
@@ -3485,6 +3490,11 @@ async function sendMessage(options) {
         });
         setSendButtonState();
         syncSessionListIndicatorClasses();
+        if (submittedRunSessionId && typeof scheduleSessionNameRecheck === 'function') {
+            scheduleSessionNameRecheck(submittedRunSessionId, {
+                baseline: (sessionStore.get(submittedRunSessionId) || {}).name || '',
+            });
+        }
         if (!stoppedByUser && getFollowupQueue(submittedRunSessionId).length) {
             renderFollowupQueue(submittedRunSessionId);
         }

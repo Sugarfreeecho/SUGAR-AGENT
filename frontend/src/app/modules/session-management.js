@@ -651,6 +651,51 @@ function scheduleTitleGenerationRefresh(sessionId, pending) {
     }, delayMs);
 }
 
+const sessionNameRecheckState = Object.create(null);
+
+/**
+ * run 结束后对「名字可能刚生成」的会话做有限复查（兜底）。
+ *
+ * 标题由服务端后台 worker 生成，前端只在 title_generation_pending 窗口内轮询；
+ * 一旦本次 run 的收尾请求与「生成完成」擦肩而过（错过窗口），会话名会一直停留
+ * 在旧值，直到用户手动切换会话。这里以 run 结束时的名字为基线短周期复查：
+ * 名字一变立即停止；到上限（默认 30s）无变化也停止。
+ */
+function scheduleSessionNameRecheck(sessionId, opts) {
+    const sid = String(sessionId || '');
+    if (!sid || !sessionsList) return;
+    const baseline = String((opts && opts.baseline) || '');
+    const maxAttempts = Math.max(1, Math.min(60, Number((opts && opts.maxAttempts) || 15)));
+    const delayMs = Math.max(600, Number((opts && opts.delayMs) || 2000));
+    let state = sessionNameRecheckState[sid];
+    if (!state) {
+        state = sessionNameRecheckState[sid] = { attempts: 0, timer: null, baseline: '', maxAttempts: maxAttempts, delayMs: delayMs };
+    }
+    if (baseline) state.baseline = baseline;
+    state.maxAttempts = maxAttempts;
+    state.delayMs = delayMs;
+    if (state.timer) return;
+    const tick = async function () {
+        state.timer = null;
+        state.attempts += 1;
+        await refreshSingleSessionRow(sid);
+        const live = sessionNameRecheckState[sid];
+        if (!live) return;
+        const session = sessionStore.get(sid);
+        const currentName = session ? String(session.name || '') : '';
+        if (currentName && live.baseline && currentName !== live.baseline) {
+            delete sessionNameRecheckState[sid];
+            return;
+        }
+        if (live.attempts >= live.maxAttempts) {
+            delete sessionNameRecheckState[sid];
+            return;
+        }
+        live.timer = setTimeout(tick, live.delayMs);
+    };
+    state.timer = setTimeout(tick, delayMs);
+}
+
 async function refreshSingleSessionRow(sessionId) {
     if (!sessionId || !sessionsList) return;
     try {

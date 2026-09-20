@@ -944,7 +944,10 @@ body {
 #breadcrumb-sub {
     display: block; font-size: 0.6rem; color: var(--text-subtle);
     font-family: var(--mono); margin-top: 0.15rem;
-    word-break: break-all;
+    /* A snapped window must not let the workspace path and session id wrap
+       into a full-screen paragraph: one line, truncated, full value on hover. */
+    max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    word-break: normal;
 }
 .titlebar-right {
     display: flex; align-items: center; justify-content: flex-end; gap: 0.65rem;
@@ -2597,7 +2600,7 @@ body {
 
 /* 骨架屏 */
 .skeleton {
-    width: min(760px, calc(100% - 2rem));
+    width: min(var(--content-column-width, 760px), 100%);
     min-height: min(62vh, 36rem);
     margin: 1rem auto;
     padding: 3rem 2.5rem;

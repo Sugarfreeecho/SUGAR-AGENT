@@ -505,9 +505,18 @@ function applyTool(detail, options) {
     options = options || {};
     const event = detail && detail.event; const aggregate = detail && detail.aggregate;
     const incoming = event && event.ui && Array.isArray(event.ui.changes) ? event.ui.changes : [];
-    if (!aggregate || !incoming.length) return false;
+    if (!incoming.length) return false;
+    if (!aggregate) {
+        // 工具行已渲染但过程框尚未就绪（或正在移动）：安排一次重扫，尽快补挂改动统计，
+        // 避免要等到下一个工具事件/整段重放才出现 +- 数字。
+        scheduleScanExisting();
+        return false;
+    }
     const ownerSessionId = aggregateSessionId(aggregate, detail);
-    if (!ownerSessionId || ownerSessionId !== mountedSessionId || !aggregateIsCurrent(aggregate)) return false;
+    if (!ownerSessionId || ownerSessionId !== mountedSessionId || !aggregateIsCurrent(aggregate)) {
+        if (!ownerSessionId || ownerSessionId === mountedSessionId) scheduleScanExisting();
+        return false;
+    }
     aggregateOwners.set(aggregate, ownerSessionId);
     aggregate.dataset.changeReviewSessionId = ownerSessionId;
     const fallbackTurnId = inferredAggregateTurnId(aggregate);
@@ -619,12 +628,17 @@ function mount() {
         mutations.forEach(function (mutation) {
             if (mutation.type === 'childList' && mutation.addedNodes && mutation.addedNodes.length) {
                 // The compact review drawer is also mounted under chat-stage.
-                // Only rescan when a real tool row was inserted; otherwise a
-                // review render would observe itself and spin indefinitely.
+                // Rescan when a real tool row was inserted, or when a process
+                // aggregate / its title is (re)built, since both can detach
+                // review badges; otherwise a review render would observe
+                // itself and spin indefinitely.
                 hasInsertedRows = hasInsertedRows || Array.from(mutation.addedNodes).some(function (node) {
                     return node && node.nodeType === 1 && (
-                        (node.matches && node.matches('.feed-item.feed--tool'))
-                        || (node.querySelector && node.querySelector('.feed-item.feed--tool'))
+                        (node.matches && (node.matches('.feed-item.feed--tool')
+                            || node.matches('.process-aggregate')
+                            || node.matches('.process-aggregate-title')))
+                        || (node.querySelector && (node.querySelector('.feed-item.feed--tool')
+                            || node.querySelector('.process-aggregate-title')))
                     );
                 });
             }

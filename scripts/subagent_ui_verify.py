@@ -163,13 +163,23 @@ def main() -> int:
     args = parser.parse_args()
 
     server = None
+    owned_work_dir: Path | None = None
     if args.base_url:
         base_url = args.base_url.rstrip("/")
+        session_root = ROOT / "workspace" / "sessions"
     else:
         port = _free_port()
         base_url = f"http://127.0.0.1:{port}"
+        # Never point a verification server at the live workspace.  Recovery
+        # discovery is process-local; sharing sessions would let this temporary
+        # process mistake a run owned by the real app for an orphan and append
+        # a false run_interrupted(no_local_activity) event.
+        owned_work_dir = Path(tempfile.mkdtemp(prefix="myagent-ui-verify-work-")).resolve()
+        session_root = owned_work_dir / "sessions"
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"
+        env["WORK_DIR"] = str(owned_work_dir)
+        env["MYAGENT_DOTENV_OVERRIDE"] = "0"
         server = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "webui:fastapi_app", "--host", "127.0.0.1",
              "--port", str(port), "--log-level", "warning"],
@@ -212,7 +222,7 @@ def main() -> int:
         session_sub = new_session()
         name_session(session_plain, "verify plain " + uuid.uuid4().hex[:6])
         name_session(session_sub, "verify subagents " + uuid.uuid4().hex[:6])
-        sub_child_ids = _seed_subagents(ROOT / "workspace" / "sessions" / session_sub)
+        sub_child_ids = _seed_subagents(session_root / session_sub)
         results["sessions"] = {"plain": session_plain, "with_subagents": session_sub, "children": sub_child_ids}
 
         # 服务器视角核对（目录接口 + 证据）
@@ -235,7 +245,14 @@ def main() -> int:
                     break
             except Exception:  # noqa: BLE001
                 time.sleep(0.2)
-        page = next(item for item in targets if item.get("type") == "page")
+        pages = [item for item in (targets or []) if item.get("type") == "page"]
+        if not pages:
+            exit_code = browser.poll() if browser is not None else None
+            raise RuntimeError(
+                "browser debugging endpoint did not expose a page"
+                + (f" (browser exit code {exit_code})" if exit_code is not None else "")
+            )
+        page = pages[0]
         cdp = Cdp(str(page["webSocketDebuggerUrl"]))
         cdp.call("Page.enable")
         cdp.call("Runtime.enable")
@@ -405,7 +422,9 @@ def main() -> int:
         summary = {k: bool(v) for k, v in results["checks"].items()}
         results["summary"] = summary
         results["ok"] = all(summary.values())
-        print(json.dumps(results, ensure_ascii=False, indent=2))
+        # Keep the verifier usable from Windows consoles whose inherited code
+        # page cannot represent every DOM glyph (for example U+2039).
+        print(json.dumps(results, ensure_ascii=True, indent=2))
         return 0 if results["ok"] else 1
     finally:
         if cdp is not None:
@@ -420,19 +439,23 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 browser.kill()
         shutil.rmtree(profile_dir, ignore_errors=True)
-        if server is not None:
-            server.terminate()
-            try:
-                server.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                server.kill()
+        # Delete seeded sessions while the owning server is still reachable so
+        # its index and any auxiliary state are cleaned consistently.
         for sid in created_sessions:
             try:
                 requests.delete(base_url + f"/sessions/{sid}", timeout=15)
             except Exception:  # noqa: BLE001
                 pass
             # 兜底：直接删目录（会话可能已不可访问）
-            shutil.rmtree(ROOT / "workspace" / "sessions" / sid, ignore_errors=True)
+            shutil.rmtree(session_root / sid, ignore_errors=True)
+        if server is not None:
+            server.terminate()
+            try:
+                server.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server.kill()
+        if owned_work_dir is not None:
+            shutil.rmtree(owned_work_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

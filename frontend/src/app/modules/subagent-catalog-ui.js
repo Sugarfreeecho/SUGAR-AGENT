@@ -114,6 +114,8 @@ var subagentCatalogUi = (function () {
         if (!storeRef) return hideTrigger();
         var el = ensureTrigger();
             if (!hasEvidence(parentId)) {
+            // 防御：列表正开着、且就是该父的目录时，不因执行期间证据短暂抖动而关闭交互。
+            if (menuOpen && String(parentId) === activeParentId) return;
             if (el.parentNode) el.parentNode.removeChild(el);
             el.classList.add('hidden');
             if (menuOpen) closeMenu();
@@ -274,8 +276,6 @@ var subagentCatalogUi = (function () {
         if (!storeRef || !menuOpen || !activeParentId) return;
         var catalog = storeRef.getCatalog(activeParentId);
         var entries = (catalog && Array.isArray(catalog.entries)) ? catalog.entries : [];
-        rows = [];
-        focusedIndex = -1;
         selectedIndex = indexOfAddressedChild(entries);
         var html = '';
         if (catalog && catalog.state === 'loading' && !entries.length) {
@@ -306,7 +306,25 @@ var subagentCatalogUi = (function () {
             html += '<div class="subagent-catalog-error">目录加载失败：'
                 + escapeText(catalog.error || '') + '</div>';
         }
+        // 内容未变：保留现有行元素（滚动位置、键盘焦点、悬停态不被打断）。
+        // 执行期间 store 通知频繁（子代理活动节流、目录刷新），逐次重建会让
+        // 已打开的列表看起来"被执行过程重置/关掉"。
+        if (menu.__lastHtml === html) return;
+        menu.__lastHtml = html;
+        var prevScroll = 0;
+        var focusKey = '';
+        try { prevScroll = Number(menu.scrollTop) || 0; } catch (e) { prevScroll = 0; }
+        try {
+            var activeEl = document.activeElement;
+            if (activeEl && typeof menu.contains === 'function' && menu.contains(activeEl)
+                && typeof activeEl.getAttribute === 'function') {
+                focusKey = String(activeEl.getAttribute('data-key') || '');
+            }
+        } catch (e2) { focusKey = ''; }
+        rows = [];
+        focusedIndex = -1;
         menu.innerHTML = html;
+        try { menu.scrollTop = prevScroll; } catch (e3) { /* ignore */ }
         primeTokenMetrics(entries);
         Array.prototype.slice.call(menu.querySelectorAll('.subagent-catalog-row')).forEach(function (rowEl) {
             rows.push({
@@ -322,6 +340,13 @@ var subagentCatalogUi = (function () {
                 focusRow(rows.findIndex(function (r) { return r.el === rowEl; }));
             });
         });
+        if (focusKey) {
+            var restoredIndex = -1;
+            for (var ri = 0; ri < rows.length; ri += 1) {
+                if (rows[ri].key === focusKey) { restoredIndex = ri; break; }
+            }
+            if (restoredIndex >= 0) focusRow(restoredIndex);
+        }
     }
 
     function focusRow(index) {
@@ -438,6 +463,7 @@ var subagentCatalogUi = (function () {
         if (menuEl) {
             menuEl.hidden = true;
             menuEl.innerHTML = '';
+            menuEl.__lastHtml = null;
         }
         rows = [];
         focusedIndex = -1;
@@ -478,6 +504,13 @@ var subagentCatalogUi = (function () {
         if (closeTimer != null) clearTimeout(closeTimer);
         closeTimer = setTimeout(function () {
             closeTimer = null;
+            // 防御：指针仍悬停在触发器/菜单上（内部节点被重绘替换等场景的事件噪音）→ 不关闭。
+            var hovering = false;
+            try {
+                hovering = (menuEl && typeof menuEl.matches === 'function' && menuEl.matches(':hover'))
+                    || (triggerEl && typeof triggerEl.matches === 'function' && triggerEl.matches(':hover'));
+            } catch (e) { hovering = false; }
+            if (hovering) return;
             closeMenu({ restoreFocus: false });
         }, HOVER_CLOSE_MS);
     }
@@ -485,6 +518,24 @@ var subagentCatalogUi = (function () {
     // ── 订阅：目录/寻址变化时重绘 ────────────────────────────────────────────
     var refreshDebounceTimer = null;
     var lastRefreshedParentId = '';
+
+    /** 当前标题行（面包屑第一行）——不依赖触发器是否已挂载。 */
+    function currentTitleRow() {
+        if (typeof document === 'undefined' || !document || !document.querySelector) return null;
+        return document.querySelector('.breadcrumb-title-row') || null;
+    }
+
+    /**
+     * 让触发器按「当前标题行」渲染。首次出现子代理证据时 triggerEl 尚未挂载，
+     * 若等待外部刷新（切会话等）才挂载，胶囊便不会及时出现——这里主动补齐。
+     */
+    function renderTriggerForCurrentTitle(parentId) {
+        var pid = String(parentId || '');
+        var titleRow = currentTitleRow();
+        if (!pid || !titleRow) return false;
+        renderTrigger(titleRow, pid);
+        return true;
+    }
 
     /**
      * 会话切换/标题刷新时调用：去抖刷新该会话的直接目录，
@@ -511,8 +562,10 @@ var subagentCatalogUi = (function () {
         var storeRef = store();
         var pid = String(parentId || '');
         if (!storeRef || !pid) return;
-        if (pid === activeParentId && triggerEl && triggerEl.parentNode) {
-            renderTrigger(triggerEl.parentNode, pid);
+        // 只为「当前会话上下文」立即可视：陈旧 activeParentId（已切走的会话）
+        // 会让旧会话的迟到成员帧把胶囊挂回当前标题行。
+        if (pid === currentParentId()) {
+            renderTriggerForCurrentTitle(pid);
         }
         void storeRef.refreshCatalogs(pid, { debounce: true });
     }
@@ -521,10 +574,14 @@ var subagentCatalogUi = (function () {
         var storeRef = store();
         if (!storeRef || unsubscribeStore) return;
         unsubscribeStore = storeRef.subscribe(function () {
-            if (!triggerEl || !triggerEl.isConnected) return;
-            var parentId = activeParentId || currentParentId();
-            var titleRow = triggerEl.parentNode;
-            if (titleRow) renderTrigger(titleRow, parentId);
+            // 渲染源必须是「当前会话上下文」：陈旧 activeParentId 会让旧会话的
+            // 迟到目录通知把胶囊重新挂回当前标题行（新建/切换后残留的根因之一）。
+            var parentId = currentParentId();
+            if (!parentId) return;
+            if (!renderTriggerForCurrentTitle(parentId)
+                && triggerEl && triggerEl.isConnected && triggerEl.parentNode) {
+                renderTrigger(triggerEl.parentNode, parentId);
+            }
             if (menuOpen) renderMenu();
         });
     }
@@ -562,6 +619,10 @@ var subagentCatalogUi = (function () {
         activeParentId = '';
         triggerEl = null;
         menuEl = null;
+        if (unsubscribeStore) {
+            try { unsubscribeStore(); } catch (e) { /* ignore */ }
+            unsubscribeStore = null;
+        }
     }
 
     return {

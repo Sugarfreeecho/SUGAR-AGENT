@@ -86,7 +86,7 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "rootSessionId: rootSessionIdForRenderedNode" in message_rendering
     assert "rootSessionId: typeof rootSessionIdForRenderedNode" in event_dispatch
     assert "document.querySelectorAll('.change-review-process-badge')" in source
-    assert "Only rescan when a real tool row was inserted" in source
+    assert "Rescan when a real tool row was inserted, or when a process" in source
     assert "{ deferRender: true }" in source
     assert "if (hasInsertedRows) scheduleScanExisting();" in source
     assert "syncActiveAggregateToViewport" in source

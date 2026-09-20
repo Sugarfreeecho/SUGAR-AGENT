@@ -2371,6 +2371,11 @@ function updateSessionTitle() {
     if (!currentSessionId) {
         br.textContent = '未选择会话';
         sub.textContent = '';
+        if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi) {
+            // 新建会话/未选择会话：上一会话的子代理胶囊必须立即撤下，
+            // 否则会残留到新会话标题行（用户反馈：创建的新会话一开始也有子代理图标）。
+            subagentCatalogUi.hideTrigger();
+        }
         if (typeof syncTitlebarSessionMenu === 'function') syncTitlebarSessionMenu(null);
         setContextTokenLabel(null, null);
         return;

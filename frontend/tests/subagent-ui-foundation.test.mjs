@@ -580,6 +580,124 @@ await testAsync('catalog row dot colours follow the agreed semantics', async () 
     delete documentStub._byId['breadcrumb-text'];
 });
 
+await testAsync('leading subagent evidence mounts the trigger without a prior render (regression)', async () => {
+    subagentCatalogStore.resetForTests();
+    subagentCatalogUIReset();
+    subagentCatalogStore.setImplementation({
+        fetchJson: fixtureFetch([{ match: '/sessions/parent-1/subagents', body: { subagents: [node()] } }], []),
+    });
+    const titleRow = makeElement('div');
+    titleRow.className = 'breadcrumb-title-row';
+    const originalQuerySelector = documentStub.querySelector;
+    documentStub.querySelector = (sel) => (sel === '.breadcrumb-title-row' ? titleRow : null);
+    context.sessionStore = { currentSessionId: 'parent-1' };
+    const findTrigger = () => titleRow.children.find(
+        (c) => /subagent-catalog-trigger/.test(String(c.className))
+    );
+    try {
+        await subagentCatalogStore.refreshCatalogs('parent-1');
+        // 场景：证据已到，但触发器从未挂载（首次出现子代理时胶囊不及时出现的根因）
+        subagentCatalogUi.hideTrigger();
+        assert.equal(findTrigger(), undefined, 'no trigger before the evidence path runs');
+        subagentCatalogUi.noteUnknownChildEvidence('parent-1');
+        const mounted = findTrigger();
+        assert.ok(mounted, 'trigger mounts on the current title row without a prior render');
+        assert.equal(mounted.classList.contains('hidden'), false, 'trigger is visible once mounted');
+
+        // 订阅回调路径：store 迟到的权威数据到达时也能把触发器补挂
+        subagentCatalogUi.bindStore();
+        subagentCatalogUi.hideTrigger();
+        assert.equal(findTrigger(), undefined);
+        subagentCatalogStore.setImplementation({
+            fetchJson: fixtureFetch([{
+                match: '/sessions/parent-1/subagents',
+                body: { subagents: [node(), node({ id: 'child-2' })] },
+            }], []),
+        });
+        await subagentCatalogStore.refreshCatalogs('parent-1', { force: true });
+        const remounted = findTrigger();
+        assert.ok(remounted, 'store refresh re-mounts the trigger for the current session');
+        assert.equal(remounted.classList.contains('hidden'), false);
+    } finally {
+        documentStub.querySelector = originalQuerySelector;
+        delete context.sessionStore;
+        subagentCatalogUIReset();
+    }
+});
+
+await testAsync('switching to a session without evidence keeps the capsule hidden under store notifications (regression)', async () => {
+    subagentCatalogStore.resetForTests();
+    subagentCatalogUIReset();
+    const titleRow = makeElement('div');
+    titleRow.className = 'breadcrumb-title-row';
+    const originalQuerySelector = documentStub.querySelector;
+    documentStub.querySelector = (sel) => (sel === '.breadcrumb-title-row' ? titleRow : null);
+    context.sessionStore = { currentSessionId: 'parent-1' };
+    const findTrigger = () => titleRow.children.find(
+        (c) => /subagent-catalog-trigger/.test(String(c.className))
+    );
+    subagentCatalogStore.setImplementation({
+        fetchJson: fixtureFetch([{ match: '/sessions/parent-1/subagents', body: { subagents: [node()] } }], []),
+    });
+    try {
+        await subagentCatalogStore.refreshCatalogs('parent-1');
+        subagentCatalogUi.bindStore();
+        subagentCatalogUi.renderTrigger(titleRow, 'parent-1');
+        assert.ok(findTrigger(), 'sanity: trigger mounted for parent-1');
+
+        // 切到没有子代理证据的会话（新建对话 / 普通会话都走这条路径）
+        context.sessionStore.currentSessionId = 'parent-2';
+        subagentCatalogUi.renderTrigger(titleRow, 'parent-2');
+        assert.equal(findTrigger(), undefined, 'trigger removed on the switch');
+
+        // 旧会话目录的迟到通知不得把旧胶囊挂回当前标题行
+        subagentCatalogStore.markSubagentRead('stale-guard-child-1');
+        assert.equal(findTrigger(), undefined, 'store notification must not resurrect the old capsule');
+        await subagentCatalogStore.refreshCatalogs('parent-1', { force: true });
+        assert.equal(findTrigger(), undefined, 'old parent refresh must not resurrect the old capsule');
+    } finally {
+        documentStub.querySelector = originalQuerySelector;
+        delete context.sessionStore;
+        subagentCatalogUIReset();
+    }
+});
+
+await testAsync('draft (no current session) stays capsule-free under store notifications (regression)', async () => {
+    subagentCatalogStore.resetForTests();
+    subagentCatalogUIReset();
+    const titleRow = makeElement('div');
+    titleRow.className = 'breadcrumb-title-row';
+    const originalQuerySelector = documentStub.querySelector;
+    documentStub.querySelector = (sel) => (sel === '.breadcrumb-title-row' ? titleRow : null);
+    context.sessionStore = { currentSessionId: 'parent-1' };
+    const findTrigger = () => titleRow.children.find(
+        (c) => /subagent-catalog-trigger/.test(String(c.className))
+    );
+    subagentCatalogStore.setImplementation({
+        fetchJson: fixtureFetch([{ match: '/sessions/parent-1/subagents', body: { subagents: [node()] } }], []),
+    });
+    try {
+        await subagentCatalogStore.refreshCatalogs('parent-1');
+        subagentCatalogUi.bindStore();
+        subagentCatalogUi.renderTrigger(titleRow, 'parent-1');
+        assert.ok(findTrigger(), 'sanity: trigger mounted for parent-1');
+
+        // 新建对话：进入草稿态（updateSessionTitle 的无会话分支会调用 hideTrigger）
+        context.sessionStore.currentSessionId = null;
+        subagentCatalogUi.hideTrigger();
+        assert.equal(findTrigger(), undefined, 'trigger hidden in draft');
+
+        subagentCatalogStore.markSubagentRead('stale-guard-child-2');
+        assert.equal(findTrigger(), undefined, 'store notification must not resurrect the capsule in draft');
+        await subagentCatalogStore.refreshCatalogs('parent-1', { force: true });
+        assert.equal(findTrigger(), undefined, 'old parent refresh must not resurrect the capsule in draft');
+    } finally {
+        documentStub.querySelector = originalQuerySelector;
+        delete context.sessionStore;
+        subagentCatalogUIReset();
+    }
+});
+
 test('subscribe reports catalog transitions in order', () => {
     subagentCatalogStore.resetForTests();
     const states = [];

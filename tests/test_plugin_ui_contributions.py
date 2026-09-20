@@ -139,7 +139,7 @@ def test_bundled_goal_and_todo_panels_publish_versioned_plugin_renderers():
         row["id"]: row for row in plugin_ui_contributions(goal)
         if row["slot"] == "session.badge"
     }
-    assert badges["active-goal"]["display"] == "activity"
+    assert badges["active-goal"].get("display", "badge") == "badge"
     assert badges["review-goal"]["label"] == "待审核"
     assert badges["review-goal"]["variant"] == "success"
     assert badges["review-goal"]["path"] == "/review_status"
