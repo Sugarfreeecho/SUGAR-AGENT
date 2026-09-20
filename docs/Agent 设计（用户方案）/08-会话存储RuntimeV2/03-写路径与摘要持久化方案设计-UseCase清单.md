@@ -49,7 +49,7 @@
 
 - 提交的**时机**属于 ReAct 写栅栏（../02-ReAct运行时/05）；
 - 压缩算法本体见 ../09-横切能力/01。
-- 归档搜索同时覆盖 `history_context_archives/*.jsonl` 与 `events.jsonl`；搜索返回 `source_file`，但不会修改两者。
+- 归档搜索同时覆盖 `history_context_archives/*.jsonl` 与 `events.jsonl`；默认只返回清洗后的语义内容，显式设置 `include_source=true` 时才附 `source_file`，且始终不会修改两者。
 
 ## 4. 依据映射
 

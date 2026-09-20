@@ -32,14 +32,14 @@
 
 ### UC-3E4 history_context 当前会话检索
 - **触发**：模型需要核对当前会话中可能已经被压缩的事实或工具细节。
-- **预期现象**：`action="search", scope="current"` 同时搜索当前会话的压缩归档与 `events.jsonl`，返回稳定 `history:` 引用、摘要片段和原文件路径；再以 `action="read"` 对引用做有界、可分页读取。
-- **规则与边界**：搜索词不能为空；最多返回 50 条；读取单页为 200～50,000 字符；当前作用域拒绝读取其他会话引用。工具不修改事件或归档，并以 `effect=read`、`parallel_safe=true` 注册。
+- **预期现象**：`action="search", scope="current"` 同时搜索当前会话的压缩归档与 `events.jsonl`，默认每项只返回稳定 `history:` 引用和清洗后的正文片段；再以 `action="read"` 对引用做有界、可分页的可读文本读取。
+- **规则与边界**：时间戳、seq、schema_version、kind、索引和内部计数等存储字段不进入默认结果；完全相同的语义内容在同一会话内去重。搜索词不能为空；最多返回 50 条；读取单页为 200～50,000 字符；当前作用域拒绝读取其他会话引用。工具不修改事件或归档，并以 `effect=read`、`parallel_safe=true` 注册。
 - **依据**：`history_context.history_context / _search_session / _read_ref`、`builtin_host_tools._invoke_history_context`。
 
 ### UC-3E5 history_context 全局会话检索与原文件兜底
 - **触发**：用户明确要求从其他会话或全部历史中寻找信息。
-- **预期现象**：`scope="global"` 按会话事件文件新近程度扫描本地会话；结果携带 `session_id/source/source_file`，允许读取跨会话稳定引用。若结构化搜索未找到证据，模型可继续在返回的 `source_file` 或目标会话原始 `events.jsonl` 中检索。
-- **规则与边界**：默认必须先用 current，不能因当前会话未命中就擅自扩大到 global；JSONL 先做原始行匹配再解析命中行，结果达到上限即停止；全局模式只扩大读取范围，不改变只读权限。
+- **预期现象**：`scope="global"` 按会话事件文件新近程度扫描本地会话；默认结果仅比当前作用域多返回 `session_id`，允许读取跨会话稳定引用。确需检查原文件时显式设置 `include_source=true`：命中项返回 `source_file`，零命中则返回最多 20 个已扫描 `source_files`。
+- **规则与边界**：默认必须先用 current，不能因当前会话未命中就擅自扩大到 global；JSONL 先做原始行预筛，再以清洗后的语义文本复核，避免内部元数据造成假命中；结果达到上限即停止；全局模式只扩大读取范围，不改变只读权限。
 - **依据**：`history_context._session_dirs / _matching_jsonl / history_context`、`prompt.md / prompt.en.md`。
 
 ## 3. 边界
@@ -60,6 +60,6 @@
 
 ## 5. 版本记录
 
-- 2026-09-20 v3：新增 `history_context` 当前/全局会话检索、稳定引用分页读取、原文件兜底和只读范围边界。
+- 2026-09-20 v3：新增 `history_context` 当前/全局会话检索、稳定引用分页读取、默认干净语义结果、同会话去重、显式原文件路径和只读范围边界。
 - 2026-09-14 v2：修正出口审批交叉引用（07/06）并更新版本线至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-310/311）。
