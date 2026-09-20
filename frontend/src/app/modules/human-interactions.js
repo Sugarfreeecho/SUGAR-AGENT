@@ -350,6 +350,7 @@ function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
     cards.forEach(function (card) {
         if (card.parentNode !== slot) slot.appendChild(card);
     });
+    removeEmptyHumanInteractionFallbackSlots(stream);
     return true;
 }
 
@@ -361,6 +362,65 @@ function attachAllHumanInteractionCards(stream) {
         var slot = humanInteractionToolSlot(stream, tid);
         if (slot && card.parentNode !== slot) slot.appendChild(card);
     });
+    removeEmptyHumanInteractionFallbackSlots(stream);
+}
+
+function removeEmptyHumanInteractionFallbackSlots(stream) {
+    if (!stream || !stream.querySelectorAll) return;
+    Array.from(stream.querySelectorAll('.human-interaction-tool-slot[data-fallback="1"]')).forEach(function (slot) {
+        if (!slot.querySelector('.human-interaction-card')) slot.remove();
+    });
+}
+
+function humanInteractionFallbackHost(stream) {
+    // A card that cannot find (and can never merge with) a tool row must still
+    // render inside the "执行过程" box instead of landing at stream level.
+    // Prefer the newest aggregate; create one through the regular path when the
+    // session has no box yet so the fragment looks identical to a live run.
+    if (!stream || !stream.querySelectorAll) return stream || null;
+    var bodies = stream.querySelectorAll('.process-aggregate .process-aggregate-body');
+    if (bodies.length) return bodies[bodies.length - 1];
+    if (typeof newDomContext === 'function' && typeof getProcessBody === 'function') {
+        try {
+            var body = getProcessBody(newDomContext(stream));
+            if (body) return body;
+        } catch (e) { /* fall back to the stream */ }
+    }
+    return stream;
+}
+
+function revealHumanInteractionCardContainer(card) {
+    if (!card || !card.closest) return;
+    var collapsedRow = card.closest('.feed-item.is-collapsed');
+    if (collapsedRow) {
+        collapsedRow.classList.remove('is-collapsed');
+        var rowBtn = collapsedRow.querySelector('.feed-row-collapse');
+        if (rowBtn) rowBtn.setAttribute('aria-expanded', 'true');
+    }
+    var agg = card.closest('.process-aggregate.is-collapsed');
+    if (!agg) return;
+    agg.classList.remove('is-collapsed');
+    var top = agg.querySelector('.process-aggregate-top');
+    if (top) top.setAttribute('aria-expanded', 'true');
+    if (typeof syncProcessAggregateHeightUi === 'function') {
+        requestAnimationFrame(function () { syncProcessAggregateHeightUi(agg); });
+    }
+}
+
+function placeHumanInteractionCardFallback(stream, card, record) {
+    // The fallback never appends to the bare chat stream while a process box is
+    // available (or can be created): the card belongs inside "执行过程".
+    var host = humanInteractionFallbackHost(stream);
+    if (!host || host === stream || typeof host.appendChild !== 'function') {
+        if (stream && stream.appendChild) stream.appendChild(card);
+        return;
+    }
+    var slot = document.createElement('div');
+    slot.className = 'human-interaction-tool-slot';
+    slot.setAttribute('data-fallback', '1');
+    slot.appendChild(card);
+    host.appendChild(slot);
+    if (record && record.status === 'pending') revealHumanInteractionCardContainer(slot);
 }
 
 function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
@@ -373,6 +433,10 @@ function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
     if (!record || record.status !== 'pending') return false;
     var toolCallId = String(record.tool_call_id || '');
     if (!toolCallId) return false;
+    // Hook approvals carry a synthetic `hook:<id>` id. No tool row can ever
+    // merge with it, so skip the placeholder row and let the card land inside
+    // the process box instead of becoming a permanent fake "执行中" row.
+    if (/^hook:/.test(toolCallId)) return false;
     if (!ctx || !ctx.stream) {
         var visibleStream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : null;
         if (!visibleStream || typeof newDomContext !== 'function') return false;
@@ -387,6 +451,13 @@ function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
         } catch (e) { existing = null; }
     }
     if (existing) return true;
+    // Prefer the last existing process box over creating a detached new one:
+    // a recovered card belongs inside the run box that was just replayed, not
+    // in an empty box appended at the bottom of the stream.
+    if (!ctx.currentProcessGroup && stream.querySelectorAll) {
+        var boxes = stream.querySelectorAll('.process-aggregate');
+        if (boxes.length) ctx.currentProcessGroup = boxes[boxes.length - 1];
+    }
     var isApproval = record.kind === 'approval';
     var toolName = isApproval ? String(record.tool || 'tool') : 'ask_user';
     appendToolPendingRow(ctx, {
@@ -397,6 +468,13 @@ function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
         command_preview: toolName,
         tool_call_id: toolCallId,
     }, sessionId);
+    var createdRow = null;
+    if (typeof CSS !== 'undefined' && CSS.escape) {
+        try {
+            createdRow = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');
+        } catch (e) { createdRow = null; }
+    }
+    if (createdRow) revealHumanInteractionCardContainer(createdRow);
     return true;
 }
 
@@ -1403,7 +1481,8 @@ function renderHumanInteractionRecord(record, sessionId, stream) {
     if (existing && existing.parentNode) existing.parentNode.replaceChild(card, existing);
     else {
         var slot = humanInteractionToolSlot(stream, toolCallId);
-        (slot || stream).appendChild(card);
+        if (slot) slot.appendChild(card);
+        else placeHumanInteractionCardFallback(stream, card, record);
     }
     if (toolCallId) {
         attachHumanInteractionCardsForToolCall(stream, toolCallId);

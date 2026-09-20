@@ -806,15 +806,24 @@ html.theme-light .dock-diff-line.is-hunk { color: #1d4ed8; background: rgba(37, 
     border: 1px solid var(--border-glass); border-radius: 8px;
 }
 .dock-turn-select.is-active { color: var(--text-primary); border-color: var(--border-accent); }
+/* Session overview: the same icon-button language as the head's refresh
+   (dsh checklist glyph, 15px in a 28px circle), toggling the changes list
+   between the per-turn scope and the whole session. */
 .dock-scope-pill {
-    padding: 3px 10px;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     color: var(--text-tertiary);
-    font-size: 0.68rem;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 999px;
+    border-radius: 28px;
     cursor: pointer;
 }
+.dock-scope-pill svg { width: 15px; height: 15px; }
 .dock-scope-pill:hover { color: var(--text-primary); background: var(--surface-glass2); }
 .dock-scope-pill.is-active {
     color: var(--text-primary);

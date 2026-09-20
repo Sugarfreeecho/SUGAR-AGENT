@@ -1042,6 +1042,12 @@ def test_pending_approval_card_reanchors_after_stream_recovery():
     # rebuild: it falls back to the visible chat stream.
     assert "getVisibleChatStream()" in ensure
     assert "newDomContext(visibleStream)" in ensure
+    # Hook approvals never grow a fake tool row; their card falls into the box.
+    assert "/^hook:/.test(toolCallId)" in ensure
+    # A recovered card belongs inside the run box that was just replayed, not
+    # in a detached new box appended at the bottom of the stream.
+    assert "ctx.currentProcessGroup = boxes[boxes.length - 1]" in ensure
+    assert "revealHumanInteractionCardContainer(createdRow)" in ensure
 
     attach = sse.split("async function attachSessionEventStream", 1)[1].split(
         "function scheduleActiveSessionReconnect", 1
@@ -1052,6 +1058,45 @@ def test_pending_approval_card_reanchors_after_stream_recovery():
     assert attach.index("streamHistoryRecoveryBySession.delete(runSessionId)") < attach.index(
         "refreshHumanInteractions(runSessionId)"
     )
+
+
+def test_card_fallback_lands_inside_process_aggregate():
+    """A card that has no tool row to live in (hook approvals, records without
+    a usable tool_call_id, resolved cards whose row is gone) must land inside
+    the "执行过程" box instead of the bare chat stream."""
+    root = Path(__file__).resolve().parents[1]
+    interactions = (root / "frontend/src/app/modules/human-interactions.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function humanInteractionFallbackHost" in interactions
+    assert "function placeHumanInteractionCardFallback" in interactions
+    assert "placeHumanInteractionCardFallback(stream, card, record)" in interactions
+    # Never append a card straight to the stream while a box exists or can be made.
+    assert "(slot || stream).appendChild(card)" not in interactions
+
+    host = interactions.split("function humanInteractionFallbackHost", 1)[1].split(
+        "function revealHumanInteractionCardContainer", 1
+    )[0]
+    assert "'.process-aggregate .process-aggregate-body'" in host
+    # No box yet: create one through the regular path so it looks identical.
+    assert "getProcessBody(newDomContext(stream))" in host
+
+    place = interactions.split("function placeHumanInteractionCardFallback", 1)[1].split(
+        "function ensurePendingHumanInteractionToolRow", 1
+    )[0]
+    assert "setAttribute('data-fallback', '1')" in place
+    assert "revealHumanInteractionCardContainer(slot)" in place
+    # Revealing expands both a collapsed tool row and its outer box.
+    reveal = interactions.split("function revealHumanInteractionCardContainer", 1)[1].split(
+        "function placeHumanInteractionCardFallback", 1
+    )[0]
+    assert "collapsedRow.classList.remove('is-collapsed')" in reveal
+    assert "agg.classList.remove('is-collapsed')" in reveal
+
+    # Empty fallback wrappers are removed once a real row adopts the card.
+    assert "function removeEmptyHumanInteractionFallbackSlots" in interactions
+    assert "removeEmptyHumanInteractionFallbackSlots(stream);" in interactions
 
 
 def test_pending_question_tool_row_is_merged_by_stable_call_id():
