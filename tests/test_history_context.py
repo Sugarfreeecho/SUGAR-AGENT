@@ -106,26 +106,96 @@ def test_history_context_search_and_read_current_and_global(tmp_path):
     current = history_context(
         manager, current_id, action="search", scope="current", query="special phrase"
     )
-    assert current["result_count"] == 1
+    assert len(current["results"]) == 1
+    assert current["results"][0]["content"] == "用户：archived special phrase"
+    assert set(current["results"][0]) == {"ref", "content"}
     item_ref = current["results"][0]["ref"]
     item = history_context(
         manager, current_id, action="read", scope="current", ref=item_ref
     )
-    assert "archived special phrase" in item["content"]
+    assert item == {"content": "用户：archived special phrase"}
 
     whole_archive = history_context(
         manager, current_id, action="read", scope="current", ref=archive["ref"]
     )
-    assert "archived special phrase" in whole_archive["content"]
+    assert whole_archive == {"content": "用户：archived special phrase"}
 
     assert history_context(
         manager, current_id, action="search", scope="current", query="global-only"
-    )["result_count"] == 0
+    )["results"] == []
     global_result = history_context(
         manager, current_id, action="search", scope="global", query="global-only"
     )
-    assert global_result["result_count"] == 1
+    assert len(global_result["results"]) == 1
     assert global_result["results"][0]["session_id"] == other_id
+    assert global_result["results"][0]["content"] == "助手：global-only evidence"
+    assert "source_file" not in global_result["results"][0]
+
+    sourced = history_context(
+        manager,
+        current_id,
+        action="search",
+        scope="current",
+        query="current event",
+        include_source=True,
+    )
+    assert sourced["results"][0]["content"] == "助手：current event needle"
+    assert sourced["results"][0]["source_file"].endswith("events.jsonl")
+
+
+def test_history_context_hides_storage_metadata_and_irrelevant_matches(tmp_path):
+    from history_context import history_context
+
+    manager = _SessionManager(tmp_path)
+    session_id = str(uuid.uuid4())
+    session_dir = manager._resolve_session_path(session_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    events = [
+        {
+            "schema_version": 1,
+            "seq": 7,
+            "timestamp": "2026-09-20T00:00:00Z",
+            "type": "assistant_final_committed",
+            "session_id": session_id,
+            "run_id": "irrelevant-run-id",
+            "payload": {"content": "clean answer", "internal_counter": 999},
+        },
+        {
+            "schema_version": 1,
+            "seq": 8,
+            "timestamp": "2026-09-20T00:00:01Z",
+            "type": "run_heartbeat",
+            "session_id": session_id,
+            "payload": {"internal_counter": "metadata-only-needle"},
+        },
+    ]
+    (session_dir / "events.jsonl").write_text(
+        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    result = history_context(
+        manager, session_id, action="search", scope="current", query="clean answer"
+    )
+    assert result["results"][0]["content"] == "助手：clean answer"
+    assert "timestamp" not in json.dumps(result, ensure_ascii=False)
+    assert "schema_version" not in json.dumps(result, ensure_ascii=False)
+    assert history_context(
+        manager,
+        session_id,
+        action="search",
+        scope="current",
+        query="metadata-only-needle",
+    )["results"] == []
+
+    read = history_context(
+        manager,
+        session_id,
+        action="read",
+        scope="current",
+        ref=result["results"][0]["ref"],
+    )
+    assert read == {"content": "助手：clean answer"}
 
 
 def test_history_context_is_registered_as_read_only_host_tool():
@@ -139,4 +209,3 @@ def test_history_context_is_registered_as_read_only_host_tool():
     policy = host_tool_invokers.policy("history_context")
     assert policy.effect == "read"
     assert policy.parallel_safe is True
-

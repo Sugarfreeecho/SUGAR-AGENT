@@ -4740,6 +4740,11 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "default": 8000,
                 "description": "read only: maximum characters returned for one page.",
             },
+            "include_source": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include the backing JSONL path only for explicit raw-file follow-up. Keep false for clean results.",
+            },
         },
         ["action"],
     ),

@@ -169,6 +169,7 @@ async def _invoke_history_context(
             limit=int(arguments.get("limit") or 10),
             offset=int(arguments.get("offset") or 0),
             max_chars=int(arguments.get("max_chars") or 8_000),
+            include_source=bool(arguments.get("include_source", False)),
         )
     except (TypeError, ValueError) as exc:
         message = str(exc)

@@ -150,6 +150,108 @@ def _assistant_call_label(call: Any) -> tuple[str, str]:
     )
 
 
+def _clean_json(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        return str(value or "")
+
+
+def _clean_message_text(row: Mapping[str, Any]) -> str:
+    """Render only the model-useful meaning of one archived message."""
+    role = str(row.get("role") or "other")
+    content = _content_text(row.get("content")).strip()
+    if role == "user":
+        return f"用户：{content}" if content else "用户：（空）"
+    if role == "assistant":
+        lines = [f"助手：{content}" if content else "助手：（无正文）"]
+        reasoning = _content_text(row.get("reasoning")).strip()
+        if reasoning:
+            lines.append(f"推理：{reasoning}")
+        for call in row.get("tool_calls") or []:
+            name, call_id = _assistant_call_label(call)
+            suffix = f"，call_id={call_id}" if call_id else ""
+            lines.append(f"工具调用：{name}{suffix}")
+            args = call.get("args") if isinstance(call, Mapping) else getattr(call, "args", None)
+            if args not in (None, "", {}, []):
+                lines.append(f"参数：{_clean_json(args)}")
+        return "\n".join(lines)
+    if role == "tool":
+        call_id = str(row.get("tool_call_id") or "").strip()
+        suffix = f"，call_id={call_id}" if call_id else ""
+        return f"工具结果{suffix}：{content}" if content else f"工具结果{suffix}：（空）"
+    if role == "system":
+        return f"系统：{content}" if content else "系统：（空）"
+    return f"消息：{content}" if content else ""
+
+
+def _clean_event_text(event: Mapping[str, Any]) -> str:
+    """Project a Runtime V2 event to readable semantic text, not storage JSON."""
+    event_type = str(event.get("type") or "").strip()
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return ""
+
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        rendered = []
+        for message in messages:
+            if isinstance(message, Mapping):
+                rendered_text = _clean_message_text(message)
+                if rendered_text:
+                    rendered.append(rendered_text)
+        if rendered:
+            return "\n\n".join(rendered)
+
+    role_by_type = {
+        "message_user": "用户",
+        "user_turn_committed": "用户",
+        "model_user": "用户",
+        "assistant_final_committed": "助手",
+        "message_assistant_final": "助手",
+        "model_assistant": "助手",
+        "model_system": "系统",
+        "model_tool": "工具结果",
+        "context_summary_committed": "上下文摘要",
+        "context_summary_finished": "上下文摘要",
+        "run_failed": "运行错误",
+        "tool_failed": "工具错误",
+        "tool_finished": "工具结果",
+    }
+    label = role_by_type.get(event_type, "记录")
+    value: Any = None
+    for key in (
+        "content",
+        "ui_content",
+        "summary",
+        "result",
+        "output",
+        "error",
+        "message",
+        "reason",
+        "prompt",
+        "query",
+    ):
+        candidate = payload.get(key)
+        if candidate not in (None, "", {}, []):
+            value = candidate
+            break
+    tool_name = str(payload.get("tool") or payload.get("name") or "").strip()
+    call_id = str(payload.get("tool_call_id") or payload.get("call_id") or "").strip()
+    if value is None and not tool_name:
+        return ""
+    details = []
+    if tool_name:
+        details.append(f"工具={tool_name}")
+    if call_id:
+        details.append(f"call_id={call_id}")
+    suffix = f"（{'，'.join(details)}）" if details else ""
+    text = _clean_json(value).strip() if value is not None else ""
+    return f"{label}{suffix}：{text}" if text else f"{label}{suffix}"
+
+
 def active_excerpt(archive: Mapping[str, Any], *, max_chars: int = 8_000) -> str:
     """Render a chronological excerpt with durable refs for omitted fields."""
     entries: list[dict[str, Any]] = []
@@ -296,41 +398,65 @@ def _matching_jsonl(path: Path, terms: list[str]) -> Iterable[tuple[dict[str, An
         return
 
 
-def _search_session(session_id: str, session_dir: Path, terms: list[str], remaining: int) -> list[dict[str, Any]]:
+def _search_session(
+    session_id: str,
+    session_dir: Path,
+    terms: list[str],
+    remaining: int,
+    *,
+    global_scope: bool,
+    include_source: bool,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for path in _iter_archive_paths(session_dir):
         archive_id = path.stem
-        for row, searchable in _matching_jsonl(path, terms):
+        for row, _raw_line in _matching_jsonl(path, terms):
             if row.get("kind") != "message":
                 continue
-            results.append({
+            clean_text = _clean_message_text(row)
+            if not clean_text or not all(term in clean_text.casefold() for term in terms):
+                continue
+            result = {
                 "ref": archive_item_ref(session_id, archive_id, str(row.get("item_id") or "")),
-                "session_id": session_id,
-                "source": "compressed_archive",
-                "role": row.get("role"),
-                "snippet": _search_snippet(searchable, terms),
-                "source_file": str(path),
-            })
+                "content": _search_snippet(clean_text, terms),
+            }
+            if global_scope:
+                result["session_id"] = session_id
+            if include_source:
+                result["source_file"] = str(path)
+            results.append(result)
             if len(results) >= remaining:
                 return results
     event_path = session_dir / "events.jsonl"
-    for event, searchable in _matching_jsonl(event_path, terms):
+    for event, _raw_line in _matching_jsonl(event_path, terms):
+        clean_text = _clean_event_text(event)
+        if not clean_text or not all(term in clean_text.casefold() for term in terms):
+            continue
         seq = int(event.get("seq") or 0)
-        results.append({
+        result = {
             "ref": event_ref(session_id, seq),
-            "session_id": session_id,
-            "source": "events",
-            "event_type": event.get("type"),
-            "timestamp": event.get("timestamp"),
-            "snippet": _search_snippet(searchable, terms),
-            "source_file": str(event_path),
-        })
+            "content": _search_snippet(clean_text, terms),
+        }
+        if global_scope:
+            result["session_id"] = session_id
+        if include_source:
+            result["source_file"] = str(event_path)
+        results.append(result)
         if len(results) >= remaining:
             return results
     return results
 
 
-def _read_ref(session_manager: Any, current_session_id: str, scope: str, ref: str, offset: int, max_chars: int) -> dict[str, Any]:
+def _read_ref(
+    session_manager: Any,
+    current_session_id: str,
+    scope: str,
+    ref: str,
+    offset: int,
+    max_chars: int,
+    *,
+    include_source: bool,
+) -> dict[str, Any]:
     match = _REF_RE.match(str(ref or "").strip())
     if not match:
         raise ValueError("invalid history_context ref")
@@ -338,13 +464,15 @@ def _read_ref(session_manager: Any, current_session_id: str, scope: str, ref: st
     if scope != "global" and session_id != current_session_id:
         raise ValueError("current scope cannot read another session")
     session_dir = Path(session_manager._resolve_session_path(session_id)).resolve()
-    value: Optional[dict[str, Any]] = None
+    rendered = ""
     source_file = ""
     if match.group("seq") is not None:
         wanted = int(match.group("seq"))
         path = session_dir / "events.jsonl"
         source_file = str(path)
         value = next((row for row in _read_jsonl(path) if int(row.get("seq") or 0) == wanted), None)
+        if value is not None:
+            rendered = _clean_event_text(value)
     else:
         archive_id = str(match.group("archive") or "")
         item_id = str(match.group("item") or "")
@@ -352,24 +480,29 @@ def _read_ref(session_manager: Any, current_session_id: str, scope: str, ref: st
         source_file = str(path)
         if item_id:
             value = next((row for row in _read_jsonl(path) if str(row.get("item_id") or "") == item_id), None)
+            if value is not None:
+                rendered = _clean_message_text(value)
         else:
-            archive_rows = list(_read_jsonl(path))
-            value = {"archive_id": archive_id, "records": archive_rows} if archive_rows else None
-    if value is None:
+            rendered_rows = [
+                text
+                for row in _read_jsonl(path)
+                if row.get("kind") == "message"
+                for text in [_clean_message_text(row)]
+                if text
+            ]
+            rendered = "\n\n".join(rendered_rows)
+    if not rendered:
         raise ValueError("history_context ref not found")
-    rendered = json.dumps(value, ensure_ascii=False, indent=2, default=str)
     start = max(0, int(offset or 0))
     limit = min(50_000, max(200, int(max_chars or 8_000)))
     chunk = rendered[start : start + limit]
-    return {
-        "ref": ref,
-        "session_id": session_id,
-        "content": chunk,
-        "offset": start,
-        "next_offset": start + len(chunk) if start + len(chunk) < len(rendered) else None,
-        "total_chars": len(rendered),
-        "source_file": source_file,
-    }
+    result: dict[str, Any] = {"content": chunk}
+    next_offset = start + len(chunk) if start + len(chunk) < len(rendered) else None
+    if next_offset is not None:
+        result["next_offset"] = next_offset
+    if include_source:
+        result["source_file"] = source_file
+    return result
 
 
 def history_context(
@@ -383,6 +516,7 @@ def history_context(
     limit: int = 10,
     offset: int = 0,
     max_chars: int = 8_000,
+    include_source: bool = False,
 ) -> dict[str, Any]:
     action_name = str(action or "search").strip().lower()
     scope_name = str(scope or "current").strip().lower()
@@ -396,6 +530,7 @@ def history_context(
             ref,
             offset,
             max_chars,
+            include_source=bool(include_source),
         )
     if action_name != "search":
         raise ValueError("action must be search or read")
@@ -414,18 +549,16 @@ def history_context(
                 session_dir,
                 terms,
                 result_limit - len(results),
+                global_scope=scope_name == "global",
+                include_source=bool(include_source),
             )
         )
         if len(results) >= result_limit:
             break
-    return {
-        "action": "search",
-        "scope": scope_name,
-        "query": normalized_query,
-        "results": results,
-        "result_count": len(results),
-        "scanned_sessions": scanned_sessions,
-    }
+    response: dict[str, Any] = {"results": results}
+    if not results:
+        response["message"] = "未找到匹配的会话内容"
+    return response
 
 
 __all__ = [
