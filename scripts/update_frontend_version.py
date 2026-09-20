@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refresh the sidebar runtime version stamp to today's date.
 
-The version token looks like ``v4.20260814`` (``v<major>.<YYYYMMDD>``) and is
+The version token looks like ``v5.20260920`` (``v<major>.<YYYYMMDD>``) and is
 embedded in the frontend shell and the built dist. On every commit this script
 rewrites the date part to the current local date, keeping the major prefix.
 
@@ -25,7 +25,7 @@ TOKEN_RE = re.compile(r"v\d+\.\d{8}")
 
 
 def main() -> int:
-    stamp = f"v4.{date.today():%Y%m%d}"
+    stamp = f"v5.{date.today():%Y%m%d}"
     changed = False
     for path in TARGETS:
         if not path.exists():
