@@ -1741,6 +1741,102 @@ def _client_supports_modalities(client: Any, required: set[str]) -> bool:
     return set(required).issubset(_client_input_modalities(client))
 
 
+def _system_message_text(message: Dict[str, Any]) -> str:
+    """Return system text without rewriting ordinary string content."""
+    content = message.get("content")
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if isinstance(part, dict) and str(part.get("type") or "") == "text":
+                parts.append(str(part.get("text") or ""))
+            elif not isinstance(part, dict):
+                parts.append(str(part))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _merge_system_prompt_for_single_system_model(
+    api_messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Project chat history onto a leading, single-system-message protocol.
+
+    Leading system messages are joined in order. Later system messages become
+    user messages in place, matching DSH's single-slot degradation strategy.
+    A system message inside an unfinished assistant/tool transaction cannot be
+    converted to user without invalidating the transaction, so it is folded
+    into the leading system prompt instead.
+    """
+    messages = list(api_messages or [])
+    if not any(str(item.get("role") or "") == "system" for item in messages):
+        return messages
+
+    leading_texts: List[str] = []
+    leading_template: Optional[Dict[str, Any]] = None
+    index = 0
+    while index < len(messages) and str(messages[index].get("role") or "") == "system":
+        message = messages[index]
+        text = _system_message_text(message)
+        if text.strip():
+            if leading_template is None:
+                leading_template = dict(message)
+            leading_texts.append(text)
+        index += 1
+
+    projected: List[Dict[str, Any]] = []
+    pending_tool_call_ids: set[str] = set()
+    pending_anonymous_tool_calls = 0
+
+    for message in messages[index:]:
+        role = str(message.get("role") or "")
+        if role == "system":
+            text = _system_message_text(message)
+            if not text.strip():
+                continue
+            if pending_tool_call_ids or pending_anonymous_tool_calls:
+                if leading_template is None:
+                    leading_template = dict(message)
+                leading_texts.append(text)
+            else:
+                converted = dict(message)
+                converted["role"] = "user"
+                projected.append(converted)
+            continue
+
+        projected.append(message)
+        if role == "assistant":
+            calls = message.get("tool_calls")
+            if isinstance(calls, list) and calls:
+                pending_tool_call_ids = {
+                    str(call.get("id") or "")
+                    for call in calls
+                    if isinstance(call, dict) and str(call.get("id") or "")
+                }
+                pending_anonymous_tool_calls = max(0, len(calls) - len(pending_tool_call_ids))
+            else:
+                pending_tool_call_ids.clear()
+                pending_anonymous_tool_calls = 0
+        elif role == "tool" and (pending_tool_call_ids or pending_anonymous_tool_calls):
+            tool_call_id = str(message.get("tool_call_id") or "")
+            if tool_call_id in pending_tool_call_ids:
+                pending_tool_call_ids.discard(tool_call_id)
+            elif pending_anonymous_tool_calls:
+                pending_anonymous_tool_calls -= 1
+        elif role != "tool":
+            pending_tool_call_ids.clear()
+            pending_anonymous_tool_calls = 0
+
+    if leading_texts:
+        head = dict(leading_template or {"role": "system"})
+        head["role"] = "system"
+        head["content"] = "\n\n".join(leading_texts)
+        projected.insert(0, head)
+    return projected
+
+
 def _mark_client_multimodal_failed(client: Any, exc: BaseException) -> None:
     try:
         setattr(client, "_myagent_multimodal_input", False)
@@ -1811,6 +1907,8 @@ def _messages_to_params_for_client(
         image_enabled="image" in modalities, client=client,
         language=getattr(client, "_myagent_prompt_language", None),
     )
+    if str(getattr(client, "_myagent_system_prompt_mode", "preserve") or "").lower() == "merge":
+        serialized = _merge_system_prompt_for_single_system_model(serialized)
     if bool(getattr(client, "_myagent_transport_enabled", False)):
         return serialized
     missing = _api_messages_required_modalities(serialized) - modalities
@@ -2681,7 +2779,14 @@ def run_chat_completion_stream_worker(
                         _masked_model_label(model),
                         _redact_runtime_log_text(e),
                     )
-                    kwargs["messages"] = _messages_to_text_only_params(messages)
+                    fallback_messages = _messages_to_text_only_params(messages)
+                    if str(
+                        getattr(client, "_myagent_system_prompt_mode", "preserve") or ""
+                    ).lower() == "merge":
+                        fallback_messages = _merge_system_prompt_for_single_system_model(
+                            fallback_messages
+                        )
+                    kwargs["messages"] = fallback_messages
                     sync_q.put(("status", "[提示] 当前模型不支持多媒体输入，已保留文件路径并切换为纯文本模式"))
                     put_stream_timing("media_fallback_retry", attempt=attempt + 1)
                     continue

@@ -53,6 +53,7 @@ from agent_openai import (
     _candidate_retry_policy,
     _is_media_input_error,
     _media_error_modalities,
+    _merge_system_prompt_for_single_system_model,
     _messages_to_params_for_client,
     _claim_additional_recovery_request,
     _serialized_messages_to_text_only,
@@ -1470,6 +1471,11 @@ def create_openai_client_for_profile(
             "_myagent_thinking_format",
             _profile_thinking_format(profile),
         )
+        setattr(
+            client,
+            "_myagent_system_prompt_mode",
+            model_profiles.profile_system_prompt_mode(profile),
+        )
     except Exception:
         logger.debug("无法向模型客户端附加多模态能力元数据", exc_info=True)
     return client, model_name
@@ -1571,6 +1577,10 @@ class _FallbackCompletions:
                 list(call_kwargs.get("messages") or []),
                 item.get("thinking_format") or "deepseek",
             )
+            if item.get("system_prompt_mode") == "merge":
+                call_kwargs["messages"] = _merge_system_prompt_for_single_system_model(
+                    call_kwargs["messages"]
+                )
             call_kwargs["model"] = item["model"]
             candidate_max_tokens = int(item.get("max_output_tokens") or MAX_OUTPUT_TOKENS)
             # The model profile that actually handles this attempt owns the
@@ -1964,6 +1974,8 @@ class ExecutorLLMClient:
         # 规范序列化标记：先保留 <think> 内容 + reasoning_content 字段，
         # 具体目标格式在 _FallbackCompletions.create 内按候选 remap。
         self._myagent_thinking_format = "canonical"
+        # Candidate-specific adaptation happens after fallback selection.
+        self._myagent_system_prompt_mode = "preserve"
         preferred_modalities = _candidate_input_modalities(first) if first else {"text"}
         self._myagent_input_modalities = sorted(preferred_modalities or {"text"})
         self._myagent_multimodal_input = bool(
@@ -2099,6 +2111,10 @@ class ExecutorLLMClient:
             list(call_kwargs.get("messages") or []),
             candidate.get("thinking_format") or "deepseek",
         )
+        if candidate.get("system_prompt_mode") == "merge":
+            call_kwargs["messages"] = _merge_system_prompt_for_single_system_model(
+                call_kwargs["messages"]
+            )
         from attachments.content import project_request_images
         from types import SimpleNamespace
         call_kwargs["messages"] = project_request_images(
@@ -2137,6 +2153,7 @@ class ExecutorLLMClient:
                 _myagent_input_modalities=_candidate_input_modalities(item),
                 _myagent_image_request_policy=item.get("image_request_policy") or {},
                 _myagent_prompt_language=getattr(self, "_myagent_prompt_language", None),
+                _myagent_system_prompt_mode=item.get("system_prompt_mode") or "preserve",
             )
             call_kwargs["messages"] = _messages_to_params_for_client(
                 route_client,
@@ -2272,6 +2289,10 @@ class ExecutorLLMClient:
                 list(call_kwargs.get("messages") or []),
                 item.get("thinking_format") or "deepseek",
             )
+            if item.get("system_prompt_mode") == "merge":
+                call_kwargs["messages"] = _merge_system_prompt_for_single_system_model(
+                    call_kwargs["messages"]
+                )
             call_kwargs["model"] = item["model"]
             candidate_max_tokens = int(item.get("max_output_tokens") or MAX_OUTPUT_TOKENS)
             call_kwargs["max_tokens"] = candidate_max_tokens
@@ -7546,6 +7567,11 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         setattr(cached[0], "_myagent_image_request_policy", dict(profile.get("image_request_policy") or {}))
         setattr(
             cached[0],
+            "_myagent_system_prompt_mode",
+            model_profiles.profile_system_prompt_mode(profile),
+        )
+        setattr(
+            cached[0],
             "_myagent_mark_multimodal_failed",
             mark_multimodal_failed,
         )
@@ -7568,6 +7594,7 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         "extra_body": extra_body,
         "reasoning_effort": _profile_reasoning_effort(profile, extra_body),
         "thinking_format": _profile_thinking_format(profile),
+        "system_prompt_mode": model_profiles.profile_system_prompt_mode(profile),
         "multimodal_input": multimodal_input,
         "input_modalities": input_modalities,
         "image_request_policy": dict(profile.get("image_request_policy") or {}),

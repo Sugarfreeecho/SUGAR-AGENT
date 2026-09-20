@@ -30,6 +30,7 @@ CONTEXT_PROBE_TOKEN_COUNT = 3_000_000
 CONTEXT_PROBE_TIMEOUT = 8.0
 LEGACY_ENV_IMPORT_MARKER = "imported_from_legacy_env"
 MULTIMODAL_MODES = frozenset({"auto", "enabled", "disabled"})
+SYSTEM_PROMPT_MODES = frozenset({"auto", "merge", "preserve"})
 KNOWN_INPUT_MODALITIES = ("text", "image", "audio", "video", "file")
 MEDIA_INPUT_MODALITIES = frozenset({"image", "audio", "video", "file"})
 LOW_COST_MAX_INPUT_USD_PER_M = 1.0
@@ -128,6 +129,28 @@ def _clean_thinking_mode(value: Any) -> str:
 def _clean_thinking_format(value: Any) -> str:
     # deepseek / reasoning / think_blocks / none；未配置留空交给运行时按模型名推断。
     return str(value or "").strip().lower()
+
+
+def normalize_system_prompt_mode(value: Any, default: str = "auto", *, strict: bool = False) -> str:
+    mode = str(value or "").strip().lower() or default
+    if mode in SYSTEM_PROMPT_MODES:
+        return mode
+    if strict:
+        raise ValueError('system_prompt_mode must be one of: auto, merge, preserve')
+    return default if default in SYSTEM_PROMPT_MODES else "auto"
+
+
+def profile_system_prompt_mode(profile: object) -> str:
+    """Resolve the request-time system prompt policy for one model profile."""
+    if not isinstance(profile, dict):
+        return "preserve"
+    if resolve_profile_provider(profile) is not LLMProvider.OPENAI_COMPATIBLE:
+        return "preserve"
+    configured = normalize_system_prompt_mode(profile.get("system_prompt_mode"))
+    if configured != "auto":
+        return configured
+    model = str(profile.get("model") or "").strip().lower()
+    return "merge" if "qwen" in model else "preserve"
 
 
 def recommended_model_windows(model_context_window: Any) -> dict[str, int]:
@@ -938,6 +961,10 @@ def public_profile(profile: dict) -> dict:
     out = dict(profile)
     effective_provider = resolve_profile_provider(profile)
     out["llm_type"] = canonical_llm_type(effective_provider)
+    out["system_prompt_mode"] = normalize_system_prompt_mode(
+        profile.get("system_prompt_mode")
+    )
+    out["effective_system_prompt_mode"] = profile_system_prompt_mode(profile)
     storage_disabled = responses_store_disabled(profile)
     out["responses_store_disabled"] = storage_disabled
     # Kept for one compatibility cycle; callers must not use it to force a
@@ -1263,6 +1290,13 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             "model_context_window": model_context_window,
             "thinking_mode": _clean_thinking_mode(payload.get("thinking_mode")),
             "thinking_format": _clean_thinking_format(payload.get("thinking_format")),
+            "system_prompt_mode": normalize_system_prompt_mode(
+                payload.get(
+                    "system_prompt_mode",
+                    (old or {}).get("system_prompt_mode", "auto"),
+                ),
+                strict=True,
+            ),
             "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort")),
             "temperature": str(payload.get("temperature") or "").strip(),
             "extra_body_json": str(payload.get("extra_body_json") or "").strip(),
@@ -1433,6 +1467,9 @@ def profile_cache_key(profile: dict) -> str:
             "headers": profile_request_headers(profile),
             "thinking_mode": profile.get("thinking_mode"),
             "thinking_format": profile.get("thinking_format"),
+            "system_prompt_mode": normalize_system_prompt_mode(
+                profile.get("system_prompt_mode")
+            ),
             "reasoning_effort": profile.get("reasoning_effort"),
             "temperature": profile.get("temperature"),
             "extra_body_json": profile.get("extra_body_json"),

@@ -339,6 +339,61 @@ def test_stream_media_fallback_handles_lazy_error_without_duplicate_request(
     assert not any(event is not None and event[0] == "err" for event in events)
 
 
+def test_stream_media_fallback_reapplies_single_system_projection(
+    monkeypatch,
+    tmp_path,
+):
+    import agent_openai
+    from agent_messages import SystemMessage, UserMessage
+
+    image_path = tmp_path / "screen.png"
+    __import__("PIL.Image", fromlist=["Image"]).new("RGB", (8, 8)).save(image_path)
+    calls = []
+
+    class LazyMediaError:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise ValueError("Model does not support image inputs")
+
+        def close(self):
+            pass
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if agent_openai._api_messages_have_media(kwargs["messages"]):
+            return LazyMediaError()
+        return iter(())
+
+    monkeypatch.setattr(agent_openai, "OPENAI_MAX_RETRIES", 1)
+    client = _client_with_create(create)
+    client._myagent_system_prompt_mode = "merge"
+    queue = Queue()
+
+    agent_openai.run_chat_completion_stream_worker(
+        queue,
+        client,
+        "qwen-plus",
+        [
+            SystemMessage("one"),
+            SystemMessage("two"),
+            UserMessage(content=f'分析 "{image_path}"'),
+            SystemMessage("tail"),
+        ],
+        temperature=0,
+        max_tokens=8,
+    )
+
+    assert len(calls) == 2
+    retry_systems = [
+        message for message in calls[1]["messages"] if message["role"] == "system"
+    ]
+    assert retry_systems == [{"role": "system", "content": "one\n\ntwo"}]
+    assert calls[1]["messages"][-1] == {"role": "user", "content": "tail"}
+    assert not agent_openai._api_messages_have_media(calls[1]["messages"])
+
+
 def test_stream_options_fallback_only_retries_parameter_errors(monkeypatch):
     import agent_openai
     from agent_messages import UserMessage

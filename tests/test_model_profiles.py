@@ -822,6 +822,8 @@ def test_advanced_model_profile_list_wires_drag_drop_reordering():
     assert 'id="model-input-modalities"' in html
     assert "input_modalities:selectedInputModalities()" in html
     assert "multimodal_mode:fieldValue(modelEls.multimodal)" in html
+    assert 'id="model-system-prompt-mode"' in html
+    assert 'system_prompt_mode:fieldValue(modelEls.systemPrompt)' in html
     assert "p.multimodal_source===\"failure\"" in html
 
 
