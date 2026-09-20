@@ -1,6 +1,6 @@
 import os
+import io
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -40,14 +40,19 @@ def test_ls_can_skip_expensive_line_counts_when_disabled(tmp_path, monkeypatch):
     assert "a.txt" in result
 
 
-def test_ls_includes_line_counts_by_default(tmp_path, monkeypatch):
+def test_ls_skips_line_counts_by_default(tmp_path, monkeypatch):
     (tmp_path / "a.txt").write_text("a\nb\n", encoding="utf-8")
     monkeypatch.delenv("LS_INCLUDE_LINE_COUNTS", raising=False)
+    monkeypatch.setattr(
+        agent_tools,
+        "_line_count_file",
+        lambda _path: (_ for _ in ()).throw(AssertionError("default listing must stay lightweight")),
+    )
 
     result = agent_tools.ls(str(tmp_path))
 
     assert "lines:" in result
-    assert "2" in result
+    assert result.rstrip().endswith("—")
 
 
 def test_ls_counts_only_recognized_text_files(tmp_path, monkeypatch):
@@ -61,7 +66,7 @@ def test_ls_counts_only_recognized_text_files(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agent_tools, "_line_count_file", count_lines)
 
-    result = agent_tools.ls(str(tmp_path))
+    result = agent_tools.ls(str(tmp_path), include_line_counts=True)
 
     assert counted == ["notes.txt"]
     image_row = next(line for line in result.splitlines() if "image.png" in line)
@@ -80,7 +85,7 @@ def test_ls_skips_line_scan_for_large_text_file(tmp_path, monkeypatch):
     (tmp_path / "large.txt").write_text("123456789", encoding="utf-8")
     monkeypatch.setenv("LS_LINE_COUNT_MAX_BYTES", "8")
 
-    result = agent_tools.ls(str(tmp_path))
+    result = agent_tools.ls(str(tmp_path), include_line_counts=True)
 
     large_row = next(line for line in result.splitlines() if "large.txt" in line)
     assert "lines:" in large_row
@@ -125,14 +130,35 @@ def test_only_ls_is_exposed_to_model_while_list_dir_remains_compatible():
 
 
 def test_ripgrep_fast_path_caps_results(monkeypatch, tmp_path):
+    processes = []
+
+    class FakeProcess:
+        def __init__(self, args):
+            self.args = args
+            self.stdout = io.StringIO("a.py:1:first\na.py:2:second\n")
+            self.stderr = io.StringIO("")
+            self.returncode = 0
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
     monkeypatch.setattr(agent_tools, "_resolve_ripgrep_path", lambda: "rg")
-    monkeypatch.setattr(
-        agent_tools.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args=args[0], returncode=0, stdout="a.py:1:first\na.py:2:second\n", stderr=""
-        ),
-    )
+    def fake_popen(args, **_kwargs):
+        process = FakeProcess(args)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(agent_tools.subprocess, "Popen", fake_popen)
 
     result = agent_tools._grep_with_ripgrep(
         regex=re.compile("first|second"),
@@ -146,6 +172,9 @@ def test_ripgrep_fast_path_caps_results(monkeypatch, tmp_path):
 
     assert "a.py:1:first" in result
     assert "output truncated" in result
+    assert processes[0].terminated
+    assert "--hidden" not in processes[0].args
+    assert "--no-ignore" not in processes[0].args
 
 
 def test_ripgrep_path_prefers_explicit_config(monkeypatch, tmp_path):
@@ -158,15 +187,39 @@ def test_ripgrep_path_prefers_explicit_config(monkeypatch, tmp_path):
 
 
 def test_ripgrep_timeout_does_not_fall_back_to_python(monkeypatch, tmp_path):
+    class HangingProcess:
+        def __init__(self):
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def terminate(self):
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    class ImmediateTimer:
+        def __init__(self, _timeout, callback):
+            self.callback = callback
+            self.daemon = False
+
+        def start(self):
+            self.callback()
+
+        def cancel(self):
+            pass
+
     (tmp_path / "sample.txt").write_text("needle\n", encoding="utf-8")
     monkeypatch.setattr(agent_tools, "_resolve_ripgrep_path", lambda: "rg")
-    monkeypatch.setattr(
-        agent_tools.subprocess,
-        "run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
-        ),
-    )
+    monkeypatch.setattr(agent_tools.subprocess, "Popen", lambda *_args, **_kwargs: HangingProcess())
+    monkeypatch.setattr(agent_tools.threading, "Timer", ImmediateTimer)
     monkeypatch.setattr(
         agent_tools.os,
         "walk",
@@ -176,6 +229,47 @@ def test_ripgrep_timeout_does_not_fall_back_to_python(monkeypatch, tmp_path):
     result = agent_tools.grep("needle", path=str(tmp_path))
 
     assert "ripgrep timed out" in result
+
+
+def test_ripgrep_can_explicitly_include_hidden_and_ignored(monkeypatch, tmp_path):
+    seen = {}
+
+    class EmptyProcess:
+        def __init__(self, args):
+            seen["args"] = args
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+
+        def poll(self):
+            return 1
+
+        def wait(self, timeout=None):
+            return 1
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(agent_tools, "_resolve_ripgrep_path", lambda: "rg")
+    monkeypatch.setattr(agent_tools.subprocess, "Popen", lambda args, **_kwargs: EmptyProcess(args))
+
+    result = agent_tools._grep_with_ripgrep(
+        regex=re.compile("needle"),
+        target=tmp_path,
+        recursive=True,
+        max_results=10,
+        line_cap=200,
+        output_cap=10_000,
+        file_cap=1024,
+        include_hidden=True,
+        include_ignored=True,
+    )
+
+    assert result == "No matches found"
+    assert "--hidden" in seen["args"]
+    assert "--no-ignore" in seen["args"]
 
 
 def test_ripgrep_unavailable_still_falls_back_to_python(monkeypatch, tmp_path):
@@ -258,6 +352,32 @@ def test_ls_per_call_line_count_and_limit_override(tmp_path, monkeypatch):
     assert "a.txt" in result
     assert "lines:        2" in result
     assert "1 more entries omitted" in result
+
+
+def test_ls_line_count_reuses_stat_cache(tmp_path, monkeypatch):
+    path = tmp_path / "cached.txt"
+    path.write_text("one\ntwo\n", encoding="utf-8")
+    agent_tools._read_file_line_count_cache.clear()
+
+    assert agent_tools._line_count_file(path) == "2"
+    monkeypatch.setattr(
+        agent_tools,
+        "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cached count must not reopen file")),
+        raising=False,
+    )
+    assert agent_tools._line_count_file(path) == "2"
+
+
+def test_missing_path_error_suggests_close_existing_component(tmp_path):
+    existing = tmp_path / "AI Agent" / "project"
+    existing.mkdir(parents=True)
+
+    result = agent_tools.grep("needle", path=str(tmp_path / "AAI Agent" / "project"))
+
+    assert "does not exist" in result
+    assert "Did you mean:" in result
+    assert "AI Agent" in result
 
 
 def test_read_file_accepts_start_plus_line_count(tmp_path):
@@ -354,6 +474,8 @@ def test_system_prompt_keeps_cross_tool_rules_without_repeating_tool_schemas():
     assert "写入或编辑后要做必要验证" in prompt
     assert "未征得用户同意不要擅自 `pip install`" in prompt
     assert "无依赖的只读工具按并发上限并行" in prompt
+    assert "优先复用 `ls`、`glob`、`grep`、`read_file` 已返回的完整路径" in prompt
+    assert "最小源码目录" in prompt
     assert "不得猜测未知参数" in prompt
     assert "创建以任务名命名的子目录" in prompt
     assert "grep` 默认 `mode=regex" not in prompt
@@ -362,6 +484,22 @@ def test_system_prompt_keeps_cross_tool_rules_without_repeating_tool_schemas():
     assert "task / subagent 常用模式" not in prompt
     assert 'task(action="status")' not in prompt
     assert "model_profile_id" not in prompt
+
+
+def test_search_and_listing_schemas_expose_fast_defaults():
+    functions = {
+        row["function"]["name"]: row["function"]
+        for row in agent_tools.OPENAI_TOOL_DEFINITIONS
+    }
+
+    grep_schema = functions["grep"]
+    grep_props = grep_schema["parameters"]["properties"]
+    assert grep_props["include_hidden"]["default"] is False
+    assert grep_props["include_ignored"]["default"] is False
+    assert "narrowest known source directory" in grep_schema["description"]
+    assert "exact tool-returned path" in grep_props["path"]["description"]
+    assert "opt-in" in functions["ls"]["description"]
+    assert "defaults false" in functions["ls"]["parameters"]["properties"]["include_line_counts"]["description"]
 
 
 def test_tool_schemas_require_canonical_write_fields_without_forcing_strict_provider_mode():

@@ -2724,6 +2724,8 @@ def run_chat_completion_stream_worker(
         transport_breakdown_emitted = False
         first_delta_at_ms: Optional[int] = None
         last_delta_at_ms: Optional[int] = None
+        _max_delta_gap_ms = 0
+        _slow_delta_gaps = 0
         usage_chunk_at_ms: Optional[int] = None
         response_payload_bytes_estimated = 0
         chunk_count = 0
@@ -2918,7 +2920,33 @@ def run_chat_completion_stream_worker(
                 if emit_deltas:
                     sync_q.put(("tool_call_delta", payload))
             _accumulate_tool_call_delta(tool_acc, delta_tool_calls)
+            # Inter-delta gap tracking: a stall between chunks is invisible in the
+            # totals (the first-token and total timings both look plausible while
+            # output trickles out one phrase per 20 s). Reported per request so a
+            # stalled stream names itself instead of looking like a slow model.
+            _gap_now = api_elapsed_ms()
+            if last_delta_at_ms is not None:
+                _gap = _gap_now - last_delta_at_ms
+                if _gap > _max_delta_gap_ms:
+                    _max_delta_gap_ms = _gap
+                if _gap >= 1000:
+                    _slow_delta_gaps += 1
+            last_delta_at_ms = _gap_now
         put_stream_timing("stream_exhausted", chunk_count=chunk_count)
+        # Gap summary. ``max_delta_gap_ms`` is the single most useful number for
+        # "the output arrives in bursts": at ~5 ms/token a healthy stream never
+        # goes more than a few hundred ms between deltas.
+        put_stream_timing(
+            "stream_gap_probe",
+            max_delta_gap_ms=int(_max_delta_gap_ms),
+            gaps_ge_1s=int(_slow_delta_gaps),
+            chunk_count=chunk_count,
+        )
+        if _max_delta_gap_ms >= 10_000:
+            logger.warning(
+                "stream stalled between deltas: max_gap_ms=%s gaps_ge_1s=%s chunks=%s",
+                int(_max_delta_gap_ms), _slow_delta_gaps, chunk_count,
+            )
         if transport_observer is not None:
             try:
                 final_transport = transport_observer.snapshot_transport_trace()

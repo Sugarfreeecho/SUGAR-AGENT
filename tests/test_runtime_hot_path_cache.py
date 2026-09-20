@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import uuid
 from pathlib import Path
 
@@ -255,6 +255,7 @@ def test_full_input_token_estimate_reuses_cache(monkeypatch):
 
     monkeypatch.setattr(agent_tools, "get_skills_catalog", lambda: "")
     monkeypatch.setattr(agent_harness, "estimate_tokens", estimate_tokens)
+    monkeypatch.setattr(agent_tokenizer, "message_token_estimator", estimate_tokens)
     monkeypatch.setattr(agent_harness, "key_context_body_for_system_prompt", lambda text: text)
     monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
     monkeypatch.setattr(agent_harness, "load_prompt_template", lambda _name: "{skills_catalog}" if _name == "system_skills_intro" else "")
@@ -303,6 +304,7 @@ def test_provider_usage_prefix_baseline_survives_process_cache_reset(monkeypatch
     )
     monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
     monkeypatch.setattr(agent_harness, "estimate_tokens", lambda _messages: 17)
+    monkeypatch.setattr(agent_tokenizer, "message_token_estimator", lambda _messages: 17)
     agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
     agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
 
@@ -326,6 +328,7 @@ def test_calculated_prebuilt_token_estimate_ignores_provider_usage(monkeypatch):
     agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
     agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
     monkeypatch.setattr(agent_harness, "estimate_tokens", lambda _messages: 17)
+    monkeypatch.setattr(agent_tokenizer, "message_token_estimator", lambda _messages: 17)
     monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
 
     messages = [SystemMessage(content="sys"), UserMessage(content="hello")]
@@ -342,6 +345,7 @@ def test_prebuilt_token_estimate_counts_tool_schemas(monkeypatch):
     agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
     agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
     monkeypatch.setattr(agent_harness, "estimate_tokens", lambda _messages: 17)
+    monkeypatch.setattr(agent_tokenizer, "message_token_estimator", lambda _messages: 17)
     monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
     monkeypatch.setattr(agent_tokenizer, "count_tool_definition_tokens", lambda tools: 41 if tools else 0)
 
@@ -363,6 +367,7 @@ def test_provider_usage_cache_is_scoped_to_tool_schema(monkeypatch):
     agent_tokenizer._PROMPT_USAGE_BASELINE_CACHE.clear()
     agent_tokenizer._PROMPT_USAGE_EXACT_CACHE.clear()
     monkeypatch.setattr(agent_harness, "estimate_tokens", lambda _messages: 17)
+    monkeypatch.setattr(agent_tokenizer, "message_token_estimator", lambda _messages: 17)
     monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
     monkeypatch.setattr(agent_tokenizer, "count_tool_definition_tokens", lambda tools: 41 if tools else 0)
 
@@ -395,6 +400,8 @@ def test_prebuilt_token_estimate_uses_provider_prefix_baseline(monkeypatch):
     import agent_harness
 
     monkeypatch.setattr(agent_harness, "estimate_tokens", estimate_tokens)
+
+    monkeypatch.setattr(agent_tokenizer, "message_token_estimator", estimate_tokens)
     monkeypatch.setattr(agent_harness, "strip_reasoning_for_api_request", lambda messages: messages)
 
     first = [SystemMessage(content="sys"), UserMessage(content="hello")]
@@ -421,6 +428,8 @@ def test_rewritten_tail_uses_provider_calibrated_scale(monkeypatch):
         return 100 if "old question" in text else 110
 
     monkeypatch.setattr(agent_harness, "estimate_tokens", estimate_tokens)
+
+    monkeypatch.setattr(agent_tokenizer, "message_token_estimator", estimate_tokens)
     old_request = [SystemMessage(content="stable system"), UserMessage(content="old question")]
     rewritten_request = [SystemMessage(content="stable system"), UserMessage(content="rewritten question")]
     agent_tokenizer.record_prompt_tokens_for_messages("s1", old_request, 200)
@@ -433,3 +442,47 @@ def test_rewritten_tail_uses_provider_calibrated_scale(monkeypatch):
 
     assert estimated == 220
     assert source == "provider_calibrated"
+
+
+def test_incremental_flatten_reuses_prefix_without_changing_text(monkeypatch):
+    import agent_tokenizer
+    from agent_messages import AssistantMessage, UserMessage
+
+    messages = [
+        UserMessage(content="first"),
+        AssistantMessage(
+            content="",
+            tool_calls=[{"id": "c1", "name": "read_file", "args": {}}],
+        ),
+    ]
+    agent_tokenizer._clear_flatten_token_cache()
+    prefix_text = agent_tokenizer._flatten_messages_incremental(messages)
+    appended = messages + [UserMessage(content="tail")]
+    full_text = agent_tokenizer._flatten_messages_for_count(appended)
+
+    assert prefix_text == agent_tokenizer._flatten_messages_for_count(messages)
+    assert agent_tokenizer._flatten_messages_incremental(appended) == full_text
+
+    monkeypatch.setattr(
+        agent_tokenizer,
+        "_flatten_message_parts",
+        lambda _message: (_ for _ in ()).throw(
+            AssertionError("exact identity hit must not flatten messages again")
+        ),
+    )
+    assert agent_tokenizer._flatten_messages_incremental(appended) == full_text
+
+
+def test_late_round_synthesis_checkpoint_escalates_without_forcing_early_runs(monkeypatch):
+    import agent_loop
+
+    monkeypatch.delenv("LATE_SYNTHESIS_REACT_ITER", raising=False)
+    monkeypatch.delenv("LATE_SYNTHESIS_TOOL_CALLS", raising=False)
+    monkeypatch.delenv("LATE_SYNTHESIS_STRONG_REACT_ITER", raising=False)
+    monkeypatch.delenv("LATE_SYNTHESIS_STRONG_TOOL_CALLS", raising=False)
+
+    assert agent_loop._late_round_synthesis_reminder(10, 10) == ""
+    assert "synthesis checkpoint" in agent_loop._late_round_synthesis_reminder(24, 10)
+    strong = agent_loop._late_round_synthesis_reminder(32, 10)
+    assert "convergence checkpoint" in strong
+    assert "Finish the user-facing result now" in strong

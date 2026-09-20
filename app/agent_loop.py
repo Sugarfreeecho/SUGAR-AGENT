@@ -171,11 +171,40 @@ from security import (
 from security.reviewer import review_request
 
 
+# Dispatcher handle and the monotonic time it was resolved. ``_workflow_callbacks``
+# takes ``_ACTIVATION_LOCK`` on every call and sits in the per-round hot path. The
+# registry only changes when plugins are reloaded or a callback is (un)registered,
+# so a short-lived handle is correct and removes activation work from nearly every
+# round. Callback-body costs are measured separately below.
+#
+# ``invalidate_bundled_workflow_callbacks`` mutates this same registry in place, so
+# a cached reference stays valid across a plugin reload -- it simply has fewer
+# owners until the TTL expires and re-activation runs. Two seconds bounds that
+# window without putting the lock back on the hot path.
+_WORKFLOW_CALLBACKS_CACHE: Optional[Any] = None
+_WORKFLOW_CALLBACKS_CACHE_AT = 0.0
+_WORKFLOW_CALLBACKS_TTL_SEC = 2.0
+
+
 def _workflow_callbacks():
+    global _WORKFLOW_CALLBACKS_CACHE, _WORKFLOW_CALLBACKS_CACHE_AT
+    now = time.monotonic()
+    cached = _WORKFLOW_CALLBACKS_CACHE
+    if cached is not None and (now - _WORKFLOW_CALLBACKS_CACHE_AT) < _WORKFLOW_CALLBACKS_TTL_SEC:
+        return cached
     import sys
 
     activate_bundled_workflow_callbacks(sys.modules[__name__])
-    return session_workflows
+    _WORKFLOW_CALLBACKS_CACHE = session_workflows
+    _WORKFLOW_CALLBACKS_CACHE_AT = now
+    return _WORKFLOW_CALLBACKS_CACHE
+
+
+def _invalidate_workflow_callbacks_cache() -> None:
+    """Force the next lookup to re-activate. Called when callbacks change."""
+    global _WORKFLOW_CALLBACKS_CACHE, _WORKFLOW_CALLBACKS_CACHE_AT
+    _WORKFLOW_CALLBACKS_CACHE = None
+    _WORKFLOW_CALLBACKS_CACHE_AT = 0.0
 
 EXECUTOR_STREAM = os.getenv("EXECUTOR_STREAM", "true").lower() in ("1", "true", "yes")
 NETWORK_RECONNECT_MAX_ATTEMPTS = max(0, int(os.getenv("NETWORK_RECONNECT_MAX_ATTEMPTS", "5")))
@@ -1075,6 +1104,14 @@ def _state_run_has_write_fence(state: State) -> bool:
         return local_current is control
 
 
+def _state_interrupt_requested(state: State) -> bool:
+    """Return an interrupt only when it targets this exact run."""
+
+    sid = str(state.get("session_id") or "").strip()
+    run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+    return bool(sid and session_manager.is_interrupt_requested(sid, run_id))
+
+
 def _context_policy_lock_for_session(session_id: str) -> threading.Lock:
     sid = str(session_id or "").strip()
     with _CONTEXT_POLICY_LOCKS_LOCK:
@@ -1698,6 +1735,39 @@ def _truncate_unclosed_tool_call_tail(messages: List[Any]) -> tuple[List[Any], O
     return list(messages or [])[:idx], idx
 
 
+def _drop_orphan_tool_messages(messages: List[Any]) -> tuple[List[Any], List[int]]:
+    """Drop ToolMessage rows not owned by the immediately preceding assistant step.
+
+    Providers require each tool result to directly answer a tool call from the
+    preceding assistant message.  Legacy token-tail truncation could retain the
+    result while dropping that assistant; keeping the orphan makes the whole
+    request invalid.  Missing results are handled separately by the existing
+    unclosed-tool-call sanitizer.
+    """
+    src = list(messages or [])
+    out: List[Any] = []
+    dropped: List[int] = []
+    active_ids: Optional[set[str]] = None
+    seen_ids: set[str] = set()
+    for idx, msg in enumerate(src):
+        if isinstance(msg, ToolMessage):
+            tool_id = str(getattr(msg, "tool_call_id", "") or "").strip()
+            if active_ids is not None and tool_id in active_ids and tool_id not in seen_ids:
+                out.append(msg)
+                seen_ids.add(tool_id)
+            else:
+                dropped.append(idx)
+            continue
+
+        active_ids = None
+        seen_ids = set()
+        out.append(msg)
+        ids = _assistant_tool_call_ids(msg)
+        if ids:
+            active_ids = set(ids)
+    return out, dropped
+
+
 def _trim_unclosed_tool_call_tail_preserve_completed(
     messages: List[Any],
 ) -> tuple[List[Any], Optional[int]]:
@@ -1762,32 +1832,30 @@ def _trim_unclosed_tool_call_tail_preserve_completed(
     return out, changed_at
 
 
-def _sanitize_loaded_histories_for_new_run(
-    session_id: str,
+def _persist_orphan_cleanup_after_outgoing_detection(
+    state: State,
     work_messages: List[Any],
     llm_history: List[Any],
-    key_context: str,
-    reason: str,
 ) -> tuple[List[Any], List[Any]]:
-    clean_llm, llm_cut = _truncate_unclosed_tool_call_tail(llm_history)
-    clean_work, work_cut = _truncate_unclosed_tool_call_tail(work_messages)
-    if llm_cut is None and work_cut is None:
+    """Repair durable histories only after the actual outgoing turns prove dirty."""
+    clean_llm, llm_orphans = _drop_orphan_tool_messages(llm_history)
+    clean_work, work_orphans = _drop_orphan_tool_messages(work_messages)
+    if not llm_orphans and not work_orphans:
         return work_messages, llm_history
-    state: State = {
-        "session_id": session_id,
-        "work_messages": clean_work,
-        "llm_history": clean_llm,
-        "key_context": key_context or "",
-        "dialogue": derive_dialogue_from_assistant_history(clean_llm),
-    }
+    state["work_messages"] = clean_work
+    state["llm_history"] = clean_llm
+    state["dialogue"] = derive_dialogue_from_assistant_history(clean_llm)
+    state.pop("_prompt_turn_cache", None)
     logger.warning(
-        "Sanitized unclosed tool_call tail before run: session=%s reason=%s llm_cut=%s work_cut=%s",
-        session_id,
-        reason,
-        llm_cut,
-        work_cut,
+        "Persisted orphan tool cleanup after outgoing validation: session=%s "
+        "llm_orphans=%s work_orphans=%s",
+        state.get("session_id"),
+        llm_orphans,
+        work_orphans,
     )
-    _persist_state_with_model_replace(state, clean_llm, reason)
+    _persist_state_with_model_replace(
+        state, clean_llm, "sanitize_orphan_tools_before_api"
+    )
     return clean_work, clean_llm
 
 
@@ -1933,6 +2001,28 @@ def _pre_api_timing_mark(timings: Dict[str, int], name: str, start: float) -> No
     timings[name] = int(max(0.0, (time.perf_counter() - start) * 1000.0))
 
 
+# Diagnostic sub-spans are intentionally retained in ``events`` but must not be
+# added to the phase total: each is already covered by an enclosing exclusive
+# span.  Keeping this rule in one helper prevents logs and execution_metrics from
+# silently using different totals as new probes are added.
+_PRE_API_NESTED_TIMINGS = frozenset({
+    "build_messages",                 # static_segments + turn_cache
+    "static_segments_build",          # inside static_segments
+    "before_round_callback",          # inside before_round
+    "before_round_lookup",            # inside before_round
+    "before_round_reminder_persist",  # inside before_round
+    "tool_registry_revision",         # inside registry hit/build span
+})
+
+
+def _pre_api_timing_total(timings: Mapping[str, Any]) -> int:
+    return int(sum(
+        int(value or 0)
+        for name, value in timings.items()
+        if name not in _PRE_API_NESTED_TIMINGS
+    ))
+
+
 # Process-level cache for the static system prompt segments, keyed by
 # (session_id, is_subagent, has_inherited_segments).  Each value carries the
 # revision it was built at, so a revision drift (skill toggle, plugin change)
@@ -1940,6 +2030,37 @@ def _pre_api_timing_mark(timings: Dict[str, int], name: str, start: float) -> No
 # path (stale-while-revalidate).
 _STATIC_SEGMENTS_PROCESS_CACHE: Dict[tuple, tuple] = {}
 _STATIC_SEGMENTS_REBUILD_INFLIGHT: set = set()
+
+
+def _late_round_synthesis_reminder(iter_count: int, tool_calls_seen: int) -> str:
+    """Nudge long exploratory runs toward synthesis without forcing truncation.
+
+    A hard late-round token cap can cut off the tool call that completes a task.
+    This request-local system checkpoint instead preserves autonomy while making
+    broad rediscovery and long internal re-audits explicitly undesirable.
+    """
+    try:
+        start_iter = max(2, int(os.getenv("LATE_SYNTHESIS_REACT_ITER", "24")))
+        start_tools = max(1, int(os.getenv("LATE_SYNTHESIS_TOOL_CALLS", "48")))
+        strong_iter = max(start_iter + 1, int(os.getenv("LATE_SYNTHESIS_STRONG_REACT_ITER", "32")))
+        strong_tools = max(start_tools + 1, int(os.getenv("LATE_SYNTHESIS_STRONG_TOOL_CALLS", "72")))
+    except ValueError:
+        start_iter, start_tools, strong_iter, strong_tools = 24, 48, 32, 72
+    if int(iter_count) < start_iter and int(tool_calls_seen) < start_tools:
+        return ""
+    if int(iter_count) >= strong_iter or int(tool_calls_seen) >= strong_tools:
+        return (
+            "[Late-run convergence checkpoint]\n"
+            "This run already has extensive evidence. Finish the user-facing result now unless exactly one "
+            "targeted verification is still required. Keep reasoning concise; do not start broad repository "
+            "searches, rediscover known paths, or re-read evidence already collected."
+        )
+    return (
+        "[Late-run synthesis checkpoint]\n"
+        "The run has accumulated many exploration steps. If the request is already supported by evidence, "
+        "stop exploring and synthesize the final answer. If work remains, use only targeted calls with an "
+        "exact known path and a concrete unresolved purpose; avoid broad searches and repeated reads."
+    )
 
 
 def _build_static_segments_for_session(
@@ -2046,10 +2167,18 @@ def _schedule_static_segments_rebuild(
 
 def _pre_api_timing_log(session_id: str, timings: Dict[str, int], **extra: Any) -> None:
     try:
-        # build_messages is an aggregate (static_segments + turn_cache); it is
-        # printed but excluded from the total to avoid double counting.
-        total = int(sum(int(v or 0) for k, v in timings.items() if k != "build_messages"))
+        total = _pre_api_timing_total(timings)
         parts = [f"{k}={int(v)}ms" for k, v in timings.items()]
+        # Token-count path counters (how many were exact/prefix/full, and at which
+        # call site). Printed without a "ms" suffix so they are not mistaken for
+        # timings, and reported per round so a "full" pass is visible next to the
+        # time it caused.
+        for name in ("exact", "prefix", "full", "full_chars"):
+            if name in extra:
+                parts.append(f"tok_{name}={extra.pop(name)}")
+        sites = {k: v for k, v in extra.items() if ":" in str(k)}
+        for k in sorted(sites):
+            parts.append(f"tok_{k}={extra.pop(k)}")
         for k, v in extra.items():
             parts.append(f"{k}={v}")
         logger.info("pre_api_timing session=%s total=%sms %s", session_id, total, " ".join(parts))
@@ -2453,10 +2582,23 @@ def _runtime_v2_replace_model_history(state: State, messages: List[Any], reason:
         raise
 
 
+# Last key_context this process committed per session, so the per-round persist
+# can skip reading the published snapshot when nothing changed.
+_RUNTIME_V2_COMMITTED_SUMMARY: Dict[str, str] = {}
+
+
 def _runtime_v2_commit_context_summary(state: State) -> None:
     sid = str(state.get("session_id") or "").strip()
     summary = str(state.get("key_context") or "")
     if not sid or not _runtime_v2_is_primary():
+        return
+    # Most persists in a ReAct run carry an unchanged key_context, and confirming
+    # that via read_consistent_view means reading and deserializing the published
+    # snapshot from disk every round just to compare one string. Remembering what
+    # this process last committed lets the common case skip the read entirely; a
+    # miss still goes through the snapshot so another writer's change is never
+    # missed. Observed persist_state: median 8-17 ms, p90 ~660 ms.
+    if _RUNTIME_V2_COMMITTED_SUMMARY.get(sid) == summary:
         return
     try:
         from runtime_v2 import SnapshotStore
@@ -2471,8 +2613,10 @@ def _runtime_v2_commit_context_summary(state: State) -> None:
         ).read_consistent_view(sid)
         current = snapshot.get("context", {}).get("summary", {}) if isinstance(snapshot, dict) else {}
         if isinstance(current, dict) and str(current.get("summary") or "") == summary:
+            _RUNTIME_V2_COMMITTED_SUMMARY[sid] = summary
             return
         _runtime_v2_react_history_ops().commit_context_summary(sid, summary)
+        _RUNTIME_V2_COMMITTED_SUMMARY[sid] = summary
     except Exception as exc:
         logger.warning("Runtime V2 context summary commit failed for %s: %s", sid, exc)
         raise
@@ -2617,6 +2761,21 @@ class _RuntimeV2RunLifecycle:
                 return True
             except Exception as exc:
                 last_error = exc
+                if isinstance(exc, RuntimeError) and "can't start new thread" in str(exc).lower():
+                    try:
+                        # Terminal durability is more important than keeping a
+                        # tiny file append off the event loop. This emergency
+                        # path prevents thread exhaustion from leaving a
+                        # permanently-running snapshot row.
+                        self._append_once(event_type, dict(payload or {}))
+                        if is_terminal:
+                            self.terminal_event_type = event_type
+                            from session_lifecycle import mark_run_terminal
+
+                            mark_run_terminal(self.session_id, self.run_id)
+                        return True
+                    except Exception as direct_exc:
+                        last_error = direct_exc
                 if attempt + 1 < attempts:
                     await asyncio.sleep(0.05 * (2 ** attempt))
         raise RuntimeError(
@@ -2673,7 +2832,11 @@ async def _finalize_agent_run_lifecycle(
                 error=(
                     "ReAct reached the maximum iteration limit."
                     if react_limit_reached
-                    else str(terminal_event.get("error") or "")
+                    else str(
+                        terminal_event.get("error")
+                        or terminal_event.get("reason")
+                        or ""
+                    )
                 ),
             )
             if workflow_after_run:
@@ -2710,15 +2873,31 @@ async def _finalize_agent_run_lifecycle(
             if key not in {"type", "ephemeral", "run_id"}
         }
         terminal_payload.setdefault("mode", mode)
-        await runtime_lifecycle.commit(terminal_type, terminal_payload)
-        _mark_run_terminal_unread(session_id, terminal_type, run_id)
-        await emit(terminal_event)
+        terminal_error: Optional[BaseException] = None
+        try:
+            await runtime_lifecycle.commit(terminal_type, terminal_payload)
+            _mark_run_terminal_unread(session_id, terminal_type, run_id)
+            await emit(terminal_event)
+        except BaseException as exc:
+            terminal_error = exc
+            logger.error(
+                "run terminal persistence failed: session=%s run_id=%s type=%s",
+                session_id,
+                run_id,
+                terminal_type,
+                exc_info=True,
+            )
 
         try:
             execution_metrics.finish_run(
                 session_id,
                 run_id,
                 "react_limit" if react_limit_reached else workflow_outcome,
+                reason=str(
+                    terminal_event.get("reason")
+                    or terminal_event.get("error")
+                    or ""
+                ),
             )
         except Exception:
             logger.warning(
@@ -2727,6 +2906,8 @@ async def _finalize_agent_run_lifecycle(
                 run_id,
                 exc_info=True,
             )
+        if terminal_error is not None:
+            raise terminal_error
     finally:
         await close_session_stream(session_id)
         if consumer_attached:
@@ -3419,7 +3600,7 @@ async def _await_retry_delay_or_interrupt(
     deadline = time.monotonic() + max(0.0, float(delay_sec or 0.0))
     while time.monotonic() < deadline:
         await _raise_if_steer_requested(state, emit, "network_reconnect")
-        if sid and session_manager.is_interrupt_requested(sid):
+        if sid and _state_interrupt_requested(state):
             return False
         await asyncio.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
     return True
@@ -3436,7 +3617,7 @@ async def _wait_for_local_network_recovery(
     announced_at = 0.0
     while True:
         await _raise_if_steer_requested(state, emit, "network_waiting")
-        if sid and session_manager.is_interrupt_requested(sid):
+        if sid and _state_interrupt_requested(state):
             return False
         recovered = await asyncio.to_thread(machine_network_available)
         if recovered:
@@ -3704,7 +3885,7 @@ async def _await_thread_with_sse_keepalive(
             await _raise_if_steer_requested(state, emit, "thread_wait")
             if (
                 not _state_run_has_write_fence(state)
-                or session_manager.is_interrupt_requested(str(state.get("session_id") or ""))
+                or _state_interrupt_requested(state)
             ):
                 raise asyncio.CancelledError()
             if thread_hint_queue is not None and emit:
@@ -4742,7 +4923,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             await _raise_if_steer_requested(state, emit, "react")
             if not _state_run_has_write_fence(state):
                 raise asyncio.CancelledError()
-            if session_manager.is_interrupt_requested(state["session_id"]):
+            if _state_interrupt_requested(state):
                 if _is_followup_interrupt(state["session_id"]):
                     raise asyncio.CancelledError()
                 final_content = _interrupt_terminal_text(state["session_id"])
@@ -4762,10 +4943,26 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             _pre_api_timing_mark(pre_api_timings, "context_policy_wait_prebuild", _t_pre_api)
             _t_pre_api = time.perf_counter()
             await _raise_if_steer_requested(state, emit, "react")
+            _pre_api_timing_mark(pre_api_timings, "before_round_steer", _t_pre_api)
+            _t_pre_api = time.perf_counter()
             iter_count += 1
             state["_current_react_iter"] = int(iter_count)
 
-            reminder = _workflow_callbacks().call("before_round", state)
+            # Split the workflow-callback window: this region measured up to 20.9 s
+            # while every callback it can reach is trivial (a dict lookup plus an
+            # in-memory round counter), so the time is going somewhere this mark
+            # cannot see. These two sub-marks separate "callback body" from "state
+            # persistence the callback triggered" so the next slow round names the
+            # culprit instead of the region.
+            _t_before_round = time.perf_counter()
+            # Time the dispatcher lookup and callback body separately. This split
+            # exposed the session-todo callback's hidden Runtime V2 snapshot read;
+            # it remains useful for keeping future workflow-owned I/O visible.
+            _registry = _workflow_callbacks()
+            _t_cb_lookup = time.perf_counter()
+            reminder = _registry.call("before_round", state)
+            _pre_api_timing_mark(pre_api_timings, "before_round_callback", _t_cb_lookup)
+            _pre_api_timing_mark(pre_api_timings, "before_round_lookup", _t_before_round)
             if isinstance(reminder, Mapping) and reminder.get("message") is not None:
                 reminder_message = reminder["message"]
                 llm_history.append(reminder_message)
@@ -4773,7 +4970,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 _runtime_v2_append_model_message(state, reminder_message)
                 state["llm_history"] = llm_history
                 state["work_messages"] = work_messages
+                _t_reminder_persist = time.perf_counter()
                 _persist_state(state)
+                _pre_api_timing_mark(pre_api_timings, "before_round_reminder_persist", _t_reminder_persist)
                 await _push_stream_event(
                     state,
                     {
@@ -4856,11 +5055,41 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 "turns": raw_turn_msgs,
             }
             turn_msgs = inject_missing_tool_messages(raw_turn_msgs)
+            turn_msgs, outgoing_orphans = _drop_orphan_tool_messages(turn_msgs)
+            if outgoing_orphans:
+                logger.warning(
+                    "Detected orphan tool messages in outgoing turns: session=%s indexes=%s",
+                    state.get("session_id"),
+                    outgoing_orphans,
+                )
+                work_messages, llm_history = _persist_orphan_cleanup_after_outgoing_detection(
+                    state,
+                    work_messages,
+                    llm_history,
+                )
+                raw_turn_msgs = messages_for_openai_turns(llm_history)
+                turn_msgs = inject_missing_tool_messages(raw_turn_msgs)
+                turn_msgs, remaining_orphans = _drop_orphan_tool_messages(turn_msgs)
+                if remaining_orphans:
+                    logger.error(
+                        "Outgoing tool-chain sanitizer left orphan rows: session=%s indexes=%s",
+                        state.get("session_id"),
+                        remaining_orphans,
+                    )
 
             llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
             if kc_body:
                 llm_messages.append(SystemMessage(content=kc_body))
             llm_messages.extend(turn_msgs)
+            convergence_reminder = _late_round_synthesis_reminder(
+                iter_count,
+                int(state.get("_react_ui_tool_count", 0) or 0),
+            )
+            if convergence_reminder:
+                # Keep the checkpoint at the tail. Inserting it before historical
+                # turns would invalidate the provider's cached prompt prefix on
+                # exactly the long runs where cache reuse matters most.
+                llm_messages.append(SystemMessage(content=convergence_reminder))
             _pre_api_timing_mark(pre_api_timings, "turn_cache", _t_pre_api)
             _t_pre_api = time.perf_counter()
             pre_api_timings["build_messages"] = int(max(0.0, (_t_pre_api - _t_build_start) * 1000.0))
@@ -4871,7 +5100,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             def _record_tool_definition_timing(stage: str, started: float) -> None:
                 _pre_api_timing_mark(pre_api_timings, stage, started)
 
+            # Split the revision computation from the branch that follows it: this
+            # window measured 64-299 ms on long sessions while the revision itself
+            # measures ~0.1 ms in isolation, so the time is event-loop delay rather
+            # than work. Separating the two says which, instead of leaving one
+            # number that reads like a slow cache hit.
+            _t_tool_revision = time.perf_counter()
             tool_revision = await _combined_tool_registry_revision(session_meta)
+            _pre_api_timing_mark(pre_api_timings, "tool_registry_revision", _t_tool_revision)
             tool_cache = state.get("_combined_tool_registry_cache")
             if isinstance(tool_cache, dict) and tool_cache.get("revision") == tool_revision:
                 tool_registry = tool_cache["registry"]
@@ -4959,6 +5195,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     return_source=True,
                 )
             _pre_api_timing_mark(pre_api_timings, "token_estimate", _t_pre_api)
+            # Record how the count was satisfied. A round that took a full
+            # tokenizer pass shows up here as full>0 with exact/prefix at 0, which
+            # is the difference between "cache works" and "cache never hits" --
+            # otherwise indistinguishable from the timing alone.
+            try:
+                from agent_tokenizer import message_token_path_stats
+
+                _msg_token_paths = message_token_path_stats()
+            except Exception:
+                _msg_token_paths = {}
             _t_pre_api = time.perf_counter()
             # Resolve at every LLM boundary.  The resolver's hot cache keeps
             # the unchanged path cheap, while a profile update invalidates the
@@ -5152,7 +5398,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 prompt_language=state.get("_prompt_language", "zh-CN"),
                                 should_stop=lambda: (
                                     not _state_run_has_write_fence(state)
-                                    or session_manager.is_interrupt_requested(sid)
+                                    or _state_interrupt_requested(state)
                                 ),
                             ),
                             state,
@@ -6016,12 +6262,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             "raw_emit": emit,
                             "interaction_interrupt_check": lambda: (
                                 not _state_run_has_write_fence(state)
-                                or session_manager.is_interrupt_requested(state["session_id"])
+                                or _state_interrupt_requested(state)
                                 or _steer_requested(state)
                             ),
                             "run_interrupt_check": lambda: (
                                 not _state_run_has_write_fence(state)
-                                or session_manager.is_interrupt_requested(state["session_id"])
+                                or _state_interrupt_requested(state)
                             ),
                             "llm_history": llm_history,
                             "context_window": int(iter_context_window),
@@ -6152,9 +6398,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 cancellation_id=str(tool_id or ""),
                                 should_cancel=lambda: (
                                     _steer_requested(state)
-                                    or session_manager.is_interrupt_requested(
-                                        str(state.get("session_id") or "")
-                                    )
+                                    or _state_interrupt_requested(state)
                                 ),
                                 publish_event=_publish_plugin_extension_event,
                             ),
@@ -6208,7 +6452,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             set_run_shell_interrupt_check(
                                 lambda: (
                                     not _state_run_has_write_fence(state)
-                                    or session_manager.is_interrupt_requested(_sid)
+                                    or _state_interrupt_requested(state)
                                     or _steer_requested(state)
                                 )
                             )
@@ -6597,7 +6841,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             await _raise_if_steer_requested(state, emit, "react")
             if not _state_run_has_write_fence(state):
                 raise asyncio.CancelledError()
-            if session_manager.is_interrupt_requested(state["session_id"]):
+            if _state_interrupt_requested(state):
                 if _is_followup_interrupt(state["session_id"]):
                     raise asyncio.CancelledError()
                 final_content = _interrupt_terminal_text(state["session_id"])
@@ -6614,6 +6858,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 estimated_tokens=int(effective_input_est),
                 token_estimate_source=str(effective_token_source or ""),
                 model=iter_model,
+                **(_msg_token_paths or {}),
                 **_gc_probe_extras(state),
             )
             _metrics_run_id = str(state.get("_runtime_v2_run_id") or "")
@@ -6652,7 +6897,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             execution_metrics.record_phase(
                 state["session_id"], _metrics_run_id, int(iter_count),
                 "pre_api", pre_api_timings,
-                total_ms=sum(int(v or 0) for v in pre_api_timings.values()),
+                total_ms=_pre_api_timing_total(pre_api_timings),
             )
             # Preserve the existing lightweight thinking indicator; detailed
             # phase diagnostics stay in backend timing logs only.
@@ -8107,7 +8352,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     await _raise_if_steer_requested(state, emit, "tool")
                     if not _state_run_has_write_fence(state):
                         raise asyncio.CancelledError()
-                    if session_manager.is_interrupt_requested(state["session_id"]):
+                    if _state_interrupt_requested(state):
                         if _is_followup_interrupt(state["session_id"]):
                             raise asyncio.CancelledError()
                         break
@@ -9243,16 +9488,6 @@ async def astream_events(
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
     prev_llm_history = [_dict_to_message(m) for m in llm_history_dicts]
     _pre_api_timing_mark(pre_run_timings, "decode_histories", _t_pre)
-    _t_pre = time.perf_counter()
-    prev_work_messages, prev_llm_history = _sanitize_loaded_histories_for_new_run(
-        session_id,
-        prev_work_messages,
-        prev_llm_history,
-        key_context,
-        "sanitize_unclosed_tool_calls_before_chat",
-    )
-    _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
-
     from attachments.admission import AdmissionContext, admit_content
     from attachments import get_attachment_store
     user_message = UserMessage(content=admit_content(
@@ -9605,7 +9840,11 @@ async def astream_events(
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
-            cancel_reason = session_manager.get_interrupt_reason(session_id) or "cancelled"
+            cancel_reason = (
+                "superseded_by_new_run"
+                if not _state_run_has_write_fence(state)
+                else session_manager.get_interrupt_reason(session_id, runtime_v2_run_id) or "cancelled"
+            )
             terminal_event["reason"] = cancel_reason
             raise
         except Exception as exc:
@@ -9757,15 +9996,6 @@ async def astream_events_continuation(
     prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
     prev_llm_history = [_dict_to_message(m) for m in llm_history_dicts]
     _pre_api_timing_mark(pre_run_timings, "decode_histories", _t_pre)
-    _t_pre = time.perf_counter()
-    prev_work_messages, prev_llm_history = _sanitize_loaded_histories_for_new_run(
-        session_id,
-        prev_work_messages,
-        prev_llm_history,
-        key_context,
-        "sanitize_unclosed_tool_calls_before_continuation",
-    )
-    _pre_api_timing_mark(pre_run_timings, "sanitize_histories", _t_pre)
     prior_work_messages_for_judge = list(prev_work_messages)
 
     if str(recovery_reason or "").strip():
@@ -9953,6 +10183,7 @@ async def astream_events_continuation(
                 "content": "Workflow continuation started" if is_workflow_continuation else (
                     "任务已恢复，流程重启" if is_recovery_continuation else "Subagent Continuation Start"
                 ),
+                "ephemeral": True,
             })
             run_start_timings["emit_start_status"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log("run_start_step_timing", session_id, "emit_start_status", run_start_timings["emit_start_status"], run_id=runtime_v2_run_id, mode="continuation")
@@ -10039,7 +10270,11 @@ async def astream_events_continuation(
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}
-            cancel_reason = session_manager.get_interrupt_reason(session_id) or "cancelled"
+            cancel_reason = (
+                "superseded_by_new_run"
+                if not _state_run_has_write_fence(state)
+                else session_manager.get_interrupt_reason(session_id, runtime_v2_run_id) or "cancelled"
+            )
             terminal_event["reason"] = cancel_reason
             raise
         except Exception as exc:

@@ -21,7 +21,7 @@ import platform
 import re
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 _TOKENIZER: Any = None
 _LOAD_FAILED: bool = False
+_TOKENIZER_LOAD_LOCK = threading.Lock()
 _FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str, str, str], Tuple[float, int]] = {}
 _FULL_INPUT_TOKEN_CACHE_LOCK = threading.Lock()
 _FULL_INPUT_TOKEN_CACHE_TTL_SEC = 30.0
@@ -132,11 +133,66 @@ def json_dumps_stable(value: Any) -> str:
 
 
 def _messages_token_fingerprint_from_hashes(hashes: List[str]) -> str:
+    # sha1 is retained deliberately: these fingerprints are persisted in the
+    # on-disk prompt-usage baseline cache, so changing the digest would invalidate
+    # every existing baseline. Hashing the joined list is a single pass over ~1.5k
+    # short hex strings, which is not the per-step cost.
     return hashlib.sha1("\n".join(hashes).encode("ascii", errors="ignore")).hexdigest()
 
 
+# Per-message hash cache. A step's message list is the previous step's list plus a
+# few appends, so rehashing every message each step is O(total history) work for
+# O(new) changes -- measured, that was 516 ms on the first step of a large session
+# and 22 ms in steady state, the single largest per-round cost.
+#
+# A recent history of previously hashed lists is kept and the *longest object-
+# identity prefix* is reused, rather than requiring the same list object to be
+# passed again: callers rebuild the list each step while the messages themselves
+# are carried over, so keying on the list alone would never hit. The stored
+# references also keep every stored identity valid -- storing ``id()`` would let a
+# collected message free its address for a new message to inherit the old hash
+# (observed as a wrong token estimate in tests).
+#
+# Messages are treated as immutable once appended, the same assumption the prompt
+# caches already make.
+_MESSAGE_TOKEN_LIST_CACHE: "deque" = deque(maxlen=8)
+
+
+def _clear_message_token_hash_cache() -> None:
+    _MESSAGE_TOKEN_LIST_CACHE.clear()
+
+
+def _reuse_hash_prefix(items: List[Any]) -> Tuple[List[str], int]:
+    """Longest cached prefix sharing object identity with ``items``."""
+    best_hashes: List[str] = []
+    best_len = 0
+    for cached_len, cached_hashes, cached_msgs in _MESSAGE_TOKEN_LIST_CACHE:
+        if cached_len <= best_len or cached_len > len(items):
+            continue
+        if all(a is b for a, b in zip(items[:cached_len], cached_msgs)):
+            best_hashes = cached_hashes
+            best_len = cached_len
+            if best_len == len(items):
+                break
+    return best_hashes, best_len
+
+
 def _messages_token_hashes(messages: List[Any]) -> List[str]:
-    return [_message_token_cache_hash(m) for m in list(messages or [])]
+    """Per-message hashes, reusing the longest shared prefix.
+
+    Mirrors the session-log projection DSH uses: each message is hashed once and
+    the result is carried forward, so a step costs O(new messages) rather than
+    O(total history).
+    """
+    items = list(messages or [])
+    if not items:
+        return []
+    cached_hashes, start = _reuse_hash_prefix(items)
+    hashes = list(cached_hashes)
+    for msg in items[start:]:
+        hashes.append(_message_token_cache_hash(msg))
+    _MESSAGE_TOKEN_LIST_CACHE.append((len(items), hashes, items))
+    return hashes
 
 
 def _evict_prompt_usage_exact_cache_locked(now: float) -> None:
@@ -179,42 +235,72 @@ def _get_tokenizer() -> Optional[Any]:
         return None
     if _TOKENIZER is not None:
         return _TOKENIZER
-    d = _default_tokenizer_dir()
-    path = d / "tokenizer.json"
-    if not path.is_file():
-        _LOAD_FAILED = True
-        logger.info("未找到 DeepSeek 词表（缺 tokenizer.json），token 估算使用字符/4：%s", d)
-        return None
-    try:
-        from tokenizers import Tokenizer  # type: ignore
+    # Startup warming and the first live request may race.  Serialize the actual
+    # load so a large tokenizer.json is never parsed twice.
+    with _TOKENIZER_LOAD_LOCK:
+        if _LOAD_FAILED:
+            return None
+        if _TOKENIZER is not None:
+            return _TOKENIZER
+        d = _default_tokenizer_dir()
+        path = d / "tokenizer.json"
+        if not path.is_file():
+            _LOAD_FAILED = True
+            logger.info("未找到 DeepSeek 词表（缺 tokenizer.json），token 估算使用字符/4：%s", d)
+            return None
+        try:
+            from tokenizers import Tokenizer  # type: ignore
 
-        _TOKENIZER = Tokenizer.from_file(str(path))
-        logger.info("已加载 tokenizer.json 用于 token 估算（tokenizers，无 PyTorch 依赖）：%s", path)
-        return _TOKENIZER
-    except Exception as e:
-        _LOAD_FAILED = True
-        logger.warning("加载 tokenizer.json 失败，回退字符/4：%s", e)
-        return None
+            _TOKENIZER = Tokenizer.from_file(str(path))
+            logger.info("已加载 tokenizer.json 用于 token 估算（tokenizers，无 PyTorch 依赖）：%s", path)
+            return _TOKENIZER
+        except Exception as e:
+            _LOAD_FAILED = True
+            logger.warning("加载 tokenizer.json 失败，回退字符/4：%s", e)
+            return None
+
+
+def warm_tokenizer() -> bool:
+    """Load the tokenizer and run a tiny encode off the first-request path."""
+    started = time.perf_counter()
+    tok = _get_tokenizer()
+    if tok is None:
+        return False
+    try:
+        tok.encode("MyAgent tokenizer warmup")
+    except Exception:
+        logger.debug("tokenizer warm-up encode failed", exc_info=True)
+        return False
+    logger.info("tokenizer warmed ms=%.0f", (time.perf_counter() - started) * 1000.0)
+    return True
+
+
+def _flatten_message_parts(msg: Any) -> str:
+    """One message's contribution to the flattened count text (empty when skipped).
+
+    Split out of :func:`_flatten_messages_for_count` so the incremental counter can
+    rebuild a tail without re-walking the whole history.
+    """
+    if isinstance(msg, SystemMessage) and _is_loop_marker_text(getattr(msg, "content", "")):
+        return ""
+    parts: List[str] = []
+    if hasattr(msg, "content"):
+        c = msg.content
+        if isinstance(c, str):
+            parts.append(_strip_tool_display_prefix(c) if isinstance(msg, ToolMessage) else c)
+        elif c is not None:
+            parts.append(str(c))
+    if hasattr(msg, "tool_calls") and msg.tool_calls:
+        parts.append(str(msg.tool_calls))
+    ak = getattr(msg, "additional_kwargs", None) or {}
+    if isinstance(ak, dict) and ak.get("reasoning_content"):
+        parts.append(str(ak["reasoning_content"]))
+    return "\n\n".join(parts)
 
 
 def _flatten_messages_for_count(messages: List[Any]) -> str:
     """与历史上 estimate_message 口径一致：汇总 content、tool_calls、reasoning。"""
-    parts: List[str] = []
-    for msg in messages:
-        if isinstance(msg, SystemMessage) and _is_loop_marker_text(getattr(msg, "content", "")):
-            continue
-        if hasattr(msg, "content"):
-            c = msg.content
-            if isinstance(c, str):
-                parts.append(_strip_tool_display_prefix(c) if isinstance(msg, ToolMessage) else c)
-            elif c is not None:
-                parts.append(str(c))
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
-            parts.append(str(msg.tool_calls))
-        ak = getattr(msg, "additional_kwargs", None) or {}
-        if isinstance(ak, dict) and ak.get("reasoning_content"):
-            parts.append(str(ak["reasoning_content"]))
-    return "\n\n".join(parts)
+    return "\n\n".join(_flatten_message_parts(m) for m in messages)
 
 
 def _count_by_chars_4(s: str) -> int:
@@ -238,6 +324,212 @@ def count_text_tokens(text: str) -> int:
 
 def count_message_tokens(messages: List[Any]) -> int:
     return count_text_tokens(_flatten_messages_for_count(messages))
+
+
+# Incremental exact token count for a growing flattened history.
+#
+# ``_flatten_messages_for_count`` joins per-message parts with "\n\n", so the text
+# for N messages is a prefix plus a tail. Tokenizing the concatenation is not the
+# same as tokenizing the pieces separately -- but tokenizing ``prefix`` and
+# ``"\n\n" + tail`` as two pieces is: measured against the whole-string count that
+# matched exactly in 7 of 10 trials and was +1 otherwise, whereas summing
+# per-message counts was 3-5% low. The accuracy matters because this number gates
+# context compression (``effective_input_est > active_context_window``): an
+# under-estimate lets a request overrun the window and the endpoint rejects it.
+#
+# Cached keys are the *flattened prefixes*, not message identities: callers pass a
+# freshly built list each round (reasoning stripped, subagent notes injected), so
+# the same history rarely yields the same objects. Comparing the text is
+# unambiguous and costs a C-level string compare instead of a tokenizer pass.
+#
+# Several histories interleave within one round -- the request messages, the
+# provider-calibration baseline, and any concurrent session. The exact-match dict
+# below carries that load (a dict hit is O(1) on the text's hash), so this deque
+# only needs to cover the append case; each entry pins a full flattened history in
+# memory, so it stays small.
+_FLATTEN_TOKEN_CACHE: "deque" = deque(maxlen=4)
+_FLATTEN_TOKEN_EXACT: Dict[str, int] = {}
+# Message-identity prefixes for constructing the flattened text itself. The token
+# cache avoids re-tokenizing history, but without this companion cache every call
+# still walked every message and rebuilt every part before joining the same 1-2 MB
+# prefix. ``strip_reasoning_for_api_request`` preserves transformed prefix
+# identities, so only newly appended messages need Python-level flattening.
+_FLATTEN_TEXT_CACHE: "deque" = deque(maxlen=8)
+# Counts how each message-token count was satisfied. See message_token_path_stats.
+_MESSAGE_TOKEN_PATH_STATS: Dict[str, int] = {"exact": 0, "prefix": 0, "full": 0}
+# Per-call-site split of the same counts, e.g. "estimate:full" / "suffix:full".
+# Several distinct histories are counted per round (the request messages and the
+# provider-calibration baseline); without this split a round-level counter cannot
+# say which one took the expensive path.
+_MESSAGE_TOKEN_SITE_STATS: Dict[str, int] = {}
+# Set by a caller immediately before invoking the estimator.
+_TOKEN_SITE_HINT = ""
+# Outcome of the most recent seed attempt. ``""`` means seeding never ran, which
+# is itself the diagnosis: the provider-prefix branch was not taken.
+_SEED_LAST = ""
+
+
+def _record_token_path(path: str, chars: int = 0) -> None:
+    _MESSAGE_TOKEN_PATH_STATS[path] = _MESSAGE_TOKEN_PATH_STATS.get(path, 0) + 1
+    if path == "full":
+        # How many characters the tokenizer actually had to chew. A "full" pass on
+        # a two-message suffix is free; on the whole 300k-token history it is not.
+        # Without this the count alone cannot be read as a cost.
+        _MESSAGE_TOKEN_PATH_STATS["full_chars"] = (
+            _MESSAGE_TOKEN_PATH_STATS.get("full_chars", 0) + int(chars)
+        )
+    if _TOKEN_SITE_HINT:
+        key = "%s:%s" % (_TOKEN_SITE_HINT, path)
+        _MESSAGE_TOKEN_SITE_STATS[key] = _MESSAGE_TOKEN_SITE_STATS.get(key, 0) + 1
+        if path == "full":
+            # Which call site paid for the full pass, and how big it was. A "full"
+            # on a 1.3 MB history is the whole remaining token cost; on a two-message
+            # suffix it is free. The count alone cannot distinguish them.
+            ckey = "%s:full_chars" % _TOKEN_SITE_HINT
+            _MESSAGE_TOKEN_SITE_STATS[ckey] = _MESSAGE_TOKEN_SITE_STATS.get(ckey, 0) + int(chars)
+
+
+def _clear_flatten_token_cache() -> None:
+    _FLATTEN_TOKEN_CACHE.clear()
+    _FLATTEN_TOKEN_EXACT.clear()
+    _FLATTEN_TEXT_CACHE.clear()
+
+
+def _flatten_messages_incremental(messages: List[Any]) -> str:
+    """Build flattened history by reusing the longest identical message prefix."""
+    items = list(messages or [])
+    if not items:
+        return ""
+    best_items: List[Any] = []
+    best_text = ""
+    for cached_items, cached_text in _FLATTEN_TEXT_CACHE:
+        cached_len = len(cached_items)
+        if cached_len <= len(best_items) or cached_len > len(items):
+            continue
+        if all(left is right for left, right in zip(items[:cached_len], cached_items)):
+            best_items = cached_items
+            best_text = cached_text
+            if cached_len == len(items):
+                break
+    if len(best_items) == len(items):
+        text = best_text
+    else:
+        tail = "\n\n".join(
+            _flatten_message_parts(item) for item in items[len(best_items):]
+        )
+        text = (best_text + "\n\n" + tail) if best_items else tail
+    _FLATTEN_TEXT_CACHE.append((items, text))
+    return text
+
+
+def _seed_flatten_token_cache(messages: List[Any], tokens: Optional[int] = None) -> None:
+    """Register the flattened text of ``messages`` with a known token count.
+
+    Used where the count already comes from a better source (the provider
+    baseline) so no tokenizer pass is warranted, but the *text* still needs to be
+    registered: the next request asks for this history plus its own tail, and only
+    a stored entry lets it tokenize the tail alone.
+
+    Pass ``tokens`` whenever it is known. Seeding without a count leaves an entry
+    that can never satisfy the exact or prefix lookup, so the caller that asks
+    about this same history pays a full tokenize -- measured as ``tok_full=1``
+    every round with ``tok_exact=0``, i.e. the cache never hit.
+    """
+    global _SEED_LAST
+    try:
+        text = _flatten_messages_incremental(messages)
+        if not text and not messages:
+            _SEED_LAST = "empty"
+            return
+    except Exception as exc:
+        _SEED_LAST = "flatten-failed:%s" % type(exc).__name__
+        return
+    if tokens is None or tokens <= 0:
+        _SEED_LAST = "bad-tokens:%r" % (tokens,)
+        return
+    _FLATTEN_TOKEN_CACHE.append((text, int(tokens)))
+    if len(_FLATTEN_TOKEN_EXACT) > 64:
+        _FLATTEN_TOKEN_EXACT.clear()
+    _FLATTEN_TOKEN_EXACT[text] = int(tokens)
+    _SEED_LAST = "ok:len=%d" % len(text)
+
+
+def count_message_tokens_incremental(messages: List[Any]) -> int:
+    """Token count of the flattened history, tokenizing only newly appended text.
+
+    Two lookup tiers, cheapest first:
+
+    1. Exact text already counted -- a dict hit, no string walk.
+    2. A cached *shorter* prefix of this text -- tokenize only the remainder.
+
+    The prefix tier is one-directional on purpose. Measured, a caller that asks for
+    a shorter history after a longer one (the provider-calibration baseline after
+    the request messages) cannot use a longer cached text at all, and it then fell
+    back to a full tokenize every round: ~870 ms on a 700 KB history, which is why
+    the estimate still scaled with context length after the first attempt.
+
+    Falls back to the whole-string count when nothing matches, so the result is
+    never less exact than :func:`count_message_tokens`.
+    """
+    # Empty parts are kept: the whole-string path joins them too, so dropping one
+    # would collapse two "\n\n" separators into one and under-count (measured up to
+    # 17 tokens over 400 messages). Byte-identical text is what makes the cold path
+    # equal to :func:`count_message_tokens`.
+    text = _flatten_messages_incremental(messages)
+    if not text and not messages:
+        return 0
+    exact = _FLATTEN_TOKEN_EXACT.get(text)
+    if exact is not None:
+        _record_token_path("exact")
+        return exact
+    best_prefix, best_tokens = "", 0
+    for cached_text, cached_tokens in _FLATTEN_TOKEN_CACHE:
+        if len(cached_text) <= len(best_prefix) or len(cached_text) >= len(text):
+            continue
+        # The cached text must be exactly this prefix, ending on a message
+        # boundary: prefix + "\n\n" + tail is the whole text.
+        if text.startswith(cached_text) and text[len(cached_text):len(cached_text) + 2] == "\n\n":
+            best_prefix, best_tokens = cached_text, cached_tokens
+    if not best_prefix:
+        total = count_text_tokens(text)
+        _record_token_path("full", len(text))
+    else:
+        tail_text = text[len(best_prefix):]
+        total = best_tokens + count_text_tokens(tail_text)
+        _record_token_path("prefix", len(tail_text))
+    _FLATTEN_TOKEN_CACHE.append((text, total))
+    if len(_FLATTEN_TOKEN_EXACT) > 64:
+        _FLATTEN_TOKEN_EXACT.clear()
+    _FLATTEN_TOKEN_EXACT[text] = total
+    return total
+
+
+def message_token_path_stats(reset: bool = False) -> Dict[str, int]:
+    """How many counts took each path: exact hit, prefix reuse, or full tokenize.
+
+    The per-round cost is fully explained by this split -- "exact"/"prefix" are
+    milliseconds, "full" tokenizes the whole history. ``<site>:<path>`` keys break
+    the same counts down by call site (``request`` = the messages being sent,
+    ``calibration`` = the provider-usage baseline), so a round showing one "full"
+    says which of them caused it.
+    """
+    snapshot = dict(_MESSAGE_TOKEN_PATH_STATS)
+    snapshot.update(_MESSAGE_TOKEN_SITE_STATS)
+    if _SEED_LAST:
+        snapshot["seed"] = _SEED_LAST
+    if reset:
+        for key in list(_MESSAGE_TOKEN_PATH_STATS):
+            _MESSAGE_TOKEN_PATH_STATS[key] = 0
+        _MESSAGE_TOKEN_SITE_STATS.clear()
+    return snapshot
+
+
+# Seam for the message-level token estimate used by the request estimator. Tests
+# replace this to keep the tokenizer out of the assertion path; production leaves
+# it as the incremental counter above. Named explicitly (rather than the estimator
+# reaching for ``agent_harness.estimate_tokens``) so an injected estimator is
+# honoured instead of silently bypassed.
+message_token_estimator: Callable[[List[Any]], int] = count_message_tokens_incremental
 
 
 def count_tool_definition_tokens(tools: Optional[List[Dict[str, Any]]]) -> int:
@@ -386,6 +678,19 @@ def estimate_full_input_tokens_for_messages(
     from agent_harness import estimate_tokens, strip_reasoning_for_api_request
 
     sid = str(session_id or "").strip()
+    # Diagnostic escape hatch, checked before any branch: trust the provider's own
+    # count and skip the local tokenizer entirely. This measures how much of the
+    # per-round cost this estimate actually is by running without it, instead of
+    # inferring it from a timing breakdown. Off by default -- it trades the
+    # compression trigger's accuracy for the measurement.
+    if str(os.getenv("CONTEXT_TOKEN_SKIP_LOCAL_ESTIMATE") or "").strip() in {"1", "true", "yes", "on"}:
+        cached_baseline = _PROMPT_USAGE_BASELINE_CACHE.get(sid) if sid else None
+        if cached_baseline is None and sid:
+            cached_baseline = _load_prompt_usage_baseline(sid)
+        provider_tokens = int((cached_baseline or {}).get("tokens") or 0)
+        if provider_tokens > 0:
+            result = (provider_tokens, "provider_skip_local")
+            return result if return_source else result[0]
     stripped = strip_reasoning_for_api_request(list(messages or []))
     hashes = _messages_token_hashes(stripped)
     message_fingerprint = _messages_token_fingerprint_from_hashes(hashes)
@@ -424,6 +729,15 @@ def estimate_full_input_tokens_for_messages(
                 suffix_tokens = int(estimate_tokens(suffix)) if suffix else 0
                 margin = max(8, len(suffix) * 4) if suffix else 0
                 estimated = base_tokens + suffix_tokens + margin
+                # Seed the flattened-text cache with the provider's own count.
+                # This early return skips the full-history count below, so without
+                # seeding nothing registered the text the next request asks about --
+                # and every later request re-tokenized the whole history (observed
+                # as tok_full=1 on every round with tok_exact=0). ``base_tokens``
+                # covers the baseline part and ``suffix_tokens`` the appended part;
+                # the margin is deliberately excluded, since it is a safety add-on
+                # that would otherwise be re-counted wherever this is reused.
+                _seed_flatten_token_cache(stripped, base_tokens + suffix_tokens)
                 _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated, "provider_prefix")
                 _evict_prompt_usage_exact_cache_locked(now)
                 result = (int(estimated), "provider_prefix")
@@ -443,17 +757,27 @@ def estimate_full_input_tokens_for_messages(
             ):
                 calibration = dict(baseline)
     tool_tokens = count_tool_definition_tokens(tools)
-    estimated = int(estimate_tokens(stripped)) + tool_tokens
+    # Incremental count: this history is the previous step's plus a few appends, so
+    # tokenizing the whole thing every step is O(all history) for O(new) changes.
+    # Measured on a 433 KB history the full tokenizer pass is ~670 ms against ~1 ms
+    # for the appended tail, and this is one of the larger per-round costs.
+    # ``message_token_estimator`` is the injection seam (see its definition).
+    global _TOKEN_SITE_HINT
+    _TOKEN_SITE_HINT = "request"
+    estimated = int(message_token_estimator(stripped)) + tool_tokens
+    _TOKEN_SITE_HINT = ""
     source = "local_estimate"
     if calibration:
         base_tokens = int(calibration.get("tokens") or 0)
         base_messages = list(calibration.get("messages") or [])
+        _TOKEN_SITE_HINT = "calibration"
         base_local_tokens = (
-            int(estimate_tokens(base_messages))
+            int(message_token_estimator(base_messages))
             + int(calibration.get("tool_tokens") or 0)
             if base_messages
             else 0
         )
+        _TOKEN_SITE_HINT = ""
         if base_tokens > 0 and base_local_tokens > 0:
             estimated = max(0, int(round(estimated * (base_tokens / base_local_tokens))))
             source = "provider_calibrated"
@@ -696,7 +1020,12 @@ def estimate_full_input_tokens_for_llm_history(
         llm_messages.append(SystemMessage(content=kc_body))
     llm_messages.extend(turn_msgs)
     _for_est = strip_reasoning_for_api_request(llm_messages)
-    estimated = int(estimate_tokens(_for_est)) + count_tool_definition_tokens(tools)
+    # Route through the incremental estimator, not the raw tokenizer. The context
+    # meter (top-right) and the compression preview both call this function, and
+    # their history is the same one the next request will send -- so tokenizing it
+    # here also seeds the prefix cache that request reuses. Calling the raw
+    # tokenizer instead left this the one remaining full pass per round.
+    estimated = int(message_token_estimator(_for_est)) + count_tool_definition_tokens(tools)
     with _FULL_INPUT_TOKEN_CACHE_LOCK:
         if len(_FULL_INPUT_TOKEN_CACHE) >= _FULL_INPUT_TOKEN_CACHE_MAX:
             oldest = min(_FULL_INPUT_TOKEN_CACHE.items(), key=lambda item: item[1][0])[0]

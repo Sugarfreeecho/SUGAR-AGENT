@@ -31,6 +31,22 @@ def test_strip_reasoning_for_api_request_strips_think_for_token_estimate():
     assert stripped[0].content == "visible answer"
 
 
+def test_strip_reasoning_for_api_request_reuses_append_only_prefix():
+    import agent_harness
+    from agent_messages import AssistantMessage, UserMessage
+
+    agent_harness._clear_strip_reasoning_cache()
+    source = AssistantMessage(content="<think>hidden</think>\nvisible")
+    first = agent_harness.strip_reasoning_for_api_request([source])
+    second = agent_harness.strip_reasoning_for_api_request(
+        [source, UserMessage(content="next")]
+    )
+
+    assert first[0].content == "visible"
+    assert second[0] is first[0]
+    assert second[1].content == "next"
+
+
 def test_compress_phase_strips_think_blocks_from_assistant_content():
     import agent_memory
 

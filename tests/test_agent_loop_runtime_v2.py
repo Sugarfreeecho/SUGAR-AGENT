@@ -510,6 +510,62 @@ def test_steer_trim_keeps_completed_prefix_and_assistant_text():
     assert [call["id"] for call in trimmed[0].tool_calls] == ["done"]
     assert trimmed[1].tool_call_id == "done"
 
+
+def test_drop_orphan_tool_messages_preserves_only_direct_matching_results():
+    import agent_loop
+
+    assistant = agent_loop.AssistantMessage(
+        content="",
+        tool_calls=[{"name": "read_file", "args": {}, "id": "call-1"}],
+    )
+    messages = [
+        agent_loop.SystemMessage(content="boundary"),
+        agent_loop.ToolMessage(content="legacy orphan", tool_call_id="old-call"),
+        assistant,
+        agent_loop.ToolMessage(content="valid", tool_call_id="call-1"),
+        agent_loop.ToolMessage(content="extra orphan", tool_call_id="extra"),
+        agent_loop.UserMessage(content="continue"),
+    ]
+
+    clean, dropped = agent_loop._drop_orphan_tool_messages(messages)
+
+    assert dropped == [1, 4]
+    assert [type(item).__name__ for item in clean] == [
+        "SystemMessage",
+        "AssistantMessage",
+        "ToolMessage",
+        "UserMessage",
+    ]
+
+
+def test_outgoing_detection_persists_orphan_cleanup(monkeypatch):
+    import agent_loop
+
+    persisted = []
+    monkeypatch.setattr(
+        agent_loop,
+        "_persist_state_with_model_replace",
+        lambda state, messages, reason: persisted.append((state, messages, reason)),
+    )
+    history = [
+        agent_loop.SystemMessage(content="Conversation truncated."),
+        agent_loop.ToolMessage(content="orphan", tool_call_id="missing"),
+        agent_loop.UserMessage(content="continue"),
+    ]
+
+    state = {
+        "session_id": "session-1",
+        "work_messages": [],
+        "llm_history": history,
+        "key_context": "facts",
+    }
+    _work, clean = agent_loop._persist_orphan_cleanup_after_outgoing_detection(
+        state, [], history
+    )
+
+    assert not any(isinstance(item, agent_loop.ToolMessage) for item in clean)
+    assert persisted and persisted[0][2] == "sanitize_orphan_tools_before_api"
+
 def test_runtime_v2_model_history_prefers_projection(monkeypatch):
     import agent_loop
 
@@ -749,6 +805,49 @@ def test_runtime_v2_todo_update_does_not_write_legacy_file(monkeypatch, tmp_path
     assert manager._by_session["s1"] == [
         {"id": "1", "text": "keep in runtime snapshot", "status": "pending"}
     ]
+
+
+def test_runtime_v2_todo_active_check_uses_run_start_snapshot(monkeypatch):
+    import agent_harness
+
+    manager = agent_harness.TodoManager()
+    manager._by_session["active"] = [
+        {"id": "1", "text": "already synchronized", "status": "in_progress"}
+    ]
+    manager._by_session["done"] = [
+        {"id": "1", "text": "finished", "status": "completed"}
+    ]
+    monkeypatch.setattr(
+        manager,
+        "_load_runtime_v2_items",
+        lambda _sid: (_ for _ in ()).throw(
+            AssertionError("per-round active check must not read Runtime V2 state")
+        ),
+    )
+
+    assert manager.has_active_plan("active") is True
+    assert manager.has_active_plan("done") is False
+    assert manager.has_active_plan("missing") is False
+
+
+def test_pre_api_total_excludes_nested_diagnostic_spans():
+    import agent_loop
+
+    timings = {
+        "before_round": 120,
+        "before_round_callback": 110,
+        "before_round_lookup": 115,
+        "before_round_reminder_persist": 40,
+        "static_segments": 30,
+        "static_segments_build": 28,
+        "turn_cache": 5,
+        "build_messages": 35,
+        "tool_registry_cache_hit": 20,
+        "tool_registry_revision": 18,
+        "token_estimate": 10,
+    }
+
+    assert agent_loop._pre_api_timing_total(timings) == 185
 
 
 def test_todo_accepts_multiple_in_progress_items(monkeypatch, tmp_path):
@@ -1299,7 +1398,6 @@ def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, t
     monkeypatch.setattr(agent_loop, "_load_key_context_for_run", lambda session_id: "")
     monkeypatch.setattr(agent_loop, "_load_model_history_dicts_v2_primary", lambda session_id, reconcile_legacy=True: [])
     monkeypatch.setattr(agent_loop, "_load_work_history_dicts_for_run", lambda session_id: [])
-    monkeypatch.setattr(agent_loop, "_sanitize_loaded_histories_for_new_run", lambda sid, work, llm, key, reason: (work, llm))
     monkeypatch.setattr(agent_loop.session_plan_store, "sync_session_from_key_context", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "setup_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "_runtime_v2_append_model_message", lambda *args, **kwargs: None)
@@ -1369,7 +1467,6 @@ def test_astream_can_record_initial_ui_message_as_user_steer(monkeypatch, tmp_pa
     monkeypatch.setattr(agent_loop, "_load_key_context_for_run", lambda session_id: "")
     monkeypatch.setattr(agent_loop, "_load_model_history_dicts_v2_primary", lambda session_id, reconcile_legacy=True: [])
     monkeypatch.setattr(agent_loop, "_load_work_history_dicts_for_run", lambda session_id: [])
-    monkeypatch.setattr(agent_loop, "_sanitize_loaded_histories_for_new_run", lambda sid, work, llm, key, reason: (work, llm))
     monkeypatch.setattr(agent_loop.session_plan_store, "sync_session_from_key_context", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "setup_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent_loop, "_runtime_v2_append_model_message", lambda *args, **kwargs: None)

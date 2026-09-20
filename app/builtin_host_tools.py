@@ -5,6 +5,7 @@ out of ``agent_loop.py`` while preserving the host's authorization boundary.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import queue
 from typing import Any, Mapping
@@ -149,6 +150,34 @@ async def _invoke_context_manage(
     return ToolOutcome.failed("invalid_context_mode", message, content=message)
 
 
+async def _invoke_history_context(
+    context: HostToolInvocationContext,
+    arguments: Mapping[str, Any],
+) -> ToolOutcome:
+    """Search/read current or global durable conversation history."""
+    from history_context import history_context
+
+    try:
+        payload = await asyncio.to_thread(
+            history_context,
+            context.service("session_manager"),
+            context.session_id,
+            action=str(arguments.get("action") or "search"),
+            scope=str(arguments.get("scope") or "current"),
+            query=str(arguments.get("query") or ""),
+            ref=str(arguments.get("ref") or ""),
+            limit=int(arguments.get("limit") or 10),
+            offset=int(arguments.get("offset") or 0),
+            max_chars=int(arguments.get("max_chars") or 8_000),
+        )
+    except (TypeError, ValueError) as exc:
+        message = str(exc)
+        return ToolOutcome.failed("invalid_history_context_request", message, content=message)
+    return ToolOutcome.completed(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
 def _context_before_hooks(arguments: Mapping[str, Any]) -> tuple[str, ...]:
     if str(arguments.get("mode") or "compact").strip().lower() == "compact":
         return ("PreCompact",)
@@ -209,6 +238,18 @@ def register_builtin_host_tools() -> None:
                 effect="control",
                 early_stream_safe=False,
                 interruptibility="cooperative",
+            ),
+        )
+    if not host_tool_invokers.has("history_context"):
+        host_tool_invokers.register(
+            "history_context",
+            _invoke_history_context,
+            policy=ToolExecutionPolicy(
+                effect="read",
+                parallel_safe=True,
+                pressure_limited=True,
+                early_stream_safe=True,
+                interruptibility="safe",
             ),
         )
     if not host_tool_invokers.has("task"):

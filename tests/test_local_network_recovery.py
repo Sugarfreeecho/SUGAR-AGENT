@@ -182,7 +182,11 @@ def test_local_network_sleep_resumes_without_probing_a_provider(monkeypatch):
     events = []
 
     monkeypatch.setattr(agent_loop, "machine_network_available", lambda: next(availability))
-    monkeypatch.setattr(agent_loop.session_manager, "is_interrupt_requested", lambda _sid: False)
+    monkeypatch.setattr(
+        agent_loop.session_manager,
+        "is_interrupt_requested",
+        lambda _sid, _run_id="": False,
+    )
 
     async def no_steer(*_args, **_kwargs):
         return None

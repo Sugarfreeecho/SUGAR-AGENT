@@ -41,3 +41,18 @@ def test_full_input_token_cache_key_changes_when_tools_change():
     assert agent_tokenizer._full_input_token_cache_key("s1", messages, "", first) != (
         agent_tokenizer._full_input_token_cache_key("s1", messages, "", second)
     )
+
+
+def test_warm_tokenizer_loads_and_runs_tiny_encode(monkeypatch):
+    import agent_tokenizer
+
+    seen = []
+
+    class FakeTokenizer:
+        def encode(self, text):
+            seen.append(text)
+
+    monkeypatch.setattr(agent_tokenizer, "_get_tokenizer", lambda: FakeTokenizer())
+
+    assert agent_tokenizer.warm_tokenizer() is True
+    assert seen == ["MyAgent tokenizer warmup"]

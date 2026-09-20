@@ -9,6 +9,7 @@ Agent 可调工具：实现函数 + OpenAI `tools` JSON Schema（`OPENAI_TOOL_DE
 
 import asyncio
 import base64
+import difflib
 import fnmatch
 import hashlib
 import html
@@ -104,6 +105,7 @@ _skill_state_lock = threading.RLock()
 _skills_scan_lock = threading.RLock()
 SKILL_STATE_PATH = PROJECT_ROOT / "skill_states.json"
 _read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
+_read_file_line_count_cache_lock = threading.RLock()
 
 
 def invalidate_skills_cache() -> None:
@@ -359,6 +361,40 @@ def _coalesce_str(*vals: Optional[str]) -> Optional[str]:
 def _format_path_for_tool_output(p: Path) -> str:
     """工具返回给模型的路径：统一为已解析的绝对路径字符串（便于复制回工具参数）。"""
     return redact_sensitive_tool_text(str(p.resolve()))
+
+
+def _missing_path_hint(path: Path) -> str:
+    """Suggest one close existing path component without recursively scanning.
+
+    Tool-driven exploration frequently reuses a long absolute path with one
+    misspelled directory.  Returning the closest sibling at the first missing
+    component lets the next call recover directly instead of spending another
+    model round rediscovering the root.
+    """
+    try:
+        resolved = path.resolve()
+        parts = resolved.parts
+        if not parts:
+            return ""
+        current = Path(parts[0])
+        for index, part in enumerate(parts[1:], start=1):
+            candidate = current / part
+            if candidate.exists():
+                current = candidate
+                continue
+            if not current.is_dir():
+                return ""
+            siblings = [entry.name for entry in current.iterdir()]
+            match = difflib.get_close_matches(part, siblings, n=1, cutoff=0.72)
+            if not match:
+                return ""
+            suggested = current / match[0]
+            for tail in parts[index + 1:]:
+                suggested /= tail
+            return f" Did you mean: {_format_path_for_tool_output(suggested)}"
+    except (OSError, ValueError):
+        return ""
+    return ""
 
 
 # ==================== 危险命令检测 ====================
@@ -2548,7 +2584,7 @@ def read_file(
         if _path_is_sensitive_tool_resource(path):
             return _sensitive_tool_resource_error("read")
         if not path.is_file():
-            return f"Failed to read file: not a file: {raw}"
+            return f"Failed to read file: not a file: {raw}.{_missing_path_hint(path)}".rstrip()
         st = path.stat()
     except Exception as e:
         return f"Failed to read file: {e}"
@@ -2570,7 +2606,8 @@ def read_file(
     if requested_end < s:
         return f"(invalid range: end_line {requested_end} < start_line {s})\n"
     cache_key = str(path.resolve())
-    cached = _read_file_line_count_cache.get(cache_key)
+    with _read_file_line_count_cache_lock:
+        cached = _read_file_line_count_cache.get(cache_key)
     cached_n = cached[2] if cached and cached[:2] == (int(st.st_mtime_ns), int(st.st_size)) else None
     selected: List[str] = []
     n = 0
@@ -2588,9 +2625,10 @@ def read_file(
     except Exception as e:
         return f"Failed to read file: {e}"
     if cached_n is None:
-        if len(_read_file_line_count_cache) >= 512:
-            _read_file_line_count_cache.pop(next(iter(_read_file_line_count_cache)), None)
-        _read_file_line_count_cache[cache_key] = (int(st.st_mtime_ns), int(st.st_size), n)
+        with _read_file_line_count_cache_lock:
+            if len(_read_file_line_count_cache) >= 512:
+                _read_file_line_count_cache.pop(next(iter(_read_file_line_count_cache)), None)
+            _read_file_line_count_cache[cache_key] = (int(st.st_mtime_ns), int(st.st_size), n)
     if n == 0:
         return "(empty file)\n"
     if s > n:
@@ -2641,6 +2679,11 @@ def _line_count_file(p: Path) -> str:
     limit = _ls_line_count_max_bytes()
     if st.st_size > limit:
         return f"— (>{_human_file_size(limit)})"
+    cache_key = str(p.resolve())
+    with _read_file_line_count_cache_lock:
+        cached = _read_file_line_count_cache.get(cache_key)
+    if cached and cached[:2] == (int(st.st_mtime_ns), int(st.st_size)):
+        return str(cached[2])
     try:
         n = 0
         with open(p, "r", encoding="utf-8", errors="replace") as f:
@@ -2649,6 +2692,10 @@ def _line_count_file(p: Path) -> str:
                 n += max(1, (len(body) + _READ_FILE_VIRTUAL_LINE_CHARS - 1) // _READ_FILE_VIRTUAL_LINE_CHARS)
     except (OSError, PermissionError, ValueError):
         return "?"
+    with _read_file_line_count_cache_lock:
+        if len(_read_file_line_count_cache) >= 512:
+            _read_file_line_count_cache.pop(next(iter(_read_file_line_count_cache)), None)
+        _read_file_line_count_cache[cache_key] = (int(st.st_mtime_ns), int(st.st_size), n)
     return str(n)
 
 
@@ -2816,7 +2863,10 @@ def _ls_max_entries() -> int:
 
 
 def _ls_include_line_counts() -> bool:
-    return os.getenv("LS_INCLUDE_LINE_COUNTS", "1").strip().lower() in {"1", "true", "yes", "on"}
+    # Directory discovery should not silently open every text file.  Large
+    # source folders measured 3.6-9.0 seconds merely to render a listing.
+    # Callers that need line counts can opt in per call or through the env flag.
+    return os.getenv("LS_INCLUDE_LINE_COUNTS", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _ls_line_count_max_bytes() -> int:
@@ -2953,7 +3003,7 @@ def ls(
         path = resolve_unrestricted_path(raw)
         enforce_leaf("fs.read", path)
         if not path.is_dir():
-            return f"Error: {raw} is not a directory"
+            return f"Error: {raw} is not a directory.{_missing_path_hint(path)}".rstrip()
         limit = _ls_max_entries() if max_entries is None else max(1, min(5000, int(max_entries)))
         t = format_directory_listing(
             path,
@@ -3331,7 +3381,11 @@ def glob(
 
         enforce_leaf("fs.read", root_path)
         if not root_path.is_dir():
-            return f"Error: root '{raw_root}' is not a directory. Hint: use path='D:/path' and pattern='**/*.py' as separate params."
+            return (
+                f"Error: root '{raw_root}' is not a directory."
+                f"{_missing_path_hint(root_path)} "
+                "Hint: use path='D:/path' and pattern='**/*.py' as separate params."
+            )
 
         max_m = _glob_max_matches()
         indexed_matches = _glob_with_windows_index(root_path, use_pattern, max_m)
@@ -3399,6 +3453,8 @@ def _grep_with_ripgrep(
     file_cap: int,
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
+    include_hidden: bool = False,
+    include_ignored: bool = False,
 ) -> Optional[str]:
     """Fast grep path. Return None when ripgrep cannot handle the request."""
     rg = _resolve_ripgrep_path()
@@ -3410,14 +3466,16 @@ def _grep_with_ripgrep(
         "--no-heading",
         "--color",
         "never",
-        "--hidden",
-        "--no-ignore",
         "--max-filesize",
         str(file_cap),
         "--max-columns",
         str(max(200, line_cap)),
         "--max-columns-preview",
     ]
+    if include_hidden:
+        args.append("--hidden")
+    if include_ignored:
+        args.append("--no-ignore")
     if regex.flags & re.IGNORECASE:
         args.append("--ignore-case")
     for pattern in include or []:
@@ -3442,44 +3500,92 @@ def _grep_with_ripgrep(
         if not recursive:
             args.extend(["--max-depth", "1"])
     args.extend(["--regexp", regex.pattern, "--", str(target)])
+    results: List[str] = []
+    total_bytes = 0
+    truncated = False
+    timeout = max(1.0, float(os.getenv("GREP_TIMEOUT_SEC", "30")))
+    timed_out = threading.Event()
+    process: Optional[subprocess.Popen] = None
+
+    def _stop_for_timeout() -> None:
+        if process is not None and process.poll() is None:
+            timed_out.set()
+            try:
+                process.kill()
+            except OSError:
+                pass
+
     try:
-        timeout = max(1.0, float(os.getenv("GREP_TIMEOUT_SEC", "30")))
-        completed = subprocess.run(
+        process = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
-            check=False,
             **_run_cli_subprocess_stdio_kwargs("rg"),
         )
-    except subprocess.TimeoutExpired:
+        timer = threading.Timer(timeout, _stop_for_timeout)
+        timer.daemon = True
+        timer.start()
+        try:
+            assert process.stdout is not None
+            for raw_line in process.stdout:
+                entry = redact_sensitive_tool_text(raw_line.rstrip())
+                if len(entry) > line_cap:
+                    entry = entry[:line_cap] + f"... [truncated, {len(entry)} chars total]"
+                entry_size = len(entry.encode("utf-8", errors="replace")) + 1
+                if len(results) >= max_results or total_bytes + entry_size > output_cap:
+                    truncated = True
+                    try:
+                        process.terminate()
+                    except OSError:
+                        pass
+                    break
+                results.append(entry)
+                total_bytes += entry_size
+                # Do not wait for ripgrep to scan the rest of the tree merely to
+                # discover whether an additional line exists. At the requested
+                # cap the caller already has all the results it asked for.
+                if len(results) >= max_results or total_bytes >= output_cap:
+                    truncated = True
+                    try:
+                        process.terminate()
+                    except OSError:
+                        pass
+                    break
+            try:
+                returncode = process.wait(timeout=1.0 if truncated else None)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                returncode = process.wait()
+            stderr_text = process.stderr.read() if process.stderr is not None else ""
+        finally:
+            timer.cancel()
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+    if timed_out.is_set():
         return (
             f"Error: ripgrep timed out after {timeout:g} seconds "
             "(GREP_TIMEOUT_SEC); Python fallback was not started."
         )
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
-    if completed.returncode == 1:
+    if truncated:
+        output = "\n".join(results)
+        output += (
+            f"\n... output truncated ({len(results)} lines shown; "
+            f"GREP_MAX_MATCH_LINES={max_results}; GREP_OUTPUT_MAX_BYTES={output_cap})"
+        )
+        return output
+    if returncode == 1:
         return "No matches found"
-    if completed.returncode != 0:
+    if returncode != 0:
+        logger.debug("ripgrep failed returncode=%s stderr=%s", returncode, stderr_text.strip()[:500])
         return None
-
-    results: List[str] = []
-    total_bytes = 0
-    truncated = False
-    for raw_line in completed.stdout.splitlines():
-        entry = redact_sensitive_tool_text(raw_line.rstrip())
-        if len(entry) > line_cap:
-            entry = entry[:line_cap] + f"... [truncated, {len(entry)} chars total]"
-        entry_size = len(entry.encode("utf-8", errors="replace")) + 1
-        if len(results) >= max_results or total_bytes + entry_size > output_cap:
-            truncated = True
-            break
-        results.append(entry)
-        total_bytes += entry_size
     if not results:
         return "No matches found"
     output = "\n".join(results)
@@ -3502,13 +3608,15 @@ def grep(
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
     max_results: Optional[int] = None,
+    include_hidden: bool = False,
+    include_ignored: bool = False,
 ) -> str:
     raw_path = _coalesce_str(path, target_directory) or "/"
     try:
         target = resolve_unrestricted_path(raw_path)
         enforce_leaf("fs.read", target)
         if not target.exists():
-            return f"Error: path '{raw_path}' does not exist"
+            return f"Error: path '{raw_path}' does not exist.{_missing_path_hint(target)}".rstrip()
         if _path_is_sensitive_tool_resource(target):
             return _sensitive_tool_resource_error("grep")
 
@@ -3587,6 +3695,8 @@ def grep(
                 file_cap=file_cap,
                 include=include_patterns,
                 exclude=exclude_patterns,
+                include_hidden=bool(include_hidden),
+                include_ignored=bool(include_ignored),
             )
             if rg_result is not None:
                 return rg_result
@@ -4230,6 +4340,22 @@ def context_manage(mode: str = "compact", focus: str = "", edit_instruction: str
     )
 
 
+def history_context(
+    action: str = "search",
+    scope: str = "current",
+    query: str = "",
+    ref: str = "",
+    limit: int = 10,
+    offset: int = 0,
+    max_chars: int = 8_000,
+) -> str:
+    """Placeholder; the host service performs bounded history retrieval."""
+    _ = action, scope, query, ref, limit, offset, max_chars
+    raise RuntimeError(
+        "history_context is handled by the host service, not tools_dict invocation."
+    )
+
+
 def task(
     action: str = "start",
     description: str = "",
@@ -4343,12 +4469,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "ls",
-        "List a directory (virtual `/` = workspace or an accessible OS path). Shows size; recognized text/source files up to LS_LINE_COUNT_MAX_BYTES (default 5 MiB) get an approximate line count. Other files and directories use —, and directory names end with /.",
+        "List a directory (virtual `/` = workspace or an accessible OS path). Shows size; directory names end with /. Line counts are opt-in because calculating them opens every recognized text file.",
         {
-            "path": {"type": "string", "description": "Directory to list; default /."},
+            "path": {"type": "string", "description": "Directory to list; default /. Reuse exact paths returned by tools instead of guessing path components."},
             "include_line_counts": {
                 "type": "boolean",
-                "description": "Count lines in recognized text/source files within the size limit. Omit to use LS_INCLUDE_LINE_COUNTS (default true).",
+                "description": "Count lines in recognized text/source files within the size limit. Omit for the lightweight default (LS_INCLUDE_LINE_COUNTS defaults false).",
             },
             "max_entries": {
                 "type": "integer",
@@ -4361,26 +4487,28 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "glob",
-        "Find files matching a glob (e.g., **/*.py). Root can be work area or an OS-absolute path.",
+        "Find files matching a glob (e.g., **/*.py). Root can be work area or an OS-absolute path. Prefer this to a broad grep when locating filenames.",
         {
             "pattern": {"type": "string"},
-            "path": {"type": "string", "description": "Root directory for glob, default /."},
+            "path": {"type": "string", "description": "Root directory for glob, default /. Reuse exact paths returned by prior tools."},
         },
         ["pattern"],
     ),
     _openai_function_schema(
         "grep",
         "Search text in files. Default mode=regex (supports |, ., *, +, ?, [], (), ^, $); use mode=fixed when you need to match literal text containing regex metacharacters. "
-        "Path can be work area (default /) or an OS-absolute file/dir.",
+        "Path can be work area (default /) or an OS-absolute file/dir. Search the narrowest known source directory; avoid recursive repository-root searches when a relevant subtree is already known. Results stop as soon as max_results or the output byte cap is reached.",
         {
             "pattern": {"type": "string"},
-            "path": {"type": "string", "description": "File or directory to search; default /."},
+            "path": {"type": "string", "description": "File or directory to search; default /. Reuse an exact tool-returned path; do not guess or abbreviate components."},
             "recursive": {"type": "boolean", "default": True},
             "mode": {"type": "string", "enum": ["fixed", "regex"], "default": "regex"},
             "case_sensitive": {"type": "boolean", "default": False},
             "include": {"type": "array", "items": {"type": "string"}, "description": "Optional file globs, e.g. ['*.py', 'src/**']."},
             "exclude": {"type": "array", "items": {"type": "string"}, "description": "Optional exclusion globs, e.g. ['dist/**']."},
             "max_results": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "include_hidden": {"type": "boolean", "default": False, "description": "Include hidden files/directories. Enable only when the target is expected there."},
+            "include_ignored": {"type": "boolean", "default": False, "description": "Ignore .gitignore and other ignore files. This can make broad searches much slower; enable only when required."},
         },
         ["pattern"],
     ),
@@ -4388,7 +4516,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "read_file",
         "Read a line range from a text file (virtual `/` under the workspace or an allowed OS-absolute path). "
         "Do not treat PDF/PPTX/spreadsheets/binary as plain text—convert or probe with code first. "
-        "Use start_line plus line_count (default 200). Legacy end_line remains accepted internally.",
+        "Use start_line plus line_count (default 200). Reuse exact paths returned by ls/glob/grep; do not guess path components. Legacy end_line remains accepted internally.",
         {
             "path": {"type": "string", "description": "File path (virtual / or OS absolute)."},
             "start_line": {
@@ -4564,6 +4692,56 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "Load a skill by name: returns instructions (SKILL.md body) and the skill root directory OS path.",
         {"skill_name": {"type": "string"}},
         ["skill_name"],
+    ),
+    _openai_function_schema(
+        "history_context",
+        "Search or read durable conversation history. Use scope=current first for facts from this session; "
+        "use scope=global only when the user asks about another or any prior session. Search returns stable refs "
+        "from compressed archives and events.jsonl; pass one ref to action=read for the exact bounded record. "
+        "This is the preferred way to recover context that may have been compacted. If it cannot locate the "
+        "needed evidence, inspect the returned source_file or the session's original events.jsonl with read/search tools.",
+        {
+            "action": {
+                "type": "string",
+                "enum": ["search", "read"],
+                "description": "search finds matching records; read expands one stable ref.",
+                "default": "search",
+            },
+            "scope": {
+                "type": "string",
+                "enum": ["current", "global"],
+                "description": "current searches only this session; global searches all local sessions.",
+                "default": "current",
+            },
+            "query": {
+                "type": "string",
+                "description": "search only: whitespace-separated terms; every term must match.",
+            },
+            "ref": {
+                "type": "string",
+                "description": "read only: stable ref returned by search or a compression placeholder.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "default": 10,
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0,
+                "description": "read only: character offset for paged retrieval.",
+            },
+            "max_chars": {
+                "type": "integer",
+                "minimum": 200,
+                "maximum": 50000,
+                "default": 8000,
+                "description": "read only: maximum characters returned for one page.",
+            },
+        },
+        ["action"],
     ),
     _openai_function_schema(
         "context_manage",
@@ -4797,6 +4975,7 @@ tools = {
     "web_fetch": web_fetch,
     "web_download": web_download,
     "activate_skill": activate_skill,
+    "history_context": history_context,
     "context_manage": context_manage,
     "task": task,
 }
