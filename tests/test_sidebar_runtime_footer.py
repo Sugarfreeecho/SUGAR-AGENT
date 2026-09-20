@@ -30,7 +30,7 @@ def test_sidebar_runtime_status_tracks_session_connectivity() -> None:
 def test_sidebar_uses_dated_product_version() -> None:
     import re
 
-    pattern = re.compile(r'class="sidebar-runtime-version">(v4\.\d{8})</span>')
+    pattern = re.compile(r'class="sidebar-runtime-version">(v5\.\d{8})</span>')
     versions = []
     for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
