@@ -10,6 +10,32 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
+def test_session_summary_writes_notify_registered_state_listeners(tmp_path):
+    import agent_harness
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    manager = agent_harness.SessionManager(sessions_dir, tmp_path / "sessions.json")
+    changes = []
+    manager.add_session_state_listener(
+        lambda session_id, fields: changes.append((session_id, fields))
+    )
+
+    session_id, *_rest = manager.get_or_create_session()
+    manager.set_session_name(session_id, "Generated title")
+    manager.set_session_pinned(session_id, True)
+    manager.set_session_todo(session_id, True)
+    manager.set_session_archived(session_id, True)
+
+    assert changes == [
+        (session_id, frozenset({"created"})),
+        (session_id, frozenset({"name"})),
+        (session_id, frozenset({"pinned", "pinned_at"})),
+        (session_id, frozenset({"todo"})),
+        (session_id, frozenset({"archived"})),
+    ]
+
+
 def test_runtime_v2_event_activity_moves_old_session_to_front(tmp_path):
     import agent_harness
 

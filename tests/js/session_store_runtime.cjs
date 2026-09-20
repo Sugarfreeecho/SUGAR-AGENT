@@ -67,6 +67,44 @@ assert.strictEqual(applySnapshot({
 assert(store.get('latest'), 'a late response from an older request must be ignored');
 assert.strictEqual(store.get('stale'), null);
 
+// Ablation A: while a metadata write is pending, even a newly numbered
+// snapshot must not roll the optimistic row back.
+store.applySnapshot([{ id: 'edited', name: 'Old' }], 0);
+store.snapshotRequestSeq = 10;
+const mutation = store.beginMetadataMutation();
+store.upsert({ id: 'edited', name: 'Optimistic' });
+assert.strictEqual(applySnapshot({
+  client_request_seq: 11,
+  state_revision: 100,
+  sessions: [{ id: 'edited', name: 'Old' }],
+}), false);
+assert.strictEqual(store.get('edited').name, 'Optimistic');
+
+// Ablation B: the client request fence independently rejects a response that
+// started before commit, even without a server revision.
+store.snapshotRequestSeq = 11;
+store.commitMetadataMutation(mutation, 101);
+assert.strictEqual(applySnapshot({
+  client_request_seq: 11,
+  sessions: [{ id: 'edited', name: 'Old' }],
+}), false);
+assert.strictEqual(store.get('edited').name, 'Optimistic');
+
+// Ablation C: the server revision fence independently rejects an old cached
+// generation carried by a request that received a newer client sequence.
+assert.strictEqual(applySnapshot({
+  client_request_seq: 12,
+  state_revision: 100,
+  sessions: [{ id: 'edited', name: 'Old' }],
+}), false);
+assert.strictEqual(store.get('edited').name, 'Optimistic');
+assert.strictEqual(applySnapshot({
+  client_request_seq: 13,
+  state_revision: 101,
+  sessions: [{ id: 'edited', name: 'Committed' }],
+}), true);
+assert.strictEqual(store.get('edited').name, 'Committed');
+
 unreadClearInFlight.add('read-session');
 store.applySnapshot([{
   id: 'read-session',

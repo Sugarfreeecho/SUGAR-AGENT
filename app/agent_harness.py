@@ -28,7 +28,7 @@ import socket
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 import dotenv
 import httpx
@@ -3405,10 +3405,35 @@ class SessionManager:
         self._known_root_session_ids: set[str] = set()
         self._auto_archive_check_lock = threading.Lock()
         self._auto_archive_last_check = 0.0
+        self._session_state_listener_lock = threading.Lock()
+        self._session_state_listeners: List[Callable[[str, frozenset[str]], None]] = []
         self._load_index()
         # 每次 Agent 启动都以磁盘上的会话目录为准重建索引，避免已存在但陈旧的
         # sessions.json 隐藏新增会话，或继续展示已从磁盘移除的会话。
         self.refresh_sessions_index_from_disk()
+
+    def add_session_state_listener(
+        self,
+        listener: Callable[[str, frozenset[str]], None],
+    ) -> None:
+        """Observe committed summary changes regardless of their entry point."""
+        with self._session_state_listener_lock:
+            if listener not in self._session_state_listeners:
+                self._session_state_listeners.append(listener)
+
+    def _notify_session_state_changed(
+        self,
+        session_id: str,
+        fields: Iterable[str],
+    ) -> None:
+        changed_fields = frozenset(str(field) for field in fields if str(field))
+        with self._session_state_listener_lock:
+            listeners = list(self._session_state_listeners)
+        for listener in listeners:
+            try:
+                listener(str(session_id or ""), changed_fields)
+            except Exception:
+                logger.exception("session state listener failed for %s", session_id)
 
     @staticmethod
     def _normalize_session_id(session_id: str) -> str:
@@ -6675,6 +6700,7 @@ class SessionManager:
                 runtime_v2_primary,
             )
             logger.info(f"创建新会话: {session_id}")
+            self._notify_session_state_changed(session_id, {"created"})
             return session_id, dialogue, work_messages, llm_history, key_context, metadata
         else:
             if self._runtime_v2_primary():
@@ -6980,6 +7006,7 @@ class SessionManager:
             changed = True
         if changed:
             self._save_index()
+            self._notify_session_state_changed("", {"archived"})
 
     def list_sessions(self, include_archived: bool = False) -> List[dict]:
         """返回会话列表；每条含 last_activity_at。置顶在前，其余按最近活动时间倒序。"""
@@ -7033,6 +7060,7 @@ class SessionManager:
             self.refresh_sessions_index_from_disk()
             return
         self._save_index()
+        self._notify_session_state_changed(session_id, {"archived"})
 
     def set_session_pinned(self, session_id: str, pinned: bool) -> None:
         meta_path = self._get_metadata_path(session_id)
@@ -7060,6 +7088,7 @@ class SessionManager:
             self.refresh_sessions_index_from_disk()
             return
         self._save_index()
+        self._notify_session_state_changed(session_id, {"pinned", "pinned_at"})
 
     def set_session_todo(self, session_id: str, todo: bool) -> None:
         meta_path = self._get_metadata_path(session_id)
@@ -7082,6 +7111,7 @@ class SessionManager:
             self.refresh_sessions_index_from_disk()
             return
         self._save_index()
+        self._notify_session_state_changed(session_id, {"todo"})
 
     def set_session_goal_review_pending(self, session_id: str, pending: bool) -> None:
         sid = str(session_id or "").strip()
@@ -7111,6 +7141,7 @@ class SessionManager:
             self.refresh_sessions_index_from_disk()
             return
         self._save_index()
+        self._notify_session_state_changed(sid, {"goal_review_pending"})
 
     def set_session_name(self, session_id: str, name: str):
         with self._session_metadata_lock(session_id):
@@ -7126,6 +7157,7 @@ class SessionManager:
                 sess["updated_at"] = metadata["updated_at"]
                 break
         self._save_index()
+        self._notify_session_state_changed(session_id, {"name"})
 
     def mark_session_unread_result(
         self,

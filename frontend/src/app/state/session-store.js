@@ -19,11 +19,55 @@ const sessionStore = {
     snapshotProtectedSessions: new Map(),
     snapshotRequestSeq: 0,
     lastAppliedSnapshotRequestSeq: 0,
+    committedSnapshotRequestFloor: 0,
+    committedStateRevisionFloor: 0,
+    metadataMutationSeq: 0,
+    pendingMetadataMutations: new Set(),
     ui: {
         loadingSessions: false,
         loadingMessages: false,
     },
     streamActiveById: Object.create(null),
+
+    beginMetadataMutation() {
+        const token = ++this.metadataMutationSeq;
+        this.pendingMetadataMutations.add(token);
+        return token;
+    },
+
+    commitMetadataMutation(token, stateRevision) {
+        this.pendingMetadataMutations.delete(token);
+        // Every snapshot request allocated up to this point may have started
+        // before the write committed, so it cannot overwrite the confirmed UI.
+        this.committedSnapshotRequestFloor = Math.max(
+            this.committedSnapshotRequestFloor,
+            this.snapshotRequestSeq
+        );
+        const revision = Number(stateRevision);
+        if (Number.isFinite(revision) && revision > 0) {
+            this.committedStateRevisionFloor = Math.max(
+                this.committedStateRevisionFloor,
+                revision
+            );
+        }
+    },
+
+    cancelMetadataMutation(token) {
+        this.pendingMetadataMutations.delete(token);
+    },
+
+    shouldAcceptSnapshot(snapshot) {
+        if (this.pendingMetadataMutations.size > 0) return false;
+        const requestSeq = Number((snapshot || {}).client_request_seq || 0);
+        if (requestSeq > 0 && requestSeq <= this.committedSnapshotRequestFloor) return false;
+        const revision = Number((snapshot || {}).state_revision || 0);
+        if (
+            this.committedStateRevisionFloor > 0
+            && revision > 0
+            && revision < this.committedStateRevisionFloor
+        ) return false;
+        return true;
+    },
 
     applySnapshot(sessions, archivedCount) {
         this.pruneDeletedSessionTombstones();

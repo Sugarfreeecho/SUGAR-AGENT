@@ -1507,7 +1507,7 @@ def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(m
             webui._sessions_state_refreshing.discard(False)
 
 
-def test_sessions_state_invalidation_keeps_stale_value_and_rejects_older_refresh(monkeypatch):
+def test_sessions_state_invalidation_discards_stale_value_and_rejects_older_refresh(monkeypatch):
     import webui
 
     refresh_started = threading.Event()
@@ -1545,14 +1545,97 @@ def test_sessions_state_invalidation_keeps_stale_value_and_rejects_older_refresh
 
         with webui._sessions_state_cache_lock:
             payload = webui._sessions_state_cache[False]["payload"]
-            assert payload["seq"] == 1
-            assert payload["sessions"] == []
+            assert payload is None
     finally:
         release_refresh.set()
         with webui._sessions_state_cache_lock:
             webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
             webui._sessions_state_refreshing.discard(False)
             webui._sessions_state_refresh_generation.pop(False, None)
+
+
+def test_sessions_state_first_read_after_invalidation_rebuilds_instead_of_serving_stale(monkeypatch):
+    import webui
+
+    calls = []
+
+    def build(include_archived=False):
+        calls.append(bool(include_archived))
+        return {
+            "seq": 2,
+            "sessions": [{"id": "s1", "name": "new name", "pinned": True}],
+        }
+
+    monkeypatch.setattr(webui, "_build_sessions_state_snapshot", build)
+    with webui._sessions_state_cache_lock:
+        webui._sessions_state_cache[False] = {
+            "ts": time.monotonic(),
+            "payload": {
+                "seq": 1,
+                "sessions": [{"id": "s1", "name": "old name", "pinned": False}],
+            },
+        }
+        webui._sessions_state_refreshing.discard(False)
+        webui._sessions_state_refresh_generation.pop(False, None)
+
+    try:
+        webui._invalidate_sessions_state_cache()
+        served = webui._build_sessions_state_snapshot_cached(False)
+
+        assert calls == [False]
+        assert served["seq"] == 2
+        assert served["state_revision"] == webui._sessions_state_cache_generation
+        assert served["sessions"] == [
+            {"id": "s1", "name": "new name", "pinned": True},
+        ]
+    finally:
+        with webui._sessions_state_cache_lock:
+            webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
+            webui._sessions_state_refreshing.discard(False)
+            webui._sessions_state_refresh_generation.pop(False, None)
+
+
+def test_sessions_state_cold_build_retries_when_mutation_crosses_scan(monkeypatch):
+    import webui
+
+    first_build_started = threading.Event()
+    release_first_build = threading.Event()
+    calls = []
+
+    def build(include_archived=False):
+        calls.append(bool(include_archived))
+        if len(calls) == 1:
+            first_build_started.set()
+            assert release_first_build.wait(2)
+            return {"seq": 1, "sessions": [{"id": "s1", "name": "old"}]}
+        return {"seq": 2, "sessions": [{"id": "s1", "name": "new"}]}
+
+    monkeypatch.setattr(webui, "_build_sessions_state_snapshot", build)
+    with webui._sessions_state_cache_lock:
+        webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
+
+    result = {}
+
+    def read_snapshot():
+        result["payload"] = webui._build_sessions_state_snapshot_cached(False)
+
+    reader = threading.Thread(target=read_snapshot)
+    reader.start()
+    try:
+        assert first_build_started.wait(1)
+        expected_revision = webui._invalidate_sessions_state_cache()
+        release_first_build.set()
+        reader.join(2)
+
+        assert not reader.is_alive()
+        assert calls == [False, False]
+        assert result["payload"]["sessions"] == [{"id": "s1", "name": "new"}]
+        assert result["payload"]["state_revision"] == expected_revision
+    finally:
+        release_first_build.set()
+        reader.join(2)
+        with webui._sessions_state_cache_lock:
+            webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
 
 
 def test_sessions_state_includes_pending_human_interaction_counts(monkeypatch, tmp_path):

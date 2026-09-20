@@ -1687,11 +1687,19 @@ _sessions_state_cache_lock = threading.Lock()
 _sessions_state_build_locks = {False: threading.Lock(), True: threading.Lock()}
 _sessions_state_refreshing: set[bool] = set()
 _sessions_state_refresh_generation: dict[bool, int] = {}
-_sessions_state_cache_generation = 0
+_sessions_state_cache_generation = int(time.time() * 1000)
 
 
-def _invalidate_sessions_state_cache() -> None:
-    """Expire snapshots without blocking readers or accepting an old refresh."""
+def _invalidate_sessions_state_cache() -> int:
+    """Discard snapshots and reject refreshes that started before a state change.
+
+    Serving stale data is useful when a snapshot merely expires by TTL, but it
+    is not safe after a known mutation.  Keeping the old payload here makes the
+    first post-mutation request return pre-mutation session metadata while a
+    background refresh catches up, which visibly rolls optimistic sidebar
+    updates back.  A hard invalidation makes the next reader rebuild under the
+    per-variant build lock instead.
+    """
     global _sessions_state_cache_generation
 
     with _sessions_state_cache_lock:
@@ -1699,8 +1707,21 @@ def _invalidate_sessions_state_cache() -> None:
         for key in (False, True):
             _sessions_state_cache[key] = {
                 "ts": 0.0,
-                "payload": _sessions_state_cache[key]["payload"],
+                "payload": None,
             }
+        return _sessions_state_cache_generation
+
+
+def _on_session_manager_state_changed(
+    _session_id: str,
+    _fields: frozenset[str],
+) -> None:
+    _invalidate_sessions_state_cache()
+
+
+_add_session_state_listener = getattr(session_manager, "add_session_state_listener", None)
+if callable(_add_session_state_listener):
+    _add_session_state_listener(_on_session_manager_state_changed)
 
 
 def _refresh_sessions_state_cache(key: bool, generation: int) -> None:
@@ -1708,6 +1729,8 @@ def _refresh_sessions_state_cache(key: bool, generation: int) -> None:
 
     try:
         payload = _build_sessions_state_snapshot(include_archived=key)
+        payload = dict(payload)
+        payload["state_revision"] = generation
         with _sessions_state_cache_lock:
             if generation == _sessions_state_cache_generation:
                 _sessions_state_cache[key] = {
@@ -1755,19 +1778,27 @@ def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dic
     # per include_archived variant, then re-check in case another request won.
     build_lock = _sessions_state_build_locks[key]
     with build_lock:
-        with _sessions_state_cache_lock:
-            generation = _sessions_state_cache_generation
-            cached = _sessions_state_cache[key]
-            if cached["payload"] is not None:
-                return cached["payload"]
-        payload = _build_sessions_state_snapshot(include_archived=key)
-        with _sessions_state_cache_lock:
-            if generation == _sessions_state_cache_generation:
+        while True:
+            with _sessions_state_cache_lock:
+                generation = _sessions_state_cache_generation
+                cached = _sessions_state_cache[key]
+                if cached["payload"] is not None:
+                    return cached["payload"]
+            payload = _build_sessions_state_snapshot(include_archived=key)
+            payload = dict(payload)
+            payload["state_revision"] = generation
+            with _sessions_state_cache_lock:
+                if generation != _sessions_state_cache_generation:
+                    # A committed mutation crossed this disk scan. Returning
+                    # the result would leak one stale response even though it
+                    # is correctly rejected for caching, so rebuild at the new
+                    # revision while still holding the single-flight lock.
+                    continue
                 _sessions_state_cache[key] = {
                     "ts": _time.monotonic(),
                     "payload": payload,
                 }
-        return payload
+                return payload
 
 def get_index_html():
     """读取并返回 Vite 构建产物 templates/dist/index.html。"""
@@ -3392,7 +3423,7 @@ async def create_session(req: Request = None):
             security_status_for_session,
             session_id,
         )
-    _invalidate_sessions_state_cache()
+    state_revision = _invalidate_sessions_state_cache()
     session = {
         "id": session_id,
         "name": (metadata or {}).get("name") or "新会话",
@@ -3415,6 +3446,7 @@ async def create_session(req: Request = None):
             "session": session,
             "model_profile_id": requested_profile_id,
             "permission_status": permission_status,
+            "state_revision": state_revision,
         },
         headers={"Server-Timing": f"session-create;dur={elapsed_ms}"},
     )
@@ -3933,8 +3965,8 @@ async def delete_session(session_id: str):
         await run_in_threadpool(_run_history_op_locked, sid, session_manager.delete_session, sid)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-    _invalidate_sessions_state_cache()
-    return JSONResponse(content={"status": "ok"})
+    state_revision = _invalidate_sessions_state_cache()
+    return JSONResponse(content={"status": "ok", "state_revision": state_revision})
 
 
 @fastapi_app.post("/sessions/{session_id}/interrupt")
@@ -6556,8 +6588,8 @@ async def rename_session(session_id: str, name: str = Form(...)):
     if not normalized_name:
         return JSONResponse(content={"status": "error", "error": "session name is required"}, status_code=400)
     session_manager.set_session_name(session_id, normalized_name)
-    _invalidate_sessions_state_cache()
-    return JSONResponse(content={"status": "ok"})
+    state_revision = _invalidate_sessions_state_cache()
+    return JSONResponse(content={"status": "ok", "state_revision": state_revision})
 
 
 def _remove_session_export_archive(path: str) -> None:
@@ -6634,22 +6666,22 @@ async def export_session(session_id: str):
 @fastapi_app.put("/sessions/{session_id}/archive")
 async def archive_session(session_id: str, archived: bool = Form(...)):
     session_manager.set_session_archived(session_id, archived)
-    _invalidate_sessions_state_cache()
-    return JSONResponse(content={"status": "ok"})
+    state_revision = _invalidate_sessions_state_cache()
+    return JSONResponse(content={"status": "ok", "state_revision": state_revision})
 
 
 @fastapi_app.put("/sessions/{session_id}/pin")
 async def pin_session(session_id: str, pinned: bool = Form(...)):
     session_manager.set_session_pinned(session_id, pinned)
-    _invalidate_sessions_state_cache()
-    return JSONResponse(content={"status": "ok"})
+    state_revision = _invalidate_sessions_state_cache()
+    return JSONResponse(content={"status": "ok", "state_revision": state_revision})
 
 
 @fastapi_app.put("/sessions/{session_id}/todo")
 async def todo_session(session_id: str, todo: bool = Form(...)):
     session_manager.set_session_todo(session_id, todo)
-    _invalidate_sessions_state_cache()
-    return JSONResponse(content={"status": "ok"})
+    state_revision = _invalidate_sessions_state_cache()
+    return JSONResponse(content={"status": "ok", "state_revision": state_revision})
 
 
 @fastapi_app.post("/sessions/{session_id}/unread-result/clear")

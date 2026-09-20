@@ -1,5 +1,6 @@
 function applySessionSnapshot(snapshot) {
     snapshot = snapshot || {};
+    if (!sessionStore.shouldAcceptSnapshot(snapshot)) return false;
     const requestSeq = Number(snapshot.client_request_seq || 0);
     if (requestSeq > 0 && requestSeq < sessionStore.lastAppliedSnapshotRequestSeq) return false;
     if (requestSeq > 0) sessionStore.lastAppliedSnapshotRequestSeq = requestSeq;

@@ -72,4 +72,8 @@ def test_rename_session_normalizes_name_and_rejects_blank(monkeypatch):
 
     assert blank.status_code == 400
     assert saved.status_code == 200
+    saved_payload = json.loads(saved.body.decode("utf-8"))
+    assert saved_payload["status"] == "ok"
+    assert isinstance(saved_payload["state_revision"], int)
+    assert saved_payload["state_revision"] > 0
     assert fake.renames == [("session-1", "Renamed session")]

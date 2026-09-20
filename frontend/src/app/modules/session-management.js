@@ -331,52 +331,120 @@ function syncSessionMenuLabels(wrap, sess) {
     if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
 }
 
+function beginSidebarMetadataMutation() {
+    // Invalidate list/archive loads already in flight. Direct reconciliation
+    // calls are independently fenced by sessionStore.shouldAcceptSnapshot().
+    sessionListLoadEpoch += 1;
+    archivedSessionsLoadEpoch += 1;
+    return sessionStore.beginMetadataMutation();
+}
+
+function commitSidebarMetadataMutation(token, responsePayload) {
+    sessionListLoadEpoch += 1;
+    archivedSessionsLoadEpoch += 1;
+    sessionStore.commitMetadataMutation(
+        token,
+        responsePayload && responsePayload.state_revision
+    );
+}
+
+function cancelSidebarMetadataMutation(token) {
+    sessionListLoadEpoch += 1;
+    archivedSessionsLoadEpoch += 1;
+    sessionStore.cancelMetadataMutation(token);
+}
+
 async function toggleSessionPinnedFromMenu(sess) {
+    const mutationToken = beginSidebarMetadataMutation();
+    let mutationCommitted = false;
+    let previous = null;
     try {
         const formData = new FormData();
         const nextPinned = !sess.pinned;
-        const previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
+        previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
         formData.append('pinned', nextPinned ? 'true' : 'false');
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/pin', { method: 'PUT', body: formData });
+        const response = await fetchWithTimeout(
+            '/sessions/' + encodeURIComponent(sess.id) + '/pin',
+            { method: 'PUT', body: formData },
+            12000
+        );
         if (!response.ok) {
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
             throw new Error('pin failed: ' + response.status);
         }
+        const responsePayload = await response.json().catch(function () { return null; });
+        commitSidebarMetadataMutation(mutationToken, responsePayload);
+        mutationCommitted = true;
         await refreshSingleSessionRow(sess.id);
-    } catch (err) { console.error('置顶失败', err); }
+    } catch (err) {
+        if (!mutationCommitted) {
+            cancelSidebarMetadataMutation(mutationToken);
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        }
+        console.error('置顶失败', err);
+    }
 }
 
 async function toggleSessionTodoFromMenu(sess) {
+    const mutationToken = beginSidebarMetadataMutation();
+    let mutationCommitted = false;
+    let previous = null;
     try {
         const formData = new FormData();
         const nextTodo = !sess.todo;
-        const previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });
+        previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });
         formData.append('todo', nextTodo ? 'true' : 'false');
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/todo', { method: 'PUT', body: formData });
+        const response = await fetchWithTimeout(
+            '/sessions/' + encodeURIComponent(sess.id) + '/todo',
+            { method: 'PUT', body: formData },
+            12000
+        );
         if (!response.ok) {
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
             throw new Error('todo failed: ' + response.status);
         }
+        const responsePayload = await response.json().catch(function () { return null; });
+        commitSidebarMetadataMutation(mutationToken, responsePayload);
+        mutationCommitted = true;
         await refreshSingleSessionRow(sess.id);
-    } catch (err) { console.error('待办设置失败', err); }
+    } catch (err) {
+        if (!mutationCommitted) {
+            cancelSidebarMetadataMutation(mutationToken);
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        }
+        console.error('待办设置失败', err);
+    }
 }
 
 async function toggleSessionArchivedFromMenu(sess) {
+    const mutationToken = beginSidebarMetadataMutation();
+    let mutationCommitted = false;
+    let previous = null;
     try {
         const formData = new FormData();
         const nextArchived = !sess.archived;
-        const previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
+        previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
         formData.append('archived', nextArchived ? 'true' : 'false');
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
+        const response = await fetchWithTimeout(
+            '/sessions/' + encodeURIComponent(sess.id) + '/archive',
+            { method: 'PUT', body: formData },
+            12000
+        );
         if (!response.ok) {
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
             throw new Error('archive failed: ' + response.status);
         }
+        const responsePayload = await response.json().catch(function () { return null; });
+        commitSidebarMetadataMutation(mutationToken, responsePayload);
+        mutationCommitted = true;
         await refreshSingleSessionRow(sess.id);
         if (!nextArchived && sessionStore.archivedLoaded) {
             await loadArchivedSessions({ background: true, refresh: true, forceRender: true });
         }
-    } catch (err) { console.error('归档失败', err); }
+    } catch (err) {
+        if (!mutationCommitted) {
+            cancelSidebarMetadataMutation(mutationToken);
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        }
+        console.error('归档失败', err);
+    }
 }
 
 async function renameSessionFromMenu(sess) {
@@ -394,18 +462,30 @@ async function renameSessionFromMenu(sess) {
     if (typeof requestedName !== 'string') return;
     var newName = requestedName.trim().slice(0, 160);
     if (!newName || newName === String(sess.name || '')) return;
+    const mutationToken = beginSidebarMetadataMutation();
+    let mutationCommitted = false;
     const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
     if (currentSessionId === sess.id) updateSessionTitle();
     try {
         const formData = new FormData();
         formData.append('name', newName);
-        const response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/name', { method: 'PUT', body: formData });
+        const response = await fetchWithTimeout(
+            '/sessions/' + encodeURIComponent(sess.id) + '/name',
+            { method: 'PUT', body: formData },
+            12000
+        );
         if (!response.ok) throw new Error('rename failed: ' + response.status);
+        const responsePayload = await response.json().catch(function () { return null; });
+        commitSidebarMetadataMutation(mutationToken, responsePayload);
+        mutationCommitted = true;
         await refreshSingleSessionRow(sess.id);
         if (currentSessionId === sess.id) updateSessionTitle();
     } catch (err) {
         console.error('重命名失败', err);
-        if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        if (!mutationCommitted) {
+            cancelSidebarMetadataMutation(mutationToken);
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        }
         if (currentSessionId === sess.id) updateSessionTitle();
     }
 }
