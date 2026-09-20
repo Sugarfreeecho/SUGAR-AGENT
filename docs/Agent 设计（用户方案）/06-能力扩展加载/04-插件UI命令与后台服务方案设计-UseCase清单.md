@@ -1,6 +1,6 @@
 # 插件 UI、命令与后台服务 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
+- 版本：2026-09-20 v3（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/ui.py`（914 行）、`plugins/web.py`、`agent_extensions`（命令目录/派发）、前端 `plugin-ui-slots.js`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -33,6 +33,12 @@
 - **预期现象**：插件的静态资源/路由可被界面加载；路径隔离（插件间不串）。
 - **依据**：`plugins/web.py`、清单 `web.assets`。
 
+### UC-6D5 插件徽章不得冒充运行状态
+- **触发**：会话级工作流插件（如 agent-goal）返回业务状态徽章。
+- **预期现象**：Goal `active` 仅显示普通状态 badge；只有插件确实存在短时后台活动时才声明 activity 脉冲。
+- **规则与边界**：插件业务状态与宿主 run activity 分离；Goal 处于 active/paused/completed 不能单独推导“正在运行”。
+- **依据**：`plugins/agent-goal/.myagent-plugin/plugin.json` 的 badge 配置、前端插件 UI 状态渲染。
+
 ## 3. 边界
 
 - 插件的**工具**类出口走工具系统（../03-工具系统/01）；
@@ -45,8 +51,10 @@
 | UC-6D1 | `agent_extensions.py` L589–750 |
 | UC-6D2/6D3 | L1522–1554、`plugins/ui.py` |
 | UC-6D4 | `plugins/web.py` |
+| UC-6D5 | `plugins/agent-goal/.myagent-plugin/plugin.json` |
 
 ## 5. 版本记录
 
+- 2026-09-20 v3：新增 UC-6D5，Goal active 徽章与宿主 run activity 解耦。
 - 2026-09-14 v2：补录扩展状态控制事件旁路（observer 流）；版本线更新至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-605）。

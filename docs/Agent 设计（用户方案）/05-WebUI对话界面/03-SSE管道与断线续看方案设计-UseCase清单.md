@@ -1,6 +1,6 @@
 # SSE 管道与断线续看 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831`）
+- 版本：2026-09-20 v3（覆盖至：当前工作区；补充终态单调性与跨进程恢复接管边界）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（3.6k 行）、`modules/event-dispatch.js`、后端 `runtime_v2_session_stream`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -40,6 +40,12 @@
 - **规则与边界**：由 5 秒心跳 `GET /api/runtime-status` 的 `active_session_ids` 驱动（`maybeTakeOverActiveRuntimeSession`），接管时伴随一次扩展状态收敛刷新；不改变"停止/插话"语义。
 - **依据**：`webui._runtime_status_payload`、`session-management.js`（心跳接管）、`sse-handling.js::attachSessionEventStream`。
 
+### UC-5C6 终态单调与恢复接管一致性
+- **触发**：SSE/历史回放收到 `run_finished`、`run_interrupted` 或 `run_failed`，或页面根据 runtime-status 重新挂接服务端自主运行。
+- **预期现象**：终态到达后前端结束该 run、封口过程块并记录 terminal run；只有不同的新 run 才能重新进入活动状态。同一 `run_id` 不得在终态后继续产生模型/工具/上下文事件。
+- **规则与边界**：前端把终态视为不可逆事实；后端恢复扫描必须用跨进程 exact-run 租约避免制造假终态。若耐久历史已经存在“同 run 终态后继续写入”，刷新只会重放矛盾状态，不能作为修复手段；应先修复事件生产者/恢复接管路径，不得用高频强制重绘掩盖。
+- **依据**：`session-event-reducer.js` 的 terminal run 归约、`sse-handling.js::endRunForClient/attachSessionEventStream`、`webui._discover_recoverable_react_sessions`。
+
 ## 3. 边界
 
 - 与"运行日志文件"无关：这里是界面流；
@@ -54,8 +60,10 @@
 | UC-5C3 | `webui.py` L190/1736；`_observer_extension_control_event` |
 | UC-5C4 | `event-dispatch.js` |
 | UC-5C5 | `webui._runtime_status_payload`；`session-management.js` 心跳接管 |
+| UC-5C6 | `session-event-reducer.js` 终态归约；`sse-handling.js` 终结/重挂；`webui.py` 跨进程恢复租约 |
 
 ## 5. 版本记录
 
+- 2026-09-20 v3：新增 UC-5C6，确立 run 终态单调性；记录假 `no_local_activity` 与后续同 run 事件会造成终结/重挂振荡，明确修复必须落在跨进程恢复接管端。
 - 2026-09-14 v2：补录服务端自主运行自动接管（UC-5C5）与扩展状态控制事件（UC-5C3）；澄清 scanExisting 归属；更新版本线至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-505）。

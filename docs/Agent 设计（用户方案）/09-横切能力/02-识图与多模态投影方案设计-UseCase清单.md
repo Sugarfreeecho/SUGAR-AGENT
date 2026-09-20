@@ -1,6 +1,6 @@
 # API 识图与多模态投影 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
+- 版本：2026-09-20 v3（覆盖至：当前工作区）
 - 用途：按「触发 → 预期现象 → 规则与边界 → 依据」逐条审查图片从接入、存储、模型请求到结果和生命周期的完整链路。
 - 适用实现：`app/attachments/**`、`app/vision_api.py`、`app/agent_openai.py`、`app/llm/transport.py`、`app/agent_harness.py`、`app/agent_loop.py`、`app/agent_mcp.py`、`app/agent_subagent.py`、`app/runtime_v2/**`、`app/webui.py`、`frontend/src/app/modules/{workspace-media,sse-handling,event-dispatch,message-rendering}.js`。
 - 上级：`00-横切能力整体设计.md`
@@ -79,6 +79,13 @@ API 识图把上传、粘贴、拖拽、本地路径、远程图片链接和工�
 - **预期现象**：同一版本只生成一次，不同版本可并行；对象提交、授权 pin 和 GC 通过 catalog 锁协调。对象库超限拒绝新提交；请求缓存超限按旧到新淘汰可重建版本，不删除锁文件或源对象。
 - **规则与边界**：对象库默认 10 GiB，缓存默认 512 MiB。锁等待默认 30 秒，超时给出 `ATTACHMENT_BUSY`。规范对象不能像缓存一样直接淘汰，必须经过可达性 GC。
 - **依据**：`attachments/locking.py`、`attachments/local.py::occupied_bytes`、`attachments/request_image.py::_trim_cache`。
+
+### UC-9B26 附件序列化热路径缓存
+
+- **触发**：长历史中的每条消息通过 `durable_content()` 解析附件存储与远程图片策略。
+- **预期现象**：附件根目录只读取单一 `WORK_DIR` 并记忆化已解析路径，远程图片策略复用缓存，避免对每条历史消息重复读取多组环境变量和执行 Windows `Path.resolve()`。
+- **规则与边界**：显式设置或变化的 `WORK_DIR` 仍必须被尊重；配置更新通过 `invalidate_attachment_env_cache()` 清除缓存。缓存只消除环境/路径解析开销，不跳过附件身份、权限或完整性校验。
+- **依据**：`attachments.__init__.get_attachment_store / invalidate_attachment_env_cache`、`RemoteImagePolicy` 缓存调用点。
 
 ## 4. 远程图片链接
 
@@ -293,5 +300,6 @@ API 识图把上传、粘贴、拖拽、本地路径、远程图片链接和工�
 
 ## 12. 版本记录
 
-- 2026-09-13 v1：拆分首版，覆盖请求投影、预算、工具图片、能力降级和附件存储。
+- 2026-09-20 v3：新增 UC-9B26，记录长历史附件序列化的环境读取与路径解析缓存，不改变附件校验语义。
 - 2026-09-14 v2：按实际实现扩展为完整 API 识图方案，新增统一准入、远程图片三模式、独立 API、授权、幂等、SSE、取消、结构化输出、配额、GC、备份恢复、前端资源复用、指标和验收证据；删除旧的强制视觉委托描述。
+- 2026-09-13 v1：拆分首版，覆盖请求投影、预算、工具图片、能力降级和附件存储。

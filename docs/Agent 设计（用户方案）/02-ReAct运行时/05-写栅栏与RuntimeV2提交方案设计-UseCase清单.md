@@ -1,6 +1,6 @@
 # 写栅栏与 Runtime V2 提交 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `d022831`）
+- 版本：2026-09-20 v2（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_loop.py`（提交点 L2113–2660）、`runtime_v2/history_ops.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -24,9 +24,10 @@
 - **依据**：`_runtime_v2_append_model_message / _runtime_v2_replace_model_history`。
 
 ### UC-2E3 写栅栏
-- **触发**：run 被中断/并行操作试图交叉写。
-- **预期现象**：同一会话上的写入被栅栏保护——未完成 run 不写终态；新的写操作等栅栏释放。
-- **依据**：`_state_run_has_write_fence`、`_RuntimeV2RunLifecycle`。
+- **触发**：同一会话内新 run 合法取得写栅栏，或旧 run 在检查点准备继续写入。
+- **预期现象**：只有持有当前 `run_id` 栅栏的 run 可以继续提交业务事件；失去栅栏的旧 run 停止写入，但仍以 `run_interrupted(reason=superseded_by_new_run)` 写入自己的唯一终态。
+- **规则与边界**：写栅栏用于隔离业务写，不等于省略旧 run 终态；中断判断也必须匹配 exact run，旧 run 的标记不得污染替代 run。
+- **依据**：`_state_run_has_write_fence`、`_state_interrupt_requested`、`_RuntimeV2RunLifecycle`。
 
 ### UC-2E4 检查点
 - **触发**：上下文 token 变化 / 压缩提交。
@@ -49,4 +50,5 @@
 
 ## 5. 版本记录
 
+- 2026-09-20 v2：修正写栅栏接管语义——旧 run 停止业务写但仍提交 `superseded_by_new_run` 唯一终态；控制边界收紧到 exact run。
 - 2026-09-13 v1：拆分首版（原 UC-207 扩充成篇）。

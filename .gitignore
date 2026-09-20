@@ -79,3 +79,6 @@ skill_states.json
 # Local debugging artifacts (analysis snapshots, Playwright MCP captures)
 .analysis/
 .playwright-mcp/
+
+# Local skeleton-width audit screenshots
+skeleton-width-audit/

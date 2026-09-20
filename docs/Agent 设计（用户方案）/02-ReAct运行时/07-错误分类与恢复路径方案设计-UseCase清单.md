@@ -1,6 +1,6 @@
 # 错误分类与恢复路径 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `d022831` + 未提交 NET 恢复改动）
+- 版本：2026-09-20 v2（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_loop.py`（分类器 L4251–4509、恢复段 L7317+）。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -35,6 +35,12 @@
 - **预期现象**：产生压力事件（本地过载提示），帮助解释"变慢"；不改变任务语义。
 - **依据**：`_cpu_pressure_transition_event / _cpu_pressure_metrics_text`。
 
+### UC-2G5 运行时辅助线程耗尽
+- **触发**：心跳、观测刷盘、power guard 或生命周期异步追加遇到 `RuntimeError: can't start new thread`。
+- **预期现象**：指标/观测后台能力非致命降级；生命周期事件改为同步追加，已经开始的 run 仍必须进入唯一终态。
+- **规则与边界**：不能把诊断线程创建失败当作业务 run 的失败前置；若同步终态追加也失败，记录明确错误并完成其余指标/注册清理后再上抛。
+- **依据**：`_RuntimeV2RunLifecycle.commit`、`execution_metrics._ensure_heartbeat_thread`、`runtime_observability._schedule_write`、`runtime_power.AgentRunPowerGuard`。
+
 ## 3. 边界
 
 - 分类器**只分类不决策**：决策在各自的恢复路径（重试/压缩/等待/切换）。
@@ -48,7 +54,9 @@
 | UC-2G2 | L4305–4336、L4900+ |
 | UC-2G3 | L3351、L7462+ |
 | UC-2G4 | L237–327 |
+| UC-2G5 | `_RuntimeV2RunLifecycle`、`execution_metrics.py`、`runtime_observability.py`、`runtime_power.py` |
 
 ## 5. 版本记录
 
+- 2026-09-20 v2：新增 UC-2G5，辅助线程耗尽时观测降级但 run 终态必须收敛。
 - 2026-09-13 v1：拆分首版（承接 UC-209/210/211）。

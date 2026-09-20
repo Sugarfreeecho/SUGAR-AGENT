@@ -1,6 +1,6 @@
 # 路径模型与安全解析 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + 9-14 路径基准修复）
+- 版本：2026-09-20 v3（覆盖至：当前工作区；补充隔离子进程的 dotenv 优先级）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_harness.py`（WORK_DIR 等）、`app/agent_tools.py`（路径解析）、`app/session_authorized_dirs.py`（规范化）。
 - 上级：`00-工作区整体设计.md`
@@ -39,6 +39,12 @@
 - **规则与边界**：Windows 虚拟根 `/foo` → 工作区根（不随 `workdir` 变）；只读 git `-C`/`--git-dir`/`--work-tree` 白名单不受影响；含空格但未加引号的绝对路径视为歧义输入，保持保守（按越界处理）；分类与后续 `required_dirs` 复核使用同一基准，避免二次判定反转。
 - **依据**：`agent_tools._resolve_shell_working_dir` L1070、`_resolve_shell_token_for_workspace_restrict` L1244、`_outside_workspace_tokens` L1288；`security/runtime._effective_shell_base` L201。
 
+### UC-4A6 隔离子进程的 WORK_DIR 优先级
+- **触发**：测试、验证或迁移工具启动第二个应用进程，并显式传入一次性 `WORK_DIR`。
+- **预期现象**：设置 `MYAGENT_DOTENV_OVERRIDE=0` 后，显式子进程环境优先；`app/.env` 只补齐缺失配置，不把临时工作区覆盖回生产目录。未设置开关的正常应用启动继续保持历史上的 `.env` 覆盖行为。
+- **规则与边界**：该开关不能隐式全局启用；调用方必须同时负责临时目录的所有权、会话清理和进程退出顺序。仅设置 `WORK_DIR` 而未关闭 dotenv override 不构成隔离。
+- **依据**：`agent_harness.load_app_dotenv`、`scripts/subagent_ui_verify.py`。
+
 ## 3. 边界
 
 - 读类工具（read/ls/glob/grep）**可**访问工作区外路径（按工具规则），写类需授权——这是刻意的非对称规则。
@@ -53,8 +59,10 @@
 | UC-4A3 | L282–345、`session_authorized_dirs.py` L13–49 |
 | UC-4A4 | L398–445 |
 | UC-4A5 | `agent_tools.py` L1070、L1244–1454；`security/runtime.py` L201、L224 起 |
+| UC-4A6 | `agent_harness.load_app_dotenv`；`scripts/subagent_ui_verify.py` |
 
 ## 5. 版本记录
 
-- 2026-09-13 v1：拆分首版（承接 UC-401）。
+- 2026-09-20 v3：新增 UC-4A6，明确隔离子进程必须显式关闭 dotenv 覆盖，防止临时 `WORK_DIR` 回落到生产 workspace。
 - 2026-09-14 v2：新增 UC-4A5（Shell 路径解析以生效工作目录为基准），UC-4A3 补充交叉引用（配合当日路径基准修复）。
+- 2026-09-13 v1：拆分首版（承接 UC-401）。

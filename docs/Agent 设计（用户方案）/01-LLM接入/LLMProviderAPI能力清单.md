@@ -1,7 +1,7 @@
 # LLM Provider API 接入层 · 能力清单（代码证据版）
 
 > 对象：MyAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
-> 代码版本：HEAD `1fd80ca` + 运行中切换修复（2026-09-18 复核）
+> 代码版本：当前工作区（2026-09-20；补充连接复用、直连适配器与后台预热）
 > 图例：【图】已画入 v3 全景图节点 / 【卡】在图上卡片中 / 【单】仅本清单（超出 12 主节点容量）
 
 ## 1. 请求生命周期与身份
@@ -95,6 +95,9 @@
 |---|---|---|
 | 本机离线检测（OS 提示 + 主动探测，离线时不发散 fallback） | `agent_harness.py` `machine_network_available` | 【图·网络节点】 |
 | SSL bypass（requests/httpx 全局 `verify=False` 补丁，默认开、可关） | `app/ssl_bypass.py`、`SSL_BYPASS_ENABLED=0` | 【图·网络节点(副标题)】 |
+| 流响应读到 EOF 后回收连接；keepalive 默认 300 秒、池上限 20/100 | `agent_harness.RequestResponseLogger`、`OPENAI_KEEPALIVE_EXPIRY` | 【单】 |
+| 首选候选 `_DirectStreamTransport` 直连；候选预算、熔断和 facade 回退保持不变 | `agent_harness._DirectStreamTransport`、`_FallbackCompletions` | 【单】 |
+| 启动后台预热提示/连接；消息到达且池子过冷时按需 worker 预热 | `warm_prompt_build_path`、`warm_llm_connections*`、`webui.start_webui_lifecycle` | 【单】 |
 | 密钥脱敏：日志/状态文案统一 `_redact_runtime_log_text` | `agent_openai.py`、`agent_harness.py` | 【单】 |
 
 ## 9. 观测与告警（AlertSpec）

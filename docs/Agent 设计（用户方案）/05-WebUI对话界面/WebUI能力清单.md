@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：HEAD `1fd80ca` + 模型选择器接线（2026-09-18 复核；前版为 `4083cbc` 子代理前端重建）
+> 代码版本：当前工作区（2026-09-20；补充 Windows WebUI 启动复用、运行状态语义与跨进程恢复租约）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -15,6 +15,7 @@
 | 布局面板与 Toast 容器 | `modules/layout-panels.js` | 【单】 |
 | 插件 UI 插槽（插件可注入界面位） | `app/plugin-ui-slots.js` | 【卡】 |
 | i18n 与主题（浅色/深色切换） | `modules/i18n.js`、`settings.js` | 【卡】 |
+| Windows 启动与页面激活（托盘单一打开者、后台/节能标签精确选择、可信失败回退） | `app/tray_launcher.py`、`app/platform_lifecycle.py` | 【单】 |
 
 ## 2. 消息与流式渲染
 | 能力 | 位置 | 状态 |
@@ -45,6 +46,7 @@
 | 观察者重连开关 | 后端 `MYAGENT_ENABLE_STREAM_RECONNECT`、`streamReconnect` | 【单】 |
 | 服务端自主运行自动接管（心跳 `active_session_ids`→≤5s 挂接观察流） | `webui._runtime_status_payload`、`modules/session-management.js` 心跳接管 | 【单】 |
 | 扩展状态控制事件（observer 流 `ephemeral+control_event`→前端刷新扩展面板） | `webui._observer_extension_control_event`、`modules/sse-handling.js::consumeExtensionControlEvent` | 【单】 |
+| run 终态单调契约：终态后结束客户端 run；同一 run 禁止后续业务事件，服务端重挂仅面向新的活动 run | `state/session-event-reducer.js`、`modules/sse-handling.js::endRunForClient/attachSessionEventStream` | 【单】 |
 
 ## 5. 面板能力
 | 能力 | 位置 | 状态 |
@@ -58,17 +60,21 @@
 | 模型档案管理（增删改、排序、启用、发现、探测） | `modules/model-profiles.js`、后端 model-profile API | 【图】 |
 | 对话区模型选择器（跟随当前会话/寻址的子代理会话；主会话→清熔断即时重试、下一次调用生效；子代理会话→数据动作切换、不打断） | `modules/model-profiles.js`、`modules/session-management.js`、`webui.set_session_model_profile` | 【图】 |
 | 工作区文件与媒体（目录浏览、图片元数据/预览、上传） | `modules/workspace-media.js`、后端 workspace API | 【卡】 |
-| 通知与 UI 存在性（presence 上报驱动桌面提醒策略） | 后端 `ui-presence`、`_ui_presence_has_active` | 【卡】 |
+| 通知与 UI 存在性（10 秒 presence 上报驱动桌面提醒；节能/睡眠时为辅助信号） | `message-rendering.js::registerUiPresence`、后端 `ui_presence/_ui_presence_has_active` | 【卡】 |
+| 已开页面复用（前台标题匹配；Windows UI Automation 精确选中后台/睡眠标签；拒绝任意浏览器窗口假成功） | `tray_launcher._focus_existing_webui_tab/_select_webui_browser_tab` | 【单】 |
+| 启动与激活韧性（托盘唯一首开、1.5 秒并发抑制、2.5 秒激活超时+一次重试、不可见则真实打开） | `tray_launcher.run_starter/_auto_open_webui_when_ready/_request_webui_activation_with_retry` | 【单】 |
 | 右侧详情栏（dockkit 三层：引擎/渲染/嵌入；dsh 式第三列 + 开始/文件/内容/修改历史四类页；角落按钮与条尾控件图形同 dsh 源码） | `frontend/src/app/modules/dock/**`（engine 8 / renderer 5 / embedder 3）、`styles/dock.css`、`app/index.js` 登记 | 【单】 |
 | 统一开文件策略（文本→详情栏，其余→系统应用；`MyAgentDock.openPathSmart` / `isTextPath`，会话文件链接与文件树共用） | `modules/dock/embedder/right-column.js`、`modules/session-scroll-history.js`（链接委托） | 【单】 |
 | 修改历史双档（本轮/本次会话，默认本轮；边界随用户消息即时推进；扫描带超时/重试/看门狗；撤销/恢复走 Change Review 路由） | `modules/dock/embedder/right-column.js`、`plugins/change-review/host.py` | 【单】 |
+| Goal 状态徽章与 run activity 解耦：active 显示普通 badge，不用黄闪冒充“正在运行” | `plugins/agent-goal/.myagent-plugin/plugin.json`、插件 UI 渲染 | 【单】 |
 
 ## 6. 会话管理
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 会话列表/归档/删除/恢复（recover_sessions） | `modules/session-management.js`、后端 sessions API | 【图】 |
 | 会话状态快照缓存（增量失效） | 后端 `_build_sessions_state_snapshot_cached` | 【单】 |
-| 中断与运行状态（缺省字段轻量版） | 后端 `interrupt_session`、`_session_run_state_fields_light` | 【单】 |
+| 中断与运行状态：控制请求匹配 exact run；用户停止与接管/看门狗等系统中断使用不同 reason 和文案 | 后端 `interrupt_session`、`_session_run_state_fields_light`、`agent_loop._interrupt_terminal_text` | 【单】 |
+| continuation 启动提示为 ephemeral 状态事件，不写入耐久消息历史，避免恢复/续跑刷屏 | `agent_loop.py` 的 `Workflow continuation started` 状态事件 | 【单】 |
 
 ## 7. 后端服务面（webui.py，>60 路由分组）
 | 能力 | 说明 | 状态 |
@@ -79,8 +85,9 @@
 | 工作区：文本只读接口（`GET /api/workspace-file-text`，UTF-8 截断 + `truncated` 标记，供详情栏文件内容页） | `webui.py::workspace_file_text`；需重启服务生效 | 【单】 |
 | 附件：授权读取、queue pin、grant、URL 入库、ZIP 导入/导出 | `webui.py`、`attachments/api.py` | 【单】 |
 | 独立识图：创建/查询/SSE 续接/取消/清理/GC/指标 | `vision_api.py` 的 `/api/vision/*` 路由 | 【单】 |
-| 运行恢复：interrupted ReAct 会话自动恢复、human interaction 恢复 | 后台 runner（`start_react_recovery_runner`） | 【单】 |
+| 运行恢复：interrupted ReAct 会话自动恢复、human interaction 恢复；跨进程 exact-run 租约新鲜时禁止误写 `no_local_activity` 与重复恢复 | 后台 runner（`start_react_recovery_runner`）、`_runtime_observability_active_runs_are_recent` | 【单】 |
 | 客户端计时上报（client_timing） | 前端性能数据回传 | 【单】 |
+| UI 存在性与激活（`POST /api/ui-presence`、`POST /api/ui-activation`） | 通知抑制、页面复用信号与会话深链激活序号 | 【单】 |
 
 ## 8. 边界说明
 - 后端另含 Runtime V2 同步/迁移（legacy→V2）与孤儿运行清理逻辑，归属"会话存储 Runtime V2"模块清单详述。
@@ -89,6 +96,9 @@
 
 ## 9. 版本记录
 
+- 2026-09-20（v10）：补录 run 终态单调契约与跨进程恢复租约；明确假终态后同 run 继续写入会触发前端终结/重挂振荡，刷新不能修复耐久矛盾历史。
+- 2026-09-20（v9）：补录 Goal badge 与 run activity 解耦、exact run 中断原因文案、continuation 启动提示仅瞬时展示。
+- 2026-09-20（v8）：补录 Windows WebUI 启动复用链——后台/节能标签用 UI Automation 精确选中，启动由托盘单一所有者负责，HTTP 激活容忍短暂事件循环阻塞；去除"随便聚焦浏览器窗口即成功"，失败时可靠打开页面。
 - 2026-09-18（v7）：模型选择器接线——选择器跟随当前会话；主会话清熔断即时重试（`reset_executor_failure_state_for_session`）、子代理会话经会话端点转交 `handover=False`（数据动作全保留、不打断）；说明见 05/06·UC-5F6 与 01/05·UC-1E2。
 - 2026-09-17（v6）：审批卡锚点恢复——补行逻辑扩展覆盖审批卡（`ensurePendingHumanInteractionToolRow`），重连历史恢复后刷新 human interactions；说明见 05/09 专项设计。
 - 2026-09-16（v5）：子代理前端 dsh 式重建——前端状态仓库计数修正为 11；「子代理 Dock」条目替换为「子代理会话」三行（目录树/成员帧桥接/编辑器三态与续接提示，新模块 5 个：catalog-ui/composer-ui/frames/slot-registry/address+store+decisions），UI 模块总数 22；旧 10 个 subagent-* 模块已删除，后端 API 组未变。

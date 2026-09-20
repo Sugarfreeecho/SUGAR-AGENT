@@ -1,6 +1,6 @@
 # 会话存储 Runtime V2 · 模块整体设计
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
+- 版本：2026-09-20 v4（覆盖至：当前工作区）
 - 用途：本模块总入口；各功能专项设计按四字段逐条审查。
 - 适用实现：`app/runtime_v2/**`（26 文件：event_log / projector / ui_projection / model_projection / snapshot_store / history_ops / migration / repair / log_compaction / extension_state / subagent_store / run_registry / gateway / mirror / legacy_compat …）。
 - 配套：架构图 `workspace/archify_study/runtime_v2/runtime-v2.architecture.html`；能力清单 `会话存储RuntimeV2能力清单.md`（本文件夹）。
@@ -38,6 +38,8 @@ Agent 的"账本"：**events.jsonl 唯一真源** + 投影/快照/迁移/修复�
 2. **顺序即事实**：seq 是全系统时间线（UI/告警/审批共用）。
 3. **显式失败**：损坏/并发冲突绝不静默吞掉（修得回来就修，修不了就报）。
 4. **引用为真源**：会话事件持久化耐久附件身份，不保存一次性请求图片或长期 base64；旧图片只在仓库边界完成准入后迁移。
+5. **生命周期闭合**：每个 `run_started` 必须由同一 `run_id` 的唯一终态闭合；看门狗、孤儿修复和快照重建都不得用会话级状态替代 run 身份。
+6. **缓存不越权**：进程内摘要缓存只用于跳过已知相同提交；冷未命中或未知状态必须读取 Runtime V2 权威快照。
 
 ## 5. 边界总览
 
@@ -47,5 +49,7 @@ Agent 的"账本"：**events.jsonl 唯一真源** + 投影/快照/迁移/修复�
 
 ## 6. 版本记录
 
+- 2026-09-20 v4：补入未变化 context summary 的进程内提交去重与冷未命中权威读取边界。
+- 2026-09-20 v3：增加运行生命周期闭合不变式；运行注册、看门狗与孤儿对账统一到 exact run 身份。
 - 2026-09-14 v2：补充附件引用真源、懒迁移与跨模块边界。
 - 2026-09-13 v1：从总清单拆分。

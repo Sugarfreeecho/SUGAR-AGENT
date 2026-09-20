@@ -1,6 +1,6 @@
 # 提示装配与静态段缓存 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `d022831`）
+- 版本：2026-09-20 v3（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_loop.py`（静态段构建与重建）、`app/agent_tokenizer.py`（分词/缓存/估算）。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -27,14 +27,26 @@
 
 ### UC-2B3 分词与估算
 - **触发**：需要判断"输入多大"（压缩判断、界面显示）。
-- **预期现象**：估算与实际用量偏差可控；显示为"上下文 xx%"类提示；同一消息序列的估算有缓存（不重复算）。
-- **规则与边界**：估算失败回退字/字符系数法（不阻断）；prompt-usage 基线来自真实用量（回写）。
-- **依据**：`agent_tokenizer.py`（count/estimate 系列、prompt-usage 基线）。
+- **预期现象**：估算与实际用量偏差可控；显示为"上下文 xx%"类提示；追加历史时，思考剥离、消息哈希、扁平文本和真实分词都只处理新增尾部，同一消息序列精确命中时不重复工作。
+- **规则与边界**：`strip_reasoning_for_api_request()` 与 tokenizer 缓存都按最长对象身份前缀复用；缓存保存对象引用并用 `is` 比较，避免对象 id 回收复用造成误命中。扁平文本使用精确层 O(1) 命中；估算失败回退字/字符系数法（不阻断）；prompt-usage 基线来自真实用量（回写）。
+- **依据**：`strip_reasoning_for_api_request / _messages_token_hashes / _flatten_messages_incremental / _seed_flatten_token_cache / count_message_tokens_incremental / estimate_full_input_tokens_for_messages`。
 
 ### UC-2B4 历史消息规整
 - **触发**：把会话历史转成模型消息。
 - **预期现象**：工具消息成对完整（无"孤儿工具结果"）；给模型的序列合法（端点不会 400）。
 - **依据**：`inject_missing_tool_messages / messages_for_openai_turns`。
+
+### UC-2B5 tokenizer 启动预热
+- **触发**：WebUI 生命周期启动。
+- **预期现象**：在后台线程加载仓库 tokenizer 并执行一次极小 encode，使首个真实请求不再承担 tokenizer.json 解析；缺少依赖或词表时维持原有字符/4回退。
+- **规则与边界**：`_TOKENIZER_LOAD_LOCK` 串行化后台预热与首个在线请求，保证只解析一次；预热失败不阻断服务启动。
+- **依据**：`agent_tokenizer.warm_tokenizer / _get_tokenizer`、`webui.start_webui_lifecycle::_warm_tokenizer_task`。
+
+### UC-2B6 本地 token 估算诊断旁路
+- **触发**：性能诊断时显式设置 `CONTEXT_TOKEN_SKIP_LOCAL_ESTIMATE=1`。
+- **预期现象**：`estimate_full_input_tokens_for_messages` 在入口直接复用 provider 上次上报计数，用来隔离本地分词对轮间耗时的影响。
+- **规则与边界**：该开关只用于测量，默认必须关闭；启用后缺少当前本地估算，可能削弱上下文压缩 gate 的准确性，不得作为生产优化常态。
+- **依据**：`agent_tokenizer.estimate_full_input_tokens_for_messages` 的 `CONTEXT_TOKEN_SKIP_LOCAL_ESTIMATE` 分支。
 
 ## 3. 边界
 
@@ -45,10 +57,14 @@
 
 | 用例 | 代码 |
 |---|---|
-| UC-2B1/2B2 | `agent_loop.py` L1930–1961 |
-| UC-2B3 | `agent_tokenizer.py`（30+ 函数） |
-| UC-2B4 | `agent_tokenizer.py` L488–560 |
+| UC-2B1/2B2 | `_build_static_segments_for_session`、`_schedule_static_segments_rebuild` |
+| UC-2B3 | `strip_reasoning_for_api_request`、`agent_tokenizer.py` 的哈希/扁平文本/增量分词与 prompt-usage 缓存 |
+| UC-2B4 | `inject_missing_tool_messages`、`messages_for_openai_turns` |
+| UC-2B5 | `agent_tokenizer.warm_tokenizer`、`webui.start_webui_lifecycle` |
+| UC-2B6 | `estimate_full_input_tokens_for_messages` 入口诊断分支 |
 
 ## 5. 版本记录
 
+- 2026-09-20 v3：补入只用于性能归因的本地 token 估算旁路开关及生产边界。
+- 2026-09-20 v2：补充消息哈希/扁平文本/精确分词的增量缓存，以及 tokenizer 后台预热和并发加载锁。
 - 2026-09-13 v1：拆分首版。

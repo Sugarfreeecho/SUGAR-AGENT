@@ -1,8 +1,8 @@
 # WebUI 对话界面 · 模块整体设计
 
-- 版本：2026-09-18 v8（覆盖至：HEAD `1fd80ca` + 模型选择器接线）
+- 版本：2026-09-20 v9（覆盖至：HEAD `6cd82d7` + Windows WebUI 启动复用修复）
 - 用途：本模块总入口；各功能专项设计按四字段逐条审查。
-- 适用实现：`frontend/src/**`（26 功能模块 + 20 状态模块；含 `modules/dock/**` 详情栏：engine 8 / renderer 5 / embedder 3；子代理模块 4 + 3 状态）、`styles/dock.css`、`app/webui.py`（60+ 路由，含 `GET /api/workspace-file-text`）、`app/templates/dist`（构建产物）。
+- 适用实现：`frontend/src/**`（26 功能模块 + 20 状态模块；含 `modules/dock/**` 详情栏：engine 8 / renderer 5 / embedder 3；子代理模块 4 + 3 状态）、`styles/dock.css`、`app/webui.py`（60+ 路由，含 `GET /api/workspace-file-text`）、`app/tray_launcher.py`、`app/platform_lifecycle.py`、`app/templates/dist`（构建产物）。
 - 配套：架构图 `workspace/archify_study/webui/webui.architecture.html`（7 节点骨架版）；能力清单 `WebUI能力清单.md`（本文件夹）。
 
 ---
@@ -42,6 +42,7 @@
 3. **会话隔离**：切换会话时各面板状态重置/重载（互不串扰）。
 4. **附件引用化**：上传回执、历史与 follow-up 队列使用耐久附件引用；预览 blob 只存在于页面内，并在末节点移除时释放。
 5. **寻址即视图**：打开子代理 = 在主对话区寻址其会话（父入栈/返回还原）；不新建独立视图容器，全部复用会话切换与 stash/restore 机制。
+6. **激活必须可见**：托盘/通知的"复用成功"必须落到可验证的 WebUI 标签页和前台窗口；页面心跳、任意浏览器窗口或短时去重锁不能制造"看似成功但页面未出现"。
 
 ## 5. 边界总览
 
@@ -51,6 +52,7 @@
 
 ## 6. 版本记录
 
+- 2026-09-20 v9：07《通知、存在性与恢复》新增 UC-5G5~5G7——Windows UI Automation 精确选择后台/节能标签页；启动浏览器改为托盘单一所有者；激活超时适配忙碌后端，并以"精确聚焦成功，否则真实打开"替代任意浏览器窗口兜底。
 - 2026-09-18 v8：模型切换链路对齐——06 新增 UC-5F6《对话区模型选择器》（跟随当前会话：主会话清熔断即时重试 / 子代理会话数据动作切换不打断）；04 补 UC-5D15《子代理会话中的模型选择器》（旧卡片菜单入口已移除，选择器即入口）。接入层语义见 ../01-LLM接入/05 v3。
 - 2026-09-17 v7：新增 09《审批卡片锚点与流恢复稳定性》（UC-5I1~5I5）——修复"执行不稳定后审批卡跑到执行过程外"：待审批卡片补占位工具行（与 ask_user 对称）、重连历史恢复后刷新持久交互；`human-interactions.js` / `sse-handling.js`，dist 同步。
 - 2026-09-16 v6：04《子代理会话》整体重写（dsh 式：标题栏谱系目录 + 主区寻址 + 编辑器三态 + 四色状态点；旧 Dock 面板已移除，UC-5D1~5D5 作废）；模块实现面补记子代理模块（功能 4 + 状态 3）。

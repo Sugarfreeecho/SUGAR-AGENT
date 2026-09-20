@@ -1,6 +1,6 @@
 # Skills 发现与激活 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `d022831`）
+- 版本：2026-09-20 v3（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（L109–214、L4055–4199）、`workspace/skills/**`、`skill_states.json`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -32,8 +32,9 @@
 
 ### UC-6E4 目录生成与缓存
 - **触发**：构建系统提示（技能目录段）。
-- **预期现象**：目录文本稳定生成（供模型选择）；代际变化后下一次请求即刷新（最多滞后一次）。
-- **依据**：`get_skills_catalog / skills_catalog_generation`。
+- **预期现象**：目录文本稳定生成（供模型选择）；SKILL.md 或目录树在磁盘上直接变化时，`get_skills_catalog()` 检测到签名变化并递增 generation，使静态提示段在下一次请求刷新（最多滞后一次）。
+- **规则与边界**：generation 不只依赖显式 `invalidate_skills_cache()`；目录树签名变化也必须推进代际，否则发现结果虽刷新，模型仍可能看到旧静态段。
+- **依据**：`get_skills_catalog / _skills_tree_signature / _bump_skills_catalog_generation / skills_catalog_generation`。
 
 ## 3. 边界
 
@@ -47,9 +48,10 @@
 | UC-6E1 | `agent_tools.py` L163–214、L4055 |
 | UC-6E2 | L122–163 |
 | UC-6E3 | L4180 |
-| UC-6E4 | L4169（get_skills_catalog）、L118（skills_catalog_generation） |
+| UC-6E4 | `get_skills_catalog`、`_skills_tree_signature`、`_bump_skills_catalog_generation`、`skills_catalog_generation` |
 
 ## 5. 版本记录
 
+- 2026-09-20 v3：明确磁盘技能树签名变化会推进 catalog generation，并联动失效提示静态段。
 - 2026-09-14 v2：修正技能符号与行号（`_plugin_skill_directories` L163、L4169/L118）；版本线更新至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-606/607）。

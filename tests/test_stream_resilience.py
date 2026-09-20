@@ -383,6 +383,27 @@ def test_run_task_cancellation_is_thread_safe_across_event_loops():
     assert not session_lifecycle.is_run_active(sid)
 
 
+def test_watchdog_cancellation_targets_one_run_not_whole_session():
+    import session_lifecycle
+
+    async def scenario():
+        sid = "run-specific-cancel"
+        first = asyncio.create_task(asyncio.Event().wait())
+        second = asyncio.create_task(asyncio.Event().wait())
+        session_lifecycle.register_run_task(sid, first, run_id="stale-run")
+        session_lifecycle.register_run_task(sid, second, run_id="healthy-run")
+        await session_lifecycle.cancel_run_tasks_by_id([(sid, "stale-run")])
+        assert first.cancelled()
+        assert not second.done()
+        assert not session_lifecycle.is_run_active(sid, "stale-run")
+        assert session_lifecycle.is_run_active(sid, "healthy-run")
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+
+    asyncio.run(scenario())
+
+
 def test_registered_run_identity_becomes_inactive_at_durable_terminal():
     import session_lifecycle
 
@@ -454,6 +475,84 @@ def test_runtime_lifecycle_never_marks_failed_terminal_commit(monkeypatch):
     with pytest.raises(RuntimeError, match="lifecycle commit failed"):
         asyncio.run(lifecycle.commit("run_finished"))
     assert lifecycle.terminal_committed is False
+
+
+def test_runtime_lifecycle_falls_back_when_worker_thread_cannot_start(monkeypatch):
+    import agent_loop
+
+    lifecycle = agent_loop._RuntimeV2RunLifecycle("s1", "r1", "chat")
+    appended = []
+
+    async def no_thread(*_args, **_kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(asyncio, "to_thread", no_thread)
+    monkeypatch.setattr(
+        lifecycle,
+        "_append_once",
+        lambda event_type, payload: appended.append((event_type, dict(payload))),
+    )
+    monkeypatch.setattr("session_lifecycle.mark_run_terminal", lambda *_args: None)
+
+    assert asyncio.run(lifecycle.commit("run_interrupted", {"reason": "watchdog"})) is True
+    assert appended == [("run_interrupted", {"reason": "watchdog"})]
+
+
+def test_finalizer_closes_metrics_even_when_terminal_commit_fails(monkeypatch):
+    import agent_loop
+
+    finished = []
+
+    class Callbacks:
+        @staticmethod
+        def call(*_args, **_kwargs):
+            return None
+
+    class PowerGuard:
+        @staticmethod
+        async def close():
+            return None
+
+    class Lifecycle:
+        @staticmethod
+        async def commit(*_args, **_kwargs):
+            raise OSError("disk unavailable")
+
+    async def emit(_event):
+        return None
+
+    async def close_stream(_session_id):
+        return None
+
+    monkeypatch.setattr(agent_loop, "_workflow_callbacks", lambda: Callbacks())
+    monkeypatch.setattr(agent_loop, "_clear_steer_run_control", lambda *_args: None)
+    monkeypatch.setattr(agent_loop, "close_session_stream", close_stream)
+    monkeypatch.setattr(
+        agent_loop.execution_metrics,
+        "finish_run",
+        lambda session_id, run_id, status, **_kwargs: finished.append((session_id, run_id, status)),
+    )
+
+    async def scenario():
+        with pytest.raises(OSError, match="disk unavailable"):
+            await agent_loop._finalize_agent_run_lifecycle(
+                state={"session_id": "s1"},
+                session_id="s1",
+                run_id="r1",
+                mode="chat",
+                continuation=False,
+                completed=False,
+                terminal_event={"type": "run_failed", "error": "boom"},
+                runtime_lifecycle=Lifecycle(),
+                power_guard=PowerGuard(),
+                steer_control=object(),
+                emit=emit,
+                queue=asyncio.Queue(),
+                consumer_attached=False,
+            )
+
+    asyncio.run(scenario())
+    assert finished == [("s1", "r1", "failed")]
 
 
 def test_runtime_lifecycle_accepts_only_one_concurrent_terminal(monkeypatch):

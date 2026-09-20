@@ -802,7 +802,9 @@ def test_prompt_allows_multi_tool_generation_independent_of_execution_mode():
     assert "依照 `tool_calls` 原始顺序串行" in prompt
     assert "不得猜测未知参数" in prompt
     assert "已被压缩或可能被压缩的历史信息" in prompt
-    assert "当前会话的 session 文件夹下查询 `events.jsonl`" in prompt
+    assert "优先调用 `history_context`" in prompt
+    assert "先用 `scope=current` 搜索当前会话" in prompt
+    assert "当前会话原始 `events.jsonl`" in prompt
 
 
 def test_ui_translation_does_not_mutate_conversation_content():
