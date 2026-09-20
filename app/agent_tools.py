@@ -2,18 +2,20 @@
 Agent 可调工具：实现函数 + OpenAI `tools` JSON Schema（`OPENAI_TOOL_DEFINITIONS`）。
 
 - `tools`：name -> 可调用对象（含 async，由 agent_loop 以 **kwargs 调用）
-- 路径默认根：`write_file`、`web_download`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`（受限时）默认以 **`WORK_DIR`**（虚拟 `/` 映射工作区根）为基准；工作区外绝对路径在受限模式下会弹出审批卡片，经用户授权对应目录后即可正常读写/删除（授权目录会记录到会话并可供后续操作复用）。`delete_file` 软删除至 **`WORK_DIR/.trash/`**，**禁止**对 `sessions`、`skills`、`.trash` 及其内部路径调用。read / ls / glob / grep 可按工具规则访问工作区外路径。
+- 路径默认根：`write_file`、`web_download`、`edit_file`、`delete_file`、`run_shell`（受限时）默认以 **`WORK_DIR`**（虚拟 `/` 映射工作区根）为基准。`apply_patch` 自身不限制目标必须位于工作区内：相对路径仍从 **`WORK_DIR`** 解析，但允许 `..` 越出工作区，也允许本机绝对路径；实际 Agent 调用仍统一经过中央权限策略。工作区外路径在受限模式下会弹出审批卡片，经用户授权对应目录后即可正常读写/删除（授权目录会记录到会话并可供后续操作复用）。`delete_file` 软删除至 **`WORK_DIR/.trash/`**，**禁止**对 `sessions`、`skills`、`.trash` 及其内部路径调用。read / ls / glob / grep 可按工具规则访问工作区外路径。
 
 - 联网：`web_search`（通过启用的 Search Provider 插件执行）、`web_fetch`
 """
 
 import asyncio
 import base64
+import codecs
 import difflib
 import fnmatch
 import hashlib
 import html
 import ipaddress
+import inspect
 import json
 import os
 from datetime import datetime
@@ -30,7 +32,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
@@ -48,7 +50,16 @@ from agent_harness import (
 # interrupt 回调：agent_loop 在工具执行前注入，run_shell 在进程运行期间检查。
 # 当 interrupt 被触发时，回调返回 True，run_shell 会主动杀掉子进程树。
 # ---------------------------------------------------------------------------
-_run_shell_interrupt_check: Optional[Callable[[], bool]] = None
+_run_shell_interrupt_check: ContextVar[Optional[Callable[[], bool]]] = ContextVar(
+    "myagent_run_shell_interrupt_check",
+    default=None,
+)
+_run_shell_output_sink: ContextVar[
+    Optional[Callable[[str, str], Awaitable[None] | None]]
+] = ContextVar(
+    "myagent_run_shell_output_sink",
+    default=None,
+)
 _tool_work_dir_override: ContextVar[Optional[Path]] = ContextVar(
     "myagent_tool_work_dir_override",
     default=None,
@@ -87,14 +98,21 @@ def tool_work_dir_override(path: Optional[str | Path]):
         _tool_work_dir_override.reset(token)
 
 
-def set_run_shell_interrupt_check(cb: Optional[Callable[[], bool]]) -> None:
-    global _run_shell_interrupt_check
-    _run_shell_interrupt_check = cb
+@contextmanager
+def run_shell_runtime_context(
+    *,
+    interrupt_check: Optional[Callable[[], bool]] = None,
+    output_sink: Optional[Callable[[str, str], Awaitable[None] | None]] = None,
+):
+    """Bind per-invocation shell callbacks without cross-talk between tools."""
 
-
-def clear_run_shell_interrupt_check() -> None:
-    global _run_shell_interrupt_check
-    _run_shell_interrupt_check = None
+    interrupt_token = _run_shell_interrupt_check.set(interrupt_check)
+    output_token = _run_shell_output_sink.set(output_sink)
+    try:
+        yield
+    finally:
+        _run_shell_output_sink.reset(output_token)
+        _run_shell_interrupt_check.reset(interrupt_token)
 
 
 # 技能目录签名缓存，避免每次 react 轮次全量遍历
@@ -333,7 +351,7 @@ def safe_work_path(file_path: str) -> Path:
 
 def resolve_unrestricted_path(file_path: str) -> Path:
     """
-    供 read / ls / glob / grep 使用：不限制在 WORK_DIR。
+    供 read / ls / glob / grep / apply_patch 使用：不限制在 WORK_DIR。
     - 平台下的绝对路径（如 ``C:\\...``、``/etc/...`` 在类 Unix 上）按本机实际路径解析。
     - 虚拟路径 `/` → WORK_DIR（项目）；否则 `/segment` 与相对路径均相对于 WORK_DIR。
     """
@@ -2118,6 +2136,160 @@ def _fuzzy_find_replacement_segment(content: str, search: str) -> Tuple[Optional
     return None, "no fuzzy line-block match (try exact substring or use_regex)"
 
 
+class _RunShellProgressPublisher:
+    """Rate-limit subprocess output while preserving stdout/stderr ordering."""
+
+    def __init__(
+        self,
+        sink: Optional[Callable[[str, str], Awaitable[None] | None]],
+        *,
+        flush_seconds: float = 0.04,
+        flush_chars: int = 8192,
+        max_chars: int = 65536,
+    ) -> None:
+        self._sink = sink
+        self._flush_seconds = max(0.001, float(flush_seconds))
+        self._flush_chars = max(1, int(flush_chars))
+        self._max_chars = max(1, int(max_chars))
+        self._accepted_chars = 0
+        self._truncation_emitted = False
+        self._pending: List[Tuple[str, str]] = []
+        self._pending_chars = 0
+        self._timer: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+        self._emit_lock = asyncio.Lock()
+
+    async def push(self, stream_name: str, text: str) -> None:
+        if self._sink is None or not text:
+            return
+        batch: List[Tuple[str, str]] = []
+        async with self._lock:
+            stream = "stderr" if stream_name == "stderr" else "stdout"
+            remaining = max(0, self._max_chars - self._accepted_chars)
+            accepted = text[:remaining]
+            self._accepted_chars += len(accepted)
+            if len(text) > len(accepted) and not self._truncation_emitted:
+                accepted += (
+                    "\n... [实时输出已截断；完整结果将在工具结束后按结果策略提供] ...\n"
+                )
+                self._truncation_emitted = True
+            if not accepted:
+                return
+            if self._pending and self._pending[-1][0] == stream:
+                previous_stream, previous_text = self._pending[-1]
+                self._pending[-1] = (previous_stream, previous_text + accepted)
+            else:
+                self._pending.append((stream, accepted))
+            self._pending_chars += len(accepted)
+            if self._pending_chars >= self._flush_chars:
+                batch = self._take_pending_locked()
+                timer = self._timer
+                self._timer = None
+                if timer is not None and timer is not asyncio.current_task():
+                    timer.cancel()
+            elif self._timer is None:
+                self._timer = asyncio.create_task(self._flush_after_delay())
+        if batch:
+            await self._publish(batch)
+
+    def _take_pending_locked(self) -> List[Tuple[str, str]]:
+        batch = self._pending
+        self._pending = []
+        self._pending_chars = 0
+        return batch
+
+    async def _flush_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(self._flush_seconds)
+            await self.flush()
+        except asyncio.CancelledError:
+            pass
+
+    async def _publish(self, batch: List[Tuple[str, str]]) -> None:
+        if self._sink is None:
+            return
+        async with self._emit_lock:
+            for stream_name, text in batch:
+                try:
+                    result = self._sink(
+                        stream_name,
+                        redact_sensitive_tool_text(text),
+                    )
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    logger.debug("run_shell progress sink failed", exc_info=True)
+
+    async def flush(self) -> None:
+        batch: List[Tuple[str, str]] = []
+        async with self._lock:
+            batch = self._take_pending_locked()
+            if self._timer is asyncio.current_task():
+                self._timer = None
+        if batch:
+            await self._publish(batch)
+
+    async def close(self) -> None:
+        timer = self._timer
+        self._timer = None
+        if timer is not None and timer is not asyncio.current_task():
+            timer.cancel()
+            try:
+                await timer
+            except asyncio.CancelledError:
+                pass
+        await self.flush()
+
+
+def _run_shell_stream_max_chars() -> int:
+    try:
+        return max(4096, int(os.getenv("RUN_SHELL_STREAM_MAX_CHARS", "65536")))
+    except (TypeError, ValueError):
+        return 65536
+
+
+async def _read_run_shell_pipe(
+    pipe: Optional[asyncio.StreamReader],
+    stream_name: str,
+    publisher: _RunShellProgressPublisher,
+) -> bytes:
+    if pipe is None:
+        return b""
+    chunks: List[bytes] = []
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    while True:
+        chunk = await pipe.read(4096)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        await publisher.push(stream_name, decoder.decode(chunk, final=False))
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        await publisher.push(stream_name, tail)
+    return b"".join(chunks)
+
+
+async def _communicate_run_shell_process(
+    process: asyncio.subprocess.Process,
+    publisher: _RunShellProgressPublisher,
+) -> Tuple[bytes, bytes]:
+    stdout_task = asyncio.create_task(
+        _read_run_shell_pipe(process.stdout, "stdout", publisher)
+    )
+    stderr_task = asyncio.create_task(
+        _read_run_shell_pipe(process.stderr, "stderr", publisher)
+    )
+    try:
+        stdout, stderr, _ = await asyncio.gather(
+            stdout_task,
+            stderr_task,
+            process.wait(),
+        )
+        return stdout, stderr
+    finally:
+        await publisher.close()
+
+
 async def run_shell(
     command: str,
     workdir: Optional[str] = None,
@@ -2308,10 +2480,16 @@ async def run_shell(
                 )
             process_job = _assign_windows_run_shell_job(int(process.pid or 0))
             try:
-                communicate_task = asyncio.create_task(process.communicate())
+                progress_publisher = _RunShellProgressPublisher(
+                    _run_shell_output_sink.get(),
+                    max_chars=_run_shell_stream_max_chars(),
+                )
+                communicate_task = asyncio.create_task(
+                    _communicate_run_shell_process(process, progress_publisher)
+                )
                 # interrupt 监控：轮询回调标志，触发时杀掉子进程树
                 async def _interrupt_watcher() -> None:
-                    check = _run_shell_interrupt_check
+                    check = _run_shell_interrupt_check.get()
                     while not communicate_task.done():
                         if check and check():
                             logger.info("run_shell: interrupt detected, killing process tree (pid=%s)", process.pid)
@@ -3254,9 +3432,9 @@ def _apply_update_hunks(content: str, body: List[str], raw_path: str) -> str:
 def apply_patch(patch: str) -> str:
     """Apply one Codex-style multi-file patch, with validation and rollback.
 
-    补丁目标默认解析到 WORK_DIR（相对路径/`/segment` 虚拟路径）。工作区外的
-    绝对路径由审批策略管控：受限模式下首次访问会弹出审批卡片，用户授权对应
-    目录后即可正常修改；full_access 模式直接放行。
+    补丁路径解析本身不施加工作区边界：相对路径从 WORK_DIR 解析且允许使用
+    ``..``，本机绝对路径也直接解析。实际 Agent 调用在进入本函数前由中央权限
+    策略管控；受限模式可要求目录审批，full_access 模式直接放行。
     """
     try:
         operations = _parse_apply_patch(patch)
@@ -3265,7 +3443,7 @@ def apply_patch(patch: str) -> str:
         line_changes: Dict[Path, Tuple[int, int]] = {}
         for operation in operations:
             raw_path = operation["path"]
-            path = safe_work_path(raw_path)
+            path = resolve_unrestricted_path(raw_path)
             enforce_leaf("fs.write", path)
             if _path_is_sensitive_tool_resource(path):
                 return _sensitive_tool_resource_error("patch")
@@ -4560,9 +4738,10 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "apply_patch",
         "Preferred tool for ordinary text-file modifications; use it instead of constructing file rewrites through run_shell. "
         "It accepts exactly one argument named `patch`; there are no `before`, `after`, `path`, `search`, or `replace` arguments. "
-        "The patch string uses Codex patch syntax for one or more files. Relative paths and `/segment` virtual paths resolve "
-        "under the runtime WORK_DIR; native absolute paths (e.g. `D:/repo/src/a.py` or an absolute path returned by read_file) "
-        "are allowed and, in restricted permission modes, prompt an approval card so the user can authorize the target directory "
+        "The patch string uses Codex patch syntax for one or more files. The tool has no built-in workspace containment limit: "
+        "relative paths resolve from the runtime WORK_DIR and may use `..`, while native absolute paths (e.g. "
+        "`D:/repo/src/a.py` or an absolute path returned by read_file) are allowed. In restricted permission modes, the central "
+        "policy may prompt an approval card so the user can authorize the target directory "
         "before the change is applied. Read the target immediately before editing and copy exact existing lines into each update "
         "hunk. All file sections are validated before writing; stale, missing, malformed, or ambiguous context fails atomically "
         "without partial edits. If an update fails, re-read the reported file and rebuild the hunk from its current contents "
@@ -4574,8 +4753,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "Complete raw patch text; do not pass a JSON object or separate before/after strings inside this value. "
                     "Use exactly `*** Begin Patch` and `*** End Patch` as boundary lines. Each section starts with exactly one of "
                     "`*** Add File: <path>`, `*** Update File: <path>`, or `*** Delete File: <path>`. Paths are resolved from the "
-                    "runtime WORK_DIR unless they are native absolute paths, which are allowed (restricted modes ask for directory "
-                    "approval first); reuse the exact absolute path returned by read_file when the target lies outside WORK_DIR. "
+                    "runtime WORK_DIR without a containment restriction: `..` may reach parent directories, and native absolute "
+                    "paths are allowed. Restricted modes may ask for directory approval first; reuse the exact absolute path "
+                    "returned by read_file when the target lies outside WORK_DIR. "
                     "For multiple files, start a new Add/Update/Delete File section for every file. For Update File, use a plain `@@` hunk header (never `*** @@`). Every hunk "
                     "body line must begin with exactly one prefix character: space for an unchanged existing line, `-` for an exact "
                     "existing line to remove, or `+` for a line to add. Each update hunk must contain at least one space- or minus-prefixed "

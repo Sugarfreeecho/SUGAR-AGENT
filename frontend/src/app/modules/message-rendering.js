@@ -3803,12 +3803,89 @@ function toolCallDraftKey(ctx, parsed) {
     return generation + ':' + ri + ':' + idx;
 }
 
+function ensureToolStreamRenderState(ctx) {
+    if (!ctx) return null;
+    if (!ctx._toolStreamRenderState) {
+        ctx._toolStreamRenderState = {
+            draftRows: new Map(),
+            rowsById: new Map(),
+            pendingRows: new Map(),
+            flushRaf: 0,
+        };
+    }
+    return ctx._toolStreamRenderState;
+}
+
+function rememberToolStreamRow(ctx, row, draftKey, toolCallId) {
+    var state = ensureToolStreamRenderState(ctx);
+    if (!state || !row) return;
+    if (draftKey) state.draftRows.set(String(draftKey), row);
+    if (toolCallId) state.rowsById.set(String(toolCallId), row);
+}
+
+function discardPendingToolRowRender(ctx, row) {
+    var state = ctx && ctx._toolStreamRenderState;
+    if (state && row) state.pendingRows.delete(row);
+}
+
+function scheduleToolRowRender(ctx, row, runSessionId, kind, parsed) {
+    var state = ensureToolStreamRenderState(ctx);
+    if (!state || !row) return;
+    state.pendingRows.set(row, {
+        kind: kind,
+        parsed: parsed || {},
+        runSessionId: runSessionId,
+    });
+    if (state.flushRaf) return;
+    state.flushRaf = requestAnimationFrame(function () {
+        state.flushRaf = 0;
+        var pending = Array.from(state.pendingRows.entries());
+        state.pendingRows.clear();
+        var startedAt = performance.now();
+        pending.forEach(function (entry) {
+            var targetRow = entry[0];
+            var opts = entry[1] || {};
+            if (!targetRow || !targetRow.isConnected) return;
+            if (opts.kind === 'draft') {
+                if (targetRow.getAttribute('data-tool-pending') === '1') return;
+                var toolName = targetRow.dataset.pendingToolName || '';
+                var argsRaw = targetRow.dataset.pendingToolArgs || '';
+                var draftText = toolName
+                    ? toolName + '(' + argsRaw + '\n生成中...'
+                    : '工具调用生成中...';
+                setToolRowText(targetRow, draftText, ctx, opts.runSessionId);
+                return;
+            }
+            var event = opts.parsed || {};
+            var commandText = formatToolPendingLine(
+                event.tool,
+                event.args,
+                targetRow.dataset.commandPreview || ''
+            );
+            setToolRowText(targetRow, commandText, ctx, opts.runSessionId);
+        });
+        if (typeof uiPerformance !== 'undefined') {
+            const metricSessionId = pending[0]?.[1]?.runSessionId || runSessionId || currentSessionId;
+            uiPerformance.sample(metricSessionId, 'toolStream.flush', performance.now() - startedAt);
+            uiPerformance.count(metricSessionId, 'toolStream.rowsRendered', pending.length);
+        }
+    });
+}
+
 function findToolDraftRow(ctx, parsed) {
     var key = toolCallDraftKey(ctx, parsed);
     if (!key) return null;
+    var state = ensureToolStreamRenderState(ctx);
+    var cached = state && state.draftRows.get(key);
+    if (cached && cached.isConnected) return cached;
+    if (cached) state.draftRows.delete(key);
     var body = getProcessBody(ctx);
     if (!body || typeof CSS === 'undefined' || !CSS.escape) return null;
-    try { return body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]'); } catch (e) { return null; }
+    try {
+        var row = body.querySelector('.feed-item.feed--tool[data-tool-draft-key="' + CSS.escape(key) + '"]');
+        if (row) rememberToolStreamRow(ctx, row, key, row.getAttribute('data-tool-call-id'));
+        return row;
+    } catch (e) { return null; }
 }
 
 function deltaDedupeKey(ctx, parsed, scope) {
@@ -3834,13 +3911,21 @@ function hasSeenStreamDelta(ctx, parsed, scope) {
 
 function setToolRowText(row, text, ctx, runSessionId) {
     if (!row) return;
-    var sc = row.querySelector('.feed-chunk-scroller');
+    var sc = row._toolStreamScroller;
+    if (!sc || !sc.isConnected) {
+        sc = row.querySelector('.feed-chunk-scroller');
+        row._toolStreamScroller = sc;
+    }
     if (sc) {
         var nextText = truncateLogTextForUi(text);
         if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, nextText);
         else sc.textContent = nextText;
     }
-    var ch = row.querySelector('.feed-chunk');
+    var ch = row._toolStreamChunk;
+    if (!ch || !ch.isConnected) {
+        ch = row.querySelector('.feed-chunk');
+        row._toolStreamChunk = ch;
+    }
     if (ch) {
         // 工具条目流式生成时也放开高度限制
         ch.classList.add('is-streaming');
@@ -3910,7 +3995,10 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
         if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
         var scNew = createProcessFeedRow(ctx, 'tool-call', '工具调用生成中...', so, runSessionId, '');
         row = scNew && scNew.closest ? scNew.closest('.feed-item') : null;
-        if (row) row.setAttribute('data-tool-draft-key', key);
+        if (row) {
+            row.setAttribute('data-tool-draft-key', key);
+            rememberToolStreamRow(ctx, row, key, '');
+        }
     }
     if (!row) return;
     // A valid call may start executing before the provider finishes emitting
@@ -3921,12 +4009,15 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
     
     // Tool-call generation should still reveal the process group; only the later
     // "executing" placeholder should avoid forcing expand/collapse changes.
-    removeTemporaryStatus(ctx);
-    var agg = row.closest('.process-aggregate');
-    if (agg && agg.classList.contains('is-collapsed')) {
-        agg.classList.remove('is-collapsed');
-        var topN = agg.querySelector('.process-aggregate-top');
-        if (topN) topN.setAttribute('aria-expanded', 'true');
+    if (row.dataset.toolDraftActivated !== '1') {
+        row.dataset.toolDraftActivated = '1';
+        removeTemporaryStatus(ctx);
+        var agg = row.closest('.process-aggregate');
+        if (agg && agg.classList.contains('is-collapsed')) {
+            agg.classList.remove('is-collapsed');
+            var topN = agg.querySelector('.process-aggregate-top');
+            if (topN) topN.setAttribute('aria-expanded', 'true');
+        }
     }
     
     // 累积工具名称和参数
@@ -3937,17 +4028,7 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
         row.dataset.pendingToolArgs = (row.dataset.pendingToolArgs || '') + String(parsed.arguments_delta);
     }
     
-    // 生成显示文本
-    var toolName = row.dataset.pendingToolName || '';
-    var argsRaw = row.dataset.pendingToolArgs || '';
-    var displayText = '工具调用生成中...';
-    
-    if (toolName) {
-        // 流式显示：工具名 + 参数原始文本（逐步增长）
-        var argsPreview = argsRaw;
-        displayText = toolName + '(' + argsPreview + '\n生成中...';
-    }
-    setToolRowText(row, displayText, ctx, runSessionId);
+    scheduleToolRowRender(ctx, row, runSessionId, 'draft', parsed);
 }
 
 function removeAbortedToolDraftRows(ctx, ev) {
@@ -3975,6 +4056,14 @@ function removeAbortedToolDraftRows(ctx, ev) {
         }
         var rowRunId = String(row.getAttribute('data-run-id') || '');
         if (runId && rowRunId && rowRunId !== runId) return;
+        var state = ctx && ctx._toolStreamRenderState;
+        discardPendingToolRowRender(ctx, row);
+        if (state) {
+            var draftKey = row.getAttribute('data-tool-draft-key');
+            var toolCallId = row.getAttribute('data-tool-call-id');
+            if (draftKey) state.draftRows.delete(draftKey);
+            if (toolCallId) state.rowsById.delete(toolCallId);
+        }
         unregisterProcessAggregateRow(row);
         row.remove();
     });
@@ -4049,6 +4138,10 @@ function rootSessionIdForRenderedNode(row, runSessionId) {
 function findToolCallRow(ctx, toolCallId) {
     var tid = toolCallId != null ? String(toolCallId) : '';
     if (!tid) return null;
+    var state = ensureToolStreamRenderState(ctx);
+    var cached = state && state.rowsById.get(tid);
+    if (cached && cached.isConnected) return cached;
+    if (cached) state.rowsById.delete(tid);
     var roots = [];
     if (ctx && ctx.stream && typeof ctx.stream.querySelector === 'function') roots.push(ctx.stream);
     var body = getExistingProcessBody(ctx);
@@ -4058,13 +4151,19 @@ function findToolCallRow(ctx, toolCallId) {
             try {
                 var selector = '.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]';
                 var row = roots[i].querySelector(selector);
-                if (row) return row;
+                if (row) {
+                    rememberToolStreamRow(ctx, row, row.getAttribute('data-tool-draft-key'), tid);
+                    return row;
+                }
             } catch (e) { /* fall through to attribute comparison */ }
         }
         if (typeof roots[i].querySelectorAll === 'function') {
             var rows = roots[i].querySelectorAll('.feed-item.feed--tool[data-tool-call-id]');
             for (var j = 0; j < rows.length; j += 1) {
-                if (String(rows[j].getAttribute('data-tool-call-id') || '') === tid) return rows[j];
+                if (String(rows[j].getAttribute('data-tool-call-id') || '') === tid) {
+                    rememberToolStreamRow(ctx, rows[j], rows[j].getAttribute('data-tool-draft-key'), tid);
+                    return rows[j];
+                }
             }
         }
     }
@@ -4104,8 +4203,10 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
     var so = null;
     if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
     if (draft) {
+        discardPendingToolRowRender(ctx, draft);
         if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
         draft.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));
+        rememberToolStreamRow(ctx, draft, toolCallDraftKey(ctx, parsed), parsed.tool_call_id);
         draft.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
         if (so) {
             var restoredReactIter = Math.max(1, Math.floor(so.reactIter));
@@ -4142,6 +4243,7 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
         row.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));
         row.setAttribute('data-tool-pending', '1');
         row.dataset.commandPreview = commandPreview;
+        rememberToolStreamRow(ctx, row, toolCallDraftKey(ctx, parsed), parsed.tool_call_id);
         var chunk = row.querySelector('.feed-chunk');
         if (chunk) {
             chunk.classList.remove('is-streaming');
@@ -4160,16 +4262,7 @@ function appendToolCommandDelta(ctx, parsed, runSessionId) {
     var row = findToolCallRow(ctx, tid);
     if (!row) return;
     row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');
-    var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);
-    var sc = row.querySelector('.feed-chunk-scroller');
-    if (sc) {
-        var pendingText = truncateLogTextForUi(text);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, pendingText);
-        else sc.textContent = pendingText;
-    }
-    var ch = row.querySelector('.feed-chunk');
-    if (ch) refreshFeedChunkOverflow(ch);
-    if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
+    scheduleToolRowRender(ctx, row, runSessionId, 'command', parsed);
 }
 function upsertToolCallResult(ctx, parsed, runSessionId) {
     var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
@@ -4183,6 +4276,10 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     var rawContent = parsed.raw_content != null ? String(parsed.raw_content) : '';
     var text = rawContent ? rawContent : formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
     if (row) {
+        discardPendingToolRowRender(ctx, row);
+        var renderState = ctx && ctx._toolStreamRenderState;
+        var completedDraftKey = row.getAttribute('data-tool-draft-key');
+        if (renderState && completedDraftKey) renderState.draftRows.delete(completedDraftKey);
         row._toolCallEvent = parsed;
         renderDurableAttachmentImages(row, parsed.attachments || []);
         if (tid) row.setAttribute('data-tool-call-id', tid);
@@ -4190,6 +4287,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         row.removeAttribute('data-tool-pending');
         row.setAttribute('data-event-committed', '1');
         row.dataset.commandPreview = cmdPreview != null ? String(cmdPreview) : '';
+        rememberToolStreamRow(ctx, row, '', tid);
         var sc = row.querySelector('.feed-chunk-scroller');
         if (sc) {
             var doneText = truncateLogTextForUi(text);
@@ -4225,6 +4323,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
     }
     if (newRow) {
+        rememberToolStreamRow(ctx, newRow, '', tid);
         newRow._toolCallEvent = parsed;
         renderDurableAttachmentImages(newRow, parsed.attachments || []);
         autoCollapseToolRowAfterResult(newRow);

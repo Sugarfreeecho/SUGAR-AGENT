@@ -22,14 +22,145 @@ def test_thread_bridge_preserves_first_token_and_coalesces_followups(monkeypatch
         assert await asyncio.wait_for(queue.get(), timeout=0.1) == ("content", "bc")
 
         bridge.put(("reasoning", "r"))
-        bridge.put(("tool_call_delta", {"index": 0}))
-        assert await asyncio.wait_for(queue.get(), timeout=0.02) == ("reasoning", "r")
-        assert await asyncio.wait_for(queue.get(), timeout=0.02) == (
+        bridge.put(("tool_call_delta", {"index": 0, "arguments_delta": "{"}))
+        bridge.put(("tool_call_delta", {"index": 0, "arguments_delta": "}"}))
+        assert await asyncio.wait_for(queue.get(), timeout=0.1) == ("reasoning", "r")
+        assert await asyncio.wait_for(queue.get(), timeout=0.1) == (
             "tool_call_delta",
-            {"index": 0},
+            {
+                "index": 0,
+                "name_delta": "",
+                "arguments_delta": "{}",
+            },
         )
 
     asyncio.run(scenario())
+
+
+def test_thread_bridge_keeps_first_tool_delta_immediate(monkeypatch):
+    import agent_loop
+
+    async def scenario():
+        queue = asyncio.Queue()
+        bridge = agent_loop._ThreadToAsyncQueue(asyncio.get_running_loop(), queue)
+        monkeypatch.setattr(bridge, "_TEXT_FLUSH_SECONDS", 0.05)
+
+        bridge.put(("tool_call_delta", {"index": 0, "name_delta": "run_shell"}))
+        assert await asyncio.wait_for(queue.get(), timeout=0.02) == (
+            "tool_call_delta",
+            {"index": 0, "name_delta": "run_shell"},
+        )
+
+    asyncio.run(scenario())
+
+
+def test_run_shell_progress_publisher_batches_and_caps_output():
+    import agent_tools
+
+    async def scenario():
+        emitted = []
+
+        async def sink(stream_name, text):
+            emitted.append((stream_name, text))
+
+        publisher = agent_tools._RunShellProgressPublisher(
+            sink,
+            flush_seconds=10,
+            flush_chars=1000,
+            max_chars=5,
+        )
+        await publisher.push("stdout", "abc")
+        await publisher.push("stderr", "d")
+        await publisher.push("stdout", "ef")
+        await publisher.push("stderr", "ignored")
+        await publisher.close()
+        return emitted
+
+    emitted = asyncio.run(scenario())
+    assert emitted[0][0] == "stdout"
+    assert [stream for stream, _ in emitted] == ["stdout", "stderr", "stdout"]
+    assert "".join(text for _, text in emitted).startswith("abcde")
+    assert "实时输出已截断" in "".join(text for _, text in emitted)
+    assert sum("ignored" in text for _, text in emitted) == 0
+
+
+def test_run_shell_streams_stdout_before_return():
+    import agent_tools
+
+    async def scenario():
+        emitted = []
+        first_output = asyncio.Event()
+
+        async def sink(stream_name, text):
+            emitted.append((stream_name, text))
+            if "one" in text:
+                first_output.set()
+
+        with agent_tools.run_shell_runtime_context(output_sink=sink):
+            task = asyncio.create_task(
+                agent_tools.run_shell(
+                    'python -c "import time; print(\'one\', flush=True); time.sleep(0.4)"',
+                    timeout_ms=5000,
+                )
+            )
+            await asyncio.wait_for(first_output.wait(), timeout=2)
+            assert not task.done()
+            result = await task
+        return result, emitted
+
+    result, emitted = asyncio.run(scenario())
+    assert "one" in result
+    assert "Exit code: 0" in result
+    assert any(stream == "stdout" and "one" in text for stream, text in emitted)
+
+
+def test_tool_stream_frontend_batches_rows_per_animation_frame():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "frontend/src/app/modules/message-rendering.js"
+    ).read_text(encoding="utf-8")
+    tool_delta = source.split("function appendToolCallDelta", 1)[1].split(
+        "function removeAbortedToolDraftRows", 1
+    )[0]
+    command_delta = source.split("function appendToolCommandDelta", 1)[1].split(
+        "function upsertToolCallResult", 1
+    )[0]
+
+    assert "pendingRows: new Map()" in source
+    assert "state.flushRaf = requestAnimationFrame" in source
+    assert "scheduleToolRowRender(ctx, row, runSessionId, 'draft', parsed)" in tool_delta
+    assert "scheduleToolRowRender(ctx, row, runSessionId, 'command', parsed)" in command_delta
+    assert "setUiRuntimeText" not in command_delta
+
+
+def test_tool_call_sse_uses_bounded_ui_result_instead_of_raw_result():
+    import agent_loop
+
+    async def scenario():
+        emitted = []
+
+        async def emit(event):
+            emitted.append(event)
+
+        await agent_loop._emit_tool_call_sse(
+            emit,
+            {
+                "type": "tool",
+                "tool_name": "run_shell",
+                "tool_args": {"command": "demo"},
+                "tool_id": "call-1",
+                "result": "x" * 100_000,
+                "tool_detail_ui": "bounded preview",
+            },
+            1,
+        )
+        return emitted
+
+    emitted = asyncio.run(scenario())
+    assert len(emitted) == 1
+    assert emitted[0]["result"] == "bounded preview"
 
 
 def test_steer_control_notifies_async_waiter_without_polling():

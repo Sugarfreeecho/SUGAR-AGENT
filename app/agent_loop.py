@@ -119,8 +119,7 @@ from agent_tools import (
     AGENT_DEFAULT_WRITE_FILENAME,
     delete_file,
     safe_work_path,
-    set_run_shell_interrupt_check,
-    clear_run_shell_interrupt_check,
+    run_shell_runtime_context,
     redact_sensitive_tool_obj,
     redact_sensitive_tool_text,
     tool_work_dir_override,
@@ -3015,7 +3014,7 @@ def _queue_get_with_timeout(q: queue.Queue, timeout: float):
 
 
 class _ThreadToAsyncQueue:
-    """Bridge worker-thread events while coalescing text within one UI frame."""
+    """Bridge worker-thread events while coalescing model deltas per UI frame."""
 
     _TEXT_FLUSH_SECONDS = max(
         0.001,
@@ -3026,12 +3025,12 @@ class _ThreadToAsyncQueue:
         self._loop = loop
         self._target = target
         self._lock = threading.Lock()
-        self._pending_text: List[Tuple[str, str]] = []
+        self._pending_text: List[Tuple[str, Any]] = []
         self._flush_scheduled = False
         self._flush_handle: Optional[asyncio.Handle] = None
         self._sent_first_text = False
 
-    def _drain_pending(self) -> List[Tuple[str, str]]:
+    def _drain_pending(self) -> List[Tuple[str, Any]]:
         with self._lock:
             rows = self._pending_text
             self._pending_text = []
@@ -3068,14 +3067,43 @@ class _ThreadToAsyncQueue:
                 and item[0] in {"reasoning", "content"}
                 and isinstance(item[1], str)
             )
-            if not is_text:
+            is_tool_delta = (
+                isinstance(item, tuple)
+                and len(item) >= 2
+                and item[0] == "tool_call_delta"
+                and isinstance(item[1], dict)
+            )
+            if not is_text and not is_tool_delta:
                 self._loop.call_soon_threadsafe(self._flush_then_put, item)
                 return
             tag, payload = item[0], item[1]
             with self._lock:
-                if self._pending_text and self._pending_text[-1][0] == tag:
-                    previous_tag, previous_payload = self._pending_text[-1]
-                    self._pending_text[-1] = (previous_tag, previous_payload + payload)
+                previous = self._pending_text[-1] if self._pending_text else None
+                if is_text and previous and previous[0] == tag:
+                    previous_tag, previous_payload = previous
+                    self._pending_text[-1] = (
+                        previous_tag,
+                        str(previous_payload) + str(payload),
+                    )
+                elif (
+                    is_tool_delta
+                    and previous
+                    and previous[0] == tag
+                    and str((previous[1] or {}).get("index", 0) or 0)
+                    == str((payload or {}).get("index", 0) or 0)
+                ):
+                    previous_tag, previous_payload = previous
+                    merged_payload = dict(previous_payload or {})
+                    merged_payload["name_delta"] = str(
+                        merged_payload.get("name_delta", "") or ""
+                    ) + str(payload.get("name_delta", "") or "")
+                    merged_payload["arguments_delta"] = str(
+                        merged_payload.get("arguments_delta", "") or ""
+                    ) + str(payload.get("arguments_delta", "") or "")
+                    for key, value in payload.items():
+                        if key not in {"name_delta", "arguments_delta"} and value not in (None, ""):
+                            merged_payload[key] = value
+                    self._pending_text[-1] = (previous_tag, merged_payload)
                 else:
                     self._pending_text.append((tag, payload))
                 if self._flush_scheduled:
@@ -4373,13 +4401,23 @@ async def _emit_tool_call_sse(
     if not emit or not isinstance(res, dict) or res.get("type") != "tool":
         return
     try:
+        ui_result = res.get("tool_detail_ui", res.get("result", ""))
+        if isinstance(ui_result, list):
+            from agent_openai import normalize_content_text
+
+            ui_result = normalize_content_text(ui_result)
+        elif not isinstance(ui_result, str):
+            ui_result = str(ui_result or "")
         r = emit(
             {
                 "type": "tool_call",
                 "tool": redact_sensitive_tool_text(res["tool_name"]),
                 "args": redact_sensitive_tool_obj(res["tool_args"]),
                 "command_preview": _tool_command_preview(res["tool_name"], res["tool_args"]),
-                "result": redact_sensitive_tool_text(res.get("result", "")),
+                # Never put the unbounded model-facing result on the browser
+                # stream. _tool_result_details_for_views has already produced a
+                # bounded UI projection and, when needed, a tempfile reference.
+                "result": redact_sensitive_tool_text(ui_result),
                 "attachments": [block["attachment"] for block in res.get("tool_detail_ui", [])
                                 if isinstance(block, dict) and block.get("type") == "image" and block.get("attachment")],
                 "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
@@ -6446,16 +6484,60 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         if workspace_lock is not None:
                             await acquire_workspace_write_lock(workspace_lock)
                             workspace_lock_acquired = True
-                        # 注入 interrupt 回调，让 run_shell 能感知 interrupt 并杀子进程
                         _sid = state.get("session_id", "") if isinstance(state, dict) else ""
-                        if _sid and tool_name == "run_shell":
-                            set_run_shell_interrupt_check(
-                                lambda: (
-                                    not _state_run_has_write_fence(state)
-                                    or _state_interrupt_requested(state)
-                                    or _steer_requested(state)
-                                )
+                        shell_delta_seq = 0
+                        shell_output_stream = ""
+
+                        def _run_shell_should_interrupt() -> bool:
+                            return bool(
+                                not _state_run_has_write_fence(state)
+                                or _state_interrupt_requested(state)
+                                or _steer_requested(state)
                             )
+
+                        async def _emit_run_shell_output(
+                            stream_name: str,
+                            delta: str,
+                        ) -> None:
+                            nonlocal shell_delta_seq, shell_output_stream
+                            if not delta:
+                                return
+                            normalized_stream = (
+                                "stderr" if stream_name == "stderr" else "stdout"
+                            )
+                            if normalized_stream != shell_output_stream:
+                                if not shell_output_stream:
+                                    prefix = (
+                                        "\nSTDERR:\n"
+                                        if normalized_stream == "stderr"
+                                        else "\n实时输出\n"
+                                    )
+                                else:
+                                    prefix = (
+                                        "\nSTDERR:\n"
+                                        if normalized_stream == "stderr"
+                                        else "\nSTDOUT:\n"
+                                    )
+                                delta = prefix + delta
+                                shell_output_stream = normalized_stream
+                            shell_delta_seq += 1
+                            await _push_stream_event(
+                                state,
+                                {
+                                    "type": "tool_command_delta",
+                                    "ephemeral": True,
+                                    "stream_seq": llm_stream_seq,
+                                    "delta_seq": shell_delta_seq,
+                                    "react_iter": int(iter_count),
+                                    "tool_call_id": str(tool_id or ""),
+                                    "tool_call_index": tool_call_index,
+                                    "tool": "run_shell",
+                                    "stream": normalized_stream,
+                                    "delta": delta,
+                                },
+                                emit=emit,
+                            )
+
                         worktree_root = ""
                         if session_meta.get("is_subagent"):
                             worktree_root = str(
@@ -6463,8 +6545,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 or session_meta.get("git_worktree_path")
                                 or ""
                             ).strip()
-                        with tool_work_dir_override(worktree_root or None):
-                            with execution_scope(
+                        with run_shell_runtime_context(
+                            interrupt_check=(
+                                _run_shell_should_interrupt
+                                if _sid and tool_name == "run_shell"
+                                else None
+                            ),
+                            output_sink=(
+                                _emit_run_shell_output
+                                if emit and tool_name == "run_shell"
+                                else None
+                            ),
+                        ):
+                            with tool_work_dir_override(worktree_root or None), execution_scope(
                                 session_id=state["session_id"],
                                 context=sec_context,
                                 request=sec_request,
@@ -6537,7 +6630,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 workspace_lock.release()
                             except RuntimeError:
                                 pass
-                        clear_run_shell_interrupt_check()
 
                 logger.info(
                     "tool_execution_timing session=%s tool=%s invoke_ms=%s react_iter=%s",

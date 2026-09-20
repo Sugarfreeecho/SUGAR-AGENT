@@ -967,6 +967,12 @@ function newDomContext(streamEl) {
         runStartedAt: null,
         reactGeneration: 0,
         _seenStreamDeltaKeys: new Set(),
+        _toolStreamRenderState: {
+            draftRows: new Map(),
+            rowsById: new Map(),
+            pendingRows: new Map(),
+            flushRaf: 0,
+        },
         llm: newLlmState(),
     };
 }

@@ -533,9 +533,10 @@ def test_apply_patch_schema_explains_update_context_without_fake_before_paramete
     assert "at least one space- or minus-prefixed existing line" in patch_description
     assert "required old, before, or context content" in patch_description
     assert "Paths are resolved from the runtime WORK_DIR" in patch_description
-    # 13e91d4 起工作区外路径改为“允许 + 目录审批”，不再禁止 patch。
-    assert "native absolute paths, which are allowed" in patch_description
-    assert "restricted modes ask for directory approval first" in patch_description
+    assert "without a containment restriction" in patch_description
+    assert "`..` may reach parent directories" in patch_description
+    assert "native absolute paths are allowed" in patch_description
+    assert "Restricted modes may ask for directory approval first" in patch_description
     assert "Files outside WORK_DIR cannot be patched" not in patch_description
     assert "new Add/Update/Delete File section for every file" in patch_description
     assert "*** Update File: relative/path.txt" in patch_description
@@ -549,7 +550,6 @@ def test_apply_patch_handles_multiple_file_operations(tmp_path, monkeypatch):
     add_path = tmp_path / "nested" / "add.txt"
     update_path.write_text("alpha\nbeta\n", encoding="utf-8")
     delete_path.write_text("remove me", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "safe_work_path", lambda raw: Path(raw))
     monkeypatch.setattr(agent_tools, "_path_is_sensitive_tool_resource", lambda _path: False)
     monkeypatch.setattr(agent_tools, "_delete_path_prohibited_reason", lambda _path: None)
 
@@ -578,11 +578,32 @@ def test_apply_patch_handles_multiple_file_operations(tmp_path, monkeypatch):
     assert not delete_path.exists()
 
 
+def test_apply_patch_path_resolution_is_not_contained_to_work_dir(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("before\n", encoding="utf-8")
+    monkeypatch.setattr(agent_tools, "_path_is_sensitive_tool_resource", lambda _path: False)
+
+    patch = "\n".join([
+        "*** Begin Patch",
+        "*** Update File: ../outside.txt",
+        "@@",
+        "-before",
+        "+after",
+        "*** End Patch",
+    ])
+    with agent_tools.tool_work_dir_override(workspace):
+        result = agent_tools.apply_patch(patch)
+
+    assert result.startswith("Done!")
+    assert outside.read_text(encoding="utf-8") == "after\n"
+
+
 def test_apply_patch_rejects_stale_context_before_any_write(tmp_path, monkeypatch):
     existing = tmp_path / "existing.txt"
     new_file = tmp_path / "new.txt"
     existing.write_text("current\n", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "safe_work_path", lambda raw: Path(raw))
     monkeypatch.setattr(agent_tools, "_path_is_sensitive_tool_resource", lambda _path: False)
 
     patch = "\n".join([
@@ -605,7 +626,6 @@ def test_apply_patch_rejects_stale_context_before_any_write(tmp_path, monkeypatc
 def test_apply_patch_accepts_saved_session_formatting_variants(tmp_path, monkeypatch):
     target = tmp_path / "formatted.txt"
     target.write_text("alpha\n  beta\n\ngamma\n", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "safe_work_path", lambda raw: Path(raw))
     monkeypatch.setattr(agent_tools, "_path_is_sensitive_tool_resource", lambda _path: False)
 
     # Saved sessions contained all three variants: a Markdown fence, omitted
@@ -631,7 +651,6 @@ def test_apply_patch_accepts_saved_session_formatting_variants(tmp_path, monkeyp
 def test_apply_patch_uses_unique_whitespace_insensitive_context(tmp_path, monkeypatch):
     target = tmp_path / "indented.py"
     target.write_text("def sample():\n    value = 1\n    return value\n", encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "safe_work_path", lambda raw: Path(raw))
     monkeypatch.setattr(agent_tools, "_path_is_sensitive_tool_resource", lambda _path: False)
 
     patch = "\n".join([
@@ -655,7 +674,6 @@ def test_apply_patch_rejects_ambiguous_whitespace_fallback(tmp_path, monkeypatch
     target = tmp_path / "ambiguous.txt"
     original = "  same\t\nfirst\n\n    same\t\t\nsecond\n"
     target.write_text(original, encoding="utf-8")
-    monkeypatch.setattr(agent_tools, "safe_work_path", lambda raw: Path(raw))
     monkeypatch.setattr(agent_tools, "_path_is_sensitive_tool_resource", lambda _path: False)
 
     patch = "\n".join([
