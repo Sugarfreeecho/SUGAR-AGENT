@@ -73,11 +73,11 @@ def test_workspace_side_panels_share_the_same_visual_system() -> None:
     assert "padding: 0.4rem 0.35rem;" in panel
     assert "font: 650 0.62rem/1.3 var(--sans);" in title
     assert "font: 400 0.68rem/1.45 var(--sans);" in item
-    assert 'chat-toc-panel workspace-side-panel' in shell
-    assert 'chat-toc-title workspace-side-panel-title' in shell
-    assert 'chat-toc-stats workspace-side-panel-meta' in shell
-    assert 'chat-toc-list workspace-side-panel-list' in shell
-    assert "workspace-side-panel-item workspace-side-panel-item--interactive" in toc_source
+    assert '<div class="chat-toc-panel">' in shell
+    assert '<div class="chat-toc-title">历史记录</div>' in shell
+    assert 'chat-toc-stats' not in shell
+    assert ".chat-toc-panel {" in styles
+    assert "workspace-side-panel-item" not in toc_source
     assert "chat-todo-plan-panel workspace-side-panel" in todo_source
     assert "chat-todo-plan-title workspace-side-panel-title" in todo_source
     assert "chat-todo-plan-stats workspace-side-panel-meta" in todo_source

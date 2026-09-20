@@ -64,7 +64,7 @@ const UI_TRANSLATIONS_EN = {
     '会话列表': 'Session list', '拖动调整侧栏宽度': 'Drag to resize sidebar', '聊天': 'Chat',
     '选择或新建会话': 'Select or create a session',
     '会话扩展面板': 'Session extensions', '折叠会话扩展面板': 'Collapse session extensions',
-    '消息': 'Messages', '历史记录': 'History', '条记录': 'items',
+    '消息': 'Messages', '历史记录': 'History',
     '折叠历史面板': 'Collapse history panel',
     '撤销': 'Undo', '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）': 'What would you like to do? (Enter to send · Shift/Ctrl/Cmd + Enter for a new line)', 'Agent运行中，输入后续任务': 'Agent is running; enter a follow-up task', '按 Enter 发送刚加入或第一条待发送任务': 'Press Enter to send the newly queued or first pending task', '选择文件': 'Choose file',
     '选择 Skill': 'Select Skill', '发送 / 停止': 'Send / Stop', '发送': 'Send', '停止': 'Stop',
@@ -9215,10 +9215,8 @@ function updateTocActiveFromViewport() {
 function clearTocForSessionLoad() {
     const toc = document.getElementById('chat-toc');
     const list = document.getElementById('chat-toc-list');
-    const stats = document.getElementById('chat-toc-stats');
     tocRebuildEpoch += 1;
     if (list) list.textContent = '';
-    if (stats) stats.textContent = '';
     if (toc) toc.classList.remove('is-open');
     notifyPanelContentChanged();
 }
@@ -9265,7 +9263,6 @@ function rebuildToc(options) {
     options = options || {};
     const toc = document.getElementById('chat-toc');
     const list = document.getElementById('chat-toc-list');
-    const stats = document.getElementById('chat-toc-stats');
     if (!toc || !list) return;
     if (suppressTocDuringSessionLoad) {
         return;
@@ -9275,7 +9272,6 @@ function rebuildToc(options) {
         list.addEventListener('scroll', hideUiHoverTooltip, { passive: true });
     }
     list.textContent = '';
-    if (stats) stats.textContent = '';
     const sid = currentSessionId;
     const epoch = ++tocRebuildEpoch;
     (async function () {
@@ -9333,7 +9329,6 @@ function rebuildToc(options) {
         });
         function appendTocLink(label, titleFull, scrollToWrap, eventIndex) {
             const a = document.createElement('a');
-            a.className = 'workspace-side-panel-item workspace-side-panel-item--interactive';
             a.href = '#';
             if (eventIndex != null) a.setAttribute('data-event-index', String(eventIndex));
             var tipText = (titleFull != null && String(titleFull).trim() !== '')
@@ -9383,11 +9378,6 @@ function rebuildToc(options) {
                     void scrollToUserTurnOrLoadOlder(ei);
                 }, ei);
             });
-        }
-        if (stats) {
-            const itemLabel = typeof translateUiString === 'function'
-                ? translateUiString('条记录') : '条记录';
-            stats.textContent = list.childElementCount + ' ' + itemLabel;
         }
         notifyPanelContentChanged();
         if (tocScrollBottomOnNextBuild) {
