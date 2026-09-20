@@ -4348,9 +4348,10 @@ def history_context(
     limit: int = 10,
     offset: int = 0,
     max_chars: int = 8_000,
+    include_source: bool = False,
 ) -> str:
     """Placeholder; the host service performs bounded history retrieval."""
-    _ = action, scope, query, ref, limit, offset, max_chars
+    _ = action, scope, query, ref, limit, offset, max_chars, include_source
     raise RuntimeError(
         "history_context is handled by the host service, not tools_dict invocation."
     )
@@ -4695,11 +4696,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "history_context",
-        "Search or read durable conversation history. Use scope=current first for facts from this session; "
+        "Search or read durable conversation history. Results are clean semantic text: storage metadata is hidden by default. "
+        "Use scope=current first for facts from this session; "
         "use scope=global only when the user asks about another or any prior session. Search returns stable refs "
         "from compressed archives and events.jsonl; pass one ref to action=read for the exact bounded record. "
-        "This is the preferred way to recover context that may have been compacted. If it cannot locate the "
-        "needed evidence, inspect the returned source_file or the session's original events.jsonl with read/search tools.",
+        "This is the preferred way to recover context that may have been compacted. Set include_source=true only "
+        "when raw-file follow-up is necessary.",
         {
             "action": {
                 "type": "string",
@@ -4743,7 +4745,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "include_source": {
                 "type": "boolean",
                 "default": False,
-                "description": "Include the backing JSONL path only for explicit raw-file follow-up. Keep false for clean results.",
+                "description": "Include backing JSONL paths only for explicit raw-file follow-up. On no match, returns scanned source_files (capped). Keep false for clean results.",
             },
         },
         ["action"],

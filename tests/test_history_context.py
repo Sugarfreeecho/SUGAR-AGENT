@@ -168,6 +168,14 @@ def test_history_context_hides_storage_metadata_and_irrelevant_matches(tmp_path)
             "session_id": session_id,
             "payload": {"internal_counter": "metadata-only-needle"},
         },
+        {
+            "schema_version": 1,
+            "seq": 9,
+            "timestamp": "2026-09-20T00:00:02Z",
+            "type": "assistant_final_committed",
+            "session_id": session_id,
+            "payload": {"content": "clean answer"},
+        },
     ]
     (session_dir / "events.jsonl").write_text(
         "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
@@ -177,6 +185,7 @@ def test_history_context_hides_storage_metadata_and_irrelevant_matches(tmp_path)
     result = history_context(
         manager, session_id, action="search", scope="current", query="clean answer"
     )
+    assert len(result["results"]) == 1
     assert result["results"][0]["content"] == "助手：clean answer"
     assert "timestamp" not in json.dumps(result, ensure_ascii=False)
     assert "schema_version" not in json.dumps(result, ensure_ascii=False)
@@ -187,6 +196,16 @@ def test_history_context_hides_storage_metadata_and_irrelevant_matches(tmp_path)
         scope="current",
         query="metadata-only-needle",
     )["results"] == []
+    no_hit_with_source = history_context(
+        manager,
+        session_id,
+        action="search",
+        scope="current",
+        query="metadata-only-needle",
+        include_source=True,
+    )
+    assert no_hit_with_source["results"] == []
+    assert no_hit_with_source["source_files"] == [str(session_dir / "events.jsonl")]
 
     read = history_context(
         manager,

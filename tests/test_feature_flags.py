@@ -804,7 +804,8 @@ def test_prompt_allows_multi_tool_generation_independent_of_execution_mode():
     assert "已被压缩或可能被压缩的历史信息" in prompt
     assert "优先调用 `history_context`" in prompt
     assert "先用 `scope=current` 搜索当前会话" in prompt
-    assert "当前会话原始 `events.jsonl`" in prompt
+    assert "默认使用干净结果" in prompt
+    assert "`include_source=true`" in prompt
 
 
 def test_ui_translation_does_not_mutate_conversation_content():

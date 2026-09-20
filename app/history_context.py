@@ -408,6 +408,7 @@ def _search_session(
     include_source: bool,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    seen_content: set[str] = set()
     for path in _iter_archive_paths(session_dir):
         archive_id = path.stem
         for row, _raw_line in _matching_jsonl(path, terms):
@@ -416,6 +417,10 @@ def _search_session(
             clean_text = _clean_message_text(row)
             if not clean_text or not all(term in clean_text.casefold() for term in terms):
                 continue
+            content_key = " ".join(clean_text.split()).casefold()
+            if content_key in seen_content:
+                continue
+            seen_content.add(content_key)
             result = {
                 "ref": archive_item_ref(session_id, archive_id, str(row.get("item_id") or "")),
                 "content": _search_snippet(clean_text, terms),
@@ -432,6 +437,10 @@ def _search_session(
         clean_text = _clean_event_text(event)
         if not clean_text or not all(term in clean_text.casefold() for term in terms):
             continue
+        content_key = " ".join(clean_text.split()).casefold()
+        if content_key in seen_content:
+            continue
+        seen_content.add(content_key)
         seq = int(event.get("seq") or 0)
         result = {
             "ref": event_ref(session_id, seq),
@@ -540,9 +549,8 @@ def history_context(
     terms = [term.casefold() for term in normalized_query.split() if term]
     result_limit = min(50, max(1, int(limit or 10)))
     results: list[dict[str, Any]] = []
-    scanned_sessions = 0
-    for session_id, session_dir in _session_dirs(session_manager, current_session_id, scope_name):
-        scanned_sessions += 1
+    session_dirs = _session_dirs(session_manager, current_session_id, scope_name)
+    for session_id, session_dir in session_dirs:
         results.extend(
             _search_session(
                 session_id,
@@ -558,6 +566,16 @@ def history_context(
     response: dict[str, Any] = {"results": results}
     if not results:
         response["message"] = "未找到匹配的会话内容"
+    if include_source and not results:
+        source_files: list[str] = []
+        for _session_id, session_dir in session_dirs:
+            event_path = session_dir / "events.jsonl"
+            if event_path.is_file():
+                source_files.append(str(event_path))
+            source_files.extend(str(path) for path in _iter_archive_paths(session_dir))
+            if len(source_files) >= 20:
+                break
+        response["source_files"] = source_files[:20]
     return response
 
 

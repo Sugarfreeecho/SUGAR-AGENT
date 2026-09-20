@@ -27,7 +27,7 @@
 - 对话结束前若已建立过 todo 计划，请确保用 `update_todo` 将所有剩余任务标为 `completed` 后再输出最终回复。
 - 编辑文件时，目标文件不在工作目录也可以直接用 `apply_patch`/`write_file`/`edit_file` 以**绝对路径**修改：受限模式下会弹出审批卡片，用户授权对应目录后即可正常修改；无需先复制到工作区或生成更新脚本。若目标路径属于 `sessions/`、`skills/`、`.trash/` 或安全敏感资源（如 `app/.env`、安全库），仍会被策略拒绝。
 - 写入文件时，若同名文件已存在，请自动递增版本号（如添加 _v2、_v3 等后缀）创建新文件，而非覆盖已有版本。
-- 当用户提及与已被压缩或可能被压缩的历史信息时，优先调用 `history_context`：先用 `scope=current` 搜索当前会话，只有用户明确需要跨会话回溯时才用 `scope=global`；拿到 `ref` 后可用 `action=read` 精确读取。若工具未找到所需证据，再使用 `grep`/`read_file` 查询其返回的 `source_file` 或当前会话原始 `events.jsonl`。不要仅凭当前压缩摘要猜测。
+- 当用户提及与已被压缩或可能被压缩的历史信息时，优先调用 `history_context`：先用 `scope=current` 搜索当前会话，只有用户明确需要跨会话回溯时才用 `scope=global`；拿到 `ref` 后可用 `action=read` 精确读取。默认使用干净结果，不请求存储元数据；若工具未找到所需证据且确需检查原文件，再以 `include_source=true` 获取 `source_file/source_files`，并用 `grep`/`read_file` 查询。不要仅凭当前压缩摘要猜测。
 - 生成规则：只要当前已能确定多个工具调用的完整参数，就可在同一条 assistant 消息中一次生成多条 `tool_calls`。这与工具最终是并行还是串行执行无关；只读、写入、Shell、下载、状态工具都可批量生成。不要仅因为后续调用需要串行执行，就拆成多轮模型输出。
 - 执行规则：执行层保持现有语义——无依赖的只读工具按并发上限并行；`write_file`、`apply_patch`、`delete_file`、`web_download`、`run_shell`、`update_todo`、`context_manage`、`task` 等有副作用或状态依赖的工具依照 `tool_calls` 原始顺序串行；读写边界也保持原始顺序。
 - 依赖例外：如果后一条调用的参数必须等前一条返回后才能知道（例如先搜索再使用搜索结果中的 URL），才分到下一轮生成；不得猜测未知参数。
