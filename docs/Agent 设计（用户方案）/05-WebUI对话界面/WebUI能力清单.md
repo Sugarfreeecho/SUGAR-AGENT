@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-09-20；补充 Windows WebUI 启动复用、运行状态语义与跨进程恢复租约）
+> 代码版本：当前工作区（2026-09-20；补充 Windows WebUI 启动复用、运行状态语义、跨进程恢复租约与会话列表状态一致性）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -57,7 +57,7 @@
 | 审批与 ask_user 交互卡片（含分析、取消、恢复） | `modules/human-interactions.js`、后端 interactions/approvals API | 【图】 |
 | 审批卡片锚点恢复（`tool_pending` 为 ephemeral；恢复时按 `tool_call_id` 重建占位工具行，重连历史恢复后刷新持久卡片） | `modules/human-interactions.js::ensurePendingHumanInteractionToolRow`、`modules/sse-handling.js::attachSessionEventStream` | 【单】 |
 | 权限与安全设置（会话级/全局权限、规则、预批准域名） | `modules/permissions.js`、后端 security API | 【图】 |
-| 模型档案管理（增删改、排序、启用、发现、探测） | `modules/model-profiles.js`、后端 model-profile API | 【图】 |
+| 模型档案管理（增删改、排序、启用、发现、探测；高级设置含 system prompt `auto/merge/preserve`） | `modules/model-profiles.js`、`app/templates/advance_config.html`、后端 model-profile API | 【图】 |
 | 对话区模型选择器（跟随当前会话/寻址的子代理会话；主会话→清熔断即时重试、下一次调用生效；子代理会话→数据动作切换、不打断） | `modules/model-profiles.js`、`modules/session-management.js`、`webui.set_session_model_profile` | 【图】 |
 | 工作区文件与媒体（目录浏览、图片元数据/预览、上传） | `modules/workspace-media.js`、后端 workspace API | 【卡】 |
 | 通知与 UI 存在性（10 秒 presence 上报驱动桌面提醒；节能/睡眠时为辅助信号） | `message-rendering.js::registerUiPresence`、后端 `ui_presence/_ui_presence_has_active` | 【卡】 |
@@ -72,7 +72,9 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 会话列表/归档/删除/恢复（recover_sessions） | `modules/session-management.js`、后端 sessions API | 【图】 |
-| 会话状态快照缓存（增量失效） | 后端 `_build_sessions_state_snapshot_cached` | 【单】 |
+| 会话状态快照缓存与版本协议（硬失效 + 单飞重建 + `state_revision`；变更后第一次读取即重建） | 后端 `_invalidate_sessions_state_cache` / `_build_sessions_state_snapshot_cached` | 【单】 |
+| 元数据写入围栏（写入在途拒收快照；客户端请求序号 + 服务端版本双下界；仅失败才回滚） | `state/session-store.js::shouldAcceptSnapshot`、`state/session-actions.js`、`modules/session-management.js`（begin/commit/cancel） | 【单】 |
+| 会话摘要写入全路径广播（created/name/pinned/todo/archived/自动归档/goal_review_pending → 失效快照缓存） | `agent_harness.SessionManager.add_session_state_listener`、`webui._on_session_manager_state_changed` | 【单】 |
 | 中断与运行状态：控制请求匹配 exact run；用户停止与接管/看门狗等系统中断使用不同 reason 和文案 | 后端 `interrupt_session`、`_session_run_state_fields_light`、`agent_loop._interrupt_terminal_text` | 【单】 |
 | continuation 启动提示为 ephemeral 状态事件，不写入耐久消息历史，避免恢复/续跑刷屏 | `agent_loop.py` 的 `Workflow continuation started` 状态事件 | 【单】 |
 
@@ -96,6 +98,7 @@
 
 ## 9. 版本记录
 
+- 2026-09-20（v11）：补录会话列表状态一致性——`/sessions/state` 改为硬失效 + 单飞重建并引入 `state_revision`；`SessionManager` 摘要写入全路径广播失效；客户端加"写入在途拒收 + 请求序号下界 + 版本下界"，仅写入失败才回滚；说明见 05/10·UC-5J1~5J6。
 - 2026-09-20（v10）：补录 run 终态单调契约与跨进程恢复租约；明确假终态后同 run 继续写入会触发前端终结/重挂振荡，刷新不能修复耐久矛盾历史。
 - 2026-09-20（v9）：补录 Goal badge 与 run activity 解耦、exact run 中断原因文案、continuation 启动提示仅瞬时展示。
 - 2026-09-20（v8）：补录 Windows WebUI 启动复用链——后台/节能标签用 UI Automation 精确选中，启动由托盘单一所有者负责，HTTP 激活容忍短暂事件循环阻塞；去除"随便聚焦浏览器窗口即成功"，失败时可靠打开页面。

@@ -1,7 +1,7 @@
 # Agent 运行时 ReAct 循环 · 能力清单（代码证据版）
 
 > 对象：MyAgent Agent 运行时（ReAct 主循环及配套运行时能力）
-> 代码版本：当前工作区（2026-09-20；补充历史性能优化 3.1~3.19、运行生命周期防风暴与跨进程恢复租约）
+> 代码版本：当前工作区（2026-09-20；补充历史性能优化 3.1~3.19、运行生命周期防风暴、跨进程恢复租约与后台子代理任务托管）
 > 图例：【图】见 `react-loop.architecture.html`（10 节点）；【卡】图中卡片；【单】仅本清单
 
 ## 1. 主循环与轮次结构
@@ -81,6 +81,8 @@
 | 线程→异步桥（队列泵、SSE 保活等待） | `_ThreadToAsyncQueue`、`_await_thread_with_sse_keepalive` | 【单】 |
 | 上下文策略串行化锁（防止并发策略冲突） | `_run_context_policy_serialized`、`_wait_context_policy_idle` | 【单】 |
 | 用户内容在占用运行位前统一准入为耐久图片引用；每个实际模型候选发送前从 Core 历史重新投影能力、缩放与总预算 | `agent_loop.py`、`attachments/admission.py`、`attachments/content.py` | 【单】 |
+| 后台子代理任务托管于进程级持久事件循环（守护线程 `subagent-background-loop`）；创建/注册原子交接，父轮临时循环关闭不中断 | `agent_subagent._BackgroundSubagentLoop`、`SubagentTaskRegistry.start_background` | 【单】 |
+| 跨事件循环等待/取消桥接：等待超时不取消 owner 任务；取消经 owner 循环执行并等待结算（≤8s） | `SubagentTaskRegistry.wait/cancel` | 【单】 |
 
 ## 10. 边界说明
 - 工具系统内部实现（注册表细节、各工具、审批闸口策略）归"工具系统"与"权限审批"模块清单。
@@ -89,6 +91,7 @@
 
 ## 11. 版本记录
 
+- 2026-09-20：补录后台子代理任务的持久循环托管与跨循环等待/取消桥接；任务生命周期与调用方循环解耦。
 - 2026-09-20：补充跨进程 exact-run 租约、共享心跳直接读盘、孤儿宽限保护与 UI 验证服务工作区隔离。
 - 2026-09-20：补充 exact run 中断、写栅栏接管原因、终态线程耗尽兜底、共享心跳与 Goal continuation 租约/熔断。
 - 2026-09-20：同步长运行收敛检查点、增量精确分词、tokenizer 后台预热与严格轮间计时口径。

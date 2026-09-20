@@ -1,6 +1,6 @@
 # LLM 接入 · 模块整体设计
 
-- 版本：2026-09-20 v4（覆盖至：当前工作区）
+- 版本：2026-09-20 v6（覆盖至：当前工作区）
 - 用途：本模块的**总入口**——先读本篇了解模块定位与功能地图，再按需进入各功能专项设计（每篇均按「触发 → 预期现象 → 规则与边界 → 依据」逐条审查）。
 - 适用实现：`app/llm/`（transport / provider_registry / responses/*）、`app/agent_openai.py`、`app/agent_harness.py`（切换/候选链）、`app/model_profiles.py`、`app/agent_reasoning.py`、`app/attachments/`（多模态投影）。
 - 配套：架构图 `workspace/archify_study/llm_provider_api/llm-provider-api-full.architecture.html`；能力清单 `LLMProviderAPI能力清单.md`（本文件夹）。
@@ -19,6 +19,7 @@
 3. 模型可自动（候选链）或手动切换，切换/降级路径全部有状态提示；
 4. 多模态（识图）在**不支持**时优雅降级而不是报错。
 5. 独立识图服务复用同一 model profile、三协议 transport、图片预算和流关闭语义，不复制第四套供应商客户端。
+6. 模型消息形状按实际候选能力投影；Qwen Chat Completions 获得开头唯一 system，且不反写 Core 历史。
 
 **非目标 / 待实现**
 - `LLM-HEDGE`（对冲提示）、`LLM-BUDGET`（预算将尽告警）为规范项 🟡（见 ../09-横切能力/）；
@@ -36,6 +37,7 @@
 | 06 | [流式解析、思考字段与 DSML 救援](06-流式解析与DSML救援方案设计-UseCase清单.md) | UC-1F1~1F2 | ✅ |
 | 07 | [网络与连接保障](07-网络与连接保障方案设计-UseCase清单.md) | UC-1G1~1G5 | ✅ |
 | 08 | [缓存、用量与隐私](08-缓存用量与隐私方案设计-UseCase清单.md) | UC-1H1~1H3 | ✅ |
+| 09 | [System Prompt 能力投影与 Qwen 兼容](09-SystemPrompt能力投影与Qwen兼容方案设计-UseCase清单.md) | UC-1I1~1I8 | ✅ |
 
 > 注：为保持可追溯性，本套 UC 编号段与原《全模块 UseCase 清单》一致（1xx 段），个别条目按功能归属微调了分组。
 
@@ -47,6 +49,7 @@
 4. **隐私保守**：Server 端存储开关、密钥脱敏（见 08）默认安全。
 5. **图片历史不变**：每个候选从耐久附件引用按自己的能力和预算重新投影；wire 层省略不反写 Core 历史。
 6. **连接优化不削弱韧性**：直连、连接复用和预热只优化首选热路径，不得绕过候选回退、预算、熔断或取消语义。
+7. **能力投影不污染历史**：system prompt、reasoning 与多模态的供应商适配只发生在实际候选的请求副本上，不回写会话历史，不提前影响其他 fallback 候选。
 
 ## 5. 边界总览
 
@@ -59,3 +62,5 @@
 - 2026-09-14 v2：补充独立识图 API 对既有 profile、transport 和候选投影规则的复用约束。
 - 2026-09-18 v3：05《手动切换》升级 v3（运行中切换一致性修复：熔断清理、选择纪元、fork 冻结释放、选择器承接子代理入口）；04 同步"接管改写绑定 + 选择纪元守卫"表述。
 - 2026-09-20 v4：07《网络与连接保障》补入 EOF drain/keepalive、首选候选直连适配器、启动与空闲后连接预热。
+- 2026-09-20 v5：新增 09《System Prompt 能力投影与 Qwen 兼容》，记录 `auto/merge/preserve`、Qwen 识别、首部合并、后置保序降级、工具事务保护与候选级 fallback 适配。
+- 2026-09-20 v6：09 补齐 non-transport SDK facade 与媒体失败重建两个请求出口，明确所有候选发送/重建支路保持相同 system 形状。

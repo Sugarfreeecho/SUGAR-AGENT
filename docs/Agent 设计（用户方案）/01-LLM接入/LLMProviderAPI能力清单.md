@@ -1,7 +1,7 @@
 # LLM Provider API 接入层 · 能力清单（代码证据版）
 
 > 对象：MyAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
-> 代码版本：当前工作区（2026-09-20；补充连接复用、直连适配器与后台预热）
+> 代码版本：当前工作区（2026-09-20；补充 Qwen system prompt 能力投影）
 > 图例：【图】已画入 v3 全景图节点 / 【卡】在图上卡片中 / 【单】仅本清单（超出 12 主节点容量）
 
 ## 1. 请求生命周期与身份
@@ -69,6 +69,7 @@
 | 专用分支：华为云 API 域名特判 | `model_profiles.py` `is_huawei_api_domain` | 【单】 |
 | 旧 .env 单档案导入迁移 | `model_profiles.py` `register_legacy_env_model_profile` | 【单】 |
 | 会话级自定义请求头 | `model_profiles.py` `profile_with_session_request_headers` | 【单】 |
+| System Prompt 策略：档案保存值 `auto/merge/preserve`、有效值解析、非法值拒绝与缓存键隔离 | `model_profiles.py` `normalize_system_prompt_mode/profile_system_prompt_mode/profile_cache_key` | 【单】 |
 
 ## 6. 模型响应特性适配
 | 能力 | 位置 | 状态 |
@@ -79,6 +80,9 @@
 | 原生边界 token 过滤 | `agent_openai.py` `_NativeBoundaryStreamFilter` | 【单】 |
 | GLM 模型专项分支 | `agent_openai.py` `_is_glm_model` | 【单】 |
 | `stream_options` 不兼容错误识别与降级 | `agent_openai.py` `_is_stream_options_error` | 【单】 |
+| Qwen Chat Completions 的首部唯一 system 投影：首部合并、后置保序降级、空项删除、工具事务保护 | `agent_openai.py` `_merge_system_prompt_for_single_system_model` | 【单】 |
+| system 投影按实际 fallback 候选执行；transport 与 non-transport SDK facade 出口一致，规范序列化阶段不提前污染其他模型 | `agent_harness.py` `ExecutorLLMClient/_FallbackCompletions/_profile_candidate` | 【单】 |
+| 媒体失败从 Core 重建纯文本请求后重新应用 system 投影 | `agent_openai.py` `run_chat_completion_stream_worker` media fallback | 【单】 |
 
 ## 7. 切换与降级（自动 / 手动）
 | 能力 | 位置 | 状态 |
