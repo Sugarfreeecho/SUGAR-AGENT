@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-09-20；补充 Windows WebUI 启动复用、运行状态语义、跨进程恢复租约与会话列表状态一致性）
+> 代码版本：当前工作区（2026-09-21；补充工作区双侧面板共享视觉系统）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -24,7 +24,7 @@
 | 耐久图片预览：同附件跨容器共享 fetch/blob，末节点移除时取消并释放 | `modules/workspace-media.js::renderDurableAttachmentImages` | 【单】 |
 | 平滑流式输出（逐帧节流） | `modules/smooth-stream.js` | 【卡】 |
 | 滚动历史锚点与回看 | `modules/session-scroll-history.js` | 【卡】 |
-| TOC 与 Todo 面板 | `modules/toc-todo.js` | 【卡】 |
+| 工作区双侧面板共享视觉系统（历史/Todo/Goal/声明式插件：主题令牌、外壳、标题、元信息、列表与条目） | `styles/app.css`、`modules/toc-todo.js`、`plugins/session-todo/web/*`、`plugins/agent-goal/web/*` | 【卡】 |
 | 性能采样与诊断（直方图/计时；长会话懒渲染在 `message-rendering.js`、`session-scroll-history.js`） | `modules/ui-performance.js` | 【单】 |
 
 ## 3. 输入与交互
@@ -94,10 +94,11 @@
 ## 8. 边界说明
 - 后端另含 Runtime V2 同步/迁移（legacy→V2）与孤儿运行清理逻辑，归属"会话存储 Runtime V2"模块清单详述。
 - 图片准入、三协议投影、独立识图 API 和生命周期的横切契约见 [识图与多模态投影](../09-横切能力/02-识图与多模态投影方案设计-UseCase清单.md)。
-- 主题/样式细节（`styles/*.css`）、构建工具链（Vite）不在本次清单范围。
+- 一般主题装饰与构建工具链（Vite）不在本次清单范围；工作区双侧面板的共享视觉契约属于可验收能力，见 [11-工作区双侧面板视觉系统](11-工作区双侧面板视觉系统方案设计-UseCase清单.md)。
 
 ## 9. 版本记录
 
+- 2026-09-21（v12）：补录工作区双侧面板共享视觉系统——历史、Todo、Goal 与声明式插件面板统一主题令牌、外壳、字体层级、间距、列表条目和交互反馈；说明见 05/11·UC-5K1~5K7。
 - 2026-09-20（v11）：补录会话列表状态一致性——`/sessions/state` 改为硬失效 + 单飞重建并引入 `state_revision`；`SessionManager` 摘要写入全路径广播失效；客户端加"写入在途拒收 + 请求序号下界 + 版本下界"，仅写入失败才回滚；说明见 05/10·UC-5J1~5J6。
 - 2026-09-20（v10）：补录 run 终态单调契约与跨进程恢复租约；明确假终态后同 run 继续写入会触发前端终结/重挂振荡，刷新不能修复耐久矛盾历史。
 - 2026-09-20（v9）：补录 Goal badge 与 run activity 解耦、exact run 中断原因文案、continuation 启动提示仅瞬时展示。

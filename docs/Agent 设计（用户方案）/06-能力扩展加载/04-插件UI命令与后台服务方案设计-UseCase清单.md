@@ -1,6 +1,6 @@
 # 插件 UI、命令与后台服务 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v3（覆盖至：当前工作区）
+- 版本：2026-09-21 v4（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/ui.py`（914 行）、`plugins/web.py`、`agent_extensions`（命令目录/派发）、前端 `plugin-ui-slots.js`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -20,8 +20,9 @@
 
 ### UC-6D2 UI 插槽注入
 - **触发**：插件声明 UI（chat.extension 等插槽）。
-- **预期现象**：对应面板/按钮按插槽规则出现（如 change-review 的改动审查面板）；未启用/未信任插件不注入任何 UI。会话级扩展面板（如 session-todo/agent-goal）的实时刷新：live 流内经 `extension_state_changed`；观察者流经 `ephemeral+control_event` 旁路转发，前端消费后刷新（见 ../05-WebUI对话界面/03 UC-5C3）。
-- **依据**：`plugin-ui-slots.js`、`plugins/ui.py`、清单 `ui.chat.extension`、`webui._observer_extension_control_event`。
+- **预期现象**：对应面板/按钮按插槽规则出现（如 change-review 的改动审查面板）；未启用/未信任插件不注入任何 UI。会话级扩展面板（如 session-todo/agent-goal）的实时刷新：live 流内经 `extension_state_changed`；观察者流经 `ephemeral+control_event` 旁路转发，前端消费后刷新（见 ../05-WebUI对话界面/03 UC-5C3）。侧面板默认继承宿主的外壳、标题、正文与列表条目规格，与右侧历史记录保持同级视觉。
+- **规则与边界**：声明式面板由 `.plugin-session-panel*` 消费宿主视觉令牌；自定义面板显式组合 `.workspace-side-panel*`。插件 CSS 只扩展业务状态、按钮和内容结构，不重建基础背景、阴影、字体或间距；完整契约见 [工作区双侧面板视觉系统](../05-WebUI对话界面/11-工作区双侧面板视觉系统方案设计-UseCase清单.md)。
+- **依据**：`plugin-ui-slots.js`、`plugins/ui.py`、`app.css`、session-todo/agent-goal 的 `web/session-panel.*`、清单 `ui.chat.extension`、`webui._observer_extension_control_event`。
 
 ### UC-6D3 会话级 UI 动作
 - **触发**：插件要求与当前会话相关的动作（打开面板/查询状态）。
@@ -55,6 +56,7 @@
 
 ## 5. 版本记录
 
+- 2026-09-21 v4：UC-6D2 增加宿主视觉契约——声明式插件面板消费共享令牌，自定义 Todo/Goal 组合共享视觉原语，插件 CSS 只保留业务语义与控件细节。
 - 2026-09-20 v3：新增 UC-6D5，Goal active 徽章与宿主 run activity 解耦。
 - 2026-09-14 v2：补录扩展状态控制事件旁路（observer 流）；版本线更新至 `d022831`。
 - 2026-09-13 v1：拆分首版（承接 UC-605）。

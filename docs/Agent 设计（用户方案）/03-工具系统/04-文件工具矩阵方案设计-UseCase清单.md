@@ -1,6 +1,6 @@
 # 文件工具矩阵 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v2（覆盖至：当前工作区）
+- 版本：2026-09-21 v3（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（read/write/edit/apply_patch/ls/glob/grep 与路径恢复）。
 - 上级：`00-工具系统整体设计.md`
@@ -53,9 +53,15 @@ read / write / edit / apply_patch / ls / glob / grep 七个文件工具的行为
 - **规则与边界**：建议只是候选，不自动改写或访问另一路径；找不到高相似度兄弟项时保持普通失败语义。
 - **依据**：`_missing_path_hint`、`OPENAI_TOOL_DEFINITIONS`、`app/prompt.md::system_tool_contract`。
 
+### UC-3D8 apply_patch 工作区外路径
+- **触发**：补丁文件段使用工作区外的本机绝对路径，或使用相对路径中的 `..` 越出运行时 `WORK_DIR`。
+- **预期现象**：`apply_patch` 正常解析并应用该补丁，不因目标位于工作区外而在工具路径解析层硬失败；绝对路径按本机路径解析，相对路径仍以运行时 `WORK_DIR` 为基准。
+- **规则与边界**：`apply_patch` 自身不施加工作区包含边界，但正常 Agent 调用仍先经过中央权限策略；受限权限模式可以要求目录审批，`full_access` 直接放行。`enforce_leaf` 继续校验实际目标必须与已裁决的补丁路径一致，敏感资源保护、删除规则和多文件原子校验保持不变。
+- **依据**：`apply_patch / resolve_unrestricted_path / security.runtime.classify_tool / enforce_leaf`；回归测试 `test_apply_patch_path_resolution_is_not_contained_to_work_dir`。
+
 ## 3. 边界
 
-- 所有路径先过工作区模型（见 ../04-工作区/01/02）。
+- 所有路径先过统一路径模型（见 ../04-工作区/01/02）；`apply_patch` 的路径解析不强制包含于工作区，权限边界由中央策略负责。
 - delete_file 不在本篇（独立成篇：06）。
 
 ## 4. 依据映射
@@ -69,8 +75,10 @@ read / write / edit / apply_patch / ls / glob / grep 七个文件工具的行为
 | UC-3D5 | `ls`、`format_directory_listing`、`_line_count_file` |
 | UC-3D6 | `glob`、`_glob_with_windows_index`、`grep`、`_grep_with_ripgrep` |
 | UC-3D7 | `_missing_path_hint`、工具 schema、`prompt.md` |
+| UC-3D8 | `apply_patch`、`resolve_unrestricted_path`、`classify_tool`、`enforce_leaf`、`test_apply_patch_path_resolution_is_not_contained_to_work_dir` |
 
 ## 5. 版本记录
 
+- 2026-09-21 v3：新增 UC-3D8，明确 `apply_patch` 路径解析不受工作区包含边界限制，并保留中央权限裁决与叶子资源校验。
 - 2026-09-20 v2：grep 改为流式达到上限即终止，默认遵守 ignore/隐藏规则；ls 行数统计改为按需并共享缓存；补充路径复用和相似路径恢复。
 - 2026-09-13 v1：拆分首版（承接 UC-308/309）。
