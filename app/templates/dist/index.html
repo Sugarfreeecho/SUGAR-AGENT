@@ -10,8 +10,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>try { var savedTheme = localStorage.getItem('myagent-theme'); document.documentElement.classList.add(savedTheme === 'deep-dark' ? 'theme-dark' : (savedTheme === 'dark' || savedTheme === 'purple' ? 'theme-purple' : 'theme-light')); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
-  <script type="module" crossorigin src="/assets/main-g6awmQIL.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/main-Bj8zWWEu.css">
+  <script type="module" crossorigin src="/assets/main-B6Gzo81X.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/main-BvfHQ1Cb.css">
 </head>
 <body>
 <div class="app">
@@ -19,7 +19,13 @@
     <aside class="sidebar" id="sidebar" aria-label="会话列表">
         <div class="sidebar-brand">
             <div class="sidebar-brand-line">
-                <div class="sidebar-brand-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div>
+                <div class="sidebar-brand-icon-wrap">
+                    <div class="sidebar-brand-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div>
+                    <button type="button" id="sidebar-brand-notice" class="sidebar-brand-notice hidden" aria-label="待处理事项" data-ui-tip="待处理事项">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+                        <span class="sidebar-brand-notice-dot" aria-hidden="true"></span>
+                    </button>
+                </div>
                 <div class="sidebar-brand-copy">
                     <div class="sidebar-brand-text">General Agent</div>
                     <div class="sidebar-brand-sub" aria-label="Self-Upgrade General Agent Runtime - 自优化通用智能平台" data-ui-tip="Self-Upgrade General Agent Runtime - 自优化通用智能平台" title="Self-Upgrade General Agent Runtime - 自优化通用智能平台">
@@ -57,23 +63,19 @@
     <section class="main" aria-label="聊天">
         <div class="main-center">
             <div id="human-interaction-banner" class="human-interaction-banner hidden" role="status" aria-live="polite">
-                <span class="human-todo-floater-mark" aria-hidden="true">!</span>
-                <div class="human-todo-floater-body">
-                    <div class="human-todo-floater-title">待处理事项</div>
-                    <div class="human-todo-floater-rows">
-                        <div class="human-todo-floater-row">
-                            <span class="human-todo-row-label">全局待办</span>
-                            <span class="human-todo-count" data-scope="global">0 项</span>
-                            <span class="human-todo-detail" data-scope="global"></span>
-                        </div>
-                        <div class="human-todo-floater-row">
-                            <span class="human-todo-row-label">当前会话</span>
-                            <span class="human-todo-count" data-scope="session">0 项</span>
-                            <span class="human-todo-detail" data-scope="session"></span>
-                        </div>
-                    </div>
-                    <button type="button" id="human-interaction-banner-btn" class="human-todo-floater-btn">立即处理</button>
-                </div>
+                <svg class="human-todo-floater-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                <span class="human-todo-floater-title">待处理事项</span>
+                <span class="human-todo-floater-chips">
+                    <span class="human-todo-chip"><span class="human-todo-row-label">全局待办</span><b class="human-todo-count" data-scope="global">0 项</b></span>
+                    <span class="human-todo-chip"><span class="human-todo-row-label">当前会话</span><b class="human-todo-count" data-scope="session">0 项</b></span>
+                </span>
+                <span class="human-todo-detail" data-scope="global"></span>
+                <span class="human-todo-detail" data-scope="session"></span>
+                <span class="human-todo-floater-spacer"></span>
+                <button type="button" id="human-interaction-banner-btn" class="human-todo-floater-btn">立即处理</button>
+                <button type="button" id="human-interaction-banner-close" class="human-todo-floater-close" aria-label="关闭">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
             </div>
             <header class="titlebar">
                 <div class="breadcrumb">
@@ -107,7 +109,8 @@
                     <aside id="chat-toc" class="chat-toc" aria-label="历史记录">
                         <div class="chat-toc-inner">
                             <div class="chat-toc-panel">
-                                <div class="chat-toc-title">历史记录</div>
+                                <div class="chat-toc-title">历史记录</div>
+
                                 <nav id="chat-toc-list" class="chat-toc-list"></nav>
                             </div>
                         </div>
@@ -165,7 +168,7 @@
                             </span>
                         </button>
                         <button type="button" class="permission-mode-option" data-permission-mode="full_access" role="option">
-                            <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.6-1.6"/><circle cx="12" cy="15" r="1" fill="currentColor"/></svg>
+                            <svg class="permission-mode-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M12 8v4"/><circle cx="12" cy="16" r="0.9" fill="currentColor" stroke="none"/></svg>
                             <span class="permission-mode-body">
                                 <span class="permission-mode-label">完全访问权限</span>
                                 <span class="permission-mode-desc">普通操作和工作区删除免审批；高危系统命令仍确认</span>
@@ -256,6 +259,6 @@
         </div>
     </div>
 </div>
-
+
 </body>
 </html>

@@ -239,15 +239,53 @@ function updateAllHumanInteractionSessionBadges() {
     updateHumanInteractionBanner(currentSessionId);
 }
 
+// 顶部待办条两态：展开（.human-interaction-banner）⇄ 收起（品牌图标右上角小铃铛 .sidebar-brand-notice）。
+// 数量变化或点击徽章时展开；展开 6s 后自动收起；悬停/聚焦时暂停收起；0 项时两者都隐藏。
+var humanBannerCollapseTimer = null;
+var humanBannerInteractionHeld = false;
+var humanBannerCountSignature = '';
+
+function clearHumanBannerCollapseTimer() {
+    if (humanBannerCollapseTimer) {
+        clearTimeout(humanBannerCollapseTimer);
+        humanBannerCollapseTimer = null;
+    }
+}
+
+function setHumanInteractionBannerExpanded(expanded) {
+    var banner = document.getElementById('human-interaction-banner');
+    if (!banner) return;
+    banner.classList.toggle('is-on', expanded);
+    banner.classList.toggle('hidden', !expanded);
+    clearHumanBannerCollapseTimer();
+    if (expanded && !humanBannerInteractionHeld) {
+        humanBannerCollapseTimer = setTimeout(function () {
+            humanBannerCollapseTimer = null;
+            if (!humanBannerInteractionHeld) setHumanInteractionBannerExpanded(false);
+        }, 6000);
+    }
+}
+
+function updateSidebarBrandNotice(counts) {
+    var badge = document.getElementById('sidebar-brand-notice');
+    if (!badge) return;
+    var visible = counts.total > 0;
+    badge.classList.toggle('is-on', visible);
+    badge.classList.toggle('hidden', !visible);
+    if (visible) {
+        var label = '待处理事项 ' + counts.total + ' 项';
+        badge.setAttribute('aria-label', label);
+        badge.setAttribute('data-ui-tip', label);
+    }
+}
+
 function updateHumanInteractionBanner(sessionId) {
     var sid = String(sessionId || currentSessionId || '');
     var banner = document.getElementById('human-interaction-banner');
     if (!banner) return;
     var globalCounts = globalHumanInteractionPendingCounts();
     var sessionCounts = sid ? sessionPendingHumanCounts(sid) : { questions: 0, approvals: 0, total: 0 };
-    var visible = globalCounts.total > 0;
-    banner.classList.toggle('is-on', visible);
-    banner.classList.toggle('hidden', !visible);
+    updateSidebarBrandNotice(globalCounts);
     var globalCountEl = banner.querySelector('.human-todo-count[data-scope="global"]');
     var globalDetailEl = banner.querySelector('.human-todo-detail[data-scope="global"]');
     var sessionCountEl = banner.querySelector('.human-todo-count[data-scope="session"]');
@@ -256,6 +294,16 @@ function updateHumanInteractionBanner(sessionId) {
     if (globalDetailEl) globalDetailEl.textContent = pendingCountDetailText(globalCounts);
     if (sessionCountEl) sessionCountEl.textContent = sessionCounts.total + ' 项';
     if (sessionDetailEl) sessionDetailEl.textContent = pendingCountDetailText(sessionCounts);
+    if (globalCounts.total <= 0) {
+        humanBannerCountSignature = '';
+        setHumanInteractionBannerExpanded(false);
+        return;
+    }
+    var signature = globalCounts.total + ':' + globalCounts.questions + ':' + globalCounts.approvals;
+    if (signature !== humanBannerCountSignature) {
+        humanBannerCountSignature = signature;
+        setHumanInteractionBannerExpanded(true);
+    }
 }
 
 function focusFirstPendingHumanInteraction() {
@@ -1573,4 +1621,26 @@ async function refreshHumanInteractions(sessionId, options) {
 (function bindHumanInteractionBanner() {
     var button = document.getElementById('human-interaction-banner-btn');
     if (button) button.addEventListener('click', function () { void handleHumanTodoFloaterAction(); });
+    var closeButton = document.getElementById('human-interaction-banner-close');
+    if (closeButton) closeButton.addEventListener('click', function () { setHumanInteractionBannerExpanded(false); });
+    var banner = document.getElementById('human-interaction-banner');
+    if (banner) {
+        var holdOpen = function () { humanBannerInteractionHeld = true; clearHumanBannerCollapseTimer(); };
+        var releaseHold = function () {
+            humanBannerInteractionHeld = false;
+            if (banner.classList.contains('is-on')) setHumanInteractionBannerExpanded(true);
+        };
+        banner.addEventListener('mouseenter', holdOpen);
+        banner.addEventListener('mouseleave', releaseHold);
+        banner.addEventListener('focusin', holdOpen);
+        banner.addEventListener('focusout', releaseHold);
+    }
+    var brandNotice = document.getElementById('sidebar-brand-notice');
+    if (brandNotice) {
+        brandNotice.addEventListener('click', function () {
+            var bannerEl = document.getElementById('human-interaction-banner');
+            var expanded = !!bannerEl && bannerEl.classList.contains('is-on');
+            setHumanInteractionBannerExpanded(!expanded);
+        });
+    }
 })();

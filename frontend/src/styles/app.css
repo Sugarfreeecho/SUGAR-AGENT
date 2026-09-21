@@ -4025,30 +4025,59 @@ body {
     background: rgba(255, 255, 255, 0.075);
     color: var(--text-primary);
 }
-.composer-permission-trigger.is-global-full-access {
-    border-color: rgba(243, 139, 168, 0.72);
-    background: rgba(243, 139, 168, 0.13);
-    box-shadow: 0 0 0 2px rgba(243, 139, 168, 0.08);
-}
+/* 候选 E（已选定）：完全访问不再使用整块强调——原粉色描边/底色/光晕全部移除，
+   高权限状态只靠图标与文字色传达（图标=盾牌警示，文字=琥珀色），
+   与 ZCode 的 yolo 处理一致（幽灵按钮 + text-warning）。.is-global-full-access 类保留供 JS 同步状态。 */
+/* 顶部通知强调色：浅色主题需要更深的色值保证对比度（不动既有 --*-accent，避免影响其他组件）。 */
+:root { --notice-warn: var(--amber-accent); --notice-danger: var(--red-accent); }
+:root.theme-light { --notice-warn: #b45309; --notice-danger: #c0392b; }
+
+/* 顶部红色警示条：与待办条同一玻璃体系（等宽 560 / 等高 40 / 同为内环描边），
+   红色图标与内环区分语义；唯一操作是"确认"，自动消失后不进入品牌徽章。 */
 .permission-global-warning-toast {
     position: absolute;
-    top: 0.9rem;
+    top: calc(44px + 0.65rem);
     left: 50%;
     transform: translateX(-50%);
     z-index: 2400;
-    width: max-content;
-    max-width: min(44rem, calc(100% - 2rem));
-    padding: 0.7rem 1rem;
-    border: 1px solid rgba(243, 139, 168, 0.72);
-    border-radius: 0.75rem;
-    background: rgba(67, 22, 34, 0.96);
-    color: #fff;
-    box-shadow: var(--shadow-soft);
-    font-size: 0.78rem;
-    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: min(560px, calc(100% - 2rem));
+    max-width: calc(100% - 2rem);
+    height: 40px;
+    padding: 0 8px 0 0;
+    border: none;
+    border-radius: 10px;
+    background: var(--floating-surface);
+    color: var(--text-primary);
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--notice-danger) 42%, transparent),
+        var(--floating-shadow);
+    font-size: 0.74rem;
+    font-weight: 400;
     line-height: 1.45;
     overflow-wrap: anywhere;
-    pointer-events: none;
+    pointer-events: auto;
+}
+.permission-global-warning-toast .pgw-ico {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    margin-left: 10px;
+    color: var(--notice-danger);
+}
+.permission-global-warning-toast .pgw-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* 红色警示固定在顶部；它出现时待办条让位到下方（警告在上、待办在下）。
+   48px = 警示条高度 40px + 8px 间距。 */
+.main-center:has(.permission-global-warning-toast) .human-interaction-banner {
+    top: calc(44px + 0.65rem + 48px);
 }
 .composer-permission-trigger:disabled { opacity: 0.5; cursor: default; }
 .composer-permission-ico {
@@ -4306,124 +4335,171 @@ body {
 }
 
 /* ── Durable human interaction / approval cards ── */
+/* 顶部待办条（展开态）：玻璃单行条 + 内环描边⑥ + 幽灵按钮B + 图标关闭②。
+   收起后由侧栏品牌图标右上角的小铃铛徽章 .sidebar-brand-notice 接续提示。 */
 .human-interaction-banner {
     display: none;
     position: absolute;
-    top: 0.9rem;
+    top: calc(44px + 0.65rem);
     left: 50%;
     transform: translateX(-50%);
     z-index: 2300;
-    width: min(34rem, calc(100vw - 2rem));
-    max-width: calc(100vw - 2rem);
-    align-items: flex-start;
-    gap: 0.7rem;
+    width: min(560px, calc(100% - 2rem));
+    max-width: calc(100% - 2rem);
+    align-items: center;
+    gap: 10px;
+    height: 40px;
     margin: 0;
-    padding: 0.72rem 0.85rem;
-    border: 1px solid rgba(249, 226, 175, 0.42);
-    border-radius: 14px;
-    background:
-        radial-gradient(circle at 0% 0%, rgba(249, 226, 175, 0.16), transparent 38%),
-        linear-gradient(180deg, rgba(64, 55, 28, 0.97), rgba(43, 37, 22, 0.98));
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    padding: 0 8px 0 0;
+    border: none;
+    border-radius: 10px;
+    background: var(--floating-surface);
     color: var(--text-primary);
-    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--notice-warn) 34%, transparent),
+        var(--floating-shadow);
     pointer-events: auto;
+    transition: top 0.18s var(--ease-out-expo);
 }
 .human-interaction-banner.is-on { display: flex; }
-.human-todo-floater-mark {
+.human-todo-floater-ico {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    margin-left: 10px;
+    color: var(--notice-warn);
+}
+.human-todo-floater-title {
+    flex: 0 0 auto;
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.human-todo-floater-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+}
+.human-todo-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 6px;
+    background: rgba(var(--text-primary-rgb), 0.06);
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    white-space: nowrap;
+}
+.human-todo-chip .human-todo-row-label {
+    color: inherit;
+    font-size: inherit;
+}
+.human-todo-chip .human-todo-count {
+    color: var(--text-primary);
+    font-weight: 700;
+}
+/* 明细只保留在 DOM 内供读屏播报（单行条不再展示两行文字） */
+.human-todo-detail {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+.human-todo-floater-spacer { flex: 1 1 auto; }
+/* 通知条通用操作按钮（待办条"立即处理"与红色警示条"确认"共用同一幽灵描边样式） */
+.human-todo-floater-btn,
+.permission-global-warning-toast .pgw-ok {
+    flex: 0 0 auto;
+    height: 26px;
+    padding: 0 12px;
+    border: 1px solid var(--floating-border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: 600 0.72rem/1 var(--sans);
+    transition: background 0.15s var(--ease-out-expo), border-color 0.15s var(--ease-out-expo), color 0.15s var(--ease-out-expo), transform 0.12s ease;
+}
+.human-todo-floater-btn:hover,
+.permission-global-warning-toast .pgw-ok:hover {
+    background: var(--floating-hover);
+    border-color: rgba(var(--accent-rgb), 0.4);
+    color: var(--text-primary);
+}
+.human-todo-floater-btn:active,
+.permission-global-warning-toast .pgw-ok:active { transform: scale(0.97); }
+/* 关闭 ②：图标 ghost 24px */
+.human-todo-floater-close {
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
-    flex: 0 0 auto;
-    margin-top: 0.05rem;
-    border-radius: 50%;
-    background: var(--amber-accent);
-    color: #312b22;
-    font-weight: 900;
-    box-shadow: 0 0 0 4px rgba(249, 226, 175, 0.1);
-}
-.human-todo-floater-body {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-.human-todo-floater-title {
-    color: var(--amber-accent);
-    font-size: 0.82rem;
-    font-weight: 800;
-}
-.human-todo-floater-rows {
-    display: flex;
-    flex-direction: column;
-    gap: 0.32rem;
-}
-.human-todo-floater-row {
-    display: flex;
-    align-items: baseline;
-    gap: 0.45rem;
-    min-width: 0;
-}
-.human-todo-row-label {
-    flex: 0 0 auto;
-    color: var(--text-secondary);
-    font-size: 0.76rem;
-}
-.human-todo-count {
-    flex: 0 0 auto;
-    min-width: 2.7rem;
-    color: var(--amber-accent);
-    font-size: 0.78rem;
-    font-weight: 800;
-}
-.human-todo-detail {
-    flex: 1;
-    min-width: 0;
-    color: var(--text-secondary);
-    font-size: 0.74rem;
-    line-height: 1.4;
-}
-.human-todo-floater-btn {
-    align-self: flex-start;
-    border: 1px solid rgba(249, 226, 175, 0.34);
-    border-radius: 8px;
-    padding: 0.36rem 0.72rem;
-    background: rgba(249, 226, 175, 0.14);
-    color: var(--amber-accent);
+    width: 24px;
+    height: 24px;
+    margin-right: 2px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-tertiary);
     cursor: pointer;
-    font: inherit;
-    font-size: 0.78rem;
-    font-weight: 700;
-    transition: background 0.18s var(--ease-out-expo), border-color 0.18s var(--ease-out-expo), transform 0.18s var(--ease-out-expo);
+    transition: background 0.15s var(--ease-out-expo), color 0.15s var(--ease-out-expo);
 }
-.human-todo-floater-btn:hover {
-    background: rgba(249, 226, 175, 0.22);
-    border-color: rgba(249, 226, 175, 0.52);
-    transform: translateY(-1px);
+.human-todo-floater-close svg { width: 13px; height: 13px; }
+.human-todo-floater-close:hover { background: var(--floating-hover); color: var(--text-primary); }
+.human-todo-floater-close:focus-visible,
+.permission-global-warning-toast .pgw-ok:focus-visible,
+.sidebar-brand-notice:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+/* ── 收起态：侧栏品牌图标右上角的小铃铛（只提示"有通知"，不显示数量）── */
+.sidebar-brand-icon-wrap { position: relative; flex-shrink: 0; }
+.sidebar-brand-notice {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    z-index: 2;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 19px;
+    height: 19px;
+    padding: 0;
+    border: 1px solid var(--floating-border);
+    border-radius: 50%;
+    background: var(--surface-glass3);
+    color: var(--notice-warn);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    transition: transform 0.15s var(--ease-out-expo), border-color 0.15s var(--ease-out-expo);
+}
+.sidebar-brand-notice.is-on { display: inline-flex; }
+.sidebar-brand-notice:hover { transform: scale(1.06); border-color: color-mix(in srgb, var(--notice-warn) 55%, transparent); }
+.sidebar-brand-notice svg { width: 11px; height: 11px; }
+.sidebar-brand-notice-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--notice-warn);
+    box-shadow: 0 0 0 2px var(--surface-glass);
+}
+@media (max-width: 480px) {
+    .human-todo-floater-chips { display: none; }
 }
 :root.theme-light .human-interaction-banner {
-    color: #3b3223;
-    background:
-        radial-gradient(circle at 0% 0%, rgba(249, 226, 175, 0.36), transparent 40%),
-        linear-gradient(180deg, rgba(255, 250, 232, 0.98), rgba(250, 239, 204, 0.98));
-    border-color: rgba(180, 138, 42, 0.42);
-    box-shadow: 0 10px 30px rgba(90, 70, 15, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-}
-:root.theme-light .human-todo-row-label,
-:root.theme-light .human-todo-detail { color: #6f5c2e; }
-:root.theme-light .human-todo-floater-title,
-:root.theme-light .human-todo-count { color: #8a6712; }
-:root.theme-light .human-todo-floater-btn {
-    background: rgba(180, 138, 42, 0.1);
-    color: #8a6712;
-}
-:root.theme-light .human-todo-floater-btn:hover {
-    background: rgba(180, 138, 42, 0.18);
-    color: #6b4e0d;
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--notice-warn) 38%, transparent),
+        var(--floating-shadow);
 }
 
 .session-human-badge {
@@ -4965,12 +5041,7 @@ body {
     .human-interaction-banner {
         width: calc(100vw - 1rem);
         max-width: calc(100vw - 1rem);
-        align-items: flex-start;
-        flex-wrap: wrap;
     }
-    .human-todo-floater-row { flex-wrap: wrap; gap: 0.2rem 0.45rem; }
-    .human-todo-detail { flex-basis: 100%; }
-    .human-todo-floater-btn { margin-left: 0; }
     .human-secondary-btn, .human-primary-btn { min-height: 44px; }
     .human-terminal-toggle { min-height: 40px; }
 }

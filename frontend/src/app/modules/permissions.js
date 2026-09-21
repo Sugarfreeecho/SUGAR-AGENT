@@ -8,7 +8,9 @@ var mcpRegistrationPrompted = new Set();
 var PERMISSION_MODE_ICONS = {
     ask_for_approval: '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/>',
     approve_for_me: '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9.2 11.8l2 2 3.8-4"/>',
-    full_access: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.6-1.6"/><circle cx="12" cy="15" r="1" fill="currentColor"/>',
+    // 完全访问：盾牌警示（与 盾 / 盾+勾 同家族；对标 ZCode 的 ShieldAlert + text-warning 处理）
+    // 圆点必须 stroke="none"：SVG 会继承父级 stroke-width=1.8，否则圆点被撑到 3.8 单位（过大）
+    full_access: '<path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M12 8v4"/><circle cx="12" cy="16" r="0.9" fill="currentColor" stroke="none"/>',
 };
 
 function permissionModeLabel(mode) {
@@ -84,9 +86,11 @@ function syncPermissionControlVisibility(status) {
     return enabled;
 }
 
+// 顶部红色警示条：与待办条同一玻璃体系（等宽 560 / 等高 40 / 同为内环描边），
+// 用红色图标与红色内环区分语义；唯一操作是"确认"；自动消失后不进入品牌徽章。
 function showGlobalWarningBanner(message, options) {
     options = options || {};
-    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
+    var host = document.querySelector('.main-center') || document.querySelector('.chat-stage') || document.body;
     var notice = host.querySelector('.permission-global-warning-toast[data-global-warning-banner="true"]');
     if (!notice) {
         notice = document.createElement('div');
@@ -94,13 +98,45 @@ function showGlobalWarningBanner(message, options) {
         notice.dataset.globalWarningBanner = 'true';
         notice.setAttribute('role', 'alert');
         notice.setAttribute('aria-live', 'assertive');
+        notice.innerHTML =
+            '<svg class="pgw-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+            + '<path d="M12 3 2.5 20h19z"/><path d="M12 9.5v4.6"/><path d="M12 17.8v.01"/></svg>'
+            + '<span class="pgw-text"></span>'
+            + '<button type="button" class="pgw-ok">确认</button>';
+        notice._clearDismissTimer = function () {
+            if (notice._dismissTimer) {
+                window.clearTimeout(notice._dismissTimer);
+                notice._dismissTimer = null;
+            }
+        };
+        notice._armDismissTimer = function (durationMs) {
+            notice._dismissMs = durationMs;
+            notice._clearDismissTimer();
+            // 悬停或键盘聚焦期间不自动消失，离开后重新计时。
+            if (notice.matches(':hover') || notice.contains(document.activeElement)) return;
+            notice._dismissTimer = window.setTimeout(function () {
+                notice._dismissTimer = null;
+                notice.remove();
+            }, durationMs);
+        };
+        notice.querySelector('.pgw-ok').addEventListener('click', function () {
+            notice._clearDismissTimer();
+            notice.remove();
+        });
+        notice.addEventListener('mouseenter', notice._clearDismissTimer);
+        notice.addEventListener('mouseleave', function () { notice._armDismissTimer(notice._dismissMs || 9000); });
+        notice.addEventListener('focusin', notice._clearDismissTimer);
+        notice.addEventListener('focusout', function () { notice._armDismissTimer(notice._dismissMs || 9000); });
         host.appendChild(notice);
     }
-    notice.textContent = String(message || '操作失败');
-    if (notice._dismissTimer) window.clearTimeout(notice._dismissTimer);
-    notice._dismissTimer = window.setTimeout(function () {
-        notice.remove();
-    }, Math.max(1000, Number(options.durationMs || 9000)));
+    var textEl = notice.querySelector('.pgw-text');
+    var text = String(message || '操作失败');
+    if (textEl) {
+        textEl.textContent = text;
+        textEl.setAttribute('title', text);
+    }
+    notice.setAttribute('aria-label', text);
+    notice._armDismissTimer(Math.max(1000, Number(options.durationMs || 9000)));
     return notice;
 }
 
@@ -111,12 +147,7 @@ function maybeShowGlobalFullAccessNotice(status) {
         if (window.sessionStorage.getItem(key) === '1') return;
         window.sessionStorage.setItem(key, '1');
     } catch (_) {}
-    var notice = document.createElement('div');
-    notice.className = 'permission-global-warning-toast';
-    notice.textContent = '完全访问已开启：普通文件、工作区删除、命令和联网不再逐项询问；高危系统命令仍需确认，Agent 自保红线始终拦截。';
-    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
-    host.appendChild(notice);
-    window.setTimeout(function () { notice.remove(); }, 9000);
+    showGlobalWarningBanner('完全访问已开启：普通文件、工作区删除、命令和联网不再逐项询问；高危系统命令仍需确认，Agent 自保红线始终拦截。');
 }
 
 function maybeShowEgressDegradedNotice(status) {
@@ -127,12 +158,7 @@ function maybeShowEgressDegradedNotice(status) {
         if (window.sessionStorage.getItem(key) === '1') return;
         window.sessionStorage.setItem(key, '1');
     } catch (_) {}
-    var notice = document.createElement('div');
-    notice.className = 'permission-global-warning-toast';
-    notice.textContent = '出站防护处于降级状态：命令仍会按上传/读取规则审批，但当前没有系统级网络隔离。';
-    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
-    host.appendChild(notice);
-    window.setTimeout(function () { notice.remove(); }, 9000);
+    showGlobalWarningBanner('出站防护处于降级状态：命令仍会按上传/读取规则审批，但当前没有系统级网络隔离。');
 }
 
 function maybeShowEgressPartialNotice(status) {
@@ -143,12 +169,7 @@ function maybeShowEgressPartialNotice(status) {
         if (window.sessionStorage.getItem(key) === '1') return;
         window.sessionStorage.setItem(key, '1');
     } catch (_) {}
-    var notice = document.createElement('div');
-    notice.className = 'permission-global-warning-toast';
-    notice.textContent = '出站助手已启用：无网络命令会被系统强制断网；获批联网命令当前仍可访问审批目标之外的地址。';
-    var host = document.querySelector('.chat-stage') || document.querySelector('.main-center') || document.body;
-    host.appendChild(notice);
-    window.setTimeout(function () { notice.remove(); }, 9000);
+    showGlobalWarningBanner('出站助手已启用：无网络命令会被系统强制断网；获批联网命令当前仍可访问审批目标之外的地址。');
 }
 
 function renderPermissionMode(status) {
