@@ -1,14 +1,13 @@
 # Agent 运行时 ReAct 循环 · 能力清单（代码证据版）
 
 > 对象：MyAgent Agent 运行时（ReAct 主循环及配套运行时能力）
-> 代码版本：当前工作区（2026-09-20；补充历史性能优化 3.1~3.19、运行生命周期防风暴、跨进程恢复租约与后台子代理任务托管）
+> 代码版本：当前工作区（2026-09-23；补充历史性能优化 3.1~3.19、运行生命周期防风暴、跨进程恢复租约与后台子代理任务托管）
 > 图例：【图】见 `react-loop.architecture.html`（10 节点）；【卡】图中卡片；【单】仅本清单
 
 ## 1. 主循环与轮次结构
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | ReAct 主循环 `react_node` / `_react_node_once`（决策-行动-观察），线程外执行避免阻塞事件循环 | `agent_loop.py` | 【图】 |
-| 长运行软收敛：24轮/48工具调用开始综合提醒，32轮/72工具调用升级；请求尾部注入以保护前缀缓存 | `_late_round_synthesis_reminder`、`convergence_reminder` | 【单】 |
 | 每轮静态 system 多段重建：进程级缓存 + 修订漂移后台重建（最多一次请求陈旧） | `agent_loop.py` `_build_static_segments_for_session`、`_schedule_static_segments_rebuild` | 【图】 |
 | 兜底与收尾：`validate_final`（现为 PASS 占位事件，不调用独立校验模型）/ `prepare_final_event` / `finish`、事件流 `astream_events` / `…_continuation` | `agent_loop.py` | 【单】 |
 | 会话标题后台生成（诊断 + 兜底、worker 队列） | `agent_loop.py` `_session_title_worker` 等 | 【卡】 |
@@ -91,6 +90,7 @@
 
 ## 11. 版本记录
 
+- 2026-09-23：移除长运行软收敛条目（`_late_round_synthesis_reminder` 与请求尾部检查点装配已下线）。
 - 2026-09-20：补录后台子代理任务的持久循环托管与跨循环等待/取消桥接；任务生命周期与调用方循环解耦。
 - 2026-09-20：补充跨进程 exact-run 租约、共享心跳直接读盘、孤儿宽限保护与 UI 验证服务工作区隔离。
 - 2026-09-20：补充 exact run 中断、写栅栏接管原因、终态线程耗尽兜底、共享心跳与 Goal continuation 租约/熔断。

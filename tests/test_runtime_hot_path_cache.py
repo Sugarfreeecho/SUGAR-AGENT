@@ -471,18 +471,3 @@ def test_incremental_flatten_reuses_prefix_without_changing_text(monkeypatch):
         ),
     )
     assert agent_tokenizer._flatten_messages_incremental(appended) == full_text
-
-
-def test_late_round_synthesis_checkpoint_escalates_without_forcing_early_runs(monkeypatch):
-    import agent_loop
-
-    monkeypatch.delenv("LATE_SYNTHESIS_REACT_ITER", raising=False)
-    monkeypatch.delenv("LATE_SYNTHESIS_TOOL_CALLS", raising=False)
-    monkeypatch.delenv("LATE_SYNTHESIS_STRONG_REACT_ITER", raising=False)
-    monkeypatch.delenv("LATE_SYNTHESIS_STRONG_TOOL_CALLS", raising=False)
-
-    assert agent_loop._late_round_synthesis_reminder(10, 10) == ""
-    assert "synthesis checkpoint" in agent_loop._late_round_synthesis_reminder(24, 10)
-    strong = agent_loop._late_round_synthesis_reminder(32, 10)
-    assert "convergence checkpoint" in strong
-    assert "Finish the user-facing result now" in strong

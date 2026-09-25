@@ -2031,37 +2031,6 @@ _STATIC_SEGMENTS_PROCESS_CACHE: Dict[tuple, tuple] = {}
 _STATIC_SEGMENTS_REBUILD_INFLIGHT: set = set()
 
 
-def _late_round_synthesis_reminder(iter_count: int, tool_calls_seen: int) -> str:
-    """Nudge long exploratory runs toward synthesis without forcing truncation.
-
-    A hard late-round token cap can cut off the tool call that completes a task.
-    This request-local system checkpoint instead preserves autonomy while making
-    broad rediscovery and long internal re-audits explicitly undesirable.
-    """
-    try:
-        start_iter = max(2, int(os.getenv("LATE_SYNTHESIS_REACT_ITER", "24")))
-        start_tools = max(1, int(os.getenv("LATE_SYNTHESIS_TOOL_CALLS", "48")))
-        strong_iter = max(start_iter + 1, int(os.getenv("LATE_SYNTHESIS_STRONG_REACT_ITER", "32")))
-        strong_tools = max(start_tools + 1, int(os.getenv("LATE_SYNTHESIS_STRONG_TOOL_CALLS", "72")))
-    except ValueError:
-        start_iter, start_tools, strong_iter, strong_tools = 24, 48, 32, 72
-    if int(iter_count) < start_iter and int(tool_calls_seen) < start_tools:
-        return ""
-    if int(iter_count) >= strong_iter or int(tool_calls_seen) >= strong_tools:
-        return (
-            "[Late-run convergence checkpoint]\n"
-            "This run already has extensive evidence. Finish the user-facing result now unless exactly one "
-            "targeted verification is still required. Keep reasoning concise; do not start broad repository "
-            "searches, rediscover known paths, or re-read evidence already collected."
-        )
-    return (
-        "[Late-run synthesis checkpoint]\n"
-        "The run has accumulated many exploration steps. If the request is already supported by evidence, "
-        "stop exploring and synthesize the final answer. If work remains, use only targeted calls with an "
-        "exact known path and a concrete unresolved purpose; avoid broad searches and repeated reads."
-    )
-
-
 def _build_static_segments_for_session(
     session_id: str,
     session_meta: Any,
@@ -5119,15 +5088,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             if kc_body:
                 llm_messages.append(SystemMessage(content=kc_body))
             llm_messages.extend(turn_msgs)
-            convergence_reminder = _late_round_synthesis_reminder(
-                iter_count,
-                int(state.get("_react_ui_tool_count", 0) or 0),
-            )
-            if convergence_reminder:
-                # Keep the checkpoint at the tail. Inserting it before historical
-                # turns would invalidate the provider's cached prompt prefix on
-                # exactly the long runs where cache reuse matters most.
-                llm_messages.append(SystemMessage(content=convergence_reminder))
             _pre_api_timing_mark(pre_api_timings, "turn_cache", _t_pre_api)
             _t_pre_api = time.perf_counter()
             pre_api_timings["build_messages"] = int(max(0.0, (_t_pre_api - _t_build_start) * 1000.0))
