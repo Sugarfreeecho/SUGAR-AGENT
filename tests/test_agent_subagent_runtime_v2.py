@@ -837,6 +837,227 @@ def test_same_subagent_cannot_enter_two_foreground_model_runs(monkeypatch, tmp_p
     asyncio.run(scenario())
 
 
+def test_background_start_failure_terminalizes_persisted_run(monkeypatch, tmp_path):
+    import agent_subagent
+
+    for mode in ("lost", "error"):
+        captured = {"events": [], "task_patches": [], "meta_patches": [], "pending": [], "parent": []}
+
+        class _SessionManager:
+            sessions_dir = tmp_path
+
+            def clear_interrupt(self, session_id):
+                pass
+
+            def append_ui_event(self, child, event):
+                captured["events"].append((child, dict(event)))
+
+            def upsert_subagent_task(self, parent, child, patch):
+                captured["task_patches"].append((parent, child, dict(patch)))
+
+            def append_pending_subagent_result(self, parent, result):
+                captured["pending"].append((parent, dict(result)))
+
+            def patch_subagent_metadata(self, child, patch):
+                captured["meta_patches"].append((child, dict(patch)))
+
+            def write_subagent_output(self, child, text):
+                captured["output"] = (child, text)
+                return str(tmp_path / child / "output.md")
+
+        class _Registry:
+            def __init__(self):
+                self.running = False
+
+            async def reserve(self, child, run_id, *, parent_session_id=""):
+                self.running = True
+                return True
+
+            async def start_background(self, child, run_id, coroutine):
+                coroutine.close()
+                if mode == "error":
+                    raise RuntimeError("background loop unavailable")
+                return False
+
+            async def unregister(self, child, run_id):
+                self.running = False
+                return True
+
+            def is_running(self, child):
+                return self.running
+
+        async def parent_emit(event):
+            captured["parent"].append(dict(event))
+
+        registry = _Registry()
+        monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+        monkeypatch.setattr(agent_subagent, "subagent_registry", registry)
+        monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda child_id: ([], [], ""))
+        monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+
+        result = asyncio.run(
+            agent_subagent._execute_subagent_run(
+                child_id="child",
+                parent_session_id="parent",
+                user_text="task",
+                description="desc",
+                subagent_type="generalPurpose",
+                resumed=False,
+                parent_emit=parent_emit,
+                run_in_background=True,
+            )
+        )
+
+        assert "failed to start" in result
+        assert registry.is_running("child") is False
+        assert captured["task_patches"][0][2]["status"] == "running"
+        assert captured["task_patches"][-1][2]["status"] == "failed"
+        assert captured["pending"][-1][1]["status"] == "failed"
+        assert any(
+            patch.get("subagent_run_status") == "failed"
+            for _child, patch in captured["meta_patches"]
+        )
+        assert any(
+            event.get("type") == "final" and "failed to start" in str(event.get("content") or "")
+            for _child, event in captured["events"]
+        )
+        assert captured["parent"][0]["type"] == "subagent_start"
+        assert captured["parent"][-1]["type"] == "subagent_finish"
+        assert captured["parent"][-1]["ok"] is False
+
+
+def test_foreground_attach_failure_terminalizes_persisted_run(monkeypatch, tmp_path):
+    import agent_subagent
+
+    captured = {"events": [], "task_patches": [], "meta_patches": []}
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, session_id):
+            pass
+
+        def append_ui_event(self, child, event):
+            captured["events"].append((child, dict(event)))
+
+        def upsert_subagent_task(self, parent, child, patch):
+            captured["task_patches"].append((parent, child, dict(patch)))
+
+        def append_pending_subagent_result(self, *args, **kwargs):
+            raise AssertionError("foreground launch failure must not enqueue a background result")
+
+        def patch_subagent_metadata(self, child, patch):
+            captured["meta_patches"].append((child, dict(patch)))
+
+        def write_subagent_output(self, child, text):
+            return str(tmp_path / child / "output.md")
+
+    class _Registry:
+        def __init__(self):
+            self.running = False
+
+        async def reserve(self, child, run_id, *, parent_session_id=""):
+            self.running = True
+            return True
+
+        async def attach(self, child, run_id, task):
+            return False
+
+        async def unregister(self, child, run_id):
+            self.running = False
+            return True
+
+        def is_running(self, child):
+            return self.running
+
+    registry = _Registry()
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", registry)
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda child_id: ([], [], ""))
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+
+    result = asyncio.run(
+        agent_subagent._execute_subagent_run(
+            child_id="child",
+            parent_session_id="parent",
+            user_text="task",
+            description="desc",
+            subagent_type="generalPurpose",
+            resumed=False,
+        )
+    )
+
+    assert "failed to start" in result
+    assert registry.is_running("child") is False
+    assert captured["task_patches"][-1][2]["status"] == "failed"
+    assert any(
+        patch.get("subagent_run_status") == "failed"
+        for _child, patch in captured["meta_patches"]
+    )
+    assert any(
+        event.get("type") == "final" and "failed to start" in str(event.get("content") or "")
+        for _child, event in captured["events"]
+    )
+
+
+def test_subagent_react_exception_is_visible_in_child_history(monkeypatch, tmp_path):
+    import agent_loop
+    import agent_subagent
+
+    captured = {"events": [], "task_patches": [], "meta_patches": []}
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, session_id):
+            pass
+
+        def append_ui_event(self, child, event):
+            captured["events"].append((child, dict(event)))
+
+        def upsert_subagent_task(self, parent, child, patch):
+            captured["task_patches"].append((parent, child, dict(patch)))
+
+        def append_pending_subagent_result(self, *args, **kwargs):
+            pass
+
+        def patch_subagent_metadata(self, child, patch):
+            captured["meta_patches"].append((child, dict(patch)))
+
+        def write_subagent_output(self, child, text):
+            return str(tmp_path / child / "output.md")
+
+        def _load_metadata(self, child):
+            return {}
+
+    async def fake_react_node(state, emit=None):
+        raise RuntimeError("model startup failed")
+
+    monkeypatch.setattr(agent_subagent, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", agent_subagent.SubagentTaskRegistry())
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda child_id: ([], [], ""))
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_subagent, "cleanup_git_worktree_for_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_loop, "react_node", fake_react_node)
+
+    result = asyncio.run(
+        agent_subagent._execute_subagent_run(
+            child_id="child",
+            parent_session_id="parent",
+            user_text="task",
+            description="desc",
+            subagent_type="generalPurpose",
+            resumed=False,
+        )
+    )
+
+    assert "model startup failed" in result
+    assert captured["task_patches"][-1][2]["status"] == "failed"
+    assert [event[1]["type"] for event in captured["events"]][:2] == ["user", "final"]
+    assert "model startup failed" in captured["events"][-1][1]["content"]
+    assert agent_subagent.subagent_registry.is_running("child") is False
+
+
 def test_deleting_foreground_subagent_does_not_cancel_parent_task(monkeypatch, tmp_path):
     import agent_loop
     import agent_subagent

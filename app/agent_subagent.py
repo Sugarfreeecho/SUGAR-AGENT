@@ -1930,6 +1930,46 @@ async def _execute_subagent_run(
                 {"subagent_files_touched": sorted(files_touched)[:500]},
             )
 
+    async def _fail_before_execution(error: str) -> str:
+        """Terminalize a run that was persisted as running but never acquired execution ownership."""
+        err = (error or "subagent execution failed to start").strip()
+        result_text = f"Error: subagent {child_id} failed to start: {err}"
+        # A lost reservation can mean a newer run already owns this child. In
+        # that case its fresh running row/lifecycle must win over this stale
+        # launch attempt.
+        if subagent_registry.is_running(child_id):
+            return result_text
+        session_manager.patch_subagent_metadata(
+            child_id,
+            {"subagent_ok": False, "subagent_error": err},
+        )
+        session_manager.append_ui_event(
+            child_id,
+            {"type": "final", "content": result_text},
+        )
+        output_file = session_manager.write_subagent_output(child_id, result_text)
+        _append_parent_pending_result(
+            status="failed",
+            result=result_text,
+            error=err,
+            output_file=output_file,
+            write_pending=run_in_background,
+        )
+        if parent_emit:
+            r = parent_emit(
+                {
+                    "type": "subagent_finish",
+                    "agent_id": child_id,
+                    "description": description,
+                    "subagent_type": subagent_type,
+                    "ok": False,
+                    "error": err,
+                }
+            )
+            if hasattr(r, "__await__"):
+                await r
+        return result_text
+
     async def _run_core(*, background: bool = False, emit_start: bool = True) -> str:
         from agent_loop import react_node
 
@@ -1963,12 +2003,17 @@ async def _execute_subagent_run(
         try:
             state_out = await react_node(state, emit=child_emit)
         except asyncio.CancelledError:
+            interrupted_text = "Subagent interrupted."
             session_manager.patch_subagent_metadata(
                 child_id, {"subagent_ok": False, "subagent_error": "interrupted"}
             )
+            session_manager.append_ui_event(
+                child_id,
+                {"type": "final", "content": interrupted_text},
+            )
             output_file = session_manager.write_subagent_output(
                 child_id,
-                "Subagent interrupted.\n",
+                interrupted_text + "\n",
             )
             _append_parent_pending_result(
                 status="interrupted",
@@ -1995,6 +2040,10 @@ async def _execute_subagent_run(
                 child_id, {"subagent_ok": False, "subagent_error": str(e)}
             )
             result_text = f"Error: subagent 执行异常：{e}"
+            session_manager.append_ui_event(
+                child_id,
+                {"type": "final", "content": result_text},
+            )
             output_file = session_manager.write_subagent_output(child_id, result_text)
             _append_parent_pending_result(
                 status="failed",
@@ -2094,13 +2143,18 @@ async def _execute_subagent_run(
             if hasattr(r, "__await__"):
                 await r
         background_run = _run_owned(background=True, emit_start=False)
-        if not await subagent_registry.start_background(
-            child_id,
-            subagent_run_id,
-            background_run,
-        ):
+        try:
+            started = await subagent_registry.start_background(
+                child_id,
+                subagent_run_id,
+                background_run,
+            )
+        except Exception as e:
             await subagent_registry.unregister(child_id, subagent_run_id)
-            return f"Error: subagent {child_id} execution reservation was lost before start."
+            return await _fail_before_execution(f"execution task could not be started: {e}")
+        if not started:
+            await subagent_registry.unregister(child_id, subagent_run_id)
+            return await _fail_before_execution("execution reservation was lost before start")
         return _format_subagent_result(
             child_session_id=child_id,
             description=description,
@@ -2123,7 +2177,7 @@ async def _execute_subagent_run(
         except asyncio.CancelledError:
             pass
         await subagent_registry.unregister(child_id, subagent_run_id)
-        return f"Error: subagent {child_id} execution reservation was lost before start."
+        return await _fail_before_execution("execution reservation was lost before start")
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
