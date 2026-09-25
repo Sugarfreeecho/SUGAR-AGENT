@@ -246,6 +246,71 @@ function renderSelectedSkillsUiMessage(container, text, linkifier) {
     if (typeof linkifier === 'function') linkifier(container);
 }
 
+// 折叠切换控件（方案 C）：半胶囊 = chevron + 文案（含隐藏行数）。
+// `.message` 在 i18n 内容选择器内，不会被 UI 翻译扫描，所以文案走 runtime 文本，
+// aria/title 主动翻译，并在语言切换时统一重刷。
+var userCollapseToggleI18nBound = false;
+function bindUserCollapseToggleI18nOnce() {
+    if (userCollapseToggleI18nBound) return;
+    userCollapseToggleI18nBound = true;
+    document.addEventListener('myagent:language-change', function () {
+        Array.prototype.forEach.call(document.querySelectorAll('.user-msg-chevron'), function (el) {
+            if (typeof el.syncUserMessageCollapse === 'function') el.syncUserMessageCollapse();
+        });
+    });
+}
+
+function buildUserMessageCollapseToggle(wrap) {
+    var ch = document.createElement('div');
+    ch.setAttribute('role', 'button');
+    ch.tabIndex = 0;
+    ch.className = 'user-msg-chevron';
+    var arrow = document.createElement('span');
+    arrow.className = 'chevron-arrow';
+    var label = document.createElement('span');
+    label.className = 'user-msg-chevron-label';
+    ch.appendChild(arrow);
+    ch.appendChild(label);
+
+    function sourceText(open, hidden) {
+        if (open) return '收起';
+        return hidden > 0 ? '展开全部 · 还有 ' + hidden + ' 行' : '展开全部';
+    }
+    function localized(text) {
+        return typeof translateUiString === 'function' ? translateUiString(text) : text;
+    }
+    ch.syncUserMessageCollapse = function (hiddenLines) {
+        if (hiddenLines != null) {
+            ch.setAttribute('data-hidden-lines', String(Math.max(0, Math.floor(Number(hiddenLines) || 0))));
+        }
+        var open = wrap.classList.contains('user-msg-expanded');
+        var source = sourceText(open, Number(ch.getAttribute('data-hidden-lines')) || 0);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(label, source);
+        else label.textContent = source;
+        ch.setAttribute('aria-expanded', open ? 'true' : 'false');
+        ch.setAttribute('aria-label', localized(source));
+        ch.title = localized(source);
+    };
+    ch.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var open = !wrap.classList.contains('user-msg-expanded');
+        var full = wrap.querySelector('.user-msg-full');
+        // max-height 过渡需要真实目标值：展开前写入实测内容高度
+        if (open && full) wrap.style.setProperty('--user-msg-full-h', (full.scrollHeight + 2) + 'px');
+        wrap.classList.toggle('user-msg-expanded', open);
+        ch.syncUserMessageCollapse();
+    });
+    ch.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        e.preventDefault();
+        e.stopPropagation();
+        ch.click();
+    });
+    bindUserCollapseToggleI18nOnce();
+    ch.syncUserMessageCollapse(0);
+    return ch;
+}
+
 function renderUserMessageContent(wrap, div, rawStr, linkifier) {
     var applyLinks = typeof linkifier === 'function' ? linkifier : null;
 
@@ -258,24 +323,21 @@ function renderUserMessageContent(wrap, div, rawStr, linkifier) {
         wrap.classList.add('has-turn-process');
         div.classList.add('is-collapsible');
         div.textContent = '';
-        var sum = document.createElement('div');
-        sum.className = 'user-msg-summary';
-        renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), applyLinks);
         var ful = document.createElement('div');
         ful.className = 'user-msg-full';
         renderSelectedSkillsUiMessage(ful, rawStr, applyLinks);
-        var ch = document.createElement('div');
-        ch.className = 'user-msg-chevron';
-        var arrow = document.createElement('span');
-        arrow.className = 'chevron-arrow';
-        ch.appendChild(arrow);
-        ch.addEventListener('click', function(e) {
-            e.stopPropagation();
-            wrap.classList.toggle('user-msg-expanded');
-        });
-        div.appendChild(sum);
         div.appendChild(ful);
+        var ch = buildUserMessageCollapseToggle(wrap);
         div.appendChild(ch);
+        // 隐藏行数按实测内容高度算（此时 ful 尚未被裁剪）
+        var fcs = window.getComputedStyle ? window.getComputedStyle(ful) : null;
+        var lineHeight = fcs ? parseFloat(fcs.lineHeight) : NaN;
+        if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+            var fontSize = fcs ? parseFloat(fcs.fontSize) : NaN;
+            lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.65 : 18;
+        }
+        var hidden = Math.max(0, Math.round(ful.scrollHeight / lineHeight) - USER_MESSAGE_COLLAPSE_LINES);
+        ch.syncUserMessageCollapse(hidden);
     }
 
     setPlain();

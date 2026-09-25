@@ -437,6 +437,8 @@ function translateUiString(value) {
         .replace(/^已清除本会话规则（(\d+) 条）。$/, 'Session rules cleared ($1).')
         .replace(/^已选择 (\d+) 个 Skill$/, '$1 skills selected')
         .replace(/^已选择 (\d+) 项$/, '$1 items selected')
+        .replace(/^展开全部$/, 'Expand all')
+        .replace(/^展开全部 · 还有 (\d+) 行$/, 'Expand all · $1 more lines')
         .replace(/^正在上传 (\d+) 个文件… (\d+)%$/, 'Uploading $1 files… $2%')
         .replace(/预估上下文 token：选择会话并加载或发送消息后显示。分母为压缩摘要阈值。/g, 'Estimated context tokens; shown after selecting a session and loading or sending a message. The denominator is the compression-summary threshold.')
         .replace(/tokens（约 ([\d.]+)%，超出门限 ([\d.]+)%）。预估进入模型的上下文规模，含历史与系统提示；分母为当前 model profile 中触发压缩摘要的上下文门限。/g, 'tokens (about $1%; $2% over the limit). Estimated context size sent to the model, including history and system prompts; the denominator is the compression threshold for the current model profile.')

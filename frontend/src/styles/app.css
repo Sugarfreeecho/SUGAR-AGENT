@@ -5382,16 +5382,24 @@ textarea.plugin-setting-control { resize: vertical; }
     display: block;
 }
 
-/* ═══════════════ 用户消息折叠 ═══════════════ */
-.message.user.is-collapsible {
-    position: relative;
-    padding-bottom: 0;
-}
-.user-msg-summary {
-    white-space: pre-wrap; word-break: break-word; line-height: 1.65;
-}
+/* ═══════════ 用户消息折叠（方案 C：10 行定高 + 底部渐隐 + 半胶囊）═══════════ */
+/* 折叠态不再用「摘要/全文」两份文本：内容始终是原文，折叠只是裁剪 + 渐隐。 */
+.user-msg-summary { display: none; }
 .user-msg-full {
-    display: none; white-space: pre-wrap; word-break: break-word; line-height: 1.65;
+    display: block;
+    white-space: pre-wrap; word-break: break-word; line-height: 1.65;
+    transition: max-height 0.32s var(--ease-out-expo);
+}
+.msg-wrap--user:not(.user-msg-expanded) .message.user.is-collapsible .user-msg-full {
+    max-height: calc(10 * 1.65em);
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.9em), rgba(0, 0, 0, 0.3) 100%);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 1.9em), rgba(0, 0, 0, 0.3) 100%);
+}
+.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-full {
+    max-height: var(--user-msg-full-h, 300em);
+    overflow: hidden;
+    -webkit-mask-image: none; mask-image: none;
 }
 
 /* System-owned skill decoration: keep it visually separate from the user's message. */
@@ -5405,106 +5413,49 @@ textarea.plugin-setting-control { resize: vertical; }
     opacity: 0.78;
 }
 
-/* 旧实现（:after 渐变线条箭头）已移除，由下方 .chevron-arrow 三角形箭头替代 */
-
-/* ═══════════════ 用户消息折叠 ═══════════════ */
-.message.user.is-collapsible {
-    position: relative;
-    padding-bottom: 0;
+/* 折叠切换：28px 半胶囊（chevron + 文案），折叠态居中、展开态贴右。 */
+.user-msg-chevron {
+    display: flex; width: max-content; align-items: center; gap: 0.32rem;
+    height: 1.75rem; min-height: 1.75rem;
+    margin: 0.5rem auto 0.05rem; padding: 0 0.75rem 0 0.6rem;
+    border: 1px solid rgba(var(--text-primary-rgb), 0.14);
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(var(--text-primary-rgb), 0.07), rgba(var(--text-primary-rgb), 0.04));
+    color: var(--text-secondary);
+    font-family: var(--sans); font-size: 0.72rem; font-weight: 500; line-height: 1;
+    cursor: pointer;
+    transition: color 0.16s var(--ease-out-expo), border-color 0.16s var(--ease-out-expo),
+                background 0.16s var(--ease-out-expo), transform 0.16s var(--ease-out-expo);
 }
-.user-msg-summary {
-    white-space: pre-wrap; word-break: break-word; line-height: 1.65;
+.user-msg-chevron:hover {
+    color: var(--text-primary);
+    border-color: var(--border-accent);
+    background: linear-gradient(180deg, rgba(var(--text-primary-rgb), 0.12), rgba(var(--text-primary-rgb), 0.07));
+    transform: translateY(-1px);
 }
-.user-msg-full {
-    display: none; white-space: pre-wrap; word-break: break-word; line-height: 1.65;
+.user-msg-chevron:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.user-msg-chevron .chevron-arrow {
+    width: 0.46rem; height: 0.46rem; flex-shrink: 0;
+    border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
+    transform: rotate(45deg) translateY(-1px);
+    transition: transform 0.2s var(--ease-out-expo);
 }
-.user-msg-chevron:hover { color: var(--text-primary); }
-.user-msg-chevron::before {
-    content: '';
-    position: absolute; inset: 0;
-    z-index: -1; pointer-events: none;
-    border-radius: 0 0 var(--radius-md) var(--radius-md);
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.1) 42%,
-        rgba(0, 0, 0, 0.28) 100%
-    );
-    transition: background 0.18s var(--ease-out-expo);
+.msg-wrap--user.user-msg-expanded .user-msg-chevron { margin-left: auto; margin-right: 0; }
+.msg-wrap--user.user-msg-expanded .user-msg-chevron .chevron-arrow { transform: rotate(225deg) translateY(-1px); }
+:root.theme-light .user-msg-chevron {
+    border-color: rgba(15, 23, 42, 0.12);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.74));
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
 }
-.user-msg-chevron:hover::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.14) 30%,
-        rgba(0, 0, 0, 0.34) 100%
-    );
+:root.theme-light .user-msg-chevron:hover {
+    background: linear-gradient(180deg, #ffffff, rgba(255, 255, 255, 0.88));
+    border-color: rgba(var(--brand-accent-rgb), 0.45);
 }
-:root.theme-light .user-msg-chevron::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.05) 42%,
-        rgba(0, 0, 0, 0.14) 100%
-    );
+@media (prefers-reduced-motion: reduce) {
+    .user-msg-chevron,
+    .user-msg-chevron .chevron-arrow,
+    .msg-wrap--user .message.user.is-collapsible .user-msg-full { transition: none; }
 }
-:root.theme-light .user-msg-chevron:hover::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.08) 30%,
-        rgba(0, 0, 0, 0.18) 100%
-    );
-}
-.user-msg-chevron .chevron-arrow::before,
-.user-msg-chevron .chevron-arrow::after {
-    content: '';
-    position: absolute;
-    top: 50%; left: 50%;
-    width: 7px; height: 2px;
-    margin: 0;
-    background: currentColor;
-    border-radius: 0;
-    backface-visibility: hidden;
-}
-.user-msg-chevron .chevron-arrow::before {
-    transform-origin: 7px 1px;
-    transform: translate(-6.5px, -1px) rotate(-30deg);
-}
-.user-msg-chevron .chevron-arrow::after {
-    transform-origin: 0 1px;
-    transform: translate(-0.5px, -1px) rotate(30deg);
-}
-.user-msg-chevron:hover .chevron-arrow { transform: rotate(180deg) scale(1.12); }
-
-/* 展开态 */
-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-summary {
-    display: none;
-}
-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-full {
-    display: block;
-}
-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible {
-    padding-bottom: 0.5rem;
-}
-.msg-wrap--user.user-msg-expanded .user-msg-chevron::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.05) 55%,
-        rgba(0, 0, 0, 0.12) 100%
-    );
-}
-:root.theme-light .msg-wrap--user.user-msg-expanded .user-msg-chevron::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.03) 55%,
-        rgba(0, 0, 0, 0.08) 100%
-    );
-}
-.msg-wrap--user.user-msg-expanded .user-msg-chevron .chevron-arrow { transform: rotate(0deg); }
-.msg-wrap--user.user-msg-expanded .user-msg-chevron:hover .chevron-arrow { transform: rotate(0deg) scale(1.12); }
 #breadcrumb-text[data-addressing="child"] { display: flex; align-items: center; gap: 0.32rem; }
 .breadcrumb-back-chip {
     flex: 0 1 auto; min-width: 0; max-width: 12rem;

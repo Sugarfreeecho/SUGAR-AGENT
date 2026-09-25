@@ -4881,15 +4881,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         if (userMessageShouldCollapse(rawStr)) {
             wrap.classList.add('has-turn-process');
             div.classList.add('is-collapsible');
-            // 摘要
-            var sum = document.createElement('div');
-            sum.className = 'user-msg-summary';
-            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), linkifyAssistantTextNodes);
-            else {
-                sum.textContent = buildUserMessageSummary(rawStr);
-                linkifyAssistantTextNodes(sum);
-            }
-            // 完整
+            // 方案 C：内容始终是原文，折叠只是裁剪 + 渐隐
             var ful = document.createElement('div');
             ful.className = 'user-msg-full';
             if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(ful, rawStr, linkifyAssistantTextNodes);
@@ -4897,19 +4889,10 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
                 ful.textContent = rawStr;
                 linkifyAssistantTextNodes(ful);
             }
-            // chevron
-            var ch = document.createElement('div');
-            ch.className = 'user-msg-chevron';
-            var arrow = document.createElement('span');
-            arrow.className = 'chevron-arrow';
-            ch.appendChild(arrow);
-            ch.addEventListener('click', function(e) {
-                e.stopPropagation();
-                wrap.classList.toggle('user-msg-expanded');
-            });
-            div.appendChild(sum);
             div.appendChild(ful);
-            div.appendChild(ch);
+            if (typeof buildUserMessageCollapseToggle === 'function') {
+                div.appendChild(buildUserMessageCollapseToggle(wrap));
+            }
         } else {
             div.textContent = rawStr;
             linkifyAssistantTextNodes(div);
