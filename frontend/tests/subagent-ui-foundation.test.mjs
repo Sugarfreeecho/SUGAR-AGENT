@@ -742,6 +742,20 @@ await testAsync('openChild pushes the parent, switches to the child, and reports
     offNav();
 });
 
+await testAsync('sidebar keeps the root conversation highlighted while viewing nested subagents', async () => {
+    subagentAddressing.resetForTests();
+    assert.equal(subagentAddressing.sidebarSessionId('parent-1'), 'parent-1');
+    await subagentAddressing.openChild('child-1', { parentSessionId: 'parent-1' });
+    assert.equal(subagentAddressing.sidebarSessionId('child-1'), 'parent-1');
+    assert.equal(subagentAddressing.sidebarSessionId('another-session'), 'another-session');
+    await subagentAddressing.openChild('grandchild-1', { parentSessionId: 'child-1' });
+    assert.equal(subagentAddressing.sidebarSessionId('grandchild-1'), 'parent-1');
+    await subagentAddressing.returnToParent();
+    assert.equal(subagentAddressing.sidebarSessionId('child-1'), 'parent-1');
+    await subagentAddressing.returnToParent();
+    assert.equal(subagentAddressing.sidebarSessionId('parent-1'), 'parent-1');
+});
+
 await testAsync('openChild without a resolvable parent fails and leaves no stack entry', async () => {
     subagentCatalogStore.resetForTests();
     subagentAddressing.resetForTests();
@@ -841,7 +855,32 @@ await testAsync('subagent_start frame registers a new child row; subagent_finish
     }
 });
 
-await testAsync('activity frames are throttled and only apply to known children', async () => {
+await testAsync('start frame with no catalog yet still registers the child and refreshes the directory', async () => {
+    subagentCatalogStore.resetForTests();
+    subagentFrames.resetForTests();
+    const calls = [];
+    subagentCatalogStore.setImplementation({
+        fetchJson: (url) => {
+            calls.push(String(url));
+            return Promise.resolve({ subagents: [node({ id: 'child-9', running: true, status: 'running' })] });
+        },
+    });
+    context.currentSessionId = 'parent-1';
+    try {
+        assert.equal(subagentCatalogStore.getCatalog('parent-1'), null, 'no catalog yet');
+        assert.equal(subagentFrames.noteSubagentLifecycleFrame({
+            type: 'subagent_start', agent_id: 'child-9', subagent_type: 'explore', description: 'scan',
+        }), true);
+        assert.ok(subagentCatalogStore.getAddress('child-9'), 'address registered even before the catalog exists');
+        await new Promise((resolve) => setTimeout(resolve, 150));   // 去抖 50ms + 一次 fetch 结算
+        assert.ok(calls.length >= 1, 'a debounced directory refresh was requested');
+        assert.equal(subagentCatalogStore.entriesOf('parent-1').length, 1, 'directory now covers the child');
+    } finally {
+        context.currentSessionId = undefined;
+    }
+});
+
+await testAsync('activity frames are throttled; unknown children record evidence and request a refresh', async () => {
     subagentCatalogStore.resetForTests();
     subagentFrames.resetForTests();
     subagentCatalogStore.setImplementation({
@@ -851,10 +890,15 @@ await testAsync('activity frames are throttled and only apply to known children'
         }], []),
     });
     await subagentCatalogStore.refreshCatalogs('parent-1');
-    assert.equal(subagentFrames.noteSubagentActivity('unknown-child', true), false, 'unknown child ignored');
+    context.currentSessionId = 'parent-1';
+    assert.equal(subagentFrames.noteSubagentActivity('unknown-child', true), true, 'unknown child records evidence + asks the directory to refresh');
+    assert.equal(subagentFrames.hasUnknownChildEvidence('parent-1'), true, 'evidence lets the capsule appear immediately');
+    subagentFrames.clearUnknownChildEvidence('parent-1');
     assert.equal(subagentFrames.noteSubagentActivity('child-1', true), true, 'first activity frame flips to running');
     assert.equal(subagentFrames.noteSubagentActivity('child-1', true), false, 'repeat frame within throttle window is a no-op');
     assert.equal(subagentCatalogStore.entriesOf('parent-1')[0].activity, 'running');
+    context.currentSessionId = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 80));   // 冲掉去抖刷新，避免跨用例定时器
 });
 
 // ── subagent-catalog-ui（触发器 + 目录树） ──────────────────────────────────

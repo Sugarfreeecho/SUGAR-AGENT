@@ -548,12 +548,19 @@ var subagentCatalogStore = (function () {
         if (!addr) return false;
         return patchCatalog(addr.parentSessionId, function (entries) {
             var changed = false;
+            var present = false;
             entries.forEach(function (entry) {
-                if (!entry.diagnostic && entry.childId === childId && entry.activity !== nextActivity) {
+                if (entry.diagnostic || entry.childId !== childId) return;
+                present = true;
+                if (entry.activity !== nextActivity) {
                     entry.activity = nextActivity;
                     changed = true;
                 }
             });
+            if (!present) {
+                // 目录里还没有这一行（拉取滞后/先前失败）：状态帧不能白跑，尽快补齐（去抖，幂等）。
+                void refreshCatalogs(addr.parentSessionId, { debounce: true });
+            }
             return changed;
         });
     }
@@ -576,9 +583,15 @@ var subagentCatalogStore = (function () {
         var catalog = getCatalog(pid);
         if (!catalog) {
             if (opts && opts.addresses) {
+                // 目录尚未建立也要先把地址登记上（此前 mutate 从未执行 → 整帧被吞：
+                // 地址缺失、无证据、无刷新，胶囊只能等下一次目录刷新才出现）。
+                mutate([]);
                 rebuildSnapshot({ addresses: addressesObject() });
+                void refreshCatalogs(pid, { debounce: true });
                 return true;
             }
+            // 目录尚未建立：状态/移除帧不能白跑，尽快去抖拉一次目录（幂等）。
+            void refreshCatalogs(pid, { debounce: true });
             return false;
         }
         var entries = (catalog.entries || []).map(function (entry) { return Object.assign({}, entry); });

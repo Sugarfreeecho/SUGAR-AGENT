@@ -13,6 +13,7 @@ var subagentFrames = (function () {
     var lastActivityAt = Object.create(null);   // childId → 上次写入时间戳
     var lastActivityValue = Object.create(null); // childId → 上次写入的 activity
     var unknownStarts = Object.create(null);     // parentId → 目录尚未覆盖的 start 帧数
+    var unknownActivityAt = Object.create(null); // parentId → 上次未知成员活动帧时间戳（节流用）
 
     function store() {
         return (typeof subagentCatalogStore !== 'undefined' && subagentCatalogStore) ? subagentCatalogStore : null;
@@ -30,7 +31,21 @@ var subagentFrames = (function () {
         if (!cid) return false;
         var storeRef = store();
         if (!storeRef) return false;
-        if (!storeRef.getAddress(cid)) return false;   // 尚未在目录中登记：等目录刷新
+        if (!storeRef.getAddress(cid)) {
+            // 目录尚未登记（首帧早到/目录拉取滞后）：活动帧本身也是「有子代理在执行」的证据，
+            // 不能静默丢弃——否则长任务执行期间没有任何信号，胶囊要等切会话才出现。
+            var parentId = currentParentSessionId();
+            if (!parentId) return false;
+            var tsUnknown = now();
+            if ((tsUnknown - (unknownActivityAt[parentId] || 0)) < ACTIVITY_THROTTLE_MS) return false;
+            unknownActivityAt[parentId] = tsUnknown;
+            if (!unknownStarts[parentId]) unknownStarts[parentId] = 1;
+            if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi
+                && typeof subagentCatalogUi.noteUnknownChildEvidence === 'function') {
+                subagentCatalogUi.noteUnknownChildEvidence(parentId);
+            }
+            return true;
+        }
         var next = running !== false ? 'running' : 'inactive';
         var ts = now();
         if (lastActivityValue[cid] === next && (ts - (lastActivityAt[cid] || 0)) < ACTIVITY_THROTTLE_MS) return false;
@@ -106,6 +121,7 @@ var subagentFrames = (function () {
         lastActivityAt = Object.create(null);
         lastActivityValue = Object.create(null);
         unknownStarts = Object.create(null);
+        unknownActivityAt = Object.create(null);
     }
 
     /** 某父会话是否存在"目录尚未覆盖的子代理"证据（供触发器显示与刷新）。 */
