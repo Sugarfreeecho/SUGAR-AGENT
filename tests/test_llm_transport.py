@@ -1775,6 +1775,32 @@ def test_classify_candidate_failure_buckets():
     # 连接抖动：同模型重试吸收（断网由调用方先行检查，不会到达分类器）
     assert _classify_candidate_failure(ConnectionError("connection reset")) == "retry"
 
+    # 传输层断连（流式 httpx 包装错误）：Server disconnected / TLS EOF /
+    # 中文 WinError 10054 等都必须按"瞬时抖动"重试，而不是直接换模型。
+    from agent_openai import HttpStreamTransportError, _is_retriable_openai_error
+
+    assert _classify_candidate_failure(
+        HttpStreamTransportError(
+            "raw httpx stream failed: Server disconnected without sending a response."
+        )
+    ) == "retry"
+    assert _classify_candidate_failure(
+        HttpStreamTransportError(
+            "raw httpx stream failed: [WinError 10054] 远程主机强迫关闭了一个现有的连接。"
+        )
+    ) == "retry"
+    assert _classify_candidate_failure(
+        HttpStreamTransportError(
+            "raw httpx stream failed: EOF occurred in violation of protocol (_ssl.c:1007)"
+        )
+    ) == "retry"
+    # 内层静默重试（_is_retriable_openai_error）同样要认这类断连
+    assert _is_retriable_openai_error(
+        HttpStreamTransportError(
+            "raw httpx stream failed: EOF occurred in violation of protocol (_ssl.c:1007)"
+        )
+    )
+
     # 断网等本机不可用错误不重试，交给上层暂停回退
     class LocalNetworkUnavailableError(ConnectionError):
         pass

@@ -231,9 +231,28 @@ def extract_usage_dict(usage_obj: Any) -> Dict[str, int]:
     }
 
 
+# 传输层"断连"错误的消息标记：httpx / OpenSSL / Windows 套接字在不同本地化
+# 环境下的报错文本不一定含 "connection"/"connect"（如 SSL EOF、
+# "Server disconnected"、中文 WinError 10054），这里统一识别，避免这类瞬时
+# 链路抖动被当成"未知错误"直接切换模型。
+_TRANSIENT_TRANSPORT_MARKERS = (
+    "disconnected",
+    "remote protocol",
+    "incomplete chunked",
+    "peer closed",
+    "forcibly closed",
+    "connection aborted",
+    "eof occurred",
+    "violation of protocol",
+    "winerror 10054",
+)
+
+
 def _is_retriable_openai_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
     if "timeout" in msg or "timed out" in msg:
+        return True
+    if any(marker in msg for marker in _TRANSIENT_TRANSPORT_MARKERS):
         return True
     if "connection" in msg or "connect" in msg:
         return True
@@ -275,6 +294,10 @@ def _classify_candidate_failure(exc: BaseException) -> str:
         return "switch"
     if type(exc).__name__ == "LocalNetworkUnavailableError":
         return "switch"
+    if isinstance(exc, HttpStreamTransportError) and status_code is None:
+        # 无状态码的流式传输失败（对端断开、TLS EOF、连接被重置等）属瞬时
+        # 链路抖动，与 SDK 的 APIConnectionError 同性质，交给同模型重试吸收。
+        return "retry"
     if isinstance(exc, ConnectionError):
         # 连接抖动（含 SDK APIConnectionError 的底层原因链）优先同模型重试；
         # 断网已由调用方先行检查，到达此处说明机器在线、只是端点链路抖动。
@@ -283,6 +306,8 @@ def _classify_candidate_failure(exc: BaseException) -> str:
     if "timeout" in msg or "timed out" in msg:
         return "retry"
     if "connection error" in msg or "connection reset" in msg or "connect failed" in msg:
+        return "retry"
+    if any(marker in msg for marker in _TRANSIENT_TRANSPORT_MARKERS):
         return "retry"
     if any(code in msg for code in ("429", "502", "503", "504", "529")):
         return "retry"
