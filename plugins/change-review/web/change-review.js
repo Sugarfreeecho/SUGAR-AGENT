@@ -293,6 +293,8 @@ function setSummary(container, active, reverted) {
         container.append(document.createTextNode(` · ${reverted.length} ${t('已撤销', 'reverted')}`));
     }
 }
+const pendingBadgeTimers = new WeakMap();
+
 function updateBadge(aggregate) {
     if (!aggregate || !aggregate.querySelector) return;
     const rows = displayTurnRows(aggregate);
@@ -316,9 +318,35 @@ function updateBadge(aggregate) {
         else if (wrap) wrap.insertBefore(badge, wrap.querySelector('.process-aggregate-stats'));
     }
     const parts = splitReviewRows(rows);
+    const value = stats(parts.active);
+    const lineStatsReady = parts.active.length
+        ? (value.added > 0 || value.removed > 0
+            || parts.active.some(function (row) { return hasLineStats(row); }))
+        : true;
+    if (parts.active.length && !lineStatsReady) {
+        // 行数统计尚未就绪（历史回放 / 统计后到）：先静默隐藏，等真实数字一次到位，
+        // 避免 badge 先渲染 +0 −0（灰白）再跳变成 +N −M（红绿）的闪烁。
+        if (!pendingBadgeTimers.has(badge)) {
+            pendingBadgeTimers.set(badge, globalThis.setTimeout(function () {
+                pendingBadgeTimers.delete(badge);
+                if (!badge.isConnected || !badge.hidden) return;
+                badge.hidden = false;
+                badge.replaceChildren(document.createTextNode(
+                    `${parts.active.length} ${t('个文件', 'files')}`));
+                if (value.omitted) badge.title = statsTitle(value);
+            }, 1500));
+        }
+        badge.hidden = true;
+        return;
+    }
+    if (pendingBadgeTimers.has(badge)) {
+        globalThis.clearTimeout(pendingBadgeTimers.get(badge));
+        pendingBadgeTimers.delete(badge);
+    }
+    badge.hidden = false;
     badge.replaceChildren();
     if (parts.active.length) {
-        appendColoredStats(badge, stats(parts.active), true);
+        appendColoredStats(badge, value, true);
         if (parts.reverted.length) {
             badge.append(document.createTextNode(` · ${parts.reverted.length} ${t('已撤销', 'reverted')}`));
         }
