@@ -493,6 +493,8 @@ function translateUiString(value) {
         .replace(/^已清除本会话规则（(\\d+) 条）。$/, 'Session rules cleared ($1).')
         .replace(/^已选择 (\\d+) 个 Skill$/, '$1 skills selected')
         .replace(/^已选择 (\\d+) 项$/, '$1 items selected')
+        .replace(/^展开全部$/, 'Expand all')
+        .replace(/^展开全部 · 还有 (\\d+) 行$/, 'Expand all · $1 more lines')
         .replace(/^正在上传 (\\d+) 个文件… (\\d+)%$/, 'Uploading $1 files… $2%')
         .replace(/预估上下文 token：选择会话并加载或发送消息后显示。分母为压缩摘要阈值。/g, 'Estimated context tokens; shown after selecting a session and loading or sending a message. The denominator is the compression-summary threshold.')
         .replace(/tokens（约 ([\\d.]+)%，超出门限 ([\\d.]+)%）。预估进入模型的上下文规模，含历史与系统提示；分母为当前 model profile 中触发压缩摘要的上下文门限。/g, 'tokens (about $1%; $2% over the limit). Estimated context size sent to the model, including history and system prompts; the denominator is the compression threshold for the current model profile.')
@@ -1316,6 +1318,71 @@ function renderSelectedSkillsUiMessage(container, text, linkifier) {
     if (typeof linkifier === 'function') linkifier(container);
 }
 
+// 折叠切换控件（方案 C）：半胶囊 = chevron + 文案（含隐藏行数）。
+// \`.message\` 在 i18n 内容选择器内，不会被 UI 翻译扫描，所以文案走 runtime 文本，
+// aria/title 主动翻译，并在语言切换时统一重刷。
+var userCollapseToggleI18nBound = false;
+function bindUserCollapseToggleI18nOnce() {
+    if (userCollapseToggleI18nBound) return;
+    userCollapseToggleI18nBound = true;
+    document.addEventListener('myagent:language-change', function () {
+        Array.prototype.forEach.call(document.querySelectorAll('.user-msg-chevron'), function (el) {
+            if (typeof el.syncUserMessageCollapse === 'function') el.syncUserMessageCollapse();
+        });
+    });
+}
+
+function buildUserMessageCollapseToggle(wrap) {
+    var ch = document.createElement('div');
+    ch.setAttribute('role', 'button');
+    ch.tabIndex = 0;
+    ch.className = 'user-msg-chevron';
+    var arrow = document.createElement('span');
+    arrow.className = 'chevron-arrow';
+    var label = document.createElement('span');
+    label.className = 'user-msg-chevron-label';
+    ch.appendChild(arrow);
+    ch.appendChild(label);
+
+    function sourceText(open, hidden) {
+        if (open) return '收起';
+        return hidden > 0 ? '展开全部 · 还有 ' + hidden + ' 行' : '展开全部';
+    }
+    function localized(text) {
+        return typeof translateUiString === 'function' ? translateUiString(text) : text;
+    }
+    ch.syncUserMessageCollapse = function (hiddenLines) {
+        if (hiddenLines != null) {
+            ch.setAttribute('data-hidden-lines', String(Math.max(0, Math.floor(Number(hiddenLines) || 0))));
+        }
+        var open = wrap.classList.contains('user-msg-expanded');
+        var source = sourceText(open, Number(ch.getAttribute('data-hidden-lines')) || 0);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(label, source);
+        else label.textContent = source;
+        ch.setAttribute('aria-expanded', open ? 'true' : 'false');
+        ch.setAttribute('aria-label', localized(source));
+        ch.title = localized(source);
+    };
+    ch.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var open = !wrap.classList.contains('user-msg-expanded');
+        var full = wrap.querySelector('.user-msg-full');
+        // max-height 过渡需要真实目标值：展开前写入实测内容高度
+        if (open && full) wrap.style.setProperty('--user-msg-full-h', (full.scrollHeight + 2) + 'px');
+        wrap.classList.toggle('user-msg-expanded', open);
+        ch.syncUserMessageCollapse();
+    });
+    ch.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        e.preventDefault();
+        e.stopPropagation();
+        ch.click();
+    });
+    bindUserCollapseToggleI18nOnce();
+    ch.syncUserMessageCollapse(0);
+    return ch;
+}
+
 function renderUserMessageContent(wrap, div, rawStr, linkifier) {
     var applyLinks = typeof linkifier === 'function' ? linkifier : null;
 
@@ -1328,24 +1395,21 @@ function renderUserMessageContent(wrap, div, rawStr, linkifier) {
         wrap.classList.add('has-turn-process');
         div.classList.add('is-collapsible');
         div.textContent = '';
-        var sum = document.createElement('div');
-        sum.className = 'user-msg-summary';
-        renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), applyLinks);
         var ful = document.createElement('div');
         ful.className = 'user-msg-full';
         renderSelectedSkillsUiMessage(ful, rawStr, applyLinks);
-        var ch = document.createElement('div');
-        ch.className = 'user-msg-chevron';
-        var arrow = document.createElement('span');
-        arrow.className = 'chevron-arrow';
-        ch.appendChild(arrow);
-        ch.addEventListener('click', function(e) {
-            e.stopPropagation();
-            wrap.classList.toggle('user-msg-expanded');
-        });
-        div.appendChild(sum);
         div.appendChild(ful);
+        var ch = buildUserMessageCollapseToggle(wrap);
         div.appendChild(ch);
+        // 隐藏行数按实测内容高度算（此时 ful 尚未被裁剪）
+        var fcs = window.getComputedStyle ? window.getComputedStyle(ful) : null;
+        var lineHeight = fcs ? parseFloat(fcs.lineHeight) : NaN;
+        if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+            var fontSize = fcs ? parseFloat(fcs.fontSize) : NaN;
+            lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.65 : 18;
+        }
+        var hidden = Math.max(0, Math.round(ful.scrollHeight / lineHeight) - USER_MESSAGE_COLLAPSE_LINES);
+        ch.syncUserMessageCollapse(hidden);
     }
 
     setPlain();
@@ -3814,12 +3878,19 @@ var subagentCatalogStore = (function () {
         if (!addr) return false;
         return patchCatalog(addr.parentSessionId, function (entries) {
             var changed = false;
+            var present = false;
             entries.forEach(function (entry) {
-                if (!entry.diagnostic && entry.childId === childId && entry.activity !== nextActivity) {
+                if (entry.diagnostic || entry.childId !== childId) return;
+                present = true;
+                if (entry.activity !== nextActivity) {
                     entry.activity = nextActivity;
                     changed = true;
                 }
             });
+            if (!present) {
+                // 目录里还没有这一行（拉取滞后/先前失败）：状态帧不能白跑，尽快补齐（去抖，幂等）。
+                void refreshCatalogs(addr.parentSessionId, { debounce: true });
+            }
             return changed;
         });
     }
@@ -3842,9 +3913,15 @@ var subagentCatalogStore = (function () {
         var catalog = getCatalog(pid);
         if (!catalog) {
             if (opts && opts.addresses) {
+                // 目录尚未建立也要先把地址登记上（此前 mutate 从未执行 → 整帧被吞：
+                // 地址缺失、无证据、无刷新，胶囊只能等下一次目录刷新才出现）。
+                mutate([]);
                 rebuildSnapshot({ addresses: addressesObject() });
+                void refreshCatalogs(pid, { debounce: true });
                 return true;
             }
+            // 目录尚未建立：状态/移除帧不能白跑，尽快去抖拉一次目录（幂等）。
+            void refreshCatalogs(pid, { debounce: true });
             return false;
         }
         var entries = (catalog.entries || []).map(function (entry) { return Object.assign({}, entry); });
@@ -3975,6 +4052,15 @@ var subagentAddressing = (function () {
 
     function isChildOpen() {
         return STACK.length > 0;
+    }
+
+    /** Keep the root conversation selected in the sidebar while viewing its child. */
+    function sidebarSessionId(sessionId) {
+        var sid = String(sessionId || '');
+        var top = current();
+        return top && String(top.childSessionId) === sid
+            ? String(STACK[0].parentSessionId || sid)
+            : sid;
     }
 
     function depth() {
@@ -4153,6 +4239,7 @@ var subagentAddressing = (function () {
         returnToParent: returnToParent,
         reset: reset,
         isChildOpen: isChildOpen,
+        sidebarSessionId: sidebarSessionId,
         current: current,
         depth: depth,
         snapshot: snapshot,
@@ -4176,6 +4263,7 @@ var subagentFrames = (function () {
     var lastActivityAt = Object.create(null);   // childId → 上次写入时间戳
     var lastActivityValue = Object.create(null); // childId → 上次写入的 activity
     var unknownStarts = Object.create(null);     // parentId → 目录尚未覆盖的 start 帧数
+    var unknownActivityAt = Object.create(null); // parentId → 上次未知成员活动帧时间戳（节流用）
 
     function store() {
         return (typeof subagentCatalogStore !== 'undefined' && subagentCatalogStore) ? subagentCatalogStore : null;
@@ -4193,7 +4281,21 @@ var subagentFrames = (function () {
         if (!cid) return false;
         var storeRef = store();
         if (!storeRef) return false;
-        if (!storeRef.getAddress(cid)) return false;   // 尚未在目录中登记：等目录刷新
+        if (!storeRef.getAddress(cid)) {
+            // 目录尚未登记（首帧早到/目录拉取滞后）：活动帧本身也是「有子代理在执行」的证据，
+            // 不能静默丢弃——否则长任务执行期间没有任何信号，胶囊要等切会话才出现。
+            var parentId = currentParentSessionId();
+            if (!parentId) return false;
+            var tsUnknown = now();
+            if ((tsUnknown - (unknownActivityAt[parentId] || 0)) < ACTIVITY_THROTTLE_MS) return false;
+            unknownActivityAt[parentId] = tsUnknown;
+            if (!unknownStarts[parentId]) unknownStarts[parentId] = 1;
+            if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi
+                && typeof subagentCatalogUi.noteUnknownChildEvidence === 'function') {
+                subagentCatalogUi.noteUnknownChildEvidence(parentId);
+            }
+            return true;
+        }
         var next = running !== false ? 'running' : 'inactive';
         var ts = now();
         if (lastActivityValue[cid] === next && (ts - (lastActivityAt[cid] || 0)) < ACTIVITY_THROTTLE_MS) return false;
@@ -4269,6 +4371,7 @@ var subagentFrames = (function () {
         lastActivityAt = Object.create(null);
         lastActivityValue = Object.create(null);
         unknownStarts = Object.create(null);
+        unknownActivityAt = Object.create(null);
     }
 
     /** 某父会话是否存在"目录尚未覆盖的子代理"证据（供触发器显示与刷新）。 */
@@ -14703,15 +14806,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         if (userMessageShouldCollapse(rawStr)) {
             wrap.classList.add('has-turn-process');
             div.classList.add('is-collapsible');
-            // 摘要
-            var sum = document.createElement('div');
-            sum.className = 'user-msg-summary';
-            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), linkifyAssistantTextNodes);
-            else {
-                sum.textContent = buildUserMessageSummary(rawStr);
-                linkifyAssistantTextNodes(sum);
-            }
-            // 完整
+            // 方案 C：内容始终是原文，折叠只是裁剪 + 渐隐
             var ful = document.createElement('div');
             ful.className = 'user-msg-full';
             if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(ful, rawStr, linkifyAssistantTextNodes);
@@ -14719,19 +14814,10 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
                 ful.textContent = rawStr;
                 linkifyAssistantTextNodes(ful);
             }
-            // chevron
-            var ch = document.createElement('div');
-            ch.className = 'user-msg-chevron';
-            var arrow = document.createElement('span');
-            arrow.className = 'chevron-arrow';
-            ch.appendChild(arrow);
-            ch.addEventListener('click', function(e) {
-                e.stopPropagation();
-                wrap.classList.toggle('user-msg-expanded');
-            });
-            div.appendChild(sum);
             div.appendChild(ful);
-            div.appendChild(ch);
+            if (typeof buildUserMessageCollapseToggle === 'function') {
+                div.appendChild(buildUserMessageCollapseToggle(wrap));
+            }
         } else {
             div.textContent = rawStr;
             linkifyAssistantTextNodes(div);
@@ -17901,14 +17987,25 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     if (nameEl) bindUiHoverTip(nameEl);
 }
 
+/** 子代理在对话区打开时，侧栏仍高亮它所属的根主会话。 */
+function sidebarHighlightedSessionId() {
+    var sid = String(currentSessionId || '');
+    if (typeof subagentAddressing !== 'undefined' && subagentAddressing
+        && typeof subagentAddressing.sidebarSessionId === 'function') {
+        return subagentAddressing.sidebarSessionId(sid);
+    }
+    return sid;
+}
+
 /** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */
 function syncSessionListIndicatorClasses() {
     if (!sessionsList) return;
+    var highlightedId = sidebarHighlightedSessionId();
     sessionsList.querySelectorAll('.session-item').forEach(function (div) {
         var el = div.querySelector('.session-name[data-id]');
         if (!el) return;
         var sid = el.getAttribute('data-id');
-        div.classList.toggle('active', !!sid && sid === currentSessionId);
+        div.classList.toggle('active', !!sid && sid === highlightedId);
         applySessionItemIndicators(div, sid);
     });
     if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
@@ -18321,7 +18418,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     const div = document.createElement('div');
     div.className = 'session-item';
     div.dataset.sessionId = sess.id || '';
-    if (currentSessionId === sess.id) div.classList.add('active');
+    if (sidebarHighlightedSessionId() === sess.id) div.classList.add('active');
     if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
     if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
     var displayName = typeof localizeSessionPlaceholderName === 'function'
@@ -27675,6 +27772,7 @@ const dockRightState = {
     button: null,
     sessionId: null,
     width: DOCK_RIGHT_WIDTH_DEFAULT,
+    lastWidth: 0,
     tabState: Object.create(null),
     dragging: false,
     revealFrame: null,
@@ -27951,6 +28049,7 @@ function dockRightEnsureMounted() {
 
     dockRightState.host = host;
     dockRightState.sash = sash;
+    dockRightState.lastWidth = window.innerWidth;
     dockRightLoadWidth();
 
     const labels = dockRightSurfaceLabels();
@@ -27996,11 +28095,14 @@ function dockRightEnsureMounted() {
     if (!dockRightState.viewportHooked) {
         dockRightState.viewportHooked = true;
         window.addEventListener('resize', () => {
+            const width = window.innerWidth;
+            const narrowed = width < Number(dockRightState.lastWidth || width);
+            dockRightState.lastWidth = width;
             if (!dockRightExpanded()) return;
-            // The column yields by closing when the window can no longer hold
-            // both: the workspace keeps a usable width and the details column
-            // stays collapsed (a half-screen snap must not crush the chat).
-            if (dockRightState.sessionId && dockRightWouldCrushWorkspace()) {
+            // A window that just got narrower keeps the column out of the way:
+            // when the open column would squeeze the workspace below its floor
+            // it collapses (a half-screen snap stays collapsed).
+            if (width >= 768 && narrowed && dockRightState.sessionId && dockRightWouldCrushWorkspace()) {
                 const surface = dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA);
                 if (surface && surface.layout.mode !== 'fullscreen') {
                     dockActionToggleExpanded(dockRightState.sessionId, dockRightSeed(), DOCK_RIGHT_AREA);
@@ -28008,12 +28110,10 @@ function dockRightEnsureMounted() {
                     return;
                 }
             }
-            if (window.innerWidth < 768 && dockRightState.sessionId) {
-                const surface = dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA);
-                if (surface && surface.layout.mode !== 'fullscreen') {
-                    dockActionSetMode(dockRightState.sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
-                }
-            }
+            // Otherwise the mode follows the page width alone: below 768px the
+            // column covers; at 768px and up it is push, and a fullscreen
+            // column comes back to push once the window is wide again.
+            dockRightEnsureWidthMode(dockRightState.sessionId);
             dockRightRender();
         }, { passive: true });
     }
@@ -28114,14 +28214,19 @@ function dockRightWouldCrushWorkspace() {
     return frame - dockRightState.width < DOCK_RIGHT_WORKSPACE_FLOOR;
 }
 
-/** A narrow window covers with the fullscreen mode instead of squeezing the
-    workspace: every open path (button, file link, review) goes through here. */
-function dockRightEnsureNarrowOpenMode(sessionId) {
+/** The column's mode follows the page width alone — below 768px it covers the
+    viewport, at 768px and up it is push, and a fullscreen column returns to
+    push once the window is wide again. Every open path and the resize handler
+    share this hook, so the four paths cannot drift apart. */
+function dockRightEnsureWidthMode(sessionId) {
     if (!sessionId) return;
-    if (!(window.innerWidth < 768 || dockRightWouldCrushWorkspace())) return;
     const surface = dockSurfaceOf(sessionId, DOCK_RIGHT_AREA);
-    if (surface && surface.layout.expanded && surface.layout.mode !== 'fullscreen') {
+    if (!surface || !surface.layout.expanded) return;
+    const narrow = window.innerWidth < 768;
+    if (narrow && surface.layout.mode !== 'fullscreen') {
         dockActionSetMode(sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+    } else if (!narrow && surface.layout.mode === 'fullscreen') {
+        dockActionSetMode(sessionId, 'push', dockRightSeed(), DOCK_RIGHT_AREA);
     }
 }
 
@@ -28218,7 +28323,7 @@ function dockRightToggle() {
             revealIfOpened: false,
         }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     }
-    dockRightEnsureNarrowOpenMode(sessionId);
+    dockRightEnsureWidthMode(sessionId);
     dockRightRender();
 }
 
@@ -28312,12 +28417,8 @@ function dockRightHandleSessionSwitch(sessionId) {
         return;
     }
     dockRightState.sessionId = sid;
-    dockRightRender();
-        // The entering session's own open state still yields to a narrow window.
-        if (dockRightExpanded() && dockRightWouldCrushWorkspace()) {
-            dockActionToggleExpanded(sid, dockRightSeed(), DOCK_RIGHT_AREA);
-            dockRightRender();
-        }
+        dockRightEnsureWidthMode(sid);
+        dockRightRender();
 }
 
 /**
@@ -28606,7 +28707,7 @@ function dockRightOpenResource(address) {
         title: claim.title,
     }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     dockRightState.sessionId = sessionId;
-    dockRightEnsureNarrowOpenMode(sessionId);
+    dockRightEnsureWidthMode(sessionId);
     dockRightRender();
 }
 
@@ -29426,8 +29527,12 @@ function dockRightOpenChangeReview(options) {
         }
     });
     dockRightOpenPageKind('changes', undefined, undefined, true);
-    if (!dockRightExpanded()) dockRightToggle();
-    else dockRightRender();
+    if (!dockRightExpanded()) {
+        dockRightToggle();
+    } else {
+        dockRightEnsureWidthMode(sessionId);
+        dockRightRender();
+    }
 }
 
 /** Release whatever a tab's body started. */
