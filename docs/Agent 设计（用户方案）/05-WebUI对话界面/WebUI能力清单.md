@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-09-21；补充工作区双侧面板共享视觉系统）
+> 代码版本：当前工作区（2026-09-21；补充顶部通知与权限警示视觉系统）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -57,11 +57,14 @@
 | 审批与 ask_user 交互卡片（含分析、取消、恢复） | `modules/human-interactions.js`、后端 interactions/approvals API | 【图】 |
 | 审批卡片锚点恢复（`tool_pending` 为 ephemeral；恢复时按 `tool_call_id` 重建占位工具行，重连历史恢复后刷新持久卡片） | `modules/human-interactions.js::ensurePendingHumanInteractionToolRow`、`modules/sse-handling.js::attachSessionEventStream` | 【单】 |
 | 权限与安全设置（会话级/全局权限、规则、预批准域名） | `modules/permissions.js`、后端 security API | 【图】 |
+| 顶部待办条两态（展开条 ⇄ 品牌铃铛徽章；6s 自动收起、悬停/聚焦暂停、数量变化再展开；徽章不显示数字） | `modules/human-interactions.js::updateHumanInteractionBanner/setHumanInteractionBannerExpanded/updateSidebarBrandNotice`、`styles/app.css` | 【单】 |
+| 红色警示条统一表面（完全访问开启 / 出站降级·部分 / MCP 注册等来源复用同一玻璃单行条；唯一"确认"、自动消失、不进徽章；警示在上、待办让位） | `modules/permissions.js::showGlobalWarningBanner`、`styles/app.css` | 【单】 |
+| 三档权限图标家族（盾 / 盾+勾 / 盾+警示；触发器由 `PERMISSION_MODE_ICONS` 注入，菜单图标双份 HTML 同步） | `modules/permissions.js::PERMISSION_MODE_ICONS`、`src/shell-body.html`、`index.html` | 【单】 |
 | 模型档案管理（增删改、排序、启用、发现、探测；高级设置含 system prompt `auto/merge/preserve`） | `modules/model-profiles.js`、`app/templates/advance_config.html`、后端 model-profile API | 【图】 |
 | 对话区模型选择器（跟随当前会话/寻址的子代理会话；主会话→清熔断即时重试、下一次调用生效；子代理会话→数据动作切换、不打断） | `modules/model-profiles.js`、`modules/session-management.js`、`webui.set_session_model_profile` | 【图】 |
 | 工作区文件与媒体（目录浏览、图片元数据/预览、上传） | `modules/workspace-media.js`、后端 workspace API | 【卡】 |
 | 通知与 UI 存在性（10 秒 presence 上报驱动桌面提醒；节能/睡眠时为辅助信号） | `message-rendering.js::registerUiPresence`、后端 `ui_presence/_ui_presence_has_active` | 【卡】 |
-| 已开页面复用（前台标题匹配；Windows UI Automation 精确选中后台/睡眠标签；拒绝任意浏览器窗口假成功） | `tray_launcher._focus_existing_webui_tab/_select_webui_browser_tab` | 【单】 |
+| 已开页面复用（仅浏览器进程；按 `General Agent` / `SugarAgent` 关键词匹配当前或后台标签；不逐标签核对地址） | `tray_launcher._visible_browser_windows/_visible_webui_windows/_select_webui_browser_tab/_focus_existing_webui_tab` | 【单】 |
 | 启动与激活韧性（托盘唯一首开、1.5 秒并发抑制、2.5 秒激活超时+一次重试、不可见则真实打开） | `tray_launcher.run_starter/_auto_open_webui_when_ready/_request_webui_activation_with_retry` | 【单】 |
 | 右侧详情栏（dockkit 三层：引擎/渲染/嵌入；dsh 式第三列 + 开始/文件/内容/修改历史四类页；角落按钮与条尾控件图形同 dsh 源码） | `frontend/src/app/modules/dock/**`（engine 8 / renderer 5 / embedder 3）、`styles/dock.css`、`app/index.js` 登记 | 【单】 |
 | 统一开文件策略（文本→详情栏，其余→系统应用；`MyAgentDock.openPathSmart` / `isTextPath`，会话文件链接与文件树共用） | `modules/dock/embedder/right-column.js`、`modules/session-scroll-history.js`（链接委托） | 【单】 |
@@ -98,6 +101,10 @@
 
 ## 9. 版本记录
 
+- 2026-09-21（v16）：恢复浏览器窗口内按标题关键词复用当前/后台标签；不再做引发页面轮换的逐标签地址核对。
+- 2026-09-21（v15）：撤销遍历并选中全部标签的识别方式；只读浏览器当前标签地址，不唤醒后台标签。后台 WebUI 无法无扰动核验时允许新开。
+- 2026-09-21（v14）：WebUI 复用识别改为浏览器进程 + 标签实际地址核验；标题仅作显示，不再作为身份依据；无匹配时恢复原标签。
+- 2026-09-21（v13）：补录顶部通知与权限警示视觉系统——待办条两态化（展开条 ⇄ 铃铛徽章、自动收起与悬停暂停）、红色警示条统一表面与"警示在上、待办让位"堆叠、完全访问控件克制强调与三档盾牌图标家族；说明见 05/12·UC-5L1~5L5。
 - 2026-09-21（v12）：补录工作区双侧面板共享视觉系统——历史、Todo、Goal 与声明式插件面板统一主题令牌、外壳、字体层级、间距、列表条目和交互反馈；说明见 05/11·UC-5K1~5K7。
 - 2026-09-20（v11）：补录会话列表状态一致性——`/sessions/state` 改为硬失效 + 单飞重建并引入 `state_revision`；`SessionManager` 摘要写入全路径广播失效；客户端加"写入在途拒收 + 请求序号下界 + 版本下界"，仅写入失败才回滚；说明见 05/10·UC-5J1~5J6。
 - 2026-09-20（v10）：补录 run 终态单调契约与跨进程恢复租约；明确假终态后同 run 继续写入会触发前端终结/重挂振荡，刷新不能修复耐久矛盾历史。
