@@ -89,6 +89,7 @@ const dockRightState = {
     button: null,
     sessionId: null,
     width: DOCK_RIGHT_WIDTH_DEFAULT,
+    lastWidth: 0,
     tabState: Object.create(null),
     dragging: false,
     revealFrame: null,
@@ -365,6 +366,7 @@ function dockRightEnsureMounted() {
 
     dockRightState.host = host;
     dockRightState.sash = sash;
+    dockRightState.lastWidth = window.innerWidth;
     dockRightLoadWidth();
 
     const labels = dockRightSurfaceLabels();
@@ -410,11 +412,14 @@ function dockRightEnsureMounted() {
     if (!dockRightState.viewportHooked) {
         dockRightState.viewportHooked = true;
         window.addEventListener('resize', () => {
+            const width = window.innerWidth;
+            const narrowed = width < Number(dockRightState.lastWidth || width);
+            dockRightState.lastWidth = width;
             if (!dockRightExpanded()) return;
-            // The column yields by closing when the window can no longer hold
-            // both: the workspace keeps a usable width and the details column
-            // stays collapsed (a half-screen snap must not crush the chat).
-            if (dockRightState.sessionId && dockRightWouldCrushWorkspace()) {
+            // A window that just got narrower keeps the column out of the way:
+            // when the open column would squeeze the workspace below its floor
+            // it collapses (a half-screen snap stays collapsed).
+            if (width >= 768 && narrowed && dockRightState.sessionId && dockRightWouldCrushWorkspace()) {
                 const surface = dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA);
                 if (surface && surface.layout.mode !== 'fullscreen') {
                     dockActionToggleExpanded(dockRightState.sessionId, dockRightSeed(), DOCK_RIGHT_AREA);
@@ -422,12 +427,10 @@ function dockRightEnsureMounted() {
                     return;
                 }
             }
-            if (window.innerWidth < 768 && dockRightState.sessionId) {
-                const surface = dockSurfaceOf(dockRightState.sessionId, DOCK_RIGHT_AREA);
-                if (surface && surface.layout.mode !== 'fullscreen') {
-                    dockActionSetMode(dockRightState.sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
-                }
-            }
+            // Otherwise the mode follows the page width alone: below 768px the
+            // column covers; at 768px and up it is push, and a fullscreen
+            // column comes back to push once the window is wide again.
+            dockRightEnsureWidthMode(dockRightState.sessionId);
             dockRightRender();
         }, { passive: true });
     }
@@ -528,14 +531,19 @@ function dockRightWouldCrushWorkspace() {
     return frame - dockRightState.width < DOCK_RIGHT_WORKSPACE_FLOOR;
 }
 
-/** A narrow window covers with the fullscreen mode instead of squeezing the
-    workspace: every open path (button, file link, review) goes through here. */
-function dockRightEnsureNarrowOpenMode(sessionId) {
+/** The column's mode follows the page width alone — below 768px it covers the
+    viewport, at 768px and up it is push, and a fullscreen column returns to
+    push once the window is wide again. Every open path and the resize handler
+    share this hook, so the four paths cannot drift apart. */
+function dockRightEnsureWidthMode(sessionId) {
     if (!sessionId) return;
-    if (!(window.innerWidth < 768 || dockRightWouldCrushWorkspace())) return;
     const surface = dockSurfaceOf(sessionId, DOCK_RIGHT_AREA);
-    if (surface && surface.layout.expanded && surface.layout.mode !== 'fullscreen') {
+    if (!surface || !surface.layout.expanded) return;
+    const narrow = window.innerWidth < 768;
+    if (narrow && surface.layout.mode !== 'fullscreen') {
         dockActionSetMode(sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+    } else if (!narrow && surface.layout.mode === 'fullscreen') {
+        dockActionSetMode(sessionId, 'push', dockRightSeed(), DOCK_RIGHT_AREA);
     }
 }
 
@@ -632,7 +640,7 @@ function dockRightToggle() {
             revealIfOpened: false,
         }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     }
-    dockRightEnsureNarrowOpenMode(sessionId);
+    dockRightEnsureWidthMode(sessionId);
     dockRightRender();
 }
 
@@ -726,12 +734,8 @@ function dockRightHandleSessionSwitch(sessionId) {
         return;
     }
     dockRightState.sessionId = sid;
-    dockRightRender();
-        // The entering session's own open state still yields to a narrow window.
-        if (dockRightExpanded() && dockRightWouldCrushWorkspace()) {
-            dockActionToggleExpanded(sid, dockRightSeed(), DOCK_RIGHT_AREA);
-            dockRightRender();
-        }
+        dockRightEnsureWidthMode(sid);
+        dockRightRender();
 }
 
 /**
@@ -1020,7 +1024,7 @@ function dockRightOpenResource(address) {
         title: claim.title,
     }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     dockRightState.sessionId = sessionId;
-    dockRightEnsureNarrowOpenMode(sessionId);
+    dockRightEnsureWidthMode(sessionId);
     dockRightRender();
 }
 
@@ -1840,8 +1844,12 @@ function dockRightOpenChangeReview(options) {
         }
     });
     dockRightOpenPageKind('changes', undefined, undefined, true);
-    if (!dockRightExpanded()) dockRightToggle();
-    else dockRightRender();
+    if (!dockRightExpanded()) {
+        dockRightToggle();
+    } else {
+        dockRightEnsureWidthMode(sessionId);
+        dockRightRender();
+    }
 }
 
 /** Release whatever a tab's body started. */
