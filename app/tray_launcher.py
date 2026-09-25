@@ -15,8 +15,10 @@ import win32api
 import win32con
 import win32event
 import win32gui
+import win32process
 import winerror
 import dotenv
+import psutil
 
 from python_runtime import configure_agent_python_environment, preferred_python
 from desktop_notify import show_desktop_notification
@@ -201,29 +203,6 @@ def _session_from_protocol_uri(raw_uri: str) -> str:
     return _re.sub(r"[^A-Za-z0-9\-]", "", candidate)[:64]
 
 
-def _visible_webui_windows() -> list[int]:
-    """Top-level visible windows whose active tab shows the WebUI."""
-
-    matches: list[int] = []
-
-    def collect(hwnd, _extra):
-        try:
-            title = str(win32gui.GetWindowText(hwnd) or "")
-            if win32gui.IsWindowVisible(hwnd) and (
-                "General Agent" in title or "SugarAgent" in title
-            ):
-                matches.append(int(hwnd))
-        except win32gui.error:
-            return True
-        return True
-
-    try:
-        win32gui.EnumWindows(collect, None)
-    except win32gui.error:
-        pass
-    return matches
-
-
 def _bring_window_to_foreground(hwnd: int) -> bool:
     """Raise ``hwnd`` to the foreground, verifying the system actually did it.
 
@@ -272,39 +251,24 @@ def _bring_window_to_foreground(hwnd: int) -> bool:
     return int(win32gui.GetForegroundWindow() or 0) == int(hwnd)
 
 
-def _focus_existing_webui_window() -> bool:
-    """Foreground a visible browser window whose active tab is the WebUI.
-
-    Returns True only when the window is verifiably in the foreground.
-    Heartbeat pages hosted inside other applications (e.g. an embedded
-    automation browser pane) can match the title check but cannot be raised
-    for the user — reporting False for those lets callers fall back to
-    opening a real browser window instead of doing nothing.
-    """
-
-    try:
-        for hwnd in _visible_webui_windows():
-            if _bring_window_to_foreground(hwnd):
-                return True
-        return False
-    except win32gui.error:
-        return False
-
-
 _BROWSER_WINDOW_CLASSES = {"Chrome_WidgetWin_1", "MozillaWindowClass"}
+_BROWSER_PROCESS_NAMES = {"msedge.exe", "chrome.exe", "firefox.exe"}
 
 
 def _visible_browser_windows() -> list[int]:
-    """Visible top-level browser windows regardless of the active tab title."""
+    """Visible browser windows, excluding similarly-classed desktop apps."""
 
     matches: list[int] = []
 
     def collect(hwnd, _extra):
         try:
             class_name = str(win32gui.GetClassName(hwnd) or "")
-            if win32gui.IsWindowVisible(hwnd) and class_name in _BROWSER_WINDOW_CLASSES:
+            if not win32gui.IsWindowVisible(hwnd) or class_name not in _BROWSER_WINDOW_CLASSES:
+                return True
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if psutil.Process(pid).name().lower() in _BROWSER_PROCESS_NAMES:
                 matches.append(int(hwnd))
-        except win32gui.error:
+        except (win32gui.error, psutil.Error, OSError):
             return True
         return True
 
@@ -315,18 +279,34 @@ def _visible_browser_windows() -> list[int]:
     return matches
 
 
+def _visible_webui_windows() -> list[int]:
+    """Browser windows whose selected tab title contains a WebUI keyword."""
+
+    matches: list[int] = []
+    for hwnd in _visible_browser_windows():
+        try:
+            title = str(win32gui.GetWindowText(hwnd) or "")
+            if "General Agent" in title or "SugarAgent" in title:
+                matches.append(hwnd)
+        except win32gui.error:
+            continue
+    return matches
+
+
+def _focus_existing_webui_window() -> bool:
+    """Foreground a browser already showing a keyword-matched WebUI tab."""
+
+    for hwnd in _visible_webui_windows():
+        if _bring_window_to_foreground(hwnd):
+            return True
+    return False
+
+
 def _select_webui_browser_tab() -> int:
-    """Select a background WebUI tab through Windows UI Automation.
+    """Select the first keyword-matched browser tab, without scanning URLs.
 
-    Top-level browser window titles only expose the active tab. Consequently a
-    healthy WebUI in a background tab used to be invisible to the launcher: it
-    either opened a duplicate, or focused an arbitrary browser window and
-    falsely reported success. Chromium and Firefox expose their tab strips to
-    the built-in Windows UI Automation API, so use that to select the matching
-    tab and return its owning HWND.
-
-    This helper is best-effort. Accessibility can be disabled by browser or
-    enterprise policy; callers must still retain the normal open-page fallback.
+    Only matching tabs are selected. Other tabs are never cycled through just
+    to inspect their addresses.
     """
 
     handles = _visible_browser_windows()
@@ -397,7 +377,7 @@ exit 1
 
 
 def _focus_existing_webui_tab() -> bool:
-    """Focus the WebUI whether it is the active or a background browser tab."""
+    """Focus a keyword-matched tab in a verified browser window."""
 
     if _focus_existing_webui_window():
         return True
@@ -450,14 +430,10 @@ def _activate_webui_from_external(session: str = "") -> bool:
     _request_webui_activation_with_retry("/", session=session)
     if _focus_existing_webui_tab():
         return True
-    if _visible_webui_windows():
-        # The exact page exists but Windows refused every foreground strategy.
-        # Do not report success while the user still sees nothing; opening the
-        # URL is the last-resort way to let the browser surface it.
-        _append_log(
-            "WebUI window found but could not be foregrounded; opening a browser page"
-        )
-    _append_log(f"UI activation: opening a new browser page (session={session or '-'})")
+    _append_log(
+        f"UI activation: no keyword-matched, focusable browser tab; "
+        f"opening a browser page (session={session or '-'})"
+    )
     _open_url_in_browser(
         f"/?session={session}" if session else "/",
         refresh=False,
@@ -963,20 +939,12 @@ class TrayLauncher:
         )
         if activation_reused and _focus_existing_webui_tab():
             return
-        if _visible_webui_windows():
-            # The exact page exists but could not be surfaced. Falling through
-            # is deliberate: a duplicate is preferable to a tray action that
-            # claims success while showing no UI.
-            _append_log(
-                "WebUI window found but could not be foregrounded; opening a browser page"
-            )
         if activation_reused:
-            # The backend sees a live page heartbeat, but no visible browser
-            # tab could be selected (e.g. a stale heartbeat or an embedded
-            # automation pane). Never focus an arbitrary browser window and
-            # call that success; opening a real page is the truthful fallback.
+            # A heartbeat is not proof that a keyword-matched browser tab
+            # can be selected and foregrounded (it may be stale or embedded).
             _append_log(
-                "WebUI heartbeat found but no selectable browser tab; opening a new browser page"
+                "WebUI heartbeat found but no keyword-matched, focusable browser tab; "
+                "opening a new browser page"
             )
         url = f"{BASE_URL}{path}"
         if session:

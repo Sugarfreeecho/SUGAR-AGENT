@@ -199,7 +199,6 @@ def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
     launcher = make_launcher()
     launcher._is_listening = lambda: True
     opened = []
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
@@ -209,12 +208,11 @@ def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
     assert opened == [tray_launcher.BASE_URL + "/"]
 
 
-def test_open_main_ui_falls_back_when_detected_window_cannot_be_focused(monkeypatch):
+def test_open_main_ui_falls_back_when_heartbeat_has_no_focusable_tab(monkeypatch):
     launcher = make_launcher()
     launcher._is_listening = lambda: True
     opened = []
     launcher._open_named_browser_window = lambda url: opened.append(url)
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [4321])
     monkeypatch.setattr(
         tray_launcher,
         "_request_existing_ui_activation",
@@ -232,7 +230,6 @@ def test_open_main_ui_reuses_visible_window_before_presence_recovers(monkeypatch
     launcher = make_launcher()
     launcher._is_listening = lambda: True
     opened = []
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: True)
@@ -248,7 +245,6 @@ def test_open_main_ui_collapses_duplicate_startup_triggers(monkeypatch):
     launcher = make_launcher()
     launcher._is_listening = lambda: True
     opened = []
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
@@ -269,7 +265,6 @@ def test_open_main_ui_retries_after_failed_browser_launch(monkeypatch):
         if len(attempts) == 1:
             raise OSError("no browser handler")
 
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = launch
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
@@ -285,7 +280,6 @@ def test_open_main_ui_allows_launch_after_dedupe_window(monkeypatch):
     launcher = make_launcher()
     launcher._is_listening = lambda: True
     opened = []
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     launcher._open_named_browser_window = lambda url: opened.append(url)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
@@ -342,7 +336,6 @@ def test_external_ui_activation_reuses_page_without_tray(monkeypatch):
 
 def test_external_ui_activation_opens_page_only_when_none_is_reusable(monkeypatch):
     opened = []
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
@@ -377,7 +370,6 @@ def test_external_ui_activation_opens_when_heartbeat_has_no_selectable_tab(monke
     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": True)
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
     monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
     monkeypatch.setattr(
         tray_launcher,
@@ -389,7 +381,17 @@ def test_external_ui_activation_opens_when_heartbeat_has_no_selectable_tab(monke
     assert opened == [("/?session=abc123", False)]
 
 
-def test_background_webui_tab_is_selected_and_its_window_is_focused(monkeypatch):
+def test_keyword_matched_browser_window_is_focused(monkeypatch):
+    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: True)
+    monkeypatch.setattr(
+        tray_launcher,
+        "_select_webui_browser_tab",
+        lambda: pytest.fail("active browser tab should not require selection"),
+    )
+    assert tray_launcher._focus_existing_webui_tab() is True
+
+
+def test_background_keyword_matched_browser_tab_is_selected_and_focused(monkeypatch):
     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
     monkeypatch.setattr(tray_launcher, "_select_webui_browser_tab", lambda: 4321)
     monkeypatch.setattr(tray_launcher, "_bring_window_to_foreground", lambda hwnd: hwnd == 4321)
@@ -398,7 +400,7 @@ def test_background_webui_tab_is_selected_and_its_window_is_focused(monkeypatch)
     assert tray_launcher._focus_existing_webui_tab() is True
 
 
-def test_tab_selector_returns_uia_selected_browser_handle(monkeypatch):
+def test_tab_selector_only_selects_keyword_matched_browser_tabs(monkeypatch):
     captured = {}
 
     class Completed:
@@ -416,8 +418,49 @@ def test_tab_selector_returns_uia_selected_browser_handle(monkeypatch):
 
     assert tray_launcher._select_webui_browser_tab() == 4321
     assert "1234,4321" in captured["command"][-1]
+    assert "General Agent|SugarAgent" in captured["command"][-1]
     assert "SelectionItemPattern" in captured["command"][-1]
+    assert "if ($name -notmatch 'General Agent|SugarAgent') { continue }" in captured["command"][-1]
+    assert "Get-BrowserAddress" not in captured["command"][-1]
+    assert "Start-Sleep" not in captured["command"][-1]
     assert captured["kwargs"]["timeout"] == tray_launcher.UI_TAB_SELECT_TIMEOUT_SECONDS
+
+
+def test_active_keyword_match_is_limited_to_browser_windows(monkeypatch):
+    monkeypatch.setattr(tray_launcher, "_visible_browser_windows", lambda: [2, 3])
+    monkeypatch.setattr(
+        tray_launcher.win32gui,
+        "GetWindowText",
+        lambda hwnd: {2: "General Agent - Microsoft Edge", 3: "Other - Chrome"}[hwnd],
+    )
+
+    assert tray_launcher._visible_webui_windows() == [2]
+
+
+def test_browser_window_filter_excludes_chromium_desktop_apps(monkeypatch):
+    monkeypatch.setattr(
+        tray_launcher.win32gui,
+        "EnumWindows",
+        lambda callback, _: [callback(hwnd, None) for hwnd in (1, 2, 3)],
+    )
+    monkeypatch.setattr(tray_launcher.win32gui, "IsWindowVisible", lambda hwnd: True)
+    monkeypatch.setattr(tray_launcher.win32gui, "GetClassName", lambda hwnd: "Chrome_WidgetWin_1")
+    monkeypatch.setattr(
+        tray_launcher.win32process,
+        "GetWindowThreadProcessId",
+        lambda hwnd: (0, hwnd),
+    )
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def name(self):
+            return {1: "ChatGPT.exe", 2: "msedge.exe", 3: "chrome.exe"}[self.pid]
+
+    monkeypatch.setattr(tray_launcher.psutil, "Process", FakeProcess)
+
+    assert tray_launcher._visible_browser_windows() == [2, 3]
 
 
 def test_activation_request_uses_stall_tolerant_timeout(monkeypatch):
