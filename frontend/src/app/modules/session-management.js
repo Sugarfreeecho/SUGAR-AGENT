@@ -230,14 +230,25 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     if (nameEl) bindUiHoverTip(nameEl);
 }
 
+/** 子代理在对话区打开时，侧栏仍高亮它所属的根主会话。 */
+function sidebarHighlightedSessionId() {
+    var sid = String(currentSessionId || '');
+    if (typeof subagentAddressing !== 'undefined' && subagentAddressing
+        && typeof subagentAddressing.sidebarSessionId === 'function') {
+        return subagentAddressing.sidebarSessionId(sid);
+    }
+    return sid;
+}
+
 /** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */
 function syncSessionListIndicatorClasses() {
     if (!sessionsList) return;
+    var highlightedId = sidebarHighlightedSessionId();
     sessionsList.querySelectorAll('.session-item').forEach(function (div) {
         var el = div.querySelector('.session-name[data-id]');
         if (!el) return;
         var sid = el.getAttribute('data-id');
-        div.classList.toggle('active', !!sid && sid === currentSessionId);
+        div.classList.toggle('active', !!sid && sid === highlightedId);
         applySessionItemIndicators(div, sid);
     });
     if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
@@ -650,7 +661,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     const div = document.createElement('div');
     div.className = 'session-item';
     div.dataset.sessionId = sess.id || '';
-    if (currentSessionId === sess.id) div.classList.add('active');
+    if (sidebarHighlightedSessionId() === sess.id) div.classList.add('active');
     if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
     if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
     var displayName = typeof localizeSessionPlaceholderName === 'function'

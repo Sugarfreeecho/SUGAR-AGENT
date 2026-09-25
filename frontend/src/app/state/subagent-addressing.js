@@ -40,6 +40,15 @@ var subagentAddressing = (function () {
         return STACK.length > 0;
     }
 
+    /** Keep the root conversation selected in the sidebar while viewing its child. */
+    function sidebarSessionId(sessionId) {
+        var sid = String(sessionId || '');
+        var top = current();
+        return top && String(top.childSessionId) === sid
+            ? String(STACK[0].parentSessionId || sid)
+            : sid;
+    }
+
     function depth() {
         return STACK.length;
     }
@@ -216,6 +225,7 @@ var subagentAddressing = (function () {
         returnToParent: returnToParent,
         reset: reset,
         isChildOpen: isChildOpen,
+        sidebarSessionId: sidebarSessionId,
         current: current,
         depth: depth,
         snapshot: snapshot,
