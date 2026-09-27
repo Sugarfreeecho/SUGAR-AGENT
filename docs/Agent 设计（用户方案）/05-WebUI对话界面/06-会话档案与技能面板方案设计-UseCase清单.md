@@ -1,6 +1,6 @@
 # 会话、档案与技能面板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v4（覆盖至：当前工作区；含快照版本与写入围栏交叉引用）
+- 版本：2026-09-26 v5（覆盖至：当前工作区；含新会话预取与隐藏草稿）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/session-management.js`、`modules/model-profiles.js`、`modules/settings.js`、`modules/skill-picker.js`、`modules/i18n.js`、对应后端 API。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -46,6 +46,12 @@
 - **规则与边界**：连续切换以后者为准（选择纪元守卫）；档案排序仍是候选链优先级（见 UC-5F2）。语义细则见 ../01-LLM接入/05·UC-1E1/1E2/1E4。
 - **依据**：`model-profiles.js`（`setCurrentSessionModelProfile` / `refreshModelProfileSelector`）、`session-management.js`（切会话刷新选择器）、`webui.set_session_model_profile`。
 
+### UC-5F7 新会话预取与隐藏草稿
+- **触发**：在无会话态点击"新会话"（含刷新后重新进入草稿态）。
+- **预期现象**：点击即启动后台预取——服务端创建**隐藏草稿会话**（目录、元数据与索引照常落盘，但首条 user 事件落盘前不出现在会话列表）；发送首条消息时直接复用该草稿（预取失败或未完成则回退为发送时即时创建，路径永远可用）；首条真实 user 事件落盘即"转正"进入列表并广播状态；刷新后按**本标签页 `sessionStorage`** 记录复用同一草稿（旧版 `localStorage` 记录读取时自动迁移，避免多标签页把独立消息发给同一草稿）。
+- **规则与边界**：草稿不进入侧栏、远程控制列表与导出；页面内重复点击"新会话"复用同一份预取；后台物化（目录预创建 + 元数据 + 索引）在用户输入首条消息之前完成，不占用发送等待；启动重建时若发现草稿已有已提交的首条 user 消息，自动修复元数据并转正（覆盖提交与转正之间的进程退出窗口）。
+- **依据**：`session-management.js::ensurePrefetchedNewSession / prefetchNewSessionInner`（`PENDING_NEW_SESSION_KEY`，`sessionStorage` + 旧记录迁移）、`webui.py::create_session`（`prefetch=true`，不失效 `/sessions/state`）、`agent_harness.py::get_or_create_session(draft=…)` / `_first_committed_draft_user_event`（`metadata.draft`、首条 user 事件转正、列表过滤、启动重建修复）。
+
 ## 3. 边界
 
 - 档案的**业务语义**（协议/能力/切换）见 ../01-LLM接入；
@@ -57,6 +63,7 @@
 
 ## 5. 版本记录
 
+- 2026-09-26 v5：新增 UC-5F7《新会话预取与隐藏草稿》——点"新会话"后台创建隐藏草稿（`metadata.draft`），发送时复用并在首条 user 事件"转正"；待用记录存每标签页 `sessionStorage`（旧 `localStorage` 迁移），失败回退即时创建；启动重建可修复已提交首条消息的草稿。
 - 2026-09-20 v4：UC-5F1 补交叉引用——会话列表状态一致性契约（快照 `state_revision`、写入围栏、仅失败才回滚）见 10《会话列表状态一致性与快照版本》。
 - 2026-09-13 v1：拆分首版（承接 UC-509/506 与设置面板条目）。
 - 2026-09-18 v2：新增 UC-5F6（对话区模型选择器）——选择器跟随当前会话；主会话清熔断即时重试、子代理会话按数据动作切换（不打断，见 04·UC-5D15）。

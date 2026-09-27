@@ -1,6 +1,6 @@
 # 子代理任务生命周期与事件循环隔离 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v1（覆盖至：当前工作区；后台子代理任务的进程级持久托管）
+- 版本：2026-09-25 v2（覆盖至：当前工作区；后台托管 + 未取得执行的终结化）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_subagent.py`（`_BackgroundSubagentLoop`、`SubagentTaskRegistry`、`_execute_subagent_run`）、`app/agent_subagent_events.py`、`app/agent_loop.py`（`_run_react_node_off_loop`）、`app/webui.py`（取消入口）、`tests/test_agent_subagent_runtime_v2.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -49,6 +49,12 @@
 - **规则与边界**：本进程实例拥有的行与注册表仍在运行的行跳过；对账在启动生命周期内执行。
 - **依据**：`agent_subagent.py::reconcile_orphaned_subagent_runs`、`main.py` 启动时段调用。
 
+### UC-2J7 未取得执行权也要终结化
+- **触发**：持久化为 `running` 的子代理运行，其后台任务无法启动（启动异常 / 预约丢失），或运行中被打断 / 执行异常。
+- **预期现象**：不再滞留"永远运行中"——子会话补写元数据（`subagent_ok=false` + 错误）、追加 `final` UI 事件、写出结果输出文件，并向父级发 `subagent_finish`（ok=false）与对应 pending 结果（`failed` / `interrupted`）；若该子代理已有更新的一次运行接管（注册表仍在运行），陈旧的启动尝试不再改写状态。
+- **规则与边界**：取消（`interrupted`）与异常路径同样补写 `final`，子会话历史可直接看到中止原因；中断文本统一为 `Subagent interrupted.`，启动失败为 `Error: subagent <id> failed to start: …`。
+- **依据**：`agent_subagent.py::_execute_subagent_run::_fail_before_execution`（前台预约丢失、后台 `start_background` 异常/失败分支）；回归 `::test_background_start_failure_terminalizes_persisted_run`、`::test_foreground_attach_failure_terminalizes_persisted_run`、`::test_subagent_react_exception_is_visible_in_child_history`。
+
 ## 3. 事件与状态不变式
 
 1. 后台任务的生命周期与其创建方的循环解耦：任何父轮临时循环关闭都不构成取消。
@@ -56,12 +62,14 @@
 3. 跨循环操作只桥接：等待超时不误取消；取消在 owner 循环执行并结算。
 4. 显式停止仍级联取消后台任务；进程退出后的遗留由重启对账收敛为 `orphaned`。
 5. 后台运行不依赖父级回调：子事件持久化 + pending 结果构成完整交付通道。
+6. 运行必须收敛到终局：启动失败 / 预约丢失 / 中断 / 异常都要终结化（元数据 + `final` 事件 + 输出文件 + 父级通知），不存在"已持久化为 running 但永远无终态"的窗口。
 
 ## 4. 验收
 
-1. `python -m pytest tests/test_agent_subagent_runtime_v2.py -q`：22 passed（含 3 条新增：后台任务跨循环存续 / 真实离线程链路存续 / 跨循环等待桥接）。
+1. `python -m pytest tests/test_agent_subagent_runtime_v2.py -q`：25 passed（v1 新增：后台任务跨循环存续 / 真实离线程链路存续 / 跨循环等待桥接；UC-2J7 新增：后台启动失败终结化 / 前台挂接失败终结化 / 异常在子会话历史可见）。
 2. 独立复现（父轮临时循环与 worker 循环先后关闭）：`workspace/subagent修复核查/复现_子agent循环归属_v2.py`，输出 `复现运行结果_v2.json`——子任务仍完成（pending=completed）、显式取消仍生效（pending=interrupted）。
 
 ## 5. 版本记录
 
+- 2026-09-25 v2：新增 UC-2J7《未取得执行权也要终结化》——启动失败/预约丢失的运行不再滞留 `running`：补写元数据、`final` 事件、输出文件与父级 `subagent_finish` 通知；中断/异常路径同样补 `final`；不变式补第 6 条，验收更新为 25 passed。
 - 2026-09-20 v1：首版。依据“主 Agent 结束导致后台子代理被中断”的修复补录：进程级持久事件循环托管、创建/注册原子交接、跨循环等待/取消桥接、前后台取消语义与事件通道边界；同步 02 整体设计、ReAct 能力清单、00-总览与 05/04 交叉引用。

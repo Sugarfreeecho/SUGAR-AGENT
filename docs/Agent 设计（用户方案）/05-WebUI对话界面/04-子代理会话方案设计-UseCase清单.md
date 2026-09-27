@@ -1,6 +1,6 @@
 # 子代理会话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v5（补录子代理任务生命周期交叉引用；覆盖至：当前工作区）
+- 版本：2026-09-25 v6（侧栏高亮跟随根主会话；覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`frontend/src/app/modules/ui-slot-registry.js`、`state/subagent-catalog-store.js`、`state/subagent-addressing.js`、`modules/subagent-frames.js`、`state/subagent-ui-decisions.js`、`modules/subagent-catalog-ui.js`、`modules/subagent-composer-ui.js`、`tests/subagent-ui-foundation.test.mjs`；接线点 `index.js` / `message-rendering.js` / `session-management.js` / `sse-handling.js` / `styles/app.css` 追加块。后端零改动。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -81,7 +81,7 @@
 #### UC-5D12 目录数据只进对象层
 - **触发**：审查代码分层。
 - **预期现象**：子代理业务数据（地址/目录/已读）只存在于 `subagent-catalog-store.js` 的对象层（引用稳定快照 + subscribe）；UI 只订阅渲染，不反向写状态；slot 注册表遵循"声明即授权、disposer 级联"。
-- **依据**：`ui-slot-registry.js`、`subagent-catalog-store.js`、`tests/subagent-ui-foundation.test.mjs`（44 断言）。
+- **依据**：`ui-slot-registry.js`、`subagent-catalog-store.js`、`tests/subagent-ui-foundation.test.mjs`（49 断言）。
 
 #### UC-5D13 后端零改动与成员帧复用
 - **触发**：核对前后端改动面。
@@ -100,6 +100,14 @@
 - **预期现象**：打开子代理会话时选择器显示该子代理的档案；切换作用于该子代理且只影响它——接入层保留全部数据动作（切换记录、fork 冻结释放、父任务行同步、熔断清理、子代理状态事件），**不打断**当前请求，新档案自下一次模型调用生效。
 - **规则与边界**：旧 Dock 的"卡片菜单 → 切换模型"入口已随重建移除，**选择器即入口**；`task action=switch_model` 仍按安全边界交接语义执行（中断 + 续跑）。语义细则见 [../01-LLM接入/05-手动切换与兼容降级矩阵方案设计-UseCase清单.md](../01-LLM接入/05-手动切换与兼容降级矩阵方案设计-UseCase清单.md)·UC-1E2。
 - **依据**：`webui.py`（`/sessions/{id}/model_profile` 识别 `is_subagent` 并转交 `handover=False`）、`agent_subagent.py::switch_subagent_model_profile`、`subagent-addressing.js`（寻址即切换当前会话，选择器随之刷新）。
+
+### 2.6 侧栏联动
+
+#### UC-5D16 侧栏高亮跟随根主会话
+- **触发**：打开子代理会话（寻址进子会话）、返回父会话，或侧栏指示重绘。
+- **预期现象**：查看子会话期间，会话列表仍高亮其所属的**根主会话**（子会话不单独占侧栏行，也不会让所有行失去选中态）；返回父会话后高亮保持；会话行重建（刷新/重排）时同一规则生效。
+- **规则与边界**：高亮解析统一走寻址栈——栈顶正是当前子会话时取栈底根会话，否则取当前会话；会话列表的"增量刷新"与"整表重建"两条路径共用同一解析，不只在切换后刷新一次。
+- **依据**：`subagent-addressing.js::sidebarSessionId`、`session-management.js::sidebarHighlightedSessionId`（`syncSessionListIndicatorClasses` / `buildAndBindSessionRow`）；回归 `tests/subagent-ui-foundation.test.mjs`（"sidebar keeps the root conversation highlighted while viewing nested subagents"）。
 
 ## 3. 边界（不在本篇）
 
@@ -123,6 +131,7 @@
 
 ## 5. 版本记录
 
+- 2026-09-25 v6：新增 UC-5D16《侧栏高亮跟随根主会话》——查看子代理会话时，侧栏保持根主会话选中（`subagentAddressing.sidebarSessionId`）；复核 UC-5D5「未覆盖子代理的成员帧登记」与实现一致；单元断言数 44→49。
 - 2026-09-20 v5：补录交叉引用——子代理任务的生命周期与事件循环隔离（后台托管、跨循环等待/取消）见 ../02-ReAct运行时/10；本文件界面内容与结论不变。
 - 2026-09-18 v4：补 UC-5D15「子代理会话中的模型选择器」——旧卡片菜单入口已移除，右下角选择器承接子代理模型切换（数据动作全保留、不打断、下一次调用生效）；UC-5D13 表述更新（目录链路未改后端，选择器接线单列）。
 - 2026-09-16 v3：**整体重写**——旧「子代理 Dock」面板（UC-5D1~5D5，浮层卡片形态）已随 dsh 式重建移除，本版按「可寻址会话」新实现重编 14 条 UC；文件更名为《04-子代理会话方案设计》。验证：44 条单元断言 + 浏览器 8/8（目录/寻址/返回/输入区）+ 4/4（四色状态点）+ 横向溢出归零。

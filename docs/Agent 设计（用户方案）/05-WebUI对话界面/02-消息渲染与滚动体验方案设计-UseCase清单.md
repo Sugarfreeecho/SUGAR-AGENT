@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v3（覆盖至：HEAD `d022831` + API 识图工作区改动）
+- 版本：2026-09-25 v5（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -21,7 +21,7 @@
 
 ### UC-5B2 消息渲染（Markdown / 代码 / 工具轨迹）
 - **触发**：任意消息上屏。
-- **预期现象**：Markdown 正确（含表格/列表/代码块高亮）；工具调用显示为可折叠轨迹（命令/结果/状态）；mermaid 图按需加载渲染。
+- **预期现象**：Markdown 正确（含表格/列表/代码块高亮）；工具调用显示为可折叠轨迹（命令/结果/状态）；mermaid 图按需加载渲染；运行中输出实时刷入工具行（见 UC-5B8）。
 - **依据**：`message-rendering.js`、`app/index.js`（mermaid 懒加载）。
 
 ### UC-5B3 滚动历史锚点
@@ -45,6 +45,18 @@
 - **预期现象**：滚动/输入不卡；历史段懒渲染；内存不持续膨胀。
 - **依据**：`message-rendering.js`、`session-scroll-history.js`（懒渲染/裁剪）；`ui-performance.js` 仅做采样与直方图诊断（非渲染层优化）。
 
+### UC-5B7 长用户消息折叠预览（10 行）
+- **触发**：用户消息较长（超过 10 行）进入折叠态；点击 / 键盘操作折叠控件。
+- **预期现象**：只显示前 10 行、底部渐隐；**没有摘要副本**（直接裁剪原文，不重复内容）；下缘半胶囊切换控件（chevron + 文案）随状态变化——"展开全部 · 还有 N 行" ⇄ "收起"；展开/收起带 max-height 过渡。
+- **规则与边界**：控件可点击也可 Enter/Space；带 `aria-expanded` / `aria-label` / `title`，语言切换时整体重刷；隐藏行数按实测行高计算（`USER_MESSAGE_COLLAPSE_LINES = 10`）；浅色主题使用专用渐隐遮罩。
+- **依据**：`shared-state-and-dialogs.js::buildUserMessageCollapseToggle / renderUserMessageContent`（`user-msg-chevron`、`user-msg-expanded`、`--user-msg-full-h`）、`app.css`、`i18n.js`。
+
+### UC-5B8 工具行实时输出与增量渲染
+- **触发**：`run_shell` 执行中产生 stdout/stderr；或模型流式给出工具调用参数增量。
+- **预期现象**：运行中输出以节流增量直接刷进对应工具行（首段带"实时输出" / `STDERR:` 前缀；超过 64 KiB 显示截断说明）；工具调用参数增量（`tool_call_delta`）按动画帧合并后渲染，无逐字符抖动。
+- **规则与边界**：实时输出是 **ephemeral**（不落盘、不参与回放，断线不续）；最终结果仍按工具结束后的限长投影（`tool_detail_ui`）提供，UI 以最终结果收口。
+- **依据**：`message-rendering.js`（工具行按帧渲染）、`agent_loop.py::_emit_run_shell_output / _ThreadToAsyncQueue`（`tool_command_delta` 合帧）、`agent_tools.py::_RunShellProgressPublisher`（≈40ms / 8 KiB 节流、64 KiB 上限）。
+
 ## 3. 边界
 
 - 渲染层不修改事件数据——所见即事件流投影。
@@ -56,6 +68,8 @@
 
 ## 5. 版本记录
 
+- 2026-09-25 v5：新增 UC-5B7《长用户消息折叠预览》——折叠改为"原文裁剪 + 渐隐"（去掉摘要副本），10 行预览 + 半胶囊切换控件（隐藏行数、i18n/ARIA/键盘），浅色遮罩适配。
+- 2026-09-21 v4：新增 UC-5B8《工具行实时输出与增量渲染》——`run_shell` 输出经 `tool_command_delta` 节流增量刷入工具行（ephemeral、64 KiB 上限），工具调用增量按帧合并渲染。
 - 2026-09-14 v3：修正性能实现归属（`ui-performance.js` 为诊断采样；懒渲染在 `message-rendering.js`/`session-scroll-history.js`）并更新版本线至 `d022831`。
 - 2026-09-14 v2：补齐跨容器共享附件 fetch/blob、节点释放与失败重试语义；用户消息图片改为等高横排缩略图。
 - 2026-09-13 v1：拆分首版（承接 UC-503/504/511）。

@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-09-21；补充顶部通知与权限警示视觉系统）
+> 代码版本：当前工作区（2026-09-21；补充顶部通知与权限警示视觉系统；右侧历史保持原有独立样式）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -24,7 +24,7 @@
 | 耐久图片预览：同附件跨容器共享 fetch/blob，末节点移除时取消并释放 | `modules/workspace-media.js::renderDurableAttachmentImages` | 【单】 |
 | 平滑流式输出（逐帧节流） | `modules/smooth-stream.js` | 【卡】 |
 | 滚动历史锚点与回看 | `modules/session-scroll-history.js` | 【卡】 |
-| 工作区双侧面板共享视觉系统（历史/Todo/Goal/声明式插件：主题令牌、外壳、标题、元信息、列表与条目） | `styles/app.css`、`modules/toc-todo.js`、`plugins/session-todo/web/*`、`plugins/agent-goal/web/*` | 【卡】 |
+| 工作区双侧面板共享视觉系统（Todo/Goal/声明式插件：主题令牌、外壳、标题、元信息、列表与条目；右侧历史保持原有独立样式） | `styles/app.css`、`plugins/session-todo/web/*`、`plugins/agent-goal/web/*` | 【卡】 |
 | 性能采样与诊断（直方图/计时；长会话懒渲染在 `message-rendering.js`、`session-scroll-history.js`） | `modules/ui-performance.js` | 【单】 |
 
 ## 3. 输入与交互
@@ -101,6 +101,7 @@
 
 ## 9. 版本记录
 
+- 2026-09-21（v17）：右侧历史记录面板保持原有独立样式（不纳入共享视觉系统）——恢复自有面板/标题/列表样式与标签式文案，移除“n 条记录”统计行与共享条目类；能力行同步收窄为 Todo/Goal/声明式插件。
 - 2026-09-21（v16）：恢复浏览器窗口内按标题关键词复用当前/后台标签；不再做引发页面轮换的逐标签地址核对。
 - 2026-09-21（v15）：撤销遍历并选中全部标签的识别方式；只读浏览器当前标签地址，不唤醒后台标签。后台 WebUI 无法无扰动核验时允许新开。
 - 2026-09-21（v14）：WebUI 复用识别改为浏览器进程 + 标签实际地址核验；标题仅作显示，不再作为身份依据；无匹配时恢复原标签。

@@ -1,6 +1,6 @@
 # 韧性与预算（重试 / 对冲 / 预算 / 时限） · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `d022831`）
+- 版本：2026-09-25 v2（覆盖至：当前工作区；含传输断连重试分类）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_openai.py`（主战场）、`app/agent_harness.py`（分类联动）。
 - 上级：`00-LLM接入整体设计.md`
@@ -14,10 +14,10 @@
 ## 2. UseCase
 
 ### UC-1C1 同模型重试
-- **触发**：瞬时错误（429/5xx/连接抖动/流中断）。
-- **预期现象**：自动重试（≤4 次、1s 起的退避）；界面仅见轻量状态（LLM-RETRY 提示，见 ../09-横切能力/03）；模型不切换。
-- **规则与边界**：认证失败/参数错误等**不可重试**类不做重试；重试耗尽才进入候选切换（见 04）。
-- **依据**：`agent_openai.py`（OPENAI_MAX_RETRIES、`_is_retriable_openai_error`）、`agent_harness.py::_emit_retry_status`（L1378 定义）。
+- **触发**：瞬时错误（429/5xx/连接抖动/流中断）；含**无状态码的流式传输失败**——对端断开、TLS EOF、`incomplete chunked`、连接被重置、`WinError 10054` 等。
+- **预期现象**：自动重试（≤4 次、1s 起的退避）；界面仅见轻量状态（LLM-RETRY 提示，见 ../09-横切能力/03）；模型不切换——断连类失败按瞬时链路抖动吸收，不因"无状态码"被当作未知错误直接切换。
+- **规则与边界**：认证失败/参数错误等**不可重试**类不做重试；重试耗尽才进入候选切换（见 04）。断连标记跨本地化环境匹配（httpx / OpenSSL / Windows 套接字报错文案）；`HttpStreamTransportError` 且无状态码一律归入同模型重试。
+- **依据**：`agent_openai.py`（OPENAI_MAX_RETRIES、`_is_retriable_openai_error`、`_classify_candidate_failure`、`_TRANSIENT_TRANSPORT_MARKERS`）、`agent_harness.py::_emit_retry_status`（L1378 定义）。
 
 ### UC-1C2 首 token 对冲（hedge）
 - **触发**：主请求发出后 30s 未达首 token。
@@ -45,9 +45,10 @@
 
 | 用例 | 代码 |
 |---|---|
-| UC-1C1 | `agent_openai.py` L234–311 |
+| UC-1C1 | `agent_openai.py` L238+（`_TRANSIENT_TRANSPORT_MARKERS` / `_is_retriable_openai_error` / `_classify_candidate_failure`） |
 | UC-1C2/1C3/1C4 | `agent_openai.py`（run_nonstream/run_stream worker 段） |
 
 ## 5. 版本记录
 
+- 2026-09-25 v2：瞬时错误识别补强——新增传输断连标记集（`disconnected` / TLS EOF / `incomplete chunked` / `peer closed` / `WinError 10054` 等），并把无状态码的流式传输失败（`HttpStreamTransportError`）归入同模型重试，避免链路抖动被当作"未知错误"直接切换模型。
 - 2026-09-13 v1：拆分首版（承接 UC-104~107）。

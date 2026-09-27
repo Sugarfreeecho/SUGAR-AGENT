@@ -1,8 +1,8 @@
 # 会话列表状态一致性与快照版本 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v1（覆盖至：HEAD `1d9e1b0`）
+- 版本：2026-09-27 v2（覆盖至：当前工作区；含待办计数缓存复核）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`modules/session-management.js`、`state/session-store.js`、`state/session-actions.js`、`app/webui.py`（`/sessions/state` 快照与其写接口）、`app/agent_harness.py`（SessionManager 摘要写入与状态广播）。
+- 适用实现：`modules/session-management.js`、`state/session-store.js`、`state/session-actions.js`、`app/webui.py`（`/sessions/state` 快照与其写接口）、`app/agent_harness.py`（SessionManager 摘要写入与状态广播）、`app/human_interaction/service.py`（待办计数缓存与周期复核）。
 - 上级：`00-WebUI对话界面整体设计.md`
 - 关联：`06-会话档案与技能面板方案设计-UseCase清单.md`（UC-5F1 会话管理操作面）；`03-SSE管道与断线续看方案设计-UseCase清单.md`（事件流、重连与对账）。
 
@@ -82,6 +82,12 @@
 - **预期现象**：行立即移入/移出归档分组，归档计数同步；取消归档时额外刷新归档分页，且在途分页不会把已取消的行塞回。
 - **依据**：`session-management.js::toggleSessionArchivedFromMenu`、`loadArchivedSessions`（代次 `archivedSessionsLoadEpoch`）、`applyOptimisticSessionUpdate` 的归档列表增删与计数分支。
 
+### UC-5J7 待办计数缓存的周期复核与共享单例
+- **触发**：侧栏/快照轮询批量读取各会话待办计数（`pending_counts_many`）；或同一会话目录的计数被另一进程写入。
+- **预期现象**：30 秒窗口内直接命中内存缓存（不读盘）；窗口过期后复核磁盘并拾取外部写入；复核读盘期间若本进程发布过新计数（代数前进），丢弃旧读、返回新值——慢读不覆盖新写；`get_human_interaction_service()` 为进程内单例，快照构建、各路由与审批门共享同一份缓存与复核状态。
+- **规则与边界**：正常变更路径仍即时发布（内存更新 + 快照失效），复核只是旁路/跨进程写入的兜底，最长陈旧窗口 ≈30 秒；单条读取路径保持原有签名校验。
+- **依据**：`human_interaction/service.py`（`_PENDING_COUNTS_REVALIDATE_SEC`、`_pending_counts_checked_at` / `_pending_counts_generation`、`get_human_interaction_service`）；回归 `tests/test_human_interaction.py::test_service_factory_reuses_counts_and_revalidates_external_changes`。
+
 ## 4. 边界
 
 - 会话列表的排序与时间分组规则见 06·UC-5F1；
@@ -100,4 +106,5 @@
 
 ## 6. 版本记录
 
+- 2026-09-27 v2：新增 UC-5J7《待办计数缓存的周期复核与共享单例》——缓存 30s 内免读盘、过期自动复核以拾取跨进程写入；代际守卫保证慢读不覆盖新写；服务工厂改为进程内单例（快照/路由/审批门共享缓存）。
 - 2026-09-20 v1：首版。记录"侧栏编辑被轮询快照回滚"的现象、根因（失效仍发旧值 / 重建被丢弃 / 客户端全量覆盖 / 请求竞态 / 旁路写入不失效）与修复设计（硬失效 + 单飞重建、`state_revision` 协议、SessionManager 状态广播、客户端请求与版本双下界、仅失败才回滚）；落于 `1d9e1b0`。
