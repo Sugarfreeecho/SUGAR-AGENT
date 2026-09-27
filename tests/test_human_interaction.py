@@ -197,6 +197,61 @@ def test_pending_counts_many_reuses_process_cache_without_disk(monkeypatch, tmp_
     }
 
 
+def test_service_factory_reuses_counts_and_revalidates_external_changes(monkeypatch, tmp_path):
+    import importlib
+    import json
+    import os
+    from types import SimpleNamespace
+
+    service_module = importlib.import_module("app.human_interaction.service")
+    sid = "session-cached"
+    path = tmp_path / sid / "snapshots" / "pending_counts.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "questions": 1, "approvals": 0}), encoding="utf-8")
+    manager = SimpleNamespace(
+        repository=SimpleNamespace(sessions_dir=tmp_path),
+        _resolve_session_path=lambda session_id: tmp_path / session_id,
+    )
+    monkeypatch.setattr(service_module, "session_manager", manager)
+    monkeypatch.setattr(service_module, "_shared_human_interaction_service", None)
+
+    service = service_module.get_human_interaction_service()
+    assert service_module.get_human_interaction_service() is service
+    assert service.pending_counts_many([sid])[sid]["total"] == 1
+
+    original_read = service._read_pending_counts_index
+    reads = []
+
+    def tracked_read(session_id):
+        reads.append(session_id)
+        return original_read(session_id)
+
+    monkeypatch.setattr(service, "_read_pending_counts_index", tracked_read)
+    assert service_module.get_human_interaction_service().pending_counts_many([sid])[sid]["total"] == 1
+    assert reads == []
+
+    replacement = path.with_name(".pending-test")
+    replacement.write_text(json.dumps({"version": 1, "questions": 20, "approvals": 0}), encoding="utf-8")
+    os.replace(replacement, path)
+    service._pending_counts_checked_at[sid] -= service_module._PENDING_COUNTS_REVALIDATE_SEC + 1
+    assert service.pending_counts_many([sid])[sid]["total"] == 20
+    assert reads == [sid]
+
+    service._publish_pending_counts(sid, {"questions": 0, "approvals": 1})
+    assert service_module.get_human_interaction_service().pending_counts_many([sid])[sid]["total"] == 1
+    assert reads == [sid]
+
+    path.write_text(json.dumps({"version": 1, "questions": 20, "approvals": 0}), encoding="utf-8")
+    service._pending_counts_checked_at[sid] -= service_module._PENDING_COUNTS_REVALIDATE_SEC + 1
+
+    def read_during_mutation(session_id):
+        service._publish_pending_counts(session_id, {"questions": 3, "approvals": 0})
+        return {"questions": 20, "approvals": 0, "total": 20}
+
+    monkeypatch.setattr(service, "_read_pending_counts_index", read_during_mutation)
+    assert service.pending_counts_many([sid])[sid]["total"] == 3
+
+
 def test_question_validation_rejects_other_and_bad_answers(tmp_path):
     service = _service(tmp_path)
     invalid = _questions()

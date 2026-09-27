@@ -42,6 +42,7 @@ _TERMINAL = {"resolved", "cancelled", "expired"}
 _WAITERS: Dict[tuple[str, str, str], asyncio.Future] = {}
 _WAITERS_LOCK = threading.RLock()
 _PENDING_COUNTS_INDEX_VERSION = 1
+_PENDING_COUNTS_REVALIDATE_SEC = 30.0
 
 
 def _clean_text(value: Any, field: str, *, maximum: int, required: bool = True) -> str:
@@ -149,6 +150,8 @@ class HumanInteractionService:
         path_resolver = path_resolver or getattr(session_manager, "_resolve_session_path", None)
         self.mirror = RuntimeMirror(root, path_resolver=path_resolver)
         self._pending_counts_cache: Dict[str, tuple[tuple[bool, int, int], dict]] = {}
+        self._pending_counts_checked_at: Dict[str, float] = {}
+        self._pending_counts_generation: Dict[str, int] = {}
         self._pending_counts_lock = threading.RLock()
 
     def _snapshot(self, session_id: str) -> dict:
@@ -230,6 +233,8 @@ class HumanInteractionService:
                 self._pending_counts_signature(path),
                 dict(normalized),
             )
+            self._pending_counts_checked_at[sid] = time.monotonic()
+            self._pending_counts_generation[sid] = self._pending_counts_generation.get(sid, 0) + 1
 
     def _read_pending_counts_index(self, session_id: str) -> Optional[dict]:
         try:
@@ -364,8 +369,10 @@ class HumanInteractionService:
         path = self._pending_counts_path(sid)
         signature = self._pending_counts_signature(path)
         with self._pending_counts_lock:
+            generation = self._pending_counts_generation.get(sid, 0)
             cached = self._pending_counts_cache.get(sid)
             if cached is not None and cached[0] == signature:
+                self._pending_counts_checked_at[sid] = time.monotonic()
                 return dict(cached[1])
         counts = self._read_pending_counts_index(sid)
         if counts is None:
@@ -373,26 +380,33 @@ class HumanInteractionService:
             # index existed. All subsequent reads are O(1) and do not touch the
             # multi-megabyte Runtime snapshot.
             counts = self._counts_from_snapshot(self._snapshot(sid))
+            with self._pending_counts_lock:
+                if self._pending_counts_generation.get(sid, 0) != generation:
+                    return dict(self._pending_counts_cache[sid][1])
             self._publish_pending_counts(sid, counts)
             return dict(counts)
         with self._pending_counts_lock:
+            if self._pending_counts_generation.get(sid, 0) != generation:
+                return dict(self._pending_counts_cache[sid][1])
             self._pending_counts_cache[sid] = (signature, dict(counts))
+            self._pending_counts_checked_at[sid] = time.monotonic()
         return dict(counts)
 
     def pending_counts_many(self, session_ids: Iterable[str]) -> Dict[str, dict]:
-        """Return cached counts and load only sessions not seen by this process.
+        """Return cached counts and periodically revalidate disk changes.
 
         Every interaction mutation publishes the new count into this cache, so
-        re-stat'ing every ``pending_counts.json`` during each sidebar poll only
-        adds disk contention. Direct ``pending_counts`` calls retain signature
-        validation for explicit reads and startup recovery.
+        most sidebar polls avoid disk I/O. A bounded revalidation interval also
+        picks up changes made by another process to the same session directory.
         """
         ids = list(dict.fromkeys(str(item or "").strip() for item in session_ids if str(item or "").strip()))
         ready: Dict[str, dict] = {}
+        now = time.monotonic()
         with self._pending_counts_lock:
             for sid in ids:
                 cached = self._pending_counts_cache.get(sid)
-                if cached is not None:
+                checked_at = self._pending_counts_checked_at.get(sid, now)
+                if cached is not None and now - checked_at < _PENDING_COUNTS_REVALIDATE_SEC:
                     ready[sid] = dict(cached[1])
         missing = [sid for sid in ids if sid not in ready]
         if not missing:
@@ -606,8 +620,16 @@ class HumanInteractionService:
         return normalized
 
 
+_shared_human_interaction_service: Optional[HumanInteractionService] = None
+_shared_human_interaction_service_lock = threading.Lock()
+
+
 def get_human_interaction_service() -> HumanInteractionService:
-    return HumanInteractionService()
+    global _shared_human_interaction_service
+    with _shared_human_interaction_service_lock:
+        if _shared_human_interaction_service is None:
+            _shared_human_interaction_service = HumanInteractionService()
+        return _shared_human_interaction_service
 
 
 def _register_waiter(session_id: str, kind: str, request_id: str) -> asyncio.Future:
