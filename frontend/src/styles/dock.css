@@ -733,10 +733,6 @@
 .dock-diff-line.is-hunk { color: var(--blue-accent); }
 .dock-diff-line.is-file { color: var(--text-tertiary); font-weight: 600; }
 
-@media (max-width: 767px) {
-    .dock-rightbar { width: 100% !important; }
-}
-
 /* ── feedback round 3 ─────────────────────────────────────────────────────── */
 
 /* Chips carry ink of their own: in the light theme a transparent capsule over
