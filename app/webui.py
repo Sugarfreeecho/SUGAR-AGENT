@@ -3397,14 +3397,23 @@ async def create_session(req: Request = None):
             ).value
         except ValueError as exc:
             return JSONResponse(content={"error": str(exc)}, status_code=422)
+    # prefetch=true：前端点“新会话”时先建一个隐藏草稿（metadata.draft），把
+    # 磁盘/索引写入挪到用户输入首条消息之前完成；首条 user 事件落盘时它才
+    # 进入会话列表。发送路径复用该草稿，不再等待真实会话文件创建。
+    requested_prefetch = body.get("prefetch") is True
     # Session creation performs several local filesystem writes. Keep those
     # writes off the asyncio event loop so one slow Windows filesystem call
     # cannot freeze heartbeats, streaming, and every other browser request.
+    create_kwargs = {}
     if requested_profile_id:
+        create_kwargs["model_profile_id"] = requested_profile_id
+    if requested_prefetch:
+        create_kwargs["draft"] = True
+    if create_kwargs:
         session_id, _, _, _, _, metadata = await asyncio.to_thread(
             session_manager.get_or_create_session,
             None,
-            model_profile_id=requested_profile_id,
+            **create_kwargs,
         )
     else:
         session_id, _, _, _, _, metadata = await asyncio.to_thread(
@@ -3423,7 +3432,13 @@ async def create_session(req: Request = None):
             security_status_for_session,
             session_id,
         )
-    state_revision = _invalidate_sessions_state_cache()
+    if requested_prefetch:
+        # A hidden draft does not change /sessions/state. Its first committed
+        # user turn notifies the session-state listener and invalidates then.
+        with _sessions_state_cache_lock:
+            state_revision = _sessions_state_cache_generation
+    else:
+        state_revision = _invalidate_sessions_state_cache()
     session = {
         "id": session_id,
         "name": (metadata or {}).get("name") or "新会话",
@@ -3435,6 +3450,7 @@ async def create_session(req: Request = None):
         "todo": bool((metadata or {}).get("todo", False)),
         "pinned_at": (metadata or {}).get("pinned_at") if (metadata or {}).get("pinned") else None,
         "model_profile_id": (metadata or {}).get("model_profile_id") or "",
+        "draft": bool((metadata or {}).get("draft", False)),
         "last_user_preview": "",
         "stream_active": False,
     }

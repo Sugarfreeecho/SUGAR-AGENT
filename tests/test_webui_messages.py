@@ -223,6 +223,38 @@ def test_create_session_applies_draft_model_and_permission_options(monkeypatch):
     assert payload["permission_status"]["mode"] == "approve_for_me"
 
 
+def test_create_session_prefetch_creates_hidden_draft(monkeypatch):
+    import webui
+
+    observed = {}
+
+    class _Request:
+        async def json(self):
+            return {"prefetch": True}
+
+    class _CreateManager:
+        def get_or_create_session(self, session_id=None, *, draft=False):
+            observed["draft"] = draft
+            return "prefetched-session", [], [], [], "", {
+                "name": "新会话",
+                "created_at": "2026-09-27T00:00:00",
+                "updated_at": "2026-09-27T00:00:00",
+                "draft": draft,
+            }
+
+    monkeypatch.setattr(webui, "session_manager", _CreateManager())
+    invalidations = []
+    monkeypatch.setattr(webui, "_invalidate_sessions_state_cache", lambda: invalidations.append(True))
+
+    response = asyncio.run(webui.create_session(_Request()))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 200
+    assert observed["draft"] is True
+    assert payload["session"]["draft"] is True
+    assert invalidations == []
+
+
 def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_path):
     from io import BytesIO
     from starlette.datastructures import UploadFile

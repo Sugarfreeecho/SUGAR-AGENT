@@ -3520,6 +3520,45 @@ class SessionManager:
                 self._metadata_session_locks[sid] = lk
             return lk
 
+    def _first_committed_draft_user_event(self, session_id: str, session_path: Path) -> Optional[dict]:
+        """Recover a draft whose first user turn committed before metadata promotion."""
+        event_path = session_path / "events.jsonl"
+        if event_path.is_file():
+            try:
+                from runtime_v2.event_log import SessionEventLog as RuntimeEventLog
+
+                for event in RuntimeEventLog(
+                    self.sessions_dir, path_resolver=self._resolve_session_path
+                ).iter_events(session_id):
+                    payload = event.payload if isinstance(event.payload, dict) else {}
+                    if event.type in {"user_turn_committed", "message_user"}:
+                        if str(payload.get("ui_type") or "user") == "user":
+                            return {
+                                "content": payload.get("ui_content", payload.get("content", "")),
+                                "created_at": event.timestamp,
+                            }
+                    elif event.type in {"ui_event", "legacy_ui_event"}:
+                        if payload.get("type") == "user" and not any(
+                            payload.get(key)
+                            for key in ("_subagent_forward", "_recap", "_micro_context_shrink")
+                        ):
+                            return {"content": payload.get("content", ""), "created_at": event.timestamp}
+            except Exception as exc:
+                logger.warning("Unable to inspect draft event log for %s: %s", session_id, exc)
+        legacy_path = session_path / "ui_events.json"
+        if legacy_path.is_file():
+            try:
+                events = json.loads(legacy_path.read_text(encoding="utf-8"))
+                for event in events if isinstance(events, list) else []:
+                    if isinstance(event, dict) and event.get("type") == "user" and not any(
+                        event.get(key)
+                        for key in ("_subagent_forward", "_recap", "_micro_context_shrink")
+                    ):
+                        return event
+            except Exception as exc:
+                logger.warning("Unable to inspect draft UI events for %s: %s", session_id, exc)
+        return None
+
     def refresh_sessions_index_from_disk(self) -> None:
         """根据 sessions 目录内存在的会话文件夹重建索引（sessions.json），磁盘与 metadata 为准。"""
         by_id: Dict[str, dict] = {}
@@ -3557,6 +3596,26 @@ class SessionManager:
                     or self._is_metadata_only_delete_remnant(p, meta)
                 ):
                     continue
+                if meta.get("draft"):
+                    first_user_event = self._first_committed_draft_user_event(sid, p)
+                    if first_user_event is not None:
+                        try:
+                            with self._session_metadata_lock(sid):
+                                latest_meta = self._load_metadata_unlocked(sid)
+                                if isinstance(latest_meta, dict) and latest_meta.get("draft"):
+                                    latest_meta.pop("draft", None)
+                                    latest_meta["last_user_preview"] = _normalize_sidebar_preview_text(
+                                        str(first_user_event.get("content") or ""), 180
+                                    )
+                                    event_at = str(first_user_event.get("created_at") or "").strip()
+                                    if event_at and self._iso_ts(event_at) > self._iso_ts(
+                                        latest_meta.get("updated_at")
+                                    ):
+                                        latest_meta["updated_at"] = event_at
+                                    self._save_metadata_unlocked(sid, latest_meta)
+                                    meta = latest_meta
+                        except Exception as exc:
+                            logger.warning("Unable to promote committed draft %s: %s", sid, exc)
                 name = meta.get("name") or "新会话"
                 created_at = meta.get("created_at")
                 if not created_at:
@@ -3595,6 +3654,7 @@ class SessionManager:
                     "todo": todo,
                     "goal_review_pending": goal_review_pending,
                     "pinned_at": pinned_at if pinned else None,
+                    "draft": bool(meta.get("draft", False)),
                     "unread_result": bool(meta.get("unread_result", False)),
                     "unread_result_at": meta.get("unread_result_at"),
                     "unread_result_status": str(meta.get("unread_result_status") or "success"),
@@ -4991,6 +5051,9 @@ class SessionManager:
                 # the same user-turn side effect so /sessions can reorder the row
                 # immediately and retain that order after a process restart.
                 meta["updated_at"] = activity_at
+                # 预取草稿的“转正”点：首条真实 user 事件落盘即视为用户真正开始
+                # 使用该会话，从此刻起它才进入会话列表（见 list_sessions）。
+                promoted_from_draft = bool(meta.pop("draft", False))
                 self._save_metadata_unlocked(session_id, meta)
             changed = False
             with self._lock:
@@ -4998,10 +5061,14 @@ class SessionManager:
                     if sess.get("id") == session_id:
                         sess["last_user_preview"] = preview
                         sess["updated_at"] = activity_at
+                        if promoted_from_draft:
+                            sess.pop("draft", None)
                         changed = True
                         break
             if changed:
                 self._save_index()
+            if promoted_from_draft:
+                self._notify_session_state_changed(session_id, {"draft"})
             if not event_copy.get("preserve_unread_result"):
                 self.clear_session_unread_result(session_id)
         elif event_copy.get("type") == "final":
@@ -6625,6 +6692,7 @@ class SessionManager:
         session_id: Optional[str] = None,
         *,
         model_profile_id: str = "",
+        draft: bool = False,
     ) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
         """
         获取或创建会话，返回:
@@ -6667,12 +6735,24 @@ class SessionManager:
             requested_profile_id = str(model_profile_id or "").strip()
             if requested_profile_id:
                 metadata["model_profile_id"] = requested_profile_id
+            if draft:
+                # 预取草稿：目录、元数据与索引照常落盘，但在首条 user 事件之前
+                # 不出现在会话列表里。这样点“新会话”时的后台物化既不污染侧栏，
+                # 也不占用发送首条消息的等待时间。
+                metadata["draft"] = True
             dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
             metadata_ready = time.perf_counter()
+            # This UUID is a new root session. Create its directory before the
+            # generic path resolver runs: a missing root otherwise falls back
+            # to a recursive search through every nested subagent directory.
+            (self.sessions_dir / session_id).mkdir(parents=True, exist_ok=False)
+            self._known_root_session_ids.add(session_id)
+            root_dir_ready = time.perf_counter()
             # A freshly generated UUID cannot be present in the deleted-session
             # registry and has no concurrent metadata writer. Avoid the generic
             # update path's repeated registry checks and per-session lock lookup.
             self.repository.save_metadata_atomic(session_id, metadata)
+            metadata_file_saved = time.perf_counter()
             self._set_interrupt_cache_from_metadata(session_id, metadata)
             metadata_saved = time.perf_counter()
             runtime_v2_primary = self._runtime_v2_primary()
@@ -6700,6 +6780,7 @@ class SessionManager:
                 "todo": bool(metadata.get("todo", False)),
                 "goal_review_pending": bool(metadata.get("goal_review_pending", False)),
                 "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
+                "draft": bool(metadata.get("draft", False)),
             }
             # create_session now runs outside the asyncio event loop. Protect
             # append + persistence as one operation so simultaneous tabs cannot
@@ -6710,18 +6791,23 @@ class SessionManager:
             index_saved = time.perf_counter()
             logger.info(
                 "create_session_timing session=%s total=%sms uuid=%sms metadata_prepare=%sms "
-                "metadata_write=%sms history_init=%sms index_write=%sms runtime_v2=%s",
+                "metadata_write=%sms root_dir=%sms metadata_file=%sms "
+                "interrupt_cache=%sms history_init=%sms index_write=%sms runtime_v2=%s",
                 session_id,
                 int((index_saved - create_started) * 1000),
                 int((uuid_ready - create_started) * 1000),
                 int((metadata_ready - uuid_ready) * 1000),
                 int((metadata_saved - metadata_ready) * 1000),
+                int((root_dir_ready - metadata_ready) * 1000),
+                int((metadata_file_saved - root_dir_ready) * 1000),
+                int((metadata_saved - metadata_file_saved) * 1000),
                 int((history_initialized - metadata_saved) * 1000),
                 int((index_saved - history_initialized) * 1000),
                 runtime_v2_primary,
             )
             logger.info(f"创建新会话: {session_id}")
-            self._notify_session_state_changed(session_id, {"created"})
+            if not draft:
+                self._notify_session_state_changed(session_id, {"created"})
             return session_id, dialogue, work_messages, llm_history, key_context, metadata
         else:
             if self._runtime_v2_primary():
@@ -7036,6 +7122,9 @@ class SessionManager:
             base_rows = [dict(s) for s in self.index if not s.get("archived")]
         else:
             base_rows = [dict(s) for s in self.index]
+        # 预取草稿（metadata.draft）在首条 user 事件前保持隐藏：它只是发送路径的
+        # 预热产物，尚未产生任何对话内容，不应出现在侧栏、远程控制列表或导出中。
+        base_rows = [s for s in base_rows if not s.get("draft")]
         rows = [self._session_entry_with_activity(s) for s in base_rows]
 
         def sort_key(r: dict) -> Tuple[int, float, float]:

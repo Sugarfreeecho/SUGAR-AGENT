@@ -980,7 +980,7 @@ def test_frontend_session_scoped_token_and_count_guards():
     assert "parsed.type === 'cache_stats' && eventSessionId === currentSessionId" in sse
 
 
-def test_frontend_new_session_is_local_until_first_send_and_coalesces_materialization():
+def test_frontend_new_session_prefetches_hidden_draft_and_coalesces_materialization():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     shared = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(encoding="utf-8")
@@ -995,6 +995,11 @@ def test_frontend_new_session_is_local_until_first_send_and_coalesces_materializ
 
     assert "let materializeNewSessionQueue = null;" in sessions
     assert "await fetch('/sessions'" not in draft_body
+    assert "void ensurePrefetchedNewSession();" in draft_body
+    assert "sessionStorage.getItem(PENDING_NEW_SESSION_KEY)" in sessions
+    assert "sessionStorage.setItem(PENDING_NEW_SESSION_KEY" in sessions
+    assert "Object.assign({ prefetch: true }, createOptions)" in materialize_body
+    assert "const prefetched = await ensurePrefetchedNewSession();" in materialize_body
     assert "setCurrentSessionState(null);" in draft_body
     assert "setWelcome();" in draft_body
     assert "restoreInputDraft(null);" in draft_body
@@ -1003,7 +1008,7 @@ def test_frontend_new_session_is_local_until_first_send_and_coalesces_materializ
     assert "body: JSON.stringify(createOptions)" in materialize_body
     assert "createOptions.model_profile_id = modelProfileId;" in materialize_body
     assert "createOptions.permission_mode = permissionMode;" in materialize_body
-    assert "applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data)" in materialize_body
+    assert "applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data || {})" in materialize_body
     assert "sessionStore.protectFromSnapshots(session);" in materialize_body
     assert "restoreInputDraft(sessionId)" not in materialize_body
     assert "submitSessionId = await materializeNewSession();" in sse

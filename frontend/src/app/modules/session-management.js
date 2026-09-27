@@ -836,6 +836,11 @@ let sessionListLoadEpoch = 0;
 let sessionListLoadPromise = null;
 let sessionListRenderKey = '';
 let materializeNewSessionQueue = null;
+// 点“新会话”后立即启动的后台预取（服务端隐藏草稿会话）：{ sessionId, response, session }。
+// 页面内重复点击与刷新后重新进入草稿态都复用它，避免把会话文件创建算进首条消息的等待。
+let pendingNewSession = null;
+let prefetchNewSessionPromise = null;
+const PENDING_NEW_SESSION_KEY = 'myagent-pending-new-session-id';
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
@@ -1972,6 +1977,8 @@ async function createNewSession() {
     const leavingSessionId = currentSessionId;
     if (!leavingSessionId) {
         setCurrentSessionState(null);
+        // 已在草稿态：复用（或继续）后台预取，不重复创建会话。
+        void ensurePrefetchedNewSession();
         localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const draftStream = getVisibleChatStream();
@@ -1995,6 +2002,9 @@ async function createNewSession() {
     switchSessionEpoch += 1;
     messageLoadEpoch += 1;
     setCurrentSessionState(null);
+    // 点“新会话”即开始后台物化：会话目录、元数据与索引在用户写首条消息之前落好，
+    // 发送时直接复用，不再把真实会话文件的创建算进首条消息的等待时间。
+    void ensurePrefetchedNewSession();
     localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);
     if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
     setWelcome();
@@ -2023,6 +2033,124 @@ async function materializeNewSession() {
             materializeNewSessionQueue = null;
         });
     return materializeNewSessionQueue;
+}
+
+function collectNewSessionCreateOptions() {
+    const createOptions = {};
+    if (typeof newSessionModelProfileId === 'function') {
+        const modelProfileId = newSessionModelProfileId();
+        if (modelProfileId) createOptions.model_profile_id = modelProfileId;
+    }
+    if (typeof selectedNewSessionPermissionMode === 'function') {
+        const permissionMode = selectedNewSessionPermissionMode();
+        if (permissionMode) createOptions.permission_mode = permissionMode;
+    }
+    return createOptions;
+}
+
+function readStoredPendingNewSession() {
+    try {
+        // Keep one pending server draft per tab. sessionStorage survives reloads
+        // without letting two tabs send independent first turns to the same ID.
+        let raw = sessionStorage.getItem(PENDING_NEW_SESSION_KEY);
+        if (!raw) {
+            // One-time handoff for drafts created by the earlier build, which
+            // stored this pointer in localStorage shared by all tabs.
+            raw = localStorage.getItem(PENDING_NEW_SESSION_KEY);
+            if (raw) {
+                sessionStorage.setItem(PENDING_NEW_SESSION_KEY, raw);
+                localStorage.removeItem(PENDING_NEW_SESSION_KEY);
+            }
+        }
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && parsed.session_id) return parsed;
+    } catch (error) { /* 旧格式或存储不可用：按未预取处理 */ }
+    return null;
+}
+
+function writeStoredPendingNewSession(sessionId, data) {
+    try {
+        if (!sessionId) {
+            sessionStorage.removeItem(PENDING_NEW_SESSION_KEY);
+            return;
+        }
+        sessionStorage.setItem(PENDING_NEW_SESSION_KEY, JSON.stringify({
+            session_id: String(sessionId),
+            model_profile_id: (data && data.model_profile_id) || '',
+            permission_mode: (data && data.permission_status && data.permission_status.mode) || '',
+        }));
+    } catch (error) { /* 存储不可用时退化为页面内复用 */ }
+}
+
+function clearPendingNewSession() {
+    pendingNewSession = null;
+    writeStoredPendingNewSession('');
+}
+
+/**
+ * 后台预取：创建隐藏草稿会话（服务端 metadata.draft，首条 user 事件落盘后才进入列表）。
+ * 页面内多次点击“新会话”复用同一份；刷新后重新进入草稿态时按记录的会话 ID 复用。
+ */
+function ensurePrefetchedNewSession() {
+    if (currentSessionId) return Promise.resolve(null);
+    if (pendingNewSession) return Promise.resolve(pendingNewSession);
+    if (prefetchNewSessionPromise) return prefetchNewSessionPromise;
+    prefetchNewSessionPromise = Promise.resolve()
+        .then(function () { return prefetchNewSessionInner(); })
+        .catch(function (error) {
+            console.warn('新会话后台预取失败，发送时回退为即时创建:', error);
+            clearPendingNewSession();
+            return null;
+        })
+        .finally(function () {
+            prefetchNewSessionPromise = null;
+        });
+    return prefetchNewSessionPromise;
+}
+
+async function prefetchNewSessionInner() {
+    const prefetchStartedAt = performance.now();
+    const stored = readStoredPendingNewSession();
+    if (stored) {
+        try {
+            const response = await fetch('/sessions/' + encodeURIComponent(stored.session_id), { cache: 'no-store' });
+            if (response.ok) {
+                const sess = await response.json();
+                if (sess && sess.id && sess.draft) {
+                    pendingNewSession = {
+                        sessionId: String(sess.id),
+                        response: {
+                            model_profile_id: stored.model_profile_id || '',
+                            permission_status: stored.permission_mode ? { mode: stored.permission_mode } : null,
+                        },
+                        session: sess,
+                    };
+                    return pendingNewSession;
+                }
+            }
+        } catch (error) { /* 校验失败则重新预取 */ }
+        writeStoredPendingNewSession('');
+    }
+    const createOptions = collectNewSessionCreateOptions();
+    const response = await fetch('/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ prefetch: true }, createOptions)),
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
+    pendingNewSession = {
+        sessionId: String(data.session_id),
+        response: data,
+        session: data.session || null,
+    };
+    writeStoredPendingNewSession(pendingNewSession.sessionId, data);
+    if (typeof uiPerformance !== 'undefined') {
+        uiPerformance.sample(pendingNewSession.sessionId, 'session.prefetch', performance.now() - prefetchStartedAt);
+    }
+    return pendingNewSession;
 }
 
 async function applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, createResponse) {
@@ -2065,26 +2193,28 @@ async function materializeNewSessionInner() {
     const createStartedAt = performance.now();
     let createdSessionId = '';
     try {
-        const createOptions = {};
-        if (typeof newSessionModelProfileId === 'function') {
-            const modelProfileId = newSessionModelProfileId();
-            if (modelProfileId) createOptions.model_profile_id = modelProfileId;
+        const createOptions = collectNewSessionCreateOptions();
+        // 优先复用点“新会话”时启动的后台预取（可能仍在途）；预取失败或超时才回退到
+        // 发送时创建，保证这条路径永远可用。
+        const prefetched = await ensurePrefetchedNewSession();
+        let sessionId = prefetched && prefetched.sessionId ? String(prefetched.sessionId) : '';
+        let data = prefetched && prefetched.response ? prefetched.response : null;
+        if (!sessionId) {
+            const response = await fetch('/sessions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(createOptions),
+            });
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            data = await response.json();
+            if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
+            sessionId = String(data.session_id);
         }
-        if (typeof selectedNewSessionPermissionMode === 'function') {
-            const permissionMode = selectedNewSessionPermissionMode();
-            if (permissionMode) createOptions.permission_mode = permissionMode;
-        }
-        const response = await fetch('/sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(createOptions),
-        });
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const data = await response.json();
-        if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
-        const sessionId = String(data.session_id);
+        clearPendingNewSession();
         createdSessionId = sessionId;
-        const session = data.session || { id: sessionId, name: '新会话' };
+        const session = (data && data.session)
+            || (prefetched && prefetched.session)
+            || { id: sessionId, name: '新会话' };
         sessionStore.protectFromSnapshots(session);
 
         const ownsDraft = !currentSessionId && switchSessionEpoch === draftEpoch;
@@ -2105,7 +2235,7 @@ async function materializeNewSessionInner() {
         }
         syncArchivedSessionStateFromStore();
         renderSessionListIfChanged(false);
-        await applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data);
+        await applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data || {});
         if (typeof commitNewSessionModelProfile === 'function') {
             commitNewSessionModelProfile(sessionId);
         }
