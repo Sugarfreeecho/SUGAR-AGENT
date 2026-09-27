@@ -223,8 +223,7 @@ function refreshAllFeedChunksUnder(root) {
 function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
     if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-    // Non-token trace events (status/tool/result/etc.) arrive through this
-    // generic path and default to the whole-row motion profile.
+    // Trace events and text wrapping share the same follow motion.
     if (isSmoothStreamActive()) {
         if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
         followStreamProcessScroll(ctx, runSessionId, channel || 'row');
@@ -249,9 +248,10 @@ function scrollProcessBodyToBottom(ctx, runSessionId) {
 }
 
 function followStreamProcessScroll(ctx, runSessionId, channel) {
+    // Keep the caller argument for the existing entry points; it no longer
+    // selects a motion profile in the unified follower.
     if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-    var followChannel = channel === 'text' ? 'text' : 'row';
     if (
         isSmoothStreamActive()
         && typeof isHistorySmoothScrollActive === 'function'
@@ -265,7 +265,6 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
             var smoothTop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
             if (smoothTop) smoothTop.setAttribute('aria-expanded', 'true');
         }
-        var smoothSpeed = ctx && ctx.llm ? ctx.llm.llmRevealCpsEma : 35;
         var smoothProcessBody = getProcessBodyElForCurrentRun();
         var releaseMainFollow = function (port) {
             if (port === chatContainer) streamChatNearBottom = false;
@@ -275,17 +274,11 @@ function followStreamProcessScroll(ctx, runSessionId, channel) {
         };
         if (smoothProcessBody) {
             smoothFollowController.request(smoothProcessBody, {
-                speedCps: smoothSpeed,
-                channel: followChannel,
-                traceHeightSource: smoothProcessBody,
                 onUnpin: releaseMainFollow,
             });
         }
         if (chatContainer) {
             smoothFollowController.request(chatContainer, {
-                speedCps: smoothSpeed,
-                channel: followChannel,
-                traceHeightSource: smoothProcessBody,
                 onUnpin: releaseMainFollow,
             });
         }
@@ -949,7 +942,6 @@ function newLlmState() {
         llmPendingResponseDelta: '',
         llmDeltaFlushRaf: 0,
         llmRevealLastTs: 0,
-        llmRevealCpsEma: 35,
         llmThinkTagMode: 'response',
         llmThinkTagCarry: '',
         llmThinkTagAllowLeading: true,
@@ -1082,7 +1074,6 @@ function finalizeLlmStreamChunks(ctx) {
         l.llmStreamResponseScroller = null;
         l.llmDeltaLastSeq = null;
         l.llmRevealLastTs = 0;
-        l.llmRevealCpsEma = 35;
         l.llmThinkTagMode = 'response';
         l.llmThinkTagCarry = '';
         l.llmThinkTagAllowLeading = true;
@@ -1130,7 +1121,6 @@ function discardLlmStreamChunks(ctx, ev) {
         l.llmStreamResponseScroller = null;
         l.llmDeltaLastSeq = null;
         l.llmRevealLastTs = 0;
-        l.llmRevealCpsEma = 35;
         l.llmThinkTagMode = 'response';
         l.llmThinkTagCarry = '';
         l.llmThinkTagAllowLeading = true;
@@ -1267,10 +1257,6 @@ function scheduleLlmDeltaFlush(ctx, runSessionId) {
             uiPerformance.sample(runSessionId, 'stream.flush', performance.now() - flushStartedAt);
             uiPerformance.count(runSessionId, 'stream.revealedCodePoints', revealed);
         }
-        if (revealed > 0 && dtMs > 0) {
-            var instantCps = revealed * 1000 / dtMs;
-            l.llmRevealCpsEma = l.llmRevealCpsEma * 0.92 + instantCps * 0.08;
-        }
         followStreamProcessScroll(ctx, runSessionId, 'text');
         if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta) {
             scheduleLlmDeltaFlush(ctx, runSessionId);
@@ -1290,7 +1276,6 @@ function resetLlmState(ctx) {
     l.llmStreamResponseScroller = null;
     l.llmDeltaLastSeq = null;
     l.llmRevealLastTs = 0;
-    l.llmRevealCpsEma = 35;
     l.llmThinkTagMode = 'response';
     l.llmThinkTagCarry = '';
     l.llmThinkTagAllowLeading = true;

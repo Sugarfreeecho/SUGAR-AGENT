@@ -268,7 +268,9 @@ async function main() {
   assert.equal(result.newlineResult, 'A\nB');
   assert.equal(result.staleRestores, 0);
   assert.equal(result.cachedScrollAfterFrames, 120);
-  assert.equal(result.sharedTrace.rowMeasurements, 12000);
+  assert.equal(result.sharedTrace.scans, 0,
+    'finite glides must not scan the full trace on each frame');
+  assert.equal(result.sharedTrace.rowMeasurements, 0);
   assert.equal(result.textUpdates.replacements, 1);
   const switchState = switchFixture();
   switchState.context.sessionStore.get = () => ({ last_activity_at: '2020-01-01' });

@@ -4,44 +4,17 @@
 const SMOOTH_STREAM_CONFIG = Object.freeze({
     revealDivisor: 8,
     referenceFrameMs: 16.67,
-    traceHeightEpsilonPx: 0.25,
-    traceHeightStableMs: 50,
+    followTargetEpsilonPx: 0.25,
+    followDurationMs: 160,
+    maxFollowStepPx: 20,
     unpinWheelPx: 8,
     gestureWindowMs: 800,
 });
 
-// Text wrapping and whole-row layout changes share one scrollTop writer, but
-// intentionally use separate motion profiles. Text keeps the original easing
-// (including its natural tail); rows keep the newer minimum tail velocity.
-const SMOOTH_STREAM_FOLLOW_PROFILES = Object.freeze({
-    text: Object.freeze({
-        followDtMs: 18,
-        followLagRefPx: 160,
-        followMinLerp: 0.05,
-        followMaxLerp: 0.25,
-        followSpeedRefCps: 35,
-        followSpeedFactorMin: 0.7,
-        followSpeedFactorMax: 2.2,
-        minFollowSpeedPxPerSec: 0,
-        maxFollowSpeedPxPerSec: 1200,
-    }),
-    row: Object.freeze({
-        followDtMs: 18,
-        followLagRefPx: 160,
-        followMinLerp: 0.05,
-        followMaxLerp: 0.25,
-        followSpeedRefCps: 35,
-        followSpeedFactorMin: 0.7,
-        followSpeedFactorMax: 2.2,
-        minFollowSpeedPxPerSec: 60,
-        maxFollowSpeedPxPerSec: 1200,
-    }),
-});
-
-function smoothFollowProfile(channel) {
-    return channel === 'text'
-        ? SMOOTH_STREAM_FOLLOW_PROFILES.text
-        : SMOOTH_STREAM_FOLLOW_PROFILES.row;
+// Text wrapping and whole-row layout changes use the same finite glide.
+function smoothFollowEaseOutCubic(progress) {
+    var remaining = 1 - smoothStreamClamp(progress, 0, 1);
+    return 1 - remaining * remaining * remaining;
 }
 
 function smoothStreamClamp(value, min, max) {
@@ -95,70 +68,6 @@ function takeSmoothTextPrefix(text, charCount) {
     };
 }
 
-function computeSmoothFollowStep(lagPx, dtMs, revealCps, channel) {
-    var lag = Math.max(0, Number(lagPx) || 0);
-    var elapsed = Math.max(0, Number(dtMs) || 0);
-    if (lag <= 0.1 || elapsed <= 0) return { advancePx: 0, lerpStep: 0 };
-    var profile = smoothFollowProfile(channel);
-    var speed = Number(revealCps) > 0
-        ? Number(revealCps)
-        : profile.followSpeedRefCps;
-    var speedFactor = smoothStreamClamp(
-        speed / profile.followSpeedRefCps,
-        profile.followSpeedFactorMin,
-        profile.followSpeedFactorMax
-    );
-    var baseLerp = smoothStreamClamp(
-        (lag / profile.followLagRefPx) * speedFactor,
-        profile.followMinLerp,
-        profile.followMaxLerp
-    );
-    var lerpStep = baseLerp * (1 - Math.exp(-elapsed / profile.followDtMs));
-    var minAdvance = profile.minFollowSpeedPxPerSec * elapsed / 1000;
-    var cappedAdvance = profile.maxFollowSpeedPxPerSec * elapsed / 1000;
-    return {
-        advancePx: Math.min(lag, Math.max(lag * lerpStep, minAdvance), cappedAdvance),
-        lerpStep: lerpStep,
-    };
-}
-
-/** Measure only execution-trace entries, excluding viewport/chrome height. */
-function measureSmoothTraceItemsHeight(root) {
-    if (!root || !root.querySelectorAll) return null;
-    var total = 0;
-    var count = 0;
-    root.querySelectorAll('.feed-item').forEach(function (row) {
-        var parentRow = row.parentElement && row.parentElement.closest
-            ? row.parentElement.closest('.feed-item')
-            : null;
-        if (parentRow) return;
-        var rect = row.getBoundingClientRect ? row.getBoundingClientRect() : null;
-        var height = rect ? Number(rect.height) : Number(row.offsetHeight);
-        if (!Number.isFinite(height)) return;
-        total += Math.max(0, height);
-        count += 1;
-    });
-    return count ? total : 0;
-}
-
-function isSmoothTraceHeightStillActive(root) {
-    return !!(
-        root
-        && root.querySelector
-        && root.querySelector(
-            '.feed-chunk.is-streaming, [data-smooth-trace-layout-owned]'
-        )
-    );
-}
-
-function isSmoothTraceRowLayoutActive(root) {
-    return !!(
-        root
-        && root.querySelector
-        && root.querySelector('[data-smooth-trace-layout-owned]')
-    );
-}
-
 function createSmoothFollowController() {
     var states = new WeakMap();
     var activePorts = new Set();
@@ -172,10 +81,10 @@ function createSmoothFollowController() {
             following: false,
             readerDetached: false,
             animatedTop: 0,
-            speedCps: smoothFollowProfile('row').followSpeedRefCps,
-            requestedChannel: 'row',
-            activeChannel: 'row',
             lastFloor: null,
+            slideFrom: 0,
+            slideTo: 0,
+            slideStartMs: 0,
             lastWrittenTop: 0,
             ownedUntil: 0,
             awayPx: 0,
@@ -183,9 +92,6 @@ function createSmoothFollowController() {
             touchY: null,
             pointerDown: false,
             pointerStartTop: 0,
-            traceHeightSource: null,
-            lastTraceItemsHeight: null,
-            traceHeightStableSince: 0,
             onUnpin: null,
             bound: false,
         };
@@ -277,16 +183,6 @@ function createSmoothFollowController() {
             ? smoothStreamClamp(now - lastFrameMs, 1, 50)
             : SMOOTH_STREAM_CONFIG.referenceFrameMs;
         lastFrameMs = now;
-        // The inner process viewport and outer chat share a trace root.
-        // Read its row geometry once per frame, even when both follow it.
-        var traceMeasurements = new Map();
-        function measureTrace(root) {
-            if (!traceMeasurements.has(root)) {
-                traceMeasurements.set(root, measureSmoothTraceItemsHeight(root));
-                if (root && typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'follow.traceScans');
-            }
-            return traceMeasurements.get(root);
-        }
         activePorts.forEach(function (port) {
             var state = states.get(port);
             if (!state || !state.following || !port.isConnected) {
@@ -296,34 +192,22 @@ function createSmoothFollowController() {
                 return;
             }
             var floor = Math.max(0, Number(port.scrollHeight) - Number(port.clientHeight));
+            // A shrinking scroll range can force the browser to clamp scrollTop.
+            // Keep our float position within that range before retargeting.
+            state.animatedTop = Math.min(floor, Math.max(0, state.animatedTop));
             if (
                 state.lastFloor == null
-                || Math.abs(floor - state.lastFloor) > SMOOTH_STREAM_CONFIG.traceHeightEpsilonPx
+                || Math.abs(floor - state.lastFloor) > SMOOTH_STREAM_CONFIG.followTargetEpsilonPx
             ) {
-                // Attribute each actual height delta, not merely each request.
-                // A row WAAPI animation has priority while it owns layout;
-                // otherwise the caller identifies text wrapping versus rows.
-                state.activeChannel = isSmoothTraceRowLayoutActive(state.traceHeightSource)
-                    ? 'row'
-                    : state.requestedChannel;
                 state.lastFloor = floor;
+                state.slideFrom = state.animatedTop;
+                state.slideTo = floor;
+                // Advance on this very frame. Row-height animations can move
+                // the floor every frame; starting at now would keep p at zero.
+                state.slideStartMs = now - dtMs;
             }
-            var traceItemsHeight = measureTrace(state.traceHeightSource);
-            if (traceItemsHeight != null) {
-                if (
-                    state.lastTraceItemsHeight == null
-                    || Math.abs(traceItemsHeight - state.lastTraceItemsHeight)
-                        > SMOOTH_STREAM_CONFIG.traceHeightEpsilonPx
-                ) {
-                    state.lastTraceItemsHeight = traceItemsHeight;
-                    state.traceHeightStableSince = now;
-                } else if (!state.traceHeightStableSince) {
-                    state.traceHeightStableSince = now;
-                }
-            }
-            state.animatedTop = Math.min(floor, Math.max(0, state.animatedTop));
             var lag = floor - state.animatedTop;
-            if (lag <= 0.25) {
+            if (lag <= SMOOTH_STREAM_CONFIG.followTargetEpsilonPx) {
                 state.animatedTop = floor;
                 state.lastWrittenTop = floor;
                 state.ownedUntil = now + 100;
@@ -340,24 +224,21 @@ function createSmoothFollowController() {
                 port.setAttribute('data-smooth-follow-owned', '1');
                 return;
             }
-            var step = computeSmoothFollowStep(
-                lag,
-                dtMs,
-                state.speedCps,
-                state.activeChannel
+            var progress = (now - state.slideStartMs) / SMOOTH_STREAM_CONFIG.followDurationMs;
+            var desiredTop = state.slideFrom
+                + (state.slideTo - state.slideFrom) * smoothFollowEaseOutCubic(progress);
+            var previousTop = state.animatedTop;
+            state.animatedTop = Math.min(
+                floor,
+                Math.max(state.animatedTop, desiredTop),
+                previousTop + SMOOTH_STREAM_CONFIG.maxFollowStepPx
             );
-            var advancePx = step.advancePx;
-            var traceHeightStable = traceItemsHeight != null
-                && !isSmoothTraceHeightStillActive(state.traceHeightSource)
-                && now - state.traceHeightStableSince >= SMOOTH_STREAM_CONFIG.traceHeightStableMs;
-            if (traceHeightStable) {
-                // A trace block that has left streaming/layout-animation state
-                // and whose entries no longer change height has finished its
-                // visual growth. End only the residual follower lag; ordinary
-                // token wrapping keeps the original interpolation untouched.
-                advancePx = lag;
-            }
-            state.animatedTop = Math.min(floor, state.animatedTop + advancePx);
+            // Finish tiny residuals only when the total frame displacement
+            // still fits under the cap. Large backlogs take additional frames.
+            if (
+                floor - state.animatedTop <= SMOOTH_STREAM_CONFIG.followTargetEpsilonPx
+                && floor - previousTop <= SMOOTH_STREAM_CONFIG.maxFollowStepPx
+            ) state.animatedTop = floor;
             state.lastWrittenTop = state.animatedTop;
             state.ownedUntil = now + 100;
             port.setAttribute('data-smooth-follow-owned', '1');
@@ -381,22 +262,11 @@ function createSmoothFollowController() {
         }
         var state = stateFor(port);
         if (state.readerDetached && options.force !== true) return;
-        var requestedChannel = options.channel === 'text' ? 'text' : 'row';
         if (!state.following) {
             state.animatedTop = Math.max(0, Number(port.scrollTop) || 0);
-            state.activeChannel = requestedChannel;
             state.lastFloor = null;
-            state.lastTraceItemsHeight = null;
-            state.traceHeightStableSince = 0;
-        }
-        if (options.traceHeightSource && options.traceHeightSource.querySelectorAll) {
-            state.traceHeightSource = options.traceHeightSource;
         }
         state.following = true;
-        state.requestedChannel = requestedChannel;
-        state.speedCps = Number(options.speedCps) > 0
-            ? Number(options.speedCps)
-            : smoothFollowProfile(requestedChannel).followSpeedRefCps;
         state.onUnpin = typeof options.onUnpin === 'function' ? options.onUnpin : state.onUnpin;
         activePorts.add(port);
         port.setAttribute('data-smooth-follow-owned', '1');
@@ -435,7 +305,6 @@ function createSmoothFollowController() {
         state.pointerDown = false;
         state.touchY = null;
         state.awayPx = 0;
-        state.traceHeightSource = null;
         state.onUnpin = null;
     }
 

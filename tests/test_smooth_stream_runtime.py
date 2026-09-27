@@ -69,7 +69,7 @@ def test_stream_end_pins_trace_before_active_run_context_is_cleared():
     )
 
 
-def test_first_version_text_and_follow_cadence_are_preserved():
+def test_text_reveal_and_unified_follow_contract():
     smooth = (
         ROOT / "frontend/src/app/modules/smooth-stream.js"
     ).read_text(encoding="utf-8")
@@ -81,17 +81,15 @@ def test_first_version_text_and_follow_cadence_are_preserved():
     assert "llmArrivalCpsEma" not in scrolling
     assert "textWarmupMs" not in smooth
     assert "function mutateSmoothTraceTextHeight" not in smooth
-    assert "followDtMs: 18" in smooth
-    assert "followMinLerp: 0.05" in smooth
-    assert "followMaxLerp: 0.25" in smooth
-    assert "maxFollowSpeedPxPerSec: 1200" in smooth
-    assert "const SMOOTH_STREAM_FOLLOW_PROFILES" in smooth
-    text_profile = smooth.index("text: Object.freeze({")
-    row_profile = smooth.index("row: Object.freeze({")
-    assert smooth.index("minFollowSpeedPxPerSec: 0", text_profile, row_profile) > text_profile
-    assert smooth.index("minFollowSpeedPxPerSec: 60", row_profile) > row_profile
-    assert "state.requestedChannel = requestedChannel;" in smooth
-    assert "state.activeChannel" in smooth
+    assert "followDurationMs: 160" in smooth
+    assert "maxFollowStepPx: 20" in smooth
+    assert "function smoothFollowEaseOutCubic" in smooth
+    assert "state.slideStartMs = now - dtMs;" in smooth
+    assert "SMOOTH_STREAM_FOLLOW_PROFILES" not in smooth
+    assert "minFollowSpeedPxPerSec" not in smooth
+    assert "traceHeightStableSince" not in smooth
+    assert "measureSmoothTraceItemsHeight" not in smooth
+    assert "llmRevealCpsEma" not in scrolling
     assert "followStreamProcessScroll(ctx, runSessionId, 'text');" in scrolling
     assert "followStreamProcessScroll(ctx, runSessionId, channel || 'row');" in scrolling
     rendering = (

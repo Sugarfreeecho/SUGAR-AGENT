@@ -41,12 +41,11 @@ globalThis.__smoothStreamTest = {
   isSmoothStreamActive,
   computeSmoothRevealCount,
   takeSmoothTextPrefix,
-  computeSmoothFollowStep,
+  smoothFollowEaseOutCubic,
   smoothFollowController,
   animateSmoothTraceRowInsertion,
   mutateSmoothTraceRowHeight,
   config: SMOOTH_STREAM_CONFIG,
-  followProfiles: SMOOTH_STREAM_FOLLOW_PROFILES,
 };`, context);
 
 const api = context.__smoothStreamTest;
@@ -61,35 +60,10 @@ assert.equal(unicode.segment, 'A😀');
 assert.equal(unicode.rest, '中');
 assert.equal(unicode.count, 2);
 
-const follow = api.computeSmoothFollowStep(160, 16.67, 35, 'row');
-assert(follow.advancePx > 0 && follow.advancePx < 160);
-assert(
-  follow.advancePx <= api.followProfiles.row.maxFollowSpeedPxPerSec * 16.67 / 1000 + 0.001,
-  'follow advance must honor the configured px/s ceiling',
-);
-
-const tailFollow = api.computeSmoothFollowStep(4, 16.67, 35, 'row');
-assert(
-  tailFollow.advancePx >= api.followProfiles.row.minFollowSpeedPxPerSec * 16.67 / 1000 - 0.001,
-  'the row channel must retain the prompt tail convergence',
-);
-const textTailFollow = api.computeSmoothFollowStep(4, 16.67, 35, 'text');
-assert.equal(api.followProfiles.text.minFollowSpeedPxPerSec, 0);
-assert(
-  textTailFollow.advancePx < tailFollow.advancePx,
-  'the text channel must retain the original easing tail without the row speed floor',
-);
-
-let lineLag = 18.94;
-let lineFrames = 0;
-while (lineLag > 0.25 && lineFrames < 120) {
-  lineLag -= api.computeSmoothFollowStep(lineLag, 16.67, 35, 'row').advancePx;
-  lineFrames += 1;
-}
-assert(
-  lineFrames <= 20,
-  `a one-line height change should settle promptly; took ${lineFrames} frames`,
-);
+assert.equal(api.config.followDurationMs, 160);
+assert.equal(api.config.maxFollowStepPx, 20);
+assert.equal(api.smoothFollowEaseOutCubic(0), 0);
+assert.equal(api.smoothFollowEaseOutCubic(1), 1);
 
 function fakePort() {
   const listeners = Object.create(null);
@@ -119,7 +93,6 @@ function runNextFrame(delta = 16.67) {
 const port = fakePort();
 let unpinned = 0;
 api.smoothFollowController.request(port, {
-  speedCps: 35,
   onUnpin() { unpinned += 1; },
 });
 runNextFrame();
@@ -133,10 +106,10 @@ assert.equal(api.smoothFollowController.isReaderDetached(port), true);
 assert.equal(port.getAttribute('data-smooth-follow-owned'), null);
 
 const queuedAfterUnpin = frames.size;
-api.smoothFollowController.request(port, { speedCps: 35 });
+api.smoothFollowController.request(port);
 assert.equal(frames.size, queuedAfterUnpin, 'detached reader must not be reclaimed');
 api.smoothFollowController.clearReaderDetached(port);
-api.smoothFollowController.request(port, { speedCps: 35 });
+api.smoothFollowController.request(port);
 assert.equal(api.smoothFollowController.isFollowing(port), true);
 api.smoothFollowController.cancel(port);
 assert.equal(api.smoothFollowController.isFollowing(port), false);
@@ -146,118 +119,156 @@ assert.equal(api.smoothFollowController.snapToBottom(port), true);
 assert.equal(port.scrollTop, 400, 'end-of-stream convergence must remove the easing tail');
 while (frames.size) runNextFrame();
 
-const splitChannelPort = fakePort();
-splitChannelPort.scrollTop = 400;
-splitChannelPort.scrollHeight = 504;
-api.smoothFollowController.request(splitChannelPort, { speedCps: 35, channel: 'row' });
-runNextFrame();
-const rowChannelAdvance = splitChannelPort.scrollTop - 400;
-assert(
-  rowChannelAdvance >= 0.99,
-  'a whole-row height delta must use the row tail-speed profile',
-);
-const beforeTextDelta = splitChannelPort.scrollTop;
-splitChannelPort.scrollHeight = 508;
-api.smoothFollowController.request(splitChannelPort, { speedCps: 35, channel: 'text' });
-runNextFrame();
-assert(
-  splitChannelPort.scrollTop - beforeTextDelta < 0.99,
-  'a later text-wrap height delta on the same viewport must switch to the text profile',
-);
-api.smoothFollowController.cancel(splitChannelPort);
-while (frames.size) runNextFrame();
-
-function fakeTraceHeightSource(initialHeight) {
-  let height = initialHeight;
-  let streaming = true;
-  let layoutAnimating = false;
-  const item = {
-    parentElement: null,
-    getBoundingClientRect() { return { height }; },
-  };
-  return {
-    querySelectorAll(selector) { return selector === '.feed-item' ? [item] : []; },
-    querySelector(selector) {
-      if (selector === '[data-smooth-trace-layout-owned]') return layoutAnimating ? {} : null;
-      return streaming || layoutAnimating ? {} : null;
-    },
-    setHeight(value) { height = value; },
-    setStreaming(value) { streaming = !!value; },
-    setLayoutAnimating(value) { layoutAnimating = !!value; },
-  };
+function followedPort(options) {
+  const p = fakePort();
+  p.scrollTop = 400;
+  api.smoothFollowController.request(p, options);
+  runNextFrame();
+  assert.equal(p.scrollTop, 400);
+  return p;
 }
 
-const caughtUpPort = fakePort();
-const traceHeightSource = fakeTraceHeightSource(100);
-caughtUpPort.scrollTop = 400;
-api.smoothFollowController.request(caughtUpPort, {
-  speedCps: 35,
-  traceHeightSource,
-});
+function recordedFrame(p, delta = 16.67) {
+  const before = p.scrollTop;
+  runNextFrame(delta);
+  const moved = p.scrollTop - before;
+  assert(moved <= api.config.maxFollowStepPx + 0.0001,
+    `follow wrote ${moved}px in one frame`);
+  return moved;
+}
+
+const textPort = fakePort();
+const rowPort = fakePort();
+for (const p of [textPort, rowPort]) p.scrollTop = 400;
+api.smoothFollowController.request(textPort, { channel: 'text' });
+api.smoothFollowController.request(rowPort, { channel: 'row' });
+assert.equal(frames.size, 1, 'both viewports share one follow rAF');
 runNextFrame();
-assert.equal(api.smoothFollowController.isFollowing(caughtUpPort), true);
-assert.equal(
-  caughtUpPort.getAttribute('data-smooth-follow-owned'),
-  '1',
-  'catching up between wrapped lines must retain stream ownership',
-);
-caughtUpPort.scrollHeight = 518;
-traceHeightSource.setHeight(119);
-// Simulate a browser-reported floor snap. The retained float extent, rather
-// than this rounded engine value, must drive the next wrapped line.
+textPort.scrollHeight += 19;
+rowPort.scrollHeight += 19;
+runNextFrame();
+assert.equal(textPort.scrollTop, rowPort.scrollTop,
+  'text wrapping and whole-row growth must use identical motion');
+api.smoothFollowController.cancel(textPort);
+api.smoothFollowController.cancel(rowPort);
+
+const oneLine = followedPort();
+oneLine.scrollHeight += 19;
+let lineFrames = 0;
+let lineMaxStep = 0;
+while (oneLine.scrollTop < 419 && lineFrames < 30) {
+  lineMaxStep = Math.max(lineMaxStep, recordedFrame(oneLine));
+  lineFrames++;
+}
+assert(lineFrames > 2 && lineFrames * 16.67 <= 250,
+  `19px wrapping should glide then stop; took ${lineFrames} frames`);
+assert(lineMaxStep < 20);
+for (let i = 0; i < 20; i++) {
+  assert.equal(recordedFrame(oneLine), 0, 'a pause must have no lingering tail');
+}
+api.smoothFollowController.cancel(oneLine);
+
+const slowOutput = followedPort();
+const slowMovingFrames = [];
+for (let burst = 0; burst < 2; burst++) {
+  slowOutput.scrollHeight += 19;
+  let movingFrames = 0;
+  while (slowOutput.scrollTop < slowOutput.scrollHeight - slowOutput.clientHeight) {
+    recordedFrame(slowOutput);
+    assert(++movingFrames * 16.67 <= 250);
+  }
+  slowMovingFrames.push(movingFrames);
+  for (let i = 0; i < 45; i++) assert.equal(recordedFrame(slowOutput), 0);
+}
+api.smoothFollowController.cancel(slowOutput);
+
+const fastOutput = followedPort();
+let fastPeakLag = 0;
+let fastPeakStep = 0;
+for (let i = 0; i < 120; i++) {
+  if (i % 2 === 0) fastOutput.scrollHeight += 19; // one wrapped line each ~33ms
+  fastPeakStep = Math.max(fastPeakStep, recordedFrame(fastOutput));
+  fastPeakLag = Math.max(fastPeakLag,
+    fastOutput.scrollHeight - fastOutput.clientHeight - fastOutput.scrollTop);
+}
+assert(fastPeakLag <= 19 * 1.5,
+  `frequent wrapping lagged ${fastPeakLag}px, above 1.5 lines`);
+assert(fastPeakStep > 0 && fastPeakStep < 20);
+api.smoothFollowController.cancel(fastOutput);
+
+const growingRow = followedPort();
+let rowPeakLag = 0;
+let rowPeakStep = 0;
+for (let i = 0; i < 12; i++) {
+  growingRow.scrollHeight += 10; // WAAPI height growth on each frame
+  const moved = recordedFrame(growingRow);
+  assert(moved > 0,
+    'continuous retargeting must still move on every frame');
+  rowPeakStep = Math.max(rowPeakStep, moved);
+  rowPeakLag = Math.max(rowPeakLag,
+    growingRow.scrollHeight - growingRow.clientHeight - growingRow.scrollTop);
+}
+assert(rowPeakLag <= 19 * 1.5);
+let rowSettleFrames = 0;
+while (growingRow.scrollTop < 520 && rowSettleFrames < 20) {
+  recordedFrame(growingRow);
+  rowSettleFrames++;
+}
+assert(rowSettleFrames * 16.67 <= 250);
+api.smoothFollowController.cancel(growingRow);
+
+const mediumRow = followedPort();
+mediumRow.scrollHeight += 200;
+let mediumFrames = 0;
+let mediumPeakStep = 0;
+while (mediumRow.scrollTop < 600 && mediumFrames < 30) {
+  mediumPeakStep = Math.max(mediumPeakStep, recordedFrame(mediumRow));
+  mediumFrames++;
+}
+assert(mediumFrames * 16.67 <= 250);
+api.smoothFollowController.cancel(mediumRow);
+
+const largeRow = followedPort();
+largeRow.scrollHeight += 400;
+for (let i = 0; i < 15; i++) recordedFrame(largeRow);
+assert(largeRow.scrollTop < 800,
+  'a large backlog must not break the frame cap to meet the duration');
+while (largeRow.scrollTop < 800) recordedFrame(largeRow);
+api.smoothFollowController.cancel(largeRow);
+
+const collapsingRowPort = followedPort();
+collapsingRowPort.scrollHeight += 60;
+while (collapsingRowPort.scrollTop < 460) recordedFrame(collapsingRowPort);
+collapsingRowPort.scrollHeight -= 40;
+collapsingRowPort.scrollTop = 420; // browser clamps when the floor shrinks
+runNextFrame();
+assert.equal(collapsingRowPort.scrollTop, 420,
+  'a shrinking scroll range must not rebound toward the old floor');
+api.smoothFollowController.cancel(collapsingRowPort);
+
+const slowFrame = followedPort();
+slowFrame.scrollHeight += 200;
+assert(recordedFrame(slowFrame, 50) <= 20,
+  'a long frame must retain the absolute 20px displacement cap');
+api.smoothFollowController.cancel(slowFrame);
+
+const caughtUpPort = followedPort({ traceHeightSource: {
+  querySelectorAll() { throw new Error('following must not scan feed rows'); },
+  querySelector() { throw new Error('following must not inspect streaming flags'); },
+} });
+assert.equal(caughtUpPort.getAttribute('data-smooth-follow-owned'), '1');
+caughtUpPort.scrollHeight += 18;
+// An engine-reported floor snap must not replace the retained float position.
 caughtUpPort.scrollTop = 418;
 runNextFrame();
-assert(
-  caughtUpPort.scrollTop > 400 && caughtUpPort.scrollTop < 418,
-  'an async layout growth must resume from the retained float extent without another request',
-);
-for (let i = 0; i < 8; i += 1) runNextFrame();
-assert(
-  caughtUpPort.scrollTop < 418,
-  'ordinary streaming height changes must retain the original glide',
-);
-traceHeightSource.setStreaming(false);
-runNextFrame();
-assert.equal(
-  caughtUpPort.scrollTop,
-  418,
-  'finished streaming with stable trace-item height must end residual lag',
-);
-caughtUpPort.scrollHeight = 536;
-traceHeightSource.setHeight(138);
-traceHeightSource.setLayoutAnimating(true);
-runNextFrame();
-assert(
-  caughtUpPort.scrollTop > 418 && caughtUpPort.scrollTop < 436,
-  'new height growth after convergence must start a fresh glide instead of snapping',
-);
-traceHeightSource.setLayoutAnimating(false);
-for (let i = 0; i < 4; i += 1) runNextFrame();
-assert.equal(
-  caughtUpPort.scrollTop,
-  436,
-  'a completed trace-row layout animation must settle once item height is stable',
-);
+assert(caughtUpPort.scrollTop > 400 && caughtUpPort.scrollTop < 418);
+for (let i = 0; i < 15; i++) recordedFrame(caughtUpPort);
+assert.equal(caughtUpPort.scrollTop, 418,
+  'a still-streaming row must settle without waiting for its streaming flag');
+caughtUpPort.scrollHeight += 18;
+assert(recordedFrame(caughtUpPort) > 0,
+  'later async layout growth must start a fresh glide without a request');
 api.smoothFollowController.cancel(caughtUpPort);
-
-const layoutOwnedPort = fakePort();
-const layoutOwnedSource = fakeTraceHeightSource(104);
-layoutOwnedSource.setStreaming(false);
-layoutOwnedSource.setLayoutAnimating(true);
-layoutOwnedPort.scrollTop = 400;
-layoutOwnedPort.scrollHeight = 504;
-api.smoothFollowController.request(layoutOwnedPort, {
-  speedCps: 35,
-  channel: 'text',
-  traceHeightSource: layoutOwnedSource,
-});
-runNextFrame();
-assert(
-  layoutOwnedPort.scrollTop - 400 >= 0.99,
-  'a layout-owned row animation must take row-channel priority over a concurrent text request',
-);
-api.smoothFollowController.cancel(layoutOwnedPort);
-while (frames.size) runNextFrame();
 
 function fakeTraceRow(initialHeight) {
   let height = initialHeight;
@@ -300,5 +311,24 @@ assert.equal(collapsingRow.getAnimation().options.duration, 230);
 
 windowObject.__MYAGENT_FEATURES__.smoothStream = false;
 assert.equal(api.isSmoothStreamActive(), false);
+const disabledPort = fakePort();
+api.smoothFollowController.request(disabledPort);
+assert.equal(disabledPort.scrollTop, disabledPort.scrollHeight,
+  'disabled smooth streaming must retain the legacy immediate scroll');
+assert.equal(api.smoothFollowController.isFollowing(disabledPort), false);
 
-console.log('smooth stream runtime checks passed');
+if (process.argv.includes('--report')) {
+  console.log(JSON.stringify({
+    frameMs: 16.67,
+    single19: { settleMs: +(lineFrames * 16.67).toFixed(1), maxStepPx: +lineMaxStep.toFixed(2) },
+    slow19: { settleMs: slowMovingFrames.map(n => +(n * 16.67).toFixed(1)),
+      stoppedFramesPerBurst: 45 },
+    fast19Every33ms: { maxLagPx: +fastPeakLag.toFixed(2),
+      maxLagLines: +(fastPeakLag / 19).toFixed(2), maxStepPx: +fastPeakStep.toFixed(2) },
+    growingRow10pxPerFrame: { maxLagPx: +rowPeakLag.toFixed(2),
+      settleAfterGrowthMs: +(rowSettleFrames * 16.67).toFixed(1),
+      maxStepPx: +rowPeakStep.toFixed(2) },
+    single200: { settleMs: +(mediumFrames * 16.67).toFixed(1),
+      maxStepPx: +mediumPeakStep.toFixed(2) },
+  }, null, 2));
+} else console.log('smooth stream runtime checks passed');
