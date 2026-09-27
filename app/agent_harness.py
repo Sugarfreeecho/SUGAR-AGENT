@@ -916,12 +916,10 @@ class _DirectStreamTransport:
         kwargs = dict(request)
         kwargs.pop("stream", None)
         for chunk in _open_raw_http_stream(self._client, kwargs, include_usage=True):
-            event = self._to_event(chunk)
-            if event is not None:
-                yield event
+            yield from self._to_events(chunk)
 
     @staticmethod
-    def _to_event(chunk: Any) -> Optional["TransportEvent"]:
+    def _to_events(chunk: Any) -> Iterator["TransportEvent"]:
         # Lazily imported: agent_openai imports this module at top level, so a
         # module-scope import here would be circular. ``extract_usage_dict`` lives
         # there, and a bare reference raised NameError at streaming time.
@@ -929,11 +927,11 @@ class _DirectStreamTransport:
 
         usage = getattr(chunk, "usage", None)
         if usage is not None:
-            return TransportEvent(kind="usage", usage=extract_usage_dict(usage),
-                                  model=str(getattr(chunk, "model", "") or ""))
+            yield TransportEvent(kind="usage", usage=extract_usage_dict(usage),
+                                 model=str(getattr(chunk, "model", "") or ""))
         choices = getattr(chunk, "choices", None) or []
         if not choices:
-            return None
+            return
         choice = choices[0]
         finish_reason = getattr(choice, "finish_reason", None)
         stop_reason = getattr(choice, "stop_reason", None)
@@ -941,20 +939,19 @@ class _DirectStreamTransport:
         model = str(getattr(chunk, "model", "") or "")
         if delta is None:
             if finish_reason or stop_reason:
-                return TransportEvent(kind="finish", finish_reason=finish_reason,
-                                      stop_reason=stop_reason, model=model)
-            return None
+                yield TransportEvent(kind="finish", finish_reason=finish_reason,
+                                     stop_reason=stop_reason, model=model)
+            return
         reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
         if reasoning:
-            return TransportEvent(kind="reasoning_delta", text=str(reasoning), model=model)
+            yield TransportEvent(kind="reasoning_delta", text=str(reasoning), model=model)
         content = getattr(delta, "content", None)
         if content:
-            return TransportEvent(kind="content_delta", text=str(content), model=model)
+            yield TransportEvent(kind="content_delta", text=str(content), model=model)
         calls = getattr(delta, "tool_calls", None) or []
-        if calls:
-            call = calls[0]
+        for call in calls:
             function = getattr(call, "function", None)
-            return TransportEvent(
+            yield TransportEvent(
                 kind="tool_call_delta",
                 index=int(getattr(call, "index", 0) or 0),
                 tool_call_id=str(getattr(call, "id", "") or ""),
@@ -963,9 +960,8 @@ class _DirectStreamTransport:
                 model=model,
             )
         if finish_reason or stop_reason:
-            return TransportEvent(kind="finish", finish_reason=finish_reason,
-                                  stop_reason=stop_reason, model=model)
-        return None
+            yield TransportEvent(kind="finish", finish_reason=finish_reason,
+                                 stop_reason=stop_reason, model=model)
 
 
 class RequestResponseLogger(httpx.Client):

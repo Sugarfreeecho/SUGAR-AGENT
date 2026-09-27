@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 from queue import Queue
+from types import SimpleNamespace
 
 import pytest
 
@@ -2016,6 +2017,36 @@ def test_compatible_stream_arguments_survive_single_char_fragments():
     events = list(_compatible_transport_with_chunks(chunks).stream_completion(model="m", messages=[]))
     merged = "".join(event.arguments_delta for event in events if event.kind == "tool_call_delta")
     assert json.loads(merged) == json.loads(payload)
+
+
+def test_direct_stream_preserves_mixed_text_and_all_tool_calls():
+    import agent_harness
+
+    chunk = SimpleNamespace(
+        model="m",
+        usage=None,
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(
+                reasoning_content="thinking",
+                content="working",
+                tool_calls=[
+                    SimpleNamespace(index=0, id="call_1", function=SimpleNamespace(name="run_shell", arguments='{"command":"pwd"}')),
+                    SimpleNamespace(index=1, id="call_2", function=SimpleNamespace(name="read_file", arguments='{"path":"x"}')),
+                ],
+            ),
+            finish_reason=None,
+            stop_reason=None,
+        )],
+    )
+
+    events = list(agent_harness._DirectStreamTransport._to_events(chunk))
+    assert [event.kind for event in events] == [
+        "reasoning_delta", "content_delta", "tool_call_delta", "tool_call_delta"
+    ]
+    assert [event.index for event in events[2:]] == [0, 1]
+    assert [event.arguments_delta for event in events[2:]] == [
+        '{"command":"pwd"}', '{"path":"x"}'
+    ]
 
 
 def test_stream_worker_parsed_args_reject_corrupt_json_instead_of_empty_object():
