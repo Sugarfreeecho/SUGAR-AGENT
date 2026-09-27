@@ -1767,6 +1767,54 @@ def _drop_orphan_tool_messages(messages: List[Any]) -> tuple[List[Any], List[int
     return out, dropped
 
 
+def _has_invalid_tool_calls(tool_calls: Any) -> bool:
+    return isinstance(tool_calls, list) and any(
+        not isinstance(call, dict)
+        or not str(call.get("name") or "").strip()
+        or not str(call.get("id") or "").strip()
+        for call in tool_calls
+    )
+
+
+def _remove_invalid_assistant_history(messages: List[Any]) -> tuple[List[Any], bool]:
+    """Remove empty replies and malformed tool turns before they reach the API.
+
+    A mixed batch can contain calls already executed in an older run.  Keep
+    those identifiable calls and their matching results, but never forward an
+    empty tool name/id or a result attached to one.
+    """
+    out: List[Any] = []
+    changed = False
+    allowed_result_ids: Optional[set[str]] = None
+    for msg in messages:
+        if isinstance(msg, ToolMessage) and allowed_result_ids is not None:
+            if str(getattr(msg, "tool_call_id", "") or "").strip() in allowed_result_ids:
+                out.append(msg)
+            else:
+                changed = True
+            continue
+        allowed_result_ids = None
+        if isinstance(msg, AssistantMessage):
+            calls = getattr(msg, "tool_calls", None)
+            if _has_invalid_tool_calls(calls):
+                valid_calls = [
+                    call for call in calls
+                    if isinstance(call, dict)
+                    and str(call.get("name") or "").strip()
+                    and str(call.get("id") or "").strip()
+                ]
+                allowed_result_ids = {str(call["id"]).strip() for call in valid_calls}
+                changed = True
+                if valid_calls:
+                    out.append(msg.model_copy(update={"tool_calls": valid_calls}))
+                continue
+            if not calls and not str(getattr(msg, "content", "") or "").strip():
+                changed = True
+                continue
+        out.append(msg)
+    return out, changed
+
+
 def _trim_unclosed_tool_call_tail_preserve_completed(
     messages: List[Any],
 ) -> tuple[List[Any], Optional[int]]:
@@ -5041,6 +5089,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             _pre_api_timing_mark(pre_api_timings, "static_segments", _t_pre_api)
             _t_pre_api = time.perf_counter()
 
+            clean_llm, llm_history_changed = _remove_invalid_assistant_history(llm_history)
+            clean_work, work_history_changed = _remove_invalid_assistant_history(work_messages)
+            if llm_history_changed or work_history_changed:
+                llm_history = clean_llm
+                work_messages = clean_work
+                state["llm_history"] = llm_history
+                state["work_messages"] = work_messages
+                state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
+                state.pop("_prompt_turn_cache", None)
+                _persist_state_with_model_replace(
+                    state, llm_history, "sanitize_invalid_assistant_before_api"
+                )
+
             turn_cache = state.get("_prompt_turn_cache")
             if (
                 isinstance(turn_cache, dict)
@@ -8033,6 +8094,61 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 break
             state.pop("_output_length_retries", None)
 
+            if _has_invalid_tool_calls(turn.tool_calls):
+                # A closed, identifiable streamed call may already have run.
+                # Preserve only those calls; otherwise discard this entire
+                # malformed turn before it can be executed or persisted.
+                started_calls = [
+                    call for idx in sorted(early_tool_tasks)
+                    if (call := _early_tool_call_from_acc(idx)) is not None
+                ]
+                if started_calls:
+                    turn.tool_calls = started_calls
+                    await prune_session_ephemeral(
+                        state["session_id"],
+                        types={"tool_pending", "tool_call_delta", "tool_command_delta"},
+                        react_iter=int(iter_count),
+                    )
+                else:
+                    for task in early_tool_tasks.values():
+                        if not task.done():
+                            task.add_done_callback(_discard_task_result)
+                            task.cancel()
+                    if streamed_this_call:
+                        await prune_session_ephemeral(
+                            state["session_id"],
+                            types={"llm_response_delta", "llm_reasoning_delta", "tool_pending", "tool_call_delta", "tool_command_delta"},
+                            react_iter=int(iter_count),
+                        )
+                        await _push_stream_event(
+                            state,
+                            {
+                                "type": "llm_stream_aborted",
+                                "reason": "invalid_tool_call",
+                                "react_iter": int(iter_count),
+                                "stream_seq": llm_stream_seq,
+                                "ephemeral": True,
+                            },
+                            emit=emit,
+                        )
+                    if final_result_retries < final_result_retry_max:
+                        final_result_retries += 1
+                        state["final_result_retries"] = final_result_retries
+                        state["empty_final_retries"] = final_result_retries
+                        max_react_iter = max(max_react_iter, iter_count + 1)
+                        _persist_state(state)
+                        await _push_stream_event(
+                            state,
+                            {
+                                "type": "status",
+                                "content": f"模型返回缺少名称或 ID 的工具调用，正在重试（{final_result_retries}/{final_result_retry_max}）",
+                            },
+                            emit=emit,
+                        )
+                        continue
+                    final_content = "模型连续返回缺少名称或 ID 的工具调用，已停止执行。"
+                    break
+
             if emit:
                 if streamed_this_call:
                     sid = state["session_id"]
@@ -8159,23 +8275,24 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             }
             if tool_calls_list is not None:
                 _ai_kw["tool_calls"] = tool_calls_list
-            interim_msg = AssistantMessage(**_ai_kw)
-            llm_history.append(interim_msg)
-            work_messages.append(interim_msg)
-            state["llm_history"] = llm_history
-            state["work_messages"] = work_messages
-            _workflow_callbacks().call("capture_dialogue",
-                state,
-                "assistant",
-                response_text,
-                kind="response",
-            )
-            _capture_tool_review_assistant_context(
-                state,
-                reasoning_text,
-                response_text,
-            )
-            _persist_state_with_model_append(state, interim_msg)
+            if (response_text or "").strip() or tool_calls_list:
+                interim_msg = AssistantMessage(**_ai_kw)
+                llm_history.append(interim_msg)
+                work_messages.append(interim_msg)
+                state["llm_history"] = llm_history
+                state["work_messages"] = work_messages
+                _workflow_callbacks().call("capture_dialogue",
+                    state,
+                    "assistant",
+                    response_text,
+                    kind="response",
+                )
+                _capture_tool_review_assistant_context(
+                    state,
+                    reasoning_text,
+                    response_text,
+                )
+                _persist_state_with_model_append(state, interim_msg)
 
             # Checkpoint every completed tool before another tool is awaited.
             # Otherwise a steer between tool calls cannot distinguish a finished
@@ -8838,6 +8955,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     final_result_retries += 1
                     state["final_result_retries"] = final_result_retries
                     state["empty_final_retries"] = final_result_retries
+                    max_react_iter = max(max_react_iter, iter_count + 1)
                     _persist_state(state)
                     await _push_stream_event(
                         state,

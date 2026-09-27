@@ -467,7 +467,8 @@ def test_followup_supports_interrupt_and_append_modes():
     assert '_STEER_MODES = {"interrupt", "append"}' in loop
     assert '_has_session_steers(sid, modes={"interrupt"})' in loop
     assert 'modes={"append", "interrupt"}' in loop
-    assert loop.count("max_react_iter = max(max_react_iter, iter_count + 1)") == 2
+    # 既有 2 处 + 新增 2 处（畸形工具调用重试 / 最终结果重试）
+    assert loop.count("max_react_iter = max(max_react_iter, iter_count + 1)") == 4
     assert 'if str(item.get("mode") or steer_mode) == "append":' in webui
 
 

@@ -2038,6 +2038,21 @@ def test_stream_worker_parsed_args_reject_corrupt_json_instead_of_empty_object()
     assert empty[0]["args"] == {}
 
 
+def test_stream_worker_preserves_malformed_tool_deltas_for_agent_rejection():
+    import agent_openai
+
+    malformed = agent_openai._tool_acc_to_parsed_list({
+        0: {"id": "", "name": "", "arguments": '{"command":"python scan.py"}'},
+        1: {"id": "", "name": "", "arguments": ""},
+    })
+
+    assert malformed is not None
+    assert len(malformed) == 2
+    assert all(call["id"] == "" and call["name"] == "" for call in malformed)
+    with pytest.raises(ValueError, match="without a name and ID"):
+        agent_openai.format_tool_calls_for_openai_api(malformed)
+
+
 def test_session_candidates_only_fallback_to_same_wire_protocol(tmp_path, monkeypatch):
     """fallback 候选链只包含同 llm_type 的模型：responses 不切 chat,反之亦然。"""
     import model_profiles

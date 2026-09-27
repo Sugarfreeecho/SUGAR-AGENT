@@ -538,6 +538,50 @@ def test_drop_orphan_tool_messages_preserves_only_direct_matching_results():
     ]
 
 
+def test_invalid_assistant_history_drops_empty_retry_and_malformed_tool_turn():
+    import agent_loop
+
+    history = [
+        agent_loop.UserMessage(content="Investigate the issue"),
+        agent_loop.AssistantMessage(content="", additional_kwargs={"reasoning_content": "hidden"}),
+        agent_loop.AssistantMessage(
+            content=" what are you doing\n\n",
+            tool_calls=[{"name": "", "id": "", "args": {"command": "python scan.py"}}],
+        ),
+        agent_loop.ToolMessage(content="Unknown or unavailable tool: ", tool_call_id=""),
+        agent_loop.UserMessage(content="Continue"),
+    ]
+
+    clean, changed = agent_loop._remove_invalid_assistant_history(history)
+
+    assert changed is True
+    assert [type(item).__name__ for item in clean] == ["UserMessage", "UserMessage"]
+    assert [item.content for item in clean] == ["Investigate the issue", "Continue"]
+
+
+def test_invalid_assistant_history_keeps_only_identifiable_executed_calls():
+    import agent_loop
+
+    history = [
+        agent_loop.AssistantMessage(
+            content="Checking files",
+            tool_calls=[
+                {"name": "read_file", "id": "valid-1", "args": {"path": "a"}},
+                {"name": "", "id": "", "args": {"command": "oops"}},
+            ],
+        ),
+        agent_loop.ToolMessage(content="file data", tool_call_id="valid-1"),
+        agent_loop.ToolMessage(content="invalid result", tool_call_id=""),
+    ]
+
+    clean, changed = agent_loop._remove_invalid_assistant_history(history)
+
+    assert changed is True
+    assert [call["id"] for call in clean[0].tool_calls] == ["valid-1"]
+    assert len(clean) == 2
+    assert clean[1].tool_call_id == "valid-1"
+
+
 def test_outgoing_detection_persists_orphan_cleanup(monkeypatch):
     import agent_loop
 

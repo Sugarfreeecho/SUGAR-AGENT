@@ -837,6 +837,8 @@ def format_tool_calls_for_openai_api(tool_calls: List[Dict[str, Any]]) -> List[D
         name = tc.get("name", "")
         args = tc.get("args", {}) or {}
         tid = tc.get("id", "") or ""
+        if not str(name or "").strip() or not str(tid or "").strip():
+            raise ValueError("Cannot send a tool call without a name and ID")
         try:
             arg_str = json.dumps(args, ensure_ascii=False) if args else "{}"
         except TypeError:
@@ -2370,8 +2372,9 @@ def _tool_acc_to_parsed_list(tool_acc: Dict[int, Dict[str, str]]) -> Optional[Li
                 continue
         else:
             args = raw_args if isinstance(raw_args, dict) else {}
-        if not name and not args and not tid:
-            continue
+        # Preserve even an entirely empty tool-call delta.  The agent loop
+        # must reject the malformed turn instead of mistaking its text for a
+        # final answer.
         tool_calls.append({"name": name, "args": args, "id": tid, "index": i})
     return tool_calls or None
 
