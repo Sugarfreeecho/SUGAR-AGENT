@@ -94,7 +94,12 @@ def test_compress_flow_uses_react_step_round_when_user_round_has_no_prefix(monke
     invoked_rounds = []
 
     monkeypatch.setattr(agent_memory, "_full_pack_tokens_for_session_preview", lambda *_a, **_k: 1000)
-    monkeypatch.setattr(agent_memory, "_full_pack_tokens_compress_work", lambda *_a, **_k: 1000)
+    monkeypatch.setattr(
+        agent_memory,
+        "_full_pack_tokens_compress_work",
+        lambda _sid, messages, _key, **_kwargs: 1000 if len(messages) == len(history) else 400,
+    )
+    monkeypatch.setattr(agent_memory, "_assemble_micro_region_only_snap", lambda *_a: [])
     monkeypatch.setattr(
         agent_memory,
         "_compress_ratio_reached",
@@ -119,6 +124,158 @@ def test_compress_flow_uses_react_step_round_when_user_round_has_no_prefix(monke
 
     assert invoked_rounds == [3]
     assert changed is True
+    assert used_summary is True
+
+
+def test_summary_path_skips_three_turn_tail_when_retained_area_exceeds_half_window(monkeypatch):
+    import agent_memory
+
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_COMPRESS_TARGET_RATIO", 0.6)
+    monkeypatch.setattr(agent_memory, "CONTEXT_MICRO_WORK_ROUNDS", 0)
+    work = [
+        message
+        for index in range(4)
+        for message in (
+            agent_memory.UserMessage(content=str(index) * 200),
+            agent_memory.AssistantMessage(content="a"),
+        )
+    ]
+
+    def estimate(messages, _key):
+        return 100 + sum(len(str(message.content or "")) for message in messages)
+
+    choice, one_attempt, reason = agent_memory._choose_summary_round(
+        work, 1, 3, "", 1200, estimate,
+    )
+
+    assert choice is not None
+    assert choice[0] == 2
+    assert [message.content for message in choice[2] if isinstance(message, agent_memory.UserMessage)] == ["3" * 200]
+    assert one_attempt is False
+    assert reason == ""
+
+
+def test_compress_flow_selects_shorter_tail_before_first_summary(monkeypatch):
+    import agent_memory
+
+    history = [
+        message
+        for index in range(4)
+        for message in (
+            agent_memory.UserMessage(content=f"question {index}"),
+            agent_memory.AssistantMessage(content=f"answer {index}"),
+        )
+    ]
+    calls = []
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_MICRO_WORK_ROUNDS", 0)
+    monkeypatch.setattr(agent_memory, "_full_pack_tokens_for_session_preview", lambda *_a, **_k: 1400)
+    monkeypatch.setattr(
+        agent_memory,
+        "_full_pack_tokens_compress_work",
+        lambda _sid, messages, _key, **_kwargs: (
+            400 if any(agent_memory.is_compress_recap_user_message(message) for message in messages)
+            else 1400 if len(messages) == len(history)
+            else 700 if len(messages) >= 6 else 300
+        ),
+    )
+    monkeypatch.setattr(agent_memory, "_compress_ratio_reached", lambda *_a, **_k: bool(calls))
+    monkeypatch.setattr(agent_memory, "_upsert_compress_summary_key_context", lambda *_a, **_k: "key")
+    monkeypatch.setattr(
+        agent_memory,
+        "_compress_summary_round",
+        lambda *_a, **kwargs: (calls.append(kwargs["round_idx"]) or "recap", "key", []),
+    )
+
+    _out, _key, _changed, _hints, used_summary, _recap = agent_memory._compress_unified_in_place(
+        history, "session-1", "", force_user_compact=True,
+    )
+
+    assert calls == [2]
+    assert used_summary is True
+
+
+def test_summary_path_rejects_all_tails_that_cannot_meet_target(monkeypatch):
+    import agent_memory
+
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_COMPRESS_TARGET_RATIO", 0.6)
+    work = [
+        agent_memory.UserMessage(content="old"),
+        agent_memory.AssistantMessage(content="answer"),
+        agent_memory.UserMessage(content="latest" * 200),
+    ]
+
+    choice, one_attempt, reason = agent_memory._choose_summary_round(
+        work, 1, 1, "", 1500,
+        lambda messages, _key: 100 + sum(len(str(message.content or "")) for message in messages),
+    )
+
+    assert choice is None
+    assert one_attempt is False
+    assert reason == "retained_floor"
+
+
+def test_summary_path_allows_one_deepest_attempt_when_half_window_is_impossible(monkeypatch):
+    import agent_memory
+
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_MICRO_WORK_ROUNDS", 0)
+    work = [
+        agent_memory.UserMessage(content="old"),
+        agent_memory.AssistantMessage(content="answer"),
+        agent_memory.UserMessage(content="latest" * 100),
+    ]
+    choice, one_attempt, reason = agent_memory._choose_summary_round(
+        work, 1, 1, "", 1500,
+        lambda messages, _key: 100 + sum(len(str(message.content or "")) for message in messages),
+    )
+
+    assert choice is not None
+    assert choice[0] == 3
+    assert one_attempt is True
+    assert reason == ""
+
+
+def test_summary_call_limit_is_a_hard_limit_even_when_output_keeps_shrinking(monkeypatch):
+    import agent_memory
+
+    history = [
+        message
+        for index in range(4)
+        for message in (
+            agent_memory.UserMessage(content=f"question {index}"),
+            agent_memory.AssistantMessage(content=f"answer {index}"),
+        )
+    ]
+    calls = []
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_COMPRESS_MAX_ROUNDS", 1)
+    monkeypatch.setattr(agent_memory, "CONTEXT_MICRO_WORK_ROUNDS", 0)
+    monkeypatch.setattr(agent_memory, "_full_pack_tokens_for_session_preview", lambda *_a, **_k: 1500)
+    monkeypatch.setattr(
+        agent_memory,
+        "_full_pack_tokens_compress_work",
+        lambda _sid, messages, _key, **_kwargs: (
+            900 if any(agent_memory.is_compress_recap_user_message(message) for message in messages)
+            else 1500 if len(messages) == len(history) else 250
+        ),
+    )
+    monkeypatch.setattr(agent_memory, "_compress_ratio_reached", lambda *_a, **_k: False)
+    monkeypatch.setattr(agent_memory, "_upsert_compress_summary_key_context", lambda *_a, **_k: "key")
+    monkeypatch.setattr(
+        agent_memory,
+        "_compress_summary_round",
+        lambda *_a, **kwargs: (calls.append(kwargs["round_idx"]) or "short recap", "key", []),
+    )
+    monkeypatch.setattr(agent_memory, "compress_tail_fallback", lambda messages, **_k: (messages, True, False))
+
+    _out, _key, _changed, _hints, used_summary, _recap = agent_memory._compress_unified_in_place(
+        history, "session-1", "", force_user_compact=True,
+    )
+
+    assert calls == [1]
     assert used_summary is True
 
 

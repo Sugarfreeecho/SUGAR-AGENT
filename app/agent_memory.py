@@ -1,8 +1,8 @@
 """
 单轨上下文裁剪与摘要：不完整轮与下一条完整轮合并为一段（连续多个不完整轮先接在一起再与后续完整轮合并）；末尾无完整轮可合并时不做裁剪。**例外**：「[压缩摘要]」User 与其后 micro 段须整段保留至下一条真实 user 之前。
 待摘要段先做噪声工具与 reasoning 收敛，再在「完整保留×N 轮」之前收敛中间 ReAct。**计轮时 `[压缩摘要]` User 不计入**
-（与 `trim_message_dicts_by_kept_user_turns` / ui_events 用户数对齐），避免「摘要站掉一轮」导致尾窗错位、上一轮被吃进摘要；达标判定为整包 token（与右上角同口径）≤ CONTEXT_WINDOW×CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）；达到则不再调用摘要模型。
-摘要 LLM 最多 3 轮，保留尾窗逐轮放宽：第 1 轮完整保留 CONTEXT_KEEP_RECENT_TURNS（默认 3）个 user 轮；第 2 轮仅 1 个 user 轮；第 3 轮最后 1 条 user + 至多 CONTEXT_COMPRESS_ROUND3_MAX_REACT（默认 10）次 ReAct assistant 步；仍不达标则截尾兜底。
+（与 `trim_message_dicts_by_kept_user_turns` / ui_events 用户数对齐），避免「摘要站掉一轮」导致尾窗错位、上一轮被吃进摘要；达标判定为当前整包 token ≤ 入口本地整包 token × CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）；达到则不再调用摘要模型。
+摘要有 3 档保留尾窗：第 1 档完整保留 CONTEXT_KEEP_RECENT_TURNS（默认 3）个 user 轮；第 2 档仅 1 个 user 轮；第 3 档最后 1 条 user + 至多 CONTEXT_COMPRESS_ROUND3_MAX_REACT（默认 10）次 ReAct assistant 步。调用模型前先估算尾窗及邻接微压段，超过半窗预算的档位直接跳过；摘要轮尝试次数由 CONTEXT_COMPRESS_MAX_ROUNDS 限制，仍不达标则截尾兜底。
 其后每轮调用一次摘要模型（`compress_history_and_key`），解析 `<recap>` / `<summary>` 后写入 llm 与 key_context；流式结束写 ui_events（context_summary_body / key_context_body）。
 **更早待摘要原文从 llm_history 移除**，顺序为 System（压缩边界）→ User（历史摘要）→ 紧靠尾的微压 legacy 段 → 完整尾部；
 进入**摘要模型**轮次前将本轮**待压缩段**（`work[:idx_full_start]`）快照为 `llm_cprefix_<时间戳>.json`；纯微压/裁剪达标则不备份。
@@ -33,7 +33,7 @@ Phase D：待摘要段噪声裁剪 (_apply_phase_d)
     ├─ 带 tool_calls 的 assistant → 去 reasoning + 正文微压
     └─ 无 tool 的 assistant → 剥 reasoning
     ↓
-达标检查？整包 token ≤ CONTEXT_WINDOW × CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）
+达标检查？整包 token ≤ 入口本地整包 token × CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）
     ↓ 是 → 返回微压后的 work（不调摘要 LLM）
     ↓ 否
 Phase E：完整保留区×3 之前的中间 ReAct 收敛 (_apply_phase_e)
@@ -42,14 +42,14 @@ Phase E：完整保留区×3 之前的中间 ReAct 收敛 (_apply_phase_e)
     ├─ 终稿 assistant 保留
     └─ 中间 ReAct assistant/tool → 微压
     ↓
-达标检查？整包 token ≤ CONTEXT_WINDOW × 0.6
+达标检查？整包 token ≤ 入口本地整包 token × 0.6
     ↓ 是 → 返回微压后的 work
     ↓ 否
-LLM 摘要轮（最多 CONTEXT_COMPRESS_MAX_ROUNDS 轮，默认 3）
-    每轮尾窗逐轮放宽 (_split_prefix_tail_for_summary_round)：
-    ├─ 第 1 轮：tail = 最后 tail_keep（默认 3）个 user 轮
-    ├─ 第 2 轮：tail = 最后 1 个 user 轮
-    └─ 第 3 轮：tail = 最后 1 条 user + 至多 CONTEXT_COMPRESS_ROUND3_MAX_REACT 步 ReAct
+LLM 摘要阶段（最多 CONTEXT_COMPRESS_MAX_ROUNDS 个摘要轮，默认 3；轮内仍可能切换候选或重试格式）
+    预估各档保留区，跳过无法容纳的尾窗 (_choose_summary_round)：
+    ├─ 第 1 档：tail = 最后 tail_keep（默认 3）个 user 轮
+    ├─ 第 2 档：tail = 最后 1 个 user 轮
+    └─ 第 3 档：tail = 最后 1 条 user + 至多 CONTEXT_COMPRESS_ROUND3_MAX_REACT 步 ReAct
     ↓
     单轮 (_compress_summary_round)：
     1. backup_llm_compress_prefix() → sessions/{sid}/llm_cprefix_<ts>.json
@@ -63,7 +63,7 @@ LLM 摘要轮（最多 CONTEXT_COMPRESS_MAX_ROUNDS 轮，默认 3）
        System(Conversation compacted…) → User([压缩摘要] recap) → 微压段 → 完整 tail
     5. prefix 原文从 llm_history 移除
     ↓
-    达标检查？整包 token ≤ CONTEXT_WINDOW × 0.6
+    达标检查？整包 token ≤ 入口本地整包 token × 0.6
     ├─ 是 → 结束摘要 loop
     └─ 否 → 还有轮次？继续下一轮（尾窗更窄）
     ↓
@@ -198,6 +198,9 @@ def _full_pack_tokens_for_session_preview(
     session_id: str,
     preview_llm_history: List,
     key_context: str,
+    *,
+    prompt_language: str = "zh-CN",
+    tools: Optional[List[Mapping[str, Any]]] = None,
 ) -> int:
     """与右上角 `/context_tokens`、`react_node` 上送前整包估算同一函数。"""
     return int(
@@ -205,15 +208,26 @@ def _full_pack_tokens_for_session_preview(
             session_id,
             list(preview_llm_history or []),
             key_context or "",
+            prompt_language,
+            tools=tools,
         )
     )
 
 
-def _full_pack_tokens_compress_work(session_id: str, work: List, key_context: str) -> int:
+def _full_pack_tokens_compress_work(
+    session_id: str,
+    work: List,
+    key_context: str,
+    *,
+    prompt_language: str = "zh-CN",
+    tools: Optional[List[Mapping[str, Any]]] = None,
+) -> int:
     return _full_pack_tokens_for_session_preview(
         session_id,
         _preview_llm_for_ui_estimate(work),
         key_context,
+        prompt_language=prompt_language,
+        tools=tools,
     )
 
 
@@ -222,6 +236,9 @@ def _compress_ratio_reached(
     work: List,
     key_context: str,
     baseline_tokens: int,
+    *,
+    prompt_language: str = "zh-CN",
+    tools: Optional[List[Mapping[str, Any]]] = None,
 ) -> bool:
     """本次压缩是否已相对入口本地基线收缩到目标比例。
 
@@ -229,7 +246,10 @@ def _compress_ratio_reached(
     启动。压缩阶段必须固定使用本地的 A（入口）和 N（当前）比较，避免
     两种口径不一致时把正常流程错误送入截尾兜底。
     """
-    current_tokens = _full_pack_tokens_compress_work(session_id, work, key_context)
+    current_tokens = _full_pack_tokens_compress_work(
+        session_id, work, key_context,
+        prompt_language=prompt_language, tools=tools,
+    )
     baseline = max(1, int(baseline_tokens))
     return float(current_tokens) / float(baseline) <= float(CONTEXT_COMPRESS_TARGET_RATIO)
 
@@ -671,6 +691,55 @@ def _assemble_micro_region_only_snap(snap_full: List, idx_full: int, n_micro: in
     return merged
 
 
+def _choose_summary_round(
+    work: List,
+    first_round: int,
+    tail_keep: int,
+    key_context: str,
+    baseline_tokens: int,
+    estimate_work: Callable[[List, str], int],
+) -> Tuple[Optional[Tuple[int, List, List]], bool, str]:
+    """Choose a token-feasible tail before paying for an executor summary.
+
+    Half a context window is the preferred retained-area ceiling.  The actual
+    local compression target can be looser, so one deepest-tail attempt is
+    permitted when half-window preservation is impossible but the real target
+    remains feasible.  Both checks include static prompt/key context, the
+    micro-shrunk adjacent region, and room for the new recap/key facts.
+    """
+    window = _effective_context_window()
+    actual_budget = min(window, max(1, int(baseline_tokens * float(CONTEXT_COMPRESS_TARGET_RATIO))))
+    preferred_budget = min(actual_budget, max(1, window // 2))
+    headroom = min(4_096, max(32, int(window * 0.03)), max(1, preferred_budget // 10))
+    available: List[Tuple[int, List, List, int]] = []
+    had_prefix = False
+    for candidate_round in range(max(1, first_round), 4):
+        prefix, tail = _split_prefix_tail_for_summary_round(work, candidate_round, tail_keep)
+        if not prefix:
+            continue
+        had_prefix = True
+        # A large tail alone proves that summarizing its prefix cannot meet
+        # this candidate's budget.  Only construct the adjacent micro-region
+        # for candidates with a chance of fitting.
+        if estimate_work(tail, key_context) + headroom > actual_budget:
+            continue
+        micro_prefix = _assemble_micro_region_only_snap(
+            list(prefix) + list(tail), len(prefix), int(CONTEXT_MICRO_WORK_ROUNDS)
+        )
+        projected_floor = estimate_work(micro_prefix + tail, key_context) + headroom
+        available.append((candidate_round, prefix, tail, projected_floor))
+        if projected_floor <= preferred_budget:
+            return (candidate_round, prefix, tail), False, ""
+
+    # If no candidate reaches the preferred half-window budget, retain the
+    # narrowest candidate that can still meet the actual ratio after one LLM
+    # summary.  Repeating the same oversized tail cannot improve that floor.
+    for candidate_round, prefix, tail, projected_floor in reversed(available):
+        if projected_floor <= actual_budget:
+            return (candidate_round, prefix, tail), True, ""
+    return None, False, "retained_floor" if had_prefix else "no_prefix"
+
+
 def _merge_summary_into_work(
     summary: str, micro_prefix: List, tail: List
 ) -> Tuple[List, Optional[str]]:
@@ -706,7 +775,7 @@ def _compress_summary_round(
     _push_progress_hint(
         hint_list,
         hint_sink,
-        f"【上下文摘要】第 {round_idx} 轮：正在生成历史摘要与要点…",
+        f"【上下文摘要】第 {round_idx} 档：正在生成历史摘要与要点…",
         kind="summary",
         session_id=session_id,
         preview_llm_history=preview,
@@ -750,12 +819,12 @@ def _compress_summary_round(
     _push_progress_persist_body(hint_sink, key_body, kind="key")
     if hint_sink is not None and (summary or "").strip():
         _push_progress_hint(
-            hint_list, hint_sink, f"【上下文摘要】第 {round_idx} 轮摘要完成",
+            hint_list, hint_sink, f"【上下文摘要】第 {round_idx} 档摘要完成",
             kind="summary", session_id=session_id, with_pct=False,
         )
     if hint_sink is not None and (key_body or "").strip():
         _push_progress_hint(
-            hint_list, hint_sink, f"【要点】第 {round_idx} 轮要点已写入",
+            hint_list, hint_sink, f"【要点】第 {round_idx} 档要点已写入",
             kind="key", session_id=session_id, with_pct=False,
         )
     return summary, key_body, micro_prefix
@@ -1472,6 +1541,8 @@ def _compress_entry_state(
     *,
     force_user_compact: bool,
     key_context: str = "",
+    prompt_language: str = "zh-CN",
+    tools: Optional[List[Mapping[str, Any]]] = None,
 ) -> Tuple[List, bool, int, int, int, bool, bool]:
     """
     压缩入口判定（context_will_attempt_compress 与 _compress_unified_in_place 共用）。
@@ -1487,6 +1558,8 @@ def _compress_entry_state(
         session_id,
         list(llm_history or []),
         key_context or "",
+        prompt_language=prompt_language,
+        tools=tools,
     )
     pack_over = int(full_pack) > tlim
     ctx_force = bool(force_user_compact) or pack_over
@@ -1514,6 +1587,7 @@ def _compress_unified_in_place(
     force_user_compact: bool,
     hint_sink: Optional[Callable[[Any], None]] = None,
     prompt_language: str = "zh-CN",
+    tools: Optional[List[Mapping[str, Any]]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[List, str, bool, List[str], bool, Optional[str]]:
     hints: List[str] = []
@@ -1537,6 +1611,8 @@ def _compress_unified_in_place(
             session_id,
             force_user_compact=force_user_compact,
             key_context=key_context,
+            prompt_language=prompt_language,
+            tools=tools,
         )
         if not work:
             return list(llm_history or []), key_context, False, hints, False, None
@@ -1546,9 +1622,21 @@ def _compress_unified_in_place(
         idx_keep9 = _full_keep_start_index(work, tail_keep * 3)
 
         new_key = key_context
+        def estimate_work(messages: List, current_key: str) -> int:
+            return _full_pack_tokens_compress_work(
+                session_id, messages, current_key,
+                prompt_language=prompt_language, tools=tools,
+            )
+
+        def ratio_reached(messages: List, current_key: str) -> bool:
+            return _compress_ratio_reached(
+                session_id, messages, current_key, baseline_tokens,
+                prompt_language=prompt_language, tools=tools,
+            )
+
         # A: 本地口径的压缩前基线。T 仅用于外层决定是否进入此流程；此后
         # 每一步都以当前本地 N / A 判断是否已经压缩充分。
-        baseline_tokens = max(1, _full_pack_tokens_compress_work(session_id, work, new_key))
+        baseline_tokens = max(1, estimate_work(work, new_key))
 
         _push_progress_hint(
             hints,
@@ -1573,7 +1661,7 @@ def _compress_unified_in_place(
 
         changed_any = bool(dchg)
         # Phase D 后即可判定是否达标，避免「仅微压已够仍强行跑 Phase E + 摘要模型」
-        if _compress_ratio_reached(session_id, work, new_key, baseline_tokens):
+        if ratio_reached(work, new_key):
             return _preview_llm_for_ui_estimate(work), new_key, changed_any, hints, False, None
 
         _push_progress_hint(
@@ -1600,11 +1688,13 @@ def _compress_unified_in_place(
         changed_any = bool(dchg or ech)
 
         # 本地 N / A 达标后即可退出；不再拿外层触发窗口 T 作为退出条件。
-        if _compress_ratio_reached(session_id, work, new_key, baseline_tokens):
+        if ratio_reached(work, new_key):
             return _preview_llm_for_ui_estimate(work), new_key, changed_any, hints, False, None
 
         cur_key = new_key
         round_idx = 0
+        summary_rounds_used = 0
+        next_policy_round = 1
         used_llm_summary = False
         key_round_chunks: List[str] = []
         _push_progress_hint(
@@ -1621,51 +1711,39 @@ def _compress_unified_in_place(
         while True:
             if should_stop and should_stop():
                 return snapshot_llm, key_context, False, hints, False, None
-            if _compress_ratio_reached(session_id, work, cur_key, baseline_tokens):
+            if ratio_reached(work, cur_key):
                 break
-            round_idx += 1
-            prefix, tail = _split_prefix_tail_for_summary_round(work, round_idx, tail_keep)
-            if not prefix:
-                # “按 user 轮”切不出前缀，不代表当前长 user 轮内没有可摘要
-                # 的 ReAct 步。逐档探测至第 3 轮的步口径；只在确有非空
-                # prefix 时推进，避免轮口径枯竭后过早截尾。
-                next_round: Optional[int] = None
-                for candidate_round in range(round_idx + 1, 4):
-                    probe_prefix, _probe_tail = _split_prefix_tail_for_summary_round(
-                        work,
-                        candidate_round,
-                        tail_keep,
-                    )
-                    if probe_prefix:
-                        next_round = candidate_round
-                        break
-                if next_round is not None:
-                    _push_progress_hint(
-                        hints,
-                        hint_sink,
-                        (
-                            f"【上下文摘要】第 {round_idx} 轮没有足够可摘要的历史前缀，"
-                            f"继续尝试第 {next_round} 轮的更窄尾窗…"
-                        ),
-                        kind="summary",
-                        session_id=session_id,
-                        preview_llm_history=_preview_llm_for_ui_estimate(work),
-                        key_context=cur_key,
-                    )
-                    round_idx = next_round - 1
-                    continue
-                fallback_reason = "no_prefix"
+            choice, one_attempt, no_choice_reason = _choose_summary_round(
+                work, next_policy_round, tail_keep, cur_key, baseline_tokens,
+                estimate_work,
+            )
+            if choice is None:
+                fallback_reason = no_choice_reason
                 _push_progress_hint(
                     hints,
                     hint_sink,
-                    "【上下文摘要】没有足够可摘要的历史前缀，已转入截尾兜底。",
+                    (
+                        "【上下文摘要】保留区本身已超出可用预算，跳过无效摘要并转入截尾兜底。"
+                        if no_choice_reason == "retained_floor" else
+                        "【上下文摘要】没有足够可摘要的历史前缀，已转入截尾兜底。"
+                    ),
                     kind="summary",
                     session_id=session_id,
                     preview_llm_history=_preview_llm_for_ui_estimate(work),
                     key_context=cur_key,
                 )
                 break
-            tokens_before_round = _full_pack_tokens_compress_work(session_id, work, cur_key)
+            round_idx, prefix, tail = choice
+            if round_idx > next_policy_round:
+                _push_progress_hint(
+                    hints, hint_sink,
+                    f"【上下文摘要】保留区预估过长，直接采用第 {round_idx} 档更窄尾窗…",
+                    kind="summary", session_id=session_id,
+                    preview_llm_history=_preview_llm_for_ui_estimate(work),
+                    key_context=cur_key,
+                )
+            next_policy_round = round_idx + 1
+            tokens_before_round = estimate_work(work, cur_key)
             if not _runtime_v2_primary():
                 try:
                     session_manager.backup_llm_compress_prefix(session_id, list(prefix))
@@ -1684,6 +1762,7 @@ def _compress_unified_in_place(
             if should_stop and should_stop():
                 return snapshot_llm, key_context, False, hints, False, None
             used_llm_summary = True
+            summary_rounds_used += 1
             kb = (key_body or "").strip()
             if kb:
                 key_round_chunks.append(kb)
@@ -1695,11 +1774,11 @@ def _compress_unified_in_place(
             work, recap = _merge_summary_into_work(summary, micro_prefix, tail)
             if recap:
                 new_recap_text = recap
-            tokens_after_round = _full_pack_tokens_compress_work(session_id, work, cur_key)
+            tokens_after_round = estimate_work(work, cur_key)
             _push_progress_hint(
                 hints,
                 hint_sink,
-                f"【上下文摘要】完成 {round_idx} 轮历史摘要；完成关键 信息、经验与结论 的记录",
+                f"【上下文摘要】第 {round_idx} 档完成（已执行摘要轮 {summary_rounds_used} 次）；已记录关键信息、经验与结论",
                 kind="summary",
                 session_id=session_id,
                 preview_llm_history=_preview_llm_for_ui_estimate(work),
@@ -1717,27 +1796,39 @@ def _compress_unified_in_place(
                     key_context=cur_key,
                 )
                 break
-            if round_idx == configured_summary_rounds:
+            if one_attempt and not ratio_reached(work, cur_key):
+                fallback_reason = "retained_floor"
+                _push_progress_hint(
+                    hints, hint_sink,
+                    "【上下文摘要】最窄尾窗仍未达到目标，停止重复摘要并转入截尾兜底。",
+                    kind="summary", session_id=session_id,
+                    preview_llm_history=_preview_llm_for_ui_estimate(work),
+                    key_context=cur_key,
+                )
+                break
+            if summary_rounds_used >= configured_summary_rounds and not ratio_reached(work, cur_key):
+                fallback_reason = "max_rounds"
                 _push_progress_hint(
                     hints,
                     hint_sink,
-                    f"【上下文摘要】已完成配置的 {configured_summary_rounds} 轮且尚未达到压缩比，继续进行增量摘要…",
+                    f"【上下文摘要】已完成配置的 {configured_summary_rounds} 轮且尚未达到压缩比，转入截尾兜底。",
                     kind="summary",
                     session_id=session_id,
                     preview_llm_history=_preview_llm_for_ui_estimate(work),
                     key_context=cur_key,
                 )
+                break
 
         new_key = cur_key
 
-        if not _compress_ratio_reached(session_id, work, new_key, baseline_tokens):
+        if not ratio_reached(work, new_key):
             fb, _ok, did_trunc = compress_tail_fallback(
                 _with_marker_systems(snapshot_llm, work),
                 reason="max_rounds",
             )
             logger.debug(
                 "compress exit fallback: fp_final=%s baseline_tokens=%s target_ratio=%s full_pack_entry=%s did_trunc=%s",
-                _full_pack_tokens_compress_work(session_id, work, new_key),
+                estimate_work(work, new_key),
                 baseline_tokens,
                 CONTEXT_COMPRESS_TARGET_RATIO,
                 int(full_pack),
@@ -1752,22 +1843,28 @@ def _compress_unified_in_place(
             elif fallback_reason == "no_progress":
                 if did_trunc:
                     fb_hint = (
-                        f"【上下文摘要】连续摘要未再缩小本地上下文（已尝试 {round_idx} 轮），"
+                        f"【上下文摘要】连续摘要未再缩小本地上下文（已尝试摘要轮 {summary_rounds_used} 次），"
                         "已转入安全截尾兜底。"
                     )
                 else:
                     fb_hint = (
-                        f"【上下文摘要】连续摘要未再缩小本地上下文（已尝试 {round_idx} 轮）；"
+                        f"【上下文摘要】连续摘要未再缩小本地上下文（已尝试摘要轮 {summary_rounds_used} 次）；"
                         "当前尾部已在安全预算内，无需再截尾。"
                     )
+            elif fallback_reason == "retained_floor":
+                fb_hint = (
+                    "【上下文摘要】保留区预估过长，已跳过重复摘要并安全截尾。"
+                    if did_trunc else
+                    "【上下文摘要】保留区预估过长，已跳过重复摘要；无需再截尾。"
+                )
             else:
                 if did_trunc:
                     fb_hint = (
-                        f"【上下文摘要】摘要未达到目标压缩比（已尝试 {round_idx} 轮），"
+                        f"【上下文摘要】摘要未达到目标压缩比（已尝试摘要轮 {summary_rounds_used} 次），"
                         "已丢弃更早对话（保留至多约半窗 token 的尾部）。"
                     )
                 else:
-                    fb_hint = f"【上下文摘要】摘要未达到目标压缩比（已尝试 {round_idx} 轮）；对话已在半窗预算内未再截断。"
+                    fb_hint = f"【上下文摘要】摘要未达到目标压缩比（已尝试摘要轮 {summary_rounds_used} 次）；对话已在半窗预算内未再截断。"
             _push_progress_hint(
                 hints,
                 hint_sink,
@@ -1827,6 +1924,7 @@ def run_context_policy(
     hint_sink: Optional[Callable[[Any], None]] = None,
     context_window: Optional[int] = None,
     prompt_language: str = "zh-CN",
+    tools: Optional[List[Mapping[str, Any]]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[List, str, bool, List[str], bool, Optional[str]]:
     l = list(llm_history)
@@ -1839,6 +1937,7 @@ def run_context_policy(
             force_user_compact=force_user_compact,
             hint_sink=hint_sink,
             prompt_language=prompt_language,
+            tools=tools,
             should_stop=should_stop,
         )
     finally:

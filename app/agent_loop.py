@@ -1130,6 +1130,7 @@ def _run_context_policy_serialized(
     hint_sink: Optional[Callable[[Any], None]] = None,
     context_window: Optional[int] = None,
     prompt_language: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ):
     lock = _context_policy_lock_for_session(session_id)
@@ -1142,6 +1143,7 @@ def _run_context_policy_serialized(
             hint_sink=hint_sink,
             context_window=context_window,
             prompt_language=prompt_language,
+            tools=tools,
             should_stop=should_stop,
         )
 
@@ -5455,6 +5457,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 hint_sink=_compress_hint_emit,
                                 context_window=int(active_context_window),
                                 prompt_language=state.get("_prompt_language", "zh-CN"),
+                                tools=combined_tools,
                                 should_stop=lambda: (
                                     not _state_run_has_write_fence(state)
                                     or _state_interrupt_requested(state)
