@@ -625,6 +625,35 @@ await testAsync('leading subagent evidence mounts the trigger without a prior re
     }
 });
 
+await testAsync('returning from a child refreshes the parent capsule catalog', async () => {
+    subagentCatalogStore.resetForTests();
+    subagentCatalogUIReset();
+    let fetches = 0;
+    subagentCatalogStore.setImplementation({
+        fetchJson: () => { fetches += 1; return Promise.resolve({ subagents: [] }); },
+    });
+    try {
+        context.currentSessionId = 'parent-1';
+        subagentCatalogUi.noteCurrentSession('parent-1');
+        await new Promise((resolve) => setTimeout(resolve, 160));
+        const firstFetches = fetches;
+        assert.ok(firstFetches >= 1);
+        subagentCatalogUi.noteCurrentSession('parent-1');
+        await new Promise((resolve) => setTimeout(resolve, 160));
+        assert.equal(fetches, firstFetches, 'repeated render does not poll immediately');
+        context.currentSessionId = 'child-1';
+        subagentCatalogUi.noteCurrentSession('parent-1');
+        await new Promise((resolve) => setTimeout(resolve, 160));
+        context.currentSessionId = 'parent-1';
+        subagentCatalogUi.noteCurrentSession('parent-1');
+        await new Promise((resolve) => setTimeout(resolve, 160));
+        assert.equal(fetches, firstFetches + 2, 'each navigation reconciles the parent catalog');
+    } finally {
+        context.currentSessionId = undefined;
+        subagentCatalogUIReset();
+    }
+});
+
 await testAsync('switching to a session without evidence keeps the capsule hidden under store notifications (regression)', async () => {
     subagentCatalogStore.resetForTests();
     subagentCatalogUIReset();
@@ -828,7 +857,7 @@ test('reset clears the stack and marks subscribers', () => {
 });
 
 // ── subagent-frames（成员帧桥接） ───────────────────────────────────────────
-await testAsync('subagent_start frame registers a new child row; subagent_finish flips it inactive', async () => {
+await testAsync('subagent_created registers a pending child before start; finish flips it inactive', async () => {
     subagentCatalogStore.resetForTests();
     subagentFrames.resetForTests();
     subagentCatalogStore.setImplementation({
@@ -838,12 +867,16 @@ await testAsync('subagent_start frame registers a new child row; subagent_finish
     try {
         await subagentCatalogStore.refreshCatalogs('parent-1');
         assert.equal(subagentFrames.noteSubagentLifecycleFrame({
-            type: 'subagent_start', agent_id: 'child-9', subagent_type: 'explore', description: 'scan',
+            type: 'subagent_created', agent_id: 'child-9', subagent_type: 'explore', description: 'scan',
         }), true);
         let entries = subagentCatalogStore.entriesOf('parent-1');
         assert.equal(entries.length, 1);
         assert.equal(entries[0].childId, 'child-9');
         assert.equal(entries[0].activity, 'running');
+        assert.equal(entries[0].raw.status, 'pending');
+        assert.equal(subagentFrames.noteSubagentLifecycleFrame({
+            type: 'subagent_start', agent_id: 'child-9', subagent_type: 'explore', description: 'scan',
+        }), true);
         assert.equal(subagentFrames.noteSubagentLifecycleFrame({
             type: 'subagent_finish', agent_id: 'child-9', ok: true,
         }), true);

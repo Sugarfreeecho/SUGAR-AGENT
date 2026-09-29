@@ -67,10 +67,11 @@ var subagentFrames = (function () {
         var storeRef = store();
         if (!storeRef) return false;
         var parentId = currentParentSessionId();
-        if (type === 'subagent_start' || type === 'subagent_started') {
+        if (type === 'subagent_created' || type === 'subagent_start' || type === 'subagent_started') {
             if (!parentId) return false;
             if (storeRef.getAddress(cid)) {
-                return storeRef.handleSessionStatus(cid, true);
+                storeRef.handleSessionStatus(cid, true);
+                return true;
             }
             var added = storeRef.handleSessionAdded({
                 id: cid,
@@ -78,7 +79,7 @@ var subagentFrames = (function () {
                 subagent_type: event.subagent_type || event.subagentType || '',
                 description: event.description || '',
                 running: true,
-                status: 'running',
+                status: type === 'subagent_created' ? 'pending' : 'running',
             });
             if (!added) {
                 // 目录尚未覆盖该子代理：记下"有此会话存在子代理"作为证据，

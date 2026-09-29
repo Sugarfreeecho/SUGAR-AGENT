@@ -518,6 +518,8 @@ var subagentCatalogUi = (function () {
     // ── 订阅：目录/寻址变化时重绘 ────────────────────────────────────────────
     var refreshDebounceTimer = null;
     var lastRefreshedParentId = '';
+    var lastRefreshedSessionId = '';
+    var lastRefreshedAt = 0;
 
     /** 当前标题行（面包屑第一行）——不依赖触发器是否已挂载。 */
     function currentTitleRow() {
@@ -545,8 +547,13 @@ var subagentCatalogUi = (function () {
         var storeRef = store();
         var pid = String(parentId || '');
         if (!storeRef || !pid) return;
-        if (pid === lastRefreshedParentId) return;
+        var visibleSessionId = typeof currentSessionId !== 'undefined'
+            ? String(currentSessionId || '') : '';
+        if (pid === lastRefreshedParentId && visibleSessionId === lastRefreshedSessionId
+            && Date.now() - lastRefreshedAt < 5000) return;
         lastRefreshedParentId = pid;
+        lastRefreshedSessionId = visibleSessionId;
+        lastRefreshedAt = Date.now();
         if (refreshDebounceTimer != null) clearTimeout(refreshDebounceTimer);
         refreshDebounceTimer = setTimeout(function () {
             refreshDebounceTimer = null;
@@ -617,6 +624,9 @@ var subagentCatalogUi = (function () {
         rows = [];
         focusedIndex = -1;
         activeParentId = '';
+        lastRefreshedParentId = '';
+        lastRefreshedSessionId = '';
+        lastRefreshedAt = 0;
         triggerEl = null;
         menuEl = null;
         if (unsubscribeStore) {

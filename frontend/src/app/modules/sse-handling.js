@@ -488,6 +488,11 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                        到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。
                        只把"该子代理在活动"作为成员帧喂给目录对象层（学 dsh：不建专属事件流）。 */
                     if (parsed.agent_id) {
+                        if (parsed.type === 'subagent_created' || parsed.type === 'subagent_start'
+                            || parsed.type === 'subagent_finish') {
+                            if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(parsed);
+                            continue;
+                        }
                         if (typeof noteSubagentActivity === 'function') noteSubagentActivity(parsed.agent_id, true);
                         continue;
                     }
@@ -1964,9 +1969,21 @@ function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {
     return message.endsWith(suffix) ? message : message + suffix;
 }
 
+function isSubagentComposerSession(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return false;
+    var top = typeof subagentAddressing !== 'undefined' && subagentAddressing
+        && typeof subagentAddressing.current === 'function'
+        ? subagentAddressing.current() : null;
+    if (top && String(top.childSessionId || '') === sid) return true;
+    var session = sessionStore.get(sid);
+    return !!(session && (session.parent_id || session.parent_session_id || session.is_subagent));
+}
+
 function enqueueCurrentInputAsFollowup(options) {
     options = options || {};
-    if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)) return false;
+    if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)
+        && !isSubagentComposerSession(currentSessionId)) return false;
     if (isChatFileUploadBusy()) return false;
     const sid = currentSessionId;
     if (!sid) return false;
@@ -1986,6 +2003,10 @@ function enqueueCurrentInputAsFollowup(options) {
         : [];
     var item = appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills, attachments);
     if (!item) return false;
+    if (isSubagentComposerSession(sid)) {
+        item.steerMode = 'append';
+        persistFollowupQueue(sid);
+    }
     recentComposerQueuedFollowup = { sessionId: sid, itemId: String(item.id) };
     if (options.pendingQuestion || attachments.length) {
         item.awaitingRunEnd = true;
@@ -3549,7 +3570,8 @@ function dispatchComposerAction(allowStop) {
     }
     if (queueComposerBehindPendingQuestion(state)) return true;
     if (state.running) {
-        const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
+        const canQueueFollowup = (isMyAgentFeatureEnabled('followupRestart', false)
+            || isSubagentComposerSession(state.sessionId))
             && state.sendable
             && !state.uploadBusy
             && !(state.activeRun && state.activeRun.suppressFollowupButton);

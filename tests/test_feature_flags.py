@@ -347,7 +347,8 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "projected-reconcile" not in sse
     assert "messages?after_index=" not in sse
     assert "function enqueueCurrentInputAsFollowup(options)" in sse
-    assert "if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)) return false;" in sse
+    assert "if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)" in sse
+    assert "&& !isSubagentComposerSession(currentSessionId)) return false;" in sse
     assert "function dispatchComposerAction(allowStop)" in sse
     assert "function onComposerInputKeydown(e)" in sse
     assert "isInputMethodComposing(e)" in sse
@@ -1195,6 +1196,30 @@ def test_followup_restart_enabled_prefers_native_steer(monkeypatch):
     assert payload["item"]["content"] == "continue now"
     assert payload["item"]["client_id"] == "cid-1"
     assert fake_manager.interrupts == []
+
+
+def test_child_steer_never_starts_a_competing_chat_run(monkeypatch):
+    import webui
+
+    monkeypatch.setenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1")
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: sid == "child")
+    monkeypatch.setattr(webui, "_is_subagent_execution_active", lambda sid: sid == "child")
+    monkeypatch.setattr(webui, "enqueue_session_steer", lambda *_args, **_kwargs: {
+        "ok": True, "item": {"id": "steer-1", "mode": "interrupt"},
+    })
+    monkeypatch.setattr(webui, "abort_session_steer_run", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(webui, "_interrupt_runtime_v2_active_runs", lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(AssertionError("must not replace the subagent with /chat"))
+    ))
+
+    response = asyncio.run(webui.post_session_steer(
+        "child", _FakeJsonRequest({"message": "continue", "client_id": "cid",
+                                   "mode": "interrupt"}),
+    ))
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["ok"] is True
+    assert payload["restart"] is False
+    assert payload["aborted"] is False
 
 
 def test_append_steer_is_accepted_without_aborting_active_run(monkeypatch):

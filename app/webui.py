@@ -615,6 +615,14 @@ def _is_session_stream_active(sid: str) -> bool:
     return bool(_session_run_state_fields(x).get("stream_active"))
 
 
+def _is_subagent_execution_active(sid: str) -> bool:
+    try:
+        from agent_subagent import subagent_registry
+        return subagent_registry.is_running(sid)
+    except Exception:
+        return False
+
+
 def _reserve_session_chat_start(sid: str, run_id: str = "") -> Optional[str]:
     x = str(sid or "").strip()
     if not x:
@@ -702,6 +710,8 @@ def _has_local_worker_activity(sid: str) -> bool:
     if not sid:
         return False
     if bool(is_run_active(sid)):
+        return True
+    if _is_subagent_execution_active(sid):
         return True
     with _chat_start_lock:
         return sid in _chat_starting_by_session
@@ -1511,6 +1521,9 @@ def _session_run_state_fields(sid: str) -> dict:
         # durable run_interrupted event and therefore belongs only to explicit
         # lifecycle/recovery paths, never to GET /sessions or busy checks.
         v2_info = _runtime_v2_active_run_info(sid)
+        if not v2_info and _is_subagent_execution_active(sid):
+            v2_info = {"session_id": sid, "run_active": True,
+                       "subagent": True, "runtime_v2": True}
         if not v2_info:
             return {
                 "stream_active": False,
@@ -1527,7 +1540,7 @@ def _session_run_state_fields(sid: str) -> dict:
             "stream_connections": stream_connections,
             "active_run": dict(v2_info, stream_connections=stream_connections),
         }
-    legacy_run_active = bool(is_run_active(sid))
+    legacy_run_active = bool(is_run_active(sid) or _is_subagent_execution_active(sid))
     started_at = get_run_started_at(sid)
     return {
         "stream_active": legacy_run_active,
@@ -1568,7 +1581,8 @@ def _session_run_state_fields_light(sid: str) -> dict:
     # Transport connections are health/observation data, not lifecycle state.
     # A socket that is still draining after a durable terminal must never
     # reopen the run in /sessions/state.
-    run_active = bool(local_run_active or starting)
+    subagent_active = _is_subagent_execution_active(sid)
+    run_active = bool(local_run_active or starting or subagent_active)
     started_at = None
     if local_run_active:
         started_at = (
@@ -1593,6 +1607,7 @@ def _session_run_state_fields_light(sid: str) -> dict:
             started_at=started_at,
             runtime_v2=is_runtime_v2,
             lightweight=True,
+            subagent=subagent_active,
         ) if run_active else None,
     }
 
@@ -4489,6 +4504,12 @@ async def post_session_steer(session_id: str, request: Request):
         result["aborted"] = False
         result["restart"] = False
         return JSONResponse(content=result)
+    if _is_subagent_execution_active(sid):
+        # A subagent owns this session through task(), not /chat. The steer is
+        # consumed by its ReAct loop; never launch a competing chat replacement.
+        result["aborted"] = abort_session_steer_run(sid, reason="steer")
+        result["restart"] = False
+        return JSONResponse(content=result)
     result["aborted"] = abort_session_steer_run(sid, reason="steer")
     if result["aborted"]:
         transitioned = transition_session_steer(
@@ -5537,8 +5558,17 @@ async def stream_session_events(
                             yield "data: [DONE]\n\n"
                             return
                     try:
-                        event = await asyncio.wait_for(asyncio.shield(next_live_event), timeout=15.0)
+                        event = await asyncio.wait_for(
+                            asyncio.shield(next_live_event),
+                            timeout=1.0 if _is_subagent_execution_active(sid) else 15.0,
+                        )
                     except asyncio.TimeoutError:
+                        if _is_subagent_execution_active(sid) or not _has_local_worker_activity(sid):
+                            async for payload in drain_projection(projection):
+                                yield payload
+                            if not _has_local_worker_activity(sid):
+                                yield "data: [DONE]\n\n"
+                                return
                         yield f": observer keepalive {cursor}\n\n"
                         continue
                     except StopAsyncIteration:

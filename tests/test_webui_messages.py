@@ -1463,6 +1463,24 @@ def test_lightweight_status_does_not_treat_terminal_transport_as_active(monkeypa
     assert state["stream_connections"] == 1
 
 
+def test_running_subagent_appears_active_to_history_stream_and_chat_guard(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_is_subagent_execution_active", lambda sid: sid == "child")
+    monkeypatch.setattr(webui, "get_active_run_info", lambda _sid: None)
+    monkeypatch.setattr(webui, "is_run_active", lambda _sid: False)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(webui, "_chat_starting_by_session", {})
+    monkeypatch.setattr(webui, "_runtime_v2_active_run_info", lambda _sid: {})
+
+    state = webui._session_run_state_fields_light("child")
+    assert state["run_active"] is True
+    assert state["stream_active"] is True
+    assert state["active_run"]["subagent"] is True
+    assert webui._has_local_worker_activity("child") is True
+    assert webui._reserve_session_chat_start("child") is None
+
+
 def test_clear_unread_result_is_run_scoped_and_invalidates_state_cache(monkeypatch):
     import webui
 

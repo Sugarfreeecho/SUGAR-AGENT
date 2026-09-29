@@ -4317,10 +4317,11 @@ var subagentFrames = (function () {
         var storeRef = store();
         if (!storeRef) return false;
         var parentId = currentParentSessionId();
-        if (type === 'subagent_start' || type === 'subagent_started') {
+        if (type === 'subagent_created' || type === 'subagent_start' || type === 'subagent_started') {
             if (!parentId) return false;
             if (storeRef.getAddress(cid)) {
-                return storeRef.handleSessionStatus(cid, true);
+                storeRef.handleSessionStatus(cid, true);
+                return true;
             }
             var added = storeRef.handleSessionAdded({
                 id: cid,
@@ -4328,7 +4329,7 @@ var subagentFrames = (function () {
                 subagent_type: event.subagent_type || event.subagentType || '',
                 description: event.description || '',
                 running: true,
-                status: 'running',
+                status: type === 'subagent_created' ? 'pending' : 'running',
             });
             if (!added) {
                 // 目录尚未覆盖该子代理：记下"有此会话存在子代理"作为证据，
@@ -4913,6 +4914,8 @@ var subagentCatalogUi = (function () {
     // ── 订阅：目录/寻址变化时重绘 ────────────────────────────────────────────
     var refreshDebounceTimer = null;
     var lastRefreshedParentId = '';
+    var lastRefreshedSessionId = '';
+    var lastRefreshedAt = 0;
 
     /** 当前标题行（面包屑第一行）——不依赖触发器是否已挂载。 */
     function currentTitleRow() {
@@ -4940,8 +4943,13 @@ var subagentCatalogUi = (function () {
         var storeRef = store();
         var pid = String(parentId || '');
         if (!storeRef || !pid) return;
-        if (pid === lastRefreshedParentId) return;
+        var visibleSessionId = typeof currentSessionId !== 'undefined'
+            ? String(currentSessionId || '') : '';
+        if (pid === lastRefreshedParentId && visibleSessionId === lastRefreshedSessionId
+            && Date.now() - lastRefreshedAt < 5000) return;
         lastRefreshedParentId = pid;
+        lastRefreshedSessionId = visibleSessionId;
+        lastRefreshedAt = Date.now();
         if (refreshDebounceTimer != null) clearTimeout(refreshDebounceTimer);
         refreshDebounceTimer = setTimeout(function () {
             refreshDebounceTimer = null;
@@ -5012,6 +5020,9 @@ var subagentCatalogUi = (function () {
         rows = [];
         focusedIndex = -1;
         activeParentId = '';
+        lastRefreshedParentId = '';
+        lastRefreshedSessionId = '';
+        lastRefreshedAt = 0;
         triggerEl = null;
         menuEl = null;
         if (unsubscribeStore) {
@@ -20383,6 +20394,11 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                        到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。
                        只把"该子代理在活动"作为成员帧喂给目录对象层（学 dsh：不建专属事件流）。 */
                     if (parsed.agent_id) {
+                        if (parsed.type === 'subagent_created' || parsed.type === 'subagent_start'
+                            || parsed.type === 'subagent_finish') {
+                            if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(parsed);
+                            continue;
+                        }
                         if (typeof noteSubagentActivity === 'function') noteSubagentActivity(parsed.agent_id, true);
                         continue;
                     }
@@ -21859,9 +21875,21 @@ function buildSelectedSkillsDisplayMessage(rawMessage, selectedSkills) {
     return message.endsWith(suffix) ? message : message + suffix;
 }
 
+function isSubagentComposerSession(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return false;
+    var top = typeof subagentAddressing !== 'undefined' && subagentAddressing
+        && typeof subagentAddressing.current === 'function'
+        ? subagentAddressing.current() : null;
+    if (top && String(top.childSessionId || '') === sid) return true;
+    var session = sessionStore.get(sid);
+    return !!(session && (session.parent_id || session.parent_session_id || session.is_subagent));
+}
+
 function enqueueCurrentInputAsFollowup(options) {
     options = options || {};
-    if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)) return false;
+    if (!options.pendingQuestion && !isMyAgentFeatureEnabled('followupRestart', false)
+        && !isSubagentComposerSession(currentSessionId)) return false;
     if (isChatFileUploadBusy()) return false;
     const sid = currentSessionId;
     if (!sid) return false;
@@ -21881,6 +21909,10 @@ function enqueueCurrentInputAsFollowup(options) {
         : [];
     var item = appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills, attachments);
     if (!item) return false;
+    if (isSubagentComposerSession(sid)) {
+        item.steerMode = 'append';
+        persistFollowupQueue(sid);
+    }
     recentComposerQueuedFollowup = { sessionId: sid, itemId: String(item.id) };
     if (options.pendingQuestion || attachments.length) {
         item.awaitingRunEnd = true;
@@ -23444,7 +23476,8 @@ function dispatchComposerAction(allowStop) {
     }
     if (queueComposerBehindPendingQuestion(state)) return true;
     if (state.running) {
-        const canQueueFollowup = isMyAgentFeatureEnabled('followupRestart', false)
+        const canQueueFollowup = (isMyAgentFeatureEnabled('followupRestart', false)
+            || isSubagentComposerSession(state.sessionId))
             && state.sendable
             && !state.uploadBusy
             && !(state.activeRun && state.activeRun.suppressFollowupButton);
