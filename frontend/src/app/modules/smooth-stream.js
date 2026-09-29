@@ -5,16 +5,35 @@ const SMOOTH_STREAM_CONFIG = Object.freeze({
     revealDivisor: 8,
     referenceFrameMs: 16.67,
     followTargetEpsilonPx: 0.25,
-    followDurationMs: 160,
+    followStiffness: 180,
     maxFollowStepPx: 20,
     unpinWheelPx: 8,
     gestureWindowMs: 800,
 });
 
-// Text wrapping and whole-row layout changes use the same finite glide.
-function smoothFollowEaseOutCubic(progress) {
-    var remaining = 1 - smoothStreamClamp(progress, 0, 1);
-    return 1 - remaining * remaining * remaining;
+// Text wrapping and whole-row layout changes use one velocity-continuous
+// follower. The exact critically damped step is stable across frame lengths.
+// A fixed stiffness (DeepSeek-style soft spring) keeps the motion gentle:
+// the response ω = sqrt(followStiffness) never scales up with distance.
+function computeSmoothFollowSpringStep(lagPx, velocityPxPerSec, dtMs) {
+    var lag = Math.max(0, Number(lagPx) || 0);
+    var velocity = Math.max(0, Number(velocityPxPerSec) || 0);
+    var seconds = Math.max(0, Number(dtMs) || 0) / 1000;
+    if (lag <= 0 || seconds <= 0) return { advancePx: 0, velocityPxPerSec: 0 };
+    // Fixed-stiffness critical damping (DeepSeek-style soft glide):
+    // ω = sqrt(stiffness) is a constant, so distance never speeds it up and
+    // the last pixels of a glide ease out over a few hundred milliseconds.
+    var response = Math.sqrt(SMOOTH_STREAM_CONFIG.followStiffness);
+    var coefficient = velocity - response * lag;
+    var decay = Math.exp(-response * seconds);
+    var remaining = (-lag + coefficient * seconds) * decay;
+    return {
+        advancePx: smoothStreamClamp(lag + remaining, 0, lag),
+        velocityPxPerSec: Math.max(
+            0,
+            (velocity - response * coefficient * seconds) * decay
+        ),
+    };
 }
 
 function smoothStreamClamp(value, min, max) {
@@ -81,10 +100,7 @@ function createSmoothFollowController() {
             following: false,
             readerDetached: false,
             animatedTop: 0,
-            lastFloor: null,
-            slideFrom: 0,
-            slideTo: 0,
-            slideStartMs: 0,
+            followVelocityPxPerSec: 0,
             lastWrittenTop: 0,
             ownedUntil: 0,
             awayPx: 0,
@@ -194,21 +210,12 @@ function createSmoothFollowController() {
             var floor = Math.max(0, Number(port.scrollHeight) - Number(port.clientHeight));
             // A shrinking scroll range can force the browser to clamp scrollTop.
             // Keep our float position within that range before retargeting.
+            if (state.animatedTop > floor) state.followVelocityPxPerSec = 0;
             state.animatedTop = Math.min(floor, Math.max(0, state.animatedTop));
-            if (
-                state.lastFloor == null
-                || Math.abs(floor - state.lastFloor) > SMOOTH_STREAM_CONFIG.followTargetEpsilonPx
-            ) {
-                state.lastFloor = floor;
-                state.slideFrom = state.animatedTop;
-                state.slideTo = floor;
-                // Advance on this very frame. Row-height animations can move
-                // the floor every frame; starting at now would keep p at zero.
-                state.slideStartMs = now - dtMs;
-            }
             var lag = floor - state.animatedTop;
             if (lag <= SMOOTH_STREAM_CONFIG.followTargetEpsilonPx) {
                 state.animatedTop = floor;
+                state.followVelocityPxPerSec = 0;
                 state.lastWrittenTop = floor;
                 state.ownedUntil = now + 100;
                 if (Math.abs((Number(port.scrollTop) || 0) - floor) > 0.1) {
@@ -224,21 +231,34 @@ function createSmoothFollowController() {
                 port.setAttribute('data-smooth-follow-owned', '1');
                 return;
             }
-            var progress = (now - state.slideStartMs) / SMOOTH_STREAM_CONFIG.followDurationMs;
-            var desiredTop = state.slideFrom
-                + (state.slideTo - state.slideFrom) * smoothFollowEaseOutCubic(progress);
-            var previousTop = state.animatedTop;
-            state.animatedTop = Math.min(
-                floor,
-                Math.max(state.animatedTop, desiredTop),
-                previousTop + SMOOTH_STREAM_CONFIG.maxFollowStepPx
+            var spring = computeSmoothFollowSpringStep(
+                lag, state.followVelocityPxPerSec, dtMs
             );
+            // A soft spring may take a few hundred milliseconds to settle;
+            // the absolute per-frame cap still guards large layout jumps.
+            var advance = Math.min(
+                lag,
+                spring.advancePx,
+                SMOOTH_STREAM_CONFIG.maxFollowStepPx
+            );
+            var previousTop = state.animatedTop;
+            state.animatedTop = previousTop + advance;
             // Finish tiny residuals only when the total frame displacement
             // still fits under the cap. Large backlogs take additional frames.
             if (
                 floor - state.animatedTop <= SMOOTH_STREAM_CONFIG.followTargetEpsilonPx
                 && floor - previousTop <= SMOOTH_STREAM_CONFIG.maxFollowStepPx
-            ) state.animatedTop = floor;
+            ) {
+                state.animatedTop = floor;
+                state.followVelocityPxPerSec = 0;
+            } else {
+                // The frame cap can shorten the spring's actual step.
+                // Carry the actual velocity into the next frame to avoid a
+                // hidden jump when the target changes again.
+                state.followVelocityPxPerSec = Math.abs(advance - spring.advancePx) > 0.000001
+                    ? advance * 1000 / dtMs
+                    : spring.velocityPxPerSec;
+            }
             state.lastWrittenTop = state.animatedTop;
             state.ownedUntil = now + 100;
             port.setAttribute('data-smooth-follow-owned', '1');
@@ -264,7 +284,7 @@ function createSmoothFollowController() {
         if (state.readerDetached && options.force !== true) return;
         if (!state.following) {
             state.animatedTop = Math.max(0, Number(port.scrollTop) || 0);
-            state.lastFloor = null;
+            state.followVelocityPxPerSec = 0;
         }
         state.following = true;
         state.onUnpin = typeof options.onUnpin === 'function' ? options.onUnpin : state.onUnpin;
@@ -320,7 +340,7 @@ function createSmoothFollowController() {
         var floor = Math.max(0, Number(port.scrollHeight) - Number(port.clientHeight));
         if (state) {
             state.animatedTop = floor;
-            state.lastFloor = floor;
+            state.followVelocityPxPerSec = 0;
             state.lastWrittenTop = floor;
         }
         var hasInlineStyle = !!(port.style && typeof port.style === 'object');

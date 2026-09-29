@@ -41,7 +41,7 @@ globalThis.__smoothStreamTest = {
   isSmoothStreamActive,
   computeSmoothRevealCount,
   takeSmoothTextPrefix,
-  smoothFollowEaseOutCubic,
+  computeSmoothFollowSpringStep,
   smoothFollowController,
   animateSmoothTraceRowInsertion,
   mutateSmoothTraceRowHeight,
@@ -60,10 +60,12 @@ assert.equal(unicode.segment, 'A😀');
 assert.equal(unicode.rest, '中');
 assert.equal(unicode.count, 2);
 
-assert.equal(api.config.followDurationMs, 160);
+assert.equal(api.config.followStiffness, 180);
 assert.equal(api.config.maxFollowStepPx, 20);
-assert.equal(api.smoothFollowEaseOutCubic(0), 0);
-assert.equal(api.smoothFollowEaseOutCubic(1), 1);
+const firstSpringStep = api.computeSmoothFollowSpringStep(19, 0, 16.67);
+assert(firstSpringStep.advancePx > 0.3 && firstSpringStep.advancePx < 0.6,
+  'a single wrapped line should ease in without a first-frame jump');
+assert(firstSpringStep.velocityPxPerSec > 0);
 
 function fakePort() {
   const listeners = Object.create(null);
@@ -156,13 +158,17 @@ const oneLine = followedPort();
 oneLine.scrollHeight += 19;
 let lineFrames = 0;
 let lineMaxStep = 0;
+let lineFirstStep = 0;
 while (oneLine.scrollTop < 419 && lineFrames < 30) {
-  lineMaxStep = Math.max(lineMaxStep, recordedFrame(oneLine));
+  const moved = recordedFrame(oneLine);
+  if (lineFrames === 0) lineFirstStep = moved;
+  lineMaxStep = Math.max(lineMaxStep, moved);
   lineFrames++;
 }
-assert(lineFrames > 2 && lineFrames * 16.67 <= 250,
+assert(lineFrames > 2 && lineFrames * 16.67 <= 550,
   `19px wrapping should glide then stop; took ${lineFrames} frames`);
-assert(lineMaxStep < 20);
+assert(lineFirstStep < 3 && lineMaxStep < 5,
+  'a single wrapped line should start gently and remain smooth');
 for (let i = 0; i < 20; i++) {
   assert.equal(recordedFrame(oneLine), 0, 'a pause must have no lingering tail');
 }
@@ -175,7 +181,7 @@ for (let burst = 0; burst < 2; burst++) {
   let movingFrames = 0;
   while (slowOutput.scrollTop < slowOutput.scrollHeight - slowOutput.clientHeight) {
     recordedFrame(slowOutput);
-    assert(++movingFrames * 16.67 <= 250);
+    assert(++movingFrames * 16.67 <= 550);
   }
   slowMovingFrames.push(movingFrames);
   for (let i = 0; i < 45; i++) assert.equal(recordedFrame(slowOutput), 0);
@@ -187,12 +193,16 @@ let fastPeakLag = 0;
 let fastPeakStep = 0;
 for (let i = 0; i < 120; i++) {
   if (i % 2 === 0) fastOutput.scrollHeight += 19; // one wrapped line each ~33ms
-  fastPeakStep = Math.max(fastPeakStep, recordedFrame(fastOutput));
+  const moved = recordedFrame(fastOutput);
+  assert(moved > 0, 'frequent wrapping must keep motion continuous');
+  fastPeakStep = Math.max(fastPeakStep, moved);
   fastPeakLag = Math.max(fastPeakLag,
     fastOutput.scrollHeight - fastOutput.clientHeight - fastOutput.scrollTop);
 }
-assert(fastPeakLag <= 19 * 1.5,
-  `frequent wrapping lagged ${fastPeakLag}px, above 1.5 lines`);
+// A fixed-stiffness soft spring trails a steadily growing target by its
+// steady-state ramp error 2v/ω (≈85px at this synthetic 570px/s rate).
+assert(fastPeakLag <= 19 * 5,
+  `frequent wrapping lagged ${fastPeakLag}px, above 5 lines`);
 assert(fastPeakStep > 0 && fastPeakStep < 20);
 api.smoothFollowController.cancel(fastOutput);
 
@@ -208,31 +218,31 @@ for (let i = 0; i < 12; i++) {
   rowPeakLag = Math.max(rowPeakLag,
     growingRow.scrollHeight - growingRow.clientHeight - growingRow.scrollTop);
 }
-assert(rowPeakLag <= 19 * 1.5);
+assert(rowPeakLag <= 19 * 5);
 let rowSettleFrames = 0;
-while (growingRow.scrollTop < 520 && rowSettleFrames < 20) {
+while (growingRow.scrollTop < 520 && rowSettleFrames < 60) {
   recordedFrame(growingRow);
   rowSettleFrames++;
 }
-assert(rowSettleFrames * 16.67 <= 250);
+assert(rowSettleFrames * 16.67 <= 650);
 api.smoothFollowController.cancel(growingRow);
 
 const mediumRow = followedPort();
 mediumRow.scrollHeight += 200;
 let mediumFrames = 0;
 let mediumPeakStep = 0;
-while (mediumRow.scrollTop < 600 && mediumFrames < 30) {
+while (mediumRow.scrollTop < 600 && mediumFrames < 60) {
   mediumPeakStep = Math.max(mediumPeakStep, recordedFrame(mediumRow));
   mediumFrames++;
 }
-assert(mediumFrames * 16.67 <= 250);
+assert(mediumFrames * 16.67 <= 800);
 api.smoothFollowController.cancel(mediumRow);
 
 const largeRow = followedPort();
 largeRow.scrollHeight += 400;
 for (let i = 0; i < 15; i++) recordedFrame(largeRow);
 assert(largeRow.scrollTop < 800,
-  'a large backlog must not break the frame cap to meet the duration');
+  'a large backlog must stay under the absolute frame cap');
 while (largeRow.scrollTop < 800) recordedFrame(largeRow);
 api.smoothFollowController.cancel(largeRow);
 
@@ -262,7 +272,7 @@ caughtUpPort.scrollHeight += 18;
 caughtUpPort.scrollTop = 418;
 runNextFrame();
 assert(caughtUpPort.scrollTop > 400 && caughtUpPort.scrollTop < 418);
-for (let i = 0; i < 15; i++) recordedFrame(caughtUpPort);
+for (let i = 0; i < 35; i++) recordedFrame(caughtUpPort);
 assert.equal(caughtUpPort.scrollTop, 418,
   'a still-streaming row must settle without waiting for its streaming flag');
 caughtUpPort.scrollHeight += 18;
@@ -320,7 +330,8 @@ assert.equal(api.smoothFollowController.isFollowing(disabledPort), false);
 if (process.argv.includes('--report')) {
   console.log(JSON.stringify({
     frameMs: 16.67,
-    single19: { settleMs: +(lineFrames * 16.67).toFixed(1), maxStepPx: +lineMaxStep.toFixed(2) },
+    single19: { settleMs: +(lineFrames * 16.67).toFixed(1),
+      firstStepPx: +lineFirstStep.toFixed(2), maxStepPx: +lineMaxStep.toFixed(2) },
     slow19: { settleMs: slowMovingFrames.map(n => +(n * 16.67).toFixed(1)),
       stoppedFramesPerBurst: 45 },
     fast19Every33ms: { maxLagPx: +fastPeakLag.toFixed(2),

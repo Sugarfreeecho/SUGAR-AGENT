@@ -81,10 +81,11 @@ def test_text_reveal_and_unified_follow_contract():
     assert "llmArrivalCpsEma" not in scrolling
     assert "textWarmupMs" not in smooth
     assert "function mutateSmoothTraceTextHeight" not in smooth
-    assert "followDurationMs: 160" in smooth
+    assert "followStiffness: 180" in smooth
+    assert "Math.sqrt(SMOOTH_STREAM_CONFIG.followStiffness)" in smooth
     assert "maxFollowStepPx: 20" in smooth
-    assert "function smoothFollowEaseOutCubic" in smooth
-    assert "state.slideStartMs = now - dtMs;" in smooth
+    assert "function computeSmoothFollowSpringStep" in smooth
+    assert "followDeadlineMs" not in smooth
     assert "SMOOTH_STREAM_FOLLOW_PROFILES" not in smooth
     assert "minFollowSpeedPxPerSec" not in smooth
     assert "traceHeightStableSince" not in smooth
