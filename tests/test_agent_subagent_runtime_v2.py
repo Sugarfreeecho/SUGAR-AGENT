@@ -29,6 +29,16 @@ def test_task_action_status_routes_without_starting_subagent(monkeypatch):
     assert result == "status:parent-1:child-1"
 
 
+def test_best_of_result_reports_failed_attempts():
+    import agent_subagent
+
+    result = agent_subagent._format_best_of_results(
+        "run-1", "audit", ["successful attempt", RuntimeError("startup failed")],
+    )
+    assert "finished with errors" in result
+    assert "Error: startup failed" in result
+
+
 def test_task_action_resume_requires_a_real_followup_prompt():
     import agent_subagent
 
@@ -41,6 +51,35 @@ def test_task_action_resume_requires_a_real_followup_prompt():
 
     assert "requires a non-empty follow-up prompt" in result
     assert "action=collect" in result
+
+
+def test_resume_keeps_existing_explore_and_readonly_tool_profile(monkeypatch):
+    import agent_subagent
+
+    class Manager:
+        def get_session_subagent_depth(self, _parent):
+            return 0
+
+        def validate_subagent_resume(self, _parent, child):
+            return child
+
+        def _load_metadata(self, _child):
+            return {"subagent_type": "explore", "readonly_strict": True}
+
+    async def capture_run(**kwargs):
+        return kwargs
+
+    monkeypatch.setattr(agent_subagent, "session_manager", Manager())
+    monkeypatch.setattr(agent_subagent, "list_executor_model_profile_choices", lambda: [])
+    monkeypatch.setattr(agent_subagent, "_execute_subagent_run", capture_run)
+
+    result = asyncio.run(agent_subagent._run_single_subagent(
+        tool_args={"action": "resume", "resume": "child", "prompt": "continue"},
+        parent_session_id="parent",
+    ))
+
+    assert result["subagent_type"] == "explore"
+    assert "严格只读" in result["user_text"]
 
 
 def test_task_action_switch_model_routes_to_existing_subagent(monkeypatch):
@@ -1053,9 +1092,137 @@ def test_subagent_react_exception_is_visible_in_child_history(monkeypatch, tmp_p
 
     assert "model startup failed" in result
     assert captured["task_patches"][-1][2]["status"] == "failed"
-    assert [event[1]["type"] for event in captured["events"]][:2] == ["user", "final"]
+    from runtime_v2.event_log import SessionEventLog
+    committed = SessionEventLog(tmp_path).read_all("child")
+    assert any(event.type == "user_turn_committed"
+               and event.payload.get("content") == "task" for event in committed)
+    assert [event[1]["type"] for event in captured["events"]] == ["final"]
     assert "model startup failed" in captured["events"][-1][1]["content"]
     assert agent_subagent.subagent_registry.is_running("child") is False
+
+
+def test_subagent_initial_turn_failure_releases_reservation_and_terminalizes(monkeypatch, tmp_path):
+    import agent_subagent
+
+    events, task_patches, parent_events = [], [], []
+
+    class Manager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, _sid):
+            pass
+
+        def append_ui_event(self, _sid, event):
+            events.append(dict(event))
+
+        def upsert_subagent_task(self, _parent, _child, patch):
+            task_patches.append(dict(patch))
+
+        def patch_subagent_metadata(self, _sid, _patch):
+            pass
+
+        def write_subagent_output(self, _sid, _text):
+            return str(tmp_path / "output.md")
+
+    async def emit(event):
+        parent_events.append(dict(event))
+
+    def fail_turn(*_args, **_kwargs):
+        raise PermissionError("metadata.json is locked")
+
+    monkeypatch.setattr(agent_subagent, "session_manager", Manager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", agent_subagent.SubagentTaskRegistry())
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda _sid: ([], [], ""))
+    monkeypatch.setattr(agent_subagent, "_commit_subagent_initial_turn", fail_turn)
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *_args: None)
+
+    result = asyncio.run(agent_subagent._execute_subagent_run(
+        child_id="child", parent_session_id="parent", user_text="original task",
+        description="desc", subagent_type="generalPurpose", resumed=False,
+        parent_emit=emit,
+    ))
+
+    assert "metadata.json is locked" in result
+    assert not agent_subagent.subagent_registry.is_running("child")
+    assert task_patches[-1]["status"] == "failed"
+    assert events[-1]["type"] == "final"
+    assert parent_events[-1]["type"] == "subagent_finish"
+
+
+def test_reserved_subagent_can_be_interrupted_before_task_attachment(monkeypatch):
+    import agent_subagent
+
+    interrupted = []
+    monkeypatch.setattr(agent_subagent.session_manager, "request_interrupt",
+                        lambda child: interrupted.append(child))
+    registry = agent_subagent.SubagentTaskRegistry()
+
+    async def run():
+        assert await registry.reserve("child", "run-1", parent_session_id="parent")
+        assert registry.is_running("child")
+        assert await registry.cancel("child")
+        assert not registry.is_running("child")
+        assert not registry.owns("child", "run-1")
+
+    asyncio.run(run())
+    assert interrupted == ["child"]
+
+
+def test_subagent_events_wake_the_child_page_stream(monkeypatch, tmp_path):
+    import agent_loop
+    import agent_subagent
+    import session_event_bus
+
+    published = []
+
+    class Manager:
+        sessions_dir = tmp_path
+
+        def clear_interrupt(self, _sid):
+            pass
+
+        def append_ui_event(self, _sid, _event):
+            pass
+
+        def upsert_subagent_task(self, _parent, _child, _patch):
+            pass
+
+        def patch_subagent_metadata(self, _sid, _patch):
+            pass
+
+        def write_subagent_output(self, _sid, _text):
+            return str(tmp_path / "output.md")
+
+        def _load_metadata(self, _sid):
+            return {}
+
+    async def publish(sid, event):
+        published.append((sid, dict(event)))
+
+    async def react(state, emit=None):
+        await emit({"type": "llm_response_delta", "delta": "working", "ephemeral": True})
+        await emit({"type": "tool_call", "tool_name": "read_file", "content": "done"})
+        state["final_response"] = "finished"
+        return state
+
+    monkeypatch.setattr(agent_subagent, "session_manager", Manager())
+    monkeypatch.setattr(agent_subagent, "subagent_registry", agent_subagent.SubagentTaskRegistry())
+    monkeypatch.setattr(agent_subagent, "_load_subagent_run_histories", lambda _sid: ([], [], ""))
+    monkeypatch.setattr(agent_subagent, "_commit_subagent_initial_turn", lambda *_args: None)
+    monkeypatch.setattr(agent_subagent, "_persist_subagent_run_state", lambda *_args: None)
+    monkeypatch.setattr(agent_subagent.todo_manager, "sync_session_from_key_context", lambda *_args: None)
+    monkeypatch.setattr(agent_subagent, "cleanup_git_worktree_for_session", lambda *_args: None)
+    monkeypatch.setattr(agent_loop, "react_node", react)
+    monkeypatch.setattr(session_event_bus, "publish_session_event", publish)
+
+    result = asyncio.run(agent_subagent._execute_subagent_run(
+        child_id="child", parent_session_id="parent", user_text="task",
+        description="desc", subagent_type="generalPurpose", resumed=False,
+    ))
+    assert "finished" in result
+    assert [(sid, event["type"]) for sid, event in published] == [
+        ("child", "llm_response_delta"), ("child", "tool_call"),
+    ]
 
 
 def test_deleting_foreground_subagent_does_not_cancel_parent_task(monkeypatch, tmp_path):

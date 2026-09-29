@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 from app.runtime_v2 import BlobStore, RuntimeSubagentStore
 
@@ -49,6 +50,24 @@ class RuntimeStorageLayoutTests(unittest.TestCase):
 
             self.assertEqual(store.list_pending_results("parent"), [])
             self.assertEqual(store.list_tasks("parent"), [])
+
+    def test_task_updates_preserve_child_worktree_metadata_and_concurrent_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = RuntimeSubagentStore(tmp)
+            store.write_metadata("parent", "agent1", {
+                "subagent_work_dir": "isolated-worktree",
+                "git_worktree_managed": True,
+                "readonly_strict": True,
+            })
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(
+                    lambda i: store.upsert_task("parent", f"agent{i}", {"status": "running"}),
+                    range(16),
+                ))
+            self.assertEqual(len(store.list_tasks("parent")), 16)
+            self.assertEqual(store.read_metadata("parent", "agent1")["subagent_work_dir"],
+                             "isolated-worktree")
+            self.assertTrue(store.read_metadata("parent", "agent1")["readonly_strict"])
 
 
 if __name__ == "__main__":

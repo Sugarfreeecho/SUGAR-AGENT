@@ -256,6 +256,89 @@ def _persist_subagent_run_state(child_id: str, state_out: Dict[str, Any]) -> Non
     session_manager.update_session(child_id, work_messages, llm_history, key_context)
 
 
+def _commit_subagent_initial_turn(child_id: str, run_id: str, user_message: Any,
+                                  ui_text: str, attachments: List[dict],
+                                  work_messages: List[Any], llm_history: List[Any],
+                                  key_context: str) -> None:
+    """Persist the assigned prompt before ownership transfers to react_node."""
+    if not _runtime_v2_primary():
+        session_manager.append_ui_event(
+            child_id, {"type": "user", "content": ui_text, "attachments": attachments}
+        )
+        session_manager.update_session(
+            child_id,
+            [_message_to_dict(m) for m in work_messages],
+            [_message_to_dict(m) for m in llm_history],
+            key_context,
+        )
+        return
+    from runtime_v2 import RuntimeHistoryOps, runtime_v2_react_transaction_timeout_seconds
+
+    data = _message_to_dict(user_message)
+    model_content = data.pop("content", "") or ""
+    data.pop("type", None)
+    if attachments:
+        data["attachments"] = attachments
+    RuntimeHistoryOps(
+        session_manager.sessions_dir,
+        path_resolver=getattr(session_manager, "_resolve_session_path", None),
+        transaction_timeout_seconds=runtime_v2_react_transaction_timeout_seconds(),
+    ).commit_user_turn(
+        child_id, model_content, ui_content=ui_text,
+        operation_id=f"subagent-user:{run_id}", run_id=run_id,
+        model_payload=data,
+    )
+    side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
+    if callable(side_effects):
+        try:
+            side_effects(child_id, {"type": "user", "content": ui_text,
+                                    "attachments": attachments})
+        except OSError:
+            logger.warning("subagent user turn committed but metadata refresh failed: %s", child_id,
+                           exc_info=True)
+
+
+async def _fail_unstarted_subagent(child_id: str, parent_session_id: str,
+                                   description: str, subagent_type: str,
+                                   error: str,
+                                   emit: Optional[Callable[[Dict[str, Any]], Any]],
+                                   run_id: str = "") -> str:
+    result = f"Error: subagent {child_id} failed to start: {error}"
+    if run_id:
+        if (hasattr(subagent_registry, "owns")
+                and not subagent_registry.owns(child_id, run_id)
+                and subagent_registry.is_running(child_id)):
+            return result
+        await subagent_registry.unregister(child_id, run_id)
+    for label, action in (
+        ("task", lambda: session_manager.upsert_subagent_task(
+            parent_session_id, child_id,
+            {"status": "failed", "error": error,
+             "finished_at": datetime.now(timezone.utc).isoformat()})),
+        ("metadata", lambda: session_manager.patch_subagent_metadata(
+            child_id, {"subagent_run_status": "failed", "subagent_ok": False,
+                       "subagent_error": error})),
+        ("final", lambda: session_manager.append_ui_event(
+            child_id, {"type": "final", "content": result})),
+    ):
+        try:
+            action()
+        except Exception:
+            logger.warning("failed to persist unstarted subagent %s %s", child_id, label,
+                           exc_info=True)
+    if emit:
+        try:
+            emitted = emit({"type": "subagent_finish", "agent_id": child_id,
+                            "description": description, "subagent_type": subagent_type,
+                            "ok": False, "error": error})
+            if hasattr(emitted, "__await__"):
+                await emitted
+        except Exception:
+            logger.warning("failed to emit unstarted subagent finish %s", child_id,
+                           exc_info=True)
+    return result
+
+
 def _save_initial_subagent_key_context(child_id: str, key_context: str) -> None:
     if not (key_context or "").strip():
         return
@@ -401,13 +484,32 @@ class SubagentTaskRegistry:
             t = self._tasks.get(child_id)
         return t is not None and not t.done()
 
+    def owns(self, child_id: str, run_id: str) -> bool:
+        with self._lock:
+            return self._run_ids.get(child_id) == run_id
+
     async def cancel(self, child_id: str) -> bool:
         with self._lock:
             t = self._tasks.get(child_id)
             run_id = self._run_ids.get(child_id, "")
+        if t is None and run_id:
+            # A reservation exists while startup persists the first turn.
+            # Interrupt it even before an asyncio Task has been attached.
+            try:
+                session_manager.request_interrupt(child_id)
+            except OSError:
+                logger.warning("could not persist pending subagent interrupt: %s", child_id,
+                               exc_info=True)
+            finally:
+                await self.unregister(child_id, run_id)
+            return True
         if t is None or t.done():
             return False
-        session_manager.request_interrupt(child_id)
+        try:
+            session_manager.request_interrupt(child_id)
+        except OSError:
+            logger.warning("could not persist subagent interrupt: %s", child_id,
+                           exc_info=True)
         current_loop = asyncio.get_running_loop()
         task_loop = t.get_loop()
         if task_loop is current_loop:
@@ -460,7 +562,7 @@ class SubagentTaskRegistry:
         with self._lock:
             ids = [
                 cid
-                for cid in self._tasks
+                for cid in self._run_ids
                 if cid in extra or self._parent_by_child.get(cid) == pid
             ]
         for cid in ids:
@@ -769,7 +871,7 @@ def reconcile_orphaned_subagent_runs() -> Dict[str, Any]:
         if not isinstance(data, list):
             continue
         for row in data:
-            if not isinstance(row, dict) or str(row.get("status") or "") != "running":
+            if not isinstance(row, dict) or str(row.get("status") or "") not in {"running", "pending"}:
                 continue
             child_id = str(
                 row.get("agent_id") or row.get("task_id") or row.get("id") or ""
@@ -1755,26 +1857,27 @@ async def _execute_subagent_run(
     parent_change_review_turn_id: str = "",
     image_attachments: Optional[List[dict]] = None,
     image_paths: Optional[List[str]] = None,
+    pre_reserved_run_id: str = "",
 ) -> str:
     """单次 subagent react_node 执行（可前台或后台）。"""
-    from attachments import get_attachment_store, AttachmentError
+    from attachments import get_attachment_store
     from attachments.admission import AdmissionContext, admit_content_async
     from attachments.request_budget import walk_images
-    try:
-        admitted = await admit_content_async(
-            [{"type": "text", "text": user_text},
-             *[{"type": "image", "attachment": ref} for ref in image_attachments or []],
-             *[{"type": "local_file", "local_file": {"path": path}} for path in image_paths or []]],
-            AdmissionContext(get_attachment_store()), scan_paths=True, scan_remote=True, strict=True)
-    except AttachmentError as exc:
-        return f"Subagent image admission failed: {exc.code}"
-    image_attachments = [block["attachment"] for block in walk_images(admitted)]
-    subagent_run_id = uuid.uuid4().hex
-    if not await subagent_registry.reserve(
-        child_id,
-        subagent_run_id,
-        parent_session_id=parent_session_id,
-    ):
+    subagent_run_id = pre_reserved_run_id or uuid.uuid4().hex
+    acquired = (
+        subagent_registry.owns(child_id, subagent_run_id)
+        if pre_reserved_run_id and hasattr(subagent_registry, "owns")
+        else await subagent_registry.reserve(
+            child_id, subagent_run_id, parent_session_id=parent_session_id,
+        )
+    )
+    if not acquired:
+        if pre_reserved_run_id:
+            return await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                "execution was interrupted before start", parent_emit,
+                run_id=pre_reserved_run_id,
+            )
         return (
             f"Subagent {child_id} is already running. "
             f"Use task(action='status', resume={child_id!r}) or "
@@ -1782,64 +1885,36 @@ async def _execute_subagent_run(
         )
     session_manager.clear_interrupt(child_id)
 
-    prev_work, prev_llm, key_context = _load_subagent_run_histories(child_id)
-    user_message = UserMessage(content=admitted if admitted != [{"type": "text", "text": user_text}] else user_text)
-    new_work = prev_work + [user_message]
-    new_llm = prev_llm + [user_message]
-
-    state: Dict[str, Any] = {
-        "dialogue": derive_dialogue_from_assistant_history(new_llm),
-        "work_messages": new_work,
-        "llm_history": new_llm,
-        "user_input": user_text,
-        "final_response": "",
-        "stream_events": [],
-        "final_printed": False,
-        "session_id": child_id,
-        "llm_calls": [],
-        "key_context": key_context,
-        "_subagent_parent_session_id": parent_session_id,
-        "_subagent_run_id": subagent_run_id,
-        "_change_review_turn_id": str(parent_change_review_turn_id or parent_run_id or subagent_run_id),
-        **({"_runtime_v2_parent_run_id": parent_run_id} if parent_run_id else {}),
-    }
-    todo_manager.sync_session_from_key_context(child_id, key_context or "")
-    session_manager.append_ui_event(child_id, {"type": "user", "content": user_text, "attachments": image_attachments or []})
-    session_manager.upsert_subagent_task(
-        parent_session_id,
-        child_id,
-        {
-            "agent_id": child_id,
-            "run_id": subagent_run_id,
-            "parent_session_id": parent_session_id,
-            "description": description,
-            "subagent_type": subagent_type,
-            "status": "running",
-            "background": bool(run_in_background),
-            "resumed": bool(resumed),
-            "started_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
-    _patch_subagent_run_lifecycle(
-        child_id,
-        status="running",
-        run_id=subagent_run_id,
-    )
-
+    state: Dict[str, Any] = {}
     last_heartbeat_at = 0.0
     files_touched: Set[str] = set()
+    run_terminalized = False
+
+    async def emit_parent(event: Dict[str, Any]) -> None:
+        if not parent_emit:
+            return
+        try:
+            sent = parent_emit(event)
+            if hasattr(sent, "__await__"):
+                await sent
+        except Exception:
+            logger.warning("subagent parent event delivery failed: %s", child_id,
+                           exc_info=True)
+
     async def child_emit(ev: Dict[str, Any]) -> None:
         nonlocal last_heartbeat_at
         now_monotonic = asyncio.get_running_loop().time()
         if now_monotonic - last_heartbeat_at >= 15.0:
             last_heartbeat_at = now_monotonic
-            session_manager.patch_subagent_metadata(
-                child_id,
-                {
-                    "subagent_run_heartbeat_at": datetime.now(timezone.utc).isoformat(),
-                    "subagent_run_status": "running",
-                },
-            )
+            try:
+                session_manager.patch_subagent_metadata(
+                    child_id,
+                    {"subagent_run_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+                     "subagent_run_status": "running"},
+                )
+            except OSError:
+                logger.warning("subagent heartbeat metadata refresh failed: %s", child_id,
+                               exc_info=True)
         if str(ev.get("type") or "") == "tool_call":
             tool_name = str(ev.get("tool_name") or ev.get("name") or "")
             if tool_name in {
@@ -1865,15 +1940,20 @@ async def _execute_subagent_run(
                         files_touched.add(match.group(1).strip()[:2000])
         if should_persist_ui_event(ev, session_meta={"is_subagent": True}):
             session_manager.append_ui_event(child_id, ev)
+        # Child pages subscribe to their own event bus. Persisting a UI event
+        # alone updates history, but does not wake their live SSE observer.
+        try:
+            from session_event_bus import publish_session_event
+            await publish_session_event(child_id, dict(ev))
+        except Exception:
+            logger.warning("could not publish child live event %s", child_id, exc_info=True)
         # A background run outlives the temporary parent ReAct loop. Its
         # durable child events and pending result remain available, but live
         # forwarding through the parent emit callback is no longer safe after
         # that loop closes.
         if parent_emit and not run_in_background and should_forward_subagent_event_to_parent(ev):
             tagged = tag_subagent_forward_event(ev, agent_id=child_id)
-            r = parent_emit(tagged)
-            if hasattr(r, "__await__"):
-                await r
+            await emit_parent(tagged)
 
     def _append_parent_pending_result(
         *,
@@ -1883,28 +1963,13 @@ async def _execute_subagent_run(
         output_file: str = "",
         write_pending: bool = True,
     ) -> None:
+        nonlocal run_terminalized
         body = (result or "").strip()
         err = (error or "").strip()
         if not body and err:
             body = (
                 f"Subagent {status} (ID: {child_id}, type: {subagent_type}, "
                 f"description: {description})\n\nError: {err}"
-            )
-        if write_pending:
-            session_manager.append_pending_subagent_result(
-                parent_session_id,
-                {
-                    "agent_id": child_id,
-                    "run_id": subagent_run_id,
-                    "description": description,
-                    "subagent_type": subagent_type,
-                    "status": status,
-                    "result": body,
-                    "error": err,
-                    "output_file": output_file,
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
-                    "parent_run_id": str(parent_run_id or "").strip(),
-                },
             )
         session_manager.upsert_subagent_task(
             parent_session_id,
@@ -1924,11 +1989,42 @@ async def _execute_subagent_run(
             run_id=subagent_run_id,
             error=err,
         )
+        run_terminalized = True
+        if write_pending:
+            try:
+                session_manager.append_pending_subagent_result(
+                    parent_session_id,
+                    {"agent_id": child_id, "run_id": subagent_run_id,
+                     "description": description, "subagent_type": subagent_type,
+                     "status": status, "result": body, "error": err,
+                     "output_file": output_file,
+                     "finished_at": datetime.now(timezone.utc).isoformat(),
+                     "parent_run_id": str(parent_run_id or "").strip()},
+                )
+            except Exception:
+                logger.warning("could not write pending subagent result: %s", child_id,
+                               exc_info=True)
         if files_touched:
-            session_manager.patch_subagent_metadata(
-                child_id,
-                {"subagent_files_touched": sorted(files_touched)[:500]},
-            )
+            try:
+                session_manager.patch_subagent_metadata(
+                    child_id,
+                    {"subagent_files_touched": sorted(files_touched)[:500]},
+                )
+            except OSError:
+                logger.warning("could not record subagent touched files: %s", child_id,
+                               exc_info=True)
+        if run_in_background:
+            try:
+                from session_event_bus import publish_session_event
+                asyncio.get_running_loop().create_task(publish_session_event(
+                    parent_session_id,
+                    {"type": "subagent_finish", "agent_id": child_id,
+                     "description": description, "subagent_type": subagent_type,
+                     "ok": status == "completed", "error": err, "ephemeral": True},
+                ))
+            except Exception:
+                logger.warning("could not publish subagent finish: %s", child_id,
+                               exc_info=True)
 
     async def _fail_before_execution(error: str) -> str:
         """Terminalize a run that was persisted as running but never acquired execution ownership."""
@@ -1939,24 +2035,45 @@ async def _execute_subagent_run(
         # launch attempt.
         if subagent_registry.is_running(child_id):
             return result_text
-        session_manager.patch_subagent_metadata(
-            child_id,
-            {"subagent_ok": False, "subagent_error": err},
-        )
-        session_manager.append_ui_event(
-            child_id,
-            {"type": "final", "content": result_text},
-        )
-        output_file = session_manager.write_subagent_output(child_id, result_text)
-        _append_parent_pending_result(
-            status="failed",
-            result=result_text,
-            error=err,
-            output_file=output_file,
-            write_pending=run_in_background,
-        )
+        output_file = ""
+        for label, action in (
+            ("lifecycle", lambda: _patch_subagent_run_lifecycle(
+                child_id, status="failed", run_id=subagent_run_id, error=err)),
+            ("task index", lambda: session_manager.upsert_subagent_task(
+                parent_session_id, child_id,
+                {"status": "failed", "run_id": subagent_run_id, "error": err,
+                 "finished_at": datetime.now(timezone.utc).isoformat()})),
+            ("child metadata", lambda: session_manager.patch_subagent_metadata(
+                child_id, {"subagent_ok": False, "subagent_error": err})),
+            ("child final", lambda: session_manager.append_ui_event(
+                child_id, {"type": "final", "content": result_text})),
+        ):
+            try:
+                action()
+            except Exception:
+                logger.warning("subagent startup failure could not write %s: %s", label,
+                               child_id, exc_info=True)
+        try:
+            output_file = session_manager.write_subagent_output(child_id, result_text)
+        except Exception:
+            logger.warning("subagent startup failure could not save output: %s", child_id,
+                           exc_info=True)
+        if run_in_background:
+            try:
+                session_manager.append_pending_subagent_result(
+                    parent_session_id,
+                    {"agent_id": child_id, "run_id": subagent_run_id,
+                     "description": description, "subagent_type": subagent_type,
+                     "status": "failed", "result": result_text, "error": err,
+                     "output_file": output_file,
+                    "finished_at": datetime.now(timezone.utc).isoformat()},
+                )
+            except Exception:
+                logger.warning("subagent startup failure could not notify parent: %s", child_id,
+                               exc_info=True)
         if parent_emit:
-            r = parent_emit(
+            try:
+                r = parent_emit(
                 {
                     "type": "subagent_finish",
                     "agent_id": child_id,
@@ -1966,9 +2083,69 @@ async def _execute_subagent_run(
                     "error": err,
                 }
             )
-            if hasattr(r, "__await__"):
-                await r
+                if hasattr(r, "__await__"):
+                    await r
+            except Exception:
+                logger.warning("subagent startup failure could not emit finish: %s", child_id,
+                               exc_info=True)
         return result_text
+
+    try:
+        admitted = await admit_content_async(
+            [{"type": "text", "text": user_text},
+             *[{"type": "image", "attachment": ref} for ref in image_attachments or []],
+             *[{"type": "local_file", "local_file": {"path": path}} for path in image_paths or []]],
+            AdmissionContext(get_attachment_store()), scan_paths=True,
+            scan_remote=True, strict=True,
+        )
+        image_attachments = [block["attachment"] for block in walk_images(admitted)]
+        prev_work, prev_llm, key_context = _load_subagent_run_histories(child_id)
+        user_message = UserMessage(
+            content=admitted if admitted != [{"type": "text", "text": user_text}] else user_text
+        )
+        new_work = prev_work + [user_message]
+        new_llm = prev_llm + [user_message]
+        state = {
+            "dialogue": derive_dialogue_from_assistant_history(new_llm),
+            "work_messages": new_work,
+            "llm_history": new_llm,
+            "user_input": user_text,
+            "final_response": "",
+            "stream_events": [],
+            "final_printed": False,
+            "session_id": child_id,
+            "llm_calls": [],
+            "key_context": key_context,
+            "_subagent_parent_session_id": parent_session_id,
+            "_subagent_run_id": subagent_run_id,
+            "_change_review_turn_id": str(parent_change_review_turn_id or parent_run_id or subagent_run_id),
+            **({"_runtime_v2_parent_run_id": parent_run_id} if parent_run_id else {}),
+        }
+        todo_manager.sync_session_from_key_context(child_id, key_context or "")
+        _commit_subagent_initial_turn(
+            child_id, subagent_run_id, user_message, user_text,
+            image_attachments or [], new_work, new_llm, key_context,
+        )
+        session_manager.upsert_subagent_task(
+            parent_session_id, child_id,
+            {"agent_id": child_id, "run_id": subagent_run_id,
+             "parent_session_id": parent_session_id, "description": description,
+             "subagent_type": subagent_type, "status": "running",
+             "background": bool(run_in_background), "resumed": bool(resumed),
+             "started_at": datetime.now(timezone.utc).isoformat()},
+        )
+        _patch_subagent_run_lifecycle(child_id, status="running", run_id=subagent_run_id)
+    except BaseException as exc:
+        await subagent_registry.unregister(child_id, subagent_run_id)
+        if isinstance(exc, asyncio.CancelledError):
+            try:
+                await _fail_before_execution("cancelled during startup")
+            finally:
+                raise
+        logger.exception("subagent startup failed: %s", child_id)
+        return await _fail_before_execution(str(exc))
+    if hasattr(subagent_registry, "owns") and not subagent_registry.owns(child_id, subagent_run_id):
+        return await _fail_before_execution("execution was interrupted before start")
 
     async def _run_core(*, background: bool = False, emit_start: bool = True) -> str:
         from agent_loop import react_node
@@ -1976,30 +2153,17 @@ async def _execute_subagent_run(
         session_manager.clear_interrupt(child_id)
 
         if parent_emit and emit_start:
-            r = parent_emit(
-                {
-                    "type": "subagent_start",
-                    "agent_id": child_id,
-                    "description": description,
-                    "subagent_type": subagent_type,
-                    "resumed": resumed,
-                    "background": background,
-                }
-            )
-            if hasattr(r, "__await__"):
-                await r
+            await emit_parent({
+                "type": "subagent_start", "agent_id": child_id,
+                "description": description, "subagent_type": subagent_type,
+                "resumed": resumed, "background": background,
+            })
         if parent_emit and not background:
-            r = parent_emit(
-                {
-                    "type": "user",
-                    "content": user_text,
-                    "attachments": image_attachments or [],
-                    "agent_id": child_id,
-                    "_subagent_forward": True,
-                }
-            )
-            if hasattr(r, "__await__"):
-                await r
+            await emit_parent({
+                "type": "user", "content": user_text,
+                "attachments": image_attachments or [],
+                "agent_id": child_id, "_subagent_forward": True,
+            })
         try:
             state_out = await react_node(state, emit=child_emit)
         except asyncio.CancelledError:
@@ -2022,17 +2186,11 @@ async def _execute_subagent_run(
                 write_pending=background,
             )
             if parent_emit and not background:
-                r = parent_emit(
-                    {
-                        "type": "subagent_finish",
-                        "agent_id": child_id,
-                        "description": description,
-                        "ok": False,
-                        "error": "interrupted",
-                    }
-                )
-                if hasattr(r, "__await__"):
-                    await r
+                await emit_parent({
+                    "type": "subagent_finish", "agent_id": child_id,
+                    "description": description, "ok": False,
+                    "error": "interrupted",
+                })
             raise
         except Exception as e:
             logger.exception("subagent react_node 失败: %s", e)
@@ -2053,17 +2211,11 @@ async def _execute_subagent_run(
                 write_pending=background,
             )
             if parent_emit and not background:
-                r = parent_emit(
-                    {
-                        "type": "subagent_finish",
-                        "agent_id": child_id,
-                        "description": description,
-                        "ok": False,
-                        "error": str(e),
-                    }
-                )
-                if hasattr(r, "__await__"):
-                    await r
+                await emit_parent({
+                    "type": "subagent_finish", "agent_id": child_id,
+                    "description": description, "ok": False,
+                    "error": str(e),
+                })
             return result_text
         finally:
             try:
@@ -2098,50 +2250,47 @@ async def _execute_subagent_run(
             output_file=output_file,
             write_pending=background,
         )
-        if interrupted or limit_reached or missing_final:
+        try:
             session_manager.patch_subagent_metadata(
-                child_id, {"subagent_ok": False, "subagent_error": subagent_error}
+                child_id,
+                {"subagent_ok": not (interrupted or limit_reached or missing_final),
+                 "subagent_error": subagent_error},
             )
-        else:
-            session_manager.patch_subagent_metadata(
-                child_id, {"subagent_ok": True, "subagent_error": ""}
-            )
+        except OSError:
+            logger.warning("could not record subagent outcome metadata: %s", child_id,
+                           exc_info=True)
         if parent_emit and not background:
-            r = parent_emit(
-                {
-                    "type": "subagent_finish",
-                    "agent_id": child_id,
-                    "description": description,
-                    "ok": not (interrupted or limit_reached or missing_final),
-                    "subagent_type": subagent_type,
-                    "result_preview": final_response[:500],
-                    **({"error": subagent_error} if subagent_error else {}),
-                }
-            )
-            if hasattr(r, "__await__"):
-                await r
+            await emit_parent({
+                "type": "subagent_finish", "agent_id": child_id,
+                "description": description,
+                "ok": not (interrupted or limit_reached or missing_final),
+                "subagent_type": subagent_type,
+                "result_preview": final_response[:500],
+                **({"error": subagent_error} if subagent_error else {}),
+            })
         return result_text
 
     async def _run_owned(*, background: bool, emit_start: bool) -> str:
         try:
             return await _run_core(background=background, emit_start=emit_start)
+        except BaseException as exc:
+            await subagent_registry.unregister(child_id, subagent_run_id)
+            if isinstance(exc, asyncio.CancelledError):
+                if not run_terminalized:
+                    await _fail_before_execution("interrupted before completion")
+                raise
+            logger.exception("subagent run failed outside react_node: %s", child_id)
+            return await _fail_before_execution(str(exc))
         finally:
             await subagent_registry.unregister(child_id, subagent_run_id)
 
     if run_in_background:
         if parent_emit:
-            r = parent_emit(
-                {
-                    "type": "subagent_start",
-                    "agent_id": child_id,
-                    "description": description,
-                    "subagent_type": subagent_type,
-                    "resumed": resumed,
-                    "background": True,
-                }
-            )
-            if hasattr(r, "__await__"):
-                await r
+            await emit_parent({
+                "type": "subagent_start", "agent_id": child_id,
+                "description": description, "subagent_type": subagent_type,
+                "resumed": resumed, "background": True,
+            })
         background_run = _run_owned(background=True, emit_start=False)
         try:
             started = await subagent_registry.start_background(
@@ -2438,6 +2587,9 @@ async def _run_single_subagent(
         if not child_id:
             return f"Error: 无法 resume subagent {resume_raw!r}（不存在或不属于当前会话）。"
         resumed = True
+        original_meta = session_manager._load_metadata(child_id) or {}
+        subagent_type = str(original_meta.get("subagent_type") or subagent_type)
+        readonly_strict = bool(original_meta.get("readonly_strict", readonly_strict))
         if subagent_registry.is_running(child_id):
             if interrupt:
                 await subagent_registry.cancel(child_id)
@@ -2470,10 +2622,54 @@ async def _run_single_subagent(
             best_of_attempt=best_of_attempt,
         )
 
-        # 继承父 key_context 到子会话，使 subagent 在 SystemMessage 中自然获得上下文
-        _save_initial_subagent_key_context(child_id, parent_key_context)
-
     assert child_id
+    startup_run_id = ""
+    if not resumed:
+        startup_run_id = uuid.uuid4().hex
+        if not await subagent_registry.reserve(
+            child_id, startup_run_id, parent_session_id=parent_session_id,
+        ):
+            return await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                "execution slot could not be reserved", emit,
+            )
+
+    if not resumed:
+        created_event = {
+            "type": "subagent_created", "agent_id": child_id,
+            "description": description, "subagent_type": subagent_type,
+            "status": "pending", "ephemeral": True,
+        }
+        try:
+            if emit and not best_of_run_id:
+                delivered = emit(created_event)
+                if hasattr(delivered, "__await__"):
+                    await delivered
+            else:
+                from session_event_bus import publish_session_event
+                await publish_session_event(parent_session_id, created_event)
+        except Exception:
+            logger.warning("could not announce created subagent %s", child_id, exc_info=True)
+            try:
+                from session_event_bus import publish_session_event
+                await publish_session_event(parent_session_id, created_event)
+            except Exception:
+                logger.warning("could not publish fallback creation event %s", child_id,
+                               exc_info=True)
+        except asyncio.CancelledError:
+            await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                "startup was cancelled", emit, run_id=startup_run_id,
+            )
+            raise
+        try:
+            _save_initial_subagent_key_context(child_id, parent_key_context)
+        except Exception as exc:
+            return await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                f"initial context could not be saved: {exc}", emit,
+                run_id=startup_run_id,
+            )
 
     # Write-capable ordinary tasks use a managed worktree when possible.
     worktree_note = ""
@@ -2485,16 +2681,32 @@ async def _run_single_subagent(
         and isolation in {"auto", "worktree"}
         and hasattr(session_manager, "patch_subagent_metadata")
     ):
-        managed = await asyncio.to_thread(_create_managed_worktree, child_id)
+        try:
+            managed = await asyncio.to_thread(_create_managed_worktree, child_id)
+        except asyncio.CancelledError:
+            await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                "worktree preparation was cancelled", emit, run_id=startup_run_id,
+            )
+            raise
+        except Exception as exc:
+            return await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                f"worktree preparation failed: {exc}", emit,
+                run_id=startup_run_id,
+            )
         if managed is not None:
             wt_root, wt_work_dir, branch, base_commit = managed
-            _persist_managed_worktree(
-                child_id,
-                wt_root,
-                wt_work_dir,
-                branch,
-                base_commit,
-            )
+            try:
+                _persist_managed_worktree(
+                    child_id, wt_root, wt_work_dir, branch, base_commit,
+                )
+            except Exception as exc:
+                return await _fail_unstarted_subagent(
+                    child_id, parent_session_id, description, subagent_type,
+                    f"worktree metadata could not be saved: {exc}", emit,
+                    run_id=startup_run_id,
+                )
             worktree_note = (
                 f"\n\nManaged Git worktree: `{wt_root}`; active tool workspace: "
                 f"`{wt_work_dir}`; branch: `{branch}`. All relative built-in "
@@ -2502,7 +2714,7 @@ async def _run_single_subagent(
                 "Do not modify the main checkout directly."
             )
         elif isolation == "worktree":
-            if hasattr(session_manager, "patch_subagent_metadata"):
+            try:
                 session_manager.patch_subagent_metadata(
                     child_id,
                     {
@@ -2512,30 +2724,23 @@ async def _run_single_subagent(
                         ),
                     },
                 )
-                _patch_subagent_run_lifecycle(
-                    child_id,
-                    status="failed",
-                    error="requested worktree isolation is unavailable",
-                )
-                session_manager.upsert_subagent_task(
-                    parent_session_id,
-                    child_id,
-                    {
-                        "status": "failed",
-                        "error": "requested worktree isolation is unavailable",
-                        "finished_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-            return (
-                "Error: requested worktree isolation is unavailable. The Git checkout "
-                "must exist; no subagent execution was started."
+            except Exception:
+                logger.warning("could not record unavailable worktree for %s", child_id,
+                               exc_info=True)
+            return await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                "requested worktree isolation is unavailable", emit,
+                run_id=startup_run_id,
             )
         else:
             if hasattr(session_manager, "patch_subagent_metadata"):
-                session_manager.patch_subagent_metadata(
-                    child_id,
-                    {"git_worktree_state": "shared_fallback"},
-                )
+                try:
+                    session_manager.patch_subagent_metadata(
+                        child_id, {"git_worktree_state": "shared_fallback"},
+                    )
+                except OSError:
+                    logger.warning("could not record shared worktree fallback for %s",
+                                   child_id, exc_info=True)
     if best_of_run_id and best_of_attempt > 0:
         run_dir = (
             session_manager._get_session_path(parent_session_id)
@@ -2543,55 +2748,86 @@ async def _run_single_subagent(
             / "_best_of"
             / best_of_run_id
         )
-        wt_info = _git_worktree_add(run_dir, best_of_attempt)
+        try:
+            wt_info = _git_worktree_add(run_dir, best_of_attempt)
+        except Exception as exc:
+            return await _fail_unstarted_subagent(
+                child_id, parent_session_id, description, subagent_type,
+                f"best-of worktree preparation failed: {exc}", emit,
+                run_id=startup_run_id,
+            )
         if wt_info is not None:
             wt_path, branch = wt_info
-            _persist_worktree_meta(child_id, wt_path, branch)
-            _register_best_of_worktree(
-                parent_session_id, best_of_run_id, best_of_attempt, wt_path, branch
-            )
+            try:
+                _persist_worktree_meta(child_id, wt_path, branch)
+                _register_best_of_worktree(
+                    parent_session_id, best_of_run_id, best_of_attempt, wt_path, branch
+                )
+            except Exception as exc:
+                return await _fail_unstarted_subagent(
+                    child_id, parent_session_id, description, subagent_type,
+                    f"best-of worktree metadata failed: {exc}", emit,
+                    run_id=startup_run_id,
+                )
             worktree_note = f"\n\nGit worktree（本尝试）: `{wt_path}` — 优先在此目录内修改/验证。"
 
-    from attachments import get_attachment_store, AttachmentError
-    attachment_store = get_attachment_store()
-    image_refs, attachment_paths, image_paths = [], [], []
-    for raw in file_attachments:
-        if isinstance(raw, dict):
-            ref = raw.get("attachment") or raw
-            image_refs.append(ref)
-            attachment_paths.append(attachment_store.image_host_path(ref))
-            continue
-        path = _resolve_attachment_path(str(raw))
-        if path is not None and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
-            image_paths.append(str(path))
-            attachment_paths.append(str(path))
-        else:
-            attachment_paths.append(str(raw))
-    user_text = build_subagent_user_message(
-        prompt=(prompt or "请继续并完成先前任务。") + worktree_note,
-        description=description,
-        subagent_type=subagent_type,
-        is_resume=resumed,
-        readonly=readonly_strict,
-        file_attachments=attachment_paths,
-        best_of_attempt=best_of_attempt,
-        best_of_total=best_of_total,
-    )
-
-    return await _execute_subagent_run(
-        child_id=child_id,
-        parent_session_id=parent_session_id,
-        user_text=user_text,
-        description=description,
-        subagent_type=subagent_type,
-        resumed=resumed,
-        parent_emit=emit,
-        run_in_background=run_in_background,
-        parent_run_id=parent_run_id,
-        parent_change_review_turn_id=parent_change_review_turn_id,
-        **({"image_attachments": image_refs} if image_refs else {}),
-        **({"image_paths": image_paths} if image_paths else {}),
-    )
+    execution_started = False
+    try:
+        from attachments import get_attachment_store
+        attachment_store = get_attachment_store()
+        image_refs, attachment_paths, image_paths = [], [], []
+        for raw in file_attachments:
+            if isinstance(raw, dict):
+                ref = raw.get("attachment") or raw
+                image_refs.append(ref)
+                attachment_paths.append(attachment_store.image_host_path(ref))
+                continue
+            path = _resolve_attachment_path(str(raw))
+            if path is not None and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
+                image_paths.append(str(path))
+                attachment_paths.append(str(path))
+            else:
+                attachment_paths.append(str(raw))
+        user_text = build_subagent_user_message(
+            prompt=(prompt or "请继续并完成先前任务。") + worktree_note,
+            description=description,
+            subagent_type=subagent_type,
+            is_resume=resumed,
+            readonly=readonly_strict,
+            file_attachments=attachment_paths,
+            best_of_attempt=best_of_attempt,
+            best_of_total=best_of_total,
+        )
+        execution_started = True
+        return await _execute_subagent_run(
+            child_id=child_id,
+            parent_session_id=parent_session_id,
+            user_text=user_text,
+            description=description,
+            subagent_type=subagent_type,
+            resumed=resumed,
+            parent_emit=emit,
+            run_in_background=run_in_background,
+            parent_run_id=parent_run_id,
+            parent_change_review_turn_id=parent_change_review_turn_id,
+            pre_reserved_run_id=startup_run_id,
+            **({"image_attachments": image_refs} if image_refs else {}),
+            **({"image_paths": image_paths} if image_paths else {}),
+        )
+    except asyncio.CancelledError:
+        if execution_started:
+            raise
+        await _fail_unstarted_subagent(
+            child_id, parent_session_id, description, subagent_type,
+            "startup was cancelled", emit, run_id=startup_run_id,
+        )
+        raise
+    except Exception as exc:
+        logger.exception("subagent preparation failed: %s", child_id)
+        return await _fail_unstarted_subagent(
+            child_id, parent_session_id, description, subagent_type,
+            str(exc), emit, run_id=startup_run_id,
+        )
 
 
 async def _run_best_of_n(
@@ -2657,6 +2893,11 @@ async def _run_best_of_n(
                     *[one_attempt(i) for i in range(n)],
                     return_exceptions=True,
                 )
+                any_failed = any(
+                    isinstance(item, BaseException) or str(item).startswith("Error:")
+                    for item in results
+                )
+                aggregate_status = "failed" if any_failed else "completed"
                 combined = _format_best_of_results(run_id, description, results)
                 output_file = session_manager.write_subagent_task_output(
                     parent_session_id,
@@ -2667,7 +2908,7 @@ async def _run_best_of_n(
                     parent_session_id,
                     run_id,
                     {
-                        "status": "completed",
+                        "status": aggregate_status,
                         "result_preview": combined[:500],
                         "output_file": output_file,
                         "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -2680,7 +2921,7 @@ async def _run_best_of_n(
                         "agent_id": run_id,
                         "description": description,
                         "subagent_type": "best-of-n-runner",
-                        "status": "completed",
+                        "status": aggregate_status,
                         "result": combined,
                         "output_file": output_file,
                         "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -2764,13 +3005,18 @@ async def _run_best_of_n(
 
 
 def _format_best_of_results(run_id: str, description: str, results: List[Any]) -> str:
+    any_failed = any(
+        isinstance(item, BaseException) or str(item).startswith("Error:")
+        for item in results
+    )
     lines = [
-        f"Best-of-N complete (run_id: {run_id}, description: {description})",
+        f"Best-of-N {'finished with errors' if any_failed else 'complete'} "
+        f"(run_id: {run_id}, description: {description})",
         "",
     ]
     for i, res in enumerate(results):
         lines.append(f"### Attempt {i + 1}")
-        if isinstance(res, Exception):
+        if isinstance(res, BaseException):
             lines.append(f"Error: {res}")
         else:
             lines.append(str(res))

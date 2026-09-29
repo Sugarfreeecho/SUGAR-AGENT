@@ -3351,7 +3351,17 @@ class SessionRepository:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(metadata if isinstance(metadata, dict) else {}, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_path, path)
+            # Windows readers/AV can hold metadata.json briefly across a
+            # replace. A bounded retry avoids losing a committed user turn
+            # solely because its sidebar metadata could not be refreshed.
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
         except BaseException:
             try:
                 Path(tmp_path).unlink(missing_ok=True)

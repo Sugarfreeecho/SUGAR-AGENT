@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -9,6 +13,9 @@ from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
+
+
+_task_index_lock = threading.RLock()
 
 
 class RuntimeSubagentStore:
@@ -100,26 +107,24 @@ class RuntimeSubagentStore:
         if not tid:
             return
         path = self.task_index_path(parent_session_id)
-        rows = self._read_json_list(path)
-        now = datetime.now(timezone.utc).isoformat()
-        update = {k: v for k, v in dict(patch or {}).items() if v is not None}
-        found = False
-        for row in rows:
-            row_id = str(row.get("task_id") or row.get("agent_id") or row.get("id") or "").strip()
-            if row_id != tid:
-                continue
-            row.update(update)
-            row["task_id"] = tid
-            row["updated_at"] = now
-            found = True
-            self.write_metadata(parent_session_id, tid, row)
-            break
-        if not found:
-            row = {"task_id": tid, "created_at": now, "updated_at": now}
-            row.update(update)
-            rows.append(row)
-            self.write_metadata(parent_session_id, tid, row)
-        self._write_json(path, rows)
+        # The child metadata belongs to SessionManager. Replacing it with a
+        # task-index row drops worktree roots, model settings and run lifecycle.
+        with _task_index_lock:
+            rows = self._read_json_list(path)
+            now = datetime.now(timezone.utc).isoformat()
+            update = {k: v for k, v in dict(patch or {}).items() if v is not None}
+            for row in rows:
+                row_id = str(row.get("task_id") or row.get("agent_id") or row.get("id") or "").strip()
+                if row_id == tid:
+                    row.update(update)
+                    row["task_id"] = tid
+                    row["updated_at"] = now
+                    break
+            else:
+                row = {"task_id": tid, "created_at": now, "updated_at": now}
+                row.update(update)
+                rows.append(row)
+            self._write_json(path, rows)
 
     def write_task_output(self, parent_session_id: str, task_id: str, text: str) -> str:
         tid = str(task_id or "").strip() or "subagent"
@@ -157,30 +162,33 @@ class RuntimeSubagentStore:
 
     def append_pending_result(self, parent_session_id: str, entry: Dict[str, Any]) -> None:
         path = self.pending_results_path(parent_session_id)
-        rows = self._read_json_list(path)
-        rows.append(dict(entry or {}))
-        self._write_json(path, rows)
+        with _task_index_lock:
+            rows = self._read_json_list(path)
+            rows.append(dict(entry or {}))
+            self._write_json(path, rows)
 
     def list_pending_results(self, parent_session_id: str) -> List[dict]:
         return self._read_json_list(self.pending_results_path(parent_session_id))
 
     def save_pending_results(self, parent_session_id: str, rows: List[dict]) -> None:
-        self._write_json(self.pending_results_path(parent_session_id), [x for x in rows if isinstance(x, dict)])
+        with _task_index_lock:
+            self._write_json(self.pending_results_path(parent_session_id), [x for x in rows if isinstance(x, dict)])
 
     def remove_parent_rows(self, parent_session_id: str, child_session_id: str) -> None:
         child_id = str(child_session_id or "").strip()
         if not child_id:
             return
-        for path in (self.task_index_path(parent_session_id), self.pending_results_path(parent_session_id)):
-            rows = self._read_json_list(path)
-            if not rows:
-                continue
-            kept = [
-                row for row in rows
-                if str(row.get("agent_id") or row.get("task_id") or row.get("id") or "") != child_id
-            ]
-            if len(kept) != len(rows):
-                self._write_json(path, kept)
+        with _task_index_lock:
+            for path in (self.task_index_path(parent_session_id), self.pending_results_path(parent_session_id)):
+                rows = self._read_json_list(path)
+                if not rows:
+                    continue
+                kept = [
+                    row for row in rows
+                    if str(row.get("agent_id") or row.get("task_id") or row.get("id") or "") != child_id
+                ]
+                if len(kept) != len(rows):
+                    self._write_json(path, kept)
 
     @staticmethod
     def _safe_id(value: str) -> str:
@@ -203,7 +211,17 @@ class RuntimeSubagentStore:
 
     def _write_json(self, path: Path, data: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-        tmp.replace(path)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_name, path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+        finally:
+            Path(tmp_name).unlink(missing_ok=True)
