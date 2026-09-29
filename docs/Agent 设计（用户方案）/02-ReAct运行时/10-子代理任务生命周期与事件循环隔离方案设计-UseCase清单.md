@@ -1,6 +1,6 @@
 # 子代理任务生命周期与事件循环隔离 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-25 v2（覆盖至：当前工作区；后台托管 + 未取得执行的终结化）
+- 版本：2026-09-28 v3（覆盖至：当前工作区；首轮先行落盘 + 预约期受控）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_subagent.py`（`_BackgroundSubagentLoop`、`SubagentTaskRegistry`、`_execute_subagent_run`）、`app/agent_subagent_events.py`、`app/agent_loop.py`（`_run_react_node_off_loop`）、`app/webui.py`（取消入口）、`tests/test_agent_subagent_runtime_v2.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -55,6 +55,24 @@
 - **规则与边界**：取消（`interrupted`）与异常路径同样补写 `final`，子会话历史可直接看到中止原因；中断文本统一为 `Subagent interrupted.`，启动失败为 `Error: subagent <id> failed to start: …`。
 - **依据**：`agent_subagent.py::_execute_subagent_run::_fail_before_execution`（前台预约丢失、后台 `start_background` 异常/失败分支）；回归 `::test_background_start_failure_terminalizes_persisted_run`、`::test_foreground_attach_failure_terminalizes_persisted_run`、`::test_subagent_react_exception_is_visible_in_child_history`。
 
+### UC-2J8 首轮先行落盘
+- **触发**：子代理运行启动（前台或后台；Runtime V2 主路径或 legacy 路径）。
+- **预期现象**：分配给子代理的首条 user 消息在**所有权转交给子 ReAct 之前**已持久化到子会话——Runtime V2 下经 `RuntimeHistoryOps.commit_user_turn`（`operation_id = subagent-user:<run_id>`，UI 文案与模型负载分离）；legacy 下先 append `user` UI 事件并更新会话历史（文案与附件随行）。
+- **规则与边界**：首轮提交失败（如元数据被锁）时运行不得静默继续——按终结化路径处理（见 UC-2J9）；提交后的 UI 侧效应刷新失败只告警不阻断（`SessionRepository` 元数据 `replace` 对 Windows 瞬时锁做有界重试）。
+- **依据**：`agent_subagent.py::_commit_subagent_initial_turn`；回归 `::test_subagent_initial_turn_failure_releases_reservation_and_terminalizes`。
+
+### UC-2J9 预约期受控与未启动运行的收敛
+- **触发**：预约（reserve）已建立、asyncio 任务尚未挂载时收到取消（删除/停止/中断）；或带 `pre_reserved_run_id` 的启动发现归属失效；或更新的运行已接管该子代理。
+- **预期现象**：任务挂载前的取消同样生效——落盘中断请求（`request_interrupt`）并释放预约（`unregister`），不存在“已预约但不可取消”的窗口；未启动的失败运行写入任务行 `failed` + 元数据（`subagent_run_status=failed / subagent_ok=false / subagent_error`）+ `final` 事件 + 父级 `subagent_finish`（失败）。
+- **规则与边界**：归属按 **run-id** 精确判定（`SubagentTaskRegistry.owns`）——更新的运行已接管时不改写状态、不释放他人预约；重启对账把 `pending` 与 `running` 一视同仁（见 UC-2J6）。
+- **依据**：`SubagentTaskRegistry.owns / cancel`、`agent_subagent.py::_fail_unstarted_subagent`、`reconcile_orphaned_subagent_runs`（`pending` 纳入）；回归 `::test_reserved_subagent_can_be_interrupted_before_task_attachment`。
+
+### UC-2J10 结果上报与续跑档案
+- **触发**：best-of-n 运行结束汇总结果；或 `task(action='resume')` 续跑既有子代理。
+- **预期现象**：best-of 汇总如实报告失败尝试（"finished with errors" + 每个失败原因），不因部分成功而隐藏失败；resume 沿用既有子代理的**工具档案**（如 `explore` + `readonly_strict`），不因续跑回退为默认档案。
+- **规则与边界**：只影响结果呈现与续跑参数装配，不改变调度与生命周期语义；resume 仍要求非空 follow-up prompt。
+- **依据**：`_format_best_of_results`、`_run_single_subagent`（resume 分支复用既有元数据）；回归 `::test_best_of_result_reports_failed_attempts`、`::test_resume_keeps_existing_explore_and_readonly_tool_profile`。
+
 ## 3. 事件与状态不变式
 
 1. 后台任务的生命周期与其创建方的循环解耦：任何父轮临时循环关闭都不构成取消。
@@ -64,12 +82,15 @@
 5. 后台运行不依赖父级回调：子事件持久化 + pending 结果构成完整交付通道。
 6. 运行必须收敛到终局：启动失败 / 预约丢失 / 中断 / 异常都要终结化（元数据 + `final` 事件 + 输出文件 + 父级通知），不存在"已持久化为 running 但永远无终态"的窗口。
 
+7. 预约即受控、归属精确：任务挂载前的取消同样落盘中断并释放预约；状态改写以 run-id 归属判定（`owns`），陈旧的启动尝试不得覆盖更新的运行。
+
 ## 4. 验收
 
-1. `python -m pytest tests/test_agent_subagent_runtime_v2.py -q`：25 passed（v1 新增：后台任务跨循环存续 / 真实离线程链路存续 / 跨循环等待桥接；UC-2J7 新增：后台启动失败终结化 / 前台挂接失败终结化 / 异常在子会话历史可见）。
+1. `python -m pytest tests/test_agent_subagent_runtime_v2.py -q`：30 passed（v1/v2 见前；2026-09-28 新增：首轮提交失败释放预约并终结化 / 预约期（任务挂载前）可打断 / 子代理事件唤醒子会话页流 / best-of 失败尝试上报 / resume 保持 explore 只读档案）。
 2. 独立复现（父轮临时循环与 worker 循环先后关闭）：`workspace/subagent修复核查/复现_子agent循环归属_v2.py`，输出 `复现运行结果_v2.json`——子任务仍完成（pending=completed）、显式取消仍生效（pending=interrupted）。
 
 ## 5. 版本记录
 
+- 2026-09-28 v3：新增 UC-2J8《首轮先行落盘》、UC-2J9《预约期受控与未启动运行的收敛》、UC-2J10《结果上报与续跑档案》——首条 user 消息在所有权转交前持久化（Runtime V2 `commit_user_turn` / legacy 双路径）；任务挂载前可打断、未启动失败运行释放预约并终结化；归属按 run-id；对账纳入 `pending`；不变式补第 7 条，验收更新为 30 passed。
 - 2026-09-25 v2：新增 UC-2J7《未取得执行权也要终结化》——启动失败/预约丢失的运行不再滞留 `running`：补写元数据、`final` 事件、输出文件与父级 `subagent_finish` 通知；中断/异常路径同样补 `final`；不变式补第 6 条，验收更新为 25 passed。
 - 2026-09-20 v1：首版。依据“主 Agent 结束导致后台子代理被中断”的修复补录：进程级持久事件循环托管、创建/注册原子交接、跨循环等待/取消桥接、前后台取消语义与事件通道边界；同步 02 整体设计、ReAct 能力清单、00-总览与 05/04 交叉引用。

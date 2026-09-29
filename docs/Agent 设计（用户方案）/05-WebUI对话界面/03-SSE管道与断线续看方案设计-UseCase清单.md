@@ -1,6 +1,6 @@
 # SSE 管道与断线续看 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-21 v4（覆盖至：当前工作区；补工具命令输出增量事件）
+- 版本：2026-09-28 v5（覆盖至：当前工作区；子代理会话流唤醒）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（3.6k 行）、`modules/event-dispatch.js`、后端 `runtime_v2_session_stream`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -46,6 +46,12 @@
 - **规则与边界**：前端把终态视为不可逆事实；后端恢复扫描必须用跨进程 exact-run 租约避免制造假终态。若耐久历史已经存在“同 run 终态后继续写入”，刷新只会重放矛盾状态，不能作为修复手段；应先修复事件生产者/恢复接管路径，不得用高频强制重绘掩盖。
 - **依据**：`session-event-reducer.js` 的 terminal run 归约、`sse-handling.js::endRunForClient/attachSessionEventStream`、`webui._discover_recoverable_react_sessions`。
 
+### UC-5C7 子代理会话的流唤醒与收流
+- **触发**：打开/观察一个由 task 托管运行的子代理会话（非主聊天运行）。
+- **预期现象**：事件到达更及时——心跳间隔由通常的 15s 缩短为 1s（仅子代理执行中的会话）；超时先重抽投影并下发增量；**无本地 worker 活动**时以 `[DONE]` 正常收流（不留僵尸观察流），仍有活动则继续等待。
+- **规则与边界**：只作用于子代理执行中的会话；普通会话维持原心跳/keepalive 行为；收流由“无本地 worker”而非猜测驱动，与 UC-5C6 的终态单调性不冲突。
+- **依据**：`webui.py::stream_session_events`（`_is_subagent_execution_active` / `_has_local_worker_activity` 判定）。
+
 ## 3. 边界
 
 - 与"运行日志文件"无关：这里是界面流；
@@ -61,9 +67,11 @@
 | UC-5C4 | `event-dispatch.js` |
 | UC-5C5 | `webui._runtime_status_payload`；`session-management.js` 心跳接管 |
 | UC-5C6 | `session-event-reducer.js` 终态归约；`sse-handling.js` 终结/重挂；`webui.py` 跨进程恢复租约 |
+| UC-5C7 | `webui.py::stream_session_events`（子代理执行判定 / 无本地 worker 收流） |
 
 ## 5. 版本记录
 
+- 2026-09-28 v5：新增 UC-5C7《子代理会话的流唤醒与收流》——子代理执行中的会话心跳缩短为 1s 并优先重抽投影，无本地 worker 活动时正常 `[DONE]` 收流。
 - 2026-09-21 v4：补记工具命令输出增量事件（`tool_command_delta`，ephemeral、节流）与工具结果限长投影（`tool_detail_ui`）；工具调用增量在桥接层按帧合并后下发。
 - 2026-09-20 v3：新增 UC-5C6，确立 run 终态单调性；记录假 `no_local_activity` 与后续同 run 事件会造成终结/重挂振荡，明确修复必须落在跨进程恢复接管端。
 - 2026-09-14 v2：补录服务端自主运行自动接管（UC-5C5）与扩展状态控制事件（UC-5C3）；澄清 scanExisting 归属；更新版本线至 `d022831`。

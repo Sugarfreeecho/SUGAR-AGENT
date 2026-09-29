@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-09-28；平滑跟随为固定刚度软弹簧（DS 同款）；含顶部通知与权限警示视觉系统、右侧历史独立样式）
+> 代码版本：当前工作区（2026-09-28；平滑跟随为固定刚度软弹簧（DS 同款）；含顶部通知与权限警示视觉系统、右侧历史独立样式、子代理执行活跃性）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -53,6 +53,7 @@
 |---|---|---|
 | 子代理会话（标题栏谱系目录 + 主区寻址；四色状态点=进行中/完成未读/完成已读/错误；打开即已读，localStorage 持久化） | `modules/subagent-catalog-ui.js`、`state/subagent-catalog-store.js`、`state/subagent-addressing.js` | 【图】 |
 | 子代理成员帧桥接（SSE `agent_id` → 目录增量；无专属事件流，后端零改动） | `modules/subagent-frames.js`、`modules/sse-handling.js` | 【单】 |
+| 子代理执行活跃性（运行中=活跃子会话；子会话 steer 顺序消费、不换聊天管线；`subagent_created` 先注册 pending、finish 翻转） | `app/webui.py`、`modules/sse-handling.js`、`modules/subagent-frames.js` | 【单】 |
 | 子代理编辑器三态（可写/锁定-保留 Stop/只读占位；slot chain 选举接管）与续接提示（结果未纳入父回答 → `/continue-subagents`） | `modules/subagent-composer-ui.js`、`state/subagent-ui-decisions.js` | 【单】 |
 | 审批与 ask_user 交互卡片（含分析、取消、恢复） | `modules/human-interactions.js`、后端 interactions/approvals API | 【图】 |
 | 审批卡片锚点恢复（`tool_pending` 为 ephemeral；恢复时按 `tool_call_id` 重建占位工具行，重连历史恢复后刷新持久卡片） | `modules/human-interactions.js::ensurePendingHumanInteractionToolRow`、`modules/sse-handling.js::attachSessionEventStream` | 【单】 |
@@ -101,6 +102,7 @@
 
 ## 9. 版本记录
 
+- 2026-09-28（v21）：子代理执行活跃性——运行中子代理视为活跃子会话（忙碌/状态/运行守卫、子会话流唤醒）；子会话 steer 顺序消费（append、不换聊天管线）；`subagent_created` 先注册 pending；目录刷新节流（见 05/04·UC-5D17/5D18）。
 - 2026-09-28（v20）：平滑跟随改为**固定刚度软弹簧**（`followStiffness: 180`、临界阻尼、无到期期限；`followResponseBase/PerLagPx/followDeadlineMs` 删除）——对齐 DeepSeek 手机端观感；单帧 ≤20px 保留为大位移安全阀；文本揭示层与跟随解耦不变（见 05/02·UC-5B1）。
 - 2026-09-28（v19）：平滑跟随同步为**临界阻尼弹簧**模型（速度连续、响应 = 26 + 0.5×落后距离、230ms 期限、单帧 ≤20px、无收尾拖尾）；文本揭示层保留且与跟随解耦（见 05/02·UC-5B1）。
 - 2026-09-28（v18）：平滑跟随改为**统一限时滑动**——折行与整行高度变化共用同一规则（160ms 段时长、单帧 ≤20px、easeOutCubic）；移除速度地板、通道差异与揭示速率反馈；内容停顿后 ≤250ms 收尾、无拖尾（见 05/02·UC-5B1）。

@@ -1,8 +1,8 @@
 # 子代理会话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-25 v6（侧栏高亮跟随根主会话；覆盖至：当前工作区）
+- 版本：2026-09-28 v7（子代理执行活跃性与生命周期帧；覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`frontend/src/app/modules/ui-slot-registry.js`、`state/subagent-catalog-store.js`、`state/subagent-addressing.js`、`modules/subagent-frames.js`、`state/subagent-ui-decisions.js`、`modules/subagent-catalog-ui.js`、`modules/subagent-composer-ui.js`、`tests/subagent-ui-foundation.test.mjs`；接线点 `index.js` / `message-rendering.js` / `session-management.js` / `sse-handling.js` / `styles/app.css` 追加块。后端零改动。
+- 适用实现：`frontend/src/app/modules/ui-slot-registry.js`、`state/subagent-catalog-store.js`、`state/subagent-addressing.js`、`modules/subagent-frames.js`、`state/subagent-ui-decisions.js`、`modules/subagent-catalog-ui.js`、`modules/subagent-composer-ui.js`、`tests/subagent-ui-foundation.test.mjs`；接线点 `index.js` / `message-rendering.js` / `session-management.js` / `sse-handling.js` / `styles/app.css` 追加块。目录数据链路后端零改动；子代理执行活跃性与子会话流由 `app/webui.py` 提供（2026-09-28 起，见 UC-5D17）。
 - 上级：`00-WebUI对话界面整体设计.md`
 
 ---
@@ -81,12 +81,12 @@
 #### UC-5D12 目录数据只进对象层
 - **触发**：审查代码分层。
 - **预期现象**：子代理业务数据（地址/目录/已读）只存在于 `subagent-catalog-store.js` 的对象层（引用稳定快照 + subscribe）；UI 只订阅渲染，不反向写状态；slot 注册表遵循"声明即授权、disposer 级联"。
-- **依据**：`ui-slot-registry.js`、`subagent-catalog-store.js`、`tests/subagent-ui-foundation.test.mjs`（49 断言）。
+- **依据**：`ui-slot-registry.js`、`subagent-catalog-store.js`、`tests/subagent-ui-foundation.test.mjs`（50 断言）。
 
 #### UC-5D13 后端零改动与成员帧复用
 - **触发**：核对前后端改动面。
-- **预期现象**：目录数据来自既有 `GET /sessions/{id}/subagents?lite=1`；活跃度来自既有 SSE 的 `agent_id` 帧（`subagent_start/finish` 生命周期帧 + ephemeral 活动帧，1.5s 节流）；**目录链路后端无新增端点**；侧栏的运行中点保持原样。
-- **依据**：`subagent-frames.js`、`sse-handling.js`（两个 `agent_id` 分支）、`webui.py`（目录链路未改动；选择器接线见 UC-5D15）。
+- **预期现象**：目录数据来自既有 `GET /sessions/{id}/subagents?lite=1`；活跃度来自既有 SSE 的 `agent_id` 帧（`subagent_created/start/finish` 生命周期帧 + ephemeral 活动帧，1.5s 节流）；**目录链路后端无新增端点**；侧栏的运行中点保持原样。
+- **依据**：`subagent-frames.js`、`sse-handling.js`（`agent_id` 分支）、`webui.py`（目录链路未改动；选择器接线见 UC-5D15，执行活跃性见 UC-5D17）。
 
 #### UC-5D14 主对话区无回归
 - **触发**：常规对话与流式输出。
@@ -108,6 +108,20 @@
 - **预期现象**：查看子会话期间，会话列表仍高亮其所属的**根主会话**（子会话不单独占侧栏行，也不会让所有行失去选中态）；返回父会话后高亮保持；会话行重建（刷新/重排）时同一规则生效。
 - **规则与边界**：高亮解析统一走寻址栈——栈顶正是当前子会话时取栈底根会话，否则取当前会话；会话列表的"增量刷新"与"整表重建"两条路径共用同一解析，不只在切换后刷新一次。
 - **依据**：`subagent-addressing.js::sidebarSessionId`、`session-management.js::sidebarHighlightedSessionId`（`syncSessionListIndicatorClasses` / `buildAndBindSessionRow`）；回归 `tests/subagent-ui-foundation.test.mjs`（"sidebar keeps the root conversation highlighted while viewing nested subagents"）。
+
+### 2.7 执行活跃性与生命周期帧
+
+#### UC-5D17 运行中的子代理即活跃子会话
+- **触发**：子代理由 task 托管执行；任意视图观察该子会话，或在其中提交输入。
+- **预期现象**：会话状态与忙碌守卫把运行中的子代理视为**活跃**（`active_run.subagent=true`，轻量快照同样标记）；子会话页面流保持在线——心跳由 15s 收紧为 1s、超时优先重抽投影下发增量，无本地 worker 活动时才 `[DONE]` 收流；该会话不会被 `/chat` 再起一条竞争运行；子代理运行中提交的 steer 由子 ReAct **顺序消费**（append 语义），不替换聊天管线。
+- **规则与边界**：活跃判定以注册表 `is_running` 为准（非会话本地 worker）；steer 在子代理执行中提前返回、不触发 interrupt/restart 路径；收流由“无本地 worker”驱动（同 05/03·UC-5C7）。
+- **依据**：`webui.py::_is_subagent_execution_active / _has_local_worker_activity / _session_run_state_fields(_light) / post_session_steer / stream_session_events`；`sse-handling.js::isSubagentComposerSession`（子会话排队 followup 且 `steerMode='append'`）；回归 `tests/test_webui_messages.py::test_running_subagent_appears_active_to_history_stream_and_chat_guard`、`tests/test_feature_flags.py::test_child_steer_never_starts_a_competing_chat_run`。
+
+#### UC-5D18 生命周期帧先注册后运行
+- **触发**：SSE 收到 `subagent_created` / `subagent_start`（`subagent_started`）/ `subagent_finish` 生命周期帧。
+- **预期现象**：`subagent_created` 即注册子行（状态 **pending**，未 start 也先出现，不再只在启动后才可见）；start 置 running；finish 翻转终态（四色状态点规则不变）；目录刷新按“父会话 + 当前可见会话”节流（同键 5s 内不重复刷新）。
+- **规则与边界**：生命周期帧与 ephemeral 活动帧走同一成员帧通道；未知子代理仍以“证据 + 去抖刷新”兜底（UC-5D5 不变）。
+- **依据**：`sse-handling.js::noteSubagentLifecycleFrame`、`subagent-frames.js`（created→pending）、`subagent-catalog-ui.js`（刷新节流）；回归 `frontend/tests/subagent-ui-foundation.test.mjs`（“subagent_created registers a pending child before start; finish flips it inactive”、“returning from a child refreshes the parent capsule catalog”，50 断言）。
 
 ## 3. 边界（不在本篇）
 
@@ -131,6 +145,7 @@
 
 ## 5. 版本记录
 
+- 2026-09-28 v7：新增 UC-5D17《运行中的子代理即活跃子会话》与 UC-5D18《生命周期帧先注册后运行》——子代理执行活跃性接入状态/忙碌守卫与子会话流（steer 顺序消费）；`subagent_created` 先注册 pending；目录刷新节流；断言数 49→50；“后端零改动”口径按活跃性链路修正。
 - 2026-09-25 v6：新增 UC-5D16《侧栏高亮跟随根主会话》——查看子代理会话时，侧栏保持根主会话选中（`subagentAddressing.sidebarSessionId`）；复核 UC-5D5「未覆盖子代理的成员帧登记」与实现一致；单元断言数 44→49。
 - 2026-09-20 v5：补录交叉引用——子代理任务的生命周期与事件循环隔离（后台托管、跨循环等待/取消）见 ../02-ReAct运行时/10；本文件界面内容与结论不变。
 - 2026-09-18 v4：补 UC-5D15「子代理会话中的模型选择器」——旧卡片菜单入口已移除，右下角选择器承接子代理模型切换（数据动作全保留、不打断、下一次调用生效）；UC-5D13 表述更新（目录链路未改后端，选择器接线单列）。

@@ -1,6 +1,6 @@
 # 扩展、子代理与运行注册 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v3（覆盖至：当前工作区；补充跨进程运行租约）
+- 版本：2026-09-28 v4（覆盖至：当前工作区；任务索引并发与保真）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/extension_state.py`（432 行）、`subagent_store.py`、`subagent_repository.py`、`run_registry.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`
@@ -47,6 +47,12 @@
 - **规则与边界**：不得使用本进程已缓存的 observability 快照，否则可能看不到另一进程刚落盘的心跳；不得用会话级“有任意活动”替代 exact-run 匹配；Runtime V2 最近事件和共享心跳任一新鲜即可续租。
 - **依据**：`webui._runtime_observability_active_runs_are_recent`、`execution_metrics._heartbeat_pump`、`runtime_observability.heartbeat_run`。
 
+### UC-8D7 任务索引的并发与保真
+- **触发**：同一父会话下的并发任务行更新（多子代理并行启动）、删除清理与重启对账对 `tasks.json` / `pending_results.json` 的读写。
+- **预期现象**：进程内互斥保证并发 upsert 不丢行（16 行 / 8 线程全数保留）；任务行更新**只合并任务字段**，不再以任务行整体覆盖子会话元数据——`subagent_work_dir`、`git_worktree_managed`、`readonly_strict` 等保持原值。
+- **规则与边界**：子会话元数据归 SessionManager 所有（`write_metadata` 通道），任务索引侧只做字段合并；JSON 写入采用原子临时文件 + 有界 `replace` 重试（Windows 瞬时锁不导致丢行）。
+- **依据**：`RuntimeSubagentStore.upsert_task / append_pending_result / remove_parent_rows / _write_json`；回归 `tests/runtime_v2/test_storage_layout.py::test_task_updates_preserve_child_worktree_metadata_and_concurrent_rows`。
+
 ## 3. 边界
 
 - 子代理的**界面呈现**见 ../05-WebUI对话界面/04；
@@ -58,6 +64,7 @@
 
 ## 5. 版本记录
 
+- 2026-09-28 v4：新增 UC-8D7《任务索引的并发与保真》——任务行更新加锁且只合并字段（不再覆盖子会话元数据：worktree 根 / 模型档案 / 只读标记保持）；JSON 写入原子化 + Windows `replace` 重试。
 - 2026-09-20 v3：新增 UC-8D6；孤儿清理加入跨进程 exact-run 心跳租约并强制尊重宽限期，避免第二 WebUI 把长模型/工具调用误判为 `no_local_activity`。
 - 2026-09-20 v2：运行注册与孤儿清理收紧到 exact run；新增 UC-8D5 stale 看门狗隔离。
 - 2026-09-13 v1：拆分首版（承接 UC-809/810）。
