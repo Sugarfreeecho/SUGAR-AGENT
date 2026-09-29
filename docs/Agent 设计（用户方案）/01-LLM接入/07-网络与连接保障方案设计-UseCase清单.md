@@ -1,6 +1,6 @@
 # 网络与连接保障 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v2（覆盖至：当前工作区）
+- 版本：2026-09-28 v3（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_loop.py`（重连循环与消息到达预热）、`app/agent_harness.py`（离线检测、连接池、直连适配器与预热）、`app/agent_openai.py`（流传输观测）、`app/ssl_bypass.py`。
 - 上级：`00-LLM接入整体设计.md`
@@ -34,7 +34,7 @@
 ### UC-1G4 首选候选直连与完整回退
 - **触发**：候选链调用首选模型。
 - **预期现象**：首选候选优先通过 `_DirectStreamTransport` 进入本地 httpx 直连流，减少 facade/线程转接开销；直连失败时仍由原候选循环继续重试、熔断或回退。
-- **规则与边界**：仅替换首选候选的 transport，不改变候选顺序、请求预算、模态投影、熔断和回退语义；不能把“直连优化”实现成绕过 facade 的单一路径。
+- **规则与边界**：仅替换首选候选的 transport，不改变候选顺序、请求预算、模态投影、熔断和回退语义；不能把“直连优化”实现成绕过 facade 的单一路径。适配器必须逐一透传同一 chunk 的**全部流事件**（思考/正文/多路工具调用等，见 UC-1G6）。
 - **依据**：`agent_harness._DirectStreamTransport`、`_FallbackCompletions` 候选循环。
 
 ### UC-1G5 启动与空闲后连接预热
@@ -42,6 +42,12 @@
 - **预期现象**：技能/环境提示构建以及 TCP/TLS 建连在后台提前发生，首条消息或长时间空闲后的首轮不承担全部冷启动成本。
 - **规则与边界**：启动预热与按需预热均不得阻塞服务启动或消息接收；按需预热只在池子过冷时调度 worker。预热失败是非致命的，真实请求仍走正常重试与回退。
 - **依据**：`agent_loop.warm_prompt_build_path`、`agent_harness.warm_llm_connections / warm_llm_connections_if_stale`、`webui.start_webui_lifecycle`。
+
+### UC-1G6 直连适配器的事件保真
+- **触发**：单个流式 chunk 同时携带多种增量——思考 + 正文 + 一路或多路工具调用（或另有 usage / finish 字段）。
+- **预期现象**：该 chunk 的**全部事件逐一透传**：`reasoning_delta`、`content_delta`、每个 `tool_call_delta`（各自 `index` 原样保留）、`usage`、`finish` 一条不丢——不再"只发首个非空字段"，也不再"只取第一个工具调用"。
+- **规则与边界**：事件顺序保持既有次序（usage 前置；思考 → 正文 → 工具调用 → 收尾）；多路工具调用的 `index` 必须原样保留，供上层按索引合并；该保真只约束直连适配器输出，不改变 facade 路径、候选循环与回退语义（见 UC-1G4）。
+- **依据**：`agent_harness._DirectStreamTransport._to_events`（由单事件 `_to_event` 改为逐事件生成器）；回归 `tests/test_llm_transport.py::test_direct_stream_preserves_mixed_text_and_all_tool_calls`。
 
 ## 3. 边界
 
@@ -57,8 +63,10 @@
 | UC-1G3 | `RequestResponseLogger`、SDK 流 EOF drain、httpx limits |
 | UC-1G4 | `_DirectStreamTransport`、`_FallbackCompletions` |
 | UC-1G5 | `warm_prompt_build_path`、`warm_llm_connections*`、WebUI lifecycle |
+| UC-1G6 | `agent_harness._DirectStreamTransport._to_events`、`tests/test_llm_transport.py` |
 
 ## 5. 版本记录
 
+- 2026-09-28 v3：新增 UC-1G6《直连适配器的事件保真》——同一 chunk 的 reasoning/content/多路 tool-call 增量逐一发出（此前只返回首个非空字段、只取第一个工具调用）；回归含"混合文本 + 双工具调用"用例；UC-1G4 补交叉引用。
 - 2026-09-20 v2：补齐流响应 EOF drain、keepalive 连接池、首选候选直连适配器，以及启动/空闲后后台预热。
 - 2026-09-13 v1：拆分首版（承接 UC-116/117）。
