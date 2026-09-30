@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
     "new_session_legacy_options_runtime.cjs",
     "runtime_status_takeover.cjs",
     "restart_recovery_order_runtime.cjs",
+    "tool_pending_history_recovery_runtime.cjs",
 ])
 def test_frontend_session_stream_runtime(script):
     result = subprocess.run(

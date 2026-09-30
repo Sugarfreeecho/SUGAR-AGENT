@@ -53,16 +53,17 @@ async function init() {
     }
     if (targetSession) await switchSession(targetSession);
     else await createNewSession();
-    // Recovery is server-owned and session-wide. Trigger a scan after the
-    // initial view is ready so interrupted background sessions resume without
-    // temporarily switching them into the visible chat.
-    void fetch('/sessions/recover', { method: 'POST' }).then(function () {
-        if (typeof observeServerOwnedReactRecovery === 'function' && currentSessionId) {
-            observeServerOwnedReactRecovery(currentSessionId);
+    // Startup already scans background sessions. Prioritize the visible one
+    // independently, without waiting for that entire scan or its HTTP reply.
+    if (currentSessionId) {
+        var recoverySessionId = String(currentSessionId);
+        if (typeof observeServerOwnedReactRecovery === 'function') {
+            observeServerOwnedReactRecovery(recoverySessionId);
         }
-    }).catch(function (error) {
-        console.warn('恢复后台会话失败:', error);
-    });
+        if (typeof requestServerOwnedReactRecovery === 'function') {
+            requestServerOwnedReactRecovery(recoverySessionId);
+        }
+    }
     bindExistingLogs();
 }
 init();

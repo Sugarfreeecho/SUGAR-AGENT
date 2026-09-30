@@ -4742,7 +4742,14 @@ function findExistingLlmFeedRow(ctx, logType, reactIter, opts) {
     }
     for (var r = 0; r < roots.length; r += 1) {
         var matches = roots[r].querySelectorAll(selector);
-        if (matches && matches.length) return matches[matches.length - 1];
+        if (matches && matches.length) {
+            var runId = String(ctx.runId || '');
+            for (var i = matches.length - 1; i >= 0; i -= 1) {
+                if (!runId || String(matches[i].getAttribute('data-run-id') || '') === runId) {
+                    return matches[i];
+                }
+            }
+        }
     }
     return null;
 }
@@ -4755,6 +4762,7 @@ function removeDuplicateLlmFeedRows(ctx, keepRow, logType, reactIter) {
     var rows = ctx.stream.querySelectorAll(selector);
     if (!rows || rows.length <= 1) return;
     rows.forEach(function (row) {
+        if (ctx.runId && String(row.getAttribute('data-run-id') || '') !== String(ctx.runId)) return;
         if (row !== keepRow && row.getAttribute('data-llm-live-row') === '1') {
             unregisterProcessAggregateRow(row);
             row.remove();

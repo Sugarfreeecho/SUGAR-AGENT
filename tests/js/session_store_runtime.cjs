@@ -12,6 +12,10 @@ const actionsSource = fs.readFileSync(
   path.join(root, 'frontend', 'src', 'app', 'state', 'session-actions.js'),
   'utf8',
 );
+const sseSource = fs.readFileSync(
+  path.join(root, 'frontend', 'src', 'app', 'modules', 'sse-handling.js'),
+  'utf8',
+);
 const unreadClearInFlight = new Set();
 
 const ctx = vm.createContext({
@@ -33,6 +37,13 @@ vm.runInContext(`${actionsSource}\nglobalThis.__applySessionSnapshot = applySess
 
 const store = ctx.__sessionStore;
 const applySnapshot = ctx.__applySessionSnapshot;
+const sseScopeSource = sseSource.match(/^function sseSequenceScope\(parsed\) \{[^]*?^\}/m);
+assert(sseScopeSource, 'missing SSE epoch scope helper');
+vm.runInContext(`${sseScopeSource[0]}\nglobalThis.__sseSequenceScope = sseSequenceScope;`, ctx);
+const sseSequenceScope = ctx.__sseSequenceScope;
+assert.strictEqual(store.shouldAcceptSseEvent('restart', 100, sseSequenceScope({seq_scope: 'event_bus', event_bus_epoch: 'old'})), true);
+assert.strictEqual(store.shouldAcceptSseEvent('restart', 1, sseSequenceScope({seq_scope: 'event_bus', event_bus_epoch: 'new'})), true);
+assert.strictEqual(store.shouldAcceptSseEvent('restart', 1, sseSequenceScope({seq_scope: 'event_bus', event_bus_epoch: 'new'})), false);
 
 store.applySnapshot([{ id: 'old', name: 'Old' }], 0);
 store.protectFromSnapshots({

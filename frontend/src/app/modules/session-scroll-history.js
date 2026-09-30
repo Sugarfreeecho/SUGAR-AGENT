@@ -733,7 +733,10 @@ function isCompleteLocalRunStream(sessionId, stream) {
     return !!(run && run.ctx && run.ctx.stream === stream
         && stream && stream.dataset
         && stream.dataset.partialBackgroundRun !== '1'
-        && stream.dataset.sessionLoadFailed !== '1');
+        && stream.dataset.sessionLoadFailed !== '1'
+        // An observer stream is complete only after durable history hydration.
+        // A local submitted run already contains its optimistic first turn.
+        && (stream.dataset.sessionLoadOk === '1' || !run.reattached));
 }
 
 function stashVisibleStreamForSession(sessionId, opts) {

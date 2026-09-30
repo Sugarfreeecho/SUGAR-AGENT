@@ -130,6 +130,16 @@ function shouldApplySseSeqFilter(parsed) {
     return true;
 }
 
+function sseSequenceScope(parsed) {
+    var scope = String((parsed && parsed.seq_scope) || 'legacy');
+    // event_bus_seq restarts at 1 with the backend process. Keep dedupe within
+    // one process while accepting the new process's first live token.
+    if (scope === 'event_bus' && parsed && parsed.event_bus_epoch) {
+        return scope + ':' + String(parsed.event_bus_epoch);
+    }
+    return scope;
+}
+
 function endRunForClient(sessionId, ctx, opts) {
     opts = opts || {};
     var sid = String(sessionId || '');
@@ -407,7 +417,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 // they are not chat history and must not enter seq/cursor handling.
                 if (consumeExtensionControlEvent(parsed, eventSessionId)) continue;
                 if (shouldApplySseSeqFilter(parsed)
-                    && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, parsed.seq_scope || 'legacy')) continue;
+                    && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, sseSequenceScope(parsed))) continue;
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerOpId = String(parsed.client_id || parsed.steer_id || '');
                     var optimisticSteerRow = steerOpId ? findSteerProcessRow(runCtx, steerOpId) : null;
@@ -480,8 +490,11 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     setSendButtonState();
                 }
                 if (reduced.contextStateChanged && eventSessionId === currentSessionId) {
-                    if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
-                    if (parsed.type === 'context_tokens') continue;
+                    if (parsed.type === 'context_tokens') {
+                        applyContextTokenLabelForCurrentSession();
+                        if (!parsed.ephemeral) streamEventIdx += 1;
+                        continue;
+                    }
                 }
                 if (parsed.ephemeral) {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；不能 fall-through
@@ -591,8 +604,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 }
                 if (parsed.agent_id) {
                     /* 非 ephemeral 子 agent 事件：绝不能落到 renderEvent(runCtx,...)；
-                       生命周期事件喂给目录对象层作为成员帧。 */
+                       生命周期事件喂给目录对象层作为成员帧。这类事件仍占据
+                       UI 历史索引，否则长时间运行的工具会被误判为漏事件。 */
                     if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(parsed);
+                    streamEventIdx += 1;
                     continue;
                 }
                 finalizeLlmStreamChunks(runCtx);
@@ -910,15 +925,34 @@ async function startContinueAfterSubagents(sessionId) {
 }
 
 var serverRecoveryObservationBySession = Object.create(null);
+var serverRecoveryRequestedAtBySession = Object.create(null);
+
+function requestServerOwnedReactRecovery(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var now = Date.now();
+    if (now - Number(serverRecoveryRequestedAtBySession[sid] || 0) < 5000) return;
+    serverRecoveryRequestedAtBySession[sid] = now;
+    void fetch('/sessions/recover?session_id=' + encodeURIComponent(sid), {
+        method: 'POST',
+    }).catch(function (error) {
+        delete serverRecoveryRequestedAtBySession[sid];
+        console.warn('恢复当前会话失败:', error);
+    });
+}
 
 function observeServerOwnedReactRecovery(sessionId) {
     var sid = String(sessionId || '');
     if (!sid || serverRecoveryObservationBySession[sid]) return;
     serverRecoveryObservationBySession[sid] = (async function () {
-        var delays = [0, 120, 350, 800, 1600];
+        // The legacy heartbeat-grace fallback can start recovery well after
+        // the first few seconds. Keep the observer alive long enough to
+        // attach when the server's deferred pass begins, without owning work.
+        var delays = [0, 120, 350, 800, 1600, 3000, 5000, 8000, 12000, 16000, 20000, 24000, 30000];
         for (var i = 0; i < delays.length; i += 1) {
             if (delays[i]) await sleepMs(delays[i]);
             if (sid !== String(currentSessionId || '')) return;
+            if (i >= 5 && i % 2 === 1) requestServerOwnedReactRecovery(sid);
             if (typeof reconcileRunStateFromServer === 'function') {
                 await reconcileRunStateFromServer({ silent: true });
             }
@@ -951,6 +985,7 @@ function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
     // Recovery execution is server-owned. The browser only waits for the
     // startup/background worker to publish an active run and then attaches an
     // observer stream; it must never start a competing /continue producer.
+    requestServerOwnedReactRecovery(sid);
     observeServerOwnedReactRecovery(sid);
 }
 
@@ -1074,6 +1109,15 @@ function restoreReactGenerationFromProcessGroup(ctx, processGroup) {
         var value = Number(row.getAttribute('data-react-generation'));
         if (Number.isFinite(value)) generation = Math.max(generation, Math.floor(value));
     });
+    // The server may have restarted between the last visible row and this
+    // attachment. A replacement run restarts react_iter, so it must not insert
+    // its first row ahead of the old run's later iterations.
+    var lastRow = rows.length ? rows[rows.length - 1] : null;
+    var lastRunId = lastRow ? String(lastRow.getAttribute('data-run-id') || '') : '';
+    var activeRunId = String(ctx.runId || '');
+    if (lastRow && activeRunId && lastRunId && activeRunId !== lastRunId) {
+        generation += 1;
+    }
     ctx.reactGeneration = generation;
     return generation;
 }
@@ -1081,6 +1125,10 @@ function restoreReactGenerationFromProcessGroup(ctx, processGroup) {
 async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
     if (!sessionId || getSessionRunState(sessionId)) return;
+    // A session switch replays its durable history first. Starting SSE during
+    // that replay creates a local run that can cancel history hydration and
+    // leave only a later follow-up/process row in the child page.
+    if (sessionId === currentSessionId && sessionStore.ui && sessionStore.ui.loadingMessages) return;
     if (!opts.force && !isServerStreamActive(sessionId)) return;
     if (streamHistoryRecoveryBySession.has(sessionId)) {
         opts = Object.assign({}, opts, { skipInitialLoad: false });
@@ -1096,6 +1144,9 @@ async function attachSessionEventStream(sessionId, opts) {
             await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
             streamHistoryRecoveryBySession.delete(runSessionId);
+            // The rebuilt history has no ephemeral tool rows. Accept the
+            // server's live-state replay even if this tab saw its seq before.
+            sessionStore.resetSseSeq(runSessionId);
             // A history rebuild drops the ephemeral tool_pending rows. Re-render
             // the durable human-interaction cards so they anchor to replayed
             // tool rows instead of landing at the bottom of the stream.
@@ -1976,6 +2027,9 @@ function isSubagentComposerSession(sessionId) {
         && typeof subagentAddressing.current === 'function'
         ? subagentAddressing.current() : null;
     if (top && String(top.childSessionId || '') === sid) return true;
+    if (typeof subagentCatalogStore !== 'undefined' && subagentCatalogStore
+        && typeof subagentCatalogStore.getAddress === 'function'
+        && subagentCatalogStore.getAddress(sid)) return true;
     var session = sessionStore.get(sid);
     return !!(session && (session.parent_id || session.parent_session_id || session.is_subagent));
 }
@@ -2287,7 +2341,9 @@ function removePendingSteerFromProcess(sessionId, item) {
 
 async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent, steerMode) {
     var activeRun = getSessionRunState(sessionId);
-    var sourceRunId = activeRun && activeRun.runId ? String(activeRun.runId) : '';
+    var activeInfo = sessionStore.getActiveRunInfo(sessionId);
+    var sourceRunId = String((activeInfo && (activeInfo.run_id || activeInfo.runId))
+        || (activeRun && activeRun.runId) || '');
     var r = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/steer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2434,6 +2490,11 @@ async function syncFollowupQueueFromServer(sessionId) {
             });
             persistFollowupQueue(sid);
             renderFollowupQueue(sid);
+            q.forEach(function (entry) {
+                if (entry && entry.steerId && (entry.status === 'accepted' || entry.status === 'restarting')) {
+                    scheduleAcceptedFollowupWatch(sid, entry.id);
+                }
+            });
         })
         .finally(function () { delete followupServerSyncInFlight[sid]; });
     return followupServerSyncInFlight[sid];
@@ -2630,7 +2691,7 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
             }
             if ((serverState === 'queued' || serverState === 'interrupting' || serverState === 'claimed') && !isSessionRunning(sid) && !isServerStreamActive(sid)) {
                 var recovered = await recoverSteerForRestart(sid, latest);
-                if (recovered) {
+                if (recovered && recovered.state === 'restarting') {
                     latest.status = 'restarting';
                     latest.replacementRunId = String(recovered.replacement_run_id || '');
                     persistFollowupQueue(sid);
@@ -2638,6 +2699,20 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
                 }
                 scheduleAcceptedFollowupWatch(sid, itemId);
                 return;
+            }
+            if (serverState === 'restarting' && isSubagentComposerSession(sid)) {
+                // The server owns the child lifecycle. It will requeue a stale
+                // takeover while task() is still running, or keep restarting
+                // only after that task has actually ended.
+                var childRecovery = await recoverSteerForRestart(sid, latest);
+                if (childRecovery && childRecovery.state !== 'restarting') {
+                    latest.status = 'accepted';
+                    latest.replacementRunId = '';
+                    persistFollowupQueue(sid);
+                    renderFollowupQueue(sid);
+                    scheduleAcceptedFollowupWatch(sid, itemId);
+                    return;
+                }
             }
             if (serverState === 'restarting' && !isSessionRunning(sid) && !isServerStreamActive(sid) && !latest.restartRecoveryAttempted) {
                 latest.restartRecoveryAttempted = true;

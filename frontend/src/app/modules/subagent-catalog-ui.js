@@ -517,6 +517,7 @@ var subagentCatalogUi = (function () {
 
     // ── 订阅：目录/寻址变化时重绘 ────────────────────────────────────────────
     var refreshDebounceTimer = null;
+    var catalogPollTimer = null;
     var lastRefreshedParentId = '';
     var lastRefreshedSessionId = '';
     var lastRefreshedAt = 0;
@@ -591,6 +592,20 @@ var subagentCatalogUi = (function () {
             }
             if (menuOpen) renderMenu();
         });
+        // Parent SSE can close while background children continue. Reconcile
+        // the visible lineage even when no parent event is available.
+        if (catalogPollTimer == null && typeof setInterval === 'function') {
+            catalogPollTimer = setInterval(function () {
+                if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+                var pid = currentParentId();
+                if (!pid || Date.now() - lastRefreshedAt < 3000) return;
+                lastRefreshedParentId = pid;
+                lastRefreshedSessionId = typeof currentSessionId !== 'undefined'
+                    ? String(currentSessionId || '') : '';
+                lastRefreshedAt = Date.now();
+                void storeRef.refreshCatalogs(pid, { force: true });
+            }, 4000);
+        }
     }
 
     function isMenuOpen() {
@@ -618,6 +633,8 @@ var subagentCatalogUi = (function () {
     function resetForTests() {
         if (hoverTimer != null) clearTimeout(hoverTimer);
         if (closeTimer != null) clearTimeout(closeTimer);
+        if (catalogPollTimer != null && typeof clearInterval === 'function') clearInterval(catalogPollTimer);
+        catalogPollTimer = null;
         hoverTimer = null;
         closeTimer = null;
         menuOpen = false;

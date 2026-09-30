@@ -795,10 +795,17 @@ async function refreshSingleSessionRow(sessionId) {
         const sess = await response.json();
         if (!sess || !sess.id) return;
         scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
-        applySessionPatch({
-            session: sess,
-            session_id: sess.id,
-        });
+        if (sess.is_subagent) {
+            // Child details must be addressable without inserting a duplicate
+            // row into the root-session sidebar.
+            sessionStore.sessionsById.set(String(sess.id), sess);
+            setSessionServerStreamActive(sess.id, !!sess.stream_active);
+        } else {
+            applySessionPatch({
+                session: sess,
+                session_id: sess.id,
+            });
+        }
         const appliedSession = sessionStore.get(sess.id) || sess;
         sessionStore.applyActiveRunForSession(
             sess.id,
@@ -824,7 +831,7 @@ async function refreshSingleSessionRow(sessionId) {
             subagentComposerUi.syncFromSessionSummary(sess.id, sess);
         }
         renderSessionListIfChanged(false);
-        if (typeof maybeAutoResumeInterruptedReact === 'function') {
+        if (!sess.is_subagent && typeof maybeAutoResumeInterruptedReact === 'function') {
             maybeAutoResumeInterruptedReact(sessionId, sess);
         }
     } catch (e) {
@@ -1834,6 +1841,9 @@ async function switchSession(sessionId, opts) {
     if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);
     prepareStashLeaving(leaving);
     setCurrentSessionState(sessionId);
+    // Hold observer attachment until the addressed session's durable history
+    // has been restored (or its complete in-memory stream has been reused).
+    sessionStore.ui.loadingMessages = true;
     // The session identity and its side-panel contents must cross the switch
     // boundary together. Waiting for history requests leaves the previous
     // session title or plan visible for a frame (and sometimes much longer on
@@ -1890,6 +1900,7 @@ async function switchSession(sessionId, opts) {
             && (restoredFromCache = restoreCachedSessionStream(sessionId)))
     )) {
         suppressTocDuringSessionLoad = false;
+        sessionStore.ui.loadingMessages = false;
         hideLoading();
         rebuildToc({ localOnly: true });
         updateSessionTitle();
@@ -1943,7 +1954,7 @@ async function switchSession(sessionId, opts) {
             // through the async load: completed results open without a glide.
             var loadedOk = await loadSessionMessages(sessionId, sessionHadUnreadResult ? 'bottom' : 'smooth-bottom', {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
-                allowDuringRun: isServerStreamActive(sessionId),
+                allowDuringRun: addressingChildSwitch || isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,
             });
             if (!loadedOk) { resolve(false); return; }

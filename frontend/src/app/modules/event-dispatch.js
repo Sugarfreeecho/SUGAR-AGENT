@@ -46,8 +46,23 @@ document.addEventListener('myagent:plugin-ui-ready', function () {
     });
 });
 
+function syncRenderContextRunScope(ctx, event) {
+    // Recovered runs restart react_iter at 1 without a new user message. Keep
+    // their rows in a later generation even when the same process box remains
+    // open across an ask_user/restart boundary.
+    var eventRunId = String(event.run_id || event.runId || '');
+    if (ctx && eventRunId && eventRunId !== String(ctx.runId || '')) {
+        if (ctx.runId) {
+            if (ctx.llm) resetLlmState(ctx);
+            ctx.reactGeneration = Math.max(0, Number(ctx.reactGeneration) || 0) + 1;
+        }
+        ctx.runId = eventRunId;
+    }
+}
+
 function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
+    syncRenderContextRunScope(ctx, event);
     var eventSessionId = runSessionId || currentSessionId || '';
     document.dispatchEvent(new CustomEvent('myagent:ui-event', {
         detail: {

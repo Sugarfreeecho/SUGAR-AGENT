@@ -278,6 +278,23 @@ async function main() {
   await switchState.context.switchSession('B');
   assert.equal(switchState.context.messageLoadEpoch, 1, 'cache restore invalidates old history requests');
   assert.equal(switchState.context.replayingMessages, false);
+  const pendingSwitch = switchFixture();
+  const pendingPromise = pendingSwitch.context.switchSession('child');
+  assert.equal(pendingSwitch.context.sessionStore.ui.loadingMessages, true,
+    'live attachment must wait while the addressed session is restoring history');
+  pendingSwitch.gates.child();
+  await pendingPromise;
+  assert.equal(pendingSwitch.context.sessionStore.ui.loadingMessages, false);
+  const partialStream = { dataset: {} };
+  const streamRestore = runtime({
+    getSessionRunState: () => ({ ctx: { stream: partialStream }, reattached: true }),
+  });
+  vm.runInContext(between(scrolling, 'function isCompleteLocalRunStream(', 'function stashVisibleStreamForSession('),
+    streamRestore.context);
+  assert.equal(streamRestore.context.isCompleteLocalRunStream('child', partialStream), false,
+    'an observer stream with no durable history must not be certified for cache restore');
+  partialStream.dataset.sessionLoadOk = '1';
+  assert.equal(streamRestore.context.isCompleteLocalRunStream('child', partialStream), true);
   const sealed = runtime({
     currentSessionId: 's', updateProcessBrief() {}, refreshProcessAggregateStats() {},
     refreshLiveProcessAggregateStats: () => false, stopLiveProcessAggregateStats() {},
