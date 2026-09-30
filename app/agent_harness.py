@@ -7227,6 +7227,12 @@ class SessionManager:
         self._notify_session_state_changed(session_id, {"pinned", "pinned_at"})
 
     def set_session_todo(self, session_id: str, todo: bool) -> None:
+        """切换侧栏「待办」标记。
+
+        ``updated_at``（侧栏 ``last_activity_at`` 的来源）代表会话的对话活动时间，
+        待办只是用户打的标记，不是活动：改写它会让老会话因为勾选待办被顶到列表最前。
+        因此这里只写 todo 字段，保留原来的活动时间。
+        """
         meta_path = self._get_metadata_path(session_id)
         if not meta_path.exists():
             self.refresh_sessions_index_from_disk()

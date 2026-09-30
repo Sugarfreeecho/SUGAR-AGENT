@@ -233,3 +233,64 @@ def test_pending_queue_user_turn_preserves_previous_unread_result(tmp_path):
     summary = manager.get_session_summary(session_id)
     assert summary["unread_result"] is True
     assert summary["unread_result_status"] == "success"
+
+
+def test_todo_toggle_keeps_activity_time_and_sidebar_order(tmp_path):
+    """侧栏「设为待办 / 取消待办」只是标记，不是对话活动，不得改变会话时间或顺序。"""
+    import agent_harness
+
+    old_id = "66666666-6666-4666-8666-666666666666"
+    new_id = "77777777-7777-4777-8777-777777777777"
+    sessions_dir = tmp_path / "sessions"
+    index_file = tmp_path / "sessions.json"
+    sessions_dir.mkdir()
+    rows = [
+        {
+            "id": new_id,
+            "name": "newer",
+            "created_at": "2026-08-25T00:00:00Z",
+            "updated_at": "2026-08-25T00:00:00Z",
+        },
+        {
+            "id": old_id,
+            "name": "older",
+            "created_at": "2026-08-10T00:00:00Z",
+            "updated_at": "2026-08-10T00:00:00Z",
+        },
+    ]
+    index_file.write_text(json.dumps({"sessions": rows}), encoding="utf-8")
+    rows_by_id = {row["id"]: row for row in rows}
+    for sid in (old_id, new_id):
+        session_dir = sessions_dir / sid
+        session_dir.mkdir()
+        (session_dir / "metadata.json").write_text(
+            json.dumps(rows_by_id[sid]),
+            encoding="utf-8",
+        )
+
+    manager = agent_harness.SessionManager(sessions_dir, index_file)
+    baseline = [row["id"] for row in manager.list_sessions(include_archived=True)]
+    assert baseline == [new_id, old_id]
+
+    manager.set_session_todo(old_id, True)
+    marked = manager.list_sessions(include_archived=True)
+    assert [row["id"] for row in marked] == baseline
+    assert marked[1]["todo"] is True
+    assert marked[1]["updated_at"] == "2026-08-10T00:00:00Z"
+    assert marked[1]["last_activity_at"] == "2026-08-10T00:00:00Z"
+    assert json.loads((sessions_dir / old_id / "metadata.json").read_text(encoding="utf-8"))[
+        "updated_at"
+    ] == "2026-08-10T00:00:00Z"
+
+    manager.set_session_todo(old_id, False)
+    cleared = manager.list_sessions(include_archived=True)
+    assert [row["id"] for row in cleared] == baseline
+    assert cleared[1]["todo"] is False
+    assert cleared[1]["updated_at"] == "2026-08-10T00:00:00Z"
+    assert cleared[1]["last_activity_at"] == "2026-08-10T00:00:00Z"
+
+    # 重启后从磁盘重建索引（含 events.jsonl 时间对账），时间与顺序仍然不变。
+    restarted = agent_harness.SessionManager(sessions_dir, index_file)
+    restarted_rows = restarted.list_sessions(include_archived=True)
+    assert [row["id"] for row in restarted_rows] == baseline
+    assert restarted.get_session_summary(old_id)["updated_at"] == "2026-08-10T00:00:00Z"
