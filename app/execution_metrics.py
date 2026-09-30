@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import atexit
+import copy
 import json
+import logging
 import os
 import threading
 import time
@@ -20,10 +22,14 @@ _heartbeat_controls: set[tuple[str, str]] = set()
 _heartbeat_thread: Optional[threading.Thread] = None
 _heartbeat_wakeup = threading.Event()
 _flush_timers: Dict[str, threading.Timer] = {}
+_flush_io_locks: Dict[str, threading.Lock] = {}
+_flush_failed_sessions: set[str] = set()
 _FLUSH_DELAY_SEC = max(
     0.05,
     min(1.0, float(os.getenv("EXECUTION_METRICS_FLUSH_DELAY_MS", "200")) / 1000.0),
 )
+_SLOW_OPERATION_MS = 100
+_timing_logger = logging.getLogger("agent_harness")
 _HEARTBEAT_INTERVAL_SEC = max(
     2.0,
     float(os.getenv("AGENT_RUN_HEARTBEAT_INTERVAL_SECONDS", "15")),
@@ -108,25 +114,57 @@ def _write_now(session_id: str, data: dict) -> None:
         pass
 
 
-def _flush_locked(session_id: str) -> None:
-    timer = _flush_timers.pop(session_id, None)
-    if timer is not None and timer is not threading.current_thread():
-        timer.cancel()
-    data = _sessions.get(session_id)
-    if data is not None:
-        _write_now(session_id, data)
+def _flush_io_lock(session_id: str) -> threading.Lock:
+    with _lock:
+        return _flush_io_locks.setdefault(session_id, threading.Lock())
+
+
+def _flush_session(session_id: str, *, fired_timer: bool = False) -> None:
+    """Copy under the metrics lock; serialize and write outside it.
+
+    The per-session I/O lock keeps a slow older flush from overwriting a newer
+    snapshot. A mutation made during the write schedules the following flush.
+    """
+    started = time.perf_counter()
+    io_lock = _flush_io_lock(session_id)
+    with io_lock:
+        io_acquired = time.perf_counter()
+        with _lock:
+            acquired = time.perf_counter()
+            timer = _flush_timers.get(session_id)
+            if fired_timer and timer is not threading.current_thread():
+                return
+            timer = _flush_timers.pop(session_id, None)
+            if timer is not None and timer is not threading.current_thread():
+                timer.cancel()
+            _flush_failed_sessions.discard(session_id)
+            data = _sessions.get(session_id)
+            snapshot_data = copy.deepcopy(data) if data is not None else None
+        copied = time.perf_counter()
+        if snapshot_data is not None:
+            _write_now(session_id, snapshot_data)
+        finished = time.perf_counter()
+    io_wait_ms = int((io_acquired - started) * 1000)
+    lock_wait_ms = int((acquired - io_acquired) * 1000)
+    lock_held_ms = int((copied - acquired) * 1000)
+    io_write_ms = int((finished - copied) * 1000)
+    if max(io_wait_ms, lock_wait_ms, lock_held_ms, io_write_ms) >= _SLOW_OPERATION_MS:
+        _timing_logger.info(
+            "execution_metrics_timing op=%s session=%s io_wait_ms=%d lock_wait_ms=%d lock_held_ms=%d io_write_ms=%d",
+            "timer_flush" if fired_timer else "sync_flush",
+            session_id, io_wait_ms, lock_wait_ms, lock_held_ms, io_write_ms,
+        )
 
 
 def _flush_timer_fired(session_id: str) -> None:
-    with _lock:
-        _flush_locked(session_id)
+    _flush_session(session_id, fired_timer=True)
 
 
 def _save(session_id: str, data: dict, *, force: bool = False) -> None:
     """Mark metrics dirty and coalesce whole-file rewrites."""
     _sessions[session_id] = data
     if force:
-        _flush_locked(session_id)
+        _flush_failed_sessions.add(session_id)
         return
     if session_id in _flush_timers:
         return
@@ -136,20 +174,21 @@ def _save(session_id: str, data: dict, *, force: bool = False) -> None:
     try:
         timer.start()
     except RuntimeError:
-        # Metrics are best-effort diagnostics. Fall back to an immediate write
-        # instead of aborting the run when native threads are exhausted.
+        # The terminal flush remains durable; never perform slow I/O while the
+        # caller owns the global metrics lock.
         _flush_timers.pop(session_id, None)
-        _write_now(session_id, data)
+        _flush_failed_sessions.add(session_id)
 
 
 def flush(session_id: Optional[str] = None) -> None:
     """Durably flush pending metrics, normally used at terminal boundaries."""
+    if session_id is not None:
+        _flush_session(str(session_id))
+        return
     with _lock:
-        if session_id is not None:
-            _flush_locked(str(session_id))
-            return
-        for sid in list(_flush_timers):
-            _flush_locked(sid)
+        pending = set(_flush_timers) | set(_flush_failed_sessions)
+    for sid in pending:
+        _flush_session(sid)
 
 
 atexit.register(flush)
@@ -280,6 +319,7 @@ def finish_run(session_id: str, run_id: str, status: str, *, reason: str = "") -
             except Exception:
                 pass
             _save(session_id, data, force=True)
+    flush(session_id)
     try:
         import runtime_observability
 
@@ -298,13 +338,23 @@ def heartbeat_run(session_id: str, run_id: str, stage: str = "") -> None:
 
 
 def record_request(session_id: str, run_id: str, react_iter: int, **fields: Any) -> None:
+    started = time.perf_counter()
     with _lock:
+        acquired = time.perf_counter()
         data = _load(session_id)
         req = _request(_run(data, run_id), react_iter)
         for key, value in fields.items():
             if value is not None:
                 req[key] = value
         _save(session_id, data)
+    finished = time.perf_counter()
+    wait_ms = int((acquired - started) * 1000)
+    held_ms = int((finished - acquired) * 1000)
+    if max(wait_ms, held_ms) >= _SLOW_OPERATION_MS:
+        _timing_logger.info(
+            "execution_metrics_timing op=record_request session=%s react_iter=%d lock_wait_ms=%d lock_held_ms=%d",
+            session_id, react_iter, wait_ms, held_ms,
+        )
 
 
 def record_run_fields(session_id: str, run_id: str, **fields: Any) -> None:
@@ -321,7 +371,9 @@ def record_run_fields(session_id: str, run_id: str, **fields: Any) -> None:
 
 
 def record_phase(session_id: str, run_id: str, react_iter: int, phase: str, values: Dict[str, Any], **meta: Any) -> None:
+    started = time.perf_counter()
     with _lock:
+        acquired = time.perf_counter()
         data = _load(session_id)
         req = _request(_run(data, run_id), react_iter)
         row = dict(req.setdefault("phases", {}).get(phase) or {})
@@ -336,6 +388,14 @@ def record_phase(session_id: str, run_id: str, react_iter: int, phase: str, valu
             row["total_ms"] = int(explicit_total)
         req["phases"][phase] = row
         _save(session_id, data)
+    finished = time.perf_counter()
+    wait_ms = int((acquired - started) * 1000)
+    held_ms = int((finished - acquired) * 1000)
+    if max(wait_ms, held_ms) >= _SLOW_OPERATION_MS:
+        _timing_logger.info(
+            "execution_metrics_timing op=record_phase session=%s react_iter=%d phase=%s lock_wait_ms=%d lock_held_ms=%d",
+            session_id, react_iter, phase, wait_ms, held_ms,
+        )
 
 
 def record_stream_event(session_id: str, run_id: str, react_iter: int, event: Dict[str, Any]) -> None:
@@ -420,10 +480,10 @@ def record_tool(
 
 
 def snapshot(session_id: str) -> dict:
+    # A snapshot is also a durable boundary, but disk I/O must not hold the
+    # process-wide metrics lock used by active ReAct rounds.
+    flush(str(session_id))
     with _lock:
-        # A caller explicitly requesting a snapshot is also a natural durable
-        # boundary; keep tests, exports, and external readers consistent.
-        _flush_locked(str(session_id))
         data = json.loads(json.dumps(_load(session_id), ensure_ascii=False))
     try:
         import runtime_observability
@@ -438,51 +498,60 @@ def snapshot_all(session_names: Optional[Dict[str, str]] = None) -> dict:
     """Return persisted metrics for every session, including inactive ones."""
     names = session_names or {}
     with _lock:
-        session_ids = set(_sessions.keys())
-        if _root is not None and _root.exists():
-            for path in _root.rglob("execution_metrics.json"):
-                try:
-                    loaded = json.loads(path.read_text(encoding="utf-8"))
-                    sid = str(loaded.get("session_id") or "")
-                    if sid:
-                        session_ids.add(sid)
-                except (OSError, ValueError, TypeError):
-                    continue
-        sessions = []
-        for sid in session_ids:
-            data = _load(sid)
-            if not data.get("runs"):
-                continue
-            row = json.loads(json.dumps(data, ensure_ascii=False))
-            row["session_name"] = str(names.get(sid) or sid)
-            try:
-                import runtime_observability
+        root = _root
+    disk_rows = _scan_persisted_metrics(root)
+    with _lock:
+        cached_ids = list(_sessions)
+    cached_rows = {}
+    for sid in cached_ids:
+        with _lock:
+            data = _sessions.get(sid)
+            if data is not None:
+                cached_rows[sid] = copy.deepcopy(data)
+    disk_rows.update(cached_rows)
+    sessions = []
+    for sid, data in disk_rows.items():
+        if not data.get("runs"):
+            continue
+        row = data
+        row["session_name"] = str(names.get(sid) or sid)
+        try:
+            import runtime_observability
 
-                row["observability"] = runtime_observability.snapshot(sid)
-            except Exception:
-                pass
-            sessions.append(row)
-        sessions.sort(key=lambda row: _run_sort_key((row.get("runs") or [{}])[-1]), reverse=True)
-        return {"version": 1, "sessions": sessions}
+            row["observability"] = runtime_observability.snapshot(sid)
+        except Exception:
+            pass
+        sessions.append(row)
+    sessions.sort(key=lambda row: _run_sort_key((row.get("runs") or [{}])[-1]), reverse=True)
+    return {"version": 1, "sessions": sessions}
+
+
+def _scan_persisted_metrics(root: Optional[Path]) -> Dict[str, dict]:
+    """Read inactive sessions without blocking active metrics writers."""
+    rows: Dict[str, dict] = {}
+    if root is None or not root.exists():
+        return rows
+    for path in root.rglob("execution_metrics.json"):
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            sid = str(loaded.get("session_id") or "")
+            if sid and isinstance(loaded.get("runs"), list):
+                rows[sid] = loaded
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return rows
 
 
 def list_sessions(session_names: Optional[Dict[str, str]] = None) -> dict:
     """Lightweight session index for the dashboard (no request/phase payload)."""
     names = session_names or {}
     with _lock:
-        session_ids = set(_sessions.keys())
-        if _root is not None and _root.exists():
-            for path in _root.rglob("execution_metrics.json"):
-                try:
-                    loaded = json.loads(path.read_text(encoding="utf-8"))
-                    sid = str(loaded.get("session_id") or "")
-                    if sid:
-                        session_ids.add(sid)
-                except (OSError, ValueError, TypeError):
-                    continue
+        root = _root
+    disk_rows = _scan_persisted_metrics(root)
+    with _lock:
+        disk_rows.update(_sessions)
         sessions = []
-        for sid in session_ids:
-            data = _load(sid)
+        for sid, data in disk_rows.items():
             runs = data.get("runs") or []
             if not runs:
                 continue
@@ -496,10 +565,10 @@ def list_sessions(session_names: Optional[Dict[str, str]] = None) -> dict:
                 "status": str(last.get("status") or ""),
                 "_last_started_order_ns": _run_sort_key(last)[1],
             })
-        sessions.sort(
-            key=lambda row: (row["last_started_at"], row["_last_started_order_ns"]),
-            reverse=True,
-        )
-        for row in sessions:
-            row.pop("_last_started_order_ns", None)
-        return {"sessions": sessions}
+    sessions.sort(
+        key=lambda row: (row["last_started_at"], row["_last_started_order_ns"]),
+        reverse=True,
+    )
+    for row in sessions:
+        row.pop("_last_started_order_ns", None)
+    return {"sessions": sessions}

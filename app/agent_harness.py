@@ -4113,10 +4113,23 @@ class SessionManager:
             self.repository.save_json_list(path, rows)
 
     def _load_pending_subagent_results(self, session_id: str) -> List[dict]:
+        read_started = time.perf_counter()
+        read_thread_cpu_started = time.thread_time()
         if self._runtime_v2_primary():
             rows = self._runtime_subagent_store().list_pending_results(session_id)
         else:
             rows = self.repository.load_json_list(self._get_pending_subagent_results_path(session_id))
+        read_ms = int((time.perf_counter() - read_started) * 1000)
+        if read_ms >= 50:
+            logger.info(
+                "subagent_pending_read_timing session=%s read_ms=%d thread_cpu_ms=%d rows=%d",
+                session_id,
+                read_ms,
+                int((time.thread_time() - read_thread_cpu_started) * 1000),
+                len(rows),
+            )
+        if not rows:
+            return []
         try:
             meta = self._load_metadata(session_id)
             created_at = str((meta or {}).get("created_at") or "")
@@ -4256,9 +4269,12 @@ class SessionManager:
         rows = self._load_pending_subagent_results(session_id)
         if not rows:
             return []
-        events = self._load_ui_events_for_active_runtime(session_id)
-        last_idx = self._latest_final_index_without_later_user(events)
         run_id = str(parent_run_id or "").strip()
+        events: List[dict] = []
+        last_idx = -1
+        if not run_id:
+            events = self._load_ui_events_for_active_runtime(session_id)
+            last_idx = self._latest_final_index_without_later_user(events)
         lines: List[str] = []
         keep: List[dict] = []
         for item in rows:
@@ -4301,9 +4317,13 @@ class SessionManager:
         rows = self._load_pending_subagent_results(session_id)
         if not rows:
             return []
-        events = self._load_ui_events_for_active_runtime(session_id)
-        last_idx = self._latest_final_index_without_later_user(events)
         rid = str(parent_run_id or "").strip()
+        # A current-run claim is matched by run ID. Reading and projecting the
+        # full UI history here delays the next model request for no benefit.
+        last_idx = -1
+        if not rid:
+            events = self._load_ui_events_for_active_runtime(session_id)
+            last_idx = self._latest_final_index_without_later_user(events)
         claimed: List[dict] = []
         for item in rows:
             if str(item.get("delivery_state") or "pending") != "pending":
@@ -7216,12 +7236,10 @@ class SessionManager:
             if not isinstance(metadata, dict):
                 metadata = {}
             metadata["todo"] = bool(todo)
-            metadata["updated_at"] = datetime.now().isoformat()
             self._save_metadata_unlocked(session_id, metadata)
         for sess in self.index:
             if sess.get("id") == session_id:
                 sess["todo"] = bool(todo)
-                sess["updated_at"] = metadata["updated_at"]
                 break
         else:
             self.refresh_sessions_index_from_disk()

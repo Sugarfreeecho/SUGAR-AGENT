@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -263,7 +264,11 @@ class GoalManager:
             # read can incorrectly make a durable Goal look absent after
             # restart.  Always reconcile against the append-only event log.
             store = self._state_store()
-            snapshot = store.snapshots.read_consistent(
+            # Discovery only needs the Goal extension. Copying the entire
+            # projection here made background scans hold the GIL while copying
+            # unrelated conversation/UI state. The consistent view keeps log
+            # reconciliation; only the returned Goal needs caller isolation.
+            snapshot = store.snapshots.read_consistent_view(
                 sid,
                 event_log=store.event_log,
                 projector=store.projector,
@@ -277,7 +282,7 @@ class GoalManager:
         if not isinstance(goal, dict) or not goal.get("id") or goal.get("deleted") is True:
             self._publish_state(sid, None, notify=False)
             return None
-        result = self._with_computed_fields(goal)
+        result = self._with_computed_fields(copy.deepcopy(goal))
         self._publish_state(sid, result, notify=False)
         return result
 

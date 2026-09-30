@@ -103,6 +103,7 @@ from tool_registry import (
     ToolRegistryError,
 )
 from host_tool_registry import HostToolInvocationContext, host_tool_invokers
+from stream_event_bridge import StreamEventBridge
 from tool_execution_policy import (
     ToolExecutionPolicy,
     builtin_tool_policy,
@@ -900,10 +901,9 @@ def _load_steer_queue_locked(session_id: str) -> List[Dict[str, Any]]:
         rows = [dict(x) for x in data if isinstance(x, dict)] if isinstance(data, list) else []
     except Exception:
         logger.warning("failed to load steer inbox for %s", session_id, exc_info=True)
-    if rows:
-        _STEER_QUEUES[session_id] = rows
-    else:
-        _STEER_QUEUES.pop(session_id, None)
+    # An empty inbox is also a valid cached result. Its stat signature still
+    # invalidates the cache when another process creates or changes the file.
+    _STEER_QUEUES[session_id] = rows
     _STEER_QUEUE_SIGNATURES[session_id] = signature
     return rows
 
@@ -2061,6 +2061,14 @@ _PRE_API_NESTED_TIMINGS = frozenset({
     "before_round_lookup",            # inside before_round
     "before_round_reminder_persist",  # inside before_round
     "tool_registry_revision",         # inside registry hit/build span
+    "context_tokens_emit",            # inside post_config_setup
+    "context_policy_decision",         # inside post_config_setup
+    "context_policy_run",              # inside post_config_setup
+    "model_config_client",             # inside resolve_model_config
+    "model_config_language",           # inside resolve_model_config
+    "model_config_request_context",    # inside resolve_model_config
+    "model_config_compaction",         # inside resolve_model_config
+    "model_config_thread_cpu",         # diagnostic, not wall time
 })
 
 
@@ -2205,22 +2213,15 @@ def _pre_api_timing_log(session_id: str, timings: Dict[str, int], **extra: Any) 
 
 
 def _gc_probe_extras(state: State) -> Dict[str, Any]:
-    """Gen2/GC deltas + event-loop stall + inter-round wall gap, since the last tool_to_next_api anchor."""
+    """Gen2/GC deltas and the next callback's scheduling delay for this round."""
     extras: Dict[str, Any] = {}
     round_gap = int(state.get("_last_round_gap_ms") or 0)
     if round_gap:
         extras["round_gap_ms"] = round_gap
     anchor = state.pop("_gc_round_anchor", None)
-    loop_anchor = state.pop("_loop_stall_anchor", None)
-    if loop_anchor:
-        try:
-            wall_delta = time.perf_counter() - loop_anchor[0]
-            loop_delta = asyncio.get_running_loop().time() - loop_anchor[1]
-            extras["loop_stall_ms"] = int(
-                max(0, round((wall_delta - loop_delta) * 1000))
-            )
-        except Exception:
-            pass
+    loop_probe = state.pop("_loop_callback_probe", None)
+    if isinstance(loop_probe, dict) and loop_probe.get("delay_ms") is not None:
+        extras["loop_callback_delay_ms"] = int(loop_probe["delay_ms"])
     if not anchor:
         return extras
     try:
@@ -2988,12 +2989,18 @@ async def _push_stream_event(
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ):
     """追加 stream_events；若提供 emit（async 可调用），则同步推给前端。"""
+    context_probe = event.get("type") == "context_tokens"
+    if context_probe:
+        probe_started = time.perf_counter()
+        probe_thread_cpu_started = time.thread_time()
     if not _state_run_has_write_fence(state):
         logger.info(
             "suppressed stale run event: session=%s run=%s type=%s",
             state.get("session_id"), state.get("_runtime_v2_run_id"), event.get("type"),
         )
         return
+    if context_probe:
+        fence_ms = int((time.perf_counter() - probe_started) * 1000)
     state["stream_events"].append(event)
     if emit:
         try:
@@ -3002,6 +3009,15 @@ async def _push_stream_event(
                 await r
         except Exception:
             pass
+    if context_probe:
+        total_ms = int((time.perf_counter() - probe_started) * 1000)
+        if total_ms >= 50:
+            logger.info(
+                "context_tokens_emit_detail session=%s total_ms=%d fence_ms=%d emit_ms=%d thread_cpu_ms=%d",
+                state.get("session_id"), total_ms, fence_ms,
+                max(0, total_ms - fence_ms),
+                int((time.thread_time() - probe_thread_cpu_started) * 1000),
+            )
 
 
 def _set_model_switch_status_callback(
@@ -3155,6 +3171,15 @@ async def _await_maybe(awaitable_or_value):
     return awaitable_or_value
 
 
+async def _prune_stream_ephemeral(emit, *args, **kwargs):
+    # Pruning is also an ordering boundary: pending main-loop deltas must not
+    # recreate a reconnect draft after an interruption or completed message.
+    flush = getattr(emit, "flush", None)
+    if callable(flush):
+        await flush()
+    return await prune_session_ephemeral(*args, **kwargs)
+
+
 async def _run_react_node_off_loop(
     state: State,
     emit: Optional[Callable[[Dict[str, Any]], Any]],
@@ -3162,12 +3187,52 @@ async def _run_react_node_off_loop(
     if emit is None:
         return await asyncio.to_thread(lambda: asyncio.run(react_node(state, emit=None)))
     main_loop = asyncio.get_running_loop()
+    event_bridge = StreamEventBridge(main_loop, emit)
+    bridge_timings: Dict[int, Dict[str, int]] = {}
+    state["_stream_bridge_timings"] = bridge_timings
+    state["_stream_event_bridge"] = event_bridge
 
     async def bridged_emit(ev: Dict[str, Any]) -> None:
-        fut = asyncio.run_coroutine_threadsafe(_await_maybe(emit(ev)), main_loop)
-        await asyncio.wrap_future(fut)
+        event_type = str(ev.get("type") or "")
+        iteration = int(ev.get("react_iter") or state.get("_current_react_iter") or 0)
+        started = time.perf_counter()
+        try:
+            await event_bridge.send(ev)
+        finally:
+            if event_type in {
+                "llm_reasoning_delta", "llm_response_delta", "tool_call_delta", "cache_stats",
+            }:
+                elapsed_ms = _timing_ms(started)
+                timings = bridge_timings.setdefault(iteration, {"total_ms": 0, "max_ms": 0, "calls": 0})
+                timings["total_ms"] += elapsed_ms
+                timings["max_ms"] = max(timings["max_ms"], elapsed_ms)
+                timings["calls"] += 1
 
-    return await asyncio.to_thread(lambda: asyncio.run(react_node(state, emit=bridged_emit)))
+    async def run_and_flush() -> State:
+        try:
+            return await react_node(state, emit=bridged_emit)
+        finally:
+            await event_bridge.flush()
+            for iteration in sorted(bridge_timings):
+                delivery = event_bridge.snapshot(iteration)
+                if state.get("session_id") and state.get("_runtime_v2_run_id"):
+                    execution_metrics.record_phase(
+                        str(state["session_id"]), str(state["_runtime_v2_run_id"]), iteration,
+                        "llm_stream_delivery", delivery,
+                        total_ms=int(delivery.get("main_emit_total_ms") or 0),
+                    )
+                logger.info(
+                    "stream_bridge_delivery_timing session=%s react_iter=%d main_emit_total_ms=%d main_emit_max_ms=%d main_emit_cpu_ms=%d queue_age_max_ms=%d main_emit_calls=%d pending_events=%d",
+                    state.get("session_id"), iteration,
+                    delivery.get("main_emit_total_ms", 0), delivery.get("main_emit_max_ms", 0),
+                    delivery.get("main_emit_cpu_ms", 0), delivery.get("queue_age_max_ms", 0),
+                    delivery.get("main_emit_calls", 0), delivery.get("pending_events", 0),
+                )
+            state.pop("_stream_event_bridge", None)
+
+    bridged_emit.flush = event_bridge.flush
+
+    return await asyncio.to_thread(lambda: asyncio.run(run_and_flush()))
 
 
 def _steer_control_from_state(state: State) -> Optional[_SteerRunControl]:
@@ -3187,6 +3252,34 @@ def _steer_requested(state: State) -> bool:
         (control and control.is_aborted())
         or _has_session_steers(sid, modes={"interrupt"})
     )
+
+
+class _StreamSteerPoller:
+    """Keep durable inbox polling independent of the model's delta rate."""
+
+    def __init__(self, state: State, poll_sec: float = 0.25):
+        self.state = state
+        self.poll_sec = poll_sec
+        self.next_probe_at = 0.0
+        self.probes = 0
+        self.total_ms = 0
+        self.max_ms = 0
+
+    def requested(self, *, force_probe: bool = False) -> bool:
+        control = _steer_control_from_state(self.state)
+        if control is not None and control.is_aborted():
+            return True
+        now = time.monotonic()
+        if not force_probe and now < self.next_probe_at:
+            return False
+        started = time.perf_counter()
+        requested = _steer_requested(self.state)
+        elapsed_ms = _timing_ms(started)
+        self.probes += 1
+        self.total_ms += elapsed_ms
+        self.max_ms = max(self.max_ms, elapsed_ms)
+        self.next_probe_at = time.monotonic() + self.poll_sec
+        return requested
 
 
 def _reset_steer_control(state: State) -> None:
@@ -3227,7 +3320,7 @@ async def _emit_steer_abort_event(
     except Exception:
         pass
     try:
-        await prune_session_ephemeral(
+        await _prune_stream_ephemeral(emit,
             str(state.get("session_id") or ""),
             types={
                 "tool_pending",
@@ -3321,7 +3414,11 @@ async def _combined_tool_registry_revision(
     """Return cheap generations for every source that shapes the catalog."""
     from agent_extensions import extension_catalog_generation
 
+    _revision_started = time.perf_counter()
+    _stage_started = _revision_started
     mcp_revision = await agent_mcp.get_tool_catalog_revision()
+    _mcp_ms = _timing_ms(_stage_started)
+    _stage_started = time.perf_counter()
     session_shape = json.dumps(
         {
             "is_subagent": bool(session_meta.get("is_subagent")),
@@ -3335,13 +3432,25 @@ async def _combined_tool_registry_revision(
         default=str,
         separators=(",", ":"),
     )
-    return (
-        mcp_revision,
-        extension_catalog_generation(),
-        host_tool_invokers.catalog_revision(),
-        executor_config_generation(),
-        session_shape,
-    )
+    _shape_ms = _timing_ms(_stage_started)
+    _stage_started = time.perf_counter()
+    extension_revision = extension_catalog_generation()
+    _extension_ms = _timing_ms(_stage_started)
+    _stage_started = time.perf_counter()
+    _host_thread_cpu_started = time.thread_time()
+    host_revision = host_tool_invokers.catalog_revision()
+    _host_ms = _timing_ms(_stage_started)
+    _host_thread_cpu_ms = int(max(0.0, (time.thread_time() - _host_thread_cpu_started) * 1000.0))
+    _stage_started = time.perf_counter()
+    executor_revision = executor_config_generation()
+    _executor_ms = _timing_ms(_stage_started)
+    _revision_ms = _timing_ms(_revision_started)
+    if _revision_ms >= 50:
+        logger.info(
+            "tool_registry_revision_detail total_ms=%d mcp_ms=%d session_shape_ms=%d extension_ms=%d host_ms=%d host_thread_cpu_ms=%d executor_ms=%d",
+            _revision_ms, _mcp_ms, _shape_ms, _extension_ms, _host_ms, _host_thread_cpu_ms, _executor_ms,
+        )
+    return (mcp_revision, extension_revision, host_revision, executor_revision, session_shape)
 
 
 def _short_registry_revision(revision: Any) -> str:
@@ -4902,11 +5011,18 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
         claim_id = "%s:%s" % (
             str(state.get("_runtime_v2_run_id") or "continuation"), uuid.uuid4().hex
         )
+        _note_claim_started = time.perf_counter()
         claimed = session_manager.claim_pending_subagent_notifications(
             state["session_id"],
             claim_id,
             parent_run_id=(str(state.get("_runtime_v2_run_id") or "") if current_run_only else ""),
         )
+        _note_claim_ms = _timing_ms(_note_claim_started)
+        if _note_claim_ms >= 50:
+            logger.info(
+                "subagent_note_claim_timing session=%s ms=%d claimed=%d current_run_only=%s",
+                state["session_id"], _note_claim_ms, len(claimed), current_run_only,
+            )
         pending_notes = [
             session_manager._pending_subagent_notification_line(item)
             for item in claimed
@@ -5272,20 +5388,29 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # session entry so the very next ReAct request uses the new model,
             # limits and client.
             _t_resolve_model = time.perf_counter()
+            _resolve_thread_cpu_started = time.thread_time()
+            _t_model_config_segment = time.perf_counter()
             iter_client, iter_model, iter_max_output_tokens, iter_context_window = (
                 resolve_executor_config_for_session(state["session_id"])
             )
+            _pre_api_timing_mark(pre_api_timings, "model_config_client", _t_model_config_segment)
+            _t_model_config_segment = time.perf_counter()
             try:
                 iter_client._myagent_prompt_language = session_manager.get_session_prompt_language(state["session_id"])
             except (AttributeError, TypeError):
                 pass
+            _pre_api_timing_mark(pre_api_timings, "model_config_language", _t_model_config_segment)
+            _t_model_config_segment = time.perf_counter()
             transport_request_context = _llm_request_context(state["session_id"])
+            _pre_api_timing_mark(pre_api_timings, "model_config_request_context", _t_model_config_segment)
+            _t_model_config_segment = time.perf_counter()
             compacted_input_est = _responses_compacted_input_estimate(
                 iter_client,
                 iter_model,
                 transport_request_context,
                 int(full_input_est),
             )
+            _pre_api_timing_mark(pre_api_timings, "model_config_compaction", _t_model_config_segment)
             effective_input_est = (
                 int(compacted_input_est)
                 if compacted_input_est is not None
@@ -5297,6 +5422,18 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 else token_estimate_source
             )
             _pre_api_timing_mark(pre_api_timings, "resolve_model_config", _t_resolve_model)
+            pre_api_timings["model_config_thread_cpu"] = int(
+                max(0.0, (time.thread_time() - _resolve_thread_cpu_started) * 1000.0)
+            )
+            if pre_api_timings["resolve_model_config"] >= 50:
+                logger.info(
+                    "resolve_model_config_detail session=%s total_ms=%d client_ms=%d language_ms=%d request_context_ms=%d compaction_ms=%d thread_cpu_ms=%d",
+                    state["session_id"], pre_api_timings["resolve_model_config"],
+                    pre_api_timings["model_config_client"], pre_api_timings["model_config_language"],
+                    pre_api_timings["model_config_request_context"], pre_api_timings["model_config_compaction"],
+                    pre_api_timings["model_config_thread_cpu"],
+                )
+            _t_post_config_setup = time.perf_counter()
             forced_context_limit_compress = bool(context_limit_recovery_pending)
             active_context_window = (
                 _context_limit_recovery_window(
@@ -5307,6 +5444,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 else int(iter_context_window)
             )
             if emit:
+                _t_context_tokens_emit = time.perf_counter()
                 await _push_stream_event(
                     state,
                     {
@@ -5325,6 +5463,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     },
                     emit=emit,
                 )
+                _pre_api_timing_mark(pre_api_timings, "context_tokens_emit", _t_context_tokens_emit)
+            _t_context_policy_decision = time.perf_counter()
             # 上一步已成功压缩时本步不再压：key 追加后 system 变长，若再压会反复套娃并刷爆状态行
             _skip_compress = state.pop("_compress_skip_next", False)
             # 仅按 token 策略自动压缩；是否主动压由模型调用 context_manage(compact) 决定
@@ -5700,6 +5840,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 compress_attempts = 0
 
             executable_tool_names = tool_registry.names(executable_only=True)
+            _pre_api_timing_mark(pre_api_timings, "context_policy_decision", _t_context_policy_decision)
             # Side-effecting calls in one assistant turn are serialized.  The
             # workspace state captured after one call is therefore also the
             # state immediately before the next call.  Reuse it so a queued
@@ -7212,7 +7353,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     int(iter_count),
                     iter_model,
                 )
-                def _run_stream_worker_logged():
+                worker_timing: Dict[str, float] = {}
+                stream_usage_record_ms = 0
+                stream_steer_poller = _StreamSteerPoller(state)
+
+                def _run_stream_worker_logged(_worker_timing=worker_timing):
                     try:
                         return run_chat_completion_stream_worker(
                             sync_q,
@@ -7231,6 +7376,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             emit_deltas=bool(llm_runtime_policy.get("emit_deltas", True)),
                         )
                     finally:
+                        _worker_timing["completed_at"] = time.perf_counter()
                         stream_worker_done_event.set()
                         logger.info(
                             "llm_worker_completed session=%s react_iter=%s model=%s",
@@ -7271,7 +7417,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 steer_fallback_task: Optional[asyncio.Task] = asyncio.create_task(asyncio.sleep(0.25))
                 try:
                     while True:
-                        if _steer_requested(state):
+                        if stream_steer_poller.requested():
                             steer_interrupted_this_call = True
                             stream_abort_event.set()
                             break
@@ -7288,7 +7434,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             break
                         if steer_fallback_task in done:
                             steer_fallback_task = asyncio.create_task(asyncio.sleep(0.25))
-                            if _steer_requested(state):
+                            if stream_steer_poller.requested(force_probe=True):
                                 steer_interrupted_this_call = True
                                 stream_abort_event.set()
                                 break
@@ -7366,12 +7512,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 int(iter_count),
                                 dict(payload or {}),
                             )
+                            _usage_record_started = time.perf_counter()
                             record_prompt_tokens_for_messages(
                                 state["session_id"],
                                 llm_messages_to_send,
                                 int((payload or {}).get("prompt_tokens", 0) or 0),
                                 tools=combined_tools,
                             )
+                            stream_usage_record_ms += _timing_ms(_usage_record_started)
                             actual_response_model = str((payload or {}).get("model") or actual_response_model or "").strip()
                             ch = int((payload or {}).get("prompt_cache_hit_tokens", 0) or 0)
                             cm = int((payload or {}).get("prompt_cache_miss_tokens", 0) or 0)
@@ -7603,6 +7751,41 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             "transport_elapsed_ms": int(_transport_final.get("trace_elapsed_ms") or _transport_breakdown.get("trace_elapsed_ms") or 0),
                         },
                     )
+                    _worker_completed_at = worker_timing.get("completed_at")
+                    _consumer_tail_ms = (
+                        _timing_ms(_worker_completed_at) if _worker_completed_at is not None else 0
+                    )
+                    _bridge_timings = (state.get("_stream_bridge_timings") or {}).get(int(iter_count)) or {}
+                    _event_bridge = state.get("_stream_event_bridge")
+                    _delivery_snapshot = (
+                        _event_bridge.snapshot(int(iter_count))
+                        if isinstance(_event_bridge, StreamEventBridge) else {}
+                    )
+                    _consumer_timings = {
+                        "worker_done_to_consumed_ms": _consumer_tail_ms,
+                        "usage_record_ms": stream_usage_record_ms,
+                        "steer_probe_total_ms": stream_steer_poller.total_ms,
+                        "steer_probe_max_ms": stream_steer_poller.max_ms,
+                        "steer_probes": stream_steer_poller.probes,
+                        "bridge_emit_total_ms": int(_bridge_timings.get("total_ms") or 0),
+                        "bridge_emit_max_ms": int(_bridge_timings.get("max_ms") or 0),
+                        "bridge_emit_calls": int(_bridge_timings.get("calls") or 0),
+                        "bridge_queued_deltas": int(isinstance(_event_bridge, StreamEventBridge)),
+                        "bridge_pending_events": int(_delivery_snapshot.get("pending_events") or 0),
+                    }
+                    execution_metrics.record_phase(
+                        state["session_id"], _metrics_run_id, int(iter_count),
+                        "llm_local_consumer", _consumer_timings, total_ms=_consumer_tail_ms,
+                    )
+                    logger.info(
+                        "llm_local_consumer_timing session=%s react_iter=%s worker_done_to_consumed_ms=%d usage_record_ms=%d steer_probe_total_ms=%d steer_probe_max_ms=%d steer_probes=%d bridge_emit_total_ms=%d bridge_emit_max_ms=%d bridge_emit_calls=%d bridge_queued_deltas=%d bridge_pending_events=%d",
+                        state["session_id"], int(iter_count), _consumer_tail_ms,
+                        stream_usage_record_ms, stream_steer_poller.total_ms,
+                        stream_steer_poller.max_ms, stream_steer_poller.probes,
+                        _consumer_timings["bridge_emit_total_ms"], _consumer_timings["bridge_emit_max_ms"],
+                        _consumer_timings["bridge_emit_calls"],
+                        _consumer_timings["bridge_queued_deltas"], _consumer_timings["bridge_pending_events"],
+                    )
                     logger.info(
                         "llm_result_consumed session=%s react_iter=%s model=%s",
                         state["session_id"],
@@ -7638,7 +7821,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     },
                                     emit=emit,
                                 )
-                                await prune_session_ephemeral(
+                                await _prune_stream_ephemeral(emit,
                                     state["session_id"],
                                     types={"llm_reasoning_delta"},
                                     react_iter=int(iter_count),
@@ -7653,7 +7836,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     },
                                     emit=emit,
                                 )
-                                await prune_session_ephemeral(
+                                await _prune_stream_ephemeral(emit,
                                     state["session_id"],
                                     types={"llm_response_delta"},
                                     react_iter=int(iter_count),
@@ -7735,7 +7918,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         "stop_reason": None,
                         "model": actual_response_model or None,
                     }
-                    await prune_session_ephemeral(
+                    await _prune_stream_ephemeral(emit,
                         state["session_id"],
                         types={"tool_pending", "tool_call_delta", "tool_command_delta"},
                         react_iter=int(iter_count),
@@ -8042,7 +8225,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     # not happen.
                     turn.tool_calls = recovered_truncated_tool_calls
                     output_truncated = False
-                    await prune_session_ephemeral(
+                    await _prune_stream_ephemeral(emit,
                         state["session_id"],
                         types={"tool_pending", "tool_call_delta", "tool_command_delta"},
                         react_iter=int(iter_count),
@@ -8116,7 +8299,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 ]
                 if started_calls:
                     turn.tool_calls = started_calls
-                    await prune_session_ephemeral(
+                    await _prune_stream_ephemeral(emit,
                         state["session_id"],
                         types={"tool_pending", "tool_call_delta", "tool_command_delta"},
                         react_iter=int(iter_count),
@@ -8127,7 +8310,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             task.add_done_callback(_discard_task_result)
                             task.cancel()
                     if streamed_this_call:
-                        await prune_session_ephemeral(
+                        await _prune_stream_ephemeral(emit,
                             state["session_id"],
                             types={"llm_response_delta", "llm_reasoning_delta", "tool_pending", "tool_call_delta", "tool_command_delta"},
                             react_iter=int(iter_count),
@@ -8173,7 +8356,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "react_iter": int(iter_count),
                             },
                         )
-                        await prune_session_ephemeral(
+                        await _prune_stream_ephemeral(emit,
                             sid,
                             types={"llm_reasoning_delta"},
                             react_iter=int(iter_count),
@@ -8198,7 +8381,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "react_iter": int(iter_count),
                             },
                         )
-                        await prune_session_ephemeral(
+                        await _prune_stream_ephemeral(emit,
                             sid,
                             types={"llm_response_delta"},
                             react_iter=int(iter_count),
@@ -8743,6 +8926,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         tool_failed=bool(res.get("tool_failed")),
                         sse_emitted=bool(isinstance(res, dict) and res.get("_sse_emitted")),
                     )
+                    _t_tool_post_metric = time.perf_counter()
                     execution_metrics.record_phase(
                         state["session_id"],
                         str(state.get("_runtime_v2_run_id") or ""),
@@ -8754,6 +8938,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         },
                         total_ms=sum(int(v or 0) for v in tool_post_timings.values()),
                     )
+                    _tool_post_metric_ms = _timing_ms(_t_tool_post_metric)
+                    if _tool_post_metric_ms >= 50:
+                        _pipeline_timing_log(
+                            "tool_result_post_metrics_timing",
+                            state["session_id"],
+                            {"record_phase": _tool_post_metric_ms},
+                            react_iter=int(iter_count),
+                        )
                     _round_tool_post_total_ms += sum(int(v or 0) for v in tool_post_timings.values())
 
                 _t_tool_post_all = time.perf_counter()
@@ -8788,24 +8980,36 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         tools=len(tool_calls_list or []),
                         outcome="steer_restart",
                     )
+                    _boundary_metric_timings: Dict[str, int] = {}
+                    _t_boundary_metric = time.perf_counter()
                     execution_metrics.record_phase(
                         state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                         "tool_to_next_api", {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                         total_ms=int(persist_after_tools_ms + steer_check_ms), outcome="steer_restart",
                     )
+                    _boundary_metric_timings["tool_to_next_api"] = _timing_ms(_t_boundary_metric)
+                    _t_boundary_metric = time.perf_counter()
                     execution_metrics.record_phase(
                         state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                         "round_postprocess",
                         {"tool_result_post": _round_tool_post_total_ms, "persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                         total_ms=int(_round_tool_post_total_ms + persist_after_tools_ms + steer_check_ms),
                     )
+                    _boundary_metric_timings["round_postprocess"] = _timing_ms(_t_boundary_metric)
                     _req_wall_end = state.pop("_req_wall_start", None)
                     if _req_wall_end is not None:
+                        _t_boundary_metric = time.perf_counter()
                         execution_metrics.record_request(
                             state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                             wall_ms=int(max(0.0, (time.perf_counter() - _req_wall_end) * 1000.0)),
                         )
+                        _boundary_metric_timings["request_wall"] = _timing_ms(_t_boundary_metric)
                         state["_last_round_end_perf"] = time.perf_counter()
+                    if sum(_boundary_metric_timings.values()) >= 50:
+                        _pipeline_timing_log(
+                            "round_boundary_metrics_timing", state["session_id"],
+                            _boundary_metric_timings, react_iter=int(iter_count), outcome="steer_restart",
+                        )
                     state.pop("_steer_rollback_marker", None)
                     _reset_steer_control(state)
                     llm_history = list(state["llm_history"])
@@ -8838,35 +9042,53 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         int(_gc_stats[2]["collected"]),
                         int(_gc_stats[0]["collections"]),
                     )
-                    # Event-loop stall anchor: (wall clock, loop clock) pair.
-                    # wall_delta - loop_delta at the next pre_api log is the
-                    # time the event loop was not running callbacks (GIL
-                    # starvation, blocking sync work) during the gap.
-                    state["_loop_stall_anchor"] = (
-                        time.perf_counter(),
-                        asyncio.get_running_loop().time(),
-                    )
+                    # Both perf_counter() and loop.time() advance while the
+                    # loop is blocked, so their difference cannot detect a
+                    # stall. Measure when a queued callback actually runs.
+                    _loop = asyncio.get_running_loop()
+                    _loop_probe = {"delay_ms": None}
+                    _loop_queued_at = _loop.time()
+
+                    def _mark_next_loop_callback() -> None:
+                        _loop_probe["delay_ms"] = int(
+                            max(0.0, (_loop.time() - _loop_queued_at) * 1000.0)
+                        )
+
+                    state["_loop_callback_probe"] = _loop_probe
+                    _loop.call_soon(_mark_next_loop_callback)
                 except Exception:
                     state.pop("_gc_round_anchor", None)
-                    state.pop("_loop_stall_anchor", None)
+                    state.pop("_loop_callback_probe", None)
+                _boundary_metric_timings: Dict[str, int] = {}
+                _t_boundary_metric = time.perf_counter()
                 execution_metrics.record_phase(
                     state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                     "tool_to_next_api", {"persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                     total_ms=int(persist_after_tools_ms + steer_check_ms), outcome="next_react_iter",
                 )
+                _boundary_metric_timings["tool_to_next_api"] = _timing_ms(_t_boundary_metric)
+                _t_boundary_metric = time.perf_counter()
                 execution_metrics.record_phase(
                     state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                     "round_postprocess",
                     {"tool_result_post": _round_tool_post_total_ms, "persist_state": persist_after_tools_ms, "steer_check": steer_check_ms},
                     total_ms=int(_round_tool_post_total_ms + persist_after_tools_ms + steer_check_ms),
                 )
+                _boundary_metric_timings["round_postprocess"] = _timing_ms(_t_boundary_metric)
                 _req_wall_end = state.pop("_req_wall_start", None)
                 if _req_wall_end is not None:
+                    _t_boundary_metric = time.perf_counter()
                     execution_metrics.record_request(
                         state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
                         wall_ms=int(max(0.0, (time.perf_counter() - _req_wall_end) * 1000.0)),
                     )
+                    _boundary_metric_timings["request_wall"] = _timing_ms(_t_boundary_metric)
                     state["_last_round_end_perf"] = time.perf_counter()
+                if sum(_boundary_metric_timings.values()) >= 50:
+                    _pipeline_timing_log(
+                        "round_boundary_metrics_timing", state["session_id"],
+                        _boundary_metric_timings, react_iter=int(iter_count), outcome="next_react_iter",
+                    )
                 state.pop("_steer_rollback_marker", None)
                 state["_runtime_stage"] = "react"
 

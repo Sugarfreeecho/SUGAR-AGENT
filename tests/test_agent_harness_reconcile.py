@@ -1062,11 +1062,14 @@ def test_runtime_v2_pending_subagent_results_do_not_fallback_legacy(tmp_path):
     def fail_legacy(*args, **kwargs):
         raise AssertionError("Runtime V2 pending subagent path must not read legacy pending files")
 
+    def fail_metadata(_session_id):
+        raise AssertionError("empty pending queue must not read session metadata")
+
     mgr = _manager_with(
         repository=_Repository(tmp_path),
         _runtime_v2_primary=lambda: True,
         _runtime_subagent_store=lambda: store,
-        _load_metadata=lambda sid: {},
+        _load_metadata=fail_metadata,
         _get_pending_subagent_results_path=fail_legacy,
     )
     mgr.repository.load_json_list = fail_legacy
@@ -1158,12 +1161,15 @@ def test_parent_run_consumes_own_result_once_without_final(tmp_path):
         "delivery_scope": "parent_run",
         "delivery_state": "pending",
     })
+    def fail_ui_load(_session_id):
+        raise AssertionError("current-run consume must not read UI history")
+
     mgr = _manager_with(
         repository=_Repository(tmp_path),
         _runtime_v2_primary=lambda: True,
         _runtime_subagent_store=lambda: store,
         _load_metadata=lambda sid: {},
-        _load_ui_events_for_active_runtime=lambda sid: [],
+        _load_ui_events_for_active_runtime=fail_ui_load,
     )
 
     first = agent_harness.SessionManager.consume_pending_subagent_notifications(
@@ -1241,12 +1247,15 @@ def test_pending_result_claim_can_rollback_and_then_commit(tmp_path):
         "parent_run_id": "run-1",
         "delivery_state": "pending",
     })
+    def fail_ui_load(_session_id):
+        raise AssertionError("current-run claim must not read UI history")
+
     mgr = _manager_with(
         repository=_Repository(tmp_path),
         _runtime_v2_primary=lambda: True,
         _runtime_subagent_store=lambda: store,
         _load_metadata=lambda sid: {},
-        _load_ui_events_for_active_runtime=lambda sid: [],
+        _load_ui_events_for_active_runtime=fail_ui_load,
     )
 
     claimed = agent_harness.SessionManager.claim_pending_subagent_notifications(

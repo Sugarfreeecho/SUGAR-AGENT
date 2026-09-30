@@ -286,6 +286,59 @@ def test_cross_process_fence_file_blocks_local_late_writer(monkeypatch, tmp_path
     agent_loop._clear_steer_run_control("s-cross", control)
 
 
+def test_stream_steer_polling_limits_file_reads_and_detects_external_inbox(monkeypatch, tmp_path):
+    import json
+    import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
+    monkeypatch.setattr(agent_loop, "_STEER_QUEUES", {})
+    monkeypatch.setattr(agent_loop, "_STEER_QUEUE_SIGNATURES", {})
+    clock = [100.0]
+    monkeypatch.setattr(agent_loop.time, "monotonic", lambda: clock[0])
+    calls = []
+    original = agent_loop._steer_requested
+
+    def probe(state):
+        calls.append(clock[0])
+        return original(state)
+
+    monkeypatch.setattr(agent_loop, "_steer_requested", probe)
+    poller = agent_loop._StreamSteerPoller({"session_id": "s-poll"})
+    assert poller.requested() is False
+    for _ in range(500):
+        assert poller.requested() is False
+    assert len(calls) == 1
+
+    inbox = tmp_path / "s-poll" / "steer_inbox.json"
+    inbox.parent.mkdir()
+    inbox.write_text(json.dumps([{"state": "queued", "mode": "interrupt"}]), encoding="utf-8")
+    clock[0] = 100.24
+    assert poller.requested() is False
+    clock[0] = 100.25
+    assert poller.requested() is True
+    assert len(calls) == 2
+    # The periodic idle-stream wake-up must still poll even if the last delta
+    # check happened just before that wake-up.
+    assert poller.requested(force_probe=True) is True
+    assert len(calls) == 3
+
+
+def test_stream_steer_local_abort_bypasses_file_poll_interval(monkeypatch):
+    import agent_loop
+
+    probes = []
+    monkeypatch.setattr(agent_loop, "_steer_requested", lambda state: probes.append(state) or False)
+    control = agent_loop._SteerRunControl("s-local", "run-local")
+    poller = agent_loop._StreamSteerPoller({"session_id": "s-local", "_steer_control": control})
+    assert poller.requested() is False
+    control.abort("user_steer")
+    assert poller.requested() is True
+    assert len(probes) == 1
+
+
 def test_twenty_consecutive_steers_replan_without_recursive_react(monkeypatch):
     import agent_loop
 
@@ -889,9 +942,19 @@ def test_pre_api_total_excludes_nested_diagnostic_spans():
         "tool_registry_cache_hit": 20,
         "tool_registry_revision": 18,
         "token_estimate": 10,
+        "post_config_setup": 200,
+        "context_tokens_emit": 160,
+        "context_policy_decision": 30,
+        "context_policy_run": 20,
+        "resolve_model_config": 50,
+        "model_config_client": 20,
+        "model_config_language": 10,
+        "model_config_request_context": 15,
+        "model_config_compaction": 5,
+        "model_config_thread_cpu": 7,
     }
 
-    assert agent_loop._pre_api_timing_total(timings) == 185
+    assert agent_loop._pre_api_timing_total(timings) == 435
 
 
 def test_todo_accepts_multiple_in_progress_items(monkeypatch, tmp_path):

@@ -1,6 +1,6 @@
 # 子代理任务生命周期与事件循环隔离 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-28 v3（覆盖至：当前工作区；首轮先行落盘 + 预约期受控）
+- 版本：2026-09-30 v4（覆盖至：当前工作区；父轮通知查询去除无关读取）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_subagent.py`（`_BackgroundSubagentLoop`、`SubagentTaskRegistry`、`_execute_subagent_run`）、`app/agent_subagent_events.py`、`app/agent_loop.py`（`_run_react_node_off_loop`）、`app/webui.py`（取消入口）、`tests/test_agent_subagent_runtime_v2.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -73,6 +73,13 @@
 - **规则与边界**：只影响结果呈现与续跑参数装配，不改变调度与生命周期语义；resume 仍要求非空 follow-up prompt。
 - **依据**：`_format_best_of_results`、`_run_single_subagent`（resume 分支复用既有元数据）；回归 `::test_best_of_result_reports_failed_attempts`、`::test_resume_keeps_existing_explore_and_readonly_tool_profile`。
 
+### UC-2J11 父轮通知领取不装配无关历史
+
+- **触发**：父 Agent 在轮次边界领取或消费 pending 子代理结果。
+- **预期现象**：pending 行为空时，在读取父会话 metadata/取得其锁之前返回；给定 `parent_run_id` 时按该 run 精确过滤，不为确定归属生成完整 UI 历史投影。
+- **规则与边界**：未提供 parent run ID 的旧调用仍按 final index 与 UI 历史判定；claim/ack/release 及结果耐久性保持。空队列早返回仍要先读取 pending 行，不等于完全没有文件检查。存储落点见 [08/04 · UC-8D8](../08-会话存储RuntimeV2/04-扩展子代理与运行注册方案设计-UseCase清单.md)。
+- **依据**：`agent_harness.py::_load_pending_subagent_results / consume_pending_subagent_notifications / claim_pending_subagent_notifications`；`tests/test_agent_harness_reconcile.py`；`subagent_note_claim_timing`。
+
 ## 3. 事件与状态不变式
 
 1. 后台任务的生命周期与其创建方的循环解耦：任何父轮临时循环关闭都不构成取消。
@@ -88,9 +95,11 @@
 
 1. `python -m pytest tests/test_agent_subagent_runtime_v2.py -q`：30 passed（v1/v2 见前；2026-09-28 新增：首轮提交失败释放预约并终结化 / 预约期（任务挂载前）可打断 / 子代理事件唤醒子会话页流 / best-of 失败尝试上报 / resume 保持 explore 只读档案）。
 2. 独立复现（父轮临时循环与 worker 循环先后关闭）：`workspace/subagent修复核查/复现_子agent循环归属_v2.py`，输出 `复现运行结果_v2.json`——子任务仍完成（pending=completed）、显式取消仍生效（pending=interrupted）。
+3. 本批通知查询回归 `tests/test_agent_harness_reconcile.py`：**40 passed**；验证精确 run 过滤、旧调用回退及空队列提前返回。该组与上方子代理生命周期组分别记录，不混作一次全量测试。
 
 ## 5. 版本记录
 
+- 2026-09-30 v4：新增 UC-2J11，记录空 pending 不读 metadata、精确 parent run 通知查询跳过完整 UI 投影，以及原领取/确认/释放语义。
 - 2026-09-28 v3：新增 UC-2J8《首轮先行落盘》、UC-2J9《预约期受控与未启动运行的收敛》、UC-2J10《结果上报与续跑档案》——首条 user 消息在所有权转交前持久化（Runtime V2 `commit_user_turn` / legacy 双路径）；任务挂载前可打断、未启动失败运行释放预约并终结化；归属按 run-id；对账纳入 `pending`；不变式补第 7 条，验收更新为 30 passed。
 - 2026-09-25 v2：新增 UC-2J7《未取得执行权也要终结化》——启动失败/预约丢失的运行不再滞留 `running`：补写元数据、`final` 事件、输出文件与父级 `subagent_finish` 通知；中断/异常路径同样补 `final`；不变式补第 6 条，验收更新为 25 passed。
 - 2026-09-20 v1：首版。依据“主 Agent 结束导致后台子代理被中断”的修复补录：进程级持久事件循环托管、创建/注册原子交接、跨循环等待/取消桥接、前后台取消语义与事件通道边界；同步 02 整体设计、ReAct 能力清单、00-总览与 05/04 交叉引用。

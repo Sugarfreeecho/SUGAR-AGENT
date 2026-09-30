@@ -1,6 +1,6 @@
 # 扩展、子代理与运行注册 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-28 v4（覆盖至：当前工作区；任务索引并发与保真）
+- 版本：2026-09-30 v5（覆盖至：当前工作区；pending 通知精确过滤与空队列快返）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/extension_state.py`（432 行）、`subagent_store.py`、`subagent_repository.py`、`run_registry.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`
@@ -53,6 +53,13 @@
 - **规则与边界**：子会话元数据归 SessionManager 所有（`write_metadata` 通道），任务索引侧只做字段合并；JSON 写入采用原子临时文件 + 有界 `replace` 重试（Windows 瞬时锁不导致丢行）。
 - **依据**：`RuntimeSubagentStore.upsert_task / append_pending_result / remove_parent_rows / _write_json`；回归 `tests/runtime_v2/test_storage_layout.py::test_task_updates_preserve_child_worktree_metadata_and_concurrent_rows`。
 
+### UC-8D8 pending 通知的最小读取范围
+
+- **触发**：父 Agent 查询、消费或 claim 子代理 pending 结果。
+- **预期现象**：`_load_pending_subagent_results` 读取 pending 行后，空队列直接返回，不再加载 metadata 或取得其会话锁；提供精确 `parent_run_id` 时，consume/claim 只过滤该 run，不构建完整 UI 历史投影。
+- **规则与边界**：未指定 run ID 的旧路径保留 final-index/UI-history 过滤；非空队列所需兼容迁移保留。pending 文件、claim/ack/release 状态和所有权交接仍按原方式持久化；本批没有全局 metadata mtime 缓存。
+- **依据**：`agent_harness.py::_load_pending_subagent_results / consume_pending_subagent_notifications / claim_pending_subagent_notifications`；`tests/test_agent_harness_reconcile.py`。pending 读取和通知领取 ≥50 ms 时记录墙钟/读取线程 CPU 或领取行数等明细，主循环落点见 [02/10 · UC-2J11](../02-ReAct运行时/10-子代理任务生命周期与事件循环隔离方案设计-UseCase清单.md)。
+
 ## 3. 边界
 
 - 子代理的**界面呈现**见 ../05-WebUI对话界面/04；
@@ -64,6 +71,7 @@
 
 ## 5. 版本记录
 
+- 2026-09-30 v5：新增 UC-8D8，补录空 pending 提前返回和精确 parent run 查询跳过 UI 投影，区分读取优化与未改动的耐久通知协议。
 - 2026-09-28 v4：新增 UC-8D7《任务索引的并发与保真》——任务行更新加锁且只合并字段（不再覆盖子会话元数据：worktree 根 / 模型档案 / 只读标记保持）；JSON 写入原子化 + Windows `replace` 重试。
 - 2026-09-20 v3：新增 UC-8D6；孤儿清理加入跨进程 exact-run 心跳租约并强制尊重宽限期，避免第二 WebUI 把长模型/工具调用误判为 `no_local_activity`。
 - 2026-09-20 v2：运行注册与孤儿清理收紧到 exact run；新增 UC-8D5 stale 看门狗隔离。

@@ -206,6 +206,36 @@ class SessionEventLogTests(unittest.TestCase):
             self.assertGreater(entries[-1][1], 0)
             self.assertGreaterEqual(entries[-1][0], 385)
 
+    def test_sparse_index_updates_only_at_new_anchors_and_keeps_tail_reads_correct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = SessionEventLog(tmp)
+            log.append("s1", "message_user", {"text": "中文"})
+            self.assertEqual([ev.seq for ev in log.read_after_seq("s1", 0)], [1])
+            index_path = log.seq_offset_index_path("s1")
+            original_index = index_path.read_bytes()
+
+            with patch.object(log, "_write_seq_offset_index", wraps=log._write_seq_offset_index) as write:
+                for _ in range(31):
+                    log.append("s1", "message_user", {"text": "中文"})
+                self.assertEqual(write.call_count, 0)
+                self.assertEqual(index_path.read_bytes(), original_index)
+                self.assertEqual([ev.seq for ev in log.read_after_seq("s1", 31)], [32])
+                self.assertEqual([ev.seq for ev in log.read_latest("s1", 2)], [31, 32])
+
+                log.append("s1", "message_user", {"text": "中文"})
+                self.assertEqual(write.call_count, 1)
+                log.append_batch("s1", [
+                    {"type": "message_user", "payload": {"text": "中文"}}
+                    for _ in range(37)
+                ])
+                self.assertEqual(write.call_count, 2)
+                self.assertEqual([ev.seq for ev in log.read_after_seq("s1", 63)], list(range(64, 71)))
+                self.assertEqual([ev.seq for ev in log.read_before_seq("s1", 65, 3)], [62, 63, 64])
+
+            index_path.write_text("invalid index", encoding="utf-8")
+            log.append("s1", "message_user", {})
+            self.assertEqual([ev.seq for ev in log.read_latest("s1", 3)], [69, 70, 71])
+
     def test_next_seq_recovers_from_tail_and_ignores_partial_last_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             log = SessionEventLog(tmp)

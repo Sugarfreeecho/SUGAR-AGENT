@@ -1,6 +1,6 @@
 # SSE 管道与断线续看 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-28 v5（覆盖至：当前工作区；子代理会话流唤醒）
+- 版本：2026-09-30 v6（覆盖至：当前工作区；模型增量有序异步桥接与清理屏障）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（3.6k 行）、`modules/event-dispatch.js`、后端 `runtime_v2_session_stream`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -52,6 +52,19 @@
 - **规则与边界**：只作用于子代理执行中的会话；普通会话维持原心跳/keepalive 行为；收流由“无本地 worker”而非猜测驱动，与 UC-5C6 的终态单调性不冲突。
 - **依据**：`webui.py::stream_session_events`（`_is_subagent_execution_active` / `_has_local_worker_activity` 判定）。
 
+### UC-5C8 模型临时增量的有序异步桥接
+
+- **触发**：离线程 Agent 向主循环发布明确为 ephemeral 的 `llm_reasoning_delta / llm_response_delta / tool_call_delta`。
+- **预期现象**：生产者入队即返回；一个 drain 按队列顺序向原事件出口发送。仅合并同身份的相邻增量，正文/思考 `delta`、工具 `name_delta / arguments_delta` 按原顺序拼接，最新序列元数据保留，内容不丢。
+- **规则与边界**：
+  - 身份同时匹配 `type / session_id / run_id / react_iter / stream_seq / index / tool_call_index / id / tool_call_id`；不同身份、非相邻或跨确认事件的增量不合并。入队复制事件字典，调用方之后修改字典不改变待投递事件。
+  - 只有上述三个明确的临时增量类型走无确认入队；完整工具事件、其他状态/终态事件仍按序等待确认，不能越过此前增量。耐久提交仍由调用方执行。
+  - 正常/异常退出先排空；`_prune_stream_ephemeral` 在删除重连草稿前先 flush，避免迟到增量重新生成被中断/完成轮的草稿。flush 只确认先前队列已处理，不替代 Runtime V2 耐久提交。
+  - 临时增量投递异常尽力记录，确认事件异常传回发送方；普通发送异常后继续处理后续队列。循环取消/关闭走队列失败路径。该队列没有新增硬容量限制，仍须观察积压与排空耗时。
+- **依据**：`app/stream_event_bridge.py::StreamEventBridge`、`agent_loop.py::_run_react_node_off_loop / _prune_stream_ephemeral`；`tests/test_stream_event_bridge.py` 覆盖阻塞 UI 时 1,000 条增量入队、完整工具事件等待、内容与身份/顺序、错误、异常退出排空及清理后无迟到草稿。
+
+桥接只改变后端交付调度，浏览器游标/断线回放仍遵守 UC-5C2/5C4。生产者等待和实际投递分别记录，字段与验收口径见 [09/04 · UC-9D10](../09-横切能力/04-观测与运行看板方案设计-UseCase清单.md)；当前生产提速结论见 [09/05](../09-横切能力/05-性能优化基线与已完成项方案设计-UseCase清单.md)。
+
 ## 3. 边界
 
 - 与"运行日志文件"无关：这里是界面流；
@@ -68,9 +81,11 @@
 | UC-5C5 | `webui._runtime_status_payload`；`session-management.js` 心跳接管 |
 | UC-5C6 | `session-event-reducer.js` 终态归约；`sse-handling.js` 终结/重挂；`webui.py` 跨进程恢复租约 |
 | UC-5C7 | `webui.py::stream_session_events`（子代理执行判定 / 无本地 worker 收流） |
+| UC-5C8 | `StreamEventBridge`、`_run_react_node_off_loop`、`_prune_stream_ephemeral` |
 
 ## 5. 版本记录
 
+- 2026-09-30 v6：新增 UC-5C8，补录三个模型临时增量的异步排队、同身份相邻合并、其他事件确认、退出排空与草稿清理屏障；不改变耐久回放游标。
 - 2026-09-28 v5：新增 UC-5C7《子代理会话的流唤醒与收流》——子代理执行中的会话心跳缩短为 1s 并优先重抽投影，无本地 worker 活动时正常 `[DONE]` 收流。
 - 2026-09-21 v4：补记工具命令输出增量事件（`tool_command_delta`，ephemeral、节流）与工具结果限长投影（`tool_detail_ui`）；工具调用增量在桥接层按帧合并后下发。
 - 2026-09-20 v3：新增 UC-5C6，确立 run 终态单调性；记录假 `no_local_activity` 与后续同 run 事件会造成终结/重挂振荡，明确修复必须落在跨进程恢复接管端。

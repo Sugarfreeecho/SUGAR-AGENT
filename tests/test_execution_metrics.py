@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -171,3 +172,139 @@ def test_execution_metrics_heartbeat_thread_exhaustion_is_nonfatal(monkeypatch):
     monkeypatch.setattr(execution_metrics, "_heartbeat_thread", None)
     monkeypatch.setattr(execution_metrics.threading, "Thread", FailingThread)
     assert execution_metrics._ensure_heartbeat_thread() is False
+
+
+def test_slow_metrics_flush_does_not_block_other_sessions_or_lose_newer_data(tmp_path, monkeypatch):
+    import threading
+    import execution_metrics
+
+    old_root = execution_metrics._root
+    execution_metrics.configure(tmp_path / "sessions")
+    execution_metrics._sessions.clear()
+    execution_metrics.flush()
+    monkeypatch.setattr(execution_metrics, "_FLUSH_DELAY_SEC", 10.0)
+    original_write = execution_metrics._write_now
+    write_started = threading.Event()
+    release_write = threading.Event()
+    first_write = True
+
+    def delayed_write(session_id, data):
+        nonlocal first_write
+        if session_id == "slow" and first_write:
+            first_write = False
+            write_started.set()
+            assert release_write.wait(3)
+        original_write(session_id, data)
+
+    monkeypatch.setattr(execution_metrics, "_write_now", delayed_write)
+    execution_metrics.start_run("slow", "r1")
+    first_flush = threading.Thread(target=execution_metrics.flush, args=("slow",))
+    second_flush = None
+    first_flush.start()
+    try:
+        assert write_started.wait(3)
+        other_done = threading.Event()
+        other = threading.Thread(
+            target=lambda: (execution_metrics.record_request("other", "r2", 1), other_done.set())
+        )
+        other.start()
+        assert other_done.wait(1), "another session waited for slow disk I/O"
+        other.join(3)
+
+        execution_metrics.record_request("slow", "r1", 1, latest=2)
+        second_flush = threading.Thread(target=execution_metrics.flush, args=("slow",))
+        second_flush.start()
+    finally:
+        release_write.set()
+        first_flush.join(3)
+    assert second_flush is not None
+    second_flush.join(3)
+    assert not first_flush.is_alive()
+    assert not second_flush.is_alive()
+    execution_metrics.flush("other")
+    data = json.loads(
+        (tmp_path / "sessions" / "slow" / "execution_metrics.json").read_text(encoding="utf-8")
+    )
+    assert data["runs"][0]["requests"][0]["latest"] == 2
+    assert (tmp_path / "sessions" / "other" / "execution_metrics.json").exists()
+    execution_metrics._root = old_root
+    execution_metrics._sessions.clear()
+
+
+def test_dashboard_disk_scan_does_not_hold_metrics_lock(tmp_path, monkeypatch):
+    import threading
+    import execution_metrics
+
+    old_root = execution_metrics._root
+    execution_metrics.configure(tmp_path / "sessions")
+    execution_metrics._sessions.clear()
+    scan_started = threading.Event()
+    release_scan = threading.Event()
+
+    def slow_scan(_root):
+        scan_started.set()
+        assert release_scan.wait(3)
+        return {}
+
+    monkeypatch.setattr(execution_metrics, "_scan_persisted_metrics", slow_scan)
+    listing = threading.Thread(target=execution_metrics.list_sessions)
+    listing.start()
+    try:
+        assert scan_started.wait(3)
+        recorded = threading.Event()
+        writer = threading.Thread(
+            target=lambda: (execution_metrics.record_request("live", "r1", 1), recorded.set())
+        )
+        writer.start()
+        assert recorded.wait(1), "dashboard scan blocked a live request"
+        writer.join(3)
+    finally:
+        release_scan.set()
+        listing.join(3)
+    assert not listing.is_alive()
+    execution_metrics.flush("live")
+    execution_metrics._root = old_root
+    execution_metrics._sessions.clear()
+
+
+def test_timer_flush_allows_live_updates_and_flushes_following_changes(tmp_path, monkeypatch):
+    import threading
+    import execution_metrics
+
+    old_root = execution_metrics._root
+    execution_metrics.configure(tmp_path / "sessions")
+    execution_metrics._sessions.clear()
+    monkeypatch.setattr(execution_metrics, "_FLUSH_DELAY_SEC", 0.01)
+    original_write = execution_metrics._write_now
+    write_started = threading.Event()
+    release_write = threading.Event()
+    first_write = True
+
+    def delayed_write(session_id, data):
+        nonlocal first_write
+        if session_id == "timer" and first_write:
+            first_write = False
+            write_started.set()
+            assert release_write.wait(3)
+        original_write(session_id, data)
+
+    monkeypatch.setattr(execution_metrics, "_write_now", delayed_write)
+    execution_metrics.start_run("timer", "r1")
+    try:
+        assert write_started.wait(3)
+        updated = threading.Event()
+        writer = threading.Thread(
+            target=lambda: (execution_metrics.record_request("timer", "r1", 1, latest=3), updated.set())
+        )
+        writer.start()
+        assert updated.wait(1), "timer held the metrics lock during disk I/O"
+        writer.join(3)
+    finally:
+        release_write.set()
+    execution_metrics.flush("timer")
+    data = json.loads(
+        (tmp_path / "sessions" / "timer" / "execution_metrics.json").read_text(encoding="utf-8")
+    )
+    assert data["runs"][0]["requests"][0]["latest"] == 3
+    execution_metrics._root = old_root
+    execution_metrics._sessions.clear()

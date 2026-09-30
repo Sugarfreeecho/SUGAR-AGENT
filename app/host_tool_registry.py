@@ -7,6 +7,8 @@ invoker receives only the trusted per-call context after those gates pass.
 from __future__ import annotations
 
 import inspect
+import logging
+import time
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping, Optional
@@ -139,10 +141,31 @@ class HostToolInvokerRegistry:
 
     def catalog_revision(self) -> tuple[int, tuple[tuple[str, bool], ...]]:
         """Return a cheap revision including dynamic availability switches."""
-        availability = tuple(
-            (name, self.is_enabled(name)) for name in sorted(self._invokers)
-        )
-        return self._generation, availability
+        started = time.perf_counter()
+        cpu_started = time.thread_time()
+        names = sorted(self._invokers)
+        sort_ms = int((time.perf_counter() - started) * 1000)
+        availability = []
+        slowest_name = ""
+        slowest_ms = 0
+        callback_ms = 0
+        for name in names:
+            callback_started = time.perf_counter()
+            enabled = self.is_enabled(name)
+            elapsed_ms = int((time.perf_counter() - callback_started) * 1000)
+            callback_ms += elapsed_ms
+            if elapsed_ms > slowest_ms:
+                slowest_name, slowest_ms = name, elapsed_ms
+            availability.append((name, enabled))
+        total_ms = int((time.perf_counter() - started) * 1000)
+        if total_ms >= 50:
+            logging.getLogger(__name__).info(
+                "host_catalog_revision_timing invokers=%d total_ms=%d sort_ms=%d callback_total_ms=%d slowest_callback=%s slowest_callback_ms=%d thread_cpu_ms=%d",
+                len(names), total_ms, sort_ms, callback_ms,
+                slowest_name or "none", slowest_ms,
+                int((time.thread_time() - cpu_started) * 1000),
+            )
+        return self._generation, tuple(availability)
 
     def resolve(self, invoker_id: str) -> Optional[HostToolInvoker]:
         return self._invokers.get(str(invoker_id or "").strip())

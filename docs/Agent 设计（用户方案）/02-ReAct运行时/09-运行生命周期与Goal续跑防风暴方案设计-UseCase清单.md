@@ -1,6 +1,6 @@
 # 运行生命周期与 Goal 续跑防风暴 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v2（覆盖至：当前工作区；补充跨进程恢复租约与验证服务隔离）
+- 版本：2026-09-30 v3（覆盖至：当前工作区；Goal 只复制目标子状态）
 - 用途：逐条审查 run 身份、终态落盘、看门狗隔离、Goal 续跑租约与失败熔断。
 - 适用实现：`app/agent_loop.py`、`app/agent_harness.py`、`app/session_lifecycle.py`、`app/main.py`、`app/webui.py`、`app/agent_goal.py`、`app/execution_metrics.py`、`app/runtime_observability.py`、`plugins/agent-goal/runner.py`、`scripts/subagent_ui_verify.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -39,7 +39,7 @@ run 从“取得执行权”到“唯一终态”的完整协议，也是 Goal �
 
 ### UC-2I5 观测线程耗尽时降级而非杀死业务
 - **触发**：执行指标、观测刷盘或 power guard 尝试创建后台线程/定时器时失败。
-- **预期现象**：诊断能力降级但业务 run 不因此失败；心跳由进程级共享线程统一泵送，不再为每个 run 创建一个原生线程；定时器启动失败时直接同步刷盘。
+- **预期现象**：诊断能力降级但业务 run 不因此失败；心跳由进程级共享线程统一泵送，不再为每个 run 创建一个原生线程。执行指标定时器启动失败时标记待刷，由终态/显式 flush 在全局锁外补刷；`runtime_observability` 保留原同步刷盘降级行为。
 - **规则与边界**：观测是辅助能力，不能成为 run 启动的硬前置；降级应留下日志且不吞业务终态。
 - **依据**：`execution_metrics._heartbeat_pump/_ensure_heartbeat_thread`、`runtime_observability._schedule_write`、`runtime_power.AgentRunPowerGuard`。
 
@@ -78,6 +78,13 @@ run 从“取得执行权”到“唯一终态”的完整协议，也是 Goal �
 - **预期现象**：临时服务、测试会话与子代理种子统一落到一次性 `WORK_DIR`；测试结束时先经拥有者服务删除测试会话，再停止服务并清理临时目录，生产 `workspace/sessions` 不发生变化。
 - **规则与边界**：子进程设置 `WORK_DIR` 时必须同时设置 `MYAGENT_DOTENV_OVERRIDE=0`，否则正常启动语义中的 `app/.env override=True` 会把显式临时目录改回生产 `./workspace`。默认应用启动仍保持 `.env` 覆盖行为；该开关只供明确隔离的子进程使用。
 - **依据**：`agent_harness.load_app_dotenv`、`scripts/subagent_ui_verify.py`、`tests/test_react_recovery_runner.py`。
+
+### UC-2I12 Goal 查询只复制所需子状态
+
+- **触发**：Goal runner discovery、遗留 continuation 对账、`should_continue` 或其他 Goal 查询。
+- **预期现象**：`GoalManager.get()` 用 `SnapshotStore.read_consistent_view()` 核对事件尾部并按需恢复，再提取 Goal；只深拷贝返回的 Goal 子状态，没有 Goal 时直接返回，避免复制无关的整个 Runtime 投影。
+- **规则与边界**：只读 view 不得被修改；返回 Goal 的嵌套字典/列表仍与共享快照隔离，计算字段在副本上装配。快照丢失/过期仍走一致性恢复。该修改不改变 discovery 频率、续跑租约、所有权、失败退避或 continuation 判定，也未合并 runner 中的重复 get 调用。
+- **依据**：`app/agent_goal.py::GoalManager.get`；`tests/test_agent_goal.py`（无关字段禁止 deepcopy、嵌套返回值隔离、无 Goal 与快照丢失恢复）；快照契约见 [08/02 · UC-8B6](../08-会话存储RuntimeV2/02-投影回放与快照方案设计-UseCase清单.md)。
 
 ## 3. 事件与状态不变式
 
@@ -119,8 +126,13 @@ run 从“取得执行权”到“唯一终态”的完整协议，也是 Goal �
 6. 用第二进程模拟“本地 task 表为空、共享 exact-run 心跳新鲜”：不得清理 active run，也不得启动 recovery。
 7. 让 Runtime V2 在长工具调用期间无新事件、只刷新 `runtime_observability` 心跳：跨进程恢复扫描仍必须跳过。
 8. 运行 `scripts/subagent_ui_verify.py` 前后对生产会话 `events.jsonl` 做哈希和行数比对；必须完全不变，且临时会话/目录全部清理。
+9. Goal 查询不触发无关投影字段的 `__deepcopy__`；无 Goal 时同样不得整份复制。
+10. 修改返回 Goal 的嵌套列表/字典不污染共享快照；快照缺失仍从事件日志恢复 Goal。
+
+2026-09-30 本批 Goal、runner、ReAct、流式桥接/恢复、recovery runner 和 registry 相关测试合计 **192 passed**；这是所列专项组合，不能替代历史全量回归。复制步骤 A/B 和生产复测状态见 [09/05](../09-横切能力/05-性能优化基线与已完成项方案设计-UseCase清单.md)。
 
 ## 6. 版本记录
 
+- 2026-09-30 v3：新增 UC-2I12，Goal 查询从整份投影 deepcopy 改为一致只读 view + Goal 子状态 deepcopy；补隔离/恢复验收并修正指标定时器失败时的锁外补刷。
 - 2026-09-20 v2：补录会话 5cd95437 的第二 WebUI 误接管证据链；新增跨进程 exact-run 租约、共享心跳直接读盘、孤儿宽限保护及验证服务 `WORK_DIR` 隔离契约。
 - 2026-09-20 v1：依据中断风暴排查新增；记录 run 级看门狗、终态兜底、共享心跳、Goal 租约/对账/熔断及 UI 状态语义，并校正历史统计口径。

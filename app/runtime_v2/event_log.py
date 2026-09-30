@@ -436,9 +436,16 @@ class SessionEventLog:
         Index failure must never turn a successfully appended fact into an
         apparent failed transaction; readers will rebuild it lazily.
         """
+        # Existing offsets remain valid after an append. Only a new sparse
+        # anchor can change this index; avoid reading and fsyncing identical
+        # contents for the other 31 events in each stride.
+        if not any((int(event.seq) - 1) % _SEQ_OFFSET_STRIDE == 0 for event in events):
+            return
         path = self.seq_offset_index_path(session_id)
         if not path.exists():
             return
+        started = time.perf_counter()
+        entry_count = 0
         try:
             with path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -446,18 +453,27 @@ class SessionEventLog:
                 path.unlink(missing_ok=True)
                 return
             entries = [list(row) for row in data.get("entries") or []]
+            entry_count = len(entries)
             offset = int(start_offset)
             for event, row in zip(events, encoded):
                 if (int(event.seq) - 1) % _SEQ_OFFSET_STRIDE == 0:
                     if not entries or int(entries[-1][0]) < int(event.seq):
                         entries.append([int(event.seq), offset])
                 offset += len(row.encode("utf-8"))
-            self._write_seq_offset_index(session_id, entries)
+            if len(entries) > entry_count:
+                self._write_seq_offset_index(session_id, entries)
         except Exception:
             try:
                 path.unlink(missing_ok=True)
             except Exception:
                 pass
+        finally:
+            elapsed_ms = int(max(0.0, (time.perf_counter() - started) * 1000.0))
+            if elapsed_ms >= 50:
+                logger.info(
+                    "runtime_v2_seq_index_timing session=%s ms=%d entries=%d",
+                    session_id, elapsed_ms, entry_count,
+                )
 
     def next_seq(self, session_id: str) -> int:
         cached = self._cached_last_seq(session_id)
@@ -612,6 +628,7 @@ class SessionEventLog:
             deadline=deadline,
             started=started,
         )
+        thread_lock_ms = int(max(0.0, (_active_uptime_seconds() - started) * 1000.0))
         if not acquired:
             logger.warning(
                 "runtime_v2_transaction_timeout session=%s stage=in_process_lock timeout_seconds=%.3f",
@@ -620,6 +637,7 @@ class SessionEventLog:
             )
             raise RuntimeEventLogBusyError(safe_id, "in-process session lock", timeout or 0.0)
         try:
+            file_lock_started = _active_uptime_seconds()
             session_dir = self.session_dir(safe_id)
             session_dir.mkdir(parents=True, exist_ok=True)
             lock_path = session_dir / ".events.lock"
@@ -631,6 +649,12 @@ class SessionEventLog:
                     timeout_seconds=timeout,
                     started=started,
                 )
+                file_open_and_lock_ms = int(max(0.0, (_active_uptime_seconds() - file_lock_started) * 1000.0))
+                if max(thread_lock_ms, file_open_and_lock_ms) >= 50:
+                    logger.info(
+                        "runtime_v2_lock_acquire_timing session=%s thread_lock_ms=%d file_open_and_lock_ms=%d",
+                        safe_id, thread_lock_ms, file_open_and_lock_ms,
+                    )
                 try:
                     yield
                 finally:

@@ -47,6 +47,36 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(recovered["status"], "active")
         self.assertTrue(snapshot_path.is_file())
 
+    def test_goal_read_copies_only_extension_and_keeps_nested_values_isolated(self):
+        class UnrelatedProjection:
+            def __deepcopy__(self, memo):
+                raise AssertionError("Goal reads must not copy unrelated projection state")
+
+        goal = {"id": "goal-1", "status": "active", "accounted_usage_ids": ["usage-1"],
+                "judge": {"evidence": ["verified"]}}
+        view = {"raw_model_messages": UnrelatedProjection(),
+                "extensions": {"agent-goal": {"goal": {"value": goal}}}}
+        store = self.manager._state_store()
+        with patch.object(store.snapshots, "read_consistent_view", return_value=view) as reader, \
+             patch.object(store.snapshots, "read_consistent", side_effect=AssertionError("full copy forbidden")):
+            result = self.manager.get("s-isolated")
+        reader.assert_called_once_with("s-isolated", event_log=store.event_log, projector=store.projector)
+        result["accounted_usage_ids"].append("mutated")
+        result["judge"]["evidence"].clear()
+        self.assertEqual(goal["accounted_usage_ids"], ["usage-1"])
+        self.assertEqual(goal["judge"]["evidence"], ["verified"])
+
+    def test_absent_goal_does_not_copy_other_snapshot_fields(self):
+        class UnrelatedProjection:
+            def __deepcopy__(self, memo):
+                raise AssertionError("Absent Goal must not copy conversation state")
+
+        store = self.manager._state_store()
+        with patch.object(store.snapshots, "read_consistent_view", return_value={
+            "raw_model_messages": UnrelatedProjection(), "extensions": {},
+        }), patch.object(store.snapshots, "read_consistent", side_effect=AssertionError("full copy forbidden")):
+            self.assertIsNone(self.manager.get("no-goal"))
+
     def test_usage_events_are_compact_and_recoverable(self):
         self.manager.create("compact-goal", "Do not repeat this objective " * 200)
         self.manager.record_usage(
