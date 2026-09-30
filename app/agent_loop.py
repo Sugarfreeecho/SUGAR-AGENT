@@ -1034,20 +1034,33 @@ def _register_steer_run_control(session_id: str, run_id: str) -> _SteerRunContro
     control = _SteerRunControl(session_id, run_id)
     sid = control.session_id
     if sid:
-        with _STEER_RUN_LOCK:
-            _ACTIVE_STEER_RUNS[sid] = control
+        from run_ownership import current_process_identity, inspect_run_fence
+
+        fence_path = _active_session_path(sid) / "active_run_fence.json"
+        owner_pid, owner_started_at = current_process_identity()
         try:
-            fence_path = _active_session_path(sid) / "active_run_fence.json"
-            fence_path.parent.mkdir(parents=True, exist_ok=True)
-            with _steer_transaction(sid):
+            with _STEER_RUN_LOCK, _steer_transaction(sid):
+                owner = inspect_run_fence(fence_path)
+                if owner.status == "unknown" or (owner.status == "live" and owner.pid != owner_pid):
+                    raise RuntimeError(
+                        f"session {sid} may still be owned by process {owner.pid}"
+                    )
                 tmp = fence_path.with_suffix(".json.tmp")
                 tmp.write_text(
-                    json.dumps({"run_id": control.run_id, "token": control.fence_token, "created_at": control.created_at}),
+                    json.dumps({
+                        "run_id": control.run_id,
+                        "token": control.fence_token,
+                        "created_at": control.created_at,
+                        "owner_pid": owner_pid,
+                        "owner_started_at": owner_started_at,
+                    }),
                     encoding="utf-8",
                 )
                 tmp.replace(fence_path)
+                _ACTIVE_STEER_RUNS[sid] = control
         except Exception:
             logger.warning("failed to persist active run fence for %s", sid, exc_info=True)
+            raise
     return control
 
 
@@ -1098,9 +1111,9 @@ def _state_run_has_write_fence(state: State) -> bool:
         fence_path = _active_session_path(sid) / "active_run_fence.json"
         current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
         token = str(current.get("token") or "")
-        return not token or token == control.fence_token
+        return token == control.fence_token
     except Exception:
-        return local_current is control
+        return False
 
 
 def _state_interrupt_requested(state: State) -> bool:

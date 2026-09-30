@@ -5,12 +5,14 @@ from __future__ import annotations
 import ssl_bypass  # SSL certificate bypass
 
 import asyncio
+import logging
 import os
 import socket
 import threading
 import time
 import webbrowser
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 
@@ -55,6 +57,7 @@ def _schedule_browser_open(host: str, port: int) -> None:
 
 if __name__ == "__main__":
     from webui import (
+        _RUNTIME_V2_ORPHAN_GRACE_SEC,
         fastapi_app,
         schedule_runtime_auto_migration,
         start_webui_lifecycle,
@@ -91,10 +94,38 @@ if __name__ == "__main__":
             """Keep stale heartbeat records alive while their local task still exists."""
             return is_run_active(session_id, run_id) or subagent_registry.is_running(session_id)
 
-        await asyncio.to_thread(
-            runtime_observability.reconcile_orphaned_runs,
-            live_checker=runtime_run_is_locally_active,
-        )
+        def runtime_run_has_foreign_owner(session_id: str, run_id: str) -> bool:
+            from run_ownership import inspect_run_fence
+
+            try:
+                path = Path(session_manager._resolve_session_path(session_id)) / "active_run_fence.json"
+                owner = inspect_run_fence(path)
+            except Exception:
+                return False
+            return owner.run_id == run_id and (
+                owner.status == "live" or (owner.status == "unknown" and owner.pid is not None)
+            )
+
+        # This scans persisted observability files; keep it out of the HTTP
+        # startup critical path. The ReAct recovery runner has its own owner
+        # check and can prioritize the visible session independently.
+        async def reconcile_observability_in_background() -> None:
+            started_at = time.perf_counter()
+            try:
+                orphaned = await asyncio.to_thread(
+                    runtime_observability.reconcile_orphaned_runs,
+                    live_checker=runtime_run_is_locally_active,
+                    owner_checker=runtime_run_has_foreign_owner,
+                    grace_seconds=_RUNTIME_V2_ORPHAN_GRACE_SEC,
+                )
+                logging.getLogger(__name__).info(
+                    "Startup observability reconciliation completed: orphaned=%s elapsed_ms=%d",
+                    len(orphaned), int((time.perf_counter() - started_at) * 1000),
+                )
+            except Exception:
+                logging.getLogger(__name__).exception("Startup observability reconciliation failed")
+
+        observability_reconcile_task = asyncio.create_task(reconcile_observability_in_background())
 
         watchdog_stop = asyncio.Event()
 
@@ -158,6 +189,8 @@ if __name__ == "__main__":
                 pass
             await stop_auto_scheduler()
             await stop_webui_lifecycle()
+            if not observability_reconcile_task.done():
+                observability_reconcile_task.cancel()
         
     fastapi_app.router.lifespan_context = lifespan
 

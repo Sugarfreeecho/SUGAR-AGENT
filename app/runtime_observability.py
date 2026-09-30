@@ -431,8 +431,10 @@ def scan_stale_runs(
 def reconcile_orphaned_runs(
     *,
     live_checker: Optional[Callable[[str, str], bool]] = None,
+    owner_checker: Optional[Callable[[str, str], bool]] = None,
+    grace_seconds: float = 0,
 ) -> list[dict]:
-    """Mark every persisted non-live ``running`` row as orphaned at startup."""
+    """Mark orphaned rows, preserving externally owned and recent runs."""
     if _sessions_root is None or not _sessions_root.exists():
         return []
     orphaned: list[dict] = []
@@ -456,6 +458,19 @@ def reconcile_orphaned_runs(
                             continue
                     except Exception:
                         pass
+                if owner_checker is not None:
+                    try:
+                        if owner_checker(sid, rid):
+                            # Foreign ownership is not process-local activity.
+                            continue
+                    except Exception:
+                        pass
+                if grace_seconds > 0:
+                    stamp = _parse_time(row.get("heartbeat_at") or row.get("started_at"))
+                    if stamp is not None and (
+                        datetime.now(timezone.utc) - stamp
+                    ).total_seconds() <= grace_seconds:
+                        continue
                 orphaned.append(
                     {
                         "session_id": sid,

@@ -119,6 +119,23 @@ def test_stale_and_restart_reconciliation_are_durable(tmp_path):
     assert obs.snapshot("s2")["runs"][0]["status"] == "orphaned"
 
 
+def test_restart_reconciliation_preserves_foreign_owned_and_recent_runs(tmp_path):
+    import runtime_observability as obs
+
+    obs.configure(tmp_path)
+    obs.start_run("foreign", "run-foreign")
+    obs.start_run("recent", "run-recent")
+
+    orphaned = obs.reconcile_orphaned_runs(
+        owner_checker=lambda sid, _rid: sid == "foreign",
+        grace_seconds=30,
+    )
+
+    assert orphaned == []
+    assert obs.snapshot("foreign")["runs"][0]["status"] == "running"
+    assert obs.snapshot("recent")["runs"][0]["status"] == "running"
+
+
 def test_stale_heartbeat_does_not_mark_a_locally_live_run(tmp_path):
     import runtime_observability as obs
 

@@ -69,7 +69,10 @@ class RuntimeUiProjection:
     @staticmethod
     def _is_react_order_boundary(event: dict) -> bool:
         event_type = str((event or {}).get("type") or "")
-        if event_type in {"user", "final"}:
+        if event_type in {
+            "user", "final", "interaction_requested", "interaction_resolved",
+            "approval_requested", "approval_resolved",
+        }:
             return True
         return bool(
             event_type == "user_steer"
@@ -88,14 +91,22 @@ class RuntimeUiProjection:
             return events
         groups: Dict[int, List[tuple[int, dict, tuple[int, int, int, int]]]] = {}
         scope = 0
+        previous_run_id = ""
         for index, event in enumerate(events):
             if cls._is_react_order_boundary(event):
                 scope += 1
+                previous_run_id = ""
             key = cls._react_process_sort_key(event, index)
             if key is not None:
+                run_id = str((event or {}).get("run_id") or "")
+                if run_id and run_id != previous_run_id and groups.get(scope):
+                    scope += 1
                 groups.setdefault(scope, []).append((index, event, key))
+                if run_id:
+                    previous_run_id = run_id
             if str((event or {}).get("type") or "") == "final":
                 scope += 1
+                previous_run_id = ""
         for entries in groups.values():
             if len(entries) < 2:
                 continue
@@ -103,6 +114,25 @@ class RuntimeUiProjection:
             for (target_index, _old, _old_key), (_source_index, source, _source_key) in zip(entries, ordered):
                 events[target_index] = source
         return events
+
+    @staticmethod
+    def _active_run_after_event(event: RuntimeEvent, active_run_id: str) -> str:
+        if event.type == "run_started":
+            return str(event.run_id or "")
+        if event.type in {"run_finished", "run_interrupted", "run_failed"}:
+            if str(event.run_id or "") == active_run_id:
+                return ""
+        return active_run_id
+
+    @staticmethod
+    def _with_run_id(ui: Optional[dict], event: RuntimeEvent, active_run_id: str) -> Optional[dict]:
+        if ui is None:
+            return None
+        run_id = str(ui.get("run_id") or event.run_id or active_run_id or "")
+        if run_id and not ui.get("run_id"):
+            ui = dict(ui)
+            ui["run_id"] = run_id
+        return ui
 
     @classmethod
     def _normalize_before_history_op(cls, events: List[dict]) -> List[dict]:
@@ -318,7 +348,9 @@ class RuntimeUiProjection:
         out: List[dict] = []
         latest_truncate_seq = 0
         has_history_ops = False
+        active_run_id = ""
         for event in self.event_log.iter_events(session_id):
+            active_run_id = self._active_run_after_event(event, active_run_id)
             if event.type == "runtime_snapshot_compacted":
                 baseline_ui = (event.payload or {}).get("ui_events")
                 out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
@@ -354,6 +386,7 @@ class RuntimeUiProjection:
                     ui = dict(ui)
                     ui["runtime_seq"] = int(event.seq)
                     ui["runtime_event_type"] = event.type
+            ui = self._with_run_id(ui, event, active_run_id)
             if ui is not None:
                 out.append(ui)
         return self._normalize_react_process_order(out), latest_truncate_seq, has_history_ops
@@ -523,6 +556,8 @@ class RuntimeUiProjection:
             "latest_truncate_seq": latest_truncate_seq,
             "has_history_ops": has_history_ops,
             "runtime_seqs": [int(seq) for seq, _typ, _preview in entries],
+            "run_ids": [str(ui.get("run_id") or "") for ui in projected],
+            "last_run_id": str(projected[-1].get("run_id") or "") if projected else "",
             "react_order_tail": react_order_tail,
             "user_indices": user_indices,
             "user_turns": user_turns,
@@ -558,6 +593,10 @@ class RuntimeUiProjection:
             "visible_range_changed",
             "message_deleted",
             "message_rewritten",
+            "run_started",
+            "run_finished",
+            "run_interrupted",
+            "run_failed",
         }
         if any(event.type in semantic_ops for event in events):
             return None
@@ -566,6 +605,8 @@ class RuntimeUiProjection:
         user_turns = [dict(row) for row in extended.get("user_turns") or [] if isinstance(row, dict)]
         total = int(extended.get("total") or 0)
         runtime_seqs = [int(value) for value in extended.get("runtime_seqs") or []]
+        run_ids = [str(value or "") for value in extended.get("run_ids") or []]
+        active_run_id = str(extended.get("last_run_id") or "")
         raw_react_tail = extended.get("react_order_tail")
         react_order_tail: Optional[tuple[int, int]] = None
         if isinstance(raw_react_tail, list) and len(raw_react_tail) == 2:
@@ -573,10 +614,10 @@ class RuntimeUiProjection:
                 react_order_tail = (int(raw_react_tail[0]), int(raw_react_tail[1]))
             except (TypeError, ValueError):
                 react_order_tail = None
-        if len(runtime_seqs) != total:
+        if len(runtime_seqs) != total or len(run_ids) != total:
             return None
         for event in events:
-            ui = self.event_to_ui(event)
+            ui = self._with_run_id(self.event_to_ui(event), event, active_run_id)
             if ui is None:
                 continue
             if self._is_react_order_boundary(ui):
@@ -597,6 +638,7 @@ class RuntimeUiProjection:
                     "preview": self._user_turn_preview(ui),
                 })
             runtime_seqs.append(int(event.seq))
+            run_ids.append(str(ui.get("run_id") or ""))
             total += 1
         extended.update({
             "signature": list(signature),
@@ -605,6 +647,8 @@ class RuntimeUiProjection:
             "user_indices": user_indices,
             "user_turns": user_turns,
             "runtime_seqs": runtime_seqs,
+            "run_ids": run_ids,
+            "last_run_id": str(run_ids[-1] or "") if run_ids else "",
             "react_order_tail": list(react_order_tail) if react_order_tail is not None else None,
         })
         self._write_ui_index(self._ui_index_path(session_id), extended)
@@ -738,6 +782,7 @@ class RuntimeUiProjection:
         runtime_events = self.event_log.read_after_seq(session_id, int(after_runtime_seq))
         projected: List[dict] = []
         last_runtime_seq = int(after_runtime_seq)
+        active_run_id = ""
         history_types = {
             "runtime_snapshot_compacted",
             "legacy_truncate_observed",
@@ -747,13 +792,14 @@ class RuntimeUiProjection:
         }
         for event in runtime_events:
             last_runtime_seq = int(event.seq)
+            active_run_id = self._active_run_after_event(event, active_run_id)
             if event.type in history_types:
                 return {
                     "events": [],
                     "last_runtime_seq": last_runtime_seq,
                     "requires_reprojection": True,
                 }
-            ui = self._event_to_ui(session_id, event)
+            ui = self._with_run_id(self._event_to_ui(session_id, event), event, active_run_id)
             if ui is not None:
                 projected.append(ui)
                 if len(projected) >= lim:
@@ -832,6 +878,8 @@ class RuntimeUiProjection:
         )
         wanted_len = max(0, total - wanted_start)
         runtime_seqs = [int(value) for value in index.get("runtime_seqs") or []]
+        indexed_run_ids = [str(value or "") for value in index.get("run_ids") or []]
+        run_id_by_seq = dict(zip(runtime_seqs, indexed_run_ids))
         index_last_runtime_seq = max(0, int(index.get("last_runtime_seq") or 0))
         semantic_ops = {
             "runtime_snapshot_compacted",
@@ -855,7 +903,7 @@ class RuntimeUiProjection:
             ]
             if not any(event.type in semantic_ops for event in indexed_runtime_events):
                 indexed_ui_by_seq = {
-                    int(event.seq): ui
+                    int(event.seq): self._with_run_id(ui, event, run_id_by_seq.get(int(event.seq), ""))
                     for event in indexed_runtime_events
                     for ui in [self._event_to_ui(session_id, event)]
                     if ui is not None
@@ -914,7 +962,7 @@ class RuntimeUiProjection:
                     continue
                 ui = self._event_to_ui(session_id, event)
                 if ui is not None:
-                    ui_events.append(ui)
+                    ui_events.append(self._with_run_id(ui, event, run_id_by_seq.get(int(event.seq), "")))
             ui_events = self._normalize_react_process_order(ui_events)
             if not ui_events:
                 if reached_start:
@@ -986,7 +1034,9 @@ class RuntimeUiProjection:
     @classmethod
     def events_to_ui(cls, events: Iterable[RuntimeEvent]) -> List[dict]:
         out: List[dict] = []
+        active_run_id = ""
         for event in events:
+            active_run_id = cls._active_run_after_event(event, active_run_id)
             if event.type == "runtime_snapshot_compacted":
                 baseline_ui = (event.payload or {}).get("ui_events")
                 out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
@@ -1016,12 +1066,14 @@ class RuntimeUiProjection:
                 ui = dict(ui)
                 ui["runtime_seq"] = int(event.seq)
                 ui["runtime_event_type"] = event.type
-                out.append(ui)
+                out.append(cls._with_run_id(ui, event, active_run_id))
         return cls._normalize_react_process_order(out)
 
     def _events_to_ui(self, session_id: str, events: Iterable[RuntimeEvent]) -> List[dict]:
         out: List[dict] = []
+        active_run_id = ""
         for event in events:
+            active_run_id = self._active_run_after_event(event, active_run_id)
             if event.type == "runtime_snapshot_compacted":
                 baseline_ui = (event.payload or {}).get("ui_events")
                 out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
@@ -1046,7 +1098,7 @@ class RuntimeUiProjection:
                 out = self._normalize_before_history_op(out)
                 out = self._apply_history_op_to_projected_events(out, event)
                 continue
-            ui = self._event_to_ui(session_id, event)
+            ui = self._with_run_id(self._event_to_ui(session_id, event), event, active_run_id)
             if ui is not None:
                 out.append(ui)
         return self._normalize_react_process_order(out)

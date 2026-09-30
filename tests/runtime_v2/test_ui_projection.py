@@ -177,6 +177,85 @@ class RuntimeUiProjectionTests(unittest.TestCase):
                 ["llm_reasoning", "llm_response", "tool_call"],
             )
 
+    def test_restarted_run_keeps_existing_ui_indices_and_run_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "question"})
+            mirror.mirror_run_started("s1", "run-old")
+            old_first = mirror.append("s1", "ui_event", {
+                "type": "llm_reasoning", "content": "old first", "react_iter": 1,
+            })
+            old_second = mirror.append("s1", "ui_event", {
+                "type": "llm_reasoning", "content": "old second", "react_iter": 2,
+            })
+            mirror.append("s1", "interaction_requested", {"interaction_id": "q1"}, run_id="run-old")
+            mirror.mirror_run_interrupted("s1", "run-old", {"reason": "no_local_activity"})
+            mirror.append("s1", "interaction_resolved", {"interaction_id": "q1"}, run_id="run-old")
+            projection = RuntimeUiProjection(tmp)
+            before = projection.read_ui_events("s1")
+
+            mirror.mirror_run_started("s1", "run-recovered")
+            new_first = mirror.append("s1", "ui_event", {
+                "type": "llm_reasoning", "content": "new first", "react_iter": 1,
+            })
+            new_response = mirror.append("s1", "ui_event", {
+                "type": "llm_response", "content": "new response", "react_iter": 1,
+            })
+            after = projection.read_ui_events("s1")
+            tail = projection.read_ui_page("s1", after_index=len(before) - 1)
+            recent = projection.read_ui_page("s1", turns=1)
+            live_tail = projection.read_ui_after_runtime_seq(
+                "s1", after_runtime_seq=before[-1]["runtime_seq"]
+            )
+            index = projection._read_or_build_ui_index("s1")
+
+            self.assertEqual(
+                [event["runtime_seq"] for event in after[:len(before)]],
+                [event["runtime_seq"] for event in before],
+            )
+            self.assertEqual(
+                [event["runtime_seq"] for event in tail["events"]],
+                [new_first.seq, new_response.seq],
+            )
+            self.assertEqual(
+                [event["runtime_seq"] for event in recent["events"]],
+                [event["runtime_seq"] for event in after],
+            )
+            self.assertEqual(
+                [event["run_id"] for event in recent["events"][-2:]],
+                ["run-recovered", "run-recovered"],
+            )
+            self.assertEqual(
+                [event["run_id"] for event in live_tail["events"]],
+                ["run-recovered", "run-recovered"],
+            )
+            self.assertEqual(index["runtime_seqs"], [event["runtime_seq"] for event in after])
+            self.assertEqual(
+                [event["run_id"] for event in after if event["runtime_seq"] in {old_first.seq, old_second.seq, new_first.seq, new_response.seq}],
+                ["run-old", "run-old", "run-recovered", "run-recovered"],
+            )
+
+    def test_restarted_run_without_interaction_does_not_merge_equal_iterations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "question"})
+            mirror.mirror_run_started("s1", "run-old")
+            old_response = mirror.append("s1", "ui_event", {
+                "type": "llm_response", "content": "old", "react_iter": 1,
+            })
+            mirror.mirror_run_interrupted("s1", "run-old", {"reason": "restart"})
+            mirror.mirror_run_started("s1", "run-new")
+            new_reasoning = mirror.append("s1", "ui_event", {
+                "type": "llm_reasoning", "content": "new", "react_iter": 1,
+            })
+
+            events = RuntimeUiProjection(tmp).read_ui_events("s1")
+
+            self.assertEqual(
+                [event["runtime_seq"] for event in events[1:]],
+                [old_response.seq, new_reasoning.seq],
+            )
+
     def test_ui_index_rebuilds_when_late_llm_row_must_precede_indexed_tool(self):
         with tempfile.TemporaryDirectory() as tmp:
             mirror = RuntimeMirror(tmp)

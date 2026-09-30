@@ -315,8 +315,8 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "const SSE_RESUME_PROBE_TIMEOUT_MS = 20000" in sse
     assert "maybeAutoResumeInterruptedReact" in sse
     layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
-    assert "fetch('/sessions/recover', { method: 'POST' })" in layout
-    assert "observeServerOwnedReactRecovery(currentSessionId)" in layout
+    assert "requestServerOwnedReactRecovery(recoverySessionId)" in layout
+    assert "observeServerOwnedReactRecovery(recoverySessionId)" in layout
     refresh_row = sessions.split("async function refreshSingleSessionRow", 1)[1].split("let sessionListLoadEpoch", 1)[0]
     event_cache_set = sessions.split("const uiEventCountCache", 1)[1].split("increment(sessionId)", 1)[0]
     assert "maybeAutoResumeInterruptedReact(sessionId, sess)" in refresh_row

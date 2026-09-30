@@ -47,6 +47,7 @@ def test_live_tool_delta_replay_is_compacted_without_losing_prefix():
     assert replay["arguments_delta"] == "".join(str(i % 10) for i in range(600))
     assert replay["replayed_snapshot"] is True
     assert replay["seq_scope"] == "event_bus"
+    assert replay["event_bus_epoch"] == bus._event_bus_epoch
 
 
 def test_completed_tool_prunes_live_delta_snapshot():
@@ -789,7 +790,8 @@ def test_frontend_uses_independent_sse_sequence_scopes_and_fast_reattach():
     webui_source = (ROOT / "app/webui.py").read_text(encoding="utf-8")
 
     assert "sid + '::' + seqScope" in store_source
-    assert "parsed.seq_scope || 'legacy'" in sse_source
+    assert "sseSequenceScope(parsed)" in sse_source
+    assert "parsed.event_bus_epoch" in sse_source
     assert "scheduleActiveSessionReconnect(runSessionId, { delayMs: 120, failure: true })" in sse_source
     assert 'payload["seq_scope"] = "ui_projection"' in webui_source
     assert "subscription.__anext__()" in webui_source

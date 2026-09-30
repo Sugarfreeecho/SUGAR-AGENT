@@ -247,8 +247,13 @@ def test_append_steer_commit_emits_mode_at_safe_boundary(monkeypatch, tmp_path):
     assert agent_loop.get_session_steer("s-append", steer_id=item["id"])["item"]["state"] == "consumed"
 
 
-def test_replacement_run_fences_late_old_run_events():
+def test_replacement_run_fences_late_old_run_events(monkeypatch, tmp_path):
     import agent_loop
+
+    class _SessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", _SessionManager())
 
     old = agent_loop._register_steer_run_control("s-fence", "run-old")
     state = {

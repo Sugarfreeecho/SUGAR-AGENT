@@ -849,53 +849,64 @@ def _schedule_human_interaction_recovery(session_id: str) -> bool:
     return True
 
 
-def _discover_recoverable_react_sessions() -> list[str]:
-    """Return every non-archived interrupted ReAct session safe to resume."""
+def _react_run_fence_owner(sid: str):
+    from run_ownership import RunFenceOwner, inspect_run_fence
+
+    try:
+        path = Path(session_manager._resolve_session_path(sid)) / "active_run_fence.json"
+    except (AttributeError, OSError, TypeError, ValueError):
+        return RunFenceOwner("unknown")
+    return inspect_run_fence(path)
+
+
+def _is_recoverable_react_session(sid: str) -> bool:
+    """Check one session; a living writer is never an orphan."""
     from workflow_extensions import session_workflows
-    recoverable: list[str] = []
+    sid = str(sid or "").strip()
+    if (
+        not sid
+        or _has_local_worker_activity(sid)
+        or int(_active_chat_by_session.get(sid, 0) or 0) > 0
+        or session_workflows.continuation_source(sid)
+    ):
+        return False
+    owner = _react_run_fence_owner(sid)
+    if owner.status in {"live", "unknown"}:
+        return False
+    snapshot = _runtime_v2_snapshot(sid)
+    # A verified dead owner needs no 30-second heartbeat grace. Legacy fences
+    # retain the old grace behavior; unverifiable new fences fail closed above.
+    if owner.status != "dead" and (
+        _runtime_v2_active_runs_are_recent(snapshot)
+        or _runtime_observability_active_runs_are_recent(sid, snapshot)
+    ):
+        return False
+    _cleanup_orphan_runtime_v2_active_runs(
+        sid, reason="no_local_activity", respect_grace=owner.status != "dead",
+    )
+    return (
+        _session_pending_human_count(sid) == 0
+        and _runtime_v2_auto_resume_pending(sid)
+        and session_manager.can_continue_react_session(sid)
+    )
+
+
+def _iter_recoverable_react_sessions():
+    """Yield candidates as they are found, without holding up earlier ones."""
     for row in session_manager.list_sessions(include_archived=False):
         sid = str((row or {}).get("id") or "").strip()
-        if (
-            not sid
-            or _has_local_worker_activity(sid)
-            or int(_active_chat_by_session.get(sid, 0) or 0) > 0
-        ):
+        if not sid:
             continue
         try:
-            # Optional workflows own their durable continuation scheduling and
-            # must not be started a second time by generic ReAct recovery.
-            if session_workflows.continuation_source(sid):
-                continue
-            # The task registry is process-local.  Fresh durable activity can
-            # therefore belong to another WebUI process even though this
-            # process has no registered worker for the session.  Runtime V2
-            # advances at event boundaries; the shared observability heartbeat
-            # keeps the lease fresh during a long model or tool call.
-            snapshot = _runtime_v2_snapshot(sid)
-            if (
-                _runtime_v2_active_runs_are_recent(snapshot)
-                or _runtime_observability_active_runs_are_recent(sid, snapshot)
-            ):
-                continue
-            # A second local WebUI process (for example a browser smoke test)
-            # cannot see tasks registered in the primary process.  Respect the
-            # durable cross-process lease; otherwise it can append a false
-            # no_local_activity terminal while the primary run still produces
-            # events.
-            _cleanup_orphan_runtime_v2_active_runs(
-                sid,
-                reason="no_local_activity",
-                respect_grace=True,
-            )
-            if _session_pending_human_count(sid) > 0:
-                continue
-            if not _runtime_v2_auto_resume_pending(sid):
-                continue
-            if session_manager.can_continue_react_session(sid):
-                recoverable.append(sid)
+            if _is_recoverable_react_session(sid):
+                yield sid
         except Exception:
             logger.debug("ReAct recovery discovery failed for %s", sid, exc_info=True)
-    return recoverable
+
+
+def _discover_recoverable_react_sessions() -> list[str]:
+    """Compatibility helper for callers that need the complete candidate set."""
+    return list(_iter_recoverable_react_sessions())
 
 
 async def _run_react_recovery_background(session_id: str) -> None:
@@ -903,10 +914,14 @@ async def _run_react_recovery_background(session_id: str) -> None:
     sid = str(session_id or "").strip()
     if not sid:
         return
+    started_at = time.perf_counter()
     recovery_run_id = "react-recovery-" + uuid.uuid4().hex
     start_token = _reserve_session_chat_start(sid, recovery_run_id) or ""
     if not start_token:
+        logger.info("ReAct recovery reservation unavailable: session=%s", sid)
         return
+    event_count = 0
+    outcome = "skipped"
     try:
         if _session_pending_human_count(sid) > 0:
             return
@@ -928,13 +943,26 @@ async def _run_react_recovery_background(session_id: str) -> None:
         ):
             # The agent loop persists durable events and publishes them to all
             # observers. This worker only owns/drains execution.
-            pass
+            event_count += 1
+            if event_count == 1:
+                logger.info(
+                    "ReAct recovery first event: session=%s run_id=%s elapsed_ms=%d",
+                    sid, recovery_run_id, int((time.perf_counter() - started_at) * 1000),
+                )
+        outcome = "completed" if event_count else "empty"
     except asyncio.CancelledError:
+        outcome = "cancelled"
         raise
     except Exception as exc:
+        outcome = "failed"
         logger.warning("Background ReAct recovery failed for %s: %s", sid, exc)
     finally:
         _release_session_chat_start(sid, start_token)
+        logger.info(
+            "ReAct recovery worker stopped: session=%s run_id=%s outcome=%s events=%d elapsed_ms=%d",
+            sid, recovery_run_id, outcome, event_count,
+            int((time.perf_counter() - started_at) * 1000),
+        )
 
 
 def _schedule_react_recovery(session_id: str) -> bool:
@@ -963,9 +991,84 @@ def _schedule_react_recovery(session_id: str) -> bool:
 
 
 async def recover_interrupted_react_sessions() -> list[str]:
-    """Discover and schedule all recoverable sessions without changing UI state."""
-    session_ids = await asyncio.to_thread(_discover_recoverable_react_sessions)
-    return [sid for sid in session_ids if _schedule_react_recovery(sid)]
+    """Schedule each candidate as it is discovered, not after the entire scan."""
+    started_at = time.perf_counter()
+    loop = asyncio.get_running_loop()
+    found: asyncio.Queue[Optional[str]] = asyncio.Queue()
+    cancelled = threading.Event()
+
+    def scan() -> None:
+        try:
+            for sid in _iter_recoverable_react_sessions():
+                if cancelled.is_set():
+                    break
+                try:
+                    loop.call_soon_threadsafe(found.put_nowait, sid)
+                except RuntimeError:
+                    break
+        finally:
+            if not cancelled.is_set():
+                try:
+                    loop.call_soon_threadsafe(found.put_nowait, None)
+                except RuntimeError:
+                    pass
+
+    worker = asyncio.create_task(asyncio.to_thread(scan))
+    scheduled: list[str] = []
+    try:
+        while (sid := await found.get()) is not None:
+            if _schedule_react_recovery(sid):
+                scheduled.append(sid)
+        await worker
+    finally:
+        cancelled.set()
+        if not worker.done():
+            worker.cancel()
+        logger.info(
+            "ReAct recovery scan completed: scheduled=%s elapsed_ms=%d",
+            len(scheduled), int((time.perf_counter() - started_at) * 1000),
+        )
+    return scheduled
+
+
+async def recover_react_session(session_id: str) -> bool:
+    """Prioritize the visible session without waiting for the global scan."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    started_at = time.perf_counter()
+    summary_reader = getattr(session_manager, "get_session_summary", None)
+    if callable(summary_reader):
+        try:
+            summary = await asyncio.to_thread(summary_reader, sid)
+        except Exception:
+            logger.debug("Recovery session lookup failed for %s", sid, exc_info=True)
+            return False
+        if not isinstance(summary, dict) or summary.get("archived"):
+            return False
+    try:
+        recoverable = await asyncio.to_thread(_is_recoverable_react_session, sid)
+    except Exception:
+        logger.debug("Targeted ReAct recovery failed for %s", sid, exc_info=True)
+        return False
+    scheduled = bool(recoverable and _schedule_react_recovery(sid))
+    logger.info(
+        "Targeted ReAct recovery checked: session=%s scheduled=%s elapsed_ms=%d",
+        sid, scheduled, int((time.perf_counter() - started_at) * 1000),
+    )
+    return scheduled
+
+
+async def _run_startup_recovery_passes() -> None:
+    started_at = time.monotonic()
+    await recover_interrupted_react_sessions()
+    # A legacy/no-owner run may still be inside the heartbeat grace window
+    # during the first pass. Recheck once when that window expires.
+    if _RUNTIME_V2_ORPHAN_GRACE_SEC > 0:
+        remaining = _RUNTIME_V2_ORPHAN_GRACE_SEC + 1 - (time.monotonic() - started_at)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+        await recover_interrupted_react_sessions()
 
 
 async def start_react_recovery_runner() -> bool:
@@ -974,7 +1077,7 @@ async def start_react_recovery_runner() -> bool:
     if _react_recovery_scan_task and not _react_recovery_scan_task.done():
         return False
     _react_recovery_scan_task = asyncio.create_task(
-        recover_interrupted_react_sessions(),
+        _run_startup_recovery_passes(),
         name="react-recovery-scan",
     )
     return True
@@ -1181,11 +1284,29 @@ def _cleanup_orphan_runtime_v2_active_runs(
     sid = str(sid or "").strip()
     if not sid or _has_local_run_activity(sid) or _has_running_subagent_activity(sid):
         return 0
+    # Registration and orphan cleanup must make their owner decision under
+    # the same cross-process lock. Otherwise a new writer can claim the run
+    # between the liveness check and the synthetic terminal append.
+    from agent_loop import _steer_transaction
+
+    with _steer_transaction(sid):
+        return _cleanup_orphan_runtime_v2_active_runs_locked(
+            sid, reason=reason, respect_grace=respect_grace,
+        )
+
+
+def _cleanup_orphan_runtime_v2_active_runs_locked(
+    sid: str, reason: str, *, respect_grace: bool,
+) -> int:
+    owner = _react_run_fence_owner(sid)
+    if owner.status in {"live", "unknown"}:
+        logger.debug("Skip orphan cleanup for unresolved owner: session=%s pid=%s", sid, owner.pid)
+        return 0
     snapshot = _runtime_v2_snapshot(sid)
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
     if not isinstance(active_runs, list) or not active_runs:
         return 0
-    if respect_grace and (
+    if respect_grace and owner.status != "dead" and (
         _runtime_v2_active_runs_are_recent(snapshot)
         or _runtime_observability_active_runs_are_recent(sid, snapshot)
     ):
@@ -1209,8 +1330,8 @@ def _cleanup_orphan_runtime_v2_active_runs(
             rid = str(run.get("run_id") or "").strip()
             if not rid:
                 continue
-            mirror.mirror_run_interrupted(sid, rid, {"reason": reason})
-            cleaned += 1
+            if mirror.mirror_run_interrupted(sid, rid, {"reason": reason}) is not None:
+                cleaned += 1
     except Exception as e:
         logger.debug("cleanup orphan runtime v2 active runs failed for %s: %s", sid, e)
         return 0
@@ -2833,9 +2954,13 @@ async def sessions_state(include_archived: bool = Query(False)):
 
 
 @fastapi_app.post("/sessions/recover")
-async def recover_sessions():
-    """Resume every interrupted recoverable session in server-owned workers."""
-    scheduled = await recover_interrupted_react_sessions()
+async def recover_sessions(session_id: Optional[str] = None):
+    """Prioritize one session, or explicitly request a background-wide scan."""
+    if session_id is not None:
+        sid = str(session_id).strip()
+        scheduled = [sid] if sid and await recover_react_session(sid) else []
+    else:
+        scheduled = await recover_interrupted_react_sessions()
     return JSONResponse(content={"ok": True, "scheduled": scheduled, "count": len(scheduled)})
 
 

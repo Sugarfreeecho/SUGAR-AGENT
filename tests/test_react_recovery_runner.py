@@ -14,6 +14,7 @@ if str(APP_DIR) not in sys.path:
 
 def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypatch):
     import webui
+    from run_ownership import RunFenceOwner
     from workflow_extensions import session_workflows
 
     cleaned = []
@@ -27,6 +28,7 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
             return sid in {"current", "background", "running", "goal", "waiting"}
 
     monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("absent"))
     monkeypatch.setattr(session_workflows, "continuation_source", lambda sid: "agent-goal" if sid == "goal" else "")
     monkeypatch.setattr(webui, "_has_local_worker_activity", lambda sid: sid == "running")
     monkeypatch.setattr(webui, "_active_chat_by_session", {})
@@ -52,6 +54,7 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
 
 def test_recovery_scan_does_not_take_over_a_fresh_cross_process_run(monkeypatch):
     import webui
+    from run_ownership import RunFenceOwner
     from workflow_extensions import session_workflows
 
     class FakeSessionManager:
@@ -60,6 +63,7 @@ def test_recovery_scan_does_not_take_over_a_fresh_cross_process_run(monkeypatch)
             return [{"id": "foreign-live"}]
 
     monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("absent"))
     monkeypatch.setattr(session_workflows, "continuation_source", lambda _sid: "")
     monkeypatch.setattr(webui, "_has_local_worker_activity", lambda _sid: False)
     monkeypatch.setattr(webui, "_active_chat_by_session", {})
@@ -181,7 +185,7 @@ def test_recover_interrupted_react_sessions_schedules_every_candidate(monkeypatc
     import webui
 
     scheduled = []
-    monkeypatch.setattr(webui, "_discover_recoverable_react_sessions", lambda: ["s1", "s2"])
+    monkeypatch.setattr(webui, "_iter_recoverable_react_sessions", lambda: iter(["s1", "s2"]))
     monkeypatch.setattr(
         webui,
         "_schedule_react_recovery",
@@ -192,6 +196,129 @@ def test_recover_interrupted_react_sessions_schedules_every_candidate(monkeypatc
 
     assert result == ["s1", "s2"]
     assert scheduled == ["s1", "s2"]
+
+
+def test_recovery_schedules_first_candidate_before_scan_finishes(monkeypatch):
+    import threading
+    import webui
+
+    release_scan = threading.Event()
+
+    def candidates():
+        yield "first"
+        assert release_scan.wait(3)
+        yield "second"
+
+    monkeypatch.setattr(webui, "_iter_recoverable_react_sessions", candidates)
+
+    async def run():
+        first_scheduled = asyncio.Event()
+        scheduled = []
+
+        def schedule(sid):
+            scheduled.append(sid)
+            if sid == "first":
+                first_scheduled.set()
+            return True
+
+        monkeypatch.setattr(webui, "_schedule_react_recovery", schedule)
+        task = asyncio.create_task(webui.recover_interrupted_react_sessions())
+        await asyncio.wait_for(first_scheduled.wait(), 2)
+        assert not task.done()
+        release_scan.set()
+        assert await task == ["first", "second"]
+        assert scheduled == ["first", "second"]
+
+    asyncio.run(run())
+
+
+def test_live_fence_owner_blocks_recovery_before_snapshot_read(monkeypatch):
+    import webui
+    from run_ownership import RunFenceOwner
+    from workflow_extensions import session_workflows
+
+    monkeypatch.setattr(session_workflows, "continuation_source", lambda _sid: "")
+    monkeypatch.setattr(webui, "_has_local_worker_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("live", 1234))
+    monkeypatch.setattr(
+        webui, "_runtime_v2_snapshot",
+        lambda _sid: (_ for _ in ()).throw(AssertionError("live writer must not be inspected")),
+    )
+
+    assert webui._is_recoverable_react_session("foreign-live") is False
+
+
+def test_dead_fence_owner_bypasses_heartbeat_grace(monkeypatch):
+    import webui
+    from run_ownership import RunFenceOwner
+    from workflow_extensions import session_workflows
+
+    cleanup_calls = []
+
+    class FakeSessionManager:
+        @staticmethod
+        def can_continue_react_session(_sid):
+            return True
+
+    monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
+    monkeypatch.setattr(session_workflows, "continuation_source", lambda _sid: "")
+    monkeypatch.setattr(webui, "_has_local_worker_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("dead", 1234))
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {"active_runs": [{"run_id": "old"}]})
+    monkeypatch.setattr(
+        webui, "_runtime_v2_active_runs_are_recent",
+        lambda _snapshot: (_ for _ in ()).throw(AssertionError("dead owner needs no grace")),
+    )
+    monkeypatch.setattr(
+        webui, "_cleanup_orphan_runtime_v2_active_runs",
+        lambda sid, reason, respect_grace: cleanup_calls.append((sid, reason, respect_grace)) or 1,
+    )
+    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
+    monkeypatch.setattr(webui, "_runtime_v2_auto_resume_pending", lambda _sid: True)
+
+    assert webui._is_recoverable_react_session("old") is True
+    assert cleanup_calls == [("old", "no_local_activity", False)]
+
+
+def test_orphan_cleanup_rechecks_live_owner_under_session_lock(monkeypatch, tmp_path):
+    import agent_loop
+    import runtime_v2
+    import webui
+    from run_ownership import RunFenceOwner
+
+    class FakeSessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(agent_loop, "session_manager", FakeSessionManager())
+    monkeypatch.setattr(runtime_v2, "runtime_v2_primary", lambda: True)
+    monkeypatch.setattr(webui, "_has_local_run_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_has_running_subagent_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("live", 321))
+    monkeypatch.setattr(
+        webui, "_runtime_v2_snapshot",
+        lambda _sid: (_ for _ in ()).throw(AssertionError("live owner must not be interrupted")),
+    )
+
+    assert webui._cleanup_orphan_runtime_v2_active_runs("foreign-live") == 0
+
+
+def test_targeted_recovery_does_not_wait_for_global_scan(monkeypatch):
+    import webui
+
+    class FakeSessionManager:
+        @staticmethod
+        def get_session_summary(_sid):
+            return {"id": "visible", "archived": False}
+
+    scheduled = []
+    monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
+    monkeypatch.setattr(webui, "_is_recoverable_react_session", lambda sid: sid == "visible")
+    monkeypatch.setattr(webui, "_schedule_react_recovery", lambda sid: scheduled.append(sid) or True)
+
+    assert asyncio.run(webui.recover_react_session("visible")) is True
+    assert scheduled == ["visible"]
 
 
 def test_auto_resume_is_not_pending_while_human_interaction_waits(monkeypatch):
@@ -322,6 +449,22 @@ def test_recover_sessions_endpoint_reports_all_scheduled_sessions(monkeypatch):
     payload = json.loads(response.body.decode("utf-8"))
 
     assert payload == {"ok": True, "scheduled": ["s1", "s2"], "count": 2}
+
+
+def test_recover_sessions_endpoint_can_prioritize_one_session(monkeypatch):
+    import webui
+
+    async def fake_targeted(sid):
+        assert sid == "visible"
+        return True
+
+    monkeypatch.setattr(webui, "recover_react_session", fake_targeted)
+    monkeypatch.setattr(
+        webui, "recover_interrupted_react_sessions",
+        lambda: (_ for _ in ()).throw(AssertionError("targeted request must not scan all sessions")),
+    )
+    response = asyncio.run(webui.recover_sessions("visible"))
+    assert json.loads(response.body.decode("utf-8"))["scheduled"] == ["visible"]
 
 
 def test_http_continue_uses_same_start_reservation_as_background_recovery(monkeypatch):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import uuid
 from collections import defaultdict, deque
 from typing import Any, AsyncGenerator, Deque, Dict, Set, Tuple
 
@@ -11,6 +12,7 @@ _recent_ephemeral: Dict[str, Deque[dict]] = defaultdict(lambda: deque(maxlen=400
 _live_delta_snapshots: Dict[str, Dict[Tuple[Any, ...], dict]] = defaultdict(dict)
 _live_state_snapshots: Dict[str, Dict[Tuple[Any, ...], dict]] = defaultdict(dict)
 _seq_by_session: Dict[str, int] = defaultdict(int)
+_event_bus_epoch = uuid.uuid4().hex
 _lock = threading.Lock()
 _event_listeners: list = []
 
@@ -66,6 +68,7 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
         if event.get("seq") is not None and event.get("seq_scope") != "event_bus":
             event.setdefault("source_seq", event.get("seq"))
         event["event_bus_seq"] = event_bus_seq
+        event["event_bus_epoch"] = _event_bus_epoch
         event["seq_scope"] = "event_bus"
         event["seq"] = event_bus_seq
         event_type = str(event.get("type") or "")
