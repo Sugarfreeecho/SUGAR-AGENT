@@ -32,7 +32,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
@@ -2094,13 +2094,13 @@ def _read_file_sniff_unreadable_text(path: Path) -> Optional[str]:
         return f"Failed to read file: {e}"
     # 先识别常见格式（其头部可能含 \\x00，如 JPEG APP0）
     if len(head) >= 3 and head[:3] == b"\xff\xd8\xff":
-        return "File appears to be JPEG. read_file is for text; use image tools or download and convert."
+        return "File appears to be JPEG image content, but its extension is not an image extension; rename or copy it to a .jpg file and read it again to view it."
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "File appears to be PNG. read_file is for text; use image tools or download and convert."
+        return "File appears to be PNG image content, but its extension is not an image extension; rename or copy it to a .png file and read it again to view it."
     if head.startswith((b"GIF87a", b"GIF89a")):
-        return "File appears to be GIF. read_file is for text; use image tools or download and convert."
+        return "File appears to be GIF image content, but its extension is not an image extension; rename or copy it to a .gif file and read it again to view it."
     if head.startswith(b"RIFF") and b"WEBP" in head[:16]:
-        return "File appears to be WebP. read_file is for text; use image tools or download and convert."
+        return "File appears to be WebP image content, but its extension is not an image extension; rename or copy it to a .webp file and read it again to view it."
     if head.startswith(b"%PDF"):
         return "File appears to be PDF. Convert to text or Markdown first; do not read as plain text."
     if b"\x00" in head:
@@ -2109,6 +2109,89 @@ def _read_file_sniff_unreadable_text(path: Path) -> Optional[str]:
             "Do not use read_file for binary; use web_download, run_shell, or convert first."
         )
     return None
+
+
+# read_file 透明读图：命中这些扩展名时直接走附件准入，返回 [文本信封, image 块]。
+_READ_FILE_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+
+
+def _image_downscale_note(ref: Dict[str, Any]) -> str:
+    """归一化缩过图时给出回原图的坐标换算提示（对齐 DSH read_image 信封）。"""
+    original = ref.get("originalDimensions")
+    if not isinstance(original, dict):
+        return ""
+    try:
+        ow, oh = int(original["width"]), int(original["height"])
+        w, h = int(ref["width"]), int(ref["height"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    if not (ow and oh and w and h):
+        return ""
+    x, y = ow / w, oh / h
+    fx, fy = f"{x:.2f}", f"{y:.2f}"
+    advice = (
+        f"multiply coordinates by {fx}"
+        if fx == fy
+        else f"multiply x coordinates by {fx} and y coordinates by {fy}"
+    )
+    return f" (downscaled from {ow}x{oh} px; {advice} to locate features in the original file)"
+
+
+def _read_file_image_error(display: str, store: Any, exc: Exception) -> str:
+    """把附件准入错误映射为模型可恢复的纯文本说明。"""
+    code = str(getattr(exc, "code", "") or "")
+    if code == "IMAGES_TOO_LARGE":
+        limits = getattr(store, "limits", None)
+        quota = ""
+        if limits is not None:
+            quota = (
+                f" (limits: {limits.max_image_bytes} bytes, {limits.max_image_pixels} pixels, "
+                f"max side {limits.max_image_dimension} px)"
+            )
+        return f"Error: image too large to view: {display}{quota}. Downscale it first and read the smaller copy."
+    if code == "UNSUPPORTED_IMAGE_TYPE":
+        return (
+            f"Error: cannot decode {display} as an image; read_file presents PNG/JPEG/WebP/GIF/BMP files. "
+            "The file may be truncated, corrupt, or in a different format."
+        )
+    if code == "ATTACHMENT_QUOTA_EXCEEDED":
+        return f"Error: attachment storage is full; cannot stage {display} for viewing."
+    if code == "ATTACHMENT_WRITE_FAILED":
+        return f"Error: could not store a normalized copy of {display}: {exc}"
+    return f"Error: could not read image {display}" + (f" ({code})" if code else "") + f": {exc}"
+
+
+def _read_file_image_output(path: Path) -> Any:
+    """把图片文件读成模型可看的 [文本信封, image 块]。
+
+    复用附件准入（字节/像素/边长校验、BMP 转换、归一化、内容寻址去重），
+    失败时返回可恢复的纯文本错误。路径与敏感资源校验由调用方完成。
+    """
+    display = _format_path_for_tool_output(path)
+    try:
+        from attachments import AttachmentError, get_attachment_store
+
+        store = get_attachment_store()
+    except Exception as exc:
+        return f"Error: image support is unavailable ({exc}); {display} was not read."
+    try:
+        ref = store.save_path(path)
+    except AttachmentError as exc:
+        return _read_file_image_error(display, store, exc)
+    except Exception as exc:
+        return f"Error: could not read image {display}: {exc}"
+    envelope = (
+        f"<path>{display}</path>\n"
+        f"<type>image</type>\n"
+        f"<content>\n"
+        f"{ref.get('mediaType')} image, {ref.get('width')}x{ref.get('height')} px, "
+        f"{ref.get('bytes')} bytes{_image_downscale_note(ref)}\n"
+        f"</content>"
+    )
+    return [
+        {"type": "text", "text": envelope},
+        {"type": "image", "attachment": ref},
+    ]
 
 
 def _fuzzy_find_replacement_segment(content: str, search: str) -> Tuple[Optional[str], Optional[str]]:
@@ -2737,9 +2820,12 @@ def read_file(
     start_line: Optional[int] = None,
     end_line: Optional[int] = None,
     line_count: Optional[int] = None,
-) -> str:
+) -> Union[str, List[Dict[str, Any]]]:
     """
-    按行读取文件。推荐提供 start_line / line_count；旧 end_line 参数仍兼容。
+    按行读取文本文件，或直接查看图片文件（PNG/JPEG/WebP/GIF/BMP）。
+    文本：推荐提供 start_line / line_count；旧 end_line 参数仍兼容；二进制嗅探保持原行为。
+    图片：命中图片扩展名时忽略行范围参数，返回 [文本信封, image 块]；大图自动归一化/缩放，
+    不要另行安装图片库或写转换脚本；模型不支持图片输入时由请求投影降级为省略文案。
     路径不限制在 WORK_DIR（平台绝对路径可指向任意可读位置；相对/虚拟 / 同以往映射到工作区）。
     目标文件：`path`（主）或同义 `target_directory`，或历史别名 `file_path`。
 
@@ -2766,6 +2852,10 @@ def read_file(
         st = path.stat()
     except Exception as e:
         return f"Failed to read file: {e}"
+
+    if path.suffix.lower() in _READ_FILE_IMAGE_SUFFIXES:
+        # 图片分支：行范围参数对图片无意义，直接返回可展示的多模态结果。
+        return _read_file_image_output(path)
 
     if st.st_size > _read_file_range_max_bytes():
         lim = _read_file_range_max_bytes()
@@ -4693,9 +4783,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "read_file",
-        "Read a line range from a text file (virtual `/` under the workspace or an allowed OS-absolute path). "
-        "Do not treat PDF/PPTX/spreadsheets/binary as plain text—convert or probe with code first. "
-        "Use start_line plus line_count (default 200). Reuse exact paths returned by ls/glob/grep; do not guess path components. Legacy end_line remains accepted internally.",
+        "Read a text file by line range, or view an image file (PNG/JPEG/WebP/GIF/BMP) directly — images are returned "
+        "visually and larger ones are downscaled automatically (do not install image libraries or write converters); "
+        "line-range parameters are ignored for images. "
+        "Text: virtual `/` under the workspace or an allowed OS-absolute path; use start_line plus line_count (default 200); legacy end_line remains accepted internally. "
+        "Do not treat PDF/PPTX/spreadsheets/other binary as plain text—convert or probe with code first. "
+        "Reuse exact paths returned by ls/glob/grep; do not guess path components.",
         {
             "path": {"type": "string", "description": "File path (virtual / or OS absolute)."},
             "start_line": {

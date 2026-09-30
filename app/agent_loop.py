@@ -6214,7 +6214,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     control_result = outcome.metadata.get("control_result")
                     if json_output and not isinstance(raw_result, str):
                         result_str = json.dumps(raw_result, ensure_ascii=False, default=str)
-                    elif read_output:
+                    elif read_output and isinstance(raw_result, str):
+                        # 仅文本结果需要按行折叠；结构化结果走下面的图片块通道。
                         result_str = _wrap_read_only_tool_output_lines(raw_result)
                     else:
                         result_str = redact_sensitive_tool_text(raw_result)
@@ -6944,12 +6945,20 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     await _workflow_callbacks().call_async("pause", state, hook_stop_reason, emit)
                 if extra_context and isinstance(result, dict) and result.get("type") == "tool":
                     suffix = f"\n\n[Hook additional context]\n{extra_context}"
-                    result["tool_detail_llm"] = str(
-                        result.get("tool_detail_llm") or result.get("result") or ""
-                    ) + suffix
+                    current_detail = result.get("tool_detail_llm") or result.get("result") or ""
+                    if isinstance(current_detail, list):
+                        # 结构化结果（如工具返回的图片块）必须保持块数组；字符串化会
+                        # 毁掉 image 引用，这里把 Hook 附加上下文追加为独立文本块。
+                        result["tool_detail_llm"] = [
+                            *current_detail,
+                            {"type": "text", "text": f"[Hook additional context]\n{extra_context}"},
+                        ]
+                    else:
+                        result["tool_detail_llm"] = str(current_detail) + suffix
                 return result
 
             # ---------- 2.6 调用 LLM ----------
+            _pre_api_timing_mark(pre_api_timings, "post_config_setup", _t_post_config_setup)
             _t_pre_api = time.perf_counter()
             await _await_context_policy_idle_for_session(state, emit)
             _pre_api_timing_mark(pre_api_timings, "context_policy_wait_pre_api", _t_pre_api)
