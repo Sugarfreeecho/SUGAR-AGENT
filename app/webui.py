@@ -627,6 +627,10 @@ def _reserve_session_chat_start(sid: str, run_id: str = "") -> Optional[str]:
     x = str(sid or "").strip()
     if not x:
         return ""
+    # A child task owns its session even if a stale follow-up takeover left
+    # interrupt_reason=followup behind. Never start a competing /chat writer.
+    if _is_subagent_execution_active(x):
+        return None
     with _chat_start_lock:
         if x in _chat_starting_by_session:
             return None
@@ -1643,8 +1647,7 @@ def _session_run_state_fields(sid: str) -> dict:
         # lifecycle/recovery paths, never to GET /sessions or busy checks.
         v2_info = _runtime_v2_active_run_info(sid)
         if not v2_info and _is_subagent_execution_active(sid):
-            v2_info = {"session_id": sid, "run_active": True,
-                       "subagent": True, "runtime_v2": True}
+            v2_info = _session_run_state_fields_light(sid).get("active_run")
         if not v2_info:
             return {
                 "stream_active": False,
@@ -1705,12 +1708,23 @@ def _session_run_state_fields_light(sid: str) -> dict:
     subagent_active = _is_subagent_execution_active(sid)
     run_active = bool(local_run_active or starting or subagent_active)
     started_at = None
+    subagent_run_id = ""
     if local_run_active:
         started_at = (
             local_run_info.get("started_at")
             if isinstance(local_run_info, dict)
             else get_run_started_at(sid)
         )
+    if subagent_active:
+        try:
+            from agent_subagent import subagent_registry
+
+            subagent_run_id = subagent_registry.running_runs().get(sid, "")
+            if subagent_run_id and not started_at:
+                meta = session_manager._load_metadata(sid) or {}
+                started_at = meta.get("subagent_run_started_at") or None
+        except Exception:
+            logger.debug("Failed to read active subagent run identity for %s", sid, exc_info=True)
     try:
         from runtime_v2 import runtime_v2_primary
         is_runtime_v2 = bool(runtime_v2_primary())
@@ -1723,6 +1737,7 @@ def _session_run_state_fields_light(sid: str) -> dict:
         "stream_connections": stream_connections,
         "active_run": dict(
             local_run_info or {"session_id": sid},
+            run_id=(local_run_info or {}).get("run_id") or subagent_run_id,
             stream_connections=stream_connections,
             run_active=run_active,
             started_at=started_at,
@@ -1788,6 +1803,20 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         }
         if run_state.get("active_run"):
             active_runs.append(run_state["active_run"])
+    # Child sessions live under their parent and are absent from list_sessions.
+    # Publish their run identities separately so the client can attach SSE and
+    # keep follow-ups in append mode while viewing a child page.
+    try:
+        from agent_subagent import subagent_registry
+
+        root_ids = {str(s.get("id") or "") for s in sessions}
+        for child_id in subagent_registry.running_runs():
+            if child_id not in root_ids:
+                child_state = _session_run_state_fields_light(child_id)
+                if child_state.get("active_run"):
+                    active_runs.append(child_state["active_run"])
+    except Exception:
+        logger.exception("Failed to include active subagent runs in /sessions/state")
     t_after_decorate = _time.perf_counter()
     out = {
         "seq": int(_time.time() * 1000),
@@ -3110,31 +3139,48 @@ async def get_session_detail(
     """单条会话摘要（与列表项结构一致），供侧栏增量更新。"""
     def _build_detail_response() -> JSONResponse:
         s = session_manager.get_session_summary(session_id)
+        if not s:
+            # Nested subagents are intentionally absent from the root sidebar
+            # index, but their addressed page needs the same detail endpoint.
+            try:
+                meta = session_manager._load_metadata(session_id) or {}
+            except (ValueError, OSError):
+                meta = {}
+            if meta.get("is_subagent") and meta.get("parent_session_id"):
+                s = dict(meta, id=session_id)
         _cleanup_stale_active_chat()
         if not s:
             return JSONResponse(content={"error": "not found"}, status_code=404)
         sid = s.get("id")
         if sid:
-            run_state = _session_run_state_fields(str(sid))
+            is_child = bool(s.get("is_subagent"))
+            run_state = (
+                _session_run_state_fields_light(str(sid))
+                if is_child else _session_run_state_fields(str(sid))
+            )
             s["stream_active"] = bool(run_state["stream_active"])
             s["run_active"] = bool(run_state["run_active"])
             s["run_started_at"] = run_state["run_started_at"]
             s["active_run"] = run_state.get("active_run")
             s["title_generation_pending"] = is_session_title_generation_pending(str(sid))
             s["pending_human_interactions"] = _session_pending_human_counts(str(sid))
-            try:
-                s["react_can_continue"] = session_manager.can_continue_react_session(str(sid))
-            except Exception:
+            if is_child:
                 s["react_can_continue"] = False
-            from workflow_extensions import session_workflows
-            workflow_source = session_workflows.continuation_source(str(sid))
-            s["react_can_continue"] = bool(s["react_can_continue"] or workflow_source)
-            s["react_auto_resume"] = bool(
-                not workflow_source
-                and s["react_can_continue"]
-                and int(s["pending_human_interactions"].get("total") or 0) == 0
-                and _runtime_v2_auto_resume_pending(str(sid))
-            )
+                s["react_auto_resume"] = False
+            else:
+                try:
+                    s["react_can_continue"] = session_manager.can_continue_react_session(str(sid))
+                except Exception:
+                    s["react_can_continue"] = False
+                from workflow_extensions import session_workflows
+                workflow_source = session_workflows.continuation_source(str(sid))
+                s["react_can_continue"] = bool(s["react_can_continue"] or workflow_source)
+                s["react_auto_resume"] = bool(
+                    not workflow_source
+                    and s["react_can_continue"]
+                    and int(s["pending_human_interactions"].get("total") or 0) == 0
+                    and _runtime_v2_auto_resume_pending(str(sid))
+                )
             if include_subagents:
                 _attach_subagent_sidebar_fields(s, str(sid))
         else:
@@ -3271,7 +3317,11 @@ def _build_runtime_v2_session_subagents_response(session_id: str, lite: bool) ->
         path_resolver=session_manager._resolve_session_path,
     )
     task_rows = store.list_tasks(session_id)
-    parent_snapshot = _runtime_v2_snapshot(session_id)
+    # The lightweight catalog is polled while a parent/child page is visible.
+    # Current task rows already contain the member/status facts; rebuilding a
+    # large parent Runtime snapshot on every poll can take seconds and makes
+    # the capsule look stuck. Keep snapshot fallback for older state-only data.
+    parent_snapshot = _runtime_v2_snapshot(session_id) if not lite or not task_rows else {}
     subagent_states = parent_snapshot.get("subagents") if isinstance(parent_snapshot, dict) else {}
     if not isinstance(subagent_states, dict):
         subagent_states = {}
@@ -4711,6 +4761,17 @@ async def recover_session_steer(session_id: str, steer_id: str):
         return JSONResponse(content=current, status_code=404)
     state_name = str(item.get("state") or "")
     if state_name == "consumed":
+        return JSONResponse(content=current)
+    if _is_subagent_execution_active(session_id):
+        # The browser can lose a child run from its root-only state snapshot.
+        # Recovery must never turn an append steer into a competing /chat run
+        # while task() still owns this child. Repair previously stranded rows.
+        if state_name == "restarting":
+            restored = transition_session_steer(
+                session_id, steer_id, {"restarting"}, "queued",
+                replacement_run_id="", claimed_by="", claimed_at=0,
+            )
+            return JSONResponse(content=restored, status_code=200 if restored.get("ok") else 409)
         return JSONResponse(content=current)
     if state_name == "restarting" and item.get("replacement_run_id"):
         return JSONResponse(content=current)

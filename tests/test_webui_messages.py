@@ -905,6 +905,9 @@ def test_subagent_list_prefers_runtime_v2_store(monkeypatch, tmp_path):
     })
     fake = _NoLegacyUiSessionManager(tmp_path, [])
     monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: (_ for _ in ()).throw(
+        AssertionError("lite catalog must use task rows without rebuilding the parent snapshot")
+    ))
 
     response = webui._build_session_subagents_response("s1", lite=True)
     payload = _json_response_payload(response)

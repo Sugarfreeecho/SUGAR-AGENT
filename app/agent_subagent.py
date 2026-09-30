@@ -484,6 +484,15 @@ class SubagentTaskRegistry:
             t = self._tasks.get(child_id)
         return t is not None and not t.done()
 
+    def running_runs(self) -> Dict[str, str]:
+        """Return active child-to-run identities for read-only state snapshots."""
+        with self._lock:
+            return {
+                child_id: run_id
+                for child_id, run_id in self._run_ids.items()
+                if child_id not in self._tasks or not self._tasks[child_id].done()
+            }
+
     def owns(self, child_id: str, run_id: str) -> bool:
         with self._lock:
             return self._run_ids.get(child_id) == run_id
