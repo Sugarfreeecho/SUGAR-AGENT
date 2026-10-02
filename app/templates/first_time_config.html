@@ -968,13 +968,19 @@
           metadata: model,
         }),
       });
-      const result = await resp.json();
+      const result = await resp.json().catch(() => ({
+        ok: false,
+        error: 'HTTP ' + resp.status + (resp.statusText ? ' ' + resp.statusText : '') + '（响应无法解析为 JSON）',
+      }));
       if (!result.ok) throw new Error(result.error || '探测失败');
       const merged = Object.assign({}, model, result.model || {});
       applyDiscoveredModel(merged);
+      const probeDetail = String((result.model && result.model.probe_error) || '').trim();
       setModelDiscoveryStatus(result.model && result.model.probe_succeeded
         ? '已获取上下文长度；探测请求可能已消耗 API 额度。'
-        : '未从 API 错误消息取得真实上下文窗口，已保留列表/默认窗口；探测请求可能已消耗 API 额度。');
+        : (probeDetail
+          ? '上下文探测失败，已使用列表/默认窗口：' + probeDetail
+          : '未从 API 错误消息取得真实上下文窗口，已保留列表/默认窗口；探测请求可能已消耗 API 额度。'));
     } catch (err) {
       setModelDiscoveryStatus('获取上下文长度失败：' + String(err.message || err));
     } finally {

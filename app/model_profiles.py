@@ -820,6 +820,39 @@ def probe_context_window_from_error(
     timeout: float = CONTEXT_PROBE_TIMEOUT,
     llm_type: str = "openai-compatible",
 ) -> int:
+    """Compatibility wrapper that keeps only the probed token count."""
+    return probe_context_window_from_error_detail(
+        client, base_url, headers, model_id, timeout=timeout, llm_type=llm_type
+    )[0]
+
+
+def _probe_failure_snippet(value: Any, limit: int = 400) -> str:
+    snippet = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(snippet) > limit:
+        snippet = snippet[: limit - 1] + "…"
+    return snippet
+
+
+def _probe_status_line(response: httpx.Response) -> str:
+    status = "HTTP %s" % response.status_code
+    reason = str(getattr(response, "reason_phrase", "") or "").strip()
+    return status + (" " + reason if reason else "")
+
+
+def probe_context_window_from_error_detail(
+    client: httpx.Client,
+    base_url: str,
+    headers: dict[str, str],
+    model_id: str,
+    timeout: float = CONTEXT_PROBE_TIMEOUT,
+    llm_type: str = "openai-compatible",
+) -> tuple[int, str]:
+    """Probe the real context window and keep the raw failure detail.
+
+    Returns ``(context_window, failure_detail)``.  The detail is empty on
+    success; otherwise it carries the transport exception or the raw HTTP
+    status and body so callers can surface the real reason to the UI/logs.
+    """
     provider = resolve_provider(llm_type, base_url, model_id)
     if provider is LLMProvider.OPENAI:
         url = responses_url_for_base(base_url)
@@ -828,7 +861,7 @@ def probe_context_window_from_error(
     else:
         url = chat_completions_url_for_base(base_url)
     if not url or not str(model_id or "").strip():
-        return 0
+        return 0, "missing base_url or model"
     probe_text = "x " * CONTEXT_PROBE_TOKEN_COUNT
     if provider is LLMProvider.OPENAI:
         payload = {
@@ -846,10 +879,12 @@ def probe_context_window_from_error(
         }
     try:
         resp = client.post(url, headers=headers, json=payload, timeout=timeout)
-    except httpx.HTTPError:
-        return 0
+    except httpx.HTTPError as exc:
+        return 0, _probe_failure_snippet(f"{type(exc).__name__}: {exc}")
+    status_line = _probe_status_line(resp)
     if resp.status_code != 400:
-        return 0
+        detail = _probe_failure_snippet(resp.text)
+        return 0, (status_line + ": " + detail) if detail else status_line
     bodies: list[Any] = [resp.text]
     try:
         bodies.append(resp.json())
@@ -858,8 +893,9 @@ def probe_context_window_from_error(
     for body in bodies:
         context_window = extract_context_window_from_error(body)
         if context_window > 0:
-            return context_window
-    return 0
+            return context_window, ""
+    detail = _probe_failure_snippet(resp.text)
+    return 0, (status_line + ": " + detail) if detail else status_line
 
 
 def probe_model_context(
@@ -890,9 +926,10 @@ def probe_model_context(
         else:
             headers["Authorization"] = "Bearer " + str(api_key).strip()
     probed_context = 0
+    probe_error = ""
     if headers:
         with httpx.Client(timeout=timeout) as client:
-            probed_context = probe_context_window_from_error(
+            probed_context, probe_error = probe_context_window_from_error_detail(
                 client,
                 base,
                 headers,
@@ -915,6 +952,7 @@ def probe_model_context(
         "output_limit_source": limits["output_source"],
         "probe_attempted": bool(headers),
         "probe_succeeded": probed_context > 0,
+        "probe_error": "" if probed_context > 0 else str(probe_error or ""),
     }
 
 

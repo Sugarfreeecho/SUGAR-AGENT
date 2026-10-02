@@ -3790,6 +3790,9 @@ async def probe_model_profile(req: Request):
         model = await run_in_threadpool(model_profiles.probe_model_context, base_url, api_key, model_id, fallback)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    probe_error = str((model or {}).get("probe_error") or "").strip()
+    if probe_error:
+        logger.warning("model context probe failed: model=%s detail=%s", model_id, probe_error)
     return JSONResponse({"ok": True, "model": model})
 
 

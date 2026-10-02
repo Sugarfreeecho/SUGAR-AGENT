@@ -442,6 +442,26 @@ def test_probe_context_window_from_http_400_error():
     assert seen_urls == ["https://api.example.com/v1/chat/completions"]
 
 
+def test_probe_context_window_detail_reports_unmatched_400_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {"message": "model `demo-model` not found"}},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        window, detail = model_profiles.probe_context_window_from_error_detail(
+            client,
+            "https://api.example.com/v1",
+            {"Authorization": "Bearer test"},
+            "demo-model",
+        )
+
+    assert window == 0
+    assert "HTTP 400" in detail
+    assert "not found" in detail
+
+
 def test_discover_models_only_fetches_model_list(monkeypatch):
     seen_paths = []
 
@@ -498,6 +518,51 @@ def test_probe_model_context_uses_context_probe_for_one_selected_model(monkeypat
     assert model["max_output_tokens"] == 8192
     assert model["limit_source"] == "probe"
     assert model["probe_succeeded"] is True
+    assert model["probe_error"] == ""
+
+
+def test_probe_model_context_returns_raw_error_detail(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "Invalid API key provided"}})
+
+    class MockClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
+
+    model = model_profiles.probe_model_context(
+        "https://api.example.com/v1",
+        "bad-key",
+        "demo-model",
+        {"max_output_tokens": 8192},
+    )
+
+    assert model["probe_attempted"] is True
+    assert model["probe_succeeded"] is False
+    assert "HTTP 401" in model["probe_error"]
+    assert "Invalid API key provided" in model["probe_error"]
+
+
+def test_probe_model_context_returns_transport_error_detail(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    class MockClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
+
+    model = model_profiles.probe_model_context(
+        "https://api.example.com/v1",
+        "test-key",
+        "demo-model",
+        {},
+    )
+
+    assert model["probe_succeeded"] is False
+    assert "connection refused" in model["probe_error"]
 
 
 def test_probe_model_context_uses_responses_protocol(monkeypatch):
@@ -825,6 +890,19 @@ def test_advanced_model_profile_list_wires_drag_drop_reordering():
     assert 'id="model-system-prompt-mode"' in html
     assert 'system_prompt_mode:fieldValue(modelEls.systemPrompt)' in html
     assert "p.multimodal_source===\"failure\"" in html
+
+
+def test_probe_failure_surfaces_raw_error_in_model_config_ui():
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "app" / "templates" / "advance_config.html").read_text(encoding="utf-8")
+    wizard = (root / "app" / "templates" / "first_time_config.html").read_text(encoding="utf-8")
+    i18n = (root / "app" / "templates" / "static" / "setup_i18n.js").read_text(encoding="utf-8")
+
+    assert 'detail=String(j.model&&j.model.probe_error||"").trim()' in html
+    assert '上下文探测失败，已使用列表/默认窗口："+detail' in html
+    assert "result.model.probe_error" in wizard
+    assert "'上下文探测失败，已使用列表/默认窗口：' + probeDetail" in wizard
+    assert "Context probe failed; using listed/default window: $1" in i18n
 
 
 def test_reorder_profiles_persists_dragged_priority(tmp_path):
