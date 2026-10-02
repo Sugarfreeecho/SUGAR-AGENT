@@ -846,6 +846,7 @@ def test_ui_translation_does_not_mutate_conversation_content():
 def test_followup_pending_queue_supports_manual_drag_reorder():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     css = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
 
     assert "function moveFollowupQueueItem" in sse
     assert "followupDragState" in sse
@@ -863,6 +864,47 @@ def test_followup_pending_queue_supports_manual_drag_reorder():
     assert ".followup-queue-row.is-dragging" in css
     assert ".followup-queue-row.is-drag-over-before" in css
     assert "touch-action: none" in css
+
+    # A native HTML5 drag makes Chromium fire pointercancel on the mouse pointer.
+    # Tearing the drag state down there leaves every dragover refusing the drop,
+    # so the queue silently stops reordering; only touch drags may end that way.
+    assert "function onFollowupPointerCancel" in sse
+    assert "state.mode !== 'touch'" in sse
+    assert "ev.pointerType !== 'touch' && ev.pointerType !== 'pen'" in sse
+    assert "grip.addEventListener('pointercancel', onFollowupPointerCancel)" in sse
+
+    # Hit target: the drag grip carries the glyph and the order badge together.
+    assert "followup-queue-grip" in sse
+    assert "grip.draggable = !item.status" in sse
+    assert "grip.setAttribute('aria-keyshortcuts', 'ArrowUp ArrowDown')" in sse
+    assert ".followup-queue-grip" in css
+    assert "min-width: 2.55rem" in css
+
+    # Drop zones: the gap between rows and the panel padding resolve to the
+    # nearest pending row, and the caret comes from the same resolution that
+    # decides the drop, so a visible caret always drops where it points.
+    assert "function resolveFollowupDropTarget" in sse
+    assert "function resolveFollowupDropTargetAtPoint" in sse
+    assert "function applyFollowupDropIndicator" in sse
+    assert "applyFollowupDropIndicator(panel, resolved.row, resolved.placement)" in sse
+    assert ".followup-queue-row.is-drag-over-after:after" in css
+    assert ".followup-queue-panel.is-dragging" in css
+
+    # Long lists: holding the pointer at a panel edge keeps scrolling, and the
+    # whole row is the drag image instead of the 17px glyph.
+    assert "function followupEdgeScrollDelta" in sse
+    assert "function trackFollowupAutoScroll" in sse
+    assert "function runFollowupAutoScroll" in sse
+    assert "setDragImage" in sse
+
+    # Keyboard path and drag-safe rendering.
+    assert "function moveFollowupQueueItemByOffset" in sse
+    assert "function focusFollowupQueueGrip" in sse
+    assert "ev.key === 'ArrowUp' ? -1 : (ev.key === 'ArrowDown' ? 1 : 0)" in sse
+    assert "followupDragRenderPending = true" in sse
+    assert "拖拽调整顺序，或按 ↑/↓ 键" in sse
+    assert "'拖拽调整顺序，或按 ↑/↓ 键': 'Drag to reorder, or press ↑/↓'" in i18n
+    assert "共 (\\d+) 条：拖拽或按上下方向键调整顺序" in i18n
 
 
 def test_ui_cache_warmup_delay_runs_inside_background_worker():

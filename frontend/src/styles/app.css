@@ -2890,36 +2890,112 @@ body {
 .followup-queue-row {
     position: relative;
     display: grid;
-    grid-template-columns: 1.2rem 1.3rem minmax(0, 1fr) auto auto auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
     align-items: center;
     gap: 0.36rem;
-    min-height: 2rem;
-    padding: 0.26rem 0.32rem;
+    min-height: 2.1rem;
+    padding: 0.14rem 0.32rem 0.14rem 0.22rem;
     border-radius: 9px;
     background: rgba(255,255,255,0.04);
+    transition: background 0.14s ease;
 }
-.followup-queue-drag {
+/* 握把：拖拽点与序号合并成一个约 36×26px 的命中区。原来只有字形本身
+   （约 17×11px）那么大，鼠标与触控都要瞄得很准才拖得动。 */
+.followup-queue-grip {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 0.26rem;
+    align-self: stretch;
+    min-width: 2.55rem;
+    padding: 0 0.42rem 0 0.3rem;
+    border: 1px solid rgba(var(--text-primary-rgb),0.06);
+    border-radius: 8px;
+    background: rgba(var(--text-primary-rgb),0.045);
     color: var(--text-muted);
-    font-size: 0.8rem;
-    line-height: 1;
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
     touch-action: none;
     -webkit-touch-callout: none;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
 }
-.followup-queue-drag.is-disabled {
-    opacity: 0.32;
-    cursor: default;
+.followup-queue-grip:hover {
+    color: var(--text-primary);
+    background: rgba(var(--accent-rgb),0.14);
+    border-color: rgba(var(--accent-rgb),0.3);
 }
-.followup-queue-drag:active {
+.followup-queue-grip:focus-visible {
+    outline: none;
+    color: var(--text-primary);
+    border-color: rgba(var(--accent-rgb),0.45);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.2);
+}
+.followup-queue-grip:active {
     cursor: grabbing;
 }
+.followup-queue-grip.is-disabled {
+    opacity: 0.34;
+    cursor: default;
+    background: rgba(var(--text-primary-rgb),0.03);
+    border-color: transparent;
+}
+.followup-queue-drag {
+    font-size: 0.82rem;
+    line-height: 1;
+    letter-spacing: -0.06em;
+}
 .followup-queue-row.is-dragging {
+    opacity: 0.4;
+}
+/* 拖拽期：可放置的行提亮，在途行压暗，让“能放到哪”一眼可见。 */
+.followup-queue-panel.is-dragging .followup-queue-row[data-reorderable="true"] {
+    background: rgba(var(--accent-rgb),0.07);
+}
+.followup-queue-panel.is-dragging .followup-queue-row[data-reorderable="false"] {
     opacity: 0.55;
+}
+/* 插入提示：2px 发光横条 + 端点圆点，画在行与行之间的间隙里；
+   间隙本身也是可放置区域（落点解析会吸附到相邻待发送行）。 */
+.followup-queue-row.is-drag-over-before,
+.followup-queue-row.is-drag-over-after {
+    background: rgba(var(--accent-rgb),0.12);
+}
+.followup-queue-row.is-drag-over-before:after,
+.followup-queue-row.is-drag-over-after:after {
+    content: "";
+    position: absolute;
+    left: 0.34rem;
+    right: 0.34rem;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--accent-2);
+    box-shadow: 0 0 10px rgba(var(--accent-rgb),0.55);
+    pointer-events: none;
+}
+.followup-queue-row.is-drag-over-before:after {
+    top: -0.15rem;
+}
+.followup-queue-row.is-drag-over-after:after {
+    bottom: -0.15rem;
+}
+.followup-queue-row.is-drag-over-before:before,
+.followup-queue-row.is-drag-over-after:before {
+    content: "";
+    position: absolute;
+    left: 0.08rem;
+    width: 0.36rem;
+    height: 0.36rem;
+    border-radius: 50%;
+    background: var(--accent-2);
+    box-shadow: 0 0 8px rgba(var(--accent-rgb),0.6);
+    pointer-events: none;
+}
+.followup-queue-row.is-drag-over-before:before {
+    top: -0.23rem;
+}
+.followup-queue-row.is-drag-over-after:before {
+    bottom: -0.23rem;
 }
 .followup-queue-row.is-drag-over-before {
     box-shadow: inset 0 2px 0 var(--accent-2);

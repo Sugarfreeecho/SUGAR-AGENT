@@ -634,6 +634,176 @@ function testReattachRestoresReactGenerationFromHistory() {
     'reconnected rows must continue after the latest historical interrupt generation');
 }
 
+function rowStub(id, reorderable, top, height) {
+  return {
+    dataset: { id: String(id), reorderable: reorderable ? 'true' : 'false' },
+    getBoundingClientRect: () => ({
+      top,
+      bottom: top + height,
+      height,
+      left: 0,
+      right: 120,
+    }),
+  };
+}
+
+function classListStub() {
+  const classes = new Set();
+  return {
+    add: (name) => classes.add(name),
+    remove: (name) => classes.delete(name),
+    contains: (name) => classes.has(name),
+    toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
+    values: () => Array.from(classes),
+  };
+}
+
+function testPointerCancelKeepsNativeDragAlive() {
+  const calls = { ended: 0 };
+  const ctx = context({
+    followupDragState: { mode: 'html5', itemId: 'a', row: null },
+    endFollowupDrag() { calls.ended += 1; },
+  });
+  vm.runInContext(between('function onFollowupPointerCancel', 'function startFollowupTouchDrag'), ctx);
+
+  ctx.onFollowupPointerCancel({ pointerType: 'mouse' });
+  assert.strictEqual(calls.ended, 0,
+    'Chromium fires pointercancel when a native drag takes over the mouse pointer; '
+    + 'tearing the drag state down here makes every following dragover refuse the drop');
+  assert.ok(ctx.followupDragState, 'the html5 drag must survive a mouse pointercancel');
+
+  ctx.onFollowupPointerCancel({ pointerType: 'pen' });
+  assert.strictEqual(calls.ended, 0, 'a pen pointercancel must not tear down an html5 drag either');
+
+  ctx.followupDragState = { mode: 'touch', itemId: 'a', row: null, pointerId: 7 };
+  ctx.onFollowupPointerCancel({ pointerType: 'mouse' });
+  assert.strictEqual(calls.ended, 0, 'a mouse pointercancel must not end a touch drag');
+
+  ctx.onFollowupPointerCancel({ pointerType: 'touch' });
+  assert.strictEqual(calls.ended, 1, 'an interrupted touch drag still has to be cleaned up');
+}
+
+function testDropTargetSnappingCoversGapsAndInFlightRows() {
+  const ctx = context();
+  vm.runInContext(
+    between('function followupQueueRows', 'function resolveFollowupDropTargetAtPoint'),
+    ctx,
+  );
+
+  const panel = (rows) => ({ querySelectorAll: () => rows });
+  const q1 = rowStub('q1', true, 0, 28);
+  const q2 = rowStub('q2', true, 31.4, 28);
+  const q3 = rowStub('q3', true, 62.8, 28);
+  const gapY = (q2.getBoundingClientRect().bottom + q3.getBoundingClientRect().top) / 2;
+
+  const inGap = ctx.resolveFollowupDropTarget(panel([q1, q2, q3]), gapY, q1, null);
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(inGap)),
+    { row: { dataset: { id: 'q2', reorderable: 'true' } }, placement: 'after' },
+    'the 3.4px gap between rows must snap to the pending row above it',
+  );
+
+  const belowLast = ctx.resolveFollowupDropTarget(panel([q1, q2, q3]), 200, q1, null);
+  assert.strictEqual(belowLast.row, q3, 'the panel padding below the list drops after the last row');
+  assert.strictEqual(belowLast.placement, 'after');
+
+  const aboveFirst = ctx.resolveFollowupDropTarget(panel([q1, q2, q3]), -20, q1, null);
+  assert.strictEqual(aboveFirst.row, q2, 'the dragged row is never its own drop target');
+  assert.strictEqual(aboveFirst.placement, 'before', 'dropping above the list inserts at the top');
+
+  // Hovering an in-flight row is valid too: it snaps to the nearest pending row.
+  const sending = rowStub('sending', false, 31.4, 28);
+  const overInFlight = ctx.resolveFollowupDropTarget(panel([q1, sending, q3]), 45, q1, null);
+  assert.strictEqual(overInFlight.row, q3, 'an in-flight row snaps to the next pending row');
+  assert.strictEqual(overInFlight.placement, 'before');
+
+  const hint = ctx.resolveFollowupDropTarget(panel([q1, q2, q3]), 80, q1, q3);
+  assert.strictEqual(hint.row, q3, 'a direct hit keeps the row under the pointer');
+  assert.strictEqual(hint.placement, 'after', 'the lower half of a row inserts after it');
+
+  const onlyInFlight = ctx.resolveFollowupDropTarget(
+    panel([q1, rowStub('a', false, 31.4, 28)]),
+    45,
+    q1,
+    null,
+  );
+  assert.strictEqual(onlyInFlight, null, 'without another pending row there is nothing to reorder against');
+  assert.strictEqual(ctx.resolveFollowupDropTarget(panel([q1]), 10, q1, null), null);
+}
+
+function testEdgeAutoScrollZones() {
+  // The two tuning constants live above the sliced helpers in the same module.
+  const ctx = context({ FOLLOWUP_DRAG_SCROLL_ZONE: 30, FOLLOWUP_DRAG_SCROLL_MAX_STEP: 16 });
+  vm.runInContext(between('function followupEdgeScrollDelta', 'function stopFollowupAutoScroll'), ctx);
+  const rect = { top: 100, bottom: 300, height: 200 };
+
+  assert.strictEqual(ctx.followupEdgeScrollDelta(200, rect), 0, 'the middle of the panel must not scroll');
+  assert.ok(ctx.followupEdgeScrollDelta(104, rect) < 0, 'hugging the top edge scrolls up');
+  assert.ok(ctx.followupEdgeScrollDelta(296, rect) > 0, 'hugging the bottom edge scrolls down');
+  assert.ok(
+    Math.abs(ctx.followupEdgeScrollDelta(101, rect)) > Math.abs(ctx.followupEdgeScrollDelta(128, rect)),
+    'the deeper the pointer sits inside the edge zone, the faster the list scrolls',
+  );
+  assert.strictEqual(ctx.followupEdgeScrollDelta(200, null), 0);
+}
+
+function testKeyboardReorderMovesWithinPendingSlots() {
+  const queue = [
+    { id: 'p1', status: '' },
+    { id: 'sending', status: 'sending' },
+    { id: 'p2', status: '' },
+    { id: 'p3', status: '' },
+  ];
+  const ctx = context({
+    getFollowupQueue: () => queue,
+    persistFollowupQueue() {},
+    renderFollowupQueue() {},
+    document: { getElementById: () => null },
+  });
+  vm.runInContext(between('function moveFollowupQueueItem', 'function withdrawFollowup'), ctx);
+
+  assert.strictEqual(ctx.moveFollowupQueueItemByOffset('s', 'p3', -1), true);
+  assert.deepStrictEqual(
+    queue.map((item) => item.id),
+    ['p1', 'sending', 'p3', 'p2'],
+    'keyboard reorder moves pending rows only; the in-flight row keeps its exact slot',
+  );
+  assert.strictEqual(queue[1].id, 'sending');
+  assert.deepStrictEqual(queue.map((item) => item.order), [0, 1, 2, 3]);
+
+  assert.strictEqual(ctx.moveFollowupQueueItemByOffset('s', 'p1', -1), false,
+    'the first pending row cannot move up');
+  assert.strictEqual(ctx.moveFollowupQueueItemByOffset('s', 'p2', 1), false,
+    'the last pending row cannot move down');
+  assert.strictEqual(ctx.moveFollowupQueueItemByOffset('s', 'sending', -1), false,
+    'in-flight rows are not keyboard-reorderable');
+}
+
+function testDropCaretKeepsASingleIndicator() {
+  const first = rowStub('a', true, 0, 28);
+  const second = rowStub('b', true, 31.4, 28);
+  first.classList = classListStub();
+  second.classList = classListStub();
+  const panel = { querySelectorAll: () => [first, second] };
+  const ctx = context({ followupDropCaret: null });
+  vm.runInContext(
+    between('function followupQueueRows', 'function resolveFollowupDropTargetAtPoint'),
+    ctx,
+  );
+
+  ctx.applyFollowupDropIndicator(panel, first, 'before');
+  assert.ok(first.classList.contains('is-drag-over-before'));
+  ctx.applyFollowupDropIndicator(panel, second, 'after');
+  assert.ok(second.classList.contains('is-drag-over-after'));
+  assert.ok(!first.classList.contains('is-drag-over-before'), 'only one insert caret may be visible');
+
+  ctx.applyFollowupDropIndicator(panel, second, 'after');
+  assert.ok(second.classList.contains('is-drag-over-after'));
+
+  ctx.clearFollowupDragIndicators(panel);
+  assert.strictEqual(second.classList.values().length, 0, 'the caret is dropped when the drag ends');
+}
+
 (async () => {
   await testDispatcherDoesNotConsumePendingRows();
   await testAutoDrainRequiresACompleteIdleBoundary();
@@ -645,6 +815,11 @@ function testReattachRestoresReactGenerationFromHistory() {
   testAppendOptimisticRowCommitsInPlace();
   testStreamingFramesKeepFollowupRenderSignatureStable();
   testReattachRestoresReactGenerationFromHistory();
+  testPointerCancelKeepsNativeDragAlive();
+  testDropTargetSnappingCoversGapsAndInFlightRows();
+  testEdgeAutoScrollZones();
+  testKeyboardReorderMovesWithinPendingSlots();
+  testDropCaretKeepsASingleIndicator();
   process.stdout.write('followup dispatcher runtime checks passed\n');
 })().catch((error) => {
   console.error(error);

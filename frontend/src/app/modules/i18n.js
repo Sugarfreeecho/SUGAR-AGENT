@@ -65,6 +65,8 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '立即发送': 'Send now', '追问发送模式': 'Follow-up send mode', '打断': 'Interrupt', '追加': 'Append', '撤回': 'Withdraw',
     '撤回中': 'Withdrawing', '提交中': 'Submitting', '已追加，等待下一轮': 'Appended, waiting for the next round',
     '已接收，等待插入': 'Received, waiting to insert', '正在接管当前任务': 'Taking over the current task', '发送中': 'Sending', '已发送': 'Sent', '待发送': 'Pending send',
+    '拖拽调整顺序，或按 ↑/↓ 键': 'Drag to reorder, or press ↑/↓',
+    '拖拽调整顺序': 'Drag to reorder',
     '已选择 Skill：': 'Activated Skill: ', '激活 Skill：': 'Activated Skill: ', '追问接管已保留，等待发送通道释放。': 'Follow-up takeover retained; waiting for the send channel to become available.',
     '请求失败': 'Request failed', '撤销失败，请重试。': 'Undo failed. Please try again.'
 });
@@ -583,6 +585,7 @@ function translateUiString(value) {
         .replace(/^恢复实时流失败: (.+)$/, 'Failed to restore live stream: $1')
         .replace(/^追问插入失败: (.+)$/, 'Failed to insert follow-up: $1')
         .replace(/^追问已被接收，无法撤回: (.+)$/, 'The follow-up was accepted and cannot be withdrawn: $1')
+        .replace(/^第 (\d+) 条，共 (\d+) 条：拖拽或按上下方向键调整顺序$/, 'Item $1 of $2: drag or press \u2191/\u2193 to reorder')
         .replace(/^验证：(.+)$/, 'Verification: $1')
         .replace(/【上下文窗口已满，开始压缩】/g, '[Context window full; starting compression]')
         .replace(/【上下文压缩已完成】/g, '[Context compression completed]')

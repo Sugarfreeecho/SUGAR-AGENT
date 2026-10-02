@@ -1482,7 +1482,23 @@ function inputHasSendableText() {
 }
 
 var followupDragState = null;
+var followupDropCaret = null;
+var followupDragRenderPending = false;
+var followupAutoScrollState = null;
 var FOLLOWUP_DRAG_TOUCH_THRESHOLD = 8;
+var FOLLOWUP_DRAG_SCROLL_ZONE = 30;
+var FOLLOWUP_DRAG_SCROLL_MAX_STEP = 16;
+
+function followupQueueRows(panel) {
+    if (!panel || !panel.querySelectorAll) return [];
+    return Array.prototype.slice.call(panel.querySelectorAll('.followup-queue-row'));
+}
+
+function setFollowupDragActive(active) {
+    var panel = document.getElementById('followup-queue-panel');
+    if (!panel || !panel.classList) return;
+    panel.classList.toggle('is-dragging', !!active);
+}
 
 function startFollowupDrag(sessionId, item, row, ev) {
     if (!item || item.status) return;
@@ -1495,30 +1511,77 @@ function startFollowupDrag(sessionId, item, row, ev) {
         itemId: String(item.id),
         row: row,
         mode: 'html5',
+        targetRow: null,
+        after: false,
     };
-    if (row && row.classList) row.classList.add('is-dragging');
     if (ev && ev.dataTransfer) {
         ev.dataTransfer.effectAllowed = 'move';
         try { ev.dataTransfer.setData('text/plain', String(item.id)); } catch (e) { /* ignore */ }
+        // 拖影取整行：只带一个 16px 的握把字形时，用户看不出正在搬哪一条。
+        try {
+            if (row && row.getBoundingClientRect && ev.dataTransfer.setDragImage) {
+                var rect = row.getBoundingClientRect();
+                var offsetX = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+                var offsetY = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
+                ev.dataTransfer.setDragImage(row, offsetX, offsetY);
+            }
+        } catch (e) { /* setDragImage 不可用时退回默认拖影 */ }
     }
+    var draggedRow = row;
+    if (typeof requestAnimationFrame === 'function') {
+        // 等浏览器截完拖影再加变暗样式，否则拖影本身也是半透明的。
+        requestAnimationFrame(function () {
+            if (followupDragState && followupDragState.row === draggedRow && draggedRow.classList) {
+                draggedRow.classList.add('is-dragging');
+            }
+        });
+    } else if (row && row.classList) {
+        row.classList.add('is-dragging');
+    }
+    setFollowupDragActive(true);
 }
 
 function clearFollowupDragIndicators(panel) {
-    if (!panel) return;
-    var rows = panel.querySelectorAll('.followup-queue-row');
+    followupDropCaret = null;
+    var rows = followupQueueRows(panel);
     for (var i = 0; i < rows.length; i += 1) {
         rows[i].classList.remove('is-drag-over-before');
         rows[i].classList.remove('is-drag-over-after');
     }
 }
 
+function applyFollowupDropIndicator(panel, target, placement) {
+    var after = placement === 'after';
+    if (followupDropCaret && followupDropCaret.row === target && followupDropCaret.after === after) return;
+    clearFollowupDragIndicators(panel);
+    if (!target) return;
+    followupDropCaret = { row: target, after: after };
+    target.classList.add(after ? 'is-drag-over-after' : 'is-drag-over-before');
+}
+
 function endFollowupDrag() {
-    if (!followupDragState) return;
-    if (followupDragState.row && followupDragState.row.classList) {
-        followupDragState.row.classList.remove('is-dragging');
+    stopFollowupAutoScroll();
+    setFollowupDragActive(false);
+    var previous = followupDragState;
+    if (previous && previous.row && previous.row.classList) {
+        previous.row.classList.remove('is-dragging');
     }
     followupDragState = null;
     clearFollowupDragIndicators(document.getElementById('followup-queue-panel'));
+    if (!previous || !followupDragRenderPending) return;
+    // 拖拽期间被推迟的重绘在拖拽结束后补上，期间的数据变化不会丢。
+    followupDragRenderPending = false;
+    renderFollowupQueue(previous.sid);
+}
+
+function onFollowupPointerCancel(ev) {
+    // 原生 HTML5 拖拽接管指针后 Chromium 会补发 pointercancel（鼠标指针也会），
+    // 这不是“触摸拖拽被系统打断”。若此时清掉拖拽态，后面的 dragover 会全部
+    // 提前返回、浏览器拒绝 drop，排序就会静默失效。
+    var state = followupDragState;
+    if (!state || state.mode !== 'touch') return;
+    if (ev && ev.pointerType && ev.pointerType !== 'touch' && ev.pointerType !== 'pen') return;
+    endFollowupDrag();
 }
 
 function startFollowupTouchDrag(sessionId, item, row, ev) {
@@ -1544,12 +1607,92 @@ function startFollowupTouchDrag(sessionId, item, row, ev) {
     if (ev.preventDefault) ev.preventDefault();
 }
 
-function autoScrollFollowupQueuePanel(panel, clientY) {
-    if (!panel || panel.scrollHeight <= panel.clientHeight) return;
-    var rect = panel.getBoundingClientRect();
-    var zone = 28;
-    if (clientY < rect.top + zone) panel.scrollTop -= 10;
-    else if (clientY > rect.bottom - zone) panel.scrollTop += 10;
+function followupEdgeScrollDelta(clientY, rect) {
+    if (!rect || !rect.height) return 0;
+    var zone = Math.min(FOLLOWUP_DRAG_SCROLL_ZONE, rect.height / 2);
+    if (clientY < rect.top + zone) {
+        var upRatio = Math.min(1, (rect.top + zone - clientY) / zone);
+        return -Math.max(1, Math.round(FOLLOWUP_DRAG_SCROLL_MAX_STEP * upRatio));
+    }
+    if (clientY > rect.bottom - zone) {
+        var downRatio = Math.min(1, (clientY - (rect.bottom - zone)) / zone);
+        return Math.max(1, Math.round(FOLLOWUP_DRAG_SCROLL_MAX_STEP * downRatio));
+    }
+    return 0;
+}
+
+function stopFollowupAutoScroll() {
+    if (!followupAutoScrollState) return;
+    if (followupAutoScrollState.raf && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(followupAutoScrollState.raf);
+    }
+    followupAutoScrollState = null;
+}
+
+function runFollowupAutoScroll() {
+    var state = followupAutoScrollState;
+    if (!state) return;
+    var panel = state.panel;
+    if (!panel || !panel.isConnected) { followupAutoScrollState = null; return; }
+    var delta = followupEdgeScrollDelta(state.clientY, panel.getBoundingClientRect());
+    if (!delta) { followupAutoScrollState = null; return; }
+    var before = panel.scrollTop;
+    panel.scrollTop = before + delta;
+    if (panel.scrollTop === before) { followupAutoScrollState = null; return; }
+    state.raf = requestAnimationFrame(runFollowupAutoScroll);
+}
+
+function trackFollowupAutoScroll(panel, clientY) {
+    // 指针贴住面板上下边缘时可能长时间不动，靠 rAF 循环持续滚动，
+    // 否则指针静止就没有新事件，列表停住不动。
+    if (!panel || typeof requestAnimationFrame !== 'function') return;
+    if (!followupEdgeScrollDelta(clientY, panel.getBoundingClientRect())) {
+        stopFollowupAutoScroll();
+        return;
+    }
+    if (followupAutoScrollState && followupAutoScrollState.panel === panel) {
+        followupAutoScrollState.clientY = clientY;
+        return;
+    }
+    stopFollowupAutoScroll();
+    followupAutoScrollState = {
+        panel: panel,
+        clientY: clientY,
+        raf: requestAnimationFrame(runFollowupAutoScroll),
+    };
+}
+
+function resolveFollowupDropTarget(panel, clientY, draggedRow, hitRow) {
+    if (hitRow && hitRow !== draggedRow && hitRow.dataset && hitRow.dataset.reorderable === 'true') {
+        var hitRect = hitRow.getBoundingClientRect();
+        return { row: hitRow, placement: clientY > hitRect.top + hitRect.height / 2 ? 'after' : 'before' };
+    }
+    var rows = followupQueueRows(panel).filter(function (row) { return row !== draggedRow; });
+    if (!rows.length) return null;
+    var insertion = rows.length;
+    for (var i = 0; i < rows.length; i += 1) {
+        var rect = rows[i].getBoundingClientRect();
+        if (clientY < rect.top + rect.height / 2) { insertion = i; break; }
+    }
+    // 行间 3.4px 的间隙和面板内边距都落在“没有行”的位置。按插入位吸附到最近的
+    // 待发送行，插入提示出现在哪里，松手就落在哪里，不再有“有提示却放不下”的死区。
+    for (var back = insertion - 1; back >= 0; back -= 1) {
+        if (rows[back].dataset && rows[back].dataset.reorderable === 'true') {
+            return { row: rows[back], placement: 'after' };
+        }
+    }
+    for (var fwd = insertion; fwd < rows.length; fwd += 1) {
+        if (rows[fwd].dataset && rows[fwd].dataset.reorderable === 'true') {
+            return { row: rows[fwd], placement: 'before' };
+        }
+    }
+    return null;
+}
+
+function resolveFollowupDropTargetAtPoint(panel, clientX, clientY, draggedRow) {
+    var el = document.elementFromPoint ? document.elementFromPoint(clientX, clientY) : null;
+    var hit = el && el.closest ? el.closest('.followup-queue-row') : null;
+    return resolveFollowupDropTarget(panel, clientY, draggedRow, hit);
 }
 
 function onFollowupTouchDragMove(ev) {
@@ -1565,21 +1708,16 @@ function onFollowupTouchDragMove(ev) {
     if (ev.preventDefault) ev.preventDefault();
     var panel = document.getElementById('followup-queue-panel');
     if (!panel) return;
-    autoScrollFollowupQueuePanel(panel, ev.clientY);
-    var el = document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
-    var target = el && el.closest ? el.closest('.followup-queue-row') : null;
-    if (!target || !target.dataset || !target.dataset.id
-        || target.dataset.reorderable !== 'true' || target === state.row) {
-        clearFollowupDragIndicators(panel);
+    trackFollowupAutoScroll(panel, ev.clientY);
+    var target = resolveFollowupDropTargetAtPoint(panel, ev.clientX, ev.clientY, state.row);
+    if (!target) {
+        applyFollowupDropIndicator(panel, null, 'before');
         state.targetRow = null;
         return;
     }
-    var rect = target.getBoundingClientRect();
-    var after = ev.clientY > rect.top + rect.height / 2;
-    clearFollowupDragIndicators(panel);
-    target.classList.add(after ? 'is-drag-over-after' : 'is-drag-over-before');
-    state.targetRow = target;
-    state.after = after;
+    applyFollowupDropIndicator(panel, target.row, target.placement);
+    state.targetRow = target.row;
+    state.after = target.placement === 'after';
 }
 
 function onFollowupTouchDragEnd(ev) {
@@ -1606,32 +1744,43 @@ function ensureFollowupQueueHost() {
     if (!panel.dataset.dragReady) {
         panel.dataset.dragReady = '1';
         panel.addEventListener('dragover', function (e) {
-            if (!followupDragState) return;
+            var state = followupDragState;
+            if (!state || state.mode !== 'html5') return;
+            trackFollowupAutoScroll(panel, e.clientY);
             var target = e.target && e.target.closest ? e.target.closest('.followup-queue-row') : null;
             if (!target || !target.dataset || !target.dataset.id
-                || target.dataset.reorderable !== 'true' || target === followupDragState.row) {
-                clearFollowupDragIndicators(panel);
+                || target.dataset.reorderable !== 'true' || target === state.row) {
+                target = null;
+            }
+            var resolved = resolveFollowupDropTarget(panel, e.clientY, state.row, target);
+            if (!resolved) {
+                applyFollowupDropIndicator(panel, null, 'before');
+                state.targetRow = null;
                 if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
                 return;
             }
             e.preventDefault();
             if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-            var rect = target.getBoundingClientRect();
-            var after = e.clientY > rect.top + rect.height / 2;
-            clearFollowupDragIndicators(panel);
-            target.classList.add(after ? 'is-drag-over-after' : 'is-drag-over-before');
+            applyFollowupDropIndicator(panel, resolved.row, resolved.placement);
+            state.targetRow = resolved.row;
+            state.after = resolved.placement === 'after';
         });
         panel.addEventListener('drop', function (e) {
-            if (!followupDragState) return;
+            var state = followupDragState;
+            if (!state || state.mode !== 'html5') return;
             e.preventDefault();
             var target = e.target && e.target.closest ? e.target.closest('.followup-queue-row') : null;
             if (!target || !target.dataset || !target.dataset.id
-                || target.dataset.reorderable !== 'true' || target === followupDragState.row) return;
-            var after = target.classList.contains('is-drag-over-after');
-            var sid = followupDragState.sid;
-            var itemId = followupDragState.itemId;
+                || target.dataset.reorderable !== 'true' || target === state.row) {
+                target = null;
+            }
+            // 落点用与插入提示相同的一次解析：提示在哪里，松手就落在哪里。
+            var resolved = resolveFollowupDropTarget(panel, e.clientY, state.row, target);
+            var sid = state.sid;
+            var itemId = state.itemId;
             endFollowupDrag();
-            moveFollowupQueueItem(sid, itemId, target.dataset.id, after ? 'after' : 'before');
+            if (!resolved) return;
+            moveFollowupQueueItem(sid, itemId, resolved.row.dataset.id, resolved.placement);
         });
     }
     var anchor = messageInput && messageInput.closest ? messageInput.closest('.composer-row') : null;
@@ -1878,6 +2027,13 @@ function renderFollowupQueue(sessionId) {
         }
         return;
     }
+    if (followupDragState && followupDragState.sid === sid
+        && followupDragState.row && followupDragState.row.isConnected) {
+        // 拖拽进行中重绘会换掉正在被拖的节点，浏览器会静默取消整个拖拽；
+        // 这里先记账，等 dragend 之后再补一次渲染，期间的状态变化不会丢。
+        followupDragRenderPending = true;
+        return;
+    }
     var q = getFollowupQueue(sid);
     syncMessageInputPlaceholder();
     var renderSignature = followupQueueRenderSignature(sid, q);
@@ -1909,27 +2065,51 @@ function renderFollowupQueue(sessionId) {
         row.classList.toggle('is-sent', item.status === 'sent');
         row.dataset.id = String(item.id);
         row.dataset.reorderable = item.status ? 'false' : 'true';
-        var dragHandle = document.createElement('div');
-        dragHandle.className = 'followup-queue-drag';
-        dragHandle.textContent = '⠿';
-        dragHandle.setAttribute('title', '拖拽调整顺序');
-        dragHandle.draggable = !item.status;
-        dragHandle.classList.toggle('is-disabled', !!item.status);
-        dragHandle.addEventListener('dragstart', function (ev) {
+        // 握把把拖拽点与序号合成一个约 36×26px 的命中区：原来只有字形本身
+        // （约 17×11px）那么大，必须瞄得很准才拖得动。
+        var grip = document.createElement('div');
+        grip.className = 'followup-queue-grip';
+        grip.draggable = !item.status;
+        grip.classList.toggle('is-disabled', !!item.status);
+        grip.setAttribute('title', '拖拽调整顺序，或按 ↑/↓ 键');
+        grip.setAttribute('aria-label', '第 ' + (idx + 1) + ' 条，共 ' + q.length + ' 条：拖拽或按上下方向键调整顺序');
+        grip.setAttribute('aria-keyshortcuts', 'ArrowUp ArrowDown');
+        if (item.status) {
+            grip.setAttribute('aria-disabled', 'true');
+        } else {
+            grip.tabIndex = 0;
+            grip.setAttribute('role', 'button');
+        }
+        var dragGlyph = document.createElement('span');
+        dragGlyph.className = 'followup-queue-drag';
+        dragGlyph.textContent = '⠿';
+        dragGlyph.setAttribute('aria-hidden', 'true');
+        var order = document.createElement('span');
+        order.className = 'followup-queue-order';
+        order.textContent = String(idx + 1);
+        order.setAttribute('aria-hidden', 'true');
+        grip.appendChild(dragGlyph);
+        grip.appendChild(order);
+        grip.addEventListener('dragstart', function (ev) {
             startFollowupDrag(sid, item, row, ev);
         });
-        dragHandle.addEventListener('dragend', endFollowupDrag);
-        dragHandle.addEventListener('pointerdown', function (ev) {
+        grip.addEventListener('dragend', endFollowupDrag);
+        grip.addEventListener('pointerdown', function (ev) {
             if (ev.pointerType === 'touch' || ev.pointerType === 'pen') {
                 startFollowupTouchDrag(sid, item, row, ev);
             }
         });
-        dragHandle.addEventListener('pointermove', onFollowupTouchDragMove);
-        dragHandle.addEventListener('pointerup', onFollowupTouchDragEnd);
-        dragHandle.addEventListener('pointercancel', endFollowupDrag);
-        var order = document.createElement('div');
-        order.className = 'followup-queue-order';
-        order.textContent = String(idx + 1);
+        grip.addEventListener('pointermove', onFollowupTouchDragMove);
+        grip.addEventListener('pointerup', onFollowupTouchDragEnd);
+        grip.addEventListener('pointercancel', onFollowupPointerCancel);
+        grip.addEventListener('keydown', function (ev) {
+            if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+            var step = ev.key === 'ArrowUp' ? -1 : (ev.key === 'ArrowDown' ? 1 : 0);
+            if (!step) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            moveFollowupQueueItemByOffset(sid, String(item.id), step);
+        });
         var text = document.createElement('div');
         text.className = 'followup-queue-text';
         var itemSkills = Array.isArray(item.skills) ? item.skills : [];
@@ -1962,8 +2142,7 @@ function renderFollowupQueue(sessionId) {
             ev.preventDefault();
             withdrawFollowup(String(item.id));
         });
-        row.appendChild(dragHandle);
-        row.appendChild(order);
+        row.appendChild(grip);
         row.appendChild(text);
         row.appendChild(status);
         row.appendChild(modePicker);
@@ -2150,6 +2329,35 @@ function moveFollowupQueueItem(sessionId, itemId, targetId, placement) {
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
     return true;
+}
+
+function focusFollowupQueueGrip(sessionId, itemId) {
+    var panel = document.getElementById('followup-queue-panel');
+    if (!panel || panel.dataset.sessionId !== String(sessionId || '')) return;
+    var row = panel.querySelector('.followup-queue-row[data-id="' + String(itemId) + '"]');
+    var grip = row ? row.querySelector('.followup-queue-grip') : null;
+    if (grip && typeof grip.focus === 'function') {
+        try { grip.focus(); } catch (e) { /* ignore */ }
+    }
+}
+
+function moveFollowupQueueItemByOffset(sessionId, itemId, delta) {
+    var sid = String(sessionId || '');
+    // 键盘排序只在待发送行之间移动，与服务端在途行的固定槽位保持一致。
+    var pending = getFollowupQueue(sid).filter(function (entry) {
+        return entry && !entry.status;
+    });
+    var index = -1;
+    for (var i = 0; i < pending.length; i += 1) {
+        if (String(pending[i].id) === String(itemId)) { index = i; break; }
+    }
+    if (index < 0) return false;
+    var next = index + (delta < 0 ? -1 : 1);
+    if (next < 0 || next >= pending.length) return false;
+    var moved = moveFollowupQueueItem(sid, itemId, String(pending[next].id), delta < 0 ? 'before' : 'after');
+    // 重排会整体重建面板，焦点必须显式还回同一条追问的握把，才能连续按键。
+    if (moved) focusFollowupQueueGrip(sid, itemId);
+    return moved;
 }
 
 function withdrawFollowup(itemId) {
