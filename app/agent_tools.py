@@ -115,6 +115,26 @@ def run_shell_runtime_context(
         _run_shell_interrupt_check.reset(interrupt_token)
 
 
+# 当前工具调用所在模型的图片输入能力：agent_loop 在调用内置工具前注入。
+# None = 未知（直接调用/测试，保持既有行为）；False = 明确不支持图片输入，
+# 读图类工具据此在执行前给出可恢复错误，避免产生模型看不到的图片块。
+_tool_model_image_input: ContextVar[Optional[bool]] = ContextVar(
+    "myagent_tool_model_image_input",
+    default=None,
+)
+
+
+@contextmanager
+def tool_model_media_context(*, image_enabled: Optional[bool]):
+    """Bind the calling model's image capability for nested tool execution."""
+
+    token = _tool_model_image_input.set(image_enabled)
+    try:
+        yield
+    finally:
+        _tool_model_image_input.reset(token)
+
+
 # 技能目录签名缓存，避免每次 react 轮次全量遍历
 _skills_cache: Dict[str, Any] = {"sig": None, "skills": None, "catalog": None}
 _skills_full_cache: Dict[str, Any] = {"sig": None, "skills": None}
@@ -2825,7 +2845,8 @@ def read_file(
     按行读取文本文件，或直接查看图片文件（PNG/JPEG/WebP/GIF/BMP）。
     文本：推荐提供 start_line / line_count；旧 end_line 参数仍兼容；二进制嗅探保持原行为。
     图片：命中图片扩展名时忽略行范围参数，返回 [文本信封, image 块]；大图自动归一化/缩放，
-    不要另行安装图片库或写转换脚本；模型不支持图片输入时由请求投影降级为省略文案。
+    不要另行安装图片库或写转换脚本；模型未声明图片输入时在执行前返回可解释错误（提示切换识图模型，
+    或把图片交给能识图的子代理），不产生图片块。
     路径不限制在 WORK_DIR（平台绝对路径可指向任意可读位置；相对/虚拟 / 同以往映射到工作区）。
     目标文件：`path`（主）或同义 `target_directory`，或历史别名 `file_path`。
 
@@ -2854,7 +2875,14 @@ def read_file(
         return f"Failed to read file: {e}"
 
     if path.suffix.lower() in _READ_FILE_IMAGE_SUFFIXES:
-        # 图片分支：行范围参数对图片无意义，直接返回可展示的多模态结果。
+        # 图片分支：行范围参数对图片无意义。模型未声明图片输入时在执行前挡下，
+        # 避免入库后产生"模型看不到的图片"与后续请求异常。
+        if _tool_model_image_input.get() is False:
+            return (
+                f"Error: the current model profile does not declare image input, so the image "
+                f"{_format_path_for_tool_output(path)} was not loaded. Switch to an image-capable "
+                "model profile, or hand the image to a subagent (`task` `file_attachments`)."
+            )
         return _read_file_image_output(path)
 
     if st.st_size > _read_file_range_max_bytes():
@@ -4785,7 +4813,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "read_file",
         "Read a text file by line range, or view an image file (PNG/JPEG/WebP/GIF/BMP) directly — images are returned "
         "visually and larger ones are downscaled automatically (do not install image libraries or write converters); "
-        "line-range parameters are ignored for images. "
+        "line-range parameters are ignored for images. Viewing an on-disk image is a normal in-context call of this "
+        "tool; a model profile that does not declare image input gets an explanatory error instead. "
         "Text: virtual `/` under the workspace or an allowed OS-absolute path; use start_line plus line_count (default 200); legacy end_line remains accepted internally. "
         "Do not treat PDF/PPTX/spreadsheets/other binary as plain text—convert or probe with code first. "
         "Reuse exact paths returned by ls/glob/grep; do not guess path components.",
@@ -5053,11 +5082,13 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "step or when the parent must perform the work itself. A subagent does not receive parent chat or tool history, "
         "so every start/resume prompt must be a self-contained handoff. Foreground start/resume waits for the final result; "
         "background mode returns an ID immediately. Never use resume to poll or collect an existing result. "
-        "For image understanding, select a model_profile_id whose effective input modalities include image. In prompt, always "
-        "wrap each exact local image path in double quotes; alternatively pass local paths or remote image URLs through "
-        "file_attachments, which quotes local image paths automatically. Both inputs use the same routing: an image-capable "
-        "profile receives image_url content prepared from durable attachments, while a text-only profile receives "
-        "deterministic omission text and cannot inspect the image itself. "
+        "Reading images the current model can see is a parent-side job: use `read_file` in-context when the current "
+        "profile declares image input. When it does not, delegate the image instead: pass local paths or remote image "
+        "URLs through file_attachments (it quotes local image paths automatically), and if the prompt itself references "
+        "images, wrap each exact local image path in double quotes so it is detected reliably. Media is routed by the "
+        "selected profile's effective input modalities: an image-capable profile receives image_url content prepared "
+        "from durable attachments, while a text-only profile receives deterministic omission text and cannot inspect "
+        "the image itself. "
         "When the user wants details of a subagent's execution process, ask that same existing subagent directly: resume the "
         "relevant resumable direct child in the foreground with focused questions and obtain its complete first-hand account. "
         "Do not infer process details from its final summary, and do not treat status or collect as a complete execution record. "
@@ -5115,9 +5146,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "start/resume, or optional for switch_model: self-contained handoff. Include objective; scope and exact paths; relevant facts or prior "
                     "findings; constraints and non-goals; expected deliverable; and how to verify completion. Include exact errors, "
                     "data, and decisions the subagent cannot infer. For resume, provide only the new instruction and changed facts. "
-                    "Always wrap every exact local image path in double quotes so it can be detected reliably; explicit remote image "
-                    "references are also supported. These references are serialized as image_url only when the selected model profile "
-                    "supports image input; otherwise they remain text. "
+                    "If the handoff references images, wrap each exact local image path in double quotes so it can be detected reliably; "
+                    "explicit remote image references are also supported. These references are serialized as image_url only when the "
+                    "selected model profile supports image input; otherwise they remain text, and the subagent cannot see them. "
                     "For an execution-detail request, explicitly ask for all available steps, files, commands/tools, observations, "
                     "decisions and reasons, failures/retries, verification performed, and remaining uncertainty; request facts from "
                     "the subagent's own history rather than asking it to guess or merely repeat its final answer."
@@ -5145,9 +5176,11 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "description": (
                     "start or switch_model only. On start, omit by default so the subagent inherits the parent's effective model. "
                     "Choose a registered profile only when its injected models-table capability metadata directly supports "
-                    "the delegated task, such as low-cost/high-concurrency batch work, difficult reasoning, research, or "
-                    "image understanding. For media work, the profile's effective input_modalities are authoritative: choose one that "
-                    "explicitly includes every required modality (for example image), rather than relying on the model family name. "
+                    "the delegated task, such as low-cost/high-concurrency batch work, difficult reasoning, or long-context "
+                    "research. When the handoff needs media input (for example the current model cannot see images, or the "
+                    "user asked a subagent to look at them), the profile's effective input_modalities are authoritative: choose "
+                    "one that explicitly includes every required modality (for example image), rather than relying on the model "
+                    "family name. "
                     "The available IDs, models, and automatic capability descriptions are injected at "
                     "runtime. A selected "
                     "profile supplies the subagent's endpoint, credentials, model, limits, and reasoning settings. Never guess, abbreviate, "
@@ -5226,7 +5259,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "bytes": {"type": "integer"}, "width": {"type": "integer"}, "height": {"type": "integer"},
                     "name": {"type": "string"}
                 }, "required": ["attachmentId", "mediaType", "bytes", "width", "height"]}]},
-                "description": "start/resume only: WORK_DIR paths, remote image URLs, or durable image attachment references. Images use the normalized read-only path and reference; image-capable profiles receive request previews, other profiles receive deterministic omission text. Text files are inlined up to a cap.",
+                "description": "start/resume only: WORK_DIR paths, remote image URLs, or durable image attachment references — how an image is handed to a subagent when the current model cannot see it. Images use the normalized read-only path and reference; image-capable profiles receive request previews, other profiles receive deterministic omission text. Text files are inlined up to a cap.",
             },
             "n": {
                 "type": "integer",

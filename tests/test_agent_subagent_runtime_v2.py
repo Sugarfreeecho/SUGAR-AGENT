@@ -526,7 +526,7 @@ def test_subagent_prompt_and_file_attachment_share_image_modality_routing(tmp_pa
         assert not any(message["role"] == "system" for message in text_params)
 
 
-def test_task_tool_description_explains_uniform_multimodal_routing():
+def test_task_tool_description_routes_media_and_keeps_text_only_fallback():
     from agent_tools import OPENAI_TOOL_DEFINITIONS
 
     task_tool = next(
@@ -536,18 +536,28 @@ def test_task_tool_description_explains_uniform_multimodal_routing():
     )["function"]
     properties = task_tool["parameters"]["properties"]
 
-    assert "In prompt" in task_tool["description"]
+    assert "Reading images the current model can see is a parent-side job" in task_tool["description"]
+    assert "use `read_file` in-context when the current profile declares image input" in task_tool[
+        "description"
+    ]
+    assert "When it does not, delegate the image instead" in task_tool["description"]
     assert "file_attachments" in task_tool["description"]
     assert "image_url content" in task_tool["description"]
     assert "text-only profile" in task_tool["description"]
-    assert "always wrap each exact local image path in double quotes" in task_tool[
+    assert "wrap each exact local image path in double quotes" in task_tool[
         "description"
     ]
-    assert "Always wrap every exact local image path in double quotes" in properties[
+    assert "If the handoff references images, wrap each exact local image path in double quotes" in properties[
         "prompt"
+    ]["description"]
+    assert "When the handoff needs media input" in properties[
+        "model_profile_id"
     ]["description"]
     assert "effective input_modalities are authoritative" in properties[
         "model_profile_id"
+    ]["description"]
+    assert "how an image is handed to a subagent when the current model cannot see it" in properties[
+        "file_attachments"
     ]["description"]
     assert "durable image attachment references" in properties["file_attachments"]["description"]
     assert "deterministic omission text" in properties["file_attachments"]["description"]

@@ -121,6 +121,7 @@ from agent_tools import (
     delete_file,
     safe_work_path,
     run_shell_runtime_context,
+    tool_model_media_context,
     redact_sensitive_tool_obj,
     redact_sensitive_tool_text,
     tool_work_dir_override,
@@ -6724,6 +6725,26 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 or session_meta.get("git_worktree_path")
                                 or ""
                             ).strip()
+                        # 内置工具读图的模型能力门（判定源与 MCP 分支一致）：
+                        # 非多模态模型在工具执行前就拿到明确错误，而不是"看不到的图片"；
+                        # 能力解析失败时保持 None（不拦截），避免误伤可读图模型。
+                        try:
+                            _tool_candidate = (
+                                iter_client.current_candidate()
+                                if callable(getattr(iter_client, "current_candidate", None))
+                                else {}
+                            )
+                            _tool_modalities = (
+                                _tool_candidate.get("input_modalities")
+                                if isinstance(_tool_candidate, dict)
+                                else None
+                            ) or __import__("agent_openai")._client_input_modalities(iter_client)
+                            _tool_image_input_enabled = "image" in {
+                                str(value or "").strip().lower()
+                                for value in (_tool_modalities or ())
+                            }
+                        except Exception:
+                            _tool_image_input_enabled = None
                         with run_shell_runtime_context(
                             interrupt_check=(
                                 _run_shell_should_interrupt
@@ -6736,7 +6757,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 else None
                             ),
                         ):
-                            with tool_work_dir_override(worktree_root or None), execution_scope(
+                            with tool_work_dir_override(worktree_root or None), tool_model_media_context(
+                                image_enabled=_tool_image_input_enabled
+                            ), execution_scope(
                                 session_id=state["session_id"],
                                 context=sec_context,
                                 request=sec_request,

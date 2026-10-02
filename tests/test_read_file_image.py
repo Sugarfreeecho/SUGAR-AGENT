@@ -4,6 +4,7 @@
 覆盖：PNG 结构化结果与引用读回、行范围参数忽略、BMP 自动转换、超限可恢复错误、
 伪扩展名改名提示、内容寻址去重、缩放坐标提示、工具结果视图管线保留 image 块。
 """
+import json
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -127,3 +128,60 @@ def test_tool_result_views_preserve_image_blocks(store, tmp_path):
     assert any(isinstance(b, dict) and b.get("type") == "image" for b in llm_view)
     assert isinstance(ui_view, list)
     assert any(isinstance(b, dict) and b.get("type") == "image" for b in ui_view)
+
+
+def test_text_only_model_is_refused_before_staging(store, tmp_path):
+    from agent_tools import tool_model_media_context
+
+    path = tmp_path / "shot.png"
+    path.write_bytes(_image_bytes())
+    with tool_model_media_context(image_enabled=False):
+        result = agent_tools.read_file(path=str(path))
+    assert isinstance(result, str)
+    assert "does not declare image input" in result
+    assert "Switch to an image-capable model profile" in result
+    assert "`task` `file_attachments`" in result
+    assert not [p for p in store.root.rglob("*") if p.is_file()]
+
+
+def test_image_capable_model_context_returns_blocks(store, tmp_path):
+    from agent_tools import tool_model_media_context
+
+    path = tmp_path / "shot.png"
+    path.write_bytes(_image_bytes())
+    with tool_model_media_context(image_enabled=True):
+        result = agent_tools.read_file(path=str(path))
+    assert isinstance(result, list)
+    assert result[1]["type"] == "image"
+
+
+def test_text_only_client_request_has_no_image_payload(store, tmp_path):
+    from types import SimpleNamespace
+
+    from agent_messages import ToolMessage
+    from agent_openai import _messages_to_params_for_client
+
+    path = tmp_path / "shot.png"
+    path.write_bytes(_image_bytes())
+    result = agent_tools.read_file(path=str(path))
+    message = ToolMessage(content=result, tool_call_id="call-1")
+    client = SimpleNamespace(_myagent_input_modalities=["text"])
+    serialized = _messages_to_params_for_client(client, [message])
+    blob = json.dumps(serialized, ensure_ascii=False)
+    assert "image_url" not in blob
+    assert "data:image" not in blob
+    assert ("图片已省略" in blob) or ("image omitted" in blob)
+    assert isinstance(serialized[0]["content"], str)
+
+
+def test_prompts_read_images_directly_and_keep_text_only_fallback():
+    """识图模型直接 read_file；未声明图片输入的模型仍保留子代理委派路径。"""
+    zh = (APP / "prompt.md").read_text(encoding="utf-8")
+    en = (APP / "prompt.en.md").read_text(encoding="utf-8")
+
+    assert "已落盘的图片直接用 `read_file` 读取" in zh
+    assert "`read_file` 只在当前模型未声明图片输入时拒绝读图" in zh
+    assert "`task` 的 `file_attachments`" in zh
+    assert "read an image already on disk directly with `read_file`" in en
+    assert "`read_file` refuses only when the current model profile does not declare image input" in en
+    assert "`task` `file_attachments`" in en
