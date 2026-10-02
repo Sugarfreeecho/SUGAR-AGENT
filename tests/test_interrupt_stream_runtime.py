@@ -14,8 +14,10 @@ def test_interrupt_checkpoint_precedes_abort_and_tool_visibility():
     import webui
 
     react_source = inspect.getsource(agent_loop._react_node_once)
-    stream_detection = react_source.split("if _steer_requested(state):", 1)[1].split(
-        "try:", 1
+    # 流式消费循环的首个中断检查：2026-09-30 起由节流轮询的 _StreamSteerPoller 承担；
+    # 切片保留"检查块内"的语义（到块尾 break 为止），abort 事件在 checkpoint 处才发送。
+    stream_detection = react_source.split("if stream_steer_poller.requested():", 1)[1].split(
+        "break", 1
     )[0]
     assert "_emit_steer_abort_event" not in stream_detection
 
