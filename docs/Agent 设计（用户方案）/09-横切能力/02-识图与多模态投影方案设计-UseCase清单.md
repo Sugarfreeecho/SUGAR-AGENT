@@ -1,6 +1,6 @@
 # API 识图与多模态投影 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v3（覆盖至：当前工作区）
+- 版本：2026-10-02 v4（覆盖至：当前工作区；读图能力门控与条件化路由文案）
 - 用途：按「触发 → 预期现象 → 规则与边界 → 依据」逐条审查图片从接入、存储、模型请求到结果和生命周期的完整链路。
 - 适用实现：`app/attachments/**`、`app/vision_api.py`、`app/agent_openai.py`、`app/llm/transport.py`、`app/agent_harness.py`、`app/agent_loop.py`、`app/agent_mcp.py`、`app/agent_subagent.py`、`app/runtime_v2/**`、`app/webui.py`、`frontend/src/app/modules/{workspace-media,sse-handling,event-dispatch,message-rendering}.js`。
 - 上级：`00-横切能力整体设计.md`
@@ -118,6 +118,13 @@ API 识图把上传、粘贴、拖拽、本地路径、远程图片链接和工�
 - **预期现象**：支持 image 才准备请求图；不支持时图片转成含身份和只读路径的确定性文字占位，不读取或生成请求图缓存。端点实际拒绝媒体时记录被拒模态并回写 profile，后续避免重复失败。
 - **规则与边界**：不再自动注入“交给 task 子代理识图”的强制委托文案；显式 task 传图仍支持。图片被省略不删除 Core 历史。音频/视频仍按原兼容降级规则处理。
 - **依据**：`attachments/content.py::project_request_images`、`agent_openai.py::_media_error_modalities`、`model_profiles.mark_profile_modalities_failed`。
+
+### UC-9B27 读图在工具层的模型能力门与条件化路由文案
+
+- **触发**：当前候选模型未声明图片输入（`input_modalities` 不含 image），模型仍调用 `read_file` 读取图片文件；或读图指引与 `task` 描述被任意模型读到。
+- **预期现象**：`read_file` 在**加载前**返回可解释错误——说明该档案未声明图片输入、图片未加载，并给出两条正路（切换到声明图片输入的模型档案；或把图片交给能识图的子代理 `task` `file_attachments`）；**不入库、不产生图片块、无附件残留**。模型声明图片输入时照常返回"信封 + 图片块"。提示词与 `read_file`/`task` 工具描述为条件式：能直读就直读、看不了再委派，不再把两条通道写成并列等价路径。
+- **规则与边界**：能力判定用"当前候选实际声明"（候选 `input_modalities`，缺失回退 client 能力缓存；解析异常保持未知＝不拦截，避免误伤可读图模型）。与 UC-9B12/9B13 分层——本层是**执行前**拦截（图片从不入库）；9B12/9B13 仍是"已入库图片的发送与预算"。拒绝文案保留两条通路（切换模型 / 子代理委派），仅未声明图片输入的模型可见。
+- **依据**：`agent_tools.py::_tool_model_image_input / tool_model_media_context / read_file 图片分支`、`agent_loop.py`（内置工具执行前注入候选能力）、`app/prompt.md / prompt.en.md`；回归 `tests/test_read_file_image.py`（12 例）、`tests/test_agent_subagent_runtime_v2.py`。
 
 ### UC-9B13 请求总预算与确定性省略
 
@@ -299,6 +306,8 @@ API 识图把上传、粘贴、拖拽、本地路径、远程图片链接和工�
 - 通用运行指标：`04-观测与运行看板方案设计-UseCase清单.md`。
 
 ## 12. 版本记录
+
+- 2026-10-02 v4：新增 UC-9B27《读图在工具层的模型能力门与条件化路由文案》——未声明图片输入的模型 read_file 在加载前拒绝（不入库、不产生图片块），提示切换识图模型或交给识图子代理；提示词与 read_file/task 描述改为条件式（能直读就直读、看不了再委派）。
 
 - 2026-09-20 v3：新增 UC-9B26，记录长历史附件序列化的环境读取与路径解析缓存，不改变附件校验语义。
 - 2026-09-14 v2：按实际实现扩展为完整 API 识图方案，新增统一准入、远程图片三模式、独立 API、授权、幂等、SSE、取消、结构化输出、配额、GC、备份恢复、前端资源复用、指标和验收证据；删除旧的强制视觉委托描述。

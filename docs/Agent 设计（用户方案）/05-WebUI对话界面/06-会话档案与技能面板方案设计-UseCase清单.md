@@ -1,6 +1,6 @@
 # 会话、档案与技能面板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-26 v5（覆盖至：当前工作区；含新会话预取与隐藏草稿）
+- 版本：2026-10-02 v6（覆盖至：当前工作区；含上下文探测失败原因透出）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/session-management.js`、`modules/model-profiles.js`、`modules/settings.js`、`modules/skill-picker.js`、`modules/i18n.js`、对应后端 API。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -52,6 +52,13 @@
 - **规则与边界**：草稿不进入侧栏、远程控制列表与导出；页面内重复点击"新会话"复用同一份预取；后台物化（目录预创建 + 元数据 + 索引）在用户输入首条消息之前完成，不占用发送等待；启动重建时若发现草稿已有已提交的首条 user 消息，自动修复元数据并转正（覆盖提交与转正之间的进程退出窗口）。
 - **依据**：`session-management.js::ensurePrefetchedNewSession / prefetchNewSessionInner`（`PENDING_NEW_SESSION_KEY`，`sessionStorage` + 旧记录迁移）、`webui.py::create_session`（`prefetch=true`，不失效 `/sessions/state`）、`agent_harness.py::get_or_create_session(draft=…)` / `_first_committed_draft_user_event`（`metadata.draft`、首条 user 事件转正、列表过滤、启动重建修复）。
 
+### UC-5F8 上下文探测失败原因透出
+
+- **触发**：在「高级设置 → 模型配置」或首次配置向导点击「获取模型上下文」，探测未成功（鉴权被拒/模型不存在/端点不可达/400 无可解析窗口）。
+- **预期现象**：状态栏显示真实原因——「上下文探测失败，已使用列表/默认窗口：HTTP 401 Unauthorized: {响应体片段}」；网络异常显示 `异常类名: 消息`；响应体折叠空白并截断 400 字符；响应非 JSON 时显示「HTTP <码>（响应无法解析为 JSON）」。服务端同落 `warning` 日志（`model=%s detail=%s`，不含 API Key）。成功或未发起探测时 `probe_error` 为空串，界面行为不变。
+- **规则与边界**：只影响失败提示与日志，不改变探测本身（3M token 探针、8s 超时、从 400 报错提取窗口）与"探测结果只作建议、不自动改写档案"；原 `probe_context_window_from_error` 保留为兼容包装。
+- **依据**：`model_profiles.py::probe_context_window_from_error_detail / probe_model_context（probe_error）`、`webui.py::probe_model_profile` 日志、`advance_config.html / first_time_config.html` 状态栏（复用既有 i18n 规则）；回归 `tests/test_model_profiles.py`。
+
 ## 3. 边界
 
 - 档案的**业务语义**（协议/能力/切换）见 ../01-LLM接入；
@@ -62,6 +69,8 @@
 见上表（webui 路由 + frontend 模块）。
 
 ## 5. 版本记录
+
+- 2026-10-02 v6：新增 UC-5F8《上下文探测失败原因透出》——探测失败保留原始原因（HTTP 状态/响应体片段/异常文本），状态栏显示真实报错、服务端落 warning 日志；成功路径与探测语义不变。
 
 - 2026-09-26 v5：新增 UC-5F7《新会话预取与隐藏草稿》——点"新会话"后台创建隐藏草稿（`metadata.draft`），发送时复用并在首条 user 事件"转正"；待用记录存每标签页 `sessionStorage`（旧 `localStorage` 迁移），失败回退即时创建；启动重建可修复已提交首条消息的草稿。
 - 2026-09-20 v4：UC-5F1 补交叉引用——会话列表状态一致性契约（快照 `state_revision`、写入围栏、仅失败才回滚）见 10《会话列表状态一致性与快照版本》。

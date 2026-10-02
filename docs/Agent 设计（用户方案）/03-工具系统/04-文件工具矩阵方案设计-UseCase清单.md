@@ -1,6 +1,6 @@
 # 文件工具矩阵 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-21 v3（覆盖至：当前工作区）
+- 版本：2026-10-02 v4（覆盖至：当前工作区；read_file 图片直读与模型能力门）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（read/write/edit/apply_patch/ls/glob/grep 与路径恢复）。
 - 上级：`00-工具系统整体设计.md`
@@ -14,10 +14,10 @@ read / write / edit / apply_patch / ls / glob / grep 七个文件工具的行为
 ## 2. UseCase
 
 ### UC-3D1 read_file
-- **触发**：读取任意文本文件（含范围参数）。
-- **预期现象**：支持行范围读取；超长行被"虚拟化"（换行展示但不失真信息）；不可读文本给出嗅探结论（如疑似二进制）；路径只有一个目录片段拼错时，错误回执附带最接近的现有路径建议。
-- **规则与边界**：行数缓存以解析后的完整路径及 `(mtime_ns, size)` 校验，文件变化后自动失效；路径建议只查看第一个缺失组件所在目录的直接子项，不递归扫描。
-- **依据**：`read_file / _virtualize_text_lines / _read_file_sniff_unreadable_text / _missing_path_hint`。
+- **触发**：读取任意文本文件（含范围参数）或图片文件（PNG/JPEG/WebP/GIF/BMP）。
+- **预期现象**：文本路径支持行范围读取；超长行被"虚拟化"（换行展示但不失真信息）；不可读文本给出嗅探结论（如疑似二进制）；路径只有一个目录片段拼错时，错误回执附带最接近的现有路径建议。图片路径忽略行范围参数，返回"文本信封 + 图片块"（信封含路径/媒体类型/显示尺寸/字节数；归一化缩放时附坐标乘数提示）；**当前模型未声明图片输入时在加载前返回可解释错误**（不入库、不产生图片块），提示切换识图模型或交给子代理 `task` `file_attachments`。
+- **规则与边界**：文本行数缓存以解析后的完整路径及 `(mtime_ns, size)` 校验，文件变化后自动失效；路径建议只查看第一个缺失组件所在目录的直接子项，不递归扫描。图片走统一附件准入（字节/像素/边长上限、BMP→PNG、EXIF 修正、8-bit sRGB 归一化、内容寻址去重）；扩展名非图片但内容为图片字节时，嗅探回执提示改名/复制后重读；模型能力未知（直接调用/测试未注入）时保持既有行为。
+- **依据**：`read_file / _virtualize_text_lines / _read_file_sniff_unreadable_text / _missing_path_hint / _read_file_image_output / tool_model_media_context`；回归 `tests/test_read_file_image.py`。
 
 ### UC-3D2 write_file
 - **触发**：写文件。
@@ -68,7 +68,7 @@ read / write / edit / apply_patch / ls / glob / grep 七个文件工具的行为
 
 | 用例 | 代码 |
 |---|---|
-| UC-3D1 | `read_file`、`_missing_path_hint` |
+| UC-3D1 | `read_file`、`_missing_path_hint`、`_read_file_image_output`、`tool_model_media_context` |
 | UC-3D2 | `write_file`、`_atomic_write_text` |
 | UC-3D3 | `edit_file`、`_fuzzy_find_replacement_segment` |
 | UC-3D4 | `_parse_apply_patch`、`_apply_update_hunks`、`apply_patch` |
@@ -78,6 +78,8 @@ read / write / edit / apply_patch / ls / glob / grep 七个文件工具的行为
 | UC-3D8 | `apply_patch`、`resolve_unrestricted_path`、`classify_tool`、`enforce_leaf`、`test_apply_patch_path_resolution_is_not_contained_to_work_dir` |
 
 ## 5. 版本记录
+
+- 2026-10-02 v4：UC-3D1 扩展图片直读（信封 + 图片块、归一化与伪装嗅探）与模型能力门（未声明图片输入时执行前拒绝、零残留）；依据映射同步。
 
 - 2026-09-21 v3：新增 UC-3D8，明确 `apply_patch` 路径解析不受工作区包含边界限制，并保留中央权限裁决与叶子资源校验。
 - 2026-09-20 v2：grep 改为流式达到上限即终止，默认遵守 ignore/隐藏规则；ls 行数统计改为按需并共享缓存；补充路径复用和相似路径恢复。

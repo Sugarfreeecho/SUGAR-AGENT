@@ -1,7 +1,7 @@
 # LLM Provider API 接入层 · 能力清单（代码证据版）
 
 > 对象：MyAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
-> 代码版本：当前工作区（2026-09-28；直连适配器事件保真；含 Qwen system prompt 能力投影）
+> 代码版本：当前工作区（2026-10-02；直连适配器事件保真；含 Qwen system prompt 能力投影与探测失败详情透出）
 > 图例：【图】已画入 v3 全景图节点 / 【卡】在图上卡片中 / 【单】仅本清单（超出 12 主节点容量）
 
 ## 1. 请求生命周期与身份
@@ -62,7 +62,7 @@
 |---|---|---|
 | 档案注册表：排序/启停/删除/`fallback_chain()` 候选链来源 | `model_profiles.py` | 【图·档案节点】 |
 | 能力推断与评分门槛（低成本/高智能/编码/Agentic/长上下文；models_table 价格与窗口） | `model_profiles.py` `infer_model_task_capabilities`、`app/data/models_table.md` | 【单】 |
-| 上下文窗口探测：最大 3M token 探针、8s 超时、从报错文本提取窗口 | `model_profiles.py` `probe_model_context`、`extract_context_window_from_error` | 【单】 |
+| 上下文窗口探测：最大 3M token 探针、8s 超时、从报错文本提取窗口；**失败保留原始原因（HTTP 状态/响应体片段/异常文本）供状态栏与日志透出** | `model_profiles.py` `probe_model_context`、`probe_context_window_from_error_detail`、`extract_context_window_from_error` | 【单】 |
 | wire 协议探测：按端点试探可用协议（payload/headers/route-missing 判定） | `model_profiles.py` `detect_wire_protocol` | 【单】 |
 | 模型列表发现：`GET /models` 拉取端点模型目录 | `model_profiles.py` `discover_models` | 【单】 |
 | URL 构造：三个协议端点 + models 端点 | `model_profiles.py` `*_url_for_base` | 【单】 |

@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-09-28；平滑跟随为固定刚度软弹簧（DS 同款）；含顶部通知与权限警示视觉系统、右侧历史独立样式、子代理执行活跃性）
+> 代码版本：当前工作区（2026-10-02；平滑跟随为固定刚度软弹簧（DS 同款）；含顶部通知与权限警示视觉系统、右侧历史独立样式、子代理执行活跃性、follow-up 队列拖拽/键盘排序）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -36,6 +36,7 @@
 | 路径选择器与打开协议（`sugaragent://`） | `vendor/myagent_path_picker.js`、后端 `api_pick_path` | 【单】 |
 | 普通文件上传与图片统一准入（限额、规范化、内容寻址、批次回滚） | 后端 `upload_chat_files`、`attachments/admission.py` | 【卡】 |
 | follow-up 队列保存耐久引用，并向服务端同步 queue pin | `modules/sse-handling.js`、`POST /api/attachments/references` | 【单】 |
+| follow-up 队列手动排序（拖拽握把/落点吸附/边缘自动滚动/键盘 ↑↓；拖拽期重绘推迟） | `modules/sse-handling.js`、`styles/app.css`、`modules/i18n.js` | 【单】 |
 
 ## 4. SSE 与实时管道
 | 能力 | 位置 | 状态 |
@@ -101,6 +102,8 @@
 - 一般主题装饰与构建工具链（Vite）不在本次清单范围；工作区双侧面板的共享视觉契约属于可验收能力，见 [11-工作区双侧面板视觉系统](11-工作区双侧面板视觉系统方案设计-UseCase清单.md)。
 
 ## 9. 版本记录
+
+- 2026-10-02（v22）：follow-up 队列拖拽排序可用性修复——握把命中区 40×26、行间隙/内边距/在途行落点吸附、边缘自动滚动、键盘排序、拖拽期重绘推迟；浏览器接管原生拖拽时的 `pointercancel` 不再拆拖拽态（见 05/01·UC-5A7）。
 
 - 2026-09-28（v21）：子代理执行活跃性——运行中子代理视为活跃子会话（忙碌/状态/运行守卫、子会话流唤醒）；子会话 steer 顺序消费（append、不换聊天管线）；`subagent_created` 先注册 pending；目录刷新节流（见 05/04·UC-5D17/5D18）。
 - 2026-09-28（v20）：平滑跟随改为**固定刚度软弹簧**（`followStiffness: 180`、临界阻尼、无到期期限；`followResponseBase/PerLagPx/followDeadlineMs` 删除）——对齐 DeepSeek 手机端观感；单帧 ≤20px 保留为大位移安全阀；文本揭示层与跟随解耦不变（见 05/02·UC-5B1）。

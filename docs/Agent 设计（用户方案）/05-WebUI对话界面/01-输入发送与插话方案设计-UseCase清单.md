@@ -1,6 +1,6 @@
 # 输入、发送与插话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v3（覆盖至：HEAD `d022831` + API 识图工作区改动）
+- 版本：2026-10-02 v4（覆盖至：当前工作区；待发送队列手动排序）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（发送/插话主流程 `sendMessage`/`acquireSendPipelineLock`）、`modules/input-actions.js`（输入键助手）、`modules/skill-picker.js`、后端 steer API、`webui.py` 消息路径。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -47,6 +47,13 @@
 - **规则与边界**：离线时本地队列仍可恢复，恢复后重试 pin；尚未同步的附件仅受上传宽限租约保护。发送队列项时沿用原附件引用并再次接受服务端授权校验。
 - **依据**：`sse-handling.js::syncFollowupAttachmentPins/persistFollowupQueue`、`POST /api/attachments/references`。
 
+### UC-5A7 待发送队列的手动排序
+
+- **触发**：运行中用握把拖拽（鼠标/触摸）或键盘在待发送（follow-up）队列内调整顺序。
+- **预期现象**：拖拽立即出现落点提示、松手换位；行间隙、面板内边距与在途行（`data-reorderable=false`）的落点吸附到最近的待发送行；长列表拖到边缘持续自动滚动；握把可聚焦（40×26 命中区、含序号徽标，`aria-label`/`aria-keyshortcuts`），↑/↓ 在待发送槽位间移动且焦点跟随条目；拖拽期间推迟 SSE 触发的重绘（`dragend` 后补齐），拖拽不被重绘打断。
+- **规则与边界**：仅待发送（pending）槽位可换位，在途行保持固定槽位且不可拖；浏览器接管原生 HTML5 拖拽时的 `pointercancel` 不得结束拖拽（仅触摸/笔指针路径结束）；插入提示同时至多一个；拖拽不改变队列持久化与附件 pin 语义（见 UC-5A6）。
+- **依据**：`sse-handling.js::onFollowupPointerCancel / resolveFollowupDropTarget / runFollowupAutoScroll / moveFollowupQueueItemByOffset / renderFollowupQueue`、`styles/app.css` 握把与提示样式、`modules/i18n.js`；回归 `tests/js/followup_dispatch_runtime.cjs`（5 例）、`tests/test_feature_flags.py`。
+
 ## 3. 边界
 
 - 输入层的"乐观渲染"会被服务端的真实事件校正（幂等）。
@@ -60,8 +67,11 @@
 | UC-5A3 | `skill-picker.js`、`_build_*_with_selected_skills` |
 | UC-5A4~5A5 | 上传 API、path picker、统一附件准入 |
 | UC-5A6 | `sse-handling.js`、附件 references API |
+| UC-5A7 | `sse-handling.js` 拖拽/键盘排序段、`styles/app.css`、`modules/i18n.js` |
 
 ## 5. 版本记录
+
+- 2026-10-02 v4：新增 UC-5A7《待发送队列的手动排序》——浏览器原生拖拽的 `pointercancel` 不再结束拖拽态；落点吸附（间隙/内边距/在途行）、边缘自动滚动、键盘 ↑/↓ 排序、拖拽期重绘推迟；握把命中区与 i18n 文案同步。
 
 - 2026-09-14 v3：修正依据归属（发送主流程在 `sse-handling.js`；`input-actions.js` 仅为输入键助手）并更新版本线至 `d022831`。
 - 2026-09-14 v2：补齐图片耐久引用、服务端准入校验和 follow-up 队列 pin。
