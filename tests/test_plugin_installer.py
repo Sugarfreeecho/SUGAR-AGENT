@@ -219,14 +219,15 @@ def test_managed_install_root_cannot_replace_or_remove_bundled_plugin(tmp_path):
 
 def test_webui_exposes_plugin_lifecycle_routes():
     source = (APP_DIR / "webui.py").read_text(encoding="utf-8")
-    template = (APP_DIR / "templates" / "extensions_config.html").read_text(
-        encoding="utf-8"
-    )
+    section = (
+        APP_DIR / "templates" / "static" / "settings" / "sections_ext.js"
+    ).read_text(encoding="utf-8")
 
     assert '@fastapi_app.post("/api/plugins/install")' in source
     assert '@fastapi_app.delete("/api/plugins/{plugin_id}")' in source
     assert '@fastapi_app.post("/api/plugins/{plugin_id}/dependencies")' in source
-    assert 'id="install-source"' in template
-    assert "install_dependencies" in template
-    assert "class=\"deps\"" in template
-    assert "class=\"remove danger\"" in template
+    assert 'data.get("install_dependencies"' in source
+    assert 'data-field="plugin-source"' in section
+    assert "api('/api/plugins/install'" in section
+    assert "if (act === 'plugin-del')" in section
+    assert "method: 'DELETE'" in section
