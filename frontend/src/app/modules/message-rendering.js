@@ -1006,6 +1006,7 @@ function syncProcessAggregateHeightUi(agg) {
         btn.hidden = true;
         return;
     }
+    applyProcessBodyViewportClamp(agg);
     if (!agg.classList.contains('is-collapsed')) {
         agg.classList.remove('is-height-expanded');
         agg.classList.remove('has-height-overflow');
@@ -1028,6 +1029,58 @@ function syncProcessAggregateHeightUi(agg) {
     btn.setAttribute('data-ui-tip', label);
     var tip = btn._uiHoverTipBound;
     if (!tip && typeof bindUiHoverTip === 'function') bindUiHoverTip(btn);
+}
+
+/* 高度上限新增条件：执行过程框的高度不得超出工作区可视区域（聊天容器可见高度）。
+ * CSS 原上限（max-height: min(72vh, 41.6rem)）保持不变，仅当可视区域更小时以其为准。
+ * 注：度量必须取“可视高度”而非“底边−框顶”——后者在跟随钉底时会自我收缩。 */
+function applyProcessBodyViewportClamp(agg, viewportHeight) {
+    var body = agg.querySelector('.process-aggregate-body');
+    if (!body) return;
+    var applied = '';
+    var viewport = document.getElementById('chat-container');
+    if (viewport && agg.isConnected && !agg.classList.contains('is-collapsed')) {
+        var available = Math.floor((viewportHeight == null
+            ? viewport.getBoundingClientRect().height : viewportHeight) - 8);
+        if (available > 0) {
+            // 让 CSS 一次求最小值；不再逐框清空样式、强制布局、再写回。
+            applied = 'min(72vh, 41.6rem, ' + available + 'px)';
+        }
+    }
+    if (body.style.maxHeight !== applied) body.style.maxHeight = applied;
+}
+
+/* 可视高度变化才重算。滚动不会改变这个上限，不需要每帧扫描历史。 */
+var processViewportClampScheduled = false;
+var processViewportClampHeight = null;
+function scheduleProcessViewportClampSweep() {
+    if (processViewportClampScheduled) return;
+    processViewportClampScheduled = true;
+    requestAnimationFrame(function () {
+        processViewportClampScheduled = false;
+        if (typeof document === 'undefined') return;
+        var viewport = document.getElementById('chat-container');
+        var viewportHeight = viewport ? viewport.getBoundingClientRect().height : 0;
+        if (viewportHeight === processViewportClampHeight) return;
+        processViewportClampHeight = viewportHeight;
+        document.querySelectorAll('.process-aggregate').forEach(function (agg) {
+            if (!agg.classList.contains('is-collapsed')) applyProcessBodyViewportClamp(agg, viewportHeight);
+        });
+    });
+}
+
+var processViewportClampBound = false;
+function ensureProcessViewportClampBinding() {
+    if (processViewportClampBound) return;
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    var viewport = document.getElementById('chat-container');
+    if (!viewport) return;
+    processViewportClampBound = true;
+    window.addEventListener('resize', scheduleProcessViewportClampSweep, { passive: true });
+    if (typeof ResizeObserver === 'function') {
+        var observer = new ResizeObserver(scheduleProcessViewportClampSweep);
+        observer.observe(viewport);
+    }
 }
 
 function scheduleProcessAggregateHeightUi(agg) {
@@ -1082,6 +1135,7 @@ function bindProcessAggregateHeightButton(agg) {
         var brief = agg.querySelector('.process-aggregate-brief');
         if (brief) agg._processHeightResizeObserver.observe(brief);
     }
+    ensureProcessViewportClampBinding();
     scheduleProcessAggregateHeightUi(agg);
 }
 
@@ -4667,6 +4721,19 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
     scheduleLlmDeltaFlush(ctx, runSessionId);
 }
 
+/**
+ * 摘掉流式标记时，把窗口化渲染（长文本流式，见 session-scroll-history.js）
+ * 收敛回既有终态投影：先测量后替换，避免可见内容大幅跳变。
+ * 调用前先摘 is-streaming，行高回到既有折叠规则后，替换本身不再改变行高。
+ */
+function endLlmStreamChunkProjection(chunk) {
+    if (!chunk) return null;
+    var sc = typeof chunk.querySelector === 'function' ? chunk.querySelector('.feed-chunk-scroller') : null;
+    chunk.classList.remove('is-streaming');
+    if (sc && typeof collapseWindowedLlmText === 'function') collapseWindowedLlmText(sc);
+    return sc;
+}
+
 function finalizeActiveLlmReasoningRow(ctx) {
     var l = ctx && ctx.llm;
     var scroller = l && l.llmStreamReasoningScroller;
@@ -4675,7 +4742,7 @@ function finalizeActiveLlmReasoningRow(ctx) {
     var row = scroller.closest ? scroller.closest('.feed-item.feed--llm') : null;
     var chunk = row && row.querySelector ? row.querySelector('.feed-chunk') : null;
     if (chunk) {
-        chunk.classList.remove('is-streaming');
+        endLlmStreamChunkProjection(chunk);
         scheduleFeedChunkOverflowRefresh(chunk);
     }
     autoCollapseLlmReasoningRow(row);
@@ -4703,8 +4770,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
         if (logType === 'llm-response') existing._processBriefRawText = rawText;
         if (sc) writeLlmStreamText(sc, rawText, logType === 'llm-response' ? 'response' : 'reasoning');
         if (ch) {
-            ch.classList.remove('is-streaming');
-            
+            endLlmStreamChunkProjection(ch);
             scheduleFeedChunkOverflowRefresh(ch);
         }
         existing.removeAttribute('data-llm-live-row');

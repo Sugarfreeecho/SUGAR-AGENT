@@ -2499,6 +2499,7 @@ body {
 .feed-chunk.expanded .feed-chunk-scroller {
     max-height: calc(var(--line) * 15.5 * 1.2 + var(--scroller-pad-y) * 2);
     overflow-y: auto; overflow-x: hidden; overscroll-behavior: auto;
+    scrollbar-gutter: stable;
 }
 .feed-chunk.is-streaming .feed-chunk-scroller { max-height: none; overflow: visible; }
 .feed-chunk.is-overflowing:not(.expanded):not(.is-streaming)::after {
@@ -2529,6 +2530,23 @@ body {
 :root.theme-light .feed-item.feed--answer .feed-chunk-scroller { color: #0f172a; }
 :root.theme-light .feed-item.feed--err .feed-chunk-scroller { color: #7f1d1d; }
 :root.theme-light .feed-item.feed--st .feed-chunk-scroller { color: var(--text-secondary); }
+
+/* 流式窗口化渲染（长文本「高度冻结」修复，见 session-scroll-history.js）：
+   流式期间长文本渲染成 [头部文本] + [占位撑高] + [尾部窗口] 三段。
+   占位块的高度由被省略内容的实测渲染高度撑起（阅读时向上滚即可看到，
+   与终态投影同构），提示文本绝对定位、不占高度，保证切换瞬间总高度不变。 */
+.feed-chunk-window-head,
+.feed-chunk-window-tail {
+    display: block;
+    text-overflow: inherit;
+}
+.feed-chunk-omitted { position: relative; }
+.feed-chunk-omitted-note {
+    position: absolute; left: 0; top: 0; right: 0;
+    font-size: 0.68rem; line-height: 1.5; color: var(--text-tertiary);
+    opacity: 0.66; white-space: normal; word-break: break-word;
+    pointer-events: none; user-select: none;
+}
 
 /* 执行过程：回复/追问保持原亮度；其他条目展开时中间亮度(80%)、
    折叠时最底亮度(50%)。filter 只作用于无背景的文字容器，

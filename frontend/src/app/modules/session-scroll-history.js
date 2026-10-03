@@ -1064,7 +1064,9 @@ function finalizeLlmStreamChunks(ctx) {
     if (!ctx) return;
     flushLlmDeltaText(ctx);
     queryFeedChunksInCtx(ctx, '.feed-chunk.is-streaming').forEach(function (ch) {
-        ch.classList.remove('is-streaming');
+        // 摘流式标记 + 收敛窗口化渲染（长文本流式）；裁剪运行时里 helper 可能缺席
+        if (typeof endLlmStreamChunkProjection === 'function') endLlmStreamChunkProjection(ch);
+        else ch.classList.remove('is-streaming');
         var row = ch.closest ? ch.closest('.feed-item') : null;
         if (row && row.classList.contains('feed--llm')) autoCollapseLlmReasoningRow(row);
         scheduleFeedChunkOverflowRefresh(ch);
@@ -1091,8 +1093,16 @@ function finalizeLlmStreamChunks(ctx) {
             var sc = el.querySelector('.feed-chunk-scroller');
             var ch = el.querySelector('.feed-chunk');
             if (sc) {
-                var norm = trimSurroundingBlankLines(sc.textContent || '');
-                sc.textContent = truncateLogTextForUi(norm);
+                if (sc._llmWindow) collapseWindowedLlmText(sc);
+                else if (!sc._llmTextNode || sc._llmTextNode !== sc.firstChild
+                    || sc._llmRenderedText !== sc.textContent) {
+                    // 流式写入/窗口收尾已经完成终态投影；只处理尚未投影的旧节点。
+                    var norm = trimSurroundingBlankLines(typeof sc._llmRawText === 'string'
+                        ? sc._llmRawText : (sc.textContent || ''));
+                    sc.textContent = truncateLogTextForUi(norm);
+                    sc._llmTextNode = sc.firstChild;
+                    sc._llmRenderedText = sc.textContent;
+                }
                 if (ch) {
                     refreshFeedChunkOverflow(ch);
                     requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });
@@ -1151,7 +1161,11 @@ function discardLlmStreamChunks(ctx, ev) {
     }
     bodies.forEach(function (body) {
         body.querySelectorAll('.feed-item[data-llm-live-row="1"]').forEach(function (el) {
-            if (matchesAbortScope(el)) el.remove();
+            if (!matchesAbortScope(el)) return;
+            if (typeof el.querySelectorAll === 'function') {
+                el.querySelectorAll('.feed-chunk-scroller').forEach(releaseLlmStreamWindow);
+            }
+            el.remove();
         });
         body.querySelectorAll(
             '.feed-item.feed--tool[data-tool-draft-key], '
@@ -1168,6 +1182,9 @@ function writeLlmStreamText(scroller, raw, part) {
     scroller._llmRawText = String(raw || '');
     var row = scroller.closest ? scroller.closest('.feed-item') : null;
     if (part === 'response' && row) row._processBriefRawText = scroller._llmRawText;
+    /* 流式长文本先走「头 + 占位撑高 + 尾窗」窗口化渲染（见下方说明），投影高度随
+       内容线性增长，跟随器始终有位移可做。未越线、终态与历史渲染仍走既有截断投影。 */
+    if (writeLlmStreamWindowedText(scroller)) return;
     var displayed = truncateLogTextForUi(trimSurroundingBlankLines(scroller._llmRawText));
     var node = scroller.firstChild;
     var previous = node && node === scroller._llmTextNode
@@ -1185,6 +1202,648 @@ function writeLlmStreamText(scroller, raw, part) {
     }
     scroller._llmTextNode = scroller.firstChild;
     scroller._llmRenderedText = displayed;
+}
+
+/* ────────────── 流式窗口化渲染（长文本「高度冻结」修复） ──────────────
+ *
+ * 背景：流式行文本超过 200 行 / 24000 字符后，truncateLogTextForUi() 会把渲染固定成
+ * 「头100 + 省略提示 + 尾100」。此后每来一行只是尾窗「丢首行、补新行」，渲染总高度
+ * 不再增长 —— 跟随器没有位移可做（丝滑滚动停摆），可见文字则原地整行瞬跳。
+ *
+ * 修复：流式期间（.feed-chunk.is-streaming）改渲染为三段结构
+ *        [头部文本：前 100 行，越线切换时写入一次，此后不变]
+ *   +    [占位块：高度 = 被省略内容的「实测」渲染高度，随省略量增长]
+ *   +    [尾部窗口：最近 N 行（默认 80），新行只做尾部追加]
+ *
+ * 硬性不变量（5.2）：新行到达时，已显示行的文档位置不得变化 —— 新行只追加在底部；
+ * 被挤出窗口的行按真实行盒高度差补偿（折行也算在内，禁止行数×行高估算），在
+ * 同一任务内「占位增高 + 窗口剔除」，两者净效果为 0；新行按真实高度向下生长，于是
+ * 总高度与全文渲染同节奏线性增长，「新行从底边滑入」由既有跟随器完成。
+ *
+ * 终态（is-streaming 移除后）与历史渲染仍用既有 truncateLogTextForUi 投影，
+ * 由 collapseWindowedLlmText() 先测量后替换地收敛回去。
+ * 尾窗大小可用 window.__UI_LLM_WINDOW_TAIL_LINES__ / __UI_LLM_WINDOW_TAIL_CHARS__ 覆盖。
+ */
+
+var LLM_STREAM_WINDOW_HEAD_CLASS = 'feed-chunk-window-head';
+var LLM_STREAM_WINDOW_TAIL_CLASS = 'feed-chunk-window-tail';
+var LLM_STREAM_WINDOW_OMITTED_CLASS = 'feed-chunk-omitted';
+var LLM_STREAM_WINDOW_NOTE_CLASS = 'feed-chunk-omitted-note';
+
+/** 尾部窗口行数上限（默认 80，可配置；越小 DOM 越省，越大回看越完整）。 */
+function llmStreamWindowTailLines() {
+    var override = typeof window !== 'undefined' ? Number(window.__UI_LLM_WINDOW_TAIL_LINES__) : NaN;
+    return Number.isFinite(override) && override > 0 ? Math.floor(override) : 80;
+}
+
+/** 尾部窗口字符上限（默认 30000）：行很长时按字符收敛，保证 DOM 文本量有界。 */
+function llmStreamWindowTailChars() {
+    var override = typeof window !== 'undefined' ? Number(window.__UI_LLM_WINDOW_TAIL_CHARS__) : NaN;
+    return Number.isFinite(override) && override > 0 ? Math.floor(override) : 30000;
+}
+
+/** 只有流式中的行（.feed-chunk.is-streaming）才做窗口化渲染；终态与历史保持既有投影。 */
+function scrollerChunkIsStreaming(scroller) {
+    var chunk = scroller && scroller.closest ? scroller.closest('.feed-chunk') : null;
+    return !!(chunk && chunk.classList && typeof chunk.classList.contains === 'function'
+        && chunk.classList.contains('is-streaming'));
+}
+
+/** trimSurroundingBlankLines 的流式特化版：只扫描首尾空白行，增量开销 O(新增)。 */
+function trimmedLlmStreamText(raw) {
+    var text = (raw == null) ? '' : String(raw);
+    if (!text) return text;
+    // 只走首尾空白前缀；超长单行不再为找换行从头到尾扫描两次。
+    var start = 0;
+    for (var first = 0; first < text.length; first += 1) {
+        var firstChar = text.charAt(first);
+        if (/\S/.test(firstChar)) break;
+        if (firstChar === '\n') start = first + 1;
+    }
+    var end = text.length;
+    for (var last = text.length - 1; last >= start; last -= 1) {
+        var lastChar = text.charAt(last);
+        if (/\S/.test(lastChar)) break;
+        if (lastChar === '\n') end = last;
+    }
+    if (first === text.length) return '';
+    return start < end ? text.slice(start, end) : '';
+}
+
+/** 越线口径与 truncateLogTextForUi 一致：行优先，其次字符。 */
+function llmStreamTextNeedsWindow(text) {
+    if (!text) return false;
+    if (text.length > Number(LOG_TRUNCATE_HEAD_CHARS || 0) + Number(LOG_TRUNCATE_TAIL_CHARS || 0)) return true;
+    var lineLimit = Number(LOG_TRUNCATE_HEAD_LINES || 0) + Number(LOG_TRUNCATE_TAIL_LINES || 0);
+    if (!(lineLimit > 0)) return false;
+    var lines = 1;
+    for (var i = 0; i < text.length; i += 1) {
+        if (text.charCodeAt(i) === 10 && ++lines > lineLimit) return true;
+    }
+    return false;
+}
+
+/** 统计 [from, to) 覆盖的行数（末行未以换行结束时也算一行）。 */
+function countLlmStreamLines(text, from, to) {
+    var a = Math.max(0, Math.min(text.length, from));
+    var b = Math.max(a, Math.min(text.length, to));
+    var lines = 0;
+    var cursor = a;
+    while (cursor < b) {
+        var nl = text.indexOf('\n', cursor);
+        lines += 1;
+        if (nl < 0 || nl >= b) break;
+        cursor = nl + 1;
+    }
+    return lines;
+}
+
+/**
+ * 头部结束偏移：取第 headLines 行的换行符下标，同时限制 headChars 字符预算；
+ * 行数未越线但字符越线时，回退到不超过 headChars 的最近行边界。
+ * 返回 -1 表示当前文本不该进入窗口化。
+ */
+function findLlmStreamHeadEnd(text) {
+    var headLines = Math.max(1, Math.floor(Number(LOG_TRUNCATE_HEAD_LINES) || 0));
+    var tailLines = Math.max(1, Math.floor(Number(LOG_TRUNCATE_TAIL_LINES) || 0));
+    // 达到行阈值就停止；单行用原生查找，不逐字符统计整份快照。
+    var cursor = 0, seen = 0, headEnd = -1;
+    while (cursor < text.length) {
+        var nl = text.indexOf('\n', cursor);
+        if (nl < 0) break;
+        seen += 1;
+        if (seen === headLines) headEnd = nl;
+        if (seen >= headLines + tailLines) {
+            return Math.min(headEnd, Math.max(1, Number(LOG_TRUNCATE_HEAD_CHARS) || 12000));
+        }
+        cursor = nl + 1;
+    }
+    var headChars = Math.max(1, Math.floor(Number(LOG_TRUNCATE_HEAD_CHARS) || 0));
+    if (text.length <= headChars) return -1;
+    var cut = text.lastIndexOf('\n', headChars - 1);
+    return cut >= 0 ? cut : headChars;
+}
+
+/**
+ * 尾部窗口起点（行边界）：保留最后 tailLines 行，且字符数不超过 tailChars
+ * 单个逻辑行超预算时按字符裁剪；实际写入再对齐到实测的视觉行边界。
+ */
+function findLlmStreamTailStart(text, tailLines, tailChars) {
+    var total = text.length;
+    if (!total) return 0;
+    var start = 0;
+    var seen = 1;
+    var charFloor = Math.max(0, total - tailChars);
+    for (var i = total - 1; i >= charFloor; i -= 1) {
+        if (text.charCodeAt(i) !== 10) continue;
+        if (seen >= tailLines) { start = i + 1; break; }
+        seen += 1;
+    }
+    if (total - start > tailChars) {
+        var minStart = total - tailChars;
+        var nextBreak = text.indexOf('\n', minStart);
+        if (nextBreak >= 0 && nextBreak + 1 < total) start = Math.max(start, nextBreak + 1);
+        else {
+            start = Math.max(start, minStart);
+        }
+    }
+    return start;
+}
+
+/** 元素行盒高度（= 内容真实渲染高度，含行距；比 Range 字形框口径精确）。 */
+function measureLlmStreamBoxHeight(el) {
+    if (!el || typeof el.getBoundingClientRect !== 'function') return 0;
+    var rect = el.getBoundingClientRect();
+    return rect && rect.height > 0 ? rect.height : 0;
+}
+
+/** 通过字形位置寻找视觉行起点，不按行数或平均字宽估算。 */
+function llmStreamVisualLineStart(node, offset, forward) {
+    var data = String(node && node.data || '');
+    if (!data || !node.ownerDocument || !node.ownerDocument.createRange) return offset;
+    var range = node.ownerDocument.createRange();
+    function topAt(index) {
+        index = Math.max(0, Math.min(data.length - 1, index));
+        range.setStart(node, index);
+        range.setEnd(node, index + 1);
+        return range.getBoundingClientRect().top;
+    }
+    var target = Math.max(0, Math.min(data.length - 1, offset));
+    var top = topAt(target);
+    var low = forward ? target : 0;
+    var high = forward ? data.length : target;
+    while (low < high) {
+        var mid = Math.floor((low + high) / 2);
+        var before = forward ? topAt(mid) <= top + 0.5 : topAt(mid) < top - 0.5;
+        if (before) low = mid + 1;
+        else high = mid;
+    }
+    return low;
+}
+
+var LLM_STREAM_LAYOUT_PROPERTIES = [
+    'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'fontStretch', 'fontVariant',
+    'lineHeight', 'letterSpacing', 'wordSpacing', 'whiteSpace', 'wordBreak',
+    'overflowWrap', 'tabSize', 'textTransform', 'direction',
+];
+
+function llmStreamLayoutMetrics(scroller) {
+    var doc = scroller.ownerDocument;
+    var view = doc && doc.defaultView;
+    if (!view || !view.getComputedStyle || !scroller.getBoundingClientRect) return null;
+    var style = view.getComputedStyle(scroller);
+    var width = scroller.getBoundingClientRect().width
+        - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0)
+        - (parseFloat(style.borderLeftWidth) || 0) - (parseFloat(style.borderRightWidth) || 0);
+    // 展开态可能保留 scrollbar-gutter；块级头窗给出实际可用的内容宽度（含亚像素）。
+    var win = scroller._llmWindow;
+    if (win && win.headEl && win.headEl.getBoundingClientRect) {
+        width = win.headEl.getBoundingClientRect().width;
+    }
+    if (!(width > 0)) return null;
+    var metrics = { width: width, values: {} };
+    var parts = [width];
+    LLM_STREAM_LAYOUT_PROPERTIES.forEach(function (key) {
+        metrics.values[key] = style[key];
+        parts.push(style[key]);
+    });
+    metrics.signature = parts.join('|');
+    return metrics;
+}
+
+/**
+ * 稀有的尺寸/字体/可见性变化才回源测量。测量节点最多放 30000 字符，按逻辑行或
+ * 实测视觉行边界推进；从不把整个长文本重新挂进 DOM，也不保留隐藏的全文副本。
+ */
+function createLlmStreamLayoutMeasurement(scroller, text, win, metrics) {
+    var doc = scroller.ownerDocument;
+    if (!doc || !doc.body) return null;
+    var box = doc.createElement('div');
+    box.setAttribute('aria-hidden', 'true');
+    box.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none;'
+        + 'display:block;box-sizing:content-box;padding:0;border:0;margin:0;max-height:none;'
+        + 'min-height:0;overflow:visible;contain:layout style;';
+    box.style.width = metrics.width + 'px';
+    LLM_STREAM_LAYOUT_PROPERTIES.forEach(function (key) { box.style[key] = metrics.values[key]; });
+    // getComputedStyle 会把 rem/倍数行高序列化为四舍五入的 px 字符串。
+    // 再设置该字符串可能每行差 1/64px，长文本会累计漂移；以真实行盒步长校准。
+    var headNode = win.headEl && win.headEl.firstChild;
+    if (headNode && headNode.nodeType === 3 && headNode.length > 1) {
+        var nextLine = llmStreamVisualLineStart(headNode, 0, true);
+        if (nextLine > 0 && nextLine < headNode.length) {
+            var lineRange = doc.createRange();
+            lineRange.setStart(headNode, 0); lineRange.setEnd(headNode, 1);
+            var firstTop = lineRange.getBoundingClientRect().top;
+            lineRange.setStart(headNode, nextLine); lineRange.setEnd(headNode, nextLine + 1);
+            var lineStep = lineRange.getBoundingClientRect().top - firstTop;
+            if (lineStep > 0) box.style.lineHeight = lineStep + 'px';
+        }
+    }
+    doc.body.appendChild(box);
+    try {
+        var headEnd = Math.min(win.headLimit, text.length);
+        if (headEnd > 0 && text.charCodeAt(headEnd) !== 10) {
+            box.textContent = text.slice(0, Math.min(text.length, headEnd + 1000));
+            if (metrics.values.whiteSpace !== 'nowrap') {
+                headEnd = llmStreamVisualLineStart(box.firstChild, headEnd, false);
+            }
+        }
+        var middleStart = headEnd + (text.charCodeAt(headEnd) === 10 ? 1 : 0);
+        var offset = 0, height = 0;
+        var range = doc.createRange();
+        function topAt(node, index) {
+            range.setStart(node, index);
+            range.setEnd(node, Math.min(node.length, index + 1));
+            return range.getBoundingClientRect().top;
+        }
+        var job = {
+            text: text, metrics: metrics, timer: null, box: box, channel: null, next: null,
+            close: function () {
+                job.next = null;
+                if (job.channel) {
+                    job.channel.port1.onmessage = null;
+                    job.channel.port1.close();
+                    job.channel.port2.close();
+                    job.channel = null;
+                }
+                box.remove();
+            },
+        };
+        job.schedule = function (callback) {
+            var view = doc.defaultView;
+            if (view && typeof view.MessageChannel === 'function') {
+                if (!job.channel) {
+                    job.channel = new view.MessageChannel();
+                    job.channel.port1.onmessage = function () {
+                        var next = job.next;
+                        job.next = null;
+                        if (next) next();
+                    };
+                }
+                job.next = callback;
+                job.channel.port2.postMessage(null);
+            } else {
+                job.timer = setTimeout(callback, 0);
+            }
+        };
+        job.advance = function (budgetMs) {
+            var started = performance.now();
+            text = job.text;
+            var target = Math.max(middleStart, findLlmStreamTailStart(text, win.tailLines, win.tailChars));
+            while (offset < text.length) {
+                // 限制每个不可打断的布局批次；大文本在批次之间让出主线程。
+                box.textContent = text.slice(offset, offset + 6000);
+                var node = box.firstChild;
+                var length = node.length;
+                if (target - offset < length || offset + length === text.length) {
+                    var cut = Math.max(0, Math.min(length, target - offset));
+                    if (cut > 0 && cut < length && text.charCodeAt(offset + cut - 1) !== 10
+                        && metrics.values.whiteSpace !== 'nowrap') {
+                        cut = llmStreamVisualLineStart(node, cut, true);
+                    }
+                    var y = cut < length ? topAt(node, cut) - topAt(node, 0) : measureLlmStreamBoxHeight(box);
+                    return { headEnd: headEnd, middleStart: middleStart,
+                        tailStart: offset + cut, tailTop: height + y };
+                }
+                // 换行边界优先；超长逻辑行在最后一个完整视觉行的起点截断。
+                var consume = node.data.lastIndexOf('\n', length - 2) + 1;
+                if (!consume && metrics.values.whiteSpace !== 'nowrap') {
+                    consume = llmStreamVisualLineStart(node, length - 1, false);
+                }
+                if (consume > 0) height += topAt(node, consume) - topAt(node, 0);
+                else { consume = length; /* nowrap 下省略部分不产生垂直高度 */ }
+                offset += consume;
+                if (performance.now() - started >= budgetMs) return null;
+            }
+            return { headEnd: headEnd, middleStart: middleStart, tailStart: text.length, tailTop: height };
+        };
+        return job;
+    } catch (error) {
+        box.remove();
+        throw error;
+    }
+}
+
+function cancelLlmStreamLayoutMeasurement(win) {
+    var job = win && win.layoutJob;
+    if (!job) return;
+    win.layoutJob = null;
+    if (job.timer != null) clearTimeout(job.timer);
+    job.close();
+}
+
+function applyLlmStreamWindowLayout(scroller, win, text, layout, metrics) {
+    win.headEnd = layout.headEnd;
+    win.middleStart = layout.middleStart;
+    win.headText = text.slice(0, layout.headEnd);
+    if (win.headEl.textContent !== win.headText) win.headEl.textContent = win.headText;
+    win.tailStart = layout.tailStart;
+    var tailText = text.slice(layout.tailStart);
+    if (win.tailNode.data !== tailText) win.tailNode.data = tailText;
+    win.gapHeight = Math.max(0, layout.tailTop - measureLlmStreamBoxHeight(win.headEl));
+    win.omittedChars = Math.max(0, layout.tailStart - layout.middleStart);
+    win.omittedLines = countLlmStreamLines(text, layout.middleStart, layout.tailStart);
+    win.textLength = text.length;
+    win.tailCharCode = text.length ? text.charCodeAt(text.length - 1) : 0;
+    win.layoutSignature = metrics.signature;
+    setLlmStreamWindowGapHeight(win);
+    syncLlmStreamWindowNote(win);
+    // 常见的两种宽度往返不必重测；只缓存两个完整结果，随窗口释放。
+    var cache = (win.layoutCache || []).filter(function (entry) { return entry.signature !== metrics.signature; });
+    win.layoutCache = cache;
+    cache.unshift({ signature: metrics.signature, raw: scroller._llmRawText, text: text, layout: layout });
+    if (cache.length > 2) cache.length = 2;
+}
+
+function continueLlmStreamLayoutMeasurement(scroller, win, job) {
+    if (win.layoutJob !== job) { job.close(); return; }
+    if (scroller._llmWindow !== win || !scroller.isConnected) {
+        cancelLlmStreamLayoutMeasurement(win);
+        return;
+    }
+    var currentMetrics = llmStreamLayoutMetrics(scroller);
+    if (!currentMetrics || currentMetrics.signature !== job.metrics.signature) {
+        cancelLlmStreamLayoutMeasurement(win);
+        refreshLlmStreamWindowGeometry(scroller, false);
+        return;
+    }
+    // 测量前缀只依赖之前的输出，允许正常增量追加，不因每个 delta 重启任务。
+    job.text = trimmedLlmStreamText(scroller._llmRawText);
+    var layout = job.advance(4);
+    if (!layout) {
+        job.schedule(function () { continueLlmStreamLayoutMeasurement(scroller, win, job); });
+        return;
+    }
+    win.layoutJob = null;
+    job.close();
+    applyLlmStreamWindowLayout(scroller, win, job.text, layout, job.metrics);
+}
+
+function refreshLlmStreamWindowGeometry(scroller, force) {
+    var win = scroller && scroller._llmWindow;
+    if (!win || !win.active) return;
+    var metrics = llmStreamLayoutMetrics(scroller);
+    if (!metrics) { cancelLlmStreamLayoutMeasurement(win); win.layoutSignature = null; return; }
+    if (win.layoutJob && win.layoutJob.metrics.signature === metrics.signature) return metrics;
+    cancelLlmStreamLayoutMeasurement(win);
+    if (!force && metrics.signature === win.layoutSignature) return metrics;
+    var cached = (win.layoutCache || []).find(function (entry) {
+        return entry.signature === metrics.signature && entry.raw === scroller._llmRawText;
+    });
+    if (cached) {
+        applyLlmStreamWindowLayout(scroller, win, cached.text, cached.layout, metrics);
+        return metrics;
+    }
+    var text = trimmedLlmStreamText(scroller._llmRawText);
+    var job = createLlmStreamLayoutMeasurement(scroller, text, win, metrics);
+    if (!job) return metrics;
+    if (text.length <= 60000) {
+        try {
+            var layout = job.advance(Infinity);
+            applyLlmStreamWindowLayout(scroller, win, text, layout, metrics);
+        } finally { job.close(); }
+    } else {
+        win.layoutJob = job;
+        job.schedule(function () { continueLlmStreamLayoutMeasurement(scroller, win, job); });
+    }
+    return metrics;
+}
+
+function disposeLlmStreamWindow(win) {
+    if (win && win.resizeObserver) win.resizeObserver.disconnect();
+    cancelLlmStreamLayoutMeasurement(win);
+    if (win) win.layoutCache = null;
+}
+
+/** 删除消息行时只释放窗口资源，不再测量或重投影即将移除的内容。 */
+function releaseLlmStreamWindow(scroller) {
+    var win = scroller && scroller._llmWindow;
+    if (!win) return;
+    disposeLlmStreamWindow(win);
+    delete scroller._llmWindow;
+}
+
+/** 占位提示文案：与终态投影措辞同构（整行省略报行数，纯字符省略报字符数）。 */
+function llmStreamWindowNoteText(win) {
+    if (!win || !win.omittedChars) return '';
+    if (win.omittedLines > 0) return '… [中间省略 ' + win.omittedLines + ' 行（输出中）] …';
+    return '… [中间省略约 ' + win.omittedChars + ' 字符（输出中）] …';
+}
+
+function syncLlmStreamWindowNote(win) {
+    if (!win || !win.noteEl) return;
+    var label = llmStreamWindowNoteText(win);
+    var previous = typeof getUiRuntimeText === 'function'
+        ? getUiRuntimeText(win.noteEl) : win.noteEl.textContent;
+    if (previous !== label) {
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(win.noteEl, label);
+        else win.noteEl.textContent = label;
+    }
+}
+
+/** 占位块高度写入（保留 0.01px 精度，值来自真实行盒测量）。 */
+function setLlmStreamWindowGapHeight(win) {
+    if (!win || !win.gapEl) return;
+    var height = Math.round(win.gapHeight * 100) / 100 + 'px';
+    if (win.gapEl.style.height !== height) win.gapEl.style.height = height;
+}
+
+/**
+ * 窗口化渲染入口（每次文本写入都会调用）。返回 true 表示本次写入已由窗口结构处理。
+ * 未越线、非流式、或结构被外部改写时返回 false，由调用方走既有截断投影。
+ */
+function writeLlmStreamWindowedText(scroller) {
+    var win = scroller._llmWindow;
+    var streaming = scrollerChunkIsStreaming(scroller);
+    if (win && win.active) {
+        if (!streaming) {
+            // 流式已收尾（标记被摘）：收敛回终态投影，不再继续窗口化
+            collapseWindowedLlmText(scroller);
+            return false;
+        }
+        if (!win.headEl || !win.headEl.isConnected || !win.tailEl || !win.tailEl.isConnected
+            || scroller.firstChild !== win.headEl || scroller.lastChild !== win.tailEl) {
+            disposeLlmStreamWindow(win);
+            delete scroller._llmWindow;   // 结构被外部替换：直接回落到既有投影
+            return false;
+        }
+        var text = trimmedLlmStreamText(scroller._llmRawText);
+        var anchored = !!text
+            && win.textLength <= text.length
+            && (win.textLength === 0 || text.charCodeAt(win.textLength - 1) === win.tailCharCode)
+            && text.indexOf(win.headText) === 0;
+        if (!anchored) {
+            // 原文被整体改写（重连快照替换等）：先收敛，再让本次写入重新评估
+            collapseWindowedLlmText(scroller);
+            return false;
+        }
+        var metrics = refreshLlmStreamWindowGeometry(scroller, false);
+        updateLlmStreamWindow(win, text, metrics);
+        return true;
+    }
+    if (!streaming) return false;
+    var pending = trimmedLlmStreamText(scroller._llmRawText);
+    if (!llmStreamTextNeedsWindow(pending)) return false;
+    return activateLlmStreamWindow(scroller, pending);
+}
+
+/** 首次越线建立有界 DOM，并回源测量头/省略/尾的实际视觉行位置。 */
+function activateLlmStreamWindow(scroller, text) {
+    var doc = scroller.ownerDocument;
+    if (!doc || !doc.createElement || !doc.createTextNode) return false;
+    var headEnd = findLlmStreamHeadEnd(text);
+    if (headEnd < 0 || headEnd >= text.length) return false;
+    var middleStart = headEnd + (text.charCodeAt(headEnd) === 10 ? 1 : 0);
+    var tailStart = Math.max(middleStart,
+        findLlmStreamTailStart(text, llmStreamWindowTailLines(), llmStreamWindowTailChars()));
+    var win = {
+        active: true, headLimit: headEnd, headEnd: headEnd, middleStart: middleStart,
+        tailStart: tailStart, textLength: text.length,
+        tailCharCode: text.length ? text.charCodeAt(text.length - 1) : 0,
+        headText: text.slice(0, headEnd),
+        omittedLines: countLlmStreamLines(text, middleStart, tailStart),
+        omittedChars: Math.max(0, tailStart - middleStart), gapHeight: 0,
+        tailLines: llmStreamWindowTailLines(), tailChars: llmStreamWindowTailChars(),
+        scroller: scroller, layoutSignature: null, resizeObserver: null,
+    };
+    win.headEl = doc.createElement('span');
+    win.headEl.className = LLM_STREAM_WINDOW_HEAD_CLASS;
+    win.headEl.textContent = win.headText;
+    win.gapEl = doc.createElement('div');
+    win.gapEl.className = LLM_STREAM_WINDOW_OMITTED_CLASS;
+    win.gapEl.setAttribute('aria-hidden', 'true');
+    win.noteEl = doc.createElement('span');
+    win.noteEl.className = LLM_STREAM_WINDOW_NOTE_CLASS;
+    win.gapEl.appendChild(win.noteEl);
+    win.tailEl = doc.createElement('span');
+    win.tailEl.className = LLM_STREAM_WINDOW_TAIL_CLASS;
+    win.tailNode = doc.createTextNode(text.slice(tailStart));
+    win.tailEl.appendChild(win.tailNode);
+    scroller.replaceChildren(win.headEl, win.gapEl, win.tailEl);
+    scroller._llmWindow = win;
+    scroller._llmTextNode = null;
+    scroller._llmRenderedText = '';
+    refreshLlmStreamWindowGeometry(scroller, true);
+    syncLlmStreamWindowNote(win);
+    var view = doc.defaultView;
+    if (view && typeof view.ResizeObserver === 'function') {
+        win.resizeObserver = new view.ResizeObserver(function () {
+            if (scroller._llmWindow !== win) { disposeLlmStreamWindow(win); return; }
+            if (scroller.isConnected === false) { releaseLlmStreamWindow(scroller); return; }
+            refreshLlmStreamWindowGeometry(scroller, false);
+        });
+        win.resizeObserver.observe(scroller);
+    }
+    return true;
+}
+
+/** 增量写入：新行只追加在底部；被挤出窗口的行「先实测、再补偿、后剔除」。 */
+function updateLlmStreamWindow(win, text, metrics) {
+    var node = win.tailNode;
+    if (!node) return;
+    var tailStart = findLlmStreamTailStart(text, win.tailLines, win.tailChars);
+    if (tailStart < win.middleStart) tailStart = win.middleStart;
+    if (tailStart < win.tailStart) tailStart = win.tailStart;
+    if (tailStart > text.length) tailStart = text.length;
+
+    var delta = text.length > win.textLength ? text.slice(win.textLength) : '';
+    if (delta.length > win.tailChars) {
+        refreshLlmStreamWindowGeometry(win.scroller, true);
+        if (win.layoutJob) {
+            // 大批量输出先显示有界的最新尾窗，高度由后台实测收敛。
+            // 后续 delta 从新的末端追加，不必等待整个前缀测量结束。
+            node.data = text.slice(tailStart);
+            win.tailStart = tailStart;
+            win.textLength = text.length;
+            win.tailCharCode = text.length ? text.charCodeAt(text.length - 1) : 0;
+            win.omittedChars = Math.max(0, tailStart - win.middleStart);
+            win.omittedLines = countLlmStreamLines(text, win.middleStart, tailStart);
+            syncLlmStreamWindowNote(win);
+        }
+        return;
+    }
+    if (delta) node.appendData(delta);
+    if (tailStart > win.tailStart && text.charCodeAt(tailStart - 1) !== 10
+        && metrics && metrics.values.whiteSpace !== 'nowrap') {
+        tailStart = win.tailStart + llmStreamVisualLineStart(node, tailStart - win.tailStart, true);
+    }
+    var removeCount = tailStart - win.tailStart;
+    if (removeCount > 0) {
+        // 5.2 硬性不变量：先实测被剔内容的真实行盒高度（含折行与行距），再同步
+        //「占位增高 + 窗口剔除」——净位移为 0，已显示行（含正在看的尾部窗口末行）
+        // 文档位置不变。行盒口径用尾窗元素高度差测量（追加新行只向下生长，不影响
+        // 被剔前缀的高度），比 Range 字形框精确。
+        var removedText = String(node.data == null ? '' : node.data).slice(0, removeCount);
+        var heightBefore = measureLlmStreamBoxHeight(win.tailEl);   // 追加后、剔除前
+        node.deleteData(0, removeCount);
+        var heightAfter = measureLlmStreamBoxHeight(win.tailEl);    // 剔除后
+        var removedHeight = heightBefore - heightAfter;
+        if (!(removedHeight > 0)) removedHeight = 0;
+        win.gapHeight += removedHeight;
+        setLlmStreamWindowGapHeight(win);
+        win.omittedChars += removeCount;
+        win.omittedLines += countLlmStreamLines(removedText, 0, removedText.length);
+        win.tailStart = tailStart;
+        syncLlmStreamWindowNote(win);
+    }
+    if (delta && typeof uiPerformance !== 'undefined') {
+        uiPerformance.count(currentSessionId, 'text.nodeAppends');
+    }
+    if (text.length < win.textLength) {
+        // 兜底自愈：正文被改写时重建尾窗内容（正常流式只追加，不会走到这里）
+        node.data = text.slice(win.tailStart);
+    }
+    win.textLength = text.length;
+    win.tailCharCode = text.length ? text.charCodeAt(text.length - 1) : 0;
+}
+
+/**
+ * 收尾/改写时把窗口化渲染收敛回既有终态投影（truncateLogTextForUi 输出）。
+ * 先测量后替换，并按需补偿最近的滚动容器：读者停在行内时保持该行底边（正在看的
+ * 尾部区域）在视口中不动；跟随器接管时跳过，避免双重运动。
+ */
+function collapseWindowedLlmText(scroller) {
+    var win = scroller && scroller._llmWindow;
+    if (!win || !win.active) return false;
+    disposeLlmStreamWindow(win);
+    delete scroller._llmWindow;
+    var raw = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : '';
+    var terminal = truncateLogTextForUi(trimSurroundingBlankLines(raw));
+    var row = scroller.closest ? scroller.closest('.feed-item') : null;
+    var beforeRect = (row && typeof row.getBoundingClientRect === 'function'
+        && typeof scroller.getBoundingClientRect === 'function')
+        ? row.getBoundingClientRect()
+        : null;
+    scroller.textContent = terminal;
+    scroller._llmTextNode = scroller.firstChild;
+    scroller._llmRenderedText = terminal;
+    if (beforeRect) compensateWindowedLlmCollapse(scroller, row, beforeRect);
+    return true;
+}
+
+/** 收尾替换后的视口补偿：行高变化按「可见区停在行内」的口径还原，避免内容上跳。 */
+function compensateWindowedLlmCollapse(scroller, row, beforeRect) {
+    if (!row || typeof row.getBoundingClientRect !== 'function') return;
+    if (typeof smoothFollowController === 'undefined' || !smoothFollowController) return;
+    var afterRect = row.getBoundingClientRect();
+    var delta = afterRect.height - beforeRect.height;
+    if (!Number.isFinite(delta) || Math.abs(delta) < 1) return;
+    var port = null;
+    var node = scroller.parentElement;
+    while (node) {
+        var style = (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function')
+            ? window.getComputedStyle(node) : null;
+        var overflowY = style ? style.overflowY : '';
+        if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay')
+            && node.scrollHeight > node.clientHeight + 1) { port = node; break; }
+        node = node.parentElement;
+    }
+    if (!port || typeof port.getBoundingClientRect !== 'function') return;
+    if (smoothFollowController.isFollowing(port)) return;
+    var portRect = port.getBoundingClientRect();
+    if (beforeRect.top > portRect.bottom || beforeRect.bottom < portRect.top) return;   // 行不在视口内
+    if (beforeRect.top > portRect.top) return;   // 读者停在行顶附近：头部内容本来就没动
+    port.scrollTop = Math.max(0, Number(port.scrollTop) + delta);
 }
 
 function appendLlmRevealedText(scroller, segment, part) {

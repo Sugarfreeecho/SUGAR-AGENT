@@ -84,8 +84,15 @@ def test_run_shell_progress_publisher_batches_and_caps_output():
     assert sum("ignored" in text for _, text in emitted) == 0
 
 
-def test_run_shell_streams_stdout_before_return():
+def test_run_shell_streams_stdout_before_return(tmp_path):
     import agent_tools
+
+    release = tmp_path / "release"
+    script = tmp_path / "stream_fixture.py"
+    script.write_text("import time\nfrom pathlib import Path\nprint('one', flush=True)\n"
+                      f"release = Path({str(release)!r})\n"
+                      "deadline = time.monotonic() + 10\n"
+                      "while not release.exists() and time.monotonic() < deadline:\n    time.sleep(0.02)\n", encoding="utf-8")
 
     async def scenario():
         emitted = []
@@ -99,12 +106,15 @@ def test_run_shell_streams_stdout_before_return():
         with agent_tools.run_shell_runtime_context(output_sink=sink):
             task = asyncio.create_task(
                 agent_tools.run_shell(
-                    'python -c "import time; print(\'one\', flush=True); time.sleep(0.4)"',
-                    timeout_ms=5000,
+                    f'python "{script}"',
+                    timeout_ms=15000,
                 )
             )
-            await asyncio.wait_for(first_output.wait(), timeout=2)
-            assert not task.done()
+            try:
+                await asyncio.wait_for(first_output.wait(), timeout=8)
+                assert not task.done()
+            finally:
+                release.touch()
             result = await task
         return result, emitted
 

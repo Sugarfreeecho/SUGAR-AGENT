@@ -28,3 +28,34 @@ def test_terminal_run_collapses_process_before_sealing_context():
     collapse = "terminalAggregate.classList.add('is-collapsed');"
     assert collapse in end_run
     assert end_run.index(collapse) < end_run.index("sealProcessGroup(ctx);")
+
+
+def test_process_body_height_respects_visible_workspace():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(
+        encoding="utf-8"
+    )
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+
+    sync = rendering.split("function syncProcessAggregateHeightUi", 1)[1].split(
+        "function applyProcessBodyViewportClamp", 1
+    )[0]
+    assert "applyProcessBodyViewportClamp(agg);" in sync
+
+    clamp = rendering.split("function applyProcessBodyViewportClamp", 1)[1].split(
+        "function scheduleProcessViewportClampSweep", 1
+    )[0]
+    assert "getElementById('chat-container')" in clamp
+    assert "viewport.getBoundingClientRect().height : viewportHeight) - 8" in clamp
+    assert "body.style.maxHeight" in clamp
+    assert "min(72vh, 41.6rem, " in clamp
+    assert "getComputedStyle(body)" not in clamp
+
+    binding = rendering.split("function ensureProcessViewportClampBinding", 1)[1].split(
+        "function scheduleProcessAggregateHeightUi", 1
+    )[0]
+    assert "addEventListener('scroll', scheduleProcessViewportClampSweep" not in binding
+    assert "addEventListener('resize', scheduleProcessViewportClampSweep" in binding
+    assert "observer.observe(viewport)" in binding
+
+    # 原最大高度保持不变
+    assert "max-height: min(72vh, 41.6rem);" in styles
