@@ -268,7 +268,7 @@
 .dock-float-header { cursor: move; user-select: none; }
 .dock-float-title { flex: 0 1 auto; cursor: inherit; }
 .dock-float-title:hover { background: transparent; }
-.dock-float-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.dock-float-body { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
 .dock-float-resize { position: absolute; right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; touch-action: none; }
 .dock-float-resize::after {
     content: '';
@@ -487,6 +487,7 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
     padding: 4px 0 12px;
 }
 /* dsh's files page: a path bar under the strip (root on the left, refresh at
@@ -568,6 +569,7 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
     padding: 10px;
 }
 .dock-doc-text {
@@ -668,6 +670,7 @@
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
     padding: 4px 0 12px;
 }
 .dock-change-turn { margin: 8px; overflow: hidden; border: 1px solid var(--border-glass); border-radius: 12px; }
@@ -719,6 +722,7 @@
     max-height: 320px;
     margin: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
     color: var(--text-soft);
     font-family: var(--mono);
     font-size: 0.64rem;

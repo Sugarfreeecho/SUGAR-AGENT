@@ -489,6 +489,25 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
         title = str(raw.get("title") or plugin.name).strip()
         description = str(raw.get("description") or "").strip()
         variant = str(raw.get("variant") or "neutral").strip().lower()
+        raw_group = raw.get("group")
+        group = None
+        if isinstance(raw_group, Mapping):
+            group_id = str(raw_group.get("id") or "").strip()
+            group_label = str(raw_group.get("label") or "").strip()
+            if (
+                _CONTRIBUTION_ID_RE.fullmatch(group_id)
+                and group_label
+                and len(group_label) <= _MAX_LABEL_LENGTH
+            ):
+                try:
+                    group_order = int(raw_group.get("order", 100))
+                except (TypeError, ValueError):
+                    group_order = 100
+                group = {
+                    "id": group_id,
+                    "label": group_label,
+                    "order": max(_MIN_ORDER, min(_MAX_ORDER, group_order)),
+                }
         fields = _renderer_fields(raw.get("fields"), allow_list=True)
         raw_visible_when = raw.get("visible_when")
         visible_when = None
@@ -601,6 +620,8 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
             "variant": variant,
             "fields": list(fields),
         }
+        if group is not None:
+            contribution["group"] = group
         if "order" in raw:
             try:
                 order = int(raw.get("order", 100))
@@ -798,6 +819,8 @@ def project_plugin_session_ui(
                 "revision": int(row.get("revision") or 0),
                 "fields": fields,
             }
+            if declaration.get("group"):
+                panel["group"] = declaration["group"]
             if declaration.get("actions"):
                 projected_actions = []
                 for action in declaration["actions"]:

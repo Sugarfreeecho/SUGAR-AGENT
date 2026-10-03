@@ -107,15 +107,11 @@ function syncEdgeTabArrows() {
 
 function updatePanelToggles() {
     const tocList = document.getElementById('chat-toc-list');
-    const pluginPanels = document.getElementById('plugin-session-panels');
     const tocTab = document.getElementById('toc-edge-tab');
     const todoTab = document.getElementById('todo-edge-tab');
     if (tocTab) tocTab.classList.toggle('visible', !!(tocList && tocList.children.length));
     if (todoTab) {
-        const hasTodoPanelContent = !!(
-            pluginPanels && !pluginPanels.hidden && pluginPanels.children.length
-        );
-        todoTab.classList.toggle('visible', hasTodoPanelContent);
+        todoTab.classList.toggle('visible', todoPanelHasVisibleContent());
     }
     syncEdgeTabArrows();
     schedulePanelEdgeTabsLayout();
@@ -207,6 +203,9 @@ function syncTodoPanelContentVisibility(hasVisibleContent) {
     }
 }
 function todoPanelHasVisibleContent() {
+    if (globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.hasContent === 'function') {
+        return globalThis.MyAgentPubar.hasContent();
+    }
     var pluginPanels = document.getElementById('plugin-session-panels');
     return !!(pluginPanels && !pluginPanels.hidden && pluginPanels.children.length);
 }

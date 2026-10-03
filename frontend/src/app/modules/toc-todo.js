@@ -192,6 +192,9 @@ function initUiHoverTips(root) {
     });
 }
 
+/* 插件（ES 模块）经 globalThis 使用统一悬停说明（与 toggleTodoPlanPanel 同类的桥接）。 */
+globalThis.bindUiHoverTip = bindUiHoverTip;
+
 function scheduleTocActiveUpdate() {
     var list = document.getElementById('chat-toc-list');
     if (!list || !list.querySelector('a[data-event-index]')) return;
@@ -256,6 +259,9 @@ function clearOptionalPanelsForSessionLoad() {
     if (pluginPanels) {
         pluginPanels.replaceChildren();
         pluginPanels.hidden = true;
+    }
+    if (globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.resetForSession === 'function') {
+        globalThis.MyAgentPubar.resetForSession();
     }
     if (root) root.classList.remove('is-open');
     notifyPanelContentChanged();
@@ -428,7 +434,10 @@ function syncExtensionPanelVisibility() {
     const root = document.getElementById('chat-todo-plan');
     const pluginPanels = document.getElementById('plugin-session-panels');
     if (!root) return;
-    const hasVisibleCard = !!(pluginPanels && !pluginPanels.hidden && pluginPanels.children.length);
+    const pubar = globalThis.MyAgentPubar;
+    const hasVisibleCard = (pubar && typeof pubar.hasContent === 'function')
+        ? pubar.hasContent()
+        : !!(pluginPanels && !pluginPanels.hidden && pluginPanels.children.length);
     if (typeof syncTodoPanelContentVisibility === 'function') {
         syncTodoPanelContentVisibility(hasVisibleCard);
     } else if (!hasVisibleCard) {

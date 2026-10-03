@@ -12,9 +12,9 @@
     background: var(--surface-glass3); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
     box-shadow: 0 6px 28px rgba(0,0,0,.22), 0 2px 8px rgba(0,0,0,.1);
 }
-.change-review-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; padding: .65rem .7rem .48rem; border-bottom: 1px solid var(--border-glass); }
+.change-review-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .65rem .7rem .48rem; border-bottom: 1px solid var(--border-glass); }
 .change-review-head strong { font-size: .73rem; letter-spacing: .04em; }
-.change-review-summary { margin-top: .15rem; color: var(--text-tertiary); font-size: .62rem; }
+.change-review-summary { min-width: 0; margin: 0 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); font-size: .62rem; }
 .change-review-list { min-height: 0; overflow: auto; padding: .35rem; }
 .change-review-file { border-bottom: 1px solid var(--border-glass); }
 .change-review-file:last-child { border-bottom: 0; }
@@ -22,7 +22,12 @@
 .change-review-file-toggle { min-width: 0; flex: 1; display: flex; align-items: center; gap: .3rem; border: 0; padding: .28rem; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .change-review-file-toggle::before { content: '›'; color: var(--text-tertiary); transition: transform .15s; }
 .change-review-file-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
-.change-review-path { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 .65rem/1.35 var(--mono); }
+.change-review-path {
+    min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    /* 窄栏里路径前缀同质（D:\AI\AI Agent\...），省略前面、保留文件名段 */
+    direction: rtl; text-align: left;
+    font: 600 .65rem/1.35 var(--mono);
+}
 .change-review-count { flex: 0 0 auto; color: var(--text-tertiary); font-size: .58rem; }
 .change-review-view {
     border: 1px solid var(--border-glass); border-radius: 6px; background: var(--surface-glass2);
@@ -34,8 +39,7 @@
     padding: .1rem .32rem; color: var(--text-tertiary); font: 600 .55rem/1.2 var(--sans);
 }
 .change-review-file.is-reverted .change-review-path, .change-review-file.is-reverted .change-review-count { opacity: .62; }
-.change-review-card footer { display: flex; justify-content: flex-end; gap: .3rem; padding: .45rem .65rem .6rem; border-top: 1px solid var(--border-glass); }
-.change-review-card footer button[hidden] { display: none; }
+
 .change-review-process-badge { display: inline-flex; align-items: center; gap: .28rem; margin-left: .32rem; padding: 0; color: var(--text-secondary); font-size: .62rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; background: transparent; border: 0; cursor: pointer; }
 .change-review-stat-added { color: var(--green-accent, #a6e3a1); }
 .change-review-stat-removed { color: var(--red-accent, #f38ba8); }
@@ -45,6 +49,65 @@
 .change-review-bar strong { font-size: .68rem; color: var(--text-primary); }
 .change-review-bar-summary { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .63rem; }
 :root.theme-light .change-review-card { background: rgba(255,255,255,.9); box-shadow: 0 10px 34px rgba(15,23,42,.14); }
+/* 「改动」页签内：去卡壳，作为“节”（外壳与滚动由公共左侧栏承载） */
+#chat-todo-plan .pubar-pane .change-review-card,
+.pubar-narrow-popover .pubar-pane .change-review-card {
+    background: transparent; box-shadow: none;
+    backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+/* 节头行与计划节头 .workspace-side-panel-title 完全同规格（min-height/上下留白/左右内缩/间隙）。 */
+#chat-todo-plan .pubar-pane .change-review-head,
+.pubar-narrow-popover .pubar-pane .change-review-head {
+    align-items: center; gap: 0.32rem;
+    min-height: 1.05rem;
+    margin: 0 0 0.3rem; padding: 0 0.15rem;
+    border-bottom: 0;
+}
+/* 标题：与 .workspace-side-panel-title 同 token/字号/字重/字距（650 0.62rem/1.3）。 */
+#chat-todo-plan .pubar-pane .change-review-head strong,
+.pubar-narrow-popover .pubar-pane .change-review-head strong {
+    color: var(--workspace-side-panel-title);
+    font: 650 0.62rem/1.3 var(--sans);
+    letter-spacing: 0.05em; text-transform: uppercase;
+}
+/* 节头右上统计：与计划节头统计 .chat-todo-plan-stats 同规格（500 0.56rem/1.3）。 */
+#chat-todo-plan .pubar-pane .change-review-summary,
+.pubar-narrow-popover .pubar-pane .change-review-summary {
+    font: 500 0.56rem/1.3 var(--sans);
+    font-variant-numeric: tabular-nums;
+}
+#chat-todo-plan .pubar-pane .change-review-view,
+.pubar-narrow-popover .pubar-pane .change-review-view { padding: 0.16rem 0.34rem; font: 500 0.56rem/1.2 var(--sans); }
+/* 列表：与计划列表 .workspace-side-panel-list 同列向/同间隙。 */
+#chat-todo-plan .pubar-pane .change-review-list,
+.pubar-narrow-popover .pubar-pane .change-review-list {
+    padding: 0; display: flex; flex-direction: column; gap: 0.22rem;
+}
+#chat-todo-plan .pubar-pane .change-review-file,
+.pubar-narrow-popover .pubar-pane .change-review-file {
+    border: 1px solid var(--workspace-side-panel-item-border); border-radius: 6px;
+    background: var(--workspace-side-panel-item-bg);
+    min-width: 0;
+}
+#chat-todo-plan .pubar-pane .change-review-file:last-child,
+.pubar-narrow-popover .pubar-pane .change-review-file:last-child { border-bottom: 1px solid var(--workspace-side-panel-item-border); }
+/* 条目内边距 = 计划条目 .workspace-side-panel-item 的 0.38rem 0.4rem（不再叠加 file-head 的额外内边距）。 */
+#chat-todo-plan .pubar-pane .change-review-file-head,
+.pubar-narrow-popover .pubar-pane .change-review-file-head { padding: 0; }
+#chat-todo-plan .pubar-pane .change-review-file-toggle,
+.pubar-narrow-popover .pubar-pane .change-review-file-toggle { padding: 0.38rem 0.4rem; }
+/* 路径与行数：字号/字重/行高对齐计划条目文字（400 0.68rem/1.45）；统计维持小节字阶。 */
+#chat-todo-plan .pubar-pane .change-review-path,
+.pubar-narrow-popover .pubar-pane .change-review-path { font: 400 0.68rem/1.45 var(--mono); }
+#chat-todo-plan .pubar-pane .change-review-count,
+.pubar-narrow-popover .pubar-pane .change-review-count {
+    font: 500 0.56rem/1.3 var(--sans);
+    font-variant-numeric: tabular-nums;
+}
+#chat-todo-plan .pubar-pane .change-review-reverted-tag,
+.pubar-narrow-popover .pubar-pane .change-review-reverted-tag {
+    margin-right: 0.4rem; font: 500 0.55rem/1.2 var(--sans);
+}
 @media (max-width: 520px) {
     .change-review-bar { margin-inline: .15rem; }
 }

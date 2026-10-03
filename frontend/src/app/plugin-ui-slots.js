@@ -16,6 +16,11 @@ let sessionUiLatestGeneration = new Map();
 let pluginSessionUiCache = new Map();
 let pluginSessionPanelRenderers = new Map();
 let pluginSessionPanelCleanups = [];
+/* 上一轮真正写入过面板的容器（含 pubar 页签 host）。当 payload 里不再出现某个面板时，
+   必须显式清空对应容器，否则旧卡片会一直留在 DOM 上（例如计划清空后 session.panel 消失）。 */
+let pluginSessionPanelContainers = new Set();
+/* cleanup 与它所属容器的对应关系：容器被清空时同步摘掉这些 cleanup。 */
+let pluginSessionPanelCleanupContainers = new Map();
 let pluginChatExtensionCleanups = [];
 
 export function normalizePluginChatExtensions(rows) {
@@ -708,7 +713,23 @@ function normalizeProjectedItem(raw, kind) {
         if (inputs.length) normalized.inputs = inputs;
         return [normalized];
     });
-    return { pluginId, id, title, description, variant, fields, actions };
+    let group = null;
+    const rawGroup = raw.group;
+    if (rawGroup && typeof rawGroup === 'object') {
+        const groupId = String(rawGroup.id || '').trim();
+        const groupLabel = boundedText(rawGroup.label, 64);
+        const groupOrder = Number(rawGroup.order);
+        if (CONTRIBUTION_ID_PATTERN.test(groupId) && groupLabel) {
+            group = {
+                id: groupId,
+                label: groupLabel,
+                order: Number.isFinite(groupOrder) ? groupOrder : 100,
+            };
+        }
+    }
+    const model = { pluginId, id, title, description, variant, fields, actions };
+    if (group) model.group = group;
+    return model;
 }
 
 export function normalizePluginSessionUiResponse(payload, requestedSessionIds) {
@@ -780,10 +801,38 @@ function renderSessionPanels(rows, sessions) {
         catch (error) { console.warn('Plugin session panel cleanup failed', error); }
     });
     pluginSessionPanelCleanups = retainedCleanups;
+    const retainedOwners = new Map();
+    retainedCleanups.forEach(function (cleanup) {
+        if (pluginSessionPanelCleanupContainers.has(cleanup)) {
+            retainedOwners.set(cleanup, pluginSessionPanelCleanupContainers.get(cleanup));
+        }
+    });
+    pluginSessionPanelCleanupContainers = retainedOwners;
     const model = sessions[sessionId];
     const panels = model ? model.panels : [];
-    const fragment = document.createDocumentFragment();
+    const pubarApi = globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.paneHostFor === 'function'
+        ? globalThis.MyAgentPubar : null;
+    const fragments = new Map();
+    function containerFor(item) {
+        let container = host;
+        if (pubarApi) {
+            const group = item && item.group && item.group.id ? item.group : null;
+            try {
+                const paneHost = pubarApi.paneHostFor(
+                    group ? group.id : 'plugins',
+                    group ? { label: group.label, order: group.order } : null
+                );
+                if (paneHost) container = paneHost;
+            } catch (error) {
+                console.warn('Public sidebar pane host failed', error);
+            }
+        }
+        if (!fragments.has(container)) fragments.set(container, document.createDocumentFragment());
+        return container;
+    }
     panels.forEach(function (item) {
+        const panelContainer = containerFor(item);
+        const fragment = fragments.get(panelContainer);
         const panel = document.createElement('section');
         panel.className = `plugin-session-panel plugin-session-panel--${item.variant}`;
         panel.dataset.pluginId = item.pluginId;
@@ -816,7 +865,10 @@ function renderSessionPanels(rows, sessions) {
                         }));
                     },
                 });
-                if (typeof cleanup === 'function') pluginSessionPanelCleanups.push(cleanup);
+                if (typeof cleanup === 'function') {
+                    pluginSessionPanelCleanups.push(cleanup);
+                    pluginSessionPanelCleanupContainers.set(cleanup, panelContainer);
+                }
                 fragment.appendChild(panel);
                 return;
             } catch (error) {
@@ -980,11 +1032,28 @@ function renderSessionPanels(rows, sessions) {
         }
         fragment.appendChild(panel);
     });
-    host.replaceChildren(fragment);
-    const visiblePanelCount = Array.from(host.children).filter(function (panel) {
-        return !panel.hidden;
-    }).length;
-    host.hidden = visiblePanelCount === 0;
+    /* 本次 payload 已无面板、但上一轮写入过的容器：显式清空并摘掉其 cleanup。
+       只重建「本次仍有面板」的容器会让消失的面板（计划清空、插件停用等）永远留在页面上。 */
+    pluginSessionPanelContainers.forEach(function (container) {
+        if (fragments.has(container)) return;
+        container.replaceChildren();
+        pluginSessionPanelCleanups = pluginSessionPanelCleanups.filter(function (cleanup) {
+            if (pluginSessionPanelCleanupContainers.get(cleanup) !== container) return true;
+            pluginSessionPanelCleanupContainers.delete(cleanup);
+            return false;
+        });
+    });
+    pluginSessionPanelContainers = new Set(fragments.keys());
+    let visiblePanelCount = 0;
+    fragments.forEach(function (fragment, container) {
+        container.replaceChildren(fragment);
+        visiblePanelCount += Array.from(container.children).filter(function (panel) {
+            return !panel.hidden;
+        }).length;
+    });
+    const usedFallbackHost = fragments.has(host);
+    if (pubarApi && !usedFallbackHost) host.hidden = true;
+    else host.hidden = visiblePanelCount === 0;
     document.dispatchEvent(new CustomEvent('myagent:plugin-session-ui-rendered', {
         detail: { sessionId, panelCount: visiblePanelCount },
     }));

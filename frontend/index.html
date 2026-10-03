@@ -51,7 +51,7 @@
                     <span class="sidebar-runtime-dot" aria-hidden="true"></span>
                     <span id="sidebar-runtime-status">Runtime 在线</span>
                 </span>
-                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v5.20261002</span>
+                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v5.20261004</span>
             </div>
         </aside>
 
@@ -96,8 +96,13 @@
 
             <div class="workbench">
                 <div class="chat-stage">
-                    <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="会话扩展面板">
+                    <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="会话状态面板">
                         <div class="chat-todo-plan-inner">
+                            <div class="pubar-head">
+                                <span class="pubar-title">会话状态</span>
+                            </div>
+                            <div class="pubar-tabs" role="tablist" aria-label="会话状态面板"></div>
+                            <div class="pubar-panes"></div>
                             <div id="plugin-session-panels" class="plugin-session-panels" hidden></div>
                         </div>
                     </aside>
@@ -113,7 +118,7 @@
                             </div>
                         </div>
                     </aside>
-                    <button type="button" class="panel-edge-handle todo-handle" id="todo-edge-tab" onclick="toggleTodoPlanPanel()" aria-label="折叠会话扩展面板">▶</button>
+                    <button type="button" class="panel-edge-handle todo-handle" id="todo-edge-tab" onclick="toggleTodoPlanPanel()" aria-label="折叠会话状态面板">▶</button>
                     <button type="button" class="panel-edge-handle toc-handle" id="toc-edge-tab" onclick="toggleTocPanel()" aria-label="折叠历史面板">◀</button>
                 </div>
             </div>
@@ -125,6 +130,13 @@
                         <button type="button" class="rewrite-undo-btn">撤销</button>
                     </div>
                     <div id="plugin-composer-actions" class="plugin-composer-actions" role="toolbar" aria-label="插件动作" hidden></div>
+                    <div id="pubar-narrow-slot" class="pubar-narrow-slot">
+                        <div id="pubar-narrow-strip" class="pubar-narrow-strip" role="toolbar" aria-label="会话状态条目" hidden></div>
+                        <div id="pubar-narrow-popover" class="pubar-narrow-popover" role="dialog" aria-label="会话状态面板" hidden>
+                            <header class="pnp-head"><strong class="pnp-title"></strong><button type="button" class="pnp-close" aria-label="关闭">×</button></header>
+                            <div class="pnp-body"></div>
+                        </div>
+                    </div>
                     <div class="composer-row">
                         <div class="input-wrapper">
                             <button type="button" id="skill-picker-btn" class="skill-picker-btn" aria-label="选择 Skill" aria-haspopup="dialog" aria-expanded="false" data-ui-tip="选择 Skill"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>

@@ -48,6 +48,33 @@ def test_plugin_ui_slot_frontend_runtime_and_safe_text_rendering():
     )[0]
 
 
+def test_session_panels_clear_containers_whose_panels_disappeared():
+    """面板从 payload 消失（如计划清空）时，原容器必须被清空。
+
+    回归：renderSessionPanels 只重建「本次仍有面板」的容器，导致清空后的旧卡片
+    永久留在左侧会话状态面板里（表现为“当前计划不刷新”）。
+    """
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for frontend runtime checks")
+    result = subprocess.run(
+        [node, str(ROOT / "tests/js/session_panel_container_cleanup_runtime.mjs")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "session panel container cleanup runtime checks passed" in result.stdout
+
+    source = (ROOT / "frontend/src/app/plugin-ui-slots.js").read_text(encoding="utf-8")
+    assert "pluginSessionPanelContainers.forEach(function (container) {" in source
+    assert "if (fragments.has(container)) return;" in source
+    assert "pluginSessionPanelContainers = new Set(fragments.keys());" in source
+    assert "pluginSessionPanelCleanupContainers.get(cleanup) !== container" in source
+
+
 def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_rendering():
     source = (ROOT / "plugins/change-review/web/change-review.js").read_text(encoding="utf-8")
     styles = (ROOT / "plugins/change-review/web/change-review.css").read_text(encoding="utf-8")
@@ -93,7 +120,7 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "chooseVisibleChangeReviewIndex" in source
     assert "document.addEventListener('scroll', viewportListener, true)" in source
     assert "document.removeEventListener('scroll', viewportListener, true)" in source
-    assert "if (shouldSync) syncActiveAggregateToViewport();" in source
+    assert "if (shouldSync || hasUserTurnBoundary) syncActiveAggregateToViewport();" in source
     assert "new ResizeObserver(function ()" in source
     assert "scheduleScanExisting();" in source
     assert "if (!options.deferRender) {" in source
@@ -121,6 +148,31 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "html.theme-light .dock-change-diff" in dock_styles
     assert "--code-surface-bg: #f5f7fb" in app_styles
     assert "change-review" not in (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+
+
+def test_change_review_association_covers_the_whole_current_turn():
+    source = (ROOT / "plugins/change-review/web/change-review.js").read_text(encoding="utf-8")
+
+    assert "function latestTurnRange" in source
+    assert "function nodeWithinTurnRange" in source
+    assert "function turnRangeAggregate" in source
+    assert "关联区域 = 当前轮的用户问题 → 对应 final 卡片" in source
+
+    viewport = source.split("function viewportAggregate", 1)[1].split(
+        "function syncActiveAggregateToViewport", 1
+    )[0]
+    assert "viewedTurnRange(stream, users)" in viewport  # 关联按“正在查看的轮”
+    assert "pickReviewedTurnKey" in viewport
+    assert "viewportFallbackAllowed" in viewport  # 收起兜底仅在查看最新轮时生效
+    assert "nodeWithinTurnRange(aggregate, latest)" in viewport
+
+    render_section = source.split("function render()", 1)[1].split("function scheduleRender", 1)[0]
+    assert "rows.length" in render_section
+    assert "isExpanded" not in render_section
+
+    scan = source.split("function scanExisting", 1)[1].split("function resetForSession", 1)[0]
+    assert "nodeWithinTurnRange(row, range)" in scan
+    assert "rangeAggregate" in scan
 
 
 def test_change_review_prefers_the_expanded_process_visible_in_the_viewport():
@@ -160,8 +212,18 @@ def test_plugin_navigation_host_is_removed_from_both_html_sources():
         html = (ROOT / relative).read_text(encoding="utf-8")
         assert 'id="plugin-navigation"' not in html
         assert html.count('id="plugin-session-panels"') == 1
-        assert html.count('id="plugin-settings-sections"') == 1
         assert html.count('id="plugin-composer-actions"') == 1
+        # 「界面设置」弹窗已由设置中心取代：插件贡献的设置槽位改在设置中心的「插件」分区里汇总
+        assert 'id="settings-modal-root"' not in html
+        assert 'id="plugin-settings-sections"' not in html
+
+
+def test_plugin_settings_contributions_surface_in_the_settings_center():
+    section = (ROOT / "app/templates/static/settings/sections_ext.js").read_text(encoding="utf-8")
+
+    assert "ui_contributions" in section
+    assert "settings.section" in section
+    assert "renderPluginSettingsSections" not in section
 
 
 def test_plugin_navigation_renderer_is_not_mounted_in_main_ui():
@@ -170,6 +232,58 @@ def test_plugin_navigation_renderer_is_not_mounted_in_main_ui():
 
     assert "renderPluginNavigation" not in source
     assert ".plugin-navigation" not in styles
+
+
+def test_todo_plan_items_clamp_to_three_lines_with_hover_tip():
+    source = (ROOT / "plugins/session-todo/web/session-panel.js").read_text(encoding="utf-8")
+    styles = (ROOT / "plugins/session-todo/web/session-panel.css").read_text(encoding="utf-8")
+    core = (ROOT / "frontend/src/app/modules/toc-todo.js").read_text(encoding="utf-8")
+
+    assert "-webkit-line-clamp:3" in styles
+    assert ".todo-plan-text" in styles
+    assert "el.scrollHeight <= el.clientHeight + 1" in source
+    assert "setAttribute('data-ui-tip'" in source
+    assert "globalThis.bindUiHoverTip" in source
+    assert "globalThis.bindUiHoverTip = bindUiHoverTip;" in core
+
+
+def test_todo_in_progress_icon_uses_play_glyph_like_dsh_and_zcode():
+    source = (ROOT / "plugins/session-todo/web/session-panel.js").read_text(encoding="utf-8")
+
+    # 进行中 = 描边播放三角（DSH 用 IconPlayOutlineRegular，ZCode 侧栏用 “[>]” + 强调色）
+    assert "M8.6 6.6 17.6 12 8.6 17.4Z" in source
+    # 旧的 3/4 缺口弧环已退役
+    assert "A8.2 8.2 0 1 1 3.8 12" not in source
+    # 待办/完成的圆环族保持不变
+    assert 'circle cx="12" cy="12" r="8.2"' in source
+
+
+def test_change_review_section_typography_matches_the_plan_section():
+    styles = (ROOT / "plugins/change-review/web/change-review.css").read_text(encoding="utf-8")
+
+    # 节头标题与计划节头 .workspace-side-panel-title 同 token / 字号 / 字重 / 字距
+    assert "var(--workspace-side-panel-title)" in styles
+    assert "font: 650 0.62rem/1.3 var(--sans);" in styles
+    # 节头右上统计与计划统计 .chat-todo-plan-stats 同规格
+    assert "font: 500 0.56rem/1.3 var(--sans);" in styles
+    # 列表与计划列表 .workspace-side-panel-list 同间隙
+    assert "gap: 0.22rem;" in styles
+    # 条目内边距 = 计划条目 .workspace-side-panel-item 的 0.38rem 0.4rem
+    assert ".pubar-pane .change-review-file-head { padding: 0; }" in styles
+    assert ".pubar-pane .change-review-file-toggle { padding: 0.38rem 0.4rem; }" in styles
+    # 路径文字字号 / 字重 / 行高对齐计划条目文字（400 0.68rem/1.45）
+    assert "font: 400 0.68rem/1.45 var(--mono);" in styles
+
+
+def test_pubar_narrow_strip_items_are_wired_by_plugins():
+    todo = (ROOT / "plugins/session-todo/web/session-panel.js").read_text(encoding="utf-8")
+    goal = (ROOT / "plugins/agent-goal/web/session-panel.js").read_text(encoding="utf-8")
+    review = (ROOT / "plugins/change-review/web/change-review.js").read_text(encoding="utf-8")
+
+    assert "configureNarrow('plan'" in todo
+    assert "configureNarrow('goal'" in goal
+    assert "toggle.click()" in goal and "remove.click()" in goal
+    assert "narrowSummaryHtml" in review and "setNarrow" in review
 
 
 def test_game_arena_declares_navigation_without_core_frontend_coupling():

@@ -28,6 +28,7 @@
                     "description": "The plan maintained for this session.",
                     "variant": "info",
                     "order": 20,
+                    "group": {"id": "plan", "label": "计划", "order": 10},
                     "visible_when": {"path": "/has_plan", "when": "truthy"},
                     "renderer": {"module": "session-panel.js", "style": "session-panel.css"},
                     "actions": [

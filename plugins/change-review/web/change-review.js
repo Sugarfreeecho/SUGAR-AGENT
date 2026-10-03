@@ -3,6 +3,9 @@ const aggregateRecency = [];
 let activeAggregate = null;
 let drawer = null;
 let bar = null;
+let pubarHandle = null;
+let cardHost = null;
+let panelObserver = null;
 let resizeObserver = null;
 let processObserver = null;
 let sessionObserver = null;
@@ -53,6 +56,82 @@ function latestRootTurnId() {
     if (!turns.length) return '';
     return String(turns[turns.length - 1].getAttribute('data-event-index') || '');
 }
+/* 「一轮」口径（见 frontend/src/app/modules/message-rendering.js 术语统一注记）：
+   一条非追问用户输入 → 下一条非追问用户输入或链路结束；user_steer 是轮内消息、不切轮。
+   改动审查的关联区域 = 当前轮的用户问题 → 对应 final 卡片。 */
+function latestTurnRange(stream, users) {
+    stream = stream || document.getElementById('chat-stream');
+    if (!stream) return null;
+    users = users || stream.querySelectorAll('.msg-wrap--user[data-event-index]');
+    if (!users.length) return null;
+    const start = users[users.length - 1];
+    let end = start;
+    for (let node = start.nextElementSibling; node; node = node.nextElementSibling) {
+        if (node.classList && node.classList.contains('msg-wrap--user')) break;
+        end = node;
+    }
+    return { stream, start, end };
+}
+function nodeWithinTurnRange(node, range) {
+    if (!node || !range) return false;
+    if (!range.stream.contains(node)) return false;
+    if (node === range.start || node === range.end) return true;
+    if (!(range.start.compareDocumentPosition(node) & 4)) return false; // DOCUMENT_POSITION_FOLLOWING
+    return Boolean(range.end.compareDocumentPosition(node) & 2); // DOCUMENT_POSITION_PRECEDING
+}
+/* 正在「查看」的轮（视口口径）：贴近底部 = 最新轮；否则取视口中线以上最近一条用户消息所在轮。 */
+function scrollViewportOf(stream) {
+    let node = stream && stream.parentElement;
+    while (node && node !== document.documentElement) {
+        const style = typeof globalThis.getComputedStyle === 'function'
+            ? globalThis.getComputedStyle(node) : null;
+        if (style && (overflowClips(style.overflowY) || overflowClips(style.overflow))) return node;
+        node = node.parentElement;
+    }
+    return null;
+}
+function viewedTurnRange(stream, users) {
+    stream = stream || document.getElementById('chat-stream');
+    if (!stream) return null;
+    users = users || stream.querySelectorAll('.msg-wrap--user[data-event-index]');
+    if (!users.length) return null;
+    const container = scrollViewportOf(stream) || stream;
+    let nearBottom = false;
+    if (typeof container.scrollTop === 'number' && Number(container.clientHeight) > 0) {
+        nearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 24;
+    }
+    const cr = container.getBoundingClientRect ? container.getBoundingClientRect() : { top: 0, height: 0 };
+    const pivot = cr.top + cr.height * 0.5;
+    let chosen = null;
+    if (!nearBottom) {
+        // 用户轮次按文档流排序，二分定位视口中线之前最近的一轮。
+        // 长历史不再在每个滚动帧读取所有用户消息的位置。
+        let low = 0, high = users.length;
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            if (users[mid].getBoundingClientRect().top <= pivot) low = mid + 1;
+            else high = mid;
+        }
+        if (low > 0) chosen = users[low - 1];
+    }
+    if (nearBottom) chosen = users[users.length - 1];
+    if (!chosen) chosen = users[0];
+    let end = chosen;
+    for (let node = chosen.nextElementSibling; node; node = node.nextElementSibling) {
+        if (node.classList && node.classList.contains('msg-wrap--user')) break;
+        end = node;
+    }
+    return { stream, start: chosen, end, key: String(chosen.getAttribute('data-event-index') || '') };
+}
+function turnRangeAggregate(range) {
+    if (!range) return null;
+    let last = null;
+    range.stream.querySelectorAll('.process-aggregate').forEach(function (aggregate) {
+        if (nodeWithinTurnRange(aggregate, range)) last = aggregate;
+    });
+    return last;
+}
+
 function inferredAggregateTurnId(aggregate) {
     if (!aggregate) return '';
     const remembered = String(aggregate.dataset.changeReviewTurnId || '');
@@ -192,16 +271,42 @@ function visibilityMetric(aggregate) {
         recency: aggregateRecency.indexOf(aggregate),
     };
 }
+export function pickReviewedTurnKey(viewedKey, latestKey) {
+    /* 审查关联以「正在查看的轮」为准；查看轮未知时退回最新轮。 */
+    return String(viewedKey || latestKey || '');
+}
+export function viewportFallbackAllowed(viewedKey, latestKey) {
+    /* “过程框收起也关联显示”的兜底仅当正在查看的轮就是最新轮时生效；切到别的轮次 → 收起。 */
+    return Boolean(latestKey) && (!viewedKey || viewedKey === latestKey);
+}
 function viewportAggregate() {
+    const stream = document.getElementById('chat-stream');
+    const users = stream ? stream.querySelectorAll('.msg-wrap--user[data-event-index]') : [];
+    const viewed = viewedTurnRange(stream, users);
+    const latest = latestTurnRange(stream, users);
+    const latestKey = latest ? String(latest.start.getAttribute('data-event-index') || '') : '';
+    const reviewedKey = pickReviewedTurnKey(viewed && viewed.key, latestKey);
     const candidates = [];
     const metrics = [];
     aggregateChanges.forEach(function (_rows, aggregate) {
         if (!aggregateIsCurrent(aggregate) || !isExpanded(aggregate) || !displayRows(aggregate).length) return;
+        /* 关联按轮：只取「正在查看的那一轮」的过程框。 */
+        if (reviewedKey && inferredAggregateTurnId(aggregate) !== reviewedKey) return;
         candidates.push(aggregate);
         metrics.push(visibilityMetric(aggregate));
     });
     const index = chooseVisibleChangeReviewIndex(metrics);
-    return index >= 0 ? candidates[index] : null;
+    if (index >= 0) return candidates[index];
+    /* 关联区域放宽（仅当正在查看的轮就是最新轮）：过程框收起（轮已结束/手动收起）时，
+       本轮改动仍关联显示，直到下一轮用户消息出现；切到别的轮次 → 收起。 */
+    if (!viewportFallbackAllowed(viewed && viewed.key, latestKey)) return null;
+    if (!latest) return null;
+    let fallback = null;
+    aggregateChanges.forEach(function (_rows, aggregate) {
+        if (!aggregateIsCurrent(aggregate) || !displayRows(aggregate).length) return;
+        if (nodeWithinTurnRange(aggregate, latest)) fallback = aggregate;
+    });
+    return fallback;
 }
 function syncActiveAggregateToViewport(options) {
     const next = viewportAggregate();
@@ -276,7 +381,7 @@ function appendColoredStats(container, value, includeOmitted) {
     }
     container.title = statsTitle(value);
 }
-function setSummary(container, active, reverted) {
+function setSummary(container, active, reverted, compact) {
     if (!container) return;
     container.replaceChildren();
     if (!active.length) {
@@ -287,11 +392,29 @@ function setSummary(container, active, reverted) {
         return;
     }
     const value = stats(active);
+    if (compact) {
+        appendColoredStats(container, value, false);
+        container.title = statsTitle(value);
+        return;
+    }
     container.append(document.createTextNode(`${active.length} ${t('个文件', 'files')} · `));
     appendColoredStats(container, value, true);
     if (reverted.length) {
         container.append(document.createTextNode(` · ${reverted.length} ${t('已撤销', 'reverted')}`));
     }
+}
+/* 窄态条目摘要（HTML）：N 个文件 · <i class="pn-add">+x</i> <i class="pn-del">−y</i> */
+function narrowSummaryHtml(parts) {
+    if (!parts.active.length) {
+        return parts.reverted.length
+            ? `${parts.reverted.length} ${t('个文件已撤销，可恢复', 'files reverted, restorable')}`
+            : '';
+    }
+    const value = stats(parts.active);
+    let html = `${parts.active.length} ${t('个文件', 'files')} · `
+        + `<i class="pn-add">+${value.added}</i> <i class="pn-del">−${value.removed}</i>`;
+    if (parts.reverted.length) html += ` · ${parts.reverted.length} ${t('已撤销', 'reverted')}`;
+    return html;
 }
 const pendingBadgeTimers = new WeakMap();
 
@@ -414,6 +537,7 @@ function renderFile(row, options) {
     const toggle = button('', 'change-review-file-toggle');
     toggle.setAttribute('aria-expanded', 'false');
     const path = document.createElement('span'); path.className = 'change-review-path'; path.textContent = row.path || '';
+    path.title = row.path || '';
     const count = document.createElement('span'); count.className = 'change-review-count';
     if (!hasLineStats(row)) {
         count.textContent = t('未统计', 'no line stats');
@@ -446,19 +570,26 @@ function renderReviewHost(host, rows, options) {
     });
     const parts = splitReviewRows(rows);
     const summary = host.querySelector('.change-review-summary');
-    setSummary(summary, parts.active, parts.reverted);
+    setSummary(summary, parts.active, parts.reverted, host.classList.contains('change-review-card'));
     const view = host.querySelector('.change-review-view');
     if (view) {
         view.hidden = !options.showView;
         view.onclick = function () { openDetails(); };
     }
 }
+function buildCard() {
+    const card = document.createElement('div');
+    card.className = 'change-review-card';
+    card.innerHTML = `<header class="change-review-head">`
+        + `<strong>${t('改动审查', 'Change review')}</strong>`
+        + `<div class="change-review-summary"></div>`
+        + `<button type="button" class="change-review-view">${t('查看', 'View')}</button>`
+        + `</header><div class="change-review-list"></div>`;
+    return card;
+}
 function shell(className) {
     const host = document.createElement('aside'); host.className = className;
-    host.innerHTML = `<div class="change-review-card"><header class="change-review-head">`
-        + `<div><strong>${t('改动审查', 'Change review')}</strong><div class="change-review-summary"></div></div>`
-        + `</header><div class="change-review-list"></div>`
-        + `<footer><button type="button" class="change-review-view">${t('查看', 'View')}</button></footer></div>`;
+    host.appendChild(buildCard());
     return host;
 }
 function openDetails(selectedRow) {
@@ -486,6 +617,23 @@ function hasRoom() {
     return spare >= 224 + goalWidth;
 }
 function updatePlacement(visible) {
+    if (pubarHandle) {
+        pubarHandle.setVisible(Boolean(visible));
+        const rows = visible && activeAggregate ? displayTurnRows(activeAggregate) : [];
+        const parts = splitReviewRows(rows);
+        pubarHandle.setCount(parts.active.length + parts.reverted.length);
+        /* 窄态条目由公共栏统一承载（输入框上方）：条目含摘要与「查看」；点击条目本体打开浮窗。 */
+        if (typeof pubarHandle.setNarrow === 'function') {
+            pubarHandle.setNarrow({
+                icon: 'diff',
+                label: t('改动审查', 'Change review'),
+                summaryHtml: narrowSummaryHtml(parts),
+                actions: [{ label: t('查看', 'View'), onClick: function () { openDetails(); } }],
+            });
+        }
+        bar.hidden = true;
+        return;
+    }
     const wide = visible && hasRoom();
     drawer.hidden = !wide; bar.hidden = !visible || wide;
     if (visible && !wide) {
@@ -495,9 +643,10 @@ function updatePlacement(visible) {
 }
 function render() {
     const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
-    const visible = Boolean(activeAggregate && aggregateIsCurrent(activeAggregate) && rows.length
-        && isExpanded(activeAggregate));
-    if (visible) renderReviewHost(drawer, rows, {
+    /* 关联区域 = 当前轮（用户问题 → 对应 final 卡片）：过程框展开与否不再影响
+       “这一轮的改动”是否关联显示。 */
+    const visible = Boolean(activeAggregate && aggregateIsCurrent(activeAggregate) && rows.length);
+    if (visible && cardHost) renderReviewHost(cardHost, rows, {
         showView: true,
         onOpen: openDetails,
     });
@@ -531,9 +680,15 @@ export function acceptChangeUpdate(old, raw) {
 }
 function applyTool(detail, options) {
     options = options || {};
-    const event = detail && detail.event; const aggregate = detail && detail.aggregate;
+    const event = detail && detail.event; let aggregate = detail && detail.aggregate;
     const incoming = event && event.ui && Array.isArray(event.ui.changes) ? event.ui.changes : [];
     if (!incoming.length) return false;
+    if (!aggregate && detail && detail.row) {
+        /* 关联区域 = 当前轮（用户问题 → 对应 final 卡片）：行即便不在任何执行过程框内，
+           只要落在当前轮区间内，也归属该轮。 */
+        const range = latestTurnRange();
+        if (range && nodeWithinTurnRange(detail.row, range)) aggregate = turnRangeAggregate(range);
+    }
     if (!aggregate) {
         // 工具行已渲染但过程框尚未就绪（或正在移动）：安排一次重扫，尽快补挂改动统计，
         // 避免要等到下一个工具事件/整段重放才出现 +- 数字。
@@ -593,9 +748,15 @@ function scanExisting() {
     const roots = [];
     const stream = document.getElementById('chat-stream');
     if (stream) roots.push(stream);
+    /* 关联区域 = 当前轮（用户问题 → 对应 final 卡片）：行优先归属所在过程框；
+       不在任何过程框内的行，回落归属当前轮的最后一个过程框。 */
+    const range = latestTurnRange();
+    const rangeAggregate = turnRangeAggregate(range);
     roots.forEach(function (root) { root.querySelectorAll('.feed-item.feed--tool').forEach(function (row) {
         if (!row._toolCallEvent) return;
-        const aggregate = row.closest('.process-aggregate');
+        let aggregate = row.closest('.process-aggregate');
+        if (!aggregate && rangeAggregate && nodeWithinTurnRange(row, range)) aggregate = rangeAggregate;
+        if (!aggregate) return;
         const applied = applyTool({ event: row._toolCallEvent, row, aggregate,
             sessionId: row._toolCallEvent.session_id || mountedSessionId,
             rootSessionId: aggregateSessionId(aggregate) || mountedSessionId },
@@ -634,7 +795,24 @@ function resetForSession(nextSessionId) {
 function mount() {
     const stage = document.querySelector('.chat-stage'); const inner = document.querySelector('.panel-inner');
     if (!stage || !inner) return false;
-    drawer = shell('change-review-drawer'); drawer.hidden = true; stage.appendChild(drawer);
+    const pubar = globalThis.MyAgentPubar;
+    if (pubar && typeof pubar.registerPane === 'function') {
+        pubarHandle = pubar.registerPane({
+            id: 'changes',
+            label: '改动',
+            order: 90,
+        });
+        if (pubarHandle && pubarHandle.host) {
+            cardHost = buildCard();
+            pubarHandle.host.appendChild(cardHost);
+        } else {
+            pubarHandle = null;
+        }
+    }
+    if (!cardHost) {
+        drawer = shell('change-review-drawer'); drawer.hidden = true; stage.appendChild(drawer);
+        cardHost = drawer;
+    }
     bar = document.createElement('div'); bar.className = 'change-review-bar'; bar.hidden = true;
     bar.innerHTML = `<strong>${t('改动审查', 'Change review')}</strong>`
         + `<span class="change-review-bar-summary"></span><button type="button" class="change-review-view">${t('查看', 'View')}</button>`;
@@ -646,12 +824,22 @@ function mount() {
     resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(function () {
         const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
         updatePlacement(Boolean(activeAggregate && aggregateIsCurrent(activeAggregate)
-            && rows.length && isExpanded(activeAggregate)));
+            && rows.length));
         scheduleViewportSync();
     }) : null;
     if (resizeObserver) { resizeObserver.observe(stage); resizeObserver.observe(inner); }
+    if (pubarHandle) {
+        panelObserver = typeof MutationObserver === 'function' ? new MutationObserver(function () {
+            scheduleRender();
+        }) : null;
+        const planRoot = document.getElementById('chat-todo-plan');
+        if (panelObserver && planRoot) {
+            panelObserver.observe(planRoot, { attributes: true, attributeFilter: ['class'] });
+        }
+    }
     processObserver = typeof MutationObserver === 'function' ? new MutationObserver(function (mutations) {
         let hasInsertedRows = false;
+        let hasUserTurnBoundary = false;
         let shouldSync = false;
         mutations.forEach(function (mutation) {
             if (mutation.type === 'childList' && mutation.addedNodes && mutation.addedNodes.length) {
@@ -669,6 +857,13 @@ function mount() {
                             || node.querySelector('.process-aggregate-title')))
                     );
                 });
+                /* 新一轮用户消息 = 轮边界：重新解析“当前轮”关联区域。 */
+                hasUserTurnBoundary = hasUserTurnBoundary || Array.from(mutation.addedNodes).some(function (node) {
+                    return node && node.nodeType === 1 && (
+                        (node.matches && node.matches('.msg-wrap--user'))
+                        || (node.querySelector && node.querySelector('.msg-wrap--user'))
+                    );
+                });
             }
             // Only the aggregate's own expanded/collapsed class affects which
             // review is active. Streaming text and child-node mutations inside
@@ -684,7 +879,7 @@ function mount() {
         // Historical process bodies are rendered lazily after expansion. Re-read
         // their tool rows so persisted ui.changes become visible immediately.
         if (hasInsertedRows) scheduleScanExisting();
-        if (shouldSync) syncActiveAggregateToViewport();
+        if (shouldSync || hasUserTurnBoundary) syncActiveAggregateToViewport();
     }) : null;
     if (processObserver) processObserver.observe(stage, {
         subtree: true, attributes: true, childList: true, attributeFilter: ['class'],
@@ -745,6 +940,7 @@ export async function installChatExtension(context) {
         document.removeEventListener('myagent:ui-event', uiListener);
         document.removeEventListener('myagent:change-review-state', reviewStateListener);
         document.removeEventListener('myagent:extension-state-changed', sessionListener);
+        document.removeEventListener('myagent:language-change', render);
         document.removeEventListener('scroll', viewportListener, true);
         if (typeof globalThis.removeEventListener === 'function') {
             globalThis.removeEventListener('resize', viewportListener);
@@ -752,6 +948,13 @@ export async function installChatExtension(context) {
         if (resizeObserver) resizeObserver.disconnect();
         if (processObserver) processObserver.disconnect();
         if (sessionObserver) sessionObserver.disconnect();
+        if (panelObserver) panelObserver.disconnect();
+        panelObserver = null;
+        if (pubarHandle) {
+            pubarHandle.remove();
+            pubarHandle = null;
+        }
+        cardHost = null;
         if (scanTimer !== null) {
             globalThis.clearTimeout(scanTimer);
             scanTimer = null;

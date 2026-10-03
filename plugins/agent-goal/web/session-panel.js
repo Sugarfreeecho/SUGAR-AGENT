@@ -50,6 +50,11 @@ function elapsedText(seconds) {
     return `${secs}${t('秒')}`;
 }
 
+function tokenText(value) {
+    const total = Math.max(0, Number(value) || 0);
+    return total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total);
+}
+
 function objectiveSummary(value) {
     const full = String(value || '').replace(/\s+/g, ' ').trim();
     return full.length <= 200 ? full : `${full.slice(0, 199).trimEnd()}…`;
@@ -86,17 +91,23 @@ function askBudget() {
     return value;
 }
 
+// Hosts recreate panel DOM on refresh; retain a bounded history across renders.
+const lastGoalActivitySignature = new Map();
+const ACTIVITY_HISTORY_LIMIT = 64;
+
 export function renderSessionPanel(context) {
     const panel = context.container;
+    const activityKey = JSON.stringify([context.sessionId, context.item.pluginId, context.item.id]);
     panel.classList.add('agent-goal-panel-host');
     let alive = true;
     let goal = initialGoal(context.item);
     let receivedAt = Date.now();
     let activeModal = null;
+    let lastClockSecond = null;
 
     const card = element('section', 'chat-goal-card workspace-side-panel');
     const heading = element('div', 'chat-goal-heading workspace-side-panel-title');
-    const status = element('span');
+    const status = element('span', 'chat-goal-status');
     heading.append(element('span', '', 'GOAL'), status);
     const objective = element('div', 'chat-goal-objective workspace-side-panel-item');
     objective.tabIndex = 0;
@@ -118,7 +129,8 @@ export function renderSessionPanel(context) {
     const review = element('button', 'chat-goal-review-btn', t('结果审核'));
     review.type = 'button';
     actions.append(stats, toggle, edit, remove, review);
-    card.append(heading, objective, actions);
+    const metaLine = element('div', 'chat-goal-meta workspace-side-panel-meta');
+    card.append(heading, objective, metaLine, actions);
     panel.appendChild(card);
 
     function closeModal() {
@@ -129,6 +141,7 @@ export function renderSessionPanel(context) {
     }
 
     function hideGoalPanel() {
+        lastGoalActivitySignature.delete(activityKey);
         goal = null;
         closeModal();
         card.hidden = true;
@@ -183,27 +196,70 @@ export function renderSessionPanel(context) {
         return value;
     }
 
-    function render() {
+    function renderClock() {
         if (!goal) return;
         const labels = { active: '进行中', paused: '已暂停', completed: '已完成', blocked: '已阻塞', cancelled: '已取消' };
         const currentStatus = String(goal.status || 'active');
         status.textContent = t(labels[currentStatus] || currentStatus)
             + (currentStatus === 'active' ? ` · ${elapsedText(liveElapsed())}` : '');
+        const meta = metaText();
+        stats.title = meta;
+        stats.setAttribute('aria-label', `${t('统计信息')}: ${meta}`);
+        lastClockSecond = Math.floor(liveElapsed());
+        const pubar = globalThis.MyAgentPubar;
+        if (pubar && typeof pubar.updateNarrowChip === 'function') {
+            pubar.updateNarrowChip('goal', status.textContent);
+        }
+    }
+
+    function render() {
+        if (!goal) return;
+        renderClock();
+        const currentStatus = String(goal.status || 'active');
         const full = String(goal.objective || '').trim();
         objective.textContent = objectiveSummary(full);
         objective.title = full;
         objective.setAttribute('aria-label', full);
-        const meta = metaText();
-        stats.title = meta;
-        stats.setAttribute('aria-label', `${t('统计信息')}: ${meta}`);
+        const usedTokens = Math.max(0, Number(goal.used_tokens || 0));
+        const remainingTokens = goal.token_budget == null ? null : Math.max(0, Number(goal.remaining_tokens || 0));
+        metaLine.textContent = remainingTokens == null
+            ? `${t('已用')} ${tokenText(usedTokens)}`
+            : `${t('已用')} ${tokenText(usedTokens)} · ${t('剩余')} ${tokenText(remainingTokens)}`;
+        const activitySignature = currentStatus + '|' + full;
+        if (lastGoalActivitySignature.get(activityKey) !== activitySignature) {
+            lastGoalActivitySignature.set(activityKey, activitySignature);
+            if (lastGoalActivitySignature.size > ACTIVITY_HISTORY_LIMIT) {
+                lastGoalActivitySignature.delete(lastGoalActivitySignature.keys().next().value);
+            }
+            const pubar = globalThis.MyAgentPubar;
+            if (pubar && typeof pubar.notifyActivity === 'function') {
+                pubar.notifyActivity(panel);
+            }
+        }
         const paused = currentStatus === 'paused';
         toggle.hidden = currentStatus !== 'active' && !paused;
         toggle.title = t(paused ? '开始 Goal' : '暂停 Goal');
-        toggle.querySelector('.chat-goal-icon-play').hidden = !paused;
-        toggle.querySelector('.chat-goal-icon-pause').hidden = paused;
+        toggle.querySelector('.chat-goal-icon-play').toggleAttribute('hidden', !paused);
+        toggle.querySelector('.chat-goal-icon-pause').toggleAttribute('hidden', paused);
         edit.hidden = currentStatus === 'completed';
         remove.hidden = currentStatus === 'completed';
         review.hidden = currentStatus !== 'completed';
+        /* 窄态条目（输入框上方）：状态胶囊 + 与卡内一致的行内动作按钮（复用原按钮点击）。 */
+        const pubar = globalThis.MyAgentPubar;
+        if (pubar && typeof pubar.configureNarrow === 'function') {
+            const actions = [];
+            if (!toggle.hidden) actions.push({ icon: paused ? 'play' : 'pause', tip: toggle.title, onClick: function () { toggle.click(); } });
+            if (!edit.hidden) actions.push({ icon: 'edit', tip: edit.title, onClick: function () { edit.click(); } });
+            if (!remove.hidden) actions.push({ icon: 'trash', tip: remove.title, onClick: function () { remove.click(); } });
+            if (!review.hidden) actions.push({ label: review.textContent, onClick: function () { review.click(); } });
+            const tone = currentStatus === 'active' ? 'accent' : (currentStatus === 'completed' ? 'green' : 'neutral');
+            pubar.configureNarrow('goal', {
+                icon: 'target', label: 'GOAL',
+                chip: { text: status.textContent, tone: tone },
+                summary: objectiveSummary(full),
+                actions: actions,
+            });
+        }
     }
 
     function openEdit() {
@@ -310,7 +366,12 @@ export function renderSessionPanel(context) {
     review.addEventListener('click', openReview);
 
     render();
-    const timer = globalThis.setInterval(function () { if (alive && goal) render(); }, 1000);
+    const tickClock = function () {
+        if (!alive || !goal || goal.status !== 'active' || document.hidden) return;
+        if (Math.floor(liveElapsed()) !== lastClockSecond) renderClock();
+    };
+    const timer = globalThis.setInterval(tickClock, 1000);
+    document.addEventListener('visibilitychange', tickClock);
     void context.request(`/sessions/${encodeURIComponent(context.sessionId)}/goal`, {
         method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' },
     }).then(function (response) { return response.ok ? response.json() : null; }).then(function (data) {
@@ -326,6 +387,7 @@ export function renderSessionPanel(context) {
     return function (details) {
         alive = false;
         globalThis.clearInterval(timer);
+        document.removeEventListener('visibilitychange', tickClock);
         const sameSession = details
             && String(details.nextSessionId || '') === String(context.sessionId || '');
         if (sameSession && activeModal) return false;

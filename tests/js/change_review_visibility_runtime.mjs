@@ -4,7 +4,18 @@ import { readFile } from 'node:fs/promises';
 const sourceUrl = new URL('../../plugins/change-review/web/change-review.js', import.meta.url);
 const source = await readFile(sourceUrl, 'utf8');
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
-const { chooseVisibleChangeReviewIndex } = await import(moduleUrl);
+const { chooseVisibleChangeReviewIndex, pickReviewedTurnKey, viewportFallbackAllowed } = await import(moduleUrl);
+
+// 审查关联以「正在查看的轮」为准；查看轮未知时退回最新轮。
+assert.equal(pickReviewedTurnKey('5', '9'), '5');
+assert.equal(pickReviewedTurnKey('', '9'), '9');
+assert.equal(pickReviewedTurnKey(null, ''), '');
+
+// “过程框收起也关联显示”的兜底仅当正在查看的轮就是最新轮时生效；切到别的轮次 → 收起。
+assert.equal(viewportFallbackAllowed('5', '9'), false);
+assert.equal(viewportFallbackAllowed('9', '9'), true);
+assert.equal(viewportFallbackAllowed('', '9'), true);
+assert.equal(viewportFallbackAllowed('9', ''), false);
 
 assert.equal(chooseVisibleChangeReviewIndex([]), -1);
 assert.equal(chooseVisibleChangeReviewIndex([

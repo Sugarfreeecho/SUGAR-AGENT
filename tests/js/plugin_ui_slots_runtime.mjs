@@ -143,6 +143,7 @@ const sessionUi = normalizePluginSessionUiResponse({
             ],
             panels: [{
                 plugin_id: 'game-arena', id: 'current-game', title: '<script>', variant: 'success',
+                group: { id: 'games', label: 'Games', order: 42 },
                 actions: [{ id: 'clear', label: '<b>Clear</b>', variant: 'danger', confirm: '<script>' }],
                 fields: [
                     { label: 'Game', value: '<img src=x>', format: 'text' },
@@ -152,6 +153,10 @@ const sessionUi = normalizePluginSessionUiResponse({
                         rows: [{ values: ['<b>A</b>', '<script>'] }],
                     },
                 ],
+            }, {
+                plugin_id: 'game-arena', id: 'second-game', title: 'Second', variant: 'info',
+                group: { id: 'Bad Id', label: ' ' },
+                fields: [{ label: 'Game', value: 'x', format: 'text' }],
             }],
         },
     },
@@ -168,6 +173,10 @@ assert.deepEqual(sessionUi.s1.panels[0].fields[1], {
 assert.deepEqual(sessionUi.s1.panels[0].actions, [{
     id: 'clear', label: '<b>Clear</b>', variant: 'danger', confirm: '<script>',
 }]);
+assert.deepEqual(sessionUi.s1.panels[0].group, { id: 'games', label: 'Games', order: 42 });
+assert.equal(sessionUi.s1.panels.length, 2);
+assert.equal('group' in sessionUi.s1.panels[1], false);
+assert.equal(sessionUi.s1.panels[1].actions.length, 0);
 assert.equal(Object.prototype.polluted, undefined);
 assert.deepEqual(normalizePluginSettingsSections([{
     plugin_id: 'game-arena', id: 'main', slot: 'settings.section', title: '<img>', label: 'Open',

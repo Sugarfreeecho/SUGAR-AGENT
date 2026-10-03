@@ -25,6 +25,7 @@ import skillPickerSource from './modules/skill-picker.js?raw';
 import smoothStreamSource from './modules/smooth-stream.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
 import tocTodoSource from './modules/toc-todo.js?raw';
+import publicSidebarSource from './modules/public-sidebar.js?raw';
 import workspaceMediaSource from './modules/workspace-media.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
 import humanInteractionsSource from './modules/human-interactions.js?raw';
@@ -165,6 +166,7 @@ const uiSources = [
     smoothStreamSource,
     sessionScrollHistorySource,
     tocTodoSource,
+    publicSidebarSource,
     workspaceMediaSource,
     messageRenderingSource,
     humanInteractionsSource,

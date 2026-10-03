@@ -6,13 +6,22 @@
 .agent-goal-panel-host .chat-goal-icon-btn[hidden],
 .agent-goal-panel-host .chat-goal-review-btn[hidden] { display:none !important; }
 .agent-goal-panel-host .chat-goal-heading {
-    justify-content:space-between;
+    justify-content:space-between; gap:.3rem;
 }
-.agent-goal-panel-host .chat-goal-heading span:last-child { margin-left:.5rem; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.agent-goal-panel-host .chat-goal-status {
+    min-width:0; margin-left:.1rem; padding:.5px 6px; border:1px solid rgba(var(--accent-rgb),.35);
+    border-radius:999px; background:rgba(var(--accent-rgb),.12); color:rgb(var(--accent-rgb));
+    font-size:.52rem; font-weight:600; letter-spacing:.02em; white-space:nowrap;
+    font-variant-numeric:tabular-nums; text-transform:none;
+}
 .agent-goal-panel-host .chat-goal-objective {
-    color:var(--text-primary);
+    color:var(--text-primary); background:transparent; border:0; padding:0;
     display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:6; line-clamp:6;
     overflow:hidden; overflow-wrap:anywhere; cursor:default;
+}
+.agent-goal-panel-host .chat-goal-meta {
+    margin:.34rem 0 0; padding:0; border:0; color:var(--text-tertiary);
+    font:500 .56rem/1.4 var(--sans); font-variant-numeric:tabular-nums;
 }
 .agent-goal-panel-host .chat-goal-objective:focus-visible { outline:1px solid var(--accent-2); outline-offset:2px; border-radius:3px; }
 .agent-goal-panel-host .chat-goal-actions { display:flex; align-items:center; gap:.25rem; margin-top:.3rem; }

@@ -1,7 +1,21 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _selector_declarations(styles: str, selector: str) -> dict[str, str]:
+    # CSS allows the same selector to split scrollbar and surface declarations.
+    blocks = re.findall(r"(?m)^\s*" + re.escape(selector) + r"\s*\{([^{}]*)\}", styles)
+    assert blocks, f"Missing CSS rule for {selector}"
+    declarations = {}
+    for block in blocks:
+        for declaration in block.split(";"):
+            name, separator, value = declaration.partition(":")
+            if separator:
+                declarations[name.strip()] = value.strip()
+    return declarations
 
 
 def test_all_themes_define_distinct_floating_surfaces() -> None:
@@ -31,16 +45,16 @@ def test_floating_components_share_the_theme_surface_contract() -> None:
         ".ui-modal-select-menu",
     )
     for selector in shared_surface_selectors:
-        block = styles.split(selector + " {", 1)[1].split("}", 1)[0]
-        assert "var(--floating-surface)" in block
+        declarations = _selector_declarations(styles, selector)
+        assert declarations["background"] == "var(--floating-surface)", selector
 
     raised_surface_selectors = (
         ".session-more-menu",
         ".msg-copy-popover",
     )
     for selector in raised_surface_selectors:
-        block = styles.split(selector + " {", 1)[1].split("}", 1)[0]
-        assert "var(--floating-surface-raised)" in block
+        declarations = _selector_declarations(styles, selector)
+        assert declarations["background"] == "var(--floating-surface-raised)", selector
 
     assert "background:var(--floating-surface," in picker
     assert "border:1px solid var(--floating-border," in picker
@@ -50,8 +64,8 @@ def test_floating_components_share_the_theme_surface_contract() -> None:
 def test_tooltip_has_no_theme_specific_hard_coded_background() -> None:
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
 
-    tooltip = styles.split("#ui-hover-tooltip {", 1)[1].split("}", 1)[0]
-    assert "background: var(--floating-surface);" in tooltip
-    assert "border: 1px solid var(--floating-border);" in tooltip
-    assert "box-shadow: var(--floating-shadow);" in tooltip
+    tooltip = _selector_declarations(styles, "#ui-hover-tooltip")
+    assert tooltip["background"] == "var(--floating-surface)"
+    assert tooltip["border"] == "1px solid var(--floating-border)"
+    assert tooltip["box-shadow"] == "var(--floating-shadow)"
     assert ":root.theme-light #ui-hover-tooltip" not in styles

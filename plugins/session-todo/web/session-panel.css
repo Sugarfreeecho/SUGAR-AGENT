@@ -5,33 +5,50 @@
     display:flex; flex:1 1 auto; min-height:0; flex-direction:column; overflow:hidden;
 }
 .session-todo-panel-host .chat-todo-plan-title {
-    justify-content:space-between;
+    justify-content:flex-start; gap:.32rem;
+}
+.session-todo-panel-host .chat-todo-plan-heading-text {
+    min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .session-todo-panel-host .chat-todo-plan-close {
-    display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
-    padding:0; border:1px solid rgba(255,255,255,.08); border-radius:3px;
-    background:transparent; color:var(--text-tertiary); font-size:.7rem; line-height:1; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center; flex:none; width:1rem; height:1rem;
+    padding:0; border:0; border-radius:4px;
+    background:transparent; color:var(--text-tertiary); font-size:.72rem; line-height:1; cursor:pointer;
 }
-.session-todo-panel-host .chat-todo-plan-close:hover { color:var(--text-primary); background:rgba(255,255,255,.08); }
+.session-todo-panel-host .chat-todo-plan-close:hover { color:var(--text-primary); background:rgba(var(--accent-rgb),.14); }
 .session-todo-panel-host .chat-todo-plan-stats {
-    color:var(--text-tertiary);
+    margin:0 0 0 auto; padding:0; border:0;
+    color:var(--text-tertiary); font:500 .56rem/1.3 var(--sans);
+    font-variant-numeric:tabular-nums; white-space:nowrap;
 }
 .session-todo-panel-host .chat-todo-plan-list {
     list-style:none; max-height:min(52vh,22rem);
 }
 .session-todo-panel-host .todo-plan-item {
-    margin:0;
+    margin:0; display:flex; align-items:flex-start; gap:5px;
+}
+.session-todo-panel-host .todo-plan-text {
+    /* 条目文本最多 3 行；超出部分在悬停浮框中呈现（见 session-panel.js 的 data-ui-tip）。 */
+    display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3;
+    overflow:hidden; overflow-wrap:anywhere; min-width:0;
 }
 .session-todo-panel-host .todo-plan--pending { color:var(--text-secondary); }
-.session-todo-panel-host .todo-plan--in_progress { background:rgba(var(--accent-rgb),.14); border-color:rgba(var(--accent-rgb),.25); color:var(--text-primary); }
-.session-todo-panel-host .todo-plan--completed { background:rgba(166,227,161,.08); border-color:rgba(166,227,161,.18); color:var(--text-placeholder); text-decoration:line-through; }
+.session-todo-panel-host .todo-plan--in_progress { border-color:rgba(var(--accent-rgb),.35); color:var(--text-primary); }
+.session-todo-panel-host .todo-plan--completed .todo-plan-text { color:var(--text-placeholder); text-decoration:line-through; }
 .session-todo-panel-host .todo-plan-status-tag {
-    display:block; font-size:.58rem; font-weight:600; text-transform:uppercase;
-    letter-spacing:.06em; color:var(--text-tertiary); margin-bottom:.15rem;
+    display:inline-flex; align-items:center; justify-content:center; flex:none;
+    width:.8rem; height:.8rem; color:var(--text-tertiary);
+    /* 与首行文字中线对齐（行高 1.45em 为条目基准） */
+    margin-top: calc((1.45em - .8rem) / 2);
 }
-.session-todo-panel-host .todo-plan--in_progress .todo-plan-status-tag { color:var(--accent-2); }
-:root.theme-light .session-todo-panel-host .todo-plan--completed { color:var(--text-tertiary); }
-:root.theme-light .session-todo-panel-host .chat-todo-plan-close { border-color:rgba(0,0,0,.1); color:var(--text-secondary); }
+.session-todo-panel-host .todo-plan-status-icon {
+    width:100%; height:100%; display:block;
+    fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round;
+}
+.session-todo-panel-host .todo-plan--in_progress .todo-plan-status-tag { color:rgb(var(--accent-rgb)); }
+.session-todo-panel-host .todo-plan--completed .todo-plan-status-tag { color:var(--green-accent,#a6e3a1); }
+:root.theme-light .session-todo-panel-host .todo-plan--completed .todo-plan-status-tag { color:#247a43; }
+:root.theme-light .session-todo-panel-host .chat-todo-plan-close { color:var(--text-secondary); }
 :root.theme-light .session-todo-panel-host .chat-todo-plan-close:hover { background:rgba(0,0,0,.05); color:var(--text-primary); }
 .plugin-session-badge[data-plugin-id="session-todo"] { border-color:rgba(var(--accent-rgb),.36); background:rgba(var(--accent-rgb),.16); color:var(--accent-2); }
 :root.theme-light .plugin-session-badge[data-plugin-id="session-todo"] { border-color:rgba(var(--brand-accent-rgb),.3); background:rgba(var(--brand-accent-rgb),.12); color:var(--accent-1); }

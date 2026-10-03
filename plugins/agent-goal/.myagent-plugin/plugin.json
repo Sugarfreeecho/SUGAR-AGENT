@@ -32,6 +32,7 @@
         "id": "current-goal", "namespace": "goal", "title": "Goal",
         "description": "Durable objective and completion-review state.", "variant": "info",
         "order": 10,
+        "group": {"id": "goal", "label": "目标", "order": 20},
         "visible_when": {"path": "/deleted", "when": "not_truthy"},
         "renderer": {"module": "session-panel.js", "style": "session-panel.css"},
         "fields": [
