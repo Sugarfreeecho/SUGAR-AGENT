@@ -44,8 +44,8 @@ General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统�
 
 启动流程：
 
-1. Windows 由 `RUN.bat` 设置 UTF-8 输出和内置 Python 路径，并启动 `app/tray_launcher.py`。
-2. Ubuntu/macOS 由 `RUN.sh` 检查 `.venv`，首次运行调用 `scripts/install_unix.sh`。
+1. Windows 由 `RUN.bat` 设置 UTF-8 输出和内置 Python 路径，启动前按当前解释器校验并补装 `app/requirements.txt` 依赖（`app/check_requirements.py`），然后启动 `app/tray_launcher.py`。
+2. Ubuntu/macOS 由 `RUN.sh` 检查 `.venv`，首次运行调用 `scripts/install_unix.sh`；每次启动前同样校验依赖并补装缺失项。
 3. Ubuntu 后端由用户级 systemd 服务监管；macOS 后端由用户级 LaunchAgent 监管。
 4. 后端最终通过 `app/main.py` 启动 FastAPI/uvicorn。
 5. `app/main.py` 调用 `refresh_executor_client_from_env()` 刷新 LLM 配置。

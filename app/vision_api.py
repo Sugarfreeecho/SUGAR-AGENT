@@ -337,11 +337,14 @@ def register_vision_api(app, work_dir, candidate_resolver, gateway_resolver):
         async def events():
             cursor = after
             while True:
+                # Finish commits state and its event together. Read state first
+                # so a terminal snapshot guarantees the following event poll
+                # includes every remaining event before the stream can close.
+                result = await asyncio.to_thread(jobs.get, owner, identity)
                 rows = await asyncio.to_thread(jobs.events, owner, identity, cursor)
                 for seq, event in rows:
                     cursor = seq
                     yield f"id: {seq}\nevent: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                result = await asyncio.to_thread(jobs.get, owner, identity)
                 if result["status"] in TERMINAL and not rows:
                     return
                 if await request.is_disconnected():

@@ -85,7 +85,7 @@ def finish(jobs, identity="r1", owner="local"):
     while time.monotonic() < deadline:
         result = jobs.get(owner, identity)
         if result["status"] in {"completed", "failed", "cancelled"}:
-            # A final state is committed just before its final SSE event.
+            # Verify that the persisted terminal state has its matching event.
             for _ in range(100):
                 if any(event["type"] == result["status"] for _, event in jobs.events(owner, identity, 0)):
                     return result
@@ -393,6 +393,41 @@ def test_http_api_sse_resume_json_limits_and_bundle_endpoints(store, tmp_path):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("terminal", ["completed", "failed", "cancelled"])
+def test_sse_finish_during_empty_poll(store, tmp_path, monkeypatch, terminal):
+    app = FastAPI()
+    jobs = register_vision_api(app, tmp_path, jobs_for(tmp_path, Transport()).candidate_resolver, lambda: None)
+    monkeypatch.setattr(jobs, "_run", lambda *args: None)
+    jobs.start(ADMIN, payload(save(store)))
+    read_events = jobs.events
+    injected = False
+
+    def read_then_finish(owner, identity, after):
+        nonlocal injected
+        rows = read_events(owner, identity, after)
+        if not injected and not rows:
+            injected = True
+            result = jobs.get(owner, identity)
+            result.update(status=terminal, answer="Finished between event and status reads")
+            jobs.finish(owner, identity, result)
+        return rows
+
+    monkeypatch.setattr(jobs, "events", read_then_finish)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1234)), base_url="http://localhost") as client:
+            response = await client.get("/api/vision/requests/r1/events")
+            assert response.status_code == 200
+            assert response.text.count(f"event: {terminal}\n") == 1
+            assert "id: 1\n" in response.text
+            # Reconnecting after the terminal event drains cleanly without replay.
+            resumed = await client.get("/api/vision/requests/r1/events?after=1")
+            assert resumed.status_code == 200 and resumed.text == ""
+
+    asyncio.run(run())
+    assert injected
+
+
 def test_remote_http_requires_device_and_attachment_grant(store, tmp_path):
     ref = save(store)
     AttachmentRegistry(store).grant("alice", [ref["attachmentId"]])
@@ -433,7 +468,7 @@ def test_sdk_stream_closed_when_consumer_cancels(protocol):
     assert response.closed
 
 
-def test_session_export_includes_reachable_images(store, tmp_path, monkeypatch):
+def test_session_export_includes_reachable_images(store, tmp_path, tmp_path_factory, monkeypatch):
     import webui
     ref = save(store)
     session = tmp_path / "sessions" / "s1"
@@ -448,8 +483,12 @@ def test_session_export_includes_reachable_images(store, tmp_path, monkeypatch):
             assert "s1/events.jsonl" in bundle.namelist()
             manifest = json.loads(bundle.read("attachments/manifest.json"))
             assert manifest["images"][0]["ref"]["attachmentId"] == ref["attachmentId"]
-        restored = import_bundle(LocalAttachmentStore(tmp_path / "another-workspace"), archive)
+        # A sibling with a short name keeps attachment atomic-write paths below
+        # Windows MAX_PATH even under pytest's default per-test temp directory.
+        restored_store = LocalAttachmentStore(tmp_path_factory.mktemp("restore"))
+        restored = import_bundle(restored_store, archive)
         assert restored[0]["attachmentId"] == ref["attachmentId"]
+        assert restored_store.read_image_sync(restored[0]) == store.read_image_sync(ref)
     finally:
         archive.unlink(missing_ok=True)
 

@@ -138,8 +138,7 @@ SugarAgent/
 │   ├── requirements.txt          # Python 依赖
 │   ├── templates/                # 后端 HTML 模板与 Vite 构建产物
 │   │   ├── first_time_config.html  # 首次配置向导
-│   │   ├── advance_config.html     # 高级环境变量配置（安全与权限页签）
-│   │   ├── mcp_config.html         # MCP 配置页面
+│   │   ├── settings_center.html    # 设置中心（模型、环境变量、安全、扩展等分区）
 │   │   └── dist/                   # Vite 生产构建输出
 │   └── tools/                    # 工具辅助资源（tokenizer 等）
 ├── frontend/                     # Vite 前端源码
@@ -187,13 +186,14 @@ SugarAgent/
 ├── tests/                        # 测试套件（84+ Python 测试 + tests/js 运行时测试）
 ├── docs/                         # 设计文档与 CHANGELOG
 ├── logs/                         # 运行日志
+├── .sugaragent/                  # 本地运行状态（技能/MCP 启停、缓存等，不入库）
 ├── RUN.bat                       # Windows 一键启动脚本
 ├── RUN.sh                        # Ubuntu/macOS 一键启动脚本
 ├── SPEC.md                       # 工程规格说明
 └── .gitignore                    # Git 忽略规则
 ```
 
-> 说明：`skill_states.json` 为运行时状态文件（技能启停），仅存在于本地，不纳入版本库；克隆后所有技能默认启用。
+> 说明：`skill_states.json`（技能启停）、`mcp_tools_state.json`（MCP 工具启停）等运行时状态文件仅存在于本地，统一存放在 `.sugaragent/`，不纳入版本库；克隆后所有技能默认启用。
 
 ---
 
@@ -237,6 +237,8 @@ python/python.exe -m pip install -r app/requirements.txt
 # 或使用系统 Python
 pip install -r app/requirements.txt
 ```
+
+> 说明：`RUN.bat` / `RUN.sh` 会在每次启动时按当前 Python 环境自动校验依赖，缺失即自动补装（包括从其他电脑拷贝过来的旧环境里缺少的后续新增依赖，如 `psutil`）；上面的命令仅用于预装或排查问题。
 
 ### 4. 启动服务
 

@@ -104,3 +104,86 @@ def test_feishu_default_state_dir_uses_sugaragent(tmp_path, monkeypatch):
     assert config.state_dir == tmp_path / ".sugaragent" / "feishu"
     assert (config.state_dir / "feishu.sqlite3").is_file()
     assert not legacy.exists()
+
+
+def test_skill_state_file_is_migrated_to_sugaragent(monkeypatch, tmp_path):
+    import agent_tools
+
+    legacy = tmp_path / "skill_states.json"
+    legacy.write_text(
+        '{"version": 1, "skills": {"demo": {"enabled": false}}}',
+        encoding="utf-8",
+    )
+    new = tmp_path / ".sugaragent" / "skill_states.json"
+
+    monkeypatch.setattr(agent_tools, "SKILL_STATE_PATH", new)
+    monkeypatch.setattr(agent_tools, "_DEFAULT_SKILL_STATE_PATH", new)
+    monkeypatch.setattr(agent_tools, "_LEGACY_SKILL_STATE_PATH", legacy)
+
+    assert agent_tools._load_skill_enabled_states() == {"demo": False}
+    assert new.is_file()
+    assert not legacy.exists()
+
+
+def test_mcp_tools_state_file_is_migrated_to_sugaragent(monkeypatch, tmp_path):
+    import agent_mcp
+
+    legacy = tmp_path / "mcp_tools_state.json"
+    legacy.write_text(
+        '{"version": 1, "tools": {"mcp_demo_x": {"enabled": false}}}',
+        encoding="utf-8",
+    )
+    new = tmp_path / ".sugaragent" / "mcp_tools_state.json"
+
+    monkeypatch.setattr(agent_mcp, "_MCP_TOOLS_STATE_PATH", new)
+    monkeypatch.setattr(agent_mcp, "_DEFAULT_MCP_TOOLS_STATE_PATH", new)
+    monkeypatch.setattr(agent_mcp, "_LEGACY_MCP_TOOLS_STATE_PATH", legacy)
+    monkeypatch.setattr(agent_mcp, "_disabled_mcp_tools_loaded", False)
+    monkeypatch.setattr(agent_mcp, "_disabled_mcp_tools", set())
+
+    assert agent_mcp._load_disabled_mcp_tools() == {"mcp_demo_x"}
+    assert new.is_file()
+    assert not legacy.exists()
+
+
+def test_skill_migration_failure_keeps_disabled_states_on_read_and_write(monkeypatch, tmp_path):
+    import agent_tools
+
+    legacy = tmp_path / "skill_states.json"
+    legacy.write_text('{"skills":{"demo":{"enabled":false}}}', encoding="utf-8")
+    new = tmp_path / ".sugaragent" / "skill_states.json"
+    monkeypatch.setattr(agent_tools, "SKILL_STATE_PATH", new)
+    monkeypatch.setattr(agent_tools, "_DEFAULT_SKILL_STATE_PATH", new)
+    monkeypatch.setattr(agent_tools, "_LEGACY_SKILL_STATE_PATH", legacy)
+
+    def fail_move(*args):
+        raise PermissionError("migration denied")
+
+    monkeypatch.setattr(agent_tools.shutil, "move", fail_move)
+    assert agent_tools._load_skill_enabled_states() == {"demo": False}
+    assert legacy.is_file() and not new.exists()
+    assert agent_tools.set_skill_enabled("other", False)
+    assert agent_tools._load_skill_enabled_states() == {"demo": False, "other": False}
+
+
+def test_skill_pending_migration_does_not_silently_ignore_unreadable_state(monkeypatch, tmp_path):
+    import agent_tools
+
+    legacy = tmp_path / "skill_states.json"
+    legacy.write_text("invalid json", encoding="utf-8")
+    new = tmp_path / ".sugaragent" / "skill_states.json"
+    monkeypatch.setattr(agent_tools, "SKILL_STATE_PATH", new)
+    monkeypatch.setattr(agent_tools, "_DEFAULT_SKILL_STATE_PATH", new)
+    monkeypatch.setattr(agent_tools, "_LEGACY_SKILL_STATE_PATH", legacy)
+    monkeypatch.setattr(agent_tools, "_migrate_legacy_state_path", lambda *args: None)
+    with pytest.raises(ValueError):
+        agent_tools._load_skill_enabled_states()
+    assert not new.exists()
+
+
+def test_default_state_paths_live_under_sugaragent():
+    import agent_mcp
+    import agent_tools
+
+    assert agent_tools.SKILL_STATE_PATH == ROOT / ".sugaragent" / "skill_states.json"
+    assert agent_mcp._MCP_TOOLS_STATE_PATH == ROOT / ".sugaragent" / "mcp_tools_state.json"

@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -60,10 +61,24 @@ _tool_catalog_generation = 0
 _SIGNATURE_CACHE_TTL_SEC = 1.0
 _last_config_error: Optional[str] = None
 
-_MCP_TOOLS_STATE_PATH = PROJECT_ROOT / "mcp_tools_state.json"
+_MCP_TOOLS_STATE_PATH = PROJECT_ROOT / ".sugaragent" / "mcp_tools_state.json"
+_DEFAULT_MCP_TOOLS_STATE_PATH = _MCP_TOOLS_STATE_PATH
+_LEGACY_MCP_TOOLS_STATE_PATH = PROJECT_ROOT / "mcp_tools_state.json"
 _mcp_tool_state_lock = threading.RLock()
 _disabled_mcp_tools: set[str] = set()
 _disabled_mcp_tools_loaded = False
+
+
+def _migrate_legacy_state_path(new: Path, legacy: Path) -> None:
+    """Move a legacy root-level state file into .sugaragent once."""
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(new))
+            logger.info("Migrated %s -> %s", legacy, new)
+        except OSError:
+            logger.warning("Could not migrate %s to %s", legacy, new, exc_info=True)
+
 
 _T = TypeVar("_T")
 _mcp_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -190,23 +205,36 @@ def _load_disabled_mcp_tools() -> set[str]:
     with _mcp_tool_state_lock:
         if _disabled_mcp_tools_loaded:
             return _disabled_mcp_tools
-        _disabled_mcp_tools = set()
+        if _MCP_TOOLS_STATE_PATH == _DEFAULT_MCP_TOOLS_STATE_PATH:
+            _migrate_legacy_state_path(_DEFAULT_MCP_TOOLS_STATE_PATH, _LEGACY_MCP_TOOLS_STATE_PATH)
         try:
             data = json.loads(_MCP_TOOLS_STATE_PATH.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("tools", {}), dict):
+                raise ValueError("invalid MCP tool state")
+        except FileNotFoundError:
+            if (_MCP_TOOLS_STATE_PATH == _DEFAULT_MCP_TOOLS_STATE_PATH
+                    and _LEGACY_MCP_TOOLS_STATE_PATH.exists()):
+                logger.warning("MCP tool state migration has not completed; retaining current state")
+                return _disabled_mcp_tools
+            data = {}
         except (OSError, ValueError, TypeError):
-            data = None
+            logger.warning("Cannot read MCP tool state; retaining current state and retrying later", exc_info=True)
+            return _disabled_mcp_tools
+        disabled = set()
         raw = data.get("tools") if isinstance(data, dict) else None
         if isinstance(raw, dict):
             for fname, value in raw.items():
                 name = str(fname or "").strip()
                 if name and isinstance(value, dict) and value.get("enabled") is False:
-                    _disabled_mcp_tools.add(name)
+                    disabled.add(name)
+        _disabled_mcp_tools = disabled
         _disabled_mcp_tools_loaded = True
     return _disabled_mcp_tools
 
 
 def is_mcp_tool_enabled(function_name: str) -> bool:
-    return str(function_name or "") not in _load_disabled_mcp_tools()
+    disabled = _load_disabled_mcp_tools()
+    return _disabled_mcp_tools_loaded and str(function_name or "") not in disabled
 
 
 def set_mcp_tool_enabled(function_name: str, enabled: bool) -> bool:
@@ -217,6 +245,8 @@ def set_mcp_tool_enabled(function_name: str, enabled: bool) -> bool:
         return False
     with _mcp_tool_state_lock:
         disabled = set(_load_disabled_mcp_tools())
+        if not _disabled_mcp_tools_loaded:
+            raise OSError("Cannot load MCP tool state; refusing to overwrite it")
         if enabled:
             disabled.discard(name)
         else:

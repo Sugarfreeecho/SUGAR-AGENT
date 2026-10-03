@@ -73,8 +73,9 @@ mcp_servers.json
 extension-picker-demo.html
 frontend/ux-optimization-concept.html
 
-# Local skill enable/disable state (runtime-writable)
+# Legacy root-level runtime state files (moved into .sugaragent/)
 skill_states.json
+mcp_tools_state.json
 
 # Local debugging artifacts (analysis snapshots, Playwright MCP captures)
 .analysis/

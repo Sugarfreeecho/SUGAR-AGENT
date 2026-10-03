@@ -142,9 +142,22 @@ _skills_full_cache: Dict[str, Any] = {"sig": None, "skills": None}
 _skills_catalog_generation = 0
 _skill_state_lock = threading.RLock()
 _skills_scan_lock = threading.RLock()
-SKILL_STATE_PATH = PROJECT_ROOT / "skill_states.json"
+SKILL_STATE_PATH = PROJECT_ROOT / ".sugaragent" / "skill_states.json"
+_DEFAULT_SKILL_STATE_PATH = SKILL_STATE_PATH
+_LEGACY_SKILL_STATE_PATH = PROJECT_ROOT / "skill_states.json"
 _read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
 _read_file_line_count_cache_lock = threading.RLock()
+
+
+def _migrate_legacy_state_path(new: Path, legacy: Path) -> None:
+    """Move a legacy root-level state file into .sugaragent once."""
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(new))
+            logger.info("Migrated %s -> %s", legacy, new)
+        except OSError:
+            logger.warning("Could not migrate %s to %s", legacy, new, exc_info=True)
 
 
 def invalidate_skills_cache() -> None:
@@ -166,10 +179,19 @@ def skills_catalog_generation() -> int:
 
 
 def _load_skill_enabled_states() -> Dict[str, bool]:
-    try:
-        data = json.loads(SKILL_STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return {}
+    with _skill_state_lock:
+        state_path = SKILL_STATE_PATH
+        if state_path == _DEFAULT_SKILL_STATE_PATH:
+            _migrate_legacy_state_path(state_path, _LEGACY_SKILL_STATE_PATH)
+            if not state_path.exists() and _LEGACY_SKILL_STATE_PATH.exists():
+                state_path = _LEGACY_SKILL_STATE_PATH
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            if state_path != SKILL_STATE_PATH:
+                # A pending migration must not turn disabled skills back on.
+                raise
+            return {}
     raw = data.get("skills") if isinstance(data, dict) else None
     if not isinstance(raw, dict):
         return {}

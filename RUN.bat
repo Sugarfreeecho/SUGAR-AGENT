@@ -35,12 +35,13 @@ if not exist "%REQUIREMENTS%" (
   exit /b 1
 )
 
-rem Install dependencies on first launch and whenever requirements.txt changes.
+rem Verify that this interpreter really satisfies requirements.txt before every
+rem launch. Do not trust app\.requirements.installed alone: the stamp travels
+rem with copied project folders, so on other/new machines it used to hide newly
+rem added dependencies (e.g. psutil) and skip the install.
 if "%SUGARAGENT_SKIP_DEPENDENCY_SYNC%"=="1" goto launch
-if not exist "%DEPENDENCY_STAMP%" goto install_dependencies
-fc /b "%REQUIREMENTS%" "%DEPENDENCY_STAMP%" >nul 2>&1
-if errorlevel 1 goto install_dependencies
-goto launch
+"%PYTHON_EXE%" "%ROOT%app\check_requirements.py"
+if not errorlevel 1 goto launch
 
 :install_dependencies
 echo Checking and installing Python dependencies...
@@ -52,7 +53,11 @@ if errorlevel 1 (
 )
 "%PYTHON_EXE%" -m pip install --disable-pip-version-check -r "%REQUIREMENTS%"
 if errorlevel 1 goto dependency_error
+rem Record the synced manifest for reference only (it no longer gates installs).
 copy /y "%REQUIREMENTS%" "%DEPENDENCY_STAMP%" >nul
+rem Re-check once; anything still missing is listed again and aborts the launch.
+"%PYTHON_EXE%" "%ROOT%app\check_requirements.py"
+if errorlevel 1 goto dependency_error
 
 :launch
 if not exist "%ROOT%app\native\sugaragent-egress-helper.exe" (

@@ -906,9 +906,9 @@ class TrayLauncher:
         if command == MENU_OPEN_WEBUI:
             self._open_url("/", refresh=True)
         elif command == MENU_OPEN_ENV:
-            self._open_url("/setup/env", refresh=True)
+            self._open_url("/settings#env", refresh=True)
         elif command == MENU_OPEN_MCP:
-            self._open_url("/setup/mcp", refresh=True)
+            self._open_url("/settings#mcp", refresh=True)
         elif command == MENU_VIEW_TERMINAL:
             self._open_terminal_viewer()
         elif command == MENU_RESTART:

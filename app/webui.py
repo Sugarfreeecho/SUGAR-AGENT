@@ -7963,36 +7963,122 @@ def _apply_env_updates(text: str, updates: dict[str, str]) -> str:
     return result
 
 
-def _load_env_advanced_html() -> str:
-    if _ENV_ADVANCED_PATH.is_file():
-        return _read_text_cached(_ENV_ADVANCED_PATH, "")
-    return "<!DOCTYPE html><html><body><p>缺少 templates/advance_config.html</p><a href='/'>返回</a></body></html>"
+def _remove_env_keys(text: str, keys: list[str]) -> str:
+    """删除 .env 中指定键的整行（设置页「恢复默认」语义）。"""
+    key_set = set(keys)
+    if not key_set:
+        return text
+    key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    out: list[str] = []
+    for line in (text.split("\n") if text else []):
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            out.append(line)
+            continue
+        key, _, _ = s.partition("=")
+        key = _normalize_dotenv_key(key)
+        if key_re.match(key) and key in key_set:
+            continue
+        out.append(line)
+    result = "\n".join(out)
+    if text.endswith("\n"):
+        result = result.rstrip("\n") + "\n"
+    return result
+
+
+# === 设置中心（单页 9 分区） ===
+# 旧的 /setup/env、/setup/mcp、/setup/extensions 保留路径，但渲染同一个设置中心并按分区预选，
+# 这样托盘、书签与既有链接不断链。
+_SETTINGS_CENTER_PATH = _Path(__file__).resolve().parent / "templates" / "settings_center.html"
+_SETTINGS_STATIC_DIR = _Path(__file__).resolve().parent / "templates" / "static" / "settings"
+_SETTINGS_ASSET_FILES = ("settings.css", "core.js", "package_import.js", "plugin_sections.js", "sections_basic.js", "sections_ext.js", "sections_ops.js")
+
+
+def _settings_asset_version() -> int:
+    latest = 0
+    for name in _SETTINGS_ASSET_FILES:
+        try:
+            latest = max(latest, (_SETTINGS_STATIC_DIR / name).stat().st_mtime_ns)
+        except OSError:
+            continue
+    return latest
+
+
+def _load_settings_center_html(section: str, request: Optional[Request] = None) -> str:
+    if not _SETTINGS_CENTER_PATH.is_file():
+        return (
+            "<!DOCTYPE html><html><body><p>缺少 templates/settings_center.html</p>"
+            "<a href='/'>返回</a></body></html>"
+        )
+    session_id = ""
+    embedded = False
+    if request is not None:
+        session_id = str(request.query_params.get("session_id") or "")
+        embedded = str(request.query_params.get("embedded") or "").strip().lower() in ("1", "true", "yes")
+    bootstrap = {
+        "section": section,
+        "workspace": str(WORK_DIR),
+        "sessionId": session_id,
+        "embedded": embedded,
+    }
+    body = _read_text_cached(_SETTINGS_CENTER_PATH, "")
+    body = body.replace("__SETTINGS_ASSET_VERSION__", str(_settings_asset_version()))
+    # JSON is embedded in an HTML script element: escape HTML delimiters as well.
+    bootstrap_json = json.dumps(bootstrap, ensure_ascii=False)
+    for char, escaped in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"),
+                          ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        bootstrap_json = bootstrap_json.replace(char, escaped)
+    body = body.replace("__SETTINGS_BOOTSTRAP__", bootstrap_json)
+    return _html_with_path_picker_script(body)
+
+
+def _settings_center_response(section: str, request: Request) -> _HTMLResponse:
+    return _HTMLResponse(
+        content=_load_settings_center_html(section, request),
+        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+    )
+
+
+@fastapi_app.get("/settings", response_class=_HTMLResponse)
+async def settings_center_page(request: Request):
+    return _settings_center_response("general", request)
+
+
+@fastapi_app.get("/static/settings/{asset_name}")
+async def serve_settings_asset(asset_name: str, request: Request):
+    """Whitelist settings assets and allow conditional cache revalidation."""
+    if asset_name not in _SETTINGS_ASSET_FILES:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    path = _SETTINGS_STATIC_DIR / asset_name
+    if not path.is_file():
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    media_type = "text/css; charset=utf-8" if asset_name.endswith(".css") else "application/javascript; charset=utf-8"
+    content = _read_text_cached(path, "")
+    etag = '"' + hashlib.sha256(content.encode("utf-8")).hexdigest() + '"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    candidates = request.headers.get("if-none-match", "").split(",")
+    if any(value.strip().removeprefix("W/") in (etag, "*") for value in candidates):
+        return Response(status_code=304, headers=headers)
+    return _HTMLResponse(
+        content=content,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 @fastapi_app.get("/setup/env", response_class=_HTMLResponse)
-async def env_advanced_page():
-    body = _html_with_path_picker_script(_load_env_advanced_html())
-    return _HTMLResponse(
-        content=body,
-        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-    )
+async def env_advanced_page(request: Request):
+    return _settings_center_response("env", request)
 
 
 @fastapi_app.get("/setup/mcp", response_class=_HTMLResponse)
-async def mcp_config_page():
-    body = _html_with_path_picker_script(_load_mcp_config_html())
-    return _HTMLResponse(
-        content=body,
-        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-    )
+async def mcp_config_page(request: Request):
+    return _settings_center_response("mcp", request)
 
 
 @fastapi_app.get("/setup/extensions", response_class=_HTMLResponse)
-async def extensions_config_page():
-    return _HTMLResponse(
-        content=_load_extensions_config_html(),
-        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-    )
+async def extensions_config_page(request: Request):
+    return _settings_center_response("plugins", request)
 
 
 @fastapi_app.get("/api/extensions")
@@ -8517,7 +8603,21 @@ async def get_env_snapshot():
         arr = sorted(by_group[gid], key=lambda r: r["key"])
         title = next((t for x, t, _ in _ENV_GROUP_ORDER if x == gid), gid)
         groups_out.append({"id": gid, "title": title, "vars": arr})
-    return JSONResponse(content={"ok": True, "path": str(path.resolve()), "groups": groups_out})
+    # Resolve paths from the same runtime helpers used by the installers and executor.
+    from agent_harness import LOG_DIR
+    from agent_extensions import plugin_manager, hooks_config_path
+    import shutil
+
+    node = shutil.which("node") or shutil.which("node.exe")
+    effective_paths = {
+        "WORK_DIR": [str(Path(WORK_DIR).resolve())],
+        "SKILLS_DIR": [str(_skills_root_dir())],
+        "PLUGINS_DIR": [str(folder.resolve()) for folder in plugin_manager().discovery_dirs],
+        "LOG_DIR": [str(Path(LOG_DIR).resolve())],
+        "HOOKS_PATH": [str(hooks_config_path().resolve())],
+        "NODE_HOME": [str(Path(os.getenv("NODE_HOME")).expanduser().resolve())] if os.getenv("NODE_HOME") else ([str(Path(node).resolve().parent)] if node else []),
+    }
+    return JSONResponse(content={"ok": True, "path": str(path.resolve()), "groups": groups_out, "effective_paths": effective_paths})
 
 
 @fastapi_app.get("/api/features/ask-user")
@@ -8548,25 +8648,57 @@ async def set_ask_user_feature(req: _Request):
             status_code=400,
         )
     env_path = dotenv_file_path()
-    previous = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
-    tmp_path = env_path.with_suffix(env_path.suffix + ".ask-user.tmp")
     try:
-        merged = _apply_env_updates(
-            previous,
+        await run_in_threadpool(
+            _persist_env_updates,
+            env_path,
             {ASK_USER_ENV_VAR: "1" if enabled else "0"},
         )
-        env_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.write_text(merged, encoding="utf-8")
-        tmp_path.replace(env_path)
-        os.environ[ASK_USER_ENV_VAR] = "1" if enabled else "0"
     except (OSError, ValueError) as exc:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
         logger.exception("Failed to persist Ask User feature state")
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
     return JSONResponse({"ok": True, "enabled": ask_user_enabled()})
+
+
+_ENV_WRITE_LOCK = threading.RLock()
+
+
+def _persist_env_updates(env_path: Path, updates: dict[str, str], remove_keys=()) -> dict[str, str]:
+    """Serialize this process's env writers and replace a flushed sibling file."""
+    with _ENV_WRITE_LOCK:
+        previous_values = _dotenv_last_assignments(env_path)
+        previous = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+        merged = _remove_env_keys(_apply_env_updates(previous, updates), remove_keys)
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=env_path.parent,
+                prefix=env_path.name + ".", suffix=".tmp", delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(merged)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if env_path.exists():
+                os.chmod(temporary, env_path.stat().st_mode)
+            os.replace(temporary, env_path)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except PermissionError:
+                    # On Windows a copied read-only bit can prevent staging cleanup.
+                    os.chmod(temporary, 0o600)
+                    temporary.unlink(missing_ok=True)
+        # load_dotenv only adds/overwrites keys: deletion must clear the old
+        # process value explicitly, otherwise reset settings remain active.
+        for key in remove_keys:
+            os.environ.pop(key, None)
+        for key in (ASK_USER_ENV_VAR, "EXTENSION_REGISTRATION_APPROVAL_ENABLED"):
+            if key in updates and key not in remove_keys:
+                os.environ[key] = updates[key]
+        return previous_values
 
 
 @fastapi_app.post("/api/env")
@@ -8575,12 +8707,22 @@ async def save_env_snapshot(req: _Request):
         data = await req.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    remove_raw = data.get("remove")
+    if remove_raw is not None and not isinstance(remove_raw, list):
+        return JSONResponse({"ok": False, "error": "remove must be a list"}, status_code=400)
+    remove_keys = [
+        str(item)
+        for item in (remove_raw or [])
+        if isinstance(item, str) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", item)
+    ]
     vals = data.get("values")
-    if not isinstance(vals, dict):
+    if vals is None and not remove_keys:
+        return JSONResponse({"ok": False, "error": "values must be object"}, status_code=400)
+    if vals is not None and not isinstance(vals, dict):
         return JSONResponse({"ok": False, "error": "values must be object"}, status_code=400)
     key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
     normalized: dict[str, str] = {}
-    for k, v in vals.items():
+    for k, v in (vals or {}).items():
         if not isinstance(k, str) or not key_re.match(k):
             continue
         if k in _MODEL_ENV_KEYS:
@@ -8599,22 +8741,17 @@ async def save_env_snapshot(req: _Request):
         else:
             return JSONResponse({"ok": False, "error": f"bad value type for {k}"}, status_code=400)
     env_path = dotenv_file_path()
-    prev_vals = _dotenv_last_assignments(env_path)
-    old_work_dir = (prev_vals.get("WORK_DIR") or "").strip()
-    new_work_dir = (normalized.get("WORK_DIR") or "").strip()
-    work_dir_changed = "WORK_DIR" in normalized and _work_dir_restart_required(old_work_dir, new_work_dir)
-    prev = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
     try:
-        merged = _apply_env_updates(prev, normalized)
-    except ValueError as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(merged, encoding="utf-8")
-    refresh_executor_client_from_env()
-    if "EXTENSION_REGISTRATION_APPROVAL_ENABLED" in normalized:
-        os.environ["EXTENSION_REGISTRATION_APPROVAL_ENABLED"] = normalized[
-            "EXTENSION_REGISTRATION_APPROVAL_ENABLED"
-        ]
+        prev_vals = await run_in_threadpool(_persist_env_updates, env_path, normalized, remove_keys)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except OSError as exc:
+        logger.exception("Failed to persist env settings")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    old_work_dir = (prev_vals.get("WORK_DIR") or "").strip()
+    new_work_dir = "" if "WORK_DIR" in remove_keys else (normalized.get("WORK_DIR") or "").strip()
+    work_dir_changed = ("WORK_DIR" in normalized or "WORK_DIR" in remove_keys) and _work_dir_restart_required(old_work_dir, new_work_dir)
+    await run_in_threadpool(refresh_executor_client_from_env)
     extension_keys = {
         "HOOKS_ENABLED",
         "HOOKS_PATH",
@@ -8625,7 +8762,7 @@ async def save_env_snapshot(req: _Request):
         "MCP_ENABLED",
         "EXTENSION_REGISTRATION_APPROVAL_ENABLED",
     }
-    if extension_keys.intersection(normalized):
+    if extension_keys.intersection(set(normalized) | set(remove_keys)):
         try:
             from agent_extensions import invalidate_extension_caches
             from agent_tools import invalidate_skills_cache
@@ -8661,7 +8798,7 @@ async def save_config(req: _Request):
     try:
         data = await req.json()
         env_path = dotenv_file_path()
-        prev_vals = _dotenv_last_assignments(env_path)
+        prev_vals = await run_in_threadpool(_dotenv_last_assignments, env_path)
         updates: dict[str, str] = {}
 
         api_key = str(data.get("api_key", "") or "").strip()
@@ -8722,9 +8859,9 @@ async def save_config(req: _Request):
             if sp == "tavily" and (sk or "TAVILY_API_KEY" not in prev_vals):
                 updates["TAVILY_API_KEY"] = sk
 
-        env_path.parent.mkdir(parents=True, exist_ok=True)
-        prev = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-        env_path.write_text(_apply_env_updates(prev, updates), encoding="utf-8")
+        persisted_previous = await run_in_threadpool(_persist_env_updates, env_path, updates)
+        if "WORK_DIR" in updates:
+            work_dir_changed = _work_dir_restart_required(persisted_previous.get("WORK_DIR", ""), updates["WORK_DIR"])
         profile = model_profiles.upsert_profile(
             PROJECT_ROOT,
             {
