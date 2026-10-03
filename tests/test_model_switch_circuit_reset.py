@@ -304,7 +304,7 @@ def test_switch_during_config_build_does_not_recache_old_model(monkeypatch):
     agent_harness._invalidate_executor_config_cache(sid)
     resolved = []
 
-    def candidates(_sid, *, profile_id_override):
+    def candidates(_sid, *, profile_id_override, **_overrides):
         resolved.append(profile_id_override)
         if len(resolved) == 1:
             with store._session_metadata_lock(sid):

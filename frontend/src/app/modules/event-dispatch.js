@@ -199,10 +199,8 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         var statusContent = String(event.content || '');
         if (event.model_switch) {
             appendModelSwitchStatus(ctx, event, runSessionId);
-            // 使用模型与选择器绑定：fallback 接管后服务端会把会话绑定
-            // 改写为实际模型，这里静默刷新右下角选择器跟随。
-            if (typeof refreshModelProfileSelectorInBackground === 'function' && runSessionId) {
-                refreshModelProfileSelectorInBackground(runSessionId, { silent: true });
+            if (typeof noteModelBindingChanged === 'function') {
+                noteModelBindingChanged(runSessionId, ctx, 'pending');
             }
             return;
         }

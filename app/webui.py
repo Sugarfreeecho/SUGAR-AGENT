@@ -3908,6 +3908,11 @@ async def create_session(req: Request = None):
         except Exception:
             body = {}
     requested_profile_id = str(body.get("model_profile_id") or "").strip()
+    if "reasoning_effort" in body and not isinstance(body["reasoning_effort"], str):
+        return JSONResponse({"ok": False, "error": "reasoning_effort must be a string"}, status_code=422)
+    requested_effort = str(body.get("reasoning_effort") or "").strip()
+    if requested_effort and requested_effort not in model_profiles.REASONING_EFFORTS:
+        return JSONResponse({"ok": False, "error": "invalid reasoning_effort"}, status_code=422)
     if requested_profile_id and not model_profiles.is_usable_profile(
         model_profiles.get_profile(PROJECT_ROOT, requested_profile_id)
     ):
@@ -3947,6 +3952,8 @@ async def create_session(req: Request = None):
         session_id, _, _, _, _, metadata = await asyncio.to_thread(
             session_manager.get_or_create_session
         )
+    if requested_effort:
+        metadata = await asyncio.to_thread(_persist_session_reasoning_effort, session_id, requested_effort)
     permission_status = None
     if requested_permission_mode:
         from security import security_status_for_session, set_session_permission_mode
@@ -3978,6 +3985,7 @@ async def create_session(req: Request = None):
         "todo": bool((metadata or {}).get("todo", False)),
         "pinned_at": (metadata or {}).get("pinned_at") if (metadata or {}).get("pinned") else None,
         "model_profile_id": (metadata or {}).get("model_profile_id") or "",
+        "reasoning_effort": (metadata or {}).get("reasoning_effort") or "",
         "draft": bool((metadata or {}).get("draft", False)),
         "last_user_preview": "",
         "stream_active": False,
@@ -4132,6 +4140,23 @@ async def probe_model_profile(req: Request):
     if probe_error:
         logger.warning("model context probe failed: model=%s detail=%s", model_id, probe_error)
     return JSONResponse({"ok": True, "model": model})
+
+
+@fastapi_app.post("/api/model_profiles/capabilities")
+async def model_profile_capabilities(req: Request):
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    capabilities = await run_in_threadpool(
+        model_profiles.infer_model_task_capabilities,
+        str(data.get("model") or "").strip(),
+        str(data.get("name") or "").strip(),
+        model_profiles._safe_int(data.get("context_window"), 0),
+    )
+    return JSONResponse({"ok": True, "capabilities": capabilities})
 
 
 @fastapi_app.get("/api/security/settings")
@@ -4432,7 +4457,44 @@ async def get_session_model_profile(session_id: str):
     if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, pid)):
         top = model_profiles.top_profile(PROJECT_ROOT)
         pid = str((top or {}).get("id") or "")
-    return JSONResponse({"ok": True, "profile_id": pid})
+    return JSONResponse({"ok": True, "profile_id": pid, "reasoning_effort": str((meta or {}).get("reasoning_effort") or "")})
+
+
+def _persist_session_reasoning_effort(sid: str, effort: str) -> dict:
+    with session_manager._session_metadata_lock(sid):
+        meta = session_manager._load_metadata_unlocked(sid)
+        if not isinstance(meta, dict):
+            meta = {}
+        if effort:
+            meta["reasoning_effort"] = effort
+        else:
+            meta.pop("reasoning_effort", None)
+        meta["updated_at"] = __import__("datetime").datetime.now().isoformat()
+        session_manager._save_metadata_unlocked(sid, meta)
+        _invalidate_executor_config_cache(sid)
+    reset_executor_failure_state_for_session(sid)
+    return meta
+
+
+@fastapi_app.post("/sessions/{session_id}/reasoning_effort")
+async def set_session_reasoning_effort(session_id: str, req: Request):
+    sid = (session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict) or not isinstance(data.get("reasoning_effort"), str):
+        return JSONResponse({"ok": False, "error": "reasoning_effort must be a string"}, status_code=400)
+    effort = data["reasoning_effort"].strip()
+    if effort and effort not in model_profiles.REASONING_EFFORTS:
+        return JSONResponse({"ok": False, "error": "invalid reasoning_effort"}, status_code=400)
+    try:
+        await run_in_threadpool(_persist_session_reasoning_effort, sid, effort)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "reasoning_effort": effort})
 
 
 @fastapi_app.post("/sessions/{session_id}/model_profile")

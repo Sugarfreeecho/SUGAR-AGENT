@@ -855,51 +855,44 @@ def test_editing_model_profile_preserves_disabled_state(tmp_path):
     assert edited["api_key"] == "test-key"
 
 
-def test_advanced_model_profile_list_wires_drag_drop_reordering():
+def test_settings_model_profile_list_wires_drag_drop_reordering():
     root = Path(__file__).resolve().parents[1]
-    html = (root / "app" / "templates" / "advance_config.html").read_text(encoding="utf-8")
-    i18n = (root / "app" / "templates" / "static" / "setup_i18n.js").read_text(encoding="utf-8")
+    html = (root / "app/templates/static/settings/sections_basic.js").read_text(encoding="utf-8")
 
-    assert "class='profile-row" in html
-    assert "draggable='true'" in html
-    assert "profile-drag-handle" in html
-    assert 'handles[i].addEventListener("dragstart",onProfileDragStart)' in html
-    assert 'rows[i].addEventListener("dragstart",onProfileDragStart)' not in html
-    assert 'addEventListener("dragover",onProfileDragOver)' in html
-    assert 'addEventListener("drop",onProfileDrop)' in html
+    assert 'class="st-lrow st-profile-row"' in html
+    assert "handle.draggable = true;" in html
+    assert "st-drag-handle" in html
+    assert "handle.addEventListener('dragstart'" in html
+    assert "row.addEventListener('dragstart'" not in html
+    assert "list.addEventListener('dragover'" in html
+    assert "list.addEventListener('drop'" in html
     assert "data-act='up'" not in html
     assert "data-act='down'" not in html
-    assert "animateProfileRowShift" in html
-    assert "profile-drop-settle" in html
-    drag_over = html.split("function onProfileDragOver", 1)[1].split("function onProfileDrop", 1)[0]
-    assert drag_over.index("ev.preventDefault()") < drag_over.index("target===dragged")
-    assert 'modelEls.configured.addEventListener("dragover",onProfileDragOver)' in html
-    assert 'modelEls.configured.addEventListener("drop",onProfileDrop)' in html
-    assert 'fetch("/api/model_profiles/reorder"' in html
-    assert "ordered_ids:ids" in html
-    assert '"ArrowUp"' in html and '"ArrowDown"' in html
-    assert "'拖动排序':'Drag to reorder'" in i18n
-    assert 'id="model-capability-description"' in html
-    assert "capability_description:capabilityFieldValue()" in html
-    assert "data-auto-value" in html
-    assert 'id="model-multimodal-mode"' in html
-    assert 'value="auto">按 models_table.md 自动识别' in html
-    assert 'id="model-input-modalities"' in html
-    assert "input_modalities:selectedInputModalities()" in html
-    assert "multimodal_mode:fieldValue(modelEls.multimodal)" in html
-    assert 'id="model-system-prompt-mode"' in html
-    assert 'system_prompt_mode:fieldValue(modelEls.systemPrompt)' in html
-    assert "p.multimodal_source===\"failure\"" in html
+    assert "animateProfileRows" in html
+    assert "if (!state.dropped) { restore(state.beforeIds); return; }" in html
+    assert "api('/api/model_profiles/reorder'" in html
+    assert "ordered_ids: ids" in html
+    assert "'ArrowUp'" in html and "'ArrowDown'" in html
+    assert 'data-field="capability_description"' in html
+    assert "payload.capability_description = dialogValue('capability_description')" in html
+    assert "limit.dataset.autoValue" in html
+    assert 'data-field="multimodal_mode"' in html
+    assert "['auto', 'enabled', 'disabled']" in html
+    assert "data-input-modality" in html
+    assert "payload.input_modalities =" in html
+    assert "payload.multimodal_mode = dialogValue('multimodal_mode')" in html
+    assert 'data-field="system_prompt_mode"' in html
+    assert "payload.system_prompt_mode = dialogValue('system_prompt_mode')" in html
 
 
 def test_probe_failure_surfaces_raw_error_in_model_config_ui():
     root = Path(__file__).resolve().parents[1]
-    html = (root / "app" / "templates" / "advance_config.html").read_text(encoding="utf-8")
+    html = (root / "app/templates/static/settings/sections_basic.js").read_text(encoding="utf-8")
     wizard = (root / "app" / "templates" / "first_time_config.html").read_text(encoding="utf-8")
     i18n = (root / "app" / "templates" / "static" / "setup_i18n.js").read_text(encoding="utf-8")
 
-    assert 'detail=String(j.model&&j.model.probe_error||"").trim()' in html
-    assert '上下文探测失败，已使用列表/默认窗口："+detail' in html
+    assert "const detail = String(result.probe_error || '').trim();" in html
+    assert "上下文探测失败，已使用列表/默认窗口：" in html
     assert "result.model.probe_error" in wizard
     assert "'上下文探测失败，已使用列表/默认窗口：' + probeDetail" in wizard
     assert "Context probe failed; using listed/default window: $1" in i18n

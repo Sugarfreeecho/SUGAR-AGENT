@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -1753,6 +1754,42 @@ def chat_messages_to_anthropic(messages: Iterable[Dict[str, Any]]) -> tuple[str,
     return "\n\n".join(part for part in system_parts if part), converted
 
 
+def _apply_anthropic_reasoning(body: Dict[str, Any], request: Dict[str, Any]) -> None:
+    """Translate the shared effort setting to Messages thinking controls.
+
+    https://platform.claude.com/docs/en/build-with-claude/effort
+    Legacy models use a thinking budget; newer Claude models use adaptive thinking.
+    """
+    extra = request.get("extra_body")
+    if isinstance(extra, dict):
+        body.update(extra)
+    thinking = body.get("thinking")
+    effort = str(request.get("reasoning_effort") or "")
+    match = re.search(r"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:[.-](\d+))?", str(body.get("model") or "").lower())
+    family = match[1] if match else ""
+    major, minor = (int(match[2]), int(match[3] or 0)) if match else (0, 0)
+    adaptive = major >= 5 or (major == 4 and minor >= 6 and family in {"opus", "sonnet"})
+    if isinstance(thinking, dict) and thinking.get("type") == "enabled" and "budget_tokens" not in thinking:
+        if adaptive:
+            body["thinking"] = {**thinking, "type": "adaptive"}
+        else:
+            # A thinking budget must be >= 1024 and smaller than max_tokens.
+            cap = int(body["max_tokens"])
+            if cap <= 1024:
+                raise ValueError("Anthropic 思考模式需要输出上限大于 1024 tokens")
+            budget = {"low": 1024, "medium": 4096, "high": 8192, "xhigh": 16384, "max": 32768}.get(effort, 8192)
+            body["thinking"] = {**thinking, "budget_tokens": min(budget, cap - 1)}
+    if effort and (adaptive or (family == "opus" and major == 4 and minor == 5)):
+        # Older effort-capable models accept fewer levels. Keep the shared UI values.
+        native_effort = effort
+        if major == 4 and minor == 6 and effort == "xhigh": native_effort = "high"
+        if major == 4 and minor == 5 and effort in {"xhigh", "max"}: native_effort = "high"
+        output = body.get("output_config")
+        body["output_config"] = {**(output if isinstance(output, dict) else {}), "effort": native_effort}
+    if isinstance(body.get("thinking"), dict) and body["thinking"].get("type") in {"enabled", "adaptive"}:
+        body.pop("temperature", None)
+
+
 class AnthropicMessagesTransport:
     provider = LLMProvider.ANTHROPIC
 
@@ -1784,9 +1821,7 @@ class AnthropicMessagesTransport:
             body["tools"] = _anthropic_tools(request["tools"])
             if request.get("tool_choice") == "auto":
                 body["tool_choice"] = {"type": "auto"}
-        extra = request.get("extra_body")
-        if isinstance(extra, dict):
-            body.update(extra)
+        _apply_anthropic_reasoning(body, request)
         headers = {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
@@ -1813,6 +1848,7 @@ class AnthropicMessagesTransport:
             body["system"] = system
         if "temperature" in request:
             body["temperature"] = request["temperature"]
+        _apply_anthropic_reasoning(body, request)
         headers = {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",

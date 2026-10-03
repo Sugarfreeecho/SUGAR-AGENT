@@ -17,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
     "runtime_status_takeover.cjs",
     "restart_recovery_order_runtime.cjs",
     "tool_pending_history_recovery_runtime.cjs",
+    "model_profile_bound_refresh_runtime.cjs",
+    "model_profile_refresh_races_runtime.cjs",
+    "model_profile_refresh_requests_runtime.cjs",
+    "model_reasoning_effort_runtime.cjs",
 ])
 def test_frontend_session_stream_runtime(script):
     result = subprocess.run(

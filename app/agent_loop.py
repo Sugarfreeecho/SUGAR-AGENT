@@ -39,6 +39,7 @@ from agent_harness import (
     _serialize_message,
     _message_to_dict,
     _dict_to_message,
+    _masked_model_label,
     setup_logging,
     normalize_prompt_language,
     prompt_template_revision,
@@ -3045,6 +3046,40 @@ def _set_model_switch_status_callback(
         setter(callback)
     except Exception:
         logger.debug("设置模型切换状态回调失败", exc_info=True)
+
+
+def _set_fallback_adopted_callback(
+    client: Any,
+    callback: Optional[Callable[[str, str, str], None]],
+) -> None:
+    setter = getattr(client, "set_fallback_adopted_callback", None)
+    if not callable(setter):
+        return
+    try:
+        setter(callback)
+    except Exception:
+        logger.debug("设置 fallback 接管回调失败", exc_info=True)
+
+
+def _model_profile_bound_event(
+    session_id: str,
+    profile_id: str,
+    model: str,
+) -> Dict[str, Any]:
+    """右下角模型选择器的同步事件：fallback 接管改绑会话之后推送。
+
+    前端收到后静默重取 ``GET /sessions/{id}/model_profile`` 并重绘标签，
+    修复“绑定已改写、显示仍停在旧模型，直到手动点开选择器才刷新”。
+    标记 ephemeral：只走当前事件流与重连快照，不进持久历史（与
+    “正在思考中...” 等临时状态一致），因此无需前端历史渲染分支。
+    """
+    return {
+        "type": "model_profile_bound",
+        "session_id": str(session_id or ""),
+        "profile_id": str(profile_id or ""),
+        "model": _masked_model_label(model),
+        "ephemeral": True,
+    }
 
 
 def _should_suppress_model_switch_status(state: State, event: Dict[str, Any]) -> bool:
@@ -7433,6 +7468,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     iter_client,
                     _stream_model_switch_status,
                 )
+                def _stream_fallback_adopted(sid: str, profile_id: str, model: str) -> None:
+                    # 会话绑定已经落地为实际服务的 profile，立刻通知前端对齐选择器。
+                    sync_q.put(("event", _model_profile_bound_event(sid, profile_id, model)))
+
+                _set_fallback_adopted_callback(
+                    iter_client,
+                    _stream_fallback_adopted,
+                )
                 stream_task = asyncio.create_task(
                     asyncio.to_thread(_run_stream_worker_logged)
                 )
@@ -7491,6 +7534,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 status_event = {"type": "status", "content": str(payload or "")}
                             if status_event.get("content"):
                                 await _push_stream_event(state, status_event, emit=emit)
+                            continue
+                        if tag == "event":
+                            if isinstance(payload, dict):
+                                await _push_stream_event(state, dict(payload), emit=emit)
                             continue
                         if tag == "stream_timing":
                             payload_dict = payload if isinstance(payload, dict) else {}
@@ -7732,6 +7779,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     except Exception:
                         pass
                     _set_model_switch_status_callback(iter_client, None)
+                    _set_fallback_adopted_callback(iter_client, None)
                     _llm_stream_timing_log(
                         state["session_id"],
                         int(iter_count),
@@ -7981,6 +8029,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     iter_client,
                     _collect_model_switch_status,
                 )
+                model_profile_bound_events: List[Dict[str, Any]] = []
+                def _collect_fallback_adopted(sid: str, profile_id: str, model: str) -> None:
+                    model_profile_bound_events.append(
+                        _model_profile_bound_event(sid, profile_id, model)
+                    )
+
+                _set_fallback_adopted_callback(
+                    iter_client,
+                    _collect_fallback_adopted,
+                )
                 try:
                     if stream_error is not None:
                         stream_error_code = _classify_api_error(stream_error).get("code")
@@ -8022,6 +8080,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         for _switch_ev in model_switch_status_events:
                             await _push_stream_event(state, _switch_ev, emit=emit)
                         model_switch_status_events.clear()
+                        for _bound_ev in model_profile_bound_events:
+                            await _push_stream_event(state, _bound_ev, emit=emit)
+                        model_profile_bound_events.clear()
                     u = getattr(api_resp, "usage", None)
                     if u is not None and not llm_call_usage:
                         llm_call_usage = extract_usage_dict(u)
@@ -8069,6 +8130,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         for _switch_ev in model_switch_status_events:
                             await _push_stream_event(state, _switch_ev, emit=emit)
                         model_switch_status_events.clear()
+                        for _bound_ev in model_profile_bound_events:
+                            await _push_stream_event(state, _bound_ev, emit=emit)
+                        model_profile_bound_events.clear()
                     _cls = _classify_api_error(_llm_exc)
                     # detail 展示完整原因链（如 RuntimeError: all model
                     # candidates ... <- PermissionDeniedError: 403 …），
@@ -8219,6 +8283,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     break
                 finally:
                     _set_model_switch_status_callback(iter_client, None)
+                    _set_fallback_adopted_callback(iter_client, None)
             state.pop("_network_reconnect_attempts", None)
             context_limit_recovery_attempts = 0
             context_limit_recovery_pending = False

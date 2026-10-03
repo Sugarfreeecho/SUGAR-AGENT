@@ -26,6 +26,7 @@ DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW = 128_000
 DEFAULT_UNKNOWN_CONTEXT_WINDOW = 119_808
 DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
 MODEL_LIMITS_TABLE_PATH = Path(__file__).resolve().parent / "data" / "models_table.md"
+REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CONTEXT_PROBE_TOKEN_COUNT = 3_000_000
 CONTEXT_PROBE_TIMEOUT = 8.0
 LEGACY_ENV_IMPORT_MARKER = "imported_from_legacy_env"
@@ -117,13 +118,26 @@ def _parse_token_count(value: Any) -> int:
 
 
 def _clean_reasoning_effort(value: Any) -> str:
-    # UI provides max/high/medium/low, but keep custom provider values possible.
+    # UI provides low/medium/high/xhigh/max; keep custom provider values possible.
     return str(value or "").strip().lower()
 
 
 def _clean_thinking_mode(value: Any) -> str:
     # UI provides enabled/disabled, but keep custom provider values possible.
-    return str(value or "").strip().lower()
+    return str(value or "enabled").strip().lower()
+
+
+def _clean_extra_body_json(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise ValueError("extra_body_json must be valid JSON") from exc
+    if not isinstance(data, dict):
+        raise ValueError("extra_body_json must be a JSON object")
+    return text if data else ""
 
 
 def _clean_thinking_format(value: Any) -> str:
@@ -1162,7 +1176,7 @@ def _legacy_env_profile_identity(profile: dict) -> tuple[str, ...]:
         str(profile.get("api_key") or "").strip(),
         str(_safe_int(profile.get("context_window"), 0)),
         str(_safe_int(profile.get("max_output_tokens"), 0)),
-        str(profile.get("thinking_mode") or "").strip().lower(),
+        _clean_thinking_mode(profile.get("thinking_mode")),
         str(profile.get("reasoning_effort") or "").strip().lower(),
         str(profile.get("temperature") or "").strip(),
         str(profile.get("extra_body_json") or "").strip(),
@@ -1337,7 +1351,7 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             ),
             "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort")),
             "temperature": str(payload.get("temperature") or "").strip(),
-            "extra_body_json": str(payload.get("extra_body_json") or "").strip(),
+            "extra_body_json": _clean_extra_body_json(payload.get("extra_body_json")),
             "multimodal_mode": normalize_multimodal_mode(
                 payload.get("multimodal_mode"),
                 normalize_multimodal_mode((old or {}).get("multimodal_mode")),
@@ -1377,6 +1391,19 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
             profile["capability_description"] = capability_description
         else:
             profile.pop("capability_description", None)
+    if "headers" in payload:
+        headers = payload["headers"]
+        if not isinstance(headers, dict):
+            raise ValueError("headers must be a JSON object")
+        for key, value in headers.items():
+            if not isinstance(key, str) or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key):
+                raise ValueError("headers contains an invalid HTTP header name")
+            if not isinstance(value, str) or "\r" in value or "\n" in value:
+                raise ValueError("header values must be strings without line breaks")
+        if headers:
+            profile["headers"] = dict(headers)
+        else:
+            profile.pop("headers", None)
     if incoming_api_key:
         profile["api_key"] = incoming_api_key
     if not profile.get("created_at"):

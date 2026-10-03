@@ -5657,6 +5657,9 @@ function applySessionEvent(event, opts) {
     return { handled: false, messageRecord: messageRecord };
 }
 `,Hr=`let modelProfilesCache = null;
+let modelProfilesLoadedAt = 0;
+let modelProfilesLoadPromise = null;
+const MODEL_PROFILES_CACHE_TTL_MS = 30000;
 const modelProfilesRefreshPromises = Object.create(null);
 const modelProfileBusyBySession = Object.create(null);
 const modelProfileIdBySession = Object.create(null);
@@ -5664,6 +5667,64 @@ const modelProfileToggleBusy = Object.create(null);
 let modelProfileSelectionEpoch = 0;
 let activeModelProfileId = '';
 const LS_NEW_SESSION_MODEL_PROFILE = 'myagent-new-session-model-profile';
+const LS_NEW_SESSION_REASONING_EFFORT = 'myagent-new-session-reasoning-effort';
+const MODEL_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const modelReasoningEffortBySession = Object.create(null);
+const modelReasoningEffortBusy = Object.create(null);
+
+function newSessionReasoningEffort() {
+    try {
+        const effort = localStorage.getItem(LS_NEW_SESSION_REASONING_EFFORT) || '';
+        return MODEL_REASONING_EFFORTS.includes(effort) ? effort : '';
+    }
+    catch (e) { return ''; }
+}
+
+function commitNewSessionReasoningEffort(sessionId) {
+    const effort = newSessionReasoningEffort();
+    if (sessionId) modelReasoningEffortBySession[sessionId] = effort;
+    try { localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT); } catch (e) {}
+}
+
+function currentSessionReasoningEffort() {
+    return currentSessionId ? modelReasoningEffortBySession[currentSessionId] || '' : newSessionReasoningEffort();
+}
+
+async function setCurrentSessionReasoningEffort(effort) {
+    if (effort && !MODEL_REASONING_EFFORTS.includes(effort)) return;
+    const sid = String(currentSessionId || '');
+    if (!sid) {
+        try {
+            if (effort) localStorage.setItem(LS_NEW_SESSION_REASONING_EFFORT, effort);
+            else localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT);
+        } catch (e) {}
+        renderModelProfileControl();
+        return;
+    }
+    if (modelReasoningEffortBusy[sid]) return;
+    modelReasoningEffortBusy[sid] = true;
+    const select = document.getElementById('model-reasoning-effort');
+    if (select) select.disabled = true;
+    try {
+        const response = await fetch('/sessions/' + encodeURIComponent(sid) + '/reasoning_effort', {
+            method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reasoning_effort: effort }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度保存失败');
+        modelReasoningEffortBySession[sid] = effort;
+        if (sid === String(currentSessionId || '')) modelProfileSelectionEpoch += 1;
+    } catch (error) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('推理强度保存失败: ' + String(error.message || error), 'error-log');
+    } finally {
+        delete modelReasoningEffortBusy[sid];
+        if (sid === String(currentSessionId || '')) {
+            renderModelProfileControl();
+            const fresh = document.getElementById('model-reasoning-effort');
+            if (fresh) fresh.focus({ preventScroll: true });
+        }
+    }
+}
 
 function newSessionModelProfileId() {
     var memoryValue = String(modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] || '');
@@ -5801,12 +5862,26 @@ function els() {
     };
 }
 
-async function loadModelProfilesForSwitcher() {
-    const response = await fetch('/api/model_profiles', { credentials: 'same-origin' });
-    const data = await response.json();
-    if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');
-    modelProfilesCache = data;
-    return data;
+async function loadModelProfilesForSwitcher(force) {
+    if (!force && modelProfilesCache && Date.now() - modelProfilesLoadedAt < MODEL_PROFILES_CACHE_TTL_MS) {
+        return modelProfilesCache;
+    }
+    if (modelProfilesLoadPromise) {
+        if (!force) return modelProfilesLoadPromise;
+        await modelProfilesLoadPromise;
+        return loadModelProfilesForSwitcher(true);
+    }
+    const promise = (async function () {
+        const response = await fetch('/api/model_profiles', { credentials: 'same-origin' });
+        const data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');
+        modelProfilesCache = data;
+        modelProfilesLoadedAt = Date.now();
+        return data;
+    })();
+    modelProfilesLoadPromise = promise;
+    try { return await promise; }
+    finally { if (modelProfilesLoadPromise === promise) modelProfilesLoadPromise = null; }
 }
 
 function storedProfiles() {
@@ -5874,7 +5949,7 @@ function renderModelProfileControl() {
         e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';
         return;
     }
-    var html = '';
+    var html = '<div class="composer-model-list" role="listbox" aria-label="' + (modelProfileUiLanguage() === 'en' ? 'Model profiles' : '模型配置') + '">';
     for (var i = 0; i < profiles.length; i += 1) {
         var p = profiles[i] || {};
         var id = String(p.id || '');
@@ -5888,6 +5963,18 @@ function renderModelProfileControl() {
             + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + modelToggleHtml(enabled) + '</button>'
             + '</div>';
     }
+    html += '</div>';
+    if (active) {
+        const english = modelProfileUiLanguage() === 'en';
+        const effort = currentSessionReasoningEffort();
+        html += '<div class="composer-model-reasoning"><label for="model-reasoning-effort">' +
+            (english ? 'Reasoning effort' : '推理强度') + '</label><select id="model-reasoning-effort"' +
+            (modelReasoningEffortBusy[currentSessionId] ? ' disabled' : '') + '>' +
+            '<option value="">' + (english ? 'Model default' : '模型默认') + ' · ' + h(profileEffortValue(active)) + '</option>' +
+            MODEL_REASONING_EFFORTS.map((value) => '<option value="' + value + '"' + (effort === value ? ' selected' : '') + '>' + value + '</option>').join('') +
+            '</select></div>';
+    }
+    e.menu.setAttribute('role', 'dialog');
     e.menu.innerHTML = html;
     if (typeof initUiHoverTips === 'function') initUiHoverTips(e.menu);
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
@@ -5902,6 +5989,8 @@ function renderModelProfileControl() {
             setModelProfileEnabled(btn.getAttribute('data-toggle-profile-id') || '', enabled);
         });
     });
+    const effortSelect = e.menu.querySelector('#model-reasoning-effort');
+    if (effortSelect) effortSelect.addEventListener('change', () => { setCurrentSessionReasoningEffort(effortSelect.value); });
 }
 
 async function setModelProfileEnabled(profileId, enabled) {
@@ -5918,7 +6007,7 @@ async function setModelProfileEnabled(profileId, enabled) {
         });
         var data = await response.json();
         if (!data || !data.ok) throw new Error((data && data.error) || '模型配置启停失败');
-        await refreshModelProfileSelector(sid, { silent: true });
+        await refreshModelProfileSelector(sid, { silent: true, forceProfiles: true });
         openModelMenu();
     } catch (err) {
         if (typeof appendLogVisible === 'function') appendLogVisible('模型配置启停失败: ' + String(err.message || err), 'error-log');
@@ -5938,39 +6027,73 @@ function renderModelProfileLoadingMenu() {
 
 async function refreshModelProfileSelector(sessionId, opts) {
     const sid = String(sessionId || currentSessionId || '');
+    if (sid !== String(currentSessionId || '')) return;
     const requestEpoch = ++modelProfileSelectionEpoch;
     var e = els();
     opts = opts || {};
     if (!e.control) return;
     if (!opts.silent && e.current) e.current.textContent = '正在加载模型配置';
     try {
-        await loadModelProfilesForSwitcher();
+        await loadModelProfilesForSwitcher(opts.forceProfiles || !opts.silent);
         var selectedProfileId = (sid ? modelProfileIdBySession[sid] : newSessionModelProfileId())
             || modelProfilesCache.new_session_default_profile_id
             || '';
         if (sid) {
             var r = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' });
             var j = await r.json();
+            if (!j || !j.ok) throw new Error((j && j.error) || '会话模型绑定加载失败');
             if (j && j.ok && j.profile_id) {
                 selectedProfileId = String(j.profile_id);
-                modelProfileIdBySession[sid] = selectedProfileId;
             }
         }
         if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        if (selectedProfileId && !(modelProfilesCache.profiles || []).some(function (profile) {
+            return String(profile.id || '') === selectedProfileId;
+        })) {
+            await loadModelProfilesForSwitcher(true);
+            if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        }
+        if (sid) {
+            modelProfileIdBySession[sid] = selectedProfileId;
+            modelReasoningEffortBySession[sid] = String((j && j.reasoning_effort) || '');
+        }
         activeModelProfileId = selectedProfileId;
         renderModelProfileControl();
+        return true;
     } catch (err) {
         if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
         if (e.current) e.current.textContent = '模型配置加载失败';
         if (e.menu) e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">模型配置加载失败</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
+        return false;
     }
 }
 
 function refreshModelProfileSelectorInBackground(sessionId, opts) {
     const sid = String(sessionId || currentSessionId || '');
+    if (sid !== String(currentSessionId || '')) return Promise.resolve();
+    opts = opts || {};
     const existing = modelProfilesRefreshPromises[sid];
-    if (existing && existing.epoch === modelProfileSelectionEpoch) return existing.promise;
-    const promise = refreshModelProfileSelector(sid, opts)
+    if (existing && existing.epoch === modelProfileSelectionEpoch) {
+        if (opts.forceProfiles) existing.opts.forceProfiles = true;
+        if (opts.invalidate) {
+            // 改绑/流关闭是权威状态边界：旧请求不能回写，完成后再拉一次。
+            existing.dirty = true;
+            existing.epoch = ++modelProfileSelectionEpoch;
+        }
+        return existing.promise;
+    }
+    const entry = { promise: null, epoch: modelProfileSelectionEpoch, dirty: false, opts: Object.assign({}, opts) };
+    const promise = (async function () {
+        var result;
+        do {
+            entry.dirty = false;
+            const refresh = refreshModelProfileSelector(sid, entry.opts);
+            entry.epoch = modelProfileSelectionEpoch;
+            result = await refresh;
+        } while (entry.dirty && sid === String(currentSessionId || '')
+            && entry.epoch === modelProfileSelectionEpoch);
+        return result;
+    })()
         .catch(function (err) {
             console.error('refresh model profiles failed:', err);
         })
@@ -5979,8 +6102,47 @@ function refreshModelProfileSelectorInBackground(sessionId, opts) {
                 delete modelProfilesRefreshPromises[sid];
             }
         });
-    const entry = { promise: promise, epoch: modelProfileSelectionEpoch };
+    entry.promise = promise;
     modelProfilesRefreshPromises[sid] = entry;
+    return promise;
+}
+
+/** Pending notices mark uncertainty; authoritative binding/close share one refresh. */
+function noteModelBindingChanged(sessionId, runCtx, phase) {
+    const sid = String(sessionId || '');
+    if (!sid || sid !== String(currentSessionId || '')) return Promise.resolve(false);
+    if (typeof refreshModelProfileSelectorInBackground !== 'function') return Promise.resolve(false);
+    const ctx = runCtx || {};
+    if (phase === 'pending') {
+        ctx.modelBindingDirty = true;
+        ctx.modelBindingVerified = false;
+        return Promise.resolve(false);
+    }
+    if (phase === 'closed') {
+        if (ctx.modelBindingRefreshPromise && !ctx.modelBindingDirty) {
+            const epoch = modelProfileSelectionEpoch;
+            return ctx.modelBindingRefreshPromise.then(function (success) {
+                if (success === false && epoch === modelProfileSelectionEpoch
+                    && sid === String(currentSessionId || '')) {
+                    return noteModelBindingChanged(sid, ctx, 'retry');
+                }
+                return success;
+            });
+        }
+        if (ctx.modelBindingVerified && !ctx.modelBindingDirty) return Promise.resolve(true);
+    }
+    ctx.modelBindingDirty = false;
+    const request = refreshModelProfileSelectorInBackground(sid, { silent: true, invalidate: true });
+    const promise = request.then(function (success) {
+        if (ctx.modelBindingRefreshPromise === promise) {
+            ctx.modelBindingVerified = success === true;
+            if (success === false) ctx.modelBindingDirty = true;
+        }
+        return success;
+    }).finally(function () {
+        if (ctx.modelBindingRefreshPromise === promise) ctx.modelBindingRefreshPromise = null;
+    });
+    ctx.modelBindingRefreshPromise = promise;
     return promise;
 }
 
@@ -6085,7 +6247,7 @@ function initModelProfileSwitcher() {
         if (modelProfilesCache) renderModelProfileControl();
         else renderModelProfileLoadingMenu();
         openModelMenu();
-        refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });
+        refreshModelProfileSelectorInBackground(currentSessionId, { silent: true, invalidate: true, forceProfiles: true });
     });
     document.addEventListener('click', (ev) => {
         if (!e.control.contains(ev.target)) closeModelMenu();
@@ -18419,10 +18581,8 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         var statusContent = String(event.content || '');
         if (event.model_switch) {
             appendModelSwitchStatus(ctx, event, runSessionId);
-            // 使用模型与选择器绑定：fallback 接管后服务端会把会话绑定
-            // 改写为实际模型，这里静默刷新右下角选择器跟随。
-            if (typeof refreshModelProfileSelectorInBackground === 'function' && runSessionId) {
-                refreshModelProfileSelectorInBackground(runSessionId, { silent: true });
+            if (typeof noteModelBindingChanged === 'function') {
+                noteModelBindingChanged(runSessionId, ctx, 'pending');
             }
             return;
         }
@@ -20507,6 +20667,10 @@ function collectNewSessionCreateOptions() {
         const modelProfileId = newSessionModelProfileId();
         if (modelProfileId) createOptions.model_profile_id = modelProfileId;
     }
+    if (typeof newSessionReasoningEffort === 'function') {
+        const effort = newSessionReasoningEffort();
+        if (effort) createOptions.reasoning_effort = effort;
+    }
     if (typeof selectedNewSessionPermissionMode === 'function') {
         const permissionMode = selectedNewSessionPermissionMode();
         if (permissionMode) createOptions.permission_mode = permissionMode;
@@ -20621,6 +20785,15 @@ async function prefetchNewSessionInner() {
 
 async function applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, createResponse) {
     const tasks = [];
+    if (createOptions.reasoning_effort && createResponse.reasoning_effort !== createOptions.reasoning_effort) {
+        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/reasoning_effort', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+            body: JSON.stringify({ reasoning_effort: createOptions.reasoning_effort }),
+        }).then(async function (response) {
+            const data = await response.json();
+            if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度应用失败');
+        }));
+    }
     if (createOptions.model_profile_id
         && String(createResponse.model_profile_id || '') !== String(createOptions.model_profile_id)) {
         tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/model_profile', {
@@ -20705,6 +20878,7 @@ async function materializeNewSessionInner() {
         if (typeof commitNewSessionModelProfile === 'function') {
             commitNewSessionModelProfile(sessionId);
         }
+        if (typeof commitNewSessionReasoningEffort === 'function') commitNewSessionReasoningEffort(sessionId);
         if (typeof commitNewSessionPermissionMode === 'function') {
             commitNewSessionPermissionMode(data.permission_status || null);
         }
@@ -21047,6 +21221,9 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         runCtx.streamConsuming = true;
         runCtx.streamEventIndex = streamEventIdx;
         runCtx.lastBusinessEventAt = Date.now();
+        // A reused context must verify each new stream instead of trusting the previous run.
+        runCtx.modelBindingDirty = true;
+        runCtx.modelBindingVerified = false;
     }
     const progressTimer = setInterval(function () {
         void checkSessionStreamProgress(runSessionId, runCtx);
@@ -21058,6 +21235,14 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         if (runCtx) runCtx.streamConsuming = false;
         if (typeof requestExtensionStateConvergence === 'function') {
             requestExtensionStateConvergence(runSessionId, 'stream-closed');
+        }
+        if (typeof noteModelBindingChanged === 'function') {
+            noteModelBindingChanged(runSessionId, runCtx, 'closed');
+        } else if (typeof refreshModelProfileSelectorInBackground === 'function' && runSessionId
+            && runSessionId === currentSessionId) {
+            /* 兜底：运行期间任何后台改绑（fallback 接管、压缩期模型调用等）都在
+               流关闭后对齐一次，保证右下角选择器最终与实际绑定一致。 */
+            refreshModelProfileSelectorInBackground(runSessionId, { silent: true, invalidate: true });
         }
         var closingRun = getSessionRunState(runSessionId);
         if (runCtx && closingRun && closingRun.ctx === runCtx && runCtx.terminalSeen !== true
@@ -21314,14 +21499,24 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                             runSessionId
                         );
                     }
+                    else if (parsed.type === 'model_profile_bound') {
+                        /* fallback 接管把会话绑定改写为实际服务的模型后推来的轻量事件
+                           （ephemeral，不进持久历史）：静默重取绑定，让右下角模型
+                           选择器跟随，不再依赖用户点开菜单才刷新。 */
+                        var boundSessionId = String(parsed.session_id || runSessionId || '');
+                        if (typeof noteModelBindingChanged === 'function') {
+                            noteModelBindingChanged(boundSessionId, runCtx, 'bound');
+                        } else if (typeof refreshModelProfileSelectorInBackground === 'function' && boundSessionId
+                            && boundSessionId === currentSessionId) {
+                            refreshModelProfileSelectorInBackground(boundSessionId, { silent: true, invalidate: true });
+                        }
+                    }
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         if (parsed.model_switch) {
                             appendModelSwitchStatus(runCtx, parsed, runSessionId);
-                            // 使用模型与选择器绑定：fallback 接管后服务端会把
-                            // 会话绑定改写为实际模型，静默刷新右下角选择器。
-                            if (typeof refreshModelProfileSelectorInBackground === 'function' && runSessionId) {
-                                refreshModelProfileSelectorInBackground(runSessionId, { silent: true });
+                            if (typeof noteModelBindingChanged === 'function') {
+                                noteModelBindingChanged(runSessionId, runCtx, 'pending');
                             }
                             continue;
                         }

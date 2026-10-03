@@ -1598,3 +1598,49 @@ def test_astream_can_record_initial_ui_message_as_user_steer(monkeypatch, tmp_pa
 
     assert ("s-followup", {"type": "user_steer", "content": "follow up", "steer": True}) in ui_events
     assert ("s-followup", {"type": "user", "content": "follow up"}) not in ui_events
+
+
+def test_model_profile_bound_event_contract():
+    """fallback 接管事件：类型/字段/ephemeral 契约（右下角选择器靠它刷新）。"""
+    import agent_loop
+
+    event = agent_loop._model_profile_bound_event("sess-1", "p2", "m2")
+    assert event["type"] == "model_profile_bound"
+    assert event["session_id"] == "sess-1"
+    assert event["profile_id"] == "p2"
+    assert isinstance(event["model"], str) and event["model"]
+    assert event["ephemeral"] is True, "该事件只走事件流与重连快照，不进持久历史"
+    assert "content" not in event, "无正文：避免被历史渲染兜底成日志行"
+
+
+def test_set_fallback_adopted_callback_wiring():
+    """接线：支持 setter 的客户端被设置/清空；不支持的客户端静默跳过。"""
+    import agent_loop
+
+    class _Client:
+        def __init__(self):
+            self.callback = None
+
+        def set_fallback_adopted_callback(self, callback):
+            self.callback = callback
+
+    client = _Client()
+    seen = []
+    agent_loop._set_fallback_adopted_callback(
+        client, lambda sid, pid, model: seen.append((sid, pid, model))
+    )
+    assert callable(client.callback)
+    client.callback("s", "p", "m")
+    assert seen == [("s", "p", "m")]
+
+    agent_loop._set_fallback_adopted_callback(client, None)
+    assert client.callback is None
+
+    # 旧客户端（没有 setter/属性）与 setter 抛错都必须被吞掉。
+    agent_loop._set_fallback_adopted_callback(object(), lambda *args: None)
+
+    class _Broken:
+        def set_fallback_adopted_callback(self, callback):
+            raise RuntimeError("boom")
+
+    agent_loop._set_fallback_adopted_callback(_Broken(), lambda *args: None)

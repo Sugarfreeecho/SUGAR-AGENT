@@ -3907,6 +3907,18 @@ body {
     z-index: 360;
 }
 .composer-model-menu.is-open { display: grid; gap: 0.28rem; }
+.composer-model-list { display: grid; gap: 0.28rem; }
+.composer-model-reasoning {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;
+    padding: 0.65rem 0.5rem 0.35rem; margin-top: 0.25rem;
+    border-top: 1px solid var(--floating-border); color: var(--text-secondary); font-size: 0.75rem;
+}
+.composer-model-reasoning select {
+    min-width: 6.5rem; max-width: 11rem; padding: 0.25rem 0.4rem;
+    font: inherit; color: var(--text-primary); background: var(--floating-surface);
+    border: 1px solid var(--floating-border); border-radius: var(--radius-sm);
+}
+.composer-model-reasoning select:focus-visible { outline: 2px solid var(--accent-1); outline-offset: 2px; }
 .composer-model-option-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

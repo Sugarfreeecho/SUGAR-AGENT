@@ -1,4 +1,7 @@
 let modelProfilesCache = null;
+let modelProfilesLoadedAt = 0;
+let modelProfilesLoadPromise = null;
+const MODEL_PROFILES_CACHE_TTL_MS = 30000;
 const modelProfilesRefreshPromises = Object.create(null);
 const modelProfileBusyBySession = Object.create(null);
 const modelProfileIdBySession = Object.create(null);
@@ -6,6 +9,64 @@ const modelProfileToggleBusy = Object.create(null);
 let modelProfileSelectionEpoch = 0;
 let activeModelProfileId = '';
 const LS_NEW_SESSION_MODEL_PROFILE = 'myagent-new-session-model-profile';
+const LS_NEW_SESSION_REASONING_EFFORT = 'myagent-new-session-reasoning-effort';
+const MODEL_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const modelReasoningEffortBySession = Object.create(null);
+const modelReasoningEffortBusy = Object.create(null);
+
+function newSessionReasoningEffort() {
+    try {
+        const effort = localStorage.getItem(LS_NEW_SESSION_REASONING_EFFORT) || '';
+        return MODEL_REASONING_EFFORTS.includes(effort) ? effort : '';
+    }
+    catch (e) { return ''; }
+}
+
+function commitNewSessionReasoningEffort(sessionId) {
+    const effort = newSessionReasoningEffort();
+    if (sessionId) modelReasoningEffortBySession[sessionId] = effort;
+    try { localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT); } catch (e) {}
+}
+
+function currentSessionReasoningEffort() {
+    return currentSessionId ? modelReasoningEffortBySession[currentSessionId] || '' : newSessionReasoningEffort();
+}
+
+async function setCurrentSessionReasoningEffort(effort) {
+    if (effort && !MODEL_REASONING_EFFORTS.includes(effort)) return;
+    const sid = String(currentSessionId || '');
+    if (!sid) {
+        try {
+            if (effort) localStorage.setItem(LS_NEW_SESSION_REASONING_EFFORT, effort);
+            else localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT);
+        } catch (e) {}
+        renderModelProfileControl();
+        return;
+    }
+    if (modelReasoningEffortBusy[sid]) return;
+    modelReasoningEffortBusy[sid] = true;
+    const select = document.getElementById('model-reasoning-effort');
+    if (select) select.disabled = true;
+    try {
+        const response = await fetch('/sessions/' + encodeURIComponent(sid) + '/reasoning_effort', {
+            method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reasoning_effort: effort }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度保存失败');
+        modelReasoningEffortBySession[sid] = effort;
+        if (sid === String(currentSessionId || '')) modelProfileSelectionEpoch += 1;
+    } catch (error) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('推理强度保存失败: ' + String(error.message || error), 'error-log');
+    } finally {
+        delete modelReasoningEffortBusy[sid];
+        if (sid === String(currentSessionId || '')) {
+            renderModelProfileControl();
+            const fresh = document.getElementById('model-reasoning-effort');
+            if (fresh) fresh.focus({ preventScroll: true });
+        }
+    }
+}
 
 function newSessionModelProfileId() {
     var memoryValue = String(modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] || '');
@@ -143,12 +204,26 @@ function els() {
     };
 }
 
-async function loadModelProfilesForSwitcher() {
-    const response = await fetch('/api/model_profiles', { credentials: 'same-origin' });
-    const data = await response.json();
-    if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');
-    modelProfilesCache = data;
-    return data;
+async function loadModelProfilesForSwitcher(force) {
+    if (!force && modelProfilesCache && Date.now() - modelProfilesLoadedAt < MODEL_PROFILES_CACHE_TTL_MS) {
+        return modelProfilesCache;
+    }
+    if (modelProfilesLoadPromise) {
+        if (!force) return modelProfilesLoadPromise;
+        await modelProfilesLoadPromise;
+        return loadModelProfilesForSwitcher(true);
+    }
+    const promise = (async function () {
+        const response = await fetch('/api/model_profiles', { credentials: 'same-origin' });
+        const data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');
+        modelProfilesCache = data;
+        modelProfilesLoadedAt = Date.now();
+        return data;
+    })();
+    modelProfilesLoadPromise = promise;
+    try { return await promise; }
+    finally { if (modelProfilesLoadPromise === promise) modelProfilesLoadPromise = null; }
 }
 
 function storedProfiles() {
@@ -216,7 +291,7 @@ function renderModelProfileControl() {
         e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';
         return;
     }
-    var html = '';
+    var html = '<div class="composer-model-list" role="listbox" aria-label="' + (modelProfileUiLanguage() === 'en' ? 'Model profiles' : '模型配置') + '">';
     for (var i = 0; i < profiles.length; i += 1) {
         var p = profiles[i] || {};
         var id = String(p.id || '');
@@ -230,6 +305,18 @@ function renderModelProfileControl() {
             + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + modelToggleHtml(enabled) + '</button>'
             + '</div>';
     }
+    html += '</div>';
+    if (active) {
+        const english = modelProfileUiLanguage() === 'en';
+        const effort = currentSessionReasoningEffort();
+        html += '<div class="composer-model-reasoning"><label for="model-reasoning-effort">' +
+            (english ? 'Reasoning effort' : '推理强度') + '</label><select id="model-reasoning-effort"' +
+            (modelReasoningEffortBusy[currentSessionId] ? ' disabled' : '') + '>' +
+            '<option value="">' + (english ? 'Model default' : '模型默认') + ' · ' + h(profileEffortValue(active)) + '</option>' +
+            MODEL_REASONING_EFFORTS.map((value) => '<option value="' + value + '"' + (effort === value ? ' selected' : '') + '>' + value + '</option>').join('') +
+            '</select></div>';
+    }
+    e.menu.setAttribute('role', 'dialog');
     e.menu.innerHTML = html;
     if (typeof initUiHoverTips === 'function') initUiHoverTips(e.menu);
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
@@ -244,6 +331,8 @@ function renderModelProfileControl() {
             setModelProfileEnabled(btn.getAttribute('data-toggle-profile-id') || '', enabled);
         });
     });
+    const effortSelect = e.menu.querySelector('#model-reasoning-effort');
+    if (effortSelect) effortSelect.addEventListener('change', () => { setCurrentSessionReasoningEffort(effortSelect.value); });
 }
 
 async function setModelProfileEnabled(profileId, enabled) {
@@ -260,7 +349,7 @@ async function setModelProfileEnabled(profileId, enabled) {
         });
         var data = await response.json();
         if (!data || !data.ok) throw new Error((data && data.error) || '模型配置启停失败');
-        await refreshModelProfileSelector(sid, { silent: true });
+        await refreshModelProfileSelector(sid, { silent: true, forceProfiles: true });
         openModelMenu();
     } catch (err) {
         if (typeof appendLogVisible === 'function') appendLogVisible('模型配置启停失败: ' + String(err.message || err), 'error-log');
@@ -280,39 +369,73 @@ function renderModelProfileLoadingMenu() {
 
 async function refreshModelProfileSelector(sessionId, opts) {
     const sid = String(sessionId || currentSessionId || '');
+    if (sid !== String(currentSessionId || '')) return;
     const requestEpoch = ++modelProfileSelectionEpoch;
     var e = els();
     opts = opts || {};
     if (!e.control) return;
     if (!opts.silent && e.current) e.current.textContent = '正在加载模型配置';
     try {
-        await loadModelProfilesForSwitcher();
+        await loadModelProfilesForSwitcher(opts.forceProfiles || !opts.silent);
         var selectedProfileId = (sid ? modelProfileIdBySession[sid] : newSessionModelProfileId())
             || modelProfilesCache.new_session_default_profile_id
             || '';
         if (sid) {
             var r = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' });
             var j = await r.json();
+            if (!j || !j.ok) throw new Error((j && j.error) || '会话模型绑定加载失败');
             if (j && j.ok && j.profile_id) {
                 selectedProfileId = String(j.profile_id);
-                modelProfileIdBySession[sid] = selectedProfileId;
             }
         }
         if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        if (selectedProfileId && !(modelProfilesCache.profiles || []).some(function (profile) {
+            return String(profile.id || '') === selectedProfileId;
+        })) {
+            await loadModelProfilesForSwitcher(true);
+            if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        }
+        if (sid) {
+            modelProfileIdBySession[sid] = selectedProfileId;
+            modelReasoningEffortBySession[sid] = String((j && j.reasoning_effort) || '');
+        }
         activeModelProfileId = selectedProfileId;
         renderModelProfileControl();
+        return true;
     } catch (err) {
         if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
         if (e.current) e.current.textContent = '模型配置加载失败';
         if (e.menu) e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">模型配置加载失败</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
+        return false;
     }
 }
 
 function refreshModelProfileSelectorInBackground(sessionId, opts) {
     const sid = String(sessionId || currentSessionId || '');
+    if (sid !== String(currentSessionId || '')) return Promise.resolve();
+    opts = opts || {};
     const existing = modelProfilesRefreshPromises[sid];
-    if (existing && existing.epoch === modelProfileSelectionEpoch) return existing.promise;
-    const promise = refreshModelProfileSelector(sid, opts)
+    if (existing && existing.epoch === modelProfileSelectionEpoch) {
+        if (opts.forceProfiles) existing.opts.forceProfiles = true;
+        if (opts.invalidate) {
+            // 改绑/流关闭是权威状态边界：旧请求不能回写，完成后再拉一次。
+            existing.dirty = true;
+            existing.epoch = ++modelProfileSelectionEpoch;
+        }
+        return existing.promise;
+    }
+    const entry = { promise: null, epoch: modelProfileSelectionEpoch, dirty: false, opts: Object.assign({}, opts) };
+    const promise = (async function () {
+        var result;
+        do {
+            entry.dirty = false;
+            const refresh = refreshModelProfileSelector(sid, entry.opts);
+            entry.epoch = modelProfileSelectionEpoch;
+            result = await refresh;
+        } while (entry.dirty && sid === String(currentSessionId || '')
+            && entry.epoch === modelProfileSelectionEpoch);
+        return result;
+    })()
         .catch(function (err) {
             console.error('refresh model profiles failed:', err);
         })
@@ -321,8 +444,47 @@ function refreshModelProfileSelectorInBackground(sessionId, opts) {
                 delete modelProfilesRefreshPromises[sid];
             }
         });
-    const entry = { promise: promise, epoch: modelProfileSelectionEpoch };
+    entry.promise = promise;
     modelProfilesRefreshPromises[sid] = entry;
+    return promise;
+}
+
+/** Pending notices mark uncertainty; authoritative binding/close share one refresh. */
+function noteModelBindingChanged(sessionId, runCtx, phase) {
+    const sid = String(sessionId || '');
+    if (!sid || sid !== String(currentSessionId || '')) return Promise.resolve(false);
+    if (typeof refreshModelProfileSelectorInBackground !== 'function') return Promise.resolve(false);
+    const ctx = runCtx || {};
+    if (phase === 'pending') {
+        ctx.modelBindingDirty = true;
+        ctx.modelBindingVerified = false;
+        return Promise.resolve(false);
+    }
+    if (phase === 'closed') {
+        if (ctx.modelBindingRefreshPromise && !ctx.modelBindingDirty) {
+            const epoch = modelProfileSelectionEpoch;
+            return ctx.modelBindingRefreshPromise.then(function (success) {
+                if (success === false && epoch === modelProfileSelectionEpoch
+                    && sid === String(currentSessionId || '')) {
+                    return noteModelBindingChanged(sid, ctx, 'retry');
+                }
+                return success;
+            });
+        }
+        if (ctx.modelBindingVerified && !ctx.modelBindingDirty) return Promise.resolve(true);
+    }
+    ctx.modelBindingDirty = false;
+    const request = refreshModelProfileSelectorInBackground(sid, { silent: true, invalidate: true });
+    const promise = request.then(function (success) {
+        if (ctx.modelBindingRefreshPromise === promise) {
+            ctx.modelBindingVerified = success === true;
+            if (success === false) ctx.modelBindingDirty = true;
+        }
+        return success;
+    }).finally(function () {
+        if (ctx.modelBindingRefreshPromise === promise) ctx.modelBindingRefreshPromise = null;
+    });
+    ctx.modelBindingRefreshPromise = promise;
     return promise;
 }
 
@@ -427,7 +589,7 @@ function initModelProfileSwitcher() {
         if (modelProfilesCache) renderModelProfileControl();
         else renderModelProfileLoadingMenu();
         openModelMenu();
-        refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });
+        refreshModelProfileSelectorInBackground(currentSessionId, { silent: true, invalidate: true, forceProfiles: true });
     });
     document.addEventListener('click', (ev) => {
         if (!e.control.contains(ev.target)) closeModelMenu();

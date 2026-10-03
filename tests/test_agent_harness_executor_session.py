@@ -67,11 +67,11 @@ def test_executor_tracks_the_last_actually_successful_candidate():
     assert client.next_candidate()["profile_id"] == "p1"
 
 
-def test_responses_profile_only_sends_explicit_thinking_and_effort():
+def test_responses_profile_sends_native_effort_without_vendor_thinking():
     import agent_harness
 
     profile = {
-        "llm_type": "openai",
+        "llm_type": "openai-responses",
         "base_url": "https://opencode.ai/zen/go/v1",
         "model": "gpt-test",
         "thinking_mode": "enabled",
@@ -79,7 +79,7 @@ def test_responses_profile_only_sends_explicit_thinking_and_effort():
     }
 
     extra_body = agent_harness._profile_extra_body(profile)
-    assert extra_body == {"thinking": {"type": "enabled"}}
+    assert extra_body is None
     assert agent_harness._profile_reasoning_effort(profile, extra_body) == "max"
 
 

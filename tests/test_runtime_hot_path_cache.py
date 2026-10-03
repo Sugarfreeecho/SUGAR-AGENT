@@ -19,7 +19,7 @@ def _install_executor_candidate(monkeypatch, agent_harness):
     monkeypatch.setattr(
         agent_harness,
         "resolve_executor_candidates_for_session",
-        lambda _sid, *, profile_id_override=None: [candidate],
+        lambda _sid, *, profile_id_override=None, **_overrides: [candidate],
     )
 
 
@@ -111,7 +111,7 @@ def test_first_profile_executor_config_keeps_saved_profiles_as_fallbacks(monkeyp
     monkeypatch.setattr(
         agent_harness,
         "resolve_executor_candidates_for_session",
-        lambda _sid, *, profile_id_override=None: candidates,
+        lambda _sid, *, profile_id_override=None, **_overrides: candidates,
     )
 
     client, model, max_tokens, context_window = agent_harness.resolve_executor_config_for_session("s-profile-first")
@@ -133,7 +133,7 @@ def test_session_model_cache_invalidation_changes_next_resolution(monkeypatch):
         calls["metadata"] += 1
         return dict(metadata)
 
-    def candidates(_sid, *, profile_id_override=None):
+    def candidates(_sid, *, profile_id_override=None, **_overrides):
         pid = str(profile_id_override or "")
         return [{
             "client": "client-" + pid,

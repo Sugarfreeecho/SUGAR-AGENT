@@ -317,6 +317,9 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         runCtx.streamConsuming = true;
         runCtx.streamEventIndex = streamEventIdx;
         runCtx.lastBusinessEventAt = Date.now();
+        // A reused context must verify each new stream instead of trusting the previous run.
+        runCtx.modelBindingDirty = true;
+        runCtx.modelBindingVerified = false;
     }
     const progressTimer = setInterval(function () {
         void checkSessionStreamProgress(runSessionId, runCtx);
@@ -328,6 +331,14 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         if (runCtx) runCtx.streamConsuming = false;
         if (typeof requestExtensionStateConvergence === 'function') {
             requestExtensionStateConvergence(runSessionId, 'stream-closed');
+        }
+        if (typeof noteModelBindingChanged === 'function') {
+            noteModelBindingChanged(runSessionId, runCtx, 'closed');
+        } else if (typeof refreshModelProfileSelectorInBackground === 'function' && runSessionId
+            && runSessionId === currentSessionId) {
+            /* 兜底：运行期间任何后台改绑（fallback 接管、压缩期模型调用等）都在
+               流关闭后对齐一次，保证右下角选择器最终与实际绑定一致。 */
+            refreshModelProfileSelectorInBackground(runSessionId, { silent: true, invalidate: true });
         }
         var closingRun = getSessionRunState(runSessionId);
         if (runCtx && closingRun && closingRun.ctx === runCtx && runCtx.terminalSeen !== true
@@ -584,14 +595,24 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                             runSessionId
                         );
                     }
+                    else if (parsed.type === 'model_profile_bound') {
+                        /* fallback 接管把会话绑定改写为实际服务的模型后推来的轻量事件
+                           （ephemeral，不进持久历史）：静默重取绑定，让右下角模型
+                           选择器跟随，不再依赖用户点开菜单才刷新。 */
+                        var boundSessionId = String(parsed.session_id || runSessionId || '');
+                        if (typeof noteModelBindingChanged === 'function') {
+                            noteModelBindingChanged(boundSessionId, runCtx, 'bound');
+                        } else if (typeof refreshModelProfileSelectorInBackground === 'function' && boundSessionId
+                            && boundSessionId === currentSessionId) {
+                            refreshModelProfileSelectorInBackground(boundSessionId, { silent: true, invalidate: true });
+                        }
+                    }
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         if (parsed.model_switch) {
                             appendModelSwitchStatus(runCtx, parsed, runSessionId);
-                            // 使用模型与选择器绑定：fallback 接管后服务端会把
-                            // 会话绑定改写为实际模型，静默刷新右下角选择器。
-                            if (typeof refreshModelProfileSelectorInBackground === 'function' && runSessionId) {
-                                refreshModelProfileSelectorInBackground(runSessionId, { silent: true });
+                            if (typeof noteModelBindingChanged === 'function') {
+                                noteModelBindingChanged(runSessionId, runCtx, 'pending');
                             }
                             continue;
                         }

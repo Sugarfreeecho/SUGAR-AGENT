@@ -927,14 +927,14 @@ def test_legacy_stateful_profile_is_migrated_to_automatic_mode(tmp_path):
 
 
 def test_responses_profile_ui_exposes_only_storage_privacy_switch():
-    html = (APP_DIR / "templates" / "advance_config.html").read_text(
+    html = (APP_DIR / "templates/static/settings/sections_basic.js").read_text(
         encoding="utf-8"
     )
 
-    assert 'id="model-responses-store-disabled"' in html
+    assert 'data-field="responses_store_disabled"' in html
     assert "Responses 会话状态" not in html
     assert "stateful（优先" not in html
-    assert "responses_store_disabled:" in html
+    assert "payload.responses_store_disabled =" in html
 
 
 def test_auto_compatible_profile_can_use_an_authless_local_endpoint(tmp_path):
@@ -1969,6 +1969,56 @@ def test_fallback_takeover_rebinds_session_profile(tmp_path, monkeypatch):
     saves.clear()
     client._maybe_adopt_fallback_profile(client.candidates[1])
     assert not saves
+
+
+def test_fallback_adopted_callback_fires_only_when_binding_changes(monkeypatch):
+    """接管回调只在绑定真的改写后通知一次，且回调异常不得影响接管。"""
+    import agent_harness
+
+    sid = "sess-adopt-callback"
+    p1 = {"id": "p1", "model": "m1", "llm_type": "openai-compatible",
+          "base_url": "https://api.example.com/v1", "api_key": "k",
+          "context_window": 1000, "max_output_tokens": 100}
+    p2 = {**p1, "id": "p2", "model": "m2"}
+    client = agent_harness.ExecutorLLMClient(
+        [
+            agent_harness._profile_candidate(p1),
+            agent_harness._profile_candidate(p2),
+        ]
+    )
+    client.set_request_scope("run-adopt-callback")
+    client.note_scope_session(sid)
+
+    calls = []
+    client.set_fallback_adopted_callback(
+        lambda s, profile_id, model: calls.append((s, profile_id, model))
+    )
+
+    adopted = {"value": True}
+    monkeypatch.setattr(
+        agent_harness,
+        "adopt_fallback_profile_for_session",
+        lambda s, profile_id, **kwargs: adopted["value"],
+    )
+
+    # 绑定被改写 → 立即通知（前端据此刷新右下角选择器）。
+    client._maybe_adopt_fallback_profile(client.candidates[1])
+    assert calls and calls[0][0] == sid and calls[0][1] == "p2"
+
+    # 绑定未变化（重复接管同一模型）→ 不重复通知。
+    adopted["value"] = False
+    client._maybe_adopt_fallback_profile(client.candidates[1])
+    assert len(calls) == 1
+
+    # 回调自身抛错必须被吞掉，且不影响接管结果。
+    adopted["value"] = True
+
+    def _boom(*_args):
+        raise RuntimeError("boom")
+
+    client.set_fallback_adopted_callback(_boom)
+    client._maybe_adopt_fallback_profile(client.candidates[1])
+    assert len(calls) == 1
 
 
 def _compatible_transport_with_chunks(chunks):

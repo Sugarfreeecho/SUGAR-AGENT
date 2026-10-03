@@ -347,6 +347,8 @@ def _load_executor_extra_body() -> Optional[Dict[str, Any]]:
             )
             return None
         return _sanitize_extra_body_drop_reasoning_when_thinking_off(data)
+    if EXECUTOR_LLM_TYPE == "openai":
+        return None
     eb_out: Optional[Dict[str, Any]] = None
     if _profile_llm_thinking_wants_extra_body_enabled():
         eb_out = {"thinking": {"type": "enabled"}}
@@ -366,6 +368,8 @@ def _extra_body_thinking_enabled() -> bool:
 
 def _executor_reasoning_effort() -> Optional[str]:
     """仅思考开启时才下发顶层 reasoning_effort；否则忽略 LLM_REASONING_EFFORT。"""
+    if EXECUTOR_LLM_TYPE == "openai":
+        return EXECUTOR_REASONING_EFFORT_RAW or None
     if not _extra_body_thinking_enabled():
         v_skip = EXECUTOR_REASONING_EFFORT_RAW
         if v_skip:
@@ -488,7 +492,7 @@ def _profile_extra_body(profile: dict) -> Optional[Dict[str, Any]]:
     # Responses profiles are safest when an empty setting means "automatic":
     # do not synthesize provider-specific fields.  Compatible profiles retain
     # the historical thinking defaults used by DeepSeek-style endpoints.
-    if not thinking_mode and resolve_profile_provider(profile).value == "openai":
+    if resolve_profile_provider(profile).value == "openai":
         return None
     if not thinking_mode:
         thinking_mode = "enabled"
@@ -2493,6 +2497,19 @@ class ExecutorLLMClient:
         status_callback: Optional[Callable[[Dict[str, Any]], None]],
     ) -> None:
         self.chat.set_status_callback(status_callback)
+
+    def set_fallback_adopted_callback(
+        self,
+        callback: Optional[Callable[[str, str, str], None]],
+    ) -> None:
+        """注册 fallback 接管成功（会话绑定已改写）后的通知回调。
+
+        回调参数为 ``(session_id, profile_id, model)``，只在
+        ``_maybe_adopt_fallback_profile`` 真的改写了会话绑定时触发。
+        agent_loop 用它推送 ``model_profile_bound`` 事件，让右下角模型选择器
+        跟随实际服务的模型（此前该回调从未被接线，选择器只能等用户点开才刷新）。
+        """
+        self._fallback_adopted_callback = callback
 
 
 # Backward-compatible public name for plugins/tests that imported the old
@@ -7727,6 +7744,7 @@ def resolve_executor_candidates_for_session(
     *,
     profile_id_override: Optional[str] = None,
     runtime_snapshot_override: Optional[Dict[str, Any]] = None,
+    reasoning_effort_override: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     sid = (session_id or "").strip()
     profile_id = str(profile_id_override or "").strip()
@@ -7741,6 +7759,8 @@ def resolve_executor_candidates_for_session(
         except Exception:
             meta = {}
         if isinstance(meta, dict):
+            if reasoning_effort_override is None:
+                reasoning_effort_override = str(meta.get("reasoning_effort") or "")
             if profile_id_override is None:
                 profile_id = str(meta.get("model_profile_id") or "").strip()
             raw_snapshot = meta.get("fork_model_runtime")
@@ -7798,6 +7818,14 @@ def resolve_executor_candidates_for_session(
             if key in runtime_snapshot:
                 frozen[key] = runtime_snapshot[key]
         candidates[0] = frozen
+    if reasoning_effort_override in model_profiles.REASONING_EFFORTS:
+        for candidate in candidates:
+            candidate["reasoning_effort"] = reasoning_effort_override
+            if candidate.get("provider") != "openai":
+                extra = dict(candidate.get("extra_body") or {})
+                configured_thinking = extra.get("thinking")
+                extra["thinking"] = {**(configured_thinking if isinstance(configured_thinking, dict) else {}), "type": "enabled"}
+                candidate["extra_body"] = extra
     return candidates
 
 
@@ -7816,31 +7844,18 @@ def _build_executor_config_for_session(sid: str) -> Tuple[Any, str, int, int]:
     profile_id = ""
     if isinstance(meta, dict):
         profile_id = str(meta.get("model_profile_id") or "").strip()
-    candidates = resolve_executor_candidates_for_session(
-        sid,
-        profile_id_override=profile_id,
-    )
     runtime_snapshot = (
         meta.get("fork_model_runtime")
         if isinstance(meta, dict)
         and isinstance(meta.get("fork_model_runtime"), dict)
         else None
     )
-    if candidates and runtime_snapshot:
-        frozen = dict(candidates[0])
-        for key in (
-            "model",
-            "max_output_tokens",
-            "context_window",
-            "temperature",
-            "extra_body",
-            "reasoning_effort",
-            "multimodal_input",
-            "input_modalities",
-        ):
-            if key in runtime_snapshot:
-                frozen[key] = runtime_snapshot[key]
-        candidates[0] = frozen
+    candidates = resolve_executor_candidates_for_session(
+        sid,
+        profile_id_override=profile_id,
+        runtime_snapshot_override=runtime_snapshot,
+        reasoning_effort_override=str((meta if isinstance(meta, dict) else {}).get("reasoning_effort") or ""),
+    )
     if not candidates:
         raise RuntimeError("no usable model profile configured")
     first = candidates[0]

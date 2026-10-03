@@ -2052,6 +2052,10 @@ function collectNewSessionCreateOptions() {
         const modelProfileId = newSessionModelProfileId();
         if (modelProfileId) createOptions.model_profile_id = modelProfileId;
     }
+    if (typeof newSessionReasoningEffort === 'function') {
+        const effort = newSessionReasoningEffort();
+        if (effort) createOptions.reasoning_effort = effort;
+    }
     if (typeof selectedNewSessionPermissionMode === 'function') {
         const permissionMode = selectedNewSessionPermissionMode();
         if (permissionMode) createOptions.permission_mode = permissionMode;
@@ -2166,6 +2170,15 @@ async function prefetchNewSessionInner() {
 
 async function applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, createResponse) {
     const tasks = [];
+    if (createOptions.reasoning_effort && createResponse.reasoning_effort !== createOptions.reasoning_effort) {
+        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/reasoning_effort', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+            body: JSON.stringify({ reasoning_effort: createOptions.reasoning_effort }),
+        }).then(async function (response) {
+            const data = await response.json();
+            if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度应用失败');
+        }));
+    }
     if (createOptions.model_profile_id
         && String(createResponse.model_profile_id || '') !== String(createOptions.model_profile_id)) {
         tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/model_profile', {
@@ -2250,6 +2263,7 @@ async function materializeNewSessionInner() {
         if (typeof commitNewSessionModelProfile === 'function') {
             commitNewSessionModelProfile(sessionId);
         }
+        if (typeof commitNewSessionReasoningEffort === 'function') commitNewSessionReasoningEffort(sessionId);
         if (typeof commitNewSessionPermissionMode === 'function') {
             commitNewSessionPermissionMode(data.permission_status || null);
         }
