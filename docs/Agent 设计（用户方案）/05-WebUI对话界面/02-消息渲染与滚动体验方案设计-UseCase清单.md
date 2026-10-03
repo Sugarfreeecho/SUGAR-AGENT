@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-28 v8（覆盖至：当前工作区）
+- 版本：2026-10-03 v10（覆盖至：当前工作区；流式测量分批与缓存）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -22,6 +22,7 @@
 ### UC-5B2 消息渲染（Markdown / 代码 / 工具轨迹）
 - **触发**：任意消息上屏。
 - **预期现象**：Markdown 正确（含表格/列表/代码块高亮）；工具调用显示为可折叠轨迹（命令/结果/状态）；mermaid 图按需加载渲染；运行中输出实时刷入工具行（见 UC-5B8）。
+- **规则与边界**：执行过程框高度上限 = min(原 CSS `min(72vh, 41.6rem)`, 工作区可视高度 − 8px)——框高不得超出工作区可视区域，原上限保持不变；展开 / 滚动 / 窗口尺寸变化时重算（`message-rendering.js::applyProcessBodyViewportClamp` / `scheduleProcessViewportClampSweep`）。度量取“可视高度”而非“底边 − 框顶”（跟随钉底时后者会自我收缩）。
 - **依据**：`message-rendering.js`、`app/index.js`（mermaid 懒加载）。
 
 ### UC-5B3 滚动历史锚点
@@ -67,6 +68,10 @@
 见上表（均为 frontend/src/app/modules/ 下文件）。
 
 ## 5. 版本记录
+
+- 2026-10-03 v10：补记前端性能批次——流式重测分 6,000 字符批让出主线程（MessageChannel，单任务约 4ms）、每个流式窗口最多两种布局签名缓存、执行框一次测量不再清样式重读；公共侧栏窄态条目 DOM 复用、改动审查轮定位二分（详见 docs/CHANGELOG-2026-10-03-前端性能优化.md）。
+
+- 2026-10-02 v9：**执行过程框高度上限新增“不超出工作区可视区域”条件**——上限 = min(原 `min(72vh, 41.6rem)`, `#chat-container` 可视高度 − 8px)；原上限保持不变；随展开 / 滚动 / 窗口尺寸变化重算（`applyProcessBodyViewportClamp`）。实机：420px 高窗口下框高由 302px 收至 284px（=可视高度−8）不再高过可视区；720px 窗口恢复原上限 518px。
 
 - 2026-09-28 v8：跟随运动改为**固定刚度软弹簧**（`followStiffness: 180`，临界阻尼、ω=√180≈13.42/s 常数）——替代 v7 的距离增强（26+0.5×lag）与 230ms 到期期限，对齐 DeepSeek 手机端"软"观感：19px 折行首帧 0.41px、483ms 收敛；单帧 20px 上限保留为大位移安全阀；明确稳态滞后 2v/ω（常规流式 <1.5 行）。
 - 2026-09-28 v7：跟随运动同步为**临界阻尼弹簧**（速度连续、响应 = 26 + 0.5×落后距离、230ms 期限、单帧 ≤20px）——替代 v6 的限时滑动；修正收尾口径：小残余一帧收口、大残余以 ≤1200px/s 连续收敛（不跳变、无拖尾）；重申文本揭示层保留、仅与跟随解耦（跟随器不读取揭示速率）。

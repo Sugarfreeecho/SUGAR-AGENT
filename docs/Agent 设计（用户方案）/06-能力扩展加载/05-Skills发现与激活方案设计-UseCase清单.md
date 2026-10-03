@@ -2,7 +2,7 @@
 
 - 版本：2026-09-20 v3（覆盖至：当前工作区）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`app/agent_tools.py`（L109–214、L4055–4199）、`workspace/skills/**`、`skill_states.json`。
+- 适用实现：`app/agent_tools.py`（L109–214、L4055–4199）、`workspace/skills/**`、`.sugaragent/skill_states.json`。
 - 上级：`00-能力扩展加载整体设计.md`
 
 ---
@@ -21,7 +21,7 @@
 
 ### UC-6E2 启停状态持久化
 - **触发**：开启/关闭某技能。
-- **预期现象**：状态写入 `skill_states.json`，重启保持；关闭的技能不出现在目录**且不可激活**。
+- **预期现象**：状态写入 `.sugaragent/skill_states.json`，重启保持；关闭的技能不出现在目录**且不可激活**。
 - **依据**：`set_skill_enabled / _load_skill_enabled_states / get_skills_catalog`。
 
 ### UC-6E3 技能激活

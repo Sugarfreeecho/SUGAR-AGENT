@@ -1,6 +1,6 @@
 # 改动审查 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-25（覆盖至：commit `3dfada4` 的撤销+恢复能力、"临时写入全程隐身"与"徽标就绪保持"修复）
+- 版本：2026-10-02（覆盖至：当前工作区；关联区域 = 当前轮「用户问题 → final 卡片」，过程框收起也保持关联）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/change-review`（store.py / host.py / runtime.py / web/change-review.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 08；配套通则见 01–07）
@@ -345,6 +345,12 @@
 - **预期现象**：历史消息里的改动记录（含已撤销/已恢复状态）正确重建；懒渲染过程体，展开时才扫描。
 - **依据**：`scanExisting / applyTool`；`file_changes_reverted/restored` 回放。
 
+### UC-609 关联区域 = 当前轮（用户问题 → final 卡片）
+- **触发**：查看「改动」页签 / 底栏；过程框展开、收起或轮刚结束。
+- **预期现象**：一轮 = 一条非追问用户输入 → 下一条非追问用户输入或链路结束（user_steer 不切轮，与术语统一注记一致）；改动审查按此口径关联——**当前轮从用户问题到对应 final 卡片**的改动都计入当前轮；过程框收起（轮结束/手动收起）后仍保持关联显示，直到下一轮用户消息出现。
+- **规则与边界**：采集不再要求“工具行位于执行过程框内”——凡落在当前轮区间内的改动事件都归属该轮（无框时回落归到该轮最后一个过程框）；显示侧不再要求过程框处于展开态（展开态仍是视口优先项）。各轮各自结算不变，不做跨轮累计。
+- **依据**：`change-review.js::latestTurnRange / nodeWithinTurnRange / turnRangeAggregate / viewportAggregate / render / scanExisting / applyTool`；`message-rendering.js` 术语统一注记；`tests/test_plugin_ui_frontend.py::test_change_review_association_covers_the_whole_current_turn`。
+
 ---
 
 ## 9. 已知边界与设计取舍（UC-7xx）
@@ -387,4 +393,4 @@
 | UC-301~309 | `test_create_modify_delete_and_undo`、`test_batch_conflict_*`、`test_undo_api_*`、`probe_cross_run_undo.py` |
 | UC-401~408 | `test_undo_then_restore_round_trip`、`test_restore_*`、`test_prepared_restore_*` |
 | UC-502/503/504 | `test_branch_copy_and_truncation_cleanup_*`、`test_workspace_cache_*` |
-| UC-601~608 | `tests/js/change_review_stats_runtime.mjs`、`change_review_visibility_runtime.mjs`、`test_plugin_ui_frontend.py` |
+| UC-601~609 | `tests/js/change_review_stats_runtime.mjs`、`change_review_visibility_runtime.mjs`、`test_plugin_ui_frontend.py` |

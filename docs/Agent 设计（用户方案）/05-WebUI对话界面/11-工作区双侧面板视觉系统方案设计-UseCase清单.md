@@ -1,6 +1,6 @@
 # 工作区双侧面板视觉系统 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-21 v2（覆盖至：当前工作区；右侧历史保持原样不变）
+- 版本：2026-10-02 v3（覆盖至：当前工作区；右侧历史纳入同款外壳与标题栏风格）
 - 用途：审查工作区左右两侧面板是否使用同一套视觉语言，而不是只核对某一个颜色值。
 - 适用实现：`frontend/src/styles/app.css`、`frontend/src/shell-body.html`、`frontend/index.html`、`frontend/src/app/modules/toc-todo.js`、`frontend/src/app/plugin-ui-slots.js`、`plugins/session-todo/web/session-panel.{js,css}`、`plugins/agent-goal/web/session-panel.{js,css}`、`frontend/src/app/modules/i18n.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -11,16 +11,16 @@
 
 工作区左右两侧面板共享同一套“外壳—标题—元信息—列表—条目”视觉原语。历史记录、Todo、Goal 与声明式插件面板在浅色/深色主题下应像同一产品中的同级区域；业务状态、操作按钮和内容结构仍按各自语义表达。
 
-**右侧历史例外（2026-09-21 起）**：历史记录面板**保持原样不变**——不纳入本共享系统：其面板/标题/列表回到自有样式（标签式文案、原 hover/当前项配色与浅色覆盖），“n 条记录”统计行与共享条目类已移除；本文涉及历史面板的条目与映射以本例外为准（UC-5K5 已退役）。
+**右侧历史风格统一（2026-10-02 起）**：历史记录面板**纳入同款外壳**——加装与左侧栏相同的 1px 描边玻璃盒，「历史记录」标题改为同款标题条（同内边距 / 字重 / 分隔线）；两栏各自保持原有垂直位置（只统一风格、不做位置对齐，见 UC-5K8）；列表条目仍保留历史面板自有样式（不套用 Todo/Goal 条目类）。此前（2026-09-21 起）的“保持原样”例外结束。
 
 ## 2. UseCase
 
-> **适用范围（2026-09-21 起）**：本系统覆盖 Todo、Goal 与声明式插件面板；右侧历史记录面板保持原有独立样式（不参与本系统），下文涉及“历史”的表述不再适用。
+> **适用范围（2026-10-02 起）**：本系统覆盖 Todo、Goal 与声明式插件面板；右侧历史面板以 UC-5K8 的“外壳与标题栏风格一致”部分纳入，列表条目保留自有样式。
 
 ### UC-5K1 左右面板外壳一致
-- **触发**：同时打开左侧 Todo/Goal 插件面板（右侧历史面板保持原样，不参与本契约）。
-- **预期现象**：面板背景、圆角、阴影、内边距、模糊效果、前景色和字体族一致；左右位置不同，但视觉层级相同。
-- **规则与边界**：共享外壳由 `.workspace-side-panel` 和 `--workspace-side-panel-*` 令牌定义。插件自定义宿主只负责清除重复外壳，不得再声明一套独立背景、阴影或排版体系。
+- **触发**：同时打开左侧 Todo/Goal 插件面板与右侧历史面板。
+- **预期现象**：面板背景、圆角、阴影、描边、内边距、模糊效果、前景色和字体族一致；左右位置不同，但视觉层级相同（历史面板按 UC-5K8 取同款描边与标题栏）。
+- **规则与边界**：共享外壳由 `.workspace-side-panel` 和 `--workspace-side-panel-*` 令牌定义。插件自定义宿主只负责清除重复外壳，不得再声明一套独立背景、阴影或排版体系；历史面板不在 `.workspace-side-panel` 体系内，按 UC-5K8 以同款令牌对齐。
 - **依据**：`app.css` 的 workspace side panel 令牌与 `.workspace-side-panel`；session-todo、agent-goal 的 `session-panel.js` 与两份 HTML（`shell-body.html` / `frontend/index.html`）的面板接线。
 
 ### UC-5K2 标题、元信息与正文层级一致
@@ -53,20 +53,26 @@
 ### UC-5K7 回归与构建产物一致
 - **触发**：修改共享令牌、类名或任一侧面板结构。
 - **预期现象**：主题契约测试能发现共享类断接或插件重新声明独立表面；Vite 构建成功，`app/templates/dist` 与源码同步。
-- **规则与边界**：视觉测试至少覆盖 light token、共享外壳/标题/条目、Todo/Goal 类名接线、Todo/Goal 不再自建外壳背景，以及"右侧历史保持独立样式"的对照断言。
+- **规则与边界**：视觉测试至少覆盖 light token、共享外壳/标题/条目、Todo/Goal 类名接线、Todo/Goal 不再自建外壳背景，以及右侧历史面板的描边 / 标题栏风格断言。
 - **依据**：`tests/test_frontend_theme_variants.py::test_workspace_side_panels_share_the_same_visual_system`；`frontend` 构建与 dist 同步检查。
+
+### UC-5K8 历史面板外壳与标题栏风格统一（2026-10-02）
+- **触发**：展开右侧「历史记录」面板（与左侧栏同屏）。
+- **预期现象**：历史面板为与左侧栏同款的玻璃描边盒（1px `--border-glass`、同圆角 / 阴影 / 模糊）；「历史记录」为同款标题条（padding `0.42rem 0.4rem 0.36rem 0.55rem`、650 / 0.6rem、字距 0.06em、底部 1px 分隔线）。
+- **规则与边界**：**只统一风格、不要求位置对齐**——两栏各自保持原有垂直居中与开合行为不变；历史列表条目保留自有样式，不套用 `.workspace-side-panel-item`；折叠把手与滑入宽度逻辑不变。
+- **依据**：`app.css`（`.chat-toc-panel`、`.chat-toc-title`）；`frontend/src/shell-body.html`；`tests/test_frontend_theme_variants.py`。
 
 ## 3. 视觉原语映射
 
 | 层级 | 历史记录（保持原样不变） | Todo | Goal | 声明式插件 |
 |---|---|---|---|---|
-| 外壳 | 保持原有独立样式（不参与本系统） | `.chat-todo-plan-panel` + `.workspace-side-panel` | `.chat-goal-card` + `.workspace-side-panel` | `.plugin-session-panel` 消费同一令牌 |
-| 标题 | — | `.chat-todo-plan-title` + `.workspace-side-panel-title` | `.chat-goal-heading` + `.workspace-side-panel-title` | `.plugin-session-panel-title` 对齐共享规格 |
+| 外壳 | `.chat-toc-panel`（同款玻璃盒 + 1px 描边） | `.chat-todo-plan-panel` + `.workspace-side-panel` | `.chat-goal-card` + `.workspace-side-panel` | `.plugin-session-panel` 消费同一令牌 |
+| 标题 | `.chat-toc-title`（同款标题条 + 分隔线） | `.chat-todo-plan-title` + `.workspace-side-panel-title` | `.chat-goal-heading` + `.workspace-side-panel-title` | `.plugin-session-panel-title` 对齐共享规格 |
 | 元信息 | — | `.chat-todo-plan-stats` | 标题内状态 | description / fields |
 | 内容条目 | — | Todo 行 | Goal objective | list row |
 | 业务差异 | — | pending/in-progress/completed | 状态与动作按钮 | info/success/warning/danger |
 
-> 历史记录列自 2026-09-21 起保持原样不变（不纳入本系统）；上表其余三列为现行共享面。
+> 历史记录列自 2026-10-02 起纳入“外壳一致 + 标题栏对齐”（UC-5K8）；列表条目仍保留自有样式。
 
 ## 4. 边界
 
@@ -75,6 +81,8 @@
 - 响应式显隐、折叠把手和侧栏宽度仍由现有布局逻辑负责。
 
 ## 5. 版本记录
+
+- 2026-10-02 v3：**右侧历史面板纳入同款外壳与标题栏风格（新增 UC-5K8）**——历史面板加装与左侧栏相同的 1px 描边玻璃盒，标题改为同款标题条（内边距 / 字重 / 分隔线一致）；只统一风格、不做位置对齐（两栏各自保持原有垂直居中）；此前“保持原样”例外结束；列表条目仍保留历史面板自有样式。
 
 - 2026-09-21 v2：**右侧历史记录面板保持原样不变（不纳入本系统）**——回退该面板的面板/标题/列表样式、标签式文案、原 hover/当前项配色与浅色覆盖；移除“n 条记录”统计行与共享条目类。本系统自本版起覆盖 Todo、Goal 与声明式插件面板（UC-5K5 退役）。
 - 2026-09-21 v1：建立左右侧面板共享视觉系统；覆盖历史、Todo、Goal 与声明式插件面板，统一主题令牌、外壳、排版、列表密度和条目反馈，并保留业务语义差异。

@@ -6,6 +6,8 @@ Hook 和 Slash Command。声明式 Skill、Hook、Command、MCP、Agent、Prompt
 
 ## Manifest
 
+设置页面扩展使用 `capabilities.ui.settings.section`，可注册配置表单页签、文件/目录选择器或独立页面入口，见 [设置页插件接口](settings_plugin_api.md)。
+
 插件入口位于 `.myagent-plugin/plugin.json`：
 
 ```json
@@ -180,6 +182,11 @@ Manifest 明确列出的扩展状态字段，并默认使用通用安全组件�
 `session.badge` 默认显示文字徽章；内置工作流可使用 `"display": "activity"` 将匹配
 状态投影为会话运行圆点，而不把领域判断重新写回宿主会话代码。
 
+`session.panel` 支持可选 `group`（`{"id": "...", "label": "...", "order": 10}`）声明面板在
+聊天区左缘「公共左侧栏」中的页签归属：同一 `group.id` 的面板归入同一页签，页签按 `order`
+排序；未声明（或声明非法）时回退到默认「插件」页签。内置示例：session-todo → `plan`
+（计划，order 10）、agent-goal → `goal`（目标，order 20）。
+
 仓库自带的原生系统插件可为面板声明专用渲染资源：
 
 ```json
@@ -288,3 +295,7 @@ v1 已稳定统一能力模型、持久 Worker、Tool/Hook/Command 注册、安�
 热重载、声明式宿主 UI 插槽和跨宿主兼容诊断。外部工具仍可通过 MCP 注册。尚未包含
 中央插件市场索引、发布/签名服务，也不承诺任意 Claude、Codex、Hermes 或 OpenCode
 插件无需修改即可运行。
+
+## 公共侧栏计时文字更新
+
+需要持续更新状态文字的面板，可在 `MyAgentPubar.configureNarrow(groupId, config)` 建立 `chip` 后调用 `MyAgentPubar.updateNarrowChip(groupId, text)`。它更新缓存配置和当前胶囊文字，保留窄栏按钮、事件处理器与焦点；未配置该分组胶囊时返回 `false`。完整状态或动作变化仍使用 `configureNarrow`。

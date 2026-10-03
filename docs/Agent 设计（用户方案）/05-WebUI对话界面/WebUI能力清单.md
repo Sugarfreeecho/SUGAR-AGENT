@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-10-02；平滑跟随为固定刚度软弹簧（DS 同款）；含顶部通知与权限警示视觉系统、右侧历史独立样式、子代理执行活跃性、follow-up 队列拖拽/键盘排序）
+> 代码版本：当前工作区（2026-10-03；平滑跟随为固定刚度软弹簧（DS 同款）；含顶部通知与权限警示视觉系统、右侧历史纳入同款外壳（标题栏风格一致 + 描边）、子代理执行活跃性、follow-up 队列拖拽/键盘排序、公共左侧栏页签、设置中心）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -24,7 +24,7 @@
 | 耐久图片预览：同附件跨容器共享 fetch/blob，末节点移除时取消并释放 | `modules/workspace-media.js::renderDurableAttachmentImages` | 【单】 |
 | 平滑流式输出（固定刚度软弹簧跟随：ω=√180、单帧 ≤20px、无长尾） | `modules/smooth-stream.js` | 【卡】 |
 | 滚动历史锚点与回看 | `modules/session-scroll-history.js` | 【卡】 |
-| 工作区双侧面板共享视觉系统（Todo/Goal/声明式插件：主题令牌、外壳、标题、元信息、列表与条目；右侧历史保持原有独立样式） | `styles/app.css`、`plugins/session-todo/web/*`、`plugins/agent-goal/web/*` | 【卡】 |
+| 工作区双侧面板共享视觉系统（Todo/Goal/声明式插件：主题令牌、外壳、标题、元信息、列表与条目；右侧历史同款外壳 + 标题栏风格一致，列表保留自有样式） | `styles/app.css`、`plugins/session-todo/web/*`、`plugins/agent-goal/web/*` | 【卡】 |
 | 性能采样与诊断（直方图/计时；长会话懒渲染在 `message-rendering.js`、`session-scroll-history.js`） | `modules/ui-performance.js` | 【单】 |
 
 ## 3. 输入与交互
@@ -37,6 +37,7 @@
 | 普通文件上传与图片统一准入（限额、规范化、内容寻址、批次回滚） | 后端 `upload_chat_files`、`attachments/admission.py` | 【卡】 |
 | follow-up 队列保存耐久引用，并向服务端同步 queue pin | `modules/sse-handling.js`、`POST /api/attachments/references` | 【单】 |
 | follow-up 队列手动排序（拖拽握把/落点吸附/边缘自动滚动/键盘 ↑↓；拖拽期重绘推迟） | `modules/sse-handling.js`、`styles/app.css`、`modules/i18n.js` | 【单】 |
+| 设置中心（/settings）：分区注册表（宿主 9 分区 + 插件 `settings.section` 声明）、旧路由深链兼容、只提交改动的保存、搜索/缓存/脏数据保护 | `app/templates/settings_center.html`、`app/templates/static/settings/*`、`app/plugins/settings.py` | 【单】 |
 
 ## 4. SSE 与实时管道
 | 能力 | 位置 | 状态 |
@@ -62,7 +63,7 @@
 | 顶部待办条两态（展开条 ⇄ 品牌铃铛徽章；6s 自动收起、悬停/聚焦暂停、数量变化再展开；徽章不显示数字） | `modules/human-interactions.js::updateHumanInteractionBanner/setHumanInteractionBannerExpanded/updateSidebarBrandNotice`、`styles/app.css` | 【单】 |
 | 红色警示条统一表面（完全访问开启 / 出站降级·部分 / MCP 注册等来源复用同一玻璃单行条；唯一"确认"、自动消失、不进徽章；警示在上、待办让位） | `modules/permissions.js::showGlobalWarningBanner`、`styles/app.css` | 【单】 |
 | 三档权限图标家族（盾 / 盾+勾 / 盾+警示；触发器由 `PERMISSION_MODE_ICONS` 注入，菜单图标双份 HTML 同步） | `modules/permissions.js::PERMISSION_MODE_ICONS`、`src/shell-body.html`、`index.html` | 【单】 |
-| 模型档案管理（增删改、排序、启用、发现、探测；高级设置含 system prompt `auto/merge/preserve`） | `modules/model-profiles.js`、`app/templates/advance_config.html`、后端 model-profile API | 【图】 |
+| 模型档案管理（增删改、排序、启用、发现、探测；高级设置含 system prompt `auto/merge/preserve`） | `modules/model-profiles.js`、`app/templates/static/settings/sections_basic.js`、后端 model-profile API | 【图】 |
 | 对话区模型选择器（跟随当前会话/寻址的子代理会话；主会话→清熔断即时重试、下一次调用生效；子代理会话→数据动作切换、不打断） | `modules/model-profiles.js`、`modules/session-management.js`、`webui.set_session_model_profile` | 【图】 |
 | 工作区文件与媒体（目录浏览、图片元数据/预览、上传） | `modules/workspace-media.js`、后端 workspace API | 【卡】 |
 | 通知与 UI 存在性（10 秒 presence 上报驱动桌面提醒；节能/睡眠时为辅助信号） | `message-rendering.js::registerUiPresence`、后端 `ui_presence/_ui_presence_has_active` | 【卡】 |
@@ -102,6 +103,10 @@
 - 一般主题装饰与构建工具链（Vite）不在本次清单范围；工作区双侧面板的共享视觉契约属于可验收能力，见 [11-工作区双侧面板视觉系统](11-工作区双侧面板视觉系统方案设计-UseCase清单.md)。
 
 ## 9. 版本记录
+
+- 2026-10-03（v24）：设置中心（/settings）上线——5 个设置入口收敛为单页：宿主 9 分区 + 插件声明页签、旧路由按 section 预选、保存只提交改动（.env 原子写）、150ms 搜索防抖与资源 ETag 缓存、统一脏数据关闭保护（见 05/14）。
+
+- 2026-10-02（v23）：右侧历史面板纳入同款外壳（1px 描边玻璃盒 + 同款标题条），与左侧栏**风格一致**（只统一风格、不做位置对齐，两栏各自垂直居中保持原样）；列表条目保留自有样式（见 05/11·UC-5K8）。
 
 - 2026-10-02（v22）：follow-up 队列拖拽排序可用性修复——握把命中区 40×26、行间隙/内边距/在途行落点吸附、边缘自动滚动、键盘排序、拖拽期重绘推迟；浏览器接管原生拖拽时的 `pointercancel` 不再拆拖拽态（见 05/01·UC-5A7）。
 

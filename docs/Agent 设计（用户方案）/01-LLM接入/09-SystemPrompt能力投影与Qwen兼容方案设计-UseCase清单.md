@@ -2,7 +2,7 @@
 
 - 版本：2026-09-20 v2（覆盖至：当前工作区）
 - 用途：定义模型请求组装阶段如何把 Core 中允许多条、允许后置的 `SystemMessage`，投影为目标模型接受的线协议形状。
-- 适用实现：`app/agent_openai.py`、`app/agent_harness.py`、`app/model_profiles.py`、`app/templates/advance_config.html`。
+- 适用实现：`app/agent_openai.py`、`app/agent_harness.py`、`app/model_profiles.py`、`app/templates/static/settings/sections_basic.js`。
 - 上级：`00-LLM接入整体设计.md`
 - 上游：`../02-ReAct运行时/02-提示装配与静态段缓存方案设计-UseCase清单.md`
 
@@ -100,7 +100,7 @@ AND "qwen" in profile.model.lower()
 - **触发**：用户在高级设置新增或编辑模型档案。
 - **预期现象**：高级配置显示 “SYSTEM PROMPT 兼容”选择器，可选 `auto / merge / preserve`；保存后立即进入客户端与候选缓存键。
 - **规则与边界**：默认 `auto`；该设置只描述 Chat Completions 的消息形状，不代表 Core 会话历史被重写。
-- **依据**：`app/templates/advance_config.html`、模型档案 API、`model_profiles.public_profile`。
+- **依据**：`app/templates/static/settings/sections_basic.js`、模型档案 API、`model_profiles.public_profile`。
 
 ### UC-1I8 媒体失败重建仍保持 system 形状
 
