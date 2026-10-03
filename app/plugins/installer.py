@@ -11,6 +11,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
 
+try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
+    from proc_flags import hidden_flags
+except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
+    from app.proc_flags import hidden_flags
+
 from .loader import discover_plugins, load_plugin
 from .models import PluginDefinition
 from .security import PluginError, PluginValidationError, is_path_within, safe_plugin_path
@@ -33,6 +38,7 @@ def _default_runner(
         capture_output=True,
         timeout=timeout,
         check=False,
+        creationflags=hidden_flags(),
     )
 
 

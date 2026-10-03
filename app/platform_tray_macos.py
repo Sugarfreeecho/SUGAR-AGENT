@@ -67,10 +67,10 @@ def run(root: Path) -> int:
             open_webui("/")
 
         def openSettings_(self, _sender):
-            open_webui("/setup/env")
+            open_webui("/settings")
 
         def openMcp_(self, _sender):
-            open_webui("/setup/mcp")
+            open_webui("/settings#mcp")
 
         def openLogs_(self, _sender):
             try:

@@ -15,6 +15,11 @@ import subprocess
 import threading
 from pathlib import Path
 
+try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
+    from proc_flags import hidden_flags
+except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
+    from app.proc_flags import hidden_flags
+
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +107,7 @@ def _notify_windows_toast(title: str, message: str, session_id: str = "") -> boo
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=hidden_flags(),
         )
         return proc.wait(timeout=20) == 0
     except subprocess.TimeoutExpired:

@@ -10,6 +10,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import win32api
 import win32con
@@ -23,6 +24,7 @@ import psutil
 from python_runtime import configure_agent_python_environment, preferred_python
 from desktop_notify import show_desktop_notification
 from platform_lifecycle import request_webui_activation
+from proc_flags import NO_WINDOW, hidden_flags
 
 
 APP_NAME = "Agent \u667a\u80fd\u4f1a\u8bdd\u52a9\u624b"
@@ -153,10 +155,21 @@ def _is_port_listening() -> bool:
         return False
 
 
-def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
-    url = f"{BASE_URL}{path}"
+def _webui_browser_url(path: str, refresh: bool = False, session: str = "") -> str:
+    parts = urlsplit(f"{BASE_URL}{path}")
+    query = parts.query
+    params = {}
+    if session:
+        params["session"] = session
     if refresh:
-        url = f"{url}{'&' if '?' in url else '?'}_={int(time.time())}"
+        params["_"] = str(int(time.time()))
+    if params:
+        query += ("&" if query else "") + urlencode(params)
+    return urlunsplit(parts._replace(query=query))
+
+
+def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
+    url = _webui_browser_url(path, refresh)
     try:
         os.startfile(url)
     except OSError:
@@ -363,7 +376,7 @@ exit 1
             encoding="utf-8",
             errors="replace",
             timeout=UI_TAB_SELECT_TIMEOUT_SECONDS,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         _append_log(f"WebUI tab selection unavailable: {type(exc).__name__}: {exc}")
@@ -461,7 +474,7 @@ def _stop_listener_on_port() -> None:
             text=True,
             encoding="utf-8",
             errors="ignore",
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=NO_WINDOW,
         )
     except Exception as exc:
         _append_log(f"Unable to inspect port {PORT}: {exc}")
@@ -477,7 +490,7 @@ def _stop_listener_on_port() -> None:
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=NO_WINDOW,
         )
 
 
@@ -696,7 +709,9 @@ class TrayLauncher:
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+                # 后端自身必须没有可见控制台：托盘由 pythonw 运行，缺这个标志
+                # Windows 会给 main.py 新建一个可见控制台窗口。
+                creationflags=hidden_flags(new_process_group=True),
             )
         finally:
             log.close()
@@ -946,11 +961,7 @@ class TrayLauncher:
                 "WebUI heartbeat found but no keyword-matched, focusable browser tab; "
                 "opening a new browser page"
             )
-        url = f"{BASE_URL}{path}"
-        if session:
-            url = f"{url}{'&' if '?' in url else '?'}session={session}"
-        if refresh:
-            url = f"{url}{'&' if '?' in url else '?'}_={int(time.time())}"
+        url = _webui_browser_url(path, refresh, session)
         if not self._claim_ui_open_slot():
             _append_log(
                 "Duplicate UI open request ignored; the browser was launched a moment ago"
@@ -1139,7 +1150,7 @@ class TrayLauncher:
                 text=True,
                 encoding="utf-8",
                 errors="ignore",
-                creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=NO_WINDOW,
             )
         except Exception as exc:
             print(f"Unable to inspect port {PORT}: {exc}")
@@ -1163,7 +1174,7 @@ class TrayLauncher:
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    creationflags=NO_WINDOW,
                 )
             except Exception as exc:
                 print(f"Unable to stop PID {pid}: {exc}")

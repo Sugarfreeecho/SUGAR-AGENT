@@ -10,6 +10,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
+    from proc_flags import hidden_flags
+except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
+    from app.proc_flags import hidden_flags
+
 from .models import HOOK_DECISIONS, HookDefinition, HookExecutionError, HookExecutionResult
 
 
@@ -176,7 +181,7 @@ class CommandHookExecutor:
                     "/F",
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    creationflags=hidden_flags(),
                 )
                 await asyncio.wait_for(killer.wait(), timeout=2.0)
             else:
@@ -226,10 +231,7 @@ class CommandHookExecutor:
                 env["MYAGENT_WORKTREE_ISOLATED"] = "1" if worktree_isolated else "0"
             kwargs: Dict[str, Any] = {}
             if os.name == "nt":
-                kwargs["creationflags"] = (
-                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                )
+                kwargs["creationflags"] = hidden_flags(new_process_group=True)
             else:
                 kwargs["start_new_session"] = True
             if os.name == "nt":

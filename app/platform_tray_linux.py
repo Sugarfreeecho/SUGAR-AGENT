@@ -88,8 +88,8 @@ def run(root: Path) -> int:
         threading.Thread(target=worker, daemon=True).start()
 
     add("打开 Agent", lambda _item: open_webui("/"))
-    add("高级设置", lambda _item: open_webui("/setup/env"))
-    add("MCP 配置", lambda _item: open_webui("/setup/mcp"))
+    add("设置中心", lambda _item: open_webui("/settings"))
+    add("设置中心 · MCP", lambda _item: open_webui("/settings#mcp"))
 
     def view_logs(_item) -> None:
         try:

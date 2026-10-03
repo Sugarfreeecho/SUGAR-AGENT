@@ -16,6 +16,11 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
+    from proc_flags import NO_WINDOW, inherit_or_hide_flags
+except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
+    from app.proc_flags import NO_WINDOW, inherit_or_hide_flags
+
 
 HOST = "127.0.0.1"
 PORT = 8192
@@ -267,11 +272,34 @@ class WindowsLauncherBackend(LifecycleBackend):
         return LifecycleStatus(running, "listening" if running else "stopped")
 
     def start(self) -> None:
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(self.root / "RUN.bat")],
-            cwd=str(self.root),
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        )
+        # RUN.bat 的输出本身就是启动进度：调用方自己有控制台时让它继承（照旧可见），
+        # 只有在调用方本来就没有控制台（托盘 / WebUI 等）时才隐藏新窗口，并把输出
+        # 落到 logs/launcher_console.log —— 否则隐藏窗口会把失败信息一并藏掉。
+        flags = inherit_or_hide_flags(new_process_group=True)
+        kwargs: dict[str, Any] = {}
+        log_fd: int | None = None
+        try:
+            if flags & NO_WINDOW:
+                log_dir = self.root / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_fd = os.open(
+                    str(log_dir / "launcher_console.log"),
+                    os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                    0o644,
+                )
+                # 窗口隐藏后控制台不可交互，RUN.bat 的 pause/input 不应把进程挂住。
+                kwargs["stdin"] = subprocess.DEVNULL
+                kwargs["stdout"] = log_fd
+                kwargs["stderr"] = subprocess.STDOUT
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(self.root / "RUN.bat")],
+                cwd=str(self.root),
+                creationflags=flags,
+                **kwargs,
+            )
+        finally:
+            if log_fd is not None:
+                os.close(log_fd)
 
     def stop(self) -> None:
         raise RuntimeError("Stop the Windows Agent from its tray menu.")

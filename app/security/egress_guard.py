@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
+    from proc_flags import hidden_flags
+except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
+    from app.proc_flags import hidden_flags
+
 from .models import PermissionMode, SandboxHealth
 
 
@@ -77,7 +82,7 @@ def sandbox_health(*, refresh: bool = False) -> SandboxHealth:
             try:
                 proc = subprocess.run(
                     [*_helper_argv(helper), "health", "--json"], capture_output=True, text=True, timeout=5.0,
-                    creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+                    creationflags=hidden_flags(),
                 )
                 payload = json.loads(proc.stdout or "{}")
                 enforcement = str(payload.get("enforcement") or "")

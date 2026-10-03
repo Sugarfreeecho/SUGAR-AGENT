@@ -20,6 +20,11 @@ try:
 except ImportError:
     from platform_lifecycle import backend_for, lifecycle_name, open_webui
 
+try:
+    from .proc_flags import hidden_flags
+except ImportError:
+    from proc_flags import hidden_flags
+
 
 APP_NAME = "Agent 智能会话助手"
 HOST = "127.0.0.1"
@@ -77,6 +82,8 @@ def run_command(command: Sequence[str], cwd: Path, log: UpdateLog) -> str:
         text=True,
         encoding="utf-8",
         errors="replace",
+        # 输出经 PIPE 收集进 UpdateLog，控制台窗口本身没有用处。
+        creationflags=hidden_flags(),
     )
     output: list[str] = []
     assert proc.stdout is not None

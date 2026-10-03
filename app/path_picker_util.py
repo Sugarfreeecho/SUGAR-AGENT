@@ -8,6 +8,11 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Literal, Optional, Tuple
 
+try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
+    from proc_flags import hidden_flags
+except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
+    from app.proc_flags import hidden_flags
+
 PathPickKind = Literal["file", "directory"]
 
 HRESULT_CANCELLED = 0x800704C7
@@ -440,6 +445,7 @@ def _pick_windows_powershell(
         encoding="utf-8",
         errors="replace",
         timeout=float(os.getenv("MYAGENT_PATH_PICKER_TIMEOUT", "45")),
+        creationflags=hidden_flags(),
     )
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "PowerShell 文件选择器失败").strip()

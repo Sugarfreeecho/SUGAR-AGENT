@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
+from proc_flags import hidden_flags
+
 
 _lock = threading.RLock()
 _sessions_root: Optional[Path] = None
@@ -496,6 +498,7 @@ def _git_output(root: Path, args: list[str]) -> Optional[bytes]:
             stderr=subprocess.DEVNULL,
             timeout=15,
             check=True,
+            creationflags=hidden_flags(),
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None

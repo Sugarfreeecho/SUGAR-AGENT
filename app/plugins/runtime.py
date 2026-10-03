@@ -23,6 +23,11 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from myagent_plugin_sdk import PluginApiError, parse_deferred_result
 
+try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
+    from proc_flags import hidden_flags
+except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
+    from app.proc_flags import hidden_flags
+
 from .models import PluginDefinition
 from .storage import (
     PluginStorageLayout,
@@ -343,7 +348,7 @@ class _PersistentPluginWorker:
             command, env = self._command_and_environment()
             kwargs: Dict[str, Any] = {}
             if os.name == "nt":
-                kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                kwargs["creationflags"] = hidden_flags()
             try:
                 process = subprocess.Popen(
                     command,

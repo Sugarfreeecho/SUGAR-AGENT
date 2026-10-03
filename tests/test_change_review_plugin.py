@@ -464,6 +464,27 @@ def test_git_inventory_stays_within_subdirectory(tmp_path):
     assert module.FileChangeReviewStore._git_inventory(nested) == [nested / "inside.txt"]
 
 
+def test_has_git_repository_finds_enclosing_repository(tmp_path):
+    module = _load_store()
+    (tmp_path / ".git").mkdir()
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    assert module._has_git_repository(nested) is True
+
+
+def test_git_inventory_skips_spawn_outside_a_repository(tmp_path, monkeypatch):
+    """非 git 工作区不该再白跑一次 git（旧行为：每次捕获都 spawn 一次并返回 128）。"""
+
+    module = _load_store()
+    monkeypatch.setattr(module, "_has_git_repository", lambda _root: False)
+
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("non-git workspace must not spawn git")
+
+    monkeypatch.setattr(module.subprocess, "run", _fail)
+    assert module.FileChangeReviewStore._git_inventory(tmp_path) is None
+
+
 def test_repeated_lines_diff_is_small_and_has_original_line_numbers(tmp_path):
     store = _load_store().FileChangeReviewStore(tmp_path / "session")
     lines = ["same\n"] * 19000

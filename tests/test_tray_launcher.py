@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 import os
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,21 @@ def make_launcher():
     launcher._ui_open_lock = threading.Lock()
     launcher._last_ui_open_at = None
     return launcher
+
+
+@pytest.mark.parametrize("section", ["env", "mcp"])
+def test_settings_deep_link_keeps_query_before_fragment(monkeypatch, section):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    opened = []
+    launcher._open_named_browser_window = opened.append
+    monkeypatch.setattr(tray_launcher.time, "time", lambda: 1234)
+    launcher._open_url(f"/settings?embedded=1#{section}", refresh=True, session="a&b")
+    parts = urlsplit(opened[0])
+    assert parts.fragment == section
+    assert parse_qs(parts.query) == {"embedded": ["1"], "session": ["a&b"], "_": ["1234"]}
+    fallback = urlsplit(tray_launcher._webui_browser_url(f"/settings#{section}", True))
+    assert fallback.fragment == section and parse_qs(fallback.query) == {"_": ["1234"]}
 
 
 def test_restart_worker_stops_starts_and_reports_success(monkeypatch):

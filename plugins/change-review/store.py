@@ -326,6 +326,20 @@ def _review_same(
     return False
 
 
+def _has_git_repository(work_root: Path) -> bool:
+    """Whether git would find a repository at or above ``work_root``.
+
+    ``git -C <dir>`` itself walks up to the enclosing repository, so a plain
+    ``.git`` existence check mirrors its lookup. In a non-git workspace the
+    spawn would exit 128 and (because failures are not negatively cached) be
+    retried on every single capture; skipping it here saves that process churn.
+    """
+    for candidate in (work_root, *work_root.parents):
+        if (candidate / ".git").exists():
+            return True
+    return False
+
+
 class FileChangeReviewStore:
     """One durable change-review store located inside a session directory."""
 
@@ -490,6 +504,8 @@ class FileChangeReviewStore:
         list of tool-specific scratch directories.  Missing tracked paths stay
         in the inventory so deletions can be observed.
         """
+        if not _has_git_repository(work_root):
+            return None
         try:
             files_result = subprocess.run(
                 [
@@ -500,6 +516,9 @@ class FileChangeReviewStore:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=30,
+                # 宿主后端可能没有可继承的控制台（pythonw/DETACHED_PROCESS）；
+                # 缺这个标志时 Windows 会为 git 新建一个可见控制台窗口。
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except (OSError, subprocess.SubprocessError, ValueError):
             return None

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import model_profiles
+from proc_flags import hidden_flags
 from agent_harness import (
     SUBAGENT_BEST_OF_N,
     SUBAGENT_MAX_DEPTH,
@@ -1414,6 +1415,7 @@ def _git_worktree_add(run_dir: Path, attempt: int) -> Optional[Tuple[Path, str]]
             text=True,
             timeout=15,
             check=False,
+            creationflags=hidden_flags(),
         )
         if git_root.returncode != 0:
             return None
@@ -1425,6 +1427,7 @@ def _git_worktree_add(run_dir: Path, attempt: int) -> Optional[Tuple[Path, str]]
             text=True,
             timeout=60,
             check=False,
+            creationflags=hidden_flags(),
         )
         if r.returncode != 0:
             logger.info("git worktree 跳过 attempt %s: %s", attempt, (r.stderr or r.stdout)[:200])
@@ -1445,6 +1448,7 @@ def _git_root_and_relative_work_dir() -> Optional[Tuple[Path, Path]]:
             text=True,
             timeout=15,
             check=False,
+            creationflags=hidden_flags(),
         )
         if result.returncode != 0:
             return None
@@ -1485,6 +1489,7 @@ def _create_managed_worktree(child_id: str) -> Optional[Tuple[Path, Path, str, s
             text=True,
             timeout=15,
             check=False,
+            creationflags=hidden_flags(),
         )
         base_commit = (head.stdout or "").strip() if head.returncode == 0 else "HEAD"
         result = subprocess.run(
@@ -1494,6 +1499,7 @@ def _create_managed_worktree(child_id: str) -> Optional[Tuple[Path, Path, str, s
             text=True,
             timeout=120,
             check=False,
+            creationflags=hidden_flags(),
         )
         if result.returncode != 0:
             logger.warning(
@@ -1523,6 +1529,7 @@ def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
                 text=True,
                 timeout=120,
                 check=False,
+                creationflags=hidden_flags(),
             )
         except Exception as e:
             logger.debug("git worktree remove 失败 %s: %s", wt, e)
@@ -1540,6 +1547,7 @@ def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
                 text=True,
                 timeout=30,
                 check=False,
+                creationflags=hidden_flags(),
             )
         except Exception as e:
             logger.debug("git branch -D 失败 %s: %s", branch_name, e)
@@ -1639,6 +1647,7 @@ def _worktree_command(
         text=True,
         timeout=timeout,
         check=False,
+        creationflags=hidden_flags(),
     )
 
 

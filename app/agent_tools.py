@@ -70,6 +70,7 @@ from security import (
     enforce_leaf,
     prepare_egress_launch,
 )
+from proc_flags import NEW_PROCESS_GROUP, hidden_flags
 
 
 def active_tool_work_dir() -> Path:
@@ -1744,8 +1745,8 @@ def _run_cli_subprocess_stdio_kwargs(synthetic_command: str) -> Dict[str, Any]:
     if platform.system() == "Windows":
         flags = 0
         if os.getenv("RUN_CLI_NO_WINDOW", "1").strip().lower() not in ("0", "false", "no"):
-            flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            flags |= hidden_flags()
+        flags |= NEW_PROCESS_GROUP
         if flags:
             out["creationflags"] = flags
     else:
@@ -1774,6 +1775,8 @@ async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
                 "/F",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                # 后端可能无控制台（pythonw/DETACHED），否则 taskkill 会闪一个可见控制台。
+                creationflags=hidden_flags(),
             )
             await asyncio.wait_for(killer.wait(), timeout=5)
         except Exception:
