@@ -136,7 +136,7 @@ def plugin_settings_schema(plugin: PluginDefinition) -> Optional[Dict[str, Any]]
             field.update({"format": "secret", "secret_ref": secret_ref})
             fields.append(field)
             continue
-        if value_format and value_format not in {"text", "multiline"}:
+        if value_format and value_format not in {"text", "multiline", "file", "directory"}:
             raise PluginValidationError(f"Unsupported format for plugin setting {field_id!r}")
         if field_type != "string" and value_format:
             raise PluginValidationError(f"Only string settings can declare a text format")

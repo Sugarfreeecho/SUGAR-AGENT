@@ -149,7 +149,7 @@ def test_permission_mode_ui_regressions():
     permissions = (ROOT / "frontend/src/app/modules/permissions.js").read_text(
         encoding="utf-8"
     )
-    advanced_settings = (ROOT / "app/templates/advance_config.html").read_text(
+    advanced_settings = (ROOT / "app/templates/static/settings/sections_ops.js").read_text(
         encoding="utf-8"
     )
     css = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
@@ -208,10 +208,10 @@ def test_permission_mode_ui_regressions():
     assert "permission-mode-option" in index_html
     assert 'id="settings-security-rules-list"' not in html
     assert 'id="settings-security-rules-list"' not in index_html
-    assert 'data-advanced-tab="security"' in advanced_settings
-    assert 'id="advanced-security-rules-list"' in advanced_settings
-    assert 'id="advanced-security-extensions-list"' in advanced_settings
-    assert 'id="advanced-security-web-fetch-domains"' in advanced_settings
+    assert "id: 'security'" in advanced_settings
+    assert "'/api/security/rules?session_id='" in advanced_settings
+    assert "'/api/security/extensions'" in advanced_settings
+    assert 'data-field="domains"' in advanced_settings
     assert "permission-sandbox-status" not in html
     assert "permission-sandbox-status" not in index_html
     assert "PERMISSION_MODE_ICONS" in permissions
@@ -254,8 +254,8 @@ def test_permission_mode_ui_regressions():
     assert "allow_external_workspace" in interactions
     assert "allow_external_workspace_once" in interactions
     assert "external_workspace_grantable" in interactions
-    assert "advanced-security-workspace-scope-status" in advanced_settings
-    assert "advanced-security-workspace-scope-revoke" in advanced_settings
+    assert "W.sw('sec:external'" in advanced_settings
+    assert "api('/api/security/settings', { method: 'POST', body })" in advanced_settings
     assert "allow_external_workspace_ops" in advanced_settings
     assert "settings-external-ops" not in permissions
     assert "settings-external-ops" not in index_html

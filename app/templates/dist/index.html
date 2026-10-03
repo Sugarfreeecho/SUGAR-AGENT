@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>try { var savedTheme = localStorage.getItem('myagent-theme'); document.documentElement.classList.add(savedTheme === 'deep-dark' ? 'theme-dark' : (savedTheme === 'dark' || savedTheme === 'purple' ? 'theme-purple' : 'theme-light')); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
-  <script type="module" crossorigin src="/assets/main-Bv4CKfWG.js"></script>
+  <script type="module" crossorigin src="/assets/main-aSWHnRJi.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/main-BJns3-op.css">
 </head>
 <body>
@@ -231,44 +231,8 @@
     </div>
 </div>
 
-    <div id="settings-modal-root" class="settings-modal-overlay" aria-hidden="true">
-    <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" tabindex="-1">
-        <div class="settings-modal__head">
-            <h2 id="settings-modal-title" class="settings-modal__title">界面设置</h2>
-            <button type="button" id="settings-modal-close" class="settings-modal__close" aria-label="关闭">×</button>
-        </div>
-        <div class="settings-modal__body">
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">字体大小</div>
-                <div class="settings-font-row" role="group" aria-label="字体大小">
-                    <button type="button" id="settings-font-0" class="settings-font-step" aria-label="小号"><span class="settings-font-a settings-font-a--sm" aria-hidden="true">A</span></button>
-                    <button type="button" id="settings-font-1" class="settings-font-step" aria-label="标准"><span class="settings-font-a settings-font-a--md" aria-hidden="true">A</span></button>
-                    <button type="button" id="settings-font-2" class="settings-font-step" aria-label="大号"><span class="settings-font-a settings-font-a--lg" aria-hidden="true">A</span></button>
-                </div>
-            </div>
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">界面风格</div>
-                <div class="settings-theme-row" role="group" aria-label="界面风格">
-                    <button type="button" id="settings-theme-dark" class="settings-theme-btn">深色</button>
-                    <button type="button" id="settings-theme-purple" class="settings-theme-btn">紫色</button>
-                    <button type="button" id="settings-theme-light" class="settings-theme-btn">浅色（默认）</button>
-                </div>
-            </div>
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">会话目录</div>
-                <div class="settings-theme-row" role="group" aria-label="会话目录显示模式">
-                    <button type="button" id="settings-session-compact" class="settings-theme-btn">紧凑</button>
-                    <button type="button" id="settings-session-detailed" class="settings-theme-btn">详细</button>
-                </div>
-            </div>
-            <div class="settings-modal__section">
-                <div class="settings-modal__label">环境与 API</div>
-                <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>
-                <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
-                <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
-            </div>
-            <div id="plugin-settings-sections" class="plugin-settings-sections" hidden></div>
-        </div>
+    <div id="settings-center-overlay" class="settings-center-overlay" hidden aria-hidden="true">
+        <iframe id="settings-center-frame" class="settings-center-frame" title="设置" data-ui-tip="设置"></iframe>
     </div>
 </div>
 

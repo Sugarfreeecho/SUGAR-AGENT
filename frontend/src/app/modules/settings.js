@@ -29,16 +29,33 @@ const newSessionBtn = document.getElementById('new-session-btn');
 const offscreenRoot = document.getElementById('session-offscreen-buffers');
 
 const LS_UI_FONT = 'myagent-font-level';
+const LS_UI_FONT_SIZE = 'myagent-font-size-px';
 const LS_UI_THEME = 'myagent-theme';
 const LS_SESSION_LIST_MODE = 'myagent-session-list-mode';
 /** 三档字号（rem 基准）：相对此前整体收紧一档（原大→现中、原中→现小） */
 /** 三档 root 字号(px)：在「降一档」基准上整体 ×1.2 */
 const UI_FONT_PX = [14, 16, 17];
-var settingsModalKeyHandler = null;
+/** 可输入字号（学 DSH 的整数 px 步进，那边 12–17；这里按现有观感把上限放到 20） */
+const UI_FONT_MIN = 12;
+const UI_FONT_MAX = 20;
+function clampFontPx(px) {
+    return Math.max(UI_FONT_MIN, Math.min(UI_FONT_MAX, Math.round(px)));
+}
+function levelForFontPx(px) {
+    var hit = UI_FONT_PX.indexOf(px);
+    if (hit >= 0) return hit;
+    return px <= 15 ? 0 : (px <= 16 ? 1 : 2);
+}
 function getStoredFontLevel() {
     var n = parseInt(localStorage.getItem(LS_UI_FONT), 10);
     if (isNaN(n) || n < 0 || n > 2) return 1;
     return n;
+}
+/** 字号以 px 键为准，缺省回落到旧三档（0/1/2 → 14/16/17） */
+function getStoredFontPx() {
+    var raw = parseInt(localStorage.getItem(LS_UI_FONT_SIZE), 10);
+    if (!isNaN(raw)) return clampFontPx(raw);
+    return UI_FONT_PX[getStoredFontLevel()];
 }
 
 function getStoredSessionListMode() {
@@ -57,32 +74,22 @@ function getUiThemeCanvasBackground() {
     return getComputedStyle(document.documentElement).getPropertyValue('--export-bg').trim() || '#ffffff';
 }
 
-function syncSettingsModalForm() {
-    var lvl = getStoredFontLevel();
-    for (var i = 0; i < 3; i++) {
-        var b = document.getElementById('settings-font-' + i);
-        if (b) b.classList.toggle('is-active', i === lvl);
-    }
-    var theme = getActiveUiTheme();
-    var bd = document.getElementById('settings-theme-dark');
-    var bp = document.getElementById('settings-theme-purple');
-    var bl = document.getElementById('settings-theme-light');
-    if (bd) bd.classList.toggle('is-active', theme === 'dark');
-    if (bp) bp.classList.toggle('is-active', theme === 'purple');
-    if (bl) bl.classList.toggle('is-active', theme === 'light');
-    var compact = getStoredSessionListMode() === 'compact';
-    var sc = document.getElementById('settings-session-compact');
-    var sd = document.getElementById('settings-session-detailed');
-    if (sc) sc.classList.toggle('is-active', compact);
-    if (sd) sd.classList.toggle('is-active', !compact);
-}
 
 function applyFontLevel(level, persist) {
     level = Math.max(0, Math.min(2, level));
-    document.documentElement.style.fontSize = UI_FONT_PX[level] + 'px';
-    document.documentElement.setAttribute('data-font-level', String(level));
-    if (persist) localStorage.setItem(LS_UI_FONT, String(level));
-    syncSettingsModalForm();
+    return applyFontSize(UI_FONT_PX[level], persist);
+}
+
+function applyFontSize(px, persist) {
+    var next = clampFontPx(px);
+    document.documentElement.style.fontSize = next + 'px';
+    document.documentElement.setAttribute('data-font-size', String(next));
+    document.documentElement.setAttribute('data-font-level', String(levelForFontPx(next)));
+    if (persist) {
+        localStorage.setItem(LS_UI_FONT_SIZE, String(next));
+        localStorage.setItem(LS_UI_FONT, String(levelForFontPx(next)));   /* 旧档位键同步，别让别的读者读到过期值 */
+    }
+    return next;
 }
 
 function applyUiTheme(theme, persist) {
@@ -91,18 +98,16 @@ function applyUiTheme(theme, persist) {
     document.documentElement.classList.add('theme-' + next);
     document.documentElement.setAttribute('data-theme', next);
     if (persist) localStorage.setItem(LS_UI_THEME, next === 'dark' ? 'deep-dark' : next);
-    syncSettingsModalForm();
 }
 
 function applySessionListMode(mode, persist) {
     var next = mode === 'compact' ? 'compact' : 'detailed';
     document.documentElement.setAttribute('data-session-list-mode', next);
     if (persist) localStorage.setItem(LS_SESSION_LIST_MODE, next);
-    syncSettingsModalForm();
 }
 
 function restoreUiPreferences() {
-    applyFontLevel(getStoredFontLevel(), false);
+    applyFontSize(getStoredFontPx(), false);
     var t = localStorage.getItem(LS_UI_THEME);
     if (t === 'deep-dark') applyUiTheme('dark', false);
     else if (t === 'dark' || t === 'purple') applyUiTheme('purple', false);
@@ -111,88 +116,158 @@ function restoreUiPreferences() {
 }
 restoreUiPreferences();
 
-function openSettingsModal() {
-    var root = document.getElementById('settings-modal-root');
-    var panel = root && root.querySelector('.settings-modal');
-    if (!root || !panel) return;
-    syncSettingsModalForm();
-    root.classList.add('is-open');
-    root.setAttribute('aria-hidden', 'false');
-    document.body.style.overflow = 'hidden';
-    try { panel.focus(); } catch (e) {}
-    settingsModalKeyHandler = function (ev) {
-        if (ev.key === 'Escape') { ev.preventDefault(); closeSettingsModal(); }
-    };
-    document.addEventListener('keydown', settingsModalKeyHandler);
+// ═══════════════════════════════════════════════════════════
+// 设置中心浮层（替代旧的「界面设置」弹窗）
+//   齿轮 → 应用内浮层打开 /settings（iframe，聊天状态不丢）
+//   关闭：ESC / 点遮罩 / 浮层内点「返回聊天」（postMessage）
+// ═══════════════════════════════════════════════════════════
+function settingsCenterUrl(section) {
+    var query = new URLSearchParams();
+    query.set('embedded', '1');
+    if (typeof currentSessionId !== 'undefined' && currentSessionId) query.set('session_id', String(currentSessionId));
+    if (window.__WORK_DIR__) query.set('workspace', String(window.__WORK_DIR__));
+    var hash = section ? ('#' + String(section)) : '';
+    return '/settings?' + query.toString() + hash;
 }
 
-function closeSettingsModal() {
-    var root = document.getElementById('settings-modal-root');
-    if (!root) return;
-    root.classList.remove('is-open');
-    root.setAttribute('aria-hidden', 'true');
+function openSettingsCenter(section) {
+    var overlay = document.getElementById('settings-center-overlay');
+    var frame = document.getElementById('settings-center-frame');
+    if (!overlay || !frame) return;
+    if (window.__settingsCenterReady === true) {
+        mountSettingsCenter(section);
+        return;
+    }
+    /* 首次点击先探活：进程还没挂 /settings 路由时给出重启提示，避免空白浮层 */
+    fetch('/settings', { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
+        .then(function (res) {
+            /* 该服务不允许 HEAD，405 也算路由存在 */
+            if (!res.ok && res.status !== 405) throw new Error('settings center unavailable');
+            window.__settingsCenterReady = true;
+            mountSettingsCenter(section);
+        })
+        .catch(function () {
+            window.__settingsCenterReady = false;
+            if (typeof showUiAlert === 'function') {
+                showUiAlert({
+                    title: '设置中心',
+                    message: '设置中心需要重启 Agent 后可用：请用托盘菜单「重启」，然后重新打开本页。',
+                    variant: 'error',
+                });
+            }
+        });
+}
+
+function mountSettingsCenter(section) {
+    var overlay = document.getElementById('settings-center-overlay');
+    var frame = document.getElementById('settings-center-frame');
+    if (!overlay || !frame) return;
+    frame.src = settingsCenterUrl(section);
+    overlay.hidden = false;
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+    window.__settingsCenterOpen = true;
+    try { if (!window.__settingsCenterKeyHandler) {
+        window.__settingsCenterKeyHandler = function (ev) {
+            if (ev.key === 'Escape' && window.__settingsCenterOpen) {
+                ev.preventDefault();
+                closeSettingsCenter();
+            }
+        };
+        document.addEventListener('keydown', window.__settingsCenterKeyHandler);
+    } } catch (e) {}
+}
+
+function closeSettingsCenter() {
+    var frame = document.getElementById('settings-center-frame');
+    var settings = frame && frame.contentWindow && frame.contentWindow.MyAgentSettings;
+    if (settings && typeof settings.requestClose === 'function') {
+        settings.requestClose();
+        return;
+    }
+    finishClosingSettingsCenter();
+}
+
+function finishClosingSettingsCenter() {
+    var overlay = document.getElementById('settings-center-overlay');
+    var frame = document.getElementById('settings-center-frame');
+    if (!overlay) return;
+    overlay.hidden = true;
+    overlay.setAttribute('aria-hidden', 'true');
     document.body.style.overflow = '';
-    if (settingsModalKeyHandler) {
-        document.removeEventListener('keydown', settingsModalKeyHandler);
-        settingsModalKeyHandler = null;
+    window.__settingsCenterOpen = false;
+    if (frame) frame.src = 'about:blank';
+    if (window.__settingsCenterKeyHandler) {
+        document.removeEventListener('keydown', window.__settingsCenterKeyHandler);
+        window.__settingsCenterKeyHandler = null;
+    }
+    /* 回到聊天页时按最新的主题/字号/会话列表偏好重绘一次 */
+    try { restoreUiPreferences(); } catch (e) {}
+    try { document.dispatchEvent(new CustomEvent('myagent:settings-closed')); } catch (e) {}
+}
+
+window.addEventListener('message', function (event) {
+    if (event.origin !== window.location.origin) return;
+    var frame = document.getElementById('settings-center-frame');
+    if (!frame || event.source !== frame.contentWindow) return;
+    var data = event.data || {};
+    if (data.type === 'myagent:settings-close') { finishClosingSettingsCenter(); return; }
+    /* 设置中心里改主题/字号/会话列表/语言 → 聊天页当场跟着变（浮层不用关） */
+    if (data.type === 'myagent:settings-prefs') applyHostPrefs(data.prefs);
+});
+
+function applyHostPrefs(prefs) {
+    if (prefs && Object.prototype.hasOwnProperty.call(prefs, 'permissionMode') && typeof setNewSessionPermissionMode === 'function') {
+        setNewSessionPermissionMode(prefs.permissionMode);
+        if (!currentSessionId && typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector('');
+    }
+    try { restoreUiPreferences(); } catch (e) { /* ignore */ }
+    var lang = prefs && prefs.lang;
+    if (lang && typeof applyUiLanguage === 'function') {
+        var next = lang === 'en' ? 'en' : 'zh-CN';
+        if (typeof uiLanguage === 'undefined' || uiLanguage !== next) applyUiLanguage(next, false);
     }
 }
 
+/* 兜底：别的窗口/标签页写了同一批偏好键时也跟随（storage 事件不会回传给写入方自己） */
+window.addEventListener('storage', function (event) {
+    var key = event && event.key;
+    if (!key) return;
+    if (key === LS_UI_THEME || key === LS_UI_FONT || key === LS_SESSION_LIST_MODE) {
+        try { restoreUiPreferences(); } catch (e) { /* ignore */ }
+    } else if (key === 'myagent-new-session-permission-mode' && typeof setNewSessionPermissionMode === 'function') {
+        setNewSessionPermissionMode(event.newValue || '');
+        if (!currentSessionId && typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector('');
+    } else if (key === 'myagent-language' && typeof applyUiLanguage === 'function') {
+        var next = event.newValue === 'en' ? 'en' : 'zh-CN';
+        if (typeof uiLanguage === 'undefined' || uiLanguage !== next) applyUiLanguage(next, false);
+    }
+});
+
 function initUiSettingsControls() {
-    var root = document.getElementById('settings-modal-root');
     var gear = document.getElementById('sidebar-settings-btn');
-    var closeBtn = document.getElementById('settings-modal-close');
-    if (!root) return;
+    var overlay = document.getElementById('settings-center-overlay');
     if (gear) {
         gear.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
-            openSettingsModal();
+            openSettingsCenter();
         });
     }
-    if (closeBtn) closeBtn.addEventListener('click', function () { closeSettingsModal(); });
-    root.addEventListener('click', function (e) {
-        if (e.target === root) closeSettingsModal();
-    });
-    var pan = root.querySelector('.settings-modal');
-    if (pan) pan.addEventListener('click', function (e) { e.stopPropagation(); });
-    for (var i = 0; i < 3; i++) {
-        (function (idx) {
-            var b = document.getElementById('settings-font-' + idx);
-            if (b) b.addEventListener('click', function () { applyFontLevel(idx, true); });
-        })(i);
+    if (overlay) {
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeSettingsCenter();
+        });
     }
-    var bd = document.getElementById('settings-theme-dark');
-    var bp = document.getElementById('settings-theme-purple');
-    var bl = document.getElementById('settings-theme-light');
-    if (bd) bd.addEventListener('click', function () { applyUiTheme('dark', true); });
-    if (bp) bp.addEventListener('click', function () { applyUiTheme('purple', true); });
-    if (bl) bl.addEventListener('click', function () { applyUiTheme('light', true); });
-    var sc = document.getElementById('settings-session-compact');
-    var sd = document.getElementById('settings-session-detailed');
-    if (sc) sc.addEventListener('click', function () { applySessionListMode('compact', true); });
-    if (sd) sd.addEventListener('click', function () { applySessionListMode('detailed', true); });
     var languageBtn = document.getElementById('sidebar-language-btn');
     if (languageBtn) {
         languageBtn.addEventListener('click', function () {
             applyUiLanguage(uiLanguage === 'en' ? 'zh-CN' : 'en', true);
         });
     }
-    var envAdv = document.getElementById('settings-env-advanced');
-    if (envAdv) {
-        envAdv.addEventListener('click', function () {
-            closeSettingsModal();
-            var query = new URLSearchParams();
-            if (currentSessionId) query.set('session_id', String(currentSessionId));
-            if (window.__WORK_DIR__) query.set('workspace', String(window.__WORK_DIR__));
-            var settingsUrl = '/setup/env' + (query.toString() ? ('?' + query.toString()) : '');
-            var w = window.open(settingsUrl, 'myagent-env');
-            if (w) {
-                try { w.focus(); } catch (e) {}
-            } else {
-                window.location.href = settingsUrl;
-            }
-        });
-    }
 }
 initUiSettingsControls();
+
+/* 其它入口（插件卡片、命令行入口等）可调用 window.myagentOpenSettings('mcp') */
+window.myagentOpenSettings = openSettingsCenter;
+window.myagentCloseSettings = closeSettingsCenter;

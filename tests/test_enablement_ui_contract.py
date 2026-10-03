@@ -6,13 +6,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_model_profile_switcher_and_configuration_page_expose_enablement_controls():
     switcher = (ROOT / "frontend/src/app/modules/model-profiles.js").read_text(encoding="utf-8")
-    settings = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
+    settings = (ROOT / "app/templates/static/settings/sections_basic.js").read_text(encoding="utf-8")
     backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
 
     assert "data-toggle-profile-id" in switcher
     assert "setModelProfileEnabled" in switcher
-    assert "data-act='toggle'" in settings
-    assert "setConfiguredProfileEnabled" in settings
+    assert "W.sw('profile:' + p.id" in settings
+    assert "'/api/model_profiles/' + encodeURIComponent(id) + '/enabled'" in settings
     assert '@fastapi_app.post("/api/model_profiles/{profile_id}/enabled")' in backend
 
 
@@ -81,7 +81,7 @@ def test_pending_followup_mode_uses_custom_picker_instead_of_native_select():
 
 def test_skill_picker_exposes_enablement_controls():
     picker = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
-    settings = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
+    settings = (ROOT / "app/templates/static/settings/sections_ext.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
     i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
     backend = (ROOT / "app/webui.py").read_text(encoding="utf-8")
@@ -119,8 +119,8 @@ def test_skill_picker_exposes_enablement_controls():
     assert 'plugin-open-action" href="' in picker
     assert 'target="_blank" rel="noopener noreferrer"' in picker
     assert "window.location.assign(link.href)" not in picker
-    assert "advanced-plugin-open' href='\"+esc(pageHref)+\"'" in settings
-    assert "advanced-plugin-open' href='\"+esc(pageHref)+\"' target='_blank'" not in settings
+    assert "c.href ? '<a class=\"st-btn sm\" href=\"' + esc(c.href)" in settings
+    assert 'target="_blank" rel="noopener"' in settings
     assert "'/api/plugins/' + encodeURIComponent(id) + '/enabled'" in picker
     assert '/api/mcp/tools' in picker
     assert '/api/extensions' in picker

@@ -148,48 +148,43 @@ def test_global_hook_switch_prevents_project_and_plugin_execution(tmp_path, monk
 
 
 def test_extensions_management_page_and_routes_are_wired():
-    html = (ROOT / "app/templates/extensions_config.html").read_text(encoding="utf-8")
+    extensions = (ROOT / "app/templates/static/settings/sections_ext.js").read_text(encoding="utf-8")
     webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
     frontend = (ROOT / "frontend/src/app/modules/settings.js").read_text(encoding="utf-8")
     permissions = (ROOT / "frontend/src/app/modules/permissions.js").read_text(encoding="utf-8")
-    mcp_page = (ROOT / "app/templates/mcp_config.html").read_text(encoding="utf-8")
+    shell = (ROOT / "app/templates/settings_center.html").read_text(encoding="utf-8")
+    core = (ROOT / "app/templates/static/settings/core.js").read_text(encoding="utf-8")
+    ops = (ROOT / "app/templates/static/settings/sections_ops.js").read_text(encoding="utf-8")
 
-    assert "HOOKS_ENABLED" in html and "PLUGINS_ENABLED" in html
-    assert '@fastapi_app.get("/api/extensions")' in webui
-    assert '@fastapi_app.post("/api/extensions/session-ui")' in webui
-    assert '@fastapi_app.post("/api/extensions/reload")' in webui
-    assert '@fastapi_app.post("/api/plugins/{plugin_id}/enabled")' in webui
-    assert '@fastapi_app.get("/api/plugins/{plugin_id}/settings")' in webui
-    assert '@fastapi_app.patch("/api/plugins/{plugin_id}/settings")' in webui
-    assert '@fastapi_app.post("/api/security/mcp/{extension_id}/registration")' in webui
+    assert "HOOKS_ENABLED" in extensions and "PLUGINS_ENABLED" in webui
+    for route in (
+        '@fastapi_app.get("/api/extensions")',
+        '@fastapi_app.post("/api/extensions/session-ui")',
+        '@fastapi_app.post("/api/extensions/reload")',
+        '@fastapi_app.post("/api/plugins/{plugin_id}/enabled")',
+        '@fastapi_app.get("/api/plugins/{plugin_id}/settings")',
+        '@fastapi_app.patch("/api/plugins/{plugin_id}/settings")',
+        '@fastapi_app.post("/api/security/mcp/{extension_id}/registration")',
+    ):
+        assert route in webui
     assert "settings-extensions" not in frontend
-    advanced = (ROOT / "app/templates/advance_config.html").read_text(encoding="utf-8")
-    setup_i18n = (ROOT / "app/templates/static/setup_i18n.js").read_text(encoding="utf-8")
-    assert advanced.count('data-settings-tab=') == 2
-    assert advanced.count('data-settings-panel=') == 2
-    assert 'data-settings-tab="model"' in advanced
-    assert 'data-settings-tab="advanced"' in advanced
-    assert 'data-advanced-tab="env"' in advanced
-    assert 'data-advanced-tab="mcp"' in advanced
-    assert 'data-advanced-tab="extensions"' in advanced
-    assert 'data-advanced-panel="mcp"' in advanced
-    assert 'h==="#extensions"' in advanced
-    assert "async function loadExtensions()" in advanced
-    assert "advancedPluginPageHref" in advanced
-    assert "advanced-plugin-open" in advanced
-    assert 'extText("停用","Disable")' in advanced
-    assert "async function loadMcpConfig()" in advanced
-    assert "promptAdvancedMcpRegistrations" in advanced
-    assert 'fetch("/api/mcp_config"' in advanced
-    assert '"/api/security/mcp/"+encodeURIComponent(item.extension_id)+"/registration"' in advanced
+    assert 'id="st-nav-list"' in shell
+    assert "registerSection(def)" in core
+    for section in ("plugins", "hooks", "mcp"):
+        assert "id: '" + section + "'" in extensions
+    assert "id: 'env'" in ops
+    assert "api('/api/extensions')" in extensions
+    assert "c.href ? '<a" in extensions
+    assert "'/api/plugins/' + encodeURIComponent(id) + '/enabled'" in extensions
+    assert "api('/api/mcp_config')" in extensions
+    assert "'/api/mcp/servers/' + encodeURIComponent(el.dataset.id) + '/register'" in extensions
+    assert "'/api/security/extensions/'" in ops
     assert "promptPendingMcpRegistrations" in permissions
     assert "每次工具调用仍按当前权限模式审批" in permissions
-    assert "promptMcpRegistrations" in mcp_page
-    assert "'扩展管理':'Extension management'" in setup_i18n
-    assert "'已注册 Hooks':'Registered hooks'" in setup_i18n
-    assert "'插件状态已更新。':'Plugin state updated.'" in setup_i18n
-    assert 'id="wizard-language-toggle"' in advanced
-    assert 'extText("正在加载扩展…","Loading extensions…")' in advanced
+    assert "t('已注册 Hook', 'Registered hooks')" in extensions
+    assert "t('已停用', 'Disabled')" in extensions
+    assert 'id="st-lang"' in shell
+    assert "t('加载中…', 'Loading…')" in core
 
 
 def test_bundled_plugin_catalog_visibility_matches_product_surfaces():

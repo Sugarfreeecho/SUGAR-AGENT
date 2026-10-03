@@ -35,6 +35,15 @@ def _plugin(tmp_path, *, schema, permissions=None, source=None, ui=None):
     return load_plugin(root)
 
 
+@pytest.mark.parametrize("format", ["file", "directory"])
+def test_plugin_path_fields_are_published_in_settings_schema(tmp_path, format):
+    from plugins.settings import plugin_settings_schema, public_plugin_settings
+    plugin = _plugin(tmp_path, schema={"type": "object", "properties": {"location": {"type": "string", "format": format}}})
+    schema = plugin_settings_schema(plugin)
+    assert schema["fields"][0]["format"] == format
+    assert public_plugin_settings(plugin, environment={})["fields"][0]["format"] == format
+
+
 def _schema():
     return {
         "type": "object",

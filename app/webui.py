@@ -6,6 +6,7 @@
 
 import asyncio
 import functools
+import hashlib
 import json
 import logging
 import mimetypes
@@ -2463,7 +2464,7 @@ def _html_with_path_picker_script(body: str) -> str:
     except OSError:
         v = 0
     tag = f'<script src="/static/myagent_path_picker.js?v={v}"></script>'
-    if tag in body:
+    if '<script src="/static/myagent_path_picker.js' in body:
         return body
     if "</head>" in body:
         return body.replace("</head>", tag + "</head>", 1)
@@ -2688,6 +2689,343 @@ async def set_registered_skill_enabled(skill_name: str, request: Request):
         return JSONResponse({"ok": False, "error": "unknown skill"}, status_code=404)
     await run_in_threadpool(set_skill_enabled, name, enabled)
     return JSONResponse({"ok": True, "name": name, "enabled": enabled})
+
+
+# === 技能：新建骨架 / 从目录·压缩包·Git 安装（设置中心「添加技能」） ===
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_SKILL_TEMPLATE = """---
+name: {name}
+description: {description_yaml}
+---
+
+# {name}
+
+{description}
+
+## 何时使用
+- 在这里写触发场景（Agent 按本文件判断是否使用该技能）。
+
+## 步骤
+1. 把执行步骤写在这里。
+"""
+
+
+def _skills_root_dir() -> Path:
+    raw = (os.environ.get("SKILLS_DIR") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    try:
+        from agent_harness import SKILLS_DIR as default_dir
+
+        return Path(default_dir).resolve()
+    except Exception:
+        return (WORK_DIR / "skills").resolve()
+
+
+def _invalidate_skills_cache() -> None:
+    try:
+        from agent_tools import invalidate_skills_cache
+
+        invalidate_skills_cache()
+    except Exception:
+        logger.warning("failed to invalidate skills cache", exc_info=True)
+
+
+def _find_skill_dir(root: Path) -> Optional[Path]:
+    """在解包 / 克隆结果里定位包含 SKILL.md 的那一层目录。"""
+    if root.is_dir() and (root / "SKILL.md").is_file():
+        return root
+    if not root.is_dir():
+        return None
+    for child in sorted(root.iterdir()):
+        if child.is_dir() and (child / "SKILL.md").is_file():
+            return child
+    return None
+
+
+def _skill_install_name(directory: Path) -> str:
+    """Use the declared skill identity, never a temporary extraction directory."""
+    import yaml
+
+    text = (directory / "SKILL.md").read_text(encoding="utf-8-sig")
+    frontmatter = re.match(r"\A---[ \t]*\r?\n(.*?)\r?\n---(?:\r?\n|$)", text, re.S)
+    try:
+        metadata = yaml.safe_load(frontmatter.group(1)) if frontmatter else None
+    except yaml.YAMLError as exc:
+        raise ValueError("SKILL.md frontmatter 格式不正确") from exc
+    name = str(metadata.get("name") or "").strip() if isinstance(metadata, dict) else ""
+    if not _SKILL_NAME_RE.fullmatch(name):
+        raise ValueError("SKILL.md 必须声明有效的技能 name（小写字母、数字、点、下划线或短横线）")
+    return name
+
+
+_SKILL_ARCHIVE_MAX_ENTRIES = 5000
+_SKILL_ARCHIVE_MAX_BYTES = 200 * 1024 * 1024
+
+
+def _extract_skill_archive(archive: Path, root: Path) -> None:
+    """Extract only bounded regular files/directories inside the staging root."""
+    import stat
+    import tarfile
+    from pathlib import PurePosixPath
+
+    root = root.resolve()
+    used_bytes = 0
+
+    def destination(name: str) -> Path:
+        relative = PurePosixPath(name.replace("\\", "/"))
+        if relative.is_absolute() or ".." in relative.parts or ":" in name:
+            raise ValueError("压缩包里包含非法路径")
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError("压缩包里包含非法路径")
+        return target
+
+    def copy_entry(name: str, size: int, is_dir: bool, reader) -> Path:
+        nonlocal used_bytes
+        target = destination(name)
+        if is_dir:
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+        if size < 0 or used_bytes + size > _SKILL_ARCHIVE_MAX_BYTES:
+            raise ValueError("技能压缩包解压体积超过 200 MB 限制")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with reader() as source, target.open("wb") as output:
+            while chunk := source.read(64 * 1024):
+                used_bytes += len(chunk)
+                if used_bytes > _SKILL_ARCHIVE_MAX_BYTES:
+                    raise ValueError("技能压缩包解压体积超过 200 MB 限制")
+                output.write(chunk)
+        return target
+
+    if archive.suffix.lower() == ".zip":
+        with zipfile.ZipFile(archive) as bundle:
+            entries = bundle.infolist()
+            if len(entries) > _SKILL_ARCHIVE_MAX_ENTRIES:
+                raise ValueError("技能压缩包文件数超过 5000 限制")
+            for entry in entries:
+                file_type = stat.S_IFMT(entry.external_attr >> 16)
+                if file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
+                    raise ValueError("技能压缩包不能包含链接或特殊文件")
+                copy_entry(entry.filename, entry.file_size, entry.is_dir(), lambda: bundle.open(entry))
+    else:
+        with tarfile.open(archive) as bundle:
+            for count, entry in enumerate(bundle, 1):
+                if count > _SKILL_ARCHIVE_MAX_ENTRIES:
+                    raise ValueError("技能压缩包文件数超过 5000 限制")
+                if not (entry.isfile() or entry.isdir()):
+                    raise ValueError("技能压缩包不能包含链接或特殊文件")
+                target = copy_entry(entry.name, entry.size, entry.isdir(), lambda: bundle.extractfile(entry))
+                if entry.isfile() and os.name != "nt":
+                    target.chmod(entry.mode & 0o777)
+
+
+def _install_skill_from(source: str, kind: str) -> Path:
+    """把 dir / zip / git 来源的技能复制进 SKILLS_DIR，返回目标目录。"""
+    import shutil
+    import tempfile
+    import zipfile
+
+    skills_root = _skills_root_dir()
+    skills_root.mkdir(parents=True, exist_ok=True)
+    cleanup: list[Path] = []
+    try:
+        src_dir: Optional[Path] = None
+        if kind == "git" or source.startswith(("http://", "https://", "git@", "ssh:")):
+            import subprocess
+
+            from proc_flags import hidden_flags
+
+            tmp = Path(tempfile.mkdtemp(prefix="myagent-skill-"))
+            cleanup.append(tmp)
+            target = tmp / "repo"
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", source, str(target)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                creationflags=hidden_flags(),
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "git clone failed").strip()
+                raise ValueError(detail[:400])
+            src_dir = _find_skill_dir(target)
+            if src_dir is None:
+                raise ValueError("仓库里没有找到含 SKILL.md 的技能目录")
+        else:
+            local = Path(source).expanduser()
+            if local.is_dir():
+                if not (local / "SKILL.md").is_file():
+                    raise ValueError("目录里没有 SKILL.md")
+                src_dir = local.resolve()
+            elif local.is_file():
+                tmp = Path(tempfile.mkdtemp(prefix="myagent-skill-"))
+                cleanup.append(tmp)
+                _extract_skill_archive(local, tmp)
+                src_dir = _find_skill_dir(tmp)
+                if src_dir is None:
+                    raise ValueError("压缩包里没有找到含 SKILL.md 的技能目录")
+            else:
+                raise ValueError("来源不存在：" + source)
+
+        dest = skills_root / _skill_install_name(src_dir)
+        if dest.exists():
+            raise ValueError("技能已存在：" + dest.name)
+        shutil.copytree(src_dir, dest)
+        return dest
+    finally:
+        import shutil as _shutil
+
+        for path in cleanup:
+            _shutil.rmtree(path, ignore_errors=True)
+
+
+@fastapi_app.post("/api/skills/create")
+async def create_skill(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    payload = data if isinstance(data, dict) else {}
+    name = str(payload.get("name") or "").strip()
+    description = str(payload.get("description") or "").strip() or name
+    if not _SKILL_NAME_RE.match(name):
+        return JSONResponse(
+            {"ok": False, "error": "技能名只能用小写字母、数字、点、下划线与短横线，且以字母或数字开头"},
+            status_code=400,
+        )
+    target = _skills_root_dir() / name
+    if target.exists():
+        return JSONResponse({"ok": False, "error": "技能已存在：" + name}, status_code=400)
+    try:
+        target.mkdir(parents=True, exist_ok=False)
+        (target / "SKILL.md").write_text(
+            _SKILL_TEMPLATE.format(name=name, description=description,
+                                   description_yaml=json.dumps(description, ensure_ascii=False)),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    _invalidate_skills_cache()
+    return JSONResponse({"ok": True, "name": name, "path": str(target)})
+
+
+@fastapi_app.post("/api/skills/install")
+async def install_skill(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    payload = data if isinstance(data, dict) else {}
+    source = str(payload.get("source") or "").strip()
+    kind = str(payload.get("kind") or "").strip().lower()
+    if not source:
+        return JSONResponse({"ok": False, "error": "source is required"}, status_code=400)
+    if kind not in ("dir", "zip", "git", ""):
+        return JSONResponse({"ok": False, "error": "kind must be dir / zip / git"}, status_code=400)
+    try:
+        dest = await run_in_threadpool(_install_skill_from, source, kind)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("skill install failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    _invalidate_skills_cache()
+    return JSONResponse({"ok": True, "name": dest.name, "path": str(dest)})
+
+
+@fastapi_app.post("/api/skills/install-upload")
+@fastapi_app.post("/api/plugins/install-upload")
+async def install_uploaded_package(request: Request):
+    """Install browser-dropped contents without depending on client absolute paths."""
+    from pathlib import PurePosixPath
+    from starlette.datastructures import UploadFile as FormUploadFile
+    from starlette.exceptions import HTTPException
+    from starlette.formparsers import MultiPartException
+
+    is_plugin = request.url.path.startswith("/api/plugins/")
+    # Bound multipart ingress before parsing/spooling, including filename/header overhead.
+    ingress_limit = _SKILL_ARCHIVE_MAX_BYTES + _SKILL_ARCHIVE_MAX_ENTRIES * 4096
+    ingress_bytes = 0
+    receive = request.receive
+    async def limited_receive():
+        nonlocal ingress_bytes
+        message = await receive()
+        ingress_bytes += len(message.get("body", b""))
+        if ingress_bytes > ingress_limit:
+            raise MultiPartException("上传总大小超过 200 MB")
+        return message
+
+    form = None
+    try:
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > ingress_limit:
+            return JSONResponse({"ok": False, "error": "上传总大小超过 200 MB"}, status_code=413)
+        form = await Request(request.scope, receive=limited_receive).form(max_files=_SKILL_ARCHIVE_MAX_ENTRIES, max_fields=8)
+        kind = form.get("kind")
+        files = form.getlist("files")
+        if kind not in {"dir", "zip"} or not files or not all(isinstance(upload, FormUploadFile) for upload in files):
+            raise ValueError("请选择一个目录或压缩包；最多 5000 个文件")
+        if kind == "zip" and len(files) != 1:
+            raise ValueError("一次只能上传一个压缩包")
+        with tempfile.TemporaryDirectory(prefix="myagent-package-upload-") as temporary:
+            root = Path(temporary)
+            contents = root / "contents"
+            contents.mkdir()
+            used_bytes = 0
+            seen = set()
+            for upload in files:
+                name = upload.filename or ""
+                parts = name.split("/")
+                relative = PurePosixPath(name)
+                if (not name or relative.is_absolute() or len(parts) > 40 or "\\" in name or ":" in name
+                    or any(part in {"", ".", ".."} or part.endswith((" ", ".")) or
+                           re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", part)
+                           for part in parts)):
+                    raise ValueError("上传文件包含非法路径")
+                identity = name.casefold()
+                if identity in seen:
+                    raise ValueError("上传文件路径重复")
+                seen.add(identity)
+                target = contents.joinpath(*parts)
+                if not target.resolve().is_relative_to(contents.resolve()):
+                    raise ValueError("上传文件包含非法路径")
+                if isinstance(upload.size, int) and used_bytes + upload.size > _SKILL_ARCHIVE_MAX_BYTES:
+                    return JSONResponse({"ok": False, "error": "上传总大小超过 200 MB"}, status_code=413)
+                await run_in_threadpool(target.parent.mkdir, parents=True, exist_ok=True)
+                with target.open("wb") as output:
+                    while chunk := await upload.read(64 * 1024):
+                        used_bytes += len(chunk)
+                        if used_bytes > _SKILL_ARCHIVE_MAX_BYTES:
+                            return JSONResponse({"ok": False, "error": "上传总大小超过 200 MB"}, status_code=413)
+                        await run_in_threadpool(output.write, chunk)
+            source = contents
+            if kind == "zip":
+                # Both installers receive validated extracted files, never raw unchecked archives.
+                source = root / "extracted"
+                source.mkdir()
+                await run_in_threadpool(_extract_skill_archive, target, source)
+            if is_plugin:
+                from agent_extensions import install_plugin
+
+                result = await run_in_threadpool(install_plugin, str(source))
+                await refresh_web_plugin_lifecycle()
+                await agent_mcp.force_reload()
+            else:
+                source = await run_in_threadpool(_find_skill_dir, source)
+                if source is None:
+                    raise ValueError("目录里没有找到 SKILL.md")
+                dest = await run_in_threadpool(_install_skill_from, str(source), "dir")
+                _invalidate_skills_cache()
+                result = {"name": dest.name, "path": str(dest)}
+            return JSONResponse({"ok": True, **result})
+    except HTTPException as exc:
+        return JSONResponse({"ok": False, "error": str(exc.detail)}, status_code=413 if ingress_bytes > ingress_limit else exc.status_code)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    finally:
+        if form is not None:
+            await form.close()
 
 
 @fastapi_app.post("/api/upload-chat-files")
@@ -7229,23 +7567,6 @@ async def setup_page():
     )
 
 
-_ENV_ADVANCED_PATH = _Path(__file__).resolve().parent / "templates" / "advance_config.html"
-_MCP_CONFIG_HTML_PATH = _Path(__file__).resolve().parent / "templates" / "mcp_config.html"
-_EXTENSIONS_CONFIG_HTML_PATH = _Path(__file__).resolve().parent / "templates" / "extensions_config.html"
-
-
-def _load_mcp_config_html() -> str:
-    if _MCP_CONFIG_HTML_PATH.is_file():
-        return _read_text_cached(_MCP_CONFIG_HTML_PATH, "")
-    return "<!DOCTYPE html><html><body><p>缺少 templates/mcp_config.html</p><a href='/'>返回</a></body></html>"
-
-
-def _load_extensions_config_html() -> str:
-    if _EXTENSIONS_CONFIG_HTML_PATH.is_file():
-        return _read_text_cached(_EXTENSIONS_CONFIG_HTML_PATH, "")
-    return "<!DOCTYPE html><html><body><p>缺少 templates/extensions_config.html</p><a href='/'>返回</a></body></html>"
-
-
 _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
     (
         "search",
@@ -8431,16 +8752,20 @@ async def _config_check(req: _Request, call_next):
         "/setup/env",
         "/setup/mcp",
         "/setup/extensions",
+        "/settings",
         "/api/save_config",
         "/api/env",
         "/api/mcp_config",
+        "/api/mcp/tools",
+        "/api/skills",
+        "/api/features/ask-user",
         "/api/extensions",
         "/api/model_profiles",
         "/api/model_profiles/discover",
         "/api/pick-path",
         "/api/upload-chat-files",
         "/api/workspace-files",
-    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/extensions/") or p.startswith("/api/remote/v1/"):
+    ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/extensions/") or p.startswith("/api/skills/") or p.startswith("/api/security/") or p.startswith("/api/mcp/tools/") or p.startswith("/api/mcp/servers/") or p.startswith("/api/features/") or p.startswith("/api/remote/v1/"):
         return await call_next(req)
     if not _is_configured():
         return _RedirectResponse(url="/setup")

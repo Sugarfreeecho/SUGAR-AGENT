@@ -5,12 +5,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_theme_picker_exposes_light_dark_and_purple_variants() -> None:
+    """三档主题现在由设置中心承载：聊天页只留齿轮入口 + 浮层。"""
     for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
-        assert 'id="settings-theme-light"' in markup
-        assert 'id="settings-theme-dark"' in markup
-        assert 'id="settings-theme-purple"' in markup
-        assert ">紫色</button>" in markup
+        assert 'id="settings-modal-root"' not in markup
+        assert 'id="settings-center-overlay"' in markup
+        assert 'id="sidebar-settings-btn"' in markup
+
+    section = (ROOT / "app/templates/static/settings/sections_basic.js").read_text(encoding="utf-8")
+    assert "{ v: 'light'" in section
+    assert "{ v: 'dark'" in section
+    assert "{ v: 'purple'" in section
+    assert "t('浅色', 'Light')" in section
+    assert "t('紫色', 'Purple')" in section
+    assert "t('深色', 'Dark')" in section
+
+    styles = (ROOT / "app/templates/static/settings/settings.css").read_text(encoding="utf-8")
+    assert ":root.theme-dark {" in styles
+    assert ":root.theme-purple {" in styles
 
 
 def test_theme_storage_keeps_legacy_dark_as_purple() -> None:

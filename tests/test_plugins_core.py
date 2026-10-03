@@ -59,17 +59,27 @@ def test_repository_engineering_plugin_contract(tmp_path):
     assert plugin.mcp_servers == {}
 
 
-def test_repository_global_mcp_contract():
+def test_repository_mcp_example_contract():
     root = Path(__file__).resolve().parents[1]
-    config = json.loads((root / "mcp_servers.json").read_text(encoding="utf-8"))
+    # The root config is ignored local state; test the versioned portable example.
+    config = json.loads((root / "app/mcp_servers.json.example").read_text(encoding="utf-8"))
     servers = config["servers"]
 
-    assert set(servers) == {"context7", "github", "playwright"}
-    assert servers["context7"]["command"] == "npx.cmd"
-    assert servers["playwright"]["args"][-2:] == ["--headless", "--isolated"]
-    assert servers["github"]["headers"] == {
-        "Authorization": "Bearer ${GITHUB_MCP_PAT}"
+    assert config["enabled"] is True
+    assert {server["transport"] for server in servers.values()} == {
+        "stdio", "sse", "streamable-http"
     }
+    assert servers["fs_stdio"]["command"] == "npx"
+    assert servers["fs_stdio"]["args"] == [
+        "-y", "@modelcontextprotocol/server-filesystem", "."
+    ]
+    assert servers["remote_sse_example"]["url"] == "https://example.com/your-mcp/sse"
+    assert servers["remote_sse_example"]["headers"] == {
+        "Authorization": "Bearer REPLACE_ME"
+    }
+    assert servers["remote_http_example"]["url"] == "https://example.com/mcp"
+    assert servers["remote_http_example"]["terminate_on_close"] is True
+    assert all(server["tool_timeout"] > 0 for server in servers.values())
 
 
 @pytest.mark.parametrize("value", ["0", "false", "FALSE", "no", "off", " Off "])

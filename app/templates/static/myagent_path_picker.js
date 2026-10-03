@@ -71,6 +71,7 @@
       var p = await pickPath(kind, initial || '', !!multiple);
       if (onPicked) onPicked(p);
     } catch (e) {
+      if (global.MyAgentSettings) global.MyAgentSettings.reportError(e);
       return;
     } finally {
       btn.disabled = false;
@@ -127,6 +128,33 @@
     });
     row.appendChild(btn);
     input.dataset.pathBrowseWrapped = '1';
+    if (!input.closest('[data-package-kind]')) {
+      input.addEventListener('dragover', function (event) {
+        if (event.dataTransfer && Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') >= 0) event.preventDefault();
+      });
+      input.addEventListener('drop', function (event) {
+        var data = event.dataTransfer;
+        if (!data || !data.files || !data.files.length) return;
+        event.preventDefault();
+        var path = data.files[0].path || '';
+        var uri = data.getData('text/uri-list').split(/\r?\n/).filter(function (line) { return line && line.charAt(0) !== '#'; })[0] || '';
+        if (!path && /^file:\/\//i.test(uri)) {
+          try {
+            var url = new URL(uri);
+            path = decodeURIComponent(url.pathname);
+            if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1).replace(/\//g, '\\');
+            else if (url.hostname) path = '\\\\' + url.hostname + path.replace(/\//g, '\\');
+          } catch (_) { /* use the picker if the URI is malformed */ }
+        }
+        if (!path) {
+          if (global.MyAgentSettings) global.MyAgentSettings.reportError(new Error('浏览器未提供完整路径，请使用旁边的选择按钮。'));
+          return;
+        }
+        input.value = path;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
     return input;
   }
 

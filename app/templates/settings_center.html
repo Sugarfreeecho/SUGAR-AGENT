@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>General Agent · 设置</title>
+<link rel="icon" href="data:,">
+<script>
+window.__MYAGENT_SETTINGS__ = __SETTINGS_BOOTSTRAP__;
+</script>
+<script>
+/* Apply the canvas and theme before CSS can paint the default light panel. */
+(function () {
+  var root = document.documentElement;
+  var theme = 'light';
+  try { theme = localStorage.getItem('myagent-theme'); } catch (e) { /* use default */ }
+  root.classList.add(theme === 'deep-dark' ? 'theme-dark' :
+    (theme === 'dark' || theme === 'purple' ? 'theme-purple' : 'theme-light'));
+  if (window.__MYAGENT_SETTINGS__.embedded || window.self !== window.top) {
+    root.classList.add('st-embedded');
+  }
+})();
+</script>
+<link rel="stylesheet" href="/static/settings/settings.css?v=__SETTINGS_ASSET_VERSION__">
+</head>
+<body>
+<div class="st-stage">
+  <div class="st-panel">
+    <nav class="st-nav">
+      <div class="st-nav-title" data-i18n="navTitle">设置</div>
+      <div class="st-nav-list" id="st-nav-list"></div>
+      <div class="st-nav-foot" id="st-nav-foot"></div>
+    </nav>
+    <section class="st-content">
+      <header class="st-header">
+        <div>
+          <h1 id="st-title"></h1>
+          <p class="st-sub" id="st-sub"></p>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="st-btn text sm" id="st-lang" type="button">中/EN</button>
+          <button class="st-btn text sm" id="st-back" type="button">返回聊天</button>
+        </div>
+      </header>
+      <div class="st-body" id="st-body"></div>
+      <footer class="st-footer" id="st-footer" hidden>
+        <span class="st-msg" id="st-dirty-msg">有未保存的更改</span>
+        <div style="flex:1"></div>
+        <button class="st-btn sm" type="button" data-act="discard">放弃</button>
+        <button class="st-btn primary sm" type="button" data-act="save">保存</button>
+      </footer>
+    </section>
+  </div>
+</div>
+
+<div class="st-toast" id="st-toast"></div>
+
+<div class="st-modal" id="st-confirm" hidden>
+  <div class="st-box">
+    <h4 id="st-cf-title">确认操作</h4>
+    <p id="st-cf-body"></p>
+    <div class="st-acts">
+      <button class="st-btn" type="button" data-act="cf-cancel">取消</button>
+      <button class="st-btn primary" type="button" data-act="cf-ok">确认</button>
+    </div>
+  </div>
+</div>
+
+<div class="st-modal" id="st-dialog" hidden>
+  <div class="st-box form">
+    <div class="st-dhead"><h4 id="st-dlg-title"></h4><p id="st-dlg-sub"></p></div>
+    <div class="st-dbody" id="st-dlg-body"></div>
+    <div class="st-dfoot">
+      <button class="st-btn" type="button" data-act="dlg-cancel">取消</button>
+      <button class="st-btn primary" id="st-dlg-ok" type="button" data-act="dlg-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/myagent_path_picker.js?v=__SETTINGS_ASSET_VERSION__"></script>
+<script src="/static/settings/core.js?v=__SETTINGS_ASSET_VERSION__"></script>
+<script src="/static/settings/package_import.js?v=__SETTINGS_ASSET_VERSION__"></script>
+<script src="/static/settings/plugin_sections.js?v=__SETTINGS_ASSET_VERSION__"></script>
+<script src="/static/settings/sections_basic.js?v=__SETTINGS_ASSET_VERSION__"></script>
+<script src="/static/settings/sections_ext.js?v=__SETTINGS_ASSET_VERSION__"></script>
+<script src="/static/settings/sections_ops.js?v=__SETTINGS_ASSET_VERSION__"></script>
+<script>MyAgentSettings.boot();</script>
+</body>
+</html>
