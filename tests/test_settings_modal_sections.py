@@ -43,7 +43,7 @@ def test_gear_entry_opens_the_settings_center_overlay() -> None:
     assert "/setup/env" not in settings
     # 主题/字号/会话列表仍然在聊天页生效（公共函数保留）
     assert "function applyUiTheme(" in settings
-    assert "function applyFontLevel(" in settings
+    assert "function applyFontSize(" in settings
     assert "function applySessionListMode(" in settings
 
 
