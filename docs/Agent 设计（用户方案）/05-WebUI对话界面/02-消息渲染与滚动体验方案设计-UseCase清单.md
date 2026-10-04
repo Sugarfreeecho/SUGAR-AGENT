@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-03 v10（覆盖至：当前工作区；流式测量分批与缓存）
+- 版本：2026-10-04 v11（覆盖至：当前工作区；上下文用量浮窗拆解卡）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -58,6 +58,12 @@
 - **规则与边界**：实时输出是 **ephemeral**（不落盘、不参与回放，断线不续）；最终结果仍按工具结束后的限长投影（`tool_detail_ui`）提供，UI 以最终结果收口。
 - **依据**：`message-rendering.js`（工具行按帧渲染）、`agent_loop.py::_emit_run_shell_output / _ThreadToAsyncQueue`（`tool_command_delta` 合帧）、`agent_tools.py::_RunShellProgressPublisher`（≈40ms / 8 KiB 节流、64 KiB 上限）。
 
+### UC-5B9 上下文用量浮窗拆解卡（对齐 DSH）
+- **触发**：指针停留右上角上下文用量（约 180ms）或键盘聚焦；Escape / 移出收起。
+- **预期现象**：浮窗为拆解卡——标题行「上下文已用 x%」+「~y / 阈值」、4px 三色占比条（系统提示词=蓝灰 / 工具定义=紫 / 对话消息=主题蓝）、三行图例（色块 + 名称 + `~token`）；占比条总长按精确百分比、分段按构成分配、0 宽度段丢弃、每段最小 2px；三行之和恒等于整包数字（行值带 `~`）；随三套主题自动取色；宽 264px（窄窗收敛 `100vw - 1.5rem`）。
+- **规则与边界**：分母为压缩摘要阈值（非原始窗口），卡底保留一行灰色口径说明；有构成数据时不叠加纯文字提示，无构成时保留旧提示且不出现卡片；卡片贴在触发器右缘向下展开（不引入测量式锚定）；构成由 `build_context_breakdown` 本地估算（系统段按内容缓存计价、工具定义按 schema 余量、对话消息取整包估值余量），快照缺构成时端点只补构成不改总量。
+- **依据**：`agent_tokenizer.py::build_context_breakdown`、`agent_loop.py`（pre-request 事件 / 压缩检查点 / 端点载荷）、`webui.py::get_session_context_tokens`、`session-scroll-history.js`（渲染）、`context-store.js`、`session-event-reducer.js`、`i18n.js`；回归 `tests/test_context_breakdown.py`、`tests/js/context_breakdown_card_runtime.cjs`。
+
 ## 3. 边界
 
 - 渲染层不修改事件数据——所见即事件流投影。
@@ -68,6 +74,8 @@
 见上表（均为 frontend/src/app/modules/ 下文件）。
 
 ## 5. 版本记录
+
+- 2026-10-04 v11：新增 UC-5B9《上下文用量浮窗拆解卡》——右上角用量 hover 拆解卡（三色占比条 + 三行图例，三行之和=整包；快照补齐只补构成）。
 
 - 2026-10-03 v10：补记前端性能批次——流式重测分 6,000 字符批让出主线程（MessageChannel，单任务约 4ms）、每个流式窗口最多两种布局签名缓存、执行框一次测量不再清样式重读；公共侧栏窄态条目 DOM 复用、改动审查轮定位二分（详见 docs/CHANGELOG-2026-10-03-前端性能优化.md）。
 
