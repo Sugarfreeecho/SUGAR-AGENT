@@ -1,6 +1,6 @@
 # 公共左侧栏（会话扩展面板）· 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-02 v2（覆盖至：当前工作区；状态：✅ 已实现——工作区完成、待提交，提交后按提交号补证据）
+- 版本：2026-10-04 v3（覆盖至：当前工作区；统一悬停说明与自适应面板宽度）
 - 用途：逐条审查（四字段格式）；核对聊天区左缘「会话扩展面板」是否统一为**一条公共栏（页签式，方案 B）**——一套外壳、一套页签显隐、一套避让/降级逻辑，而不是多套卡片与多套规则并存。
 - 适用实现（拟落点）：新增 `frontend/src/app/modules/public-sidebar.js`；改造 `frontend/src/app/plugin-ui-slots.js`、`frontend/src/app/modules/layout-panels.js`、`frontend/src/app/modules/toc-todo.js`、`frontend/src/styles/app.css`、`frontend/src/shell-body.html`、`frontend/index.html`；插件侧 `plugins/session-todo/**`、`plugins/agent-goal/**`、`plugins/change-review/web/change-review.{js,css}`；后端 `app/plugins/ui.py`（`session.panel` 透传 `group`）；词条 `frontend/src/app/modules/i18n.js`。
 - 上级：`00-WebUI对话界面整体设计.md`｜相关：`11-工作区双侧面板视觉系统方案设计-UseCase清单.md`（视觉原语继承、本条收口“多栏共生”）、`../06-能力扩展加载/08-内置插件-改动审查方案设计-UseCase清单.md`（改动审查内容）、`../../plugin_api_v1.md`（拟增 `group` 字段，实现后同步）。
@@ -121,6 +121,12 @@
 - **规则与边界**：条目外观由页签注册方经 `handle.setNarrow / MyAgentPubar.configureNarrow` 配置（icon / label / summary / summaryHtml / chip / actions）；未配置页签用缺省样式（默认图标 + 计数摘要）；浮窗内“节”与左栏内同款去壳；浮窗仅在窄态出现（宽态自动关闭并复位）；关闭时恢复页签 hidden 状态与 DOM 排序。
 - **依据**：`public-sidebar.js::pubarRenderNarrowStrip / pubarBuildNarrowItem / pubarOpenNarrowPopover / pubarCloseNarrowPopover / pubarConfigureNarrow`；`plugins/{session-todo,agent-goal,change-review}/web/**`（configureNarrow / setNarrow 接线）；`app.css`（`.pubar-narrow-strip / .pni / .pubar-narrow-popover`）；双 shell 的 `#pubar-narrow-slot`。
 
+### UC-5M15 统一悬停说明与自适应面板宽度
+- **触发**：悬停/聚焦面板条目（计划/目标/插件/改动/窄态条）或舞台横向空间变化。
+- **预期现象**：悬停说明统一走 `setUiHoverTip`（无原生 `title`）——文本在布局前绑定、可见内实时更新、显示时翻译；被截断条目悬停呈现全文。面板宽度走 `--todo-panel-width / --toc-panel-width`（有空间时向内填满、原宽度为下限），改动审查抽屉跟随该变量。
+- **规则与边界**：宽度由 `layout-panels.js` 分侧独立填充、先设 max-width 再测重叠（避免过渡期误折叠）；窄态弹层关闭钮等也带统一提示。
+- **依据**：`public-sidebar.js`、`toc-todo.js::setUiHoverTip`、`layout-panels.js`、`plugin-ui-slots.js`、`plugins/{session-todo,agent-goal,change-review}/web/*`；回归 `tests/test_plugin_ui_frontend.py`。
+
 ## 3. 实现落点与顺序（工程口径）
 
 **文件清单**
@@ -167,6 +173,8 @@
 5. 新内容出现：**自动切换到最新生成/更新的页签**（会话切换后 4s 抑制期内回退为脉冲提示；用户点按页签即取消待切换）。
 
 ## 7. 版本记录
+
+- 2026-10-04 v3：新增 UC-5M15《统一悬停说明与自适应面板宽度》——悬停说明全面走 `setUiHoverTip`（布局前绑定、实时更新）；面板宽度变量化并自适应填充（原宽下限）。
 
 - 2026-10-03 v9.4：**计划「进行中」图标改为描边播放三角（参考 DSH/ZCode）**——原 3/4 缺口弧环辨识度差、已退役。参考口径：DSH（`packages/client/ui-tool/.../ToolDetails.tsx`）进行中 = `IconPlayOutlineRegular` 14px、完成 = 对勾、待办 = 10×10 描边方块，且无动画（该包无 `@keyframes`）；ZCode（`apps/zcode-cli/packages/tui/src/app-sidebar.tsx`）侧栏标记 = `[x] / [>] / [ ]`，进行中取 `palette.accent` 强调色。本实现采用描边播放三角（沿用 `.todo-plan-status-icon` 的 stroke 家族 + 既有 `--accent` 高亮，未加动画），path 由 `M12 3.8A8.2 8.2 0 1 1 3.8 12` 改为 `M8.6 6.6 17.6 12 8.6 17.4Z`；待办圆环与完成「圆环+对勾」保持不变。验证：pytest（新增 `test_todo_in_progress_icon_uses_play_glyph_like_dsh_and_zcode`，断言新 path 存在且旧弧环已移除）+ 实机 DOM 探针（进行中 path 生效）+ 截图（`workspace/左侧栏统一_分析/浮窗截图/计划图标_进行中_播放三角_特写.png`、`计划图标_进行中_播放三角_左栏.png`）。
 - 2026-10-03 v9.3：**「改动审查」节内文字规格对齐计划节**——节头行改与 `.workspace-side-panel-title` 同规格（`min-height 1.05rem`、`margin 0 0 0.3rem`、`padding 0 0.15rem`、`gap 0.32rem`），标题字 `650 0.62rem/1.3` + `--workspace-side-panel-title` token + `0.05em` 字距 + uppercase；节头右上统计 `500 0.56rem/1.3` + 等宽数字；列表改 flex 列向 `gap 0.22rem`（对齐 `.workspace-side-panel-list`）；条目内边距对齐 `.workspace-side-panel-item` 的 `0.38rem 0.4rem`（去掉 `.change-review-file-head` 的叠加内边距）；路径文字改 `400 0.68rem/1.45`（字号/字重/行高对齐计划条目文字，仍保留等宽字体便于读路径）；行内统计 `500 0.56rem/1.3`；「已撤销」标记补 `0.4rem` 右内缩。验证：pytest 21 passed（新增 `test_change_review_section_typography_matches_the_plan_section`）+ 实机截图（`workspace/左侧栏统一_分析/浮窗截图/风格对齐_计划节参照_左栏.png`、`风格对齐_改动节_浮窗.png`、`风格对齐_改动节_左栏.png`）。

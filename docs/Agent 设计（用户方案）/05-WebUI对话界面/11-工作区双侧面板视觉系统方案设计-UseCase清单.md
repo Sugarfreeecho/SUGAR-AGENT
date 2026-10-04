@@ -1,6 +1,6 @@
 # 工作区双侧面板视觉系统 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-02 v3（覆盖至：当前工作区；右侧历史纳入同款外壳与标题栏风格）
+- 版本：2026-10-04 v4（覆盖至：当前工作区；全局排版令牌与系统字体栈）
 - 用途：审查工作区左右两侧面板是否使用同一套视觉语言，而不是只核对某一个颜色值。
 - 适用实现：`frontend/src/styles/app.css`、`frontend/src/shell-body.html`、`frontend/index.html`、`frontend/src/app/modules/toc-todo.js`、`frontend/src/app/plugin-ui-slots.js`、`plugins/session-todo/web/session-panel.{js,css}`、`plugins/agent-goal/web/session-panel.{js,css}`、`frontend/src/app/modules/i18n.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -12,6 +12,12 @@
 工作区左右两侧面板共享同一套“外壳—标题—元信息—列表—条目”视觉原语。历史记录、Todo、Goal 与声明式插件面板在浅色/深色主题下应像同一产品中的同级区域；业务状态、操作按钮和内容结构仍按各自语义表达。
 
 **右侧历史风格统一（2026-10-02 起）**：历史记录面板**纳入同款外壳**——加装与左侧栏相同的 1px 描边玻璃盒，「历史记录」标题改为同款标题条（同内边距 / 字重 / 分隔线）；两栏各自保持原有垂直位置（只统一风格、不做位置对齐，见 UC-5K8）；列表条目仍保留历史面板自有样式（不套用 Todo/Goal 条目类）。此前（2026-09-21 起）的“保持原样”例外结束。
+
+### UC-5K9 全局排版令牌与系统字体栈（2026-10-04）
+- **触发**：任意界面渲染文本（会话、面板、设置中心、向导、远程控制、插件页）。
+- **预期现象**：全站使用系统字体栈（Segoe UI / PingFang SC / 微软雅黑 / SF Mono 等，不再依赖 Google Webfonts）；字号统一走 `--ui-text-xs/sm/md/lg` 与 `--ui-line-*` 令牌（根字号 16px，原 14px 设计尺度在元信息等处按需保留）；强调字重收敛（600–800 → 500/600）、玻璃模糊面简化。
+- **规则与边界**：只统一排版与层级，不改交互与布局结构；Mermaid 等渲染跟随 body 字体；插件页与内嵌页共享同一字体令牌。
+- **依据**：`app.css`（:root 令牌与全量字号）、`dock.css`、`settings.css`、`plugins/*/web/style.css`、`webui.py` 向导页、`first_time_config.html`、`remote_control.html`；回归 `tests/test_frontend_typography_browser.py`。
 
 ## 2. UseCase
 
@@ -81,6 +87,8 @@
 - 响应式显隐、折叠把手和侧栏宽度仍由现有布局逻辑负责。
 
 ## 5. 版本记录
+
+- 2026-10-04 v4：新增 UC-5K9《全局排版令牌与系统字体栈》——系统字体栈替换 Webfonts、`--ui-text-*`/`--ui-line-*` 令牌全站化、字重与模糊面收敛。
 
 - 2026-10-02 v3：**右侧历史面板纳入同款外壳与标题栏风格（新增 UC-5K8）**——历史面板加装与左侧栏相同的 1px 描边玻璃盒，标题改为同款标题条（内边距 / 字重 / 分隔线一致）；只统一风格、不做位置对齐（两栏各自保持原有垂直居中）；此前“保持原样”例外结束；列表条目仍保留历史面板自有样式。
 

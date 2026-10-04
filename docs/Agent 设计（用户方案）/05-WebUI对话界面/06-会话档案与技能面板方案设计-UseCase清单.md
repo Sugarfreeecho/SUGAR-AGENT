@@ -1,6 +1,6 @@
 # 会话、档案与技能面板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-03 v7（覆盖至：当前工作区；会话级推理强度与模型绑定跟随）
+- 版本：2026-10-04 v8（覆盖至：当前工作区；模型与推理强度两级菜单）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/session-management.js`、`modules/model-profiles.js`、`modules/settings.js`、`modules/skill-picker.js`、`modules/i18n.js`、对应后端 API。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -62,7 +62,7 @@
 ## 3. 边界
 ### UC-5F9 会话级推理强度与模型绑定跟随
 - **触发**：在模型选择器调整推理强度（low/medium/high/xhigh/max）；或 fallback 接管改写了会话绑定。
-- **预期现象**：强度随会话独立保存（新会话创建即带上、切换会话读取各自值）；请求按协议转换——Responses 原生 reasoning 字段、兼容接口保留 thinking 参数、Anthropic 自适应思考或受输出上限约束的思考预算（旧模型不支持的强度映射到支持值）。fallback 接管改写绑定后，服务端推送 `model_profile_bound`（ephemeral）轻量事件，选择器静默重取并跟随，不再依赖用户点开菜单才刷新。
+- **预期现象**：强度随会话独立保存（新会话创建即带上、切换会话读取各自值）；请求按协议转换——Responses 原生 reasoning 字段、兼容接口保留 thinking 参数、Anthropic 自适应思考或受输出上限约束的思考预算（旧模型不支持的强度映射到支持值）。fallback 接管改写绑定后，服务端推送 `model_profile_bound`（ephemeral）轻量事件，选择器静默重取并跟随，不再依赖用户点开菜单才刷新。菜单为两级结构——先「模型」/「推理强度」，点入后选择具体值：当前项带勾、方向键移动、Escape 返回上一层再按一次关闭，保存成功后关闭；触发按钮显示「模型 · 强度」。
 - **规则与边界**：强度枚举以 `model_profiles.REASONING_EFFORTS` 为准；模型列表 30s TTL + 并发合并，打开菜单/改配置/发现新档案时强制更新；绑定通知只走当前事件流与重连快照、不进持久历史。
 - **依据**：`model-profiles.js::noteModelBindingChanged`、`sse-handling.js`（model_profile_bound 分支）、`session-management.js`（新会话 reasoning_effort）、`agent_loop.py::_model_profile_bound_event`、`agent_harness.py`（reasoning extra body 语义）、`llm/transport.py::_apply_anthropic_reasoning`、`model_profiles.py::REASONING_EFFORTS`；回归 `tests/js/model_reasoning_effort_runtime.cjs`、`tests/test_anthropic_reasoning_controls.py`、`tests/test_model_settings_controls.py`。
 
@@ -75,6 +75,8 @@
 见上表（webui 路由 + frontend 模块）。
 
 ## 5. 版本记录
+
+- 2026-10-04 v8：UC-5F9 补记两级菜单交互（模型／推理强度分层面板、当前项带勾、方向键与 Escape 层级返回、保存即关闭；实现见 10-04 提交）。
 
 - 2026-10-03 v7：新增 UC-5F9《会话级推理强度与模型绑定跟随》——强度随会话独立保存并按三协议转换；fallback 接管后选择器即时跟随（`model_profile_bound`）；档案管理入口迁至设置中心 sections_basic。
 

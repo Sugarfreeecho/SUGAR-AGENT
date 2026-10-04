@@ -1,6 +1,6 @@
 # 输入、发送与插话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-02 v4（覆盖至：当前工作区；待发送队列手动排序）
+- 版本：2026-10-04 v5（覆盖至：当前工作区；追问路径胶囊往返保真）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（发送/插话主流程 `sendMessage`/`acquireSendPipelineLock`）、`modules/input-actions.js`（输入键助手）、`modules/skill-picker.js`、后端 steer API、`webui.py` 消息路径。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -54,7 +54,12 @@
 - **规则与边界**：仅待发送（pending）槽位可换位，在途行保持固定槽位且不可拖；浏览器接管原生 HTML5 拖拽时的 `pointercancel` 不得结束拖拽（仅触摸/笔指针路径结束）；插入提示同时至多一个；拖拽不改变队列持久化与附件 pin 语义（见 UC-5A6）。
 - **依据**：`sse-handling.js::onFollowupPointerCancel / resolveFollowupDropTarget / runFollowupAutoScroll / moveFollowupQueueItemByOffset / renderFollowupQueue`、`styles/app.css` 握把与提示样式、`modules/i18n.js`；回归 `tests/js/followup_dispatch_runtime.cjs`（5 例）、`tests/test_feature_flags.py`。
 
-## 3. 边界
+### UC-5A8 追问与草稿的路径胶囊往返保真
+- **触发**：把带本地文件路径的消息入队/发送后，经「撤回再发 / 刷新或切会话后从草稿再发 / 会话忙 409 回填 / 改写编辑器重发」任一链路再次发送。
+- **预期现象**：再次发送的正文仍是完整真实路径（模型侧从不出现 `@基名`）；输入框显示形态不变（仍是 `@基名` 胶囊——回填后重跑标签重写、映射被重建）。
+- **规则与边界**：标签→路径映射随草稿持久化（会话级隔离、随草稿清除）；回填用「实际提交原文」，`fromQueue` 沿用展开文本、`fromInlineRewrite` 重新展开；显示侧（`ui_message`/`event.content(ui)`）继续显示标签属有意设计。Agent 派生上下文（安全审查 / Goal Judge）仍取显示形式——记录为已知边界。
+- **依据**：`sse-handling.js::returnFollowupToInput / sendMessage`、`session-scroll-history.js::persistDraftPathTokens / restoreDraftPathTokens / persistInputDraft / removeStoredInputDraft`；回归 `tests/js/input_path_token_roundtrip_runtime.cjs`、`tests/test_input_path_token_followup.py`。
+
 
 - 输入层的"乐观渲染"会被服务端的真实事件校正（幂等）。
 - ask_user 的回答入口在主界面卡片而非输入框（见 05）。
@@ -70,6 +75,8 @@
 | UC-5A7 | `sse-handling.js` 拖拽/键盘排序段、`styles/app.css`、`modules/i18n.js` |
 
 ## 5. 版本记录
+
+- 2026-10-04 v5：新增 UC-5A8《追问与草稿的路径胶囊往返保真》——撤回/草稿/忙回填/改写重发四条链路不再把 `@基名` 标签当正文发出；草稿随存标签→路径映射。
 
 - 2026-10-02 v4：新增 UC-5A7《待发送队列的手动排序》——浏览器原生拖拽的 `pointercancel` 不再结束拖拽态；落点吸附（间隙/内边距/在途行）、边缘自动滚动、键盘 ↑/↓ 排序、拖拽期重绘推迟；握把命中区与 i18n 文案同步。
 

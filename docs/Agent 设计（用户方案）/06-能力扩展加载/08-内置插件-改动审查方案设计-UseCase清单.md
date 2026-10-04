@@ -394,3 +394,5 @@
 | UC-401~408 | `test_undo_then_restore_round_trip`、`test_restore_*`、`test_prepared_restore_*` |
 | UC-502/503/504 | `test_branch_copy_and_truncation_cleanup_*`、`test_workspace_cache_*` |
 | UC-601~609 | `tests/js/change_review_stats_runtime.mjs`、`change_review_visibility_runtime.mjs`、`test_plugin_ui_frontend.py` |
+
+- 2026-10-04：文件条目上下留白与单行计划条目对齐（`font: inherit` + `line-height: normal`，移除旧折叠箭头样式）；条目悬停说明改走统一 `setUiHoverTip`（配合 05/13·UC-5M15）。
