@@ -3090,12 +3090,6 @@ def _should_suppress_model_switch_status(state: State, event: Dict[str, Any]) ->
     return int(state.get("_network_reconnect_attempts", 0) or 0) > 0
 
 
-def _queue_get_with_timeout(q: queue.Queue, timeout: float):
-    try:
-        return q.get(timeout=timeout)
-    except queue.Empty:
-        return ("__timeout__", None)
-
 
 class _ThreadToAsyncQueue:
     """Bridge worker-thread events while coalescing model deltas per UI frame."""
@@ -3213,11 +3207,6 @@ def _discard_task_result(task: asyncio.Task) -> None:
     except Exception:
         logger.debug("background task finished after cancellation", exc_info=True)
 
-
-async def _await_maybe(awaitable_or_value):
-    if inspect.isawaitable(awaitable_or_value):
-        return await awaitable_or_value
-    return awaitable_or_value
 
 
 async def _prune_stream_ephemeral(emit, *args, **kwargs):
@@ -4234,11 +4223,6 @@ async def _emit_tool_approval_required_sse(
     except Exception:
         pass
 
-
-def _tool_ui_approval_enabled() -> bool:
-    # Security prompts are policy-controlled. A model-writable environment file
-    # must never be able to disable them.
-    return True
 
 
 def _tool_ui_approval_spec(tool_name: str, tool_args: Any) -> Optional[Dict[str, str]]:

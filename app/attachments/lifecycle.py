@@ -16,9 +16,6 @@ from .registry import AttachmentRegistry
 IDENTITY_RE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
-def referenced_ids(value):
-    return set(IDENTITY_RE.findall(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)))
-
 
 def collect_references(roots):
     identities = set()

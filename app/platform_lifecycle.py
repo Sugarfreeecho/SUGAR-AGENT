@@ -342,12 +342,3 @@ def backend_for(
         return WindowsLauncherBackend(root, runner=runner)
     raise ValueError(f"Unknown lifecycle backend: {selected}")
 
-
-def child_environment(
-    base: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    env = dict(os.environ if base is None else base)
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["OPEN_BROWSER"] = "0"
-    env["MYAGENT_SERVER_PORT"] = str(PORT)
-    return env

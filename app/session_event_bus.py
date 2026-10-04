@@ -42,13 +42,6 @@ def add_event_listener(listener) -> None:
             _event_listeners.append(listener)
 
 
-def remove_event_listener(listener) -> None:
-    with _lock:
-        try:
-            _event_listeners.remove(listener)
-        except ValueError:
-            pass
-
 
 def _sid(session_id: str) -> str:
     return str(session_id or "").strip()

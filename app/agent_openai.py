@@ -818,14 +818,6 @@ def _extract_reasoning_text_and_field(obj: Any, *, keep_ws: bool = False) -> Tup
     return _extract_reasoning_from_content(_get_nested_attr_or_key(obj, "content"))
 
 
-def _extract_reasoning_text(obj: Any) -> Optional[str]:
-    """
-    兼容不同供应商的思考字段命名：
-    - reasoning_content（OpenAI/DeepSeek 常见）
-    - reasoning（部分兼容端）
-    """
-    return _extract_reasoning_text_and_field(obj)[0]
-
 
 def format_tool_calls_for_openai_api(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -1284,18 +1276,6 @@ def _http_stream_chat_completion(
             status_code=getattr(exc, "status_code", None),
         ) from exc
 
-
-def _drain_response(response: Any) -> None:
-    """Read any bytes left after the terminal sentinel so the connection pools.
-
-    httpx discards a connection whose response was not fully consumed; the SSE
-    ``[DONE]`` marker is a protocol sentinel, not a transport EOF.
-    """
-    try:
-        for _ in response.iter_bytes():
-            pass
-    except Exception:
-        logger.debug("流式响应收尾读取失败", exc_info=True)
 
 
 def _chunk_namespace(body: Dict[str, Any]) -> Any:
@@ -1763,9 +1743,6 @@ def _client_input_modalities(client: Any) -> set[str]:
         return {"text", "image", "audio", "video", "file"}
     return {"text"}
 
-
-def _client_supports_modalities(client: Any, required: set[str]) -> bool:
-    return set(required).issubset(_client_input_modalities(client))
 
 
 def _system_message_text(message: Dict[str, Any]) -> str:

@@ -188,12 +188,3 @@ def is_preapproved_host_with_user_list(host: str, user_hosts: frozenset[str]) ->
         host, PREAPPROVED_HOSTS | _env_extra_hosts() | frozenset(user_hosts)
     )
 
-
-def is_preapproved_url(url: str) -> bool:
-    try:
-        parsed = urlsplit(str(url or ""))
-    except ValueError:
-        return False
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return False
-    return is_preapproved_host(parsed.hostname)

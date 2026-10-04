@@ -7,15 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
-TEAM_STATUSES = frozenset({"active", "shutting_down", "stopped", "archived"})
 MEMBER_STATES = frozenset(
     {"starting", "idle", "working", "waiting_permission", "stopping", "stopped", "failed"}
 )
 TASK_STATUSES = frozenset({"pending", "in_progress", "blocked", "completed", "cancelled"})
 TASK_PRIORITIES = frozenset({"low", "normal", "high", "urgent"})
-MESSAGE_STATUSES = frozenset({"queued", "delivering", "delivered", "consumed", "failed"})
-TERMINAL_MEMBER_STATES = frozenset({"stopped", "failed"})
-TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled"})
 
 
 class AgentTeamError(RuntimeError):

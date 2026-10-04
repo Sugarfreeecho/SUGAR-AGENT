@@ -55,7 +55,7 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | SessionExtensionStateStore：插件命名空间状态（冲突/缺失错误语义） | `extension_state.py`（432 行） | 【图】 |
-| 子代理存储（RuntimeSubagentStore / SubagentRepository / SubagentState） | `subagent_store.py`、`subagent_repository.py` | 【卡】 |
+| 子代理存储（RuntimeSubagentStore） | `subagent_store.py` | 【卡】 |
 | 运行注册表（RunRegistry / RunState） | `run_registry.py` | 【单】 |
 | 运行身份精确到 `(session_id, run_id)`；中断 metadata 的原因/时间随更新刷新 | `agent_harness.py`、`session_lifecycle.py` | 【单】 |
 
@@ -64,7 +64,7 @@
 |---|---|---|
 | RuntimeGateway：统一读写入口 | `gateway.py` | 【图】 |
 | StreamPublisher：SSE 事件发布 | `stream_publisher.py` | 【图】 |
-| SessionRepository / PermissionManager / HealthMonitor | `session_repository.py`、`permission_manager.py`、`health_monitor.py` | 【卡】 |
+| SessionRepository | `session_repository.py` | 【卡】 |
 
 ## 9. 运行期保障
 | 能力 | 位置 | 状态 |
@@ -81,6 +81,8 @@
 - v1 遗留文件（llm_history.json 等）明确不作为上下文权威（会话存储约定）。
 
 ## 11. 版本记录
+
+- 2026-10-04：移除零引用的 `SubagentRepository / PermissionManager / HealthMonitor` 模块；子代理存储行收敛为 `RuntimeSubagentStore`。
 
 - 2026-09-20：补充 exact run 中断 metadata、run 级 stale 看门狗与生命周期终态兜底。
 - 2026-09-20：补充未变化 context summary 的进程内提交去重与冷未命中权威读取边界。

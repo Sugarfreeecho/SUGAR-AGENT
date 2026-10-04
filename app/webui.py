@@ -1515,30 +1515,6 @@ def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[
         return None
 
 
-def _runtime_v2_ephemeral_sse_payload(session_id: str, event: dict) -> dict:
-    payload = {
-        "protocol": "runtime_v2",
-        "type": "runtime_v2_ephemeral",
-        "session_id": session_id,
-        "ui_event": dict(event or {}),
-    }
-    if isinstance(event, dict) and event.get("run_id"):
-        payload["run_id"] = event.get("run_id")
-    return payload
-
-
-def _user_turns_from_ui_events(events: list[dict]) -> list[dict]:
-    out: list[dict] = []
-    for idx, event in enumerate(events or []):
-        if not isinstance(event, dict) or event.get("type") != "user":
-            continue
-        raw = event.get("content")
-        text = raw if isinstance(raw, str) else str(raw or "")
-        preview = re.sub(r"\s+", " ", text).strip()
-        if len(preview) > 180:
-            preview = preview[:177] + "..."
-        out.append({"event_index": idx, "preview": preview})
-    return out
 
 
 def _runtime_v2_chat_protocol_enabled(requested: str, sid: Optional[str]) -> bool:
@@ -8776,23 +8752,6 @@ async def save_env_snapshot(req: _Request):
     return JSONResponse({"ok": True, "restart_required": work_dir_changed})
 
 
-def _upsert_env_line(lines: list[str], key: str, value: str) -> None:
-    prefix = f"{key}="
-    first_idx: Optional[int] = None
-    duplicate_idxs: list[int] = []
-    for i, line in enumerate(lines):
-        if line.strip().startswith(prefix):
-            if first_idx is None:
-                first_idx = i
-            else:
-                duplicate_idxs.append(i)
-    if first_idx is None:
-        lines.append(prefix + value)
-        return
-    lines[first_idx] = prefix + value
-    for i in reversed(duplicate_idxs):
-        del lines[i]
-
 
 @fastapi_app.post("/api/save_config")
 async def save_config(req: _Request):
@@ -8924,7 +8883,7 @@ def _vision_candidate(profile_id):
     return _profile_candidate(profile)
 
 
-_vision_jobs = _register_vision_api(
+_register_vision_api(
     fastapi_app, WORK_DIR, _vision_candidate, lambda: _remote_control_gateway,
 )
 from attachments.api import register_attachment_api as _register_attachment_api

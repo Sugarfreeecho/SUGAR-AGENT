@@ -516,18 +516,6 @@ def _normalize_incomplete_turns(work: List) -> List:
     return out
 
 
-def _tool_name_for_tool_message(work: List, ti: int) -> str:
-    tid = str(getattr(work[ti], "tool_call_id", "") or "")
-    j = ti - 1
-    while j >= 0:
-        if isinstance(work[j], AssistantMessage):
-            for c in work[j].tool_calls or []:
-                if isinstance(c, dict) and str(c.get("id") or "") == tid:
-                    return str(c.get("name") or "")
-            return ""
-        j -= 1
-    return ""
-
 
 def _tool_name_by_id(work: List) -> dict:
     out = {}

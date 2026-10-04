@@ -59,11 +59,6 @@ _POLICY_TAMPER = re.compile(
     r"disable[^\r\n]*(?:security|approval|firewall|defender)|"
     r"set-mppreference|add-mppreference)"
 )
-_CREDENTIAL_TOKEN = re.compile(
-    r"(?i)(?:^|[\s\"'/\\])(?:\.env(?:\.[\w.-]+)?|id_rsa|id_ed25519|"
-    r"credentials\.json|login data)(?:$|[\s\"']|[\\/])|"
-    r"\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password)\b"
-)
 # Reading credential-bearing files is treated as an ordinary read: allowed
 # inside the workspace, approval-required outside. Only *export* remains an
 # unconditional denial (copy out, upload, network send, credential-store dump).

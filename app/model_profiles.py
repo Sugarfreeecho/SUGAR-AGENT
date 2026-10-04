@@ -641,10 +641,6 @@ def profile_input_modalities(profile: object) -> list[str]:
     return [item for item in KNOWN_INPUT_MODALITIES if item in set(effective)]
 
 
-def profile_supports_modalities(profile: object, required: Any) -> bool:
-    required_set = set(normalize_input_modalities(required)) - {"text"}
-    return required_set.issubset(set(profile_input_modalities(profile)))
-
 
 def profile_multimodal_input(profile: object) -> bool:
     return any(

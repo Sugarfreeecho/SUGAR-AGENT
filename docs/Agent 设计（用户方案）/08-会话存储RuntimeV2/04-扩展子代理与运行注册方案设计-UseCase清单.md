@@ -21,7 +21,7 @@
 ### UC-8D2 子代理账本
 - **触发**：子代理创建/更新/结束。
 - **预期现象**：子代理状态、输出引用持久化；主会话可见子代理历史（关闭应用后仍可查）；分支复制时随会话走。
-- **依据**：`RuntimeSubagentStore / SubagentRepository / SubagentState`。
+- **依据**：`RuntimeSubagentStore`。
 
 ### UC-8D3 运行注册表
 - **触发**：run 开始/心跳/结束。
@@ -70,6 +70,8 @@
 见上表（runtime_v2 + webui 清理段）。
 
 ## 5. 版本记录
+
+- 2026-10-04：删除从未接线的 `SubagentRepository / PermissionManager / HealthMonitor` 三个零引用模块及 `subagent_repository.py`；实际子代理存储路径为 `RuntimeSubagentStore`（`subagent_store.py`）。
 
 - 2026-09-30 v5：新增 UC-8D8，补录空 pending 提前返回和精确 parent run 查询跳过 UI 投影，区分读取优化与未改动的耐久通知协议。
 - 2026-09-28 v4：新增 UC-8D7《任务索引的并发与保真》——任务行更新加锁且只合并字段（不再覆盖子会话元数据：worktree 根 / 模型档案 / 只读标记保持）；JSON 写入原子化 + Windows `replace` 重试。

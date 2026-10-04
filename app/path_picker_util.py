@@ -567,10 +567,3 @@ def pick_native_path(
     hint = "无法打开本机文件选择对话框。" + platform_hint + f" 详情：{' | '.join(failures)}"
     raise RuntimeError(hint)
 
-
-def tkinter_available() -> bool:
-    try:
-        import tkinter  # noqa: F401
-        return True
-    except ImportError:
-        return False

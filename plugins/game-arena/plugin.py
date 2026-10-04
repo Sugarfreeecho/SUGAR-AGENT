@@ -70,9 +70,6 @@ def _normalize_game_type(raw: Any) -> str:
 def _is_go(state: Dict[str, Any]) -> bool:
     return str(state.get("game_type") or "gomoku").lower() == "go"
 
-def _get_engine(game_type: str):
-    return _go_engine if _normalize_game_type(game_type) == "go" else _gomoku_engine
-
 def _board_ascii(board, win_line=None) -> str:
     return render_ascii(board, win_line)
 

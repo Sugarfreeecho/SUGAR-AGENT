@@ -132,7 +132,7 @@ def _register_legacy_dotenv_model_profile() -> dict:
         return {"ok": False, "action": "error", "profile": None}
 
 
-_LEGACY_ENV_MODEL_IMPORT = _register_legacy_dotenv_model_profile()
+_register_legacy_dotenv_model_profile()
 _INITIAL_MODEL_PROFILE = model_profiles.top_profile(PROJECT_ROOT) or {}
 
 
@@ -1358,62 +1358,6 @@ def machine_network_available() -> bool:
 # Retry-After）只会把 429/5xx 的等待时间放大数倍，必须关闭。
 _OPENAI_SDK_KWARGS = {"max_retries": 0}
 
-
-def create_openai_client(
-    model_name: str,
-    model_type: str,
-    role: str,
-    http_client: Optional[httpx.Client] = None,
-) -> Tuple[OpenAI, str]:
-    """创建 OpenAI 兼容客户端；返回 (client, 实际请求的 model id)。"""
-    try:
-        if model_type == "openai":
-            logger.info(
-                "创建 %s 客户端 (OpenAI 兼容): model=%s, base_url=%s",
-                role,
-                _masked_model_label(model_name),
-                _masked_base_label(OPENAI_BASE_URL),
-            )
-            client = OpenAI(
-                api_key=OPENAI_API_KEY or "",
-                base_url=_openai_sdk_base_url(False),
-                http_client=http_client,
-                timeout=OPENAI_HTTP_TIMEOUT,
-                **_OPENAI_SDK_KWARGS,
-            )
-            return client, model_name
-        if model_type == "local":
-            resolved = LOCAL_LLM if LOCAL_LLM else model_name
-            logger.info(
-                "创建 %s 客户端 (本地 OpenAI 兼容 /v1): model=%s, base=%s",
-                role,
-                _masked_model_label(resolved),
-                _masked_base_label(LOCAL_LLM_HOST),
-            )
-            client = OpenAI(
-                api_key=_LOCAL_OPENAI_DUMMY_KEY,
-                base_url=_openai_sdk_base_url(True),
-                http_client=http_client,
-                timeout=OPENAI_HTTP_TIMEOUT,
-                **_OPENAI_SDK_KWARGS,
-            )
-            return client, resolved
-        raise ValueError(f"不支持的 LLM 类型: {model_type}（需 openai 或 local）")
-    except Exception as e:
-        logger.error(
-            "%s 客户端创建失败: %s；降级到本地 OpenAI 兼容服务",
-            role,
-            _redact_runtime_log_text(e),
-        )
-        resolved = LOCAL_LLM if LOCAL_LLM else model_name
-        client = OpenAI(
-            api_key=_LOCAL_OPENAI_DUMMY_KEY,
-            base_url=_openai_sdk_base_url(True),
-            http_client=http_client,
-            timeout=OPENAI_HTTP_TIMEOUT,
-            **_OPENAI_SDK_KWARGS,
-        )
-        return client, resolved
 
 
 def create_openai_client_for_profile(
@@ -7829,11 +7773,6 @@ def resolve_executor_candidates_for_session(
     return candidates
 
 
-def resolve_executor_for_session(session_id: str) -> Tuple[Any, str]:
-    """子会话可经 metadata.executor_model 覆盖默认 executor 模型。"""
-    client, model, _max_out, _ctx = resolve_executor_config_for_session(session_id)
-    return client, model
-
 
 def _build_executor_config_for_session(sid: str) -> Tuple[Any, str, int, int]:
     """Build a client from one metadata snapshot, without touching the cache."""
@@ -7978,24 +7917,6 @@ def _extract_todo_plan_section_raw(kc: str) -> str:
 _KEY_COMPRESS_H2 = re.compile(r"^## 上下文(?:压缩|摘要)[^\n]*$", re.MULTILINE)
 _NEXT_SAME_TIER_H2 = re.compile(r"\n(## [^#])")
 
-
-def strip_compress_summary_h2_sections(text: str) -> str:
-    """删除全部「## 上下文摘要 / ## 上下文压缩」小节（至下一 ## 或文末），保留其余 Markdown。"""
-    s = (text or "").strip()
-    while True:
-        m = _KEY_COMPRESS_H2.search(s)
-        if not m:
-            break
-        start = m.start()
-        rest = s[m.end() :]
-        mnext = _NEXT_SAME_TIER_H2.search(rest)
-        if mnext:
-            s = (s[:start] + rest[mnext.start() :]).strip()
-        else:
-            s = s[:start].strip()
-            break
-        s = re.sub(r"\n{3,}", "\n\n", s)
-    return s.strip()
 
 
 def merge_compress_summary_into_key_context(existing: str, summary_body: str) -> str:

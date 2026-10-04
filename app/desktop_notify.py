@@ -45,11 +45,6 @@ NOTIFY_MESSAGE = (
 _UI_CLOSED_TOAST_SCRIPT = Path(__file__).resolve().parent / "notify_ui_closed.ps1"
 
 
-def show_ui_closed_notification() -> None:
-    """Show a native popup after all WebUI pages have been closed."""
-
-    show_desktop_notification()
-
 
 def show_desktop_notification(
     title: str = NOTIFY_TITLE,

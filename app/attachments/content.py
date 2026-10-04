@@ -147,7 +147,6 @@ def needs_image_migration(value) -> bool:
 
 # Backward-compatible alias for diagnostics written before the public name was
 # introduced. Runtime code should use ``needs_image_migration``.
-_has_image_payload = needs_image_migration
 
 
 def redact_image_payloads(value):

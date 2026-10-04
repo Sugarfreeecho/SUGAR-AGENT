@@ -158,9 +158,6 @@ def _messages_token_fingerprint_from_hashes(hashes: List[str]) -> str:
 _MESSAGE_TOKEN_LIST_CACHE: "deque" = deque(maxlen=8)
 
 
-def _clear_message_token_hash_cache() -> None:
-    _MESSAGE_TOKEN_LIST_CACHE.clear()
-
 
 def _reuse_hash_prefix(items: List[Any]) -> Tuple[List[str], int]:
     """Longest cached prefix sharing object identity with ``items``."""

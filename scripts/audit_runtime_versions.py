@@ -151,11 +151,6 @@ def signatures_match(left: Iterable[dict], right: Iterable[dict], *, kind: str) 
     return normalized_signatures(left, kind=kind) == normalized_signatures(right, kind=kind)
 
 
-def signatures_prefix_match(prefix: Iterable[dict], rows: Iterable[dict], *, kind: str) -> bool:
-    a = normalized_signatures(prefix, kind=kind)
-    b = normalized_signatures(rows, kind=kind)
-    return len(a) <= len(b) and b[:len(a)] == a
-
 
 def first_signature_mismatch(left: Iterable[dict], right: Iterable[dict], *, kind: str) -> Dict[str, Any]:
     a = normalized_signatures(left, kind=kind)
