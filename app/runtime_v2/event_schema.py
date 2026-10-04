@@ -8,6 +8,7 @@ from .versions import EVENT_SCHEMA_VERSION
 
 
 CORE_EVENT_TYPES = {
+    "execution_recorded",
     "session_meta",
     "message_user",
     "user_turn_committed",

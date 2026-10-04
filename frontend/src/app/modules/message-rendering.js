@@ -1383,14 +1383,208 @@ function refreshProcessAggregateStats(agg) {
        user_steer 是轮内消息、不切轮。分页/TOC/user_turns/改动审查均用此口径。
    步：每次 API 发送 = 一步（对应 react_iter，面板统计「N 步」）。
    条：每一步期间产生的一条思考/回复/工具/状态记录（feed item 行单位）。 */
+var executionRecordsBySession = new Map();
+var executionRecoveryBySession = new Map();
+
+function selectExecutionProcessGroup(ctx, groupId) {
+    if (!ctx || !ctx.stream || !groupId) return;
+    ctx.processGroupId = String(groupId);
+    var groups = Array.from(ctx.stream.querySelectorAll('.process-aggregate'));
+    var existing = groups.find(function (group) { return group.dataset.processGroupId === ctx.processGroupId; });
+    if (existing) ctx.currentProcessGroup = existing;
+    else if (ctx.currentProcessGroup && !ctx.currentProcessGroup.dataset.processGroupId) ctx.currentProcessGroup.dataset.processGroupId = ctx.processGroupId;
+    else if (ctx.currentProcessGroup && ctx.currentProcessGroup.dataset.processGroupId !== ctx.processGroupId) ctx.currentProcessGroup = null;
+}
+
+function mergeAdjacentExecutionGroups(stream) {
+    if (!stream || !stream.children) return;
+    var previous = null;
+    Array.from(stream.children).forEach(function (node) {
+        if (!node.classList.contains('process-aggregate')) { previous = null; return; }
+        if (previous && node.dataset.processGroupId && node.dataset.processGroupId === previous.dataset.processGroupId) {
+            var from = node.querySelector('.process-aggregate-body');
+            var target = previous.querySelector('.process-aggregate-body');
+            if (from && target) Array.from(from.children).forEach(function (row) {
+                unregisterProcessAggregateRow(row);
+                target.appendChild(row);
+                registerProcessAggregateRow(previous, row);
+            });
+            // Row counts remain authoritative after two run summaries merge.
+            delete previous.dataset.procToolCalls;
+            delete previous.dataset.procReactLoops;
+            if (node.dataset.procStartedAt) previous.dataset.procStartedAt = String(Math.min(
+                Number(previous.dataset.procStartedAt || node.dataset.procStartedAt), Number(node.dataset.procStartedAt)));
+            if (node.dataset.procEndedAt) previous.dataset.procEndedAt = String(Math.max(
+                Number(previous.dataset.procEndedAt || 0), Number(node.dataset.procEndedAt)));
+            if (node.dataset.procDurationMs) previous.dataset.procDurationMs = String(
+                Number(previous.dataset.procDurationMs || 0) + Number(node.dataset.procDurationMs));
+            if (node.dataset.procToolFails) previous.dataset.procToolFails = String(
+                Number(previous.dataset.procToolFails || 0) + Number(node.dataset.procToolFails));
+            if (typeof smoothFollowController !== 'undefined' && from) smoothFollowController.cancel(from);
+            if (target) delete target._reactOrderTailKey;
+            node.remove();
+            refreshProcessAggregateStats(previous);
+        } else previous = node;
+    });
+}
+
+function updateExecutionRecord(sessionId, update) {
+    var sid = String(sessionId || '');
+    var records = executionRecordsBySession.get(sid);
+    if (!records) { records = new Map(); executionRecordsBySession.set(sid, records); }
+    var id = String(update.execution_id || '');
+    if (!id) return null;
+    var row = Object.assign({}, records.get(id) || {}, update);
+    var prior = records.get(id) || {};
+    if (update.last_runtime_seq && Number(update.last_runtime_seq) <= Number(prior.last_runtime_seq || 0)) return prior;
+    [['text_delta', 'content'], ['name_delta', 'tool'], ['arguments_delta', 'arguments_raw'], ['output_delta', 'output']].forEach(function (pair) {
+        if (Object.prototype.hasOwnProperty.call(update, pair[0])) row[pair[1]] = String(prior[pair[1]] || '') + String(update[pair[0]] || '');
+        delete row[pair[0]];
+    });
+    if (['completed','failed','timed_out','interrupted','unknown'].indexOf(prior.status) >= 0
+        && ['completed','failed','timed_out','interrupted','unknown'].indexOf(update.status) < 0) row.status = prior.status;
+    else if (update.status === 'generating' && prior.status && prior.status !== 'generating') row.status = prior.status;
+    records.set(id, row);
+    return row;
+}
+
+function renderExecutionRecord(ctx, record, sessionId) {
+    if (!ctx || !ctx.stream || !record || !record.execution_id) return;
+    if (record.kind === 'continuation') return;
+    var row = Array.from(ctx.stream.querySelectorAll('[data-execution-id]')).find(function (item) {
+        return item.dataset.executionId === String(record.execution_id);
+    });
+    var runtimeSeq = Number(record.last_runtime_seq || 0);
+    // The journal replay and event bus can deliver the same token. Do not
+    // rewrite its text or move the follow target a second time.
+    if (row && runtimeSeq > 0 && row.dataset.executionRenderedSeq === String(runtimeSeq)
+        && row.dataset.executionStatus === String(record.status || '')) return;
+    var generation = typeof syncRenderContextRunScope === 'function'
+        ? syncRenderContextRunScope(ctx, record) : reactGenerationForContext(ctx);
+    var executionGenerations = ctx.reactGenerationsByExecutionId || (ctx.reactGenerationsByExecutionId = new Map());
+    var executionId = String(record.execution_id);
+    if (row && row.dataset.reactGeneration != null) generation = Number(row.dataset.reactGeneration);
+    else if (executionGenerations.has(executionId)) generation = executionGenerations.get(executionId);
+    else executionGenerations.set(executionId, generation);
+    if (record.run_id && String(ctx.runId || '') === String(record.run_id)
+        && generation > reactGenerationForContext(ctx)) {
+        ctx.reactGeneration = generation;
+        if (ctx.reactGenerationsByRunId) ctx.reactGenerationsByRunId.set(String(record.run_id), generation);
+    }
+    var historicalRun = generation < reactGenerationForContext(ctx);
+    if (historicalRun) {
+        ctx = Object.assign({}, ctx, {runId:record.run_id, reactGeneration:generation});
+    }
+    selectExecutionProcessGroup(ctx, record.process_group_id);
+    // Live deltas and durable replay share this entry point. Clear the wait
+    // placeholder only when this execution has received actual content.
+    var hasContent = record.kind === 'tool'
+        ? !!(record.tool || record.arguments_raw || record.args || record.command_preview || record.output || record.result)
+        : !!record.content;
+    if (hasContent && !historicalRun) removeTemporaryStatus(ctx);
+    if (!row && record.tool_call_id) {
+        row = findToolCallRow(ctx, String(record.tool_call_id));
+        if (row && row.dataset.executionId && row.dataset.executionId !== String(record.execution_id)) row = null;
+    }
+    var labels = {waiting_approval:'等待审批', waiting_input:'等待回答', interrupted:'已中断', unknown:'执行状态未知', timed_out:'已超时', failed:'执行失败'};
+    var text = String(record.content || '');
+    if (record.kind === 'tool') {
+        var isExecuting = record.status === 'waiting_execution' || record.status === 'running';
+        text = record.status === 'generating'
+            ? formatToolDraftLine(record.tool, record.arguments_raw)
+            : isExecuting ? String(record.command_preview || '')
+            : record.command_preview || String(record.tool || '工具') + '(' + (record.arguments_raw || JSON.stringify(record.args || {})) + ')';
+        var result = String(record.result || '');
+        var output = String(record.output || '');
+        if (output && result.indexOf(output) < 0) text += '\n实时输出\n' + output;
+        if (result) text += '\n' + result;
+        if (isExecuting) text = formatToolPendingLine(record.tool, record.args, text);
+    }
+    if (labels[record.status]) text += '\n[' + labels[record.status] + ']';
+    if (!row) {
+        var type = record.kind === 'tool' ? 'tool-call' : record.kind === 'reasoning' ? 'llm-reasoning' : 'llm-response';
+        var sc = createProcessFeedRow(ctx, type, text, {reactIter:record.react_iter,
+            reactGeneration:generation, runId:record.run_id, streaming:record.status === 'generating',
+            historyHydrate:historicalRun, suppressFollow:historicalRun}, sessionId, record.tool_call_id || '');
+        row = sc && sc.closest ? sc.closest('.feed-item') : null;
+    }
+    if (!row) return;
+    discardPendingToolRowRender(ctx, row);
+    row.dataset.executionId = String(record.execution_id);
+    row.dataset.executionStatus = String(record.status || '');
+    row.dataset.executionRenderedSeq = String(runtimeSeq);
+    if (record.run_id) row.dataset.runId = String(record.run_id);
+    if (record.react_iter != null) row.dataset.reactIter = String(record.react_iter);
+    if (record.kind === 'response') row._processBriefRawText = String(record.content || '');
+    if (row.dataset.reactGeneration == null) row.dataset.reactGeneration = String(generation);
+    if (record.tool_call_id) {
+        row.dataset.toolCallId = String(record.tool_call_id);
+        rememberToolStreamRow(ctx, row, '', record.tool_call_id);
+    }
+    row.removeAttribute('data-llm-live-row');
+    row.removeAttribute('data-tool-draft-key');
+    row.removeAttribute('data-tool-pending');
+    row.dataset.eventCommitted = '1';
+    var scroller = row.querySelector('.feed-chunk-scroller');
+    var uiText = truncateLogTextForUi(text);
+    if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
+    var chunk = row.querySelector('.feed-chunk');
+    if (chunk) { chunk.classList.toggle('is-streaming', record.status === 'generating'); refreshFeedChunkOverflow(chunk); }
+    if (typeof attachHumanInteractionCardsForToolCall === 'function' && record.tool_call_id) attachHumanInteractionCardsForToolCall(ctx.stream, record.tool_call_id);
+    if (typeof renderDurableAttachmentImages === 'function') renderDurableAttachmentImages(row, record.attachments || []);
+    var owner = row.closest && row.closest('.process-aggregate');
+    if (owner) { unregisterProcessAggregateRow(row); registerProcessAggregateRow(owner, row); }
+    if (record.kind === 'tool' && record.ui_committed) {
+        row._toolCallEvent = {type:'tool_call', tool:record.tool, args:record.args, tool_call_id:record.tool_call_id,
+            execution_id:record.execution_id, process_group_id:record.process_group_id,
+            result:record.result, execution_status:record.status, attachments:record.attachments || []};
+        if (typeof autoCollapseToolRowAfterResult === 'function') autoCollapseToolRowAfterResult(row);
+        if (typeof document !== 'undefined' && typeof CustomEvent !== 'undefined'
+            && row.dataset.executionNotifiedSeq !== String(record.last_runtime_seq || '')) {
+            row.dataset.executionNotifiedSeq = String(record.last_runtime_seq || '');
+            document.dispatchEvent(new CustomEvent('myagent:tool-call-rendered', {detail:{
+                event:row._toolCallEvent, row:row, aggregate:owner, sessionId:sessionId,
+                rootSessionId:rootSessionIdForRenderedNode(row, sessionId)}}));
+        }
+    }
+    if (record.kind === 'reasoning' && record.status !== 'generating' && typeof autoCollapseLlmReasoningRow === 'function') autoCollapseLlmReasoningRow(row);
+    if (ctx.currentProcessGroup) refreshAggregateStatsSmart(ctx.currentProcessGroup);
+    if (!replayingMessages && !historicalRun) scrollContentAreaIfFollow(ctx, sessionId, 'text');
+}
+
+function renderExecutionEvent(ctx, event, sessionId) {
+    if (!event || !event.execution_id) return false;
+    var type = String(event.type || '');
+    var category = type.indexOf('tool_') === 0 ? 'tool' : type.indexOf('reasoning') >= 0 ? 'reasoning' : 'response';
+    var update = {execution_id:event.execution_id, process_group_id:event.process_group_id,
+        kind:category, run_id:event.run_id, react_iter:event.react_iter, stream_seq:event.stream_seq,
+        last_runtime_seq:event.execution_runtime_seq};
+    if (type === 'tool_call_delta') Object.assign(update, {status:'generating', tool_call_id:event.id, name_delta:event.name_delta || '', arguments_delta:event.arguments_delta || ''});
+    else if (type === 'tool_command_delta') Object.assign(update, {status:'running', output_delta:event.delta || '', tool_call_id:event.tool_call_id});
+    else if (type === 'tool_pending') Object.assign(update, {status:'waiting_execution', tool:event.tool, args:event.args, command_preview:event.command_preview, tool_call_id:event.tool_call_id});
+    else if (type === 'tool_execution_state') Object.assign(update, {status:event.status, tool_call_id:event.tool_call_id});
+    else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], ui_committed:true});
+    else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating', text_delta:event.delta || ''});
+    else if (type === 'llm_reasoning' || type === 'llm_response') Object.assign(update, {status:event.execution_status || 'completed', content:event.content || '', ui_committed:true});
+    else return false;
+    renderExecutionRecord(ctx, updateExecutionRecord(sessionId, update), sessionId);
+    return true;
+}
+
 function ensureProcessGroup(ctx) {
     if (!ctx || !ctx.stream) return null;
     /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行过程框 */
     if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;
     if (ctx.currentProcessGroup) return ctx.currentProcessGroup;
+    var last = ctx.stream.lastElementChild;
+    if (last && last.classList.contains('process-aggregate') && (!ctx.processGroupId || last.dataset.processGroupId === ctx.processGroupId)) {
+        ctx.currentProcessGroup = last;
+        return last;
+    }
     stripWelcome(ctx);
     const wrap = document.createElement('div');
     wrap.className = 'process-aggregate';
+    if (ctx.processGroupId) wrap.dataset.processGroupId = String(ctx.processGroupId);
     var replayCollapsed = !!replayingMessages;
     if (replayCollapsed) wrap.classList.add('is-collapsed');
     if (!replayingMessages) wrap.classList.add('is-running');
@@ -1413,6 +1607,14 @@ function ensureProcessGroup(ctx) {
     }
     delete wrap.dataset.maxReactIter;
     (ctx.stream || chatContainer).appendChild(wrap);
+    if (ctx.processGroupId) {
+        var parts = ctx.processGroupId.split(':');
+        var anchor = Array.from(ctx.stream.children).find(function (node) {
+            return node.getAttribute && node.getAttribute('data-runtime-seq') === parts[1]
+                && node.classList.contains(parts[0] === 'turn' ? 'msg-wrap--user' : 'msg-wrap--assistant');
+        });
+        if (anchor) ctx.stream.insertBefore(wrap, anchor.nextElementSibling);
+    }
     bindProcessAggregate(wrap);
     ctx.currentProcessGroup = wrap;
     refreshProcessAggregateStats(wrap);
@@ -3861,9 +4063,7 @@ function scheduleToolRowRender(ctx, row, runSessionId, kind, parsed) {
                 if (targetRow.getAttribute('data-tool-pending') === '1') return;
                 var toolName = targetRow.dataset.pendingToolName || '';
                 var argsRaw = targetRow.dataset.pendingToolArgs || '';
-                var draftText = toolName
-                    ? toolName + '(' + argsRaw + '\n生成中...'
-                    : '工具调用生成中...';
+                var draftText = formatToolDraftLine(toolName, argsRaw);
                 setToolRowText(targetRow, draftText, ctx, opts.runSessionId);
                 return;
             }
@@ -4122,6 +4322,10 @@ function formatToolCommandLine(tool, args, commandPreview) {
         Object.keys(a).sort().forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); });
     }
     return name + '(' + keys.map(function (k) { return pair(k, a[k]); }).join(', ') + ')';
+}
+
+function formatToolDraftLine(tool, argumentsRaw) {
+    return tool ? String(tool) + '(' + String(argumentsRaw || '') + '\n生成中...' : '工具调用生成中...';
 }
 
 function formatToolPendingLine(tool, args, commandPreview) {
@@ -4508,8 +4712,11 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     const row = document.createElement('div');
     row.className = 'feed-item ' + meta.c;
     row.setAttribute('data-log-type', type);
-    row.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
-    if (ctx && ctx.runId) row.setAttribute('data-run-id', String(ctx.runId));
+    var rowGeneration = streamOpts.reactGeneration != null
+        ? Math.max(0, Number(streamOpts.reactGeneration) || 0) : reactGenerationForContext(ctx);
+    var rowRunId = streamOpts.runId || (ctx && ctx.runId);
+    row.setAttribute('data-react-generation', String(rowGeneration));
+    if (rowRunId) row.setAttribute('data-run-id', String(rowRunId));
     if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
     var rowCanCollapse = type === 'tool-call' || type === 'llm-reasoning';
     var initialCollapseLabel = type === 'llm-reasoning' ? '收起思考' : '收起工具行';
@@ -4555,15 +4762,23 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     if (type === 'llm-reasoning' && !streamOpts.streaming) autoCollapseLlmReasoningRow(row);
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
-    insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx));
+    insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, rowGeneration);
     if (typeof translateUiNode === 'function') translateUiNode(row);
     var isHistoryHydrate = !!(
-        replayingMessages
+        replayingMessages || streamOpts.historyHydrate
         || (ctx && ctx.currentTurn && ctx.currentTurn.dataset.processLoading === '1')
     );
     var isInitialLiveStatusRow = !isHistoryHydrate && type === 'status'
         && body.querySelectorAll('.feed-item[data-log-type="status"]').length === 1;
-    if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);
+    /* 流式行（llm-reasoning / llm-response）插入时还是空行：插入动画把行高动画到
+       「空行高度」，动画期间 overflow:clip 会把随后流入的文字裁掉，动画结束的同一
+       帧整行再跳高（窄栏实测裁切 289px、释放瞬间单帧跳 440px，行内文字与下方内容
+       一起被甩动）。这类行不做插入高度动画，让行高直接跟随内容。 */
+    var isLiveStreamRow = !!(streamOpts.streaming
+        && (type === 'llm-reasoning' || type === 'llm-response'));
+    if (!isHistoryHydrate && !isInitialLiveStatusRow && !isLiveStreamRow) {
+        animateSmoothTraceRowInsertion(row);
+    }
     if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);
     if (type === 'error-log') {
         var errHint = document.createElement('div');
@@ -4582,7 +4797,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     }
     else if (!replayingMessages) requestAnimationFrame(function () { scheduleFeedChunkOverflowRefresh(chunk); });
     if (!replayingMessages) refreshAggregateStatsSmart(agg);
-    if (!streamOpts.streaming && !isInitialLiveStatusRow) scrollContentAreaIfFollow(ctx, runSessionId);
+    if (!streamOpts.streaming && !isInitialLiveStatusRow && !streamOpts.suppressFollow) scrollContentAreaIfFollow(ctx, runSessionId);
     return sc;
 }
 

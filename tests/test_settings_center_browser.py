@@ -544,11 +544,17 @@ def test_goal_clock_preserves_narrow_buttons_and_skips_hidden_or_paused(browser_
     load_plugin(page, "plugins/agent-goal/web/session-panel.js")
     page.set_content('<div id="goal-panel"></div><div id="strip"><div data-pubar-narrow-item="goal"><span class="pni-chip"></span><button id="narrow-action">Action</button></div></div>')
     sidebar = (ROOT / "frontend/src/app/modules/public-sidebar.js").read_text(encoding="utf-8")
-    # Extract the real function without executing the complete application bootstrap.
-    start = sidebar.index("function pubarUpdateNarrowChip(")
-    end = sidebar.index("\n}", start) + 2
+    # Extract the real functions without executing the complete application bootstrap.
+    def _sidebar_fn(anchor):
+        start = sidebar.index(anchor)
+        return sidebar[start:sidebar.index("\n}", start) + 2]
     page.add_script_tag(content="var pubarNarrowConfigs={},pubarNarrowStripEl=document.getElementById('strip');"
-                         "function pubarFindPane(id){return id==='goal'?{id}:null;}" + sidebar[start:end])
+                         "var pubarNarrowOpenId=null;"
+                         "function pubarFindPane(id){return id==='goal'?{id}:null;}"
+                         + _sidebar_fn("function pubarNarrowHasOpen(")
+                         + _sidebar_fn("function pubarNarrowConfigOf(")
+                         + _sidebar_fn("function pubarNarrowSignature(")
+                         + _sidebar_fn("function pubarUpdateNarrowChip("))
     result = page.evaluate("""status => {
       let now=1000,configure=0;const originalNow=Date.now,interval=setInterval,clear=clearInterval;
       Date.now=()=>now;globalThis.setInterval=fn=>{window.tick=fn;return 1;};globalThis.clearInterval=()=>{};

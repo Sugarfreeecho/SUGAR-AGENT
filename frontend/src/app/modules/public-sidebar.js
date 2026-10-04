@@ -518,6 +518,15 @@ function pubarUpdateNarrowChip(id, text) {
         setUiHoverTip(main, [config.label || pane.label, config.chip.text,
             config.summaryTip || (summary && summary.textContent)].filter(Boolean).join('\n'));
     }
+    /* 只改文字、结构未变：同步记忆签名，避免下一次 pubarRenderNarrowStrip（面板重渲染都会调用，
+       流式期间每个插件更新一次）把条目判定成“内容已变”而整条重建。重建会丢掉悬停/过渡状态，
+       并让 backdrop-filter 重新合成，视觉上就是每秒一次的抖动与残影。
+       仅当活体 DOM 确实已显示新文字（胶囊存在且内容一致）时才记忆，否则保留旧签名让下次正确重建。 */
+    if (item && chip && chip.textContent === config.chip.text) {
+        /* 必须走与 pubarRenderNarrowStrip 相同的归一化入口，否则 summaryHtml 等缺省字段
+           （undefined vs ""）会让签名永远不相等，反而每帧都重建。 */
+        pane.narrowSignature = pubarNarrowSignature(pane, pubarNarrowConfigOf(pane));
+    }
     return true;
 }
 

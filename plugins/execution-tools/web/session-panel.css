@@ -1,0 +1,22 @@
+.execution-panel { display: grid; gap: 8px; padding: 12px; }
+.execution-panel h3 { margin: 6px 0; font-size: 13px; }
+.execution-panel button, .execution-dialog button, .execution-panel select, .execution-dialog select, .execution-dialog input {
+    padding: 5px 9px; border: 1px solid var(--border-glass, #555); border-radius: 6px;
+    color: var(--text-primary, #eee); background: var(--surface-glass2, #252932); cursor: pointer;
+}
+.execution-status { font-size: 12px; opacity: .75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.execution-list { display: grid; gap: 6px; max-height: 260px; overflow: auto; }
+.execution-row { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.execution-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.execution-computer select { display: block; max-width: 100%; margin: 6px 0; }
+.execution-overlay { position: fixed; inset: 0; z-index: 10020; display: grid; place-items: center; padding: 20px; background: #0009; }
+.execution-dialog { display: flex; flex-direction: column; gap: 12px; width: min(1000px, 94vw); max-height: 90vh; padding: 20px; border-radius: 12px;
+    color: var(--text-primary, #eee); background: var(--surface-glass, #171b22); box-shadow: 0 20px 80px #0008; }
+.execution-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.execution-tabs button { white-space: nowrap; }
+.execution-tabs button[aria-selected="true"] { border-color: var(--accent, #9a86fc); }
+.execution-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.execution-dialog header strong { min-width: 0; overflow-wrap: anywhere; }
+.execution-output { min-height: 300px; max-height: 65vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.execution-terminal { width: 100%; height: min(60vh, 550px); min-height: 200px; background: #000; }
+.execution-terminal .xterm { padding: 8px; height: 100%; }

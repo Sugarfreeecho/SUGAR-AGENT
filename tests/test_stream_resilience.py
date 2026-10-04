@@ -618,7 +618,7 @@ def test_interrupt_waits_are_bounded_and_context_lock_timeout_returns():
     assert "asyncio.to_thread(stream_worker_done_event.wait)" not in react_source
 
 
-def test_frontend_terminal_cleanup_discards_tool_and_progress_drafts():
+def test_frontend_terminal_cleanup_preserves_durable_interrupted_records():
     sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     render_source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     sessions_source = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
@@ -627,6 +627,9 @@ def test_frontend_terminal_cleanup_discards_tool_and_progress_drafts():
         "async function readSseChunkWithIdleTimeout", 1
     )[0]
     assert "removeAbortedToolDraftRows(ctx, {});" in end_run
+    assert "preserveInterruptedPartial" in end_run
+    assert "parsed.preserve_execution_records" in sse_source
+    assert "row.dataset.eventCommitted = '1'" in render_source
     assert "discardProgressStreamChunks(ctx);" in end_run
     assert "discardPartialStreams: parsed.type !== 'run_finished'" in sse_source
     assert "function discardProgressStreamChunks(ctx)" in render_source
@@ -852,7 +855,8 @@ def test_frontend_inserts_live_react_rows_in_logical_phase_order():
 
     assert "existingIter === iter && existingPhase > phase" in helper
     assert "body.insertBefore(row, existing)" in helper
-    assert "insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, reactGenerationForContext(ctx))" in creator
+    assert "insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, rowGeneration)" in creator
+    assert "streamOpts.reactGeneration != null" in creator
     assert "data-react-generation" in creator
 
 

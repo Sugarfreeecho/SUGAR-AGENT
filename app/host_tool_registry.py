@@ -139,6 +139,10 @@ class HostToolInvokerRegistry:
             and (key in self._before_hooks) == has_before_hooks
         )
 
+    def notify_catalog_changed(self) -> None:
+        """Invalidate cached definitions when a provider changes its schema."""
+        self._generation += 1
+
     def catalog_revision(self) -> tuple[int, tuple[tuple[str, bool], ...]]:
         """Return a cheap revision including dynamic availability switches."""
         started = time.perf_counter()

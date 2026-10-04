@@ -46,18 +46,71 @@ document.addEventListener('myagent:plugin-ui-ready', function () {
     });
 });
 
-function syncRenderContextRunScope(ctx, event) {
-    // Recovered runs restart react_iter at 1 without a new user message. Keep
-    // their rows in a later generation even when the same process box remains
-    // open across an ask_user/restart boundary.
-    var eventRunId = String(event.run_id || event.runId || '');
-    if (ctx && eventRunId && eventRunId !== String(ctx.runId || '')) {
-        if (ctx.runId) {
-            if (ctx.llm) resetLlmState(ctx);
-            ctx.reactGeneration = Math.max(0, Number(ctx.reactGeneration) || 0) + 1;
+function seedRenderContextRunGenerations(ctx, events, executionRecords) {
+    if (!ctx) return;
+    var generations = ctx.reactGenerationsByRunId || new Map();
+    var executions = ctx.reactGenerationsByExecutionId || new Map();
+    var maximum = generations.size ? Math.max.apply(null, Array.from(generations.values())) : -1;
+    var currentRunId = '', generation = 0;
+    var facts = (events || []).concat(executionRecords || []).map(function (event) {
+        return {event:event, seq:Number(event.first_runtime_seq || event.runtime_seq || event.execution_runtime_seq || 0) || Infinity};
+    });
+    facts.sort(function (a, b) { return a.seq - b.seq; }).forEach(function (fact) {
+        var event = fact.event;
+        var runId = String(event.run_id || event.runId || '');
+        if (runId) {
+            if (!generations.has(runId)) generations.set(runId, ++maximum);
+            if (runId !== currentRunId) generation = generations.get(runId);
+            currentRunId = runId;
         }
-        ctx.runId = eventRunId;
+        if (event.type === 'user_steer' && String(event.steer_mode || 'interrupt') === 'interrupt') {
+            generation = ++maximum;
+        }
+        if (event.execution_id && !executions.has(String(event.execution_id))) {
+            executions.set(String(event.execution_id), generation);
+        }
+    });
+    ctx.reactGenerationsByRunId = generations;
+    ctx.reactGenerationsByExecutionId = executions;
+}
+
+function syncRenderContextRunScope(ctx, event) {
+    if (!ctx || !event) return 0;
+    var generation = Math.max(0, Number(ctx.reactGeneration) || 0);
+    var eventRunId = String(event.run_id || event.runId || '');
+    if (!eventRunId) return generation;
+    var generations = ctx.reactGenerationsByRunId;
+    if (!generations) {
+        generations = ctx.reactGenerationsByRunId = new Map();
+        // A reattached context starts empty while its DOM already has history.
+        // Recover every run's identity, including rows restored from drafts.
+        if (ctx.stream && ctx.stream.querySelectorAll) {
+            ctx.stream.querySelectorAll('.feed-item[data-run-id][data-react-generation]').forEach(function (row) {
+                var id = String(row.getAttribute('data-run-id') || '');
+                var value = Number(row.getAttribute('data-react-generation'));
+                if (id && Number.isFinite(value) && !generations.has(id)) generations.set(id, Math.max(0, value));
+            });
+        }
     }
+    var currentRunId = String(ctx.runId || '');
+    if (currentRunId && !generations.has(currentRunId)) generations.set(currentRunId, generation);
+    if (eventRunId === currentRunId && generations.get(currentRunId) < generation) {
+        // Interrupt steer can advance the logical generation within one run.
+        generations.set(currentRunId, generation);
+    }
+    if (!generations.has(eventRunId)) {
+        var maximum = Math.max.apply(null, [generation].concat(Array.from(generations.values())));
+        generations.set(eventRunId, generations.size ? maximum + 1 : generation);
+    }
+    var eventGeneration = generations.get(eventRunId);
+    // Replayed older records retain their original place and must not replace
+    // the active run or reset its live stream state.
+    if (!currentRunId || eventGeneration >= generation) {
+        if (currentRunId && currentRunId !== eventRunId && ctx.llm) resetLlmState(ctx);
+        ctx.runId = eventRunId;
+        ctx.reactGeneration = eventGeneration;
+    }
+    return eventGeneration;
 }
 
 function renderEvent(ctx, event, eventIndex, runSessionId) {

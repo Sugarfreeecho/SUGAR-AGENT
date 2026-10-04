@@ -87,6 +87,7 @@ class RuntimeProjector:
             "last_seq": 0,
             "updated_at": None,
             "runs": {},
+            "executions": {},
             "active_runs": [],
             "messages": [],
             "raw_model_messages": [],
@@ -205,6 +206,11 @@ class RuntimeProjector:
             key: copy.deepcopy(value) if isinstance(value, dict) else value
             for key, value in dict(snapshot.get("approvals") or {}).items()
         }
+        identity = str((event.payload or {}).get("execution_id") or "")
+        if identity:
+            out["executions"] = dict(snapshot.get("executions") or {})
+            if identity in out["executions"]:
+                out["executions"][identity] = dict(out["executions"][identity])
         out["pending_interactions"] = [
             copy.deepcopy(value) for value in list(snapshot.get("pending_interactions") or [])
         ]
@@ -300,6 +306,11 @@ class RuntimeProjector:
         snapshot["session_id"] = snapshot.get("session_id") or event.session_id
         snapshot["last_seq"] = max(int(snapshot.get("last_seq") or 0), event.seq)
         snapshot["updated_at"] = event.timestamp
+        identity = str((event.payload or {}).get("execution_id") or "")
+        if identity and event.type not in {"execution_recorded", "approval_requested", "interaction_requested"}:
+            row = snapshot.get("executions", {}).get(identity)
+            if row:
+                row["ui_runtime_seq"] = event.seq
         event_type = event.type
         if self._event_changes_model_history(event):
             snapshot["model_history_generation"] = int(
@@ -320,6 +331,9 @@ class RuntimeProjector:
                 self._ensure_shape(snapshot)
                 snapshot["session_id"] = snapshot.get("session_id") or event.session_id
                 snapshot["last_seq"] = int(event.seq)
+        elif event_type == "execution_recorded":
+            from .execution_journal import apply_execution_update
+            apply_execution_update(snapshot.setdefault("executions", {}), event.payload or {}, event.seq)
         elif event_type == "session_meta":
             snapshot["session"] = dict(event.payload or {})
         elif event_type == "message_user":
@@ -812,6 +826,14 @@ class RuntimeProjector:
 
     def _apply_history_op(self, snapshot: dict, event: RuntimeEvent) -> None:
         payload = dict(event.payload or {})
+        if event.type == "message_deleted":
+            target = int(payload.get("target_seq") or 0)
+            snapshot["executions"] = {key: row for key, row in snapshot.get("executions", {}).items()
+                                       if int(row.get("ui_runtime_seq") or 0) != target}
+        elif event.type == "visible_range_changed" and payload.get("to_seq") is not None:
+            end = int(payload["to_seq"])
+            snapshot["executions"] = {key: row for key, row in snapshot.get("executions", {}).items()
+                                       if int(row.get("first_runtime_seq") or 0) <= end}
         self._record_history_op(snapshot, event)
         if event.type == "history_branch_created":
             lineage_id = str(payload.get("lineage_id") or payload.get("source_session_id") or "").strip()

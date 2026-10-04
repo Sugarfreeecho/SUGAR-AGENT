@@ -372,13 +372,19 @@ function humanInteractionDraftKey(sessionId, interactionId, requestVersion) {
     return HUMAN_INTERACTION_DRAFT_PREFIX + String(sessionId || '') + ':' + String(interactionId || '') + ':' + String(requestVersion || 1);
 }
 
-function humanInteractionToolSlot(stream, toolCallId) {
+function humanInteractionToolRow(stream, toolCallId, anchor) {
+    if (!stream || !stream.querySelectorAll) return null;
+    var tid = String(toolCallId || '');
+    var identity = String(anchor && (anchor.execution_id || anchor.executionId) || '');
+    var rows = Array.from(stream.querySelectorAll('.feed-item.feed--tool'));
+    if (identity) return rows.find(function (row) { return row.dataset.executionId === identity; }) || null;
+    return rows.find(function (row) { return row.dataset.toolCallId === tid; }) || null;
+}
+
+function humanInteractionToolSlot(stream, toolCallId, anchor) {
     var tid = String(toolCallId || '');
     if (!stream || !tid || typeof CSS === 'undefined' || !CSS.escape) return null;
-    var row = null;
-    try {
-        row = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]');
-    } catch (e) { row = null; }
+    var row = humanInteractionToolRow(stream, tid, anchor);
     if (!row) return null;
     var slot = row.querySelector('.human-interaction-tool-slot');
     if (!slot) {
@@ -391,15 +397,18 @@ function humanInteractionToolSlot(stream, toolCallId) {
 
 function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
     var tid = String(toolCallId || '');
-    var slot = humanInteractionToolSlot(stream, tid);
-    if (!slot) return false;
+    if (!stream || !stream.querySelectorAll) return false;
     var escaped = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid.replace(/"/g, '\\"');
     var cards = Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id="' + escaped + '"]'));
+    var attached = false;
     cards.forEach(function (card) {
+        var slot = humanInteractionToolSlot(stream, tid, card.dataset);
+        if (!slot) return;
         if (card.parentNode !== slot) slot.appendChild(card);
+        attached = true;
     });
     removeEmptyHumanInteractionFallbackSlots(stream);
-    return true;
+    return attached;
 }
 
 function attachAllHumanInteractionCards(stream) {
@@ -407,7 +416,7 @@ function attachAllHumanInteractionCards(stream) {
     Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id]')).forEach(function (card) {
         var tid = card.getAttribute('data-tool-call-id') || '';
         if (!tid) return;
-        var slot = humanInteractionToolSlot(stream, tid);
+        var slot = humanInteractionToolSlot(stream, tid, card.dataset);
         if (slot && card.parentNode !== slot) slot.appendChild(card);
     });
     removeEmptyHumanInteractionFallbackSlots(stream);
@@ -420,12 +429,18 @@ function removeEmptyHumanInteractionFallbackSlots(stream) {
     });
 }
 
-function humanInteractionFallbackHost(stream) {
+function humanInteractionFallbackHost(stream, record) {
     // A card that cannot find (and can never merge with) a tool row must still
     // render inside the "执行过程" box instead of landing at stream level.
     // Prefer the newest aggregate; create one through the regular path when the
     // session has no box yet so the fragment looks identical to a live run.
     if (!stream || !stream.querySelectorAll) return stream || null;
+    if (record && record.process_group_id && typeof selectExecutionProcessGroup === 'function'
+        && typeof newDomContext === 'function' && typeof getProcessBody === 'function') {
+        var ctx = newDomContext(stream);
+        selectExecutionProcessGroup(ctx, record.process_group_id);
+        return getProcessBody(ctx);
+    }
     var bodies = stream.querySelectorAll('.process-aggregate .process-aggregate-body');
     if (bodies.length) return bodies[bodies.length - 1];
     if (typeof newDomContext === 'function' && typeof getProcessBody === 'function') {
@@ -458,7 +473,7 @@ function revealHumanInteractionCardContainer(card) {
 function placeHumanInteractionCardFallback(stream, card, record) {
     // The fallback never appends to the bare chat stream while a process box is
     // available (or can be created): the card belongs inside "执行过程".
-    var host = humanInteractionFallbackHost(stream);
+    var host = humanInteractionFallbackHost(stream, record);
     if (!host || host === stream || typeof host.appendChild !== 'function') {
         if (stream && stream.appendChild) stream.appendChild(card);
         return;
@@ -472,12 +487,8 @@ function placeHumanInteractionCardFallback(stream, card, record) {
 }
 
 function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
-    // tool_pending rows are ephemeral: any stream rebuild (page refresh,
-    // reconnect, history recovery) removes them. A durable interaction card
-    // must recreate that anchor row, otherwise it renders at the bottom of the
-    // stream - outside the process block that owns the tool call. Both
-    // approvals and ask_user questions share this path; tool_call_id is the
-    // stable identity that later merges the placeholder with the real row.
+    // Recover the original execution anchor before placing a durable card.
+    // Legacy requests without an execution identity still use tool_call_id.
     if (!record || record.status !== 'pending') return false;
     var toolCallId = String(record.tool_call_id || '');
     if (!toolCallId) return false;
@@ -492,13 +503,22 @@ function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
     }
     var stream = ctx && ctx.stream ? ctx.stream : null;
     if (!stream || typeof appendToolPendingRow !== 'function') return false;
-    var existing = null;
-    if (typeof CSS !== 'undefined' && CSS.escape) {
-        try {
-            existing = stream.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(toolCallId) + '"]');
-        } catch (e) { existing = null; }
-    }
+    var existing = humanInteractionToolRow(stream, toolCallId, record);
     if (existing) return true;
+    var isApproval = record.kind === 'approval';
+    var toolName = isApproval ? String(record.tool || 'tool') : 'ask_user';
+    if (record.execution_id && typeof renderExecutionRecord === 'function') {
+        var saved = typeof executionRecordsBySession !== 'undefined'
+            && executionRecordsBySession.get(String(sessionId || ''));
+        renderExecutionRecord(ctx, Object.assign({}, saved && saved.get(record.execution_id) || {}, {
+            execution_id: record.execution_id, process_group_id: record.process_group_id,
+            run_id: record.run_id, tool_call_id: toolCallId, kind: 'tool', tool: toolName,
+            status: isApproval ? 'waiting_approval' : 'waiting_input',
+        }), sessionId);
+        var restoredRow = humanInteractionToolRow(stream, toolCallId, record);
+        if (restoredRow) revealHumanInteractionCardContainer(restoredRow);
+        return !!restoredRow;
+    }
     // Prefer the last existing process box over creating a detached new one:
     // a recovered card belongs inside the run box that was just replayed, not
     // in an empty box appended at the bottom of the stream.
@@ -506,8 +526,6 @@ function ensurePendingHumanInteractionToolRow(ctx, record, sessionId) {
         var boxes = stream.querySelectorAll('.process-aggregate');
         if (boxes.length) ctx.currentProcessGroup = boxes[boxes.length - 1];
     }
-    var isApproval = record.kind === 'approval';
-    var toolName = isApproval ? String(record.tool || 'tool') : 'ask_user';
     appendToolPendingRow(ctx, {
         type: 'tool_pending',
         ephemeral: true,
@@ -1401,6 +1419,8 @@ async function resolveHumanApproval(card, decision, rejectionReason) {
     if (!card || card.dataset.submitting === '1') return;
     setHumanInteractionSubmitting(card, true, '正在处理…');
     try {
+        var recoveryAfterIndex = typeof getUiEventCount === 'function'
+            ? getUiEventCount(card.dataset.sessionId) : 0;
         var payload = { decision: decision };
         if (decision === 'deny') payload.rejection_reason = String(rejectionReason || '').trim();
         var response = await fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/approvals/' + encodeURIComponent(card.dataset.interactionId) + '/resolve', {
@@ -1417,6 +1437,7 @@ async function resolveHumanApproval(card, decision, rejectionReason) {
         }
         var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'approval_resolved' }, data.approval || {}));
         renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
+        if (data.recovered) resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);
     } catch (err) {
         setHumanInteractionSubmitting(card, false);
         var error = card.querySelector('.human-card-error');
@@ -1526,9 +1547,11 @@ function renderHumanInteractionRecord(record, sessionId, stream) {
     card.dataset.status = record.status || 'pending';
     var toolCallId = String(record.tool_call_id || '');
     if (toolCallId) card.dataset.toolCallId = toolCallId;
+    if (record.execution_id) card.dataset.executionId = String(record.execution_id);
+    if (record.process_group_id) card.dataset.processGroupId = String(record.process_group_id);
     if (existing && existing.parentNode) existing.parentNode.replaceChild(card, existing);
     else {
-        var slot = humanInteractionToolSlot(stream, toolCallId);
+        var slot = humanInteractionToolSlot(stream, toolCallId, record);
         if (slot) slot.appendChild(card);
         else placeHumanInteractionCardFallback(stream, card, record);
     }

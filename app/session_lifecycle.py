@@ -227,6 +227,8 @@ async def stop_session_tree(session_id: str, session_manager, subagent_registry)
     sid = session_manager._normalize_session_id(session_id)
     descendants = session_manager.list_subagent_descendants(sid)
     all_ids = [sid, *descendants]
+    from execution_services.integration import stop_execution
+    await stop_execution(all_ids, deleted=True, reason="session_deleted")
     mark_sessions_deleted(all_ids)
 
     for x in all_ids:

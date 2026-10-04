@@ -28,6 +28,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -60,6 +61,8 @@ _run_shell_output_sink: ContextVar[
     "myagent_run_shell_output_sink",
     default=None,
 )
+_run_shell_state_sink: ContextVar[Optional[Callable[[dict], Awaitable[None] | None]]] = ContextVar(
+    "myagent_run_shell_state_sink", default=None)
 _tool_work_dir_override: ContextVar[Optional[Path]] = ContextVar(
     "myagent_tool_work_dir_override",
     default=None,
@@ -104,14 +107,17 @@ def run_shell_runtime_context(
     *,
     interrupt_check: Optional[Callable[[], bool]] = None,
     output_sink: Optional[Callable[[str, str], Awaitable[None] | None]] = None,
+    state_sink: Optional[Callable[[dict], Awaitable[None] | None]] = None,
 ):
     """Bind per-invocation shell callbacks without cross-talk between tools."""
 
     interrupt_token = _run_shell_interrupt_check.set(interrupt_check)
     output_token = _run_shell_output_sink.set(output_sink)
+    state_token = _run_shell_state_sink.set(state_sink)
     try:
         yield
     finally:
+        _run_shell_state_sink.reset(state_token)
         _run_shell_output_sink.reset(output_token)
         _run_shell_interrupt_check.reset(interrupt_token)
 
@@ -2286,6 +2292,9 @@ class _RunShellProgressPublisher:
         self._timer: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
         self._emit_lock = asyncio.Lock()
+        # Pipe reader tasks may be cancelled before returning their local
+        # chunks. Retain raw bytes independently, including with no live sink.
+        self.output_bytes = {"stdout": bytearray(), "stderr": bytearray()}
 
     async def push(self, stream_name: str, text: str) -> None:
         if self._sink is None or not text:
@@ -2390,6 +2399,7 @@ async def _read_run_shell_pipe(
         if not chunk:
             break
         chunks.append(chunk)
+        publisher.output_bytes[stream_name].extend(chunk)
         await publisher.push(stream_name, decoder.decode(chunk, final=False))
     tail = decoder.decode(b"", final=True)
     if tail:
@@ -2428,6 +2438,7 @@ async def run_shell(
     args: Optional[List[str]] = None,
     working_dir: Optional[str] = None,
     timeout: Optional[int] = None,
+    run_in_background: bool = False,
 ) -> str:
     """
     Run a command through a shell: ``command`` and optional ``args`` are merged into one command line.
@@ -2452,6 +2463,8 @@ async def run_shell(
     Decoded PowerShell scripts still follow PowerShell semantics.
     """
     full_cmd = _compose_shell_command(command, args)
+    if not isinstance(run_in_background, bool):
+        return "Error: run_in_background must be a boolean."
     effective_workdir = workdir if workdir is not None else working_dir
     if timeout_ms is not None:
         effective_timeout = max(0.001, min(float(timeout_ms) / 1000.0, 600.0))
@@ -2469,6 +2482,27 @@ async def run_shell(
         return _sensitive_tool_resource_error("shell access")
 
     active = active_security_context()
+    shell_started = time.monotonic()
+
+    async def report_state(status, result, process, publisher=None):
+        sink = _run_shell_state_sink.get()
+        if sink is None:
+            return
+        payload = {"status": status, "result": result, "executed": process is not None,
+                   "process_state": "stopped" if process is not None and process.returncode is not None else "unknown",
+                   "exit_code": process.returncode if process is not None else None,
+                   "duration_ms": int((time.monotonic() - shell_started) * 1000)}
+        if publisher is not None:
+            for channel in ("stdout", "stderr"):
+                payload[channel] = redact_sensitive_tool_text(
+                    _decode_cli_subprocess_bytes(bytes(publisher.output_bytes[channel])))
+        output = sink(payload)
+        if inspect.isawaitable(output):
+            await output
+    from execution_services.shell import jobs_enabled, execute_prepared
+    managed_execution = bool(active and jobs_enabled())
+    if run_in_background and not managed_execution:
+        return "Error: background execution requires an authorized Agent session and the execution-tools plugin."
     # Agent self-protection is a non-bypassable controller invariant. Full
     # access removes ordinary approvals; it never grants permission to kill or
     # replace the process that is executing this tool call.
@@ -2495,6 +2529,8 @@ async def run_shell(
         cwd = _resolve_shell_working_dir(effective_workdir, wroot)
 
         # 3. 统一 shell 管线（bash 优先）
+        process = None
+        progress_publisher = None
         try:
             child_env = _subprocess_env_for_shell()
             spawn_kw = _run_cli_subprocess_stdio_kwargs(full_cmd)
@@ -2534,6 +2570,12 @@ async def run_shell(
                     command=full_cmd,
                     active_context=active_security_context(),
                 )
+                if managed_execution:
+                    managed_result = await execute_prepared(prepared, cwd, spawn_kw, full_cmd,
+                        effective_timeout, run_in_background, ephemeral_py, active,
+                        _run_shell_output_sink.get(), _run_shell_interrupt_check.get())
+                    if managed_result is not None:
+                        return managed_result
                 process = await asyncio.create_subprocess_exec(
                     *prepared.argv,
                     stdout=asyncio.subprocess.PIPE,
@@ -2580,6 +2622,12 @@ async def run_shell(
                     command=full_cmd,
                     active_context=active_security_context(),
                 )
+                if managed_execution:
+                    managed_result = await execute_prepared(prepared, cwd, spawn_kw, full_cmd,
+                        effective_timeout, run_in_background, ephemeral_py, active,
+                        _run_shell_output_sink.get(), _run_shell_interrupt_check.get())
+                    if managed_result is not None:
+                        return managed_result
                 process = await asyncio.create_subprocess_exec(
                     *prepared.argv,
                     stdout=asyncio.subprocess.PIPE,
@@ -2598,6 +2646,12 @@ async def run_shell(
                     command=full_cmd,
                     active_context=active_security_context(),
                 )
+                if managed_execution:
+                    managed_result = await execute_prepared(prepared, cwd, spawn_kw, full_cmd,
+                        effective_timeout, run_in_background, ephemeral_py, active,
+                        _run_shell_output_sink.get(), _run_shell_interrupt_check.get())
+                    if managed_result is not None:
+                        return managed_result
                 process = await asyncio.create_subprocess_exec(
                     *prepared.argv,
                     stdout=asyncio.subprocess.PIPE,
@@ -2642,7 +2696,21 @@ async def run_shell(
                     await asyncio.wait_for(process.wait(), timeout=5)
                 except asyncio.TimeoutError:
                     pass
-                return f"Error: Command timed out after {effective_timeout} seconds"
+                await progress_publisher.close()
+                partial = []
+                for stream_name in ("stdout", "stderr"):
+                    raw = bytes(progress_publisher.output_bytes[stream_name])
+                    text = _truncate_output(_summarize_shell_stream_if_binary_like(
+                        _decode_cli_subprocess_bytes(raw), raw, stream_name
+                    ))
+                    if text:
+                        partial.append(("STDERR:\n" if stream_name == "stderr" else "") + text)
+                stopped = "process terminated" if process.returncode is not None else "process stop state unknown"
+                partial.append(f"Error: Command timed out after {effective_timeout} seconds; {stopped}")
+                partial.append(f"Exit code: {process.returncode if process.returncode is not None else 'unknown'}")
+                result = redact_sensitive_tool_text("\n".join(partial))
+                await report_state("timed_out", result, process, progress_publisher)
+                return result
             except asyncio.CancelledError:
                 if process is not None:
                     await _kill_process_tree(process)
@@ -2650,6 +2718,17 @@ async def run_shell(
                         await asyncio.wait_for(process.wait(), timeout=5)
                     except asyncio.TimeoutError:
                         pass
+                await progress_publisher.close()
+                partial = []
+                for channel in ("stdout", "stderr"):
+                    raw = bytes(progress_publisher.output_bytes[channel])
+                    text = _truncate_output(_decode_cli_subprocess_bytes(raw))
+                    if text:
+                        partial.append(("STDERR:\n" if channel == "stderr" else "") + text)
+                partial.append("工具调用已被用户追问或取消打断。")
+                partial.append("进程已确认停止。" if process.returncode is not None else "进程停止状态未知。")
+                partial.append(f"Exit code: {process.returncode if process.returncode is not None else 'unknown'}")
+                await report_state("interrupted", redact_sensitive_tool_text("\n".join(partial)), process, progress_publisher)
                 raise
 
             # 4. 解码、二进制状输出摘要、截断
@@ -2672,11 +2751,32 @@ async def run_shell(
             if hint:
                 parts.append(hint)
 
-            return redact_sensitive_tool_text("\n".join(parts) if parts else "(no output)")
+            result = redact_sensitive_tool_text("\n".join(parts) if parts else "(no output)")
+            await report_state("completed" if rc == 0 else "failed", result, process, progress_publisher)
+            return result
 
         except Exception as e:
             logger.error(f"Command execution failed: {e}")
-            return redact_sensitive_tool_text(f"Error executing command: {str(e)}")
+            if process is not None and process.returncode is None:
+                await _kill_process_tree(process)
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+            partial = []
+            if progress_publisher is not None:
+                await progress_publisher.close()
+                for channel in ("stdout", "stderr"):
+                    raw = bytes(progress_publisher.output_bytes[channel])
+                    text = _truncate_output(_decode_cli_subprocess_bytes(raw))
+                    if text:
+                        partial.append(("STDERR:\n" if channel == "stderr" else "") + text)
+            partial.append(f"Error executing command: {str(e)}")
+            if process is not None:
+                partial.append(f"Exit code: {process.returncode if process.returncode is not None else 'unknown'}")
+            result = redact_sensitive_tool_text("\n".join(partial))
+            await report_state("failed", result, process, progress_publisher)
+            return result
 
 
     finally:
@@ -5006,12 +5106,15 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "Virtual `/folder` under restriction means under the workspace root, not the OS root; avoid `cd /` expecting the workspace on Windows. "
         "Prefer write_file(temporary=true) + `python script.py` over huge `python -c` for throwaway scripts; long `-c` payloads may auto-materialize under `.run_shell_temp/`. "
         "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized. "
+        "Set run_in_background=true to return a job_id immediately; use job_output/job_list/job_kill afterward. "
+        "With execution-tools enabled, an authorized session command still running at timeout_ms is promoted to a background job. "
         "Use the canonical parameters command, workdir, timeout_ms, and login; do not send legacy args, working_dir, or timeout.",
         {
             "command": {"type": "string", "description": "Complete shell command line."},
             "workdir": {"type": "string", "description": "Directory under workspace (relative to workspace root, or absolute). Omit for workspace root. '.' means workspace root."},
-            "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (maximum 600000).", "default": 10000, "minimum": 1, "maximum": 600000},
+            "timeout_ms": {"type": "integer", "description": "Foreground wait in milliseconds (default 30000, maximum 600000). With execution-tools enabled, a still-running authorized command is promoted to a background job.", "default": 30000, "minimum": 1, "maximum": 600000},
             "login": {"type": "boolean", "description": "Use a login shell when the selected executor supports it.", "default": True},
+            "run_in_background": {"type": "boolean", "description": "Start an owned background job and return its id immediately.", "default": False},
         },
         ["command"],
     ),

@@ -7,7 +7,7 @@ the source of truth and stores each operation in `steer_inbox.json` with a stabl
 ## Delivery modes
 
 - `interrupt` is the existing takeover mode. It aborts interruptible LLM/tool
-  work, preserves completed output, removes only an unclosed tool tail, commits
+  work, preserves received output and unfinished execution records, commits
   the steer, and replans.
 - `append` never requests an abort. The UI appends an optimistic follow-up row
   to the end of the active process block after server acceptance. The ReAct loop
@@ -74,8 +74,9 @@ suppressed. This prevents a cancelled request from overwriting or appending to
 the replacement run.
 
 Native replanning uses a non-recursive outer loop. Confirmed assistant text and
-completed tool results remain in history. Rollback removes only an unclosed tool
-tail and its unfinished UI events. Serialized write tools are not cancelled once
+completed tool results remain in history. Interrupted complete calls receive a
+matching tool result containing confirmed progress and stop state; incomplete
+parameters remain execution drafts outside provider message history. Serialized write tools are not cancelled once
 started; their real result is checkpointed and the steer is applied at the next
 safe point, because cancelling an awaitable cannot undo an external side effect.
 
@@ -86,9 +87,13 @@ safe point, because cancelling an awaitable cannot undo an external side effect.
 3. Only the active fence owner may publish or persist run output.
 4. A replacement run must claim the matching steer ID and replacement run ID.
 5. Missing SSE delivery must be recoverable through projection and status APIs.
-6. Confirmed output is retained; only unfinished execution artifacts are pruned.
+6. Received output and unfinished execution artifacts are retained in Runtime V2.
 7. Append mode is invisible to interruption polling and is consumed only at a
    completed ReAct boundary before the next model request.
-8. Interrupt mode seals the prior process block exactly once. Its durable event
-   reuses the optimistic operation-keyed row and reserved UI index; replacement
-   reasoning/response rows may only be upserted inside the new process block.
+8. Interrupt mode, request retries and replacement runs reuse the same durable
+   process block. Only an ordinary user message or visible final answer defines
+   a block boundary. Its durable steer event reuses the optimistic operation-keyed
+   row and reserved UI index; generation-aware rows preserve phase order.
+
+See [execution_recovery.md](execution_recovery.md) for journal, recovery cursor
+and bounded output continuation behavior.

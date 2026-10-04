@@ -219,6 +219,43 @@ def _effective_shell_base(workdir_value: object, workspace: Path) -> Path | None
 def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) -> CapabilityRequest:
     name = str(tool_name or "").strip()
     args = dict(arguments or {})
+    from execution_services.computer import tool_contract as computer_tool_contract
+    computer_contract = computer_tool_contract(name)
+    if computer_contract:
+        from agent_tools import _agent_protected_process_ids
+        target = args.get("target") if isinstance(args.get("target"), dict) else {}
+        pid = target.get("pid", args.get("pid"))
+        protected_target = False
+        try:
+            protected_target = int(pid) in _agent_protected_process_ids() if pid is not None else False
+        except (ValueError, TypeError):
+            pass
+        return CapabilityRequest.create(action="tool.call", resource=name,
+            effect="policy_change" if protected_target and computer_contract["effect"] != "read" else computer_contract["effect"],
+            arguments=args, metadata={"tool": name, "declared": True,
+                                      "permissions": {"security_policy": protected_target and computer_contract["effect"] != "read"}})
+    if name in {"job_output", "job_list", "job_kill", "terminal_read", "terminal_list", "terminal_close", "terminal_signal"}:
+        # Resource ownership is enforced again by the service. Cancelling an
+        # owned operation cannot select an arbitrary process or shell.
+        return CapabilityRequest.create(action="tool.call", resource=name, effect="read",
+            arguments=args, metadata={"tool": name, "declared": True})
+    if name == "terminal_send":
+        from execution_services.jobs import _SERVICE
+        terminal = _SERVICE.terminals.sessions.get(str(args.get("sessionId"))) if _SERVICE and _SERVICE.terminals else None
+        text = str(args.get("text") or "")
+        shell_request = classify_tool("run_shell", {"command": text,
+            "workdir": terminal.cwd if terminal else str(workspace)}, workspace)
+        # Preserve all destructive/self-protection checks from shell analysis.
+        # Interactive stdin additionally needs approval; a shell startup grant
+        # cannot silently authorize future REPL input or split commands.
+        metadata = dict(shell_request.metadata)
+        metadata.update(tool=name, terminal_id=args.get("sessionId"), interactive_stdin=True)
+        return CapabilityRequest.create(action="process.exec", resource=text,
+            effect=shell_request.effect, arguments=args, metadata=metadata)
+    if name == "terminal_open":
+        return CapabilityRequest.create(action="tool.call", resource=name, effect="external_write",
+            arguments=args, metadata={"tool": name, "declared": True, "permissions": {"shell": True},
+                "paths": [str(canonical_path(args.get("cwd") or ".", workspace))]})
     if name.startswith("mcp_"):
         try:
             from agent_mcp import get_tool_contract

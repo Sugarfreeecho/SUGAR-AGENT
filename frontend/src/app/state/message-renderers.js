@@ -1,7 +1,12 @@
 function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
+    if (typeof renderExecutionEvent === 'function' && renderExecutionEvent(ctx, record.event, sid)) return record;
+    if (record.event.type === 'user') {
+        ctx.processGroupId = 'turn:' + String(record.event.runtime_seq || record.index);
+    }
     renderEvent(ctx, record.event, record.index, sid);
+    if (record.event.type === 'final') ctx.processGroupId = 'after-final:' + String(record.event.runtime_seq || record.index);
     return record;
 }
 

@@ -468,8 +468,8 @@ def test_followup_supports_interrupt_and_append_modes():
     assert '_STEER_MODES = {"interrupt", "append"}' in loop
     assert '_has_session_steers(sid, modes={"interrupt"})' in loop
     assert 'modes={"append", "interrupt"}' in loop
-    # 既有 2 处 + 新增 2 处（畸形工具调用重试 / 最终结果重试）
-    assert loop.count("max_react_iter = max(max_react_iter, iter_count + 1)") == 4
+    # 既有 2 处 + 畸形工具调用/最终结果重试 2 处 + 执行与恢复等待重试 3 处
+    assert loop.count("max_react_iter = max(max_react_iter, iter_count + 1)") == 7
     assert 'if str(item.get("mode") or steer_mode) == "append":' in webui
 
 
@@ -924,17 +924,19 @@ def test_streamed_llm_commits_are_sse_fallbacks_without_repersisting():
     subagent_events = (ROOT / "app/agent_subagent_events.py").read_text(encoding="utf-8")
 
     streamed_block = re.search(
-        r"if streamed_this_call:(?P<body>.*?)else:",
+        r"if emit:\n\s+if streamed_this_call:(?P<body>.*?)\n\s*else:",
         agent_loop,
         re.S,
     )
     assert streamed_block, "streamed LLM branch must be explicit"
     body = streamed_block.group("body")
 
-    assert 'session_manager.append_ui_event(' in body
     assert '"type": "llm_reasoning"' in body
     assert '"type": "llm_response"' in body
-    assert '"_skip_persist": True' in body
+    # Streamed commits publish via the stream-event bridge with live_commit
+    # metadata; persistence happens in the Runtime V2 commit path, not here.
+    assert '_push_stream_event(' in body
+    assert '_prune_stream_ephemeral(emit' in body
     assert '"live_commit": True' in body
     assert "emit=emit" in body
     assert 'ev.get("_skip_persist")' in subagent_events

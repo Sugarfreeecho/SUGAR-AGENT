@@ -626,6 +626,10 @@ class PolicyEngine:
             # Otherwise a networked ``python -c``/encoded command would be
             # classified only as network access and could receive a reusable
             # ``curl:*``/``powershell:*`` allow rule.
+            if request.metadata.get("interactive_stdin"):
+                return result(DecisionOutcome.ASK, "process.interactive_stdin",
+                    "Persistent terminal input requires fresh approval; startup does not authorize later commands.",
+                    one_time_only=True, required_dirs=request.metadata.get("required_dirs") or [])
             egress_intent = str(request.metadata.get("egress_intent") or "none")
             confidence = str(request.metadata.get("analysis_confidence") or "low")
             destinations = list(request.metadata.get("destinations") or [])

@@ -7,6 +7,12 @@ const SMOOTH_STREAM_CONFIG = Object.freeze({
     followTargetEpsilonPx: 0.25,
     followStiffness: 180,
     maxFollowStepPx: 20,
+    // 单帧位移的增量上限（px/帧²，按参考帧 16.67ms 折算；3 ≈ 10800px/s²）。
+    // 固定刚度弹簧在落后距离较大时首帧就能给出 20px+ 的步长：窄栏实测单帧位移
+    // 可达 20~34px（约 1~2 行），肉眼看就是文字一顿一顿地抖、并拖出残影。
+    // 让步长按固定加速度爬升（先慢后快），任何时刻都不会出现单帧大跳；
+    // 3 仍能保证大位移在既有收敛预算内追上（见 tests/js/smooth_stream_runtime.cjs）。
+    maxFollowAccelPxPerFrame2: 3,
     unpinWheelPx: 8,
     gestureWindowMs: 800,
 });
@@ -101,6 +107,7 @@ function createSmoothFollowController() {
             readerDetached: false,
             animatedTop: 0,
             followVelocityPxPerSec: 0,
+            lastStepPx: 0,
             lastWrittenTop: 0,
             ownedUntil: 0,
             awayPx: 0,
@@ -210,12 +217,16 @@ function createSmoothFollowController() {
             var floor = Math.max(0, Number(port.scrollHeight) - Number(port.clientHeight));
             // A shrinking scroll range can force the browser to clamp scrollTop.
             // Keep our float position within that range before retargeting.
-            if (state.animatedTop > floor) state.followVelocityPxPerSec = 0;
+            if (state.animatedTop > floor) {
+                state.followVelocityPxPerSec = 0;
+                state.lastStepPx = 0;
+            }
             state.animatedTop = Math.min(floor, Math.max(0, state.animatedTop));
             var lag = floor - state.animatedTop;
             if (lag <= SMOOTH_STREAM_CONFIG.followTargetEpsilonPx) {
                 state.animatedTop = floor;
                 state.followVelocityPxPerSec = 0;
+                state.lastStepPx = 0;
                 state.lastWrittenTop = floor;
                 state.ownedUntil = now + 100;
                 if (Math.abs((Number(port.scrollTop) || 0) - floor) > 0.1) {
@@ -236,11 +247,21 @@ function createSmoothFollowController() {
             );
             // A soft spring may take a few hundred milliseconds to settle;
             // the absolute per-frame cap still guards large layout jumps.
+            // 额外限制「本帧步长相对上一帧的增量」：弹簧在大落后距离下会一帧给出
+            // 十几到几十像素，直接写进去就是可见的跳变；按固定加速度爬升后，位移
+            // 曲线始终连续，文字只会平顺滑动。
+            var stepCeiling = Math.min(
+                SMOOTH_STREAM_CONFIG.maxFollowStepPx,
+                (state.lastStepPx || 0)
+                    + SMOOTH_STREAM_CONFIG.maxFollowAccelPxPerFrame2
+                        * (dtMs / SMOOTH_STREAM_CONFIG.referenceFrameMs)
+            );
             var advance = Math.min(
                 lag,
                 spring.advancePx,
-                SMOOTH_STREAM_CONFIG.maxFollowStepPx
+                stepCeiling
             );
+            state.lastStepPx = advance;
             var previousTop = state.animatedTop;
             state.animatedTop = previousTop + advance;
             // Finish tiny residuals only when the total frame displacement
@@ -251,6 +272,7 @@ function createSmoothFollowController() {
             ) {
                 state.animatedTop = floor;
                 state.followVelocityPxPerSec = 0;
+                state.lastStepPx = 0;
             } else {
                 // The frame cap can shorten the spring's actual step.
                 // Carry the actual velocity into the next frame to avoid a
@@ -285,6 +307,7 @@ function createSmoothFollowController() {
         if (!state.following) {
             state.animatedTop = Math.max(0, Number(port.scrollTop) || 0);
             state.followVelocityPxPerSec = 0;
+            state.lastStepPx = 0;
         }
         state.following = true;
         state.onUnpin = typeof options.onUnpin === 'function' ? options.onUnpin : state.onUnpin;
@@ -305,6 +328,7 @@ function createSmoothFollowController() {
         var state = states.get(port);
         if (!state) return;
         state.following = false;
+        state.lastStepPx = 0;
         activePorts.delete(port);
         port.removeAttribute('data-smooth-follow-owned');
         if (activePorts.size === 0) {
@@ -341,6 +365,7 @@ function createSmoothFollowController() {
         if (state) {
             state.animatedTop = floor;
             state.followVelocityPxPerSec = 0;
+            state.lastStepPx = 0;
             state.lastWrittenTop = floor;
         }
         var hasInlineStyle = !!(port.style && typeof port.style === 'object');
@@ -443,6 +468,26 @@ function animateSmoothTraceRowInsertion(row) {
     return animateSmoothTraceRowHeight(row, 0, targetHeight, { insertion: true });
 }
 
+/* 在 inline 高度被钉住的情况下推算「内容改完之后」的自然行高：行高 = 行内固定部分 +
+   内容可视高度。只读 scrollHeight 与 computed max-height，不解除钉子，因此不会触发
+   「内容瞬时变矮」的那次布局。 */
+function measureSmoothTraceRowNaturalHeight(row) {
+    if (!row || !row.querySelector) return row ? row.getBoundingClientRect().height : 0;
+    var sc = row.querySelector('.feed-chunk-scroller');
+    if (!sc) return row.getBoundingClientRect().height;
+    var extra = Math.max(0, row.getBoundingClientRect().height - sc.getBoundingClientRect().height);
+    var scStyle = getComputedStyle(sc);
+    var scMax = parseFloat(scStyle.maxHeight);
+    var visible = sc.scrollHeight;
+    if (isFinite(scMax)) visible = Math.min(visible, scMax);
+    var chunk = row.querySelector('.feed-chunk');
+    if (chunk) {
+        var chunkMax = parseFloat(getComputedStyle(chunk).maxHeight);
+        if (isFinite(chunkMax)) visible = Math.min(visible, chunkMax);
+    }
+    return extra + Math.max(0, visible);
+}
+
 function mutateSmoothTraceRowHeight(row, mutation) {
     if (!row || typeof mutation !== 'function') return;
     if (!isSmoothStreamActive() || !row.isConnected || !row.getBoundingClientRect) {
@@ -451,8 +496,14 @@ function mutateSmoothTraceRowHeight(row, mutation) {
     }
     var fromHeight = row.getBoundingClientRect().height;
     cancelSmoothTraceLayoutAnimation(row);
+    /* 先钉住旧高度再改内容：mutation 之后浏览器那次布局（以及由它触发的滚动钳制）看到的
+       仍是旧高度，从根上消掉「内容瞬时变矮 → 贴底容器被硬钳 scrollTop」的中间态。
+       矮窗口下这一中间态会让整个执行过程框（含正在读的那几行字）单帧下跳再弹回。 */
+    var pinned = !!(row.style && typeof row.style === 'object');
+    if (pinned) row.style.height = fromHeight + 'px';
     mutation();
-    var toHeight = row.getBoundingClientRect().height;
+    var toHeight = pinned ? measureSmoothTraceRowNaturalHeight(row) : row.getBoundingClientRect().height;
+    if (pinned) row.style.removeProperty('height');
     animateSmoothTraceRowHeight(row, fromHeight, toHeight);
 }
 

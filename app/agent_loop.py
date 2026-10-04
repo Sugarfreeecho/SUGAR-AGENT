@@ -1921,70 +1921,6 @@ def _remove_invalid_assistant_history(messages: List[Any]) -> tuple[List[Any], b
     return out, changed
 
 
-def _trim_unclosed_tool_call_tail_preserve_completed(
-    messages: List[Any],
-) -> tuple[List[Any], Optional[int]]:
-    src = list(messages or [])
-    out: List[Any] = []
-    i = 0
-    changed_at: Optional[int] = None
-    while i < len(src):
-        msg = src[i]
-        ids = _assistant_tool_call_ids(msg)
-        if not ids:
-            out.append(msg)
-            i += 1
-            continue
-
-        tool_rows: List[ToolMessage] = []
-        j = i + 1
-        while j < len(src) and isinstance(src[j], ToolMessage):
-            tool_rows.append(src[j])
-            j += 1
-
-        seen_ids = {
-            str(getattr(t, "tool_call_id", "") or "").strip()
-            for t in tool_rows
-        }
-        if len(tool_rows) >= len(ids) and set(ids).issubset(seen_ids):
-            out.extend(src[i:j])
-            i = j
-            continue
-
-        changed_at = len(out)
-        completed_ids = [tid for tid in ids if tid in seen_ids]
-        raw_calls = list(getattr(msg, "tool_calls", None) or [])
-        kept_calls: List[Any] = []
-        if completed_ids:
-            completed_set = set(completed_ids)
-            for idx, tc in enumerate(raw_calls):
-                if isinstance(tc, dict):
-                    raw = tc.get("id") or tc.get("tool_call_id") or ""
-                else:
-                    raw = getattr(tc, "id", "") or getattr(tc, "tool_call_id", "") or ""
-                tid = str(raw or "").strip() or f"__missing_tool_call_id_{idx}"
-                if tid in completed_set:
-                    kept_calls.append(tc)
-        if kept_calls:
-            out.append(msg.model_copy(update={"tool_calls": kept_calls}))
-            out.extend([t for t in tool_rows if str(getattr(t, "tool_call_id", "") or "").strip() in completed_set])
-        else:
-            content = str(getattr(msg, "content", "") or "")
-            additional = getattr(msg, "additional_kwargs", None) or {}
-            reasoning = ""
-            if isinstance(additional, dict):
-                reasoning = str(
-                    additional.get("reasoning_content")
-                    or additional.get("reasoning")
-                    or additional.get("reasoning_text")
-                    or ""
-                )
-            if content or reasoning:
-                out.append(msg.model_copy(update={"tool_calls": None}))
-        return out, changed_at
-    return out, changed_at
-
-
 def _persist_orphan_cleanup_after_outgoing_detection(
     state: State,
     work_messages: List[Any],
@@ -3523,6 +3459,9 @@ async def _await_steerable(
         if not task.done():
             task.add_done_callback(_discard_task_result)
             task.cancel()
+            # Let cooperative cancellation flush pipe output and confirm its
+            # process state. A cancellation-resistant tool stays unknown.
+            await asyncio.wait({task}, timeout=5)
         raise
 
 
@@ -3941,27 +3880,97 @@ def _rollback_steer_partial_turn(state: State) -> None:
         return
     llm_history = list(state.get("llm_history", []))
     work_messages = list(state.get("work_messages", []))
-    llm_history, llm_cut = _trim_unclosed_tool_call_tail_preserve_completed(llm_history)
-    work_messages, work_cut = _trim_unclosed_tool_call_tail_preserve_completed(work_messages)
-    if llm_cut is None and work_cut is None:
+    from runtime_v2.execution_journal import close_unfinished_calls
+    records = _execution_recovery_snapshot(state["session_id"])["execution_records"]
+    llm_history, llm_added = close_unfinished_calls(llm_history, records)
+    work_messages, work_added = close_unfinished_calls(work_messages, records)
+    if not llm_added and not work_added:
         return
-    kept_tool_ids = _completed_tool_call_ids_from_messages(llm_history)
     state["llm_history"] = llm_history
     state["work_messages"] = work_messages
     state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
-    _persist_state_with_model_replace(state, llm_history, "steer_restart_trim_unclosed_tools")
-    _runtime_v2_delete_unfinished_tool_events_after_marker(state, marker, kept_tool_ids)
+    _persist_state_with_model_replace(state, llm_history, "steer_close_interrupted_tools")
+    by_id = {r.get("tool_call_id"): r for r in records}
+    state["_interrupted_tool_events"] = [{
+        "type": "tool_call", "tool_call_id": result.tool_call_id,
+        "tool": by_id.get(result.tool_call_id, {}).get("tool", "tool"),
+        "args": by_id.get(result.tool_call_id, {}).get("args", {}),
+        "result": result.content, "execution_status": "interrupted",
+        "react_iter": by_id.get(result.tool_call_id, {}).get("react_iter"),
+        "execution_id": by_id.get(result.tool_call_id, {}).get("execution_id"),
+        "stream_seq": by_id.get(result.tool_call_id, {}).get("stream_seq"),
+    } for result in llm_added]
 
 
-def _completed_tool_call_ids_from_messages(messages: List[Any]) -> set[str]:
-    out: set[str] = set()
-    for msg in list(messages or []):
-        if not isinstance(msg, ToolMessage):
-            continue
-        tid = str(getattr(msg, "tool_call_id", "") or "").strip()
-        if tid:
-            out.add(tid)
-    return out
+def _execution_recovery_snapshot(session_id: str) -> dict:
+    from runtime_v2.execution_journal import ExecutionJournal
+    if not _runtime_v2_is_primary():
+        return {"execution_records": [], "last_final_seq": 0}
+    return ExecutionJournal(session_manager.sessions_dir,
+                            getattr(session_manager, "_resolve_session_path", None)).read(session_id)
+
+
+def _restore_execution_context(state: State) -> None:
+    """Close interrupted calls and expose saved progress before API sanitizing."""
+    from runtime_v2.execution_journal import close_unfinished_calls
+    recovery = _execution_recovery_snapshot(state["session_id"])
+    records = recovery["execution_records"]
+    continuation = next((row for row in reversed(records) if row.get("kind") == "continuation"
+                         and row.get("process_group_id") == recovery.get("process_group_id")
+                         and row.get("status") == "generating"), None)
+    if continuation and not state.get("_execution_context_restored"):
+        state["_output_length_retries"] = int(continuation.get("extra_requests") or 0)
+        state["_output_continuation"] = str(continuation.get("content") or "")
+    llm, added = close_unfinished_calls(list(state.get("llm_history") or []), records, reason="runtime_recovery")
+    work, _ = close_unfinished_calls(list(state.get("work_messages") or []), records, reason="runtime_recovery")
+    if not state.get("_execution_context_restored"):
+        state["_execution_context_restored"] = True
+        fragments = []
+        known_calls = {str(call.get("id") or "") for message in llm
+                       if isinstance(message, AssistantMessage) for call in (message.tool_calls or [])}
+        for row in records:
+            if row.get("kind") == "continuation":
+                continue
+            orphan_result = row.get("kind") == "tool" and row.get("tool_call_id") not in known_calls
+            interrupted_reasoning = row.get("kind") == "reasoning" and row.get("status") != "completed"
+            if ((row.get("ui_committed") and not orphan_result and not interrupted_reasoning)
+                    or row.get("run_id") == state.get("_runtime_v2_run_id")
+                    or int(row.get("last_runtime_seq") or 0) <= recovery.get("last_final_seq", 0)):
+                continue
+            text = row.get("result") or row.get("content") or row.get("output") or row.get("arguments_raw")
+            if text:
+                purpose = str(row.get("args") or row.get("arguments_raw") or "") if orphan_result else ""
+                fragments.append(f"{row.get('kind')} / {row.get('tool', '')} / {row.get('status')} / {purpose}: {text}")
+        if fragments:
+            note = SystemMessage(content="[恢复进度：以下是上次运行已收到的记录。参数草稿未执行；已完成的工具不要重复执行，外部操作状态未知时先核实。]\n" + "\n".join(fragments))
+            llm.append(note)
+            work.append(note)
+            added.append(note)
+    state["llm_history"], state["work_messages"] = llm, work
+    if added:
+        state["dialogue"] = derive_dialogue_from_assistant_history(llm)
+        _persist_state_with_model_replace(state, llm, "restore_execution_progress")
+
+
+def _append_execution_progress_note(state: State, reason: str) -> None:
+    from runtime_v2.execution_journal import execution_progress_note
+    records = _execution_recovery_snapshot(state["session_id"])["execution_records"]
+    records = [row for row in records if row.get("run_id") == state.get("_runtime_v2_run_id")
+               and row.get("stream_seq") == state.get("_active_stream_seq")]
+    content = execution_progress_note(records, reason=reason)
+    if content:
+        message = SystemMessage(content=content)
+        state["llm_history"].append(message)
+        state["work_messages"].append(message)
+        _persist_state_with_model_append(state, message)
+
+
+def _checkpoint_output_continuation(state: State, *, status="generating") -> None:
+    if _runtime_v2_is_primary():
+        from runtime_v2.execution_journal import ExecutionJournal
+        ExecutionJournal(session_manager.sessions_dir,
+                         getattr(session_manager, "_resolve_session_path", None)).checkpoint_continuation(
+                             state["session_id"], str(state.get("_runtime_v2_run_id") or ""), state, status=status)
 
 
 def _runtime_v2_latest_seq(session_id: str) -> int:
@@ -3978,48 +3987,6 @@ def _runtime_v2_latest_seq(session_id: str) -> int:
         return max(0, int(log.next_seq(sid)) - 1)
     except Exception:
         return 0
-
-
-def _runtime_v2_delete_unfinished_tool_events_after_marker(
-    state: State,
-    marker: Dict[str, Any],
-    kept_tool_ids: set[str],
-) -> None:
-    sid = str(state.get("session_id") or "").strip() if isinstance(state, dict) else ""
-    if not sid or not _runtime_v2_is_primary():
-        return
-    try:
-        marker_seq = int(marker.get("runtime_seq") or 0)
-    except Exception:
-        marker_seq = 0
-    if marker_seq <= 0:
-        return
-    try:
-        from runtime_v2.event_log import SessionEventLog
-
-        resolver = getattr(session_manager, "_resolve_session_path", None)
-        log = SessionEventLog(session_manager.sessions_dir, path_resolver=resolver)
-        ops = _runtime_v2_react_history_ops()
-        for ev in log.read_after_seq(sid, marker_seq):
-            payload = dict(ev.payload or {})
-            ev_type = str(ev.type or "")
-            ui_type = str(payload.get("type") or "")
-            if ev_type not in {"tool_started", "legacy_ui_event"}:
-                continue
-            if ev_type == "legacy_ui_event" and ui_type != "tool_call":
-                continue
-            tid = str(
-                payload.get("tool_call_id")
-                or payload.get("id")
-                or payload.get("tool_id")
-                or ""
-            ).strip()
-            has_result = payload.get("result") is not None or payload.get("raw_content") is not None
-            if tid and tid in kept_tool_ids and has_result:
-                continue
-            ops.delete_message(sid, int(ev.seq), reason="steer_restart_remove_unfinished_tool")
-    except Exception:
-        logger.debug("failed to hide unfinished tool events after steer rollback", exc_info=True)
 
 
 async def _consume_steer_messages(
@@ -4671,9 +4638,11 @@ async def _emit_tool_call_sse(
                 "attachments": [block["attachment"] for block in res.get("tool_detail_ui", [])
                                 if isinstance(block, dict) and block.get("type") == "image" and block.get("attachment")],
                 "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
+                "execution_status": res.get("execution_status"),
                 "tool_call_id": res.get("tool_id") or "",
                 "tool_call_index": res.get("tool_call_index"),
-                "react_iter": int(react_iter),
+                "react_iter": int(res.get("execution_react_iter", react_iter)),
+                **({"stream_seq": res["execution_stream_seq"]} if "execution_stream_seq" in res else {}),
                 "ui": redact_sensitive_tool_obj(res.get("ui") or {}),
             }
         )
@@ -5066,6 +5035,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
     if not _runtime_v2_is_primary():
         _materialize_lazy_work_messages(state)
+    _restore_execution_context(state)
     work_messages = list(state["work_messages"])
     llm_history = list(state["llm_history"])
 
@@ -5082,7 +5052,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     iter_count = 0
     tool_results = []
     final_content = ""
-    llm_stream_seq = 0
+    llm_stream_seq = int(state.get("_active_stream_seq") or 0)
     compress_attempts = 0
     context_limit_recovery_attempts = 0
     context_limit_recovery_pending = False
@@ -5202,6 +5172,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 )
                 break
             _inject_pending_subagent_notes(current_run_only=True)
+            from execution_services.integration import consume_notices
+            if await consume_notices(state, _persist_state_with_model_append):
+                llm_history = list(state["llm_history"])
+                work_messages = list(state["work_messages"])
             pre_api_timings: Dict[str, int] = dict(state.pop("_pre_run_timings", {}) or {})
             _t_pre_api = time.perf_counter()
             _req_wall_start = time.perf_counter()
@@ -5386,6 +5360,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     )
 
             llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
+            from execution_services.integration import prompt_guidance
+            execution_guidance = prompt_guidance()
+            if execution_guidance:
+                llm_messages.append(SystemMessage(content=execution_guidance))
             if kc_body:
                 llm_messages.append(SystemMessage(content=kc_body))
             llm_messages.extend(turn_msgs)
@@ -5990,11 +5968,22 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             workspace_audit_tail_by_root: Dict[str, dict] = {}
 
             async def _execute_one_core(tool_call):
+                call_stream_seq = tool_call.get("_execution_stream_seq", llm_stream_seq)
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
                 tool_id = tool_call["id"]
                 tool_call_index = tool_call.get("index")
                 tool_descriptor = tool_registry.resolve(tool_name)
+                if _runtime_v2_is_primary() and tool_descriptor is not None and tool_descriptor.effect != "read":
+                    from runtime_v2.execution_journal import ExecutionJournal
+                    uncertain = ExecutionJournal(session_manager.sessions_dir,
+                        getattr(session_manager, "_resolve_session_path", None)).uncertain_execution(
+                            state["session_id"], tool_name, tool_args)
+                    if uncertain:
+                        logger.warning("unclosed_tool_call session=%s execution_id=%s tool=%s",
+                                       state["session_id"], uncertain, tool_name)
+                        return _blocked_tool_result(tool_name, tool_args, tool_id,
+                            "同一操作曾开始执行，但停止状态尚未确认。请先查询外部执行状态，禁止直接重复执行。")
                 if state.get("_tool_batch_first_started_at") is None:
                     state["_tool_batch_first_started_at"] = time.perf_counter()
                 state["_runtime_stage"] = "running_tool:%s" % tool_name
@@ -6480,6 +6469,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
                 # Run the final steer check before announcing that execution started.
                 await _raise_if_steer_requested(state, emit, "tool")
+                await _push_stream_event(state, {
+                    "type": "tool_execution_state", "ephemeral": True,
+                    "tool_call_id": tool_id, "tool_call_index": tool_call_index,
+                    "tool": tool_name, "react_iter": int(iter_count),
+                    "status": "waiting_input" if tool_name == "ask_user" else "running", "executed": True,
+                }, emit=emit)
 
                 def _response_from_outcome(
                     outcome: ToolOutcome,
@@ -6586,6 +6581,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
                 if tool_descriptor is not None and tool_descriptor.invoker_id:
                     started = time.perf_counter()
+                    _host_candidate = iter_client.current_candidate() if callable(getattr(iter_client, "current_candidate", None)) else {}
+                    _host_modalities = _host_candidate.get("input_modalities") or __import__("agent_openai")._client_input_modalities(iter_client)
 
                     async def _publish_host_tool_event(event: Dict[str, Any]) -> None:
                         await _push_stream_event(state, dict(event), emit=emit)
@@ -6598,6 +6595,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         emit_event=_publish_host_tool_event,
                         services={
                             "tool_name": tool_name,
+                            "security_context": sec_context,
+                            "security_request": sec_request,
+                            "security_decision": sec_decision,
+                            "security_workspace": security_workspace,
+                            "image_input_enabled": "image" in _host_modalities,
+                            "model": _host_candidate.get("model") or iter_model,
                             "session_manager": session_manager,
                             "session_plan_store": session_plan_store,
                             "context_changed": lambda current_state: _workflow_callbacks().call(
@@ -6812,6 +6815,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             normalized_stream = (
                                 "stderr" if stream_name == "stderr" else "stdout"
                             )
+                            raw_delta = delta
                             if normalized_stream != shell_output_stream:
                                 if not shell_output_stream:
                                     prefix = (
@@ -6833,13 +6837,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 {
                                     "type": "tool_command_delta",
                                     "ephemeral": True,
-                                    "stream_seq": llm_stream_seq,
+                                    "stream_seq": call_stream_seq,
                                     "delta_seq": shell_delta_seq,
                                     "react_iter": int(iter_count),
                                     "tool_call_id": str(tool_id or ""),
                                     "tool_call_index": tool_call_index,
                                     "tool": "run_shell",
                                     "stream": normalized_stream,
+                                    "raw_delta": raw_delta,
                                     "delta": delta,
                                 },
                                 emit=emit,
@@ -6872,6 +6877,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             }
                         except Exception:
                             _tool_image_input_enabled = None
+                        async def _emit_run_shell_state(payload: dict) -> None:
+                            await _push_stream_event(state, {"type": "tool_execution_state",
+                                "stream_seq": call_stream_seq,
+                                "ephemeral": True, "tool_call_id": tool_id,
+                                "tool_call_index": tool_call_index, "react_iter": int(iter_count),
+                                **payload}, emit=emit)
                         with run_shell_runtime_context(
                             interrupt_check=(
                                 _run_shell_should_interrupt
@@ -6883,6 +6894,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 if emit and tool_name == "run_shell"
                                 else None
                             ),
+                            state_sink=_emit_run_shell_state if emit and tool_name == "run_shell" else None,
                         ):
                             with tool_work_dir_override(worktree_root or None), tool_model_media_context(
                                 image_enabled=_tool_image_input_enabled
@@ -6994,6 +7006,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 """Execute a closed tool call through the Hook lifecycle."""
 
                 call = dict(tool_call or {})
+                call["_execution_stream_seq"] = llm_stream_seq
+                call_react_iter = int(iter_count)
                 tool_name = str(call.get("name") or "")
                 tool_args = call.get("args") if isinstance(call.get("args"), dict) else {}
                 tool_id = str(call.get("id") or "")
@@ -7009,6 +7023,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         0,
                         bool(result.get("tool_failed", True)),
                     )
+                    result["execution_stream_seq"] = call["_execution_stream_seq"]
+                    result["execution_react_iter"] = call_react_iter
                     return result
 
                 if tool_name not in executable_tool_names:
@@ -7154,6 +7170,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 audit_before_ms = _timing_ms(audit_before_started)
                 observed_tool_started = time.perf_counter()
                 result = await _execute_one_core(call)
+                if isinstance(result, dict):
+                    result["execution_stream_seq"] = call["_execution_stream_seq"]
+                    result["execution_react_iter"] = call_react_iter
                 observed_tool_ms = _timing_ms(observed_tool_started)
                 audit_after_started = time.perf_counter()
                 if audit_candidate:
@@ -7371,6 +7390,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 },
             )
             llm_stream_seq += 1
+            state["_active_stream_seq"] = llm_stream_seq
             llm_delta_seq = 0
             tool_delta_seq = 0
             turn = None
@@ -7972,15 +7992,31 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if steer_interrupted_this_call:
                     for _idx, _task in list(early_tool_tasks.items()):
                         if not _task.done():
-                            _task.add_done_callback(_discard_task_result)
-                            _task.cancel()
+                            _tc = _early_tool_call_from_acc(_idx)
+                            _name = str((_tc or {}).get("name") or "")
+                            _policy = _tool_steer_policy(_name, tool_registry.resolve(_name))
+                            if _policy["interruptibility"] == "non_interruptible":
+                                await _task
+                            else:
+                                _task.cancel()
+                                _task.add_done_callback(_discard_task_result)
+                                await asyncio.wait({_task}, timeout=5)
                     partial_reasoning = "".join(streamed_reasoning_parts).strip()
                     partial_response = "".join(streamed_response_parts)
                     completed_early_tool_calls: List[Dict[str, Any]] = []
                     completed_early_tool_results: List[Dict[str, Any]] = []
-                    for _idx in sorted(early_tool_results.keys()):
+                    for _idx in sorted(early_tool_tasks.keys()):
                         _res = early_tool_results.get(_idx)
                         _tc = _early_tool_call_from_acc(_idx)
+                        if _tc and not isinstance(_res, dict):
+                            from runtime_v2.execution_journal import interrupted_tool_text
+                            _records = _execution_recovery_snapshot(state["session_id"])["execution_records"]
+                            _record = next((row for row in _records if row.get("tool_call_id") == _tc["id"]), None)
+                            _text = interrupted_tool_text(_record)
+                            _res = {"type": "tool", "tool_id": _tc["id"], "tool_name": _tc["name"],
+                                    "tool_args": _tc["args"], "tool_call_index": _idx, "result": _text,
+                                    "tool_detail_ui": _text, "tool_detail_llm": _text,
+                                    "execution_status": "interrupted"}
                         if isinstance(_res, dict) and _res.get("type") == "tool" and _tc:
                             completed_early_tool_calls.append(_tc)
                             completed_early_tool_results.append(_res)
@@ -7993,6 +8029,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     {
                                         "type": "llm_reasoning",
                                         "content": partial_reasoning,
+                                        "execution_status": "interrupted",
                                         "react_iter": int(iter_count),
                                     },
                                     emit=emit,
@@ -8008,6 +8045,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     {
                                         "type": "llm_response",
                                         "content": partial_response,
+                                        "execution_status": "interrupted",
                                         "react_iter": int(iter_count),
                                     },
                                     emit=emit,
@@ -8044,10 +8082,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         except Exception:
                             steer_checkpoint_ok = False
                             logger.debug("failed to preserve steer partial assistant output", exc_info=True)
-                    # Commit the interrupted assistant/tool checkpoint before
-                    # telling clients to discard live rows.  Durable LLM/tool
-                    # events upgrade their existing DOM rows first; the abort
-                    # event then removes only drafts that remain uncommitted.
+                    # Commit the checkpoint before clearing transient buffers.
                     await _emit_steer_abort_event(
                         state,
                         emit,
@@ -8055,6 +8090,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         checkpoint_ok=steer_checkpoint_ok,
                         cleanup_scope="drafts_only" if steer_checkpoint_ok else "none",
                     )
+                    _append_execution_progress_note(state, "用户追问")
                     if await _consume_steer_messages(state, emit=emit, modes={"interrupt"}):
                         _reset_steer_control(state)
                         llm_history = list(state["llm_history"])
@@ -8065,6 +8101,48 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         continue
                     _reset_steer_control(state)
                 if stream_error is not None:
+                    # A fallback request must know the received progress. An
+                    # early executed call is reconciled below instead of retried.
+                    if not early_tool_tasks:
+                        _partial_response = "".join(streamed_response_parts)
+                        _partial_reasoning = "".join(streamed_reasoning_parts)
+                        if _partial_response and not early_tool_acc:
+                            from runtime_v2.execution_journal import merge_continuation
+                            state["_output_continuation"] = merge_continuation(
+                                str(state.get("_output_continuation") or ""), _partial_response)
+                        if _partial_response or _partial_reasoning:
+                            _partial_message = AssistantMessage(content=_partial_response,
+                                metadata={"interrupted": True},
+                                additional_kwargs=build_assistant_additional_kwargs(_partial_reasoning))
+                            llm_history.append(_partial_message)
+                            work_messages.append(_partial_message)
+                            _persist_state_with_model_append(state, _partial_message)
+                            for _kind, _text in (("llm_response", _partial_response), ("llm_reasoning", _partial_reasoning)):
+                                if _text:
+                                    await _push_stream_event(state, {"type": _kind, "content": _text,
+                                        "react_iter": int(iter_count), "execution_status": "interrupted"}, emit=emit)
+                            _notice = SystemMessage(content="[上一请求连接中断，已保留收到的内容。接着未完成的回复继续；参数草稿未执行，已开始的工具不得重复执行。]")
+                            if _partial_reasoning:
+                                _notice.content += "\n已收到的思考进度：" + _partial_reasoning
+                            llm_history.append(_notice)
+                            work_messages.append(_notice)
+                            _persist_state_with_model_append(state, _notice)
+                            llm_messages_to_send = strip_reasoning_for_api_request(
+                                list(llm_messages_to_send) + [_partial_message, _notice])
+                        state["llm_history"], state["work_messages"] = llm_history, work_messages
+                        await _push_stream_event(state, {"type": "llm_stream_aborted", "ephemeral": True,
+                            "reason": "transport_error", "react_iter": int(iter_count),
+                            "stream_seq": llm_stream_seq, "cleanup_scope": "none"}, emit=emit)
+                        _progress_start = len(llm_history)
+                        _append_execution_progress_note(state, "模型流连接中断")
+                        llm_history = list(state["llm_history"])
+                        work_messages = list(state["work_messages"])
+                        llm_messages_to_send = strip_reasoning_for_api_request(
+                            list(llm_messages_to_send) + llm_history[_progress_start:])
+                        if state.get("_output_continuation"):
+                            _checkpoint_output_continuation(state)
+                        llm_stream_seq += 1
+                        state["_active_stream_seq"] = llm_stream_seq
                     logger.warning("流式输出失败，降级为整段响应: %s", stream_error)
                     turn = None
                     streamed_this_call = False
@@ -8404,6 +8482,27 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 finish_reason_norm in {"length", "max_tokens", "max_output_tokens"}
                 or stop_reason_norm in {"length", "max_tokens", "max_output_tokens"}
             )
+            length_continuation_exhausted = False
+            length_retry = 0
+            max_length_retries = max(0, int(os.getenv("OUTPUT_LENGTH_RETRY_MAX", "2")))
+            if output_truncated:
+                from runtime_v2.execution_journal import register_output_continuation
+                if api_resp is not None and not early_tool_acc:
+                    from runtime_v2.execution_journal import response_tool_drafts
+                    for draft in response_tool_drafts(api_resp):
+                        await _push_stream_event(state, {**draft, "react_iter": int(iter_count),
+                            "stream_seq": llm_stream_seq}, emit=emit)
+                length_retry, may_continue = register_output_continuation(
+                    state, response_text, tool_drafts=bool(turn.tool_calls or early_tool_acc),
+                    max_extra_requests=max_length_retries)
+                length_continuation_exhausted = not may_continue
+                _checkpoint_output_continuation(state)
+                logger.info("output_continuation session=%s attempt=%s max=%s tool_drafts=%s",
+                            state["session_id"], length_retry, max_length_retries,
+                            bool(turn.tool_calls or early_tool_acc))
+            else:
+                if state.pop("_output_length_retries", None) is not None:
+                    _checkpoint_output_continuation(state, status="completed")
             recovered_truncated_tool_calls: List[Dict[str, Any]] = []
             if output_truncated and early_tool_tasks:
                 for _idx in sorted(early_tool_tasks):
@@ -8413,9 +8512,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if recovered_truncated_tool_calls:
                     # The assistant turn may have been truncated after one or
                     # more independently complete calls. Keep those calls and
-                    # their real results in history; discard only unfinished
-                    # draft fragments instead of pretending executed writes did
-                    # not happen.
+                    # their real results in history. Retain drafts separately
+                    # so the next request cannot execute incomplete parameters.
                     turn.tool_calls = recovered_truncated_tool_calls
                     output_truncated = False
                     await _prune_stream_ephemeral(emit,
@@ -8438,25 +8536,40 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state,
                         {
                             "type": "status",
-                            "content": "模型输出在完整工具调用后达到长度上限；已保留并执行完整调用，未完成片段已丢弃。",
+                            "content": "模型输出在完整工具调用后达到长度上限；完整调用和参数草稿均已保留，草稿未执行。",
                             "ephemeral": True,
                         },
                         emit=emit,
                     )
             if output_truncated:
+                _fragment = AssistantMessage(content=response_text,
+                    metadata={"interrupted": True}, additional_kwargs=build_assistant_additional_kwargs(reasoning_text))
+                if response_text or reasoning_text:
+                    llm_history.append(_fragment)
+                    work_messages.append(_fragment)
+                    _persist_state_with_model_append(state, _fragment)
+                    for _kind, _text in (("llm_reasoning", reasoning_text), ("llm_response", response_text)):
+                        if _text:
+                            await _push_stream_event(state, {"type": _kind, "content": _text,
+                                "react_iter": int(iter_count), "execution_status": "interrupted"}, emit=emit)
+                _has_tool_drafts = bool(turn.tool_calls or early_tool_acc)
+                state["llm_history"], state["work_messages"] = llm_history, work_messages
+                await _push_stream_event(state, {"type": "llm_stream_aborted", "ephemeral": True,
+                    "reason": "output_length", "react_iter": int(iter_count), "cleanup_scope": "none"}, emit=emit)
                 for _task in list(early_tool_tasks.values()):
                     if not _task.done():
                         _task.add_done_callback(_discard_task_result)
                         _task.cancel()
-                length_retry = int(state.get("_output_length_retries", 0) or 0) + 1
-                state["_output_length_retries"] = length_retry
-                max_length_retries = max(0, int(os.getenv("OUTPUT_LENGTH_RETRY_MAX", "2")))
-                if length_retry <= max_length_retries:
+                _append_execution_progress_note(state, "输出长度上限")
+                llm_history = list(state["llm_history"])
+                work_messages = list(state["work_messages"])
+                if not length_continuation_exhausted:
                     retry_msg = SystemMessage(
                         content=(
                             "[系统通知：上一轮 assistant 输出因为 max_tokens/max_output_tokens 上限被截断，"
-                            "可能包含未闭合或不完整的 tool_call。该半截输出已丢弃，不能当作最终答案。"
-                            "请重新生成一个完整且更短的下一步；如果需要写入长文件，请拆成多个较小的工具调用，"
+                            "收到的内容和参数草稿已保留，但参数草稿未执行。"
+                            "正文请从已生成内容后继续，不要重复开头；工具参数不完整时请重新生成该调用，"
+                            "不要重复已经执行的调用。如果需要写入长文件，请拆成多个较小的工具调用，"
                             "或先写入较小脚本/片段再继续。]"
                         )
                     )
@@ -8470,17 +8583,18 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         state,
                         {
                             "type": "status",
-                            "content": f"模型输出达到输出 token 上限，已丢弃半截工具调用并重试（{length_retry}/{max_length_retries}）",
+                            "content": f"模型输出达到输出 token 上限，已保留生成片段并自动继续（{length_retry}/{max_length_retries}）",
                         },
                         emit=emit,
                     )
+                    max_react_iter = max(max_react_iter, iter_count + 1)
                     continue
+                _checkpoint_output_continuation(state, status="failed")
                 final_content = (
-                    "模型输出达到 max_tokens/max_output_tokens 上限，工具调用可能被截断。"
-                    "请调大输出窗口，或把长文件写入拆成更小的步骤后重试。"
+                    str(state.pop("_output_continuation", ""))
+                    + "\n\n模型输出仍达到长度上限，自动继续次数已用完。已保留全部收到的片段和工具参数草稿。"
                 )
                 break
-            state.pop("_output_length_retries", None)
 
             if _has_invalid_tool_calls(turn.tool_calls):
                 # A closed, identifiable streamed call may already have run.
@@ -8541,14 +8655,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if streamed_this_call:
                     sid = state["session_id"]
                     if (reasoning_text or "").strip():
-                        session_manager.append_ui_event(
-                            sid,
-                            {
-                                "type": "llm_reasoning",
-                                "content": reasoning_text,
-                                "react_iter": int(iter_count),
-                            },
-                        )
                         await _prune_stream_ephemeral(emit,
                             sid,
                             types={"llm_reasoning_delta"},
@@ -8560,20 +8666,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "type": "llm_reasoning",
                                 "content": reasoning_text,
                                 "react_iter": int(iter_count),
-                                "_skip_persist": True,
                                 "metadata": {"live_commit": True},
                             },
                             emit=emit,
                         )
                     if (response_text or "").strip():
-                        session_manager.append_ui_event(
-                            sid,
-                            {
-                                "type": "llm_response",
-                                "content": response_text,
-                                "react_iter": int(iter_count),
-                            },
-                        )
                         await _prune_stream_ephemeral(emit,
                             sid,
                             types={"llm_response_delta"},
@@ -8585,7 +8682,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "type": "llm_response",
                                 "content": response_text,
                                 "react_iter": int(iter_count),
-                                "_skip_persist": True,
                                 "metadata": {"live_commit": True},
                             },
                             emit=emit,
@@ -9285,6 +9381,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 state.pop("_steer_rollback_marker", None)
                 state["_runtime_stage"] = "react"
 
+            if recovered_truncated_tool_calls:
+                _append_execution_progress_note(state, "完整调用之后达到输出长度上限")
+                llm_history = list(state["llm_history"])
+                work_messages = list(state["work_messages"])
+                if length_continuation_exhausted:
+                    _checkpoint_output_continuation(state, status="failed")
+                    final_content = "模型输出仍达到长度上限，自动继续次数已用完。完整工具调用及其真实结果已保存，参数草稿未执行。"
+                    break
+                max_react_iter = max(max_react_iter, iter_count + 1)
+
             hook_pause_reason = str(state.pop("_hook_pause_requested", "") or "").strip()
             if hook_pause_reason:
                 final_content = f"执行已由 Hook 暂停：{hook_pause_reason}"
@@ -9358,6 +9464,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
             if not tool_calls_list:
                 # 没有工具调用 → 终稿只取正文；仅有思考、无正文时由前端 llm_reasoning 展示，不当作最终回答文本
+                from execution_services.integration import consume_notices
+                if await consume_notices(state, _persist_state_with_model_append):
+                    llm_history = list(state["llm_history"])
+                    work_messages = list(state["work_messages"])
+                    max_react_iter = max(max_react_iter, iter_count + 1)
+                    continue
                 if await _consume_steer_messages(state, emit=emit, modes={"append", "interrupt"}):
                     _reset_steer_control(state)
                     llm_history = list(state["llm_history"])
@@ -9377,7 +9489,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         emit=emit,
                     )
                     continue
-                final_content = _strip_think_tags_for_final(response_text)
+                from runtime_v2.execution_journal import merge_continuation
+                final_content = _strip_think_tags_for_final(merge_continuation(
+                    str(state.pop("_output_continuation", "")), response_text))
                 if not final_content and final_result_retries < final_result_retry_max:
                     final_result_retries += 1
                     state["final_result_retries"] = final_result_retries
@@ -9461,14 +9575,16 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
     """Run ReAct with non-recursive steer replanning.
 
     A steer restarts the logical planning pass without stacking coroutine frames.
-    Completed history remains in ``state``; only an unclosed tool tail is rolled
-    back before the durable steer message is claimed and committed.
+    Received history remains in ``state``; missing tool results are closed with
+    confirmed progress before the durable steer message is claimed and committed.
     """
     while True:
         try:
             return await _react_node_once(state, emit=emit)
         except _SteerRestartRequested:
             _rollback_steer_partial_turn(state)
+            for event in state.pop("_interrupted_tool_events", []):
+                await _push_stream_event(state, event, emit=emit)
             consumed = await _consume_steer_messages(state, emit=emit, modes={"interrupt"})
             _reset_steer_control(state)
             if not consumed:
@@ -10133,6 +10249,8 @@ async def astream_events(
         kind="question",
     )
     session_manager.clear_interrupt(session_id, runtime_v2_run_id)
+    from execution_services.integration import resume_execution
+    await resume_execution(session_id)
     steer_control = _register_steer_run_control(session_id, runtime_v2_run_id)
     state["_steer_control"] = steer_control
 
@@ -10149,6 +10267,7 @@ async def astream_events(
         # 子 agent 转发事件仅推 SSE，不写入父会话 ui_events
         ev = dict(ev)
         ev.setdefault("run_id", runtime_v2_run_id)
+        ev.setdefault("stream_seq", state.get("_active_stream_seq"))
         event_type = str(ev.get("type") or "")
         if not runtime_lifecycle.allows_stream_event(event_type):
             logger.info(
@@ -10158,6 +10277,7 @@ async def astream_events(
                 event_type,
             )
             return
+        ev = await persist_execution_event(session_manager, session_id, ev)
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final":
             model_content = str(ev.get("content") or "")
@@ -10654,6 +10774,7 @@ async def astream_events_continuation(
     async def emit(ev: Dict[str, Any]) -> None:
         ev = dict(ev)
         ev.setdefault("run_id", runtime_v2_run_id)
+        ev.setdefault("stream_seq", state.get("_active_stream_seq"))
         event_type = str(ev.get("type") or "")
         if not runtime_lifecycle.allows_stream_event(event_type):
             logger.info(
@@ -10663,6 +10784,7 @@ async def astream_events_continuation(
                 event_type,
             )
             return
+        ev = await persist_execution_event(session_manager, session_id, ev)
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final":
             model_content = str(ev.get("content") or "")
@@ -10679,10 +10801,10 @@ async def astream_events_continuation(
         if persist and ev.get("type") != "tool_call":
             session_manager.append_ui_event(session_id, ev)
         if persist and ev.get("type") == "tool_call":
-            if consumer_attached:
-                await queue.put(public_event)
             await asyncio.to_thread(session_manager.append_ui_event, session_id, ev)
             await publish_session_event(session_id, public_event)
+            if consumer_attached:
+                await queue.put(public_event)
             return
         await publish_session_event(session_id, public_event)
         if consumer_attached:

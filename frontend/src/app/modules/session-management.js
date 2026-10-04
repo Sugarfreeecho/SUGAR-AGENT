@@ -1471,6 +1471,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         let snapshotTocTurns = null;
         let historySource = 'messages';
         let snapshotTiming = null;
+        let savedExecutions = [];
         const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
         if (canUseSnapshot) {
             try {
@@ -1490,6 +1491,13 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                     if (snapshotResp.ok) {
                     if (snapshot && snapshot.ok && snapshot.messages) {
                         raw = snapshot.messages;
+                        savedExecutions = Array.isArray(snapshot.execution_records) ? snapshot.execution_records : [];
+                        executionRecoveryBySession.set(String(sessionId), {
+                            lastRuntimeSeq:Number(snapshot.last_runtime_seq || 0),
+                            revision:Number(snapshot.projection_revision || 0),
+                            projectionVersion:Number(snapshot.projection_version || 0),
+                        });
+                        executionRecordsBySession.set(String(sessionId), new Map());
                         historySource = 'history_snapshot';
                         snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'
                             ? snapshot.timing
@@ -1610,6 +1618,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             return true;
         }
         const loadCtx = newDomContext(getVisibleChatStream());
+        if (typeof seedRenderContextRunGenerations === 'function') {
+            seedRenderContextRunGenerations(loadCtx, events, savedExecutions);
+        }
         const hydrationStartedAt = performance.now();
         loadCtx.lastUserEventIndex = -1;
         const indexBase = pageMeta ? pageMeta.range_start : 0;
@@ -1628,6 +1639,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
             }
         }
+        savedExecutions.forEach(function (record) {
+            updateExecutionRecord(sessionId, record);
+            if (!record.ui_committed) renderExecutionRecord(loadCtx, record, sessionId);
+        });
+        mergeAdjacentExecutionGroups(loadCtx.stream);
         if (typeof uiPerformance !== 'undefined') {
             uiPerformance.sample(sessionId, 'history.hydrate', performance.now() - hydrationStartedAt);
             uiPerformance.count(sessionId, 'history.events', events.length);

@@ -106,3 +106,22 @@ def test_sidebar_groups_and_labels_are_declared():
     assert "'目标': 'Goal'" in i18n
     assert "'插件': 'Plugins'" in i18n
     assert "'改动': 'Changes'" in i18n
+
+
+def test_narrow_strip_item_text_truncates_instead_of_overflowing_the_column():
+    """长目标/长状态文案只截断文本：条目不得按 min-content 撑宽并溢到输入列之外。"""
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+
+    slot = styles.split(".pubar-narrow-slot {", 1)[1].split("}", 1)[0]
+    item = styles.split(".pni {", 1)[1].split("}", 1)[0]
+    chip = styles.split(".pni-chip {", 1)[1].split("}", 1)[0]
+    summary = styles.split(".pni-summary {", 1)[1].split("}", 1)[0]
+
+    assert "container-type: inline-size;" in slot  # 容器查询上下文落在条带自身，而非窗口宽度
+    assert "min-width: 0;" in item  # 网格条目不再按 min-content 撑开 auto 轨道
+    assert "flex: 0 0 auto; min-width: 0;" in chip  # 常规宽度下胶囊不参与压缩
+    assert "max-width: 11rem; overflow: hidden; text-overflow: ellipsis;" in chip
+    assert "flex: 1 999 auto;" in summary  # 先牺牲摘要，状态胶囊最后才被压缩
+    for threshold in ("24rem", "15rem", "12rem"):  # 摘要+放开胶囊压缩 → 分组标签 → 行内动作
+        assert f"@container (max-width: {threshold})" in styles
+    assert ".pubar-narrow-strip .pni-chip { flex: 0 1 auto; }" in styles  # 压缩只在 24rem 以下放开

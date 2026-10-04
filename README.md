@@ -24,6 +24,8 @@ SugarAgent 是一个**本地运行**的 AI Agent 开发与使用平台。它通�
 | 🎯 **持久 Goal 模式** | 服务端调度器自动续跑未完成的 Goal，不依赖浏览器保持打开；双阶段完成流程由独立 Judge 裁决 |
 | 🗜️ **上下文压缩** | 渐进式压缩、微压缩、摘要合并和应急裁剪，保障长会话稳定运行 |
 | 🔌 **MCP 扩展** | 支持 stdio / SSE / Streamable HTTP 三种 MCP transport；专用后台事件循环避免跨循环绑定错误 |
+| 🕒 **后台任务与持久终端** | DSH 风格 `run_in_background`、`job_*` 和 `terminal_*` 工具；网页任务面板与独立用户 PTY；任务完成后服务端续跑 |
+| 🖱️ **Computer Use** | 可选 Cua Driver 原生 SDK / MCP provider，动态工具目录、截图附件及中央审批，默认关闭 |
 | 🧩 **插件生态** | Plugin API v1 支持 Python/Node 工具、Hook、Slash Command，可在插件包中携带 Skill/MCP/Agent |
 | ⚡ **稳定性自适应** | CPU 压力监测下自动降级为非流式输出；首 token 超时自动发起并行重试；可观测性防抖写盘 |
 | 🛡️ **安全边界** | 工作区路径限制、Shell 危险命令拦截、SSRF 防护、敏感信息脱敏、工具审批、**网络出口控制（egress）** |
@@ -35,6 +37,8 @@ SugarAgent 是一个**本地运行**的 AI Agent 开发与使用平台。它通�
 
 MyAgent 全局统一使用一套持久权限模式，主界面提供三档固定权限。新任务、子 Agent、
 后台任务、切换工作区和应用重启都会立即使用当前全局模式；只有用户主动切换才会改变：
+
+网页用户终端是用户直接操作的系统终端，以当前系统用户权限执行，独立于 Agent 权限模式；其输入输出不会自动进入模型上下文。Agent 的持久终端输入仍按当前权限进行审批，创建 shell 不会授权后续全部命令。
 
 | 模式 | 执行边界 | 审批 |
 |------|------|------|
@@ -53,6 +57,14 @@ MyAgent 全局统一使用一套持久权限模式，主界面提供三档固定
 **网络出口控制（Egress Guard）**：可选的系统级网络隔离助手。`EGRESS_HELPER_ENABLED=1` 时，Agent 通过健康握手发现原生助手（`SUGAR_AGENT_EGRESS_HELPER` → `app/native/` → `PATH`），依据策略对命令执行**网络放行/隔离**；helper 报告 `strong`（可按目标约束网络）或 `partial`（仅可整体拒绝）。助手缺失或未启用时，出站防护处于 `degraded` 状态，前端会提示"当前没有系统级网络隔离"，命令仍按应用层规则审批。协议见 [docs/egress_helper_protocol.md](docs/egress_helper_protocol.md)，Windows 助手由 C# 源码可复现构建（`scripts/build_egress_helper_windows.ps1`）。
 
 原生 OS 沙箱仅作为未来可选的高级安全功能，不是正常运行的前置条件。本项目不安装、检测或调用容器运行时。
+
+### 后台任务、持久终端与 Computer Use
+
+会话侧栏的「执行」页提供任务输出、取消按钮和用户终端。`run_shell(run_in_background=true)` 返回 job ID，后续用 `job_output`、`job_list`、`job_kill` 管理；已授权会话中的前台命令等待超时会转为后台任务。一次性脚本优先用 `run_shell`；需要保存目录、环境变量或交互式 stdin 时用 `terminal_open/send/read/signal/close/list`。
+
+后台任务完成后会通知 Agent，空闲会话由服务端续跑，不要求浏览器在线。点击会话「停止」取消该会话及其子 Agent 的后台任务并抑制这次取消的唤醒，用户终端保持独立。应用重启保留记录和有界输出，但不会恢复进程、shell 或重放命令。`terminal_send` 的 `inferred_idle` / `timeout` 仅表示等待结束，不能证明命令退出。
+
+在「执行 → Computer Use」中显式启用 Native 或选择已配置的 Cua Driver stdio MCP。依赖为 `cua-driver==0.28.0`；原生工具名为 `cua_driver_native__<tool>`，MCP 工具名为 `mcp__cua-driver-mcp__<tool>`。截图需要模型声明图像输入；缺少系统权限或平台能力时返回诊断，不自动换模型或切换 provider。详见 [执行功能说明](docs/execution_services.md)。
 
 ---
 

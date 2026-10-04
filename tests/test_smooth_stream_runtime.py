@@ -84,6 +84,13 @@ def test_text_reveal_and_unified_follow_contract():
     assert "followStiffness: 180" in smooth
     assert "Math.sqrt(SMOOTH_STREAM_CONFIG.followStiffness)" in smooth
     assert "maxFollowStepPx: 20" in smooth
+    assert "maxFollowAccelPxPerFrame2" in smooth
+    assert "stepCeiling" in smooth
+    # 行高变化必须先钉住旧高度再改内容：否则「内容瞬时变矮」的那次布局会把贴底容器的
+    # scrollTop 硬钳下去（矮窗口下整个执行过程框单帧闪跳），且钳下去后不会自动恢复。
+    assert "function measureSmoothTraceRowNaturalHeight" in smooth
+    assert "row.style.height = fromHeight + 'px';" in smooth
+    assert "if (pinned) row.style.removeProperty('height');" in smooth
     assert "function computeSmoothFollowSpringStep" in smooth
     assert "followDeadlineMs" not in smooth
     assert "SMOOTH_STREAM_FOLLOW_PROFILES" not in smooth
@@ -93,9 +100,15 @@ def test_text_reveal_and_unified_follow_contract():
     assert "llmRevealCpsEma" not in scrolling
     assert "followStreamProcessScroll(ctx, runSessionId, 'text');" in scrolling
     assert "followStreamProcessScroll(ctx, runSessionId, channel || 'row');" in scrolling
+    # 流式文字写入行时，行上还挂着的插入/高度动画必须释放（否则动画的裁切快照
+    # 会把新文字切掉，并在动画结束时整行跳高）。
+    assert "data-smooth-trace-layout-owned" in scrolling
+    assert "cancelSmoothTraceLayoutAnimation(row);" in scrolling
     rendering = (
         ROOT / "frontend/src/app/modules/message-rendering.js"
     ).read_text(encoding="utf-8")
-    assert "if (!isHistoryHydrate && !isInitialLiveStatusRow) animateSmoothTraceRowInsertion(row);" in rendering
+    # 流式行不做插入高度动画（空行快照 + overflow:clip 会裁掉流入的文字）。
+    assert "var isLiveStreamRow = !!(streamOpts.streaming" in rendering
+    assert "if (!isHistoryHydrate && !isInitialLiveStatusRow && !isLiveStreamRow) {" in rendering
     assert "if (isInitialLiveStatusRow) finishStreamScrollIfFollow(ctx, runSessionId);" in rendering
     assert "mutateSmoothTraceRowHeight(row, collapse);" in rendering

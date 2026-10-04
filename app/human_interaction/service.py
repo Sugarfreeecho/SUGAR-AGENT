@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import hashlib
+import hmac
 import json
 import os
 import threading
@@ -159,6 +160,17 @@ class HumanInteractionService:
             session_id, self.mirror.event_log, self.mirror.projector
         )
 
+    def _snapshot_locked(self, session_id: str) -> dict:
+        # Execution deltas append without rewriting the snapshot. Rebuild a
+        # stale view under our existing transaction rather than acquiring the
+        # same Windows file lock again through read_consistent().
+        snapshot = self.mirror.snapshots.read_for_update(session_id)
+        from runtime_v2.versions import PROJECTOR_VERSION
+        if (int(snapshot.get("last_seq") or 0) != self.mirror.event_log.next_seq(session_id) - 1
+                or snapshot.get("projector_version") != PROJECTOR_VERSION):
+            snapshot = self.mirror.projector.project(self.mirror.event_log.read_all(session_id))
+        return snapshot
+
     def _append_locked(self, session_id: str, event_type: str, payload: dict, run_id: str = ""):
         event = self.mirror.event_log._append_unlocked(
             session_id, event_type, payload=payload, run_id=run_id or None
@@ -286,6 +298,7 @@ class HumanInteractionService:
             "questions": questions,
             "metadata": metadata,
         }
+        request_core.update(self._execution_anchor(sid, tool_call_id, run_id))
         record = {
             **request_core,
             "status": "pending",
@@ -294,7 +307,7 @@ class HumanInteractionService:
             "request_digest": _digest(request_core),
         }
         with self.mirror.event_log.session_transaction(sid):
-            snapshot = self._snapshot(sid)
+            snapshot = self._snapshot_locked(sid)
             if iid in dict(snapshot.get("interactions") or {}):
                 raise HumanInteractionConflict("interaction_id already exists")
             self._append_locked(sid, "interaction_requested", record, str(run_id or ""))
@@ -321,6 +334,7 @@ class HumanInteractionService:
             "request_version": 1,
             **meta,
         }
+        request_core.update(self._execution_anchor(sid, tool_call_id, run_id))
         from tool_approval_gate import approval_wait_seconds
 
         wait_seconds = approval_wait_seconds()
@@ -340,14 +354,23 @@ class HumanInteractionService:
             "request_digest": _digest(request_core),
         }
         with self.mirror.event_log.session_transaction(sid):
-            snapshot = self._snapshot(sid)
+            snapshot = self._snapshot_locked(sid)
             existing = dict(snapshot.get("approvals") or {}).get(aid)
             if isinstance(existing, dict):
                 if existing.get("status") == "pending":
+                    if existing.get("request_digest") != record["request_digest"]:
+                        raise HumanInteractionConflict("approval request digest changed")
                     return existing
                 raise HumanInteractionConflict("approval_id already exists")
             self._append_locked(sid, "approval_requested", record, str(run_id or ""))
         return record
+
+    def _execution_anchor(self, session_id: str, tool_call_id: str, run_id: str) -> dict:
+        if not tool_call_id:
+            return {}
+        from runtime_v2.execution_journal import ExecutionJournal
+        return ExecutionJournal(self.mirror.event_log.root,
+                                self.mirror.event_log._path_resolver).anchor(session_id, tool_call_id, run_id)
 
     def list(self, session_id: str, *, kind: str = "question", status: str = "") -> list[dict]:
         snapshot = self._snapshot(session_id)
@@ -363,6 +386,23 @@ class HumanInteractionService:
         if not isinstance(row, dict):
             raise HumanInteractionNotFound(f"{kind} request not found")
         return dict(row)
+
+    @staticmethod
+    def _verify_approval_record(record: dict, expected_digest: str = "") -> None:
+        # Projection/terminal fields were not part of the original request.
+        mutable = {"status", "created_at", "expires_at", "request_digest", "seq", "updated_at",
+                   "resolved_at", "resolver", "decision", "rejection_reason", "cancelled_at",
+                   "expired_at", "reason"}
+        core = {key: value for key, value in record.items() if key not in mutable}
+        digest = str(record.get("request_digest") or "")
+        if (not digest or not hmac.compare_digest(digest, _digest(core))
+                or (expected_digest and not hmac.compare_digest(digest, expected_digest))):
+            raise HumanInteractionConflict("审批原请求摘要不一致，不能恢复执行。")
+
+    def verified_approval_request(self, session_id: str, approval_id: str) -> dict:
+        record = self.get(session_id, approval_id, kind="approval")
+        self._verify_approval_record(record)
+        return record
 
     def pending_counts(self, session_id: str) -> dict:
         sid = str(session_id or "").strip()
@@ -427,7 +467,7 @@ class HumanInteractionService:
         sid = str(session_id or "").strip()
         iid = str(interaction_id or "").strip()
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot(sid).get("interactions") or {}).get(iid)
+            record = dict(self._snapshot_locked(sid).get("interactions") or {}).get(iid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound("interaction not found")
             if record.get("status") in _TERMINAL:
@@ -454,6 +494,7 @@ class HumanInteractionService:
         *,
         resolver: Optional[dict] = None,
         rejection_reason: str = "",
+        expected_request_digest: str = "",
     ) -> dict:
         sid = str(session_id or "").strip()
         aid = str(approval_id or "").strip()
@@ -481,9 +522,11 @@ class HumanInteractionService:
                 "rejection_reason is only valid when decision is deny"
             )
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot(sid).get("approvals") or {}).get(aid)
+            record = dict(self._snapshot_locked(sid).get("approvals") or {}).get(aid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound("approval not found")
+            if expected_request_digest:
+                self._verify_approval_record(record, expected_request_digest)
             if record.get("status") in _TERMINAL:
                 return dict(record)
             if (
@@ -533,7 +576,7 @@ class HumanInteractionService:
         id_key = "approval_id" if kind == "approval" else "interaction_id"
         event_type = "approval_cancelled" if kind == "approval" else "interaction_cancelled"
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot(sid).get(collection) or {}).get(rid)
+            record = dict(self._snapshot_locked(sid).get(collection) or {}).get(rid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound(f"{kind} request not found")
             if record.get("status") in _TERMINAL:
@@ -557,7 +600,7 @@ class HumanInteractionService:
         id_key = "approval_id" if kind == "approval" else "interaction_id"
         event_type = "approval_expired" if kind == "approval" else "interaction_expired"
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot(sid).get(collection) or {}).get(rid)
+            record = dict(self._snapshot_locked(sid).get(collection) or {}).get(rid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound(f"{kind} request not found")
             if record.get("status") in _TERMINAL:

@@ -73,8 +73,29 @@ function makeElement(tag) {
             }
             return null;
         },
+        querySelector: function (selector) { return queryDescendant(el, selector); },
     };
     return el;
+}
+
+/* 只支持模块实际用到的两种选择器：类名与 [data-pubar-narrow-item="…"]。 */
+function matchesStubSelector(el, selector) {
+    const attributeMatch = /^\[data-pubar-narrow-item="([^"]+)"\]$/.exec(String(selector));
+    if (attributeMatch) return el._attrs['data-pubar-narrow-item'] === attributeMatch[1];
+    const text = String(selector);
+    if (text.charCodeAt(0) === 46) {
+        return String(el.className || '').split(/\s+/).includes(text.slice(1));
+    }
+    return false;
+}
+
+function queryDescendant(node, selector) {
+    for (const child of node.children) {
+        if (matchesStubSelector(child, selector)) return child;
+        const nested = queryDescendant(child, selector);
+        if (nested) return nested;
+    }
+    return null;
 }
 
 const root = makeElement('aside');
@@ -162,6 +183,27 @@ globalThis.MyAgentPubar.configureNarrow('plan', {
 assert.equal(narrowStrip.children[0], actionItem, '仅更换动作回调时不重建按钮');
 actionItem.children[1].children[0]._listeners.click[0]({ preventDefault() {}, stopPropagation() {} });
 assert.equal(narrowActionValue, 2, '复用的按钮调用最新回调');
+
+/* 秒级状态胶囊（Goal 计时）只应改文字：重建会丢悬停/过渡态并让 backdrop-filter 重新合成出残影。 */
+globalThis.MyAgentPubar.configureNarrow('plan', {
+    label: '计划', chip: { text: '1 / 3 已完成', tone: 'accent' },
+    actions: [{ label: '执行', onClick() { narrowActionValue = 2; } }],
+});
+mod.pubarSync();
+const chipItem = narrowStrip.children[0];
+const chipOf = (item) => item.children[0].children.find(
+    child => String(child.className || '').split(/\s+/).includes('pni-chip'));
+assert.equal(chipOf(chipItem).textContent, '1 / 3 已完成');
+assert.equal(globalThis.MyAgentPubar.updateNarrowChip('plan', '2 / 3 已完成'), true);
+assert.equal(chipOf(chipItem).textContent, '2 / 3 已完成', '文字已更新到活体 DOM');
+assert.equal(narrowStrip.children[0], chipItem, '仅更新胶囊文字时不重建条目');
+mod.pubarSync();
+assert.equal(narrowStrip.children[0], chipItem, '更新后的面板同步也不重建条目');
+globalThis.MyAgentPubar.configureNarrow('plan', {
+    label: '计划', chip: { text: '2 / 3 已完成', tone: 'accent' }, summary: '新的摘要',
+    actions: [{ label: '执行', onClick() { narrowActionValue = 2; } }],
+});
+assert.notEqual(narrowStrip.children[0], chipItem, '摘要等结构内容变化时仍重建条目');
 
 const changes = mod.pubarRegisterPane({ id: 'changes', label: '改动', order: 90 });
 assert.ok(changes && changes.host);

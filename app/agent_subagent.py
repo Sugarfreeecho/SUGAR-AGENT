@@ -41,6 +41,7 @@ from agent_harness import (
     todo_manager,
 )
 from agent_subagent_events import (
+    persist_execution_event,
     should_forward_subagent_event_to_parent,
     should_persist_ui_event,
     tag_subagent_forward_event,
@@ -1956,6 +1957,10 @@ async def _execute_subagent_run(
                         flags=re.MULTILINE,
                     ):
                         files_touched.add(match.group(1).strip()[:2000])
+        ev = dict(ev)
+        ev.setdefault("run_id", subagent_run_id)
+        ev.setdefault("stream_seq", state.get("_active_stream_seq"))
+        ev = await persist_execution_event(session_manager, child_id, ev)
         if should_persist_ui_event(ev, session_meta={"is_subagent": True}):
             session_manager.append_ui_event(child_id, ev)
         # Child pages subscribe to their own event bus. Persisting a UI event

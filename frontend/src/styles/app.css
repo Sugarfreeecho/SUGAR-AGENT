@@ -1021,6 +1021,58 @@ button, input, select, textarea { font-family: var(--sans);
 .ctx-wrap.is-bad .ctx-fill { background: linear-gradient(90deg, #dc2626, #ef4444); }
 :root.theme-light .ctx-bar { background: rgba(15, 23, 42, 0.085); }
 
+/* ── 上下文拆解卡：hover 浮窗，对齐 DSH 的 ContextMeter 面板 ──
+   触发器就在右上角，卡片贴其右缘向下展开即可落在视口内，因此不需要 DSH 那套
+   测量式锚定；分段条与图例三色沿用 DSH 的取色（中性蓝灰 / 紫 / 蓝）。 */
+.ctx-wrap { position: relative; }
+.ctx-card {
+    --ctx-lane-system-color: var(--text-tertiary);
+    --ctx-lane-tools-color: #a78bfa;
+    --ctx-lane-messages-color: var(--blue-accent);
+    position: absolute; right: 0; top: calc(100% + 0.4rem);
+    box-sizing: border-box;
+    width: min(16.5rem, calc(100vw - 1.5rem));
+    padding: 0.75rem;
+    border: 1px solid var(--floating-border); border-radius: var(--radius-sm);
+    background: var(--floating-surface);
+    box-shadow: var(--floating-shadow);
+    color: var(--text-secondary);
+    font-family: var(--sans); font-size: var(--ui-text-xs); line-height: 1.25rem;
+    text-align: left; cursor: default;
+    z-index: 420;
+}
+.ctx-card[hidden] { display: none; }
+.ctx-card-head { display: flex; align-items: center; gap: 0.375rem; }
+.ctx-card-headline { color: var(--text-tertiary); }
+.ctx-card-headline:empty { display: none; }
+.ctx-card-pct { font-weight: 500; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ctx-card-figures {
+    margin-left: auto; font-weight: 500;
+    color: var(--text-primary); font-variant-numeric: tabular-nums;
+}
+.ctx-card-bar {
+    display: flex; gap: 1px; margin: 0.65rem 0 0.75rem; height: 4px;
+    border-radius: 999px; background: rgba(var(--text-primary-rgb), 0.09); overflow: hidden;
+}
+/* 每段至少留 2px：占比极小的段也要看得见（DSH 同款下限） */
+.ctx-card-seg { flex: none; min-width: 2px; height: 100%; border-radius: 1px; }
+.ctx-card-rows { margin: 0.35rem 0 0; }
+.ctx-card-rows[hidden] { display: none; }
+.ctx-card-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.125rem 0; }
+.ctx-card-row dt { display: inline-flex; align-items: center; color: var(--text-secondary); }
+.ctx-card-row dd { margin: 0; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ctx-card-swatch {
+    display: inline-block; margin-right: 0.375rem; width: 8px; height: 8px;
+    border-radius: 2px; vertical-align: baseline;
+}
+.ctx-card-note { margin: 0.5rem 0 0; color: var(--text-tertiary); font-size: 0.68rem; line-height: 1.1rem; }
+.ctx-lane-system { --ctx-lane-tint: var(--ctx-lane-system-color); }
+.ctx-lane-tools { --ctx-lane-tint: var(--ctx-lane-tools-color); }
+.ctx-lane-messages { --ctx-lane-tint: var(--ctx-lane-messages-color); }
+.ctx-card-swatch, .ctx-card-seg { background: var(--ctx-lane-tint, var(--text-tertiary)); }
+:root.theme-light .ctx-card { --ctx-lane-tools-color: #7c3aed; }
+:root.theme-light .ctx-card-bar { background: rgba(15, 23, 42, 0.085); }
+
 /* ── 工作区 ── */
 .workbench { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .chat-stage {
@@ -1090,8 +1142,11 @@ button, input, select, textarea { font-family: var(--sans);
 .chat-toc.is-open { width: var(--toc-panel-width, 9.5rem); min-width: 8.5rem; overflow: hidden; opacity: 1; pointer-events: auto; border-radius: var(--radius-sm); }
 .chat-toc-panel {
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
-    background: var(--surface-glass3);
-    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    /* 浮层压在消息流之上：毛玻璃会不停抓取“身后文字”的快照，底色又只有 58%~78% 不透明，
+       于是流式/滚动时能直接看见背后那层模糊文字，合成滞后时更是露出上一帧的残影（文字虚影）。
+       改用与其它浮层一致的近不透明底色并去掉 blur：观感仍是浮层卡片，身后文字不再透出。 */
+    background: var(--floating-surface);
+    backdrop-filter: none; -webkit-backdrop-filter: none;
     padding: 0;
     max-height: min(70vh, 28rem);
     display: flex; flex-direction: column;
@@ -1099,8 +1154,8 @@ button, input, select, textarea { font-family: var(--sans);
     box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 :root.theme-light .chat-toc-panel {
-    background: rgba(255, 255, 255, 0.58);
-    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    background: var(--floating-surface);  /* 浅色主题同样改为近不透明（原来只有 58% 不透明） */
+    backdrop-filter: none; -webkit-backdrop-filter: none;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 .chat-toc-title {
@@ -1207,10 +1262,12 @@ button, input, select, textarea { font-family: var(--sans);
     min-width: 0; overflow: hidden;
     display: flex; flex-direction: column; justify-content: flex-start; gap: 0;
     border-radius: 10px;
-    background: var(--workspace-side-panel-bg);
+    /* 同 .chat-toc-panel：会话状态浮层悬在消息流之上，半透明 + blur(18px) 会让身后的滚动文字
+       透出来（流式时尤其明显，表现为文字虚影）。改为近不透明底色并去掉 blur。 */
+    background: var(--floating-surface);
     border: 1px solid var(--border-glass);
     box-shadow: var(--workspace-side-panel-shadow);
-    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: none; -webkit-backdrop-filter: none;
 }
 .chat-todo-plan.is-open { width: var(--todo-panel-width, 9.5rem); min-width: 8.5rem; overflow: hidden; opacity: 1; pointer-events: auto; border-radius: var(--radius-sm); }
 .plugin-session-panels[hidden] { display: none; }
@@ -1331,7 +1388,8 @@ button, input, select, textarea { font-family: var(--sans);
 }
 
 /* ═══ 输入框上方：会话状态「窄态条目区」（宽态隐藏；与左栏互斥）═══ */
-.pubar-narrow-slot { position: relative; }
+/* 窄态条目区同时作为容器查询上下文：条目按“本列可用宽度”逐级退让，而不是按窗口宽度猜测。 */
+.pubar-narrow-slot { position: relative; container-type: inline-size; }
 .pubar-narrow-strip { display: grid; gap: 0.375rem; margin: 0 0 0.5rem; }
 .pubar-narrow-strip[hidden] { display: none; }
 .pni {
@@ -1342,6 +1400,10 @@ button, input, select, textarea { font-family: var(--sans);
     box-shadow: 0 4px 14px rgba(0,0,0,.08), 0 1px 3px rgba(0,0,0,.05);
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     transition: border-color 0.15s ease, transform 0.12s ease;
+    /* 网格条目默认 min-width:auto，会让 .pubar-narrow-strip 的 auto 轨道按 min-content
+       （未被截断的摘要文案）撑开，条目随之外溢到输入列之外、.pni-summary 的省略号永不生效。
+       显式归零后条目贴住列宽，摘要按列宽省略（目标全文仍在悬停提示/浮窗里）。 */
+    min-width: 0;
 }
 .pni:hover { border-color: rgba(var(--accent-rgb),0.45); }
 .pni[data-open="1"] { border-color: rgba(var(--accent-rgb),0.35); }
@@ -1357,16 +1419,22 @@ button, input, select, textarea { font-family: var(--sans);
 }
 .pni-label { flex: none; font: 500 var(--ui-text-sm)/1.3 var(--sans); color: var(--text-primary); letter-spacing: 0; }
 .pni-chip {
-    flex: none; font-size: var(--ui-text-xs); line-height: 1.4; padding: 0.09rem 0.44rem;
+    flex: 0 0 auto; min-width: 0; font-size: var(--ui-text-xs); line-height: 1.4; padding: 0.09rem 0.44rem;
     border-radius: 999px; border: 1px solid rgba(var(--accent-rgb),0.35);
     background: rgba(var(--accent-rgb),0.12); color: rgb(var(--accent-rgb));
     white-space: nowrap; font-variant-numeric: tabular-nums;
+    /* 文本不可换行：异常长的状态文案会把整条顶出可视范围，因此限宽省略。
+       默认不参与压缩，保证「进行中 · 用时」在常规宽度下永远完整（压缩只由摘要承担）；
+       列宽真正不够时由下方 @container 分级规则放开压缩。 */
+    max-width: 11rem; overflow: hidden; text-overflow: ellipsis;
 }
 .pni-chip--green { border-color: rgba(166,227,161,0.3); background: rgba(166,227,161,0.1); color: var(--green-accent, #a6e3a1); }
 .pni-chip--neutral { border-color: var(--border-glass); background: transparent; color: var(--text-tertiary); }
 :root.theme-light .pni-chip--green { border-color: rgba(36,122,67,0.3); background: rgba(52,168,83,0.1); color: #247a43; }
 .pni-summary {
-    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    /* 压缩权重放大：空间不足时先牺牲摘要（可省略号），状态胶囊只在摘要归零后才会被压缩，
+       避免长目标文案把「进行中 · 用时」挤成省略号。 */
+    flex: 1 999 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font: 400 var(--ui-text-xs)/1.3 var(--sans); color: var(--text-tertiary);
 }
 .pni-summary .pn-add { color: var(--green-accent, #a6e3a1); font-style: normal; font-weight: 500; }
@@ -1389,6 +1457,23 @@ button, input, select, textarea { font-family: var(--sans);
 .pni-btn--text:hover { border-color: rgba(var(--accent-rgb),0.45); background: rgba(var(--accent-rgb),0.12); color: var(--text-primary); }
 .pni-chev { flex: none; width: 0.8rem; height: 0.8rem; color: var(--text-tertiary); transition: transform 0.15s ease; pointer-events: none; }
 .pni[data-open="1"] .pni-chev { transform: rotate(180deg); }
+
+/* 列宽不足时逐级退让（按条带自身宽度判断，与侧栏开合、窗口尺寸解耦）：
+   摘要 → 胶囊压缩 → 分组标签 → 行内动作。分级后条目内容始终留在条目盒内，
+   不再画到输入列之外；被让出的信息仍在悬停提示与点击弹出的浮窗卡片里。
+   24rem≈384px 是「图标 + GOAL + 完整状态胶囊 + 动作按钮 + 展开箭头」的最小舒适宽度：
+   低于它先收起摘要并允许胶囊压缩，胶囊的省略号只可能出现在这一段；
+   15rem≈240px 以下再让出「GOAL」标签；12rem≈192px 以下让出行内动作按钮（浮窗卡片内仍有完整动作栏）。 */
+@container (max-width: 24rem) {
+    .pubar-narrow-strip .pni-summary { display: none; }
+    .pubar-narrow-strip .pni-chip { flex: 0 1 auto; }
+}
+@container (max-width: 15rem) {
+    .pubar-narrow-strip .pni-label { display: none; }
+}
+@container (max-width: 12rem) {
+    .pubar-narrow-strip .pni-actions { display: none; }
+}
 
 /* 浮窗（点击条目打开；形式上对标 skill-picker 弹层） */
 .pubar-narrow-popover {

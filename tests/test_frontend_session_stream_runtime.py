@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize("script", [
     "frontend_session_stream_runtime.cjs",
     "stream_recovery_runtime.cjs",
+    "execution_recovery_runtime.cjs",
+    "execution_display_compat_runtime.cjs",
+    "execution_restart_order_runtime.cjs",
     "ui_performance_runtime.cjs",
     "session_store_runtime.cjs",
     "new_session_lifecycle_runtime.cjs",

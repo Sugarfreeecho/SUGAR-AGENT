@@ -10,6 +10,21 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 
+async def persist_execution_event(manager, session_id: str, event: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist execution updates before their live presentation, without model writes."""
+    if event.get("_subagent_forward"):
+        return event
+    from runtime_v2.execution_journal import ExecutionJournal, STREAM_TYPES
+    if event.get("type") not in STREAM_TYPES | {"llm_stream_aborted", "run_interrupted", "run_failed"}:
+        return event
+    from runtime_v2 import runtime_v2_primary
+    if not runtime_v2_primary():
+        return event
+    import asyncio
+    journal = ExecutionJournal(manager.sessions_dir, getattr(manager, "_resolve_session_path", None))
+    return await asyncio.to_thread(journal.record, session_id, event)
+
+
 SUBAGENT_PARENT_FORWARD_BLOCKED_TYPES = frozenset(
     {
         # Child-local session state. Forwarding these through the parent SSE stream

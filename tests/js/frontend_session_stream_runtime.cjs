@@ -204,7 +204,7 @@ async function testUnreadHistoryLoadLayout() {
   for (const name of ['hideLoading', 'resetSessionHistoryPaging', 'emptyChatStreamKeepingStrip',
     'markVisibleSessionStreamLoadState', 'beginMessageReplay', 'rebuildToc', 'updateSessionTitle',
     'updateHistorySentinelVisibility', 'bindExistingLogInteractions', 'scheduleTocActiveUpdate',
-    'scheduleContextTokensAfterPaint', 'logOpenSessionTiming']) c[name] = () => {};
+    'scheduleContextTokensAfterPaint', 'logOpenSessionTiming', 'mergeAdjacentExecutionGroups']) c[name] = () => {};
   c.elapsedSince = () => 0;
   c.prepareWorkspaceImageLayout = async () => { order.push('images'); assert(stream.hidden); };
   c.reduceAndRenderMessageEvent = ctx => {

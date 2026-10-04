@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "execution-tools",
+  "name": "Execution Tools",
+  "version": "1.0.0",
+  "system_builtin": true,
+  "description": "DSH-compatible background jobs and persistent model/user terminals.",
+  "capabilities": {
+    "trusted_host": {"entry": "host.py"},
+    "web": {"assets": "web"},
+    "ui": {"session.panel": [{
+      "id": "execution", "namespace": "panel", "title": "执行与终端",
+      "description": "后台任务、持久终端与 Computer Use。", "order": 30,
+      "group": {"id": "execution", "label": "执行", "order": 30},
+      "renderer": {"module": "session-panel.js", "style": "session-panel.css"},
+      "fields": []
+    }]}
+  }
+}

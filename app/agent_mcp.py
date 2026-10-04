@@ -55,6 +55,7 @@ _defs_snapshot: List[Dict[str, Any]] = []
 _tool_contracts: Dict[str, Dict[str, Any]] = {}
 _server_start_errors: Dict[str, str] = {}
 _start_lock = asyncio.Lock()
+_host_reserved_servers: set[str] = set()
 _loaded_signature: Optional[str] = None
 _signature_cache: Optional[Tuple[float, str]] = None
 _tool_catalog_generation = 0
@@ -546,11 +547,13 @@ class _PersistentMcpServer:
         transport_label: str,
         connect_cm: Callable[[], Any],
         call_timeout_sec: float = 120.0,
+        register_tools: bool = True,
     ):
         self.alias = alias
         self.transport_label = transport_label
         self._connect_cm = connect_cm
         self.call_timeout_sec = max(1.0, float(call_timeout_sec or 120.0))
+        self.register_tools = register_tools
         self._queue: asyncio.Queue = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._ready = asyncio.Event()
@@ -583,7 +586,7 @@ class _PersistentMcpServer:
                     await session.initialize()
                     listed = await session.list_tools()
                     self._tools = list(listed.tools)
-                    mapped = _register_tools_globally(self.alias, self._tools)
+                    mapped = _register_tools_globally(self.alias, self._tools) if self.register_tools else 0
                     if not self._ready.is_set():
                         self._ready.set()
                     logger.info(
@@ -706,7 +709,7 @@ def _resolve_stdio_cwd(cwd: Any) -> Optional[str]:
     return str((PROJECT_ROOT / p).resolve())
 
 
-def _make_stdio_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
+def _make_stdio_connector(alias: str, cfg: dict, *, register_tools: bool = True) -> _PersistentMcpServer:
     cmd = str(cfg.get("command") or "").strip()
     args = cfg.get("args") or []
     if not isinstance(args, list):
@@ -739,7 +742,7 @@ def _make_stdio_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
             yield rw
 
     call_timeout = float(cfg.get("tool_timeout", cfg.get("call_timeout", cfg.get("callTimeout", 120))))
-    return _PersistentMcpServer(alias, "stdio", _cm, call_timeout_sec=call_timeout)
+    return _PersistentMcpServer(alias, "stdio", _cm, call_timeout_sec=call_timeout, register_tools=register_tools)
 
 
 def _make_sse_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
@@ -841,6 +844,9 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
     """Start one approved server and register its discovered tool contracts."""
     from security.extensions import mcp_descriptor, mcp_registration_is_approved
 
+    if alias in _host_reserved_servers:
+        return
+
     if not mcp_registration_is_approved(mcp_descriptor(alias, cfg)):
         raise PermissionError("registration approval is required")
 
@@ -876,6 +882,24 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
         getattr(srv, "transport_label", "?"),
         sum(1 for pair in _fname_to_tool.values() if pair[0] == alias),
     )
+
+
+async def reserve_server_for_host(alias: str, reserved: bool) -> None:
+    """Give a host provider exclusive transport/catalog ownership of one alias."""
+    async def change():
+        global _loaded_signature, _signature_cache
+        async with _start_lock:
+            if reserved:
+                _host_reserved_servers.add(alias)
+                previous = _servers.pop(alias, None)
+                if previous is not None:
+                    await previous.stop()
+                _remove_server_tools_unlocked(alias)
+            else:
+                _host_reserved_servers.discard(alias)
+            _loaded_signature = None
+            _signature_cache = None
+    await _run_on_mcp_loop(change())
 
 
 async def _force_reload_impl() -> None:

@@ -296,7 +296,9 @@ async function checkSessionStreamProgress(sessionId, ctx) {
         var count = await getUiEventCount(sessionId, { preferCache: false });
         if (sessionId !== currentSessionId || getSessionRunState(sessionId) !== run) return;
         if (Number(count) > Number(ctx.streamEventIndex)) {
-            streamHistoryRecoveryBySession.add(sessionId);
+            console.info('stream recovery', {reason:'history-gap', sessionId:sessionId, runId:run.runId,
+                clientIndex:ctx.streamEventIndex, serverCount:count, runtimeSeq:ctx.lastRuntimeSeq || 0});
+            if (!ctx.lastRuntimeSeq) streamHistoryRecoveryBySession.add(sessionId);
             markRunAbortReason(run, 'stream-history-gap');
             run.controller.abort();
         }
@@ -343,7 +345,8 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         var closingRun = getSessionRunState(runSessionId);
         if (runCtx && closingRun && closingRun.ctx === runCtx && runCtx.terminalSeen !== true
             && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            streamHistoryRecoveryBySession.add(runSessionId);
+            console.info('stream recovery', {reason:'missing-terminal', sessionId:runSessionId, runtimeSeq:runCtx.lastRuntimeSeq || 0});
+            if (!runCtx.lastRuntimeSeq) streamHistoryRecoveryBySession.add(runSessionId);
             clearSessionRunState(runSessionId);
             // Let the caller finish its cleanup before acquiring another stream.
             setTimeout(function () {
@@ -405,6 +408,13 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
             try {
                 let parsed = JSON.parse(data);
                 if (parsed && (parsed.type === 'sse_keepalive' || parsed.keepalive === true)) continue;
+                var forwarded = parsed && parsed.ui_event ? Object.assign({}, parsed, parsed.ui_event) : parsed;
+                if (forwarded && (forwarded._subagent_forward || (forwarded.agent_id
+                    && (forwarded.ephemeral || forwarded.type === 'execution_update'
+                        || (forwarded.session_id || forwarded.sessionId || runSessionId) !== runSessionId)))) {
+                    if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(forwarded);
+                    continue;
+                }
                 if (runCtx) runCtx.lastBusinessEventAt = Date.now();
                 if (parsed && parsed.protocol === 'runtime_v2') {
                     const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;
@@ -424,11 +434,42 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     });
                 }
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
+                // Route child events before parent lifecycle reduction/cursor
+                // accounting, including forwarded child terminal events.
+                if (parsed._subagent_forward || (parsed.agent_id && (parsed.ephemeral
+                    || parsed.type === 'execution_update' || eventSessionId !== runSessionId))) {
+                    if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(parsed);
+                    continue;
+                }
                 // Observer-only control messages refresh extension snapshots;
                 // they are not chat history and must not enter seq/cursor handling.
                 if (consumeExtensionControlEvent(parsed, eventSessionId)) continue;
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, sseSequenceScope(parsed))) continue;
+                if (eventSessionId === runSessionId && !parsed.agent_id
+                    && (parsed.type === 'run_started' || parsed.type === 'run_attached'
+                        || parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta'
+                        || parsed.type === 'tool_call_delta' || parsed.type === 'tool_command_delta'
+                        || parsed.type === 'tool_pending' || parsed.type === 'tool_execution_state')
+                    && typeof syncRenderContextRunScope === 'function') {
+                    syncRenderContextRunScope(runCtx, parsed);
+                }
+                if (parsed.type === 'history_invalidated') {
+                    console.info('stream recovery', {reason:'projection-invalidated', sessionId:runSessionId, revision:parsed.projection_revision});
+                    streamHistoryRecoveryBySession.add(runSessionId);
+                    throw new Error('history projection invalidated');
+                }
+                var runtimePosition = Number(parsed.runtime_seq || parsed.execution_runtime_seq || 0);
+                if (runCtx && eventSessionId === runSessionId && runtimePosition > 0) {
+                    runCtx.lastRuntimeSeq = Math.max(Number(runCtx.lastRuntimeSeq || 0), runtimePosition);
+                    if (typeof executionRecoveryBySession !== 'undefined') executionRecoveryBySession.set(String(runSessionId), Object.assign({}, executionRecoveryBySession.get(String(runSessionId)) || {}, {lastRuntimeSeq:runCtx.lastRuntimeSeq}));
+                }
+                if (parsed.type === 'execution_update') {
+                    var executionUpdate = Object.assign({}, parsed.update, {last_runtime_seq:parsed.runtime_seq});
+                    if (!executionUpdate.run_id && parsed.run_id) executionUpdate.run_id = parsed.run_id;
+                    renderExecutionRecord(runCtx, updateExecutionRecord(runSessionId, executionUpdate), runSessionId);
+                    continue;
+                }
                 if (parsed.type === 'user_steer' && parsed.steer) {
                     var steerOpId = String(parsed.client_id || parsed.steer_id || '');
                     var optimisticSteerRow = steerOpId ? findSteerProcessRow(runCtx, steerOpId) : null;
@@ -490,7 +531,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                             discardPartialStreams: parsed.type !== 'run_finished',
                             drainFollowup: true,
                         });
-                        streamEventIdx += 1;
+                        if (!parsed.ephemeral) streamEventIdx += 1;
                         continue;
                     }
                     syncSessionListIndicatorClasses();
@@ -506,6 +547,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                         if (!parsed.ephemeral) streamEventIdx += 1;
                         continue;
                     }
+                }
+                if (!parsed.agent_id && typeof renderExecutionEvent === 'function' && renderExecutionEvent(runCtx, parsed, runSessionId)) {
+                    if (!parsed.ephemeral) streamEventIdx += 1;
+                    continue;
                 }
                 if (parsed.ephemeral) {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；不能 fall-through
@@ -525,6 +570,16 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                         var preserveInterruptedPartial = parsed.cleanup_scope === 'none'
                             || parsed.checkpoint_ok === false;
                         if (runCtx) runCtx.preserveInterruptedPartial = preserveInterruptedPartial;
+                        if (parsed.preserve_execution_records) {
+                            var savedRecords = executionRecordsBySession.get(String(runSessionId));
+                            if (savedRecords) savedRecords.forEach(function (record) {
+                                if (record.run_id === parsed.run_id && ['completed','failed','timed_out','interrupted','unknown'].indexOf(record.status) < 0) {
+                                    if (['output_length','truncated_after_closed_tool_call','transport_after_closed_tool_call'].indexOf(parsed.reason) >= 0 && record.status !== 'generating') return;
+                                    record.status = 'interrupted';
+                                    renderExecutionRecord(runCtx, record, runSessionId);
+                                }
+                            });
+                        }
                         discardLlmStreamChunks(runCtx, parsed);
                         if (!preserveInterruptedPartial) {
                             removeAbortedToolDraftRows(runCtx, parsed);
@@ -1126,9 +1181,14 @@ function restoreReactGenerationFromProcessGroup(ctx, processGroup) {
     if (!ctx || !processGroup || !processGroup.querySelectorAll) return 0;
     var generation = Math.max(0, Math.floor(Number(ctx.reactGeneration) || 0));
     var rows = processGroup.querySelectorAll('.feed-item[data-react-generation]');
+    var generations = ctx.reactGenerationsByRunId || new Map();
     rows.forEach(function (row) {
         var value = Number(row.getAttribute('data-react-generation'));
-        if (Number.isFinite(value)) generation = Math.max(generation, Math.floor(value));
+        if (Number.isFinite(value)) {
+            generation = Math.max(generation, Math.floor(value));
+            var runId = String(row.getAttribute('data-run-id') || '');
+            if (runId) generations.set(runId, Math.max(Number(generations.get(runId)) || 0, Math.floor(value), 0));
+        }
     });
     // The server may have restarted between the last visible row and this
     // attachment. A replacement run restarts react_iter, so it must not insert
@@ -1136,9 +1196,13 @@ function restoreReactGenerationFromProcessGroup(ctx, processGroup) {
     var lastRow = rows.length ? rows[rows.length - 1] : null;
     var lastRunId = lastRow ? String(lastRow.getAttribute('data-run-id') || '') : '';
     var activeRunId = String(ctx.runId || '');
-    if (lastRow && activeRunId && lastRunId && activeRunId !== lastRunId) {
+    if (activeRunId && generations.has(activeRunId)) {
+        generation = generations.get(activeRunId);
+    } else if (lastRow && activeRunId && lastRunId && activeRunId !== lastRunId) {
         generation += 1;
     }
+    if (activeRunId) generations.set(activeRunId, generation);
+    ctx.reactGenerationsByRunId = generations;
     ctx.reactGeneration = generation;
     return generation;
 }
@@ -1151,6 +1215,8 @@ async function attachSessionEventStream(sessionId, opts) {
     // leave only a later follow-up/process row in the child page.
     if (sessionId === currentSessionId && sessionStore.ui && sessionStore.ui.loadingMessages) return;
     if (!opts.force && !isServerStreamActive(sessionId)) return;
+    var savedRecovery = typeof executionRecoveryBySession !== 'undefined' ? executionRecoveryBySession.get(String(sessionId)) : null;
+    if (savedRecovery && savedRecovery.lastRuntimeSeq && !streamHistoryRecoveryBySession.has(sessionId)) opts = Object.assign({}, opts, {skipInitialLoad:true});
     if (streamHistoryRecoveryBySession.has(sessionId)) {
         opts = Object.assign({}, opts, { skipInitialLoad: false });
         delete opts.afterIndex;
@@ -1180,6 +1246,8 @@ async function attachSessionEventStream(sessionId, opts) {
         }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
+        savedRecovery = typeof executionRecoveryBySession !== 'undefined' ? executionRecoveryBySession.get(String(sessionId)) : null;
+        runCtx.lastRuntimeSeq = savedRecovery ? Number(savedRecovery.lastRuntimeSeq || 0) : 0;
         var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};
         runCtx.runId = String(activeInfoForAttach.run_id || activeInfoForAttach.runId || '');
         runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();
@@ -1220,7 +1288,9 @@ async function attachSessionEventStream(sessionId, opts) {
             ? Math.max(0, Math.floor(Number(opts.afterIndex)))
             : await getUiEventCount(runSessionId, { preferCache: true });
         const streamUrl = '/sessions/' + encodeURIComponent(runSessionId)
-            + '/stream?after_index=' + encodeURIComponent(String(preCount - 1));
+            + '/stream?after_index=' + encodeURIComponent(String(preCount - 1))
+            + (runCtx.lastRuntimeSeq ? '&after_runtime_seq=' + encodeURIComponent(String(runCtx.lastRuntimeSeq)) : '')
+            + (savedRecovery && savedRecovery.projectionVersion ? '&projection_version=' + encodeURIComponent(String(savedRecovery.projectionVersion)) : '');
         const response = await fetch(streamUrl, { signal: ac.signal });
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {

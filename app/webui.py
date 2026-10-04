@@ -805,6 +805,37 @@ def _append_recovered_question_tool_result(record: dict) -> bool:
     return True
 
 
+def _append_recovered_approval_result(record: dict, execution: dict) -> bool:
+    """Record the decision without replaying the orphaned operation itself."""
+    from runtime_v2 import RuntimeHistoryOps, SnapshotStore
+    from runtime_v2.execution_journal import ExecutionJournal
+
+    sid = str(record.get("session_id") or "")
+    operation_id = "approval-recovery:" + str(record.get("approval_id") or "")
+    root = session_manager.repository.sessions_dir
+    resolver = getattr(session_manager, "_resolve_session_path", None)
+    snapshot = SnapshotStore(root, path_resolver=resolver).read_consistent(sid)
+    if operation_id in set(snapshot.get("operation_ids") or []):
+        return False
+    allowed = record.get("decision") != "deny"
+    notice = ("重启后已恢复审批，用户已允许原请求。原工具尚未执行；如需继续，请重新生成完整调用，"
+              "并通过正常安全检查使用该授权。" if allowed else
+              "重启后已恢复审批，用户已拒绝原请求。原工具尚未执行；请根据拒绝原因调整后续步骤。")
+    if record.get("rejection_reason"):
+        notice += "\n拒绝原因：" + str(record["rejection_reason"])
+    journal = ExecutionJournal(root, resolver)
+    journal.record(sid, {"type": "tool_execution_state", "execution_id": execution["execution_id"],
+        "run_id": execution.get("run_id"), "stream_seq": execution.get("stream_seq"),
+        "react_iter": execution.get("react_iter"), "process_group_id": execution.get("process_group_id"),
+        "tool_call_id": execution.get("tool_call_id"), "status": "interrupted", "executed": False,
+        "result": notice, "process_state": "not_started"})
+    RuntimeHistoryOps(root, path_resolver=resolver).append_model_message(
+        sid, "system", notice + "\n原请求：" + json.dumps({"tool": execution.get("tool"),
+            "args": execution.get("args"), "request_digest": record.get("request_digest")}, ensure_ascii=False),
+        operation_id=operation_id, run_id=str(record.get("run_id") or "") or None)
+    return True
+
+
 async def _run_human_interaction_recovery_background(session_id: str) -> None:
     sid = str(session_id or "").strip()
     if not sid:
@@ -4304,6 +4335,8 @@ async def set_session_permissions(session_id: str, req: Request):
 
         set_session_permission_mode(sid, (body or {}).get("mode"))
         status = security_status_for_session(sid)
+        from execution_services.integration import permissions_changed
+        await permissions_changed(str(status["mode"]))
         event = {"type": "permission_mode_changed", **status, "ephemeral": True}
         for row in session_manager.list_sessions(include_archived=True):
             target = str(row.get("id") or row.get("session_id") or "").strip()
@@ -4597,6 +4630,12 @@ async def interrupt_session(session_id: str, request: Request):
 
         descendants = session_manager.list_subagent_descendants(sid)
         all_ids = [sid, *descendants]
+        from execution_services.integration import stop_execution
+        if reason != "followup":
+            try:
+                await stop_execution(all_ids, reason=reason)
+            except Exception as e:
+                logger.warning("execution cleanup on interrupt failed: %s", e)
         for child_sid in descendants:
             try:
                 session_manager.request_interrupt(child_sid)
@@ -4844,7 +4883,32 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
         from tool_approval_gate import has_live_approval_waiter
 
         service = get_human_interaction_service()
-        if not has_live_approval_waiter(session_id, approval_id):
+        live_waiter = has_live_approval_waiter(session_id, approval_id)
+        recovered_execution = None
+        original_record = None
+        if not live_waiter:
+            from human_interaction.service import HumanInteractionConflict
+            from runtime_v2.execution_journal import ExecutionJournal
+
+            if _has_local_worker_activity(session_id):
+                raise HumanInteractionConflict("会话正在执行，请等待当前执行结束后恢复审批。")
+            original_record = await asyncio.to_thread(service.verified_approval_request, session_id, approval_id)
+            recovery = await asyncio.to_thread(ExecutionJournal(service.mirror.event_log.root,
+                service.mirror.event_log._path_resolver).read, session_id)
+            recovered_execution = next((row for row in recovery["execution_records"]
+                if row.get("execution_id") == original_record.get("execution_id")), None)
+            if recovered_execution and (recovered_execution.get("executed")
+                    or recovered_execution.get("status") not in {"waiting_approval", "waiting_execution", "interrupted"}
+                    or not isinstance(recovered_execution.get("args"), dict)):
+                raise HumanInteractionConflict("原操作已执行或执行状态无法确认，不能自动重复执行。")
+            if recovered_execution and original_record.get("status") != "pending":
+                if original_record.get("status") != "resolved":
+                    raise HumanInteractionConflict("该审批已经取消或过期，请重新发起操作。")
+                appended = await asyncio.to_thread(_append_recovered_approval_result, original_record, recovered_execution)
+                scheduled = _schedule_human_interaction_recovery(session_id) if appended else False
+                return JSONResponse(content={"ok": True, "approval": original_record,
+                    "recovered": True, "recovery_scheduled": scheduled})
+        if not live_waiter and recovered_execution is None:
             record = await asyncio.to_thread(
                 service.cancel,
                 session_id,
@@ -4862,6 +4926,8 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
                 status_code=409,
             )
         resolve_kwargs = {"resolver": _interaction_resolver_metadata(request)}
+        if original_record is not None:
+            resolve_kwargs["expected_request_digest"] = original_record["request_digest"]
         if decision.strip().lower().replace("-", "_") == "deny":
             resolve_kwargs["rejection_reason"] = rejection_reason
         record = await asyncio.to_thread(
@@ -4948,7 +5014,13 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
                     str(record.get("rejection_reason") or ""),
                 )
         await publish_session_event(session_id, {"type": "approval_resolved", **record})
-        return JSONResponse(content={"ok": True, "approval": record})
+        recovery_scheduled = False
+        if recovered_execution is not None:
+            appended = await asyncio.to_thread(_append_recovered_approval_result, record, recovered_execution)
+            if appended:
+                recovery_scheduled = _schedule_human_interaction_recovery(session_id)
+        return JSONResponse(content={"ok": True, "approval": record,
+            "recovered": recovered_execution is not None, "recovery_scheduled": recovery_scheduled})
     except Exception as exc:
         return _human_interaction_error_response(exc)
 
@@ -6012,6 +6084,8 @@ async def stream_session_events(
     session_id: str,
     request: Request,
     after_index: Optional[int] = Query(None, ge=-1),
+    after_runtime_seq: Optional[int] = Query(None, ge=0),
+    projection_version: Optional[int] = Query(None, ge=0),
 ):
     sid = (session_id or "").strip()
     if not sid:
@@ -6020,7 +6094,18 @@ async def stream_session_events(
     async def runtime_v2_event_generator():
         _observer_streams_by_session[sid] = _observer_streams_by_session.get(sid, 0) + 1
         cursor = int(after_index) if after_index is not None else -1
-        runtime_cursor: Optional[int] = None
+        runtime_cursor: Optional[int] = int(after_runtime_seq) if isinstance(after_runtime_seq, int) else None
+        from runtime_v2.versions import PROJECTOR_VERSION
+        try:
+            recovery_run = _session_run_state_fields_light(sid).get("active_run") or {}
+            from runtime_v2.event_log import SessionEventLog
+            recovery_server_seq = SessionEventLog(session_manager.repository.sessions_dir,
+                path_resolver=session_manager._resolve_session_path).next_seq(sid) - 1
+        except Exception:
+            recovery_run, recovery_server_seq = {}, None
+        logger.info("stream_recovery session=%s run_id=%s reason=%s client_index=%s client_runtime_seq=%s server_runtime_seq=%s projection_version=%s server_projection_version=%s",
+                    sid, recovery_run.get("run_id"), "runtime_incremental" if runtime_cursor is not None else "legacy_index",
+                    cursor, runtime_cursor, recovery_server_seq, projection_version if isinstance(projection_version, int) else None, PROJECTOR_VERSION)
         subscription = subscribe_session_events(sid, replay_recent=True)
         next_live_event = asyncio.create_task(subscription.__anext__())
 
@@ -6037,14 +6122,11 @@ async def stream_session_events(
                     )
                     if page.get("requires_reprojection"):
                         reprojected_through = int(page.get("last_runtime_seq") or 0)
-                        incremental = False
-                        page = await asyncio.to_thread(
-                            projection.read_ui_page,
-                            sid,
-                            after_index=cursor,
-                            limit=100,
-                        )
-                        page["reprojected_through"] = reprojected_through
+                        logger.info("stream_recovery session=%s reason=history_changed client_runtime_seq=%s server_runtime_seq=%s",
+                                    sid, runtime_cursor, reprojected_through)
+                        yield "data: " + json.dumps({"type": "history_invalidated", "ephemeral": True,
+                            "session_id": sid, "projection_revision": reprojected_through}) + "\n\n"
+                        return
                 else:
                     page = await asyncio.to_thread(
                         projection.read_ui_page,
@@ -6072,9 +6154,15 @@ async def stream_session_events(
                         return
                     if not isinstance(event, dict):
                         continue
-                    event_index = start + offset
+                    event_index = cursor + 1 if incremental else start + offset
                     payload = dict(event)
                     payload["session_id"] = sid
+                    if payload.get("type") == "execution_update":
+                        payload["seq_scope"] = "runtime_execution"
+                        payload["seq"] = payload["runtime_seq"]
+                        runtime_cursor = max(int(runtime_cursor or 0), int(payload["runtime_seq"]))
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        continue
                     payload["seq"] = event_index + 1
                     payload["seq_scope"] = "ui_projection"
                     yield_payload = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -6104,6 +6192,11 @@ async def stream_session_events(
                     session_manager.repository.sessions_dir,
                     path_resolver=session_manager._resolve_session_path,
                 )
+                if isinstance(projection_version, int) and projection_version != PROJECTOR_VERSION:
+                    yield "data: " + json.dumps({"type": "history_invalidated", "ephemeral": True,
+                        "session_id": sid, "reason": "projection_version_changed",
+                        "projection_version": PROJECTOR_VERSION}) + "\n\n"
+                    return
                 # Start the live subscription before reading the projection. Any
                 # event committed during catch-up is queued, closing the old
                 # query-then-subscribe race that could hide tool/final events.
@@ -6572,6 +6665,13 @@ async def get_session_history_snapshot(
             lim = int(limit) if limit is not None else 200
             tv = int(turns) if turns is not None else None
             event_budget_value = event_budget if isinstance(event_budget, int) else None
+            # Capture BEFORE reading the page. Any concurrent commit is replayed
+            # on reconnect; non-UI history edits already projected in this page
+            # are acknowledged too, avoiding repeated invalidation loops.
+            from runtime_v2.execution_journal import ExecutionJournal
+            execution_journal = ExecutionJournal(session_manager.repository.sessions_dir,
+                                                 session_manager._resolve_session_path)
+            recovery_cursor = execution_journal.log.next_seq(session_id) - 1
             timings: dict[str, int] = {}
             t_phase = _time.perf_counter()
             page = projection.read_ui_page(
@@ -6652,6 +6752,21 @@ async def get_session_history_snapshot(
                 run_state = _session_run_state_fields_light(session_id)
             except Exception:
                 run_state = {"stream_active": False, "run_active": False, "run_started_at": None}
+            recovery = execution_journal.read(session_id)
+            from runtime_v2.versions import PROJECTOR_VERSION
+            recovery["projection_version"] = PROJECTOR_VERSION
+            # Auxiliary records may be newer; stable execution identities make
+            # their subsequent replay idempotent.
+            page_seqs = [int(event.get("runtime_seq") or 0) for event in page.get("events") or []]
+            recovery["last_runtime_seq"] = max(recovery_cursor, max(page_seqs, default=0))
+            if page_seqs:
+                lower_bound = min(page_seqs)
+                recovery["execution_records"] = [row for row in recovery["execution_records"]
+                    if int(row.get("first_runtime_seq") or 0) >= lower_bound]
+            if not run_state.get("run_active"):
+                for row in recovery["execution_records"]:
+                    if row.get("status") in {"running", "generating", "waiting_execution"}:
+                        row["status"] = "unknown" if row.get("executed") else "interrupted"
             return JSONResponse(content={
                 "ok": True,
                 "source": "runtime_v2_snapshot",
@@ -6668,6 +6783,7 @@ async def get_session_history_snapshot(
                 "run_active": bool(run_state.get("run_active")),
                 "run_started_at": run_state.get("run_started_at"),
                 "active_run": run_state.get("active_run"),
+                **recovery,
             })
         except Exception as exc:
             logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)
@@ -9261,3 +9377,6 @@ async def stop_webui_lifecycle() -> None:
         await stop_plugin_runtime()
     finally:
         await stop_react_recovery_runner()
+        from execution_services.jobs import _SERVICE
+        if _SERVICE is not None:
+            await _SERVICE.shutdown()

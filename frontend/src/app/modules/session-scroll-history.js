@@ -1300,6 +1300,13 @@ function writeLlmStreamText(scroller, raw, part) {
     if (!scroller) return;
     scroller._llmRawText = String(raw || '');
     var row = scroller.closest ? scroller.closest('.feed-item') : null;
+    /* 行还在做插入/高度动画（data-smooth-trace-layout-owned）时文字已经流入：动画的
+       裁切高度是「插入瞬间」的快照，继续裁切会把新文字切掉，并在动画结束时整行突然
+       跳高（窄栏实测裁切 289px、释放瞬间单帧跳 440px）。释放动画，让行高跟随内容。 */
+    if (row && row.hasAttribute && row.hasAttribute('data-smooth-trace-layout-owned')
+        && typeof cancelSmoothTraceLayoutAnimation === 'function') {
+        cancelSmoothTraceLayoutAnimation(row);
+    }
     if (part === 'response' && row) row._processBriefRawText = scroller._llmRawText;
     /* 流式长文本先走「头 + 占位撑高 + 尾窗」窗口化渲染（见下方说明），投影高度随
        内容线性增长，跟随器始终有位移可做。未越线、终态与历史渲染仍走既有截断投影。 */

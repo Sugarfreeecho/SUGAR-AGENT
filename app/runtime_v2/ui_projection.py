@@ -799,7 +799,12 @@ class RuntimeUiProjection:
                     "last_runtime_seq": last_runtime_seq,
                     "requires_reprojection": True,
                 }
-            ui = self._with_run_id(self._event_to_ui(session_id, event), event, active_run_id)
+            if event.type == "execution_recorded":
+                ui = {"type": "execution_update", "ephemeral": True,
+                      "update": dict(event.payload or {}), "runtime_seq": event.seq,
+                      "run_id": event.run_id}
+            else:
+                ui = self._with_run_id(self._event_to_ui(session_id, event), event, active_run_id)
             if ui is not None:
                 projected.append(ui)
                 if len(projected) >= lim:
