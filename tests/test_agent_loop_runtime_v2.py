@@ -545,7 +545,7 @@ def test_user_turn_commit_failure_never_acknowledges_steer(monkeypatch, tmp_path
     assert failed.get("consumed_at") is None
 
 
-def test_steer_trim_keeps_completed_prefix_and_assistant_text():
+def test_steer_closure_keeps_incomplete_call_and_assistant_text():
     import agent_loop
 
     assistant = agent_loop.AssistantMessage(
@@ -558,15 +558,16 @@ def test_steer_trim_keeps_completed_prefix_and_assistant_text():
     )
     completed = agent_loop.ToolMessage(content="file contents", tool_call_id="done")
 
-    trimmed, changed_at = agent_loop._trim_unclosed_tool_call_tail_preserve_completed(
-        [assistant, completed]
-    )
+    from runtime_v2.execution_journal import close_unfinished_calls
+    trimmed, added = close_unfinished_calls([assistant, completed], [
+        {"tool_call_id": "running", "executed": True, "output": "partial"}])
 
-    assert changed_at == 0
-    assert len(trimmed) == 2
+    assert len(added) == 1
+    assert len(trimmed) == 3
     assert trimmed[0].content == "already streamed response"
-    assert [call["id"] for call in trimmed[0].tool_calls] == ["done"]
+    assert [call["id"] for call in trimmed[0].tool_calls] == ["done", "running"]
     assert trimmed[1].tool_call_id == "done"
+    assert trimmed[2].tool_call_id == "running" and "partial" in trimmed[2].content
 
 
 def test_drop_orphan_tool_messages_preserves_only_direct_matching_results():
@@ -743,6 +744,11 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
     monkeypatch.setattr(agent_loop, "get_context_token_mode", lambda: "hybrid")
     monkeypatch.setattr(agent_loop, "estimate_hybrid_input_tokens_for_llm_history", fake_estimate)
     monkeypatch.setattr(agent_loop, "resolve_executor_config_for_session", lambda _sid: (None, "m", 1024, 4096))
+    monkeypatch.setattr(
+        agent_loop,
+        "compute_context_breakdown_for_llm_history",
+        lambda *_args, **_kwargs: {"system_tokens": 7, "tools_tokens": 11, "message_tokens": 105},
+    )
 
     tool_definitions = [{"type": "function", "function": {"name": "demo"}}]
     result = agent_loop.compute_context_tokens_for_session("s1", tool_definitions)
@@ -755,6 +761,7 @@ def test_runtime_v2_context_token_compute_uses_projection_not_legacy(monkeypatch
         "source": "runtime_v2_projection",
         "token_source": "provider_calibrated",
         "token_mode": "hybrid",
+        "breakdown": {"system_tokens": 7, "tools_tokens": 11, "message_tokens": 105},
     }
     assert captured["session_id"] == "s1"
     assert captured["messages"][0].content == "hello"

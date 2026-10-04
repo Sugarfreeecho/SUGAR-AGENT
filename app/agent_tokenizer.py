@@ -536,6 +536,35 @@ def count_tool_definition_tokens(tools: Optional[List[Dict[str, Any]]]) -> int:
     return _tool_schema_cache_values(tools)[1]
 
 
+def build_context_breakdown(
+    system_messages: Optional[List[Any]],
+    total_tokens: Optional[int],
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, int]:
+    """Composition of one request package: system prompt / tool schemas / turns.
+
+    Same semantics as the DSH token-meter ``contextBreakdown`` lanes: the system
+    and tool lanes are priced locally, and the conversation lane is the remainder
+    of the exact total, so the three numbers always add up to the figure the
+    context meter shows (the UI marks every lane with ``~`` for that reason).
+
+    Cost: pricing the system lane reuses the incremental counter's text cache, so
+    an unchanged prompt prefix is a dict hit. Nothing here tokenizes the history.
+    """
+    system_tokens = (
+        int(message_token_estimator(list(system_messages)))
+        if system_messages
+        else 0
+    )
+    tools_tokens = count_tool_definition_tokens(tools)
+    total = max(0, int(total_tokens or 0))
+    return {
+        "system_tokens": system_tokens,
+        "tools_tokens": tools_tokens,
+        "message_tokens": max(0, total - system_tokens - tools_tokens),
+    }
+
+
 def _prompt_usage_baseline_path(session_id: str) -> Optional[Path]:
     try:
         from agent_harness import session_manager

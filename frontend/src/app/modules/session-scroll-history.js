@@ -1,3 +1,111 @@
+/**
+ * 上下文拆解卡（对齐 DSH token-meter 的 ContextMeter 面板）：
+ * 标题行「上下文已用 24.7%」+ 右侧「~24.5k / 128k」，一条按构成分色的占比条，
+ * 下方三行图例（系统提示词 / 工具定义 / 对话消息）。条的总长永远等于精确占比，
+ * 分段只按启发式构成分配宽度；没有构成数据时退回单色整条，并保留原来的纯文字提示。
+ * 三条泳道的键与后端 breakdown 一致。
+ */
+var CTX_BREAKDOWN_LANES = [
+    { key: 'system_tokens', lane: 'system' },
+    { key: 'tools_tokens', lane: 'tools' },
+    { key: 'message_tokens', lane: 'messages' },
+];
+/* 悬停展开的迟滞：足够长到划过标题栏时不闪，远短于通用提示的 500ms（那是纯文字提示）。 */
+var CTX_CARD_HOVER_DELAY_MS = 180;
+var ctxCardOpenTimer = null;
+var ctxCardReady = false;
+
+function contextBreakdownOrNull(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var parts = {};
+    for (var i = 0; i < CTX_BREAKDOWN_LANES.length; i += 1) {
+        var value = Number(raw[CTX_BREAKDOWN_LANES[i].key]);
+        if (!Number.isFinite(value) || value < 0) return null;
+        parts[CTX_BREAKDOWN_LANES[i].key] = value;
+    }
+    return parts;
+}
+
+function closeContextBreakdownCard() {
+    if (ctxCardOpenTimer) {
+        clearTimeout(ctxCardOpenTimer);
+        ctxCardOpenTimer = null;
+    }
+    var card = document.getElementById('ctx-breakdown');
+    if (card) {
+        card.hidden = true;
+        card.setAttribute('aria-hidden', 'true');
+    }
+}
+
+function openContextBreakdownCard() {
+    if (ctxCardOpenTimer) {
+        clearTimeout(ctxCardOpenTimer);
+        ctxCardOpenTimer = null;
+    }
+    var card = document.getElementById('ctx-breakdown');
+    if (!card || !ctxCardReady) return;
+    card.hidden = false;
+    card.setAttribute('aria-hidden', 'false');
+}
+
+/** 卡片内容：占比条分段宽度按构成比例分配，行值按同一份构成标注 ~。 */
+function renderContextBreakdownCard(card, pctDisp, estimated, threshold, breakdown) {
+    if (!card) return;
+    var widthPct = Math.max(0, Math.min(100, pctDisp));
+    var pctEl = card.querySelector('.ctx-card-pct');
+    var figuresEl = card.querySelector('.ctx-card-figures');
+    var barEl = card.querySelector('.ctx-card-bar');
+    var rowsEl = card.querySelector('.ctx-card-rows');
+    if (pctEl) pctEl.textContent = pctDisp + '%';
+    if (figuresEl) {
+        figuresEl.textContent = '~' + formatTokenCompact(estimated) + ' / ' + formatTokenCompact(threshold);
+    }
+    var total = breakdown
+        ? (breakdown.system_tokens + breakdown.tools_tokens + breakdown.message_tokens)
+        : 0;
+    var segments = [];
+    if (!breakdown || total <= 0) {
+        segments.push('<span class="ctx-card-seg" style="width:' + widthPct + '%"></span>');
+    } else {
+        CTX_BREAKDOWN_LANES.forEach(function (lane) {
+            var width = widthPct * breakdown[lane.key] / total;
+            if (!(width > 0)) return;
+            segments.push(
+                '<span class="ctx-card-seg ctx-lane-' + lane.lane + '" style="width:' + width.toFixed(3) + '%"></span>'
+            );
+        });
+    }
+    if (barEl) barEl.innerHTML = segments.join('');
+    if (rowsEl) {
+        rowsEl.hidden = !breakdown;
+        if (breakdown) {
+            Array.prototype.forEach.call(rowsEl.querySelectorAll('[data-lane]'), function (valueEl) {
+                var laneKey = valueEl.getAttribute('data-lane');
+                valueEl.textContent = '~' + formatTokenCompact(breakdown[laneKey]);
+            });
+        }
+    }
+}
+
+function bindContextBreakdownHover(el) {
+    if (!el || el._ctxCardHoverBound) return;
+    el._ctxCardHoverBound = true;
+    el.addEventListener('mouseenter', function () {
+        if (!ctxCardReady) return;
+        if (ctxCardOpenTimer) clearTimeout(ctxCardOpenTimer);
+        ctxCardOpenTimer = setTimeout(function () {
+            ctxCardOpenTimer = null;
+            openContextBreakdownCard();
+        }, CTX_CARD_HOVER_DELAY_MS);
+    });
+    // 卡片是触发器的子节点，指针移入卡片不会触发 mouseleave；离开整块才收起。
+    el.addEventListener('mouseleave', closeContextBreakdownCard);
+    document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') closeContextBreakdownCard();
+    });
+}
+
 function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
@@ -7,7 +115,7 @@ function formatTokenCompact(n) {
     return String(x);
 }
 
-function setContextTokenLabel(estimated, threshold) {
+function setContextTokenLabel(estimated, threshold, breakdown) {
     const el = document.getElementById('ctx-tokens');
     if (!el) return;
     const label = el.querySelector('.ctx-label');
@@ -20,6 +128,8 @@ function setContextTokenLabel(estimated, threshold) {
         if (pctEl) pctEl.textContent = '';
         if (fill) fill.style.width = '0%';
         el.classList.remove('is-warn', 'is-bad');
+        ctxCardReady = false;
+        closeContextBreakdownCard();
         el.setAttribute('data-ui-tip', '预估上下文 token：选择会话并加载或发送消息后显示。分母为压缩摘要阈值。');
         bindUiHoverTip(el);
         return;
@@ -32,6 +142,20 @@ function setContextTokenLabel(estimated, threshold) {
     el.classList.remove('is-warn', 'is-bad');
     if (pct >= 100) el.classList.add('is-bad');
     else if (pct >= 80) el.classList.add('is-warn');
+    const card = el.querySelector('#ctx-breakdown');
+    const parts = contextBreakdownOrNull(breakdown);
+    renderContextBreakdownCard(card, pctDisp, n, t, parts);
+    ctxCardReady = !!parts;
+    bindContextBreakdownHover(el);
+    if (!parts) {
+        closeContextBreakdownCard();
+    }
+    if (parts) {
+        // 拆解卡接管说明职责；同一元素上不再挂纯文字提示，避免两种浮窗叠加。
+        el.removeAttribute('data-ui-tip');
+        if (typeof hideUiHoverTooltip === 'function') hideUiHoverTooltip();
+        return;
+    }
     var tipPct = pct >= 100
         ? ('约 ' + pctDisp + '%，超出门限 ' + (Math.round((pct - 100) * 10) / 10) + '%')
         : ('约 ' + pctDisp + '%');
@@ -51,7 +175,7 @@ async function refreshContextTokensFromServer(sid, seq) {
     if (!sid) return;
     const cached = selectContextTokens(sid);
     if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
-        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold);
+        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold, cached.breakdown);
         return;
     }
     if (contextTokenInFlightBySession[sid]) return;
@@ -62,7 +186,7 @@ async function refreshContextTokensFromServer(sid, seq) {
         if (seq != null && seq !== contextTokenRequestSeq) return;
         if (sid !== currentSessionId) return;
         if (r.ok && j && j.ok && j.estimated != null && j.estimated >= 0) {
-            recordContextTokens(sid, j.estimated, j.threshold);
+            recordContextTokens(sid, j.estimated, j.threshold, j.breakdown);
             return;
         }
     } catch (e) { /* ignore */ }
@@ -84,17 +208,17 @@ function scheduleContextTokensAfterPaint(sid) {
     });
 }
 
-function recordContextTokens(sessionId, estimated, threshold) {
+function recordContextTokens(sessionId, estimated, threshold, breakdown) {
     if (!sessionId) return;
-    setContextTokensForSession(sessionId, estimated, threshold);
-    if (sessionId === currentSessionId) setContextTokenLabel(estimated, threshold);
+    setContextTokensForSession(sessionId, estimated, threshold, breakdown);
+    if (sessionId === currentSessionId) setContextTokenLabel(estimated, threshold, breakdown);
 }
 
 function applyContextTokenLabelForCurrentSession() {
-    if (!currentSessionId) { setContextTokenLabel(null, null); return; }
+    if (!currentSessionId) { setContextTokenLabel(null, null, null); return; }
     const x = selectContextTokens(currentSessionId);
-    if (x) setContextTokenLabel(x.estimated, x.threshold);
-    else setContextTokenLabel(null, null);
+    if (x) setContextTokenLabel(x.estimated, x.threshold, x.breakdown);
+    else setContextTokenLabel(null, null, null);
 }
 
 /** 主对话区跟到底 */

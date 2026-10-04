@@ -51,6 +51,7 @@ from agent_harness import (
 from human_interaction import ASK_USER_ENV_VAR, ask_user_enabled
 from agent_loop import (
     abort_session_steer_run,
+    backfill_context_breakdown_for_session,
     build_combined_tool_definitions_for_session,
     compute_context_tokens_for_session,
     enqueue_session_steer,
@@ -7177,6 +7178,20 @@ async def get_session_context_tokens(session_id: str):
         snap["token_mode"] = token_mode
         if not snap.get("ok", True):
             return JSONResponse(content=snap, status_code=500)
+        # The meter's panel reads a three-lane composition beside the total. A
+        # snapshot taken before the lanes existed (or one whose session has not
+        # run since) is filled in here; a failure leaves the snapshot untouched
+        # rather than failing a read-only status call.
+        if not snap.get("breakdown") and snap.get("estimated") is not None:
+            backfill_tools = await build_combined_tool_definitions_for_session(session_id)
+            backfilled = await run_in_threadpool(
+                backfill_context_breakdown_for_session,
+                session_id,
+                snap.get("estimated"),
+                backfill_tools,
+            )
+            if backfilled:
+                snap["breakdown"] = backfilled
         return JSONResponse(content=snap)
     tool_definitions = await build_combined_tool_definitions_for_session(session_id)
     out = await run_in_threadpool(

@@ -783,6 +783,9 @@ def test_context_tokens_stale_provider_value_does_not_switch_to_local_scale(monk
         "compute_context_tokens_for_session",
         lambda _sid: (_ for _ in ()).throw(AssertionError("must preserve provider scale")),
     )
+    # This test is about the total's scale only; the lane backfill has its own
+    # contract tests and must not reach into the real workspace here.
+    monkeypatch.setattr(webui, "backfill_context_breakdown_for_session", lambda *_args, **_kwargs: None)
 
     payload = _json_response_payload(asyncio.run(webui.get_session_context_tokens("s1")))
 

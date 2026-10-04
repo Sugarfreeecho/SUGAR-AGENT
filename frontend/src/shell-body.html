@@ -76,6 +76,32 @@
                                 <span class="ctx-pct"></span>
                             </div>
                             <span class="ctx-bar" aria-hidden="true"><span class="ctx-fill"></span></span>
+                            <!-- Hover breakdown (dsh context panel parity): headline + total,
+                                 composition bar and one legend row per lane. Values are filled
+                                 by setContextTokenLabel; the shell only owns the labels. -->
+                            <div id="ctx-breakdown" class="ctx-card" role="tooltip" aria-hidden="true" hidden>
+                                <div class="ctx-card-head">
+                                    <span class="ctx-card-headline">上下文已用</span>
+                                    <span class="ctx-card-pct"></span>
+                                    <span class="ctx-card-figures"></span>
+                                </div>
+                                <div class="ctx-card-bar" aria-hidden="true"></div>
+                                <dl class="ctx-card-rows" hidden>
+                                    <div class="ctx-card-row">
+                                        <dt><span class="ctx-card-swatch ctx-lane-system" aria-hidden="true"></span>系统提示词</dt>
+                                        <dd class="ctx-card-value" data-lane="system_tokens"></dd>
+                                    </div>
+                                    <div class="ctx-card-row">
+                                        <dt><span class="ctx-card-swatch ctx-lane-tools" aria-hidden="true"></span>工具定义</dt>
+                                        <dd class="ctx-card-value" data-lane="tools_tokens"></dd>
+                                    </div>
+                                    <div class="ctx-card-row">
+                                        <dt><span class="ctx-card-swatch ctx-lane-messages" aria-hidden="true"></span>对话消息</dt>
+                                        <dd class="ctx-card-value" data-lane="message_tokens"></dd>
+                                    </div>
+                                </dl>
+                                <p class="ctx-card-note">分母为压缩摘要阈值；构成按本地估算</p>
+                            </div>
                         </div>
                     </div>
                 </header>

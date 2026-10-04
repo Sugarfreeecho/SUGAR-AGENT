@@ -419,6 +419,12 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '撤销': 'Undo', '恢复': 'Restore', '差分': 'Diff',
     '文本接口尚不可用（需重启服务加载新接口），可在系统应用中打开。': 'The text endpoint is not live yet (a server restart loads it); open the file with a system app instead.',
 });
+Object.assign(UI_TRANSLATIONS_EN, {
+    // Context breakdown card (dsh ContextMeter panel parity)
+    '上下文已用': 'Context used',
+    '系统提示词': 'System prompt', '工具定义': 'Tool definitions', '对话消息': 'Messages',
+    '分母为压缩摘要阈值；构成按本地估算': 'Denominator: compression-summary threshold; composition is a local estimate',
+});
 const uiI18nTextOriginal = new WeakMap();
 const uiI18nAttrOriginal = new WeakMap();
 const uiI18nRuntimeOriginal = new WeakMap();

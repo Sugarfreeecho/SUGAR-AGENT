@@ -137,12 +137,13 @@ from agent_tokenizer import (
     messages_for_openai_turns,
     build_env_static,
     build_static_system_segments,
+    build_context_breakdown,
 )
 import agent_mcp
 import cpu_pressure
 import execution_metrics
 from runtime_observability import capture_workspace_state, diff_workspace_states
-from agent_subagent_events import should_persist_ui_event
+from agent_subagent_events import should_persist_ui_event, persist_execution_event
 from workflow_extensions import activate_bundled_workflow_callbacks, session_workflows
 from workspace_media_snapshots import snapshot_workspace_images
 
@@ -1661,7 +1662,95 @@ def compute_context_tokens_for_session(
         "source": "runtime_v2_projection" if _runtime_v2_is_primary() else "legacy_history",
         "token_source": token_source,
         "token_mode": token_mode,
+        "breakdown": compute_context_breakdown_for_llm_history(
+            sid,
+            key_context or "",
+            prompt_language,
+            tool_definitions,
+            full_input_est,
+        ),
     }
+
+
+def _leading_system_messages(messages: List[Any]) -> List[Any]:
+    """The leading run of system messages of one assembled request.
+
+    Only that run is the system prompt; a system note injected mid-history stays
+    with the conversation lane, matching the DSH rule that everything except the
+    prompt is priced as messages.
+    """
+    end = 0
+    for message in messages or []:
+        if not isinstance(message, SystemMessage):
+            break
+        end += 1
+    return list(messages[:end])
+
+
+def compute_context_breakdown_for_llm_history(
+    session_id: str,
+    key_context: str,
+    language: str = "zh-CN",
+    tools: Optional[List[Dict[str, Any]]] = None,
+    total_tokens: Optional[int] = None,
+) -> Dict[str, int]:
+    """Breakdown of the request this module would assemble from a stored session.
+
+    Builds exactly the system prefix of ``estimate_full_input_tokens_for_llm_history``
+    (static segments + the key_context body) so the three lanes describe the same
+    package the meter's total came from.
+    """
+    from agent_tools import get_skills_catalog
+
+    sid = str(session_id or "").strip()
+    skills_catalog = get_skills_catalog()
+    env_static = build_env_static(sid if sid else None)
+    kc_body = key_context_body_for_system_prompt(key_context or "")
+    static_segments = build_static_system_segments(skills_catalog, env_static, language)
+    system_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
+    if kc_body:
+        system_messages.append(SystemMessage(content=kc_body))
+    return build_context_breakdown(system_messages, total_tokens, tools)
+
+
+def backfill_context_breakdown_for_session(
+    session_id: str,
+    total_tokens: Optional[int],
+    tool_definitions: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, int]]:
+    """Price the three lanes for a checkpoint that recorded only a total.
+
+    Context checkpoints written before the breakdown existed, and snapshots of
+    sessions that have not run since, carry ``estimated`` alone. The meter reads
+    such a snapshot on session open, so without this the panel would stay empty
+    until the next request. The stored total is never recomputed or replaced --
+    only the composition is added, and any failure returns None so the caller
+    keeps serving the snapshot unchanged.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    try:
+        if _runtime_v2_is_primary():
+            key_context = _load_runtime_v2_context_summary(sid)
+        else:
+            _sid, _dialogue, _wm, _history, key_context, _md = session_manager.get_or_create_session(sid)
+        try:
+            prompt_language = normalize_prompt_language(
+                (session_manager._load_metadata(sid) or {}).get("prompt_language")
+            )
+        except Exception:
+            prompt_language = "zh-CN"
+        return compute_context_breakdown_for_llm_history(
+            sid,
+            key_context or "",
+            prompt_language,
+            tool_definitions,
+            total_tokens,
+        )
+    except Exception as exc:
+        logger.warning("Context breakdown backfill failed for %s: %s", sid, exc)
+        return None
 
 
 def get_context_token_mode(value: Any = None) -> str:
@@ -5492,6 +5581,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             if forced_context_limit_compress
                             else "pre_request"
                         ),
+                        # Same three lanes the UI draws in the context panel. The
+                        # system lane is the leading system run of the request that
+                        # is about to be sent, so the panel and this total describe
+                        # one package.
+                        "breakdown": build_context_breakdown(
+                            _leading_system_messages(llm_messages),
+                            int(effective_input_est),
+                            combined_tools,
+                        ),
                         "ephemeral": True,
                     },
                     emit=emit,
@@ -5814,6 +5912,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     "token_source": post_compress_token_source,
                     "source": post_compress_token_source,
                     "reason": "post_compress_checkpoint",
+                    # Compaction rewrote both the key_context system segment and the
+                    # turns, so the panel's lanes are repriced against the checkpoint
+                    # total instead of keeping the pre-compaction composition.
+                    "breakdown": compute_context_breakdown_for_llm_history(
+                        state["session_id"],
+                        nk or "",
+                        state.get("_prompt_language", "zh-CN"),
+                        combined_tools,
+                        post_compress_est,
+                    ),
                 }
                 _runtime_v2_checkpoint_context_tokens(state, post_compress_tokens)
                 await _push_stream_event(

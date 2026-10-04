@@ -1502,7 +1502,12 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                             if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
                         }
                         if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
-                            recordContextTokens(sessionId, snapshot.context_tokens.estimated, snapshot.context_tokens.threshold);
+                            recordContextTokens(
+                                sessionId,
+                                snapshot.context_tokens.estimated,
+                                snapshot.context_tokens.threshold,
+                                snapshot.context_tokens.breakdown
+                            );
                         }
                         if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
                             const __snapActive = !!(snapshot.stream_active || snapshot.run_active);

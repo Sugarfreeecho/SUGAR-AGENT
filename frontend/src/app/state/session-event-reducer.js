@@ -113,7 +113,7 @@ function applySessionEvent(event, opts) {
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
-        setContextTokensForSession(sessionId, event.estimated, event.threshold);
+        setContextTokensForSession(sessionId, event.estimated, event.threshold, event.breakdown);
         return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_summary_delta') {

@@ -2,13 +2,19 @@ const contextStore = {
     tokensBySession: new Map(),
     progressBySession: new Map(),
 
-    setTokens(sessionId, estimated, threshold) {
+    setTokens(sessionId, estimated, threshold, breakdown) {
         const sid = String(sessionId || '');
         if (!sid) return;
         if (estimated != null && Number(estimated) >= 0) {
+            // Setters race (the snapshot on open, then the session endpoint): an
+            // update that carries no composition must not erase the lanes an
+            // earlier one already stored, or the panel would lose its rows.
+            const previous = this.tokensBySession.get(sid);
             this.tokensBySession.set(sid, {
                 estimated: Number(estimated),
                 threshold: threshold,
+                // 三段构成由调用方透传（后端 breakdown）；渲染层再校验，缺字段就退回单色条。
+                breakdown: breakdown != null ? breakdown : ((previous && previous.breakdown) || null),
                 updatedAt: Date.now(),
             });
         } else {
@@ -57,8 +63,8 @@ const contextStore = {
     },
 };
 
-function setContextTokensForSession(sessionId, estimated, threshold) {
-    contextStore.setTokens(sessionId, estimated, threshold);
+function setContextTokensForSession(sessionId, estimated, threshold, breakdown) {
+    contextStore.setTokens(sessionId, estimated, threshold, breakdown);
 }
 
 function selectContextTokens(sessionId) {
