@@ -2529,7 +2529,7 @@ function ensureMermaidInitialized(api) {
             securityLevel: 'loose',
             themeVariables: {
                 fontSize: '11px',
-                fontFamily: 'Plus Jakarta Sans, system-ui, sans-serif',
+                fontFamily: getComputedStyle(document.body).fontFamily,
             },
             flowchart: { htmlLabels: true, curve: 'basis' },
             sequence: { useMaxWidth: true },

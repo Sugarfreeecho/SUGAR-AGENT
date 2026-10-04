@@ -52,7 +52,8 @@
   --st-danger: #ec1313;
   --st-mask: rgba(0, 0, 0, 0.24);
   --st-shadow-panel: 0 24px 60px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
-  --st-mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+  --st-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --st-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, 'Microsoft YaHei', monospace;
 }
 
 /* 深色（DSH dark）：面板 rgb(44,44,46)，选中 rgb(67,69,74) */
@@ -128,7 +129,7 @@ html, body { height: 100%; margin: 0; }
 body {
   background: var(--st-page);
   color: var(--st-text);
-  font: 14px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font: 14px/22px var(--st-sans);
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; color: inherit; }

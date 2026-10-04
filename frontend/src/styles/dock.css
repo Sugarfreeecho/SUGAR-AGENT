@@ -122,7 +122,7 @@
     height: 28px;
     padding: 0 12px;
     color: var(--text-secondary);
-    font-size: 0.78rem;
+    font-size: var(--ui-text-sm);
     line-height: 1;
     white-space: nowrap;
     border-radius: 12px;
@@ -214,7 +214,7 @@
     margin: 0;
     padding: 12px;
     color: var(--text-tertiary);
-    font-size: 0.76rem;
+    font-size: var(--ui-text-sm);
 }
 
 /* ── drop hints ───────────────────────────────────────────────────────────── */
@@ -242,7 +242,7 @@
     padding: 12px;
     overflow: hidden;
     color: var(--text-tertiary);
-    font-size: 0.76rem;
+    font-size: var(--ui-text-sm);
     border: 1.5px dashed var(--border-hover);
     border-radius: var(--radius-md);
 }
@@ -301,7 +301,7 @@
 .dock-menu-item {
     padding: 5px 8px;
     color: var(--text-primary);
-    font-size: 0.76rem;
+    font-size: var(--ui-text-sm);
     text-align: left;
     background: transparent;
     border: none;
@@ -310,7 +310,7 @@
 }
 .dock-menu-item:hover { background: var(--surface-glass2); }
 
-.dock-unknown-tab { padding: 12px; color: var(--text-tertiary); font-size: 0.76rem; }
+.dock-unknown-tab { padding: 12px; color: var(--text-tertiary); font-size: var(--ui-text-sm); }
 
 /* ── narrow screens: the column is fullscreen by policy ───────────────────── */
 @media (max-width: 767px) {
@@ -464,8 +464,8 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-secondary);
-    font-size: 0.7rem;
-    font-weight: 600;
+    font-size: var(--ui-text-xs);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -473,7 +473,7 @@
     flex: none;
     padding: 3px 8px;
     color: var(--text-tertiary);
-    font-size: 0.68rem;
+    font-size: var(--ui-text-xs);
     background: transparent;
     border: none;
     border-radius: 6px;
@@ -506,7 +506,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-tertiary);
-    font-size: 0.74rem;
+    font-size: var(--ui-text-xs);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -519,7 +519,7 @@
     padding: 6px 10px;
     color: var(--text-soft);
     /* Same scale as the change list's rows: one type size across the column. */
-    font-size: 0.78rem;
+    font-size: var(--ui-text-sm);
     text-align: left;
     background: transparent;
     border: none;
@@ -531,7 +531,7 @@
     flex: none;
     width: 12px;
     color: var(--text-tertiary);
-    font-size: 0.62rem;
+    font-size: var(--ui-text-xs);
 }
 .dock-files-marker--icon,
 .dock-files-marker--dir {
@@ -540,7 +540,7 @@
     align-items: center;
     width: auto;
 }
-.dock-files-caret { display: inline-block; width: 10px; text-align: center; font-size: 0.66rem; }
+.dock-files-caret { display: inline-block; width: 10px; text-align: center; font-size: var(--ui-text-xs); }
 .dock-files-icon { display: block; width: 16px; height: 16px; }
 .dock-files-name {
     flex: 1 1 auto;
@@ -553,7 +553,7 @@
     flex: none;
     color: var(--text-tertiary);
     font-family: var(--mono);
-    font-size: 0.64rem;
+    font-size: var(--ui-text-xs);
     font-variant-numeric: tabular-nums;
 }
 
@@ -576,7 +576,7 @@
     margin: 0;
     color: var(--text-soft);
     font-family: var(--mono);
-    font-size: 0.7rem;
+    font-size: var(--ui-text-sm);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -588,13 +588,13 @@
 .dock-doc-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
 /* Rendered markdown keeps readable typography inside the column: the chat's
    global rules do not reach here, so the essentials are stated locally. */
-.dock-doc-markdown { padding: 14px 16px; color: var(--text-soft); font-size: 0.8rem; line-height: 1.65; }
+.dock-doc-markdown { padding: 14px 16px; color: var(--text-soft); font-size: var(--ui-text-lg); line-height: 1.65; }
 .dock-doc-markdown h1, .dock-doc-markdown h2, .dock-doc-markdown h3, .dock-doc-markdown h4 {
-    margin: 1.1em 0 0.5em; color: var(--text-primary); line-height: 1.35;
+    margin: 1.1em 0 0.5em; color: var(--text-primary); font-weight: 600; line-height: 1.5;
 }
 .dock-doc-markdown h1 { font-size: 1.25rem; }
-.dock-doc-markdown h2 { font-size: 1.1rem; }
-.dock-doc-markdown h3 { font-size: 0.95rem; }
+.dock-doc-markdown h2 { font-size: 1.125em; }
+.dock-doc-markdown h3 { font-size: var(--ui-text-lg); }
 .dock-doc-markdown p, .dock-doc-markdown li { margin: 0.45em 0; }
 .dock-doc-markdown ul, .dock-doc-markdown ol { padding-left: 1.4em; }
 .dock-doc-markdown code {
@@ -615,7 +615,7 @@
 .dock-doc-markdown img { max-width: 100%; height: auto; border-radius: var(--radius-sm); }
 .dock-doc-markdown a { color: var(--accent-1); text-decoration: none; }
 .dock-doc-markdown a:hover { text-decoration: underline; }
-.dock-note { padding: 8px 4px; color: var(--text-tertiary); font-size: 0.7rem; }
+.dock-note { padding: 8px 4px; color: var(--text-tertiary); font-size: var(--ui-text-xs); }
 
 /* ── start ("guide") page ─────────────────────────────────────────────────── */
 .dock-guide {
@@ -655,8 +655,8 @@
 .dock-guide-card-icon { flex: none; display: inline-flex; }
 .dock-guide-card-icon svg { width: 20px; height: 20px; }
 .dock-guide-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.dock-guide-card-title { font-size: 0.82rem; font-weight: 600; }
-.dock-guide-card-desc { color: var(--text-tertiary); font-size: 0.7rem; }
+.dock-guide-card-title { font-size: var(--ui-text-md); font-weight: 500; }
+.dock-guide-card-desc { color: var(--text-tertiary); font-size: var(--ui-text-xs); }
 .dock-doc-fallback {
     display: flex;
     flex-direction: column;
@@ -679,9 +679,9 @@
     padding: 8px 10px; background: var(--surface-glass2); border-bottom: 1px solid var(--border-glass);
 }
 .dock-change-turn-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.dock-change-turn-copy strong { color: var(--text-primary); font-size: 0.75rem; }
-.dock-change-turn-copy > span:not(.dock-change-turn-summary) { overflow: hidden; color: var(--text-secondary); font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
-.dock-change-turn-summary { color: var(--text-tertiary); font-family: var(--mono); font-size: 0.62rem; }
+.dock-change-turn-copy strong { color: var(--text-primary); font-size: var(--ui-text-sm); }
+.dock-change-turn-copy > span:not(.dock-change-turn-summary) { overflow: hidden; color: var(--text-secondary); font-size: var(--ui-text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.dock-change-turn-summary { color: var(--text-tertiary); font-family: var(--mono); font-size: var(--ui-text-xs); }
 .dock-change-turn-actions { display: flex; flex: none; gap: 2px; }
 .dock-change { border-bottom: 1px solid var(--border-glass); }
 .dock-change:last-child { border-bottom: 0; }
@@ -700,13 +700,13 @@
     transition: transform 170ms var(--ease-out-expo), color 120ms ease-out;
 }
 .dock-change-toggle.is-open { color: var(--text-secondary); transform: rotate(90deg); }
-.dock-change-name { flex: none; max-width: 45%; overflow: hidden; color: var(--text-primary); font-size: 0.78rem; text-overflow: ellipsis; white-space: nowrap; }
-.dock-change-dir { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: 0.66rem; text-overflow: ellipsis; white-space: nowrap; }
-.dock-change-stats { flex: none; display: flex; gap: 4px; font-family: var(--mono); font-size: 0.64rem; font-variant-numeric: tabular-nums; }
+.dock-change-name { flex: none; max-width: 45%; overflow: hidden; color: var(--text-primary); font-size: var(--ui-text-sm); text-overflow: ellipsis; white-space: nowrap; }
+.dock-change-dir { flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-tertiary); font-size: var(--ui-text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.dock-change-stats { flex: none; display: flex; gap: 4px; font-family: var(--mono); font-size: var(--ui-text-xs); font-variant-numeric: tabular-nums; }
 .dock-change-added { color: var(--green-accent); }
 .dock-change-removed { color: var(--red-accent); }
-.dock-change-reverted { margin-left: 2px; padding: 1px 5px; border: 1px solid var(--border-glass); border-radius: 999px; color: var(--text-tertiary); font-family: var(--sans); font-size: 0.58rem; }
-.dock-change-status { min-height: 22px; padding: 5px 10px 2px; color: var(--green-accent); font-size: 0.66rem; white-space: pre-wrap; }
+.dock-change-reverted { margin-left: 2px; padding: 1px 5px; border: 1px solid var(--border-glass); border-radius: 999px; color: var(--text-tertiary); font-family: var(--sans); font-size: var(--ui-text-xs); }
+.dock-change-status { min-height: 22px; padding: 5px 10px 2px; color: var(--green-accent); font-size: var(--ui-text-xs); white-space: pre-wrap; }
 .dock-change-status:empty { min-height: 0; padding-block: 0; }
 .dock-change-status.is-error { color: var(--red-accent); }
 .dock-change-body {
@@ -725,7 +725,7 @@
     scrollbar-gutter: stable;
     color: var(--text-soft);
     font-family: var(--mono);
-    font-size: 0.64rem;
+    font-size: var(--ui-text-xs);
     line-height: 1.5;
     background: var(--code-surface-bg);
     border-radius: var(--radius-sm);
@@ -735,7 +735,7 @@
 .dock-diff-line.is-added { color: var(--green-accent); }
 .dock-diff-line.is-removed { color: var(--red-accent); }
 .dock-diff-line.is-hunk { color: var(--blue-accent); }
-.dock-diff-line.is-file { color: var(--text-tertiary); font-weight: 600; }
+.dock-diff-line.is-file { color: var(--text-tertiary); font-weight: 500; }
 
 /* ── feedback round 3 ─────────────────────────────────────────────────────── */
 
@@ -802,7 +802,7 @@ html.theme-light .dock-diff-line.is-hunk { color: #1d4ed8; background: rgba(37, 
 .dock-changes-scope { display: flex; flex: none; gap: 6px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--border-glass); }
 .dock-turn-select {
     min-width: 0; flex: 1 1 auto; padding: 4px 8px; overflow: hidden; color: var(--text-secondary);
-    font-size: 0.68rem; text-overflow: ellipsis; background: var(--surface-glass2);
+    font-size: var(--ui-text-xs); text-overflow: ellipsis; background: var(--surface-glass2);
     border: 1px solid var(--border-glass); border-radius: 8px;
 }
 .dock-turn-select.is-active { color: var(--text-primary); border-color: var(--border-accent); }

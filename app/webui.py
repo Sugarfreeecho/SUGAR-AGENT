@@ -7490,7 +7490,8 @@ def _load_config_wizard_html() -> str:
             return path.read_text(encoding="utf-8")
     # 极简兜底（完整 UI：templates/first_time_config.html）
     return """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>首次配置</title></head>
-<body style="font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem;">
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei','PingFang SC','Hiragino Sans GB','Helvetica Neue',Helvetica,Arial,sans-serif}button,input{font-family:inherit}</style>
+<body style="max-width:480px;margin:2rem auto;padding:1rem;">
 <h1>General Agent · 首次配置</h1>
 <p>缺少 <code>templates/first_time_config.html</code>，使用简易表单。</p>
 <form id="f"><label>API Key<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
