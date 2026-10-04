@@ -657,6 +657,8 @@ function translateUiString(value) {
         .replace(/^占本阶段 (.+)$/, 'Share of phase $1')
         .replace(/^(.+) 次 LLM 请求$/, '$1 LLM requests')
         .replace(/^(.+) 个模型。$/, '$1 models.')
+        .replace(/^… \[中间省略 (\d+) 行（输出中）\] …$/, '… [$1 lines omitted (streaming)] …')
+        .replace(/^… \[中间省略约 (\d+) 字符（输出中）\] …$/, '… [about $1 characters omitted (streaming)] …')
         .replace(/^\.\.\. \[中间省略 (\d+) 行\] \.\.\.$/, '... [$1 lines omitted] ...')
         .replace(/^\.\.\. \[中间省略约 (\d+) 字符\] \.\.\.$/, '... [about $1 characters omitted] ...');
 }

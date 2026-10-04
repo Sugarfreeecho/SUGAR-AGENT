@@ -713,6 +713,8 @@ function translateUiString(value) {
         .replace(/^占本阶段 (.+)$/, 'Share of phase $1')
         .replace(/^(.+) 次 LLM 请求$/, '$1 LLM requests')
         .replace(/^(.+) 个模型。$/, '$1 models.')
+        .replace(/^… \\[中间省略 (\\d+) 行（输出中）\\] …$/, '… [$1 lines omitted (streaming)] …')
+        .replace(/^… \\[中间省略约 (\\d+) 字符（输出中）\\] …$/, '… [about $1 characters omitted (streaming)] …')
         .replace(/^\\.\\.\\. \\[中间省略 (\\d+) 行\\] \\.\\.\\.$/, '... [$1 lines omitted] ...')
         .replace(/^\\.\\.\\. \\[中间省略约 (\\d+) 字符\\] \\.\\.\\.$/, '... [about $1 characters omitted] ...');
 }
@@ -9657,6 +9659,7 @@ function restoreInputDraft(sessionId) {
         ? draftBySession[draftKey]
         : readStoredInputDraft(sessionId);
     messageInput.value = v != null ? String(v) : '';
+    restoreDraftPathTokens(sessionId, messageInput.value);
     rewriteInputWorkspacePaths();
     autoResizeTextarea();
 }
@@ -9666,14 +9669,69 @@ function inputDraftStorageKey(sessionId) {
     return LS_INPUT_DRAFT_PREFIX + draftKey;
 }
 
+/* 输入框里的绝对路径会被改写成 @基名 胶囊标签，真实路径只存在 inputPathTokenMap 里。
+   草稿落盘的是标签形式，不同时持久化标签→路径映射，刷新/切会话后标签就成了死文本，
+   再发送时真实路径会被吞掉。 */
+function inputDraftPathTokenStorageKey(sessionId) {
+    return inputDraftStorageKey(sessionId) + '::path-tokens';
+}
+
+/** 取出文本中仍被引用的 标签→真实路径 映射（只保留确实出现过的标签）。 */
+function collectDraftPathTokens(text) {
+    const source = String(text || '');
+    const out = Object.create(null);
+    if (!source || typeof inputPathTokenMap === 'undefined') return out;
+    Object.keys(inputPathTokenMap).forEach(function (label) {
+        if (label && source.indexOf(label) >= 0 && inputPathTokenMap[label]) {
+            out[label] = inputPathTokenMap[label];
+        }
+    });
+    return out;
+}
+
+function persistDraftPathTokens(sessionId, text) {
+    const key = inputDraftPathTokenStorageKey(sessionId);
+    const tokens = collectDraftPathTokens(text);
+    try {
+        if (Object.keys(tokens).length) localStorage.setItem(key, JSON.stringify(tokens));
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
+/** 恢复草稿前先重建标签映射，让草稿里的 @基名 胶囊重新可用（否则发送会丢路径）。 */
+function restoreDraftPathTokens(sessionId, text) {
+    const source = String(text || '');
+    if (!source || typeof inputPathTokenMap === 'undefined') return;
+    let stored = null;
+    try {
+        stored = JSON.parse(localStorage.getItem(inputDraftPathTokenStorageKey(sessionId)) || 'null');
+    } catch (e) {
+        stored = null;
+    }
+    if (!stored || typeof stored !== 'object') return;
+    Object.keys(stored).forEach(function (label) {
+        const path = String(stored[label] || '');
+        if (!label || !path || source.indexOf(label) < 0) return;
+        const existing = inputPathTokenMap[label];
+        if (existing && typeof normalizeInputPathTokenIdentity === 'function'
+            && normalizeInputPathTokenIdentity(existing) !== normalizeInputPathTokenIdentity(path)) return;
+        inputPathTokenMap[label] = path;
+    });
+}
+
 function persistInputDraft(sessionId, value) {
     const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
     const text = String(value || '');
     draftBySession[draftKey] = text;
     try {
         const key = inputDraftStorageKey(sessionId);
-        if (text) localStorage.setItem(key, text);
-        else localStorage.removeItem(key);
+        if (text) {
+            localStorage.setItem(key, text);
+            persistDraftPathTokens(sessionId, text);
+        } else {
+            localStorage.removeItem(key);
+            localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));
+        }
     } catch (e) { /* ignore */ }
     if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
 }
@@ -9689,7 +9747,10 @@ function readStoredInputDraft(sessionId) {
 function removeStoredInputDraft(sessionId) {
     const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
     delete draftBySession[draftKey];
-    try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
+    try {
+        localStorage.removeItem(inputDraftStorageKey(sessionId));
+        localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));
+    } catch (e) { /* ignore */ }
     if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
 }
 
@@ -24039,7 +24100,11 @@ function withdrawFollowup(itemId) {
 
 function returnFollowupToInput(sid, item) {
     removePendingSteerFromProcess(sid, item);
-    const returned = String(item.display || item.text || '');
+    /* 回填必须用「实际提交的原文」item.text：display 只是输入框里的 @基名 胶囊标签，
+       而标签→真实路径的映射在入队时已随 clearInputPathTokens() 清空，用 display 回填
+       会让下一次发送真的把 "@文件名" 发出去（路径被吞）。item.text 里是展开后的真实路径，
+       回到输入框后会被 rewriteInputWorkspacePaths() 重新变成胶囊并重建映射。 */
+    const returned = String(item.text || item.display || '');
     if (sid !== currentSessionId) {
         const backgroundDraft = Object.prototype.hasOwnProperty.call(draftBySession, sid)
             ? String(draftBySession[sid] || '')
@@ -25046,7 +25111,9 @@ async function sendMessage(options) {
     const submitSessionIdInitial = options.sessionId || currentSessionId;
     if (!options.fromQueue && !options.fromInlineRewrite) rewriteInputWorkspacePaths();
     const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
-    const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
+    /* fromQueue 的文本在入队时已展开为真实路径；fromInlineRewrite 仍要过一遍标签展开，
+       否则改写编辑器里沿用的 @基名 会被原样发出（路径被吞）。 */
+    const rawMessage = options.fromQueue ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!hasSendableText(rawMessage)) return;
     if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
     /* 在任何异步检查和可消费 UI 状态之前上锁，所有发送入口共享同一会话互斥。 */
@@ -25330,8 +25397,12 @@ async function sendMessage(options) {
                     attachmentsForRun
                 );
             } else if (!options.fromQueue && runSessionId === currentSessionId) {
-                messageInput.value = visibleMessage;
-                persistInputDraft(runSessionId, visibleMessage);
+                /* 回填发送原文而不是输入框里的 @基名 标签：此刻标签映射已被清空，
+                   塞回标签会让用户再发一次时丢掉路径。rewriteInputWorkspacePaths()
+                   会把真实路径重新变成胶囊并重建映射，显示形态不变。 */
+                messageInput.value = rawMessage;
+                rewriteInputWorkspacePaths();
+                persistInputDraft(runSessionId, messageInput.value);
                 if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
                     window.setSelectedSkillsForCurrentSession(selectedSkillsForRun);
                 }

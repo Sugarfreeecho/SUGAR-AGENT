@@ -2129,6 +2129,7 @@ function restoreInputDraft(sessionId) {
         ? draftBySession[draftKey]
         : readStoredInputDraft(sessionId);
     messageInput.value = v != null ? String(v) : '';
+    restoreDraftPathTokens(sessionId, messageInput.value);
     rewriteInputWorkspacePaths();
     autoResizeTextarea();
 }
@@ -2138,14 +2139,69 @@ function inputDraftStorageKey(sessionId) {
     return LS_INPUT_DRAFT_PREFIX + draftKey;
 }
 
+/* 输入框里的绝对路径会被改写成 @基名 胶囊标签，真实路径只存在 inputPathTokenMap 里。
+   草稿落盘的是标签形式，不同时持久化标签→路径映射，刷新/切会话后标签就成了死文本，
+   再发送时真实路径会被吞掉。 */
+function inputDraftPathTokenStorageKey(sessionId) {
+    return inputDraftStorageKey(sessionId) + '::path-tokens';
+}
+
+/** 取出文本中仍被引用的 标签→真实路径 映射（只保留确实出现过的标签）。 */
+function collectDraftPathTokens(text) {
+    const source = String(text || '');
+    const out = Object.create(null);
+    if (!source || typeof inputPathTokenMap === 'undefined') return out;
+    Object.keys(inputPathTokenMap).forEach(function (label) {
+        if (label && source.indexOf(label) >= 0 && inputPathTokenMap[label]) {
+            out[label] = inputPathTokenMap[label];
+        }
+    });
+    return out;
+}
+
+function persistDraftPathTokens(sessionId, text) {
+    const key = inputDraftPathTokenStorageKey(sessionId);
+    const tokens = collectDraftPathTokens(text);
+    try {
+        if (Object.keys(tokens).length) localStorage.setItem(key, JSON.stringify(tokens));
+        else localStorage.removeItem(key);
+    } catch (e) { /* ignore */ }
+}
+
+/** 恢复草稿前先重建标签映射，让草稿里的 @基名 胶囊重新可用（否则发送会丢路径）。 */
+function restoreDraftPathTokens(sessionId, text) {
+    const source = String(text || '');
+    if (!source || typeof inputPathTokenMap === 'undefined') return;
+    let stored = null;
+    try {
+        stored = JSON.parse(localStorage.getItem(inputDraftPathTokenStorageKey(sessionId)) || 'null');
+    } catch (e) {
+        stored = null;
+    }
+    if (!stored || typeof stored !== 'object') return;
+    Object.keys(stored).forEach(function (label) {
+        const path = String(stored[label] || '');
+        if (!label || !path || source.indexOf(label) < 0) return;
+        const existing = inputPathTokenMap[label];
+        if (existing && typeof normalizeInputPathTokenIdentity === 'function'
+            && normalizeInputPathTokenIdentity(existing) !== normalizeInputPathTokenIdentity(path)) return;
+        inputPathTokenMap[label] = path;
+    });
+}
+
 function persistInputDraft(sessionId, value) {
     const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
     const text = String(value || '');
     draftBySession[draftKey] = text;
     try {
         const key = inputDraftStorageKey(sessionId);
-        if (text) localStorage.setItem(key, text);
-        else localStorage.removeItem(key);
+        if (text) {
+            localStorage.setItem(key, text);
+            persistDraftPathTokens(sessionId, text);
+        } else {
+            localStorage.removeItem(key);
+            localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));
+        }
     } catch (e) { /* ignore */ }
     if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
 }
@@ -2161,7 +2217,10 @@ function readStoredInputDraft(sessionId) {
 function removeStoredInputDraft(sessionId) {
     const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
     delete draftBySession[draftKey];
-    try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
+    try {
+        localStorage.removeItem(inputDraftStorageKey(sessionId));
+        localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));
+    } catch (e) { /* ignore */ }
     if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
 }
 

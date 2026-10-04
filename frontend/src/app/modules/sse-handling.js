@@ -2410,7 +2410,11 @@ function withdrawFollowup(itemId) {
 
 function returnFollowupToInput(sid, item) {
     removePendingSteerFromProcess(sid, item);
-    const returned = String(item.display || item.text || '');
+    /* 回填必须用「实际提交的原文」item.text：display 只是输入框里的 @基名 胶囊标签，
+       而标签→真实路径的映射在入队时已随 clearInputPathTokens() 清空，用 display 回填
+       会让下一次发送真的把 "@文件名" 发出去（路径被吞）。item.text 里是展开后的真实路径，
+       回到输入框后会被 rewriteInputWorkspacePaths() 重新变成胶囊并重建映射。 */
+    const returned = String(item.text || item.display || '');
     if (sid !== currentSessionId) {
         const backgroundDraft = Object.prototype.hasOwnProperty.call(draftBySession, sid)
             ? String(draftBySession[sid] || '')
@@ -3417,7 +3421,9 @@ async function sendMessage(options) {
     const submitSessionIdInitial = options.sessionId || currentSessionId;
     if (!options.fromQueue && !options.fromInlineRewrite) rewriteInputWorkspacePaths();
     const visibleMessage = options.message != null ? String(options.message) : messageInput.value;
-    const rawMessage = (options.fromQueue || options.fromInlineRewrite) ? visibleMessage : expandInputPathTokens(visibleMessage);
+    /* fromQueue 的文本在入队时已展开为真实路径；fromInlineRewrite 仍要过一遍标签展开，
+       否则改写编辑器里沿用的 @基名 会被原样发出（路径被吞）。 */
+    const rawMessage = options.fromQueue ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!hasSendableText(rawMessage)) return;
     if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
     /* 在任何异步检查和可消费 UI 状态之前上锁，所有发送入口共享同一会话互斥。 */
@@ -3701,8 +3707,12 @@ async function sendMessage(options) {
                     attachmentsForRun
                 );
             } else if (!options.fromQueue && runSessionId === currentSessionId) {
-                messageInput.value = visibleMessage;
-                persistInputDraft(runSessionId, visibleMessage);
+                /* 回填发送原文而不是输入框里的 @基名 标签：此刻标签映射已被清空，
+                   塞回标签会让用户再发一次时丢掉路径。rewriteInputWorkspacePaths()
+                   会把真实路径重新变成胶囊并重建映射，显示形态不变。 */
+                messageInput.value = rawMessage;
+                rewriteInputWorkspacePaths();
+                persistInputDraft(runSessionId, messageInput.value);
                 if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
                     window.setSelectedSkillsForCurrentSession(selectedSkillsForRun);
                 }
