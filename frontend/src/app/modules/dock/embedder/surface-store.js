@@ -262,19 +262,6 @@ function dockActionOpenContent(sessionId, intent, seed, settled, area) {
     }, seed), area);
 }
 
-/** Open a page kind by kind, at the page address the kind records. */
-function dockActionOpenPage(sessionId, kind, options, seed, settled, area) {
-    const opts = options || {};
-    dockActionOpenContent(sessionId, {
-        kind: kind,
-        contentId: 'myagent-page://' + kind,
-        title: opts.title,
-        paneId: opts.paneId,
-        replaceTab: opts.replaceTab,
-        revealIfOpened: false,
-    }, seed, settled, area);
-}
-
 /** A page is never copied: the copy would sit beside it in the same pane. */
 function dockActionDuplicateTab(sessionId, tabId, seed, area) {
     return dockSeat(sessionId, (surface) => dockAdvance(
@@ -386,12 +373,3 @@ function dockActionStep(sessionId, direction, area) {
     }, area);
 }
 
-/** Undo one intent, or one run of consecutive focus-only intents. */
-function dockActionUndo(sessionId, area) {
-    return dockActionStep(sessionId, 'undo', area);
-}
-
-/** Redo one intent the matching undo stepped back. */
-function dockActionRedo(sessionId, area) {
-    return dockActionStep(sessionId, 'redo', area);
-}

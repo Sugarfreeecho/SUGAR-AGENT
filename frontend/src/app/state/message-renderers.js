@@ -22,9 +22,3 @@ function reduceAndRenderMessageEvent(ctx, event, opts) {
     return reduced || { handled: false };
 }
 
-function renderMessageRecords(ctx, records, sessionId) {
-    const list = Array.isArray(records) ? records : [];
-    for (let i = 0; i < list.length; i += 1) {
-        renderMessageRecord(ctx, list[i], sessionId);
-    }
-}

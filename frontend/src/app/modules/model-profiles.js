@@ -139,9 +139,6 @@ function canonicalLlmType(raw) {
 function isResponsesProfile(profile) {
     return canonicalLlmType(profile && profile.llm_type) === 'openai-responses';
 }
-function isChatProfile(profile) {
-    return canonicalLlmType(profile && profile.llm_type) === 'openai';
-}
 function profileEffortValue(profile) {
     var p = profile || {};
     var thinkingDisabled = String(p.thinking_mode || '').toLowerCase() === 'disabled';

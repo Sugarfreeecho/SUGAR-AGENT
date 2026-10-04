@@ -257,39 +257,6 @@ function branchFinalTextMatches(eventContent, expectedText) {
     return false;
 }
 
-async function waitForBranchFinalPersisted(sessionId, beforeIndex, expectedText) {
-    if (!sessionId || !Number.isFinite(beforeIndex) || beforeIndex <= 0) {
-        return { ready: true, beforeIndex: beforeIndex };
-    }
-    var deadline = Date.now() + 2600;
-    while (Date.now() < deadline) {
-        try {
-            var url = '/sessions/' + encodeURIComponent(sessionId)
-                + '/messages?limit=1&before_index=' + encodeURIComponent(String(beforeIndex));
-            var r = await fetch(url);
-            var j = await r.json().catch(function () { return null; });
-            var events = Array.isArray(j) ? j : (j && Array.isArray(j.events) ? j.events : []);
-            if (events.length && events[events.length - 1] && events[events.length - 1].type === 'final') {
-                return { ready: true, beforeIndex: beforeIndex };
-            }
-            var recentUrl = '/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=80';
-            var rr = await fetch(recentUrl);
-            var jj = await rr.json().catch(function () { return null; });
-            var recent = Array.isArray(jj) ? jj : (jj && Array.isArray(jj.events) ? jj.events : []);
-            var base = jj && typeof jj.range_start === 'number' ? jj.range_start : 0;
-            for (var i = recent.length - 1; i >= 0; i -= 1) {
-                var ev = recent[i];
-                if (!ev || ev.type !== 'final') continue;
-                if (branchFinalTextMatches(ev.content, expectedText)) {
-                    return { ready: true, beforeIndex: base + i + 1 };
-                }
-            }
-        } catch (e) { /* retry */ }
-        await new Promise(function (resolve) { setTimeout(resolve, 180); });
-    }
-    return { ready: false, beforeIndex: beforeIndex };
-}
-
 function copyMessageText(wrap) {
     const msg = wrap && wrap.querySelector('.message');
     const plain = msg ? (msg.innerText || '') : '';
@@ -2055,8 +2022,6 @@ function stripWelcome(ctx) {
     if (root) root.querySelector('.welcome')?.remove();
 }
 
-function clearChat() { setWelcome(); }
-
 function pathJoinBaseName(baseDir, name) {
     if (!baseDir) return name || '';
     if (!name) return baseDir;
@@ -2268,14 +2233,6 @@ function stripWorkspaceRootPrefixFromRelPath(relPath) {
         return t.slice(baseName.length + 1);
     }
     return t;
-}
-
-function getCurrentSessionDataPath() {
-    var sdir = (typeof window.__SESSIONS_DIR__ === 'string') ? window.__SESSIONS_DIR__ : '';
-    if (sdir && currentSessionId) return pathJoinBaseName(sdir, currentSessionId);
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    if (w && currentSessionId) return pathJoinBaseName(pathJoinBaseName(w, 'sessions'), currentSessionId);
-    return '';
 }
 
 /** 标题栏与侧栏：工作目录绝对路径与会话 ID（与服务端 window.__WORK_DIR__ 一致） */

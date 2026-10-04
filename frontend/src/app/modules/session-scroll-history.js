@@ -215,11 +215,6 @@ function measureFeedChunkScrollerHeight(sc, chunk) {
     return h;
 }
 
-function refreshAllFeedChunksUnder(root) {
-    if (!root || !root.querySelectorAll) return;
-    root.querySelectorAll('.feed-chunk').forEach(scheduleFeedChunkOverflowRefresh);
-}
-
 function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
     if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
@@ -2015,24 +2010,6 @@ function hideRewriteUndoToast() {
         if (btn) btn.textContent = '撤销';
     }
     rewriteUndoState = null;
-}
-function showRewriteUndoToast(type, data) {
-    const t = document.getElementById('rewrite-undo-toast');
-    const msgEl = t && t.querySelector('.rewrite-undo-msg');
-    const btn = t && t.querySelector('.rewrite-undo-btn');
-    if (!t || !msgEl) return;
-    rewriteUndoState = { type: type, data: data };
-    if (type === 'rewrite_pending') {
-        msgEl.textContent = '改写待生效：发送消息后才会截断历史并发送；点此取消改写。';
-        if (btn) btn.textContent = '取消改写';
-    } else if (type === 'tail') {
-        msgEl.textContent = '已截断历史，可撤销恢复';
-        if (btn) btn.textContent = '撤销';
-    } else {
-        msgEl.textContent = '已填入输入框，可撤销';
-        if (btn) btn.textContent = '撤销';
-    }
-    t.classList.add('is-on');
 }
 
 function smoothScrollBy(el, dy) {

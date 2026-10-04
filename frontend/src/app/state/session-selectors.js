@@ -77,6 +77,3 @@ function selectIsSessionRunning(sessionId) {
     return false;
 }
 
-function selectRunForSession(sessionId) {
-    return sessionStore.getRun(sessionId);
-}

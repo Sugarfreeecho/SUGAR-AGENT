@@ -906,22 +906,10 @@ function getStoredSessionListMode() {
     return m === 'compact' ? 'compact' : 'detailed';
 }
 
-function getActiveUiTheme() {
-    var root = document.documentElement;
-    if (root.classList.contains('theme-light')) return 'light';
-    if (root.classList.contains('theme-dark')) return 'dark';
-    return 'purple';
-}
-
 function getUiThemeCanvasBackground() {
     return getComputedStyle(document.documentElement).getPropertyValue('--export-bg').trim() || '#ffffff';
 }
 
-
-function applyFontLevel(level, persist) {
-    level = Math.max(0, Math.min(2, level));
-    return applyFontSize(UI_FONT_PX[level], persist);
-}
 
 function applyFontSize(px, persist) {
     var next = clampFontPx(px);
@@ -1142,16 +1130,6 @@ function insertTextareaNewline(textarea, event) {
     return true;
 }
 
-function bindInputSubmit(input, options) {
-    if (!input) return;
-    options = options || {};
-    const mode = options.mode || (input.tagName === 'TEXTAREA' ? 'editor' : 'single-line');
-    input.addEventListener('keydown', function (event) {
-        if (!isInputSubmitShortcut(event, mode)) return;
-        event.preventDefault();
-        if (typeof options.submit === 'function') void options.submit(event, input);
-    });
-}
 `,Ir=`let currentSessionId = null;
 /** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */
 const sendPipelineLocksBySession = Object.create(null);
@@ -1356,11 +1334,6 @@ function splitUserMessageVisualLines(text) {
         }
     }
     return out;
-}
-
-function buildUserMessageSummary(text) {
-    var lines = splitUserMessageVisualLines(text);
-    return lines.slice(0, USER_MESSAGE_COLLAPSE_LINES).join('\\n') + '\\n...';
 }
 
 function userMessageShouldCollapse(text) {
@@ -2906,9 +2879,6 @@ function selectIsSessionRunning(sessionId) {
     return false;
 }
 
-function selectRunForSession(sessionId) {
-    return sessionStore.getRun(sessionId);
-}
 `,Rr=`function applySessionSnapshot(snapshot) {
     snapshot = snapshot || {};
     if (!sessionStore.shouldAcceptSnapshot(snapshot)) return false;
@@ -3279,24 +3249,12 @@ function beginMessageReplay(sessionId, meta) {
     return messageStore.beginReplay(sessionId, meta);
 }
 
-function clearMessageStateForSession(sessionId) {
-    messageStore.clearSession(sessionId);
-}
-
 function applyMessageEvent(sessionId, event, eventIndex, source) {
     return messageStore.applyEvent(sessionId, event, eventIndex, source);
 }
 
 function selectMessageEvents(sessionId) {
     return messageStore.listEvents(sessionId);
-}
-
-function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
-    return messageStore.listEventsInRange(sessionId, startIndex, endIndex);
-}
-
-function selectMessageEventCount(sessionId) {
-    return messageStore.eventCount(sessionId);
 }
 
 function truncateMessageStateForSession(sessionId, beforeIndex) {
@@ -3326,12 +3284,6 @@ function reduceAndRenderMessageEvent(ctx, event, opts) {
     return reduced || { handled: false };
 }
 
-function renderMessageRecords(ctx, records, sessionId) {
-    const list = Array.isArray(records) ? records : [];
-    for (let i = 0; i < list.length; i += 1) {
-        renderMessageRecord(ctx, list[i], sessionId);
-    }
-}
 `,Lr=`const contextStore = {
     tokensBySession: new Map(),
     progressBySession: new Map(),
@@ -3407,9 +3359,6 @@ function appendContextProgressForSession(sessionId, kind, delta) {
     return contextStore.appendProgress(sessionId, kind, delta);
 }
 
-function selectContextProgress(sessionId) {
-    return contextStore.progressBySession.get(String(sessionId || '')) || null;
-}
 `,Mr=`/**
  * 子代理目录对象层（dsh 式）——纯逻辑，零 DOM、零框架、零全局 UI 依赖。
  *
@@ -5800,9 +5749,6 @@ function canonicalLlmType(raw) {
 function isResponsesProfile(profile) {
     return canonicalLlmType(profile && profile.llm_type) === 'openai-responses';
 }
-function isChatProfile(profile) {
-    return canonicalLlmType(profile && profile.llm_type) === 'openai';
-}
 function profileEffortValue(profile) {
     var p = profile || {};
     var thinkingDisabled = String(p.thinking_mode || '').toLowerCase() === 'disabled';
@@ -7838,11 +7784,6 @@ function measureFeedChunkScrollerHeight(sc, chunk) {
     return h;
 }
 
-function refreshAllFeedChunksUnder(root) {
-    if (!root || !root.querySelectorAll) return;
-    root.querySelectorAll('.feed-chunk').forEach(scheduleFeedChunkOverflowRefresh);
-}
-
 function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
     if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
     if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
@@ -9638,24 +9579,6 @@ function hideRewriteUndoToast() {
         if (btn) btn.textContent = '撤销';
     }
     rewriteUndoState = null;
-}
-function showRewriteUndoToast(type, data) {
-    const t = document.getElementById('rewrite-undo-toast');
-    const msgEl = t && t.querySelector('.rewrite-undo-msg');
-    const btn = t && t.querySelector('.rewrite-undo-btn');
-    if (!t || !msgEl) return;
-    rewriteUndoState = { type: type, data: data };
-    if (type === 'rewrite_pending') {
-        msgEl.textContent = '改写待生效：发送消息后才会截断历史并发送；点此取消改写。';
-        if (btn) btn.textContent = '取消改写';
-    } else if (type === 'tail') {
-        msgEl.textContent = '已截断历史，可撤销恢复';
-        if (btn) btn.textContent = '撤销';
-    } else {
-        msgEl.textContent = '已填入输入框，可撤销';
-        if (btn) btn.textContent = '撤销';
-    }
-    t.classList.add('is-on');
 }
 
 function smoothScrollBy(el, dy) {
@@ -11869,39 +11792,6 @@ function branchFinalTextMatches(eventContent, expectedText) {
     return false;
 }
 
-async function waitForBranchFinalPersisted(sessionId, beforeIndex, expectedText) {
-    if (!sessionId || !Number.isFinite(beforeIndex) || beforeIndex <= 0) {
-        return { ready: true, beforeIndex: beforeIndex };
-    }
-    var deadline = Date.now() + 2600;
-    while (Date.now() < deadline) {
-        try {
-            var url = '/sessions/' + encodeURIComponent(sessionId)
-                + '/messages?limit=1&before_index=' + encodeURIComponent(String(beforeIndex));
-            var r = await fetch(url);
-            var j = await r.json().catch(function () { return null; });
-            var events = Array.isArray(j) ? j : (j && Array.isArray(j.events) ? j.events : []);
-            if (events.length && events[events.length - 1] && events[events.length - 1].type === 'final') {
-                return { ready: true, beforeIndex: beforeIndex };
-            }
-            var recentUrl = '/sessions/' + encodeURIComponent(sessionId) + '/messages?limit=80';
-            var rr = await fetch(recentUrl);
-            var jj = await rr.json().catch(function () { return null; });
-            var recent = Array.isArray(jj) ? jj : (jj && Array.isArray(jj.events) ? jj.events : []);
-            var base = jj && typeof jj.range_start === 'number' ? jj.range_start : 0;
-            for (var i = recent.length - 1; i >= 0; i -= 1) {
-                var ev = recent[i];
-                if (!ev || ev.type !== 'final') continue;
-                if (branchFinalTextMatches(ev.content, expectedText)) {
-                    return { ready: true, beforeIndex: base + i + 1 };
-                }
-            }
-        } catch (e) { /* retry */ }
-        await new Promise(function (resolve) { setTimeout(resolve, 180); });
-    }
-    return { ready: false, beforeIndex: beforeIndex };
-}
-
 function copyMessageText(wrap) {
     const msg = wrap && wrap.querySelector('.message');
     const plain = msg ? (msg.innerText || '') : '';
@@ -13667,8 +13557,6 @@ function stripWelcome(ctx) {
     if (root) root.querySelector('.welcome')?.remove();
 }
 
-function clearChat() { setWelcome(); }
-
 function pathJoinBaseName(baseDir, name) {
     if (!baseDir) return name || '';
     if (!name) return baseDir;
@@ -13880,14 +13768,6 @@ function stripWorkspaceRootPrefixFromRelPath(relPath) {
         return t.slice(baseName.length + 1);
     }
     return t;
-}
-
-function getCurrentSessionDataPath() {
-    var sdir = (typeof window.__SESSIONS_DIR__ === 'string') ? window.__SESSIONS_DIR__ : '';
-    if (sdir && currentSessionId) return pathJoinBaseName(sdir, currentSessionId);
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
-    if (w && currentSessionId) return pathJoinBaseName(pathJoinBaseName(w, 'sessions'), currentSessionId);
-    return '';
 }
 
 /** 标题栏与侧栏：工作目录绝对路径与会话 ID（与服务端 window.__WORK_DIR__ 一致） */
@@ -19642,32 +19522,6 @@ function pauseCurrentRun() {
     sealProcessGroup(ctx);
     if (reachedServer) void requestInterrupt(sid, runId, 'user_button');
     setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
-}
-
-/** 在当前会话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。*/
-function resendLastUserMessage() {
-    if (!currentSessionId) return false;
-    if (isSessionRunning(currentSessionId)) return false;
-    var lastMsg = lastUserMessageBySession[currentSessionId];
-    if (!lastMsg || !String(lastMsg).trim()) {
-        var chatStream = getVisibleChatStream();
-        if (chatStream) {
-            var wraps = chatStream.querySelectorAll('.msg-wrap--user');
-            if (wraps.length) {
-                var lastWrap = wraps[wraps.length - 1];
-                lastMsg = messageRawMarkdown.get(lastWrap) || (lastWrap.querySelector('.message.user') && lastWrap.querySelector('.message.user').textContent);
-            }
-        }
-    }
-    if (!lastMsg || !String(lastMsg).trim()) {
-        lastMsg = draftBySession[currentSessionId];
-    }
-    if (!lastMsg || !String(lastMsg).trim()) return false;
-    messageInput.value = String(lastMsg);
-    rewriteInputWorkspacePaths();
-    autoResizeTextarea();
-    sendMessage();
-    return true;
 }
 
 function showLoading() {
@@ -26301,16 +26155,6 @@ function dockCreateMinter(seed) {
     };
 }
 
-/** Whether a node is a pane. @param {*} node Candidate. @returns {boolean} */
-function dockIsPaneNode(node) {
-    return !!node && node.kind === 'pane';
-}
-
-/** Whether a node is a split. @param {*} node Candidate. @returns {boolean} */
-function dockIsSplitNode(node) {
-    return !!node && node.kind === 'split';
-}
-
 /**
  * Reject an unhandled discriminant at the end of a closed switch.
  * @param {never} value The discriminant the switch did not handle.
@@ -29580,19 +29424,6 @@ function dockActionOpenContent(sessionId, intent, seed, settled, area) {
     }, seed), area);
 }
 
-/** Open a page kind by kind, at the page address the kind records. */
-function dockActionOpenPage(sessionId, kind, options, seed, settled, area) {
-    const opts = options || {};
-    dockActionOpenContent(sessionId, {
-        kind: kind,
-        contentId: 'myagent-page://' + kind,
-        title: opts.title,
-        paneId: opts.paneId,
-        replaceTab: opts.replaceTab,
-        revealIfOpened: false,
-    }, seed, settled, area);
-}
-
 /** A page is never copied: the copy would sit beside it in the same pane. */
 function dockActionDuplicateTab(sessionId, tabId, seed, area) {
     return dockSeat(sessionId, (surface) => dockAdvance(
@@ -29704,15 +29535,6 @@ function dockActionStep(sessionId, direction, area) {
     }, area);
 }
 
-/** Undo one intent, or one run of consecutive focus-only intents. */
-function dockActionUndo(sessionId, area) {
-    return dockActionStep(sessionId, 'undo', area);
-}
-
-/** Redo one intent the matching undo stepped back. */
-function dockActionRedo(sessionId, area) {
-    return dockActionStep(sessionId, 'redo', area);
-}
 `,ms=`/**
  * Tab-type registration: what a type IS and how an address resolves to one.
  *
@@ -29772,14 +29594,6 @@ function dockCompileGlob(pattern) {
     }
     const re = new RegExp('^' + source + '$', 'i');
     return (address) => re.test(String(address));
-}
-
-/** The address's URI path, or undefined when it is not a URI. */
-function dockAddressPath(address) {
-    const text = String(address);
-    const match = /^[a-z][a-z0-9+.-]*:\\/\\/[^/]*(\\/.*)?$/i.exec(text);
-    if (!match) return undefined;
-    return match[1] || '';
 }
 
 /**

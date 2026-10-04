@@ -121,24 +121,12 @@ function beginMessageReplay(sessionId, meta) {
     return messageStore.beginReplay(sessionId, meta);
 }
 
-function clearMessageStateForSession(sessionId) {
-    messageStore.clearSession(sessionId);
-}
-
 function applyMessageEvent(sessionId, event, eventIndex, source) {
     return messageStore.applyEvent(sessionId, event, eventIndex, source);
 }
 
 function selectMessageEvents(sessionId) {
     return messageStore.listEvents(sessionId);
-}
-
-function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
-    return messageStore.listEventsInRange(sessionId, startIndex, endIndex);
-}
-
-function selectMessageEventCount(sessionId) {
-    return messageStore.eventCount(sessionId);
 }
 
 function truncateMessageStateForSession(sessionId, beforeIndex) {

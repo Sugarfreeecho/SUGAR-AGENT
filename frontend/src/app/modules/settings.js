@@ -63,22 +63,10 @@ function getStoredSessionListMode() {
     return m === 'compact' ? 'compact' : 'detailed';
 }
 
-function getActiveUiTheme() {
-    var root = document.documentElement;
-    if (root.classList.contains('theme-light')) return 'light';
-    if (root.classList.contains('theme-dark')) return 'dark';
-    return 'purple';
-}
-
 function getUiThemeCanvasBackground() {
     return getComputedStyle(document.documentElement).getPropertyValue('--export-bg').trim() || '#ffffff';
 }
 
-
-function applyFontLevel(level, persist) {
-    level = Math.max(0, Math.min(2, level));
-    return applyFontSize(UI_FONT_PX[level], persist);
-}
 
 function applyFontSize(px, persist) {
     var next = clampFontPx(px);

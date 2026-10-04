@@ -58,16 +58,6 @@ function dockCreateMinter(seed) {
     };
 }
 
-/** Whether a node is a pane. @param {*} node Candidate. @returns {boolean} */
-function dockIsPaneNode(node) {
-    return !!node && node.kind === 'pane';
-}
-
-/** Whether a node is a split. @param {*} node Candidate. @returns {boolean} */
-function dockIsSplitNode(node) {
-    return !!node && node.kind === 'split';
-}
-
 /**
  * Reject an unhandled discriminant at the end of a closed switch.
  * @param {never} value The discriminant the switch did not handle.

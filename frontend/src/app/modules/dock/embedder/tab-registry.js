@@ -59,14 +59,6 @@ function dockCompileGlob(pattern) {
     return (address) => re.test(String(address));
 }
 
-/** The address's URI path, or undefined when it is not a URI. */
-function dockAddressPath(address) {
-    const text = String(address);
-    const match = /^[a-z][a-z0-9+.-]*:\/\/[^/]*(\/.*)?$/i.exec(text);
-    if (!match) return undefined;
-    return match[1] || '';
-}
-
 /**
  * One registry of tab types. Registration order is part of the contract: it
  * breaks ties between types that recognize an address equally well.

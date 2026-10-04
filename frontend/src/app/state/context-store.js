@@ -73,6 +73,3 @@ function appendContextProgressForSession(sessionId, kind, delta) {
     return contextStore.appendProgress(sessionId, kind, delta);
 }
 
-function selectContextProgress(sessionId) {
-    return contextStore.progressBySession.get(String(sessionId || '')) || null;
-}

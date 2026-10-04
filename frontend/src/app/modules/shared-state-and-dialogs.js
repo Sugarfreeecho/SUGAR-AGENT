@@ -204,11 +204,6 @@ function splitUserMessageVisualLines(text) {
     return out;
 }
 
-function buildUserMessageSummary(text) {
-    var lines = splitUserMessageVisualLines(text);
-    return lines.slice(0, USER_MESSAGE_COLLAPSE_LINES).join('\n') + '\n...';
-}
-
 function userMessageShouldCollapse(text) {
     return false;
 }

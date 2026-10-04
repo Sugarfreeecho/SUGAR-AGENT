@@ -26,13 +26,3 @@ function insertTextareaNewline(textarea, event) {
     return true;
 }
 
-function bindInputSubmit(input, options) {
-    if (!input) return;
-    options = options || {};
-    const mode = options.mode || (input.tagName === 'TEXTAREA' ? 'editor' : 'single-line');
-    input.addEventListener('keydown', function (event) {
-        if (!isInputSubmitShortcut(event, mode)) return;
-        event.preventDefault();
-        if (typeof options.submit === 'function') void options.submit(event, input);
-    });
-}

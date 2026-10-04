@@ -113,32 +113,6 @@ function pauseCurrentRun() {
     setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
 }
 
-/** 在当前会话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。*/
-function resendLastUserMessage() {
-    if (!currentSessionId) return false;
-    if (isSessionRunning(currentSessionId)) return false;
-    var lastMsg = lastUserMessageBySession[currentSessionId];
-    if (!lastMsg || !String(lastMsg).trim()) {
-        var chatStream = getVisibleChatStream();
-        if (chatStream) {
-            var wraps = chatStream.querySelectorAll('.msg-wrap--user');
-            if (wraps.length) {
-                var lastWrap = wraps[wraps.length - 1];
-                lastMsg = messageRawMarkdown.get(lastWrap) || (lastWrap.querySelector('.message.user') && lastWrap.querySelector('.message.user').textContent);
-            }
-        }
-    }
-    if (!lastMsg || !String(lastMsg).trim()) {
-        lastMsg = draftBySession[currentSessionId];
-    }
-    if (!lastMsg || !String(lastMsg).trim()) return false;
-    messageInput.value = String(lastMsg);
-    rewriteInputWorkspacePaths();
-    autoResizeTextarea();
-    sendMessage();
-    return true;
-}
-
 function showLoading() {
     resetSessionHistoryPaging();
     clearTocForSessionLoad();
