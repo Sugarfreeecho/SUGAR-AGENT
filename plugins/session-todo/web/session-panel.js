@@ -13,7 +13,7 @@ function statusLabel(status) {
     return translated('待处理');
 }
 
-/* 状态图标：已完成=绿勾（圆环+勾）、进行中=半环、待处理=空环；语义文字走 aria-label / title。 */
+/* 状态图标：语义文字走 aria-label 与统一悬停浮窗。 */
 function statusIconMarkup(status) {
     if (status === 'completed') {
         return '<svg viewBox="0 0 24 24" aria-hidden="true" class="todo-plan-status-icon">'
@@ -50,7 +50,7 @@ export function renderSessionPanel(context) {
     clear.type = 'button';
     clear.className = 'chat-todo-plan-close';
     clear.textContent = '×';
-    clear.title = translated('清除当前计划');
+    globalThis.setUiHoverTip?.(clear, translated('清除当前计划'));
     clear.setAttribute('aria-label', translated('清除计划'));
 
     const doneField = fieldByLabel(context.item, 'Completed');
@@ -67,6 +67,7 @@ export function renderSessionPanel(context) {
     stats.className = 'chat-todo-plan-stats workspace-side-panel-meta';
     stats.setAttribute('aria-live', 'polite');
     stats.textContent = `${done} / ${total} ${translated('已完成')}`;
+    globalThis.setUiHoverTip?.(stats, stats.textContent);
     heading.append(stats, clear);
 
     const list = document.createElement('ul');
@@ -81,30 +82,17 @@ export function renderSessionPanel(context) {
         tag.className = 'todo-plan-status-tag';
         tag.setAttribute('role', 'img');
         tag.setAttribute('aria-label', statusLabel(status));
-        tag.title = statusLabel(status);
+        globalThis.setUiHoverTip?.(tag, statusLabel(status));
         tag.innerHTML = statusIconMarkup(status);
         const body = document.createElement('span');
         body.className = 'todo-plan-text';
         body.textContent = text;
+        globalThis.setUiHoverTip?.(body, text);
         li.append(tag, body);
         list.appendChild(li);
     });
     card.append(heading, list);
     panel.appendChild(card);
-
-    /* 条目文本最多 3 行；被截断的条目在悬停浮框中呈现全文（布局后惰性补测，面板不可见时等下轮）。 */
-    const applyTodoTextTips = function () {
-        panel.querySelectorAll('.todo-plan-text').forEach(function (el) {
-            if (el.getAttribute('data-ui-tip')) return;
-            if (el.clientHeight <= 0) return;
-            if (el.scrollHeight <= el.clientHeight + 1) return;
-            el.setAttribute('data-ui-tip', el.textContent || '');
-            const bindTip = globalThis.bindUiHoverTip;
-            if (typeof bindTip === 'function') bindTip(el);
-        });
-    };
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(applyTodoTextTips);
-    if (typeof setTimeout === 'function') setTimeout(applyTodoTextTips, 350);
 
     /* 窄态条目（输入框上方，左栏收起时）：计数摘要与左栏内页签一致。 */
     const pubar = globalThis.MyAgentPubar;

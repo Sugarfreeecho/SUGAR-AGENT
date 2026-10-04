@@ -1074,7 +1074,7 @@ button, input, select, textarea { font-family: var(--sans);
     right: var(--panel-edge-dock-right);
     left: auto;
     top: 50%; transform: translateY(-50%); z-index: 20;
-    width: 0; min-width: 0; max-width: 9.5rem;
+    width: 0; min-width: 0; max-width: var(--toc-panel-width, 9.5rem);
     max-height: min(80vh, 30rem); overflow: visible; opacity: 0;
     display: block;
     pointer-events: none;
@@ -1087,7 +1087,7 @@ button, input, select, textarea { font-family: var(--sans);
     border-radius: var(--radius-sm);
     background: transparent;
 }
-.chat-toc.is-open { width: 9.5rem; min-width: 8.5rem; overflow: hidden; opacity: 1; pointer-events: auto; border-radius: var(--radius-sm); }
+.chat-toc.is-open { width: var(--toc-panel-width, 9.5rem); min-width: 8.5rem; overflow: hidden; opacity: 1; pointer-events: auto; border-radius: var(--radius-sm); }
 .chat-toc-panel {
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
     background: var(--surface-glass3);
@@ -1196,7 +1196,7 @@ button, input, select, textarea { font-family: var(--sans);
     left: var(--panel-edge-dock-left);
     right: auto;
     top: 50%; transform: translateY(-50%); z-index: 20;
-    width: 0; min-width: 0; max-width: 9.5rem;
+    width: 0; min-width: 0; max-width: var(--todo-panel-width, 9.5rem);
     max-height: min(80vh, 30rem); overflow: visible; opacity: 0;
     display: block;
     pointer-events: none;
@@ -1212,7 +1212,7 @@ button, input, select, textarea { font-family: var(--sans);
     box-shadow: var(--workspace-side-panel-shadow);
     backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
 }
-.chat-todo-plan.is-open { width: 9.5rem; min-width: 8.5rem; overflow: hidden; opacity: 1; pointer-events: auto; border-radius: var(--radius-sm); }
+.chat-todo-plan.is-open { width: var(--todo-panel-width, 9.5rem); min-width: 8.5rem; overflow: hidden; opacity: 1; pointer-events: auto; border-radius: var(--radius-sm); }
 .plugin-session-panels[hidden] { display: none; }
 .plugin-session-panels {
     display: flex; flex: 0 1 auto; min-height: 0; flex-direction: column; gap: 0.45rem;
@@ -1309,8 +1309,6 @@ button, input, select, textarea { font-family: var(--sans);
        （.pubar-pane 已去掉左右内边距，不再在条带之外叠加空隙）。 */
     scrollbar-gutter: stable both-edges;
 }
-.pubar-panes::-webkit-scrollbar { width: 5px; }
-.pubar-panes::-webkit-scrollbar-thumb { background: var(--workspace-side-panel-item-border); border-radius: 3px; }
 /* 左右内边距为 0：横向空隙只由 .pubar-panes 的预留条带提供（5px = 条宽），上下留白不变。
    窄态浮窗的 .pnp-body .pubar-pane 有自己的内边距，不受此改动影响。 */
 .pubar-pane { flex: none; padding: 0.45rem 0 0.6rem; }
@@ -1476,7 +1474,7 @@ button, input, select, textarea { font-family: var(--sans);
     border-left: none;
 }
 .chat-stage:has(.chat-todo-plan.is-open) > .panel-edge-handle.todo-handle {
-    left: calc(var(--panel-edge-dock-left) + var(--panel-edge-slide-width));
+    left: calc(var(--panel-edge-dock-left) + var(--todo-panel-width, var(--panel-edge-slide-width)));
 }
 .chat-stage > .panel-edge-handle.todo-handle:hover {
     transform: translate(0, -50%);
@@ -1489,7 +1487,7 @@ button, input, select, textarea { font-family: var(--sans);
     border-right: none;
 }
 .chat-stage:has(.chat-toc.is-open) > .panel-edge-handle.toc-handle {
-    right: calc(var(--panel-edge-dock-right) + var(--panel-edge-slide-width));
+    right: calc(var(--panel-edge-dock-right) + var(--toc-panel-width, var(--panel-edge-slide-width)));
 }
 .chat-stage > .panel-edge-handle.toc-handle:hover {
     transform: translate(0, -50%);
@@ -4526,7 +4524,8 @@ button, input, select, textarea { font-family: var(--sans);
     inset: auto;
     top: auto;
     transform: none;
-    width: min(var(--panel-edge-slide-width), 100%);
+    /* Share the composer column without colliding in narrow panes. */
+    width: min(var(--panel-edge-slide-width), calc((100% - 0.5rem) / 2));
     max-width: 100%;
 }
 .panel.composer-side-controls-stacked .composer-permission-bar {

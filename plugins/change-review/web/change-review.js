@@ -379,7 +379,7 @@ function appendColoredStats(container, value, includeOmitted) {
         container.append(document.createTextNode(
             ` · ${value.omitted} ${t('个文件未统计行数', 'files without line stats')}`));
     }
-    container.title = statsTitle(value);
+    globalThis.setUiHoverTip?.(container, statsTitle(value));
 }
 function setSummary(container, active, reverted, compact) {
     if (!container) return;
@@ -389,12 +389,13 @@ function setSummary(container, active, reverted, compact) {
             container.append(document.createTextNode(
                 `${reverted.length} ${t('个文件已撤销，可恢复', 'files reverted, restorable')}`));
         }
+        globalThis.setUiHoverTip?.(container, container.textContent);
         return;
     }
     const value = stats(active);
     if (compact) {
         appendColoredStats(container, value, false);
-        container.title = statsTitle(value);
+        globalThis.setUiHoverTip?.(container, statsTitle(value));
         return;
     }
     container.append(document.createTextNode(`${active.length} ${t('个文件', 'files')} · `));
@@ -456,7 +457,7 @@ function updateBadge(aggregate) {
                 badge.hidden = false;
                 badge.replaceChildren(document.createTextNode(
                     `${parts.active.length} ${t('个文件', 'files')}`));
-                if (value.omitted) badge.title = statsTitle(value);
+                if (value.omitted) globalThis.setUiHoverTip?.(badge, statsTitle(value));
             }, 1500));
         }
         badge.hidden = true;
@@ -535,15 +536,15 @@ function renderFile(row, options) {
     item.dataset.snapshotId = String(row.snapshot_id || '');
     const head = document.createElement('div'); head.className = 'change-review-file-head';
     const toggle = button('', 'change-review-file-toggle');
-    toggle.setAttribute('aria-expanded', 'false');
     const path = document.createElement('span'); path.className = 'change-review-path'; path.textContent = row.path || '';
-    path.title = row.path || '';
+    globalThis.setUiHoverTip?.(path, row.path || '');
     const count = document.createElement('span'); count.className = 'change-review-count';
     if (!hasLineStats(row)) {
         count.textContent = t('未统计', 'no line stats');
-        count.title = omittedText(row);
+        globalThis.setUiHoverTip?.(count, omittedText(row));
     } else {
         appendColoredStats(count, { added: Number(row.added) || 0, removed: Number(row.removed) || 0 }, false);
+        globalThis.setUiHoverTip?.(count, `${t('新增', 'Added')} ${Number(row.added) || 0} · ${t('删除', 'Removed')} ${Number(row.removed) || 0}`);
     }
     toggle.append(path, count);
     item.classList.add('change-review-file--link');
@@ -585,6 +586,7 @@ function buildCard() {
         + `<div class="change-review-summary"></div>`
         + `<button type="button" class="change-review-view">${t('查看', 'View')}</button>`
         + `</header><div class="change-review-list"></div>`;
+    globalThis.setUiHoverTip?.(card.querySelector('.change-review-view'), t('查看本轮改动', 'View changes for this turn'));
     return card;
 }
 function shell(className) {
@@ -628,7 +630,8 @@ function updatePlacement(visible) {
                 icon: 'diff',
                 label: t('改动审查', 'Change review'),
                 summaryHtml: narrowSummaryHtml(parts),
-                actions: [{ label: t('查看', 'View'), onClick: function () { openDetails(); } }],
+                summaryTip: statsTitle(stats(parts.active)),
+                actions: [{ label: t('查看', 'View'), tip: t('查看本轮改动', 'View changes for this turn'), onClick: function () { openDetails(); } }],
             });
         }
         bar.hidden = true;

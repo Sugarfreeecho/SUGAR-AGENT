@@ -241,9 +241,9 @@ def test_todo_plan_items_clamp_to_three_lines_with_hover_tip():
 
     assert "-webkit-line-clamp:3" in styles
     assert ".todo-plan-text" in styles
-    assert "el.scrollHeight <= el.clientHeight + 1" in source
-    assert "setAttribute('data-ui-tip'" in source
-    assert "globalThis.bindUiHoverTip" in source
+    # Bind the full text before layout so hidden tabs and later width changes
+    # cannot leave clamped items without a tooltip.
+    assert "globalThis.setUiHoverTip?.(body, text)" in source
     assert "globalThis.bindUiHoverTip = bindUiHoverTip;" in core
 
 
@@ -268,7 +268,7 @@ def test_change_review_section_typography_matches_the_plan_section():
     assert "font: 500 0.56rem/1.3 var(--sans);" in styles
     # 列表与计划列表 .workspace-side-panel-list 同间隙
     assert "gap: 0.22rem;" in styles
-    # 条目内边距 = 计划条目 .workspace-side-panel-item 的 0.38rem 0.4rem
+    # 文件条目上下留白与单行计划条目一致
     assert ".pubar-pane .change-review-file-head { padding: 0; }" in styles
     assert ".pubar-pane .change-review-file-toggle { padding: 0.38rem 0.4rem; }" in styles
     # 路径文字字号 / 字重 / 行高对齐计划条目文字（400 0.68rem/1.45）

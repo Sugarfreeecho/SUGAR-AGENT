@@ -788,6 +788,11 @@ function renderSessionBadges(rows, sessions) {
     });
 }
 
+function bindSessionPanelHoverTips(panel) {
+    if (typeof globalThis.bindUiHoverTip !== 'function') return;
+    panel.querySelectorAll('[title], [data-ui-tip]').forEach(globalThis.bindUiHoverTip);
+}
+
 function renderSessionPanels(rows, sessions) {
     const host = document.getElementById('plugin-session-panels');
     if (!host) return;
@@ -843,6 +848,7 @@ function renderSessionPanels(rows, sessions) {
             try {
                 const cleanup = customRenderer({
                     container: panel,
+                    setHoverTip: globalThis.setUiHoverTip,
                     item,
                     sessionId,
                     request: sessionUiRequest,
@@ -869,6 +875,7 @@ function renderSessionPanels(rows, sessions) {
                     pluginSessionPanelCleanups.push(cleanup);
                     pluginSessionPanelCleanupContainers.set(cleanup, panelContainer);
                 }
+                bindSessionPanelHoverTips(panel);
                 fragment.appendChild(panel);
                 return;
             } catch (error) {
@@ -880,11 +887,13 @@ function renderSessionPanels(rows, sessions) {
         const heading = document.createElement('div');
         heading.className = 'plugin-session-panel-title';
         heading.textContent = item.title;
+        globalThis.setUiHoverTip?.(heading, [item.title, item.description].filter(Boolean).join('\n'));
         panel.appendChild(heading);
         if (item.description) {
             const description = document.createElement('div');
             description.className = 'plugin-session-panel-description';
             description.textContent = item.description;
+            globalThis.setUiHoverTip?.(description, item.description);
             panel.appendChild(description);
         }
         const fields = document.createElement('dl');
@@ -894,6 +903,7 @@ function renderSessionPanels(rows, sessions) {
             row.className = 'plugin-session-panel-field';
             const label = document.createElement('dt');
             label.textContent = field.label;
+            globalThis.setUiHoverTip?.(label, field.label);
             const value = document.createElement('dd');
             if (field.format === 'list') {
                 value.className = 'plugin-session-panel-list';
@@ -904,7 +914,7 @@ function renderSessionPanels(rows, sessions) {
                         const cell = document.createElement('span');
                         cell.className = 'plugin-session-panel-list-cell';
                         const column = field.columns[index];
-                        cell.title = column.label;
+                        globalThis.setUiHoverTip?.(cell, `${column.label}: ${itemValue || '—'}`);
                         const key = document.createElement('span');
                         key.className = 'plugin-session-panel-list-key';
                         key.textContent = `${column.label}: `;
@@ -917,6 +927,7 @@ function renderSessionPanels(rows, sessions) {
                 });
             } else {
                 value.textContent = field.value;
+                globalThis.setUiHoverTip?.(value, `${field.label}: ${field.value}`);
             }
             row.append(label, value);
             fields.appendChild(row);
@@ -962,7 +973,7 @@ function renderSessionPanels(rows, sessions) {
                     }
                     control.name = input.id;
                     control.required = input.required;
-                    if (input.description) control.title = input.description;
+                    if (input.description) globalThis.setUiHoverTip?.(control, input.description);
                     if (Number.isFinite(input.minimum)) control.min = String(input.minimum);
                     if (Number.isFinite(input.maximum)) control.max = String(input.maximum);
                     if (Number.isFinite(input.min_length)) control.minLength = input.min_length;
@@ -975,6 +986,7 @@ function renderSessionPanels(rows, sessions) {
                 button.type = 'button';
                 button.className = `plugin-session-panel-action plugin-session-panel-action--${action.variant}`;
                 button.textContent = action.label;
+                globalThis.setUiHoverTip?.(button, action.label);
                 button.addEventListener('click', async function () {
                     if (action.confirm && typeof globalThis.confirm === 'function'
                         && !globalThis.confirm(action.confirm)) return;
@@ -1030,6 +1042,7 @@ function renderSessionPanels(rows, sessions) {
             });
             panel.appendChild(actions);
         }
+        bindSessionPanelHoverTips(panel);
         fragment.appendChild(panel);
     });
     /* 本次 payload 已无面板、但上一轮写入过的容器：显式清空并摘掉其 cleanup。

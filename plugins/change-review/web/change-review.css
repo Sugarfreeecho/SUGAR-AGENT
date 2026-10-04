@@ -5,7 +5,7 @@
     color: var(--text-primary); font-family: var(--sans);
 }
 .change-review-drawer[hidden] { display: none !important; }
-.chat-stage:has(.chat-todo-plan.is-open) .change-review-drawer { left: calc(var(--panel-edge-dock-left) + var(--panel-edge-slide-width, 9.5rem)); }
+.chat-stage:has(.chat-todo-plan.is-open) .change-review-drawer { left: calc(var(--panel-edge-dock-left) + var(--todo-panel-width, var(--panel-edge-slide-width, 9.5rem))); }
 .change-review-card {
     display: flex; flex-direction: column; max-height: inherit; overflow: hidden;
     border: none; border-radius: var(--radius-sm);
@@ -19,9 +19,12 @@
 .change-review-file { border-bottom: 1px solid var(--border-glass); }
 .change-review-file:last-child { border-bottom: 0; }
 .change-review-file-head { display: flex; align-items: center; gap: .25rem; padding: .28rem .12rem; }
-.change-review-file-toggle { min-width: 0; flex: 1; display: flex; align-items: center; gap: .3rem; border: 0; padding: .28rem; background: transparent; color: inherit; cursor: pointer; text-align: left; }
-.change-review-file-toggle::before { content: '›'; color: var(--text-tertiary); transition: transform .15s; }
-.change-review-file-toggle[aria-expanded="true"]::before { transform: rotate(90deg); }
+.change-review-file-toggle {
+    min-width: 0; flex: 1; display: flex; align-items: center; gap: .3rem;
+    border: 0; padding: .28rem; background: transparent; color: inherit; cursor: pointer; text-align: left;
+    /* Size the row from its contents rather than the shared form-control line box. */
+    font: inherit; line-height: normal;
+}
 .change-review-path {
     min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     /* 窄栏里路径前缀同质（D:\AI\AI Agent\...），省略前面、保留文件名段 */
@@ -91,7 +94,7 @@
 }
 #chat-todo-plan .pubar-pane .change-review-file:last-child,
 .pubar-narrow-popover .pubar-pane .change-review-file:last-child { border-bottom: 1px solid var(--workspace-side-panel-item-border); }
-/* 条目内边距 = 计划条目 .workspace-side-panel-item 的 0.38rem 0.4rem（不再叠加 file-head 的额外内边距）。 */
+/* 单行文件条目的上下留白与计划条目一致。 */
 #chat-todo-plan .pubar-pane .change-review-file-head,
 .pubar-narrow-popover .pubar-pane .change-review-file-head { padding: 0; }
 #chat-todo-plan .pubar-pane .change-review-file-toggle,

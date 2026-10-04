@@ -322,6 +322,7 @@ function pubarNarrowConfigOf(pane) {
         label: configured.label || pane.label,
         summary: summary,
         summaryHtml: configured.summaryHtml || '',
+        summaryTip: configured.summaryTip || '',
         chip: configured.chip || null,
         actions: configured.actions || [],
     };
@@ -362,6 +363,10 @@ function pubarBuildNarrowItem(pane, config) {
     if (config.summaryHtml) summary.innerHTML = String(config.summaryHtml);
     else summary.textContent = config.summary;
     main.appendChild(summary);
+    if (typeof setUiHoverTip === 'function') {
+        setUiHoverTip(main, [config.label, config.chip && config.chip.text,
+            config.summaryTip || summary.textContent].filter(Boolean).join('\n'));
+    }
     main.addEventListener('click', function () { pubarOpenNarrowPopover(pane.id); });
     item.appendChild(main);
     var actions = document.createElement('span');
@@ -377,9 +382,10 @@ function pubarBuildNarrowItem(pane, config) {
             btn.className = 'pni-btn';
             btn.innerHTML = pubarNarrowIcon(action.icon);
         }
-        if (action.tip) {
-            btn.setAttribute('data-ui-tip', String(action.tip));
-            if (typeof bindUiHoverTip === 'function') bindUiHoverTip(btn);
+        var actionTip = action.tip || action.label;
+        if (actionTip) {
+            btn.setAttribute('aria-label', String(actionTip));
+            if (typeof setUiHoverTip === 'function') setUiHoverTip(btn, actionTip);
         }
         btn.addEventListener('click', function (event) {
             event.preventDefault();
@@ -406,7 +412,7 @@ function pubarBuildNarrowItem(pane, config) {
 
 function pubarNarrowSignature(pane, config) {
     return JSON.stringify([pane.id, pubarNarrowHasOpen(pane.id), config.icon, config.label,
-        config.summary, config.summaryHtml, config.chip,
+        config.summary, config.summaryHtml, config.summaryTip, config.chip,
         config.actions.map(function (action) {
             return action ? [action.hidden, action.icon, action.label, action.tip] : null;
         })]);
@@ -506,6 +512,12 @@ function pubarUpdateNarrowChip(id, text) {
     var item = pubarNarrowStripEl && pubarNarrowStripEl.querySelector('[data-pubar-narrow-item="' + pane.id + '"]');
     var chip = item && item.querySelector('.pni-chip');
     if (chip && chip.textContent !== config.chip.text) chip.textContent = config.chip.text;
+    var main = item && item.querySelector('.pni-main');
+    if (main && typeof setUiHoverTip === 'function') {
+        var summary = item.querySelector('.pni-summary');
+        setUiHoverTip(main, [config.label || pane.label, config.chip.text,
+            config.summaryTip || (summary && summary.textContent)].filter(Boolean).join('\n'));
+    }
     return true;
 }
 
@@ -625,7 +637,10 @@ function initPublicSidebar() {
     pubarNarrowBodyEl = pubarNarrowPopoverEl ? pubarNarrowPopoverEl.querySelector('.pnp-body') : null;
     if (pubarNarrowPopoverEl) {
         var narrowCloseBtn = pubarNarrowPopoverEl.querySelector('.pnp-close');
-        if (narrowCloseBtn) narrowCloseBtn.addEventListener('click', function () { pubarCloseNarrowPopover(); });
+        if (narrowCloseBtn) {
+            if (typeof setUiHoverTip === 'function') setUiHoverTip(narrowCloseBtn, narrowCloseBtn.getAttribute('aria-label') || '关闭');
+            narrowCloseBtn.addEventListener('click', function () { pubarCloseNarrowPopover(); });
+        }
     }
     document.addEventListener('mousedown', function (event) {
         if (!pubarNarrowOpenId) return;

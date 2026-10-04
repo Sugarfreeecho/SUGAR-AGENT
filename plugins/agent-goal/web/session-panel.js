@@ -121,13 +121,16 @@ export function renderSessionPanel(context) {
     toggle.type = 'button';
     toggle.append(icon(['M9 5v14', 'M15 5v14'], 'chat-goal-icon-pause'), icon(['m8 5 11 7-11 7Z'], 'chat-goal-icon-play'));
     const edit = element('button', 'chat-goal-icon-btn');
-    edit.type = 'button'; edit.title = t('编辑 Goal');
+    edit.type = 'button'; edit.setAttribute('aria-label', t('编辑 Goal'));
+    globalThis.setUiHoverTip?.(edit, t('编辑 Goal'));
     edit.appendChild(icon(['m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10Z', 'm14 7 3 3']));
     const remove = element('button', 'chat-goal-icon-btn chat-goal-icon-btn--danger');
-    remove.type = 'button'; remove.title = t('删除 Goal');
+    remove.type = 'button'; remove.setAttribute('aria-label', t('删除 Goal'));
+    globalThis.setUiHoverTip?.(remove, t('删除 Goal'));
     remove.appendChild(icon(['M4 7h16', 'M9 7V4h6v3', 'M7 7l1 13h8l1-13', 'M10 11v5', 'M14 11v5']));
     const review = element('button', 'chat-goal-review-btn', t('结果审核'));
     review.type = 'button';
+    globalThis.setUiHoverTip?.(review, t('结果审核'));
     actions.append(stats, toggle, edit, remove, review);
     const metaLine = element('div', 'chat-goal-meta workspace-side-panel-meta');
     card.append(heading, objective, metaLine, actions);
@@ -203,7 +206,9 @@ export function renderSessionPanel(context) {
         status.textContent = t(labels[currentStatus] || currentStatus)
             + (currentStatus === 'active' ? ` · ${elapsedText(liveElapsed())}` : '');
         const meta = metaText();
-        stats.title = meta;
+        globalThis.setUiHoverTip?.(stats, meta);
+        globalThis.setUiHoverTip?.(status, status.textContent);
+        globalThis.setUiHoverTip?.(metaLine, meta);
         stats.setAttribute('aria-label', `${t('统计信息')}: ${meta}`);
         lastClockSecond = Math.floor(liveElapsed());
         const pubar = globalThis.MyAgentPubar;
@@ -218,7 +223,7 @@ export function renderSessionPanel(context) {
         const currentStatus = String(goal.status || 'active');
         const full = String(goal.objective || '').trim();
         objective.textContent = objectiveSummary(full);
-        objective.title = full;
+        globalThis.setUiHoverTip?.(objective, full);
         objective.setAttribute('aria-label', full);
         const usedTokens = Math.max(0, Number(goal.used_tokens || 0));
         const remainingTokens = goal.token_budget == null ? null : Math.max(0, Number(goal.remaining_tokens || 0));
@@ -238,7 +243,9 @@ export function renderSessionPanel(context) {
         }
         const paused = currentStatus === 'paused';
         toggle.hidden = currentStatus !== 'active' && !paused;
-        toggle.title = t(paused ? '开始 Goal' : '暂停 Goal');
+        const toggleTip = t(paused ? '开始 Goal' : '暂停 Goal');
+        toggle.setAttribute('aria-label', toggleTip);
+        globalThis.setUiHoverTip?.(toggle, toggleTip);
         toggle.querySelector('.chat-goal-icon-play').toggleAttribute('hidden', !paused);
         toggle.querySelector('.chat-goal-icon-pause').toggleAttribute('hidden', paused);
         edit.hidden = currentStatus === 'completed';
@@ -248,15 +255,16 @@ export function renderSessionPanel(context) {
         const pubar = globalThis.MyAgentPubar;
         if (pubar && typeof pubar.configureNarrow === 'function') {
             const actions = [];
-            if (!toggle.hidden) actions.push({ icon: paused ? 'play' : 'pause', tip: toggle.title, onClick: function () { toggle.click(); } });
-            if (!edit.hidden) actions.push({ icon: 'edit', tip: edit.title, onClick: function () { edit.click(); } });
-            if (!remove.hidden) actions.push({ icon: 'trash', tip: remove.title, onClick: function () { remove.click(); } });
-            if (!review.hidden) actions.push({ label: review.textContent, onClick: function () { review.click(); } });
+            if (!toggle.hidden) actions.push({ icon: paused ? 'play' : 'pause', tip: toggleTip, onClick: function () { toggle.click(); } });
+            if (!edit.hidden) actions.push({ icon: 'edit', tip: t('编辑 Goal'), onClick: function () { edit.click(); } });
+            if (!remove.hidden) actions.push({ icon: 'trash', tip: t('删除 Goal'), onClick: function () { remove.click(); } });
+            if (!review.hidden) actions.push({ label: review.textContent, tip: t('结果审核'), onClick: function () { review.click(); } });
             const tone = currentStatus === 'active' ? 'accent' : (currentStatus === 'completed' ? 'green' : 'neutral');
             pubar.configureNarrow('goal', {
                 icon: 'target', label: 'GOAL',
                 chip: { text: status.textContent, tone: tone },
                 summary: objectiveSummary(full),
+                summaryTip: full,
                 actions: actions,
             });
         }

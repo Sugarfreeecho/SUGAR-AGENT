@@ -252,6 +252,17 @@ function runPanelAutoCollapseCheck() {
     var tocDockOffset = toc ? Math.max(0, stageRect.right - toc.getBoundingClientRect().right) : 0;
     var todoHasRecoveryRoom = leftAvailable >= todoDockOffset + preferredPanelWidth + RECOVERY_GAP;
     var tocHasRecoveryRoom = rightAvailable >= tocDockOffset + preferredPanelWidth + RECOVERY_GAP;
+    /* Fill each gutter independently, keeping the original width as the minimum.
+       Update max-width before measuring overlap so shrinking panes cannot be
+       collapsed merely because their width transition is still in progress. */
+    var todoWidth = Math.max(preferredPanelWidth, Math.floor(leftAvailable - todoDockOffset - RECOVERY_GAP)) + 'px';
+    var tocWidth = Math.max(preferredPanelWidth, Math.floor(rightAvailable - tocDockOffset - RECOVERY_GAP)) + 'px';
+    if (stage.style.getPropertyValue('--todo-panel-width') !== todoWidth) {
+        stage.style.setProperty('--todo-panel-width', todoWidth);
+    }
+    if (stage.style.getPropertyValue('--toc-panel-width') !== tocWidth) {
+        stage.style.setProperty('--toc-panel-width', tocWidth);
+    }
     var todoOpen = !!(todo && todo.classList.contains('is-open'));
     var tocOpen = !!(toc && toc.classList.contains('is-open'));
     var todoRect = todoOpen ? todo.getBoundingClientRect() : null;

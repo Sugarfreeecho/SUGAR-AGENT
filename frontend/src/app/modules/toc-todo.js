@@ -148,7 +148,6 @@ function bindUiHoverTip(el) {
     el.addEventListener('mouseenter', function (ev) {
         var t = el.getAttribute('data-ui-tip');
         if (t == null || !String(t).trim()) return;
-        if (typeof translateUiString === 'function') t = translateUiString(t);
         clearUiHoverTipTimer();
         hideUiHoverTooltip();
         uiHoverTipActiveEl = el;
@@ -159,7 +158,10 @@ function bindUiHoverTip(el) {
                 hideUiHoverTooltip();
                 return;
             }
-            showUiHoverTooltip(uiHoverTipLastEv || ev, t);
+            var currentTip = el.getAttribute('data-ui-tip');
+            if (!currentTip || !String(currentTip).trim()) { hideUiHoverTooltip(); return; }
+            if (typeof translateUiString === 'function') currentTip = translateUiString(currentTip);
+            showUiHoverTooltip(uiHoverTipLastEv || ev, currentTip);
         }, UI_HOVER_TIP_DELAY_MS);
     });
     el.addEventListener('mousemove', function (ev) {
@@ -175,10 +177,29 @@ function bindUiHoverTip(el) {
         var t = el.getAttribute('data-ui-tip');
         if (t == null || !String(t).trim()) return;
         if (typeof translateUiString === 'function') t = translateUiString(t);
+        hideUiHoverTooltip();
         var rect = el.getBoundingClientRect();
         showUiHoverTooltip({ clientX: rect.right, clientY: rect.top }, t);
     });
     el.addEventListener('blur', hideUiHoverTooltip);
+}
+
+/* Renderers can update live tooltip text without reintroducing a native title. */
+function setUiHoverTip(el, text) {
+    if (!el) return;
+    el.removeAttribute('title');
+    var value = text == null ? '' : String(text);
+    if (value.trim()) el.setAttribute('data-ui-tip', value);
+    else el.removeAttribute('data-ui-tip');
+    bindUiHoverTip(el);
+    if (uiHoverTooltipEl && uiHoverTooltipEl.classList.contains('is-visible')
+        && (uiHoverTipActiveEl === el || (!uiHoverTipActiveEl && document.activeElement === el))) {
+        if (!value.trim()) { hideUiHoverTooltip(); return; }
+        var rect = el.getBoundingClientRect();
+        var pointer = uiHoverTipActiveEl === el && uiHoverTipLastEv;
+        showUiHoverTooltip(pointer || { clientX: rect.right, clientY: rect.top },
+            typeof translateUiString === 'function' ? translateUiString(value) : value);
+    }
 }
 
 function initUiHoverTips(root) {
@@ -194,6 +215,7 @@ function initUiHoverTips(root) {
 
 /* 插件（ES 模块）经 globalThis 使用统一悬停说明（与 toggleTodoPlanPanel 同类的桥接）。 */
 globalThis.bindUiHoverTip = bindUiHoverTip;
+globalThis.setUiHoverTip = setUiHoverTip;
 
 function scheduleTocActiveUpdate() {
     var list = document.getElementById('chat-toc-list');
