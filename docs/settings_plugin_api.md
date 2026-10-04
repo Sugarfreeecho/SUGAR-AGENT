@@ -68,6 +68,8 @@
 临时目录在安装结束或失败后清理。
 
 模型推理强度在会话中独立保存，提供 `low`、`medium`、`high`、`xhigh`、`max`。
+聊天输入框旁显示模型与当前强度；菜单先显示「模型」和「推理强度」，点入后选择具体值。
+当前选项带勾，保存成功后关闭菜单；方向键可移动，Escape 返回上一层，再按一次关闭。
 请求协议分别转换：Responses 使用原生 reasoning 字段，兼容接口保留 thinking 参数，
 Anthropic 依据模型使用自适应思考或受输出上限约束的思考预算；旧模型不支持的强度会映射到支持值。
 相关协议依据见 [Anthropic effort 文档](https://platform.claude.com/docs/en/build-with-claude/effort)

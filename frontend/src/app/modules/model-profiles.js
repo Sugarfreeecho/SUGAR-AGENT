@@ -13,6 +13,7 @@ const LS_NEW_SESSION_REASONING_EFFORT = 'myagent-new-session-reasoning-effort';
 const MODEL_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const modelReasoningEffortBySession = Object.create(null);
 const modelReasoningEffortBusy = Object.create(null);
+let modelMenuPane = 'root';
 
 function newSessionReasoningEffort() {
     try {
@@ -33,7 +34,7 @@ function currentSessionReasoningEffort() {
 }
 
 async function setCurrentSessionReasoningEffort(effort) {
-    if (effort && !MODEL_REASONING_EFFORTS.includes(effort)) return;
+    if (effort && !MODEL_REASONING_EFFORTS.includes(effort)) return false;
     const sid = String(currentSessionId || '');
     if (!sid) {
         try {
@@ -41,12 +42,11 @@ async function setCurrentSessionReasoningEffort(effort) {
             else localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT);
         } catch (e) {}
         renderModelProfileControl();
-        return;
+        return true;
     }
-    if (modelReasoningEffortBusy[sid]) return;
-    modelReasoningEffortBusy[sid] = true;
-    const select = document.getElementById('model-reasoning-effort');
-    if (select) select.disabled = true;
+    if (modelReasoningEffortBusy[sid]) return false;
+    modelReasoningEffortBusy[sid] = { effort };
+    renderModelProfileControl();
     try {
         const response = await fetch('/sessions/' + encodeURIComponent(sid) + '/reasoning_effort', {
             method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
@@ -56,14 +56,14 @@ async function setCurrentSessionReasoningEffort(effort) {
         if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度保存失败');
         modelReasoningEffortBySession[sid] = effort;
         if (sid === String(currentSessionId || '')) modelProfileSelectionEpoch += 1;
+        return true;
     } catch (error) {
         if (typeof appendLogVisible === 'function') appendLogVisible('推理强度保存失败: ' + String(error.message || error), 'error-log');
+        return false;
     } finally {
         delete modelReasoningEffortBusy[sid];
         if (sid === String(currentSessionId || '')) {
             renderModelProfileControl();
-            const fresh = document.getElementById('model-reasoning-effort');
-            if (fresh) fresh.focus({ preventScroll: true });
         }
     }
 }
@@ -249,13 +249,36 @@ function activeProfileContextWindow() {
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
 
-function closeModelMenu() {
+function closeModelMenu(restoreFocus) {
     var e = els();
+    modelMenuPane = 'root';
     if (e.menu) e.menu.classList.remove('is-open');
     if (e.trigger) {
         e.trigger.classList.remove('is-open');
         e.trigger.setAttribute('aria-expanded', 'false');
+        if (restoreFocus) e.trigger.focus({ preventScroll: true });
     }
+}
+
+function modelMenuIcon(kind) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' +
+        (kind === 'check' ? 'm5 12 4 4L19 6' : 'm9 5 7 7-7 7') + '"/></svg>';
+}
+
+function modelMenuItems() {
+    var e = els();
+    return e.menu ? Array.from(e.menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"]')).filter((item) => !item.disabled) : [];
+}
+
+function setModelMenuPane(pane) {
+    const previous = modelMenuPane;
+    modelMenuPane = pane;
+    renderModelProfileControl();
+    constrainModelMenuToTitlebar();
+    const e = els();
+    const target = pane === 'root' ? e.menu.querySelector('[data-model-pane="' + previous + '"]')
+        : e.menu.querySelector('[aria-checked="true"]:not([disabled])');
+    (target || modelMenuItems()[0] || e.trigger).focus({ preventScroll: true });
 }
 
 function openModelMenu() {
@@ -283,46 +306,72 @@ function renderModelProfileControl() {
     var e = els();
     if (!e.trigger || !e.current || !e.menu) return;
     var active = activeProfile();
-    e.current.textContent = active ? profileLabel(active) : '没有启用的模型配置';
+    const english = modelProfileUiLanguage() === 'en';
+    const effort = currentSessionReasoningEffort();
+    const effectiveEffort = active ? effort || profileEffortValue(active) : '';
+    const busy = !!(modelReasoningEffortBusy[currentSessionId] || modelProfileBusyBySession[currentSessionId]);
+    const focus = document.activeElement;
+    const focusAttr = e.menu.contains(focus) ? ['data-model-pane', 'data-profile-id', 'data-toggle-profile-id', 'data-reasoning-effort']
+        .find((attr) => focus.hasAttribute(attr)) : null;
+    const focusValue = focusAttr ? focus.getAttribute(focusAttr) : null;
+    e.current.innerHTML = '<span class="composer-model-current-name">' + h(active ? profileLabel(active) : (english ? 'No enabled models' : '没有启用的模型配置')) + '</span>' +
+        (active ? '<span class="composer-model-current-effort">' + h(effectiveEffort) + '</span>' : '');
+    e.trigger.setAttribute('aria-label', (english ? 'Select model and reasoning effort, current ' : '选择模型与推理强度，当前 ') +
+        (active ? profileLabel(active) + ' · ' + effectiveEffort : (english ? 'No enabled models' : '没有启用的模型配置')));
+    e.trigger.setAttribute('aria-haspopup', 'menu');
+    e.trigger.setAttribute('aria-controls', 'model-profile-menu');
+    e.trigger.setAttribute('aria-busy', String(busy));
     e.trigger.removeAttribute('title');
     e.trigger.removeAttribute('data-ui-tip');
+    e.menu.setAttribute('role', 'menu');
+    e.menu.setAttribute('aria-label', english ? 'Model and reasoning effort' : '模型与推理强度');
+    e.menu.setAttribute('aria-busy', String(busy));
     var profiles = storedProfiles();
     if (!profiles.length) {
         e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';
         return;
     }
-    var html = '<div class="composer-model-list" role="listbox" aria-label="' + (modelProfileUiLanguage() === 'en' ? 'Model profiles' : '模型配置') + '">';
-    for (var i = 0; i < profiles.length; i += 1) {
-        var p = profiles[i] || {};
-        var id = String(p.id || '');
-        var enabled = p.enabled !== false;
-        var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';
-        html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '" data-ui-tip="' + h(modelProfileHoverDetail(p)) + '">'
-            + '<button type="button" class="composer-model-option' + activeCls + '" role="option" data-profile-id="' + h(id) + '"' + (enabled ? '' : ' disabled') + '>'
-            + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
-            + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
-            + '</button>'
-            + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + modelToggleHtml(enabled) + '</button>'
-            + '</div>';
+    var html = '';
+    if (modelMenuPane === 'root' && active) {
+        html = '<button type="button" role="menuitem" class="composer-model-cell" data-model-pane="model">' +
+            '<span class="composer-model-cell-label">' + (english ? 'Model' : '模型') + '</span>' +
+            '<span class="composer-model-cell-value">' + h(profileLabel(active)) + '</span>' +
+            '<span class="composer-model-cell-chevron">' + modelMenuIcon('right') + '</span></button>' +
+            '<button type="button" role="menuitem" class="composer-model-cell" data-model-pane="effort">' +
+            '<span class="composer-model-cell-label">' + (english ? 'Reasoning effort' : '推理强度') + '</span>' +
+            '<span class="composer-model-cell-value">' + h(effectiveEffort) + '</span>' +
+            '<span class="composer-model-cell-chevron">' + modelMenuIcon('right') + '</span></button>';
+    } else if (modelMenuPane === 'effort' && active) {
+        html = [{ value: '', label: (english ? 'Model default' : '模型默认') + ' · ' + profileEffortValue(active) }]
+            .concat(MODEL_REASONING_EFFORTS.map((value) => ({ value, label: value }))).map((choice) => {
+                const selected = effort === choice.value;
+                return '<button type="button" role="menuitemradio" aria-checked="' + selected + '" class="composer-model-effort-option" data-reasoning-effort="' + choice.value + '"' +
+                    (busy ? ' disabled' : '') + '><span>' + h(choice.label) + '</span><span class="composer-model-check">' +
+                    (modelReasoningEffortBusy[currentSessionId] && modelReasoningEffortBusy[currentSessionId].effort === choice.value ? '<span class="composer-model-pending"></span>' : selected ? modelMenuIcon('check') : '') + '</span></button>';
+            }).join('');
+    } else {
+        html = '<div class="composer-model-list" role="group" aria-label="' + (english ? 'Model profiles' : '模型配置') + '">';
+        for (var i = 0; i < profiles.length; i += 1) {
+            var p = profiles[i] || {};
+            var id = String(p.id || '');
+            var enabled = p.enabled !== false;
+            var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';
+            html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '" data-ui-tip="' + h(modelProfileHoverDetail(p)) + '">'
+                + '<button type="button" class="composer-model-option' + activeCls + '" role="menuitemradio" aria-checked="' + (id === String(activeModelProfileId || '')) + '" data-profile-id="' + h(id) + '"' + (enabled && !busy ? '' : ' disabled') + '>'
+                + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
+                + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
+                + '</button>'
+                + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + modelToggleHtml(enabled) + '</button>'
+                + '</div>';
+        }
+        html += '</div>';
     }
-    html += '</div>';
-    if (active) {
-        const english = modelProfileUiLanguage() === 'en';
-        const effort = currentSessionReasoningEffort();
-        html += '<div class="composer-model-reasoning"><label for="model-reasoning-effort">' +
-            (english ? 'Reasoning effort' : '推理强度') + '</label><select id="model-reasoning-effort"' +
-            (modelReasoningEffortBusy[currentSessionId] ? ' disabled' : '') + '>' +
-            '<option value="">' + (english ? 'Model default' : '模型默认') + ' · ' + h(profileEffortValue(active)) + '</option>' +
-            MODEL_REASONING_EFFORTS.map((value) => '<option value="' + value + '"' + (effort === value ? ' selected' : '') + '>' + value + '</option>').join('') +
-            '</select></div>';
-    }
-    e.menu.setAttribute('role', 'dialog');
     e.menu.innerHTML = html;
     if (typeof initUiHoverTips === 'function') initUiHoverTips(e.menu);
     e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
         btn.addEventListener('click', () => {
             setCurrentSessionModelProfile(btn.getAttribute('data-profile-id') || '');
-            closeModelMenu();
+            closeModelMenu(true);
         });
     });
     e.menu.querySelectorAll('[data-toggle-profile-id]').forEach((btn) => {
@@ -331,8 +380,22 @@ function renderModelProfileControl() {
             setModelProfileEnabled(btn.getAttribute('data-toggle-profile-id') || '', enabled);
         });
     });
-    const effortSelect = e.menu.querySelector('#model-reasoning-effort');
-    if (effortSelect) effortSelect.addEventListener('change', () => { setCurrentSessionReasoningEffort(effortSelect.value); });
+    e.menu.querySelectorAll('[data-model-pane]').forEach((button) => {
+        button.addEventListener('click', () => setModelMenuPane(button.dataset.modelPane));
+    });
+    e.menu.querySelectorAll('[data-reasoning-effort]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const sid = String(currentSessionId || '');
+            const value = button.dataset.reasoningEffort;
+            if (value === currentSessionReasoningEffort() || await setCurrentSessionReasoningEffort(value)) {
+                if (sid === String(currentSessionId || '')) closeModelMenu(true);
+            }
+        });
+    });
+    if (focusAttr && e.menu.classList.contains('is-open')) {
+        const target = Array.from(e.menu.querySelectorAll('[' + focusAttr + ']')).find((item) => item.getAttribute(focusAttr) === focusValue && !item.disabled);
+        (target || e.trigger).focus({ preventScroll: true });
+    }
 }
 
 async function setModelProfileEnabled(profileId, enabled) {
@@ -586,16 +649,45 @@ function initModelProfileSwitcher() {
             closeModelMenu();
             return;
         }
+        modelMenuPane = activeProfile() ? 'root' : 'model';
         if (modelProfilesCache) renderModelProfileControl();
         else renderModelProfileLoadingMenu();
         openModelMenu();
         refreshModelProfileSelectorInBackground(currentSessionId, { silent: true, invalidate: true, forceProfiles: true });
     });
     document.addEventListener('click', (ev) => {
-        if (!e.control.contains(ev.target)) closeModelMenu();
+        // Pane rendering replaces the clicked row before this listener runs.
+        if (!ev.composedPath().includes(e.control)) closeModelMenu();
+    });
+    e.control.addEventListener('keydown', (ev) => {
+        if (!e.menu.classList.contains('is-open')) return;
+        const items = modelMenuItems();
+        if (ev.key === 'Escape' || ev.key === 'ArrowLeft' || (ev.key === 'Tab' && ev.shiftKey)) {
+            ev.preventDefault(); ev.stopPropagation();
+            if (modelMenuPane !== 'root' && activeProfile()) setModelMenuPane('root');
+            else closeModelMenu(true);
+        } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key) && items.length) {
+            ev.preventDefault();
+            const at = items.indexOf(document.activeElement);
+            const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1 : at < 0 ?
+                (ev.key === 'ArrowUp' ? items.length - 1 : 0) : (at + (ev.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+            items[next].focus({ preventScroll: true });
+        } else if (ev.key === 'ArrowRight' && modelMenuPane === 'root' && document.activeElement.dataset.modelPane) {
+            ev.preventDefault(); setModelMenuPane(document.activeElement.dataset.modelPane);
+        } else if (ev.key === 'Tab') {
+            if (items.includes(document.activeElement)) {
+                ev.preventDefault(); document.activeElement.click();
+            } else if (document.activeElement === e.trigger && items.length) {
+                ev.preventDefault();
+                (items.find((item) => item.getAttribute('aria-checked') === 'true') || items[0]).focus({ preventScroll: true });
+            }
+        }
+    });
+    e.control.addEventListener('focusout', (ev) => {
+        if (ev.relatedTarget && !e.control.contains(ev.relatedTarget)) closeModelMenu();
     });
     document.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Escape') closeModelMenu();
+        if (ev.key === 'Escape' && e.menu.classList.contains('is-open')) closeModelMenu(true);
     });
     window.addEventListener('resize', () => {
         var fresh = els();

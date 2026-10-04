@@ -3885,6 +3885,8 @@ button, input, select, textarea { font-family: var(--sans);
 }
 
 .composer-model-bar {
+    /* DSH's 13px caption at the default 16px root, scaled with UI preferences. */
+    --composer-model-font-size: var(--ui-text-sm);
     position: absolute;
     right: calc(var(--composer-panel-end-gutter) + (100% - var(--composer-panel-end-gutter) - var(--composer-input-width)) / 4);
     top: 50%;
@@ -3902,13 +3904,13 @@ button, input, select, textarea { font-family: var(--sans);
     align-items: center;
     gap: 0.34rem;
     width: 100%;
-    min-height: 30px;
+    min-height: 1.875rem;
     padding: 0.22rem 0.48rem;
     border: 1px solid var(--border-glass);
     border-radius: 10px;
     background: rgba(255,255,255,0.035);
     color: var(--text-secondary);
-    font-family: var(--sans);
+    font: 400 var(--composer-model-font-size)/1.25rem var(--sans);
     cursor: pointer;
     text-align: left;
 }
@@ -3922,14 +3924,30 @@ button, input, select, textarea { font-family: var(--sans);
     display: none;
 }
 .composer-model-v {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: inherit;
-    font-size: 0.68rem;
-    font-weight: 700;
+    font: inherit;
+}
+.composer-model-current-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.composer-model-current-effort {
+    flex-shrink: 1000;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 400;
+    color: var(--text-tertiary);
 }
 .composer-model-caret {
     width: 0;
@@ -3938,7 +3956,9 @@ button, input, select, textarea { font-family: var(--sans);
     border-right: 4px solid transparent;
     border-top: 5px solid currentColor;
     opacity: 0.72;
+    transition: transform 120ms ease;
 }
+.composer-model-trigger.is-open .composer-model-caret { transform: rotate(180deg); }
 .composer-model-menu {
     position: absolute;
     right: 0;
@@ -3946,28 +3966,69 @@ button, input, select, textarea { font-family: var(--sans);
     width: min(17rem, calc(100vw - 2rem));
     max-height: var(--composer-popover-max-height, min(44rem, 82vh));
     overflow: auto;
-    scrollbar-gutter: stable;
+    /* Only the scrollbar-width gutters inset the rows, equally on both sides. */
+    scrollbar-gutter: stable both-edges;
     display: none;
-    padding: 0.35rem;
+    padding: 0.35rem 0;
     border: 1px solid var(--floating-border);
     border-radius: var(--radius-sm);
     background: var(--floating-surface);
     box-shadow: var(--floating-shadow);
     z-index: 360;
 }
-.composer-model-menu.is-open { display: grid; gap: 0.28rem; }
+.composer-model-menu.is-open { display: grid; gap: 0.12rem; }
 .composer-model-list { display: grid; gap: 0.28rem; }
-.composer-model-reasoning {
-    display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;
-    padding: 0.65rem 0.5rem 0.35rem; margin-top: 0.25rem;
-    border-top: 1px solid var(--floating-border); color: var(--text-secondary); font-size: 0.75rem;
+.composer-model-cell,
+.composer-model-effort-option {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    width: 100%;
+    min-width: 0;
+    min-height: 2.125rem;
+    padding: 0 0.5rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font: 400 var(--composer-model-font-size)/1.25rem var(--sans);
+    text-align: left;
+    cursor: pointer;
 }
-.composer-model-reasoning select {
-    min-width: 6.5rem; max-width: 11rem; padding: 0.25rem 0.4rem;
-    font: inherit; color: var(--text-primary); background: var(--floating-surface);
-    border: 1px solid var(--floating-border); border-radius: var(--radius-sm);
+.composer-model-cell-label { flex: 0 0 auto; white-space: nowrap; }
+.composer-model-cell-value {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+    color: var(--text-tertiary);
 }
-.composer-model-reasoning select:focus-visible { outline: 2px solid var(--accent-1); outline-offset: 2px; }
+.composer-model-cell-chevron { display: flex; flex: 0 0 12px; color: var(--text-tertiary); }
+.composer-model-cell-chevron svg { width: 12px; height: 12px; }
+.composer-model-effort-option { justify-content: space-between; font-weight: 500; }
+.composer-model-check { display: grid; place-items: center; flex: 0 0 14px; }
+.composer-model-check svg { width: 14px; height: 14px; }
+.composer-model-cell:hover,
+.composer-model-effort-option:hover:not(:disabled) { background: var(--floating-hover); }
+.composer-model-cell:focus-visible,
+.composer-model-effort-option:focus-visible { outline: 2px solid var(--accent-1); outline-offset: -2px; }
+.composer-model-effort-option:disabled { cursor: wait; opacity: 0.55; }
+.composer-model-pending {
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid var(--floating-border);
+    border-top-color: var(--text-primary);
+    border-radius: 50%;
+    animation: composer-model-pending-spin 0.7s linear infinite;
+}
+@keyframes composer-model-pending-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .composer-model-pending { animation: none; }
+    .composer-model-caret { transition: none; }
+}
 .composer-model-option-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -4045,8 +4106,9 @@ button, input, select, textarea { font-family: var(--sans);
 }
 .composer-model-option-name {
     display: block;
-    font-size: 0.75rem;
-    font-weight: 800;
+    font-size: var(--composer-model-font-size);
+    font-weight: 500;
+    line-height: 1.25rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
