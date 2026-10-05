@@ -214,14 +214,24 @@ def test_frontend_passes_the_breakdown_through_the_token_store():
     store = (ROOT / "frontend/src/app/state/context-store.js").read_text(encoding="utf-8")
     snapshot = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
     scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
 
     assert "event.estimated, event.threshold, event.breakdown" in reducer
     assert "breakdown: breakdown != null ? breakdown" in store
     assert "snapshot.context_tokens.breakdown" in snapshot
     assert "recordContextTokens(sid, j.estimated, j.threshold, j.breakdown)" in scroll
-    # The card only takes over when lanes exist; otherwise the plain tip stays.
+    # One popup, not two: any value opens the card, and the plain tip is only for
+    # the empty state. Lanes decide the legend, not whether the card exists.
     assert "el.removeAttribute('data-ui-tip')" in scroll
     assert "ctx-card-seg ctx-lane-" in scroll
+    assert "ctxCardReady = true;" in scroll
+    # A value stored without lanes asks for them once, bypassing the freshness window.
+    assert "function ensureContextBreakdownForCurrentSession(breakdown)" in scroll
+    assert "refreshContextTokensFromServer(sid, null, true);" in scroll
+    assert "if (!force && cached && cached.updatedAt" in scroll
+    # Both note variants are localised, including the "priced with the next request" one.
+    assert "分母为压缩摘要阈值；构成按本地估算" in i18n
+    assert "分母为压缩摘要阈值；构成待本次请求估算后补齐" in i18n
 
 
 def test_context_breakdown_card_runtime():

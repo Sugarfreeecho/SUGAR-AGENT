@@ -53,9 +53,11 @@ _fname_to_tool: Dict[str, Tuple[str, str]] = {}
 _servers: Dict[str, Any] = {}
 _defs_snapshot: List[Dict[str, Any]] = []
 _tool_contracts: Dict[str, Dict[str, Any]] = {}
+_tool_selections: Dict[str, Dict[str, frozenset[str]]] = {}
 _server_start_errors: Dict[str, str] = {}
 _start_lock = asyncio.Lock()
 _host_reserved_servers: set[str] = set()
+_host_server_views: Dict[str, Callable[[], Dict[str, Any]]] = {}
 _loaded_signature: Optional[str] = None
 _signature_cache: Optional[Tuple[float, str]] = None
 _tool_catalog_generation = 0
@@ -240,18 +242,22 @@ def is_mcp_tool_enabled(function_name: str) -> bool:
 
 def set_mcp_tool_enabled(function_name: str, enabled: bool) -> bool:
     """Persist whether a registered MCP tool is visible and callable."""
-    global _disabled_mcp_tools
     name = str(function_name or "").strip()
     if not name or name not in _fname_to_tool:
         return False
+    return _set_mcp_tools_enabled({name}, enabled)
+
+
+def _set_mcp_tools_enabled(names: set[str], enabled: bool) -> bool:
+    global _disabled_mcp_tools
     with _mcp_tool_state_lock:
         disabled = set(_load_disabled_mcp_tools())
         if not _disabled_mcp_tools_loaded:
             raise OSError("Cannot load MCP tool state; refusing to overwrite it")
         if enabled:
-            disabled.discard(name)
+            disabled.difference_update(names)
         else:
-            disabled.add(name)
+            disabled.update(names)
         out = {
             "version": 1,
             "tools": {key: {"enabled": False} for key in sorted(disabled)},
@@ -270,6 +276,32 @@ def set_mcp_tool_enabled(function_name: str, enabled: bool) -> bool:
     return True
 
 
+def set_mcp_server_tools_enabled(alias: str, enabled: bool) -> bool:
+    """Atomically toggle all discovered tools of a user-managed server."""
+    if alias in _host_reserved_servers:
+        raise ValueError("Host-managed tools must be configured in their provider panel")
+    names = {name for name, pair in tuple(_fname_to_tool.items()) if pair[0] == alias}
+    return bool(names) and _set_mcp_tools_enabled(names, enabled)
+
+
+def _parse_tool_selection(cfg: dict) -> Dict[str, frozenset[str]]:
+    selection = cfg.get("tools", {})
+    if not isinstance(selection, dict):
+        raise ValueError("MCP tools selection must be an object")
+    result = {}
+    for key in ("include", "exclude", "pin"):
+        raw = selection.get(key, [])
+        if not isinstance(raw, list) or any(not isinstance(name, str) or not name.strip() for name in raw):
+            raise ValueError("MCP tools." + key + " must be an array of non-empty tool names")
+        result[key] = frozenset(name.strip() for name in raw)
+    return result
+
+
+def get_pinned_tool_names() -> frozenset[str]:
+    return frozenset(name for name, (alias, original) in tuple(_fname_to_tool.items())
+                     if {name, original} & _tool_selections.get(alias, {}).get("pin", frozenset()))
+
+
 def _bump_tool_catalog_generation() -> None:
     global _tool_catalog_generation
     _tool_catalog_generation += 1
@@ -280,6 +312,13 @@ def _register_tools_globally(alias: str, tools: List[Any]) -> int:
     global _defs_snapshot
     seen_fname: set[str] = set()
     registered = 0
+    selection = _tool_selections.get(alias, {})
+    include = selection.get("include", frozenset())
+    exclude = selection.get("exclude", frozenset())
+    previous_contracts = dict(_tool_contracts)
+    previous_mapping = dict(_fname_to_tool)
+    # A refreshed tools/list is a replacement, including when it is empty.
+    _remove_server_tools_unlocked(alias)
     for t in tools or []:
         orig_name = getattr(t, "name", "") or ""
         if not orig_name:
@@ -288,6 +327,9 @@ def _register_tools_globally(alias: str, tools: List[Any]) -> int:
         schema = getattr(t, "inputSchema", None)
         od = _openai_tool_def(alias, orig_name, desc, schema)
         fname = od["function"]["name"]
+        keys = {orig_name, fname}
+        if (include and not keys & include) or keys & exclude:
+            continue
         if fname in seen_fname:
             continue
         seen_fname.add(fname)
@@ -296,6 +338,8 @@ def _register_tools_globally(alias: str, tools: List[Any]) -> int:
             logger.warning("MCP: duplicate tool key `%s`, skip `%s.%s`", fname, alias, orig_name)
             continue
         _fname_to_tool[fname] = (alias, orig_name)
+        if fname in previous_contracts and previous_mapping.get(fname) == (alias, orig_name):
+            _tool_contracts[fname] = previous_contracts[fname]
         _defs_snapshot = [
             d
             for d in _defs_snapshot
@@ -561,6 +605,13 @@ class _PersistentMcpServer:
         self._fatal: Optional[str] = None
         self._restart_lock = asyncio.Lock()
 
+    def connection_status(self) -> Dict[str, Any]:
+        return {
+            "connected": bool(self._ready.is_set() and self._task is not None
+                              and not self._task.done() and not self._fatal),
+            "error": str(self._fatal or ""),
+        }
+
     async def start(self, timeout_sec: float = 60.0) -> None:
         self._ready.clear()
         self._fatal = None
@@ -816,6 +867,7 @@ async def _shutdown_servers_unlocked() -> None:
     _fname_to_tool.clear()
     _defs_snapshot.clear()
     _tool_contracts.clear()
+    _tool_selections.clear()
     if had_tools:
         _bump_tool_catalog_generation()
 
@@ -846,6 +898,7 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
 
     if alias in _host_reserved_servers:
         return
+    selection = _parse_tool_selection(cfg)
 
     if not mcp_registration_is_approved(mcp_descriptor(alias, cfg)):
         raise PermissionError("registration approval is required")
@@ -866,9 +919,12 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
     else:
         raise ValueError("unknown transport")
 
+    _tool_selections[alias] = selection
     try:
         await srv.start()
     except BaseException:
+        _tool_selections.pop(alias, None)
+        _remove_server_tools_unlocked(alias)
         await srv.stop()
         raise
 
@@ -884,19 +940,24 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
     )
 
 
-async def reserve_server_for_host(alias: str, reserved: bool) -> None:
+async def reserve_server_for_host(
+    alias: str, reserved: bool, *, view: Optional[Callable[[], Dict[str, Any]]] = None,
+) -> None:
     """Give a host provider exclusive transport/catalog ownership of one alias."""
     async def change():
         global _loaded_signature, _signature_cache
         async with _start_lock:
             if reserved:
                 _host_reserved_servers.add(alias)
+                if view is not None:
+                    _host_server_views[alias] = view
                 previous = _servers.pop(alias, None)
                 if previous is not None:
                     await previous.stop()
                 _remove_server_tools_unlocked(alias)
             else:
                 _host_reserved_servers.discard(alias)
+                _host_server_views.pop(alias, None)
             _loaded_signature = None
             _signature_cache = None
     await _run_on_mcp_loop(change())
@@ -978,6 +1039,9 @@ async def _register_server_impl(alias: str) -> Dict[str, Any]:
         if not isinstance(cfg, dict):
             raise KeyError(alias)
 
+        if alias in _host_reserved_servers:
+            return next(row for row in list_configured_servers() if row["server"] == alias)
+
         previous = _servers.pop(alias, None)
         if previous is not None:
             await previous.stop()
@@ -1057,6 +1121,21 @@ def schedule_mcp_startup_refresh() -> None:
         _release()
 
 
+def _host_mcp_views() -> Dict[str, Dict[str, Any]]:
+    """Read host-owned connections for display without registering a second route."""
+    views = {}
+    for alias in tuple(_host_reserved_servers):
+        reader = _host_server_views.get(alias)
+        if reader is None:
+            views[alias] = {"managed_by": "host"}
+            continue
+        try:
+            views[alias] = dict(reader())
+        except Exception as exc:
+            views[alias] = {"managed_by": "host", "error": str(exc)}
+    return views
+
+
 def list_registered_tools() -> List[Dict[str, Any]]:
     """Return the currently registered MCP tools for UI display."""
     disabled = _load_disabled_mcp_tools()
@@ -1066,6 +1145,7 @@ def list_registered_tools() -> List[Dict[str, Any]]:
         )
         for d in _defs_snapshot
     }
+    pinned = get_pinned_tool_names()
     tools = [
         {
             "function_name": fname,
@@ -1073,9 +1153,14 @@ def list_registered_tools() -> List[Dict[str, Any]]:
             "tool_name": orig_name,
             "description": descriptions.get(fname, ""),
             "enabled": fname not in disabled,
+            "pinned": fname in pinned,
         }
         for fname, (alias, orig_name) in _fname_to_tool.items()
+        if alias not in _host_reserved_servers
     ]
+    for alias, view in _host_mcp_views().items():
+        for tool in view.get("tools", ()):
+            tools.append({**tool, "server": alias, "managed_by": view.get("managed_by", "host")})
     tools.sort(key=lambda item: (str(item["server"]).lower(), str(item["tool_name"]).lower()))
     return tools
 
@@ -1091,24 +1176,34 @@ def list_configured_servers() -> List[Dict[str, Any]]:
     aliases = set(str(alias) for alias in configured)
     aliases.update(str(alias) for alias in _servers)
     aliases.update(tool_counts)
+    host_views = _host_mcp_views()
+    aliases.update(host_views)
     servers = []
     for alias in sorted(aliases, key=str.lower):
         cfg = configured.get(alias)
         tool_count = int(tool_counts.get(alias, 0))
-        servers.append(
-            {
-                "server": alias,
-                "transport": _resolve_transport(cfg) if isinstance(cfg, dict) else "",
-                "connected": alias in _servers,
-                "discovered": tool_count > 0,
-                "tool_count": tool_count,
-                "error": str(_server_start_errors.get(alias) or ""),
-            }
-        )
+        row = {
+            "server": alias,
+            "transport": _resolve_transport(cfg) if isinstance(cfg, dict) else "",
+            "connected": alias in _servers,
+            "discovered": tool_count > 0,
+            "tool_count": tool_count,
+            "error": str(_server_start_errors.get(alias) or ""),
+        }
+        if alias in host_views:
+            view = host_views[alias]
+            row.update({
+                "managed_by": view.get("managed_by", "host"),
+                "connected": bool(view.get("connected")),
+                "discovered": bool(view.get("discovered")),
+                "tool_count": int(view.get("tool_count", 0)),
+                "error": str(view.get("error") or ""),
+            })
+        servers.append(row)
     return servers
 
 
-def format_call_tool_result(result: Any, *, image_enabled: bool = False, model: str = "", attachment_store=None):
+def format_call_tool_result(result: Any, *, image_enabled: bool = False, model: str = "", attachment_store=None, image_source=None):
     from attachments import get_attachment_store, SaveImageAttachment, AttachmentError
     from attachments.encoding import decode_base64
     from attachments.content import redact_image_payloads
@@ -1140,7 +1235,7 @@ def format_call_tool_result(result: Any, *, image_enabled: bool = False, model: 
                     raise AttachmentError("Image exceeds byte limit", "IMAGES_TOO_LARGE")
                 data = decode_base64(encoded)
                 store.validate_image(data, media)
-                inputs.append(SaveImageAttachment(data, media))
+                inputs.append(SaveImageAttachment(data, media, source=image_source))
             except (AttachmentError, TypeError) as exc:
                 admission_error = getattr(exc, "code", "UNSUPPORTED_IMAGE_TYPE")
         elif kind == "resource":

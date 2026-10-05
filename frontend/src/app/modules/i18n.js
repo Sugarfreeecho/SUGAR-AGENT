@@ -41,7 +41,7 @@ const UI_TRANSLATIONS_EN = {
     '已发送': 'Sent', '提交中': 'Submitting', '撤回中': 'Withdrawing', '已接收，等待插入': 'Received, waiting to insert',
     '正在接管当前任务': 'Taking over the current task', '选择 Skill ': 'Select Skill ', '清空': 'Clear',
     '当前没有已注册 Skill': 'No registered skills', '正在加载 Skill': 'Loading skills',
-    'MCP 工具': 'MCP Tools', '正在加载 MCP 工具': 'Loading MCP tools', '当前没有已注册的 MCP 工具': 'No registered MCP tools', '当前没有已配置的 MCP 服务器': 'No configured MCP servers', 'MCP 工具加载失败': 'Failed to load MCP tools', '未命名服务器': 'Unnamed server', '未注册': 'Not registered', '服务器尚未完成工具注册；请检查连接、凭据或服务配置。': 'The server has not completed tool registration. Check the connection, credentials, or server configuration.', '未命名 Plugin': 'Unnamed plugin',
+    'MCP 工具': 'MCP Tools', '正在加载 MCP 工具': 'Loading MCP tools', '当前没有已注册的 MCP 工具': 'No registered MCP tools', '当前没有已配置的 MCP 服务器': 'No configured MCP servers', 'MCP 工具加载失败': 'Failed to load MCP tools', '未命名服务器': 'Unnamed server', '未注册': 'Not registered', '由 Computer Use 管理': 'Managed by Computer Use', '由宿主管理': 'Managed by host', '服务器尚未完成工具注册；请检查连接、凭据或服务配置。': 'The server has not completed tool registration. Check the connection, credentials, or server configuration.', '未命名 Plugin': 'Unnamed plugin',
     'MCP 工具启停失败': 'Failed to change MCP tool status', '注册': 'Register', '注册中…': 'Registering…', 'MCP 注册失败': 'MCP registration failed', 'MCP 注册未完成': 'MCP registration incomplete',
     'Hooks': 'Hooks', 'Plugins': 'Plugins', '正在加载扩展': 'Loading extensions', '当前没有已注册 Hook': 'No registered hooks', '当前没有已发现插件': 'No plugins found', '扩展加载失败': 'Failed to load extensions', '无': 'None',
     '启用': 'Enable', '停用': 'Disable', '打开页面': 'Open page', '处理中…': 'Working…', '插件状态更新失败': 'Failed to update plugin status',
@@ -424,6 +424,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '上下文已用': 'Context used',
     '系统提示词': 'System prompt', '工具定义': 'Tool definitions', '对话消息': 'Messages',
     '分母为压缩摘要阈值；构成按本地估算': 'Denominator: compression-summary threshold; composition is a local estimate',
+    '分母为压缩摘要阈值；构成待本次请求估算后补齐': 'Denominator: compression-summary threshold; the composition is priced with the next request',
 });
 const uiI18nTextOriginal = new WeakMap();
 const uiI18nAttrOriginal = new WeakMap();

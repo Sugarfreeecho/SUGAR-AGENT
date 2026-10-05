@@ -216,7 +216,39 @@ async def _invoke_task(
     )
 
 
+async def _invoke_tool_search(context, arguments):
+    registry = context.service("tool_registry")
+    disclosure = registry.disclosure
+    if disclosure is None:
+        return ToolOutcome.failed("tool_search_inactive", "Tool search is inactive")
+    try:
+        method = disclosure.search if context.service("tool_name") == "tool_search" else disclosure.describe
+        result = method(arguments)
+    except ValueError as exc:
+        return ToolOutcome.failed("invalid_tool_search", str(exc), content=str(exc))
+    return ToolOutcome.completed(json.dumps(result, ensure_ascii=False))
+
+
+def _invoke_tool_call_unresolved(_context, _arguments):
+    # The execution loop must unwrap before hooks and authorization. Calling
+    # the invoker directly must never bypass that boundary.
+    return ToolOutcome.failed("unresolved_tool_bridge", "tool_call must be resolved by the execution pipeline")
+
+
 def register_builtin_host_tools() -> None:
+    for name in ("tool_search", "tool_describe", "tool_call"):
+        if not host_tool_invokers.has(name):
+            host_tool_invokers.register(
+                name,
+                _invoke_tool_call_unresolved if name == "tool_call" else _invoke_tool_search,
+                owner="core.tool_search",
+                policy=ToolExecutionPolicy(
+                    effect="control" if name == "tool_call" else "read",
+                    parallel_safe=name != "tool_call",
+                    early_stream_safe=False,
+                    interruptibility="non_interruptible" if name == "tool_call" else "safe",
+                ),
+            )
     if not host_tool_invokers.has("ask_user"):
         host_tool_invokers.register(
             "ask_user",

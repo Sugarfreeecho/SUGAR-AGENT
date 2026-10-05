@@ -270,6 +270,8 @@ python app/main.py
 
 服务启动后自动打开浏览器，访问地址：**http://127.0.0.1:8192/**
 
+工具较多时，可在设置中心的 MCP 页面开启「工具按需披露」，让外部工具通过搜索调用，并查看上下文中的工具定义节省量。配置和执行边界见 [工具按需披露](docs/tool-disclosure.md)。
+
 > 首次启动时，若未检测到配置文件，系统会自动跳转到 `/setup` 引导完成初始配置。
 
 Ubuntu Server 使用 `bash scripts/install_unix.sh --mode server` 安装，并通过

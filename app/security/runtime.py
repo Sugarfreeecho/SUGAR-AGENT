@@ -546,6 +546,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         )
     if name in {
         "ask_user",
+        "tool_search",
+        "tool_describe",
         "activate_skill",
         "update_todo",
         "context_manage",

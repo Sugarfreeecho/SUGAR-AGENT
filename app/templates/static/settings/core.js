@@ -337,6 +337,7 @@
       const el = event.target.closest('[data-act]');
       if (!el) {
         if (!$('#st-confirm').hidden && event.target.id === 'st-confirm') askConfirmHide();
+        else if (!$('#st-dialog').hidden && event.target.id === 'st-dialog') closeDialog();
         return;
       }
       const act = el.dataset.act;
@@ -416,11 +417,14 @@
     document.addEventListener('focusout', () => { hideTip(); });
     document.addEventListener('scroll', () => { hideTip(); }, true);
 
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (!$('#st-confirm').hidden) { event.preventDefault(); askConfirmHide(); }
+      else if (!$('#st-dialog').hidden) { event.preventDefault(); closeDialog(); }
+      else if (EMBEDDED) { event.preventDefault(); leaveSettings(); }
+    });
     if (EMBEDDED) {
       document.documentElement.classList.add('st-embedded');
-      document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') { event.preventDefault(); leaveSettings(); }
-      });
       const stage = document.querySelector('.st-stage');
       if (stage) {
         stage.addEventListener('click', (event) => { if (event.target === stage) leaveSettings(); });

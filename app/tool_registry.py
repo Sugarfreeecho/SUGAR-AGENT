@@ -155,6 +155,8 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._descriptors: dict[str, ToolDescriptor] = {}
+        self.model_names: Optional[frozenset[str]] = None
+        self.disclosure: Any = None
 
     def register(self, descriptor: ToolDescriptor) -> ToolDescriptor:
         if not isinstance(descriptor, ToolDescriptor):
@@ -216,6 +218,16 @@ class ToolRegistry:
         return tuple(self._descriptors.values())
 
     def definitions(self) -> list[Dict[str, Any]]:
+        definitions = [
+            item.openai_definition() for item in self._descriptors.values()
+            if self.model_names is None or item.name in self.model_names
+        ]
+        if self.disclosure is not None:
+            return ToolDefinitions(definitions, self.disclosure.stats)
+        return definitions
+
+    def all_definitions(self) -> list[Dict[str, Any]]:
+        """Authorized execution catalog, independent of model presentation."""
         return [item.openai_definition() for item in self._descriptors.values()]
 
     def names(self, *, executable_only: bool = False) -> frozenset[str]:
@@ -230,6 +242,14 @@ class ToolRegistry:
 
     def __contains__(self, name: object) -> bool:
         return isinstance(name, str) and name in self._descriptors
+
+
+class ToolDefinitions(list):
+    """JSON-compatible request schemas with local, non-serialized accounting."""
+
+    def __init__(self, definitions, disclosure_stats):
+        super().__init__(definitions)
+        self.disclosure_stats = dict(disclosure_stats)
 
 
 @dataclass(frozen=True)

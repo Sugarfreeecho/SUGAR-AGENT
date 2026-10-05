@@ -8578,6 +8578,46 @@ async def list_mcp_tools():
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+@fastapi_app.get("/api/tool_search/config")
+async def get_tool_search_config_api():
+    import tool_search
+    from dataclasses import asdict
+    return JSONResponse({"ok": True, "config": asdict(tool_search.load_config()),
+                         "path": str(tool_search.CONFIG_PATH),
+                         "environment_override": os.getenv("MYAGENT_TOOL_SEARCH", "")})
+
+
+@fastapi_app.post("/api/tool_search/config")
+async def set_tool_search_config_api(request: Request):
+    import tool_search
+    from dataclasses import asdict
+    try:
+        raw = await request.json()
+        config = await asyncio.to_thread(tool_search.save_config, raw)
+        return JSONResponse({"ok": True, "config": asdict(config)})
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except OSError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.post("/api/mcp/servers/{server_name:path}/tools/enabled")
+async def set_mcp_server_tools_enabled_api(server_name: str, request: Request):
+    try:
+        raw = await request.json()
+        enabled = raw.get("enabled") if isinstance(raw, dict) else None
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be boolean")
+        ok = await asyncio.to_thread(agent_mcp.set_mcp_server_tools_enabled, server_name, enabled)
+        if not ok:
+            return JSONResponse({"ok": False, "error": "unknown server or no registered tools"}, status_code=404)
+        return JSONResponse({"ok": True, "server": server_name, "enabled": enabled})
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except OSError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @fastapi_app.post("/api/mcp/servers/{server_name:path}/register")
 async def register_mcp_server_api(server_name: str):
     try:

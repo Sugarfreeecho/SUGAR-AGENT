@@ -23,6 +23,10 @@ function contextBreakdownOrNull(raw) {
         if (!Number.isFinite(value) || value < 0) return null;
         parts[CTX_BREAKDOWN_LANES[i].key] = value;
     }
+    ['deferred_tools_count', 'deferred_tools_tokens', 'saved_tools_tokens'].forEach(function (key) {
+        var value = Number(raw[key]);
+        if (Number.isFinite(value) && value >= 0) parts[key] = value;
+    });
     return parts;
 }
 
@@ -84,6 +88,14 @@ function renderContextBreakdownCard(card, pctDisp, estimated, threshold, breakdo
                 var laneKey = valueEl.getAttribute('data-lane');
                 valueEl.textContent = '~' + formatTokenCompact(breakdown[laneKey]);
             });
+        }
+    }
+    var noteEl = card.querySelector('.ctx-card-note');
+    if (noteEl) {
+        noteEl.textContent = breakdown ? CTX_CARD_NOTE_WITH_LANES : CTX_CARD_NOTE_WITHOUT_LANES;
+        if (breakdown && breakdown.deferred_tools_count > 0) {
+            noteEl.textContent += '；已延迟 ' + breakdown.deferred_tools_count +
+                ' 个工具，本轮工具定义节省约 ' + formatTokenCompact(breakdown.saved_tools_tokens || 0) + ' tokens';
         }
     }
 }

@@ -558,11 +558,16 @@ def build_context_breakdown(
     )
     tools_tokens = count_tool_definition_tokens(tools)
     total = max(0, int(total_tokens or 0))
-    return {
+    result = {
         "system_tokens": system_tokens,
         "tools_tokens": tools_tokens,
         "message_tokens": max(0, total - system_tokens - tools_tokens),
     }
+    # Deferred schemas are outside this request and outside the three lanes.
+    stats = getattr(tools, "disclosure_stats", None)
+    if isinstance(stats, dict):
+        result.update(stats)
+    return result
 
 
 def _prompt_usage_baseline_path(session_id: str) -> Optional[Path]:

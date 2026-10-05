@@ -331,6 +331,7 @@ def test_list_registered_tools_returns_sorted_snapshot(monkeypatch):
         "tool_name": "beta",
         "description": "[MCP server `server-a`] Beta tool",
         "enabled": True,
+        "pinned": False,
     }
     assert tools[1]["tool_name"] == "alpha"
 

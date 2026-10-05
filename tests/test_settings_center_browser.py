@@ -29,6 +29,9 @@ def settings_page(browser_page):
         "/api/model_profiles": {"profiles": [profile]},
         "/api/model_profiles/probe": {"model": {"model_context_window": 32000, "probe_error": "HTTP 400: fixture detail"}},
         "/api/mcp_config": {"text": "{}", "path": "fixture/mcp_servers.json"},
+        "/api/tool_search/config": {"config": {"enabled": "on", "threshold_pct": 10,
+            "threshold_tokens": 20000, "search_default_limit": 5, "max_search_limit": 20,
+            "defer_plugin_tools": False}, "environment_override": ""},
     }
 
     def route(request):
@@ -83,6 +86,83 @@ def test_env_search_keeps_focus_and_unsaved_inputs_without_fetch(settings_page):
     assert page.evaluate("originalInput===document.querySelector('[data-env-key=FOO]')")
     assert "有未保存" in page.locator("#st-dirty-msg").inner_text()
     assert len([request for request in requests if request["path"] == "/api/env"]) == 1
+
+
+@pytest.mark.parametrize("close_with", ["mask", "escape"])
+def test_nested_settings_dialog_closes_only_inner_layer(settings_page, close_with):
+    page, requests = settings_page
+    page.evaluate("""() => {
+      window.saved = false;
+      MyAgentSettings.openDialog({title:'Inner', body:'<input id="inner-input">',
+        onOk:() => {window.saved=true;}});
+    }""")
+    page.locator("#inner-input").click()
+    assert page.locator("#st-dialog").is_visible()
+    page.evaluate("MyAgentSettings.askConfirm('Confirm',()=>{window.saved=true})")
+    if close_with == "mask":
+        page.locator("#st-confirm").click(position={"x": 4, "y": 4})
+    else:
+        page.keyboard.press("Escape")
+    assert page.locator("#st-confirm").is_hidden()
+    assert page.locator("#st-dialog").is_visible()
+    if close_with == "mask":
+        page.locator("#st-dialog").click(position={"x": 4, "y": 4})
+    else:
+        page.keyboard.press("Escape")
+    assert page.locator("#st-dialog").is_hidden()
+    assert page.locator("#st-body").is_visible()
+    assert page.evaluate("!window.saved")
+
+
+def test_mcp_managed_provider_shows_tools_without_registration_or_generic_toggles(settings_page):
+    page, requests = settings_page
+    _mock_json(page, "/api/mcp/tools", {
+        "servers": [{"server": "cua-driver-mcp", "transport": "stdio", "connected": True,
+                     "discovered": True, "tool_count": 2, "managed_by": "computer-use"}],
+        "tools": [{"server": "cua-driver-mcp", "function_name": "mcp__cua-driver-mcp__" + name,
+                   "tool_name": name, "enabled": True, "managed_by": "computer-use"}
+                  for name in ("click", "list_windows")],
+    })
+    page.evaluate("MyAgentSettings.showSection('mcp',{force:true})")
+    group = page.locator('[data-mcp-server="cua-driver-mcp"]')
+    group.wait_for()
+    text = group.inner_text()
+    assert "已连接" in text and "2 个工具" in text and "由 Computer Use 管理" in text
+    assert "mcp__cua-driver-mcp__click" in text and "mcp__cua-driver-mcp__list_windows" in text
+    assert "未连接" not in text and "尚未注册" not in text
+    assert group.locator('[data-act="mcp-register"]').count() == 0
+    assert group.locator('[data-key^="mcp:"]').count() == 0
+    assert not [request for request in requests if request["method"] == "POST"]
+
+
+def test_mcp_composer_inventory_respects_provider_ownership(browser_page):
+    page = browser_page
+    source = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
+    page.goto("about:blank")
+    page.add_script_tag(content=source.rsplit("\ninitSkillPicker();", 1)[0])
+    page.evaluate("""() => {
+      mcpServersCache=[{server:'cua-driver-mcp',connected:true,discovered:true,managed_by:'computer-use'}];
+      mcpToolsCache=[{server:'cua-driver-mcp',function_name:'mcp__cua-driver-mcp__click',
+                     tool_name:'click',enabled:true,managed_by:'computer-use'}];
+      document.body.innerHTML=renderSkillPickerMcpToolsHtml();
+    }""")
+    assert "由 Computer Use 管理" in page.locator("body").inner_text()
+    assert "已启用 1 / 共 1 个工具" in page.locator("body").inner_text()
+    assert "mcp__cua-driver-mcp__click" in page.locator("body").inner_text()
+    assert page.locator(".mcp-tool-toggle,.mcp-server-register-btn").count() == 0
+
+    page.evaluate("""() => {
+      mcpServersCache[0].connected=false;mcpServersCache[0].discovered=false;mcpToolsCache=[];
+      document.body.innerHTML=renderSkillPickerMcpToolsHtml();
+    }""")
+    assert "未连接" in page.locator("body").inner_text()
+    assert page.locator(".mcp-server-register-btn").count() == 0
+
+    page.evaluate("""() => {
+      mcpServersCache=[{server:'ordinary',connected:false,discovered:false}];
+      document.body.innerHTML=renderSkillPickerMcpToolsHtml();
+    }""")
+    assert page.locator('.mcp-server-register-btn[data-mcp-server="ordinary"]').count() == 1
 
 
 def _mock_json(page, path, payload, method="GET"):
@@ -230,9 +310,35 @@ def test_mcp_add_precedes_server_groups_and_tools_stay_in_their_group(settings_p
         "tools": [{"server": "alpha", "function_name": "alpha_one"}, {"server": "alpha", "function_name": "alpha_two"}, {"server": "beta", "function_name": "beta_one"}]})
     page.evaluate("MyAgentSettings.showSection('mcp',{force:true})")
     page.locator('[data-mcp-server="beta"]').wait_for()
-    assert page.locator("#st-body .st-card .st-t").all_text_contents()[:2] == ["添加服务器", "已添加服务器"]
+    assert page.locator("#st-body .st-card .st-t").all_text_contents()[:3] == ["工具按需披露", "添加服务器", "已添加服务器"]
     assert page.locator('[data-mcp-server="alpha"] [data-key^="mcp:"]').count() == 2
     assert page.locator('[data-mcp-server="beta"] [data-key^="mcp:"]').count() == 1
+
+
+def test_tool_disclosure_mode_and_group_controls_send_validated_settings(settings_page):
+    page, requests = settings_page
+    _mock_json(page, "/api/mcp/tools", {"servers": [{"server": "alpha", "connected": True}],
+        "tools": [{"server": "alpha", "function_name": "mcp_alpha_read", "tool_name": "read"}]})
+    _mock_json(page, "/api/mcp_config", {"text": json.dumps({"servers": {"alpha": {"command": "demo"}}}), "path": "fixture"})
+    page.evaluate("MyAgentSettings.showSection('mcp',{force:true})")
+    page.locator('[data-field="tool-search-mode"]').wait_for()
+    page.locator('[data-field="tool-search-mode"]').select_option("auto")
+    page.locator('[data-field="tool-search-pct"]').fill("5")
+    page.locator('[data-field="tool-search-tokens"]').fill("10000")
+    page.locator('[data-act="tool-search-save"]').click()
+    page.wait_for_function("document.getElementById('st-toast').textContent.includes('已保存')")
+    saved = next(row for row in requests if row["path"] == "/api/tool_search/config" and row["method"] == "POST")
+    assert json.loads(saved["body"])["enabled"] == "auto"
+    assert json.loads(saved["body"])["threshold_pct"] == 5
+    assert json.loads(saved["body"])["threshold_tokens"] == 10000
+    page.locator('[data-act="mcp-disable-group"]').click()
+    page.wait_for_function("document.getElementById('st-toast').textContent==='已更新'")
+    group = next(row for row in requests if row["path"] == "/api/mcp/servers/alpha/tools/enabled")
+    assert json.loads(group["body"]) == {"enabled": False}
+    page.locator('[data-act="mcp-pin"]').click()
+    page.wait_for_function("document.getElementById('st-toast').textContent==='已更新常驻配置'")
+    pin = next(row for row in requests if row["path"] == "/api/mcp_config" and row["method"] == "POST")
+    assert json.loads(json.loads(pin["body"])["text"])["servers"]["alpha"]["tools"]["pin"] == ["mcp_alpha_read"]
 
 
 def test_plugin_page_link_is_in_contributed_pages_card(settings_page):

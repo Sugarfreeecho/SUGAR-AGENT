@@ -400,6 +400,7 @@ select.st-input {
 
 /* 弹窗（DSH 模态） */
 .st-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--st-mask); z-index: 90; }
+#st-confirm { z-index: 91; }
 .st-modal .st-box {
   width: 400px; max-width: calc(100vw - 40px); padding: 20px;
   border-radius: var(--st-radius-panel); background: var(--st-panel);

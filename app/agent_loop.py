@@ -104,6 +104,7 @@ from tool_registry import (
     ToolRegistryError,
 )
 from host_tool_registry import HostToolInvocationContext, host_tool_invokers
+import tool_search
 from stream_event_bridge import StreamEventBridge
 from tool_execution_policy import (
     ToolExecutionPolicy,
@@ -3516,7 +3517,15 @@ async def _combined_tool_registry_revision(
             "tool_registry_revision_detail total_ms=%d mcp_ms=%d session_shape_ms=%d extension_ms=%d host_ms=%d host_thread_cpu_ms=%d executor_ms=%d",
             _revision_ms, _mcp_ms, _shape_ms, _extension_ms, _host_ms, _host_thread_cpu_ms, _executor_ms,
         )
-    return (mcp_revision, extension_revision, host_revision, executor_revision, session_shape)
+    model_shape = None
+    if session_id and tool_search.load_config().enabled != "off":
+        try:
+            _, model, _, context_window = resolve_executor_config_for_session(session_id)
+            model_shape = (model, context_window)
+        except Exception:
+            pass
+    return (mcp_revision, extension_revision, host_revision, executor_revision, session_shape,
+            tool_search.config_revision(), model_shape)
 
 
 def _short_registry_revision(revision: Any) -> str:
@@ -3718,6 +3727,8 @@ async def build_combined_tool_registry_for_session(
         combined_tools = filter_tools_for_session(combined_tools, session_meta)
         combined_tools = inject_task_model_profiles(combined_tools)
     except Exception as exc:
+        if tool_search.load_config().enabled != "off":
+            raise RuntimeError("Cannot assemble deferred tools without session profile filtering") from exc
         logger.warning("subagent tool filtering failed and was skipped: %s", exc)
     finally:
         if timing_callback is not None:
@@ -3787,6 +3798,15 @@ async def build_combined_tool_registry_for_session(
             logger.warning("Duplicate tool registration was skipped: %s", exc)
         except ToolRegistryError as exc:
             logger.warning("Invalid tool registration was skipped: %s", exc)
+    try:
+        _, _, _, tool_context_window = resolve_executor_config_for_session(sid)
+    except Exception:
+        tool_context_window = None
+    tool_search.assemble(
+        registry,
+        context_window=tool_context_window,
+        pinned_names=agent_mcp.get_pinned_tool_names(),
+    )
     return registry
 
 
@@ -5393,6 +5413,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             elif (
                 isinstance(tool_cache, dict)
                 and tool_cache.get("definitions")
+                # A deferred catalog must never serve stale authorization,
+                # disabled-tool state or disclosure configuration.
+                and tool_search.load_config().enabled == "off"
+                and getattr(tool_cache.get("registry"), "disclosure", None) is None
                 and _schedule_tool_registry_revalidate(state, session_meta, tool_revision)
             ):
                 # Revision drifted mid-run (MCP server re-registered tools, a
@@ -5439,6 +5463,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     "version": 1,
                     "system_segments": list(static_segments),
                     "tools": combined_tools,
+                    "authorized_tools": [
+                        descriptor.openai_definition() for descriptor in tool_registry.descriptors()
+                        if descriptor.owner != "core.tool_search"
+                    ],
                     "_cache_revision": runtime_config_revision,
                 }
                 state["_last_prompt_runtime_config"] = last_prompt_runtime_config
@@ -7027,6 +7055,21 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     result["execution_react_iter"] = call_react_iter
                     return result
 
+                # Parse corruption before unwrapping. Keep the assistant's
+                # original call untouched; all execution policies see target.
+                if tool_name == "tool_call" and tool_registry.disclosure is not None:
+                    if isinstance(tool_args.get(_STREAM_CORRUPTED_ARGUMENTS_KEY), str):
+                        return short_circuit(_corrupted_stream_args_result(
+                            tool_name, tool_id, call.get("index"),
+                            corrupted_length=len(tool_args[_STREAM_CORRUPTED_ARGUMENTS_KEY]),
+                        ))
+                    try:
+                        call = tool_search.resolve_call(tool_registry, call)
+                    except ValueError as exc:
+                        return short_circuit(_blocked_tool_result(tool_name, tool_args, tool_id, str(exc)))
+                    tool_name, tool_args = call["name"], call["args"]
+                    tool_descriptor = tool_registry.resolve(tool_name)
+
                 if tool_name not in executable_tool_names:
                     return short_circuit(
                         _unknown_tool_result(tool_name, tool_args, tool_id)
@@ -7442,7 +7485,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     async def execute_closed_call() -> Any:
                         policy = _tool_steer_policy(
                             str(tc.get("name") or ""),
-                            tool_registry.resolve(str(tc.get("name") or "")),
+                            tool_search.call_descriptor(tool_registry, tc),
                         )
                         return await _await_steerable(
                             state,
@@ -7452,7 +7495,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             defer_steer=policy["interruptibility"] == "non_interruptible",
                         )
 
-                    early_descriptor = tool_registry.resolve(str(tc.get("name") or ""))
+                    early_descriptor = tool_search.call_descriptor(tool_registry, tc)
                     if early_descriptor is not None and early_descriptor.parallel_safe:
                         r = await execute_closed_call()
                     else:
@@ -7490,6 +7533,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if idx in early_tool_tasks:
                     return
                 tc = _early_tool_call_from_acc(idx)
+                # Bridges wait for the complete assistant turn. This also
+                # preserves interactive-batch validation before side effects.
+                if tc and tc.get("name") in tool_search.BRIDGE_NAMES:
+                    return
                 if not tc or not _can_execute_closed_stream_tool(
                     str(tc.get("name") or ""),
                     tool_registry.resolve(str(tc.get("name") or "")),
@@ -8594,6 +8641,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     str(state.pop("_output_continuation", ""))
                     + "\n\n模型输出仍达到长度上限，自动继续次数已用完。已保留全部收到的片段和工具参数草稿。"
                 )
+                state["_run_error"] = "模型输出仍达到长度上限，自动继续次数已用完。"
                 break
 
             if _has_invalid_tool_calls(turn.tool_calls):
@@ -8721,10 +8769,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_calls_list
                 and any(
                     bool(
-                        tool_registry.resolve(str((tc or {}).get("name") or ""))
-                        and tool_registry.require(
-                            str((tc or {}).get("name") or "")
-                        ).interactive
+                        tool_search.call_descriptor(tool_registry, tc or {})
+                        and tool_search.call_descriptor(tool_registry, tc or {}).interactive
                     )
                     for tc in tool_calls_list
                 )
@@ -8913,7 +8959,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         _task.cancel()
                 def is_read_only_tool(tool_call: Dict[str, Any]) -> bool:
                     n = tool_call.get("name") or ""
-                    descriptor = tool_registry.resolve(str(n))
+                    descriptor = tool_search.call_descriptor(tool_registry, tool_call)
                     return bool(descriptor and descriptor.parallel_safe)
 
                 async def run_group(group_calls: List[Dict[str, Any]]) -> List[Any]:
@@ -8930,7 +8976,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     async def run_one_with_tc(tc: Dict[str, Any]):
                         try:
                             tool_name = str((tc or {}).get("name") or "")
-                            descriptor = tool_registry.resolve(tool_name)
+                            descriptor = tool_search.call_descriptor(tool_registry, tc)
                             if descriptor is not None and descriptor.pressure_limited:
                                 async with local_pressure_semaphore:
                                     r = await _await_steerable(state, execute_one(tc), emit, "tool")
@@ -9048,7 +9094,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         "tool",
                         defer_steer=_tool_steer_policy(
                             str(tool_call.get("name") or ""),
-                            tool_registry.resolve(str(tool_call.get("name") or "")),
+                            tool_search.call_descriptor(tool_registry, tool_call),
                         )["interruptibility"] == "non_interruptible",
                     )
                     write_result = await checkpoint_completed_tool_result(write_result)
@@ -9548,7 +9594,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             {
                 "type": "process_metrics",
                 "duration_ms": dur_ms,
-                "react_loops": int(iter_count),
+                "react_loops": int(iter_count - iter_offset),
                 "tool_calls": tool_n,
                 "tool_failures": fail_n,
             },
@@ -10012,6 +10058,57 @@ def finish(state: State) -> State:
 
 
 # ==================== 流式执行辅助 ====================
+def release_session_followup_claim(sid: str, pending_id: str, owner: str, *, committed: bool = False) -> None:
+    """A stop during prompt hooks must not leave an unstarted turn claimed."""
+    if not pending_id:
+        return
+    with _STEER_LOCK, _steer_transaction(sid):
+        rows = [_normalize_steer_item(row) for row in _load_steer_queue_locked(sid)]
+        for row in rows:
+            if (row["id"] == pending_id and row.get("after_turn")
+                    and row["state"] == "claimed" and row.get("claimed_by") == owner):
+                row["state"] = "consumed" if committed else "queued"
+                row["claimed_by"] = ""
+                row["claimed_at"] = 0
+                row["version"] += 1
+                row["updated_at"] = time.time()
+                _save_steer_queue_locked(sid, _trim_steer_rows(rows))
+                break
+
+
+def _release_pending_queued_turn(state: State) -> None:
+    release_session_followup_claim(
+        state["session_id"], state.pop("_pending_queued_turn_id", ""),
+        str(state.get("_runtime_v2_run_id") or ""),
+        committed=state.pop("_queued_turn_committed", False),
+    )
+
+
+async def _continue_with_queued_turn(state: State, emit, should_stop=None) -> bool:
+    """Keep the run and transport alive after a complete, persisted answer."""
+    sid = state["session_id"]
+    if (state.get("_run_error") or state.get("react_limit_reached") or state.get("_queue_continuation_blocked")
+            or not state.get("_queue_can_continue", True)
+            or not _state_run_has_write_fence(state)
+            or (callable(getattr(session_manager, "is_interrupt_requested", None))
+                and _state_interrupt_requested(state))
+            or (should_stop and should_stop(sid))):
+        return False
+    if not await _consume_steer_messages(state, emit=emit, after_turn=True):
+        return False
+    state["_queued_react_iter_offset"] = int(state.get("_current_react_iter") or 0)
+    state["final_response"] = ""
+    state["final_printed"] = False
+    for key in ("_final_event_prepared", "_prompt_turn_cache", "_output_continuation"):
+        state.pop(key, None)
+    state["final_result_retries"] = state["empty_final_retries"] = 0
+    state["repeat_count"] = 0
+    state["last_response_content"] = state["last_tool_calls_signature"] = None
+    state["reminder_inserted"] = False
+    _reset_steer_control(state)
+    return True
+
+
 async def astream_events(
     user_input: str,
     session_id: str = None,

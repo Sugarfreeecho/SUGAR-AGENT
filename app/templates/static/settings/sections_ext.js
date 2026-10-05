@@ -243,9 +243,10 @@
     zhSub: 'MCP 服务器为 Agent 提供额外工具（浏览器、文档库等）。', enSub: 'MCP servers give the agent extra tools.',
     async load() {
       const tools = await api('/api/mcp/tools');
+      const search = await api('/api/tool_search/config');
       let config = { text: '', path: '' };
       try { config = await api('/api/mcp_config'); } catch (e) { /* ignore */ }
-      return { tools: tools.tools || [], servers: tools.servers || [], config };
+      return { tools: tools.tools || [], servers: tools.servers || [], config, search };
     },
     render(d) {
       const byServer = Object.create(null);
@@ -256,12 +257,16 @@
       });
       const serverRows = servers.map((s) => {
         const tools = byServer[s.server] || [];
+        const managed = !!s.managed_by;
+        const managedLabel = s.managed_by === 'computer-use'
+          ? t('由 Computer Use 管理', 'Managed by Computer Use') : t('由宿主管理', 'Managed by host');
         const head = W.lrow(
           esc(s.server),
           t('传输', 'transport') + ' ' + esc(s.transport || '—') + ' · ' + tools.length + t(' 个工具', ' tools') +
+            (managed ? ' · ' + managedLabel : '') +
             (s.error ? ' · <span class="st-muted">' + esc(s.error) + '</span>' : ''),
           (s.connected ? W.status('ok', t('已连接', 'Connected')) : W.status('warn', t('未连接', 'Not connected'))) +
-          (s.discovered === false || !tools.length
+          (!managed && (s.discovered === false || !tools.length)
             ? '<button type="button" class="st-btn sm primary" data-act="mcp-register" data-id="' + esc(s.server) + '">' + t('注册', 'Register') + '</button>'
             : '')
         );
@@ -269,17 +274,42 @@
           tipIf('<span class="st-mono">' + esc(tool.function_name) + '</span>',
             tool.description || tool.tool_name || ''),
           '',
-          W.sw('mcp:' + tool.function_name, tool.enabled !== false)
+          tool.managed_by
+            ? W.status(tool.enabled !== false ? 'ok' : 'warn', tool.enabled !== false ? t('已启用', 'Enabled') : t('已禁用', 'Disabled'))
+            : W.sw('mcp:' + tool.function_name, tool.enabled !== false) +
+              '<button type="button" class="st-btn sm" data-act="mcp-pin" data-id="' + esc(tool.function_name) +
+              '" data-server="' + esc(s.server) + '" data-pinned="' + (tool.pinned ? '1' : '0') + '">' +
+              (tool.pinned ? t('常驻 ✓', 'Pinned ✓') : t('常驻', 'Pin')) + '</button>'
         )).join('');
         return '<section class="st-mcp-group" data-mcp-server="' + esc(s.server) + '">' + head +
-          '<div class="st-mcp-tools">' + (toolRows || W.empty(t('该服务器尚未注册工具', 'No tools registered for this server'))) + '</div></section>';
+          (!managed && tools.length ? '<div class="st-row-actions">' +
+            '<button type="button" class="st-btn sm" data-act="mcp-enable-group" data-id="' + esc(s.server) + '">' + t('全部启用', 'Enable all') + '</button>' +
+            '<button type="button" class="st-btn sm" data-act="mcp-disable-group" data-id="' + esc(s.server) + '">' + t('全部停用', 'Disable all') + '</button></div>' : '') +
+          (s.managed_by === 'computer-use' ? W.note(t(
+            '在聊天页「执行 → Computer Use」统一开启、关闭或切换接入方式；这里显示各工具的当前状态。',
+            'Enable, disable or switch providers in the chat’s Execution → Computer Use panel. This list shows each tool’s current status.'
+          )) : '') +
+          '<div class="st-mcp-tools">' + (toolRows || W.empty(managed
+            ? managedLabel : t('该服务器尚未注册工具', 'No tools registered for this server'))) + '</div></section>';
       }).join('');
       const config = parseConfig(d.config.text);
       const advanced = '<textarea class="st-input" data-field="mcp-json" spellcheck="false">' +
         esc(JSON.stringify(config || {}, null, 2)) + '</textarea>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;padding-top:10px">' +
         W.btn(t('重新加载', 'Reload'), 'mcp-reload') + W.btn(t('保存并重载', 'Save & reload'), 'mcp-save-json', 'primary') + '</div>';
-      return W.card(t('添加服务器', 'Add server'), t('两种方式任选其一', 'Either way works'),
+      const searchConfig = d.search.config;
+      const mode = '<select class="st-input" data-field="tool-search-mode">' + ['on', 'auto', 'off'].map((value) =>
+        '<option value="' + value + '"' + (searchConfig.enabled === value ? ' selected' : '') + '>' +
+        ({ on: t('开启', 'On'), auto: t('自动', 'Auto'), off: t('关闭', 'Off') })[value] + '</option>').join('') + '</select>';
+      return W.card(t('工具按需披露', 'Tool disclosure'), t('保留常用工具，其他工具通过搜索调用', 'Keep core tools; find external tools when needed'),
+          W.row(t('模式', 'Mode'), t('关闭后恢复完整工具清单', 'Off restores the full tool catalog'), mode) +
+          W.row(t('上下文占比阈值', 'Context threshold'), t('自动模式，百分比', 'Percentage in Auto mode'),
+            '<input class="st-input" type="number" min="0.1" max="100" step="0.1" data-field="tool-search-pct" value="' + esc(searchConfig.threshold_pct) + '">') +
+          W.row(t('工具定义预算', 'Schema budget'), t('自动模式达到任一阈值即启用', 'Auto activates at either threshold'),
+            '<input class="st-input" type="number" min="1" data-field="tool-search-tokens" value="' + esc(searchConfig.threshold_tokens) + '">') +
+          (d.search.environment_override ? W.note(t('环境变量覆盖：', 'Environment override: ') + esc(d.search.environment_override)) : ''),
+          W.btn(t('保存', 'Save'), 'tool-search-save', 'primary')) +
+        W.card(t('添加服务器', 'Add server'), t('两种方式任选其一', 'Either way works'),
           W.row(t('命令方式', 'Command'), t('本地进程，例如 npx 启动的 MCP', 'Local process'),
             '<input class="st-input" data-field="mcp-cmd" style="width:192px" placeholder="npx.cmd -y …">' +
             '<button class="st-btn sm" type="button" data-browse-kind="file" data-browse-field="mcp-cmd" data-browse-command="1">' + t('选择程序', 'Choose program') + '</button>' +
@@ -301,6 +331,40 @@
         .catch((err) => { reportError(err); reload(); });
     },
     onAction(act, el) {
+      if (act === 'tool-search-save') {
+        const value = (key) => document.querySelector('[data-field="' + key + '"]').value;
+        const config = Object.assign({}, A.__toolSearchConfig, {
+          enabled: value('tool-search-mode'), threshold_pct: Number(value('tool-search-pct')),
+          threshold_tokens: Number(value('tool-search-tokens')),
+        });
+        api('/api/tool_search/config', { method: 'POST', body: config })
+          .then(() => { toast(t('已保存，下一次请求生效', 'Saved; applies to the next request')); reload(); })
+          .catch(reportError);
+        return;
+      }
+      if (act === 'mcp-enable-group' || act === 'mcp-disable-group') {
+        api('/api/mcp/servers/' + encodeURIComponent(el.dataset.id) + '/tools/enabled', {
+          method: 'POST', body: { enabled: act === 'mcp-enable-group' },
+        }).then(() => { toast(t('已更新', 'Updated')); reload(); }).catch(reportError);
+        return;
+      }
+      if (act === 'mcp-pin') {
+        const config = parseConfig(A.__mcpText);
+        const servers = config && (config.servers || config.mcpServers);
+        const server = servers && servers[el.dataset.server];
+        if (!server) { toast(t('请在该插件的 MCP 配置中设置常驻工具', 'Set pinned tools in the plugin MCP configuration'), true); return; }
+        server.tools = server.tools || {};
+        const pins = new Set(server.tools.pin || []);
+        if (el.dataset.pinned === '1') {
+          const tool = (A.__mcpTools || []).find((row) => row.function_name === el.dataset.id);
+          pins.delete(el.dataset.id);
+          if (tool) pins.delete(tool.tool_name);
+        } else pins.add(el.dataset.id);
+        server.tools.pin = Array.from(pins);
+        api('/api/mcp_config', { method: 'POST', body: { text: JSON.stringify(config, null, 2) } })
+          .then(() => { toast(t('已更新常驻配置', 'Pin updated')); reload(); }).catch(reportError);
+        return;
+      }
       if (act === 'mcp-register') {
         api('/api/mcp/servers/' + encodeURIComponent(el.dataset.id) + '/register', { method: 'POST', body: {} })
           .then(() => { toast(t('已注册', 'Registered')); reload(); })
@@ -344,6 +408,10 @@
           .catch(reportError);
       }
     },
-    after(root, d) { A.__mcpText = (d && d.config && d.config.text) || ''; },
+    after(root, d) {
+      A.__mcpText = (d && d.config && d.config.text) || '';
+      A.__mcpTools = d.tools || [];
+      A.__toolSearchConfig = d.search.config;
+    },
   });
 })();
