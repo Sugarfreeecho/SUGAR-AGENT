@@ -246,17 +246,6 @@ function normalizeBranchFinalText(text) {
     return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-function branchFinalTextMatches(eventContent, expectedText) {
-    var a = normalizeBranchFinalText(eventContent);
-    var b = normalizeBranchFinalText(expectedText);
-    if (!a || !b) return false;
-    if (a === b) return true;
-    if (a.length > 80 && b.length > 80) {
-        return a.indexOf(b.slice(0, 80)) >= 0 || b.indexOf(a.slice(0, 80)) >= 0;
-    }
-    return false;
-}
-
 function copyMessageText(wrap) {
     const msg = wrap && wrap.querySelector('.message');
     const plain = msg ? (msg.innerText || '') : '';

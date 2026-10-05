@@ -61,7 +61,6 @@ from agent_openai import (
     parse_assistant_message,
     refresh_request_recovery_config_from_env,
     run_chat_completion_stream_worker,
-    single_turn_text_completion,
 )
 from agent_subagent_results import format_pending_subagent_notification
 from agent_tokenizer import count_message_tokens
@@ -1190,13 +1189,6 @@ executor_http_client = RequestResponseLogger(
 
 MAX_OUTPUT_TOKENS = model_profiles._safe_int(_INITIAL_MODEL_PROFILE.get("max_output_tokens"), 8192)
 
-
-def _openai_sdk_base_url(for_local: bool) -> Optional[str]:
-    if for_local:
-        return LOCAL_LLM_HOST.rstrip("/") + "/v1"
-    if OPENAI_BASE_URL:
-        return OPENAI_BASE_URL.rstrip("/")
-    return None
 
 
 def _redact_runtime_log_text(value: Any) -> str:
@@ -2689,23 +2681,6 @@ def executor_chat_complete_stream(
             pass
     return text
 
-
-def executor_text_and_usage(
-    prompt: str,
-    session_id: str = "",
-) -> Tuple[str, Optional[Dict[str, int]]]:
-    """与 executor_text_complete 相同，返回 usage。"""
-    result = executor_one_shot_complete(
-        [UserMessage(content=prompt)],
-        session_id=session_id,
-        purpose=LLMRequestPurpose.SUMMARY,
-        temperature=EXECUTOR_TEMPERATURE,
-    )
-    usage = result.get("usage")
-    return (
-        str(result.get("text") or "").strip(),
-        dict(usage) if isinstance(usage, dict) else None,
-    )
 
 # ==================== 从 ui_events 还原主对话链（与 SSE 同源）====================
 def rebuild_core_messages_from_ui_events(events: List[dict]) -> List:

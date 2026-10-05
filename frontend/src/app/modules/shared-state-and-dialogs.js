@@ -187,23 +187,6 @@ function markSessionResultComplete(sessionId, status, runId) {
     if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
 }
 
-function splitUserMessageVisualLines(text) {
-    var raw = text == null ? '' : String(text);
-    var physical = raw.split('\n');
-    var out = [];
-    for (var i = 0; i < physical.length; i += 1) {
-        var line = physical[i];
-        if (line.length === 0) {
-            out.push('');
-            continue;
-        }
-        for (var j = 0; j < line.length; j += USER_MESSAGE_VIRTUAL_LINE_CHARS) {
-            out.push(line.slice(j, j + USER_MESSAGE_VIRTUAL_LINE_CHARS));
-        }
-    }
-    return out;
-}
-
 function userMessageShouldCollapse(text) {
     return false;
 }

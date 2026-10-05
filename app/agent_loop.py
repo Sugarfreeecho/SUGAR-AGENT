@@ -30,7 +30,6 @@ from agent_harness import (
     EXECUTOR_TEMPERATURE,
     EXECUTOR_EXTRA_BODY,
     MAX_OUTPUT_TOKENS,
-    executor_text_and_usage,
     load_prompt_template,
     session_manager,
     logger,

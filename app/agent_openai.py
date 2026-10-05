@@ -3292,35 +3292,3 @@ def _buffered_chat_completion_via_stream(
         usage=usage_payload,
     )
 
-
-def single_turn_text_completion(
-    client: OpenAI,
-    model: str,
-    user_text: str,
-    *,
-    temperature: float,
-    max_tokens: int,
-    text_validator: Optional[Callable[[str], bool]] = None,
-) -> Tuple[str, Optional[Dict[str, int]]]:
-    """Single buffered text completion used by titles and summaries."""
-    def _response_validator(response: Any) -> bool:
-        choices = getattr(response, "choices", None) or []
-        if not choices or getattr(choices[0], "message", None) is None:
-            return False
-        text = _normalize_content_text(getattr(choices[0].message, "content", ""))
-        if not text.strip():
-            return False
-        return bool(text_validator(text)) if text_validator is not None else True
-
-    response = chat_completion(
-        client,
-        model,
-        [UserMessage(content=user_text)],
-        temperature=temperature,
-        max_tokens=max_tokens,
-        response_validator=_response_validator,
-    )
-    text = _normalize_content_text(getattr(response.choices[0].message, "content", ""))
-    usage_obj = getattr(response, "usage", None)
-    usage = extract_usage_dict(usage_obj) if usage_obj is not None else None
-    return text, usage

@@ -361,15 +361,3 @@ function dockActionResizeFloat(sessionId, paneId, rect, seed, area) {
 function dockActionResizeSplit(sessionId, splitId, sizes, seed, area) {
     return dockSeat(sessionId, (surface) => dockAdvance(surface, () => dockPlanResizeSplit(splitId, sizes, DOCK_PRODUCT_MIN_FRACTION), seed), area);
 }
-
-/** Step a surface through the history in one direction. */
-function dockActionStep(sessionId, direction, area) {
-    return dockSeat(sessionId, (surface) => {
-        const moved = direction === 'redo'
-            ? dockStepForward(surface.history, surface.layout)
-            : dockStepBack(surface.history, surface.layout);
-        if (moved === undefined) return surface;
-        return { layout: moved.state, history: moved.history, minted: surface.minted };
-    }, area);
-}
-
