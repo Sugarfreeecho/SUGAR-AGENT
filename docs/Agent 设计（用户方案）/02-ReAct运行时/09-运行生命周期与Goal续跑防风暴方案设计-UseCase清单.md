@@ -1,6 +1,6 @@
 # 运行生命周期与 Goal 续跑防风暴 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-30 v3（覆盖至：当前工作区；Goal 只复制目标子状态）
+- 版本：2026-10-05 v4（覆盖至：当前工作区；Goal 失败即停与全窗口轮次回溯）
 - 用途：逐条审查 run 身份、终态落盘、看门狗隔离、Goal 续跑租约与失败熔断。
 - 适用实现：`app/agent_loop.py`、`app/agent_harness.py`、`app/session_lifecycle.py`、`app/main.py`、`app/webui.py`、`app/agent_goal.py`、`app/execution_metrics.py`、`app/runtime_observability.py`、`plugins/agent-goal/runner.py`、`scripts/subagent_ui_verify.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -86,6 +86,11 @@ run 从“取得执行权”到“唯一终态”的完整协议，也是 Goal �
 - **规则与边界**：只读 view 不得被修改；返回 Goal 的嵌套字典/列表仍与共享快照隔离，计算字段在副本上装配。快照丢失/过期仍走一致性恢复。该修改不改变 discovery 频率、续跑租约、所有权、失败退避或 continuation 判定，也未合并 runner 中的重复 get 调用。
 - **依据**：`app/agent_goal.py::GoalManager.get`；`tests/test_agent_goal.py`（无关字段禁止 deepcopy、嵌套返回值隔离、无 Goal 与快照丢失恢复）；快照契约见 [08/02 · UC-8B6](../08-会话存储RuntimeV2/02-投影回放与快照方案设计-UseCase清单.md)。
 
+### UC-2I13 Goal 失败即停与全窗口轮次回溯（2026-10-05）
+- **触发**：Goal 自动续跑遇到 `failed` / `error`；事件日志超过尾部 2 MiB / 4000 条窗口；ReAct 终止错误。
+- **预期现象**：失败/错误首次发生即暂停并保存错误（清空重试时间，等用户恢复）；正常到达 ReAct 迭代上限仍允许续跑；API 错误/上下文恢复失败/输出长度续接耗尽/无效工具调用重试耗尽统一结算 `run_failed`（保留错误卡片与 final，不消费排队输入、不触发 Stop Hook）；续跑查找用户轮次在快速路径未命中时按事件序号分批向前回溯（追问不切换用户轮次）；调度器回收带失败状态的旧续跑按失败结算（失败优先于残留的 ReAct 上限标记）。
+- **依据**：`agent_goal.py`、`plugins/agent-goal/runner.py`、`agent_loop.py`；回归 `tests/test_agent_goal.py`、`tests/test_goal_runner.py`。
+
 ## 3. 事件与状态不变式
 
 1. 一个 run 的控制身份始终是 `(session_id, run_id)`；reason 不能作为身份。
@@ -133,6 +138,7 @@ run 从“取得执行权”到“唯一终态”的完整协议，也是 Goal �
 
 ## 6. 版本记录
 
+- 2026-10-05 v4：新增 UC-2I13——Goal 失败/错误首次发生即暂停；续跑用户轮次在尾部窗口未命中时按事件序号分批回溯；终止错误统一结算 `run_failed`。
 - 2026-09-30 v3：新增 UC-2I12，Goal 查询从整份投影 deepcopy 改为一致只读 view + Goal 子状态 deepcopy；补隔离/恢复验收并修正指标定时器失败时的锁外补刷。
 - 2026-09-20 v2：补录会话 5cd95437 的第二 WebUI 误接管证据链；新增跨进程 exact-run 租约、共享心跳直接读盘、孤儿宽限保护及验证服务 `WORK_DIR` 隔离契约。
 - 2026-09-20 v1：依据中断风暴排查新增；记录 run 级看门狗、终态兜底、共享心跳、Goal 租约/对账/熔断及 UI 状态语义，并校正历史统计口径。

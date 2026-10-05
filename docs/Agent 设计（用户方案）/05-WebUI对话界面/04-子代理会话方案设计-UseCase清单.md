@@ -1,6 +1,6 @@
 # 子代理会话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-28 v7（子代理执行活跃性与生命周期帧；覆盖至：当前工作区）
+- 版本：2026-10-05 v8（覆盖至：当前工作区；子代理胶囊交互）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`frontend/src/app/modules/ui-slot-registry.js`、`state/subagent-catalog-store.js`、`state/subagent-addressing.js`、`modules/subagent-frames.js`、`state/subagent-ui-decisions.js`、`modules/subagent-catalog-ui.js`、`modules/subagent-composer-ui.js`、`tests/subagent-ui-foundation.test.mjs`；接线点 `index.js` / `message-rendering.js` / `session-management.js` / `sse-handling.js` / `styles/app.css` 追加块。目录数据链路后端零改动；子代理执行活跃性与子会话流由 `app/webui.py` 提供（2026-09-28 起，见 UC-5D17）。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -145,6 +145,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-05 v8：会话标题后子代理胶囊支持悬停与点击打开；悬停打开后点击不再关闭清单，外部点击与 Esc 仍可关闭。
 - 2026-09-28 v7：新增 UC-5D17《运行中的子代理即活跃子会话》与 UC-5D18《生命周期帧先注册后运行》——子代理执行活跃性接入状态/忙碌守卫与子会话流（steer 顺序消费）；`subagent_created` 先注册 pending；目录刷新节流；断言数 49→50；“后端零改动”口径按活跃性链路修正。
 - 2026-09-25 v6：新增 UC-5D16《侧栏高亮跟随根主会话》——查看子代理会话时，侧栏保持根主会话选中（`subagentAddressing.sidebarSessionId`）；复核 UC-5D5「未覆盖子代理的成员帧登记」与实现一致；单元断言数 44→49。
 - 2026-09-20 v5：补录交叉引用——子代理任务的生命周期与事件循环隔离（后台托管、跨循环等待/取消）见 ../02-ReAct运行时/10；本文件界面内容与结论不变。

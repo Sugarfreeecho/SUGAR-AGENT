@@ -1,6 +1,6 @@
 # 设置中心（/settings）· 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-03 v1（覆盖至：当前工作区；状态 ✅ 已实现——待提交）
+- 版本：2026-10-05 v2（覆盖至：当前工作区；遮罩/Esc 层级与 MCP 工具披露）
 - 用途：逐条审查（四字段格式）；核对散落在多处的设置入口是否统一收敛为一个「设置中心」页面，以及分区注册、保存语义、缓存与脏数据保护的边界。
 - 适用实现：`app/templates/settings_center.html`（无构建步骤的静态页）、`app/templates/static/settings/{core.js,sections_basic.js,sections_ext.js,sections_ops.js,plugin_sections.js,package_import.js,settings.css}`、`app/webui.py`（静态服务与设置相关路由）、`app/plugins/settings.py`（插件设置 schema）、`frontend/src/app/modules/settings.js`（聊天页齿轮入口与浮层接线）。
 - 上级：`00-WebUI对话界面整体设计.md`｜相关：`06-会话档案与技能面板方案设计-UseCase清单.md`（模型档案管理）、[`../../settings_plugin_api.md`](../../settings_plugin_api.md)（插件设置页签声明接口）、`../../settings_hub_adaptation_plan.md`（参考实现学习与适配方案）、`../../settings_center_verification.md`（逐分区验证报告）。
@@ -67,4 +67,5 @@
 
 ## 5. 版本记录
 
+- 2026-10-05 v2：内编辑窗口支持遮罩关闭、Esc 优先关确认框/编辑窗（遮罩关闭不触发保存/确认）；MCP 页新增「工具按需披露」开关与按服务器批量启停/常驻按钮。
 - 2026-10-03 v1：拆分首版——设置中心（/settings）落地：5 入口收敛单页、分区注册表与插件设置声明、只提交改动的保存语义（.env 原子写）、搜索/缓存/脏数据保护；旧模板与加载器移除，`/setup` 向导与旧路由深链兼容不变。待提交后补提交号。

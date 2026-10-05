@@ -1,6 +1,6 @@
 # 启动与进程卫生 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-03 v1（覆盖至：当前工作区；状态 ✅ 已实现——待提交）
+- 版本：2026-10-05 v2（覆盖至：当前工作区；活动时间口径与执行面板初始化幂等）
 - 用途：逐条审查（四字段格式）；核对"启动依赖自检、子进程控制台窗口统一收敛、根目录状态文件迁移"三类进程/启动卫生机制的对外行为与边界。
 - 适用实现：`app/check_requirements.py`、`RUN.bat` / `RUN.sh`、`app/proc_flags.py`、`scripts/audit_subprocess_flags.py`、`app/platform_lifecycle.py`、`app/tray_launcher.py` 及全仓派生点（`agent_tools` / `agent_subagent` / `runtime_observability` / `agent_updater` / `desktop_notify` / `path_picker_util` / `hooks/executor` / `security/egress_guard` / `plugins/installer` / `plugins/runtime` / `plugins/change-review/store`）、`.gitignore`、`pytest.ini`。
 - 上级：`00-横切能力整体设计.md`｜相关：`05-WebUI对话界面/07-通知存在性与恢复方案设计-UseCase清单.md`（托盘启动链）、`06-能力扩展加载/05-Skills发现与激活方案设计-UseCase清单.md`（技能状态路径）、`../06-能力扩展加载/06-MCP接入与工具池方案设计-UseCase清单.md`（MCP 工具状态路径）。
@@ -31,6 +31,12 @@
 - **规则与边界**：正在运行的实例需重启后使用新路径；重启前若旧实例写回根目录文件，新版本不覆盖 `.sugaragent/` 中状态，可手动删除残留。
 - **依据**：`agent_tools.py`（SKILL_STATE_PATH）、`agent_mcp.py`（_MCP_TOOLS_STATE_PATH）、`pytest.ini`、`mcp_servers.json`、`.gitignore`；回归 `tests/test_sugaragent_state_paths.py`、`tests/test_mcp_state_read_failures.py`。
 
+### UC-9E4 会话活动时间口径与执行面板初始化幂等（2026-10-05 补）
+- **触发**：宿主启动扫描；会话索引重建（mtime 提示有新增时）。
+- **预期现象**：执行面板初始化幂等（已有状态不再改写、revision 不随重启递增；`recover()` 仍每次执行）；活动时间回填为"最后一条非控制事件"时间（控制类事件显式列举：扩展命名空间状态、插件清单/重载等不计入）；日志不可解析时退回 mtime 口径；尾部仅控制事件时保留已存活动时间。
+- **规则与边界**：错误口径的索引无需手工修复（按新口径重算自愈）；全量重建约 0.5s（仅 mtime 新于已存活动时间的会话触发尾扫）。
+- **依据**：`execution_services/notifications.py`、`session_lifecycle.py`、`agent_harness.py::refresh_sessions_index_from_disk`；回归 `tests/test_session_index_startup_rebuild.py`、`tests/test_execution_panel_bootstrap.py`。
+
 ## 3. 边界
 
 - 三条机制都保持"非 Windows / 常规环境零额外行为"：helper 在非 Windows 返回 0；自检只影响启动路径；状态目录只改默认路径与迁移。
@@ -46,4 +52,5 @@
 
 ## 5. 版本记录
 
+- 2026-10-05 v2：新增 UC-9E4——启动扫描幂等（不污染活动时间）、活动时间改事件感知（控制事件显式排除）、索引自愈。
 - 2026-10-03 v1：拆分首版——启动依赖自检（每次真实校验 + 缺失补装、~2.3s 快检）、隐藏子进程控制台统一收敛（`proc_flags` + 全仓巡检 + RUN 自适应隐藏）、根目录状态/临时文件迁入 `.sugaragent`（自动迁移与失败降级）。待提交后补提交号。

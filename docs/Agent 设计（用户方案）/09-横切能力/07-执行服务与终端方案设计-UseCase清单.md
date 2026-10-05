@@ -1,6 +1,6 @@
 # 执行服务与终端 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-04 v1（覆盖至：当前工作区；执行服务 / 持久 PTY / 执行日志与恢复）
+- 版本：2026-10-05 v2（覆盖至：当前工作区；执行回执与证据链（投递≠生效））
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/execution_services/**`（jobs / terminals / shell / computer / integration / notifications）、`app/runtime_v2/execution_journal.py`、`plugins/execution-tools/**`、`plugins/computer-use/**`、`frontend/src/app/terminal-runtime.js`。
 - 上级：`00-横切能力整体设计.md`；对接：`../02-ReAct运行时`（工具循环）、`../06-能力扩展加载`（插件宿主）、`../08-会话存储RuntimeV2`（执行日志投影）。
@@ -40,6 +40,12 @@ DSH 式"执行服务"：后台作业、持久 PTY 终端与执行日志，独立
 - **预期现象**：插件拥有一个可选 Cua 提供商（截图/输入动作走其契约）；未安装/未配置时不可见且不影响既有工具面。
 - **依据**：`plugins/computer-use/host.py`；回归 `tests/test_computer_use_provider.py`。
 
+### UC-9F6 执行回执与证据链（投递≠生效，2026-10-05 补）
+- **触发**：CUA 像素动作、终端 SIGINT/取消、后台 send 完成、工具结果状态判定。
+- **预期现象**：所有"投递"型回执显示 DELIVERY ONLY 及原始验证状态；窗口动作可选 `_verify`（同 pid/window/session 检查，默认不返回图片、等 1s，仅稳定 satisfied 算完成）；CUA 状态 API 带 `recording_evidence`（policy_revision / control_tracked / acknowledged_enabled / owner / counter 下限）——本地控制证据而非缓存的"实时录制状态"；终端 SIGINT 回执区分 `delivered` / `interruptVerified` / `forced`（PTY Ctrl+C → 受控子进程终止兜底），无独立子进程的命令保留未确认（`no_owned_child_processes`）；后台 send 回执带 `completion_scope=terminal_send` + `command_state`（`inferred_idle`/`timeout` = 命令状态未知）。
+- **规则与边界**：不伪造实时状态、不自动重放输入、不自动升级前台；截图 hash 不变不判"投递失败"；关键显示值以 `_verify` + 新截图双通道核对；工具结果截断/超时判定优先结构化字段（不扫描正文关键词）。
+- **依据**：`execution_services/{computer,computer_policy,terminals}.py`、`plugins/computer-use/host.py`；回归 `tests/test_computer_use_feedback.py`、`tests/test_terminal_regressions.py`、`tests/test_tool_result_status_regressions.py`。
+
 ## 3. 边界
 
 - 执行服务不替代会话授权与审批：受信 session 之外的工具调用仍走既有权限路径；
@@ -48,4 +54,5 @@ DSH 式"执行服务"：后台作业、持久 PTY 终端与执行日志，独立
 
 ## 4. 版本记录
 
+- 2026-10-05 v2：新增 UC-9F6《执行回执与证据链》——DELIVERY ONLY/`_verify`/`recording_evidence`/SIGINT 三级回执/`completion_scope`；同类修复见审查修复 changelog。
 - 2026-10-04 v1：初版——UC-9F1（后台作业）、UC-9F2（持久 PTY）、UC-9F3（执行日志 journal）、UC-9F4（执行恢复）、UC-9F5（computer-use 可选供应商）。

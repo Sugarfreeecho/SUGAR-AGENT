@@ -1,6 +1,6 @@
 # 改动审查 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-02（覆盖至：当前工作区；关联区域 = 当前轮「用户问题 → final 卡片」，过程框收起也保持关联）
+- 版本：2026-10-05（覆盖至：当前工作区；详情节点复用与轮次归属）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/change-review`（store.py / host.py / runtime.py / web/change-review.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 08；配套通则见 01–07）
@@ -396,3 +396,4 @@
 | UC-601~609 | `tests/js/change_review_stats_runtime.mjs`、`change_review_visibility_runtime.mjs`、`test_plugin_ui_frontend.py` |
 
 - 2026-10-04：文件条目上下留白与单行计划条目对齐（`font: inherit` + `line-height: normal`，移除旧折叠箭头样式）；条目悬停说明改走统一 `setUiHoverTip`（配合 05/13·UC-5M15）。
+- 2026-10-05：修改历史复用未变化的文件详情节点；需重建的展开项挂回页面后再渲染差分（避免空白）；保留查看轮次、新增改动归入实际最新轮次。
