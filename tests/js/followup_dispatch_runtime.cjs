@@ -804,7 +804,97 @@ function testDropCaretKeepsASingleIndicator() {
   assert.strictEqual(second.classList.values().length, 0, 'the caret is dropped when the drag ends');
 }
 
+async function testQueuedTurnsPublishInOrderWithoutEndingTheRun() {
+  const queue = [{id: 'a', text: 'a', awaitingRunEnd: true}, {id: 'b', text: 'b', awaitingRunEnd: true}];
+  const requests = [];
+  let releaseFirst;
+  const ctx = context({
+    followupDispatchChain: Object.create(null),
+    isSessionRunning: () => true,
+    isServerStreamActive: () => true,
+    isSessionStreamStopSuppressed: () => false,
+    getFollowupQueue: () => queue,
+    getSessionRunState: () => ({runId: 'same-run'}),
+    persistFollowupQueue() {}, renderFollowupQueue() {},
+    takeFollowupItem: (sid, id) => queue.splice(queue.findIndex(item => item.id === id), 1),
+    fetch: async (url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      if (requests.length === 1) await new Promise(resolve => { releaseFirst = resolve; });
+      return {ok: true, json: async () => ({ok: true, items: body.items.map(item => ({
+        id: 'server-' + item.message, client_id: item.client_id, state: 'queued', after_turn: true,
+      }))})};
+    },
+  });
+  vm.runInContext(between('function withFollowupDispatch', 'function shouldApplySseSeqFilter'), ctx);
+  vm.runInContext(between('function publishFollowupQueueToRun', 'function appendFollowupQueueItem'), ctx);
+  vm.runInContext(between('function moveFollowupQueueItem', 'function focusFollowupQueueGrip'), ctx);
+  const first = ctx.publishFollowupQueueToRun('s');
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(requests.length, 1);
+  const clientId = queue[0].clientId;
+  ctx.moveFollowupQueueItem('s', 'b', 'a', 'before');
+  releaseFirst();
+  await first;
+  await ctx.withFollowupDispatch('s', async () => {});
+  assert.deepStrictEqual(requests.map(request => request.items.map(item => item.message)), [['a', 'b'], ['b', 'a']]);
+  assert.strictEqual(queue[1].clientId, clientId, 'reorder/retries must reuse durable operation identities');
+  assert.ok(queue.every(item => item.serverQueued && !item.status), 'server-queued turns remain sortable until claimed');
+  assert.ok(requests.every(request => request.source_run_id === 'same-run'));
+}
+
+async function testQueuedTurnWithdrawalWaitsForItsRegistration() {
+  const queue = [{id: 'a', text: 'a', awaitingRunEnd: true}];
+  let release;
+  const cancellations = [];
+  const restored = [];
+  const ctx = context({
+    currentSessionId: 's', followupDispatchChain: Object.create(null),
+    isSessionRunning: () => true, isServerStreamActive: () => true,
+    getSessionRunState: () => ({runId: 'same-run'}), getFollowupQueue: () => queue,
+    persistFollowupQueue() {}, renderFollowupQueue() {},
+    cancelSteerMessage: async (sid, item) => { cancellations.push(item.steerId); },
+    returnFollowupToInput: (sid, item) => { restored.push(item.text); },
+    fetch: async (url, options) => {
+      const item = JSON.parse(options.body).items[0];
+      await new Promise(resolve => { release = resolve; });
+      return {ok: true, json: async () => ({ok: true, items: [{id: 'server-a', client_id: item.client_id, state: 'queued', after_turn: true}]})};
+    },
+  });
+  vm.runInContext(between('function withFollowupDispatch', 'function shouldApplySseSeqFilter'), ctx);
+  vm.runInContext(between('function publishFollowupQueueToRun', 'function appendFollowupQueueItem'), ctx);
+  vm.runInContext(between('function takeFollowupItem', 'function moveFollowupQueueItem'), ctx);
+  vm.runInContext(between('function withdrawFollowup', 'function returnFollowupToInput'), ctx);
+  const registering = ctx.publishFollowupQueueToRun('s');
+  await Promise.resolve(); await Promise.resolve();
+  ctx.withdrawFollowup('a');
+  assert.strictEqual(queue[0].status, 'withdrawing');
+  release();
+  await registering;
+  await ctx.withFollowupDispatch('s', async () => {});
+  assert.deepStrictEqual(cancellations, ['server-a']);
+  assert.deepStrictEqual(restored, ['a']);
+  assert.strictEqual(queue.length, 0);
+}
+
+async function testLateQueueAcknowledgementCannotResendAConsumedTurn() {
+  const queue = [{id: 'a', text: 'a', clientId: 'stable-client'}];
+  const ctx = context({
+    getFollowupQueue: () => queue, persistFollowupQueue() {}, renderFollowupQueue() {},
+    takeFollowupItem: () => queue.pop(),
+    scheduleFollowupQueueDrain() {},
+    fetch: async () => ({ok: true, json: async () => ({ok: true, items: [{id: 'server-a', client_id: 'stable-client', after_turn: true, state: 'consumed'}]})}),
+  });
+  vm.runInContext(between('async function ensureQueuedFollowupRegistered', 'function startFollowupChat'), ctx);
+  assert.strictEqual(await ctx.ensureQueuedFollowupRegistered('s', queue[0]), false);
+  assert.strictEqual(queue.length, 0);
+}
+
 (async () => {
+  await testQueuedTurnsPublishInOrderWithoutEndingTheRun();
+  await testQueuedTurnWithdrawalWaitsForItsRegistration();
+  await testLateQueueAcknowledgementCannotResendAConsumedTurn();
   await testDispatcherDoesNotConsumePendingRows();
   await testAutoDrainRequiresACompleteIdleBoundary();
   await testPendingQueueCanBeReordered();

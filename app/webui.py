@@ -59,6 +59,8 @@ from agent_loop import (
     get_session_steer,
     list_session_steers,
     remove_session_steer,
+    release_session_followup_claim,
+    sync_session_followup_queue,
     transition_session_steer,
 )
 from session_lifecycle import get_active_run_info, get_run_started_at, is_run_active
@@ -1510,7 +1512,8 @@ def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[
             # Regular /chat user messages are rendered optimistically in the
             # browser. Steer messages are intentionally not, so they must be
             # projected through this live Runtime V2 stream.
-            if str((event.payload or {}).get("ui_type") or "") == "user_steer":
+            if (str((event.payload or {}).get("ui_type") or "") == "user_steer"
+                    or (event.payload or {}).get("queued_followup")):
                 projection = RuntimeUiProjection(
                     session_manager.repository.sessions_dir,
                     path_resolver=session_manager._resolve_session_path,
@@ -3904,6 +3907,26 @@ async def delete_subagent(parent_id: str, child_id: str):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+async def _apply_session_permission_mode(session_id: str, mode: object):
+    """Apply a global mode change with execution cleanup and UI notification."""
+    from security import security_status_for_session, set_session_permission_mode
+    from execution_services.integration import permissions_changed
+
+    await asyncio.to_thread(set_session_permission_mode, session_id, mode)
+    status = await asyncio.to_thread(security_status_for_session, session_id)
+    await permissions_changed(str(status["mode"]))
+    event = {"type": "permission_mode_changed", **status, "ephemeral": True}
+    rows = await asyncio.to_thread(session_manager.list_sessions, include_archived=True)
+    for row in rows:
+        target = str(row.get("id") or row.get("session_id") or "").strip()
+        if target:
+            try:
+                await publish_session_event(target, event)
+            except Exception:
+                logger.debug("Permission mode broadcast failed for %s", target, exc_info=True)
+    return status
+
+
 @fastapi_app.post("/sessions")
 async def create_session(req: Request = None):
     started = time.perf_counter()
@@ -3964,17 +3987,7 @@ async def create_session(req: Request = None):
         metadata = await asyncio.to_thread(_persist_session_reasoning_effort, session_id, requested_effort)
     permission_status = None
     if requested_permission_mode:
-        from security import security_status_for_session, set_session_permission_mode
-
-        await asyncio.to_thread(
-            set_session_permission_mode,
-            session_id,
-            requested_permission_mode,
-        )
-        permission_status = await asyncio.to_thread(
-            security_status_for_session,
-            session_id,
-        )
+        permission_status = await _apply_session_permission_mode(session_id, requested_permission_mode)
     if requested_prefetch:
         # A hidden draft does not change /sessions/state. Its first committed
         # user turn notifies the session-state listener and invalidates then.
@@ -4331,21 +4344,7 @@ async def set_session_permissions(session_id: str, req: Request):
     except Exception:
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
     try:
-        from security import security_status_for_session, set_session_permission_mode
-
-        set_session_permission_mode(sid, (body or {}).get("mode"))
-        status = security_status_for_session(sid)
-        from execution_services.integration import permissions_changed
-        await permissions_changed(str(status["mode"]))
-        event = {"type": "permission_mode_changed", **status, "ephemeral": True}
-        for row in session_manager.list_sessions(include_archived=True):
-            target = str(row.get("id") or row.get("session_id") or "").strip()
-            if not target:
-                continue
-            try:
-                await publish_session_event(target, event)
-            except Exception:
-                logger.debug("Permission mode broadcast failed for %s", target, exc_info=True)
+        status = await _apply_session_permission_mode(sid, (body or {}).get("mode"))
         return JSONResponse({"ok": True, **status})
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
@@ -5069,6 +5068,64 @@ def _build_ui_message_with_selected_skills(raw_message: str, valid_names: list[s
     return raw_message if raw_message.endswith(suffix) else raw_message + suffix
 
 
+@fastapi_app.post("/sessions/{session_id}/followup_queue")
+async def post_session_followup_queue(session_id: str, request: Request):
+    """Durably queue ordinary user turns; never start or stop a run here."""
+    try:
+        data = await request.json()
+        items = data.get("items") if isinstance(data, dict) else None
+        if not session_id.strip() or not isinstance(items, list):
+            raise ValueError("items must be an array")
+        prepared = []
+        seen = set()
+        from attachments.admission import AdmissionContext, admit_content
+        from attachments.access import principal_for_request, require_attachment
+        from attachments.request_budget import walk_images
+        store = get_attachment_store(WORK_DIR)
+        for entry in items:
+            if not isinstance(entry, dict):
+                raise ValueError("invalid queue item")
+            text = str(entry.get("message") or "").strip()
+            client_id = str(entry.get("client_id") or "").strip()
+            if not text or not client_id or client_id in seen:
+                raise ValueError("queue items require unique client_id and non-empty message")
+            seen.add(client_id)
+            skills = _valid_selected_skill_names(entry.get("selected_skills") or [])
+            agent_text = _build_agent_message_with_selected_skills(text, skills)
+            blocks = [{"type": "text", "text": agent_text}]
+            attachments = entry.get("attachments") or []
+            if not isinstance(attachments, list):
+                raise ValueError("attachments must be an array")
+            for attachment in attachments:
+                if not isinstance(attachment, dict):
+                    raise ValueError("invalid attachment")
+                if isinstance(attachment.get("attachment"), dict):
+                    actor = principal_for_request(request, globals().get("_remote_control_gateway"), "write")
+                    ref = await run_in_threadpool(require_attachment, store, actor, attachment["attachment"].get("attachmentId"))
+                    blocks.append({"type": "image", "attachment": ref})
+                elif attachment.get("path"):
+                    blocks.append({"type": "local_file", "local_file": {
+                        "path": str(Path(attachment["path"]).expanduser().resolve()),
+                        "name": str(attachment.get("name") or ""),
+                    }})
+            content = await run_in_threadpool(
+                admit_content, blocks if len(blocks) > 1 else agent_text,
+                AdmissionContext(store), scan_paths=True, scan_remote=True,
+            )
+            prepared.append({
+                "content": agent_text, "user_content": content, "client_id": client_id,
+                "raw_content": text, "selected_skills": skills, "attachments": attachments,
+                "ui_content": _build_ui_message_with_selected_skills(str(entry.get("ui_content") or text), skills),
+                "ui_attachments": [block["attachment"] for block in walk_images(content)],
+                "source_run_id": str(data.get("source_run_id") or ""),
+                "mode": "interrupt" if entry.get("mode") == "interrupt" else "append",
+            })
+        result = await run_in_threadpool(sync_session_followup_queue, session_id.strip(), prepared)
+        return JSONResponse(result)
+    except (ValueError, TypeError, AttachmentError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
 @fastapi_app.post("/sessions/{session_id}/steer")
 async def post_session_steer(session_id: str, request: Request):
     sid = (session_id or "").strip()
@@ -5124,6 +5181,14 @@ async def post_session_steer(session_id: str, request: Request):
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
     item = result.get("item") if isinstance(result.get("item"), dict) else {}
+    if item.get("after_turn"):
+        promoted = transition_session_steer(
+            sid, str(item.get("id") or ""), {"queued"}, "queued",
+            after_turn=False, mode=steer_mode,
+        ) if item.get("state") == "queued" else {"ok": False}
+        if not promoted.get("ok"):
+            return JSONResponse({**result, "restart": False, "aborted": False})
+        item = result["item"] = promoted["item"]
     if str(item.get("mode") or steer_mode) == "append":
         # Append mode never aborts the active LLM/tool operation. The running
         # ReAct loop claims it after the current round is durably complete and
@@ -5763,6 +5828,7 @@ async def chat(
     client_run_id: str = Form(None),
     stream_protocol: str = Form("runtime_v2"),
     followup_steer: bool = Form(False),
+    queued_followup: bool = Form(False),
     steer_id: str = Form(""),
     selected_skills: str = Form(""),
     ui_message: str = Form(""),
@@ -5771,6 +5837,7 @@ async def chat(
     preserve_unread_result: bool = Form(False),
 ):
     # Validate durable references before reserving a session start token.
+    queued_followup = queued_followup is True
     authorized_image_refs = {}
     try:
         attachment_input = json.loads(attachments or "[]")
@@ -5813,14 +5880,17 @@ async def chat(
                 },
                 status_code=425,
             )
-        if followup_steer and steer_operation_id:
+        if (followup_steer or queued_followup) and steer_operation_id:
             steer_status = get_session_steer(sid, steer_id=steer_operation_id)
             steer_item = steer_status.get("item") if isinstance(steer_status.get("item"), dict) else {}
             if not steer_status.get("ok"):
                 return JSONResponse(content={"ok": False, "reason": "unknown_steer"}, status_code=409)
             if str(steer_item.get("state") or "") == "consumed":
                 return JSONResponse(content={"ok": False, "reason": "duplicate_steer"}, status_code=409)
-            if str(steer_item.get("state") or "") != "restarting":
+            claimable = {"queued", "interrupting"} if queued_followup else {"restarting"}
+            if queued_followup and not steer_item.get("after_turn"):
+                return JSONResponse(content={"ok": False, "reason": "not_queued_followup"}, status_code=409)
+            if str(steer_item.get("state") or "") not in claimable:
                 return JSONResponse(
                     content={"ok": False, "reason": "steer_already_claimed", "state": steer_item.get("state")},
                     status_code=409,
@@ -5831,7 +5901,7 @@ async def chat(
             claimed = transition_session_steer(
                 sid,
                 steer_operation_id,
-                {"restarting"},
+                claimable,
                 "claimed",
                 claimed_by=run_id,
                 claimed_at=time.time(),
@@ -5840,9 +5910,9 @@ async def chat(
                 return JSONResponse(content={"ok": False, "reason": "steer_already_claimed"}, status_code=409)
         start_token = _reserve_session_chat_start(sid, run_id) or ""
         if not start_token:
-            if followup_steer and steer_operation_id:
+            if (followup_steer or queued_followup) and steer_operation_id:
                 transition_session_steer(
-                    sid, steer_operation_id, {"claimed"}, "restarting", claimed_by="", claimed_at=0
+                    sid, steer_operation_id, {"claimed"}, "queued" if queued_followup else "restarting", claimed_by="", claimed_at=0
                 )
             run_state = _session_run_state_fields(sid)
             return JSONResponse(
@@ -5984,6 +6054,11 @@ async def chat(
             except Exception as exc:
                 put_from_worker({"type": "error", "content": str(exc), "ephemeral": True})
             finally:
+                if queued_followup and sid and steer_operation_id:
+                    try:
+                        release_session_followup_claim(sid, steer_operation_id, run_id)
+                    except Exception:
+                        logger.warning("queued chat claim cleanup failed: session=%s", sid, exc_info=True)
                 put_from_worker(None)
 
         def worker_main() -> None:

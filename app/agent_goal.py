@@ -830,12 +830,21 @@ class GoalManager:
                 goal["last_error"] = str(
                     error or ("run_interrupted" if outcome == "interrupted" else "run_failed")
                 )[:2000]
-                goal["next_retry_at"] = _future_iso(min(300, 2 ** min(failures, 8)))
-                max_failures = max(1, int(os.getenv("GOAL_MAX_CONSECUTIVE_FAILURES", "3") or 3))
-                if goal.get("status") == "active" and failures >= max_failures:
-                    self._stop_clock(goal)
-                    goal["status"] = "paused"
-                    goal["pause_reason"] = "consecutive_run_failures"
+                if outcome in {"failed", "error"}:
+                    # A terminal runtime error needs user intervention. Backoff
+                    # must not replay the same failing run automatically.
+                    goal["next_retry_at"] = None
+                    if goal.get("status") == "active":
+                        self._stop_clock(goal)
+                        goal["status"] = "paused"
+                        goal["pause_reason"] = "run_failed"
+                else:
+                    goal["next_retry_at"] = _future_iso(min(300, 2 ** min(failures, 8)))
+                    max_failures = max(1, int(os.getenv("GOAL_MAX_CONSECUTIVE_FAILURES", "3") or 3))
+                    if goal.get("status") == "active" and failures >= max_failures:
+                        self._stop_clock(goal)
+                        goal["status"] = "paused"
+                        goal["pause_reason"] = "consecutive_run_failures"
             elif outcome == "react_limit":
                 # The ReAct ceiling bounds one execution run, not the whole
                 # Goal. Leave the Goal runnable so the scheduler starts a fresh

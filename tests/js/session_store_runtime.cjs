@@ -148,4 +148,24 @@ store.upsert({
 assert.strictEqual(store.get('read-session').unread_result, true);
 assert.strictEqual(store.get('read-session').unread_result_run_id, 'run-2');
 
+const reducerSource = fs.readFileSync(path.join(root, 'frontend', 'src', 'app', 'state', 'session-event-reducer.js'), 'utf8');
+ctx.currentSessionId = 'continuous';
+ctx.applyMessageEvent = (sid, event, index) => ({event, index});
+ctx.getSessionRunState = () => ({runId: 'shared'});
+ctx.markSessionRunInactive = () => { throw new Error('a queued turn must keep its owning run active'); };
+vm.runInContext(reducerSource, ctx);
+store.activeRunInfoBySession.set('continuous', {run_id: 'shared', phase: 'running', run_active: true});
+store.markRunFinalizing('continuous', 'shared');
+assert.strictEqual(store.isRunFinalizing('continuous'), true);
+const resumed = ctx.applySessionEvent({type: 'user', queued_followup: true, run_id: 'shared', content: 'next'},
+  {sessionId: 'continuous', source: 'sse', eventIndex: 3});
+assert.strictEqual(resumed.handled, false, 'the queued user message still needs rendering');
+assert.strictEqual(resumed.messageRecord.event.content, 'next');
+assert.strictEqual(store.isRunFinalizing('continuous'), false);
+assert.strictEqual(store.activeRunInfoBySession.get('continuous').phase, 'running');
+assert.strictEqual(store.activeRunInfoBySession.get('continuous').run_active, true);
+store.markRunFinalizing('continuous', 'shared');
+ctx.applySessionEvent({type: 'user', queued_followup: true, run_id: 'old'}, {sessionId: 'continuous', source: 'history'});
+assert.strictEqual(store.isRunFinalizing('continuous'), true, 'replaying an older queued turn must not change the current run phase');
+
 process.stdout.write('session store runtime checks passed\n');

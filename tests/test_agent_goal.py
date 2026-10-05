@@ -417,15 +417,27 @@ class GoalManagerTests(unittest.TestCase):
         self.assertEqual(exhausted["status"], "paused")
         self.assertEqual(exhausted["pause_reason"], "token_budget_exhausted")
 
-    def test_three_failed_runs_pause_goal(self):
-        self.manager.create("s1", "Stop retry storms")
-        for index in range(1, 4):
-            goal = self.manager.record_run(
-                "s1", 1, continuation=True, run_id=f"run-{index}", outcome="failed", error="boom"
-            )
-        self.assertEqual(goal["status"], "paused")
-        self.assertEqual(goal["pause_reason"], "consecutive_run_failures")
-        self.assertEqual(goal["consecutive_failures"], 3)
+    def test_failed_run_pauses_immediately_until_user_resumes(self):
+        for outcome in ("failed", "error"):
+            with self.subTest(outcome=outcome):
+                self.manager.create(outcome, "Stop retry storms")
+                self.manager.mark_continuation_started(outcome, run_id="failed-run")
+                with patch.dict(os.environ, {"GOAL_MAX_CONSECUTIVE_FAILURES": "99"}):
+                    goal = self.manager.record_run(
+                        outcome, 1, continuation=True, run_id="failed-run", outcome=outcome, error="boom"
+                    )
+                self.assertEqual(goal["status"], "paused")
+                self.assertEqual(goal["pause_reason"], "run_failed")
+                self.assertEqual(goal["consecutive_failures"], 1)
+                self.assertEqual(goal["last_error"], "boom")
+                self.assertIsNone(goal["next_retry_at"])
+                self.assertIsNone(goal["current_run_id"])
+                self.assertIsNone(goal["active_since_epoch"])
+                self.assertFalse(self.manager.should_continue(outcome))
+                # Reloading must not reactivate the failed goal.
+                self.assertFalse(GoalManager(self.tmp.name).should_continue(outcome))
+                self.manager.user_action(outcome, "resume")
+                self.assertTrue(self.manager.should_continue(outcome))
 
     def test_three_interrupted_runs_pause_goal(self):
         self.manager.create("s1", "Stop interruption retry storms")

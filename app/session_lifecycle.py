@@ -157,6 +157,16 @@ def mark_run_finalizing(session_id: str, run_id: str) -> None:
                 info["phase"] = "finalizing"
 
 
+def mark_run_running(session_id: str, run_id: str) -> None:
+    """A queued input resumes work within the existing active task."""
+    with _lock:
+        for task in list(_run_tasks.get(session_id, ())):
+            info = _run_info_by_task.get(task)
+            if (isinstance(info, dict) and info.get("run_id") == run_id
+                    and info.get("run_active", True)):
+                info["phase"] = "running"
+
+
 async def _cancel_tasks(tasks: List[asyncio.Task], timeout: float = 8.0) -> None:
     pending = [t for t in tasks if t and not t.done()]
     if not pending:

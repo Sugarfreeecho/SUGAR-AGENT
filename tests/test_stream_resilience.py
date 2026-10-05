@@ -556,6 +556,63 @@ def test_finalizer_closes_metrics_even_when_terminal_commit_fails(monkeypatch):
     assert finished == [("s1", "r1", "failed")]
 
 
+@pytest.mark.parametrize("error_state", [
+    {}, {"react_limit_reached": True},
+    {"_run_error": "PermissionDeniedError: provider returned 403"},
+    {"react_limit_reached": True, "_run_error": "PermissionDeniedError: provider returned 403"},
+])
+def test_finalizer_accounts_terminal_errors_as_failure(monkeypatch, error_state):
+    import agent_loop
+
+    accounted = []
+    committed = []
+    metrics = []
+    emitted = []
+    error = "PermissionDeniedError: provider returned 403"
+
+    class Callbacks:
+        @staticmethod
+        def call(name, *args, **kwargs):
+            if name == "record_run_usage":
+                accounted.append(kwargs)
+
+    class PowerGuard:
+        @staticmethod
+        async def close():
+            pass
+
+    class Lifecycle:
+        @staticmethod
+        async def commit(name, payload):
+            committed.append((name, payload))
+
+    async def emit(event):
+        emitted.append(event)
+
+    async def close_stream(_sid):
+        pass
+
+    monkeypatch.setattr(agent_loop, "_workflow_callbacks", lambda: Callbacks())
+    monkeypatch.setattr(agent_loop, "_clear_steer_run_control", lambda *_args: None)
+    monkeypatch.setattr(agent_loop, "_mark_run_terminal_unread", lambda *_args: None)
+    monkeypatch.setattr(agent_loop, "close_session_stream", close_stream)
+    monkeypatch.setattr(agent_loop.execution_metrics, "finish_run",
+                        lambda _sid, _run, status, **_kw: metrics.append(status))
+    asyncio.run(agent_loop._finalize_agent_run_lifecycle(
+        state={"session_id": "s1", **error_state}, session_id="s1", run_id="r1",
+        mode="continuation", continuation=True,
+        # A caught API failure returns an error final instead of throwing.
+        completed=bool(error_state.get("_run_error")),
+        terminal_event={"type": "run_failed", "error": error},
+        runtime_lifecycle=Lifecycle(), power_guard=PowerGuard(), steer_control=None,
+        emit=emit, queue=asyncio.Queue(), consumer_attached=False,
+    ))
+    assert accounted == [{"continuation": True, "outcome": "failed", "error": error}]
+    assert metrics == ["failed"]
+    assert committed[0][0] == "run_failed"
+    assert emitted[-1]["type"] == "run_failed"
+
+
 def test_runtime_lifecycle_accepts_only_one_concurrent_terminal(monkeypatch):
     import agent_loop
 

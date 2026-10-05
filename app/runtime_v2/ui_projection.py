@@ -1170,7 +1170,10 @@ class RuntimeUiProjection:
                 return data
             data = {"type": "user", "content": payload.get("ui_content") or payload.get("content") or "", "created_at": event.timestamp}
             if event.run_id:
-                data["turn_id"] = str(event.run_id)
+                data["turn_id"] = str(payload.get("turn_id") or event.run_id)
+            if payload.get("queued_followup"):
+                data.update(queued_followup=True, steer_id=str(payload.get("operation_id") or ""),
+                            client_id=str(payload.get("client_id") or ""), preserve_unread_result=True)
             if payload.get("attachments"):
                 data["attachments"] = payload["attachments"]
             if payload.get("branch_source_session_id"):

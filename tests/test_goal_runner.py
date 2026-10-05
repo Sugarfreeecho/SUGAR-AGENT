@@ -5,6 +5,9 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,6 +112,70 @@ def test_discover_accounts_abandoned_goal_run_before_replacement(monkeypatch):
             },
         )
     ]
+
+
+@pytest.mark.parametrize("stage", ["before_events", "after_events", "empty"])
+def test_goal_runner_failure_pauses_and_is_not_discovered_again(tmp_path, monkeypatch, stage):
+    import agent_goal
+
+    monkeypatch.setenv("GOAL_ENABLED", "1")
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    manager = agent_goal.GoalManager(tmp_path)
+    manager.create("s1", "Stop when the runtime fails")
+    releases = []
+    calls = []
+
+    async def continuation(_sid, **kwargs):
+        calls.append(kwargs["run_id"])
+        if stage == "empty":
+            return
+        if stage == "after_events":
+            yield {"type": "run_started"}
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(agent_goal, "manager_for", lambda _host: manager)
+    monkeypatch.setattr(_GOAL_RUNNER, "_host", SimpleNamespace(
+        session_manager=object(),
+        _reserve_session_chat_start=lambda *_args: "lease",
+        _release_session_chat_start=lambda *args: releases.append(args),
+        _session_was_manually_stopped=lambda _sid: False,
+        _session_pending_human_count=lambda _sid: 0,
+        _has_local_worker_activity=lambda _sid: False,
+        astream_events_continuation=continuation,
+    ))
+    asyncio.run(_GOAL_RUNNER._continue("s1"))
+    failed = manager.get("s1")
+    assert failed["status"] == "paused"
+    assert failed["pause_reason"] == "run_failed"
+    assert failed["last_error"] == ("continuation_produced_no_events" if stage == "empty" else "provider unavailable")
+    assert failed["run_count"] == failed["continuation_count"] == 1
+    assert releases == [("s1", "lease")]
+    assert _GOAL_RUNNER._discover(["s1"]) == []
+    asyncio.run(_GOAL_RUNNER._continue("s1"))
+    assert len(calls) == 1
+
+
+def test_reconcile_durable_failed_continuation_pauses_goal(tmp_path, monkeypatch):
+    import agent_goal
+    import runtime_observability
+
+    monkeypatch.setenv("GOAL_ENABLED", "1")
+    monkeypatch.setenv("RUNTIME_VERSION", "2")
+    manager = agent_goal.GoalManager(tmp_path)
+    manager.create("s1", "Recover a failed run without retrying it")
+    manager.mark_continuation_started("s1", run_id="failed-run")
+    monkeypatch.setattr(_GOAL_RUNNER, "_host", SimpleNamespace(
+        _has_local_worker_activity=lambda _sid: False,
+    ))
+    monkeypatch.setattr(runtime_observability, "snapshot", lambda _sid: {
+        "runs": [{"run_id": "failed-run", "status": "failed"}],
+    })
+    assert _GOAL_RUNNER._reconcile_incomplete_run(manager, "s1") is False
+    goal = manager.get("s1")
+    assert goal["status"] == "paused"
+    assert goal["last_run_outcome"] == "failed"
+    assert goal["next_retry_at"] is None
+    assert not manager.should_continue("s1")
 
 
 def test_background_goal_runner_drains_continuation_without_browser(monkeypatch):

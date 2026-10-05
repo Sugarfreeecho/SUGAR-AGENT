@@ -397,6 +397,10 @@ const sessionStore = {
         if (!rid || String(this.finalizingRunIdsBySession.get(sid) || '') === rid) {
             this.finalizingRunIdsBySession.delete(sid);
         }
+        const info = this.activeRunInfoBySession.get(sid);
+        if (info && info.phase === 'finalizing' && (!rid || String(info.run_id || info.runId || '') === rid)) {
+            info.phase = 'running';
+        }
     },
 
     isRunFinalizing(sessionId) {

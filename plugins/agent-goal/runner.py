@@ -83,11 +83,11 @@ def _reconcile_incomplete_run(manager: Any, session_id: str) -> bool:
         0,
         continuation=True,
         run_id=current_run_id,
-        outcome="interrupted",
+        outcome="failed" if status in {"failed", "error"} else "interrupted",
         error=f"abandoned_continuation:{status or 'missing_observability'}",
     )
-    # record_run applies backoff (and may trip the failure fuse), so discovery
-    # must wait for a later tick instead of immediately starting a replacement.
+    # record_run pauses failed runs and applies backoff to interruptions;
+    # discovery must not immediately start a replacement.
     return False
 
 

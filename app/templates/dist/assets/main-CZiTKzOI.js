@@ -2291,14 +2291,14 @@ var uiSlots = (function () {
 `,Mu=`const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
 
 const sessionStore = {
-    seq: 0,
-    sessionsById: new Map(),
-    sessionOrder: [],
-    currentSessionId: null,
-    runsBySession: new Map(),
+    seq: 0,\r
+    sessionsById: new Map(),\r
+    sessionOrder: [],\r
+    currentSessionId: null,\r
+    runsBySession: new Map(),\r
     terminalRunIdsBySession: new Map(),
     finalizingRunIdsBySession: new Map(),
-    activeRunInfoBySession: new Map(),
+    activeRunInfoBySession: new Map(),\r
     archivedCount: 0,
     archivedLoaded: false,
     archivedSessions: null,
@@ -2313,10 +2313,10 @@ const sessionStore = {
     committedStateRevisionFloor: 0,
     metadataMutationSeq: 0,
     pendingMetadataMutations: new Set(),
-    ui: {
-        loadingSessions: false,
-        loadingMessages: false,
-    },
+    ui: {\r
+        loadingSessions: false,\r
+        loadingMessages: false,\r
+    },\r
     streamActiveById: Object.create(null),
 
     beginMetadataMutation() {
@@ -2358,16 +2358,16 @@ const sessionStore = {
         ) return false;
         return true;
     },
-
-    applySnapshot(sessions, archivedCount) {
-        this.pruneDeletedSessionTombstones();
+\r
+    applySnapshot(sessions, archivedCount) {\r
+        this.pruneDeletedSessionTombstones();\r
         const nextById = new Map();
         const nextOrder = [];
         const nextStreamActive = Object.create(null);
         const list = Array.isArray(sessions) ? sessions : [];
         const snapshotIds = new Set();
         let unreadChanged = false;
-        for (let i = 0; i < list.length; i += 1) {
+        for (let i = 0; i < list.length; i += 1) {\r
             const s = list[i];
             if (!s || !s.id) continue;
             const sid = String(s.id);
@@ -2381,22 +2381,22 @@ const sessionStore = {
                 delete nextSession.unread_result_status;
                 delete nextSession.unread_result_run_id;
             }
-            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {
-                nextSession.stream_active = false;
-                nextSession.run_active = false;
-                nextSession.run_started_at = null;
-            }
-            if (typeof sessionUnreadComplete !== 'undefined') {
-                if (nextSession.unread_result) {
-                    if (!sessionUnreadComplete.has(sid)) {
-                        sessionUnreadComplete.add(sid);
-                        unreadChanged = true;
-                    }
-                } else if (sessionUnreadComplete.delete(sid)) {
-                    unreadChanged = true;
-                }
-            }
-            nextById.set(sid, nextSession);
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {\r
+                nextSession.stream_active = false;\r
+                nextSession.run_active = false;\r
+                nextSession.run_started_at = null;\r
+            }\r
+            if (typeof sessionUnreadComplete !== 'undefined') {\r
+                if (nextSession.unread_result) {\r
+                    if (!sessionUnreadComplete.has(sid)) {\r
+                        sessionUnreadComplete.add(sid);\r
+                        unreadChanged = true;\r
+                    }\r
+                } else if (sessionUnreadComplete.delete(sid)) {\r
+                    unreadChanged = true;\r
+                }\r
+            }\r
+            nextById.set(sid, nextSession);\r
             nextOrder.push(sid);
             nextStreamActive[sid] = !!nextSession.stream_active;
         }
@@ -2422,12 +2422,12 @@ const sessionStore = {
         this.sessionOrder = nextOrder;
         this.streamActiveById = nextStreamActive;
         this._reorderSessionOrder();
-        if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
-            this.archivedCount = Number(archivedCount);
-        }
-        if (unreadChanged && typeof persistSessionUnread === 'function') persistSessionUnread();
-    },
-
+        if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {\r
+            this.archivedCount = Number(archivedCount);\r
+        }\r
+        if (unreadChanged && typeof persistSessionUnread === 'function') persistSessionUnread();\r
+    },\r
+\r
     upsert(session) {
         if (!session || !session.id) return;
         const sid = String(session.id);
@@ -2443,13 +2443,13 @@ const sessionStore = {
         }
         const existed = this.sessionOrder.indexOf(sid) >= 0;
         this.sessionsById.set(sid, nextSession);
-        if (!existed) {
-            this.sessionOrder.unshift(sid);
-        }
-        // 任何字段更新都可能改变 last_activity_at / pinned_at，需立即重排，
-        // 否则老会话有了新对话后仍停留在原分组、原位置（仅靠 800ms 后的
-        // applySnapshot 兜底，期间 UI 顺序与时间分组不一致）。
-        this._reorderSessionOrder();
+        if (!existed) {\r
+            this.sessionOrder.unshift(sid);\r
+        }\r
+        // 任何字段更新都可能改变 last_activity_at / pinned_at，需立即重排，\r
+        // 否则老会话有了新对话后仍停留在原分组、原位置（仅靠 800ms 后的\r
+        // applySnapshot 兜底，期间 UI 顺序与时间分组不一致）。\r
+        this._reorderSessionOrder();\r
         if (Object.prototype.hasOwnProperty.call(nextSession, 'stream_active')) {
             this.streamActiveById[sid] = !!nextSession.stream_active;
         }
@@ -2463,102 +2463,102 @@ const sessionStore = {
         this.snapshotProtectedSessions.set(sid, copy);
         this.upsert(copy);
     },
-
-    // 与后端 list_sessions 的 sort_key 保持一致：
-    //   pinned 在前；pinned 之间按 pinned_at 倒序；非 pinned 按 last_activity_at 倒序。
-    // 缺失时间字段时回退到 updated_at / created_at，仍解析失败则视为 0（沉底）。
-    _activityTimeMs(session) {
-        if (!session) return 0;
-        var raw = session.last_activity_at || session.updated_at || session.created_at || '';
-        var t = Date.parse(String(raw || ''));
-        return Number.isFinite(t) ? t : 0;
-    },
-
-    _pinnedTimeMs(session) {
-        if (!session) return 0;
-        var raw = session.pinned_at || session.updated_at || session.created_at || '';
-        var t = Date.parse(String(raw || ''));
-        return Number.isFinite(t) ? t : 0;
-    },
-
-    _reorderSessionOrder() {
-        const self = this;
-        this.sessionOrder.sort(function (aId, bId) {
-            const a = self.sessionsById.get(aId);
-            const b = self.sessionsById.get(bId);
-            if (!a) return 1;
-            if (!b) return -1;
-            const aPinned = !!a.pinned;
-            const bPinned = !!b.pinned;
-            if (aPinned !== bPinned) return aPinned ? -1 : 1;
-            if (aPinned) return self._pinnedTimeMs(b) - self._pinnedTimeMs(a);
-            return self._activityTimeMs(b) - self._activityTimeMs(a);
-        });
-    },
-
+\r
+    // 与后端 list_sessions 的 sort_key 保持一致：\r
+    //   pinned 在前；pinned 之间按 pinned_at 倒序；非 pinned 按 last_activity_at 倒序。\r
+    // 缺失时间字段时回退到 updated_at / created_at，仍解析失败则视为 0（沉底）。\r
+    _activityTimeMs(session) {\r
+        if (!session) return 0;\r
+        var raw = session.last_activity_at || session.updated_at || session.created_at || '';\r
+        var t = Date.parse(String(raw || ''));\r
+        return Number.isFinite(t) ? t : 0;\r
+    },\r
+\r
+    _pinnedTimeMs(session) {\r
+        if (!session) return 0;\r
+        var raw = session.pinned_at || session.updated_at || session.created_at || '';\r
+        var t = Date.parse(String(raw || ''));\r
+        return Number.isFinite(t) ? t : 0;\r
+    },\r
+\r
+    _reorderSessionOrder() {\r
+        const self = this;\r
+        this.sessionOrder.sort(function (aId, bId) {\r
+            const a = self.sessionsById.get(aId);\r
+            const b = self.sessionsById.get(bId);\r
+            if (!a) return 1;\r
+            if (!b) return -1;\r
+            const aPinned = !!a.pinned;\r
+            const bPinned = !!b.pinned;\r
+            if (aPinned !== bPinned) return aPinned ? -1 : 1;\r
+            if (aPinned) return self._pinnedTimeMs(b) - self._pinnedTimeMs(a);\r
+            return self._activityTimeMs(b) - self._activityTimeMs(a);\r
+        });\r
+    },\r
+\r
     remove(sessionId) {
-        const sid = String(sessionId || '');
-        if (!sid) return;
-        this.sessionsById.delete(sid);
-        delete this.streamActiveById[sid];
-        this.runsBySession.delete(sid);
+        const sid = String(sessionId || '');\r
+        if (!sid) return;\r
+        this.sessionsById.delete(sid);\r
+        delete this.streamActiveById[sid];\r
+        this.runsBySession.delete(sid);\r
         this.terminalRunIdsBySession.delete(sid);
         this.finalizingRunIdsBySession.delete(sid);
         this.activeRunInfoBySession.delete(sid);
         this.unreadComplete.delete(sid);
         this.snapshotProtectedSessions.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
-    },
-
-    markDeletedSession(sessionId) {
-        const sid = String(sessionId || '');
-        if (!sid) return;
-        this.deletedSessionTombstones.set(sid, Date.now());
-        this.remove(sid);
-    },
-
-    clearDeletedSessionTombstone(sessionId) {
-        const sid = String(sessionId || '');
-        if (!sid) return;
-        this.deletedSessionTombstones.delete(sid);
-    },
-
-    pruneDeletedSessionTombstones() {
-        const now = Date.now();
-        const ttl = 120000;
-        this.deletedSessionTombstones.forEach(function (createdAt, sid, map) {
-            if (now - Number(createdAt || 0) > ttl) map.delete(sid);
-        });
-    },
-
-    isDeletedSessionTombstoned(sessionId) {
-        this.pruneDeletedSessionTombstones();
-        return this.deletedSessionTombstones.has(String(sessionId || ''));
-    },
-
-    list() {
-        const out = [];
-        for (let i = 0; i < this.sessionOrder.length; i += 1) {
-            const s = this.sessionsById.get(this.sessionOrder[i]);
-            if (s) out.push(s);
-        }
-        return out;
-    },
-
-    get(sessionId) {
-        return this.sessionsById.get(String(sessionId || '')) || null;
-    },
-
-    setCurrentSession(sessionId) {
-        this.currentSessionId = sessionId ? String(sessionId) : null;
-    },
-
-    setArchivedCount(count) {
-        if (Number.isFinite(Number(count)) && Number(count) >= 0) {
-            this.archivedCount = Number(count);
-        }
-    },
-
+    },\r
+\r
+    markDeletedSession(sessionId) {\r
+        const sid = String(sessionId || '');\r
+        if (!sid) return;\r
+        this.deletedSessionTombstones.set(sid, Date.now());\r
+        this.remove(sid);\r
+    },\r
+\r
+    clearDeletedSessionTombstone(sessionId) {\r
+        const sid = String(sessionId || '');\r
+        if (!sid) return;\r
+        this.deletedSessionTombstones.delete(sid);\r
+    },\r
+\r
+    pruneDeletedSessionTombstones() {\r
+        const now = Date.now();\r
+        const ttl = 120000;\r
+        this.deletedSessionTombstones.forEach(function (createdAt, sid, map) {\r
+            if (now - Number(createdAt || 0) > ttl) map.delete(sid);\r
+        });\r
+    },\r
+\r
+    isDeletedSessionTombstoned(sessionId) {\r
+        this.pruneDeletedSessionTombstones();\r
+        return this.deletedSessionTombstones.has(String(sessionId || ''));\r
+    },\r
+\r
+    list() {\r
+        const out = [];\r
+        for (let i = 0; i < this.sessionOrder.length; i += 1) {\r
+            const s = this.sessionsById.get(this.sessionOrder[i]);\r
+            if (s) out.push(s);\r
+        }\r
+        return out;\r
+    },\r
+\r
+    get(sessionId) {\r
+        return this.sessionsById.get(String(sessionId || '')) || null;\r
+    },\r
+\r
+    setCurrentSession(sessionId) {\r
+        this.currentSessionId = sessionId ? String(sessionId) : null;\r
+    },\r
+\r
+    setArchivedCount(count) {\r
+        if (Number.isFinite(Number(count)) && Number(count) >= 0) {\r
+            this.archivedCount = Number(count);\r
+        }\r
+    },\r
+\r
     setArchivedLoaded(sessions, options) {
         options = options || {};
         const filtered = Array.isArray(sessions)
@@ -2578,7 +2578,7 @@ const sessionStore = {
         ));
         this.archivedCount = totalCount;
     },
-
+\r
     clearArchivedLoaded() {
         this.archivedLoaded = false;
         this.archivedSessions = null;
@@ -2603,62 +2603,62 @@ const sessionStore = {
     hasMoreArchivedSessions() {
         return this.archivedVisibleCount < this.archivedCount;
     },
-
-    isStreamActive(sessionId) {
-        const sid = String(sessionId || '');
-        if (!sid) return false;
-        if (Object.prototype.hasOwnProperty.call(this.streamActiveById, sid)) {
-            return !!this.streamActiveById[sid];
-        }
-        const sess = this.get(sid);
-        return !!(sess && sess.stream_active);
-    },
-
-    setStreamActive(sessionId, active) {
-        const sid = String(sessionId || '');
-        if (!sid) return;
-        this.streamActiveById[sid] = !!active;
-        const sess = this.sessionsById.get(sid);
-        if (sess) sess.stream_active = !!active;
-    },
-
-    applyStreamActiveMap(activeMap) {
-        const next = Object.create(null);
-        const src = activeMap || {};
-        Object.keys(src).forEach(function (sid) {
-            next[String(sid)] = !!src[sid];
-        });
-        this.streamActiveById = next;
-        this.sessionsById.forEach(function (sess, sid) {
-            sess.stream_active = !!next[sid];
-            sess.run_active = !!next[sid];
-            if (!next[sid]) sess.run_started_at = null;
-        });
-    },
-
-    setRun(sessionId, run) {
-        const sid = String(sessionId || '');
-        if (!sid) return;
-        if (run) this.runsBySession.set(sid, run);
-        else this.runsBySession.delete(sid);
-    },
-
-    getRun(sessionId) {
-        return this.runsBySession.get(String(sessionId || '')) || null;
-    },
-
-    hasRun(sessionId) {
-        return this.runsBySession.has(String(sessionId || ''));
-    },
-
+\r
+    isStreamActive(sessionId) {\r
+        const sid = String(sessionId || '');\r
+        if (!sid) return false;\r
+        if (Object.prototype.hasOwnProperty.call(this.streamActiveById, sid)) {\r
+            return !!this.streamActiveById[sid];\r
+        }\r
+        const sess = this.get(sid);\r
+        return !!(sess && sess.stream_active);\r
+    },\r
+\r
+    setStreamActive(sessionId, active) {\r
+        const sid = String(sessionId || '');\r
+        if (!sid) return;\r
+        this.streamActiveById[sid] = !!active;\r
+        const sess = this.sessionsById.get(sid);\r
+        if (sess) sess.stream_active = !!active;\r
+    },\r
+\r
+    applyStreamActiveMap(activeMap) {\r
+        const next = Object.create(null);\r
+        const src = activeMap || {};\r
+        Object.keys(src).forEach(function (sid) {\r
+            next[String(sid)] = !!src[sid];\r
+        });\r
+        this.streamActiveById = next;\r
+        this.sessionsById.forEach(function (sess, sid) {\r
+            sess.stream_active = !!next[sid];\r
+            sess.run_active = !!next[sid];\r
+            if (!next[sid]) sess.run_started_at = null;\r
+        });\r
+    },\r
+\r
+    setRun(sessionId, run) {\r
+        const sid = String(sessionId || '');\r
+        if (!sid) return;\r
+        if (run) this.runsBySession.set(sid, run);\r
+        else this.runsBySession.delete(sid);\r
+    },\r
+\r
+    getRun(sessionId) {\r
+        return this.runsBySession.get(String(sessionId || '')) || null;\r
+    },\r
+\r
+    hasRun(sessionId) {\r
+        return this.runsBySession.has(String(sessionId || ''));\r
+    },\r
+\r
     markTerminalRun(sessionId, runId) {
-        const sid = String(sessionId || '');
-        const rid = String(runId || '').trim();
-        if (!sid || !rid) return;
-        let bucket = this.terminalRunIdsBySession.get(sid);
-        if (!bucket) {
-            bucket = new Set();
-            this.terminalRunIdsBySession.set(sid, bucket);
+        const sid = String(sessionId || '');\r
+        const rid = String(runId || '').trim();\r
+        if (!sid || !rid) return;\r
+        let bucket = this.terminalRunIdsBySession.get(sid);\r
+        if (!bucket) {\r
+            bucket = new Set();\r
+            this.terminalRunIdsBySession.set(sid, bucket);\r
         }
         bucket.add(rid);
         while (bucket.size > 64) {
@@ -2687,6 +2687,10 @@ const sessionStore = {
         if (!rid || String(this.finalizingRunIdsBySession.get(sid) || '') === rid) {
             this.finalizingRunIdsBySession.delete(sid);
         }
+        const info = this.activeRunInfoBySession.get(sid);
+        if (info && info.phase === 'finalizing' && (!rid || String(info.run_id || info.runId || '') === rid)) {
+            info.phase = 'running';
+        }
     },
 
     isRunFinalizing(sessionId) {
@@ -2696,30 +2700,30 @@ const sessionStore = {
         if (info && info.phase === 'finalizing') return true;
         return this.finalizingRunIdsBySession.has(sid);
     },
-
-    isTerminalRun(sessionId, runId) {
-        const sid = String(sessionId || '');
-        const rid = String(runId || '').trim();
-        if (!sid || !rid) return false;
-        const bucket = this.terminalRunIdsBySession.get(sid);
-        return !!(bucket && bucket.has(rid));
-    },
-
+\r
+    isTerminalRun(sessionId, runId) {\r
+        const sid = String(sessionId || '');\r
+        const rid = String(runId || '').trim();\r
+        if (!sid || !rid) return false;\r
+        const bucket = this.terminalRunIdsBySession.get(sid);\r
+        return !!(bucket && bucket.has(rid));\r
+    },\r
+\r
     applyActiveRuns(activeRuns) {
-        const next = new Map();
-        const list = Array.isArray(activeRuns) ? activeRuns : [];
+        const next = new Map();\r
+        const list = Array.isArray(activeRuns) ? activeRuns : [];\r
         list.forEach(function (run) {
             const sid = typeof run === 'string' ? run : (run && run.session_id);
             if (!sid) return;
             const runId = typeof run === 'string' ? '' : String((run && (run.run_id || run.runId)) || '').trim();
             if (run && run.runtime_v2 && !runId) return;
             if (runId && this.isTerminalRun(sid, runId)) return;
-            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;\r
             next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
             if (runId && run && run.phase === 'finalizing') {
                 this.finalizingRunIdsBySession.set(String(sid), runId);
             }
-        }, this);
+        }, this);\r
         this.activeRunInfoBySession = next;
     },
 
@@ -2755,15 +2759,15 @@ const sessionStore = {
         }
         return false;
     },
-
-    activeRunIds() {
-        return Array.from(this.activeRunInfoBySession.keys());
-    },
-
-    getActiveRunInfo(sessionId) {
-        return this.activeRunInfoBySession.get(String(sessionId || '')) || null;
-    },
-
+\r
+    activeRunIds() {\r
+        return Array.from(this.activeRunInfoBySession.keys());\r
+    },\r
+\r
+    getActiveRunInfo(sessionId) {\r
+        return this.activeRunInfoBySession.get(String(sessionId || '')) || null;\r
+    },\r
+\r
     shouldAcceptSseEvent(sessionId, seq, scope) {
         const sid = String(sessionId || '');
         const n = Number(seq);
@@ -2775,75 +2779,75 @@ const sessionStore = {
         this.sseSeqBySession.set(key, n);
         if (Number.isFinite(Number(this.seq)) && n > Number(this.seq)) this.seq = n;
         return true;
-    },
-
-    resetSseSeq(sessionId) {
+    },\r
+\r
+    resetSseSeq(sessionId) {\r
         const sid = String(sessionId || '');
         if (!sid) return;
         this.sseSeqBySession.delete(sid);
         Array.from(this.sseSeqBySession.keys()).forEach(function (key) {
             if (String(key).indexOf(sid + '::') === 0) this.sseSeqBySession.delete(key);
         }, this);
-    },
-};
-
-const SESSION_STREAM_STOP_SUPPRESS_MS = 60000;
-const sessionStreamStopSuppressUntil = Object.create(null);
-
-function isSessionStreamStopSuppressed(sessionId) {
-    const sid = String(sessionId || '');
-    if (!sid) return false;
-    const until = Number(sessionStreamStopSuppressUntil[sid] || 0);
-    if (!until) return false;
-    if (Date.now() <= until) return true;
-    delete sessionStreamStopSuppressUntil[sid];
-    return false;
-}
-
-function clearSessionStreamStopSuppress(sessionId) {
-    const sid = String(sessionId || '');
-    if (!sid) return;
-    delete sessionStreamStopSuppressUntil[sid];
-}
-
-function suppressSessionServerStreamActive(sessionId, ms) {
-    const sid = String(sessionId || '');
-    if (!sid) return;
-    sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);
-    sessionStore.setStreamActive(sid, false);
-    sessionStore.activeRunInfoBySession.delete(sid);
-    const sess = sessionStore.get(sid);
-    if (sess) {
-        sess.stream_active = false;
-        sess.run_active = false;
-        sess.run_started_at = null;
-    }
-}
-
-function setSessionServerStreamActive(sessionId, active) {
-    const sid = String(sessionId || '');
-    if (!sid) return;
-    if (active && isSessionStreamStopSuppressed(sid)) active = false;
-    sessionStore.setStreamActive(sid, !!active);
-}
-
-function isServerStreamActive(sessionId) {
-    const sid = String(sessionId || '');
-    if (!sid) return false;
-    if (isSessionStreamStopSuppressed(sid)) return false;
-    return sessionStore.isStreamActive(sid);
-}
-
-function applyServerStreamActiveMap(activeMap) {
-    const src = activeMap || Object.create(null);
-    const m = Object.create(null);
-    Object.keys(src).forEach(function (sid) {
-        var active = !!src[sid];
-        if (active && isSessionStreamStopSuppressed(sid)) active = false;
-        m[sid] = active;
-    });
-    sessionStore.applyStreamActiveMap(m);
-}
+    },\r
+};\r
+\r
+const SESSION_STREAM_STOP_SUPPRESS_MS = 60000;\r
+const sessionStreamStopSuppressUntil = Object.create(null);\r
+\r
+function isSessionStreamStopSuppressed(sessionId) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid) return false;\r
+    const until = Number(sessionStreamStopSuppressUntil[sid] || 0);\r
+    if (!until) return false;\r
+    if (Date.now() <= until) return true;\r
+    delete sessionStreamStopSuppressUntil[sid];\r
+    return false;\r
+}\r
+\r
+function clearSessionStreamStopSuppress(sessionId) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid) return;\r
+    delete sessionStreamStopSuppressUntil[sid];\r
+}\r
+\r
+function suppressSessionServerStreamActive(sessionId, ms) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid) return;\r
+    sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);\r
+    sessionStore.setStreamActive(sid, false);\r
+    sessionStore.activeRunInfoBySession.delete(sid);\r
+    const sess = sessionStore.get(sid);\r
+    if (sess) {\r
+        sess.stream_active = false;\r
+        sess.run_active = false;\r
+        sess.run_started_at = null;\r
+    }\r
+}\r
+\r
+function setSessionServerStreamActive(sessionId, active) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid) return;\r
+    if (active && isSessionStreamStopSuppressed(sid)) active = false;\r
+    sessionStore.setStreamActive(sid, !!active);\r
+}\r
+\r
+function isServerStreamActive(sessionId) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid) return false;\r
+    if (isSessionStreamStopSuppressed(sid)) return false;\r
+    return sessionStore.isStreamActive(sid);\r
+}\r
+\r
+function applyServerStreamActiveMap(activeMap) {\r
+    const src = activeMap || Object.create(null);\r
+    const m = Object.create(null);\r
+    Object.keys(src).forEach(function (sid) {\r
+        var active = !!src[sid];\r
+        if (active && isSessionStreamStopSuppressed(sid)) active = false;\r
+        m[sid] = active;\r
+    });\r
+    sessionStore.applyStreamActiveMap(m);\r
+}\r
 `,Ou=`function selectCurrentSession() {
     return sessionStore.get(sessionStore.currentSessionId);
 }
@@ -5636,6 +5640,10 @@ function applySessionEvent(event, opts) {
             goalContinues: goalContinues,
             messageRecord: messageRecord,
         };
+    }
+    if (type === 'user' && event.queued_followup) {
+        sessionStore.clearRunFinalizing(sessionId, runId);
+        return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'final' && source === 'sse') {
         const localRun = getSessionRunState(sessionId);
@@ -22750,6 +22758,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     if (!reservedSteerIndex) streamEventIdx += 1;
                     continue;
                 }
+                if (parsed.type === 'user' && parsed.queued_followup) {
+                    removeConsumedFollowupSteer(eventSessionId, parsed);
+                    initRunFinalTracking(runCtx);
+                }
                 const reduced = applySessionEvent(parsed, {
                     sessionId: eventSessionId,
                     eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,
@@ -23190,6 +23202,7 @@ async function startContinueAfterSubagents(sessionId) {
         scheduleContextTokensAfterPaint(runSessionId);
         let streamEventIdx = preCount;
         try {
+            if (typeof publishFollowupQueueToRun === 'function') void publishFollowupQueueToRun(runSessionId);
             await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -23536,6 +23549,7 @@ async function attachSessionEventStream(sessionId, opts) {
             + (runCtx.lastRuntimeSeq ? '&after_runtime_seq=' + encodeURIComponent(String(runCtx.lastRuntimeSeq)) : '')
             + (savedRecovery && savedRecovery.projectionVersion ? '&projection_version=' + encodeURIComponent(String(savedRecovery.projectionVersion)) : '');
         const response = await fetch(streamUrl, { signal: ac.signal });
+        if (response.ok && typeof publishFollowupQueueToRun === 'function') void publishFollowupQueueToRun(runSessionId);
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {
         if (error && error.name === 'AbortError') return;
@@ -23715,6 +23729,7 @@ function normalizeStoredFollowupItem(item) {
         // 恢复提交期间的 in-flight 状态：刷新/崩溃后可继续恢复，不再静默丢失。
         clientId: String(item.clientId || ''),
         steerId: String(item.steerId || ''),
+        serverQueued: !!item.serverQueued,
         status: restoredStatus,
         replacementRunId: String(item.replacementRunId || ''),
         awaitingRunEnd: item.awaitingRunEnd !== false,
@@ -23787,6 +23802,7 @@ function persistFollowupQueue(sessionId) {
             steerMode: item.steerMode === 'append' ? 'append' : 'interrupt',
             clientId: item.clientId || '',
             steerId: item.steerId || '',
+            serverQueued: !!item.serverQueued,
             status: item.status || '',
             replacementRunId: item.replacementRunId || '',
             awaitingRunEnd: item.awaitingRunEnd !== false,
@@ -24152,6 +24168,7 @@ function followupQueueRenderSignature(sessionId, queue) {
         return {
             id: String((item && item.id) || ''),
             status: String((item && item.status) || ''),
+            serverQueued: !!(item && item.serverQueued),
             steerMode: item && item.steerMode === 'append' ? 'append' : 'interrupt',
             display: String((item && (item.display || item.text)) || ''),
             skills: Array.isArray(item && item.skills) ? item.skills.map(String) : [],
@@ -24501,7 +24518,53 @@ function getFollowupStatusText(item) {
     if (status === 'restarting') return '正在接管当前任务';
     if (status === 'sending') return '发送中';
     if (status === 'sent') return '已发送';
+    if (item && item.serverQueued) return '已排队，当前回答完成后继续';
     return '待发送';
+}
+
+function publishFollowupQueueToRun(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid || (!isSessionRunning(sid) && !isServerStreamActive(sid))
+        || (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))) return Promise.resolve();
+    getFollowupQueue(sid).forEach(function (item) {
+        if (!item.status && item.awaitingRunEnd !== false) {
+            item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+            item.queueRegistrationPending = true;
+        }
+    });
+    persistFollowupQueue(sid);
+    return withFollowupDispatch(sid, async function () {
+        var pending = getFollowupQueue(sid).filter(function (item) {
+            return !item.status && item.awaitingRunEnd !== false;
+        });
+        if (!pending.length) return;
+        try {
+            var active = getSessionRunState(sid);
+            var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/followup_queue', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({source_run_id: active && active.runId || '', items: pending.map(function (item) {
+                    return {client_id: item.clientId, message: item.text, ui_content: item.display || item.text,
+                        selected_skills: item.skills || [], attachments: item.attachments || [], mode: item.steerMode};
+                })}),
+            });
+            var payload = await response.json();
+            if (!response.ok || !payload.ok) throw new Error(payload.error || 'queue registration failed');
+            (payload.items || []).forEach(function (serverItem) {
+                var local = getFollowupQueue(sid).find(function (item) { return item.clientId === serverItem.client_id; });
+                if (!local) return;
+                local.steerId = String(serverItem.id || '');
+                local.serverQueued = !!serverItem.after_turn;
+                if (serverItem.state === 'consumed') takeFollowupItem(sid, local.id);
+            });
+        } catch (error) {
+            // Keep the durable local queue for reconciliation/retry at the terminal boundary.
+            console.warn('follow-up queue registration failed:', error);
+        } finally {
+            pending.forEach(function (item) { item.queueRegistrationPending = false; });
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+        }
+    });
 }
 
 function appendFollowupQueueItem(sessionId, text, display, selectedSkills, attachments) {
@@ -24521,6 +24584,7 @@ function appendFollowupQueueItem(sessionId, text, display, selectedSkills, attac
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
     setSendButtonState();
+    if (typeof publishFollowupQueueToRun === 'function') void publishFollowupQueueToRun(sid);
     return item;
 }
 
@@ -24663,6 +24727,7 @@ function moveFollowupQueueItem(sessionId, itemId, targetId, placement) {
     });
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
+    if (typeof publishFollowupQueueToRun === 'function') void publishFollowupQueueToRun(sid);
     return true;
 }
 
@@ -24699,6 +24764,23 @@ function withdrawFollowup(itemId) {
     const sid = currentSessionId;
     var q = getFollowupQueue(sid);
     var pendingItem = q.find(function (entry) { return String(entry.id) === String(itemId); });
+    if (pendingItem && (pendingItem.serverQueued || pendingItem.queueRegistrationPending)) {
+        pendingItem.status = 'withdrawing';
+        persistFollowupQueue(sid);
+        renderFollowupQueue(sid);
+        void withFollowupDispatch(sid, async function () {
+            try {
+                if (pendingItem.serverQueued) await cancelSteerMessage(sid, pendingItem);
+                var withdrawn = takeFollowupItem(sid, itemId);
+                if (withdrawn) returnFollowupToInput(sid, withdrawn);
+            } catch (error) {
+                pendingItem.status = '';
+                await syncFollowupQueueFromServer(sid);
+                appendLogVisible('追问已开始处理，无法撤回: ' + ((error && error.message) || String(error)), 'error-log');
+            }
+        });
+        return;
+    }
     if (pendingItem && (pendingItem.status === 'sending' || pendingItem.status === 'submitting' || pendingItem.status === 'accepted' || pendingItem.status === 'restarting')) {
         pendingItem.cancelRequested = true;
         pendingItem.status = 'withdrawing';
@@ -24973,7 +25055,7 @@ async function syncFollowupQueueFromServer(sessionId) {
             if (!payload || !payload.ok || !Array.isArray(payload.items)) return;
             var q = getFollowupQueue(sid);
             var pendingIds = new Set();
-            payload.items.forEach(function (serverItem) {
+            payload.items.forEach(function (serverItem, serverIndex) {
                 var steerId = String(serverItem.id || '');
                 var clientId = String(serverItem.client_id || '');
                 var state = String(serverItem.state || 'queued');
@@ -24986,8 +25068,11 @@ async function syncFollowupQueueFromServer(sessionId) {
                 if (!local && !isTerminal) {
                     local = {
                         id: 'server-' + (steerId || clientId || Date.now()),
-                        text: String(serverItem.content || ''),
+                        text: String(serverItem.raw_content || serverItem.content || ''),
                         display: String(serverItem.ui_content || serverItem.content || ''),
+                        skills: serverItem.selected_skills || [],
+                        attachments: serverItem.attachments || [],
+                        order: serverItem.after_turn ? serverIndex : undefined,
                         clientId: clientId,
                         steerId: steerId,
                         createdAt: Math.round(Number(serverItem.created_at || 0) * 1000) || Date.now(),
@@ -25003,7 +25088,7 @@ async function syncFollowupQueueFromServer(sessionId) {
                     return;
                 }
                 if (state === 'consumed') {
-                    commitPendingSteerProcessRow(sid, local, serverItem);
+                    if (!serverItem.after_turn) commitPendingSteerProcessRow(sid, local, serverItem);
                     var terminalIndex = q.indexOf(local);
                     if (terminalIndex >= 0) q.splice(terminalIndex, 1);
                     return;
@@ -25012,6 +25097,11 @@ async function syncFollowupQueueFromServer(sessionId) {
                 local.clientId = clientId || local.clientId;
                 local.replacementRunId = String(serverItem.replacement_run_id || local.replacementRunId || '');
                 local.steerMode = String(serverItem.mode || local.steerMode || '') === 'append' ? 'append' : 'interrupt';
+                local.serverQueued = !!serverItem.after_turn;
+                if (local.serverQueued) {
+                    if (local.status !== 'withdrawing') local.status = state === 'claimed' ? 'accepted' : '';
+                    return;
+                }
                 local.status = state === 'restarting' ? 'restarting' : 'accepted';
                 if (local.steerMode === 'append' && (state === 'queued' || state === 'claimed')) {
                     // Rebuild the transient tail anchor after refresh/reattach.
@@ -25049,7 +25139,7 @@ async function syncFollowupQueueFromServer(sessionId) {
 
 function removeConsumedFollowupSteer(sessionId, ev) {
     const sid = String(sessionId || '');
-    if (!sid || !ev || !ev.steer) return false;
+    if (!sid || !ev || (!ev.steer && !ev.queued_followup)) return false;
     var steerId = String(ev.steer_id || '');
     var clientId = String(ev.client_id || '');
     if (!steerId && !clientId) return false;
@@ -25185,6 +25275,10 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
             return String(entry.id) === String(itemId);
         });
         if (!queued || !['submitting', 'sending', 'accepted', 'restarting'].includes(String(queued.status || ''))) return;
+        if (queued.serverQueued) {
+            void syncFollowupQueueFromServer(sid);
+            return;
+        }
         // Recovery can start a replacement /chat, so it participates in the
         // same per-session dispatcher as manual and automatic sends.
         void withFollowupDispatch(sid, async function () {
@@ -25301,6 +25395,32 @@ function scheduleAcceptedFollowupWatch(sid, itemId) {
     }, 1200);
 }
 
+async function ensureQueuedFollowupRegistered(sid, item) {
+    if (item.serverQueued && item.steerId) return true;
+    item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+    persistFollowupQueue(sid);
+    var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/followup_queue', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({items: [{client_id: item.clientId, message: item.text,
+            ui_content: item.display || item.text, selected_skills: item.skills || [],
+            attachments: item.attachments || [], mode: item.steerMode}]}),
+    });
+    var payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.error || 'queue registration failed');
+    var operation = payload.items && payload.items[0];
+    if (!operation) throw new Error('queue operation missing');
+    if (operation.state === 'consumed') {
+        takeFollowupItem(sid, item.id);
+        renderFollowupQueue(sid);
+        scheduleFollowupQueueDrain(sid, 0);
+        return false;
+    }
+    item.steerId = String(operation.id || '');
+    item.serverQueued = !!operation.after_turn;
+    persistFollowupQueue(sid);
+    return item.serverQueued && operation.state === 'queued';
+}
+
 // Resolve as soon as /chat has been accepted and its SSE stream is ready. The
 // long-running sendMessage promise continues consuming the stream in the
 // background, while the dispatcher is released for genuine in-run steers.
@@ -25407,6 +25527,11 @@ async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) 
         scheduleFollowupQueueDrain(sid, 120);
         return false;
     }
+    if (typeof ensureQueuedFollowupRegistered === 'function' && !await ensureQueuedFollowupRegistered(sid, item)) {
+        item.status = '';
+        persistFollowupQueue(sid);
+        return false;
+    }
     var started = await startFollowupChat({
         message: item.text,
         displayMessage: item.display || item.text,
@@ -25415,6 +25540,8 @@ async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) 
         fromQueue: true,
         sessionId: sid,
         forceStart: true,
+        queuedFollowup: !!item.serverQueued,
+        steerId: item.serverQueued ? item.steerId : '',
     });
     if (started) {
         takeFollowupItem(sid, itemId);
@@ -25468,6 +25595,9 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
     if (options.autoAfterRun) {
         return sendQueuedFollowupAsChat(sid, item, itemId, options.autoDispatchEpoch);
     }
+    if (item.serverQueued && !isSessionRunning(sid) && !isServerStreamActive(sid)) {
+        return sendQueuedFollowupAsChat(sid, item, itemId);
+    }
     item.awaitingRunEnd = false;
     item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
     item.status = 'submitting';
@@ -25490,6 +25620,7 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
         );
         item.steerInFlight = false;
         item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
+        item.serverQueued = !!(steerResult && steerResult.item && steerResult.item.after_turn);
         if (steerResult && steerResult.item && steerResult.item.mode) {
             item.steerMode = String(steerResult.item.mode) === 'append' ? 'append' : 'interrupt';
         }
@@ -25986,6 +26117,10 @@ async function sendMessage(options) {
     }
     if (renderAsSteer) formData.append('followup_steer', 'true');
     if (renderAsSteer && options.steerId) formData.append('steer_id', String(options.steerId));
+    if (options.queuedFollowup && options.steerId) {
+        formData.append('queued_followup', 'true');
+        formData.append('steer_id', String(options.steerId));
+    }
     /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */
     if (!switchedAway) applyContextTokenLabelForCurrentSession();
     let streamEventIdx = preCount + 1;
@@ -26046,6 +26181,7 @@ async function sendMessage(options) {
                 console.error('run start callback failed:', onStartedError);
             }
         }
+        if (response.ok && typeof publishFollowupQueueToRun === 'function') void publishFollowupQueueToRun(runSessionId);
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
         if (!runCtx || runCtx.terminalSeen !== true) {
             streamDisconnectedUnexpectedly = true;

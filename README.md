@@ -667,7 +667,8 @@ events.
 
 `GOAL_ENABLED=0`（也接受 `false`、`no` 或 `off`）会禁用整个功能；默认启用。禁用后模型工具列表不会
 暴露 Goal 工具，服务端不会自动续跑，Goal 控制接口也会拒绝变更。`GOAL_RUNNER_POLL_SECONDS` 控制服务端
-扫描间隔（默认 `2` 秒，最小 `0.5` 秒），`GOAL_MAX_CONSECUTIVE_FAILURES` 控制连续失败暂停阈值（默认 `3`）。
+扫描间隔（默认 `2` 秒，最小 `0.5` 秒）。运行报错退出时 Goal 立即暂停，保留错误信息，需用户恢复后继续；
+`GOAL_MAX_CONSECUTIVE_FAILURES` 仅控制运行中断后的连续重试暂停阈值（默认 `3`）。
 Judge 可通过 `GOAL_JUDGE_MAX_OUTPUT_TOKENS`、`GOAL_JUDGE_EVIDENCE_MAX_CHARS`、
 `GOAL_JUDGE_MAX_PARSE_FAILURES` 和 `GOAL_JUDGE_MAX_TRANSPORT_FAILURES` 调整。
 修改这些环境变量后需要重启 MyAgent。
@@ -675,5 +676,6 @@ Judge 可通过 `GOAL_JUDGE_MAX_OUTPUT_TOKENS`、`GOAL_JUDGE_EVIDENCE_MAX_CHARS`
 Set `GOAL_ENABLED=0` (also accepts `false`, `no`, or `off`) to disable the entire feature; it is enabled by
 default. When disabled, Goal tools are omitted, server-side continuation stops, and Goal control mutations are
 rejected. `GOAL_RUNNER_POLL_SECONDS` controls the server scan interval (default `2`, minimum `0.5` seconds), and
-`GOAL_MAX_CONSECUTIVE_FAILURES` controls the automatic pause threshold (default `3`). Restart MyAgent after
+runtime errors immediately pause the Goal until the user resumes it. `GOAL_MAX_CONSECUTIVE_FAILURES` controls
+the pause threshold for repeated interrupted runs only (default `3`). Restart MyAgent after
 changing these environment variables.

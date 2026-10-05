@@ -10,6 +10,29 @@ log = logging.getLogger(__name__)
 _runner = None
 _workers = {}
 
+# 会话面板只有在对应扩展命名空间存在后才会被投影（见 app/plugins/ui.py），
+# 新会话因此需要一次初始化写入。初始化以「命名空间状态」为准，而不是「每次宿主
+# 启动都写一遍」：追加到旧会话事件日志里的控制事件会被侧栏的活动时间回填当成新的
+# 对话活动，把所有会话顶成「今天」并打乱顺序。
+_PANEL_PLUGIN_ID = "execution-tools"
+_PANEL_NAMESPACE = "panel"
+
+
+async def _initialize_owner(service, owner):
+    """恢复一个会话的执行资源，并在缺失时补齐会话面板状态（幂等）。"""
+    await service.call(service.recover, owner)
+    store = service._store()
+    if store is None:
+        return
+    try:
+        row = await asyncio.to_thread(store.get, owner, _PANEL_PLUGIN_ID, _PANEL_NAMESPACE)
+    except Exception:
+        log.debug("session panel state probe failed: %s", owner, exc_info=True)
+        return
+    if isinstance(row, dict) and row.get("value") is not None:
+        return
+    await service.call(service.persist, owner, _PANEL_NAMESPACE, {"enabled": True})
+
 
 async def _continue(service, owner):
     import webui
@@ -52,8 +75,7 @@ async def start_runner(service):
                     for row in rows:
                         owner = str(row.get("id") or "")
                         if owner and owner not in initialized:
-                            await service.call(service.recover, owner)
-                            await service.call(service.persist, owner, "panel", {"enabled": True})
+                            await _initialize_owner(service, owner)
                             initialized.add(owner)
                 for owner in await service.call(service.pending_owners):
                     task = _workers.get(owner)

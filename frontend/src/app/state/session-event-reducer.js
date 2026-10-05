@@ -100,6 +100,10 @@ function applySessionEvent(event, opts) {
             messageRecord: messageRecord,
         };
     }
+    if (type === 'user' && event.queued_followup) {
+        sessionStore.clearRunFinalizing(sessionId, runId);
+        return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
+    }
     if (type === 'final' && source === 'sse') {
         const localRun = getSessionRunState(sessionId);
         const localRunId = String((localRun && localRun.runId) || '').trim();

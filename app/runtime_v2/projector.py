@@ -341,6 +341,10 @@ class RuntimeProjector:
         elif event_type == "user_turn_committed":
             self._append_message(snapshot, event, "user")
             self._append_model_message(snapshot, event)
+            if event.payload.get("queued_followup"):
+                run = snapshot.get("runs", {}).get(self._event_run_id(event))
+                if isinstance(run, dict) and run.get("status") == "running":
+                    run["phase"] = "running"
         elif event_type == "assistant_final_committed":
             self._append_message(snapshot, event, "assistant")
             self._commit_assistant_final_model(snapshot, event)

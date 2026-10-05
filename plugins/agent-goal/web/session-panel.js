@@ -186,7 +186,7 @@ export function renderSessionPanel(context) {
         const used = Math.max(0, Number(goal.used_tokens || 0));
         const tokens = goal.token_budget == null ? `Token ${t('已消耗')} ${used}` : `Token ${used} / ${goal.token_budget}`;
         const reasonLabels = {
-            token_budget_exhausted: 'Token 预算已耗尽', consecutive_run_failures: '连续运行失败',
+            token_budget_exhausted: 'Token 预算已耗尽', run_failed: '运行报错，已暂停', consecutive_run_failures: '连续运行失败',
             judge_parse_failures: 'Judge 解析连续失败', judge_transport_failures: 'Judge 调用连续失败',
             react_iteration_limit: 'ReAct 已达到轮次上限', manual: '手动暂停',
         };

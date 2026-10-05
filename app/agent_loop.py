@@ -839,6 +839,8 @@ async def _apply_stop_hooks(
 ) -> Dict[str, Any]:
     """Let a Stop Hook request more work, with a hard retry boundary."""
 
+    if state.get("_run_error"):
+        return state
     max_retries = max(0, min(10, int(os.getenv("STOP_HOOK_MAX_RETRIES", "3"))))
     for attempt in range(max_retries + 1):
         result = await _dispatch_state_hook(
@@ -855,12 +857,14 @@ async def _apply_stop_hooks(
             _append_hook_context(state, result.additional_context, "Stop")
         if result.should_pause or result.requires_approval:
             reason = _hook_decision_reason(result, "Stop Hook paused the run.")
+            state["_queue_continuation_blocked"] = True
             state["final_response"] = f"执行已由 Stop Hook 暂停：{reason}"
             return state
         if not result.blocked:
             return state
         reason = _hook_decision_reason(result, "Stop Hook requested more work.")
         if attempt >= max_retries:
+            state["_queue_continuation_blocked"] = True
             state["final_response"] = (
                 f"Stop Hook 在 {max_retries + 1} 次检查后仍阻止结束：{reason}"
             )
@@ -1225,6 +1229,39 @@ def enqueue_session_steer(
     return {"ok": True, "item": item, "queued": depth}
 
 
+def sync_session_followup_queue(session_id: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Publish/reorder ordinary queued turns without interrupting their owner.
+
+    Only pending entries supplied by this client are reordered. Claimed and
+    terminal entries are never resurrected by an older browser snapshot.
+    """
+    sid = str(session_id or "").strip()
+    with _STEER_LOCK, _steer_transaction(sid):
+        rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
+        by_client = {str(x.get("client_id") or ""): x for x in rows}
+        ordered = []
+        result = []
+        for entry in items:
+            client_id = str(entry["client_id"])
+            item = by_client.get(client_id)
+            if item is None:
+                now = time.time()
+                item = {**entry, "id": str(uuid.uuid4()), "state": "queued",
+                        "version": 1, "created_at": now, "updated_at": now,
+                        "after_turn": True, "replacement_run_id": ""}
+                rows.append(item)
+                by_client[client_id] = item
+            if item.get("after_turn") and item.get("state") == "queued":
+                ordered.append(item)
+            result.append(dict(item))
+        # Preserve other clients' slots and all in-flight operations.
+        supplied_ids = {item["id"] for item in ordered}
+        iterator = iter(ordered)
+        rows = [next(iterator) if row["id"] in supplied_ids else row for row in rows]
+        _save_steer_queue_locked(sid, _trim_steer_rows(rows))
+    return {"ok": True, "items": result}
+
+
 def remove_session_steer(session_id: str, steer_id: str = "", client_id: str = "") -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     target_id = str(steer_id or "").strip()
@@ -1272,6 +1309,7 @@ def _pop_session_steers(session_id: str, *, modes: Optional[set[str]] = None) ->
             _normalize_steer_item(x)
             for x in _load_steer_queue_locked(sid)
             if str((x or {}).get("state") or "queued") in _STEER_CLAIMABLE_STATES
+            and not (x or {}).get("after_turn")
             and str((x or {}).get("mode") or "interrupt").strip().lower() in allowed_modes
         ]
     return items
@@ -1285,6 +1323,7 @@ def _has_session_steers(session_id: str, *, modes: Optional[set[str]] = None) ->
     with _STEER_LOCK:
         return any(
             str((x or {}).get("state") or "queued") in _STEER_CLAIMABLE_STATES
+            and not (x or {}).get("after_turn")
             and str((x or {}).get("mode") or "interrupt").strip().lower() in allowed_modes
             for x in _load_steer_queue_locked(sid)
         )
@@ -1312,7 +1351,8 @@ def list_session_steers(session_id: str, *, include_terminal: bool = False) -> D
         rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
     if not include_terminal:
         rows = [x for x in rows if x.get("state") in _STEER_PENDING_STATES]
-    rows.sort(key=lambda x: float(x.get("created_at") or 0.0))
+    if not any(row.get("after_turn") for row in rows):
+        rows.sort(key=lambda x: float(x.get("created_at") or 0.0))
     return {"ok": True, "items": rows}
 
 
@@ -1336,6 +1376,8 @@ def transition_session_steer(
                 if item.get("id") != target_id:
                     continue
                 if item.get("state") == target_state:
+                    if target_state == "claimed" and "claimed" not in allowed:
+                        return {"ok": False, "error": "steer already claimed"}
                     changed_updates = {k: v for k, v in updates.items() if v is not None and item.get(k) != v}
                     if changed_updates:
                         item.update(changed_updates)
@@ -1361,6 +1403,7 @@ def _claim_session_steers(
     run_id: str,
     *,
     modes: Optional[set[str]] = None,
+    after_turn: bool = False,
 ) -> List[Dict[str, Any]]:
     sid = str(session_id or "").strip()
     owner = str(run_id or "").strip()
@@ -1374,6 +1417,8 @@ def _claim_session_steers(
             rows = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
             changed = False
             for index, item in enumerate(rows):
+                if bool(item.get("after_turn")) != after_turn:
+                    continue
                 if str(item.get("mode") or "interrupt") not in allowed_modes:
                     continue
                 state_name = str(item.get("state") or "queued")
@@ -1389,6 +1434,8 @@ def _claim_session_steers(
                 rows[index] = item
                 claimed.append(dict(item))
                 changed = True
+                if after_turn:
+                    break  # Ordinary queued turns keep one answer per input.
             if changed:
                 _save_steer_queue_locked(sid, _trim_steer_rows(rows))
     return claimed
@@ -2500,6 +2547,7 @@ def _runtime_v2_commit_user_turn(
                 if value:
                     data[key] = value
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+        data.update(ui_event_metadata)
         committed_event = _runtime_v2_react_history_ops().commit_user_turn(
             sid,
             model_content,
@@ -2542,25 +2590,52 @@ def _latest_official_user_turn_id(session_id: str) -> str:
     sid = str(session_id or "").strip()
     if not sid or not _runtime_v2_is_primary():
         return ""
+
+    def official_turn_id(event: Any) -> str:
+        if str(getattr(event, "type", "") or "") not in {"message_user", "user_turn_committed"}:
+            return ""
+        payload = dict(getattr(event, "payload", {}) or {})
+        if str(payload.get("ui_type") or "user") == "user_steer":
+            return ""
+        if payload.get("turn_id"):
+            return str(payload["turn_id"])
+        run_id = str(getattr(event, "run_id", "") or "").strip()
+        if run_id:
+            return run_id
+        seq = getattr(event, "seq", None)
+        return f"turn:{seq}" if seq is not None else ""
+
     try:
         event_log = _runtime_v2_react_history_ops().event_log
         reader = getattr(event_log, "read_tail_window", None)
         if callable(reader):
             events, _ = reader(sid, max_bytes=2 * 1024 * 1024, max_events=4000)
-        else:
-            events = list(event_log.iter_events(sid))
-        for event in reversed(events):
-            if str(getattr(event, "type", "") or "") not in {"message_user", "user_turn_committed"}:
-                continue
-            payload = dict(getattr(event, "payload", {}) or {})
-            if str(payload.get("ui_type") or "user") == "user_steer":
-                continue
-            run_id = str(getattr(event, "run_id", "") or "").strip()
-            if run_id:
-                return run_id
-            seq = getattr(event, "seq", None)
-            if seq is not None:
-                return f"turn:{seq}"
+            for event in reversed(events):
+                turn_id = official_turn_id(event)
+                if turn_id:
+                    return turn_id
+            # A long Goal can push its user message outside both tail limits.
+            # Search older indexed windows instead of treating a continuation
+            # as a new user turn (which retires the cumulative review baseline).
+            before_reader = getattr(event_log, "read_before_seq", None)
+            if callable(before_reader):
+                before = events[0].seq if events else event_log.next_seq(sid)
+                while before > 1:
+                    older = before_reader(sid, before, 4000)
+                    if not older:
+                        break
+                    for event in reversed(older):
+                        turn_id = official_turn_id(event)
+                        if turn_id:
+                            return turn_id
+                    before = older[0].seq
+                return ""
+        # Compatibility readers may only expose streaming iteration. Retain
+        # the newest matching id without materializing the full event log.
+        latest = ""
+        for event in event_log.iter_events(sid):
+            latest = official_turn_id(event) or latest
+        return latest
     except Exception:
         logger.debug("Could not resolve latest official user turn: session=%s", sid, exc_info=True)
     return ""
@@ -2587,11 +2662,12 @@ def _runtime_v2_commit_assistant_final(
         return False
     try:
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
+        turn_id = str(state.get("_runtime_v2_turn_id") or run_id)
         _runtime_v2_react_history_ops().commit_assistant_final(
             sid,
             str(content or ""),
             ui_content=ui_content,
-            operation_id=f"final:{run_id}" if run_id else "",
+            operation_id=f"final:{turn_id}" if turn_id else "",
             run_id=run_id or None,
             model_payload={"metadata": {"is_final": True}},
         )
@@ -2874,14 +2950,16 @@ async def _finalize_agent_run_lifecycle(
             )
 
         react_limit_reached = bool(state.get("react_limit_reached"))
+        run_error = str(state.get("_run_error") or "").strip()
+        if run_error:
+            # ReAct preserves an error card/final response for display rather
+            # than raising API failures. That is still a failed execution.
+            completed = False
+            terminal_event = {"type": "run_failed", "error": run_error, "ephemeral": True}
         workflow_outcome = (
-            "react_limit"
-            if react_limit_reached
-            else (
-                "finished"
-                if completed
-                else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
-            )
+            ("react_limit" if react_limit_reached else "finished")
+            if completed
+            else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
         )
         try:
             workflow_after_run = _workflow_callbacks().call(
@@ -2891,7 +2969,7 @@ async def _finalize_agent_run_lifecycle(
                 outcome=workflow_outcome,
                 error=(
                     "ReAct reached the maximum iteration limit."
-                    if react_limit_reached
+                    if workflow_outcome == "react_limit"
                     else str(
                         terminal_event.get("error")
                         or terminal_event.get("reason")
@@ -2920,6 +2998,10 @@ async def _finalize_agent_run_lifecycle(
             )
 
         _clear_steer_run_control(session_id, steer_control)
+        try:
+            _release_pending_queued_turn(state)
+        except Exception:
+            logger.warning("queued turn claim cleanup failed: session=%s run_id=%s", session_id, run_id, exc_info=True)
         if completed:
             terminal_event = {
                 "type": "run_finished",
@@ -2952,7 +3034,7 @@ async def _finalize_agent_run_lifecycle(
             execution_metrics.finish_run(
                 session_id,
                 run_id,
-                "react_limit" if react_limit_reached else workflow_outcome,
+                workflow_outcome,
                 reason=str(
                     terminal_event.get("reason")
                     or terminal_event.get("error")
@@ -3477,6 +3559,7 @@ def _model_tool_definition_name(definition: Any) -> str:
 
 async def _combined_tool_registry_revision(
     session_meta: Mapping[str, Any],
+    session_id: str = "",
 ) -> tuple[Any, ...]:
     """Return cheap generations for every source that shapes the catalog."""
     from agent_extensions import extension_catalog_generation
@@ -3491,7 +3574,9 @@ async def _combined_tool_registry_revision(
             "is_subagent": bool(session_meta.get("is_subagent")),
             "agent_team_member_id": session_meta.get("agent_team_member_id"),
             "subagent_depth": session_meta.get("subagent_depth"),
+            "subagent_type": session_meta.get("subagent_type"),
             "readonly_strict": session_meta.get("readonly_strict"),
+            "model_profile_id": session_meta.get("model_profile_id"),
             "fork_runtime_config": session_meta.get("fork_runtime_config"),
         },
         ensure_ascii=False,
@@ -3736,7 +3821,7 @@ async def build_combined_tool_registry_for_session(
 
     fork_runtime_config = session_meta.get("fork_runtime_config")
     inherited_tools = (
-        fork_runtime_config.get("tools")
+        fork_runtime_config.get("authorized_tools", fork_runtime_config.get("tools"))
         if isinstance(fork_runtime_config, dict)
         else None
     )
@@ -3748,6 +3833,12 @@ async def build_combined_tool_registry_for_session(
                 "Ignoring invalid inherited fork tool definitions for session=%s",
                 sid,
             )
+
+    # Fork snapshots may predate a child's profile. Disclosure can only expose
+    # the catalog left after that profile has been applied.
+    if isinstance(inherited_tools, list) and inherited_tools:
+        from agent_subagent import filter_tools_for_session
+        combined_tools = filter_tools_for_session(combined_tools, session_meta)
 
     registry = ToolRegistry()
     for definition in combined_tools:
@@ -4014,10 +4105,12 @@ async def _consume_steer_messages(
     emit: Optional[Callable[[Dict[str, Any]], Any]] = None,
     *,
     modes: Optional[set[str]] = None,
+    after_turn: bool = False,
 ) -> bool:
     sid = str(state.get("session_id") or "").strip()
     run_id = str(state.get("_runtime_v2_run_id") or "").strip()
-    items = _claim_session_steers(sid, run_id, modes=modes)
+    items = (_claim_session_steers(sid, run_id, modes=modes, after_turn=True)
+             if after_turn else _claim_session_steers(sid, run_id, modes=modes))
     if not items:
         return False
     work_messages = list(state.get("work_messages", []))
@@ -4028,24 +4121,50 @@ async def _consume_steer_messages(
         ui_text = str((item or {}).get("ui_content") or text).strip()
         if not text:
             continue
-        msg = UserMessage(content=text)
         steer_id = str((item or {}).get("id") or "")
         steer_mode = str((item or {}).get("mode") or "interrupt")
+        metadata = {"steer_id": steer_id, "client_id": str(item.get("client_id") or ""),
+                    "steer_mode": steer_mode}
+        if after_turn:
+            state["_pending_queued_turn_id"] = steer_id
+            state["_queued_turn_committed"] = False
+            state["_runtime_v2_turn_id"] = steer_id
+            state["_change_review_turn_id"] = steer_id
+            state["_submitted_user_input"] = text
+            state["_tool_review_assistant_context"] = []
+            state["_tool_review_user_followups"] = []
+            metadata.update(queued_followup=True, turn_id=steer_id, preserve_unread_result=True)
+            prompt_hook = await _dispatch_state_hook(
+                "UserPromptSubmit", state,
+                {"matcher_value": text, "input": {"prompt": text}}, emit,
+            )
+            if prompt_hook.blocked or prompt_hook.should_pause or prompt_hook.requires_approval:
+                reason = _hook_decision_reason(prompt_hook, "UserPromptSubmit Hook rejected this prompt.")
+                transition_session_steer(sid, steer_id, {"claimed"}, "failed", error=reason)
+                raise RuntimeError(reason)
+            if prompt_hook.updated_input is not None:
+                text = str(prompt_hook.updated_input.get("prompt", prompt_hook.updated_input.get("user_input", text)))
+            content = item.get("user_content") or text
+            if isinstance(content, list) and prompt_hook.updated_input is not None:
+                content = [{"type": "text", "text": text}, *[x for x in content if x.get("type") != "text"]]
+        else:
+            content = text
+        msg = UserMessage(content=content)
         try:
             committed = _runtime_v2_commit_user_turn(
                 state,
                 msg,
                 ui_content=ui_text,
-                ui_type="user_steer",
+                ui_type="user" if after_turn else "user_steer",
                 operation_id=steer_id or str((item or {}).get("client_id") or ""),
-                ui_metadata={
-                    "steer_id": steer_id,
-                    "client_id": str((item or {}).get("client_id") or ""),
-                    "steer_mode": steer_mode,
-                },
+                ui_metadata=metadata,
             )
             if not committed:
                 _persist_state_with_model_append(state, msg)
+            if after_turn:
+                state["_queued_turn_committed"] = True
+                from session_lifecycle import mark_run_running
+                mark_run_running(sid, run_id)
         except Exception:
             transition_session_steer(sid, steer_id, {"claimed"}, "failed", error="user turn commit failed")
             raise
@@ -4057,13 +4176,21 @@ async def _consume_steer_messages(
             work_messages.append(msg)
             llm_history.append(msg)
         state["user_input"] = text
+        if after_turn and prompt_hook.additional_context:
+            hook_msg = SystemMessage(content=f"[Hook additional context · UserPromptSubmit]\n{prompt_hook.additional_context}")
+            work_messages.append(hook_msg)
+            llm_history.append(hook_msg)
+            state["work_messages"] = work_messages
+            state["llm_history"] = llm_history
+            _persist_state_with_model_append(state, hook_msg)
         _workflow_callbacks().call("capture_dialogue",
             state,
             "user",
             ui_text,
-            kind="followup",
+            kind="question" if after_turn else "followup",
         )
-        _capture_tool_review_user_followup(state, ui_text)
+        if not after_turn:
+            _capture_tool_review_user_followup(state, ui_text)
         state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
         state["work_messages"] = work_messages
         state["llm_history"] = llm_history
@@ -4071,12 +4198,11 @@ async def _consume_steer_messages(
             await _push_stream_event(
                 state,
                 {
-                    "type": "user_steer",
+                    "type": "user" if after_turn else "user_steer",
                     "content": ui_text,
-                    "steer": True,
-                    "steer_id": steer_id,
-                    "client_id": str((item or {}).get("client_id") or ""),
-                    "steer_mode": steer_mode,
+                    "steer": not after_turn,
+                    **metadata,
+                    "attachments": item.get("ui_attachments") or [],
                     "_runtime_v2_committed": committed,
                 },
                 emit=emit,
@@ -4089,6 +4215,9 @@ async def _consume_steer_messages(
             consumed_by=run_id,
             consumed_at=time.time(),
         )
+        if after_turn:
+            state.pop("_pending_queued_turn_id", None)
+            state.pop("_queued_turn_committed", None)
         changed = True
     return changed
 
@@ -4693,44 +4822,46 @@ async def _emit_live_metrics(state, emit):
     )
 
 
-def _tool_result_indicates_failure(_tool_name: str, result: Any) -> bool:
-    """
-    工具未抛异常仍可能失败（与过程区可见的「错误输出」一致），例如：
-    - run_shell：非零 Exit code、任意位置的 Error:（勿仅扫描前缀：stdout 很长时错误在末尾）
-    - 各工具返回 JSON 含 \"error\" 字段
-    """
-    if result is None:
-        return False
+def _structured_tool_result(result: Any) -> Dict[str, Any]:
     if isinstance(result, dict):
-        if result.get("error") is not None:
-            return True
-        if result.get("ok") is False:
-            return True
-    s = str(result).strip()
-    if not s:
-        return False
-    # run_shell / 校验失败等多以 \"Error:\" 标明（可能在全文任意位置）
-    if re.search(r"(?i)\berror\s*:", s):
-        return True
-    if "error executing command:" in s.lower():
-        return True
-    if "regex error:" in s.lower():
-        return True
-    if s.startswith("{") and '"error"' in s[:1200]:
+        return result
+    if isinstance(result, str) and result.lstrip().startswith("{"):
         try:
-            j = json.loads(s)
-            if isinstance(j, dict) and j.get("error") is not None:
-                return True
-        except Exception:
+            value = json.loads(result)
+            if isinstance(value, dict):
+                return value
+        except (ValueError, TypeError):
             pass
-    matches = list(re.finditer(r"(?mi)Exit code:\s*(-?\d+)", s))
-    if matches:
-        try:
-            if int(matches[-1].group(1)) != 0:
-                return True
-        except ValueError:
-            pass
-    return False
+    return {}
+
+
+def _tool_result_exit_code(tool_name: str, result: Any) -> Optional[int]:
+    value = _structured_tool_result(result)
+    code = value.get("exit_code")
+    if code is None and tool_name in {"job_output", "run_shell"}:
+        code = (value.get("job") or {}).get("exit_code") if isinstance(value.get("job"), dict) else None
+    if isinstance(code, int) and not isinstance(code, bool):
+        return code
+    if tool_name == "run_shell" and not value:
+        matches = list(re.finditer(r"(?mi)^Exit code:\s*(-?\d+)\s*$", str(result or "")))
+        if matches:
+            return int(matches[-1].group(1))
+    return None
+
+
+def _tool_result_indicates_failure(tool_name: str, result: Any) -> bool:
+    """Read result metadata; file contents and echoed commands are not status."""
+    value = _structured_tool_result(result)
+    if value:
+        if value.get("error") is not None or value.get("ok") is False:
+            return True
+        job = value.get("job")
+        if tool_name == "job_output" and isinstance(job, dict) and job.get("status") == "failed":
+            return True
+    code = _tool_result_exit_code(tool_name, result)
+    if code is not None:
+        return code != 0
+    return bool(re.match(r"(?i)^(?:Error\s*:|Error executing command:|Regex error:)", str(result or "").strip()))
 
 
 def _tool_result_status(
@@ -4743,18 +4874,15 @@ def _tool_result_status(
     """Structured status metadata while preserving the existing text result API."""
     text = str(result or "")
     sample = text if len(text) <= 16_384 else text[:8192] + "\n" + text[-8192:]
-    exit_code = None
-    matches = list(re.finditer(r"(?mi)Exit code:\s*(-?\d+)", sample))
-    if matches:
-        try:
-            exit_code = int(matches[-1].group(1))
-        except (TypeError, ValueError):
-            exit_code = None
+    value = _structured_tool_result(result)
+    exit_code = _tool_result_exit_code(tool_name, result)
     is_failed = _tool_result_indicates_failure(tool_name, result) if failed is None else bool(failed)
     status: Dict[str, Any] = {
         "ok": not is_failed,
-        "truncated": "truncated" in sample.lower() or "截断" in sample,
-        "timed_out": "timed out" in sample.lower() or "timeout" in sample.lower(),
+        "truncated": value.get("truncated") is True if value else bool(re.search(
+            r"(?m)^(?:\[output truncated;|\.\.\. output truncated|\.\.\. \[truncated,)", sample)),
+        "timed_out": value.get("timed_out") is True if value else bool(re.search(
+            r"(?mi)^Error: (?:Command|ripgrep) timed out after \d", sample)),
     }
     if exit_code is not None:
         status["exit_code"] = exit_code
@@ -5069,7 +5197,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
 
     # ========== 2. 循环变量初始化 ==========
-    iter_count = 0
+    state["_queue_can_continue"] = False
+    state.pop("_run_error", None)
+    iter_offset = int(state.get("_queued_react_iter_offset") or 0)
+    iter_count = iter_offset
     tool_results = []
     final_content = ""
     llm_stream_seq = int(state.get("_active_stream_seq") or 0)
@@ -5111,6 +5242,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             1,
             int(session_meta.get("subagent_max_iter") or SUBAGENT_MAX_REACT_ITER),
         )
+    max_react_iter += iter_offset
     parent_session_id = str(
         state.get("_subagent_parent_session_id")
         or (session_meta.get("parent_session_id") if isinstance(session_meta, dict) else "")
@@ -5403,7 +5535,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # than work. Separating the two says which, instead of leaving one
             # number that reads like a slow cache hit.
             _t_tool_revision = time.perf_counter()
-            tool_revision = await _combined_tool_registry_revision(session_meta)
+            tool_revision = await _combined_tool_registry_revision(session_meta, state["session_id"])
             _pre_api_timing_mark(pre_api_timings, "tool_registry_revision", _t_tool_revision)
             tool_cache = state.get("_combined_tool_registry_cache")
             if isinstance(tool_cache, dict) and tool_cache.get("revision") == tool_revision:
@@ -5848,6 +5980,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     f"LLM 调用失败 [{_cls['code']}] {_cls['title']}："
                                     f"{_cls['msg']}\n{_cls['solution']}"
                                 )
+                                state["_run_error"] = context_limit_last_error_detail or final_content
                                 break
                 else:
                     nl, nk, chg, used_llm_summary, new_recap = llm_history, kcur, False, False, None
@@ -6623,6 +6756,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         emit_event=_publish_host_tool_event,
                         services={
                             "tool_name": tool_name,
+                            "tool_registry": tool_registry,
                             "security_context": sec_context,
                             "security_request": sec_request,
                             "security_decision": sec_decision,
@@ -7321,6 +7455,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         ]
                     else:
                         result["tool_detail_llm"] = str(current_detail) + suffix
+                if isinstance(result, dict) and call.get("_bridge_call"):
+                    result["bridge_call"] = call["_bridge_call"]
                 return result
 
             # ---------- 2.6 调用 LLM ----------
@@ -8497,6 +8633,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             emit=emit,
                         )
                     final_content = f"LLM 调用失败 [{_cls['code']}] {_cls['title']}：{_cls['msg']}\n{_cls['solution']}"
+                    state["_run_error"] = _err_detail
                     break
                 finally:
                     _set_model_switch_status_callback(iter_client, None)
@@ -8697,6 +8834,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         )
                         continue
                     final_content = "模型连续返回缺少名称或 ID 的工具调用，已停止执行。"
+                    state["_run_error"] = final_content
                     break
 
             if emit:
@@ -9434,11 +9572,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if length_continuation_exhausted:
                     _checkpoint_output_continuation(state, status="failed")
                     final_content = "模型输出仍达到长度上限，自动继续次数已用完。完整工具调用及其真实结果已保存，参数草稿未执行。"
+                    state["_run_error"] = final_content
                     break
                 max_react_iter = max(max_react_iter, iter_count + 1)
 
             hook_pause_reason = str(state.pop("_hook_pause_requested", "") or "").strip()
             if hook_pause_reason:
+                state["_queue_continuation_blocked"] = True
                 final_content = f"执行已由 Hook 暂停：{hook_pause_reason}"
                 await _push_stream_event(
                     state,
@@ -9555,6 +9695,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     continue
                 state["final_result_retries"] = 0
                 state["empty_final_retries"] = 0
+                state["_queue_can_continue"] = bool(final_content)
                 break
 
         else:
@@ -10503,7 +10644,7 @@ async def astream_events(
             )
             if not atomic_user_turn:
                 _runtime_v2_append_model_message(state, user_message)
-            if user_ui_type == "user_steer" and str(user_operation_id or "").strip():
+            if str(user_operation_id or "").strip():
                 transition_session_steer(
                     session_id,
                     str(user_operation_id).strip(),
@@ -10583,63 +10724,66 @@ async def astream_events(
                 run_id=runtime_v2_run_id,
                 user_event_type=user_ui_type,
             )
-            state = await _run_react_node_off_loop(state, emit)
-            state = await _apply_stop_hooks(state, emit)
-            final_timings: Dict[str, int] = {}
-            _t_final = time.perf_counter()
-            await emit({"type": "status", "content": "Loop finished"})
-            final_timings["emit_loop_finished"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_loop_finished", final_timings["emit_loop_finished"], run_id=runtime_v2_run_id, mode="chat")
-            stream_event_count_after_react = len(state["stream_events"])
-            _t_final = time.perf_counter()
-            state = validate_final(state)
-            final_timings["validate_final"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "validate_final", final_timings["validate_final"], run_id=runtime_v2_run_id, mode="chat")
-            _t_final = time.perf_counter()
-            for evt in state["stream_events"][stream_event_count_after_react:]:
-                if evt.get("type") in ("status", "validate_final", "final"):
-                    await emit(evt)
-            final_timings["emit_validate_events"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_validate_events", final_timings["emit_validate_events"], run_id=runtime_v2_run_id, mode="chat")
-            stream_event_count_after_validate = len(state["stream_events"])
-            _t_final = time.perf_counter()
-            state = prepare_final_event(state)
-            final_timings["prepare_final_event"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "prepare_final_event", final_timings["prepare_final_event"], run_id=runtime_v2_run_id, mode="chat")
-            _t_final = time.perf_counter()
-            for evt in state["stream_events"][stream_event_count_after_validate:]:
-                if evt.get("type") in ("status", "validate_final", "final"):
-                    await emit(evt)
-            final_timings["emit_final_event"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_final_event", final_timings["emit_final_event"], run_id=runtime_v2_run_id, mode="chat")
-            _t_final = time.perf_counter()
-            await asyncio.sleep(0)
-            final_timings["yield_after_final"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="chat")
-            stream_event_count_after_final = len(state["stream_events"])
-            schedule_session_title_generation(state)
-            _t_final = time.perf_counter()
-            state = finish(state)
-            final_timings["finish_after_final"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="chat")
-            _t_final = time.perf_counter()
-            for evt in state["stream_events"][stream_event_count_after_final:]:
-                if evt.get("type") in ("status", "validate_final", "final"):
-                    await emit(evt)
-            final_timings["emit_finish_events"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_finish_events", final_timings["emit_finish_events"], run_id=runtime_v2_run_id, mode="chat")
-            _pipeline_timing_log(
-                "final_pipeline_timing",
-                session_id,
-                final_timings,
-                run_id=runtime_v2_run_id,
-                final_chars=len(str(state.get("final_response") or "")),
-            )
-            execution_metrics.record_phase(
-                session_id, runtime_v2_run_id, max(1, int(state.get("_current_react_iter") or 1)),
-                "final_pipeline", final_timings,
-                total_ms=sum(int(v or 0) for v in final_timings.values()),
-            )
+            while True:
+                state = await _run_react_node_off_loop(state, emit)
+                state = await _apply_stop_hooks(state, emit)
+                final_timings: Dict[str, int] = {}
+                _t_final = time.perf_counter()
+                await emit({"type": "status", "content": "Loop finished"})
+                final_timings["emit_loop_finished"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_loop_finished", final_timings["emit_loop_finished"], run_id=runtime_v2_run_id, mode="chat")
+                stream_event_count_after_react = len(state["stream_events"])
+                _t_final = time.perf_counter()
+                state = validate_final(state)
+                final_timings["validate_final"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "validate_final", final_timings["validate_final"], run_id=runtime_v2_run_id, mode="chat")
+                _t_final = time.perf_counter()
+                for evt in state["stream_events"][stream_event_count_after_react:]:
+                    if evt.get("type") in ("status", "validate_final", "final"):
+                        await emit(evt)
+                final_timings["emit_validate_events"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_validate_events", final_timings["emit_validate_events"], run_id=runtime_v2_run_id, mode="chat")
+                stream_event_count_after_validate = len(state["stream_events"])
+                _t_final = time.perf_counter()
+                state = prepare_final_event(state)
+                final_timings["prepare_final_event"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "prepare_final_event", final_timings["prepare_final_event"], run_id=runtime_v2_run_id, mode="chat")
+                _t_final = time.perf_counter()
+                for evt in state["stream_events"][stream_event_count_after_validate:]:
+                    if evt.get("type") in ("status", "validate_final", "final"):
+                        await emit(evt)
+                final_timings["emit_final_event"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_final_event", final_timings["emit_final_event"], run_id=runtime_v2_run_id, mode="chat")
+                _t_final = time.perf_counter()
+                await asyncio.sleep(0)
+                final_timings["yield_after_final"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="chat")
+                stream_event_count_after_final = len(state["stream_events"])
+                schedule_session_title_generation(state)
+                _t_final = time.perf_counter()
+                state = finish(state)
+                final_timings["finish_after_final"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="chat")
+                _t_final = time.perf_counter()
+                for evt in state["stream_events"][stream_event_count_after_final:]:
+                    if evt.get("type") in ("status", "validate_final", "final"):
+                        await emit(evt)
+                final_timings["emit_finish_events"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_finish_events", final_timings["emit_finish_events"], run_id=runtime_v2_run_id, mode="chat")
+                _pipeline_timing_log(
+                    "final_pipeline_timing",
+                    session_id,
+                    final_timings,
+                    run_id=runtime_v2_run_id,
+                    final_chars=len(str(state.get("final_response") or "")),
+                )
+                execution_metrics.record_phase(
+                    session_id, runtime_v2_run_id, max(1, int(state.get("_current_react_iter") or 1)),
+                    "final_pipeline", final_timings,
+                    total_ms=sum(int(v or 0) for v in final_timings.values()),
+                )
+                if not await _continue_with_queued_turn(state, emit, should_stop):
+                    break
             anchor_pending = getattr(
                 session_manager, "anchor_pending_subagent_results_for_run", None
             )
@@ -10648,7 +10792,7 @@ async def astream_events(
             await _dispatch_state_hook(
                 "SessionEnd",
                 state,
-                {"matcher_value": "chat", "mode": "chat", "status": "finished"},
+                {"matcher_value": "chat", "mode": "chat", "status": "failed" if state.get("_run_error") else "finished"},
                 emit,
             )
             completed = True
@@ -11010,64 +11154,67 @@ async def astream_events_continuation(
                 run_id=runtime_v2_run_id,
                 mode="continuation",
             )
-            state = await _run_react_node_off_loop(state, emit)
-            state = await _apply_stop_hooks(state, emit)
-            final_timings: Dict[str, int] = {}
-            _t_final = time.perf_counter()
-            await emit({"type": "status", "content": "Loop finished"})
-            final_timings["emit_loop_finished"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_loop_finished", final_timings["emit_loop_finished"], run_id=runtime_v2_run_id, mode="continuation")
-            stream_event_count_after_react = len(state["stream_events"])
-            _t_final = time.perf_counter()
-            state = validate_final(state)
-            final_timings["validate_final"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "validate_final", final_timings["validate_final"], run_id=runtime_v2_run_id, mode="continuation")
-            _t_final = time.perf_counter()
-            for evt in state["stream_events"][stream_event_count_after_react:]:
-                if evt.get("type") in ("status", "validate_final", "final"):
-                    await emit(evt)
-            final_timings["emit_validate_events"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_validate_events", final_timings["emit_validate_events"], run_id=runtime_v2_run_id, mode="continuation")
-            stream_event_count_after_validate = len(state["stream_events"])
-            _t_final = time.perf_counter()
-            state = prepare_final_event(state)
-            final_timings["prepare_final_event"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "prepare_final_event", final_timings["prepare_final_event"], run_id=runtime_v2_run_id, mode="continuation")
-            _t_final = time.perf_counter()
-            for evt in state["stream_events"][stream_event_count_after_validate:]:
-                if evt.get("type") in ("status", "validate_final", "final"):
-                    await emit(evt)
-            final_timings["emit_final_event"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_final_event", final_timings["emit_final_event"], run_id=runtime_v2_run_id, mode="continuation")
-            _t_final = time.perf_counter()
-            await asyncio.sleep(0)
-            final_timings["yield_after_final"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="continuation")
-            stream_event_count_after_final = len(state["stream_events"])
-            schedule_session_title_generation(state)
-            _t_final = time.perf_counter()
-            state = finish(state)
-            final_timings["finish_after_final"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="continuation")
-            _t_final = time.perf_counter()
-            for evt in state["stream_events"][stream_event_count_after_final:]:
-                if evt.get("type") in ("status", "validate_final", "final"):
-                    await emit(evt)
-            final_timings["emit_finish_events"] = _timing_ms(_t_final)
-            _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_finish_events", final_timings["emit_finish_events"], run_id=runtime_v2_run_id, mode="continuation")
-            _pipeline_timing_log(
-                "final_pipeline_timing",
-                session_id,
-                final_timings,
-                run_id=runtime_v2_run_id,
-                mode="continuation",
-                final_chars=len(str(state.get("final_response") or "")),
-            )
-            execution_metrics.record_phase(
-                session_id, runtime_v2_run_id, max(1, int(state.get("_current_react_iter") or 1)),
-                "final_pipeline", final_timings,
-                total_ms=sum(int(v or 0) for v in final_timings.values()),
-            )
+            while True:
+                state = await _run_react_node_off_loop(state, emit)
+                state = await _apply_stop_hooks(state, emit)
+                final_timings: Dict[str, int] = {}
+                _t_final = time.perf_counter()
+                await emit({"type": "status", "content": "Loop finished"})
+                final_timings["emit_loop_finished"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_loop_finished", final_timings["emit_loop_finished"], run_id=runtime_v2_run_id, mode="continuation")
+                stream_event_count_after_react = len(state["stream_events"])
+                _t_final = time.perf_counter()
+                state = validate_final(state)
+                final_timings["validate_final"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "validate_final", final_timings["validate_final"], run_id=runtime_v2_run_id, mode="continuation")
+                _t_final = time.perf_counter()
+                for evt in state["stream_events"][stream_event_count_after_react:]:
+                    if evt.get("type") in ("status", "validate_final", "final"):
+                        await emit(evt)
+                final_timings["emit_validate_events"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_validate_events", final_timings["emit_validate_events"], run_id=runtime_v2_run_id, mode="continuation")
+                stream_event_count_after_validate = len(state["stream_events"])
+                _t_final = time.perf_counter()
+                state = prepare_final_event(state)
+                final_timings["prepare_final_event"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "prepare_final_event", final_timings["prepare_final_event"], run_id=runtime_v2_run_id, mode="continuation")
+                _t_final = time.perf_counter()
+                for evt in state["stream_events"][stream_event_count_after_validate:]:
+                    if evt.get("type") in ("status", "validate_final", "final"):
+                        await emit(evt)
+                final_timings["emit_final_event"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_final_event", final_timings["emit_final_event"], run_id=runtime_v2_run_id, mode="continuation")
+                _t_final = time.perf_counter()
+                await asyncio.sleep(0)
+                final_timings["yield_after_final"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="continuation")
+                stream_event_count_after_final = len(state["stream_events"])
+                schedule_session_title_generation(state)
+                _t_final = time.perf_counter()
+                state = finish(state)
+                final_timings["finish_after_final"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="continuation")
+                _t_final = time.perf_counter()
+                for evt in state["stream_events"][stream_event_count_after_final:]:
+                    if evt.get("type") in ("status", "validate_final", "final"):
+                        await emit(evt)
+                final_timings["emit_finish_events"] = _timing_ms(_t_final)
+                _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "emit_finish_events", final_timings["emit_finish_events"], run_id=runtime_v2_run_id, mode="continuation")
+                _pipeline_timing_log(
+                    "final_pipeline_timing",
+                    session_id,
+                    final_timings,
+                    run_id=runtime_v2_run_id,
+                    mode="continuation",
+                    final_chars=len(str(state.get("final_response") or "")),
+                )
+                execution_metrics.record_phase(
+                    session_id, runtime_v2_run_id, max(1, int(state.get("_current_react_iter") or 1)),
+                    "final_pipeline", final_timings,
+                    total_ms=sum(int(v or 0) for v in final_timings.values()),
+                )
+                if not await _continue_with_queued_turn(state, emit, should_stop):
+                    break
             anchor_pending = getattr(
                 session_manager, "anchor_pending_subagent_results_for_run", None
             )
@@ -11079,7 +11226,7 @@ async def astream_events_continuation(
                 {
                     "matcher_value": "continuation",
                     "mode": "continuation",
-                    "status": "finished",
+                    "status": "failed" if state.get("_run_error") else "finished",
                 },
                 emit,
             )

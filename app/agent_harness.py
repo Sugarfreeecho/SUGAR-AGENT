@@ -3231,6 +3231,87 @@ def _parse_metadata_json_raw(raw: str) -> dict:
         return {}
 
 
+# 会话活动时间（侧栏 last_activity_at 与排序）只认对话活动。事件日志里还混有控制类
+# 事实（扩展命名空间与插件清单的状态同步），它们不是对话活动：启动期回填活动时间
+# 时必须跳过，否则一次状态初始化就会把每个旧会话顶成「今天」并打乱侧栏顺序。
+SESSION_ACTIVITY_CONTROL_EVENTS = frozenset({
+    "extension_state_changed",
+    "plugin_state_changed",
+    "plugin_reloaded",
+})
+# 反向扫描上限：尾部超过这个体积仍未找到活动事件时，退回文件 mtime 的旧口径。
+SESSION_LOG_ACTIVITY_SCAN_BYTES = 4 * 1024 * 1024
+_SESSION_LOG_ACTIVITY_CHUNK_BYTES = 64 * 1024
+
+
+def _runtime_event_timestamp(raw: Any) -> Optional[float]:
+    """解析 Runtime V2 事件时间戳；无法解析时返回 None。"""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _classify_session_log_line(raw: bytes) -> Tuple[str, Optional[float]]:
+    """把 events.jsonl 的一行归类为活动 / 控制 / 跳过 / 不可解析。"""
+    text = raw.strip()
+    if not text:
+        return "skip", None
+    try:
+        event = json.loads(text.decode("utf-8"))
+    except Exception:
+        return "unreadable", None
+    if not isinstance(event, dict):
+        return "unreadable", None
+    if str(event.get("type") or "") in SESSION_ACTIVITY_CONTROL_EVENTS:
+        return "control", None
+    ts = _runtime_event_timestamp(event.get("timestamp"))
+    if ts is None:
+        return "unreadable", None
+    return "activity", ts
+
+
+def _session_log_activity_timestamp(log_path: Path, fallback: float) -> Optional[float]:
+    """Runtime V2 事件日志里最后一条「对话活动」的时间戳。
+
+    返回 ``fallback``：日志不可读/不可解析（沿用文件 mtime 的旧口径）；
+    返回 ``None``：扫到的部分只有控制类事件（调用方保留已存的活动时间，不把这次
+    追加当成会话活动）。
+    """
+    try:
+        size = log_path.stat().st_size
+    except OSError:
+        return fallback
+    if size <= 0:
+        return None
+    try:
+        with open(log_path, "rb") as stream:
+            position = int(size)
+            pending = b""
+            scanned = 0
+            while position > 0 and scanned < SESSION_LOG_ACTIVITY_SCAN_BYTES:
+                step = min(_SESSION_LOG_ACTIVITY_CHUNK_BYTES, position)
+                position -= step
+                scanned += step
+                stream.seek(position)
+                pending = stream.read(step) + pending
+                lines = pending.split(b"\n")
+                pending = lines.pop(0) if position > 0 else b""
+                for raw in reversed(lines):
+                    verdict, value = _classify_session_log_line(raw)
+                    if verdict == "activity":
+                        return value
+                    if verdict == "unreadable":
+                        return fallback
+            if position > 0:
+                return fallback
+            return None
+    except OSError:
+        return fallback
+
+
 # Todo 计划 Markdown 标题（独立落盘 todo_plan.md；兼容旧 key_context 内嵌）
 TODO_SECTION_HEADER = "## Todo 计划"
 
@@ -3596,14 +3677,19 @@ class SessionManager:
                 # instead of stat'ing every event log on every request.
                 activity_path = p / ("events.jsonl" if runtime_v2_primary else "ui_events.json")
                 try:
-                    activity_ts = activity_path.stat().st_mtime
-                    if activity_ts > self._iso_ts(updated_at):
-                        updated_at = datetime.fromtimestamp(
-                            activity_ts,
-                            tz=timezone.utc,
-                        ).isoformat().replace("+00:00", "Z")
+                    activity_ts: Optional[float] = activity_path.stat().st_mtime
                 except OSError:
-                    pass
+                    activity_ts = None
+                if activity_ts is not None and activity_ts > self._iso_ts(updated_at):
+                    # 追加不等于活动：控制类事实（例如执行面板状态同步）要把时间让给
+                    # 日志里最后一条对话活动事件，否则每次启动都会刷新全部会话。
+                    if runtime_v2_primary:
+                        activity_ts = _session_log_activity_timestamp(activity_path, activity_ts)
+                if activity_ts is not None and activity_ts > self._iso_ts(updated_at):
+                    updated_at = datetime.fromtimestamp(
+                        activity_ts,
+                        tz=timezone.utc,
+                    ).isoformat().replace("+00:00", "Z")
                 archived = bool(meta.get("archived", False))
                 pinned = bool(meta.get("pinned", False))
                 todo = bool(meta.get("todo", False))

@@ -1,5 +1,7 @@
 import json
+import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -118,3 +120,106 @@ def test_rebuild_promotes_draft_with_committed_user_turn(monkeypatch, tmp_path, 
     assert session_id in {row["id"] for row in rebuilt.list_sessions()}
     assert rebuilt.get_session_summary(session_id)["last_user_preview"] == "first question"
     assert "draft" not in json.loads((tmp_path / session_id / "metadata.json").read_text(encoding="utf-8"))
+
+
+def _append_jsonl(path: Path, rows) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _event(seq: int, event_type: str, session_id: str, timestamp: str, payload=None) -> dict:
+    return {
+        "schema_version": 1,
+        "seq": seq,
+        "type": event_type,
+        "session_id": session_id,
+        "timestamp": timestamp,
+        "payload": payload or {},
+    }
+
+
+def _panel_state_event(seq: int, session_id: str, timestamp: str) -> dict:
+    return _event(
+        seq,
+        "extension_state_changed",
+        session_id,
+        timestamp,
+        {"plugin_id": "execution-tools", "namespace": "panel", "revision": 1, "value": {"enabled": True}},
+    )
+
+
+def _plugin_inventory_event(seq: int, session_id: str, timestamp: str, event_type: str) -> dict:
+    return _event(seq, event_type, session_id, timestamp, {"plugin_id": "change-review", "state": {"enabled": True}})
+
+
+def test_control_event_append_does_not_refresh_session_activity(monkeypatch, tmp_path):
+    """执行面板等控制事件不能被当成新的对话活动。
+
+    回归：宿主每次启动都往每个会话的事件日志补写一次面板状态，日志 mtime 被当成活动
+    时间后，侧栏所有会话被顶成「今天」并按启动顺序重排。
+    """
+    import agent_harness
+
+    monkeypatch.setenv("REPAIR_SESSIONS_INDEX_ON_START", "0")
+    session_id = str(uuid.uuid4())
+    session_dir = tmp_path / session_id
+    session_dir.mkdir()
+    (session_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": session_id,
+                "name": "老会话",
+                "created_at": "2026-08-24T10:00:00Z",
+                "updated_at": "2026-08-24T11:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    log = session_dir / "events.jsonl"
+    _append_jsonl(log, [_event(1, "run_finished", session_id, "2026-08-24T11:05:00.000Z")])
+    _append_jsonl(log, [_panel_state_event(2, session_id, "2026-08-25T09:00:00.000Z")])
+    _append_jsonl(log, [
+        _plugin_inventory_event(3, session_id, "2026-08-25T10:00:00.000Z", "plugin_state_changed"),
+        _plugin_inventory_event(4, session_id, "2026-08-25T11:00:00.000Z", "plugin_reloaded"),
+    ])
+    now = time.time()
+    os.utime(log, (now, now))
+
+    manager = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    assert manager.get_session_summary(session_id)["updated_at"] == "2026-08-24T11:05:00Z"
+
+    # 真正的对话活动仍然照常前移活动时间。
+    _append_jsonl(log, [_event(5, "run_finished", session_id, "2026-08-27T08:00:00.000Z")])
+    rebuilt = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    assert rebuilt.get_session_summary(session_id)["updated_at"] == "2026-08-27T08:00:00Z"
+
+
+def test_control_only_log_keeps_metadata_activity(monkeypatch, tmp_path):
+    """只有控制类事件的日志不产生活动时间，保留 metadata 里已有的值。"""
+    import agent_harness
+
+    monkeypatch.setenv("REPAIR_SESSIONS_INDEX_ON_START", "0")
+    session_id = str(uuid.uuid4())
+    session_dir = tmp_path / session_id
+    session_dir.mkdir()
+    (session_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": session_id,
+                "name": "只有控制事件",
+                "created_at": "2026-08-24T10:00:00Z",
+                "updated_at": "2026-08-24T11:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    log = session_dir / "events.jsonl"
+    _append_jsonl(log, [_panel_state_event(1, session_id, "2026-08-25T09:00:00.000Z")])
+    now = time.time()
+    os.utime(log, (now, now))
+
+    manager = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    row = manager.get_session_summary(session_id)
+    assert row["updated_at"] == "2026-08-24T11:00:00Z"
+    assert row["last_activity_at"] == "2026-08-24T11:00:00Z"
