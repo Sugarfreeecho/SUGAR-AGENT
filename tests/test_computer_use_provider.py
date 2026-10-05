@@ -110,6 +110,8 @@ def test_mcp_provider_owns_catalog_and_releases_transport(monkeypatch):
     lifecycle = []
     class Server:
         _tools = [SimpleNamespace(model_dump=lambda: {"name": "click", "inputSchema": {"type": "object"}})]
+        def connection_status(self):
+            return {"connected": True, "error": ""}
         async def start(self):
             lifecycle.append("start")
         async def stop(self):
@@ -118,7 +120,9 @@ def test_mcp_provider_owns_catalog_and_releases_transport(monkeypatch):
             return {"content": [{"type": "text", "text": name}]}
     async def run_here(coro):
         return await coro
-    async def reserve(alias, value):
+    async def reserve(alias, value, *, view=None):
+        if value:
+            assert view.__self__ is manager
         lifecycle.append((alias, value))
     def connector(alias, cfg, *, register_tools):
         assert register_tools is False
@@ -133,10 +137,78 @@ def test_mcp_provider_owns_catalog_and_releases_transport(monkeypatch):
             result = await service.call(manager.configure, True, "mcp", save=False)
             assert result["state"] == "ready"
             assert manager.catalog[0]["function"]["name"] == "mcp__cua-driver-mcp__click"
+            view = manager.mcp_view()
+            assert view["connected"] and view["discovered"] and view["tool_count"] == 1
+            assert view["tools"][0]["function_name"] == "mcp__cua-driver-mcp__click"
             raw = await service.call(manager._raw_call, "mcp__cua-driver-mcp__click", {})
             assert raw["content"][0]["text"] == "click"
             await service.call(manager.stop)
             assert lifecycle == [("cua-driver-mcp", True), "start", "stop", ("cua-driver-mcp", False)]
+        finally:
+            await service.shutdown()
+    asyncio.run(run())
+
+
+def test_mcp_inventory_tracks_transport_failure_and_provider_release(monkeypatch):
+    import agent_mcp
+    import security.extensions
+    service = ExecutionService()
+    manager = ComputerUseManager(service)
+    transport = {"connected": True, "error": ""}
+    calls = []
+
+    class Server:
+        _tools = [SimpleNamespace(model_dump=lambda: {"name": "click", "inputSchema": {"type": "object"}})]
+        async def start(self):
+            calls.append("start")
+        async def stop(self):
+            calls.append("stop")
+        def connection_status(self):
+            return dict(transport)
+
+    async def run_here(coro):
+        return await coro
+
+    monkeypatch.setattr(agent_mcp, "_start_lock", asyncio.Lock())
+    monkeypatch.setattr(agent_mcp, "_host_reserved_servers", set())
+    monkeypatch.setattr(agent_mcp, "_host_server_views", {})
+    monkeypatch.setattr(agent_mcp, "_servers", {})
+    monkeypatch.setattr(agent_mcp, "_fname_to_tool", {})
+    monkeypatch.setattr(agent_mcp, "_defs_snapshot", [])
+    monkeypatch.setattr(agent_mcp, "_tool_contracts", {})
+    monkeypatch.setattr(agent_mcp, "_loaded_signature", None)
+    monkeypatch.setattr(agent_mcp, "_signature_cache", None)
+    monkeypatch.setattr(agent_mcp, "_load_servers_dict_from_config", lambda: ({"cua-driver-mcp": {"command": "cua-driver"}}, None))
+    monkeypatch.setattr(agent_mcp, "_make_stdio_connector", lambda *args, **kwargs: Server())
+    monkeypatch.setattr(agent_mcp, "_run_on_mcp_loop", run_here)
+    monkeypatch.setattr(agent_mcp, "_load_disabled_mcp_tools", lambda: set())
+    monkeypatch.setattr(security.extensions, "mcp_registration_is_approved", lambda descriptor: True)
+    monkeypatch.setattr(manager, "_plugin_enabled", lambda: True)
+
+    async def run():
+        try:
+            await service.call(manager.configure, True, "mcp", save=False)
+            row = agent_mcp.list_configured_servers()[0]
+            assert row["connected"] and row["discovered"] and row["tool_count"] == 1
+            assert row["managed_by"] == "computer-use"
+            tools = agent_mcp.list_registered_tools()
+            assert tools[0]["function_name"] == "mcp__cua-driver-mcp__click"
+            assert tools[0]["enabled"] and tools[0]["managed_by"] == "computer-use"
+            assert agent_mcp._fname_to_tool == {} and agent_mcp._defs_snapshot == []
+            assert agent_mcp.set_mcp_tool_enabled(tools[0]["function_name"], False) is False
+            assert await agent_mcp.register_server("cua-driver-mcp") == row
+            assert calls == ["start"]
+
+            transport.update(connected=False, error="driver exited")
+            row = agent_mcp.list_configured_servers()[0]
+            assert not row["connected"] and row["error"] == "driver exited"
+            assert not agent_mcp.list_registered_tools()[0]["enabled"]
+
+            await service.call(manager.stop)
+            assert agent_mcp.list_registered_tools() == []
+            assert "managed_by" not in agent_mcp.list_configured_servers()[0]
+            assert agent_mcp._host_server_views == {}
+            assert calls == ["start", "stop"]
         finally:
             await service.shutdown()
     asyncio.run(run())

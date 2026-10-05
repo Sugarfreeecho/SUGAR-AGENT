@@ -9,7 +9,11 @@ def prompt_guidance():
         parts.append("Track every background job id you start. Completion is notified in-session; do not busy-poll or sleep on a job. "
             "Continue independent work. Before finalizing, collect still-relevant results with job_output; use wait=true only when blocked. "
             "Cancel obsolete jobs with job_kill. Use persistent terminals for interactive stdin or state across calls; prefer run_shell for one-shot commands. "
-            "Close unused terminal sessions. inferred_idle or timeout does not prove the foreground command exited.")
+            "Close unused terminal sessions. A pty-send job completes a send observation, not the command's lifetime. "
+            "inferred_idle or timeout does not prove the foreground command exited; use terminal_read for subsequent output. "
+            "A signal's delivered flag alone does not prove interruption; inspect interruptVerified and terminal_read. "
+            "Windows SIGINT may forcibly end owned child programs after Ctrl+C fails to restore the shell prompt; "
+            "check forced/fallback. In-process shell commands have no separate termination target; explicit terminal_close stops the shell.")
     from .computer import _MANAGER, GUIDANCE
     if _MANAGER is not None and _MANAGER.state == "ready" and _MANAGER._plugin_enabled():
         parts.append(GUIDANCE)

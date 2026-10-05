@@ -84,13 +84,22 @@ class Job:
     permission_mode: str = ""
     result: dict | None = None
     result_pending: bool = False
+    terminal_id: str | None = None
 
     def public(self):
-        return {"id": self.id, "kind": self.kind, "label": self.label,
+        value = {"id": self.id, "kind": self.kind, "label": self.label,
                 "status": self.status, "detail": self.detail, "exit_code": self.exit_code,
                 "started_at": self.started_at, "finished_at": self.finished_at,
                 "outputOffset": self.output.end, "outputBegin": self.output.begin,
                 "pid": self.pid}
+        if self.kind == "pty-send":
+            result = self.result or {}
+            value.update(terminal_id=self.terminal_id, completion_scope="terminal_send",
+                         wait_reason=result.get("waitReason"),
+                         command_state=result.get("command_state", "unknown"))
+            if "interruption" in result:
+                value["interruption"] = result["interruption"]
+        return value
 
 
 class ExecutionService:
@@ -199,6 +208,7 @@ class ExecutionService:
                 job.exit_code = value.get("exit_code")
                 job.detail = value.get("detail", "")
                 job.result = value.get("result")
+                job.terminal_id = value.get("terminal_id")
                 job.result_pending = bool(value.get("result_pending"))
                 if job.status in ACTIVE:
                     job.status, job.detail = "failed", "host_restarted: execution was interrupted; command was not replayed"
@@ -417,8 +427,13 @@ class ExecutionService:
     async def notices(self, owner):
         jobs = [j for j in self.jobs.values() if j.owner == owner and j.notice_pending and not j.waiters
                 and owner not in self.suppressed]
-        return [{"id": j.id, "text": f"[background job {j.id}] {j.kind} finished: {j.status}. {j.detail} Read its output with job_output."}
-                for j in jobs]
+        def notice(job):
+            if job.kind == "pty-send":
+                return (f"[background job {job.id}] Terminal send observation ended: {job.status}. {job.detail}. "
+                        "This does not establish command success or exit. Read the observation with job_output; "
+                        f"read continuing terminal output with terminal_read(sessionId='{job.terminal_id}').")
+            return f"[background job {job.id}] {job.kind} finished: {job.status}. {job.detail} Read its output with job_output."
+        return [{"id": j.id, "text": notice(j)} for j in jobs]
 
     async def acknowledge(self, owner, ids):
         for identifier in ids:

@@ -37,17 +37,41 @@ class TerminalSession:
     send_job: object | None = None
     last_output: float = field(default_factory=time.monotonic)
     prompt_count: int = 0
+    cwd_ready: bool = False
     marker_tail: str = ""
     connection: str = ""
     permission_mode: str = ""
     detail: str = ""
+    exit_code: int | None = None
     pid: int | None = None
     process_created: float | None = None
+    interruption: dict | None = None
+
+    def working_directory(self):
+        """Read the live shell's directory, never infer it from prior input."""
+        import psutil
+        try:
+            if (self.status != "running" or not self.cwd_ready or not self.pid
+                or not self.process_created
+                or (self.send_task is not None and not self.send_task.done())
+                or not TerminalManager._foreground_ready(self)):
+                return None
+            process = psutil.Process(self.pid)
+            if abs(process.create_time() - self.process_created) >= .01:
+                return None
+            cwd = process.cwd()
+            if not os.path.isabs(cwd) or not os.path.isdir(cwd):
+                return None
+            self.cwd = cwd
+            return cwd
+        except (psutil.Error, OSError, ValueError):
+            return None
 
     def public(self):
         return {"id": self.id, "type": "shell", "name": self.name, "cwd": self.cwd,
                 "status": self.status, "actor": self.actor, "dialect": self.dialect,
-                "startedAt": self.started_at, "pid": self.pid, "detail": self.detail}
+                "startedAt": self.started_at, "pid": self.pid, "detail": self.detail,
+                "exit_code": self.exit_code}
 
 
 class TerminalManager:
@@ -92,7 +116,12 @@ class TerminalManager:
         env = _run_shell_env_with_prepended_agent_python_dir(_subprocess_env_for_shell())
         nonce = uuid.uuid4().hex
         prompt_marker = f"\x1b]133;D;{nonce}\x07"
-        env.update(TERM="xterm-256color", COLORTERM="truecolor")
+        if actor == "model":
+            # DSH uses a plain model terminal; retain rich rendering for users.
+            env.update(TERM="dumb", PAGER="cat", GIT_PAGER="cat", NO_COLOR="1")
+            env.pop("COLORTERM", None)
+        else:
+            env.update(TERM="xterm-256color", COLORTERM="truecolor")
         if not cwd:
             from agent_tools import active_tool_work_dir
             cwd = str(active_tool_work_dir())
@@ -109,7 +138,12 @@ class TerminalManager:
             dialect = "pwsh" if "powershell" in base or "pwsh" in base else ("bash" if "bash" in base else "cmd")
             if dialect == "pwsh":
                 argv = [executable, "-NoLogo", "-NoProfile", "-NoExit", "-Command",
-                    f'function global:prompt {{ [Console]::Write([char]27 + "]133;D;{nonce}" + [char]7); "PS " + (Get-Location).Path + "> " }}']
+                    ('Remove-Module PSReadLine -ErrorAction SilentlyContinue; ' if actor == "model" else '') + 'function global:prompt { '
+                    # PowerShell's provider location does not normally update
+                    # the process cwd. Synchronize it before publishing readiness.
+                    'if ((Get-Location).Provider.Name -eq "FileSystem") { '
+                    '[Environment]::CurrentDirectory = (Get-Location).ProviderPath }; '
+                    f'[Console]::Write([char]27 + "]133;D;{nonce}" + [char]7); "PS " + (Get-Location).Path + "> " }}']
             elif dialect == "bash":
                 env["PS1"] = f"\\[\\e]133;D;{nonce}\\a\\]\\w $ "
                 argv = [executable, "--noprofile", "--norc", "-i"]
@@ -161,7 +195,7 @@ class TerminalManager:
             session.reader = asyncio.create_task(self._pump(session))
             # Initial startup output is useful, but startup never depends on
             # recognizing a prompt from an arbitrary interactive application.
-            deadline = time.monotonic() + 3
+            deadline = time.monotonic() + (10 if actor == "model" else 3)
             while session.prompt_count == 0 and session.status == "running" and time.monotonic() < deadline:
                 await asyncio.sleep(.05)
             return {**session.public(), "motd": self.viewport(session)}
@@ -174,11 +208,18 @@ class TerminalManager:
         io_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1,
             thread_name_prefix="terminal-io")
         loop = asyncio.get_running_loop()
+        detail = "shell exited"
         try:
             while session.status == "running":
                 text = await loop.run_in_executor(io_pool, session.backend.read, 8192)
                 if not text:
-                    break
+                    # pywinpty returns an empty string for its no-data sentinel,
+                    # and raises EOFError on actual EOF. Never close a live shell
+                    # merely because a read found no output.
+                    if getattr(session.backend, "flag_eof", False) or not await asyncio.to_thread(session.backend.isalive):
+                        break
+                    await asyncio.sleep(.05)
+                    continue
                 if isinstance(text, bytes):
                     text = text.decode("utf-8", errors="replace")
                 session.output.append(text.encode("utf-8"))
@@ -194,18 +235,33 @@ class TerminalManager:
                         session.screen.history.bottom.pop()
                 marked = session.marker_tail + text
                 marker = session.prompt_marker
-                session.prompt_count += marked.count(marker)
+                prompt_count = marked.count(marker)
+                session.prompt_count += prompt_count
+                if prompt_count:
+                    session.cwd_ready = True
                 # Keep only an incomplete marker, never count a full marker twice.
                 session.marker_tail = next((marked[-n:] for n in range(len(marker)-1, 0, -1)
                     if marked.endswith(marker[:n])), "")
                 session.last_output = time.monotonic()
-        except (EOFError, OSError):
+        except EOFError:
             pass
+        except Exception as exc:
+            detail = f"terminal read failed: {type(exc).__name__}: {exc}"
         finally:
             io_pool.shutdown(wait=False, cancel_futures=True)
             if session.status == "running":
-                session.status, session.detail = "closed", "shell exited"
                 try:
+                    alive = await asyncio.to_thread(session.backend.isalive)
+                except Exception as exc:
+                    alive = True
+                    detail = f"terminal liveness check failed: {type(exc).__name__}: {exc}"
+                if alive and detail == "shell exited":
+                    detail = "terminal transport reached EOF while shell was alive; shell cleaned up"
+                session.status, session.detail = "closed", detail
+                session.exit_code = getattr(session.backend, "exitstatus", None)
+                try:
+                    if alive:
+                        await asyncio.to_thread(terminate_process, session.backend, session.process_created)
                     await asyncio.to_thread(session.backend.close, True)
                 finally:
                     await self._persist(session)
@@ -253,6 +309,7 @@ class TerminalManager:
             return echoed >= 0 and "\x00" in received[echoed + len(expected_echo):]
         began = time.monotonic()
         try:
+            session.cwd_ready = False
             await asyncio.to_thread(session.backend.write, text + ("\r" if submit else ""))
             while True:
                 if session.status != "running":
@@ -274,12 +331,19 @@ class TerminalManager:
                     reason = "timeout"
                     break
                 await asyncio.sleep(.05)
+            session.cwd_ready = reason == "stdin_read"
             return {"kind": "foreground", "viewport": self.viewport(session),
                     "waitReason": reason, "sessionStatus": session.status,
+                    "sessionDetail": session.detail, "shellExitCode": session.exit_code,
+                    "terminalId": session.id, "completion_scope": "terminal_send",
+                    "command_state": {"stdin_read": "shell_ready", "session_exit": "shell_exited"}.get(reason, "unknown"),
                     "truncated": session.output.begin > 0}
         except asyncio.CancelledError:
             if session.status == "running":
-                await self.signal(session.owner, session.id, "SIGINT", actor=session.actor)
+                try:
+                    session.interruption = await self.signal(session.owner, session.id, "SIGINT", actor=session.actor)
+                except Exception as exc:
+                    session.interruption = {"delivered": False, "interruptVerified": False, "error": str(exc)}
             raise
 
     async def send(self, owner, identifier, text, submit=True, background=False):
@@ -293,7 +357,10 @@ class TerminalManager:
             session.send_task = asyncio.create_task(self._send(session, text, submit))
             return await session.send_task
         job = await self.service.admit(owner, "pty-send", f"{identifier}: {text}", permission_mode=session.permission_mode)
+        job.terminal_id = identifier
+        await self.service._persist_job(job)
         session.send_job = job
+        session.interruption = None
         cursor = session.output.end
         session.send_task = asyncio.create_task(self._send(session, text, submit))
         operation = session.send_task
@@ -305,19 +372,37 @@ class TerminalManager:
             import pyte
             chunks = []
             class TextScreen(pyte.Screen):
+                def __init__(self):
+                    super().__init__(160, 40)
+                    self.pending = False
                 def draw(self, value):
-                    chunks.append(value)
+                    self.pending = True
                     super().draw(value)
+                    self.pending = True
+                def emit_line(self):
+                    if self.pending:
+                        chunks.append(self.display[self.cursor.y].rstrip() + "\n")
+                        self.pending = False
                 def linefeed(self):
-                    chunks.append("\n")
+                    if self.pending:
+                        self.emit_line()
+                    else:
+                        chunks.append("\n")
                     super().linefeed()
-            parser = pyte.Stream(TextScreen(160, 40))
-            async def flush():
+                def index(self):
+                    # Include automatically wrapped output before it scrolls.
+                    self.emit_line()
+                    super().index()
+            screen = TextScreen()
+            parser = pyte.Stream(screen)
+            async def flush(final=False):
                 nonlocal cursor
                 raw, cursor, gap = session.output.read_at(cursor)
                 if gap:
                     chunks.append("\n[terminal output truncated]\n")
                 parser.feed(raw.decode("utf-8", errors="replace"))
+                if final:
+                    screen.emit_line()
                 if chunks:
                     text = "".join(chunks)
                     chunks.clear()
@@ -327,15 +412,20 @@ class TerminalManager:
                     await flush()
                     await asyncio.sleep(.1)
                 result = await operation
-                await flush()
+                await flush(final=True)
                 await self.service.settle(job, detail=result["waitReason"], result=result)
             except asyncio.CancelledError:
-                await flush()
-                await self.service.settle(job, "killed", "terminal send cancelled; shell retained")
+                await flush(final=True)
+                receipt = session.interruption or {"interruptVerified": False}
+                await self.service.settle(job, "killed", "terminal send observation cancelled; consult interruption receipt",
+                    result={"terminalId": identifier, "completion_scope": "terminal_send",
+                            "command_state": "shell_ready" if receipt.get("interruptVerified") else "unknown",
+                            "interruption": receipt})
             except Exception as exc:
                 await self.service.settle(job, "failed", str(exc))
         job.task = asyncio.create_task(monitor())
-        return {"kind": "background", "jobId": job.id}
+        return {"kind": "background", "jobId": job.id, "terminalId": identifier,
+                "completion_scope": "terminal_send"}
 
     async def read(self, owner, identifier, offset=0, count=500, *, actor="model"):
         if identifier not in self.sessions:
@@ -398,26 +488,102 @@ class TerminalManager:
         if name not in allowed:
             raise ValueError("unsupported signal")
         if name == "SIGINT":
-            await asyncio.to_thread(session.backend.write, "\x03")
-            return {"delivered": True}
+            before = session.prompt_count
+            children = []
+            if os.name == "nt":
+                shell = self._windows_shell(session)
+                # Capture before Ctrl+C so a later command cannot become the
+                # fallback target. Process objects retain creation-time checks.
+                children = await asyncio.to_thread(shell.children, recursive=True)
+            delivered, delivery_error = True, None
+            try:
+                await asyncio.to_thread(session.backend.write, "\x03")
+            except (OSError, EOFError) as exc:
+                delivered, delivery_error = False, str(exc)
+            method = "pty_ctrl_c"
+            deadline = time.monotonic() + 2
+            verified = False
+            while session.status == "running" and time.monotonic() < deadline:
+                if session.prompt_count > before and self._foreground_ready(session):
+                    verified = True
+                    session.cwd_ready = True
+                    break
+                await asyncio.sleep(.05)
+            receipt = {"delivered": delivered, "method": method, "interruptVerified": verified,
+                       "verification": "shell_ready" if verified else "not_observed",
+                       "sessionStatus": session.status}
+            if delivery_error:
+                receipt["delivery_error"] = delivery_error
+            if os.name == "nt" and not verified and session.status == "running":
+                self._windows_shell(session)
+                if children:
+                    fallback = await self._terminate_windows_children(session, children, "SIGTERM")
+                    # Exiting the children is not enough to establish shell
+                    # readiness. Keep the same shell and require its new prompt.
+                    deadline = time.monotonic() + 1
+                    while time.monotonic() < deadline and session.status == "running":
+                        if session.prompt_count > before and self._foreground_ready(session):
+                            verified = fallback["interruptVerified"]
+                            if verified:
+                                session.cwd_ready = True
+                            break
+                        await asyncio.sleep(.05)
+                    receipt.update(delivered=delivered or fallback["delivered"],
+                        method="pty_ctrl_c_then_terminate_owned_children", forced=True,
+                        interruptVerified=verified,
+                        verification="foreground_processes_exited" if verified else "not_observed",
+                        ctrlCVerified=False, fallback=fallback, shellPreserved=fallback["shellPreserved"], sessionStatus=session.status)
+                else:
+                    receipt.update(reason="no_owned_child_processes", shellPreserved=True,
+                        next_action="Observe again or explicitly terminal_close to stop an in-process shell command. No shell termination or replacement was performed.")
+            session.interruption = receipt
+            return receipt
         if os.name == "nt":
             if name not in {"SIGTERM", "SIGKILL"}:
                 raise ValueError(f"{name} is not supported on Windows")
-            import psutil
-            children = psutil.Process(session.pid).children(recursive=True)
+            shell = self._windows_shell(session)
+            children = shell.children(recursive=True)
             if not children:
                 raise ValueError("shell-targeted signal refused; use terminal_close")
-            for child in reversed(children):
-                if name == "SIGKILL":
-                    child.kill()
-                else:
-                    child.terminate()
-            return {"delivered": True}
+            return await self._terminate_windows_children(session, children, name)
         pgid = os.tcgetpgrp(session.backend.fd)
         if pgid == os.getpgid(session.pid):
             raise ValueError("shell-targeted signal refused; use terminal_close")
         os.killpg(pgid, getattr(signal, name))
-        return {"delivered": True, "targetPgid": pgid}
+        return {"delivered": True, "targetPgid": pgid, "interruptVerified": False,
+                "verification": "not_observed", "sessionStatus": session.status}
+
+    @staticmethod
+    def _windows_shell(session):
+        import psutil
+        shell = psutil.Process(session.pid)
+        if not session.process_created or abs(shell.create_time() - session.process_created) >= .01:
+            raise RuntimeError("terminal process identity changed")
+        return shell
+
+    async def _terminate_windows_children(self, session, children, name):
+        import psutil
+        self._windows_shell(session)
+        def terminate():
+            errors = []
+            for child in reversed(children):
+                try:
+                    child.kill() if name == "SIGKILL" else child.terminate()
+                except psutil.NoSuchProcess:
+                    pass
+                except psutil.Error as exc:
+                    errors.append({"pid": child.pid, "error": str(exc)})
+            _, alive = psutil.wait_procs(children, timeout=2)
+            return errors, alive
+        errors, alive = await asyncio.to_thread(terminate)
+        shell = self._windows_shell(session)
+        preserved = shell.is_running() and session.status == "running"
+        verified = not alive and not errors and preserved
+        return {"delivered": not errors, "interruptVerified": verified,
+                "verification": "foreground_processes_exited" if verified else "not_observed",
+                "method": "terminate_owned_child_process_tree", "forced": True,
+                "targetPids": [child.pid for child in children], "errors": errors,
+                "shellPreserved": preserved, "sessionStatus": session.status}
 
     async def close(self, owner, identifier, *, actor="model"):
         session = self.owned(owner, identifier, actor)

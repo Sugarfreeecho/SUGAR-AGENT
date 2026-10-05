@@ -100,7 +100,7 @@ def tool_definitions(context, plugin):
             {**session, "text": string, "submit": {"type": "boolean"}, "run_in_background": {"type": "boolean"}}, ["sessionId", "text"]),
         _definition("terminal_read", "Read retained terminal output without sending input. offset is newest-relative lines; count defaults to 500.",
             {**session, "offset": {"type": "integer", "minimum": 0}, "count": {"type": "integer", "minimum": 1}}, ["sessionId"]),
-        _definition("terminal_signal", "Signal the current foreground task. Shell-targeted SIGKILL is refused; use terminal_close. Unsupported platform signals fail explicitly.",
+        _definition("terminal_signal", "Signal the current foreground task. delivered alone does not prove interruption; inspect interruptVerified and terminal_read. On Windows SIGINT tries Ctrl+C, then may forcibly terminate the terminal's original owned child processes if its shell prompt does not return; forced=true identifies this fallback, which can end a REPL program. In-process shell commands with no child target can remain unverified; explicitly terminal_close to stop them. The shell itself is never killed by signal. Unsupported platform signals fail explicitly.",
             {**session, "signal": {"type": "string", "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGTSTP", "SIGHUP"]}}, ["sessionId", "signal"]),
         _definition("terminal_close", "Close your persistent terminal and terminate its process tree.", session, ["sessionId"]),
         _definition("terminal_list", "List your persistent terminals. User-operated terminals are separate and unavailable to model tools.", {}),

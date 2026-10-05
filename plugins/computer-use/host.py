@@ -47,7 +47,8 @@ def install(app, context, plugin):
         manager = computer_manager(service)
         try:
             return await service.call(manager.configure, data["enabled"],
-                data.get("provider", "native"), data.get("server_alias", "cua-driver-mcp"))
+                data.get("provider", "native"), data.get("server_alias", "cua-driver-mcp"),
+                allow_existing_profile=data.get("allow_existing_profile", False))
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -61,7 +62,8 @@ async def start(context, plugin):
     if settings.get("enabled"):
         try:
             await service.call(manager.configure, settings["enabled"], settings.get("provider", "native"),
-                settings.get("server_alias", "cua-driver-mcp"), save=False)
+                settings.get("server_alias", "cua-driver-mcp"), save=False,
+                allow_existing_profile=settings.get("allow_existing_profile", False))
         except (ValueError, RuntimeError) as exc:
             manager.state, manager.error = "error", str(exc)
 

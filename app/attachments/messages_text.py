@@ -32,6 +32,25 @@ def offloaded_image_text(ref, path, language="en"):
 def request_image_handle_text(ref, version, path, language="en"):
     prefix = (f"Image {_identity(ref)}; request preview {version.width}x{version.height}px." if language == "en"
               else f"图片 {_identity(ref)}；请求预览 {version.width}x{version.height}px。")
+    source = ref.get("source") or {}
+    if source.get("kind") == "computer_use":
+        dimensions = ref.get("originalDimensions") or ref
+        width, height = dimensions["width"], dimensions["height"]
+        mapping = source.get("coordinateMapping") or {}
+        width, height = mapping.get("driver_width", width), mapping.get("driver_height", height)
+        space = source.get("coordinateSpace", "driver_screenshot")
+        if space == "browser_screenshot":
+            prefix += (f" Browser screenshot evidence {width}x{height}px; use DOM refs or the browser action's coordinate contract, not native window coordinates." if language == "en" else
+                       f" 浏览器截图证据 {width}x{height}px；使用 DOM 引用或 browser 动作自己的坐标约定，不能套用原生窗口坐标。")
+        elif language == "en":
+            prefix += (f" Cua coordinates: {space}, driver image {width}x{height}px. "
+                       f"Convert this request preview to driver pixels: x*{width}/{version.width}, y*{height}/{version.height}. "
+                       "The driver then maps to screen pixels; do not apply window-bounds, client-area or DPI scaling again. "
+                       "Zoom images require the zoom action contract; coordinates from a different screenshot are stale.")
+        else:
+            prefix += (f" Cua 坐标：{space}，驱动原图 {width}x{height}px。预览转驱动像素："
+                       f"x*{width}/{version.width}，y*{height}/{version.height}。驱动随后换算到屏幕；"
+                       "不要再次按窗口外框、客户区或 DPI 缩放。放大图须遵循 zoom 动作约定；其他截图的坐标已过期。")
     return prefix + _access(ref, path, language)
 
 

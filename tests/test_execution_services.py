@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -81,10 +82,15 @@ def test_persistent_pty_and_user_terminal_isolation(tmp_path):
             command = "Write-Output $env:DSH_TEST" if os.name == "nt" else "printf '%s\\n' \"$DSH_TEST\""
             result = await service.call(terminals.send, "owner", identifier, command)
             assert "kept" in result["viewport"]
-            # Prompt detection races with ConPTY echo timing; both settlement
-            # reasons are legitimate under the send-wait contract.
-            assert result["waitReason"] in ("stdin_read", "inferred_idle")
-            command = "Write-Output ('background-' + 'start'); Start-Sleep -Seconds 20" if os.name == "nt" else "printf 'background-%s\\n' start; sleep 20"
+            assert result["waitReason"] == "stdin_read"
+            if os.name == "nt":
+                # A forced fallback can stop a child process tree while keeping
+                # its shell; an in-process cmdlet has no separate kill target.
+                child_file = tmp_path / "foreground-wait.py"
+                child_file.write_text("import time\nprint('background-'+'start', flush=True)\ntime.sleep(20)\n")
+                command = "& '" + sys.executable.replace("'", "''") + "' '" + str(child_file).replace("'", "''") + "'"
+            else:
+                command = "printf 'background-%s\\n' start; sleep 20"
             started = await service.call(terminals.send, "owner", identifier, command, background=True)
             for _ in range(100):
                 output = await service.call(service.output, "owner", started["jobId"], offset=0)
@@ -93,26 +99,19 @@ def test_persistent_pty_and_user_terminal_isolation(tmp_path):
                 await asyncio.sleep(.05)
             assert "background-start" in output["text"], output
             assert output["job"]["status"] == "running"
+            cancelled_at = time.monotonic()
             await service.call(service.kill, "owner", started["jobId"])
             killed = await service.call(service.output, "owner", started["jobId"], True, 5000)
             assert killed["job"]["status"] == "killed"
+            assert killed["result"]["interruption"]["interruptVerified"] is True
             assert terminals.sessions[identifier].status == "running"
-            command = "Write-Output 'after-cancel'" if os.name == "nt" else "printf 'after-cancel\\n'"
+            command = "Write-Output ('after-' + 'cancel')" if os.name == "nt" else "printf 'after-%s\\n' cancel"
             finished = await service.call(terminals.send, "owner", identifier, command, background=True)
             collected = await service.call(service.output, "owner", finished["jobId"], True, 5000)
-            assert collected["result"]["waitReason"] in ("stdin_read", "inferred_idle")
-            # winpty can deliver the cancellation Ctrl+C late (or queue it after
-            # the interrupted command), and the stream / viewport / screen feed
-            # settle on different edges; poll the terminal read until the
-            # command output shows up in any of them.
+            assert collected["result"]["waitReason"] == "stdin_read"
             payload = (collected.get("text") or "") + "\n" + ((collected.get("result") or {}).get("viewport") or "")
-            for _ in range(140):
-                if "after-cancel" in payload:
-                    break
-                await asyncio.sleep(.25)
-                readback = await service.call(terminals.read, "owner", identifier)
-                payload += "\n" + (readback.get("text") or "")
             assert "after-cancel" in payload, payload[-400:]
+            assert time.monotonic() - cancelled_at < 8
             assert (await service.call(service.output, "owner", finished["jobId"]))["result"] is None
             with pytest.raises(ValueError, match="not found"):
                 await service.call(terminals.read, "other", identifier)

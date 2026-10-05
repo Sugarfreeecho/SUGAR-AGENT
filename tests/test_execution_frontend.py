@@ -29,6 +29,7 @@ def page():
           window.MyAgentTerminal={Terminal:class extends window.Terminal {
             constructor(options){super(options);terminals.push(this);}
           },FitAddon:window.FitAddon.FitAddon};
+          window.job={id:'job-id',label:'build',status:'running'};
           window.user={id:'user-id',actor:'user',name:'work',status:'running'};
           window.model={id:'model-id',actor:'model',name:'agent',status:'running'};
           window.EventSource=class {
@@ -42,8 +43,8 @@ def page():
             let result={};
             if(url==='/api/computer-use')result={enabled:false,provider:'native',state:'disabled',tool_count:0,mcp_servers:[]};
             else if(url==='/api/execution/capabilities')result={shells:[{name:'test shell',path:'/bin/bash'}]};
-            else if(url.endsWith('/jobs'))result={jobs:[{id:'job-id',label:'build',status:'running'}]};
-            else if(url.includes('/jobs/job-id/output'))result={text:url.endsWith('offset=0')?'job output':'',offset:10};
+            else if(url.endsWith('/jobs'))result={jobs:[job]};
+            else if(url.includes('/jobs/job-id/output'))result={text:url.endsWith('offset=0')?'job output':'',offset:10,job};
             else if(url.endsWith('/terminals')&&body)result=user;
             else if(url.endsWith('/terminals'))result={user:[user],model:[model]};
             else if(url.includes('/history'))result={text:'model history'};
@@ -84,6 +85,23 @@ def test_terminal_input_reconnect_tabs_and_view_cleanup(page):
     assert not page.evaluate("calls.some(c=>c.url.endsWith('/close'))")
 
 
+def test_computer_profile_grant_is_explicit_mcp_only(page):
+    computer = page.locator('.execution-computer')
+    computer.locator('summary').click()
+    grant = computer.get_by_label('允许访问已登录浏览器（追加 MCP 授权）')
+    assert not grant.is_visible()
+    computer.locator('select').first.select_option('mcp')
+    assert grant.is_visible() and not grant.is_checked()
+    grant.check()
+    computer.get_by_role('button', name='保存', exact=True).click()
+    page.wait_for_function("calls.some(c=>c.url==='/api/computer-use' && c.body)")
+    assert page.evaluate("calls.filter(c=>c.url==='/api/computer-use' && c.body).at(-1).body.allow_existing_profile") is True
+    computer.locator('select').first.select_option('native')
+    computer.get_by_role('button', name='保存', exact=True).click()
+    page.wait_for_function("calls.filter(c=>c.url==='/api/computer-use' && c.body).length===2")
+    assert page.evaluate("calls.filter(c=>c.url==='/api/computer-use' && c.body).at(-1).body.allow_existing_profile") is False
+
+
 def test_create_terminal_job_output_and_explicit_end(page):
     page.get_by_role("button", name="输出", exact=True).click()
     assert page.locator(".execution-output").inner_text() == "job output"
@@ -102,3 +120,13 @@ def test_create_terminal_job_output_and_explicit_end(page):
     page.wait_for_function("calls.some(c=>c.url.endsWith('/close'))")
     assert page.evaluate("user.status") == "closed"
     assert page.evaluate("alerts") == []
+
+
+def test_background_send_shows_unknown_command_state_and_links_terminal(page):
+    page.evaluate("Object.assign(job,{kind:'pty-send',status:'completed',command_state:'unknown',terminal_id:'model-id'})")
+    page.get_by_text('发送等待结束 · 命令状态未知', exact=False).wait_for()
+    page.get_by_role('button', name='输出', exact=True).click()
+    assert '命令状态未知' in page.locator('.execution-dialog .execution-status').first.inner_text()
+    assert '命令后续输出请查看对应 Agent 终端' in page.locator('.execution-dialog').inner_text()
+    page.get_by_role('button', name='查看对应终端', exact=True).click()
+    assert page.locator('.execution-output').inner_text() == 'model history'

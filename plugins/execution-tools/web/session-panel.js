@@ -17,6 +17,15 @@ function button(label, action) {
     return node;
 }
 
+function jobStatus(job) {
+    if (job.kind !== 'pty-send') return job.status;
+    if (job.status === 'completed') return job.command_state === 'shell_ready'
+        ? '发送等待结束 · Shell 已就绪' : '发送等待结束 · 命令状态未知';
+    if (job.status === 'killed') return job.interruption?.interruptVerified
+        ? '发送等待已取消 · 已观察到中断' : '发送等待已取消 · 中断未确认';
+    return job.status;
+}
+
 export function renderSessionPanel(context) {
     const root = context.container;
     root.classList.add('execution-panel');
@@ -59,8 +68,18 @@ export function renderSessionPanel(context) {
 
     async function showJob(job) {
         const dialog = viewer(job.label || job.id);
+        const state = element('p', jobStatus(job), 'execution-status');
         const output = element('pre', '', 'execution-output');
-        dialog.append(output);
+        dialog.append(state, output);
+        if (job.kind === 'pty-send') {
+            dialog.append(element('p', '此任务只记录一次发送的等待窗口。命令后续输出请查看对应 Agent 终端；Shell 就绪也不代表命令执行成功。', 'execution-status'));
+            if (job.terminal_id) dialog.append(button('查看对应终端', async () => {
+                const list = await request(prefix + '/terminals');
+                const terminal = list.model.find((item) => item.id === job.terminal_id);
+                if (!terminal) throw new Error('对应终端不存在');
+                await showTerminal(terminal);
+            }));
+        }
         let offset = 0;
         let updating = false;
         let disposed = false;
@@ -70,6 +89,7 @@ export function renderSessionPanel(context) {
             try {
                 const result = await request(`${prefix}/jobs/${encodeURIComponent(job.id)}/output?offset=${offset}`);
                 offset = result.offset;
+                if (result.job) state.textContent = jobStatus(result.job);
                 output.textContent = (output.textContent + result.text).slice(-256 * 1024);
                 output.scrollTop = output.scrollHeight;
             } catch (error) { status.textContent = error.message; }
@@ -201,17 +221,27 @@ export function renderSessionPanel(context) {
         const option = element('option', text); option.value = value; provider.append(option);
     });
     const alias = element('select');
+    const existingProfile = element('input');
+    existingProfile.type = 'checkbox';
+    const existingProfileLabel = element('label', '允许访问已登录浏览器（追加 MCP 授权） ');
+    existingProfileLabel.append(existingProfile);
+    const existingProfileHelp = element('p', '默认关闭。启用后追加 --grant existing-profile；允许驱动访问已有登录态，但仍需要可连接的 DevTools 端点。启用注册审批时，请先在 MCP 配置参数中添加该授权并批准。服务器原有授权参数仍生效。', 'execution-status');
     const computerStatus = element('p', '', 'execution-status');
-    const updateProvider = () => { alias.hidden = provider.value !== 'mcp'; };
+    const updateProvider = () => {
+        const isMcp = provider.value === 'mcp';
+        alias.hidden = existingProfileLabel.hidden = existingProfileHelp.hidden = !isMcp;
+    };
     provider.addEventListener('change', updateProvider);
-    computer.append(label, provider, alias, button('保存', async () => {
-        const result = await request('/api/computer-use', { enabled: enabled.checked, provider: provider.value, server_alias: alias.value || 'cua-driver-mcp' });
+    computer.append(label, provider, alias, existingProfileLabel, existingProfileHelp, button('保存', async () => {
+        const result = await request('/api/computer-use', { enabled: enabled.checked, provider: provider.value, server_alias: alias.value || 'cua-driver-mcp',
+            allow_existing_profile: provider.value === 'mcp' && existingProfile.checked });
         computerStatus.textContent = `${result.state} · ${result.tool_count} tools${result.error ? ' · ' + result.error : ''}`;
     }), computerStatus);
     root.append(computer);
     request('/api/computer-use').then((result) => {
         enabled.checked = result.enabled;
         provider.value = result.provider;
+        existingProfile.checked = result.allow_existing_profile === true;
         result.mcp_servers.forEach((value) => { const option = element('option', value); option.value = value; alias.append(option); });
         alias.value = result.server_alias;
         computerStatus.textContent = `${result.state} · ${result.tool_count} tools${result.error ? ' · ' + result.error : ''}`;
@@ -227,7 +257,7 @@ export function renderSessionPanel(context) {
             if (!jobResult.jobs.length) jobs.append(element('p', '暂无后台任务', 'execution-status'));
             jobResult.jobs.slice(-50).reverse().forEach((job) => {
                 const row = element('div', null, 'execution-row');
-                const title = element('span', `[${job.status}] ${job.label || job.id}`);
+                const title = element('span', `[${jobStatus(job)}] ${job.label || job.id}`);
                 title.title = job.id;
                 row.append(title, button('输出', () => showJob(job)));
                 if (['running', 'stopping'].includes(job.status)) row.append(button('停止', async () => { await request(`${prefix}/jobs/${encodeURIComponent(job.id)}/kill`, {}); await refresh(); }));
