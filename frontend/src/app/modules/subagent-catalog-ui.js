@@ -92,7 +92,9 @@ var subagentCatalogUi = (function () {
         triggerEl.addEventListener('click', function (event) {
             event.preventDefault();
             event.stopPropagation();
-            toggleMenu();
+            if (hoverTimer != null) { clearTimeout(hoverTimer); hoverTimer = null; }
+            if (closeTimer != null) { clearTimeout(closeTimer); closeTimer = null; }
+            openMenu();
         });
         triggerEl.addEventListener('mouseenter', function () {
             scheduleHoverOpen();

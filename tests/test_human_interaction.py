@@ -702,6 +702,10 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
             )
             return dict(record)
 
+        def save_approval_analysis(self, session_id, approval_id, analysis, *, expected_digest):
+            assert (session_id, approval_id) == ("session-analysis", "approval-analysis")
+            return {**record, "analysis": analysis}
+
     calls = []
 
     async def fake_review(
@@ -739,13 +743,19 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
         },
     )
     monkeypatch.setattr(security.reviewer, "review_request", fake_review)
+    published = []
+
+    async def publish(session_id, event):
+        published.append((session_id, event))
+
+    monkeypatch.setattr(webui, "publish_session_event", publish)
 
     response = asyncio.run(
         webui.analyze_session_approval("session-analysis", "approval-analysis")
     )
     payload = json.loads(response.body)
 
-    assert payload == {
+    assert {key: value for key, value in payload.items() if key != "approval"} == {
         "ok": True,
         "analysis": {
             "recommendation": "allow",
@@ -757,6 +767,8 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
             "available": True,
         },
     }
+    assert payload["approval"]["analysis"] == payload["analysis"]
+    assert published == [("session-analysis", {"type": "approval_analyzed", **payload["approval"]})]
     assert calls == [(
         request,
         "inspect repository",
@@ -773,6 +785,30 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
         "status": "pending",
         "decision": None,
     }
+
+
+@pytest.mark.parametrize("resolve_first", [False, True])
+def test_approval_analysis_survives_reload_and_replay_without_changing_decision(tmp_path, resolve_first):
+    service = _service(tmp_path)
+    record = service.create_approval("analysis-session", approval_id="analysis-id", metadata={"tool": "run_shell"})
+    if resolve_first:
+        service.resolve_approval("analysis-session", "analysis-id", "allow_once")
+    advice = {"recommendation": "deny", "risk": "high", "reason": "Needs review", "available": True}
+    service.save_approval_analysis("analysis-session", "analysis-id", advice,
+                                  expected_digest=record["request_digest"])
+    reloaded = _service(tmp_path)
+    saved = reloaded.verified_approval_request("analysis-session", "analysis-id")
+    assert saved["analysis"] == advice
+    assert saved["status"] == ("resolved" if resolve_first else "pending")
+    assert saved.get("decision") == ("allow_once" if resolve_first else None)
+    assert reloaded.pending_counts("analysis-session")["approvals"] == (0 if resolve_first else 1)
+    events = RuntimeUiProjection(tmp_path, path_resolver=lambda sid: tmp_path / sid).read_ui_events_fast("analysis-session")
+    assert any(event["type"] == "approval_analyzed" and event["analysis"] == advice for event in events)
+    if not resolve_first:
+        terminal = reloaded.resolve_approval("analysis-session", "analysis-id", "deny",
+                                            expected_request_digest=record["request_digest"],
+                                            rejection_reason=advice["reason"])
+        assert terminal["analysis"] == advice
 
 
 @pytest.mark.parametrize(

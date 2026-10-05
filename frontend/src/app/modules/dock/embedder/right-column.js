@@ -1295,9 +1295,11 @@ function dockRightChangesBody(tab) {
         turns: new Map(),
         turnTokens: new Map(),
         selectedTurnId: null,
+        latestTurnId: null,
         scope: 'turn',
         focusRequest: dockRightChangeReviewFocus.get(String(sessionId || '')) || null,
         expandedChanges: new Set(),
+        renderedChanges: new Map(),
         released: false,
         listener: null,
         abort: null,
@@ -1405,6 +1407,7 @@ function dockRightChangesBody(tab) {
 
     const render = () => {
         if (state.released) return;
+        const scrollTop = list.scrollTop;
         resolveFocus();
         const turns = Array.from(state.turns.values()).sort((left, right) => Number(left.id) - Number(right.id));
         if (!state.selectedTurnId && turns.length) state.selectedTurnId = turns[turns.length - 1].id;
@@ -1439,6 +1442,7 @@ function dockRightChangesBody(tab) {
             }
         }
 
+        list.scrollTop = scrollTop;
         const focus = state.focusRequest;
         if (!focus) return;
         const selector = focus.snapshotId
@@ -1528,6 +1532,7 @@ function dockRightChangesBody(tab) {
                 row.effective = !isReverted;
             });
             const sortedTurns = Array.from(state.turns.values()).sort((left, right) => Number(left.id) - Number(right.id));
+            if (sortedTurns.length) state.latestTurnId = sortedTurns[sortedTurns.length - 1].id;
             if (!state.selectedTurnId && sortedTurns.length) state.selectedTurnId = sortedTurns[sortedTurns.length - 1].id;
             state.loadTries = 0;
             state.loaded = true;
@@ -1548,7 +1553,7 @@ function dockRightChangesBody(tab) {
     });
     sessionScope.addEventListener('click', () => { state.scope = 'session'; render(); });
     refresh.addEventListener('click', () => {
-        state.rows.clear(); state.turns.clear(); state.turnTokens.clear(); state.selectedTurnId = null;
+        state.rows.clear(); state.turns.clear(); state.turnTokens.clear(); state.latestTurnId = null;
         state.loadTries = 0; state.loaded = false; state.status = '';
         void load();
     });
@@ -1560,8 +1565,8 @@ function dockRightChangesBody(tab) {
         if (incoming.type === 'user') {
             const id = String(Number.isFinite(Number(detail.eventIndex)) ? Number(detail.eventIndex) : Date.now());
             addTurn(id, incoming.content, incoming.created_at, incoming.turn_id);
-            state.selectedTurnId = id;
-            state.scope = 'turn';
+            state.latestTurnId = id;
+            if (!state.selectedTurnId) state.selectedTurnId = id;
             render();
             return;
         }
@@ -1576,7 +1581,7 @@ function dockRightChangesBody(tab) {
             return;
         }
         const changes = incoming.ui && Array.isArray(incoming.ui.changes) ? incoming.ui.changes : [];
-        for (let i = 0; i < changes.length; i += 1) accept(changes[i], undefined, state.selectedTurnId, detail.sessionId);
+        for (let i = 0; i < changes.length; i += 1) accept(changes[i], undefined, state.latestTurnId, detail.sessionId);
         if (changes.length) render();
     };
     document.addEventListener('myagent:ui-event', state.listener);
@@ -1658,6 +1663,10 @@ function dockRightChangeGroup(turn, turnIndex, rows, state, rerender) {
 /** One complete change row: path, counts/omission, diff, reverted state and action. */
 function dockRightChangeRow(row, state, rerender) {
     const expandKey = String(row.snapshot_id || row.path || '');
+    const cacheKey = String(row._sessionId || '') + '\0' + expandKey;
+    const signature = JSON.stringify([row, dockRightReviewRunning()]);
+    const cached = state && state.renderedChanges && state.renderedChanges.get(cacheKey);
+    if (cached && cached.signature === signature) return cached.item;
     const item = document.createElement('article');
     item.className = 'dock-change' + (row._reverted ? ' is-reverted' : '');
     item.setAttribute('data-dock-snapshot-id', String(row.snapshot_id || ''));
@@ -1730,7 +1739,10 @@ function dockRightChangeRow(row, state, rerender) {
         body.setAttribute('aria-hidden', opening ? 'false' : 'true');
         toggle.classList.toggle('is-open', opening);
         toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
-        if (opening && diffLines && nextDiffLine < diffLines.length && diffFrame === null) renderDiffChunk();
+        // Restored rows are still detached here; render once the list is mounted.
+        if (opening && diffLines && nextDiffLine < diffLines.length && diffFrame === null) {
+            diffFrame = requestAnimationFrame(renderDiffChunk);
+        }
         if (!opening && diffFrame !== null) { cancelAnimationFrame(diffFrame); diffFrame = null; }
     };
     const toggleBody = () => setExpanded(!body.classList.contains('is-open'));
@@ -1740,6 +1752,7 @@ function dockRightChangeRow(row, state, rerender) {
     item.__dockSetExpanded = setExpanded;
     // 执行期间新改动注册会全量重建列表；恢复用户此前打开的详情，避免"被关掉"。
     if (state && state.expandedChanges && state.expandedChanges.has(expandKey)) setExpanded(true);
+    if (state && state.renderedChanges) state.renderedChanges.set(cacheKey, { signature, item });
     return item;
 }
 

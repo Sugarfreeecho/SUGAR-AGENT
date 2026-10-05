@@ -235,6 +235,8 @@ function renderSkillPickerMcpToolsHtml() {
         var serverTools = group.tools;
         var enabledCount = serverTools.filter(function (tool) { return tool && tool.enabled !== false; }).length;
         var discovered = serverTools.length > 0 || group.info.discovered === true;
+        var managed = !!group.info.managed_by;
+        var managedLabel = group.info.managed_by === 'computer-use' ? '由 Computer Use 管理' : '由宿主管理';
         var body = serverTools.length ? serverTools.map(function (tool) {
             var fn = String(tool && tool.function_name || '');
             var name = String(tool && tool.tool_name || fn);
@@ -248,9 +250,10 @@ function renderSkillPickerMcpToolsHtml() {
                 + (desc ? '<span class="skill-picker-option-desc">' + skillPickerEscape(desc) + '</span>' : '')
                 + (fn ? '<span class="mcp-tool-fname">' + skillPickerEscape(fn) + '</span>' : '')
                 + '</span>'
-                + '<button type="button" class="skill-picker-toggle mcp-tool-toggle" data-mcp-tool="' + skillPickerEscape(fn) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + skillPickerToggleHtml(enabled) + '</button>'
+                + (tool.managed_by ? '<span class="skill-picker-group-summary">' + (enabled ? '已启用' : '已禁用') + '</span>'
+                  : '<button type="button" class="skill-picker-toggle mcp-tool-toggle" data-mcp-tool="' + skillPickerEscape(fn) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + skillPickerToggleHtml(enabled) + '</button>')
                 + '</div>';
-        }).join('') : '<div class="skill-picker-group-empty">'
+        }).join('') : managed ? '<div class="skill-picker-group-empty">' + skillPickerEscape(group.info.error || managedLabel) + '</div>' : '<div class="skill-picker-group-empty">'
             + '<span class="mcp-server-register-message">' + skillPickerEscape(group.info.error || '服务器尚未完成工具注册；请检查连接、凭据或服务配置。') + '</span>'
             + '<button type="button" class="mcp-server-register-btn" data-mcp-server="' + skillPickerEscape(server) + '"' + (mcpServerRegisterBusy[server] ? ' disabled' : '') + '>'
             + (mcpServerRegisterBusy[server] ? '注册中…' : '注册')
@@ -260,7 +263,7 @@ function renderSkillPickerMcpToolsHtml() {
             'mcp',
             server,
             server,
-            discovered ? ('已启用 ' + enabledCount + ' / 共 ' + serverTools.length + ' 个工具') : '未注册',
+            (managed ? managedLabel + ' · ' : '') + (discovered ? ('已启用 ' + enabledCount + ' / 共 ' + serverTools.length + ' 个工具') : managed ? (group.info.connected ? '已连接' : '未连接') : '未注册'),
             body,
             discovered ? '' : 'is-undiscovered'
         );

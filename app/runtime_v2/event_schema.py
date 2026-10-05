@@ -39,6 +39,7 @@ CORE_EVENT_TYPES = {
     "interaction_cancelled",
     "interaction_expired",
     "approval_requested",
+    "approval_analyzed",
     "approval_resolved",
     "approval_cancelled",
     "approval_expired",

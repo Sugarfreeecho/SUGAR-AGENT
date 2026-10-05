@@ -67,8 +67,15 @@ async def permissions_changed(mode):
                     if job.status in jobs.ACTIVE and job.permission_mode == "full_access" and mode != "full_access"}
         if service.terminals:
             for terminal in tuple(service.terminals.sessions.values()):
-                if terminal.actor == "model" and terminal.status == "running" and terminal.permission_mode != mode:
+                if terminal.actor != "model" or terminal.status != "running":
+                    continue
+                if terminal.permission_mode == "full_access" and mode != "full_access":
                     await service.terminals.close(terminal.owner, terminal.id)
+                else:
+                    # The restricted presets share an execution boundary.
+                    # Loosening it does not cancel approved work; future sends
+                    # must be admitted against the newly selected mode.
+                    terminal.permission_mode = mode
         for owner in affected:
             await service.stop_owner(owner, reason="permission_mode_changed")
     await service.call(apply)

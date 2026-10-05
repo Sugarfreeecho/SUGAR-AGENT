@@ -243,13 +243,18 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         from execution_services.jobs import _SERVICE
         terminal = _SERVICE.terminals.sessions.get(str(args.get("sessionId"))) if _SERVICE and _SERVICE.terminals else None
         text = str(args.get("text") or "")
+        terminal_cwd = terminal.working_directory() if terminal else None
         shell_request = classify_tool("run_shell", {"command": text,
-            "workdir": terminal.cwd if terminal else str(workspace)}, workspace)
+            "workdir": terminal_cwd or str(workspace)}, workspace)
         # Preserve all destructive/self-protection checks from shell analysis.
         # Interactive stdin additionally needs approval; a shell startup grant
         # cannot silently authorize future REPL input or split commands.
         metadata = dict(shell_request.metadata)
         metadata.update(tool=name, terminal_id=args.get("sessionId"), interactive_stdin=True)
+        if not terminal_cwd:
+            metadata.update(terminal_cwd_unknown=True, external_workspace=True,
+                            workspace_delete=False, unknown_target=True,
+                            analysis_confidence="low", workdir="", effective_workdir="")
         return CapabilityRequest.create(action="process.exec", resource=text,
             effect=shell_request.effect, arguments=args, metadata=metadata)
     if name == "terminal_open":
@@ -810,6 +815,14 @@ def authorize_request(
                 request = CapabilityRequest(action=request.action, resource=request.resource, effect=request.effect, principal=request.principal, args_digest=request.args_digest, metadata=new_meta)
             except Exception:
                 pass
+    if request.metadata.get("terminal_cwd_unknown"):
+        # Path recomputation cannot turn an unobserved PTY location into a
+        # workspace grant simply because its relative tokens look harmless.
+        metadata = dict(request.metadata)
+        metadata.update(external_workspace=True, workspace_delete=False)
+        request = CapabilityRequest(action=request.action, resource=request.resource,
+            effect=request.effect, principal=request.principal,
+            args_digest=request.args_digest, metadata=metadata)
     decision = engine.decide(request, context)
     if decision.outcome != DecisionOutcome.DENY:
         rules = store.active_permission_rules(

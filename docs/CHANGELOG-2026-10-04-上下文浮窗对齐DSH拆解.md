@@ -22,11 +22,27 @@
 
 ## 验证
 
+### 追补：hover 在两种浮窗之间来回切换（同日报障）
+
+反馈：同一个用量位置，有时是旧版纯文字提示，有时是新版拆解卡，"像是算完才出分段"。取证结论——不是算不出来：
+
+- 线上 `/sessions/{id}/context_tokens` 已返回 `breakdown`（实测该会话 `system 4144 / tools 40212 / messages 241752`），所以"旧版"不是数据缺失，而是前端在两种状态间切了两种浮窗：拉开会话时 `/history_snapshot` 先写入旧检查点的"只有总量"值，而紧随其后的 `/context_tokens` 因 3 秒新鲜度窗口被跳过；此时按原实现（没有三段就保留纯文字提示）显示旧提示，等运行中的 SSE 事件带来三段才变成卡片。
+- 修法一：**卡片只由"有没有数值"决定**——有数值恒为拆解卡（缺三段时单色整条 + 隐藏图例 + 说明行改为"构成待本次请求估算后补齐"），没数值才回到旧的纯文字提示。同一位置不再有两种浮窗。
+- 修法二：读到缺三段的值时**自动补取一次**（`ensureContextBreakdownForCurrentSession`，绕开新鲜度窗口、仍在途去重、每会话一次），分段不用等发消息就补齐。这里还修了一个自锁：补取机会原本在"排队时"就登记，于是当补取恰好被在途请求挡下时，唯一机会被浪费、分段永远补不上（浏览器实测复现）；现在登记改为在**补取真的发出**时消费，并用 `git show` 之外的手段（页面内探针）确认了真实时序：`ensure → 排队 → 补取发起（消费机会）→ 响应 → 补取落地`。
+- 前端契约测试相应收紧：`tests/js/context_breakdown_card_runtime.cjs` 直接驱动真实的 `refreshContextTokensFromServer`，覆盖"缺三段→补一次""在途被挡→机会不消费、随后仍会重试""有值无三段也能展开卡片""Escape/移出收起""脏数据不编造构成"。浏览器里那段真实时序（`ensure → 排队 → 补取发起并消费机会 → 响应 → 落地`，以及被在途挡下的那次不消费机会）是用临时的页面内探针取到的，取证后已移除。
+
+### 本轮验证结果（追补后）
+
+- 全量 `pytest -q`：**2104 passed / 5 skipped / 0 failed**；新增 `tests/test_context_breakdown.py` 11 passed；node 卡片用例通过；`npm run verify:dist` 通过。
+- 真实浏览器（stub `/sessions/**`）：缺三段时卡片可展开、图例隐藏、说明行提示补齐；补取落地后同一位置的卡片变为三段图例（`~4.1k / ~9.1k / ~28k`，宽度 `0.814% + 1.782% + 5.504% = 8.1%`），全程没有回到纯文字提示。
+
+### 首次验证（改动当日）
+
 - `npm run build` 后 `npm run verify:dist`：`Frontend dist is in sync.`（dist 随源码重建）。
 - 新增 `tests/test_context_breakdown.py`（11 passed，含三段之和等于总量、总量偏小时的收敛、只计开头连续 system 段、端点补齐与既有构成直出、补齐失败不抛、双外壳标记、前端透传契约、node 卡片用例）；新增 `tests/js/context_breakdown_card_runtime.cjs`（分段宽度与总量一致、0 宽度段丢弃、无构成时的单色兜底、超阈值收敛到满条、脏数据拒绝）。
 - 修正两处旧断言：`tests/test_agent_loop_runtime_v2.py`（结果字典新增 `breakdown`）、`tests/test_webui_messages.py`（总量口径测试不再触碰真实补齐路径）。
 - 定向 pytest：`test_context_breakdown.py` 11 passed；`test_webui_messages.py` 56 passed；runtime_v2 与前端运行时套件合计 276 passed；前端契约类套件 130 passed。
-- 全量 `pytest -q`：2085 passed / 5 skipped / 4 failed。4 项失败与本次改动无关且可归因：`test_feature_flags.py` 两项（`session_manager.append_ui_event(` 被工作区未提交改动移入 Runtime V2 提交路径、`max_react_iter` 计数由 4 变 7；已用 `git show HEAD:app/agent_loop.py` 对照确认 HEAD 满足断言、失败区域不含本次改动）；`test_settings_modal_sections.py` 与 `test_settings_center_browser.py` 各一项（设置中心 `settings.js` 与静态设置页，`function applyFontLevel(` 在 HEAD 的工作区版本里同样缺失，本次未触碰这些文件）。
+- 全量 `pytest -q`（当日首次）：2085 passed / 5 skipped / 4 failed，4 项失败均与本次改动无关且可归因：`test_feature_flags.py` 两项（`session_manager.append_ui_event(` 被工作区未提交改动移入 Runtime V2 提交路径、`max_react_iter` 计数由 4 变 7；已用 `git show HEAD:app/agent_loop.py` 对照确认 HEAD 满足断言、失败区域不含本次改动）；`test_settings_modal_sections.py` 与 `test_settings_center_browser.py` 各一项（设置中心 `settings.js` 与静态设置页，`function applyFontLevel(` 在当时的版本里同样缺失，本次未触碰这些文件）。这 4 项随后随工作区其它未提交改动一并消失（与本次改动无因果关系），追补复跑为全绿。
 - 真实浏览器（Playwright，stub 掉 `/sessions/**`，不动用户在线会话）：悬停展开、移出收起、Escape 收起、theme-dark / theme-light 两套取色、无构成时的兜底均已实测；截图见工作区 `ctx拆解浮窗_dsh对齐/card-theme-{dark,light}-hover.png`。实测数字：`41.2k / 512k → 8.1%`，三段宽度 `0.814% + 1.782% + 5.504% = 8.1%`，行值 `~4.1k / ~9.1k / ~28k`；`486.4k / 512k → 95%` 时 `2.422% + 1.777% + 90.801% = 95%`。
 
 ## 文件

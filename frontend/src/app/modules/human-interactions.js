@@ -53,7 +53,12 @@ function applyHumanInteractionEvent(sessionId, event) {
     var previousVersion = Number(previous.request_version || 0);
     var incomingVersion = Number(event.request_version || previousVersion || 0);
     if (previousVersion && incomingVersion && incomingVersion < previousVersion) return previous;
-    if (terminalStatuses[previous.status] && incomingStatus === 'pending') return previous;
+    if (terminalStatuses[previous.status] && incomingStatus === 'pending') {
+        if (event.type !== 'approval_analyzed') return previous;
+        // A delayed analysis response must not reopen an already decided approval.
+        event = Object.assign({}, previous, { type: event.type, analysis: event.analysis });
+        incomingStatus = previous.status;
+    }
     var record = Object.assign({}, previous, event, {
         kind: kind,
         status: incomingStatus,
@@ -1332,6 +1337,7 @@ function createHumanApprovalCard(record, sessionId, options) {
             selectedButton.setAttribute('aria-pressed', 'true');
         }
     }
+    renderHumanApprovalAnalysis(card, record.analysis);
     return card;
 }
 
@@ -1352,41 +1358,47 @@ async function analyzeHumanApproval(card) {
         });
         var data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
-        var result = data.analysis || {};
-        var recommendAllow = result.recommendation === 'allow';
-        panel.className = 'human-approval-analysis ' + (recommendAllow ? 'is-allow' : 'is-deny');
-        panel.textContent = '';
-        var heading = humanElement(
-            'div',
-            'human-approval-analysis-title',
-            result.available === false
-                ? '暂时无法给出可靠建议'
-                : (recommendAllow ? '建议允许' : '建议拒绝')
-        );
-        var risk = humanElement('span', 'human-approval-analysis-risk', '风险：' + String(result.risk || 'unknown'));
-        heading.appendChild(risk);
-        panel.appendChild(heading);
-        appendApprovalReviewExplanation(
-            panel,
-            result.intercept_reason,
-            result.risk_analysis,
-            result.command_purpose,
-            result.reason || '审查模型未提供理由。'
-        );
-        if (!recommendAllow && result.available !== false && String(result.reason || '').trim()) {
-            card.dataset.rejectionReasonSuggestion = String(result.reason).trim();
-            var rejectionInput = card.querySelector('.human-approval-rejection-input');
-            if (rejectionInput && !String(rejectionInput.value || '').trim()) {
-                rejectionInput.value = card.dataset.rejectionReasonSuggestion;
+        var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({
+            type: 'approval_analyzed', approval_id: card.dataset.interactionId, analysis: data.analysis,
+        }, data.approval || {}));
+        renderHumanApprovalAnalysis(card, record && record.analysis);
+        // The original card may have been replaced while the review was running.
+        document.querySelectorAll('.human-approval-card').forEach(function (visibleCard) {
+            if (visibleCard !== card && visibleCard.dataset.sessionId === card.dataset.sessionId
+                && visibleCard.dataset.interactionId === card.dataset.interactionId) {
+                renderHumanApprovalAnalysis(visibleCard, record && record.analysis);
             }
-        }
-        panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));
+        });
+        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(card.dataset.sessionId);
     } catch (err) {
         if (panel) panel.hidden = true;
         if (error) error.textContent = '分析失败：' + String(err && err.message ? err.message : err);
     } finally {
         setHumanInteractionSubmitting(card, false);
     }
+}
+
+function renderHumanApprovalAnalysis(card, result) {
+    var panel = card && card.querySelector('.human-approval-analysis');
+    if (!panel || !result) return;
+    var recommendAllow = result.recommendation === 'allow';
+    panel.hidden = false;
+    panel.className = 'human-approval-analysis ' + (recommendAllow ? 'is-allow' : 'is-deny');
+    panel.textContent = '';
+    var heading = humanElement('div', 'human-approval-analysis-title', result.available === false
+        ? '暂时无法给出可靠建议' : (recommendAllow ? '建议允许' : '建议拒绝'));
+    heading.appendChild(humanElement('span', 'human-approval-analysis-risk', '风险：' + String(result.risk || 'unknown')));
+    panel.appendChild(heading);
+    appendApprovalReviewExplanation(panel, result.intercept_reason, result.risk_analysis,
+        result.command_purpose, result.reason || '审查模型未提供理由。');
+    if (!recommendAllow && result.available !== false && String(result.reason || '').trim()) {
+        card.dataset.rejectionReasonSuggestion = String(result.reason).trim();
+        var rejectionInput = card.querySelector('.human-approval-rejection-input');
+        if (rejectionInput && !String(rejectionInput.value || '').trim()) {
+            rejectionInput.value = card.dataset.rejectionReasonSuggestion;
+        }
+    }
+    panel.appendChild(humanElement('div', 'human-approval-analysis-hint', '以上仅为分析建议，审批仍由你决定。'));
 }
 
 async function requestHumanApprovalDenial(card) {
@@ -1588,7 +1600,8 @@ function renderHumanInteractionEvent(ctx, event, runSessionId) {
     ensurePendingHumanInteractionToolRow(ctx, record, sid);
     var card = renderHumanInteractionRecord(record, sid, stream);
     // Live SSE only: bring a freshly-inserted pending card into view.
-    if (card && record.status === 'pending' && !(typeof replayingMessages !== 'undefined' && replayingMessages)) {
+    if (card && record.status === 'pending' && event.type !== 'approval_analyzed'
+        && !(typeof replayingMessages !== 'undefined' && replayingMessages)) {
         autoRevealPendingHumanCard(card);
     }
     return card;

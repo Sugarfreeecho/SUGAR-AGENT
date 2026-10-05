@@ -198,10 +198,24 @@ def test_create_session_applies_draft_model_and_permission_options(monkeypatch):
             }
             return "configured-session", [], [], [], "", metadata
 
+        def list_sessions(self, *, include_archived=False):
+            return [{"id": "configured-session"}, {"id": "existing-session"}]
+
     monkeypatch.setattr(webui, "session_manager", _CreateManager())
     monkeypatch.setattr(webui.model_profiles, "get_profile", lambda _root, pid: {"id": pid})
     monkeypatch.setattr(webui.model_profiles, "is_usable_profile", lambda profile: bool(profile))
     monkeypatch.setattr(webui, "_invalidate_sessions_state_cache", lambda: None)
+    import execution_services.integration
+    changes, broadcasts = [], []
+
+    async def changed(mode):
+        changes.append(mode)
+
+    async def publish(sid, event):
+        broadcasts.append((sid, event))
+
+    monkeypatch.setattr(execution_services.integration, "permissions_changed", changed)
+    monkeypatch.setattr(webui, "publish_session_event", publish)
     monkeypatch.setattr(
         security,
         "set_session_permission_mode",
@@ -221,6 +235,9 @@ def test_create_session_applies_draft_model_and_permission_options(monkeypatch):
     assert observed["permission"] == ("configured-session", "approve_for_me")
     assert payload["model_profile_id"] == "profile-fast"
     assert payload["permission_status"]["mode"] == "approve_for_me"
+    assert changes == ["approve_for_me"]
+    assert [sid for sid, _ in broadcasts] == ["configured-session", "existing-session"]
+    assert all(event["type"] == "permission_mode_changed" for _, event in broadcasts)
 
 
 def test_create_session_prefetch_creates_hidden_draft(monkeypatch):

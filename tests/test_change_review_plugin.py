@@ -179,6 +179,73 @@ def test_runtime_callback_can_observe_an_unknown_external_tool(tmp_path):
     assert not (workspace / "external.txt").exists()
 
 
+@pytest.mark.parametrize("large_payload", [False, True])
+def test_long_goal_continuations_keep_patch_stats_in_the_official_turn(tmp_path, monkeypatch, large_payload):
+    sys.path.insert(0, str(ROOT / "app"))
+    import agent_loop
+    import agent_tools
+    from runtime_v2.history_ops import RuntimeHistoryOps
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session_dir = tmp_path / "sessions" / "goal-session"
+    ops = RuntimeHistoryOps(tmp_path / "sessions")
+    monkeypatch.setattr(agent_loop, "_runtime_v2_is_primary", lambda: True)
+    monkeypatch.setattr(agent_loop, "_runtime_v2_react_history_ops", lambda: ops)
+    ops.event_log.append("goal-session", "user_turn_committed", {
+        "content": "Finish the goal", "turn_id": "official-turn",
+    }, run_id="origin-run")
+    runtime = _load_plugin_module("runtime.py", "test_long_goal_change_review_runtime")
+    callbacks = runtime.initialize(SimpleNamespace(session_manager=SimpleNamespace(
+        _get_session_path=lambda _sid: session_dir,
+    )))
+    target = workspace / "goal.txt"
+    target.write_text("original\n", encoding="utf-8")
+    first_snapshot = None
+    with agent_tools.tool_work_dir_override(workspace):
+        for index in range(3):
+            if index:
+                # Either the byte window or event-count window excludes the
+                # original user message. Steers do not start a new turn.
+                rows = [{"type": "model_assistant", "run_id": f"run-{index}",
+                         "payload": {"content": "x" * (2 * 1024 * 1024 + 100)}}] if large_payload else [
+                    {"type": "model_assistant", "run_id": f"run-{index}",
+                     "payload": {"content": "progress"}} for _ in range(4010)
+                ]
+                rows.append({"type": "user_turn_committed", "run_id": f"run-{index}",
+                             "payload": {"ui_type": "user_steer", "content": "Keep going"}})
+                ops.event_log.append_batch("goal-session", rows)
+            state = {
+                "session_id": "goal-session", "_runtime_v2_run_id": f"run-{index}",
+                "_change_review_turn_id": agent_loop._latest_official_user_turn_id("goal-session") or f"run-{index}",
+            }
+            before = "original" if index == 0 else f"change-{index - 1}"
+            patch = "\n".join([
+                "*** Begin Patch", "*** Update File: goal.txt", "@@",
+                f"-{before}", f"+change-{index}", "+added", "*** End Patch",
+            ])
+            capture_state = callbacks["before_native_file_tool"](
+                state, "apply_patch", {"patch": patch}, f"patch-{index}", "",
+            )
+            result = agent_tools.apply_patch(patch=patch)
+            changes = callbacks["after_native_file_tool"](state, capture_state, True)
+            assert len(changes) == 1, result
+            row = changes[0]
+            if first_snapshot is None:
+                first_snapshot = row["snapshot_id"]
+            assert row["turn_id"] == "official-turn"
+            assert row["snapshot_id"] == first_snapshot
+            assert (row["added"], row["removed"]) == (index + 2, 1)
+            assert "-original" in row["diff"]
+            callbacks["after_run"](state)
+
+    # A new ordinary user turn must still start a new review baseline.
+    ops.event_log.append("goal-session", "user_turn_committed", {
+        "content": "Next task", "turn_id": "next-turn",
+    }, run_id="next-run")
+    assert agent_loop._latest_official_user_turn_id("goal-session") == "next-turn"
+
+
 def test_real_apply_patch_keeps_line_endings_and_reports_hunk_diff(review):
     store, workspace = review
     import agent_tools

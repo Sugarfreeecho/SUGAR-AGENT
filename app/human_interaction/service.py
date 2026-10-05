@@ -392,7 +392,7 @@ class HumanInteractionService:
         # Projection/terminal fields were not part of the original request.
         mutable = {"status", "created_at", "expires_at", "request_digest", "seq", "updated_at",
                    "resolved_at", "resolver", "decision", "rejection_reason", "cancelled_at",
-                   "expired_at", "reason"}
+                   "expired_at", "reason", "analysis"}
         core = {key: value for key, value in record.items() if key not in mutable}
         digest = str(record.get("request_digest") or "")
         if (not digest or not hmac.compare_digest(digest, _digest(core))
@@ -403,6 +403,25 @@ class HumanInteractionService:
         record = self.get(session_id, approval_id, kind="approval")
         self._verify_approval_record(record)
         return record
+
+    def save_approval_analysis(
+        self, session_id: str, approval_id: str, analysis: dict, *, expected_digest: str
+    ) -> dict:
+        """Persist advice against the original request without changing its decision."""
+        with self.mirror.event_log.session_transaction(session_id):
+            snapshot = self._snapshot_locked(session_id)
+            record = dict(snapshot.get("approvals") or {}).get(approval_id)
+            if not isinstance(record, dict):
+                raise HumanInteractionNotFound("approval request not found")
+            self._verify_approval_record(record, expected_digest)
+            _, snapshot = self._append_locked(session_id, "approval_analyzed", {
+                "approval_id": approval_id,
+                "session_id": session_id,
+                "request_version": record.get("request_version", 1),
+                "status": record.get("status", "pending"),
+                "analysis": dict(analysis),
+            }, str(record.get("run_id") or ""))
+            return dict(snapshot["approvals"][approval_id])
 
     def pending_counts(self, session_id: str) -> dict:
         sid = str(session_id or "").strip()

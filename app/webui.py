@@ -4854,18 +4854,26 @@ async def analyze_session_approval(session_id: str, approval_id: str):
                 else None
             ),
         )
+        analysis = {
+            "recommendation": "allow" if review.approved else "deny",
+            "risk": review.risk,
+            "reason": review.reason,
+            "intercept_reason": getattr(review, "intercept_reason", ""),
+            "risk_analysis": getattr(review, "risk_analysis", ""),
+            "command_purpose": getattr(review, "command_purpose", ""),
+            "available": review.available,
+        }
+        saved = await asyncio.to_thread(
+            get_human_interaction_service().save_approval_analysis,
+            session_id, approval_id, analysis,
+            expected_digest=str(record.get("request_digest") or ""),
+        )
+        await publish_session_event(session_id, {"type": "approval_analyzed", **saved})
         return JSONResponse(
             content={
                 "ok": True,
-                "analysis": {
-                    "recommendation": "allow" if review.approved else "deny",
-                    "risk": review.risk,
-                    "reason": review.reason,
-                    "intercept_reason": getattr(review, "intercept_reason", ""),
-                    "risk_analysis": getattr(review, "risk_analysis", ""),
-                    "command_purpose": getattr(review, "command_purpose", ""),
-                    "available": review.available,
-                },
+                "analysis": analysis,
+                "approval": saved,
             }
         )
     except Exception as exc:

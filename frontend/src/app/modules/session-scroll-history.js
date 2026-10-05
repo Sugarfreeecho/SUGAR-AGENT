@@ -2,8 +2,12 @@
  * 上下文拆解卡（对齐 DSH token-meter 的 ContextMeter 面板）：
  * 标题行「上下文已用 24.7%」+ 右侧「~24.5k / 128k」，一条按构成分色的占比条，
  * 下方三行图例（系统提示词 / 工具定义 / 对话消息）。条的总长永远等于精确占比，
- * 分段只按启发式构成分配宽度；没有构成数据时退回单色整条，并保留原来的纯文字提示。
- * 三条泳道的键与后端 breakdown 一致。
+ * 分段只按启发式构成分配宽度。
+ *
+ * 只有"有数值 / 没数值"两种状态：有数值就恒为这张卡（拿不到三段时退回单色整条并
+ * 隐藏图例，同时补一次取三段的请求），没数值才退回原来的纯文字提示。会话打开时
+ * 快照先写入的旧检查点可能还没有三段，若那时改回纯文字提示，用户就会在同一处看到
+ * 两种浮窗来回切换 —— 这正是要避免的。三条泳道的键与后端 breakdown 一致。
  */
 var CTX_BREAKDOWN_LANES = [
     { key: 'system_tokens', lane: 'system' },
@@ -12,8 +16,14 @@ var CTX_BREAKDOWN_LANES = [
 ];
 /* 悬停展开的迟滞：足够长到划过标题栏时不闪，远短于通用提示的 500ms（那是纯文字提示）。 */
 var CTX_CARD_HOVER_DELAY_MS = 180;
+/* 有数值但还没有三段时，读到的说明行要讲清"分段为什么还没出来"。 */
+var CTX_CARD_NOTE_WITH_LANES = '分母为压缩摘要阈值；构成按本地估算';
+var CTX_CARD_NOTE_WITHOUT_LANES = '分母为压缩摘要阈值；构成待本次请求估算后补齐';
 var ctxCardOpenTimer = null;
+/* 有数值即可展开卡片（是否含三段只决定图例与分段颜色，不决定卡片是否存在）。 */
 var ctxCardReady = false;
+/* 每个会话只补取一次三段，避免请求风暴；拿到三段后清除，值再次退化时可以再补。 */
+var contextBreakdownRefetchTried = Object.create(null);
 
 function contextBreakdownOrNull(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -51,6 +61,36 @@ function openContextBreakdownCard() {
     if (!card || !ctxCardReady) return;
     card.hidden = false;
     card.setAttribute('aria-hidden', 'false');
+}
+
+/**
+ * A value stored without the three lanes (an older checkpoint read straight from
+ * the history snapshot) would leave the legend permanently empty, because the
+ * meter's own refresh is rate-limited to one request per session per few seconds
+ * and nothing else re-asks. Ask once, bypassing that freshness window.
+ */
+function ensureContextBreakdownForCurrentSession(breakdown) {
+    var sid = String(currentSessionId || '');
+    if (!sid) return;
+    if (contextBreakdownOrNull(breakdown)) {
+        delete contextBreakdownRefetchTried[sid];
+        return;
+    }
+    if (contextBreakdownRefetchTried[sid]) return;
+    if (contextTokenInFlightBySession[sid]) return;
+    requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+            // 标记只在"补取真的发起"时消费（见 refreshContextTokensFromServer）。若此刻
+            // 恰有在途请求，那次请求落地后仍会带着同一个缺三段的数值回到这里重排一次，
+            // 因此这里提前登记会把唯一机会浪费在一次不会发出的请求上。
+            var latest = selectContextTokens(sid);
+            if (latest && contextBreakdownOrNull(latest.breakdown)) {
+                delete contextBreakdownRefetchTried[sid];
+                return;
+            }
+            refreshContextTokensFromServer(sid, null, true);
+        });
+    });
 }
 
 /** 卡片内容：占比条分段宽度按构成比例分配，行值按同一份构成标注 ~。 */
@@ -157,47 +197,47 @@ function setContextTokenLabel(estimated, threshold, breakdown) {
     const card = el.querySelector('#ctx-breakdown');
     const parts = contextBreakdownOrNull(breakdown);
     renderContextBreakdownCard(card, pctDisp, n, t, parts);
-    ctxCardReady = !!parts;
+    // 有数值就恒为拆解卡；三段只决定图例与分段颜色（缺口由下面的一次补取填上）。
+    ctxCardReady = true;
     bindContextBreakdownHover(el);
-    if (!parts) {
-        closeContextBreakdownCard();
-    }
-    if (parts) {
-        // 拆解卡接管说明职责；同一元素上不再挂纯文字提示，避免两种浮窗叠加。
-        el.removeAttribute('data-ui-tip');
-        if (typeof hideUiHoverTooltip === 'function') hideUiHoverTooltip();
-        return;
-    }
-    var tipPct = pct >= 100
-        ? ('约 ' + pctDisp + '%，超出门限 ' + (Math.round((pct - 100) * 10) / 10) + '%')
-        : ('约 ' + pctDisp + '%');
-    el.setAttribute(
-        'data-ui-tip',
-        formatTokenCompact(n) + ' / ' + formatTokenCompact(t) + ' tokens（' + tipPct
-            + '）。预估进入模型的上下文规模，含历史与系统提示；分母为当前 model profile 中触发压缩摘要的上下文门限。'
-    );
-    bindUiHoverTip(el);
+    ensureContextBreakdownForCurrentSession(parts);
+    // 拆解卡接管说明职责；同一元素上不再挂纯文字提示，避免两种浮窗叠加。
+    el.removeAttribute('data-ui-tip');
+    if (typeof hideUiHoverTooltip === 'function') hideUiHoverTooltip();
 }
 
 let contextTokenRequestSeq = 0;
 const contextTokenInFlightBySession = Object.create(null);
 const CONTEXT_TOKEN_CACHE_TTL_MS = 3000;
 
-async function refreshContextTokensFromServer(sid, seq) {
+async function refreshContextTokensFromServer(sid, seq, force) {
     if (!sid) return;
     const cached = selectContextTokens(sid);
-    if (cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
+    // ``force`` 只给"有值但缺三段"的补取用：它绕开新鲜度窗口，仍受在途去重约束。
+    if (!force && cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
         if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold, cached.breakdown);
         return;
     }
     if (contextTokenInFlightBySession[sid]) return;
     contextTokenInFlightBySession[sid] = true;
+    // 补取机会在这里消费：只有真的发出去了才算用过，被在途请求挡下的那次不算。
+    if (force) contextBreakdownRefetchTried[sid] = true;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
-        if (seq != null && seq !== contextTokenRequestSeq) return;
-        if (sid !== currentSessionId) return;
         if (r.ok && j && j.ok && j.estimated != null && j.estimated >= 0) {
+            // Clear the in-flight mark BEFORE recording: applying a value without
+            // the three lanes is what schedules the one-shot lane refetch, and an
+            // in-flight mark that is still set would make that refetch look
+            // redundant — it would never happen, leaving the legend empty.
+            delete contextTokenInFlightBySession[sid];
+            // A session switch invalidates the paint, not the session's data.
+            // Keep successful refetches so returning within the cache TTL has lanes.
+            if (sid !== currentSessionId || (seq != null && seq !== contextTokenRequestSeq)) {
+                setContextTokensForSession(sid, j.estimated, j.threshold, j.breakdown);
+                if (contextBreakdownOrNull(j.breakdown)) delete contextBreakdownRefetchTried[sid];
+                return;
+            }
             recordContextTokens(sid, j.estimated, j.threshold, j.breakdown);
             return;
         }
