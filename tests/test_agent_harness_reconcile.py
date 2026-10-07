@@ -21,6 +21,25 @@ def _manager_with(**attrs):
     return mgr
 
 
+def test_required_ui_commit_reports_failure_even_in_best_effort_mode(monkeypatch):
+    import pytest
+    import agent_harness
+    import runtime_v2
+    import session_lifecycle
+
+    monkeypatch.setattr(session_lifecycle, 'is_session_deleted', lambda sid: False)
+    monkeypatch.setattr(runtime_v2, 'runtime_v2_primary', lambda: True)
+    monkeypatch.setattr(runtime_v2, 'runtime_v2_strict', lambda: False)
+    manager = _manager_with(_mirror_ui_event_to_runtime_v2=lambda *args: None)
+    event = {'type': 'file_changes_updated', 'changes': []}
+    manager.append_ui_event('session', event)  # Existing best-effort behavior.
+    with pytest.raises(RuntimeError, match='did not accept'):
+        manager.append_ui_event('session', event, require_commit=True)
+    monkeypatch.setattr(session_lifecycle, 'is_session_deleted', lambda sid: True)
+    with pytest.raises(RuntimeError, match='deleted session'):
+        manager.append_ui_event('session', event, require_commit=True)
+
+
 class _Repository:
     def __init__(self, sessions_dir: Path):
         self.sessions_dir = sessions_dir

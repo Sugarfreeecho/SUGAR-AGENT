@@ -1539,8 +1539,12 @@ function renderExecutionRecord(ctx, record, sessionId) {
     if (owner) { unregisterProcessAggregateRow(row); registerProcessAggregateRow(owner, row); }
     if (record.kind === 'tool' && record.ui_committed) {
         row._toolCallEvent = {type:'tool_call', tool:record.tool, args:record.args, tool_call_id:record.tool_call_id,
+            run_id:record.run_id, react_iter:record.react_iter, stream_seq:record.stream_seq,
             execution_id:record.execution_id, process_group_id:record.process_group_id,
-            result:record.result, execution_status:record.status, attachments:record.attachments || []};
+            result:record.result, execution_status:record.status, attachments:record.attachments || [],
+            /* Plugin-owned UI metadata (change review rows). The execution journal
+               carries it so chat extensions see changes on live updates and replay. */
+            ui:record.ui};
         if (typeof autoCollapseToolRowAfterResult === 'function') autoCollapseToolRowAfterResult(row);
         if (typeof document !== 'undefined' && typeof CustomEvent !== 'undefined'
             && row.dataset.executionNotifiedSeq !== String(record.last_runtime_seq || '')) {
@@ -1566,7 +1570,7 @@ function renderExecutionEvent(ctx, event, sessionId) {
     else if (type === 'tool_command_delta') Object.assign(update, {status:'running', output_delta:event.delta || '', tool_call_id:event.tool_call_id});
     else if (type === 'tool_pending') Object.assign(update, {status:'waiting_execution', tool:event.tool, args:event.args, command_preview:event.command_preview, tool_call_id:event.tool_call_id});
     else if (type === 'tool_execution_state') Object.assign(update, {status:event.status, tool_call_id:event.tool_call_id});
-    else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], ui_committed:true});
+    else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], ui_committed:true}, event.ui ? {ui:event.ui} : null);
     else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating', text_delta:event.delta || ''});
     else if (type === 'llm_reasoning' || type === 'llm_response') Object.assign(update, {status:event.execution_status || 'completed', content:event.content || '', ui_committed:true});
     else return false;

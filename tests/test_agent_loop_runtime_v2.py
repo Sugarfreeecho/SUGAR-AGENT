@@ -26,6 +26,27 @@ class _NoLegacySessionManager:
         raise AssertionError("Runtime V2 run setup must not migrate legacy key_context")
 
 
+def test_change_review_boundary_forwards_committed_updates_and_honors_fence(monkeypatch):
+    import agent_loop
+    from types import SimpleNamespace
+
+    calls = []
+    event = {'type': 'file_changes_updated', '_runtime_v2_committed': True, 'changes': []}
+    monkeypatch.setattr(agent_loop, '_workflow_callbacks', lambda: SimpleNamespace(
+        call=lambda name, state: (calls.append(name), [event])[1]))
+    monkeypatch.setattr(agent_loop, '_state_run_has_write_fence', lambda state: state.get('fence', True))
+    state = {'session_id': 'review', '_change_review_dirty': True, 'stream_events': [], 'fence': False}
+    asyncio.run(agent_loop._flush_file_tool_reviews(state))
+    assert calls == [] and state['stream_events'] == []
+    state['fence'] = True
+    asyncio.run(agent_loop._flush_file_tool_reviews(state))
+    assert calls == ['flush_file_tool_reviews']
+    assert state['stream_events'] == [event]
+    state['_change_review_dirty'] = False
+    asyncio.run(agent_loop._flush_file_tool_reviews(state))
+    assert len(calls) == 1
+
+
 def test_react_history_ops_uses_online_lock_budget(monkeypatch, tmp_path):
     import agent_loop
 

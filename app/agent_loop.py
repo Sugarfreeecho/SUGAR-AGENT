@@ -5311,6 +5311,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     state.get("_runtime_v2_run_id"),
                 )
                 raise asyncio.CancelledError()
+            # Retry/length-continuation branches can bypass the normal tool
+            # batch tail. Complete their durable review obligation before the
+            # next planning request, while its original execution scope remains.
+            await _flush_file_tool_reviews(state, emit)
+            state.pop('_change_review_batch_active', None)
             workflow_pause_reason = str(
                 state.pop("_workflow_pause_requested", "") or ""
             ).strip()
@@ -6126,6 +6131,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # run_shell can switch from "generating" to "executing" without
             # first rescanning the entire workspace.
             workspace_audit_tail_by_root: Dict[str, dict] = {}
+            # Declared paths still commit per tool. Only the plugin-owned full
+            # workspace sweep is coalesced until this iteration's batch boundary.
+            state['_change_review_batch_active'] = True
 
             async def _execute_one_core(tool_call):
                 call_stream_seq = tool_call.get("_execution_stream_seq", llm_stream_seq)
@@ -9217,6 +9225,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 # 末尾残留的只读工具并行执行
                 await _raise_if_steer_requested(state, emit, "tool")
                 await flush_read_only()
+                await _flush_file_tool_reviews(state, emit)
+                state.pop('_change_review_batch_active', None)
 
                 _tool_batch_started_at = state.pop("_tool_batch_first_started_at", None)
                 _tool_batch_duration_ms = _timing_ms(float(_tool_batch_started_at)) if _tool_batch_started_at is not None else 0
@@ -9685,7 +9695,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     except _SteerRestartRequested:
         raise
     finally:
-        pass
+        await _flush_file_tool_reviews(state, emit)
+        state.pop('_change_review_batch_active', None)
 
     # 本次运行 ReAct 统计：写入 ui_events，刷新页面后仍可显示耗时/步数/工具次数
     # 最后一步（通常是无工具收尾步）的步进墙钟与 run 级对账字段。
@@ -9732,6 +9743,20 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
     state["final_response"] = final_content
     return state
+
+
+async def _flush_file_tool_reviews(state: State, emit=None) -> None:
+    """Flush plugin-owned workspace audits at a tool/interrupt boundary."""
+    if not state.get('_change_review_dirty') and not state.get('_change_review_pending_events'):
+        return
+    if not _state_run_has_write_fence(state):
+        return
+    try:
+        events = _workflow_callbacks().call('flush_file_tool_reviews', state) or []
+        for event in events:
+            await _push_stream_event(state, event, emit=emit)
+    except Exception:
+        logger.warning('change review batch flush failed session=%s', state.get('session_id'), exc_info=True)
 
 
 async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:

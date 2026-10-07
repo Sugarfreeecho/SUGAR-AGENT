@@ -20,6 +20,7 @@ import uuid
 import zipfile
 import stat
 from collections import Counter
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from dataclasses import dataclass
@@ -150,6 +151,13 @@ _locks: Dict[str, threading.RLock] = {}
 # Metadata/state only, never retain a workspace's file contents in memory.
 # Access is serialized by the corresponding session store lock.
 _workspace_scans: dict[tuple[str, str], dict[str, dict]] = {}
+
+
+def _setting(name: str, default: int, maximum: int) -> int:
+    try:
+        return max(0, min(maximum, int(os.environ.get(name, default))))
+    except (TypeError, ValueError):
+        return default
 
 
 @lru_cache(maxsize=1)
@@ -349,6 +357,35 @@ class FileChangeReviewStore:
         self.index_path = self.root / "index.json"
         self.blob_dir = self.root / "blobs"
         self.lock = _store_lock(self.root)
+        self.timings: dict[str, Any] = {}
+
+    @contextmanager
+    def _measure(self, stage: str):
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.timings[stage] = self.timings.get(stage, 0.0) + (time.perf_counter() - started) * 1000
+
+    @contextmanager
+    def _capture_lock(self):
+        started = time.perf_counter()
+        with self.lock:
+            self.timings['lock_wait_ms'] = (time.perf_counter() - started) * 1000
+            yield
+
+    def _inventory(self, work_root: Path) -> Optional[List[Path]]:
+        self.timings['inventory_calls'] = self.timings.get('inventory_calls', 0) + 1
+        with self._measure('inventory_ms'):
+            paths = self._git_inventory(work_root)
+        self.timings['files'] = len(paths) if paths is not None else 0
+        limit = _setting('MYAGENT_CHANGE_REVIEW_MAX_WORKSPACE_FILES', 0, 10_000_000)
+        if paths is not None and limit and len(paths) > limit:
+            self.timings['coverage'] = 'declared_paths'
+            self.timings['file_limit'] = limit
+            return None
+        self.timings['coverage'] = 'workspace' if paths is not None else 'declared_paths'
+        return paths
 
     def _empty(self) -> dict:
         return {
@@ -360,9 +397,15 @@ class FileChangeReviewStore:
             "operations": {},
             "baselines": {},
             "temporaries": {},
+            "deferred_sweeps": {},
+            "review_events": {},
         }
 
     def _load(self) -> dict:
+        with self._measure('index_read_ms'):
+            return self._load_index()
+
+    def _load_index(self) -> dict:
         if not self.index_path.is_file():
             return self._empty()
         try:
@@ -371,14 +414,19 @@ class FileChangeReviewStore:
             raise SnapshotGoneError("change review metadata is unreadable") from exc
         if not isinstance(data, dict) or int(data.get("version") or 0) != STORE_VERSION:
             raise SnapshotGoneError("change review metadata has an unsupported version")
-        for key in ("pending", "records", "active", "groups", "operations", "baselines", "temporaries"):
+        for key in ("pending", "records", "active", "groups", "operations", "baselines", "temporaries", "deferred_sweeps", "review_events"):
             data.setdefault(key, {})
         return data
 
     def _save(self, data: dict) -> None:
-        _atomic_json(self.index_path, data)
+        with self._measure('index_write_ms'):
+            _atomic_json(self.index_path, data)
 
     def _put_blob(self, content: bytes) -> str:
+        with self._measure('blob_io_ms'):
+            return self._write_blob(content)
+
+    def _write_blob(self, content: bytes) -> str:
         digest = _sha256(content)
         target = self.blob_dir / f"{digest}.gz"
         if not target.is_file():
@@ -399,6 +447,10 @@ class FileChangeReviewStore:
         return digest
 
     def _get_blob(self, digest: Optional[str]) -> bytes:
+        with self._measure('blob_io_ms'):
+            return self._read_blob(digest)
+
+    def _read_blob(self, digest: Optional[str]) -> bytes:
         if not digest:
             raise SnapshotGoneError("snapshot content is missing")
         path = self.blob_dir / f"{digest}.gz"
@@ -562,12 +614,17 @@ class FileChangeReviewStore:
         run_id: str,
         work_root: Path,
     ) -> Optional[dict]:
+        with self._measure('baseline_ms'):
+            return self._create_workspace_baseline(index, run_id=run_id, work_root=work_root)
+
+    def _create_workspace_baseline(self, index: dict, *, run_id: str,
+                                   work_root: Path) -> Optional[dict]:
         baseline_key = str(run_id or "") + "\0" + self._key(work_root)
         existing = index["baselines"].get(baseline_key)
         if isinstance(existing, dict):
             return existing
 
-        inventory = self._git_inventory(work_root)
+        inventory = self._inventory(work_root)
         if inventory is None:
             return None
 
@@ -575,7 +632,7 @@ class FileChangeReviewStore:
         # its baseline, older full-workspace archives are no longer needed;
         # changed files have already been promoted into durable content blobs.
         for key, baseline in list(index["baselines"].items()):
-            if key != baseline_key and isinstance(baseline, dict):
+            if key != baseline_key and key not in index['deferred_sweeps'] and isinstance(baseline, dict):
                 self._remove_baseline(baseline)
                 index["baselines"].pop(key, None)
 
@@ -639,6 +696,10 @@ class FileChangeReviewStore:
         return baseline
 
     def _baseline_bytes(self, baseline: dict, entry: dict) -> Optional[bytes]:
+        with self._measure('blob_io_ms'):
+            return self._read_baseline_bytes(baseline, entry)
+
+    def _read_baseline_bytes(self, baseline: dict, entry: dict) -> Optional[bytes]:
         state = entry.get("before") or {}
         if not state.get("exists") or state.get("kind") != "file":
             return None
@@ -656,25 +717,47 @@ class FileChangeReviewStore:
             raise SnapshotGoneError("workspace baseline checksum mismatch")
         return data
 
+    def _read_state(self, path: Path) -> tuple[Optional[bytes], dict]:
+        with self._measure('read_hash_ms'):
+            data = _read_regular_file(path)
+            return data, _state(path, data)
+
     def _workspace_entries(self, work_root: Path, baseline: Optional[dict] = None) -> Optional[tuple[Dict[str, dict], Dict[str, bytes]]]:
-        inventory = self._git_inventory(work_root)
+        self.timings['sweep_count'] = self.timings.get('sweep_count', 0) + 1
+        inventory = self._inventory(work_root)
         if inventory is None:
             return None
         entries: Dict[str, dict] = {}
         contents: Dict[str, bytes] = {}
         cache_key = (str(self.root), str((baseline or {}).get("baseline_id") or ""))
         previous = _workspace_scans.get(cache_key, (baseline or {}).get("entries") or {})
-        for path in inventory:
+        workers = max(1, _setting('MYAGENT_CHANGE_REVIEW_SIGNATURE_WORKERS', 1, 8))
+        threshold = _setting('MYAGENT_CHANGE_REVIEW_SIGNATURE_PARALLEL_MIN_FILES', 1024, 10_000_000)
+        workers = workers if len(inventory) >= threshold else 1
+        self.timings['scan_workers'] = workers
+        # Workers only read metadata. Ordered merging and cache publication stay
+        # under the store lock; never move shared dict writes into the pool.
+        with self._measure('signature_ms'):
+            if workers == 1:
+                signatures = [_file_signature(path) for path in inventory]
+            else:
+                signatures = []
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='review-signature') as pool:
+                    for start in range(0, len(inventory), 128):
+                        signatures.extend(pool.map(_file_signature, inventory[start:start + 128]))
+        for path, signature in zip(inventory, signatures):
             path_key = self._key(path)
-            signature = _file_signature(path)
             cached = previous.get(path_key)
             if signature is not None and cached and tuple(cached.get("signature") or ()) == signature:
                 entries[path_key] = cached
+                self.timings['cache_hits'] = self.timings.get('cache_hits', 0) + 1
                 continue
-            data = _read_regular_file(path)
-            state = _state(path, data)
-            if signature != _file_signature(path):
+            data, state = self._read_state(path)
+            with self._measure('signature_ms'):
+                verified_signature = _file_signature(path)
+            if signature != verified_signature:
                 signature = None
+            self.timings['changed_count'] = self.timings.get('changed_count', 0) + 1
             entries[path_key] = {
                 "path_abs": str(path),
                 "path": self._display_path(path, work_root),
@@ -695,6 +778,7 @@ class FileChangeReviewStore:
         run_id: str,
         tool_call_id: str,
         work_root: str | Path,
+        execution_scope: Optional[dict] = None,
     ) -> Optional[Capture]:
         """Persist declared paths and the execution process workspace baseline."""
         supported_file_tool = tool_name in {
@@ -715,7 +799,8 @@ class FileChangeReviewStore:
         capture_id = uuid.uuid4().hex
         root = Path(work_root).resolve()
         entries: List[dict] = []
-        with self.lock:
+        self.timings = {}
+        with self._capture_lock():
             index = self._load()
             baseline = self._ensure_workspace_baseline(
                 index,
@@ -727,12 +812,12 @@ class FileChangeReviewStore:
             if temporary_write:
                 if specs:
                     path = Path(specs[0]["path"]).resolve()
-                    before_data = _read_regular_file(path)
+                    before_data, before = self._read_state(path)
                     entry = {
                         "path_abs": str(path),
                         "path": self._display_path(path, root),
                         "path_key": self._key(path),
-                        "before": _state(path, before_data),
+                        "before": before,
                         "before_blob": self._put_blob(before_data) if before_data is not None else None,
                     }
                     self._register_temporary(
@@ -746,8 +831,7 @@ class FileChangeReviewStore:
             group_id = uuid.uuid4().hex if manifest is not None else None
             for spec in specs:
                 path = Path(spec["path"]).resolve()
-                before_data = _read_regular_file(path)
-                before = _state(path, before_data)
+                before_data, before = self._read_state(path)
                 entries.append(
                     {
                         "path_abs": str(path),
@@ -770,6 +854,7 @@ class FileChangeReviewStore:
                 "tool": tool_name,
                 "run_id": str(run_id or ""),
                 "tool_call_id": str(tool_call_id or ""),
+                "execution_scope": dict(execution_scope or {}),
                 "entries": entries,
                 "group_id": group_id,
                 "baseline_key": baseline.get("baseline_key") if baseline else None,
@@ -779,6 +864,10 @@ class FileChangeReviewStore:
         return Capture(capture_id)
 
     def _diff(self, path: str, before_data: bytes, after_data: bytes) -> dict:
+        with self._measure('diff_ms'):
+            return self._build_diff(path, before_data, after_data)
+
+    def _build_diff(self, path: str, before_data: bytes, after_data: bytes) -> dict:
         before_text, before_lines_count, before_reason = _text_info(before_data)
         after_text, after_lines_count, after_reason = _text_info(after_data)
         reason = before_reason or after_reason
@@ -851,6 +940,7 @@ class FileChangeReviewStore:
         active_key = run_id + "\0" + str(entry["path_key"])
         snapshot_id = index["active"].get(active_key)
         record = index["records"].get(snapshot_id) if snapshot_id else None
+        previous_before = dict(record.get('before') or {}) if isinstance(record, dict) else dict(entry['before'])
         entry_before_data = (
             self._get_blob(entry.get("before_blob"))
             if (entry.get("before") or {}).get("exists")
@@ -893,7 +983,6 @@ class FileChangeReviewStore:
                 record["path_abs"] = entry["path_abs"]
 
         previous_after = dict(record.get("after") or {})
-        previous_before = dict(record.get("before") or {})
         record_before_data: Optional[bytes] = None
         if str((record.get("before") or {}).get("kind") or "") != "directory":
             record_before_data = (
@@ -932,11 +1021,118 @@ class FileChangeReviewStore:
             record.pop("neutralized", None)
         return self.public_record(record)
 
-    def finish_capture(self, capture: Optional[Capture], *, successful: bool = True) -> List[dict]:
+    def _sweep_workspace(self, index: dict, pending: dict) -> List[dict]:
+        output: List[dict] = []
+        baseline = index["baselines"].get(str(pending.get("baseline_key") or ""))
+        work_root = Path(pending.get("work_root") or ".").resolve()
+        current = (
+            self._workspace_entries(work_root, baseline)
+            if isinstance(baseline, dict) else None
+        )
+        if isinstance(baseline, dict) and current is not None:
+            current_entries, current_contents = current
+            baseline_entries = baseline.get("entries") or {}
+            run_prefix = str(pending.get("run_id") or "") + "\0"
+            active_entries: Dict[str, dict] = {}
+            for active_key, snapshot_id in index["active"].items():
+                if not str(active_key).startswith(run_prefix):
+                    continue
+                record = index["records"].get(snapshot_id)
+                if isinstance(record, dict):
+                    active_entries[str(record.get("path_key") or "")] = record
+            temporary_paths = index.get("temporaries") or {}
+            for path_key in sorted(
+                set(baseline_entries) | set(current_entries) | set(active_entries)
+            ):
+                if str(path_key) in temporary_paths:
+                    # A shadowed path stays invisible to the workspace sweep
+                    # (creation, modification and deletion alike) until a
+                    # normal declared write graduates it.
+                    continue
+                base_entry = baseline_entries.get(path_key)
+                current_entry = current_entries.get(path_key)
+                if base_entry is None and current_entry is not None:
+                    base_entry = {
+                        "path_abs": current_entry["path_abs"],
+                        "path": current_entry["path"],
+                        "path_key": path_key,
+                        "before": {
+                            "exists": False, "kind": "missing", "sha256": None,
+                            "bytes": 0, "lines": 0,
+                        },
+                        "archive_name": None,
+                    }
+                elif base_entry is None and path_key in active_entries:
+                    active_record = active_entries[path_key]
+                    if bool((active_record.get("before") or {}).get("exists")):
+                        # The path already has a real origin (declared file
+                        # or directory, or an ignored path outside the
+                        # inventory). Re-origining it from a synthesized
+                        # "missing" state would corrupt that history and
+                        # make undo delete the file instead of restoring it.
+                        continue
+                    base_entry = {
+                        "path_abs": active_record["path_abs"],
+                        "path": active_record["path"],
+                        "path_key": path_key,
+                        "before": {
+                            "exists": False, "kind": "missing", "sha256": None,
+                            "bytes": 0, "lines": 0,
+                        },
+                        "archive_name": None,
+                    }
+                if base_entry is None:
+                    continue
+                if current_entry is not None:
+                    after_data = current_contents.get(path_key)
+                    immediate_after = current_entry["before"]
+                else:
+                    # The tool may have changed .gitignore during the run.
+                    # A baseline path disappearing from `git ls-files -co`
+                    # is not necessarily a filesystem deletion.
+                    current_path = Path(base_entry["path_abs"])
+                    after_data, immediate_after = self._read_state(current_path)
+                active_key = str(pending.get("run_id") or "") + "\0" + path_key
+                if (
+                    _same_state(base_entry.get("before") or {}, immediate_after)
+                    and active_key not in index["active"]
+                ):
+                    continue
+                active_record = index["records"].get(index["active"].get(active_key))
+                if (
+                    isinstance(active_record, dict)
+                    and _same_state(active_record.get("before") or {}, base_entry.get("before") or {})
+                    and _same_state(active_record.get("after") or {}, immediate_after)
+                    and bool(active_record.get("effective", True))
+                ):
+                    continue
+                workspace_entry = dict(base_entry)
+                baseline_data = self._baseline_bytes(baseline, base_entry)
+                workspace_entry["before_blob"] = (
+                    self._put_blob(baseline_data) if baseline_data is not None else None
+                )
+                if after_data is None and immediate_after.get("exists"):
+                    after_data = _read_regular_file(Path(base_entry["path_abs"]))
+                public = self._promote_entry(
+                    index,
+                    pending,
+                    workspace_entry,
+                    after_data,
+                    immediate_after,
+                    authoritative_baseline=True,
+                )
+                if public is not None:
+                    output.append(public)
+
+        return output
+
+    def finish_capture(self, capture: Optional[Capture], *, successful: bool = True,
+                       defer_workspace_sweep: bool = False) -> List[dict]:
         """Promote the execution process's cumulative, byte-accurate changes."""
+        self.timings = {}
         if capture is None:
             return []
-        with self.lock:
+        with self._capture_lock():
             index = self._load()
             pending = index["pending"].pop(capture.capture_id, None)
             if not isinstance(pending, dict):
@@ -946,8 +1142,7 @@ class FileChangeReviewStore:
             # files explicitly edited by native tools, and empty directories.
             for entry in pending.get("entries") or []:
                 path = Path(entry["path_abs"])
-                after_data = _read_regular_file(path)
-                immediate_after = _state(path, after_data)
+                after_data, immediate_after = self._read_state(path)
                 shadowed = self._temporary_entry(index, entry.get("path_key"))
                 if shadowed is not None:
                     if not immediate_after.get("exists"):
@@ -962,111 +1157,32 @@ class FileChangeReviewStore:
                     entry["before"] = dict(shadowed.get("before") or {})
                     entry["before_blob"] = shadowed.get("before_blob")
                     index["temporaries"].pop(str(entry.get("path_key") or ""), None)
-                public = self._promote_entry(index, pending, entry, after_data, immediate_after)
+                authoritative = False
+                if defer_workspace_sweep and shadowed is None:
+                    baseline = index['baselines'].get(str(pending.get('baseline_key') or '')) or {}
+                    origin = (baseline.get('entries') or {}).get(entry['path_key'])
+                    if origin is not None:
+                        # Immediate declared rows must already carry the same
+                        # turn origin that the deferred workspace sweep uses.
+                        if not _same_state(entry['before'], origin['before']):
+                            entry = dict(entry, before=dict(origin['before']))
+                            origin_data = self._baseline_bytes(baseline, origin)
+                            entry['before_blob'] = self._put_blob(origin_data) if origin_data is not None else None
+                        authoritative = True
+                public = self._promote_entry(index, pending, entry, after_data, immediate_after,
+                                             authoritative_baseline=authoritative)
                 if public is not None:
                     output.append(public)
 
-            baseline = index["baselines"].get(str(pending.get("baseline_key") or ""))
-            work_root = Path(pending.get("work_root") or ".").resolve()
-            current = (
-                self._workspace_entries(work_root, baseline)
-                if isinstance(baseline, dict) else None
-            )
-            if isinstance(baseline, dict) and current is not None:
-                current_entries, current_contents = current
-                baseline_entries = baseline.get("entries") or {}
-                run_prefix = str(pending.get("run_id") or "") + "\0"
-                active_entries: Dict[str, dict] = {}
-                for active_key, snapshot_id in index["active"].items():
-                    if not str(active_key).startswith(run_prefix):
-                        continue
-                    record = index["records"].get(snapshot_id)
-                    if isinstance(record, dict):
-                        active_entries[str(record.get("path_key") or "")] = record
-                temporary_paths = index.get("temporaries") or {}
-                for path_key in sorted(
-                    set(baseline_entries) | set(current_entries) | set(active_entries)
-                ):
-                    if str(path_key) in temporary_paths:
-                        # A shadowed path stays invisible to the workspace sweep
-                        # (creation, modification and deletion alike) until a
-                        # normal declared write graduates it.
-                        continue
-                    base_entry = baseline_entries.get(path_key)
-                    current_entry = current_entries.get(path_key)
-                    if base_entry is None and current_entry is not None:
-                        base_entry = {
-                            "path_abs": current_entry["path_abs"],
-                            "path": current_entry["path"],
-                            "path_key": path_key,
-                            "before": {
-                                "exists": False, "kind": "missing", "sha256": None,
-                                "bytes": 0, "lines": 0,
-                            },
-                            "archive_name": None,
-                        }
-                    elif base_entry is None and path_key in active_entries:
-                        active_record = active_entries[path_key]
-                        if bool((active_record.get("before") or {}).get("exists")):
-                            # The path already has a real origin (declared file
-                            # or directory, or an ignored path outside the
-                            # inventory). Re-origining it from a synthesized
-                            # "missing" state would corrupt that history and
-                            # make undo delete the file instead of restoring it.
-                            continue
-                        base_entry = {
-                            "path_abs": active_record["path_abs"],
-                            "path": active_record["path"],
-                            "path_key": path_key,
-                            "before": {
-                                "exists": False, "kind": "missing", "sha256": None,
-                                "bytes": 0, "lines": 0,
-                            },
-                            "archive_name": None,
-                        }
-                    if base_entry is None:
-                        continue
-                    if current_entry is not None:
-                        after_data = current_contents.get(path_key)
-                        immediate_after = current_entry["before"]
-                    else:
-                        # The tool may have changed .gitignore during the run.
-                        # A baseline path disappearing from `git ls-files -co`
-                        # is not necessarily a filesystem deletion.
-                        current_path = Path(base_entry["path_abs"])
-                        after_data = _read_regular_file(current_path)
-                        immediate_after = _state(current_path, after_data)
-                    active_key = str(pending.get("run_id") or "") + "\0" + path_key
-                    if (
-                        _same_state(base_entry.get("before") or {}, immediate_after)
-                        and active_key not in index["active"]
-                    ):
-                        continue
-                    active_record = index["records"].get(index["active"].get(active_key))
-                    if (
-                        isinstance(active_record, dict)
-                        and _same_state(active_record.get("before") or {}, base_entry.get("before") or {})
-                        and _same_state(active_record.get("after") or {}, immediate_after)
-                        and bool(active_record.get("effective", True))
-                    ):
-                        continue
-                    workspace_entry = dict(base_entry)
-                    baseline_data = self._baseline_bytes(baseline, base_entry)
-                    workspace_entry["before_blob"] = (
-                        self._put_blob(baseline_data) if baseline_data is not None else None
-                    )
-                    if after_data is None and immediate_after.get("exists"):
-                        after_data = _read_regular_file(Path(base_entry["path_abs"]))
-                    public = self._promote_entry(
-                        index,
-                        pending,
-                        workspace_entry,
-                        after_data,
-                        immediate_after,
-                        authoritative_baseline=True,
-                    )
-                    if public is not None:
-                        output.append(public)
+            baseline_key = str(pending.get("baseline_key") or "")
+            if defer_workspace_sweep and baseline_key:
+                # Persist the obligation as well as immediate declared-path
+                # records, so interruption/restart cannot silently lose it.
+                index["deferred_sweeps"][baseline_key] = pending
+                self.timings["sweep_deferred"] = 1
+            else:
+                output.extend(self._sweep_workspace(index, pending))
+                index["deferred_sweeps"].pop(baseline_key, None)
 
             # Only the latest revision for each path matters inside one tool
             # result.  This also prevents the declared-path fallback from
@@ -1100,6 +1216,43 @@ class FileChangeReviewStore:
             "effective": bool(record.get("effective", True)),
             "reverted": bool(record.get("reverted")),
         }
+
+    def flush_deferred_sweeps(self) -> List[dict]:
+        """Finish batch obligations and retain delivery in a durable outbox.
+
+        The outbox is acknowledged only after the host has committed the UI
+        event. A crash between those commits can replay an idempotent revision,
+        never lose the only reference to a newly promoted workspace record.
+        """
+        self.timings = {}
+        if not self.index_path.is_file():
+            return []
+        with self._capture_lock():
+            index = self._load()
+            dirty = bool(index['deferred_sweeps'])
+            for key, pending in list(index['deferred_sweeps'].items()):
+                changes = self._sweep_workspace(index, pending)
+                if changes:
+                    event_id = uuid.uuid4().hex
+                    index['review_events'][event_id] = {
+                        **dict(pending.get('execution_scope') or {}),
+                        'type': 'file_changes_updated',
+                        'operation_id': event_id,
+                        'tool_call_id': str(pending.get('tool_call_id') or ''),
+                        'turn_id': str(pending.get('run_id') or ''),
+                        'changes': changes,
+                    }
+                index['deferred_sweeps'].pop(key, None)
+            events = list(index['review_events'].values())
+            if dirty:
+                self._save(index)
+            return events
+
+    def acknowledge_review_event(self, operation_id: str) -> None:
+        with self.lock:
+            index = self._load()
+            if index['review_events'].pop(str(operation_id), None) is not None:
+                self._save(index)
 
     def _restore_record(self, record: dict, side: str) -> None:
         path = Path(record["path_abs"])
@@ -1358,6 +1511,11 @@ class FileChangeReviewStore:
         keep = {str(item or "") for item in referenced_snapshot_ids if str(item or "")}
         with self.lock:
             index = self._load()
+            # Delivery can race with history maintenance. Keep unacknowledged
+            # revisions actionable until their durable UI reference exists.
+            keep.update(str(row.get('snapshot_id') or '')
+                        for event in index['review_events'].values()
+                        for row in event.get('changes') or [])
             removed = {
                 snapshot_id
                 for snapshot_id, record in index["records"].items()
@@ -1388,7 +1546,7 @@ class FileChangeReviewStore:
             index = self._load()
             changed = False
             for key, baseline in list(index["baselines"].items()):
-                if isinstance(baseline, dict) and str(baseline.get("run_id") or "") == wanted:
+                if key not in index['deferred_sweeps'] and isinstance(baseline, dict) and str(baseline.get("run_id") or "") == wanted:
                     self._remove_baseline(baseline)
                     index["baselines"].pop(key, None)
                     changed = True
@@ -1405,7 +1563,7 @@ class FileChangeReviewStore:
             index = self._load()
             changed = False
             for key, baseline in list(index["baselines"].items()):
-                if not isinstance(baseline, dict) or str(baseline.get("run_id") or "") == keep:
+                if key in index['deferred_sweeps'] or not isinstance(baseline, dict) or str(baseline.get("run_id") or "") == keep:
                     continue
                 self._remove_baseline(baseline)
                 index["baselines"].pop(key, None)
@@ -1462,7 +1620,7 @@ class FileChangeReviewStore:
             return
         index = index or self._load()
         keep: set[str] = set()
-        for pending in index.get("pending", {}).values():
+        for pending in list(index.get('pending', {}).values()) + list(index.get('deferred_sweeps', {}).values()):
             for entry in pending.get("entries") or []:
                 if entry.get("before_blob"):
                     keep.add(entry["before_blob"])

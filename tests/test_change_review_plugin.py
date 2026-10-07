@@ -521,6 +521,240 @@ def test_workspace_cache_detects_same_size_write_with_restored_mtime(tmp_path):
     assert path.read_bytes() == b"before\n"
 
 
+def test_declared_batch_sweeps_once_and_preserves_external_undo(tmp_path, monkeypatch):
+    module = _load_store()
+    workspace = tmp_path / 'repo'
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    external = workspace / 'external.txt'
+    external.write_text('original\n')
+    store = module.FileChangeReviewStore(tmp_path / 'session')
+    inventories = []
+    original = store._git_inventory
+    monkeypatch.setattr(store, '_git_inventory', lambda root: (inventories.append(root), original(root))[1])
+    sys.path.insert(0, str(ROOT / 'app'))
+    import agent_tools
+    declared = []
+    with agent_tools.tool_work_dir_override(workspace):
+        for index in range(5):
+            name = f'file-{index}.txt'
+            pending = store.begin_capture('write_file', {'path': name}, run_id='turn',
+                                         tool_call_id=f'call-{index}', work_root=workspace,
+                                         execution_scope={'run_id': 'execution', 'react_iter': 3, 'stream_seq': 7})
+            (workspace / name).write_text('created\n')
+            if index == 2:
+                external.write_text('external modification\n')
+            rows = store.finish_capture(pending, defer_workspace_sweep=True)
+            assert [row['path'] for row in rows] == [name]
+            declared.extend(rows)
+    assert len(inventories) == 1  # first baseline only
+    events = store.flush_deferred_sweeps()
+    assert len(inventories) == 2
+    assert len(events) == 1
+    event = events[0]
+    assert event['type'] == 'file_changes_updated'
+    assert event['run_id'] == 'execution' and event['react_iter'] == 3
+    assert event['tool_call_id'] == 'call-4'
+    assert [row['path'] for row in event['changes']] == ['external.txt']
+    all_rows = declared + event['changes']
+    store.undo([row['snapshot_id'] for row in all_rows], 'undo-batch')
+    store.commit_undo('undo-batch')
+    assert external.read_text() == 'original\n'
+    assert not list(workspace.glob('file-*.txt'))
+    store.restore([row['snapshot_id'] for row in all_rows], 'restore-batch')
+    store.commit_restore('restore-batch')
+    assert len(list(workspace.glob('file-*.txt'))) == 5
+    assert external.read_text() == 'external modification\n'
+
+
+def test_deferred_sweep_recovers_and_outbox_retries_until_ack(tmp_path, monkeypatch):
+    module = _load_store()
+    workspace = tmp_path / 'repo'
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    store = module.FileChangeReviewStore(tmp_path / 'session')
+    pending = store.begin_capture('run_shell', {}, run_id='turn', tool_call_id='last-call', work_root=workspace)
+    (workspace / 'external.txt').write_text('new\n')
+    store.finish_capture(pending, defer_workspace_sweep=True)
+    # A new process has no in-memory signature cache; recovery must use only
+    # the persisted baseline, obligation and content blobs.
+    monkeypatch.setattr(module, '_workspace_scans', {})
+    fresh = module.FileChangeReviewStore(tmp_path / 'session')
+    events = fresh.flush_deferred_sweeps()
+    assert len(events) == 1
+    assert fresh.flush_deferred_sweeps() == events
+    fresh.acknowledge_review_event(events[0]['operation_id'])
+    assert fresh.flush_deferred_sweeps() == []
+    assert not fresh._load()['deferred_sweeps']
+
+
+def test_runtime_external_tool_is_batch_boundary_and_logs_breakdown(tmp_path, caplog):
+    import agent_tools
+    workspace = tmp_path / 'repo'
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    session_dir = tmp_path / 'session'
+    durable = []
+    manager = SimpleNamespace(_get_session_path=lambda _sid: session_dir,
+                              append_ui_event=lambda sid, event, **kwargs: durable.append(dict(event)))
+    runtime = _load_plugin_module('runtime.py', 'test_review_batch_runtime')
+    callbacks = runtime.initialize(SimpleNamespace(session_manager=manager))
+    state = {'session_id': 'session', '_runtime_v2_run_id': 'run', '_change_review_batch_active': True,
+             '_current_react_iter': 2, '_active_stream_seq': 4}
+    caplog.set_level('INFO', logger='agent_harness')
+    with agent_tools.tool_work_dir_override(workspace):
+        pending = callbacks['before_native_file_tool'](state, 'write_file', {'path': 'native.txt'}, 'native')
+        (workspace / 'native.txt').write_text('native\n')
+        (workspace / 'outside.txt').write_text('before external tool\n')
+        native = callbacks['after_native_file_tool'](state, pending)
+        assert [row['path'] for row in native] == ['native.txt']
+        external = callbacks['before_native_file_tool'](state, 'mcp_writer', {}, 'external', str(workspace), True)
+        assert [row['path'] for row in durable[0]['changes']] == ['outside.txt']
+        (workspace / 'outside.txt').write_text('after external tool\n')
+        after = callbacks['after_native_file_tool'](state, external)
+        assert [row['path'] for row in after] == ['outside.txt']
+    updates = callbacks['flush_file_tool_reviews'](state)
+    assert updates[0]['_runtime_v2_committed'] is True
+    assert len(durable) == 1
+    assert callbacks['flush_file_tool_reviews'](state) == []
+    assert 'inventory_ms=' in caplog.text and 'signature_ms=' in caplog.text
+
+
+def test_workspace_limit_skips_first_baseline_but_keeps_declared_review(tmp_path, monkeypatch):
+    import agent_tools
+    module = _load_store()
+    workspace = tmp_path / 'repo'
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    for index in range(3):
+        (workspace / f'{index}.txt').write_text('original\n')
+    monkeypatch.setenv('MYAGENT_CHANGE_REVIEW_MAX_WORKSPACE_FILES', '2')
+    store = module.FileChangeReviewStore(tmp_path / 'session')
+    with agent_tools.tool_work_dir_override(workspace):
+        pending = store.begin_capture('write_file', {'path': '0.txt'}, run_id='turn', tool_call_id='call', work_root=workspace)
+        assert store.timings['coverage'] == 'declared_paths'
+        assert store.timings['files'] == 3
+        assert not list((store.root / 'baselines').glob('*.zip'))
+        (workspace / '0.txt').write_text('changed\n')
+        rows = store.finish_capture(pending)
+    assert [row['path'] for row in rows] == ['0.txt']
+    store.undo([rows[0]['snapshot_id']], 'undo-limited')
+    assert (workspace / '0.txt').read_text() == 'original\n'
+    assert store.begin_capture('run_shell', {}, run_id='turn', tool_call_id='external', work_root=workspace) is None
+
+
+def test_parallel_signatures_keep_cache_and_detect_restored_mtime(tmp_path, monkeypatch):
+    module = _load_store()
+    workspace = tmp_path / 'repo'
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    for index in range(260):
+        (workspace / f'{index}.txt').write_bytes(b'before\n')
+    store = module.FileChangeReviewStore(tmp_path / 'session')
+    capture(store, workspace, 'run_shell', {}, lambda: None)
+    monkeypatch.setenv('MYAGENT_CHANGE_REVIEW_SIGNATURE_WORKERS', '8')
+    monkeypatch.setenv('MYAGENT_CHANGE_REVIEW_SIGNATURE_PARALLEL_MIN_FILES', '0')
+    path = workspace / '129.txt'
+    before = path.stat()
+    def mutate():
+        path.write_bytes(b'after!\n')
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    rows = capture(store, workspace, 'run_shell', {}, mutate)
+    assert store.timings['scan_workers'] == 8
+    assert store.timings['cache_hits'] == 259
+    assert store.timings['changed_count'] == 1
+    assert [row['path'] for row in rows] == ['129.txt']
+    store.undo([rows[0]['snapshot_id']], 'undo-parallel')
+    assert path.read_bytes() == b'before\n'
+
+
+def test_workspace_update_replays_without_entering_model_history(tmp_path):
+    from runtime_v2.mirror import RuntimeMirror
+    from runtime_v2.ui_projection import RuntimeUiProjection
+    from runtime_v2.model_projection import RuntimeModelProjection
+    event = {'type': 'file_changes_updated', 'run_id': 'run', 'react_iter': 2, 'stream_seq': 4,
+             'tool_call_id': 'tool', 'changes': [{'path': 'external.txt', 'snapshot_id': 'snapshot', 'revision': 1}]}
+    RuntimeMirror(tmp_path).mirror_ui_event('session', event)
+    events = RuntimeUiProjection(tmp_path).read_ui_events('session')
+    assert events[0]['type'] == 'file_changes_updated'
+    assert events[0]['run_id'] == 'run' and events[0]['changes'] == event['changes']
+    assert RuntimeModelProjection(tmp_path).read_message_dicts('session') == []
+
+
+def test_deferred_declared_row_already_uses_turn_origin(review):
+    store, workspace = review
+    init_git_workspace(workspace)
+    target = workspace / 'origin.txt'
+    target.write_text('turn origin\n')
+    capture(store, workspace, 'run_shell', {}, lambda: None)
+    target.write_text('external before declaration\n')
+    pending = store.begin_capture('write_file', {'path': 'origin.txt'}, run_id='run-1',
+                                 tool_call_id='declared', work_root=workspace)
+    target.write_text('declared final\n')
+    rows = store.finish_capture(pending, defer_workspace_sweep=True)
+    assert '-turn origin' in rows[0]['diff']
+    assert 'external before declaration' not in rows[0]['diff']
+    assert store.flush_deferred_sweeps() == []
+    store.undo([rows[0]['snapshot_id']], 'undo-immediate-origin')
+    assert target.read_text() == 'turn origin\n'
+
+
+def test_pending_sweep_and_delivery_survive_baseline_cleanup_and_prune(tmp_path):
+    module = _load_store()
+    workspace = tmp_path / 'repo'
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    path = workspace / 'external.txt'
+    path.write_text('before\n')
+    store = module.FileChangeReviewStore(tmp_path / 'session')
+    pending = store.begin_capture('run_shell', {}, run_id='old', tool_call_id='tool', work_root=workspace)
+    path.write_text('after\n')
+    store.finish_capture(pending, defer_workspace_sweep=True)
+    store.finish_run('old')
+    store.finish_other_runs('new')
+    assert store._load()['baselines']
+    events = store.flush_deferred_sweeps()
+    snapshot = events[0]['changes'][0]['snapshot_id']
+    store.prune_unreferenced([])
+    assert not store._load()['records'][snapshot].get('dropped')
+    store.finish_other_runs('new')
+    assert not store._load()['baselines']
+    store.undo([snapshot], 'undo-unacked')
+    assert path.read_text() == 'before\n'
+
+
+def test_runtime_delivery_failure_keeps_retryable_outbox(tmp_path):
+    import agent_tools
+    workspace = tmp_path / 'repo'
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    runtime = _load_plugin_module('runtime.py', 'test_review_delivery_runtime')
+    durable = []
+
+    def append(_sid, event, **kwargs):
+        assert kwargs['require_commit']
+        if not durable:
+            durable.append('failed')
+            raise OSError('injected durable UI failure')
+        durable.append(dict(event))
+
+    callbacks = runtime.initialize(SimpleNamespace(session_manager=SimpleNamespace(
+        _get_session_path=lambda sid: tmp_path / 'session', append_ui_event=append)))
+    state = {'session_id': 'session', '_runtime_v2_run_id': 'run', '_change_review_batch_active': True}
+    with agent_tools.tool_work_dir_override(workspace):
+        pending = callbacks['before_native_file_tool'](state, 'write_file', {'path': 'native.txt'}, 'native')
+        (workspace / 'native.txt').write_text('native\n')
+        (workspace / 'external.txt').write_text('external\n')
+        callbacks['after_native_file_tool'](state, pending)
+    with pytest.raises(OSError, match='injected'):
+        callbacks['flush_file_tool_reviews'](state)
+    assert state['_change_review_dirty']
+    updates = callbacks['flush_file_tool_reviews'](state)
+    assert [row['path'] for row in updates[0]['changes']] == ['external.txt']
+    assert updates[0]['_runtime_v2_committed']
+    assert callbacks['flush_file_tool_reviews'](state) == []
+
+
 def test_git_inventory_stays_within_subdirectory(tmp_path):
     module = _load_store()
     init_git_workspace(tmp_path)

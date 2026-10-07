@@ -14,6 +14,7 @@ let renderFrame = null;
 let viewportFrame = null;
 let mountedSessionId = '';
 const aggregateOwners = new WeakMap();
+const workspaceReviewUpdates = new Map();
 let clippingAncestors = new WeakMap();
 
 function zh() {
@@ -681,10 +682,51 @@ export function acceptChangeUpdate(old, raw) {
     if (String(old.snapshot_id) !== String(raw.snapshot_id)) return true;
     return !(Number(old.revision || 0) > Number(raw.revision || 0));
 }
+export function workspaceReviewKey(event) {
+    return [event.run_id || '', Number(event.react_iter || 0),
+        Number(event.stream_seq || 0), event.tool_call_id || ''].join('\u0000');
+}
+export function mergeReviewChanges(existing, incoming) {
+    const rows = new Map();
+    (existing || []).concat(incoming || []).forEach(function (row) {
+        if (!row || !row.path || !row.snapshot_id) return;
+        const key = String(row.path).toLowerCase();
+        if (acceptChangeUpdate(rows.get(key), row)) rows.set(key, row);
+    });
+    return Array.from(rows.values());
+}
+export function reviewUpdatesForTool(event, row, updates) {
+    const data = (row && row.dataset) || {};
+    const scope = Object.assign({}, event, {
+        run_id: event.run_id || data.runId || '',
+        react_iter: event.react_iter == null ? data.reactIter : event.react_iter,
+        tool_call_id: event.tool_call_id || data.toolCallId || '',
+    });
+    if (event.stream_seq != null || data.streamSeq != null) {
+        scope.stream_seq = event.stream_seq == null ? data.streamSeq : event.stream_seq;
+        return updates.get(workspaceReviewKey(scope)) || [];
+    }
+    // Execution-record hydration retains run/iteration on the row but may omit
+    // the stream sequence from its synthetic tool event. Match only inside that
+    // execution scope; never fall back to a tool id across runs or iterations.
+    if (!scope.run_id || !scope.tool_call_id) return [];
+    let rows = [];
+    let matches = 0;
+    updates.forEach(function (changes, key) {
+        const parts = key.split('\u0000');
+        if (parts[0] === scope.run_id && Number(parts[1]) === Number(scope.react_iter || 0)
+            && parts[3] === scope.tool_call_id) {
+            rows = changes;
+            matches += 1;
+        }
+    });
+    return matches === 1 ? rows : [];
+}
 function applyTool(detail, options) {
     options = options || {};
     const event = detail && detail.event; let aggregate = detail && detail.aggregate;
-    const incoming = event && event.ui && Array.isArray(event.ui.changes) ? event.ui.changes : [];
+    const updates = event && reviewUpdatesForTool(event, detail.row, workspaceReviewUpdates);
+    const incoming = mergeReviewChanges(event && event.ui && event.ui.changes, updates);
     if (!incoming.length) return false;
     if (!aggregate && detail && detail.row) {
         /* 关联区域 = 当前轮（用户问题 → 对应 final 卡片）：行即便不在任何执行过程框内，
@@ -715,7 +757,7 @@ function applyTool(detail, options) {
         const old = rows.get(String(raw.path).toLowerCase());
         if (!acceptChangeUpdate(old, raw)) return;
         const enriched = Object.assign({}, raw, {
-            _sessionId: String(detail.sessionId || ''),
+            _sessionId: String(raw._reviewSessionId || detail.sessionId || ''),
             _rootSessionId: ownerSessionId,
             _turnId: fallbackTurnId,
             _turnToken: String(raw.turn_id || incomingTurnToken || fallbackTurnId),
@@ -743,6 +785,16 @@ function onUiEvent(detail) {
     const event = detail && detail.event;
     const ownerSessionId = String((detail && detail.rootSessionId) || (detail && detail.sessionId) || '');
     if (ownerSessionId && ownerSessionId !== mountedSessionId) return;
+    if (event && event.type === 'file_changes_updated') {
+        const key = workspaceReviewKey(event);
+        const changes = (event.changes || []).map(function (row) {
+            return Object.assign({}, row, {_reviewSessionId: event.session_id || detail.sessionId || ownerSessionId});
+        });
+        workspaceReviewUpdates.set(key, mergeReviewChanges(workspaceReviewUpdates.get(key), changes));
+        // Also covers replay-before-lazy-tool-body: retain the scoped updates
+        // until its tool row exists. Native tool events remain the normal path.
+        scheduleScanExisting();
+    }
     if (event && event.type === 'file_changes_reverted') markReverted(event.snapshot_ids || []);
     if (event && event.type === 'file_changes_restored') markRestored(event.snapshot_ids || []);
 }
@@ -772,6 +824,7 @@ function scanExisting() {
     }
 }
 function resetForSession(nextSessionId) {
+    workspaceReviewUpdates.clear();
     if (scanTimer !== null) {
         globalThis.clearTimeout(scanTimer);
         scanTimer = null;

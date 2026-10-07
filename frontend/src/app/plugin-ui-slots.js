@@ -48,6 +48,49 @@ export function normalizePluginChatExtensions(rows) {
     });
 }
 
+/* 插件样式必须在上屏前生效：只把 <link> 挂到 head 而不等待时，渲染器会先画一版
+   “还没加载好样式”的界面（改动审查的 +/− 数字是灰白字色，1–2 秒后才跳成红绿），
+   因为卡片/徽标一挂载就渲染，而插件样式表还在路上。这里统一等待样式表可用
+   （load/error/超时都有界），再让渲染器上屏。 */
+const PLUGIN_STYLE_WAIT_MS = 8000;
+
+export function pluginStyleReady(link, timeoutMs) {
+    if (!link) return Promise.resolve(false);
+    if (link.sheet) return Promise.resolve(true);
+    const limit = Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : PLUGIN_STYLE_WAIT_MS;
+    return new Promise(function (resolve) {
+        let settled = false;
+        let timer = null;
+        function finish(ok) {
+            if (settled) return;
+            settled = true;
+            link.removeEventListener('load', onLoad);
+            link.removeEventListener('error', onError);
+            if (timer !== null) globalThis.clearTimeout(timer);
+            resolve(ok);
+        }
+        function onLoad() { finish(true); }
+        function onError() { finish(false); }
+        link.addEventListener('load', onLoad);
+        link.addEventListener('error', onError);
+        if (link.sheet) { finish(true); return; }
+        if (limit > 0) timer = globalThis.setTimeout(function () { finish(false); }, limit);
+    });
+}
+
+async function ensurePluginStyleLink(definition, datasetProperty, attributeName) {
+    const key = `${definition.pluginId}:${definition.id}`;
+    let link = document.querySelector(`link[${attributeName}="${key}"]`);
+    if (!link && definition.styleUrl) {
+        link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = definition.styleUrl;
+        link.dataset[datasetProperty] = key;
+        document.head.appendChild(link);
+    }
+    return pluginStyleReady(link, PLUGIN_STYLE_WAIT_MS);
+}
+
 async function loadPluginChatExtensions(rows) {
     pluginChatExtensionCleanups.splice(0).forEach(function (cleanup) {
         try { cleanup(); } catch (error) { console.warn('Plugin chat extension cleanup failed', error); }
@@ -55,14 +98,10 @@ async function loadPluginChatExtensions(rows) {
     const definitions = normalizePluginChatExtensions(rows);
     await Promise.all(definitions.map(async function (definition) {
         try {
-            if (definition.styleUrl && !document.querySelector(`link[data-plugin-chat-style="${definition.pluginId}:${definition.id}"]`)) {
-                const link = document.createElement('link');
-                link.rel = 'stylesheet';
-                link.href = definition.styleUrl;
-                link.dataset.pluginChatStyle = `${definition.pluginId}:${definition.id}`;
-                document.head.appendChild(link);
-            }
-            const module = await import(/* @vite-ignore */ definition.moduleUrl);
+            const [module] = await Promise.all([
+                import(/* @vite-ignore */ definition.moduleUrl),
+                ensurePluginStyleLink(definition, 'pluginChatStyle', 'data-plugin-chat-style'),
+            ]);
             if (!module || typeof module.installChatExtension !== 'function') return;
             const cleanup = await module.installChatExtension({
                 pluginId: definition.pluginId,
@@ -110,14 +149,10 @@ async function loadPluginSessionPanelRenderers(rows) {
     const loaded = new Map();
     await Promise.all(definitions.map(async function (definition) {
         try {
-            if (definition.styleUrl && !document.querySelector(`link[data-plugin-panel-style="${definition.pluginId}:${definition.id}"]`)) {
-                const link = document.createElement('link');
-                link.rel = 'stylesheet';
-                link.href = definition.styleUrl;
-                link.dataset.pluginPanelStyle = `${definition.pluginId}:${definition.id}`;
-                document.head.appendChild(link);
-            }
-            const module = await import(/* @vite-ignore */ definition.moduleUrl);
+            const [module] = await Promise.all([
+                import(/* @vite-ignore */ definition.moduleUrl),
+                ensurePluginStyleLink(definition, 'pluginPanelStyle', 'data-plugin-panel-style'),
+            ]);
             if (module && typeof module.renderSessionPanel === 'function') {
                 loaded.set(`${definition.pluginId}:${definition.id}`, module.renderSessionPanel);
             }

@@ -512,3 +512,31 @@ def test_history_snapshot_acknowledges_non_ui_revision(monkeypatch, journal):
     assert payload["last_runtime_seq"] >= payload["projection_revision"] > 1
     replay = RuntimeUiProjection(journal.log.root).read_ui_after_runtime_seq("s", after_runtime_seq=payload["last_runtime_seq"])
     assert not replay["requires_reprojection"]
+
+
+def test_tool_result_record_keeps_change_review_ui_payload(journal):
+    """Plugin-owned change-review rows must ride on the execution record.
+
+    The chat-side change review reads ``ui.changes`` from the rendered tool row,
+    and that row is built from the execution record (live ``execution_update``
+    and replayed history). Dropping the payload here blanks the review pane
+    while the details column keeps listing the same changes from history.
+    """
+    import json
+    change = {"path": "workspace/demo.txt", "operation": "create", "snapshot_id": "snap-1",
+              "revision": 1, "turn_id": "turn-id", "added": 1, "removed": 0,
+              "diff": "--- a/workspace/demo.txt\n+++ b/workspace/demo.txt\n+secret-ui-only\n",
+              "effective": True}
+    event = emit(journal, "tool_call", tool_call_id="call", tool="write_file",
+                 args={"path": "workspace/demo.txt"}, result="ok",
+                 execution_status="completed", ui={"changes": [change]})
+    record = next(row for row in journal.read("s")["execution_records"]
+                  if row.get("execution_id") == event["execution_id"])
+    assert record["ui"]["changes"][0]["snapshot_id"] == "snap-1"
+    snapshot = RuntimeProjector().project(journal.log.read_all("s"))
+    assert "secret-ui-only" not in json.dumps(snapshot["raw_model_messages"], ensure_ascii=False)
+    page = RuntimeUiProjection(journal.log.root).read_ui_after_runtime_seq(
+        "s", after_runtime_seq=int(event["execution_runtime_seq"]) - 1)
+    updates = [item for item in page["events"] if item.get("type") == "execution_update"]
+    assert any(item["update"].get("ui", {}).get("changes", [{}])[0].get("snapshot_id") == "snap-1"
+               for item in updates)

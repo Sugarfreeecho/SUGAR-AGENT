@@ -9,6 +9,7 @@ import {
     normalizePluginChatExtensions,
     normalizePluginSettingsSections,
     normalizePluginSettingsResponse,
+    pluginStyleReady,
     resolvePluginExtensionEvent,
 } from '../../frontend/src/app/plugin-ui-slots.js';
 
@@ -214,4 +215,41 @@ assert.deepEqual(normalizePluginComposerActions([{
     pluginId: 'game-arena', id: 'draft', label: '<script>', description: '', action: 'insert_text',
     order: 100, text: '<img src=x>',
 }]);
+
+/* 插件样式就绪门：渲染器必须等样式表可用后才上屏，否则会先画一版灰白的
+   “未加载样式”界面（改动审查 +/− 数字 1–2 秒后才变红绿）。 */
+function fakeStyleLink() {
+    return {
+        sheet: null,
+        listeners: new Map(),
+        addEventListener(type, handler) { this.listeners.set(type, handler); },
+        removeEventListener(type) { this.listeners.delete(type); },
+        fire(type) { const handler = this.listeners.get(type); if (handler) handler(); },
+    };
+}
+
+assert.equal(await pluginStyleReady(null, 10), false, 'no link means no stylesheet to wait for');
+assert.equal(await pluginStyleReady({ sheet: {} }, 10), true, 'an applied stylesheet resolves immediately');
+
+const loaded = fakeStyleLink();
+const loadedWait = pluginStyleReady(loaded, 1000);
+assert.equal(loaded.listeners.has('load'), true, 'a pending stylesheet is awaited');
+loaded.fire('load');
+assert.equal(await loadedWait, true, 'the stylesheet load event releases the renderer');
+assert.equal(loaded.listeners.has('load'), false, 'listeners are removed once settled');
+
+const failed = fakeStyleLink();
+const failedWait = pluginStyleReady(failed, 1000);
+failed.fire('error');
+assert.equal(await failedWait, false, 'a failed stylesheet must not block the renderer forever');
+
+const stalled = fakeStyleLink();
+assert.equal(await pluginStyleReady(stalled, 20), false, 'a stalled stylesheet falls through on its bound');
+
+const alreadyApplied = fakeStyleLink();
+alreadyApplied.sheet = {};
+const appliedWait = pluginStyleReady(alreadyApplied, 1000);
+assert.equal(alreadyApplied.listeners.has('load'), false, 'applied styles never register listeners');
+assert.equal(await appliedWait, true);
+console.log('plugin style readiness checks passed');
 console.log('plugin UI slot runtime checks passed');

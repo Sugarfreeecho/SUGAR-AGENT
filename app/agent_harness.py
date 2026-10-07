@@ -5231,7 +5231,7 @@ class SessionManager:
         elif event_copy.get("type") in ("run_interrupted", "run_failed"):
             self.mark_session_unread_result(session_id, status="failed")
 
-    def append_ui_event(self, session_id: str, event: Dict[str, Any]) -> None:
+    def append_ui_event(self, session_id: str, event: Dict[str, Any], *, require_commit: bool = False) -> None:
         """追加一条与 SSE 同结构的 UI 事件（供刷新时原样重放）。"""
         if not event or not isinstance(event, dict):
             return
@@ -5241,9 +5241,12 @@ class SessionManager:
             from session_lifecycle import is_session_deleted
 
             if is_session_deleted(session_id):
+                if require_commit:
+                    raise RuntimeError('cannot commit UI event to a deleted session')
                 return
         except Exception:
-            pass
+            if require_commit:
+                raise
         try:
             from attachments.content import redact_image_payloads
             event_copy = json.loads(json.dumps(redact_image_payloads(event), ensure_ascii=False))
@@ -5266,7 +5269,7 @@ class SessionManager:
                     return
             except Exception as mirror_error:
                 if runtime_v2_primary is not None and runtime_v2_primary():
-                    if runtime_v2_strict is None or runtime_v2_strict():
+                    if require_commit or runtime_v2_strict is None or runtime_v2_strict():
                         raise
                     logger.warning("Runtime V2 mirror ui_event failed for %s: %s", session_id, mirror_error)
                     return
@@ -5277,7 +5280,7 @@ class SessionManager:
             self._apply_appended_ui_event_side_effects(session_id, event_copy)
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
-            if runtime_v2_active and runtime_v2_strict_mode:
+            if require_commit or (runtime_v2_active and runtime_v2_strict_mode):
                 raise
 
     def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> bool:

@@ -245,6 +245,12 @@ class ExecutionJournal:
                                   result=result, ui_committed=True, command_preview=event.get("command_preview"),
                                   attachments=event.get("attachments", []),
                                   duration_ms=(event.get("status") or {}).get("duration_ms"))
+                    # Plugin-owned UI metadata (change-review rows) belongs to the
+                    # result, not to the provider payload. Keep it on the record so
+                    # the live execution_update and the replayed record both carry it.
+                    ui_payload = event.get("ui")
+                    if isinstance(ui_payload, dict) and ui_payload:
+                        update["ui"] = ui_payload
             elif kind.endswith("_delta"):
                 update.update(status="generating", text_delta=event.get("delta", ""))
             else:

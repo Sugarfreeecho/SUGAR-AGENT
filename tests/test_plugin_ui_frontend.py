@@ -48,6 +48,43 @@ def test_plugin_ui_slot_frontend_runtime_and_safe_text_rendering():
     )[0]
 
 
+def test_plugin_renderers_wait_for_their_stylesheet_before_mounting():
+    """回归：插件样式表必须在上屏前生效，否则会先画一版“未加载样式”的界面。
+
+    症状：改动审查的 +/− 数字先是灰白（无插件样式），1–2 秒后才变成红绿——
+    因为只把 <link> 挂到 head 就立刻挂载渲染器，样式表还在路上。
+    """
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for frontend runtime checks")
+    result = subprocess.run(
+        [node, str(ROOT / "tests/js/plugin_ui_slots_runtime.mjs")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "plugin style readiness checks passed" in result.stdout
+
+    source = (ROOT / "frontend/src/app/plugin-ui-slots.js").read_text(encoding="utf-8")
+    assert "export function pluginStyleReady" in source
+    # 旧写法（挂 link 后不等样式就继续）必须消失：
+    assert "link.dataset.pluginChatStyle = " not in source
+    assert "link.dataset.pluginPanelStyle = " not in source
+    for marker, install in (
+        ("async function loadPluginChatExtensions", "installChatExtension("),
+        ("async function loadPluginSessionPanelRenderers", "renderSessionPanel"),
+    ):
+        block = source.split(marker, 1)[1].split("\nexport function ", 1)[0]
+        assert "ensurePluginStyleLink(" in block, marker
+        assert "await Promise.all([" in block, marker
+        style_at = block.find("ensurePluginStyleLink(")
+        install_at = block.find(install)
+        assert 0 <= style_at < install_at, marker
+
+
 def test_session_panels_clear_containers_whose_panels_disappeared():
     """面板从 payload 消失（如计划清空）时，原容器必须被清空。
 
