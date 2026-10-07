@@ -57,6 +57,10 @@ class PluginRuntimeError(RuntimeError):
     """Raised when a plugin worker cannot describe or invoke a capability."""
 
 
+class DeferredTokenExpiredError(PluginRuntimeError):
+    """An authorized deferred result expired before its next poll."""
+
+
 def _declared_context_fields(plugin: PluginDefinition) -> frozenset[str]:
     """Return optional host context explicitly requested by the manifest."""
 
@@ -1101,10 +1105,6 @@ class PluginRuntimeRegistry:
         lease = self._deferred_leases.get(lease_key)
         if lease is None:
             raise PluginRuntimeError("Unknown, expired, or already consumed deferred token")
-        if lease.expires_at <= time.time() and not allow_expired:
-            self._deferred_leases.pop(lease_key, None)
-            self._persist_deferred_leases_locked()
-            raise PluginRuntimeError("Deferred token has expired")
         if (
             lease.function_name != str(function_name or "")
             or lease.plugin_signature != binding.plugin_signature
@@ -1115,6 +1115,10 @@ class PluginRuntimeRegistry:
                 raise PluginRuntimeError(
                     f"Deferred token is not authorized for this {field}"
                 )
+        if lease.expires_at <= time.time() and not allow_expired:
+            # Keep the lease so its owner can still run cancel_deferred's
+            # cleanup. Removing it here makes timeout cleanup impossible.
+            raise DeferredTokenExpiredError("Deferred token has expired")
         return binding, worker, trusted_context, lease_key
 
     def poll_deferred(

@@ -33,6 +33,7 @@ function applySessionEvent(event, opts) {
         || type === 'tool_call_delta'
         || type === 'tool_command_delta'
         || type === 'context_summary_delta'
+        || type === 'context_summary_reasoning_delta'
         || type === 'key_context_delta'
     );
     // Ephemeral events belong to the live DOM only. Recording statuses,

@@ -1226,9 +1226,21 @@ def _run_compress_executor_dialogue(
                 dialogue_msgs, suffix=suffix, archive=archive
             ), ""
         for attempt in range(2):
+            reasoning_streamed = False
+
             def _buffer_delta(piece: str) -> None:
                 if stream_sink is not None:
                     stream_sink(piece)
+
+            def _reasoning_delta(piece: str) -> None:
+                nonlocal reasoning_streamed
+                if hint_sink is not None:
+                    reasoning_streamed = True
+                    hint_sink({
+                        "type": "context_summary_reasoning_delta",
+                        "delta": piece,
+                        "ephemeral": True,
+                    })
 
             call_msgs = msgs
             if attempt:
@@ -1240,7 +1252,20 @@ def _run_compress_executor_dialogue(
                 )
                 call_msgs = list(msgs) + [UserMessage(content=strict)]
             if stream_sink is not None:
-                raw = executor_chat_complete_stream(call_msgs, on_content_delta=_buffer_delta, session_id=session_id)
+                stream_kwargs = {
+                    "on_content_delta": _buffer_delta,
+                    "session_id": session_id,
+                }
+                if hint_sink is not None:
+                    stream_kwargs["on_reasoning_delta"] = _reasoning_delta
+                try:
+                    raw = executor_chat_complete_stream(call_msgs, **stream_kwargs)
+                finally:
+                    if reasoning_streamed and hint_sink is not None:
+                        try:
+                            hint_sink({"type": "context_summary_reasoning_end", "ephemeral": True})
+                        except Exception:
+                            pass
             else:
                 raw = executor_chat_complete(call_msgs, session_id=session_id).strip()
             recap, key_body = _parse_compress_dialogue_output(raw)

@@ -2721,9 +2721,11 @@ def executor_chat_complete_stream(
     messages: List[Any],
     on_content_delta: Optional[Callable[[str], None]] = None,
     session_id: str = "",
+    *,
+    on_reasoning_delta: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
-    执行端多轮 chat 流式补全；每收到 content 片段即回调 on_content_delta（供压缩/要点 SSE 推送）。
+    执行端多轮 chat 流式补全；正文与推理分别回调，供压缩/要点 SSE 推送。
     返回完整正文（与 executor_chat_complete 一致）。
     """
     buffer_only = bool(cpu_pressure.snapshot().degraded)
@@ -2754,6 +2756,7 @@ def executor_chat_complete_stream(
     t.start()
     parts: List[str] = []
     buffered_final = ""
+    buffered_reasoning = ""
     err: Optional[BaseException] = None
     while True:
         item = sync_q.get()
@@ -2768,14 +2771,25 @@ def executor_chat_complete_stream(
                     on_content_delta(piece)
                 except Exception:
                     pass
+        elif tag == "reasoning" and payload and on_reasoning_delta:
+            try:
+                on_reasoning_delta(payload if isinstance(payload, str) else str(payload))
+            except Exception:
+                pass
         elif tag == "turn" and payload is not None:
             buffered_final = str(getattr(payload, "content", "") or "")
+            buffered_reasoning = str(getattr(payload, "reasoning_content", "") or "")
         elif tag == "err" and isinstance(payload, BaseException):
             err = payload
     t.join()
     if err is not None:
         raise err
     text = "".join(parts) or buffered_final
+    if buffer_only and buffered_reasoning and on_reasoning_delta:
+        try:
+            on_reasoning_delta(buffered_reasoning)
+        except Exception:
+            pass
     if buffer_only and text and on_content_delta:
         try:
             on_content_delta(text)

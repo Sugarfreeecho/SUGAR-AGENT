@@ -3475,6 +3475,7 @@ async def _emit_steer_abort_event(
                 "llm_response_delta",
                 "context_trim_delta",
                 "context_summary_delta",
+                "context_summary_reasoning_delta",
                 "key_context_delta",
             },
             run_id=state.get("_runtime_v2_run_id"),

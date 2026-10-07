@@ -1236,26 +1236,50 @@ def _subprocess_env_for_shell() -> Dict[str, str]:
     return env
 
 
+def _decode_byte_line(line: bytes) -> str:
+    """
+    单行兜底解码（混合编码流专用）：UTF-8 严格优先；该行“非 ASCII 字节里绝大多数不是合法 UTF-8”时按 GBK；
+    其余情况保留 UTF-8 替换符结果。
+    """
+    try:
+        return line.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    replaced = line.decode("utf-8", errors="replace")
+    bad = replaced.count("\ufffd")
+    non_ascii = sum(1 for b in line if b >= 0x80)
+    if bad >= 2 and non_ascii and bad * 2 >= non_ascii:
+        try:
+            return line.decode("gbk")
+        except UnicodeDecodeError:
+            pass
+    return replaced
+
+
 def _decode_cli_subprocess_bytes(data: bytes) -> str:
     """
     解码子进程 stdout/stderr。Windows 上部分工具（含商店/python 存根）输出 GBK，而 Git Bash 侧多为 UTF-8；
-    优先 UTF-8；若出现替换字符再尝试 GBK。
+    优先按 UTF-8 严格解码；失败后按“行”在 UTF-8 / GBK 间择优（兼容混合编码流）；仍失败的行用替换符兜底。
+
+    注意：不要把“解码结果里含 U+FFFD”当作回退信号——合法 UTF-8 文本本身就可能包含 U+FFFD（例如上游已用
+    errors="replace" 读过的内容），否则整段会被重新按 GBK 解码，把原本正确的中文改写成 GBK 误码（如 U+FFFD → “锟絓”）。
     """
     if not data:
         return ""
     if platform.system() != "Windows":
         return data.decode("utf-8", errors="replace")
     try:
-        s = data.decode("utf-8")
-        if "\ufffd" not in s:
-            return s
+        return data.decode("utf-8")
     except UnicodeDecodeError:
         pass
-    try:
-        return data.decode("gbk")
-    except UnicodeDecodeError:
-        pass
-    return data.decode("utf-8", errors="replace")
+    parts = data.split(b"\n")
+    out: List[str] = []
+    for idx, line in enumerate(parts):
+        if line:
+            out.append(_decode_byte_line(line))
+        if idx < len(parts) - 1:
+            out.append("\n")
+    return "".join(out)
 
 
 def _summarize_shell_stream_if_binary_like(decoded: str, raw: bytes, label: str) -> str:

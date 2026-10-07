@@ -24,6 +24,7 @@ from myagent_plugin_sdk import parse_deferred_result, strip_deferred_result
 try:  # Production launches with app/ on sys.path; package imports use the fallback.
     from hooks import HookDispatchResult, HookManager, HookSource, hooks_enabled
     from plugins import (
+        DeferredTokenExpiredError,
         PluginLoadResult,
         PluginManager,
         PluginReloadResult,
@@ -34,6 +35,7 @@ try:  # Production launches with app/ on sys.path; package imports use the fallb
 except ImportError:  # pragma: no cover - import style depends on the launcher
     from .hooks import HookDispatchResult, HookManager, HookSource, hooks_enabled
     from .plugins import (
+        DeferredTokenExpiredError,
         PluginLoadResult,
         PluginManager,
         PluginReloadResult,
@@ -555,13 +557,21 @@ async def invoke_plugin_tool(
             if time.monotonic() >= deadline:
                 return await _cancel("timeout")
 
-            latest = await asyncio.to_thread(
-                registry.poll_deferred,
-                function_name,
-                opaque_token,
-                loaded.plugins,
-                context=trusted_context,
-            )
+            try:
+                latest = await asyncio.to_thread(
+                    registry.poll_deferred,
+                    function_name,
+                    opaque_token,
+                    loaded.plugins,
+                    context=trusted_context,
+                )
+            except DeferredTokenExpiredError:
+                # The plugin's lease can expire while a poll is crossing the
+                # worker boundary, even though this loop began before its
+                # deadline. Treat that race as a timeout and still run the
+                # plugin's cleanup handler (which is allowed to see expired
+                # leases), instead of leaking an unhandled runtime error.
+                return await _cancel("timeout")
             next_spec = parse_deferred_result(latest)
             if next_spec is None:
                 return await _apply_host_actions(strip_deferred_result(latest))

@@ -52,6 +52,7 @@ async def execute_prepared(prepared, cwd, spawn_kw, command, timeout, background
     deadline = time.monotonic() + timeout
     publisher = _RunShellProgressPublisher(sink, max_chars=_run_shell_stream_max_chars())
     emitted = {"stdout": b"", "stderr": b""}
+    emitted_text = {"stdout": "", "stderr": ""}
     try:
         snapshot = await service.call(service.foreground_snapshot, identifier)
         if background:
@@ -67,7 +68,20 @@ async def execute_prepared(prepared, cwd, spawn_kw, command, timeout, background
                     previous = emitted[name]
                     delta = raw[len(previous):] if raw.startswith(previous) else raw
                     if delta:
-                        await publisher.push(name, _decode_cli_subprocess_bytes(delta))
+                        prev_text = emitted_text[name]
+                        # 优先解码“整段累计字节”再取新增文本差：避免按任意字节切片解码把多字节字符劈开；
+                        # 超过 1MB 的巨量输出退回按片解码，控制每轮快照的解码开销。
+                        full_text = (
+                            _decode_cli_subprocess_bytes(raw) if len(raw) <= 1048576 else None
+                        )
+                        if full_text is not None and full_text.startswith(prev_text):
+                            piece = full_text[len(prev_text):]
+                            emitted_text[name] = full_text
+                        else:
+                            piece = _decode_cli_subprocess_bytes(delta)
+                            emitted_text[name] = prev_text + piece
+                        if piece:
+                            await publisher.push(name, piece)
                     emitted[name] = raw
             if snapshot["done"]:
                 break

@@ -414,6 +414,72 @@ def test_compress_executor_stream_delta_is_forwarded_live(monkeypatch):
     assert order[:2] == ["sink:<recap>live", "executor_after_delta"]
 
 
+def test_compression_reasoning_reaches_ui_before_summary_and_stays_out_of_result(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    import agent_harness
+    import agent_memory
+    from agent_subagent_events import should_persist_ui_event
+
+    reasoning_seen = threading.Event()
+    frames = []
+    monkeypatch.setattr(agent_memory, "load_prompt_template", lambda _name: "compress")
+    monkeypatch.setattr(agent_harness.cpu_pressure, "snapshot", lambda: SimpleNamespace(degraded=False))
+    monkeypatch.setattr(agent_harness, "resolve_executor_config_for_session", lambda _sid: (None, "fixture", 200, 1000))
+
+    def worker(sync_q, *_args, **_kwargs):
+        sync_q.put(("reasoning", "先整理"))
+        if not reasoning_seen.wait(timeout=2):
+            sync_q.put(("err", RuntimeError("reasoning was not forwarded live")))
+            sync_q.put(None)
+            return
+        sync_q.put(("reasoning", "\n历史上下文。"))
+        sync_q.put(("content", "<recap>finished recap</recap><summary>- key</summary>"))
+        sync_q.put(None)
+
+    def hint_sink(event):
+        frames.append(event)
+        if event.get("type") == "context_summary_reasoning_delta":
+            reasoning_seen.set()
+
+    monkeypatch.setattr(agent_harness, "run_chat_completion_stream_worker", worker)
+    recap, key = agent_memory._run_compress_executor_dialogue(
+        "", [agent_memory.UserMessage(content="old"), agent_memory.AssistantMessage(content="answer")],
+        stream_sink=lambda piece: frames.append({"type": "context_summary_delta", "delta": piece}),
+        hint_sink=hint_sink,
+        session_id="00000000-0000-0000-0000-000000000001",
+    )
+    assert (recap, key) == ("finished recap", "- key")
+    assert [frame["type"] for frame in frames] == [
+        "context_summary_reasoning_delta", "context_summary_reasoning_delta",
+        "context_summary_delta", "context_summary_reasoning_end",
+    ]
+    assert "".join(frame["delta"] for frame in frames if frame["type"] == "context_summary_reasoning_delta") == "先整理\n历史上下文。"
+    assert all(not should_persist_ui_event(frame) for frame in frames if frame["type"].startswith("context_summary_reasoning"))
+
+
+def test_compression_reasoning_closes_each_failed_attempt(monkeypatch):
+    import agent_memory
+
+    frames = []
+    monkeypatch.setattr(agent_memory, "load_prompt_template", lambda _name: "compress")
+
+    def stream(_msgs, on_content_delta=None, session_id="", *, on_reasoning_delta=None):
+        on_reasoning_delta("thinking")
+        return "invalid"
+
+    monkeypatch.setattr(agent_memory, "executor_chat_complete_stream", stream)
+    agent_memory._run_compress_executor_dialogue(
+        "", [agent_memory.UserMessage(content="old"), agent_memory.AssistantMessage(content="answer")],
+        stream_sink=lambda _piece: None, hint_sink=frames.append,
+    )
+    assert [frame["type"] for frame in frames if frame.get("type")] == [
+        "context_summary_reasoning_delta", "context_summary_reasoning_end",
+        "context_summary_reasoning_delta", "context_summary_reasoning_end",
+    ]
+
+
 def test_compress_round_archives_prefix_and_exposes_retrieval_ref(monkeypatch):
     import agent_memory
 

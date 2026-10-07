@@ -278,16 +278,19 @@ def test_internal_streaming_completion_buffers_transport_under_pressure(monkeypa
         from types import SimpleNamespace
 
         worker_args.append(kwargs)
-        sync_q.put(("turn", SimpleNamespace(content="whole response")))
+        sync_q.put(("turn", SimpleNamespace(content="whole response", reasoning_content="buffered thinking")))
         sync_q.put(None)
 
     monkeypatch.setattr(agent_harness, "run_chat_completion_stream_worker", fake_stream_worker)
     pieces = []
+    reasoning = []
     result = agent_harness.executor_chat_complete_stream(
         [{"role": "user", "content": "summarize"}],
         on_content_delta=pieces.append,
         session_id="s1",
+        on_reasoning_delta=reasoning.append,
     )
     assert result == "whole response"
     assert pieces == ["whole response"]
+    assert reasoning == ["buffered thinking"]
     assert worker_args[0]["emit_deltas"] is False

@@ -231,9 +231,15 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         appendProgressLog(ctx, event.content, 'context-trim', runSessionId);
     } else if (event.type === 'context_summary_progress') {
         appendProgressLog(ctx, event.content, 'context-summary', runSessionId);
+    } else if (event.type === 'context_summary_reasoning_delta') {
+        appendCompressionReasoningDelta(ctx, event, runSessionId);
+    } else if (event.type === 'context_summary_reasoning_end') {
+        finishCompressionReasoning(ctx);
     } else if (event.type === 'context_summary_delta') {
+        finishCompressionReasoning(ctx, false);
         appendProgressStreamDelta(ctx, event.delta, 'context-summary', runSessionId);
     } else if (event.type === 'context_summary_body') {
+        finishCompressionReasoning(ctx, false);
         applyProgressPersistedBody(ctx, event.content, 'context-summary', runSessionId);
     } else if (event.type === 'key_context_progress') {
         var keyProg = String(event.content || '');

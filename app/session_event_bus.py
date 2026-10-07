@@ -23,6 +23,7 @@ _SNAPSHOT_DELTA_FIELDS = {
     "tool_command_delta": ("delta", "command_delta"),
     "context_trim_delta": ("delta",),
     "context_summary_delta": ("delta",),
+    "context_summary_reasoning_delta": ("delta",),
     "key_context_delta": ("delta",),
 }
 
@@ -75,6 +76,13 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
                     sid,
                     run_id=terminal_run_id,
                 )
+        elif event_type == "context_summary_reasoning_end":
+            # Compression reasoning is a live preview, not durable history.
+            _prune_recent_ephemeral_unlocked(
+                sid,
+                types={"context_summary_reasoning_delta"},
+                run_id=event.get("run_id") or event.get("runId"),
+            )
         elif event.get("ephemeral"):
             if event_type in _SNAPSHOT_DELTA_FIELDS:
                 # Delta events already have an accumulated reconnect snapshot.

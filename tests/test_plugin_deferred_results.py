@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 import json
 import shutil
 import sys
@@ -226,6 +227,50 @@ def test_registry_rejects_deferred_marker_without_registered_handler(tmp_path):
     with pytest.raises(PluginRuntimeError, match="without registering"):
         registry.invoke(wait_name, {"mode": "complete"}, [plugin])
     registry.close()
+
+
+def test_deferred_expiry_during_poll_still_calls_cleanup(tmp_path, monkeypatch):
+    agent_extensions, names = _configure_agent_extensions(tmp_path, monkeypatch)
+    registry = agent_extensions.get_plugin_runtime_registry()
+    original_poll = registry.poll_deferred
+
+    def expire_before_poll(function_name, token, plugins, *, context=None):
+        # Deterministically reproduce expiry between the host deadline check
+        # and the registry check across the thread boundary.
+        with registry._lock:
+            for lease_key, lease in registry._deferred_leases.items():
+                _plugin_id, lease_token = lease_key
+                if lease_token == token:
+                    registry._deferred_leases[lease_key] = replace(lease, expires_at=0)
+        return original_poll(function_name, token, plugins, context=context)
+
+    monkeypatch.setattr(registry, "poll_deferred", expire_before_poll)
+    result = asyncio.run(agent_extensions.invoke_plugin_tool(
+        names["wait"], {"mode": "release"},
+        session_id="expiry-owner", cancellation_id="expiry-call",
+    ))
+
+    assert result == {
+        "ok": False, "reason": "timeout", "existed": True,
+        "session_id": "expiry-owner", "cancellation_id": "expiry-call",
+    }
+    assert registry.snapshot()["deferred_count"] == 0
+
+
+def test_deferred_protocol_error_is_not_treated_as_timeout(tmp_path, monkeypatch):
+    from plugins import PluginRuntimeError
+
+    agent_extensions, names = _configure_agent_extensions(tmp_path, monkeypatch)
+    registry = agent_extensions.get_plugin_runtime_registry()
+
+    def invalid_poll(*_args, **_kwargs):
+        raise PluginRuntimeError("Unknown, expired, or already consumed deferred token")
+
+    monkeypatch.setattr(registry, "poll_deferred", invalid_poll)
+    with pytest.raises(PluginRuntimeError, match="already consumed"):
+        asyncio.run(agent_extensions.invoke_plugin_tool(
+            names["wait"], {"mode": "release"}, session_id="protocol-owner",
+        ))
 
 
 def test_deferred_lease_is_bound_to_tool_identity_and_revoked_on_disable(tmp_path):

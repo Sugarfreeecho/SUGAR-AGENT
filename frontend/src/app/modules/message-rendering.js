@@ -4140,6 +4140,7 @@ const TRACE_ROW = {
     'compact-summary': { label: '压缩', c: 'feed--cmp' },
     'context-trim': { label: '裁剪', c: 'feed--trim' },
     'context-summary': { label: '压缩', c: 'feed--cmp' },
+    'context-summary-reasoning': { label: '压缩思考', c: 'feed--llm' },
     'key-context': { label: '要点', c: 'feed--key' },
     'plugin-extension': { label: '扩展', c: 'feed--plugin-extension' },
     'user-steer':  { label: '追问', c: 'feed--answer' },
@@ -4866,8 +4867,9 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     row.setAttribute('data-react-generation', String(rowGeneration));
     if (rowRunId) row.setAttribute('data-run-id', String(rowRunId));
     if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
-    var rowCanCollapse = type === 'tool-call' || type === 'llm-reasoning';
-    var initialCollapseLabel = type === 'llm-reasoning' ? '收起思考' : '收起工具行';
+    var isReasoningRow = type === 'llm-reasoning' || type === 'context-summary-reasoning';
+    var rowCanCollapse = type === 'tool-call' || type === 'llm-reasoning' || type === 'context-summary-reasoning';
+    var initialCollapseLabel = isReasoningRow ? '收起思考' : '收起工具行';
     var rowCollapseBtn = rowCanCollapse
         ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="' + initialCollapseLabel + '">'
             + '<span class="feed-row-collapse-chevron" aria-hidden="true"></span></button>'
@@ -4880,7 +4882,8 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
         + '</div>';
     const chunk = row.querySelector('.feed-chunk');
     const sc = row.querySelector('.feed-chunk-scroller');
-    if (type === 'llm-reasoning') chunk.classList.add('expanded');
+    if (isReasoningRow) chunk.classList.add('expanded');
+    if (type === 'context-summary-reasoning') row.querySelector('.feed-label').title = meta.label;
     if (rowCanCollapse) {
         const collapseBtn = row.querySelector('.feed-row-collapse');
         if (collapseBtn) {
@@ -4903,7 +4906,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     } else {
         sc.textContent = initialUiText;
     }
-    if (streamOpts.streaming && (type === 'llm-reasoning' || type === 'llm-response')) {
+    if (streamOpts.streaming && (isReasoningRow || type === 'llm-response')) {
         chunk.classList.add('is-streaming');
         row.setAttribute('data-llm-live-row', '1');
     }
@@ -4923,7 +4926,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
        帧整行再跳高（窄栏实测裁切 289px、释放瞬间单帧跳 440px，行内文字与下方内容
        一起被甩动）。这类行不做插入高度动画，让行高直接跟随内容。 */
     var isLiveStreamRow = !!(streamOpts.streaming
-        && (type === 'llm-reasoning' || type === 'llm-response'));
+        && (isReasoningRow || type === 'llm-response'));
     if (!isHistoryHydrate && !isInitialLiveStatusRow && !isLiveStreamRow) {
         animateSmoothTraceRowInsertion(row);
     }
@@ -5461,7 +5464,8 @@ function flushProgressDeltaText(ctx, logType) {
     if (st.pending && st.scroller && st.scroller.isConnected) {
         var current = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st.scroller) : String(st.scroller.textContent || '');
         var merged = truncateLogTextForUi(current + st.pending);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(st.scroller, merged);
+        if (logType === 'context-summary-reasoning') st.scroller.textContent = merged;
+        else if (typeof setUiRuntimeText === 'function') setUiRuntimeText(st.scroller, merged);
         else st.scroller.textContent = merged;
         var ch = st.scroller.closest('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
@@ -5471,6 +5475,7 @@ function flushProgressDeltaText(ctx, logType) {
 
 function finalizeProgressStreamChunks(ctx) {
     if (!ctx) return;
+    finishCompressionReasoning(ctx);
     var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
     for (var i = 0; i < types.length; i += 1) flushProgressDeltaText(ctx, types[i]);
     var streamRoot = ctx.stream;
@@ -5499,6 +5504,7 @@ function discardProgressStreamChunks(ctx) {
         streamRoot.querySelectorAll(
             '.feed-item[data-log-type="context-trim"] .feed-chunk.is-streaming, '
             + '.feed-item[data-log-type="context-summary"] .feed-chunk.is-streaming, '
+            + '.feed-item[data-log-type="context-summary-reasoning"] .feed-chunk.is-streaming, '
             + '.feed-item[data-log-type="key-context"] .feed-chunk.is-streaming'
         ).forEach(function (chunk) {
             var row = chunk.closest('.feed-item');
@@ -5510,7 +5516,7 @@ function discardProgressStreamChunks(ctx) {
     });
     ctx.progressStream = {};
     if (ctx.progressScrollers) {
-        ['context-trim', 'context-summary', 'key-context'].forEach(function (type) {
+        ['context-trim', 'context-summary', 'context-summary-reasoning', 'key-context'].forEach(function (type) {
             var scroller = ctx.progressScrollers[type];
             if (!scroller || !scroller.isConnected) delete ctx.progressScrollers[type];
         });
@@ -5537,6 +5543,50 @@ function ensureProgressScroller(ctx, logType, runSessionId) {
     sc = appendLog(ctx, '', logType, runSessionId);
     if (sc) ctx.progressScrollers[logType] = sc;
     return sc;
+}
+
+/** 压缩推理只在当前执行过程显示，与主模型思考和摘要正文使用独立行。 */
+function appendCompressionReasoningDelta(ctx, event, runSessionId) {
+    if (!ctx || !event || !event.delta) return;
+    var logType = 'context-summary-reasoning';
+    if (!ctx.progressScrollers) ctx.progressScrollers = {};
+    if (!ctx.progressStream) ctx.progressStream = {};
+    var sc = ctx.progressScrollers[logType];
+    if (!sc || !sc.isConnected) {
+        sc = createProcessFeedRow(ctx, logType, '', { streaming: true }, runSessionId);
+        if (!sc) return;
+        ctx.progressScrollers[logType] = sc;
+    }
+    var st = ctx.progressStream[logType];
+    if (!st) {
+        st = { scroller: sc, pending: '', flushRaf: 0 };
+        ctx.progressStream[logType] = st;
+    }
+    if (event.replayed_snapshot) {
+        // 重连快照是累计全文；覆盖旧预览，不能再追加一次。
+        if (st.flushRaf) cancelAnimationFrame(st.flushRaf);
+        st.flushRaf = 0;
+        st.pending = '';
+        sc.textContent = '';
+    }
+    var chunk = sc.closest('.feed-chunk');
+    if (chunk) chunk.classList.add('is-streaming');
+    st.pending += String(event.delta);
+    scheduleProgressDeltaFlush(ctx, runSessionId, logType);
+}
+
+function finishCompressionReasoning(ctx, requestEnded) {
+    if (!ctx) return;
+    var logType = 'context-summary-reasoning';
+    finalizeProgressStreamForType(ctx, logType);
+    var sc = ctx.progressScrollers && ctx.progressScrollers[logType];
+    if (sc && sc.isConnected) {
+        var row = sc.closest('.feed-item');
+        autoCollapseLlmReasoningRow(row);
+        if (requestEnded !== false && row) row.removeAttribute('data-llm-live-row');
+    }
+    // 摘要正文开始时保留行引用；请求结束后下一轮/重试创建自己的推理行。
+    if (requestEnded !== false && ctx.progressScrollers) delete ctx.progressScrollers[logType];
 }
 
 /** 落盘正文：替换流式段或追加到状态行后，与刷新后 ui_events 回放一致 */

@@ -146,7 +146,8 @@ def test_refresh_replay_keeps_running_tool_after_many_stream_chunks():
     assert replay[1]["delta"] == "".join(str(i % 10) for i in range(800))
 
 
-def test_refresh_replay_keeps_complete_context_summary_after_recent_buffer_limit():
+@pytest.mark.parametrize("event_type", ["context_summary_delta", "context_summary_reasoning_delta"])
+def test_refresh_replay_keeps_complete_context_summary_after_recent_buffer_limit(event_type):
     import session_event_bus as bus
 
     async def scenario():
@@ -157,7 +158,7 @@ def test_refresh_replay_keeps_complete_context_summary_after_recent_buffer_limit
             await bus.publish_session_event(
                 sid,
                 {
-                    "type": "context_summary_delta",
+                    "type": event_type,
                     "ephemeral": True,
                     "run_id": run_id,
                     "delta": str(index % 10),
@@ -170,7 +171,7 @@ def test_refresh_replay_keeps_complete_context_summary_after_recent_buffer_limit
         return replay
 
     replay = asyncio.run(scenario())
-    assert replay["type"] == "context_summary_delta"
+    assert replay["type"] == event_type
     assert replay["delta"] == "".join(str(i % 10) for i in range(900))
     assert replay["replayed_snapshot"] is True
 
@@ -202,6 +203,33 @@ def test_committed_context_body_prunes_its_live_delta_snapshot():
         await bus.close_session_stream(sid)
 
     asyncio.run(scenario())
+
+
+def test_compression_reasoning_end_prunes_only_its_run_and_is_not_replayed():
+    import session_event_bus as bus
+
+    async def scenario():
+        sid = "stream-replay-compression-reasoning-end"
+        await bus.close_session_stream(sid)
+        for run_id in ("finished", "current"):
+            await bus.publish_session_event(sid, {
+                "type": "context_summary_reasoning_delta", "ephemeral": True,
+                "run_id": run_id, "delta": run_id,
+            })
+        await bus.publish_session_event(sid, {
+            "type": "context_summary_reasoning_end", "ephemeral": True, "run_id": "finished",
+        })
+        assert not bus._recent_ephemeral.get(sid)
+        subscription = bus.subscribe_session_events(sid, replay_recent=True)
+        replay = await asyncio.wait_for(subscription.__anext__(), timeout=1)
+        await subscription.aclose()
+        await bus.close_session_stream(sid)
+        return replay
+
+    replay = asyncio.run(scenario())
+    assert replay["type"] == "context_summary_reasoning_delta"
+    assert replay["run_id"] == "current"
+    assert replay["delta"] == "current"
 
 
 def test_terminal_event_prunes_only_the_terminated_run_ephemerals():
