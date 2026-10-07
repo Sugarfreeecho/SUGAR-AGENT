@@ -63,9 +63,10 @@ def _workspace_key(manager, session_id: str) -> str:
     meta = manager._load_metadata(session_id) or {}
     root = str(meta.get("subagent_work_dir") or meta.get("git_worktree_path") or "").strip()
     if not root:
-        from agent_harness import WORK_DIR
+        from agent_harness import WORK_DIR, session_work_dir_override
 
-        root = str(WORK_DIR)
+        # 每会话工作目录：不同目录的会话不再互相加锁（默认目录行为不变）。
+        root = session_work_dir_override(meta) or str(WORK_DIR)
     return os.path.normcase(os.path.normpath(str(Path(root).resolve())))
 
 

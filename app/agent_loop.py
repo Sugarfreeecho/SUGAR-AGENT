@@ -73,6 +73,8 @@ from agent_harness import (
     ToolMessage,
     COMPACT_TRUNCATED_BOUNDARY_SYSTEM_EXACT,
     WORK_DIR,
+    session_work_root,
+    session_work_root_raw,
     LocalNetworkUnavailableError,
     machine_network_available,
     _redact_runtime_log_text,
@@ -668,11 +670,9 @@ async def _dispatch_state_hook(
         hook_meta = session_manager._load_metadata(data["session_id"]) or {}
     except Exception:
         hook_meta = {}
-    hook_workspace = str(
-        hook_meta.get("subagent_work_dir")
-        or hook_meta.get("git_worktree_path")
-        or ""
-    ).strip()
+    # 含用户指定的会话工作目录：默认目录/子代理 worktree 的行为与以前完全一致，
+    # 只有"自定义目录的根会话"才会多出 workspace_root（这正是需要的）。
+    hook_workspace = session_work_root_raw(hook_meta)
     if hook_workspace:
         data.setdefault("workspace_root", hook_workspace)
         data.setdefault("worktree_isolated", bool(hook_meta.get("git_worktree_managed")))
@@ -6149,11 +6149,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 state["_runtime_stage"] = "running_tool:%s" % tool_name
                 await _raise_if_steer_requested(state, emit, "tool")
 
-                security_workspace = Path(
-                    session_meta.get("subagent_work_dir")
-                    or session_meta.get("git_worktree_path")
-                    or WORK_DIR
-                ).resolve()
+                # 工具根 == 安全策略根 == 审计根：统一走 session_work_root()
+                security_workspace = session_work_root(session_meta)
                 sec_request, sec_decision, sec_context = authorize_tool(
                     session_id=state["session_id"],
                     tool_name=tool_name,
@@ -6818,11 +6815,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     and tool_descriptor.invocation_kind is ToolInvocationKind.MCP
                 ):
                     started = time.perf_counter()
-                    mcp_work_dir = str(
-                        session_meta.get("subagent_work_dir")
-                        or session_meta.get("git_worktree_path")
-                        or ""
-                    ).strip()
+                    mcp_work_dir = session_work_root_raw(session_meta)
                     active_candidate = iter_client.current_candidate() if callable(getattr(iter_client, "current_candidate", None)) else {}
                     mcp_modalities = active_candidate.get("input_modalities") or __import__("agent_openai")._client_input_modalities(iter_client)
                     change_review_capture = _begin_change_review_capture(
@@ -6873,11 +6866,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     and tool_descriptor.invocation_kind is ToolInvocationKind.PLUGIN
                 ):
                     started = time.perf_counter()
-                    plugin_work_dir = str(
-                        session_meta.get("subagent_work_dir")
-                        or session_meta.get("git_worktree_path")
-                        or ""
-                    ).strip()
+                    plugin_work_dir = session_work_root_raw(session_meta)
                     change_review_capture = _begin_change_review_capture(
                         plugin_work_dir, observe_workspace=True
                     )
@@ -7011,13 +7000,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 emit=emit,
                             )
 
-                        worktree_root = ""
-                        if session_meta.get("is_subagent"):
-                            worktree_root = str(
-                                session_meta.get("subagent_work_dir")
-                                or session_meta.get("git_worktree_path")
-                                or ""
-                            ).strip()
+                        # 会话工作根：子代理 worktree → 用户指定的会话目录 → 默认目录。
+                        # 根会话现在也能拿到自己的目录（原先只有子代理走这条覆盖）。
+                        worktree_root = session_work_root_raw(session_meta)
                         # 内置工具读图的模型能力门（判定源与 MCP 分支一致）：
                         # 非多模态模型在工具执行前就拿到明确错误，而不是"看不到的图片"；
                         # 能力解析失败时保持 None（不拦截），避免误伤可读图模型。
@@ -7322,11 +7307,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         blocked["tool_call_index"] = call.get("index")
                         return short_circuit(blocked)
 
-                audit_root = str(
-                    session_meta.get("subagent_work_dir")
-                    or session_meta.get("git_worktree_path")
-                    or WORK_DIR
-                )
+                audit_root = str(session_work_root(session_meta))
                 audit_candidate = (
                     tool_descriptor is None
                     or tool_descriptor.effect not in {"read", "control"}
@@ -7680,11 +7661,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 if tc.get("_hook_approval_spec"):
                     return
                 try:
-                    early_workspace = Path(
-                        session_meta.get("subagent_work_dir")
-                        or session_meta.get("git_worktree_path")
-                        or WORK_DIR
-                    ).resolve()
+                    early_workspace = session_work_root(session_meta)
                     _early_request, early_decision, _early_context = authorize_tool(
                         session_id=state["session_id"],
                         tool_name=str(tc.get("name") or ""),

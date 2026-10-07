@@ -149,6 +149,108 @@ from attachments import configure_attachment_workspace
 configure_attachment_workspace(WORK_DIR)
 
 
+# ---------------------------------------------------------------------------
+# 每会话工作目录（session-scoped working directory）
+#
+# 会话可以在创建时指定自己的工作目录（metadata.work_dir：绝对路径、已存在、是目录）。
+# 未指定的会话——包括全部历史会话——继续使用进程级 WORK_DIR，也就是"默认工作目录"，
+# 因此老数据行为完全不变。与 DeepSeek Harness 一致：创建后不允许再改，想换目录就新建会话。
+# 工具根 / 安全策略根 / 审计根必须都走 session_work_root()，保证三者永远一致。
+# ---------------------------------------------------------------------------
+SESSION_WORK_DIR_KEYS = ("subagent_work_dir", "git_worktree_path", "work_dir")
+
+
+def normalize_session_work_dir(raw: Any) -> str:
+    """校验“用户指定的会话工作目录”：绝对路径 + 存在 + 是目录；不合格返回空串。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            return ""
+        resolved = Path(os.path.abspath(str(path)))
+        if not resolved.is_dir():
+            return ""
+    except (OSError, ValueError):
+        return ""
+    return str(resolved)
+
+
+def session_work_dir_override(metadata: Optional[dict] = None) -> str:
+    """会话级工作目录（字符串）；未设置返回空串。
+
+    只看 ``work_dir`` 字段——子代理的 worktree 语义由 session_work_root_raw() 处理。
+    """
+    if not isinstance(metadata, dict):
+        return ""
+    return normalize_session_work_dir(metadata.get("work_dir"))
+
+
+def session_work_root_raw(metadata: Optional[dict] = None) -> str:
+    """会话的工作根（字符串）；没有任何会话级设置时返回空串。
+
+    优先级：子代理工作目录 → git worktree → 用户指定的会话目录。
+    空串表示“沿用进程级默认目录”，由调用方决定兜底（hook 载荷与锁 key 依赖这个区分）。
+    """
+    meta = metadata if isinstance(metadata, dict) else {}
+    for key in SESSION_WORK_DIR_KEYS:
+        raw = str(meta.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            path = Path(raw).expanduser()
+        except (OSError, ValueError):
+            continue
+        if not path.is_absolute():
+            continue
+        return str(path)
+    return ""
+
+
+def session_work_root(metadata: Optional[dict] = None) -> Path:
+    """会话的有效工作根；无会话级设置时回退进程级 WORK_DIR（默认工作目录）。"""
+    raw = session_work_root_raw(metadata)
+    return Path(raw).resolve() if raw else WORK_DIR.resolve()
+
+
+def session_work_dir(session_id: Optional[str] = None, metadata: Optional[dict] = None) -> Path:
+    """会话的有效工作目录：metadata.work_dir → 默认工作目录。"""
+    meta = metadata if isinstance(metadata, dict) else None
+    if meta is None:
+        sid = str(session_id or "").strip()
+        if sid:
+            try:
+                meta = session_manager._load_metadata(sid) or {}
+            except Exception:
+                meta = {}
+    return session_work_root(meta)
+
+
+def session_work_dir_projection(
+    session_id: Optional[str] = None, metadata: Optional[dict] = None
+) -> dict:
+    """会话工作目录的界面投影：work_dir / work_dir_label / work_dir_is_default。
+
+    默认目录的显示名交给前端 i18n（“默认工作目录”）。
+    """
+    meta = metadata if isinstance(metadata, dict) else None
+    if meta is None:
+        sid = str(session_id or "").strip()
+        if sid:
+            try:
+                meta = session_manager._load_metadata(sid) or {}
+            except Exception:
+                meta = {}
+    override = session_work_dir_override(meta)
+    path = Path(override) if override else WORK_DIR
+    return {
+        "work_dir": str(path),
+        "work_dir_label": path.name or str(path),
+        "work_dir_is_default": not bool(override),
+    }
+
+
 def _prompt_md_candidate_paths() -> list[Path]:
     """prompt.md 可能出现的位置（不依赖 cwd；兼容 PyInstaller / 直连 exe）。"""
     raw: list[Path] = []
@@ -3682,6 +3784,7 @@ class SessionManager:
                     "todo": todo,
                     "goal_review_pending": goal_review_pending,
                     "pinned_at": pinned_at if pinned else None,
+                    "work_dir": normalize_session_work_dir(meta.get("work_dir")) or None,
                     "draft": bool(meta.get("draft", False)),
                     "unread_result": bool(meta.get("unread_result", False)),
                     "unread_result_at": meta.get("unread_result_at"),
@@ -6741,6 +6844,7 @@ class SessionManager:
         *,
         model_profile_id: str = "",
         draft: bool = False,
+        work_dir: str = "",
     ) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
         """
         获取或创建会话，返回:
@@ -6766,6 +6870,16 @@ class SessionManager:
             llm_history = []           # 新会话 llm_history 为空
             key_context = ""
             now_iso = datetime.now().isoformat()
+            # 会话工作目录（创建时指定、之后不可改，与 DSH 一致）：不合格直接拒绝，
+            # 避免用户以为切了目录、实际仍落在默认目录。
+            requested_work_dir = normalize_session_work_dir(work_dir)
+            if str(work_dir or "").strip() and not requested_work_dir:
+                raise ValueError(
+                    f"会话工作目录必须是已存在的绝对路径: {str(work_dir).strip()}"
+                )
+            if requested_work_dir and os.path.normcase(requested_work_dir) == os.path.normcase(str(WORK_DIR)):
+                # 显式选中的就是默认目录：按“未指定”处理，免得同一目录被拆成两个分组。
+                requested_work_dir = ""
             metadata = {
                 "name": "新会话",
                 "created_at": now_iso,
@@ -6778,8 +6892,10 @@ class SessionManager:
                 # Resolving it again on every click adds another filesystem call
                 # to a latency-sensitive path, which can have multi-second tail
                 # latency on Windows when the volume is busy or being scanned.
-                "authorized_dirs": [str(WORK_DIR)],
+                "authorized_dirs": [requested_work_dir or str(WORK_DIR)],
             }
+            if requested_work_dir:
+                metadata["work_dir"] = requested_work_dir
             requested_profile_id = str(model_profile_id or "").strip()
             if requested_profile_id:
                 metadata["model_profile_id"] = requested_profile_id
@@ -6830,6 +6946,7 @@ class SessionManager:
                 "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
                 "draft": bool(metadata.get("draft", False)),
             }
+            index_entry["work_dir"] = metadata.get("work_dir") or None
             # create_session now runs outside the asyncio event loop. Protect
             # append + persistence as one operation so simultaneous tabs cannot
             # overwrite each other's newly-created index row.
@@ -7069,6 +7186,13 @@ class SessionManager:
         d["unread_result_status"] = str(d.get("unread_result_status") or "success")
         if d.get("pinned") and not d.get("pinned_at"):
             d["pinned_at"] = d.get("updated_at") or d.get("created_at")
+        # 会话工作目录投影（侧栏按工作目录分组用）：直接读索引行、不再碰磁盘，
+        # 避免 /sessions/state 轮询时对每个会话各做一次 metadata I/O。
+        wd_override = normalize_session_work_dir(d.get("work_dir"))
+        wd_path = wd_override or str(WORK_DIR)
+        d["work_dir"] = wd_path
+        d["work_dir_label"] = Path(wd_path).name or wd_path
+        d["work_dir_is_default"] = not bool(wd_override)
         sid = d.get("id")
         best_ts: Optional[float] = None
         for key in ("updated_at", "created_at"):

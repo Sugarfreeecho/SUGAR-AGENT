@@ -237,7 +237,7 @@ def _pick_windows_ifiledialog_impl(
             item, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))
         ).contents
         get_display_name = ctypes.WINFUNCTYPE(
-            ctypes.HRESULT, ctypes.c_void_p, wt.DWORD, ctypes.POINTER(wt.LPWSTR)
+            ctypes.c_long, ctypes.c_void_p, wt.DWORD, ctypes.POINTER(wt.LPWSTR)
         )(item_vtbl[5])
         psz = wt.LPWSTR()
         hr = get_display_name(item, SIGDN_FILESYSPATH, ctypes.byref(psz))
@@ -268,12 +268,13 @@ def _pick_windows_ifiledialog_impl(
             proto = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)
             return proto(vtbl[idx])
 
-        set_options = _fn(9, ctypes.HRESULT, wt.DWORD)
-        set_folder = _fn(12, ctypes.HRESULT, ctypes.c_void_p)
-        get_folder = _fn(13, ctypes.HRESULT, ctypes.POINTER(ctypes.c_void_p))
-        set_title = _fn(17, ctypes.HRESULT, wt.LPCWSTR)
-        show = _fn(3, ctypes.HRESULT, wt.HWND)
-        get_result = _fn(20, ctypes.HRESULT, ctypes.POINTER(ctypes.c_void_p))
+        # ctypes.HRESULT raises OSError on failure before our cancellation and
+        # result checks run. Read the raw signed HRESULT for explicit handling.
+        set_options = _fn(9, ctypes.c_long, wt.DWORD)
+        set_folder = _fn(12, ctypes.c_long, ctypes.c_void_p)
+        set_title = _fn(17, ctypes.c_long, wt.LPCWSTR)
+        show = _fn(3, ctypes.c_long, wt.HWND)
+        get_result = _fn(20, ctypes.c_long, ctypes.POINTER(ctypes.c_void_p))
 
         options = FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST
         dlg_title = "选择文件夹" if kind == "directory" else "选择文件"
@@ -307,21 +308,10 @@ def _pick_windows_ifiledialog_impl(
         if not _hresult_succeeded(hr):
             raise OSError(hr, f"Show 失败: {_hresult_unsigned(hr):#010x}")
 
-        if kind == "directory":
-            folder_item = ctypes.c_void_p()
-            hr = get_folder(dialog, ctypes.byref(folder_item))
-            if _hresult_succeeded(hr) and folder_item:
-                path = _shell_item_path(folder_item)
-                if path:
-                    return path, False
-            result = ctypes.c_void_p()
-            hr = get_result(dialog, ctypes.byref(result))
-            if _hresult_succeeded(hr) and result:
-                path = _shell_item_path(result)
-                if path:
-                    return path, False
-            return None, False
-
+        # GetResult is the user's confirmed selection for both files and
+        # FOS_PICKFOLDERS. GetFolder reports the browsing location (or the
+        # initial folder after the dialog closes), which can still be the
+        # default directory when a child folder was selected without opening it.
         result = ctypes.c_void_p()
         hr = get_result(dialog, ctypes.byref(result))
         if _hresult_succeeded(hr) and result:

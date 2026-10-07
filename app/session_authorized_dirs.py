@@ -52,6 +52,7 @@ def get_authorized_dirs_for_session(session_id: str, workspace: Path | None = No
     sid = str(session_id or "").strip()
     if not sid:
         return [ws.resolve()]
+    meta = None
     try:
         from agent_harness import session_manager
         meta = session_manager._load_metadata(sid)
@@ -75,6 +76,14 @@ def get_authorized_dirs_for_session(session_id: str, workspace: Path | None = No
                     out.append(p)
                 if out:
                     return out
+    except Exception:
+        pass
+    # 会话自带工作目录时用它兜底（老会话没有该字段，行为完全不变）。
+    try:
+        from agent_harness import session_work_dir
+
+        if isinstance(meta, dict) and str(meta.get("work_dir") or "").strip():
+            return [session_work_dir(sid, meta).resolve()]
     except Exception:
         pass
     return [ws.resolve()]

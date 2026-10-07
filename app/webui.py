@@ -3952,6 +3952,18 @@ async def create_session(req: Request = None):
             status_code=422,
         )
     requested_permission_mode = str(body.get("permission_mode") or "").strip()
+    # 会话工作目录（可选）：创建时指定、之后不可改；必须是已存在的绝对路径。
+    requested_work_dir_raw = str(body.get("work_dir") or "").strip()
+    requested_work_dir = ""
+    if requested_work_dir_raw:
+        from agent_harness import normalize_session_work_dir
+
+        requested_work_dir = normalize_session_work_dir(requested_work_dir_raw)
+        if not requested_work_dir:
+            return JSONResponse(
+                content={"error": "work_dir must be an existing absolute directory"},
+                status_code=422,
+            )
     if requested_permission_mode:
         try:
             from security.models import normalize_permission_mode
@@ -3973,16 +3985,22 @@ async def create_session(req: Request = None):
         create_kwargs["model_profile_id"] = requested_profile_id
     if requested_prefetch:
         create_kwargs["draft"] = True
-    if create_kwargs:
-        session_id, _, _, _, _, metadata = await asyncio.to_thread(
-            session_manager.get_or_create_session,
-            None,
-            **create_kwargs,
-        )
-    else:
-        session_id, _, _, _, _, metadata = await asyncio.to_thread(
-            session_manager.get_or_create_session
-        )
+    if requested_work_dir:
+        create_kwargs["work_dir"] = requested_work_dir
+    try:
+        if create_kwargs:
+            session_id, _, _, _, _, metadata = await asyncio.to_thread(
+                session_manager.get_or_create_session,
+                None,
+                **create_kwargs,
+            )
+        else:
+            session_id, _, _, _, _, metadata = await asyncio.to_thread(
+                session_manager.get_or_create_session
+            )
+    except ValueError as exc:
+        # 目录在校验与创建之间被删掉等竞态：按参数错误返回，不建半成品会话。
+        return JSONResponse(content={"error": str(exc)}, status_code=422)
     if requested_effort:
         metadata = await asyncio.to_thread(_persist_session_reasoning_effort, session_id, requested_effort)
     permission_status = None
@@ -3995,6 +4013,8 @@ async def create_session(req: Request = None):
             state_revision = _sessions_state_cache_generation
     else:
         state_revision = _invalidate_sessions_state_cache()
+    from agent_harness import session_work_dir_projection
+
     session = {
         "id": session_id,
         "name": (metadata or {}).get("name") or "新会话",
@@ -4008,6 +4028,7 @@ async def create_session(req: Request = None):
         "model_profile_id": (metadata or {}).get("model_profile_id") or "",
         "reasoning_effort": (metadata or {}).get("reasoning_effort") or "",
         "draft": bool((metadata or {}).get("draft", False)),
+        **session_work_dir_projection(session_id, metadata),
         "last_user_preview": "",
         "stream_active": False,
     }

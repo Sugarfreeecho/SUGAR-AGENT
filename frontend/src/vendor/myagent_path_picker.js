@@ -1,5 +1,5 @@
 /**
- * General Agent local path picker.
+ * SugarAgent local path picker.
  */
 (function (global) {
   'use strict';
@@ -7,10 +7,17 @@
   var MAX_CHAT_UPLOAD_FILE_BYTES = 100 * 1024 * 1024;
   var MAX_CHAT_UPLOAD_TOTAL_BYTES = 200 * 1024 * 1024;
 
-  var FOLDER_SVG =
-    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path>' +
-    '</svg>';
+  // The app shell provides a shared icon set. Standalone settings pages use the
+  // same path data as a fallback because they load this vendor file directly.
+  var ICONS = global.MyAgentIcons;
+  var FOLDER_SVG = ICONS ? ICONS.svg('folder') :
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';
+  var FOLDER_OPEN_SVG = ICONS ? ICONS.svg('folder-open') :
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1"></path><path d="M3 9h18l-1.7 9.2a2 2 0 0 1-2 1.6H6.7a2 2 0 0 1-2-1.6L3 9z"></path></svg>';
+  var FILE_SVG = ICONS ? ICONS.svg('file') :
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z"></path><path d="M13 3v7h7"></path></svg>';
+  var PAPERCLIP_SVG = ICONS ? ICONS.svg('paperclip') :
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.4 11.1-8.9 8.9a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"></path></svg>';
 
   function injectStyles() {
     if (document.getElementById('myagent-path-picker-styles')) return;
@@ -273,6 +280,7 @@
         }
       });
       textarea._myAgentStructuredAttachments = remembered;
+      renderChatAttachmentTray(textarea);
       var text = uploaded.map(function (item) {
         return quotePickedPath(item.path || item.rel || item.name);
       }).join(' ');
@@ -286,8 +294,34 @@
       : [];
   }
 
+  function cleanupChatUploads(attachments, useBeacon) {
+    var paths = Array.from(new Set(Array.prototype.slice.call(attachments || []).filter(function (item) {
+      // Image uploads are moved into the shared content-addressed store by
+      // the upload endpoint. Only ordinary staged workspace copies are removed.
+      return item && item.path && !item.attachment;
+    }).map(function (item) { return String(item.path); })));
+    if (!paths.length) return Promise.resolve(false);
+    var body = JSON.stringify({ paths: paths });
+    if (useBeacon && global.navigator && typeof global.navigator.sendBeacon === 'function') {
+      try {
+        var blob = new Blob([body], { type: 'application/json' });
+        if (global.navigator.sendBeacon('/api/upload-chat-files/cleanup', blob)) return Promise.resolve(true);
+      } catch (_error) { /* fall through to keepalive fetch */ }
+    }
+    if (typeof global.fetch !== 'function') return Promise.resolve(false);
+    return global.fetch('/api/upload-chat-files/cleanup', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+      keepalive: !!useBeacon,
+    }).then(function (response) { return !!response.ok; }).catch(function () { return false; });
+  }
+
   function clearChatAttachments(textarea) {
-    if (textarea) textarea._myAgentStructuredAttachments = [];
+    if (!textarea) return;
+    textarea._myAgentStructuredAttachments = [];
+    renderChatAttachmentTray(textarea);
   }
 
   function addChatAttachments(textarea, attachments) {
@@ -302,6 +336,112 @@
       }
     });
     textarea._myAgentStructuredAttachments = remembered;
+    renderChatAttachmentTray(textarea);
+  }
+
+  function attachmentImageRef(item) {
+    var ref = item && item.attachment;
+    if (!ref || !/^sha256:[a-f0-9]{64}$/.test(ref.attachmentId || '')) return null;
+    return ref;
+  }
+
+  function attachmentBadge(name) {
+    var ext = String(name || '').split('.').pop().toUpperCase();
+    return /^[A-Z0-9]{1,5}$/.test(ext) ? ext : 'FILE';
+  }
+
+  function removeChatAttachment(textarea, item) {
+    var path = String(item && item.path || '');
+    var attachments = Array.isArray(textarea._myAgentStructuredAttachments)
+      ? textarea._myAgentStructuredAttachments
+      : [];
+    textarea._myAgentStructuredAttachments = attachments.filter(function (attachment) {
+      return String(attachment && attachment.path || '') !== path;
+    });
+    if (item) void cleanupChatUploads([item]);
+    var removedPathToken = path && typeof global.removeInputPathTokenForPath === 'function'
+      ? global.removeInputPathTokenForPath(path)
+      : false;
+    if (!removedPathToken && path && textarea.value) {
+      var token = quotePickedPath(path);
+      var at = textarea.value.indexOf(token);
+      if (at >= 0) {
+        textarea.value = textarea.value.slice(0, at) + textarea.value.slice(at + token.length);
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }
+    renderChatAttachmentTray(textarea);
+    textarea.focus();
+  }
+
+  function renderChatAttachmentTray(textarea) {
+    if (!textarea || !textarea.closest) return;
+    var row = textarea.closest('.composer-row');
+    var wrapper = textarea.closest('.input-wrapper');
+    if (!row || !wrapper) return;
+    var tray = row.querySelector('.composer-attachment-tray');
+    if (!tray) {
+      tray = document.createElement('div');
+      tray.className = 'composer-attachment-tray';
+      tray.setAttribute('role', 'group');
+      tray.setAttribute('aria-label', '待发送附件');
+      row.insertBefore(tray, wrapper);
+    }
+    tray.replaceChildren();
+    var attachments = Array.isArray(textarea._myAgentStructuredAttachments)
+      ? textarea._myAgentStructuredAttachments
+      : [];
+    tray.hidden = attachments.length === 0;
+    attachments.forEach(function (item) {
+      if (!item || !item.path) return;
+      var name = String(item.name || String(item.path).split(/[\\/]/).pop() || '附件');
+      var ref = attachmentImageRef(item);
+      var card = document.createElement('div');
+      card.className = 'composer-attachment-card';
+      if (ref) card.classList.add('is-image');
+
+      if (ref) {
+        var preview = document.createElement('button');
+        preview.type = 'button';
+        preview.className = 'msg-attachment-preview-trigger composer-attachment-preview';
+        preview.setAttribute('aria-label', '放大查看 ' + name);
+        preview.setAttribute('data-ui-tip', '点击放大查看');
+        var image = document.createElement('img');
+        image.src = item.url || ('/api/attachments/' + encodeURIComponent(ref.attachmentId));
+        image.alt = name;
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        preview.appendChild(image);
+        card.appendChild(preview);
+      } else {
+        var badge = document.createElement('span');
+        badge.className = 'composer-attachment-badge';
+        badge.textContent = attachmentBadge(name);
+        card.appendChild(badge);
+      }
+
+      var copy = document.createElement('span');
+      copy.className = 'composer-attachment-copy';
+      var title = document.createElement('span');
+      title.className = 'composer-attachment-name';
+      title.textContent = name;
+      var meta = document.createElement('small');
+      meta.className = 'composer-attachment-meta';
+      var size = Number(item.size || (ref && ref.bytes) || 0);
+      meta.textContent = (formatBytes(size) || '附件') + (ref ? ' · 图片' : '');
+      copy.appendChild(title);
+      copy.appendChild(meta);
+      card.appendChild(copy);
+
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'composer-attachment-remove';
+      remove.setAttribute('aria-label', '移除附件 ' + name);
+      remove.textContent = '×';
+      remove.addEventListener('click', function () { removeChatAttachment(textarea, item); });
+      card.appendChild(remove);
+      tray.appendChild(card);
+    });
   }
 
   function dispatchUploadError(textarea, error) {
@@ -936,7 +1076,7 @@
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'path-browse-btn';
-    btn.innerHTML = FOLDER_SVG;
+    btn.innerHTML = (input.getAttribute('data-path-kind') || kind) === 'file' ? FILE_SVG : FOLDER_OPEN_SVG;
     var tipText = title || '浏览路径';
     btn.setAttribute('aria-label', tipText);
     if (typeof bindUiHoverTip === 'function') {
@@ -950,6 +1090,7 @@
       ev.stopPropagation();
       var fixedKind = input.getAttribute('data-path-kind') || kind;
       if (fixedKind !== 'file' && fixedKind !== 'directory') fixedKind = 'directory';
+      btn.innerHTML = fixedKind === 'file' ? FILE_SVG : FOLDER_OPEN_SVG;
       runPick(btn, fixedKind, input.value || '', function (p) {
         if (!p) return;
         var nextPath = Array.isArray(p) ? (p[0] || '') : String(p);
@@ -988,14 +1129,23 @@
   function attachChatPicker(button, textarea) {
     if (!button || !textarea) return;
     injectStyles();
+    renderChatAttachmentTray(textarea);
     bindDropUpload(textarea);
     bindPasteUpload(textarea);
     button.classList.add('path-browse-btn', 'path-browse-btn--ghost');
-    button.innerHTML = FOLDER_SVG;
+    button.innerHTML = PAPERCLIP_SVG;
     button.setAttribute('aria-label', '工作区文件');
     button.setAttribute('data-ui-tip', '工作区文件');
     button.dataset.silentPickerUnavailable = '1';
     button.removeAttribute('title');
+
+    if (!textarea.dataset.chatUploadCleanupBound) {
+      textarea.dataset.chatUploadCleanupBound = '1';
+      global.addEventListener('pagehide', function () {
+        var pending = chatAttachments(textarea).concat(textarea._myAgentInFlightUploads || []);
+        void cleanupChatUploads(pending, true);
+      });
+    }
 
     var fileInput = document.createElement('input');
     fileInput.type = 'file';
@@ -1050,6 +1200,7 @@
     clipboardFilesFromEvent: clipboardFilesFromEvent,
     clipboardHasUsableText: clipboardHasUsableText,
     chatAttachments: chatAttachments,
+    cleanupChatUploads: cleanupChatUploads,
     clearChatAttachments: clearChatAttachments,
     addChatAttachments: addChatAttachments,
     scan: scan,
