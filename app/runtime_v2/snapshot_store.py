@@ -481,6 +481,21 @@ class SnapshotStore:
             snapshot.pop("_event_log", None)
         return snapshot
 
+    def project_after_append(self, session_id: str, snapshot: dict, event_log, projector, through_seq: int) -> dict:
+        """Catch up an append under its session transaction, including journal facts.
+
+        Execution updates append independently between visible commits. A gap
+        means replaying that suffix, not rebuilding every older message/token.
+        """
+        last_seq = self._snapshot_seq(snapshot)
+        if self._projection_version_matches(snapshot) and 0 < last_seq < int(through_seq):
+            pending = event_log.read_after_seq(session_id, last_seq)
+            if pending and int(pending[-1].seq) == int(through_seq):
+                for event in pending:
+                    snapshot = projector.project_incremental(snapshot, event)
+                return snapshot
+        return projector.project(event_log.read_all(session_id))
+
     def read_consistent(self, session_id: str, event_log=None, projector=None) -> Dict[str, Any]:
         """Read the fast cache, rebuilding only when its log signature is stale.
 

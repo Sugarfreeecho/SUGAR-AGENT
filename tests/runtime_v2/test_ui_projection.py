@@ -656,17 +656,17 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             index = projection._read_or_build_ui_index("s1")
             self.assertEqual(index["total"], 2)
 
-            original_read_after = projection.event_log.read_after_seq
+            original_read_by_seqs = projection.event_log.read_by_seqs
             appended = False
 
-            def append_during_indexed_read(session_id, after_seq):
+            def append_during_indexed_read(session_id, sequences):
                 nonlocal appended
                 if not appended:
                     appended = True
                     mirror.mirror_ui_event("s1", {"type": "llm_response", "content": "new-tail"})
-                return original_read_after(session_id, after_seq)
+                return original_read_by_seqs(session_id, sequences)
 
-            projection.event_log.read_after_seq = append_during_indexed_read
+            projection.event_log.read_by_seqs = append_during_indexed_read
             page = projection.read_ui_page("s1", turns=50)
 
             self.assertEqual(page.get("source"), "runtime_v2_seq_index")

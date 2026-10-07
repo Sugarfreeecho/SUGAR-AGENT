@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -27,6 +28,7 @@ class RuntimeUiProjection:
     _events_cache_max = 64
     _recent_page_cache: Dict[tuple[str, tuple[bool, int, int], int, int], dict] = {}
     _recent_page_cache_order: List[tuple[str, tuple[bool, int, int], int, int]] = []
+    _index_locks: Dict[str, threading.RLock] = {}
 
     def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.sessions_dir = Path(sessions_dir)
@@ -344,13 +346,17 @@ class RuntimeUiProjection:
         session_id: str,
         *,
         hydrate: bool = True,
+        end_offset: Optional[int] = None,
+        read_metadata: Optional[dict] = None,
     ) -> Tuple[List[dict], int, bool]:
         out: List[dict] = []
         latest_truncate_seq = 0
         has_history_ops = False
         active_run_id = ""
-        for event in self.event_log.iter_events(session_id):
+        for event in self.event_log.iter_events(session_id, end_offset=end_offset):
             active_run_id = self._active_run_after_event(event, active_run_id)
+            if read_metadata is not None:
+                read_metadata.update(last_runtime_seq=int(event.seq), last_run_id=active_run_id)
             if event.type == "runtime_snapshot_compacted":
                 baseline_ui = (event.payload or {}).get("ui_events")
                 out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
@@ -495,6 +501,12 @@ class RuntimeUiProjection:
         return self.event_log.session_dir(session_id) / "snapshots" / "ui_projection_index.json"
 
     def _read_or_build_ui_index(self, session_id: str) -> dict:
+        with self._cache_lock:
+            lock = self._index_locks.setdefault(self._cache_key(session_id), threading.RLock())
+        with lock:
+            return self._read_or_build_ui_index_unlocked(session_id)
+
+    def _read_or_build_ui_index_unlocked(self, session_id: str) -> dict:
         signature = self._event_log_signature(session_id)
         path = self._ui_index_path(session_id)
         try:
@@ -525,9 +537,12 @@ class RuntimeUiProjection:
     def _build_ui_index(self, session_id: str, signature: Optional[tuple[bool, int, int]] = None) -> dict:
         if signature is None:
             signature = self._event_log_signature(session_id)
+        read_metadata = {"last_runtime_seq": 0, "last_run_id": ""}
         projected, latest_truncate_seq, has_history_ops = self._project_visible_ui_entries(
             session_id,
             hydrate=False,
+            end_offset=int(signature[2]),
+            read_metadata=read_metadata,
         )
         entries: List[tuple[int, str, str]] = []
         react_order_tail: Optional[List[int]] = None
@@ -551,13 +566,13 @@ class RuntimeUiProjection:
         data = {
             "index_version": UI_PROJECTION_INDEX_VERSION,
             "signature": list(signature),
-            "last_runtime_seq": max(0, self.event_log.next_seq(session_id) - 1),
+            "last_runtime_seq": read_metadata["last_runtime_seq"],
             "total": total,
             "latest_truncate_seq": latest_truncate_seq,
             "has_history_ops": has_history_ops,
             "runtime_seqs": [int(seq) for seq, _typ, _preview in entries],
             "run_ids": [str(ui.get("run_id") or "") for ui in projected],
-            "last_run_id": str(projected[-1].get("run_id") or "") if projected else "",
+            "last_run_id": read_metadata["last_run_id"],
             "react_order_tail": react_order_tail,
             "user_indices": user_indices,
             "user_turns": user_turns,
@@ -582,7 +597,7 @@ class RuntimeUiProjection:
         signature: tuple[bool, int, int],
     ) -> Optional[dict]:
         after_seq = int(data.get("last_runtime_seq") or 0)
-        events = self.event_log.read_after_seq(session_id, after_seq)
+        events = self.event_log.read_after_seq(session_id, after_seq, end_offset=int(signature[2]))
         if not events:
             # A changed file with no higher sequence is a rewrite/repair, not an
             # append-only extension. Rebuild rather than trusting stale offsets.
@@ -593,10 +608,6 @@ class RuntimeUiProjection:
             "visible_range_changed",
             "message_deleted",
             "message_rewritten",
-            "run_started",
-            "run_finished",
-            "run_interrupted",
-            "run_failed",
         }
         if any(event.type in semantic_ops for event in events):
             return None
@@ -617,6 +628,7 @@ class RuntimeUiProjection:
         if len(runtime_seqs) != total or len(run_ids) != total:
             return None
         for event in events:
+            active_run_id = self._active_run_after_event(event, active_run_id)
             ui = self._with_run_id(self.event_to_ui(event), event, active_run_id)
             if ui is None:
                 continue
@@ -648,7 +660,7 @@ class RuntimeUiProjection:
             "user_turns": user_turns,
             "runtime_seqs": runtime_seqs,
             "run_ids": run_ids,
-            "last_run_id": str(run_ids[-1] or "") if run_ids else "",
+            "last_run_id": active_run_id,
             "react_order_tail": list(react_order_tail) if react_order_tail is not None else None,
         })
         self._write_ui_index(self._ui_index_path(session_id), extended)
@@ -658,12 +670,18 @@ class RuntimeUiProjection:
     def _write_ui_index(path: Path, data: dict) -> None:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".json.tmp")
+            tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
             with tmp.open("w", encoding="utf-8") as fh:
                 json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
             tmp.replace(path)
         except Exception:
             pass
+        finally:
+            if "tmp" in locals():
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def invalidate_cache(self, session_id: str) -> None:
         key = self._cache_key(session_id)
@@ -726,6 +744,30 @@ class RuntimeUiProjection:
         event_budget: Optional[int] = None,
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
     ) -> dict:
+        recent_key = None
+        if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
+            recent_key = (self._cache_key(session_id), self._event_log_signature(session_id),
+                          int(turns), int(event_budget or 0))
+            with self._cache_lock:
+                cached = self._recent_page_cache.get(recent_key)
+            if cached is not None:
+                return self._copy_page(cached)
+        if legacy_loader is None:
+            indexed = self._read_indexed_ui_page(
+                session_id, limit=limit, before_index=before_index, after_index=after_index,
+                target_index=target_index, turns=turns, event_budget=event_budget,
+            )
+            if indexed is not None:
+                if recent_key is not None:
+                    with self._cache_lock:
+                        self._recent_page_cache[recent_key] = indexed
+                        if recent_key in self._recent_page_cache_order:
+                            self._recent_page_cache_order.remove(recent_key)
+                        self._recent_page_cache_order.append(recent_key)
+                        while len(self._recent_page_cache_order) > self._events_cache_max:
+                            old_key = self._recent_page_cache_order.pop(0)
+                            self._recent_page_cache.pop(old_key, None)
+                return indexed
         if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
             budget = max(1, int(event_budget)) if event_budget is not None else 0
             cache_key = (self._cache_key(session_id), self._event_log_signature(session_id), int(turns), budget)
@@ -758,6 +800,36 @@ class RuntimeUiProjection:
             turns=turns,
             event_budget=event_budget,
         )
+
+    def _read_indexed_ui_page(self, session_id: str, **options) -> Optional[dict]:
+        index = self._read_or_build_ui_index(session_id)
+        if not index or index.get("has_history_ops"):
+            return None
+        total = int(index.get("total") or 0)
+        seqs = [int(seq) for seq in index.get("runtime_seqs") or []]
+        run_ids = list(index.get("run_ids") or [])
+        if len(seqs) != total or len(run_ids) != total or any(seq <= 0 for seq in seqs):
+            return None
+        users = set(index.get("user_indices") or [])
+        # Reuse the exact paging contract on metadata, never on full payloads.
+        page = self._page_events(
+            [{"type": "user" if pos in users else ""} for pos in range(total)], **options
+        )
+        start, end = page["range_start"], page["range_end"]
+        wanted = seqs[start:end]
+        by_seq = {event.seq: event for event in self.event_log.read_by_seqs(session_id, wanted)}
+        selected = []
+        for pos in range(start, end):
+            event = by_seq.get(seqs[pos])
+            if event is None:
+                return None  # Compacted baselines require the semantic projector.
+            ui = self._with_run_id(self._event_to_ui(session_id, event), event, run_ids[pos])
+            if ui is None:
+                return None
+            selected.append(ui)
+        page.update(events=selected, source="runtime_v2_seq_index",
+                    last_runtime_seq=int(index.get("last_runtime_seq") or 0))
+        return page
 
     @staticmethod
     def _copy_page(page: dict) -> dict:
@@ -1146,6 +1218,8 @@ class RuntimeUiProjection:
             "tool_call_delta",
             "tool_command_delta",
             "context_summary_delta",
+            "context_summary_reasoning_delta",
+            "context_summary_reasoning_end",
             "key_context_delta",
         }:
             return None

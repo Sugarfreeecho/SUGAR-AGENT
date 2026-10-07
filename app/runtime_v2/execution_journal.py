@@ -54,13 +54,20 @@ def apply_execution_update(records: dict, payload: dict, seq: int = 0) -> dict |
 class ExecutionJournal:
     _guard = threading.RLock()
     _cache: dict[str, dict] = {}
+    _session_locks: dict[str, threading.RLock] = {}
 
     def __init__(self, root, path_resolver=None):
         self.log = SessionEventLog(root, path_resolver=path_resolver)
 
+    def _session_lock(self, session_id: str):
+        key = str(self.log.event_path(session_id).resolve())
+        with self._guard:
+            return self._session_locks.setdefault(key, threading.RLock())
+
     def _state(self, session_id: str) -> dict:
         key = str(self.log.event_path(session_id).resolve())
-        state = self._cache.get(key)
+        with self._guard:
+            state = self._cache.get(key)
         latest = self.log.next_seq(session_id) - 1
         try:
             stat = self.log.event_path(session_id).stat()
@@ -71,10 +78,14 @@ class ExecutionJournal:
                 or (state["seq"] == latest and state.get("signature") != signature)):
             state = {"seq": 0, "records": {}, "group": "legacy:0", "turn": "", "revision": 0,
                      "last_final_seq": 0, "ui_ids": {}, "boundaries": []}
-            if len(self._cache) >= 64:
-                self._cache.pop(next(iter(self._cache)))
-            self._cache[key] = state
-        for event in self.log.read_after_seq(session_id, state["seq"]):
+            with self._guard:
+                if len(self._cache) >= 64:
+                    self._cache.pop(next(iter(self._cache)))
+                self._cache[key] = state
+        elif state["seq"] == latest and state.get("signature") == signature:
+            return state
+        for event in self.log.read_after_seq(session_id, state["seq"],
+                                             end_offset=signature[1] if signature else 0):
             payload = event.payload or {}
             if event.type in {"message_user", "user_turn_committed"} and payload.get("ui_type") != "user_steer":
                 state["turn"] = str(event.seq)
@@ -136,7 +147,7 @@ class ExecutionJournal:
         return state
 
     def read(self, session_id: str) -> dict:
-        with self._guard:
+        with self._session_lock(session_id):
             state = self._state(session_id)
             return {"last_runtime_seq": state["seq"], "projection_revision": state["revision"],
                     "last_final_seq": state["last_final_seq"],
@@ -149,7 +160,7 @@ class ExecutionJournal:
         kind = str(event.get("type") or "")
         if kind not in STREAM_TYPES and kind not in {"llm_stream_aborted", "run_interrupted", "run_failed"}:
             return event
-        with self._guard, self.log.session_transaction(session_id):
+        with self.log.session_transaction(session_id), self._session_lock(session_id):
             state = self._state(session_id)
             run = str(event.get("run_id") or "legacy")
             attempt = str(event.get("stream_seq") or event.get("react_iter") or "0")
@@ -274,14 +285,14 @@ class ExecutionJournal:
 
     def anchor(self, session_id: str, tool_call_id: str, run_id: str = "") -> dict:
         """Return durable ownership for a separately persisted human request."""
-        with self._guard:
+        with self._session_lock(session_id):
             rows = self._state(session_id)["records"].values()
             row = next((r for r in reversed(list(rows)) if r.get("tool_call_id") == tool_call_id
                         and (not run_id or r.get("run_id") == run_id)), {})
             return {key: row[key] for key in ("execution_id", "process_group_id", "turn_id") if key in row}
 
     def uncertain_execution(self, session_id: str, tool: str, arguments: dict) -> str:
-        with self._guard:
+        with self._session_lock(session_id):
             for row in self._state(session_id)["records"].values():
                 if (row.get("kind") == "tool" and row.get("tool") == tool
                         and row.get("args") == arguments and row.get("executed")
@@ -292,7 +303,7 @@ class ExecutionJournal:
 
     def checkpoint_continuation(self, session_id: str, run_id: str, state: dict,
                                 *, status="generating") -> None:
-        with self._guard, self.log.session_transaction(session_id):
+        with self.log.session_transaction(session_id), self._session_lock(session_id):
             current = self._state(session_id)
             self._append(session_id, current, {"execution_id": current["group"] + ":continuation",
                 "kind": "continuation", "process_group_id": current["group"], "run_id": run_id,

@@ -48,11 +48,15 @@ async function main() {
   assert(rows[0].sc.textContent.includes('progress'));
   c.renderExecutionEvent(ctx, {type:'tool_command_delta', execution_id:'exec', process_group_id:'turn:1', tool_call_id:'call', delta:'progress\n', execution_runtime_seq:4}, 's');
   assert.equal(c.executionRecordsBySession.get('s').get('exec').output, 'progress\n');
-  c.renderExecutionEvent(ctx, {type:'tool_call', execution_id:'exec', process_group_id:'turn:1', tool_call_id:'call', tool:'run_shell', result:'interrupted result', execution_status:'interrupted', execution_runtime_seq:5}, 's');
+  c.renderExecutionEvent(ctx, {type:'tool_call', execution_id:'exec', process_group_id:'turn:1', tool_call_id:'call', tool:'run_shell', result:'interrupted result', execution_status:'interrupted', execution_runtime_seq:5,
+    run_id:'scope-run', react_iter:2, stream_seq:4}, 's');
   assert.equal(rows.length, 1);
   assert(rows[0].sc.textContent.includes('progress'));
   assert(rows[0].sc.textContent.includes('已中断'));
   assert(c.attached.includes('call'));
+  assert.equal(rows[0]._toolCallEvent.run_id, 'scope-run');
+  assert.equal(rows[0]._toolCallEvent.react_iter, 2);
+  assert.equal(rows[0]._toolCallEvent.stream_seq, 4);
   c.renderExecutionEvent(ctx, {type:'tool_command_delta', execution_id:'exec', process_group_id:'turn:1', tool_call_id:'call', delta:'late output', execution_runtime_seq:6}, 's');
   assert.equal(c.executionRecordsBySession.get('s').get('exec').status, 'interrupted');
   assert(rows[0].sc.textContent.includes('late output'));

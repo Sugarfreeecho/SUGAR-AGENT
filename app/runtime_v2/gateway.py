@@ -38,7 +38,8 @@ class RuntimeGateway:
             event = self.event_log._append_unlocked(session_id, event_type, payload=payload, run_id=run_id)
             snapshot = self.snapshots.read_for_update(session_id)
             if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
-                snapshot = self.projector.project(self.event_log.read_all(session_id))
+                snapshot = self.snapshots.project_after_append(
+                    session_id, snapshot, self.event_log, self.projector, event.seq)
             else:
                 snapshot = self.projector.project_incremental(snapshot, event)
             self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))

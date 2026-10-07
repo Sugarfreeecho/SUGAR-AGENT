@@ -3527,7 +3527,7 @@ class SessionManager:
     - metadata.json: 会话元数据（名称、创建时间等）
     """
 
-    AUTO_ARCHIVE_AFTER_DAYS = 14
+    AUTO_ARCHIVE_AFTER_DAYS = 30          # 超过一个月的会话才自动归档（原 14）
     AUTO_ARCHIVE_CHECK_INTERVAL_SEC = 300.0
 
     def __init__(self, sessions_dir: Path, index_file: Path):

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+from bisect import bisect_right
 import errno
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -19,6 +21,7 @@ from .versions import SEQ_OFFSET_INDEX_VERSION
 
 
 _SEQ_OFFSET_STRIDE = 32
+_SEQ_HEADER = re.compile(rb'^\s*\{\s*(?:"schema_version"\s*:\s*\d+\s*,\s*)?"seq"\s*:\s*(\d+)\s*,')
 
 
 logger = logging.getLogger(__name__)
@@ -208,14 +211,64 @@ class SessionEventLog:
     def read_all(self, session_id: str) -> List[RuntimeEvent]:
         return list(self.iter_events(session_id))
 
-    def read_after_seq(self, session_id: str, after_seq: int) -> List[RuntimeEvent]:
+    def read_after_seq(self, session_id: str, after_seq: int, *, end_offset: Optional[int] = None) -> List[RuntimeEvent]:
         after = int(after_seq)
         entries = self._read_or_build_seq_offset_index(session_id)
         offset = self._offset_at_or_before_seq(entries, after + 1)
         return [
-            ev for ev in self._iter_events_from_offset(session_id, offset)
+            ev for ev in self._iter_events_from_offset(session_id, offset, end_offset=end_offset)
             if ev.seq > after
         ]
+
+    def read_by_seqs(self, session_id: str, sequences: Iterable[int]) -> List[RuntimeEvent]:
+        """Read indexed visible facts without decoding intervening stream updates.
+
+        Each requested fact starts at its nearest sparse anchor. Adjacent facts
+        share a seek; unrelated token/execution payloads are never materialized.
+        The caller's published sequence list also bounds a concurrent append.
+        """
+        wanted = sorted({int(seq) for seq in sequences if int(seq) > 0})
+        path = self.event_path(session_id)
+        if not wanted or not path.exists():
+            return []
+        entries = self._read_or_build_seq_offset_index(session_id)
+        anchors = [int(entry[0]) for entry in entries]
+        grouped: dict[int, list[int]] = {}
+        for seq in wanted:
+            pos = bisect_right(anchors, seq) - 1
+            offset = int(entries[pos][1]) if pos >= 0 else 0
+            grouped.setdefault(offset, []).append(seq)
+        result = []
+        with path.open("rb") as fh:
+            for offset, targets in grouped.items():
+                remaining = set(targets)
+                fh.seek(offset)
+                while remaining:
+                    row_offset = fh.tell()
+                    raw = fh.readline()
+                    if not raw:
+                        break
+                    if not raw.strip():
+                        continue
+                    try:
+                        header = _SEQ_HEADER.match(raw)
+                        record = None
+                        if header:
+                            seq = int(header.group(1))
+                        else:
+                            record = json.loads(raw.decode("utf-8"))
+                            seq = int(record["seq"])
+                        if seq > targets[-1]:
+                            break
+                        if seq in remaining:
+                            result.append(event_from_record(record if record is not None
+                                                            else json.loads(raw.decode("utf-8"))))
+                            remaining.remove(seq)
+                    except Exception as exc:
+                        raise RuntimeEventLogCorruptionError(
+                            session_id, path, byte_offset=row_offset, detail=str(exc)
+                        ) from exc
+        return result
 
     def read_latest(self, session_id: str, limit: int) -> List[RuntimeEvent]:
         limit = max(0, int(limit))
@@ -299,16 +352,28 @@ class SessionEventLog:
                 break
         return list(rows)
 
-    def iter_events(self, session_id: str) -> Iterable[RuntimeEvent]:
-        yield from self._iter_events_from_offset(session_id, 0)
+    def iter_events(self, session_id: str, *, end_offset: Optional[int] = None) -> Iterable[RuntimeEvent]:
+        yield from self._iter_events_from_offset(session_id, 0, end_offset=end_offset)
 
-    def _iter_events_from_offset(self, session_id: str, offset: int) -> Iterable[RuntimeEvent]:
+    def _iter_events_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None) -> Iterable[RuntimeEvent]:
         path = self.event_path(session_id)
         if not path.exists():
             return
         with path.open("rb") as fh:
             fh.seek(max(0, int(offset)))
-            for line_number, raw_line in enumerate(fh, 1):
+            line_number = 0
+            while True:
+                remaining = None if end_offset is None else int(end_offset) - fh.tell()
+                if remaining is not None and remaining <= 0:
+                    break
+                raw_line = fh.readline() if remaining is None else fh.readline(remaining)
+                if not raw_line:
+                    break
+                # The snapshot may have observed a writer's partial last line.
+                # Leave that fact for the next read instead of decoding half JSON.
+                if end_offset is not None and not raw_line.endswith(b"\n"):
+                    break
+                line_number += 1
                 line = raw_line.strip()
                 if not line:
                     continue
