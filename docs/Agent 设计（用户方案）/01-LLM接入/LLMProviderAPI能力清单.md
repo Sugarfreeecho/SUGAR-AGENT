@@ -1,6 +1,6 @@
 # LLM Provider API 接入层 · 能力清单（代码证据版）
 
-> 对象：MyAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
+> 对象：SugarAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
 > 代码版本：当前工作区（2026-10-02；直连适配器事件保真；含 Qwen system prompt 能力投影与探测失败详情透出）
 > 图例：【图】已画入 v3 全景图节点 / 【卡】在图上卡片中 / 【单】仅本清单（超出 12 主节点容量）
 

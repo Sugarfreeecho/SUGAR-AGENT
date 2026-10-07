@@ -1,6 +1,6 @@
 # 输入、发送与插话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v6（覆盖至：当前工作区；排队消息连续运行（同一 run 顺序续跑））
+- 版本：2026-10-07 v7（覆盖至：当前工作区；输入附件卡片与未发送副本清理）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（发送/插话主流程 `sendMessage`/`acquireSendPipelineLock`）、`modules/input-actions.js`（输入键助手）、`modules/skill-picker.js`、后端 steer API、`webui.py` 消息路径。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -70,6 +70,12 @@
 - **规则与边界**：只在回答完成边界领取，模型/工具执行中途不插入；排序同步服务端、撤回与领取互斥、重复提交/网络延迟/刷新不重建已处理操作；保留所选 Skill 与附件（服务端持久化，刷新可恢复）；手动停止、暂停与执行上限不领取后续；中途停止未开始消息会释放领取状态；赶上 run 已结束时仍可从普通聊天入口启动，但沿用原队列操作去重。
 - **依据**：`agent_loop.py`（领取边界/生成阶段恢复）、`webui.py`（队列与 /chat）、`sse-handling.js`、`session-store`/`session-event-reducer`、projector；回归 `tests/test_queued_followup_continuation.py`、`tests/js/followup_dispatch_runtime.cjs`、`tests/js/session_store_runtime.cjs`。
 
+### UC-5A10 输入附件卡片与未发送副本清理
+- **触发**：在输入框上传图片或其他文件，移除附件、编辑正文后发送、发送失败或离开页面。
+- **预期现象**：每个待发送文件只显示一个附件卡片，不再重复显示路径/文件标签；图片卡片展示缩略图，其他文件展示类型徽标，卡片均显示文件名、大小和移除入口。消息未被服务端接纳时，普通上传在工作区创建的副本会被清理。
+- **规则与边界**：图片与普通文件使用同一张卡片布局；用户移除附件或正文中已不再引用该附件时清理普通文件副本。发送请求未被接纳、页面关闭时也清理待处理副本；发送被 409 回填或保留为待发送队列重试时保留附件副本。服务端确认接纳后保留文件。清理接口只允许删除受管理的 uploads/chat/YYYYMMDD 路径，已接纳文件不会被误删；耐久图片对象不走工作区副本清理接口。
+- **依据**：vendor/myagent_path_picker.js 的 renderChatAttachmentTray、removeChatAttachment 与 cleanupChatUploads；sse-handling.js 的 sendMessage；webui.py 的 cleanup_unsent_chat_uploads/_managed_chat_upload_path；工作区 UC-4D8。
+
 ## 4. 依据映射
 
 | 用例 | 代码 |
@@ -79,9 +85,12 @@
 | UC-5A4~5A5 | 上传 API、path picker、统一附件准入 |
 | UC-5A6 | `sse-handling.js`、附件 references API |
 | UC-5A7 | `sse-handling.js` 拖拽/键盘排序段、`styles/app.css`、`modules/i18n.js` |
+| UC-5A10 | vendor/myagent_path_picker.js 附件卡片/清理、sse-handling.js、webui.py 上传清理 API |
+
 
 ## 5. 版本记录
 
+- 2026-10-07 v7：新增 UC-5A10《输入附件卡片与未发送副本清理》——输入附件统一卡片呈现，移除重复文件标签；普通工作区上传副本在移除、未被发送接纳或页面离开时清理，409 回填/排队重试保留。
 - 2026-10-05 v6：新增 UC-5A9《排队消息连续运行》——回答完成边界顺序领取、服务端持久化与去重、停止/暂停/上限不领取。
 - 2026-10-04 v5：新增 UC-5A8《追问与草稿的路径胶囊往返保真》——撤回/草稿/忙回填/改写重发四条链路不再把 `@基名` 标签当正文发出；草稿随存标签→路径映射。
 

@@ -1,6 +1,6 @@
-# MyAgent Plugin API v1
+# SugarAgent Plugin API v1
 
-Plugin API v1 让原生 MyAgent 插件在独立的持久 Worker 进程中注册并执行 Tool、
+Plugin API v1 让原生 SugarAgent 插件在独立的持久 Worker 进程中注册并执行 Tool、
 Hook 和 Slash Command。声明式 Skill、Hook、Command、MCP、Agent、Prompt 与
 代码型 Runtime 可以放在同一个插件包内。
 
@@ -212,7 +212,10 @@ Manifest 明确列出的扩展状态字段，并默认使用通用安全组件�
 专用渲染器运行在宿主页，拥有页面 DOM 权限，因此不是普通插件能力。宿主会同时校验
 `system_builtin`、原生格式、插件真实路径位于随应用发布的 `plugins/` 目录，以及资源
 确实位于 `capabilities.web.assets` 中；用户插件即使伪造相同 Manifest 字段，也只会回退
-到通用面板。资源 URL 由宿主生成并附带内容签名用于缓存失效。
+到通用面板。资源 URL 由宿主生成并附带内容签名用于缓存失效。宿主在挂载渲染器**之前**
+等待其 `module` / `style` 就绪（样式表未生效不绘制插件内容，`load` / `error` / 有界超时
+兜底），因此渲染器自身**不需要**等待样式；样式加载失败不阻塞功能（照常挂载，仅缺插件
+样式）。
 
 ## Node.js 插件
 
@@ -264,7 +267,7 @@ Content-Type: application/json
 
 ## 运行语义
 
-- 插件入口不会导入 MyAgent 主进程，而是在按插件隔离的持久 Worker 中加载。
+- 插件入口不会导入 SugarAgent 主进程，而是在按插件隔离的持久 Worker 中加载。
 - 模型看到能力定义之前，Worker 会执行 `plugin.describe`。
 - Tool、Hook、Command 调用分别使用 `tool.call`、`hook.call`、`command.call`。
 - Worker 还支持 `plugin.ping` 和 `plugin.shutdown`；请求使用换行分隔 JSON，并以
@@ -279,7 +282,7 @@ Content-Type: application/json
 
 | 来源 | 当前能力 |
 |---|---|
-| MyAgent native | Tool、代码/声明式 Hook、代码/声明式 Command、MCP、Skill、Agent、Prompt |
+| SugarAgent native | Tool、代码/声明式 Hook、代码/声明式 Command、MCP、Skill、Agent、Prompt |
 | Claude Code | Manifest 和声明式资源；`commands/*.md` 可转为 Slash Command |
 | Codex | `.codex-plugin/plugin.json` 的声明式资源兼容 |
 | Hermes Agent | `plugin.yaml/yml`、常用 `register_tool/register_hook/register_command` Python API 子集 |

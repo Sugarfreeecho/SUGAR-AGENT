@@ -4,7 +4,7 @@
 
 日期：2026-10-05（Asia/Shanghai）。复核会话：`c5caf529-3324-4c1e-a975-2b3c06f27a58`。
 
-证据来自本地服务的完整 history_snapshot / execution_records、原始结构化回执、`workspace/cua_fulltest_20261005/rec*`、MyAgent 当前适配代码、DSH 本地两个 Cua provider，以及 Cua 0.28.0 源码。没有重演会修改用户桌面的完整测试。
+证据来自本地服务的完整 history_snapshot / execution_records、原始结构化回执、`workspace/cua_fulltest_20261005/rec*`、SugarAgent 当前适配代码、DSH 本地两个 Cua provider，以及 Cua 0.28.0 源码。没有重演会修改用户桌面的完整测试。
 
 ## 先修正测试报告的结论
 
@@ -28,7 +28,7 @@ DSH 锁定 `@trycua/cua-driver@0.28.0`。其 Native provider 直接传入 args �
 
 | 问题 | 归属与判断 |
 |---|---|
-| 截图缩放改变后续像素解释 | Cua Windows 0.28.0 的 ResizeRegistry 按 PID 保存最近截图比例，get_window_state.max_dimension 会改写；replay 使用原 arguments，不包含当时截图空间。DSH 直通同一驱动也会面临此机制，但没有在 DSH 桌面重演。MyAgent 之前仅注释附件缩放，未消除驱动可变空间，这部分宿主适配需要改进。 |
+| 截图缩放改变后续像素解释 | Cua Windows 0.28.0 的 ResizeRegistry 按 PID 保存最近截图比例，get_window_state.max_dimension 会改写；replay 使用原 arguments，不包含当时截图空间。DSH 直通同一驱动也会面临此机制，但没有在 DSH 桌面重演。SugarAgent 之前仅注释附件缩放，未消除驱动可变空间，这部分宿主适配需要改进。 |
 | 光标 null 的 schema 错误 | 上游结构契约缺陷。0.28.0 success/refusal anyOf 中 position 被声明为非 null object；合法的未知位置是 null。不能绕过整个 schema。 |
 | 录制 getter 报 disabled | 本轮 start/get/stop 都经同一 MCP 入口，不能解释成 CLI/MCP 混用。与成功 start、turn 目录和 stop 的视频路径确实冲突。根因还不能从现有证据完全证明，宿主应保留不确定性。 |
 | XAML 输入丢失、快捷键拒绝、Electron 菜单模式缺失 | 主要是驱动/应用能力限制；“成功文案”和遗漏 isError 是宿主可以改善的结果解释。不能默默切前台或扩大输入范围。 |
@@ -40,7 +40,7 @@ DSH 锁定 `@trycua/cua-driver@0.28.0`。其 Native provider 直接传入 args �
 ## 本次实现
 
 1. **固定截图参考空间。** get_window_state 不再把 max_dimension 传给驱动；驱动按配置默认尺寸捕获，小预览由宿主缩放。structuredContent.coordinate_mapping 和附件 source.coordinateMapping 保留 driver/preview 尺寸，模型请求二次缩图仍直接换算到驱动像素。没有改成客户区像素，没有按 DPI 重复缩放。截图到屏幕的最后一步仍由驱动执行。
-2. **拦截不可靠回放。** 新录制写 MyAgent 坐标合同；回放前核对配置、精确窗口图像/物理尺寸，拒绝旧录制、过期 token/index/zoom、桌面像素轨迹、同 PID 多窗口及轨迹内几何/配置变化。缺少依据时不发输入。原 rec、rec2 不被自动补造合同。成功计数仍明确标注为投递计数。
+2. **拦截不可靠回放。** 新录制写 SugarAgent 坐标合同；回放前核对配置、精确窗口图像/物理尺寸，拒绝旧录制、过期 token/index/zoom、桌面像素轨迹、同 PID 多窗口及轨迹内几何/配置变化。缺少依据时不发输入。原 rec、rec2 不被自动补造合同。成功计数仍明确标注为投递计数。
 3. **严格光标兼容。** 只修复 position:null 的 tool_output_invalid；保留 success/refusal 联合结构，完整校验修正后的 schema。其他字段仍非法则原样失败。保留原错误证据，不重放读调用。
 4. **诚实解释结果。** nested refusal 统一为失败；键盘/文本 delivery_failed 且没有成功后置验证时为 input_delivery_unconfirmed。裸点击、双击、右击、滚动的 unverifiable 原生文案加未验证标记，去掉成功图标。已成功的后置条件不再同时提示“仅投递”，但只能证明其指定谓词。
 5. **录制状态冲突。** 当前连接最后一次成功 start 与实时 disabled 冲突时返回 recording_state_conflict、状态 unknown，保留双方证据；不把缓存伪装成活跃状态。另一个 Agent 不能在同一宿主连接上停掉已有录制。独立驱动客户端和重启后的所有权不能靠本地缓存证明。

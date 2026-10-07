@@ -1,6 +1,6 @@
 # 执行服务与终端 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v2（覆盖至：当前工作区；执行回执与证据链（投递≠生效））
+- 版本：2026-10-07 v4（覆盖至：当前工作区；前台流式输出解码切片安全）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/execution_services/**`（jobs / terminals / shell / computer / integration / notifications）、`app/runtime_v2/execution_journal.py`、`plugins/execution-tools/**`、`plugins/computer-use/**`、`frontend/src/app/terminal-runtime.js`。
 - 上级：`00-横切能力整体设计.md`；对接：`../02-ReAct运行时`（工具循环）、`../06-能力扩展加载`（插件宿主）、`../08-会话存储RuntimeV2`（执行日志投影）。
@@ -28,7 +28,8 @@ DSH 式"执行服务"：后台作业、持久 PTY 终端与执行日志，独立
 ### UC-9F3 执行日志（execution_recorded / journal）
 - **触发**：流式推理/回复/工具参数草稿/工具输出逐批到达。
 - **预期现象**：`execution_recorded` 事件不依赖供应商消息模型保存"已接收"内容；稳定 `execution_id / process_group_id / turn_id / run_id / attempt_id / tool_call_id`；完整工具 ID 分派时是"草稿提升"而非新增行；增量批**先追加 JSONL journal 再发布**（不每 token 重写快照）；终态展示等待前序批；状态区分 generating / 等待执行·审批·输入 / running / completed / failed / timed out / interrupted / unknown；参数生成≠已执行；迟到增量只加输出、不重开终态。
-- **依据**：`runtime_v2/execution_journal.py`、`event_schema / projector / ui_projection / versions`；回归 `tests/test_execution_recovery.py`、`tests/js/execution_recovery_runtime.cjs`。
+- **规则与边界（插件 UI 元数据随记录走）**：工具结果的插件 UI 元数据（`ui`，现用于改动审查行 `ui.changes`）由记录一并保存并在**实时 `execution_update` 与历史回放**两条路径交付——实时靠 journal 的工具结果 patch，回放靠投影事件；它只进 UI 投影、不进模型历史，也不参与状态判定与草稿提升。丢掉该负载的典型现象：插件（改动审查）在信赖记录渲染的视图里整段不出现，而直读历史快照的视图（详情栏「修改历史」）仍正常。
+- **依据**：`runtime_v2/execution_journal.py`（工具结果 patch 携带 `ui`）、`event_schema / projector / ui_projection / versions`；回归 `tests/test_execution_recovery.py`（含 `test_tool_result_record_keeps_change_review_ui_payload`）、`tests/js/execution_recovery_runtime.cjs`、`tests/js/change_review_ui_payload_runtime.cjs`；变更记录见 `../../CHANGELOG-2026-10-06-改动审查数据链路修复.md`。
 
 ### UC-9F4 执行恢复（重启顺序 / 显示兼容）
 - **触发**：刷新/重启后历史快照携带 `execution_records` 重放。
@@ -46,6 +47,12 @@ DSH 式"执行服务"：后台作业、持久 PTY 终端与执行日志，独立
 - **规则与边界**：不伪造实时状态、不自动重放输入、不自动升级前台；截图 hash 不变不判"投递失败"；关键显示值以 `_verify` + 新截图双通道核对；工具结果截断/超时判定优先结构化字段（不扫描正文关键词）。
 - **依据**：`execution_services/{computer,computer_policy,terminals}.py`、`plugins/computer-use/host.py`；回归 `tests/test_computer_use_feedback.py`、`tests/test_terminal_regressions.py`、`tests/test_tool_result_status_regressions.py`。
 
+### UC-9F7 前台流式输出解码（切片安全，2026-10-07 补）
+- **触发**：`run_shell` 前台执行期间，快照循环逐批推送“实时输出”。
+- **预期现象**：增量推送改为“解码整段累计字节 → 取相对上批的新增文本差”——多字节字符不会被字节切片边界劈开（UTF-8 与 GBK 中文流均不再出现边界误码）；实时输出与最终结果共用同一解码链（最终结果另有二进制摘要/截断包装）。
+- **规则与边界**：超过 1MB 的巨量输出退回按片解码（控制每轮快照解码开销）；解码分支切换（罕见）时回退按片解码、不复用旧前缀；解码规则本身见 `../03-工具系统/03` UC-3C5（逐行 UTF-8/GBK 择优）。
+- **依据**：`execution_services/shell.py`（前台快照循环）；回归 `tests/test_execution_services.py`、`tests/test_execution_recovery.py`。
+
 ## 3. 边界
 
 - 执行服务不替代会话授权与审批：受信 session 之外的工具调用仍走既有权限路径；
@@ -54,5 +61,7 @@ DSH 式"执行服务"：后台作业、持久 PTY 终端与执行日志，独立
 
 ## 4. 版本记录
 
+- 2026-10-07 v4：新增 UC-9F7《前台流式输出解码（切片安全）》——前台快照循环改为“整段累计解码 + 新增文本差”推送（切片劈字误码消除；>1MB 退回按片解码）；与 03/03 UC-3C5 解码链修订（同日）配套。
+- 2026-10-07 v3：UC-9F3 补"插件 UI 元数据随记录走"——工具结果 patch 保留 `ui`（改动审查行），实时与回放两路交付、不进模型历史；配套前端透传（`renderExecutionEvent / renderExecutionRecord`）与回归用例；同日另修插件样式上屏时序（见 06/04·UC-6D2）。
 - 2026-10-05 v2：新增 UC-9F6《执行回执与证据链》——DELIVERY ONLY/`_verify`/`recording_evidence`/SIGINT 三级回执/`completion_scope`；同类修复见审查修复 changelog。
 - 2026-10-04 v1：初版——UC-9F1（后台作业）、UC-9F2（持久 PTY）、UC-9F3（执行日志 journal）、UC-9F4（执行恢复）、UC-9F5（computer-use 可选供应商）。

@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="zh-CN" class="theme-dark" data-session-list-mode="compact">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SugarAgent · 会话分组预览</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../frontend/src/styles/app.css">
+  <style>
+    body { height: auto; min-height: 100dvh; overflow: auto; background: var(--space-bg); }
+    button { cursor: pointer; }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent-1); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+    .preview { --preview-width: 260px; max-width: 1160px; margin: 0 auto; padding: 28px 28px 20px; }
+    .preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    .preview-title { display: flex; align-items: center; gap: 10px; }
+    .preview-title h1 { font-size: 17px; font-weight: 600; }
+    .prototype-label { font-size: 11px; color: var(--text-tertiary); border: 1px solid var(--border-glass); padding: 2px 7px; border-radius: 5px; }
+    .preview-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .preview-controls label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+    .preview-controls select, .plain-button { border: 1px solid var(--border-glass); border-radius: 6px; background: var(--surface-glass); padding: 5px 9px; color: var(--text-primary); font-size: 12px; }
+    .plain-button:hover { background: var(--floating-hover); }
+    .comparison { display: grid; grid-template-columns: var(--preview-width) var(--preview-width) minmax(240px, 1fr); gap: 26px; align-items: start; }
+    .column-label { height: 37px; display: flex; align-items: baseline; gap: 9px; color: var(--text-secondary); font-size: 12px; }
+    .column-label strong { color: var(--text-primary); font-weight: 600; }
+    .preview .sidebar { width: 100%; max-width: none; height: 780px; min-height: 550px; border: 1px solid var(--border-glass); border-radius: 12px; overflow: hidden; }
+    .preview .sidebar-brand, .preview .sidebar-new-chat-wrap { flex-shrink: 0; }
+    .preview .sidebar-brand-notice { display: none; }
+    .preview .sidebar-settings-btn { cursor: default; }
+    .preview .sidebar-settings-btn:hover { transform: none; color: var(--text-tertiary); }
+    .preview .sidebar-runtime { font-size: .62rem; }
+    .preview .sessions-list { min-height: 0; scrollbar-width: thin; }
+    .preview .sessions-list::-webkit-scrollbar { width: 5px; }
+    .preview .sessions-list::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 5px; }
+    .current-list .session-item { cursor: default; }
+    .current-list .session-name { cursor: default; }
+    .current-list .session-item-date { font-size: 11px; }
+    /* 所有提案样式仅作用于新建对话下方的列表。上部沿用仓库样式。 */
+    #proposal-list {
+      --list-text: var(--text-primary); --list-heading: var(--text-secondary);
+      --list-icon: var(--text-tertiary); --list-selected: rgba(var(--text-primary-rgb), .09);
+      --list-hover: rgba(var(--text-primary-rgb), .045); --list-focus: var(--accent-1);
+      --entry-height: 32px; --entry-gap: 4px;
+      padding: 12px 8px 22px; scrollbar-gutter: stable;
+      display: flex; flex-direction: column; gap: 28px;
+      background: transparent; color: var(--list-text);
+    }
+    :root[data-session-list-mode="detailed"] #proposal-list { --entry-height: 52px; }
+    #proposal-list button:focus-visible { outline-color: var(--list-focus); }
+    #proposal-list .nav-section { flex-shrink: 0; }
+    #proposal-list .group-heading { display: flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; }
+    #proposal-list .group-toggle { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--list-heading); display: flex; align-items: center; gap: 10px; padding: 4px 0; text-align: left; font-size: 14px; font-weight: 600; line-height: 20px; }
+    #proposal-list .group-toggle:hover { color: var(--list-text); }
+    #proposal-list .group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #proposal-list .group-tools { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
+    #proposal-list .icon-button { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--list-icon); }
+    #proposal-list .icon-button svg { width: 16px; height: 16px; }
+    #proposal-list .icon-button:hover { color: var(--list-text); background: var(--list-hover); }
+    #proposal-list .group-body { padding-top: 8px; }
+    #proposal-list .nav-section.is-collapsed > .group-body { display: none; }
+    #proposal-list .project-children > .nav-section + .nav-section { margin-top: var(--entry-gap); }
+    #proposal-list .project-row { position: relative; height: var(--entry-height); padding: 0 8px; border-radius: 10px; }
+    #proposal-list .project-row:hover { background: var(--list-hover); }
+    #proposal-list .project-row.is-selected { background: var(--list-selected); }
+    #proposal-list .project-row .group-toggle { height: 100%; padding: 6px 0; color: var(--list-text); font-weight: 400; }
+    #proposal-list .project-symbol { width: 16px; height: 16px; flex-shrink: 0; }
+    #proposal-list .project-section > .group-body { padding: 4px 0 8px 24px; }
+    #proposal-list .project-tools { position: absolute; right: 6px; opacity: 0; pointer-events: none; }
+    #proposal-list .project-row:hover .project-tools, #proposal-list .project-row:focus-within .project-tools, #proposal-list .project-row.menu-open .project-tools { opacity: 1; pointer-events: auto; }
+    #proposal-list .project-row:hover .group-toggle, #proposal-list .project-row:focus-within .group-toggle, #proposal-list .project-row.menu-open .group-toggle { padding-right: 56px; }
+    #proposal-list .chat-row { display: flex; align-items: center; position: relative; height: var(--entry-height); margin: 0; border-radius: 10px; }
+    #proposal-list .chat-row + .chat-row { margin-top: var(--entry-gap); }
+    #proposal-list .chat-row:hover { background: var(--list-hover); }
+    #proposal-list .chat-row.is-active { background: var(--list-selected); }
+    #proposal-list .chat-select { display: flex; flex-direction: column; justify-content: center; align-items: stretch; gap: 2px; flex: 1; min-width: 0; height: 100%; border: 0; padding: 6px 8px; background: transparent; color: var(--list-text); text-align: left; font-size: 14px; font-weight: 400; line-height: 20px; border-radius: 10px; }
+    #proposal-list .chat-title-line { display: flex; align-items: center; min-width: 0; }
+    #proposal-list .chat-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+    #proposal-list .chat-age { flex-shrink: 0; margin-left: 6px; color: var(--text-tertiary); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #proposal-list .chat-summary { display: none; width: 100%; font-size: 12px; line-height: 18px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    :root[data-session-list-mode="detailed"] #proposal-list .chat-summary { display: block; }
+    #proposal-list .chat-more { position: absolute; right: 6px; opacity: 0; }
+    #proposal-list .chat-row:hover .chat-more, #proposal-list .chat-row:focus-within .chat-more, #proposal-list .chat-row.menu-open .chat-more { opacity: 1; }
+    #proposal-list .chat-row:hover .chat-select, #proposal-list .chat-row:focus-within .chat-select, #proposal-list .chat-row.menu-open .chat-select { padding-right: 36px; }
+    #proposal-list .recent-time-label { color: var(--list-heading); font-size: 12px; font-weight: 400; line-height: 18px; margin: 12px 8px 3px; }
+    #proposal-list .recent-time-group:first-child .recent-time-label { margin-top: 0; }
+    #proposal-list .empty-group { padding: 8px; font-size: 12px; color: var(--list-heading); }
+    #proposal-list .drop-target > .group-heading { background: var(--list-hover); outline: 1px dashed var(--list-focus); border-radius: 8px; }
+    #proposal-list .chat-row.is-dragging { opacity: .45; }
+    #proposal-list svg.icon-more circle { fill: currentColor; stroke: none; }
+    .explanation { padding: 37px 2px 0 7px; }
+    .explanation .eyebrow { color: var(--text-tertiary); font-size: 11px; letter-spacing: .04em; }
+    .explanation h2 { margin: 9px 0 14px; color: var(--text-primary); font-size: 24px; line-height: 1.45; font-weight: 600; }
+    .explanation .intro { color: var(--text-secondary); font-size: 13px; line-height: 1.9; max-width: 350px; }
+    .rules { margin: 26px 0; display: grid; gap: 18px; }
+    .rule { display: grid; grid-template-columns: 24px 1fr; gap: 9px; }
+    .rule-index { color: var(--text-tertiary); font-size: 11px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+    .rule strong { font-size: 13px; font-weight: 500; }
+    .rule p { font-size: 12px; color: var(--text-secondary); line-height: 1.8; margin-top: 4px; }
+    .selection { padding: 16px 0; border-top: 1px solid var(--border-glass); border-bottom: 1px solid var(--border-glass); margin-bottom: 18px; }
+    .selection-label { font-size: 11px; color: var(--text-tertiary); margin-bottom: 7px; }
+    .selection-title { font-size: 14px; line-height: 1.6; color: var(--text-primary); }
+    .selection-path { font-size: 12px; color: var(--text-secondary); margin-top: 5px; }
+    .selection-move { display: flex; align-items: center; gap: 7px; margin-top: 12px; }
+    .selection-move label { font-size: 12px; color: var(--text-secondary); flex-shrink: 0; }
+    .selection-move select { min-width: 0; flex: 1; max-width: 160px; padding: 5px 6px; border: 1px solid var(--border-glass); border-radius: 6px; background: var(--surface-glass); color: var(--text-primary); font-size: 12px; }
+    .selection-move button:disabled { opacity: .4; cursor: default; }
+    .try-it { color: var(--text-tertiary); font-size: 12px; line-height: 1.9; }
+    .demo-note { color: var(--text-tertiary); font-size: 11px; line-height: 1.7; margin-top: 18px; }
+    .toast { min-height: 25px; color: var(--text-primary); font-size: 12px; margin-top: 13px; line-height: 1.7; }
+    /* 菜单复用仓库 session-more-menu，仅调整定位，避免被滚动列表裁切。 */
+    .context-menu { position: fixed; right: auto; max-width: calc(100vw - 16px); max-height: calc(100dvh - 24px); overflow-y: auto; visibility: visible; opacity: 1; transform: none; }
+    dialog { width: min(360px, calc(100vw - 32px)); margin: auto; padding: 23px; border: 1px solid var(--floating-border); border-radius: 12px; background: var(--floating-surface-raised); color: var(--text-primary); box-shadow: var(--floating-shadow); }
+    dialog::backdrop { background: rgba(0, 0, 0, .35); }
+    dialog h2 { font-size: 16px; font-weight: 600; margin-bottom: 18px; }
+    dialog label { font-size: 12px; color: var(--text-secondary); display: block; margin-bottom: 7px; }
+    dialog input { width: 100%; padding: 9px 10px; border: 1px solid var(--border-hover); border-radius: 6px; background: var(--surface-glass); color: var(--text-primary); }
+    .directory-field { margin-top: 15px; }
+    .directory-hint { font-size: 11px; color: var(--text-tertiary); line-height: 1.7; margin-top: 6px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+    .dialog-actions .primary-button { background: var(--text-primary); color: var(--space-bg2); border-color: var(--text-primary); }
+    .preview svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    @media (max-width: 950px) { .comparison { grid-template-columns: var(--preview-width) var(--preview-width); justify-content: center; } .explanation { grid-column: 1 / -1; padding: 5px 0 10px; } .rules { grid-template-columns: 1fr 1fr; } .preview-toolbar { align-items: flex-start; flex-direction: column; gap: 14px; } }
+    @media (max-width: 620px) { .preview { padding: 20px 14px; } .comparison { grid-template-columns: minmax(0, 1fr); } .comparison > .preview-column { width: min(100%, 360px); justify-self: center; } .rules { grid-template-columns: 1fr; } .preview .sidebar { height: 630px; } .preview-controls { gap: 8px; } }
+    @media (hover: none) { #proposal-list { --entry-height: 44px; } :root[data-session-list-mode="detailed"] #proposal-list { --entry-height: 52px; } #proposal-list .project-tools, #proposal-list .chat-more { opacity: 1; pointer-events: auto; } #proposal-list .chat-select { padding-right: 42px; } #proposal-list .project-row .group-toggle { padding-right: 72px; } #proposal-list .icon-button { width: 32px; height: 32px; } }
+    @media (prefers-reduced-motion: reduce) { .preview *, .context-menu * { transition: none !important; animation: none !important; } }
+  </style>
+</head>
+<body>
+  <main class="preview" id="preview">
+    <header class="preview-toolbar">
+      <div class="preview-title"><h1>会话分组预览</h1><span class="prototype-label">交互原型</span></div>
+      <div class="preview-controls">
+        <label>主题 <select id="theme-control"><option value="light">浅色</option><option value="dark" selected>深色</option><option value="purple">紫色</option></select></label>
+        <label>栏宽 <select id="width-control"><option value="220">220 px · 当前宽度</option><option value="260" selected>260 px</option><option value="300">300 px</option></select></label>
+        <label>列表 <select id="mode-control"><option value="compact" selected>紧凑</option><option value="detailed">详细</option></select></label>
+        <button class="plain-button" id="reset-demo" type="button">重置演示</button>
+      </div>
+    </header>
+    <div class="comparison">
+      <section class="preview-column" aria-label="现有会话分组">
+        <div class="column-label"><strong>现有分组</strong><span>按时间组织</span></div>
+        <aside class="sidebar" id="current-sidebar" aria-label="现有会话栏">
+          <div class="header-host"></div>
+          <div class="sessions-list current-list" id="current-list"></div>
+          <div class="footer-host"></div>
+        </aside>
+      </section>
+      <section class="preview-column" aria-label="建议会话分组">
+        <div class="column-label"><strong>调整后</strong><span>四个同级分组</span></div>
+        <aside class="sidebar" id="proposal-sidebar" aria-label="可交互的建议会话栏">
+          <div class="header-host"></div>
+          <nav class="sessions-list proposal-list" id="proposal-list" aria-label="会话分组"></nav>
+          <div class="footer-host"></div>
+        </aside>
+      </section>
+      <section class="explanation" aria-label="设计说明">
+        <div class="eyebrow">只调整「新建对话」以下的会话列表</div>
+        <h2>保留会话信息，<br>调整分组与行间距。</h2>
+        <p class="intro">置顶、项目、最近、归档四个同级分组。沿用原来的背景与会话菜单，保留时间和标签；详细模式显示第二行最近提问。</p>
+        <div class="rules">
+          <div class="rule"><span class="rule-index">01</span><div><strong>置顶</strong><p>常用会话单独放在最上面，保留项目归属。取消置顶后回到所属项目或最近。</p></div></div>
+          <div class="rule"><span class="rule-index">02</span><div><strong>项目</strong><p>项目默认收起，文件夹行选中时显示圆角灰底。点击展开所属会话，仅缩进一级。</p></div></div>
+          <div class="rule"><span class="rule-index">03</span><div><strong>最近 · 会话目录</strong><p>未关联项目的会话保留「今天、昨天、近 7 天、近 14 天」分组，组内按最近活动排序。</p></div></div>
+          <div class="rule"><span class="rule-index">04</span><div><strong>归档</strong><p>独立分组，默认折叠。恢复后回到所属项目或对应时间组，不随「最近」一起收起。</p></div></div>
+        </div>
+        <div class="selection" aria-live="polite">
+          <div class="selection-label">当前选择</div>
+          <div class="selection-title" id="selected-title"></div>
+          <div class="selection-path" id="selected-path"></div>
+          <div class="selection-move"><label for="move-target">移动到</label><select id="move-target"></select><button class="plain-button" type="button" id="move-selected">移动</button></div>
+        </div>
+        <p class="try-it">顶部切换紧凑／详细，比较两种列表密度。<br>标题右侧「⋯」管理分组；「＋」添加项目。<br>拖动会话，或用上方「移动到」调整归属。<br>悬停会话显示原有菜单；悬停文字查看完整信息。</p>
+        <p class="demo-note">使用示例会话与项目，仅演示交互。上部复用现有样式；未修改正式页面或真实会话。正式接入需要保存项目目录和会话归属。</p>
+        <div class="toast" id="demo-status" role="status" aria-live="polite"></div>
+      </section>
+    </div>
+  </main>
+  <div class="session-more-menu context-menu" id="context-menu" role="menu" hidden></div>
+  <dialog id="name-dialog" aria-labelledby="dialog-title">
+    <form id="name-form">
+      <h2 id="dialog-title">添加项目</h2>
+      <label for="name-input" id="name-label">项目名称</label>
+      <input id="name-input" name="name" required maxlength="40" autocomplete="off">
+      <div class="directory-field" id="directory-field" hidden><label for="directory-input">项目目录</label><input id="directory-input" name="directory" autocomplete="off" placeholder="例如 D:\AI\Projects\MyProject"><p class="directory-hint">原型仅记录示例目录，不访问文件系统。</p></div>
+      <div class="dialog-actions"><button class="plain-button" type="button" id="cancel-dialog">取消</button><button class="plain-button primary-button" type="submit">保存</button></div>
+    </form>
+  </dialog>
+  <template id="sidebar-header">
+    <div class="sidebar-brand">
+      <div class="sidebar-brand-line">
+        <div class="sidebar-brand-icon-wrap"><div class="sidebar-brand-icon" aria-hidden="true"><img src="../../frontend/public/assets/sugar-logo.png" alt="" draggable="false"></div></div>
+        <div class="sidebar-brand-copy">
+          <div class="sidebar-brand-text">SugarAgent</div>
+          <div class="sidebar-brand-sub"><span class="sidebar-brand-sub-line sidebar-brand-sub-line--en">Self-Upgrade General Agent Runtime</span><span class="sidebar-brand-sub-line sidebar-brand-sub-line--zh">自优化通用智能平台</span></div>
+        </div>
+        <div class="sidebar-brand-actions">
+          <button type="button" class="sidebar-settings-btn" aria-label="界面设置（示意）"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <button type="button" class="sidebar-settings-btn sidebar-language-btn" aria-label="切换语言（示意）">中/EN</button>
+        </div>
+      </div>
+    </div>
+    <div class="sidebar-new-chat-wrap"><button type="button" class="new-session-btn">新建对话</button></div>
+  </template>
+  <template id="sidebar-footer"><div class="sidebar-runtime"><span class="sidebar-runtime-link"><span class="sidebar-runtime-dot" aria-hidden="true"></span><span>Runtime 在线</span></span><span class="sidebar-runtime-version">v5.20261005</span></div></template>
+  <script>
+    (() => {
+      'use strict';
+      const preview = document.getElementById('preview');
+      const list = document.getElementById('proposal-list');
+      const currentList = document.getElementById('current-list');
+      const menu = document.getElementById('context-menu');
+      const dialog = document.getElementById('name-dialog');
+      const input = document.getElementById('name-input');
+      const iconPaths = {
+        chevron: '<path d="m4 6 4 4 4-4"/>',
+        folder: '<path d="M2 5V3.8A1.8 1.8 0 0 1 3.8 2h2.1l1.6 2H12A2 2 0 0 1 14 6v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5Zm0 2h12"/>',
+        pin: '<path d="m5 2 6 0-1 5 2 2H4l2-2-1-5ZM8 9v5"/>',
+        chats: '<path d="M3 3h10v8H7l-4 3V3Z"/>',
+        archive: '<rect x="2.5" y="2.5" width="11" height="3" rx=".7"/><path d="M3.5 5.5v8h9v-8M6 8h4"/>',
+        plus: '<path d="M8 3v10M3 8h10"/>',
+        more: '<circle cx="3" cy="8" r=".8"/><circle cx="8" cy="8" r=".8"/><circle cx="13" cy="8" r=".8"/>',
+        rename: '<path d="m3 10 7-7 3 3-7 7-3 1 0-4ZM9 4l3 3"/>',
+        compose: '<path d="M8 2H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8"/><path d="m7 9 .5-2.5L12 2l2 2-4.5 4.5L7 9Z"/>',
+        move: '<path d="M2 8h12m-4-4 4 4-4 4"/>',
+        check: '<path d="m3 8 3 3 7-7"/>',
+        trash: '<path d="M3 4h10M6 2h4M4 4l1 10h6l1-10M7 7v4M9 7v4"/>'
+      };
+      const svg = (name, cls = '') => `<svg viewBox="0 0 16 16" width="14" height="14" class="icon-${name} ${cls}" aria-hidden="true">${iconPaths[name] || ''}</svg>`;
+      const escape = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+      const originalSessions = [
+        { id: 's1', name: 'Agent 执行器重构方案', group: 'core', pinned: true, review: true, age: '2时', bucket: 'today', query: '梳理执行器的职责与状态流转。' },
+        { id: 's2', name: '前端交互优化清单', group: 'ui', pinned: true, draft: true, age: '1天', bucket: 'yesterday', query: '整理下一轮需要调整的交互细节。' },
+        { id: 's3', name: '会话分组与侧栏设计', group: 'core', age: '刚刚', bucket: 'today', query: '将会话清单改成 Codex 的分组风格。' },
+        { id: 's4', name: '流式响应中断恢复', group: 'core', age: '12分', bucket: 'today', status: 'running', query: '检查连接中断后的恢复路径。' },
+        { id: 's5', name: '浏览器侧栏布局', group: 'ui', age: '3时', bucket: 'today', query: '调整侧栏在窄屏下的排版。' },
+        { id: 's6', name: '工具调用状态同步', group: 'core', age: '5时', bucket: 'today', status: 'unread', query: '确保执行状态可以实时同步。' },
+        { id: 's7', name: '运行时日志整理', group: null, age: '1天', bucket: 'yesterday', query: '合并重复日志并检查输出。' },
+        { id: 's8', name: '深色主题细节', group: 'ui', age: '2天', bucket: 'week', query: '统一深色主题的菜单和边框。' },
+        { id: 's9', name: '整理本周待办', group: null, todo: true, age: '6时', bucket: 'today', query: '帮我整理本周尚未完成的事项。' },
+        { id: 's10', name: 'Python 环境排查', group: null, age: '3天', bucket: 'week', query: '确认运行环境和依赖版本。' },
+        { id: 's11', name: '文档与发布说明', group: null, age: '9天', bucket: 'fortnight', query: '生成这次更新的发布说明。' },
+        { id: 's12', name: '旧版界面设计讨论', group: 'ui', age: '9/20', bucket: 'older', archived: true, query: '上一版界面方案。' },
+        { id: 's13', name: '首次运行环境配置', group: 'core', age: '9/18', bucket: 'older', archived: true, query: '检查首次启动的环境配置。' }
+      ];
+      let sessions, groups, selected, selectedProject, collapsed, dialogAction, dragId, sequence;
+      let menuAnchor = null;
+      const announce = text => { document.getElementById('demo-status').textContent = text; };
+      const find = id => sessions.find(session => session.id === id);
+      const groupName = id => groups.find(group => group.id === id)?.name || '最近';
+      const activityAge = session => {
+        if (session.age === '刚刚') return 0;
+        const value = parseInt(session.age, 10);
+        if (session.age.endsWith('分')) return value;
+        if (session.age.endsWith('时')) return value * 60;
+        if (session.age.endsWith('天')) return value * 1440;
+        return 100000;
+      };
+      const visibleSessions = id => sessions.filter(session => {
+        if (id === 'archived') return session.archived;
+        if (session.archived) return false;
+        if (id === 'pinned') return session.pinned;
+        return !session.pinned && (id === 'normal' ? !session.group : session.group === id);
+      }).sort((a, b) => id === 'pinned' ? 0 : activityAge(a) - activityAge(b));
+      function closeMenu(restoreFocus = false) {
+        menu.hidden = true;
+        list.querySelectorAll('.menu-open').forEach(row => row.classList.remove('menu-open'));
+        list.querySelectorAll('[aria-expanded="true"][aria-haspopup="menu"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+        if (restoreFocus && menuAnchor?.isConnected) menuAnchor.focus();
+        menuAnchor = null;
+      }
+      function badgesMarkup(session) {
+        return [['todo','待办'],['draft','草稿'],['review','审查']].filter(([key]) => session[key])
+          .map(([key,label]) => `<span class="session-${key}-badge" aria-label="${label}">${label}</span>`).join('');
+      }
+      function rowMarkup(session) {
+        const state = session.status === 'running' ? '，运行中' : session.status === 'unread' ? '，有未读结果' : '';
+        const tags = [['todo','待办'],['draft','草稿'],['review','审查']].filter(([key]) => session[key]).map(([,label]) => label);
+        const tooltip = session.name + '\n最近活动：' + session.age + '\n最近提问：' + session.query + (tags.length ? '\n标签：' + tags.join('、') : '') + (state ? '\n状态：' + state.slice(1) : '');
+        return `<div class="chat-row${selected === session.id ? ' is-active' : ''}" data-session="${escape(session.id)}" draggable="true">
+          <button class="chat-select" type="button" data-select="${escape(session.id)}" aria-current="${selected === session.id ? 'true' : 'false'}" aria-label="${escape(session.name + state + (tags.length ? '，' + tags.join('、') : ''))}" title="${escape(tooltip)}"><span class="chat-title-line"><span class="chat-name">${escape(session.name)}</span>${badgesMarkup(session)}<span class="chat-age">${escape(session.age)}</span></span><span class="chat-summary">${escape(session.query)}</span></button>
+          <button class="icon-button chat-more" type="button" data-session-menu="${escape(session.id)}" aria-label="${escape(session.name)}的更多操作" aria-haspopup="menu" aria-expanded="false">${svg('more')}</button>
+        </div>`;
+      }
+      function sectionToolsMarkup(id) {
+        const label = id === 'pinned' ? '置顶' : id === 'projects' ? '项目' : id === 'normal' ? '最近' : '归档';
+        const extra = id === 'projects'
+          ? `<button type="button" class="icon-button" id="add-group" aria-label="添加项目" title="添加项目">${svg('plus')}</button>`
+          : id === 'normal' ? `<button type="button" class="icon-button" data-new-recent aria-label="新建会话" title="新建会话">${svg('compose')}</button>` : '';
+        return `<div class="group-tools"><button type="button" class="icon-button" data-section-menu="${id}" aria-label="${label}的分组操作" aria-haspopup="menu" aria-expanded="false" title="${label}的分组操作">${svg('more')}</button>${extra}</div>`;
+      }
+      function sectionHeadingMarkup(id, name) {
+        return `<div class="group-heading"><button type="button" class="group-toggle" data-toggle="${escape(id)}" aria-expanded="${!collapsed.has(id)}" aria-controls="group-body-${escape(id)}"><span class="group-label">${escape(name)}</span></button>${sectionToolsMarkup(id)}</div>`;
+      }
+      function sectionMarkup(id, name, custom = false) {
+        const rows = visibleSessions(id);
+        const isCollapsed = collapsed.has(id);
+        const project = groups.find(group => group.id === id);
+        const tools = `<div class="group-tools project-tools"><button type="button" class="icon-button" data-new-in-group="${escape(id)}" aria-label="在${escape(name)}中新建会话" title="在此项目新建会话">${svg('plus')}</button><button type="button" class="icon-button" data-group-menu="${escape(id)}" aria-label="${escape(name)}的项目操作" aria-haspopup="menu" aria-expanded="false" title="项目操作">${svg('more')}</button></div>`;
+        const heading = custom
+          ? `<div class="group-heading project-row${selectedProject === id ? ' is-selected' : ''}"><button class="group-toggle" type="button" data-toggle="${escape(id)}" aria-expanded="${!isCollapsed}" aria-controls="group-body-${escape(id)}" aria-current="${selectedProject === id ? 'true' : 'false'}" title="${escape(project.name + '\n' + project.path)}">${svg('folder', 'project-symbol')}<span class="group-label">${escape(name)}</span></button>${tools}</div>`
+          : sectionHeadingMarkup(id, name);
+        return `<section class="nav-section${custom ? ' project-section' : ''}${isCollapsed ? ' is-collapsed' : ''}${id === 'archived' ? ' archive-section' : ''}" data-group="${escape(id)}">
+          ${heading}
+          <div class="group-body" id="group-body-${escape(id)}">${rows.length ? rows.map(rowMarkup).join('') : '<div class="empty-group">暂无会话</div>'}</div>
+        </section>`;
+      }
+      function projectsMarkup() {
+        return `<section class="nav-section${collapsed.has('projects') ? ' is-collapsed' : ''}" data-group="projects">${sectionHeadingMarkup('projects', '项目')}<div class="group-body project-children" id="group-body-projects">${groups.length ? groups.map(group => sectionMarkup(group.id, group.name, true)).join('') : '<div class="empty-group">添加一个项目开始组织会话</div>'}</div></section>`;
+      }
+      function recentMarkup() {
+        const rows = visibleSessions('normal');
+        const timeGroups = [['today','今天'],['yesterday','昨天'],['week','近7天'],['fortnight','近14天'],['older','更早']].map(([key,name]) => {
+          const items = rows.filter(session => session.bucket === key);
+          return items.length ? `<div class="recent-time-group"><div class="recent-time-label">${name}</div>${items.map(rowMarkup).join('')}</div>` : '';
+        }).join('');
+        return `<section class="nav-section${collapsed.has('normal') ? ' is-collapsed' : ''}" data-group="normal">${sectionHeadingMarkup('normal', '最近')}<div class="group-body" id="group-body-normal">${timeGroups || '<div class="empty-group">暂无未关联项目的会话</div>'}</div></section>`;
+      }
+      function render() {
+        closeMenu();
+        list.innerHTML = sectionMarkup('pinned', '置顶')
+          + projectsMarkup()
+          + recentMarkup()
+          + sectionMarkup('archived', '归档');
+        const session = find(selected);
+        document.getElementById('selected-title').textContent = session?.name || '尚未选择会话';
+        const origin = session ? groupName(session.group) : '';
+        document.getElementById('selected-path').textContent = session ? (session.archived ? '归档 · 原归属：' + origin : session.pinned ? '置顶 · 原归属：' + origin : (session.group ? '项目 / ' : '') + origin) : '';
+        const moveTarget = document.getElementById('move-target');
+        moveTarget.innerHTML = [...groups,{id:'normal',name:'最近（未关联项目）'}].map(group => `<option value="${escape(group.id)}">${escape(group.name)}</option>`).join('');
+        moveTarget.value = session?.group || 'normal'; moveTarget.disabled = !session;
+        document.getElementById('move-selected').disabled = !session;
+      }
+      function currentRow(session) {
+        return `<div class="session-item${session.id === 's3' ? ' active' : ''}${session.status === 'running' ? ' is-generating' : ''}${session.status === 'unread' ? ' is-unread-result' : ''}"><div class="session-item-head"><div class="session-item-main"><div class="session-item-title-row"><span class="session-name">${escape(session.name)}</span>${badgesMarkup(session)}<span class="session-item-date">${escape(session.age)}</span></div><div class="session-last-query">${escape(session.query)}</div></div></div></div>`;
+      }
+      function currentSection(id, name, rows, body) {
+        return `<div class="session-section${id === 'archived' ? ' is-collapsed' : ''}"><button type="button" class="session-section-toggle" aria-expanded="${id !== 'archived'}"><span class="session-section-toggle-label">${name}</span><span class="session-section-meta"><span class="session-section-count">${rows.length}</span><span class="session-section-chev" aria-hidden="true">▾</span></span></button><div class="session-section-body">${body || rows.map(currentRow).join('')}</div></div>`;
+      }
+      function renderCurrent() {
+        const normal = originalSessions.filter(session => !session.pinned && !session.archived);
+        const body = [['today','今天'],['yesterday','昨天'],['week','近7天'],['fortnight','近14天']].map(([key, name]) => {
+          const rows = normal.filter(session => session.bucket === key);
+          return rows.length ? `<div class="session-time-group-title">${name}</div>${rows.map(currentRow).join('')}` : '';
+        }).join('');
+        currentList.innerHTML = currentSection('pinned', '置顶目录', originalSessions.filter(session => session.pinned))
+          + currentSection('normal', '会话目录', normal, body)
+          + currentSection('archived', '归档目录', originalSessions.filter(session => session.archived));
+      }
+      function reset() {
+        sessions = originalSessions.map(session => ({ ...session }));
+        groups = [{id:'core',name:'MyAgent Developer',path:'D:\\AI\\AI Agent\\MyAgent Developer'}, {id:'ui',name:'Browser Sidebar',path:'D:\\AI\\Examples\\Browser Sidebar（示例目录）'}];
+        selected = 's3'; selectedProject = 'core'; collapsed = new Set(['archived','core','ui']); sequence = 20; list.scrollTop = 0;
+        render(); renderCurrent(); list.scrollTop = 0; announce('');
+      }
+      function openNameDialog(title, label, value, action) {
+        closeMenu();
+        document.getElementById('dialog-title').textContent = title;
+        document.getElementById('name-label').textContent = label;
+        input.value = value; input.maxLength = label === '会话名称' ? 160 : 40;
+        input.setCustomValidity('');
+        document.getElementById('directory-field').hidden = label !== '项目名称';
+        document.getElementById('directory-input').required = label === '项目名称';
+        document.getElementById('directory-input').value = '';
+        dialogAction = action; dialog.showModal(); input.focus(); input.select();
+      }
+      function createGroup() {
+        openNameDialog('添加项目', '项目名称', '', name => {
+          const id = 'group-' + (++sequence); groups.push({id, name, path: document.getElementById('directory-input').value.trim()});
+          collapsed.delete('projects'); collapsed.add(id); selectedProject = id; render(); announce('已添加示例项目「' + name + '」，可关联会话。');
+          list.querySelector(`[data-toggle="${id}"]`).scrollIntoView({block:'nearest'});
+        });
+      }
+      function createSession(group = null) {
+        const session = {id:'s' + (++sequence),name:'新会话',group,age:'刚刚',bucket:'today',query:'暂无提问'};
+        sessions.unshift(session); selected = session.id; selectedProject = group; collapsed.delete(group || 'normal'); if (group) collapsed.delete('projects'); render();
+        announce('已在「' + groupName(group) + '」中新建示例会话。');
+        list.querySelector(`[data-session="${session.id}"]`).scrollIntoView({block:'nearest'});
+      }
+      function moveSession(session, target) {
+        if (target === 'pinned') { session.pinned = true; session.archived = false; }
+        else if (target === 'archived') session.archived = true;
+        else { session.group = target === 'normal' ? null : target; session.pinned = false; session.archived = false; }
+        if (selected === session.id) selectedProject = session.group;
+        collapsed.delete(target); if (groups.some(group => group.id === target)) collapsed.delete('projects'); render();
+        const destination = target === 'pinned' ? '置顶' : target === 'archived' ? '归档' : groupName(session.group);
+        announce('「' + session.name + '」已移到「' + destination + '」。');
+      }
+      function menuButton(label, action, className = '') {
+        const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'menuitem');
+        button.className = className; button.textContent = label;
+        button.addEventListener('click', () => { closeMenu(); action(); }); menu.appendChild(button);
+      }
+      function menuSeparator() {
+        const divider = document.createElement('div'); divider.className = 'session-menu-separator'; divider.setAttribute('role', 'separator'); menu.appendChild(divider);
+      }
+      function exportDemoSession(session) {
+        const url = URL.createObjectURL(new Blob([JSON.stringify({prototype: true, session}, null, 2)], {type:'application/json'}));
+        const link = document.createElement('a'); link.href = url; link.download = 'demo-session-' + session.id + '.json'; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0); announce('已导出此示例会话的 JSON 数据。');
+      }
+      function showMenu(anchor, build) {
+        const wasOpen = !menu.hidden && menuAnchor === anchor;
+        closeMenu();
+        if (wasOpen) { anchor.focus(); return; }
+        menuAnchor = anchor; menu.innerHTML = ''; build(); menu.hidden = false;
+        anchor.closest('.chat-row,.project-row')?.classList.add('menu-open'); anchor.setAttribute('aria-expanded', 'true');
+        const rect = anchor.getBoundingClientRect();
+        const left = Math.max(8, Math.min(rect.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8));
+        const top = Math.max(8, Math.min(rect.bottom + 3, innerHeight - menu.offsetHeight - 8));
+        menu.style.left = left + 'px'; menu.style.top = top + 'px'; menu.querySelector('button')?.focus();
+      }
+      function showSessionMenu(anchor, id) {
+        const session = find(id);
+        showMenu(anchor, () => {
+          menuButton(session.pinned ? '取消置顶' : '置顶会话', () => {
+            session.pinned = !session.pinned; collapsed.delete(session.pinned ? 'pinned' : session.group || 'normal');
+            if (!session.pinned && session.group) collapsed.delete('projects');
+            render(); announce(session.pinned ? '已置顶，保留项目归属。' : '已取消置顶，回到「' + groupName(session.group) + '」。');
+          }, 'session-menu-pin');
+          menuButton(session.todo ? '取消待办' : '设为待办', () => { session.todo = !session.todo; render(); announce(session.todo ? '已标记示例会话为待办。' : '已取消待办标签。'); }, 'session-menu-todo');
+          menuButton('重命名', () => openNameDialog('重命名会话', '会话名称', session.name, name => {session.name = name; render(); announce('已更新示例会话名称。');}), 'session-menu-rename');
+          menuButton(session.archived ? '取消归档' : '归档会话', () => {
+            session.archived = !session.archived;
+            if (!session.archived) collapsed.delete(session.pinned ? 'pinned' : session.group || 'normal');
+            if (!session.archived && !session.pinned && session.group) collapsed.delete('projects');
+            render(); announce(session.archived ? '已归档「' + session.name + '」。' : '已恢复到「' + (session.pinned ? '置顶' : groupName(session.group)) + '」。');
+          }, 'session-menu-archive');
+          menuSeparator();
+          menuButton('导出会话', () => exportDemoSession(session), 'session-menu-export');
+          menuButton('删除会话', () => {
+            sessions = sessions.filter(item => item.id !== id); if (selected === id) { selected = null; selectedProject = null; }
+            render(); announce('已删除示例会话「' + session.name + '」，点击「重置演示」可恢复。');
+          }, 'session-menu-delete');
+        });
+      }
+      function toggleSection(id) {
+        collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id);
+        if (groups.some(group => group.id === id)) selectedProject = id;
+        render(); list.querySelector(`[data-toggle="${id}"]`)?.focus({preventScroll:true});
+      }
+      function showSectionMenu(anchor, id) {
+        showMenu(anchor, () => {
+          if (id === 'projects') {
+            menuButton('添加项目', createGroup);
+            menuButton('展开所有项目', () => {
+              collapsed.delete('projects'); groups.forEach(group => collapsed.delete(group.id)); render();
+              list.querySelector('[data-toggle="projects"]').focus({preventScroll:true});
+            });
+            menuButton('收起所有项目', () => {
+              groups.forEach(group => collapsed.add(group.id)); render();
+              list.querySelector('[data-toggle="projects"]').focus({preventScroll:true});
+            });
+          } else {
+            const label = id === 'pinned' ? '置顶' : id === 'normal' ? '最近' : '归档';
+            menuButton((collapsed.has(id) ? '展开' : '收起') + label, () => toggleSection(id));
+            if (id === 'normal') {
+              menuButton('新建会话', () => createSession());
+            }
+          }
+        });
+      }
+      function showGroupMenu(anchor, id) {
+        const group = groups.find(item => item.id === id);
+        showMenu(anchor, () => {
+          menuButton('新建会话', () => createSession(id));
+          menuButton('重命名项目', () => openNameDialog('重命名项目', '显示名称', group.name, name => {group.name = name; render(); announce('已更新项目显示名称。');}));
+          menuSeparator();
+          menuButton('移除项目，保留会话', () => {
+            sessions.filter(session => session.group === id).forEach(session => {session.group = null;});
+            groups = groups.filter(item => item.id !== id); if (selectedProject === id) selectedProject = null; collapsed.delete('normal'); render();
+            announce('已移除示例项目「' + group.name + '」，会话保留并回到最近。');
+          }, 'session-menu-delete');
+        });
+      }
+      document.querySelectorAll('.header-host').forEach(host => host.append(document.getElementById('sidebar-header').content.cloneNode(true)));
+      document.querySelectorAll('.footer-host').forEach(host => host.append(document.getElementById('sidebar-footer').content.cloneNode(true)));
+      document.querySelector('#proposal-sidebar .new-session-btn').addEventListener('click', () => createSession());
+      document.querySelector('#current-sidebar .new-session-btn').addEventListener('click', () => announce('左侧是现有结构的对照。请在右侧体验新建对话。'));
+      currentList.addEventListener('click', event => {
+        const toggle = event.target.closest('.session-section-toggle'); if (!toggle) return;
+        const section = toggle.closest('.session-section'); section.classList.toggle('is-collapsed');
+        toggle.setAttribute('aria-expanded', String(!section.classList.contains('is-collapsed')));
+      });
+      list.addEventListener('click', event => {
+        const toggle = event.target.closest('[data-toggle]');
+        if (toggle) { toggleSection(toggle.dataset.toggle); return; }
+        const selection = event.target.closest('[data-select]');
+        if (selection) { selected = selection.dataset.select; selectedProject = find(selected).group; render(); list.querySelector(`[data-select="${selected}"]`).focus({preventScroll:true}); return; }
+        const more = event.target.closest('[data-session-menu]'); if (more) { showSessionMenu(more, more.dataset.sessionMenu); return; }
+        const groupMenu = event.target.closest('[data-group-menu]'); if (groupMenu) { showGroupMenu(groupMenu, groupMenu.dataset.groupMenu); return; }
+        const sectionMenu = event.target.closest('[data-section-menu]'); if (sectionMenu) { showSectionMenu(sectionMenu, sectionMenu.dataset.sectionMenu); return; }
+        const newInGroup = event.target.closest('[data-new-in-group]'); if (newInGroup) {createSession(newInGroup.dataset.newInGroup); return;}
+        if (event.target.closest('[data-new-recent]')) {createSession(); return;}
+        if (event.target.closest('#add-group')) createGroup();
+      });
+      list.addEventListener('dragstart', event => {
+        const row = event.target.closest('[data-session]'); if (!row) return;
+        dragId = row.dataset.session; event.dataTransfer.setData('text/plain', dragId); event.dataTransfer.effectAllowed = 'move'; row.classList.add('is-dragging'); closeMenu();
+      });
+      list.addEventListener('dragover', event => {
+        const section = event.target.closest('[data-group]'); if (!section || !dragId || section.dataset.group === 'projects') return;
+        event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+        list.querySelectorAll('.drop-target').forEach(item => item.classList.remove('drop-target')); section.classList.add('drop-target');
+      });
+      list.addEventListener('dragleave', event => { const section = event.target.closest('[data-group]'); if (section && !section.contains(event.relatedTarget)) section.classList.remove('drop-target'); });
+      list.addEventListener('drop', event => { const section = event.target.closest('[data-group]'); const session = find(dragId); if (section && session && section.dataset.group !== 'projects') {event.preventDefault(); moveSession(session, section.dataset.group);} dragId = null; });
+      list.addEventListener('dragend', () => {dragId = null; list.querySelectorAll('.drop-target,.is-dragging').forEach(item => item.classList.remove('drop-target', 'is-dragging'));});
+      document.addEventListener('pointerdown', event => { if (!menu.hidden && !menu.contains(event.target) && !event.target.closest('[data-session-menu],[data-group-menu],[data-section-menu]')) closeMenu(); });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeMenu(true);
+        if (event.key === 'Tab') closeMenu();
+        if (!menu.hidden && ['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
+          event.preventDefault(); const buttons = [...menu.querySelectorAll('button')]; const index = buttons.indexOf(document.activeElement);
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length-1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length; buttons[next].focus();
+        }
+      });
+      list.addEventListener('scroll', () => closeMenu(), {passive:true});
+      window.addEventListener('resize', () => closeMenu());
+      window.addEventListener('scroll', () => closeMenu(), {passive:true});
+      document.getElementById('name-form').addEventListener('submit', event => {event.preventDefault(); const name = input.value.trim(); if (!name) {input.setCustomValidity('请输入名称'); input.reportValidity(); return;} const action = dialogAction; dialog.close(); action(name);});
+      input.addEventListener('input', () => input.setCustomValidity(''));
+      document.getElementById('cancel-dialog').addEventListener('click', () => dialog.close());
+      document.getElementById('theme-control').addEventListener('change', event => {document.documentElement.className = 'theme-' + event.target.value; closeMenu();});
+      document.getElementById('width-control').addEventListener('change', event => {preview.style.setProperty('--preview-width', event.target.value + 'px'); closeMenu();});
+      document.getElementById('mode-control').addEventListener('change', event => {document.documentElement.dataset.sessionListMode = event.target.value; closeMenu();});
+      document.getElementById('move-selected').addEventListener('click', () => {
+        const session = find(selected); if (!session) return;
+        moveSession(session, document.getElementById('move-target').value);
+        list.querySelector(`[data-session="${session.id}"]`)?.scrollIntoView({block:'nearest'});
+      });
+      document.getElementById('reset-demo').addEventListener('click', reset);
+      reset();
+    })();
+  </script>
+</body>
+</html>

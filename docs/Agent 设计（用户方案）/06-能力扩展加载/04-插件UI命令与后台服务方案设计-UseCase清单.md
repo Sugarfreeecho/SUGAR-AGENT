@@ -1,6 +1,6 @@
 # 插件 UI、命令与后台服务 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-21 v4（覆盖至：当前工作区）
+- 版本：2026-10-07 v5（覆盖至：当前工作区；插件渲染器等自己的样式表）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/ui.py`（914 行）、`plugins/web.py`、`agent_extensions`（命令目录/派发）、前端 `plugin-ui-slots.js`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -22,7 +22,8 @@
 - **触发**：插件声明 UI（chat.extension 等插槽）。
 - **预期现象**：对应面板/按钮按插槽规则出现（如 change-review 的改动审查面板）；未启用/未信任插件不注入任何 UI。会话级扩展面板（如 session-todo/agent-goal）的实时刷新：live 流内经 `extension_state_changed`；观察者流经 `ephemeral+control_event` 旁路转发，前端消费后刷新（见 ../05-WebUI对话界面/03 UC-5C3）。侧面板默认继承宿主的外壳、标题、正文与列表条目规格，与右侧历史记录保持同级视觉。
 - **规则与边界**：声明式面板由 `.plugin-session-panel*` 消费宿主视觉令牌；自定义面板显式组合 `.workspace-side-panel*`。插件 CSS 只扩展业务状态、按钮和内容结构，不重建基础背景、阴影、字体或间距；完整契约见 [工作区双侧面板视觉系统](../05-WebUI对话界面/11-工作区双侧面板视觉系统方案设计-UseCase清单.md)。
-- **依据**：`plugin-ui-slots.js`、`plugins/ui.py`、`app.css`、session-todo/agent-goal 的 `web/session-panel.*`、清单 `ui.chat.extension`、`webui._observer_extension_control_event`。
+- **规则与边界（样式就绪才上屏）**：插件渲染器（`chat.extension` 与 `session.panel` 同一加载器）**只在自己的样式表生效之后**才挂载——宿主复用/创建插件 `<link>`（`data-plugin-chat-style` / `data-plugin-panel-style`）并等待其可用：`link.sheet` 已有→立即通过；否则等 `load`，`error` 或 8 s 有界超时兜底。样式未就绪时**不绘制插件内容**（宁可晚一点出现，也不先画一版未套样式的界面，如改动审查的灰白 `±` 数字）。插件渲染器自身不负责等待样式；资源失败不阻塞功能（照旧挂载，仅是缺插件样式）。
+- **依据**：`plugin-ui-slots.js`（`pluginStyleReady / ensurePluginStyleLink / loadPluginChatExtensions / loadPluginSessionPanelRenderers`）、`plugins/ui.py`（`renderer.style` 经 `/plugin-assets/... ?v=<内容签名>` 下发）、`app.css`、session-todo/agent-goal 的 `web/session-panel.*`、清单 `ui.chat.extension`、`webui._observer_extension_control_event`；回归 `tests/js/plugin_ui_slots_runtime.mjs`（样式就绪：已应用 / 等待 load / error / 超时）、`tests/test_plugin_ui_frontend.py::test_plugin_renderers_wait_for_their_stylesheet_before_mounting`；变更记录见 `../../CHANGELOG-2026-10-07-插件样式上屏时序修复.md`。
 
 ### UC-6D3 会话级 UI 动作
 - **触发**：插件要求与当前会话相关的动作（打开面板/查询状态）。
@@ -56,6 +57,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-07 v5：UC-6D2 增加"样式就绪才上屏"——插件渲染器挂载前等待自身样式表（`pluginStyleReady`，8 s 有界 + error/超时兜底），消除插件界面先于样式渲染的"灰白一帧"（改动审查 ± 数字 1–2 秒后才变红绿）。同批：执行 journal 保留工具结果的插件 UI 元数据 `ui`（改动审查行），实时与回放两路都携带（见 08·UC-608）。
 - 2026-09-21 v4：UC-6D2 增加宿主视觉契约——声明式插件面板消费共享令牌，自定义 Todo/Goal 组合共享视觉原语，插件 CSS 只保留业务语义与控件细节。
 - 2026-09-20 v3：新增 UC-6D5，Goal active 徽章与宿主 run activity 解耦。
 - 2026-09-14 v2：补录扩展状态控制事件旁路（observer 流）；版本线更新至 `d022831`。

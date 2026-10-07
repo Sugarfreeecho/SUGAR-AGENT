@@ -1,8 +1,8 @@
 # 路径模型与安全解析 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v3（覆盖至：当前工作区；补充隔离子进程的 dotenv 优先级）
+- 版本：2026-10-07 v4（覆盖至：当前工作区；会话工作目录与工具、安全、审计根）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`app/agent_harness.py`（WORK_DIR 等）、`app/agent_tools.py`（路径解析）、`app/session_authorized_dirs.py`（规范化）。
+- 适用实现：`app/agent_harness.py`（WORK_DIR 与会话目录）、`app/agent_loop.py`（执行根接线）、`app/agent_tools.py`（路径解析）、`app/session_authorized_dirs.py`（规范化）、`app/webui.py::create_session`。
 - 上级：`00-工作区整体设计.md`
 
 ---
@@ -15,8 +15,8 @@
 
 ### UC-4A1 虚拟路径模型
 - **触发**：任意写类/读类工具使用相对路径。
-- **预期现象**：统一按"`/` = 工作区根（WORK_DIR）"解析；回执与界面呈现工作区相对语义；工作区根默认 `PROJECT_ROOT/workspace`（可用 `WORK_DIR` 环境变量改）。
-- **依据**：`_env_path("WORK_DIR", ...)`、系统提示路径模型段。
+- **预期现象**：工具统一按「`/` = 当前会话的工具工作根」解析；回执呈现该工作区的相对语义。未指定会话目录时取全局 `WORK_DIR`，默认 `PROJECT_ROOT/workspace`（可用 `WORK_DIR` 环境变量改）；会话目录规则见 UC-4A7。
+- **依据**：`_env_path("WORK_DIR", ...)`、`session_work_root`、`tool_work_dir_override`、系统提示路径模型段。
 
 ### UC-4A2 路径文字预处理
 - **触发**：路径含重复斜杠/混合分隔符/盘符字面量。
@@ -45,10 +45,18 @@
 - **规则与边界**：该开关不能隐式全局启用；调用方必须同时负责临时目录的所有权、会话清理和进程退出顺序。仅设置 `WORK_DIR` 而未关闭 dotenv override 不构成隔离。
 - **依据**：`agent_harness.load_app_dotenv`、`scripts/subagent_ui_verify.py`。
 
+### UC-4A7 创建时指定会话工作目录
+
+- **触发**：新会话创建请求携带 `work_dir`，或用户从已有自定义目录会话进入新会话。
+- **预期现象**：服务端只接受已存在的绝对目录；非法目录返回 HTTP 422，创建层也校验并拒绝。有效自定义目录写入会话元数据与会话索引，`authorized_dirs` 初值取该目录；创建响应和会话查询返回 `work_dir / work_dir_label / work_dir_is_default`。未指定时使用全局默认目录。
+- **规则与边界**：目录创建后固定，换目录通过新建会话完成。显式选择全局默认目录时归入默认目录语义，避免重复分组。执行根按 `subagent_work_dir → git_worktree_path → work_dir → WORK_DIR` 取值，工具根、安全策略根、审计根及 early-tool 授权根共用 `session_work_root`；hook 工作根与改动审查锁随该根。会话库、附件/上传与识图对象仍集中保存在默认工作区；会话目录选择不迁移这些数据。
+- **依据**：`agent_harness.py::normalize_session_work_dir / session_work_root_raw / session_work_root / session_work_dir_projection / SessionManager.get_or_create_session`、`webui.py::create_session`、`agent_loop.py::_react_node_once` 的 `worktree_root / security_workspace / audit_root` 接线、`session_authorized_dirs.py`、`plugins/change-review/host.py`；前端入口见 [05/06 · UC-5F11~5F13](../05-WebUI对话界面/06-会话档案与技能面板方案设计-UseCase清单.md)。
+
 ## 3. 边界
 
 - 读类工具（read/ls/glob/grep）**可**访问工作区外路径（按工具规则），写类需授权——这是刻意的非对称规则。
 - 授权目录的生成与存储见 02。
+- 工作区文件列表、文件内容与媒体浏览接口当前继续以全局 `WORK_DIR` 解析；会话执行目录和集中存储/浏览根分别按上述契约使用。
 
 ## 4. 依据映射
 
@@ -60,8 +68,11 @@
 | UC-4A4 | L398–445 |
 | UC-4A5 | `agent_tools.py` L1070、L1244–1454；`security/runtime.py` L201、L224 起 |
 | UC-4A6 | `agent_harness.load_app_dotenv`；`scripts/subagent_ui_verify.py` |
+| UC-4A7 | `webui.create_session`、`SessionManager.get_or_create_session`、`session_work_root* / session_work_dir_projection` 与执行根接线 |
 
 ## 5. 版本记录
+
+- 2026-10-07 v4：新增 UC-4A7，记录会话目录创建校验、不可变语义、默认目录归并、执行/安全/审计根统一和全局集中存储边界；UC-4A1 改为按会话工具工作根描述。
 
 - 2026-09-20 v3：新增 UC-4A6，明确隔离子进程必须显式关闭 dotenv 覆盖，防止临时 `WORK_DIR` 回落到生产 workspace。
 - 2026-09-14 v2：新增 UC-4A5（Shell 路径解析以生效工作目录为基准），UC-4A3 补充交叉引用（配合当日路径基准修复）。

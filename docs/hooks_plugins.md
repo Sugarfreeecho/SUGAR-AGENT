@@ -5,7 +5,7 @@ MyAgent 现在提供两个彼此独立、可以组合的扩展层：
 - Hook 是生命周期执行点。它接收 JSON，运行受超时与最小环境限制的命令，并返回结构化决定。
 - Plugin 是可安装扩展包。它可以同时贡献 Skill、声明式/代码型 Hook、Command、MCP、
   Agent、Prompt 和在独立持久 Worker 中运行的 Python/Node Runtime；插件入口不会
-  导入 MyAgent 主进程。
+  导入 SugarAgent 主进程。
 
 ## 开关与路径
 
@@ -77,7 +77,7 @@ Hook 从标准输入读取事件 JSON，并在标准输出写一个 JSON 对象�
 }
 ```
 
-决定值为 `allow`、`deny`、`ask`、`pause`、`continue`。`PreToolUse` 修改参数后，MyAgent 使用新参数重新进入原有路径限制与 UI 审批；Hook 不能绕过工具自身的安全检查。`ask` 在 Web UI 中打开确认框，没有审批通道时采取拒绝执行。Stop Hook 可以要求 Agent 继续工作，重试次数由 `STOP_HOOK_MAX_RETRIES` 限制。
+决定值为 `allow`、`deny`、`ask`、`pause`、`continue`。`PreToolUse` 修改参数后，SugarAgent 使用新参数重新进入原有路径限制与 UI 审批；Hook 不能绕过工具自身的安全检查。`ask` 在 Web UI 中打开确认框，没有审批通道时采取拒绝执行。Stop Hook 可以要求 Agent 继续工作，重试次数由 `STOP_HOOK_MAX_RETRIES` 限制。
 
 失败策略：
 
@@ -138,7 +138,7 @@ Manifest 示例：
 
 ### 仓库工程 Plugin 与全局 MCP
 
-仓库内置的 `plugins/repo-engineering` 是一个 Codex 兼容声明式 Plugin，只提供仓库审查、实现、聚焦测试、变更日志和发布检查 Skill。通用工具独立配置在仓库根目录的 `mcp_servers.json`，不会随该 Plugin 的启停而增删：
+仓库内置的 `plugins/repo-engineering` 是一个 Codex 兼容声明式 Plugin，只提供仓库审查、实现、聚焦测试、变更日志和发布检查 Skill。通用工具独立配置在 `.sugaragent/mcp_servers.json`，不会随该 Plugin 的启停而增删：
 
 - `context7`：查询当前库文档，默认只读。
 - `playwright`：无头、隔离的本地浏览器验证，按外部写入能力执行权限策略。
@@ -164,7 +164,7 @@ host 专属 App、认证流程和 UI 扩展会出现在诊断中。因此这不�
 ## 安全与审计
 
 - 组件路径必须留在插件根目录；拒绝 `..`、绝对越界、symlink 逃逸，并在加载时再次校验。
-- 插件代码只在按插件隔离的 Worker 进程中导入，不进入 MyAgent 主进程。
+- 插件代码只在按插件隔离的 Worker 进程中导入，不进入 SugarAgent 主进程。
 - 复制或安装的插件只会进入“待信任”列表，不会执行 Runtime `describe` 或代码 Hook。
   插件内容摘要变化会自动失效，自动审查 Agent 不能建立持久插件信任。
 - `EXTENSION_REGISTRATION_APPROVAL_ENABLED=0`（默认）时，MCP 与可执行 Plugin 能力直接注册；

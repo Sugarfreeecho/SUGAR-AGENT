@@ -2,7 +2,7 @@
 
 - 版本：2026-10-05 v3（覆盖至：当前工作区；MCP 服务器级筛选）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`app/agent_mcp.py`（1.2k 行）、`mcp_servers.json`。
+- 适用实现：`app/agent_mcp.py`（1.2k 行）、`.sugaragent/mcp_servers.json`。
 - 上级：`00-能力扩展加载整体设计.md`
 
 ---
@@ -30,7 +30,7 @@
 - **依据**：`set_mcp_tool_enabled / is_mcp_tool_enabled / _bump_tool_catalog_generation`。
 
 ### UC-6F4 配置变更与重连
-- **触发**：修改 `mcp_servers.json`。
+- **触发**：修改 `.sugaragent/mcp_servers.json`。
 - **预期现象**：配置签名变化 → 自动重连（或提示重启点）；旧服务器进程被清理；工具目录同步。
 - **依据**：`_compute_config_signature_cached / force_reload / _shutdown_servers_unlocked`。
 

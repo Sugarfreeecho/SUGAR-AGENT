@@ -1,4 +1,4 @@
-# MyAgent 浏览器侧栏插件 · 设计文档（定稿）
+# SugarAgent 浏览器侧栏插件 · 设计文档（定稿）
 
 - 版本：**v2.1 定稿**（2026-09）｜v2 → v2.1：并入 D20（交付形态：独立扩展，不纳入插件体系）｜最早稿：`browser_extension_sidebar_design.md`（v0.9 草案，仅存档）
 - 关系：上游分析见 [browser_extension_sidebar_plan.md](browser_extension_sidebar_plan.md)（代码现状 + 三条路线对比）
@@ -37,7 +37,7 @@
 
 **目标**
 
-1. 任意网页右侧栏打开 MyAgent，完成完整一轮对话（流式输出、停止、运行中追加）。
+1. 任意网页右侧栏打开 SugarAgent，完成完整一轮对话（流式输出、停止、运行中追加）。
 2. 工具审批可在侧栏完成：允许 / 拒绝（理由选填）+ AI 分析。
 3. 会话与主 WebUI、手机端**同源共享**：会话列表、历史、实时事件一致。
 4. 页面上下文问答：当前页正文 / 选中文本 / 仅网址三种来源，手动触发。
@@ -127,7 +127,7 @@
 
 1. `app/.env` 增：`MYAGENT_REMOTE_CONTROL_ENABLED=1`
 2. `app/.env` 增：`MYAGENT_REMOTE_CONTROL_ALLOWED_ORIGINS=chrome-extension://<固定ID>`（Edge 另加 `edge-extension://<ID>`）
-3. 重启 MyAgent；`manifest.json` 的 `"key"`（公钥，非机密）保证扩展 ID 跨机器稳定
+3. 重启 SugarAgent；`manifest.json` 的 `"key"`（公钥，非机密）保证扩展 ID 跨机器稳定
 4. 按 §4.1 配对；如需撤销设备，在电脑端 `DELETE /api/remote/v1/devices/<id>`（本机专用）
 
 > 该白名单同时被附件接口的跨源校验复用（`app/attachments/access.py`），因此**不要写通配符**。
@@ -260,7 +260,7 @@ unpaired ──(配对码)──► pairing ──成功──► connected ─�
 - **附件（§8）**：`📎` → 截图当前可见区域 / 选择文件（含拖拽、剪贴板粘贴图片）；发送前显示缩略图与大小。
 - **审批卡（D17）**：`[AI 分析]`（调 `approval.analyze`，结果就地展示，可折叠）｜`[允许]` / `[拒绝]`（拒绝理由选填，展开一个小输入框）；处理成功就地变结果行。
 - **运行中**：`➤` 变 `[停止]`；输入框仍可用，回车即 `session.steer{mode:"append"}`。
-- **快捷键与菜单（D14）**：`Ctrl+Shift+M` 打开/聚焦侧栏；右键菜单两项——「就选中内容提问」「把当前页发给 MyAgent」。
+- **快捷键与菜单（D14）**：`Ctrl+Shift+M` 打开/聚焦侧栏；右键菜单两项——「就选中内容提问」「把当前页发给 SugarAgent」。
 - **未读（D13）**：历史面板会话项右侧数字徽标；当前会话不做徽标；打开即清零。
 - **语言与主题（D15）**：`prefers-color-scheme` 跟随系统；文案 zh-CN/en 两套；列表/时间格式按语言本地化。
 - **窄宽适配**：`min-width:300px`；工具行默认折叠；表格/长代码块横向滚动并给"复制"按钮；宽度 ≥460px 时历史面板改为两栏（列表 + 预览）。
@@ -444,19 +444,19 @@ browser-extension/
 ```json
 {
   "manifest_version": 3,
-  "name": "MyAgent Sidebar",
+  "name": "SugarAgent Sidebar",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
   "key": "<固定扩展 ID 的公钥，非机密>",
   "permissions": ["sidePanel", "storage", "scripting", "contextMenus", "activeTab"],
   "host_permissions": ["http://127.0.0.1:8192/*", "http://localhost:8192/*"],
-  "action": { "default_title": "打开 MyAgent 侧栏" },
+  "action": { "default_title": "打开 SugarAgent 侧栏" },
   "side_panel": { "default_path": "sidepanel.html" },
   "background": { "service_worker": "background.js" },
   "commands": {
     "toggle-side-panel": {
       "suggested_key": { "default": "Ctrl+Shift+M" },
-      "description": "打开/聚焦 MyAgent 侧栏"
+      "description": "打开/聚焦 SugarAgent 侧栏"
     }
   }
 }
@@ -555,7 +555,7 @@ createRcClient({baseUrl, onEvent, onStateChange, storage})
 2. 扩展页/SW 连 `ws://127.0.0.1:8192` 是否被 CSP 或 host 权限拦截（预期不拦）。
 3. 扩展页拉取 `/api/workspace-image` 等只读资源是否受 Origin 校验影响（预期不受；附件上传/读取类接口才校验）。
 
-**已评估并否决的备选方案：以 MyAgent 插件形式交付（D20）**
+**已评估并否决的备选方案：以 SugarAgent 插件形式交付（D20）**
 
 - **备选内容**：把整个项目做成内置插件 `plugins/browser-sidebar/`——`capabilities.web` 提供"安装与配对向导"页（并可用 `capabilities.ui.navigation` 在主 UI 加导航入口），向导页调用本机接口完成启用与配对；MV3 扩展放进该插件的 `extension/` 子目录，用户"加载已解压的扩展程序"直接指向它。
 - **当时确认可行的证据**：`plugins/execution-dashboard/.myagent-plugin/plugin.json` 已是"纯 Web 页面 + 导航入口"形态；插件页由 `app/webui.py:8280` 提供且与主 UI 同源（CSP `connect-src 'self'`）；`POST /api/env` 接受任意合法键名并写入 dotenv（`app/webui.py:8000-8036`），因此向导页能自动写 `MYAGENT_REMOTE_CONTROL_ENABLED` 与 `MYAGENT_REMOTE_CONTROL_ALLOWED_ORIGINS`；`POST /api/remote/v1/pairings` 只要求 loopback 直连（`app/remote_control/gateway.py:136+`），向导页可直接生成配对码；D18 的固定扩展 ID 让白名单可预填。

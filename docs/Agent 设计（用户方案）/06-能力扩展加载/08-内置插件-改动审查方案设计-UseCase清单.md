@@ -1,6 +1,6 @@
 # 改动审查 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05（覆盖至：当前工作区；详情节点复用与轮次归属）
+- 版本：2026-10-07（覆盖至：当前工作区；执行记录携带 ui、插件样式先于上屏、性能基准范围）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/change-review`（store.py / host.py / runtime.py / web/change-review.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 08；配套通则见 01–07）
@@ -22,7 +22,7 @@
 
 ## 1. 功能定位与范围
 
-**一句话**：以「执行过程（run）」为账本单位，对工作区改动做**净变更统计 + 安全撤销/恢复**。
+**一句话**：以官方用户轮为累计账本单位，对工作区改动做**净变更统计 + 安全撤销/恢复**。自动续跑沿用该轮基线，Runtime 执行 run 是独立的交付身份。
 
 **目标**：
 1. 每轮执行过程内，谁（哪个工具）改了什么、改了多少行——可信、可对账；
@@ -51,7 +51,8 @@
 
 | 概念 | 含义 |
 |---|---|
-| **run（执行过程）** | 一次任务执行；统计与撤销的结算边界。同一 run 内同文件的多次修改**合并**为一条记录 |
+| **官方用户轮 / turn** | 统计与撤销的结算边界；同轮同文件多次修改合并。store 记录的 `run_id` 保存这一标识 |
+| **Runtime 执行 run** | 一次实际运行；补扫事件另带 `run_id/react_iter/stream_seq/tool_call_id`，用于关联正确工具行 |
 | **快照（snapshot / record）** | 一条文件级记录：`before`（本轮起点状态）+ `after`（当前状态）+ diff + ± 行数 |
 | **revision** | 记录被合并更新的次数（同 run 内每改一次 +1） |
 | **effective** | 相对本轮起点是否还有净变化；改回原样 = `false`（界面上整条消失） |
@@ -59,7 +60,7 @@
 | **dropped** | 历史被修剪、永远不可再操作；其快照字节可被回收 |
 | **temporaries（登记表）** | `temporary=True` 写入时登记"隐身路径"，三处采集源（Git 扫描 / 声明路径 / 删除）一律静默（见 UC-107） |
 | **diff_omitted_reason** | 行数未统计的原因：`binary` / `too_large_bytes` / `too_many_lines` / `too_complex` / `directory` |
-| **存储** | 会话目录下 `change_reviews/index.json` + `blobs/`（sha256 压缩块） |
+| **存储** | 会话目录下 `change_reviews/index.json` + `blobs/`（sha256 压缩块）+ `baselines/*.zip`；索引含 `deferred_sweeps` 补扫义务和 `review_events` 待交付事件 |
 
 ---
 
@@ -68,7 +69,7 @@
 ### UC-101 Git 仓库 · tracked / 未忽略文件 · 任意工具修改
 - **触发**：run 内任何工具（含 run_shell、脚本、MCP、Plugin）改动 Git 仓库里 tracked 或未忽略的未跟踪文件。
 - **预期现象**：文件出现在审查列表，`+x −y` 与 `git diff --numstat` 一致；该行也可撤销。
-- **规则与边界**：每 run 首次采集时用 `git ls-files -co --exclude-standard` 建立基线，结束时比对。
+- **规则与边界**：每官方用户轮首次采集时用 `git ls-files -co --exclude-standard` 建立基线。声明式文件工具在批次末尾比对工作区；shell/MCP/插件外部工具仍逐次比对，详见 UC-116。
 - **依据**：`store.py::_git_inventory / _ensure_workspace_baseline / finish_capture`；探针 A / C / J 场景。
 
 ### UC-102 Git 仓库 · 未忽略新文件 · shell/脚本创建
@@ -148,6 +149,37 @@
 - **触发**：MCP/插件工具执行（带 `observe_workspace=True`）。
 - **预期现象**：与 shell 同级——Git 仓库可见、非 Git 不可见。
 - **依据**：`agent_loop.py` 采集挂接；`test_runtime_callback_can_observe_an_unknown_external_tool`。
+
+### UC-116 声明式文件工具批次合并扫描
+- **触发**：同一 ReAct 工具批次内连续执行 `write_file/edit_file/apply_patch/delete_file`，含流式提前启动的完整工具调用。
+- **预期现象**：每次工具结束仍立即保存声明路径的真实状态和差分；工作区枚举/签名检查合并到批次边界一次执行。批次内未声明的外部变动在补扫时出现，不因合并失去撤销/恢复能力。
+- **规则与边界**：只有宿主显式标记批次活动时才延后；直接 store 调用默认仍逐次扫。shell/MCP/插件工具前先完成已有义务，完成后仍逐次扫；不按 1 秒 TTL 跳过扫描，不假设声明之外不会修改。声明路径即使晚于外部改动，也立即采用该轮权威基线起点；临时路径毕业和忽略文件保持原规则。工作区扫尾仍枚举全部 Git 可见路径，只减少频率，不是 watcher 增量扫描。
+- **依据**：`agent_loop.py::_react_node_once` 批次/下一迭代/退出边界、`runtime.py::before_native_file_tool / after_native_file_tool`、`store.py::finish_capture / _sweep_workspace`；`test_declared_batch_sweeps_once_and_preserves_external_undo`、`test_deferred_declared_row_already_uses_turn_origin`、`test_runtime_external_tool_is_batch_boundary_and_logs_breakdown`。
+
+### UC-117 完整签名检查与可选并行
+- **触发**：Git 工作区扫尾。
+- **预期现象**：保留完整签名和读取后二次验证，同大小写入且恢复 mtime 仍能检出；线程只读元数据，结果按 inventory 原顺序在持锁线程合并，成功后统一发布缓存。
+- **配置**：`MYAGENT_CHANGE_REVIEW_SIGNATURE_WORKERS=1`（默认串行，最多 8）；`MYAGENT_CHANGE_REVIEW_SIGNATURE_PARALLEL_MIN_FILES=1024`（配置多线程时，小于阈值仍串行）。比较强制并行可将阈值设为 0。
+- **规则与边界**：初步旋转顺序实测中 4/8 线程慢于串行，故未默认开启。Windows NTFS ChangeTime 查询保留；不实施“size/mtime 一致就跳过 ChangeTime”的快筛。缓存和 Undo 语义不以并行配置改变。
+- **依据**：`store.py::_workspace_entries / _file_signature`、`test_parallel_signatures_keep_cache_and_detect_restored_mtime`；测量口径见 [09/05 §4.6](../09-横切能力/05-性能优化基线与已完成项方案设计-UseCase清单.md)。
+
+### UC-118 显式大工作区上限
+- **触发**：用户配置 `MYAGENT_CHANGE_REVIEW_MAX_WORKSPACE_FILES=N`，Git inventory 文件数超过 N。
+- **预期现象**：跳过首次基线字节归档和后续 workspace sweep，只保存声明路径审查；界面明确警告覆盖范围收缩。默认 0 表示无限制。
+- **规则与边界**：此开关是用户主动选择的止血策略，可能遗漏 shell/MCP/插件和未声明路径改动；不可静默默认开启。Git 枚举仍执行才能判断文件数；因此不是大目录枚举成本的全解。行数省略阈值与本开关不同，前者不缩小捕获范围。
+- **依据**：`store.py::_inventory / _ensure_workspace_baseline`、`runtime.py::coverage_notice`、`test_workspace_limit_skips_first_baseline_but_keeps_declared_review`。
+
+### UC-119 审查耗时可归因
+- **触发**：工具前采集、工具后采集、批次补扫/恢复。
+- **预期现象**：`change_review_timing` 区分 `stage=before/after/batch_flush`，记录 inventory、signature、读取/哈希、blob I/O、diff、index 读写、锁等待、首次 baseline、旧基线维护与补充 UI 耐久提交的耗时，附文件数、签名命中/失效数、枚举/扫尾次数和延后标记。
+- **规则与边界**：无扫描阶段计数 0 只表示本阶段没有枚举；`changed_count` 是签名失效候选数，`changes` 才是输出记录数。`baseline_ms` 包含首次 inventory 和并行文件读取，不可再与其子计时相加。补扫义务在本地执行，不引入独立常驻线程。更完整的指标定义见 [09/04 UC-9D12](../09-横切能力/04-观测与运行看板方案设计-UseCase清单.md)。
+- **依据**：`runtime.py::log_timing`、`store.py::_measure / timings`；外部工具边界测试核对日志字段。
+
+### UC-120 改动审查存储性能基准
+- **触发**：验证 change-review store 扫描/批次优化，或对比签名线程配置。
+- **预期现象**：`scripts/benchmark_change_review.py` 在临时 Git 工作区中分别报告首次采集与稳定态的“工具 N 后采集 + 工具 N+1 前采集”耗时；可选报告声明式写入批次的捕获加补扫耗时与 inventory 调用次数，以及串行/4/8 线程签名耗时和输出一致性。可通过 `--baseline-store` 做改动前后比较、`--current-first` 反转顺序检查缓存顺序影响，并用 `--report` 保存 JSON。
+- **规则与边界**：这是 store 层合成微基准，不启动 Agent 主循环，不调用 LLM、实际工具执行或宿主 UI 投递；批次口径也排除文件写入本身。`--target-ms` 默认 500 仅用于当前实现相邻边界最大值的脚本退出码，不是产品 SLA。磁盘缓存、机器负载、样本数和 A/B 顺序都会影响结果；基准结果只支持对应 store 路径的局部判断，不能推导 Agent 整体轮间耗时或收益倍率。数据和已知限制见 [09/05 §4.6](../09-横切能力/05-性能优化基线与已完成项方案设计-UseCase清单.md)。
+- **依据**：`scripts/benchmark_change_review.py::measure / measure_batches / measure_signatures`；`.analysis/change-review-20261005/benchmark-1000.json`、`benchmark-1000-reverse.json`、`benchmark-4295.json`、`benchmark-4295-current-breakdown.json`。
 
 ---
 
@@ -297,9 +329,16 @@
 - **依据**：`prune_unreferenced`；`runtime.py::history_truncated`。
 
 ### UC-505 基线清理
-- **触发**：run 结束。
-- **预期现象**：该 run 的工作区基线归档被清理；记录不受影响。
-- **依据**：`finish_run`。
+- **触发**：下一官方用户轮首次采集，或显式 `finish_run`。
+- **预期现象**：旧轮基线可清理，已提升记录不受影响；同一用户轮的自动续跑保留基线。
+- **规则与边界**：存在未完成补扫的基线不得提前删除。runtime 先恢复/交付旧轮补扫，再清理旧轮；同一运行内旧基线维护只在用户轮标识变化时执行一次。
+- **依据**：`runtime.py::before_native_file_tool / after_run`、`store.py::finish_run / finish_other_runs`。
+
+### UC-506 补扫义务与交付恢复
+- **触发**：声明路径已提交但尚未完成批次补扫，发生异常、插话中断或进程重启。
+- **预期现象**：批次边界与退出 `finally` 执行补扫；跳过正常批次尾部的重试/继续分支，在下一次规划前补扫。进程硬退出后，下一次受监控工具的 pre-hook 恢复保存的义务。
+- **规则与边界**：义务和声明记录同一次索引写入；新外部记录先写入 store 的 `review_events`，再以 `append_ui_event(require_commit=True)` 耐久提交 `file_changes_updated`，成功后才确认待交付事件。提交失败保留重试；提交后、确认前崩溃可以重复交付同一 revision，不丢记录。历史修剪保留尚未确认事件的记录；GC 保留补扫引用。遵守当前 run 写栅栏，失去所有权的旧运行不再发更新。义务属于派生审查状态，不移动用户轮、助手/工具结果、摘要/压缩和子代理转交的事实边界。
+- **依据**：`flush_deferred_sweeps / acknowledge_review_event / prune_unreferenced / _gc_blobs`、`runtime.py::flush_file_tool_reviews`、`agent_loop.py::_flush_file_tool_reviews`；重启、提交失败、清理/修剪专项测试。
 
 ---
 
@@ -307,8 +346,9 @@
 
 ### UC-601 列表与徽标
 - **触发**：执行过程完成且有改动。
-- **预期现象**：过程标题旁徽标显示 `+x −y`；展开后出现审查面板；无净变化则无徽标。
-- **依据**：`updateBadge / activeRows`。
+- **预期现象**：过程标题旁徽标显示 `+x −y`；展开后出现审查面板；无净变化则无徽标；数字**首次可见即已着色**（+ 绿 − 红；浅色主题用深色可读值），不得先出现"未套样式"的灰白数字。
+- **规则与边界**：插件界面（卡片与徽标）只在自己的样式表**生效之后**才上屏——宿主在挂载插件渲染器前等待样式表就绪（`load` / `error` / 8s 有界超时兜底，两者同一口径）；样式未就绪时**不绘制**，而不是先画一版未样式化界面。与"行数统计未就绪暂缓画徽标"（1.5s 兜底，见 UC-607 / `pendingBadgeTimers`）是两条独立保证：一条管样式、一条管数据。
+- **依据**：`updateBadge / activeRows`；`frontend/src/app/plugin-ui-slots.js::pluginStyleReady / ensurePluginStyleLink`；回归 `tests/js/plugin_ui_slots_runtime.mjs`（样式就绪：已应用 / 等待 load / error / 超时）、`tests/test_plugin_ui_frontend.py::test_plugin_renderers_wait_for_their_stylesheet_before_mounting`；变更记录见 `../../CHANGELOG-2026-10-07-插件样式上屏时序修复.md`。
 
 ### UC-602 布局自适应
 - **触发**：窗口宽窄变化 / 多个过程可见。
@@ -343,13 +383,20 @@
 ### UC-608 历史回放
 - **触发**：打开含历史的会话。
 - **预期现象**：历史消息里的改动记录（含已撤销/已恢复状态）正确重建；懒渲染过程体，展开时才扫描。
-- **依据**：`scanExisting / applyTool`；`file_changes_reverted/restored` 回放。
+- **规则与边界**：改动行搭在工具行的渲染事件上（`row._toolCallEvent.ui.changes`）。**实时与回放两条路径都必须透传该负载**——历史由 UI 投影驱动（`tool_call` → `renderExecutionEvent`），实时/重放由执行记录驱动（`execution_recorded` → `execution_update` → `renderExecutionRecord`），后端 `execution_journal` 记录工具结果时保留 `ui`。任何一路丢掉 `ui` 的现象都是"详情栏「修改历史」正常、聊天区改动审查整段不出现"，属实现遗漏而非记录丢失。`ui` 只进 UI 投影，不进入模型历史。
+- **依据**：`scanExisting / applyTool`；`message-rendering.js::renderExecutionEvent / renderExecutionRecord`；`runtime_v2/execution_journal.py`（工具结果 patch 携带 `ui`，且不改写模型消息）；`file_changes_reverted/restored` 回放；回归 `tests/js/change_review_ui_payload_runtime.cjs`、`tests/test_change_review_ui_payload_runtime.py`、`tests/test_execution_recovery.py::test_tool_result_record_keeps_change_review_ui_payload`；变更记录见 `../../CHANGELOG-2026-10-06-改动审查数据链路修复.md`。
 
 ### UC-609 关联区域 = 当前轮（用户问题 → final 卡片）
 - **触发**：查看「改动」页签 / 底栏；过程框展开、收起或轮刚结束。
 - **预期现象**：一轮 = 一条非追问用户输入 → 下一条非追问用户输入或链路结束（user_steer 不切轮，与术语统一注记一致）；改动审查按此口径关联——**当前轮从用户问题到对应 final 卡片**的改动都计入当前轮；过程框收起（轮结束/手动收起）后仍保持关联显示，直到下一轮用户消息出现。
 - **规则与边界**：采集不再要求“工具行位于执行过程框内”——凡落在当前轮区间内的改动事件都归属该轮（无框时回落归到该轮最后一个过程框）；显示侧不再要求过程框处于展开态（展开态仍是视口优先项）。各轮各自结算不变，不做跨轮累计。
 - **依据**：`change-review.js::latestTurnRange / nodeWithinTurnRange / turnRangeAggregate / viewportAggregate / render / scanExisting / applyTool`；`message-rendering.js` 术语统一注记；`tests/test_plugin_ui_frontend.py::test_change_review_association_covers_the_whole_current_turn`。
+
+### UC-610 批次补扫的实时显示与历史回放
+- **触发**：收到 `file_changes_updated`，包括事件先于懒加载工具行的历史回放。
+- **预期现象**：补充改动关联到该批最后一次声明式工具的正确执行范围；已显示的声明路径无须等待补扫。刷新、晚展开、重复交付都能更新统计；旧 revision 不覆盖新 revision。
+- **规则与边界**：缓存键包含 Runtime run、ReAct 迭代、流序号和工具调用 ID。执行记录重建的工具事件保留这三个范围字段；旧页面缺少流序号时，仅允许范围内唯一匹配，不猜测有歧义的流。子代理改动保留源会话身份供撤销/恢复；切换会话清空缓存，其他根会话更新不污染当前视图。事件只进入 UI 投影，不进入模型历史。
+- **依据**：`workspaceReviewKey / reviewUpdatesForTool / mergeReviewChanges / onUiEvent / applyTool / resetForSession`；`message-rendering.js::renderExecutionRecord`；`tests/js/change_review_stats_runtime.mjs`、`test_workspace_update_replays_without_entering_model_history`。
 
 ---
 
@@ -389,11 +436,18 @@
 | UC-108/308/408 | `test_directory_delete_restores_files_and_empty_directories`、`test_directory_delete_restore_round_trip` |
 | UC-112/113 | `test_binary_and_large_file_omit_line_diff`、`test_text_diff_normalizes_line_endings_*` |
 | UC-115 | `test_runtime_callback_can_observe_an_unknown_external_tool` |
+| UC-116~119/506 | `test_declared_batch_sweeps_once_and_preserves_external_undo`、`test_deferred_sweep_recovers_and_outbox_retries_until_ack`、`test_deferred_declared_row_already_uses_turn_origin`、`test_runtime_delivery_failure_keeps_retryable_outbox`、`test_pending_sweep_and_delivery_survive_baseline_cleanup_and_prune`、线程/上限/日志专项 |
+| UC-120 | `scripts/benchmark_change_review.py`；§4.6 独立 store A/B 原始 JSON 报告 |
 | UC-201/202 | `probe_change_review_stats.py`、`run_patch_identity_probe.py` |
 | UC-301~309 | `test_create_modify_delete_and_undo`、`test_batch_conflict_*`、`test_undo_api_*`、`probe_cross_run_undo.py` |
 | UC-401~408 | `test_undo_then_restore_round_trip`、`test_restore_*`、`test_prepared_restore_*` |
 | UC-502/503/504 | `test_branch_copy_and_truncation_cleanup_*`、`test_workspace_cache_*` |
-| UC-601~609 | `tests/js/change_review_stats_runtime.mjs`、`change_review_visibility_runtime.mjs`、`test_plugin_ui_frontend.py` |
+| UC-601/608 | `tests/js/change_review_ui_payload_runtime.cjs`（`ui` 负载两条渲染路径）、`tests/js/plugin_ui_slots_runtime.mjs`（样式就绪门）、`test_plugin_ui_frontend.py::test_plugin_renderers_wait_for_their_stylesheet_before_mounting` / 数据链路契约、`tests/test_execution_recovery.py`（执行记录保留 `ui` 且不进模型历史） |
+| UC-601~610 | `tests/js/change_review_stats_runtime.mjs`、`change_review_visibility_runtime.mjs`、`test_plugin_ui_frontend.py`；含晚展开、源会话、重复交付、范围冲突与会话切换 |
 
 - 2026-10-04：文件条目上下留白与单行计划条目对齐（`font: inherit` + `line-height: normal`，移除旧折叠箭头样式）；条目悬停说明改走统一 `setUiHoverTip`（配合 05/13·UC-5M15）。
+- 2026-10-07：**插件样式先于上屏**——宿主挂载插件渲染器（聊天扩展 / 会话面板同一加载器）前等待其样式表就绪（`link.sheet` 已有→立即通过；否则等 `load`；`error` / 8s 超时兜底），消除"± 数字先灰白、1–2 秒后才变红绿"的一帧未样式化现象。依据 `plugin-ui-slots.js::pluginStyleReady / ensurePluginStyleLink`；A/B 探针（样式插入人为延后 4s）：旧行为 243 帧 ≈ 4.0s 未着色 vs 修复后 0 帧，首次可见即 `rgb(21,128,61)`。回归 `tests/js/plugin_ui_slots_runtime.mjs`（新增样式就绪用例）、`tests/test_plugin_ui_frontend.py`；见 `../../CHANGELOG-2026-10-07-插件样式上屏时序修复.md`（UC-601 / UC-6D2 / 05-13·UC-5M9）。
+- 2026-10-07：新增 UC-120，明确 `benchmark_change_review.py` 只衡量 change-review store 合成路径及其 A/B/批次/签名对照；记载其排除项、500ms 参考阈值语义和不得外推到 Agent 整体性能的限制。实测数据仍以 09/05 §4.6 为准。
+- 2026-10-06：**执行记录携带 `ui`**（数据链路修复）——执行 journal 记录工具结果时保留插件 UI 元数据 `ui.changes`，前端 `renderExecutionEvent` 透传、`renderExecutionRecord` 重建的 `_toolCallEvent` 携带 `ui`；修复"改动能在详情栏「修改历史」看到、聊天区改动审查整段不出现"（`de2d6d6` 起执行记录接管工具行后漏带该负载）。回归 `tests/js/change_review_ui_payload_runtime.cjs`、`tests/test_change_review_ui_payload_runtime.py`、`tests/test_execution_recovery.py`；见 `../../CHANGELOG-2026-10-06-改动审查数据链路修复.md`（UC-608）。
 - 2026-10-05：修改历史复用未变化的文件详情节点；需重建的展开项挂回页面后再渲染差分（避免空白）；保留查看轮次、新增改动归入实际最新轮次。
+- 2026-10-05：UC-116~119、506、610 实现声明工具批次补扫、耐久义务/outbox、严格交付确认、完整签名可选并行、显式文件上限和分段计时；更新 UC-505 的官方用户轮基线生命周期。实测与验收见 09/05 §4.6。

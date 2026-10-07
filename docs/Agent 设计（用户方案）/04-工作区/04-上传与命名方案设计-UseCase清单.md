@@ -1,6 +1,6 @@
 # 上传、附件对象与命名 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + API 识图工作区改动）
+- 版本：2026-10-07 v3（覆盖至：当前工作区；未发送普通文件副本清理）
 - 用途：逐条审查上传文件与图片附件在工作区侧的落点、授权、读取和备份边界。
 - 适用实现：`app/webui.py`（`upload_chat_files / _safe_upload_filename / _dedupe_upload_path / read_attachment`）、`app/attachments/{local,registry,access,api,lifecycle}.py`。
 - 上级：`00-工作区整体设计.md`
@@ -63,6 +63,12 @@
 - **规则与边界**：导入拒绝绝对路径、`..`、符号链接、未知成员和超限压缩包；导出临时文件在响应结束后清理。附件包不包含设备授权、队列 pin 或模型请求缓存。
 - **依据**：`attachments/api.py`、`attachments/lifecycle.py::add_bundle/import_bundle`、会话导出路径。
 
+### UC-4D8 未发送普通文件副本清理
+- **触发**：聊天输入框上传普通文件后移除附件、发送内容未引用该文件、发送请求未被服务端接纳，或页面在上传/发送期间关闭。
+- **预期现象**：与聊天消息关联的普通文件工作区副本在未发送成功时及时移除；被服务端接纳的文件继续留在工作区。
+- **规则与边界**：前端通过 cleanup API 清理已移除、未引用和未接纳的普通上传副本；页面离开时以 sendBeacon 尽力清理待处理/在途上传。409 回填或队列保留供重试的附件继续保留。服务端只解析受管理的 uploads/chat/YYYYMMDD 路径，限制单次路径数，跳过已登记为接纳的文件；图片耐久对象不属于此清理范围。
+- **依据**：webui.py 的 cleanup_unsent_chat_uploads/_managed_chat_upload_path、vendor/myagent_path_picker.js 的 cleanupChatUploads、sse-handling.js 的 sendMessage。
+
 ## 3. 边界
 
 - 图片的模型能力判断、请求缩放、总预算、省略规则和独立识图 API 见[识图与多模态投影](../09-横切能力/02-识图与多模态投影方案设计-UseCase清单.md)。
@@ -78,8 +84,11 @@
 | UC-4D4 | `webui.read_attachment`、`attachments/access.py` |
 | UC-4D5 | `attachments/api.py`、`remote.py` |
 | UC-4D6~4D7 | `attachments/registry.py`、`lifecycle.py`、`vision_api.py` |
+| UC-4D8 | webui.py 上传清理 API 与受管理路径校验、前端发送生命周期 |
+
 
 ## 5. 版本记录
 
+- 2026-10-07 v3：新增 UC-4D8《未发送普通文件副本清理》——聊天上传文件在未被服务端接纳时清理工作区副本；409 回填/队列重试可保留，清理范围限制于受管理上传目录且排除图片对象。
 - 2026-09-14 v2：区分普通文件与图片对象，补齐授权读取、URL 入库、引用保护、GC 和备份恢复。
 - 2026-09-13 v1：拆分首版（承接 UC-407）。

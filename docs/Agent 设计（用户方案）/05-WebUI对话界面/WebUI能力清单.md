@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
-> 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-10-05；平滑跟随为固定刚度软弹簧（DS 同款）；含顶部通知与权限警示视觉系统、右侧历史纳入同款外壳（标题栏风格一致 + 描边）、子代理执行活跃性、follow-up 队列拖拽/键盘排序、公共左侧栏页签、设置中心、系统字体与排版令牌、模型两级菜单、统一悬停说明、执行工具会话面板与终端（xterm）、执行恢复渲染、上下文拆解浮窗、工具按需披露与 MCP 服务器级筛选、排队消息连续运行、执行回执证据链）
+> 对象：SugarAgent WebUI（前端 SPA + FastAPI Web 服务）
+> 代码版本：当前工作区（2026-10-07；平滑跟随为固定刚度软弹簧（DS 同款）；含会话侧栏宽度首帧恢复、侧栏会话列表改版（视觉/字号自适应、刷新节拍与增量渲染、目录组配额·拖拽·重命名、时间分桶与自动归档 30 天）、顶部通知与权限警示视觉系统、右侧历史纳入同款外壳（标题栏风格一致 + 描边）、子代理执行活跃性、follow-up 队列拖拽/键盘排序、公共左侧栏页签、设置中心、系统字体与排版令牌、模型两级菜单、统一悬停说明、执行工具会话面板与终端（xterm）、执行恢复渲染、上下文拆解浮窗、工具按需披露与 MCP 服务器级筛选、排队消息连续运行、执行回执证据链、插件界面样式就绪再上屏；新建会话与草稿目录、目录图标；压缩 reasoning 独立实时行与活动流续接；输入附件卡片及未发送副本清理、全区域图片居中预览）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -13,6 +13,8 @@
 | 前端插槽注册表（声明即授权/单链座位/优先级选举/disposer 级联） | `modules/ui-slot-registry.js` | 【单】 |
 | 事件派发与 reducer：SSE 事件 → 状态归约 → 渲染 | `modules/event-dispatch.js`、`state/session-event-reducer.js` | 【图】 |
 | 布局面板与 Toast 容器 | `modules/layout-panels.js` | 【单】 |
+| 会话侧栏宽度首帧恢复（head 同步读取 `sidebar-width-px` → `--sidebar-width-px`；拖动后 mouseup 持久化） | `frontend/index.html`、`styles/app.css`、`modules/layout-panels.js` | 【单】 |
+| 标题栏用量表与标题区视觉基准（移除 `--ctx-unit` 缩放恢复参考值；`.titlebar` 顶部内边距 0.2rem；⋯ 与子代理胶囊 `translateY(1px)` 光心对齐，仅顶栏实例） | `styles/app.css` | 【单】 |
 | 插件 UI 插槽（插件可注入界面位） | `app/plugin-ui-slots.js` | 【卡】 |
 | i18n 与主题（浅色/深色切换） | `modules/i18n.js`、`settings.js` | 【卡】 |
 | Windows 启动与页面激活（托盘单一打开者、后台/节能标签精确选择、可信失败回退） | `app/tray_launcher.py`、`app/platform_lifecycle.py` | 【单】 |
@@ -21,7 +23,8 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 消息渲染（Markdown、工具执行轨迹、附件图片） | `modules/message-rendering.js`、`state/message-renderers.js` | 【图】 |
-| 耐久图片预览：同附件跨容器共享 fetch/blob，末节点移除时取消并释放 | `modules/workspace-media.js::renderDurableAttachmentImages` | 【单】 |
+| 本地压缩 reasoning 实时行（安全纯文本、正文到达后默认收起、重试分行；仅运行态） | `modules/message-rendering.js`、`modules/event-dispatch.js`、`state/session-event-reducer.js`；05/02·UC-5B10 | 【单】 |
+| 耐久图片卡片与全区域预览：用户气泡/执行过程使用紧凑图片附件卡，输入框和最终回答图片也可打开共享居中浮窗；滚轮居中缩放按帧合并，图片行不额外增加底部间距，最终回答原排版与非图片执行条目不变 | modules/workspace-media.js、styles/app.css；05/02·UC-5B5/5B12 | 【单】 |
 | 平滑流式输出（固定刚度软弹簧跟随：ω=√180、单帧 ≤20px、无长尾） | `modules/smooth-stream.js` | 【卡】 |
 | 滚动历史锚点与回看 | `modules/session-scroll-history.js` | 【卡】 |
 | 工作区双侧面板共享视觉系统（Todo/Goal/声明式插件：主题令牌、外壳、标题、元信息、列表与条目；右侧历史同款外壳 + 标题栏风格一致，列表保留自有样式） | `styles/app.css`、`plugins/session-todo/web/*`、`plugins/agent-goal/web/*` | 【卡】 |
@@ -34,7 +37,8 @@
 | Steer 中断（运行中插入指令，失败可恢复 `recover_session_steer`） | 后端 `webui.py` steer API | 【单】 |
 | 技能选取（skill-picker，随消息注入已选技能） | `modules/skill-picker.js`、`_build_agent_message_with_selected_skills` | 【卡】 |
 | 路径选择器与打开协议（`sugaragent://`） | `vendor/myagent_path_picker.js`、后端 `api_pick_path` | 【单】 |
-| 普通文件上传与图片统一准入（限额、规范化、内容寻址、批次回滚） | 后端 `upload_chat_files`、`attachments/admission.py` | 【卡】 |
+| 普通文件上传与图片统一准入（限额、规范化、内容寻址、批次回滚） | 后端 upload_chat_files、attachments/admission.py | 【卡】 |
+| 输入附件统一卡片（图片缩略图/普通文件类型徽标、名称、大小、移除；无重复文件标签）；未接纳的普通工作区副本自动清理 | vendor/myagent_path_picker.js、sse-handling.js、webui.py；05/01·UC-5A10、04/04·UC-4D8 | 【单】 |
 | follow-up 队列保存耐久引用，并向服务端同步 queue pin | `modules/sse-handling.js`、`POST /api/attachments/references` | 【单】 |
 | follow-up 队列手动排序（拖拽握把/落点吸附/边缘自动滚动/键盘 ↑↓；拖拽期重绘推迟） | `modules/sse-handling.js`、`styles/app.css`、`modules/i18n.js` | 【单】 |
 | 设置中心（/settings）：分区注册表（宿主 9 分区 + 插件 `settings.section` 声明）、旧路由深链兼容、只提交改动的保存、搜索/缓存/脏数据保护 | `app/templates/settings_center.html`、`app/templates/static/settings/*`、`app/plugins/settings.py` | 【单】 |
@@ -44,6 +48,7 @@
 |---|---|---|
 | SSE 事件流（live/观察者/回放游标 after_index） | 后端 `runtime_v2_session_stream` | 【图】 |
 | 断线续看：空闲 120s 探测、重连 ≤10 次（0.5s→15s 退避）、耗尽提示 | `modules/sse-handling.js` 顶部常量 | 【卡】 |
+| 压缩 reasoning 活动续接：运行期间累计快照恢复当前草稿、前端替换避免重复，结束后清理且不写耐久历史 | `app/session_event_bus.py`、`modules/sse-handling.js`、`state/session-event-reducer.js`；05/03·UC-5C9 | 【单】 |
 | 发送管道锁（防重复提交） | `modules/sse-handling.js` `acquireSendPipelineLock` | 【卡】 |
 | 观察者重连开关 | 后端 `MYAGENT_ENABLE_STREAM_RECONNECT`、`streamReconnect` | 【单】 |
 | 服务端自主运行自动接管（心跳 `active_session_ids`→≤5s 挂接观察流） | `webui._runtime_status_payload`、`modules/session-management.js` 心跳接管 | 【单】 |
@@ -78,6 +83,11 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 会话列表/归档/删除/恢复（recover_sessions） | `modules/session-management.js`、后端 sessions API | 【图】 |
+| 新建会话主按钮沿用当前会话工作目录；草稿态保留已选目录；箭头菜单收敛为当前目录 / 新目录两项 | `session-management.js::startNewSessionInCurrentDir / startNewSessionInFolder`、`shell-body.html`；05/06·UC-5F11 | 【单】 |
+| 欢迎页会话目录卡片：目录名/完整路径/选择按钮，选目录时保留输入草稿 | `message-rendering.js::syncWelcomeSessionDirectory`、`session-management.js::applyNewSessionWorkDir`；05/06·UC-5F12 | 【单】 |
+| 隐藏草稿携带 work_dir；目录与选择版本共同校验，丢弃迟到响应；按标签页恢复且校验服务端实际目录 | `collectNewSessionCreateOptions / ensurePrefetchedNewSession / prefetchNewSessionInner / sessionWorkDirMatchesTarget`；05/06·UC-5F13 | 【单】 |
+| 按工作目录分组与分组新建/复制/打开动作；会话数据集中保存 | `state/session-selectors.js`、`state/session-renderers.js`、`buildSessionGroupActions`；05/06·UC-5F14 | 【单】 |
+| 主聊天目录/文件图标语义统一：folder、folder-open、folder-plus、file、paperclip | `app/folder-icons.js`、`src/main.js` 与目录卡片/分组/详情栏/路径选择器；05/06·UC-5F15 | 【单】 |
 | 会话状态快照缓存与版本协议（硬失效 + 单飞重建 + `state_revision`；变更后第一次读取即重建） | 后端 `_invalidate_sessions_state_cache` / `_build_sessions_state_snapshot_cached` | 【单】 |
 | 元数据写入围栏（写入在途拒收快照；客户端请求序号 + 服务端版本双下界；仅失败才回滚） | `state/session-store.js::shouldAcceptSnapshot`、`state/session-actions.js`、`modules/session-management.js`（begin/commit/cancel） | 【单】 |
 | 会话摘要写入全路径广播（created/name/pinned/todo/archived/自动归档/goal_review_pending → 失效快照缓存） | `agent_harness.SessionManager.add_session_state_listener`、`webui._on_session_manager_state_changed` | 【单】 |
@@ -102,7 +112,21 @@
 - 图片准入、三协议投影、独立识图 API 和生命周期的横切契约见 [识图与多模态投影](../09-横切能力/02-识图与多模态投影方案设计-UseCase清单.md)。
 - 一般主题装饰与构建工具链（Vite）不在本次清单范围；工作区双侧面板的共享视觉契约属于可验收能力，见 [11-工作区双侧面板视觉系统](11-工作区双侧面板视觉系统方案设计-UseCase清单.md)。
 
+
 ## 9. 版本记录
+
+- 2026-10-07（v36）：补录会话侧栏列表改版——列表视觉与字号自适应（首帧防闪）、行标记微交互与点置顶切入会话、侧栏时间刷新与统一节拍、列表增量渲染（内容流单行替换）、视图选项缺省（隐藏已归档/详细）、目录组默认前 5 与分级展开·拖拽排序·重命名、时间分桶（置顶/今天/昨天/近三天/近7天/近半月/近一月）与自动归档 30 天；详见 05/06·UC-5F16~5F23。
+- 2026-10-07（v35）：修正执行过程图片卡片尾部多余间距；图片行与下一条恢复原有间距规则，非图片行保持不变（05/02·UC-5B5）。
+- 2026-10-07（v34）：标题行胶囊光心对齐——子代理返回胶囊与目录触发器同款 `translateY(1px)`（与 ⋯ 一致）；两胶囊中心 16.09→17.09px（见 05/02·UC-5B11）。
+- 2026-10-07（v33）：补录输入附件卡片与未发送普通文件副本清理（05/01·UC-5A10、04/04·UC-4D8）；补录用户气泡/执行过程图片卡片、全区域居中预览和按动画帧合并的居中滚轮缩放，最终回答排版保持原样（05/02·UC-5B5/5B12）。
+- 2026-10-07（v32）：标题栏视觉微调——右上角用量表移除 `--ctx-unit` 缩放、恢复参考基线值；`.titlebar` 顶部内边距 0.2rem；⋯ 按钮 `translateY(1px)` 光心对齐（仅顶栏实例；见 05/02·UC-5B11）。
+- 2026-10-07（v31）：补录本地压缩 reasoning 独立实时行与 SSE 活动续接；前端快照替换草稿避免重复，结束时清理、不写耐久历史（见 05/02·UC-5B10、05/03·UC-5C9、09/01·UC-9A11）。
+
+- 2026-10-07（v30）：补录新建主按钮与两项菜单、欢迎页会话目录卡片、隐藏草稿目标与选择版本校验、按目录分组及目录/附件图标统一；详见 05/06·UC-5F11~5F15。
+
+- 2026-10-07（v29）：会话侧栏宽度恢复前移至 HTML head 同步脚本，通过 `--sidebar-width-px` 参与首帧布局，消除刷新时默认宽度闪现；拖动范围与 localStorage 保存逻辑不变（见 05/06·UC-5F10）。
+
+- 2026-10-07（v28）：插件界面**样式就绪才上屏**——宿主挂载插件渲染器（改动审查卡片/徽标、计划/目标面板；聊天扩展与会话面板同一加载器）前等待其样式表生效（`pluginStyleReady`：`link.sheet` 已应用→立即通过，否则等 `load`，`error`/8 s 超时兜底），消除"± 数字先灰白、1–2 秒后才变红绿"的一帧未样式化；配套执行记录携带插件 UI 元数据 `ui`（改动审查行在实时与回放两路都交付）。见 05/13·UC-5M9、06/04·UC-6D2、06/08·UC-601/608、09/07·UC-9F3。
 
 - 2026-10-05（v27）：工具按需披露（tool_search/describe/call 桥接、MCP include/exclude/pin、浮窗计量）；排队消息同 run 连续运行；Goal 失败即停；活动时间口径与面板初始化幂等；交互/状态保存与执行回执证据链修复。
 

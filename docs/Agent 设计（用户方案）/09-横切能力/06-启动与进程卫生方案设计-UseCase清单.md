@@ -26,10 +26,10 @@
 - **依据**：`app/proc_flags.py`、`scripts/audit_subprocess_flags.py`、各派生点（见适用实现）；回归 `tests/test_proc_flags.py`（含巡检脚本回归）、`tests/test_change_review_plugin.py`（`.git` 祖先探测快路径）。
 
 ### UC-9E3 根目录状态/临时文件迁移（.sugaragent）
-- **触发**：技能启停、MCP 工具启停、pytest 运行、Playwright MCP 输出等状态读写。
+- **触发**：技能启停、MCP 工具启停、pytest 运行、Playwright MCP 输出等状态读写；MCP 服务器配置与模型档案读写。
 - **预期现象**：默认路径统一为 `.sugaragent/` 下——`skill_states.json`、`mcp_tools_state.json`、`pytest_cache`（含 frontend 的 `pytest_cache_frontend`）、`playwright-mcp`、`tmp-change-review-dist`；读取时若发现旧根目录文件且新路径不存在，**自动移动迁移**。技能状态迁移失败（文件占用等）记录警告并继续读旧文件、保留禁用状态；旧文件也无法读取/解析时显式报错（不按全部启用处理）。MCP 状态读取/解析失败保留内存状态且不锁存成功、后续可重试；未完成加载时工具暂不可用。`.gitignore` 补充忽略 `.sugaragent/` 与旧 `mcp_tools_state.json`（旧版遗留保护）。
-- **规则与边界**：正在运行的实例需重启后使用新路径；重启前若旧实例写回根目录文件，新版本不覆盖 `.sugaragent/` 中状态，可手动删除残留。
-- **依据**：`agent_tools.py`（SKILL_STATE_PATH）、`agent_mcp.py`（_MCP_TOOLS_STATE_PATH）、`pytest.ini`、`mcp_servers.json`、`.gitignore`；回归 `tests/test_sugaragent_state_paths.py`、`tests/test_mcp_state_read_failures.py`。
+- **规则与边界**：正在运行的实例需重启后使用新路径；重启前若旧实例写回根目录文件，新版本不覆盖 `.sugaragent/` 中状态，可手动删除残留。配置文件（`mcp_servers.json`、`model_profiles.json`）自 2026-10-06 起同样默认落 `.sugaragent/`（`agent_mcp._config_path`、`model_profiles.profile_store_path`），首次读取自动迁移根目录旧文件（模型档案还包括更早的 `app/model_profiles.json`）；配置内的相对路径仍相对进程工作目录解析，不随配置文件位置改变。
+- **依据**：`agent_tools.py`（SKILL_STATE_PATH）、`agent_mcp.py`（_MCP_TOOLS_STATE_PATH）、`pytest.ini`、`.sugaragent/mcp_servers.json`、`.sugaragent/model_profiles.json`、`.gitignore`；回归 `tests/test_sugaragent_state_paths.py`、`tests/test_mcp_state_read_failures.py`。
 
 ### UC-9E4 会话活动时间口径与执行面板初始化幂等（2026-10-05 补）
 - **触发**：宿主启动扫描；会话索引重建（mtime 提示有新增时）。

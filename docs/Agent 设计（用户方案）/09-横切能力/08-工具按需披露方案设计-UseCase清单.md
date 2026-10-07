@@ -26,7 +26,7 @@
 - **依据**：`tool_search.py`、`agent_loop.py`、`tool_registry.py`、`builtin_host_tools.py`。
 
 ### UC-9G3 MCP 服务器级筛选
-- **触发**：`mcp_servers.json` 服务器 `tools.include/exclude/pin` 增量设置。
+- **触发**：`.sugaragent/mcp_servers.json` 服务器 `tools.include/exclude/pin` 增量设置。
 - **预期现象**：include 空=不限、exclude 优先、pin 不复活被禁用/排除工具；旧 `tools.<name>` 执行契约继续兼容；设置中心支持按服务器批量启停与常驻按钮。
 - **依据**：`agent_mcp.py`、`mcp_servers.json.example`；回归 `tests/test_mcp_tool_selection.py`。
 

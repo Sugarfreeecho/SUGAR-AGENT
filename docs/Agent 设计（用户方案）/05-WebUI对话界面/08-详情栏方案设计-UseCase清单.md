@@ -1,6 +1,6 @@
 # 详情栏 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v6（覆盖至：HEAD `d022831` + 详情栏三轮反馈与开文件策略更新）
+- 版本：2026-10-07 v18（覆盖至：当前工作区；统一折叠动效与详情栏过渡）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`frontend/src/app/modules/dock/**`（engine 8 件 / renderer 5 件：icons、gesture、measure、dock-surface、float-layer / embedder 3 件：surface-store、tab-registry、right-column）、`frontend/src/styles/dock.css`、`frontend/src/app/index.js`（`?raw` 登记）、后端 `GET /api/workspace-file-text`、测试 `frontend/tests/dock-engine.test.mjs`（24 项）、冒烟 `workspace/分屏功能需求/dock_verify/dock_smoke.py`（30 项）。
 - 上级：`00-WebUI对话界面整体设计.md`；技术细节与序列化格式见 [`../../frontend-dock.md`](../../frontend-dock.md)；诊断脚本 `dock_verify/turn_scope_probe.py`、`dock_verify/scope_probe_browser.py`。
@@ -19,7 +19,7 @@
 ### UC-5H7 详情栏开合、推挤、过渡与宽度（含子代理寻址保持）
 - **触发**：点击会话标题右上角的图标按钮（`#dock-rightbar-toggle-btn`）。
 - **预期现象**：右侧出现第三列（默认 460px），工作区平滑让位（实测 1220→760px）；左缘 8px 可拖宽（320–960px，双击复位，宽度按浏览器记忆）；窄屏（<768px）打开自动全屏；收起即完全不占位。
-- **规则与边界**：角标**只在收起时显示**（展开后隐去）；开合为滑动过渡；同一列自身的 tab 条右端也有全屏/收起控件（`PanelChrome`）；每会话各自保留开合状态与布局，且**同会话的子代理寻址视图沿用父会话的栏状态**（`dockRightSurfaceKey`：子会话 id 归一到父 id，进入/返回子代理都不收起详情栏）；⚪ 默认不落盘（与 dsh memory-only 一致）。
+- **规则与边界**：角标**只在收起时显示**（展开后隐去）；开合为滑动过渡，右栏专属时长 280ms，共用同一缓动；系统启用减少动态效果时过渡缩短；统一动效细节见 [15《展开/收起统一过渡动效》](15-展开收起统一过渡动效方案设计-UseCase清单.md)；同一列自身的 tab 条右端也有全屏/收起控件（`PanelChrome`）；每会话各自保留开合状态与布局，且**同会话的子代理寻址视图沿用父会话的栏状态**（`dockRightSurfaceKey`：子会话 id 归一到父 id，进入/返回子代理都不收起详情栏）；⚪ 默认不落盘（与 dsh memory-only 一致）。
 - **依据**：`dock/embedder/right-column.js`（`dockRightToggle` / `dockRightEnsureButton` / `dockRightStartResize` / `dockRightRender` / `dockRightBuildChrome`）、`dock.css`（`.dock-rightbar` / `.dock-expand-btn[hidden]` / `.dock-rightbar-sash`）、`surface-store.js`（区域 `right`）。
 
 ### UC-5H8 详情栏 · 开始页（guide，默认页与兜底页）
@@ -31,7 +31,7 @@
 ### UC-5H9 详情栏 · 工作区文件页
 - **触发**：开始页的"工作区文件"卡片，或点「工作区文件」页签。
 - **预期现象**：逐层展开的工作区文件树；目录优先排序、目录可展开收起（▸/▾ + 文件夹图标）、文件显示分类图标与大小；点文件打开「文件内容」页；可刷新。
-- **规则与边界**：数据来自既有 `GET /api/workspace-files?dir=`；资源地址形如 `myagent-resource://file/<rel>`，与 dsh 的 `dsh-resource://file/**` 同构；**滚动位置按页签记忆**，切换到其它页签再回来会恢复到原位置（浏览器会丢弃脱离文档的 scroller 位置，由 `__dockRestore` 在挂回时补写）；分类图标为按扩展名着色的内联 SVG（图片/代码/配置/文档/PDF/文件夹/通用文件）。
+- **规则与边界**：数据来自既有 `GET /api/workspace-files?dir=`；资源地址形如 `myagent-resource://file/<rel>`，与 dsh 的 `dsh-resource://file/**` 同构；目录树展开收起复用 15·UC-5P4 的统一折叠过渡；**滚动位置按页签记忆**，切换到其它页签再回来会恢复到原位置（浏览器会丢弃脱离文档的 scroller 位置，由 `__dockRestore` 在挂回时补写）；分类图标为按扩展名着色的内联 SVG（图片/代码/配置/文档/PDF/文件夹/通用文件）。
 - **依据**：`right-column.js`（`dockRightFilesBody` / `dockRightLoadDir` / `dockRightFileRow` / `dockRightFileIcon` / `dockRightTrackScroll`）。
 
 ### UC-5H10 详情栏 · 文件内容页与统一开文件策略
@@ -76,6 +76,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-07 v18：同步 15《展开/收起统一过渡动效》——详情栏自身开合统一为 280ms 面板时长，文件树目录复用 220ms 内容折叠时长，缓动一致并遵循减少动态效果偏好。
 - 2026-09-27 v17：**窄屏旧兜底移除**——删除 `@media (max-width: 767px) { .dock-rightbar { width: 100% !important; } }`：窄屏全屏由 v16 的模式系统统一接管（<768px 自动进入 `fullscreen` 模式，`.is-fullscreen > .dock-surface` 自身 100% 宽），旧 `!important` 规则会与模式化宽度冲突。
 - 2026-09-20 v16：**全屏判定改为"仅按页面总宽"**——废弃"工作区挤压（主区宽−记忆列宽<560）"作为全屏依据：`window.innerWidth < 768` → 全屏模式；`≥ 768` → 一律 push 模式，且当前为全屏时自动切回 push（修复"只进不退"）。打开文件、顶栏按钮、切换会话、窗口 resize 四条路径统一走同一判定。保留一条窗口行为：窗口**变窄**且打开着的详情栏会挤压工作区时自动收起（半屏默认收起，不变）；窗口变宽不收起、也不再误判全屏。冒烟 57 项全绿（更新 2 条旧断言 + 新增 4 条：≥768 重开为 push、全屏可覆盖、变宽自动回 push、≥768 文件链接保持 push）。
 - 2026-09-20 v15：**修改历史「会话总览」改为图标按钮**——由文字胶囊改为 28px 图标按钮（dsh `IconChecklistOutline14` 清单图标，`aria-label`/`title` 给出「会话总览」），与头部刷新按钮同款视觉；激活态保留（`is-active` 圆底）。冒烟 55 项全绿（新增"会话总览控件带图标"断言）。

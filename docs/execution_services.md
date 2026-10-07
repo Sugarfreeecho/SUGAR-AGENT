@@ -245,7 +245,7 @@ Environment defaults: `COMPUTER_USE_ENABLED=0`, `COMPUTER_USE_PROVIDER=native`,
 ### Configure the Cua Driver MCP provider
 
 The installed `cua-driver==0.28.0` package includes the MCP executable, so a
-separate MCP package is not required. Add this server to `mcp_servers.json`:
+separate MCP package is not required. Add this server to `.sugaragent/mcp_servers.json`:
 
 ```json
 {
@@ -278,7 +278,7 @@ enable, disable or switch the provider in Execution → Computer Use.
 The MCP-only **Allow access to signed-in browser profiles** checkbox is off by
 default (`allow_existing_profile:false`). An explicit Save adds
 `--grant existing-profile` to the selected runtime's launch arguments, without
-rewriting `mcp_servers.json`. Existing grants in that file still apply. If
+rewriting `.sugaragent/mcp_servers.json`. Existing grants in that file still apply. If
 registration approvals are enabled, put the grant in the server's configured
 arguments and approve that exact configuration first; approval of the original
 configuration does not authorize different launch arguments. The UI selection

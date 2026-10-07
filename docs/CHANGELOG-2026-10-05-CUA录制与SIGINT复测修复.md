@@ -4,7 +4,7 @@
 
 ## 录制问题不是仅靠重载解决
 
-复测使用的 MyAgent PID 20708 于 `2026-10-05T06:26:54Z` 启动；computer.py / computer_policy.py 的修改时间为 `04:01:13Z`。运行入口和 Python 路径也指向当前仓库。因此不能仅凭部分行为没有发生就判定 RecordingEvidence 未加载。
+复测使用的 SugarAgent PID 20708 于 `2026-10-05T06:26:54Z` 启动；computer.py / computer_policy.py 的修改时间为 `04:01:13Z`。运行入口和 Python 路径也指向当前仓库。因此不能仅凭部分行为没有发生就判定 RecordingEvidence 未加载。
 
 已经定位两个宿主问题：
 

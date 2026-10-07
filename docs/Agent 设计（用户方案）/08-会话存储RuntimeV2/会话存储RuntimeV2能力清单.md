@@ -1,6 +1,6 @@
 # 会话存储 Runtime V2 · 能力清单（代码证据版）
 
-> 对象：MyAgent 会话存储 Runtime V2（事件日志真源 + 投影/快照/迁移/修复）
+> 对象：SugarAgent 会话存储 Runtime V2（事件日志真源 + 投影/快照/迁移/修复）
 > 代码版本：当前工作区（2026-09-20；补充运行终态、exact run 看门狗、孤儿对账与摘要提交去重）
 > 图例：【图】见 `runtime-v2.architecture.html`（10 节点）；【卡】图中卡片；【单】仅本清单
 
@@ -49,6 +49,7 @@
 | 子代理修复服务（RuntimeV2SubagentRepairService） | `repair.py`（606 行） | 【图】 |
 | 根日志修复（RootEventLogRepairService） | `root_log_repair.py`（564 行） | 【卡】 |
 | 日志压缩（LogCompactionService） | `log_compaction.py` | 【图】 |
+| 超大会话写延迟治理：压缩实操（安全门槛 / `--force` / 备份与校验回滚）与预算调优 | `scripts/compact_runtime_v2_logs.py`、`log_compaction.py` | 【单】 |
 | 会话导出包含本会话可达附件 bundle | `webui._build_session_export_archive`、`attachments.lifecycle.add_bundle` | 【单】 |
 
 ## 7. 扩展与子代理状态
@@ -69,7 +70,7 @@
 ## 9. 运行期保障
 | 能力 | 位置 | 状态 |
 |---|---|---|
-| 事务超时（react transaction timeout）配置 | `config.py` | 【单】 |
+| 事务超时（react transaction timeout）配置；默认 10 s，2026-10-05 部署调至 30 s | `config.py` | 【单】 |
 | 孤儿运行清理（orphan active runs） | `webui._cleanup_orphan_runtime_v2_active_runs` | 【单】 |
 | 活动运行与快照缓存（sessions state snapshot cache） | `webui._build_sessions_state_snapshot_cached` | 【单】 |
 | stale 扫描只消费 `running` 行并核对 exact run 本地活性；看门狗按 run 取消而非整会话取消 | `runtime_observability.scan_stale_runs`、`main.runtime_watchdog`、`cancel_run_tasks_by_id` | 【单】 |
@@ -81,6 +82,8 @@
 - v1 遗留文件（llm_history.json 等）明确不作为上下文权威（会话存储约定）。
 
 ## 11. 版本记录
+
+- 2026-10-05：补充超大会话压缩实操与事务预算调整实践（对应 08/05·UC-8E7、08/01·UC-8A3/8A5）；压缩脚本入口与安全门槛入账。
 
 - 2026-10-04：移除零引用的 `SubagentRepository / PermissionManager / HealthMonitor` 模块；子代理存储行收敛为 `RuntimeSubagentStore`。
 

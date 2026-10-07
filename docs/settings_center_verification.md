@@ -13,7 +13,7 @@
 | UI 实测 | Playwright 驱动系统 Edge：真鼠标拖拽、键盘换位、弹窗/确认框、分段控件、校验提示、搜索过滤、路径选择器、齿轮浮层 | `verify_settings_ui.py`（17 项） |
 | 字号实测 | 浮层内输入/箭头调字号 → 校验设置中心、localStorage、**聊天页**三处同步 + 越界钳制 + 还原 | `verify_font_size_ui.py`（8 项） |
 | 写入回环 | 挑「可还原」的写操作：改回去再比对，确认语义回到原状 | 两个脚本都会在结尾还原并复读 |
-| 防脏写 | 每步后比对 4 个配置文件的 SHA256 与基线 | `model_profiles.json` / `mcp_servers.json` / `.sugaragent/skill_states.json` / `app/.env` |
+| 防脏写 | 每步后比对 4 个配置文件的 SHA256 与基线 | `.sugaragent/model_profiles.json` / `.sugaragent/mcp_servers.json` / `.sugaragent/skill_states.json` / `app/.env` |
 
 跑测时的真实规模（说明不是空跑）：8 个模型档案、19 个技能、6 个插件、3 个 MCP 服务器 / 27 个工具、5 条会话规则、6 组 36 个环境变量。
 
@@ -52,7 +52,7 @@
 
 ### 3.4 看着像问题、其实不是
 
-- `model_profiles.json` 在开关/排序回环后哈希变了：`set_profile_enabled()` 会刷新 `updated_at`、排序会重写序号（预期），语义已还原。
+- `.sugaragent/model_profiles.json` 在开关/排序回环后哈希变了：`set_profile_enabled()` 会刷新 `updated_at`、排序会重写序号（预期），语义已还原。
 - 路径键「缺失」：`/api/env` 只列出 `.env` 里真实存在的键；`目录与路径` 自带 6 键清单，缺席即「未设置/用默认」。
 - 无头模式下原生 HTML5 拖拽不触发（Playwright 合成鼠标事件限制），不是实现问题：同一条用例改由合成 `DragEvent` 兜底；`--headful`/真实浏览器下走的是真鼠标拖拽，已单独验过。
 
@@ -101,7 +101,7 @@ python -m pytest tests/test_settings_center.py -q             # 12 例契约测�
 ### 5.1 跑测期间的环境变化（不属于本轮改动）
 
 - 全量测试最后剩两条不绿，都与设置中心无关：
-  `test_repository_global_mcp_contract` 断言 `mcp_servers.json` 里 playwright 的 `args[-2:]` 是
+  `test_repository_global_mcp_contract` 断言 `.sugaragent/mcp_servers.json` 里 playwright 的 `args[-2:]` 是
   `--headless --isolated`，而该文件在本轮跑测期间被另一个工作流按
   `docs/CHANGELOG-2026-10-03-根目录状态文件迁移.md` 主动加了 `--output-dir .sugaragent/playwright-mcp`
   ——旧的末尾断言因此过期（**不是**本轮的写入，脚本侧只读该文件；需要的话改一行断言即可）。
@@ -122,6 +122,6 @@ python -m pytest tests/test_settings_center.py -q             # 12 例契约测�
 
 ## 6. 数据来源
 
-- 运行中的 MyAgent WebUI（`http://127.0.0.1:8192`）：`/api/model_profiles`（含 `/reorder`、`/{id}/enabled`）、`/api/skills`、`/api/extensions`（含 `/reload`）、`/api/mcp/tools`、`/api/mcp_config`、`/api/security/*`、`/api/env`、`/sessions/{id}/permissions`、路由 `/settings|/setup/env|/setup/mcp|/setup/extensions`。
+- 运行中的 SugarAgent WebUI（`http://127.0.0.1:8192`）：`/api/model_profiles`（含 `/reorder`、`/{id}/enabled`）、`/api/skills`、`/api/extensions`（含 `/reload`）、`/api/mcp/tools`、`/api/mcp_config`、`/api/security/*`、`/api/env`、`/sessions/{id}/permissions`、路由 `/settings|/setup/env|/setup/mcp|/setup/extensions`。
 - 源码：`frontend/src/app/modules/settings.js`、`app/templates/static/settings/{core.js,sections_basic.js,sections_ext.js,sections_ops.js,settings.css}`、`app/webui.py`（`_parse_env_entries` 7676、`_apply_env_updates` 7720、`_remove_env_keys` 7754、`get_env_snapshot` 8346、`save_env_snapshot` 8441、`reorder_model_profiles` 3890）、`app/model_profiles.py`（`set_profile_enabled` 1434）、`app/templates/advance_config.html`（旧拖拽实现，作为行为参照）。
 - 证据文件：`workspace/设置中心验证/{verification_api_probe.py,verify_model_reorder.py,verify_settings_ui.py,check_served_assets.py,_cleanup_tmp_rule.py,tab-*.png,ui-*.png}`。

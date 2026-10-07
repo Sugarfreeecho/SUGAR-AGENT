@@ -1,4 +1,4 @@
-# MyAgent 浏览器侧栏插件 · 完整设计文档
+# SugarAgent 浏览器侧栏插件 · 完整设计文档
 
 - 版本：**v0.9 草案（已归档）**
 - ⚠️ 本文档已被 [browser_extension_sidebar_design_v2.md](browser_extension_sidebar_design_v2.md)（**v2 定稿**，19 项决策全部经用户确认）取代，此处仅作历史存档；实现请以 v2 为准。
@@ -20,7 +20,7 @@
 
 **目标**
 
-1. 在任意网页右侧栏打开 MyAgent，完成完整一轮对话（流式输出、停止、继续）。
+1. 在任意网页右侧栏打开 SugarAgent，完成完整一轮对话（流式输出、停止、继续）。
 2. 工具审批卡片可在侧栏直接"允许/拒绝"，不强制回到主 WebUI。
 3. 会话与主 WebUI / 手机端**同源共享**：同一会话可在多处同时订阅、事件一致、无重复。
 4. 支持把**当前页正文或选中文本**作为上下文提问（"Chat with Webpage"）。
@@ -223,7 +223,7 @@ unpaired ──(用户输入配对码 / connect{pairing_code})──► pairing 
 - **停止 / 追加**：运行中 `➤` 变为 `停止`；输入框仍可用，回车即 `session.steer{mode:"append"}`（失败则提示）。
 - **审批卡片**：`tool_approval_required` 到达即插入卡片（置顶滚动）；处理成功后卡片就地变为结果行。
 - **快捷键**：`Ctrl+Shift+M` 打开/聚焦侧栏（`chrome.commands`，避免与 Page Assist 的 `Ctrl+Shift+Y` 冲突）；侧栏内 `Esc` 关历史面板、`Enter` 发送、`Shift+Enter` 换行。
-- **右键菜单**（`chrome.contextMenus`）：选中文本 →「就选中内容提问」；页面空白 →「把当前页发给 MyAgent」。
+- **右键菜单**（`chrome.contextMenus`）：选中文本 →「就选中内容提问」；页面空白 →「把当前页发给 SugarAgent」。
 - **空态**：无会话时显示"新建会话"；未配对显示配对引导；服务端不可达显示排障三步（服务未启动 / 远控未开启 / 白名单缺失）。
 - **窄宽适配**：content 区 `min-width: 300px`；消息气泡左右边距 8px；工具行长文本折行 + 一键复制；表格式工具结果默认折叠为"展开查看"。
 - **主题**：默认跟随系统 `prefers-color-scheme`；提供深/浅手动覆盖（与主 UI 的深色令牌风格近似，但不复用其 CSS 文件）。
@@ -400,19 +400,19 @@ browser-extension/
 ```json
 {
   "manifest_version": 3,
-  "name": "MyAgent Sidebar",
+  "name": "SugarAgent Sidebar",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
   "key": "<用于固定扩展 ID 的 base64 公钥>",
   "permissions": ["sidePanel", "storage", "scripting", "contextMenus", "activeTab"],
   "host_permissions": ["http://127.0.0.1:8192/*", "http://localhost:8192/*"],
-  "action": { "default_title": "打开 MyAgent 侧栏" },
+  "action": { "default_title": "打开 SugarAgent 侧栏" },
   "side_panel": { "default_path": "sidepanel.html" },
   "background": { "service_worker": "background.js" },
   "commands": {
     "toggle-side-panel": {
       "suggested_key": { "default": "Ctrl+Shift+M" },
-      "description": "打开/聚焦 MyAgent 侧栏"
+      "description": "打开/聚焦 SugarAgent 侧栏"
     }
   }
 }

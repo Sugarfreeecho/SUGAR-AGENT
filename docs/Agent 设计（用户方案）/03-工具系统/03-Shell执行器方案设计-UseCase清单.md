@@ -1,6 +1,6 @@
 # Shell 执行器 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-14 v2（覆盖至：HEAD `d022831` + 9-14 路径基准修复）
+- 版本：2026-10-07 v3（覆盖至：当前工作区；UC-3C5 子进程输出解码链修订）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（L574–2331：shell 选择/进程管理/物化/环境）。
 - 上级：`00-工具系统整体设计.md`
@@ -38,8 +38,9 @@
 
 ### UC-3C5 环境与编码
 - **触发**：子进程输出二进制/乱码；需要内置 Python。
-- **预期现象**：二进制输出被摘要化（不喷终端）；编码解码健壮；内置 Python 目录自动前置（脚本可直接用）；stderr 有修复提示（如缺依赖给命令）。
-- **依据**：`_decode_cli_subprocess_bytes / _summarize_shell_stream_if_binary_like / _run_shell_env_with_prepended_agent_python_dir / _run_cli_stderr_hints`。
+- **预期现象**：二进制输出被摘要化（不喷终端）；编码解码健壮——UTF-8 严格优先，整段失败后按“行”在 UTF-8 / GBK 间择优（混合编码流两端都能正确显示，如 PowerShell 的 GBK 日期行不再变 `�`）；兜底只替换无法解码的字节；内置 Python 目录自动前置（脚本可直接用）；stderr 有修复提示（如缺依赖给命令）。
+- **规则与边界**：不以“结果含 U+FFFD”作为整套回退 GBK 的信号——合法 UTF-8 文本可自带 U+FFFD（历史误例：`B2 \"�\" ENDB` 曾被改写为 `B2 \"锟絓" ENDB`）；逐行 GBK 仅在“该行非 ASCII 字节中，UTF-8 非法字节 ≥2 且占比 ≥50%”时启用，避免个别坏字节的 UTF-8 行被整行改写；流式输出的切片安全见 09/07 UC-9F7。
+- **依据**：`_decode_byte_line / _decode_cli_subprocess_bytes / _summarize_shell_stream_if_binary_like / _run_shell_env_with_prepended_agent_python_dir / _run_cli_stderr_hints`；回归 `tests/test_decode_cli_subprocess_bytes.py`。
 
 ## 3. 边界
 
@@ -54,9 +55,10 @@
 | UC-3C2 | L1665–1777 |
 | UC-3C3 | L1478–1627 |
 | UC-3C4 | L670–1454（路径收窄段，含 9-14 基准修复） |
-| UC-3C5 | L1084–1236、L1854–1928 |
+| UC-3C5 | L1192–1354、L2053–2072（2026-10-07 复核） |
 
 ## 5. 版本记录
 
 - 2026-09-13 v1：拆分首版（承接 UC-306/307）。
 - 2026-09-14 v2：UC-3C4 补充"相对路径按生效工作目录（workdir）解析"与只读 git/歧义输入边界（配合当日路径基准修复）。
+- 2026-10-07 v3：UC-3C5 修订子进程输出解码链——移除“含 U+FFFD 即回退 GBK”的误判（曾把合法 UTF-8 改写为 GBK 误码“锟絓/閿熸枻鎷穃”类）；整段失败改为按行在 UTF-8 / GBK 间择优，兜底只替换无法解码的字节；新增回归 `tests/test_decode_cli_subprocess_bytes.py`（8 用例）；依据映射行号按当前工作区复核。

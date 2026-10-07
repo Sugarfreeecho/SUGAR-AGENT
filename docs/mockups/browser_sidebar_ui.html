@@ -1,0 +1,680 @@
+<!doctype html>
+<!-- 基础版：已被 browser_sidebar_ui_v3.html（素净版）取代，仅留作对比 -->
+<html lang="zh-CN" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SugarAgent 侧栏 / 手机 UI 原型</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%230f766e'/><path d='M4.4 8h7.2' stroke='%23ffffff' stroke-width='2' stroke-linecap='round'/></svg>">
+<style>
+  :root{
+    --bg:#0b1020; --panel:#111827; --panel-2:#0d1528; --line:#263248;
+    --text:#edf2f7; --muted:#94a3b8; --accent:#5eead4; --accent-ink:#04211d;
+    --warn:#fbbf24; --warn-bg:#422006; --danger:#fb7185; --ok:#34d399;
+    --code-bg:#0f172a; --user-bubble:#123047; --assistant-bubble:#172033;
+    --shadow:0 18px 50px rgba(0,0,0,.45);
+  }
+  html[data-theme="light"]{
+    --bg:#eef1f5; --panel:#ffffff; --panel-2:#f6f7f9; --line:#dfe3ea;
+    --text:#1b2231; --muted:#6b7280; --accent:#0f766e; --accent-ink:#ffffff;
+    --warn:#b45309; --warn-bg:#fef3c7; --danger:#e11d48; --ok:#059669;
+    --code-bg:#f3f4f6; --user-bubble:#e0f2fe; --assistant-bubble:#f8fafc;
+    --shadow:0 18px 40px rgba(15,23,42,.16);
+  }
+  @media (prefers-color-scheme: light){
+    html[data-theme="system"]{
+      --bg:#eef1f5; --panel:#ffffff; --panel-2:#f6f7f9; --line:#dfe3ea;
+      --text:#1b2231; --muted:#6b7280; --accent:#0f766e; --accent-ink:#ffffff;
+      --warn:#b45309; --warn-bg:#fef3c7; --danger:#e11d48; --ok:#059669;
+      --code-bg:#f3f4f6; --user-bubble:#e0f2fe; --assistant-bubble:#f8fafc;
+      --shadow:0 18px 40px rgba(15,23,42,.16);
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  }
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  svg{display:block}
+
+  /* ===== 设计稿工具条 ===== */
+  .sheet-bar{
+    position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; gap:14px; align-items:center;
+    padding:10px 18px; background:color-mix(in srgb,var(--panel) 88%, transparent);
+    border-bottom:1px solid var(--line); backdrop-filter:blur(8px);
+  }
+  .sheet-bar .brand{font-weight:700; letter-spacing:.3px}
+  .sheet-bar .brand small{display:block; font-weight:400; color:var(--muted); font-size:12px}
+  .group{display:flex; align-items:center; gap:6px; padding-left:14px; border-left:1px solid var(--line)}
+  .group > span.lbl{color:var(--muted); font-size:12px}
+  .seg{display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .seg button{background:transparent; border:0; padding:6px 10px; color:var(--muted)}
+  .seg button.on{background:var(--accent); color:var(--accent-ink); font-weight:600}
+  .seg button:hover{color:var(--text)}
+  .seg button.on:hover{color:var(--accent-ink)}
+
+  /* ===== 画布 ===== */
+  .sheet{display:flex; flex-wrap:wrap; gap:34px; justify-content:center; padding:26px 18px 46px}
+  .device{display:flex; flex-direction:column; gap:8px; align-items:center}
+  .device > figcaption{color:var(--muted); font-size:12px}
+  .frame{
+    position:relative; display:flex; flex-direction:column; background:var(--panel);
+    border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow); overflow:hidden;
+  }
+  #dev-sidebar .frame{width:380px; height:760px}
+  #dev-sidebar[data-width="320"] .frame{width:320px}
+  #dev-sidebar[data-width="420"] .frame{width:420px}
+  #dev-phone .frame{width:390px; height:800px; border-radius:30px}
+  .chrome{border-bottom:1px solid var(--line); background:var(--panel-2); color:var(--muted); font-size:11.5px}
+  #dev-sidebar .chrome{display:flex; align-items:center; gap:8px; padding:7px 10px}
+  #dev-sidebar .chrome .dotrow{display:flex; gap:5px}
+  #dev-sidebar .chrome i{width:9px; height:9px; border-radius:50%; background:#3b4557; display:block}
+  #dev-sidebar .chrome .url{
+    flex:1; text-align:center; background:color-mix(in srgb,var(--bg) 70%, transparent);
+    border:1px solid var(--line); border-radius:999px; padding:3px 10px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #dev-phone .chrome{display:flex; justify-content:space-between; padding:6px 16px 4px; font-variant-numeric:tabular-nums}
+  .phone-notch{position:absolute; top:6px; left:50%; transform:translateX(-50%); width:96px; height:18px; border-radius:12px; background:var(--bg); border:1px solid var(--line); z-index:3}
+  .home-bar{height:18px; display:flex; align-items:center; justify-content:center}
+  .home-bar i{width:120px; height:4px; border-radius:3px; background:var(--line); display:block}
+
+  /* ===== 侧栏内部：通用 ===== */
+  .app{flex:1; min-height:0; display:flex; flex-direction:column}
+  .app-head{display:flex; align-items:center; gap:8px; padding:9px 10px; border-bottom:1px solid var(--line)}
+  .status{width:8px; height:8px; border-radius:50%; background:var(--ok); flex:0 0 auto; box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%, transparent)}
+  .status.off{background:var(--danger); box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 22%, transparent)}
+  .app-head .title{flex:1; min-width:0}
+  .app-head .title b{display:block; font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .app-head .title small{color:var(--muted); font-size:11px}
+  .iconbtn{
+    width:30px; height:30px; display:grid; place-items:center; border-radius:9px;
+    border:1px solid var(--line); background:color-mix(in srgb,var(--panel-2) 80%, transparent); color:var(--muted);
+  }
+  .iconbtn:hover{color:var(--text); border-color:color-mix(in srgb,var(--accent) 40%, var(--line))}
+  .iconbtn.on{color:var(--accent-ink); background:var(--accent); border-color:var(--accent)}
+  .body{flex:1; min-height:0; overflow:auto; padding:12px 12px 4px; display:flex; flex-direction:column; gap:10px}
+  .body::-webkit-scrollbar{width:8px}
+  .body::-webkit-scrollbar-thumb{background:var(--line); border-radius:8px}
+
+  /* ===== 消息 ===== */
+  .msg{max-width:88%; border-radius:14px; padding:9px 11px; border:1px solid var(--line)}
+  .msg.user{align-self:flex-end; background:var(--user-bubble)}
+  .msg.assistant{align-self:flex-start; background:var(--assistant-bubble); max-width:94%; width:94%}
+  .msg h4{margin:2px 0 6px; font-size:13.5px}
+  .msg p{margin:0 0 8px}
+  .msg ul{margin:0 0 8px; padding-left:18px}
+  .msg li{margin:2px 0}
+  .msg code.inline{background:var(--code-bg); border:1px solid var(--line); border-radius:6px; padding:0 5px; font-size:12.5px}
+  .codeblock{background:var(--code-bg); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:0 0 8px}
+  .codeblock header{display:flex; justify-content:space-between; align-items:center; padding:5px 9px; border-bottom:1px solid var(--line); color:var(--muted); font-size:11.5px}
+  .codeblock pre{margin:0; padding:9px 10px; overflow:auto; font:12.5px/1.5 ui-monospace,Consolas,monospace}
+  .codeblock .k{color:#c792ea}.codeblock .s{color:#ecc48d}.codeblock .c{color:var(--muted)}
+  table.md{width:100%; border-collapse:collapse; margin:0 0 8px; font-size:12.5px}
+  table.md th,table.md td{border:1px solid var(--line); padding:4px 6px; text-align:left}
+  table.md th{background:color-mix(in srgb,var(--panel-2) 70%, transparent); color:var(--muted); font-weight:600}
+
+  /* 折叠块：工具行 / 思考过程 */
+  .fold{border:1px solid var(--line); border-radius:11px; background:color-mix(in srgb,var(--panel-2) 65%, transparent); overflow:hidden}
+  .fold > button.head{
+    width:100%; display:flex; align-items:center; gap:7px; background:transparent; border:0;
+    padding:7px 9px; text-align:left; color:var(--muted); font-size:12.5px;
+  }
+  .fold > button.head b{color:var(--text); font-weight:600}
+  .fold .chev{margin-left:auto; transition:transform .16s ease}
+  .fold.open .chev{transform:rotate(90deg)}
+  .fold .panel{display:none; padding:8px 9px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted)}
+  .fold.open .panel{display:block}
+  .fold.tool .panel b{color:var(--text)}
+  .kbd{font:11.5px ui-monospace,Consolas,monospace; border:1px solid var(--line); border-radius:5px; padding:0 4px; color:var(--muted)}
+
+  /* 状态 / 进度 / 子代理 */
+  .statusrow{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12.5px; padding:0 2px}
+  .spinner{width:12px; height:12px; border-radius:50%; border:2px solid var(--line); border-top-color:var(--accent); animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .progress{display:flex; flex-direction:column; gap:4px}
+  .progress .bar{height:5px; border-radius:4px; background:var(--line); overflow:hidden}
+  .progress .bar i{display:block; height:100%; background:var(--accent); width:62%}
+  .badge-sub{display:inline-flex; align-items:center; gap:6px; border:1px dashed var(--line); border-radius:999px; padding:2px 9px; color:var(--muted); font-size:11.5px; align-self:flex-start}
+  .attach{display:flex; gap:8px; align-items:center; border:1px solid var(--line); border-radius:11px; padding:6px; align-self:flex-start; background:color-mix(in srgb,var(--panel-2) 60%, transparent)}
+  .attach .thumb{width:52px; height:38px; border-radius:7px; border:1px solid var(--line); background:linear-gradient(135deg,#334155,#0f172a); display:grid; place-items:center; color:#94a3b8; font-size:10px}
+  .attach small{color:var(--muted); display:block; font-size:11px}
+
+  /* 审批卡 */
+  .approval{border:1px solid color-mix(in srgb,var(--warn) 55%, var(--line)); background:var(--warn-bg); border-radius:12px; padding:9px 10px; align-self:stretch; color:var(--text)}
+  .approval h5{margin:0 0 4px; font-size:13px; display:flex; align-items:center; gap:6px}
+  .approval .cmd{background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:12.5px ui-monospace,Consolas,monospace; margin:6px 0 8px; overflow:auto}
+  .approval .acts{display:flex; gap:7px; flex-wrap:wrap; align-items:center}
+  .btn{border:1px solid var(--line); background:color-mix(in srgb,var(--panel) 75%, transparent); border-radius:9px; padding:6px 11px; font-size:12.5px}
+  .btn:hover{border-color:color-mix(in srgb,var(--accent) 45%, var(--line))}
+  .btn.primary{background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600}
+  .btn.danger{color:var(--danger); border-color:color-mix(in srgb,var(--danger) 45%, var(--line))}
+  .btn:disabled{opacity:.5; cursor:not-allowed}
+  .analysis{margin-top:8px; border-top:1px dashed color-mix(in srgb,var(--warn) 45%, var(--line)); padding-top:7px; font-size:12.5px; color:var(--muted)}
+  .analysis b{color:var(--text)}
+  .resolved{border:1px dashed var(--line); border-radius:11px; padding:6px 9px; color:var(--muted); font-size:12.5px; align-self:stretch}
+
+  /* 输入区 */
+  .composer{border-top:1px solid var(--line); padding:8px 10px 10px; background:var(--panel); display:flex; flex-direction:column; gap:7px}
+  .chips{display:flex; gap:6px; flex-wrap:wrap}
+  .chip{display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; padding:3px 4px 3px 9px; font-size:11.5px; color:var(--muted); background:color-mix(in srgb,var(--panel-2) 70%, transparent)}
+  .chip b{color:var(--text); font-weight:600}
+  .chip button{border:0; background:transparent; color:var(--muted); width:18px; height:18px; border-radius:50%}
+  .chip button:hover{color:var(--danger); background:color-mix(in srgb,var(--danger) 15%, transparent)}
+  .chip.add{border-style:dashed; cursor:pointer}
+  .chip.add:hover{color:var(--text)}
+  .input{display:flex; align-items:flex-end; gap:7px; border:1px solid var(--line); border-radius:12px; padding:7px 8px; background:color-mix(in srgb,var(--panel-2) 70%, transparent)}
+  .input textarea{flex:1; min-height:22px; max-height:96px; resize:none; border:0; background:transparent; outline:none; color:var(--text)}
+  .input textarea::placeholder{color:var(--muted)}
+  .hint{color:var(--muted); font-size:11px; display:flex; gap:10px; flex-wrap:wrap}
+
+  /* 历史面板（Page Assist 风格） */
+  .panel-head{padding:9px 10px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:8px}
+  .search{display:flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:10px; padding:6px 9px; background:color-mix(in srgb,var(--panel-2) 70%, transparent)}
+  .search input{flex:1; border:0; background:transparent; outline:none}
+  .group-label{color:var(--muted); font-size:11.5px; padding:8px 4px 2px}
+  .sess{position:relative; display:flex; gap:8px; align-items:center; padding:8px 9px; border:1px solid transparent; border-bottom-color:var(--line); cursor:pointer}
+  .sess:hover{background:color-mix(in srgb,var(--panel-2) 75%, transparent)}
+  .sess .txt{flex:1; min-width:0}
+  .sess .txt b{display:block; font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .sess .txt small{color:var(--muted); font-size:11px}
+  .pill{font-size:10.5px; border-radius:999px; padding:1px 7px; border:1px solid var(--line); color:var(--muted)}
+  .pill.unread{background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700}
+  .pill.appr{background:var(--warn-bg); border-color:var(--warn); color:var(--warn)}
+  .menu{position:absolute; right:8px; top:34px; z-index:5; min-width:132px; background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); overflow:hidden}
+  .menu button{display:block; width:100%; text-align:left; border:0; background:transparent; padding:7px 10px; font-size:12.5px}
+  .menu button:hover{background:color-mix(in srgb,var(--panel-2) 80%, transparent)}
+  .menu button.danger{color:var(--danger)}
+  .menu hr{border:0; border-top:1px solid var(--line); margin:0}
+
+  /* 配对 / 设置 */
+  .card{border:1px solid var(--line); border-radius:12px; padding:11px; background:color-mix(in srgb,var(--panel-2) 60%, transparent); display:flex; flex-direction:column; gap:9px}
+  .card h4{margin:0; font-size:13.5px}
+  .card p{margin:0; color:var(--muted); font-size:12.5px}
+  .field{display:flex; flex-direction:column; gap:4px}
+  .field label{color:var(--muted); font-size:11.5px}
+  .field input,.field select{border:1px solid var(--line); border-radius:9px; padding:7px 9px; background:var(--panel); outline:none}
+  .code-inline{font:12.5px ui-monospace,Consolas,monospace; background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:6px 8px; overflow:auto}
+  .row{display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px dashed var(--line)}
+  .row:last-child{border-bottom:0}
+  .row .grow{flex:1}
+  .row small{color:var(--muted); display:block; font-size:11.5px}
+  .switch{position:relative; width:40px; height:22px; border-radius:999px; border:1px solid var(--line); background:color-mix(in srgb,var(--panel) 70%, transparent)}
+  .switch i{position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--muted); transition:.16s}
+  .switch.on{background:var(--accent); border-color:var(--accent)}
+  .switch.on i{left:20px; background:var(--accent-ink)}
+  .toast{align-self:center; margin:0 auto 6px; background:color-mix(in srgb,var(--panel) 92%, transparent); border:1px solid var(--line); color:var(--text); border-radius:999px; padding:5px 12px; font-size:12px; box-shadow:var(--shadow)}
+  .legend{max-width:900px; margin:0 auto; color:var(--muted); font-size:12px; padding:0 18px 40px}
+  .legend code{background:var(--code-bg); border:1px solid var(--line); border-radius:6px; padding:0 4px}
+</style>
+</head>
+<body>
+
+<header class="sheet-bar">
+  <div class="brand">SugarAgent 侧栏 / 手机 UI 原型<small>静态稿 · 数据为示例 · 对照设计文档 v2.1（D1–D20）</small></div>
+
+  <div class="group"><span class="lbl">视图</span>
+    <div class="seg" id="seg-view">
+      <button data-view="chat" class="on">对话</button>
+      <button data-view="history">历史</button>
+      <button data-view="pair">配对</button>
+      <button data-view="settings">设置</button>
+    </div>
+  </div>
+
+  <div class="group"><span class="lbl">主题</span>
+    <div class="seg" id="seg-theme">
+      <button data-theme="system" class="on">跟随系统</button>
+      <button data-theme="dark">深</button>
+      <button data-theme="light">浅</button>
+    </div>
+  </div>
+
+  <div class="group"><span class="lbl">语言</span>
+    <div class="seg" id="seg-lang">
+      <button data-lang="zh" class="on">中文</button>
+      <button data-lang="en">EN</button>
+    </div>
+  </div>
+
+  <div class="group"><span class="lbl">侧栏宽</span>
+    <div class="seg" id="seg-width">
+      <button data-width="320">320</button>
+      <button data-width="380" class="on">380</button>
+      <button data-width="420">420</button>
+    </div>
+  </div>
+
+  <div class="group"><span class="lbl">连接态</span>
+    <div class="seg" id="seg-conn">
+      <button data-conn="on" class="on">已连接</button>
+      <button data-conn="off">离线</button>
+    </div>
+  </div>
+</header>
+
+<main class="sheet">
+  <figure class="device" id="dev-sidebar" data-width="380">
+    <div class="frame">
+      <div class="chrome">
+        <span class="dotrow"><i></i><i></i><i></i></span>
+        <span class="url" id="chrome-url">https://example.com/myagent-design-doc</span>
+        <span style="font-size:11px">侧栏</span>
+      </div>
+      <div class="app" data-frame="sidebar"></div>
+    </div>
+    <figcaption>扩展侧栏（Chrome/Edge sidePanel，320–420px）</figcaption>
+  </figure>
+
+  <figure class="device" id="dev-phone" data-width="390">
+    <div class="frame">
+      <div class="phone-notch"></div>
+      <div class="chrome"><span>9:41</span><span>SugarAgent</span><span>5G ▮</span></div>
+      <div class="app" data-frame="phone"></div>
+      <div class="home-bar"><i></i></div>
+    </div>
+    <figcaption>手机窄屏（同套 UI，未读/审批走同一信息架构）</figcaption>
+  </figure>
+</main>
+
+<p class="legend">
+  原型覆盖：单会话头部（状态点/会话标题/历史·新建·设置）、运行中与停止、工具行与思考过程折叠、上下文进度条、子代理徽标、
+  附件缩略图、审批卡（允许/拒绝选填理由 + AI 分析）、上下文芯片三来源（正文/选中/仅网址）、
+  Page Assist 式历史面板（搜索、分组、未读与待审批徽标、改名/归档/置顶/待办/删除）、配对页、设置页。
+  文案已内置中文/英文两套（示例对话内容不随语言切换）；主题支持跟随系统。
+</p>
+
+<script>
+(function(){
+  "use strict";
+
+  var state = {
+    view: "chat",
+    theme: "system",
+    lang: "zh",
+    conn: "on",
+    ctx: "page",          // page | selection | url | none
+    approval: "pending",  // pending | analyzed | approved | rejected
+    open: { tool: false, think: false },
+    query: "",
+    menu: "",
+    running: true,
+    toast: "",
+    archived: {},
+    sessions: [
+      { id: "s1", name: "\u89d2\u6807\u4fee\u590d\u4f1a\u8bdd", meta: "10 \u5206\u949f\u524d", unread: 2, appr: 1, group: "today" },
+      { id: "s2", name: "RAG \u77e5\u8bc6\u5e93\u8c03\u7814", meta: "2 \u5c0f\u65f6\u524d", unread: 0, appr: 0, group: "today" },
+      { id: "s3", name: "\u524d\u7aef dock \u91cd\u6784\u8bc4\u5ba1", meta: "\u6628\u5929 21:40", unread: 0, appr: 0, group: "yesterday" },
+      { id: "s4", name: "\u8fdc\u63a7\u65b9\u6848\u8bbe\u8ba1", meta: "\u672c\u5468\u4e8c", unread: 0, appr: 0, group: "week" },
+      { id: "s5", name: "\u65e7\u4f1a\u8bdd\uff1a\u6392\u67e5\u542f\u52a8\u53cc\u7a97\u53e3", meta: "8 \u6708 12 \u65e5", unread: 0, appr: 0, group: "earlier" }
+    ]
+  };
+
+  var I18N = {
+    zh: {
+      chat: "对话", history: "历史", pair: "配对", settings: "设置",
+      connected: "已连接 · 本地 Agent", offline: "离线 · 无法连接本机 Agent",
+      session: "会话", newSession: "新建会话", historyTitle: "历史会话",
+      searchPh: "搜索标题（可选搜内容）", archived: "已归档",
+      today: "今天", yesterday: "昨天", week: "本周", earlier: "更早",
+      open: "打开", rename: "改名", archive: "归档", pin: "置顶", todo: "标记待办", del: "删除会话",
+      composerPh: "输入消息…（Enter 发送 / Shift+Enter 换行）",
+      hk: "Ctrl+Shift+M 打开/聚焦侧栏 · 右键可「就选中内容提问」",
+      ctxPage: "当前页正文", ctxSel: "选中文本", ctxUrl: "仅网址", ctxAdd: "附加当前页",
+      ctxNote: "仅网址模式受受信/预批准域名限制",
+      running: "运行中…", stop: "停止", thinking: "思考过程", tool: "工具", sub: "子代理 · 运行中",
+      compress: "上下文压缩", approvalTitle: "需要确认：执行命令", approvalBody: "将在工作区执行删除构建产物目录的命令",
+      analyze: "AI 分析", allow: "允许", deny: "拒绝", reasonPh: "拒绝理由（选填）",
+      analyzed: "分析", approved: "已允许", rejected: "已拒绝", resolvedOther: "已在其他端处理",
+      pairTitle: "连接到这台电脑", pairDesc: "先在电脑端创建一次性配对码，再在此输入；凭据只存在本机扩展存储中。",
+      pairCode: "配对码", deviceName: "设备名称", pairBtn: "配对",
+      pairHelp: "如何生成配对码？", pairHelpBody: "电脑端打开主界面 → 远控页创建配对码（默认 10 分钟有效、一次性）。",
+      server: "服务地址", ctxLen: "上下文长度", langRow: "界面语言", themeRow: "主题",
+      pageCtx: "页面上下文", diag: "连接诊断", clear: "清除本机凭据",
+      on: "开", off: "关",
+      keep: "保留", clearCtx: "已移除上下文", added: "已附加当前页", renamed: "已改名", archivedOk: "已归档",
+      pinned: "已置顶", todoOk: "已标记待办", deleted: "已删除会话",
+      attach: "附件", shot: "截图 1600px PNG", codeCopy: "复制"
+    },
+    en: {
+      chat: "Chat", history: "History", pair: "Pair", settings: "Settings",
+      connected: "Connected · local agent", offline: "Offline · local agent unreachable",
+      session: "Session", newSession: "New session", historyTitle: "Chat history",
+      searchPh: "Search titles (optionally content)", archived: "Archived",
+      today: "Today", yesterday: "Yesterday", week: "This week", earlier: "Earlier",
+      open: "Open", rename: "Rename", archive: "Archive", pin: "Pin", todo: "Mark todo", del: "Delete",
+      composerPh: "Message… (Enter to send / Shift+Enter for newline)",
+      hk: "Ctrl+Shift+M toggles the side panel · right-click: ask about selection",
+      ctxPage: "Current page text", ctxSel: "Selected text", ctxUrl: "URL only", ctxAdd: "Attach current page",
+      ctxNote: "URL-only mode is limited by trusted/pre-approved domains",
+      running: "Running…", stop: "Stop", thinking: "Reasoning", tool: "Tool", sub: "Subagent · running",
+      compress: "Context compaction", approvalTitle: "Confirmation required: run command", approvalBody: "Will remove the build output directory inside the workspace",
+      analyze: "AI analysis", allow: "Allow", deny: "Deny", reasonPh: "Rejection reason (optional)",
+      analyzed: "Analysis", approved: "Approved", rejected: "Rejected", resolvedOther: "Handled elsewhere",
+      pairTitle: "Connect to this computer", pairDesc: "Create a one-time pairing code on the desktop first, then enter it here. The credential stays in local extension storage.",
+      pairCode: "Pairing code", deviceName: "Device name", pairBtn: "Pair",
+      pairHelp: "How to create a pairing code?", pairHelpBody: "Open the main web UI on the desktop → create a code on the remote control page (10 min, one-time).",
+      server: "Endpoint", ctxLen: "Context size", langRow: "UI language", themeRow: "Theme",
+      pageCtx: "Page context", diag: "Diagnostics", clear: "Clear local credential",
+      on: "On", off: "Off",
+      keep: "Keep", clearCtx: "Context removed", added: "Current page attached", renamed: "Renamed", archivedOk: "Archived",
+      pinned: "Pinned", todoOk: "Marked as todo", deleted: "Session deleted",
+      attach: "Attach", shot: "Screenshot 1600px PNG", codeCopy: "Copy"
+    }
+  };
+  function t(key){ return (I18N[state.lang] || I18N.zh)[key] || key; }
+
+  function icon(name){
+    var p = {
+      clock: '<circle cx="8" cy="8" r="6.2"/><path d="M8 4.6V8l2.3 1.6"/>',
+      plus: '<path d="M8 3.4v9.2M3.4 8h9.2"/>',
+      gear: '<path d="M2.4 4.6h11.2M2.4 8h11.2M2.4 11.4h11.2"/><circle cx="5.8" cy="4.6" r="1.5"/><circle cx="10.2" cy="8" r="1.5"/><circle cx="6.8" cy="11.4" r="1.5"/>',
+      clip: '<path d="M6.2 9.8l3.9-3.9a2 2 0 1 1 2.8 2.8l-4.9 4.9a3.4 3.4 0 0 1-4.8-4.8l4.9-4.9"/>',
+      send: '<path d="M2.6 8L13.4 2.8 10.6 13 8 9.6 2.6 8z"/>',
+      stop: '<rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.4"/>',
+      chev: '<path d="M6 3.6L10.4 8 6 12.4"/>',
+      file: '<path d="M4 2.6h5l3 3v7.8H4z"/><path d="M9 2.6v3h3"/>',
+      check: '<path d="M3.4 8.4l3 3 6.2-6.6"/>'
+    }[name] || "";
+    return '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' + p + '</svg>';
+  }
+
+  /* ---------- 视图渲染 ---------- */
+  function headHtml(){
+    var offline = state.conn === "off";
+    return '' +
+      '<div class="app-head">' +
+        '<span class="status ' + (offline ? 'off' : '') + '"></span>' +
+        '<span class="title"><b>' + esc(activeSession().name) + '</b>' +
+          '<small>' + (offline ? t("offline") : t("connected")) + '</small></span>' +
+        '<button class="iconbtn ' + (state.view === "history" ? "on" : "") + '" data-act="view" data-view="history" title="' + t("history") + '">' + icon("clock") + '</button>' +
+        '<button class="iconbtn" data-act="new-session" title="' + t("newSession") + '">' + icon("plus") + '</button>' +
+        '<button class="iconbtn ' + (state.view === "settings" ? "on" : "") + '" data-act="view" data-view="settings" title="' + t("settings") + '">' + icon("gear") + '</button>' +
+      '</div>';
+  }
+
+  function chatHtml(){
+    var s = state.approval;
+    var ctxChip = state.ctx === "none"
+      ? '<button class="chip add" data-act="ctx-cycle">' + icon("file") + ' ' + t("ctxAdd") + '</button>'
+      : '<span class="chip">' + icon("file") + ' <b>' + ctxLabel() + '</b> · ' + (state.ctx === "url" ? "URL" : "3.2k \u5b57") + ' <button data-act="ctx-remove" title="' + t("keep") + '">\u2715</button></span>' +
+        '<button class="chip add" data-act="ctx-cycle">\u21bb ' + t("ctxNameNext") + '</button>';
+
+    return headHtml() +
+    '<div class="body">' +
+      '<div class="msg user">\u8fd9\u4e2a\u65b9\u6848\u91cc\uff0c\u4fa7\u680f\u7684\u672a\u8bfb\u63d0\u9192\u600e\u4e48\u505a\uff1f</div>' +
+      '<div class="msg assistant">' +
+        '<h4>\u672a\u8bfb\u4e0e\u591a\u8ba2\u9605\uff08\u5bf9\u9f50 D13\uff09</h4>' +
+        '<p>\u4e00\u4e2a\u8fde\u63a5\u540c\u65f6\u8ba2\u9605\u591a\u4e2a\u4f1a\u8bdd\uff0c\u975e\u5f53\u524d\u4f1a\u8bdd\u6536\u5230\u4e8b\u4ef6\u65f6\u7d2f\u52a0\u672a\u8bfb\u8ba1\u6570\uff0c\u8fdb\u5165\u8be5\u4f1a\u8bdd\u5373\u6e05\u96f6\u3002</p>' +
+        '<ul><li>\u8ba2\u9605\u7a97\u53e3\uff1a\u6700\u8fd1 <code class="inline">20</code> \u4e2a\u4f1a\u8bdd</li><li>\u53bb\u91cd\u6e38\u6807\uff1a<code class="inline">event_bus_seq</code> \u5355\u8c03\u9012\u589e</li></ul>' +
+        '<div class="codeblock">' +
+          '<header><span>lib/unread.js</span><span>' + t("codeCopy") + '</span></header>' +
+          '<pre><span class="c">// \u975e\u5f53\u524d\u4f1a\u8bdd\uff1a\u53ea\u8ba1\u6570\uff0c\u4e0d\u6e32\u67d3</span>\n' +
+'<span class="k">if</span> (sid !== state.current) {\n' +
+'  unread[sid] = (unread[sid] || 0) + <span class="s">1</span>;\n' +
+'  renderBadges();\n' +
+'}</pre>' +
+        '</div>' +
+        '<table class="md"><thead><tr><th>\u4e8b\u4ef6</th><th>UI</th></tr></thead>' +
+        '<tbody><tr><td>session.event</td><td>\u5f53\u524d\u4f1a\u8bdd\u76f4\u63a5\u6e32\u67d3</td></tr>' +
+        '<tr><td>approval_requested</td><td>\u63d2\u5165\u5ba1\u6279\u5361\u7247</td></tr></tbody></table>' +
+        '<div class="fold tool ' + (state.open.tool ? 'open' : '') + '">' +
+          '<button class="head" data-act="tool-toggle">' + t("tool") + ' · <b>read_file</b><span class="chev">' + icon("chev") + '</span></button>' +
+          '<div class="panel"><b>\u53c2\u6570</b> path=app/agent_harness.py, line_count=200<br><b>\u7ed3\u679c</b> 200 \u884c\uff0c\u547d\u4e2d set_session_pinned / set_session_todo</div>' +
+        '</div>' +
+        '<div class="fold show ' + (state.open.think ? 'open' : '') + '">' +
+          '<button class="head" data-act="think-toggle">' + t("thinking") + '<span class="chev">' + icon("chev") + '</span></button>' +
+          '<div class="panel">\u5148\u6838\u5bf9\u8fdc\u63a7\u65b9\u6cd5\u8868\uff0c\u518d\u786e\u5b9a\u672a\u8bfb\u7edf\u8ba1\u662f\u5426\u9700\u8981\u670d\u52a1\u7aef\u652f\u6301\u2026\uff08\u5df2\u6536\u8d77\uff0c\u53ef\u5c55\u5f00\uff09</div>' +
+        '</div>' +
+        '<div class="progress"><div class="statusrow"><span class="spinner"></span><span>' + t("compress") + ' 62%</span></div><div class="bar"><i></i></div></div>' +
+        '<span class="badge-sub">' + icon("check") + t("sub") + '</span>' +
+      '</div>' +
+      '<div class="attach"><span class="thumb">PNG</span><span><b>shot-20260930.png</b><small>1.2 MB · ' + t("shot") + '</small></span></div>' +
+      approvalHtml(s) +
+      (state.running
+        ? '<div class="statusrow"><span class="spinner"></span><span>' + t("running") + '</span><button class="btn danger" data-act="stop" style="margin-left:auto">' + t("stop") + '</button></div>'
+        : '<div class="resolved">' + (state.conn === "off" ? t("offline") : '\u5df2\u505c\u6b62\uff08run_interrupted\uff09') + '</div>') +
+      (state.toast ? '<div class="toast">' + esc(state.toast) + '</div>' : '') +
+    '</div>' +
+    '<div class="composer">' +
+      '<div class="chips">' + ctxChip + '</div>' +
+      '<div class="input">' +
+        '<button class="iconbtn" data-act="attach" title="' + t("attach") + '">' + icon("clip") + '</button>' +
+        '<textarea rows="1" placeholder="' + t("composerPh") + '"></textarea>' +
+        '<button class="iconbtn ' + (state.running ? '' : 'on') + '" data-act="send" title="' + (state.running ? t("stop") : "Enter") + '">' + (state.running ? icon("stop") : icon("send")) + '</button>' +
+      '</div>' +
+      '<div class="hint"><span>' + t("hk") + '</span>' + (state.ctx === "url" ? '<span style="color:var(--warn)">' + t("ctxNote") + '</span>' : '') + '</div>' +
+    '</div>';
+  }
+
+  function approvalHtml(s){
+    if (s === "approved" || s === "rejected"){
+      return '<div class="resolved">' + (s === "approved" ? t("approved") : t("rejected")) + ' · \u5ba1\u6279\u5df2\u56de\u5199\uff08approval.resolve\uff09</div>';
+    }
+    return '<div class="approval">' +
+      '<h5>\u26a0 ' + t("approvalTitle") + '</h5>' +
+      '<div style="font-size:12.5px;color:var(--muted)">' + t("approvalBody") + '</div>' +
+      '<div class="cmd">Remove-Item -Recurse -Force .\\build</div>' +
+      '<div class="acts">' +
+        '<button class="btn" data-act="analyze">' + t("analyze") + '</button>' +
+        '<input class="btn" style="min-width:0;flex:1" placeholder="' + t("reasonPh") + '">' +
+        '<button class="btn danger" data-act="deny">' + t("deny") + '</button>' +
+        '<button class="btn primary" data-act="allow">' + t("allow") + '</button>' +
+      '</div>' +
+      (s === "analyzed"
+        ? '<div class="analysis"><b>' + t("analyzed") + '</b> \u8be5\u547d\u4ee4\u4f1a\u5220\u9664\u5de5\u4f5c\u533a\u5185 <code class="inline">build/</code> \u76ee\u5f55\uff0c\u4e0d\u6d89\u53ca\u6e90\u7801\uff1b\u82e5\u6784\u5efa\u4ea7\u7269\u53ef\u91cd\u751f\uff0c\u98ce\u9669\u8f83\u4f4e\u3002\u5efa\u8bae\uff1a\u5141\u8bb8\u3002</div>'
+        : '') +
+    '</div>';
+  }
+
+  function historyHtml(){
+    var q = state.query.trim().toLowerCase();
+    var groups = [["today", t("today")], ["yesterday", t("yesterday")], ["week", t("week")], ["earlier", t("earlier")]];
+    var list = "";
+    groups.forEach(function(g){
+      var items = state.sessions.filter(function(s){
+        if (state.archived[s.id]) return false;
+        if (s.group !== g[0]) return false;
+        if (q && s.name.toLowerCase().indexOf(q) < 0) return false;
+        return true;
+      });
+      if (!items.length) return;
+      list += '<div class="group-label">' + g[1] + '</div>';
+      items.forEach(function(s){
+        list += '<div class="sess" data-act="sess" data-sid="' + s.id + '">' +
+          '<span style="color:var(--muted)">' + icon("clock") + '</span>' +
+          '<span class="txt"><b>' + esc(s.name) + '</b><small>' + s.meta + '</small></span>' +
+          (s.appr ? '<span class="pill appr">' + t("approvalTitle").split("\uff1a")[0].slice(0,4) + '1</span>' : '') +
+          (s.unread ? '<span class="pill unread">' + s.unread + '</span>' : '') +
+          '<button class="iconbtn" data-act="sess-menu" data-sid="' + s.id + '" style="width:26px;height:26px">\u22ef</button>' +
+          (state.menu === s.id ? sessMenu(s.id) : '') +
+        '</div>';
+      });
+    });
+    var archived = state.sessions.filter(function(s){ return state.archived[s.id]; });
+    if (archived.length){
+      list += '<div class="group-label">' + t("archived") + ' (' + archived.length + ')</div>';
+      archived.forEach(function(s){
+        list += '<div class="sess" data-act="sess" data-sid="' + s.id + '"><span style="color:var(--muted)">' + icon("clock") + '</span><span class="txt"><b>' + esc(s.name) + '</b><small>' + t("archived") + '</small></span></div>';
+      });
+    }
+    if (!list){ list = '<div class="group-label" style="text-align:center;padding:24px 0">\u2014</div>'; }
+
+    return headHtml() +
+      '<div class="panel-head">' +
+        '<div style="display:flex;align-items:center;gap:8px"><b>' + t("historyTitle") + '</b>' +
+          '<button class="btn" data-act="new-session" style="margin-left:auto">+ ' + t("newSession") + '</button></div>' +
+        '<div class="search">\uf002<input data-act="search" value="' + esc(state.query) + '" placeholder="' + t("searchPh") + '"></div>' +
+      '</div>' +
+      '<div class="body" style="padding:0 6px 6px">' + list + '</div>' +
+      (state.toast ? '<div class="composer"><div class="toast">' + esc(state.toast) + '</div></div>' : '');
+  }
+
+  function sessMenu(sid){
+    return '<div class="menu">' +
+      '<button data-act="sess-open" data-sid="' + sid + '">' + t("open") + '</button>' +
+      '<button data-act="op" data-op="rename" data-sid="' + sid + '">' + t("rename") + '</button>' +
+      '<button data-act="op" data-op="pin" data-sid="' + sid + '">' + t("pin") + '</button>' +
+      '<button data-act="op" data-op="todo" data-sid="' + sid + '">' + t("todo") + '</button>' +
+      '<button data-act="op" data-op="archive" data-sid="' + sid + '">' + t("archive") + '</button>' +
+      '<hr><button class="danger" data-act="op" data-op="delete" data-sid="' + sid + '">' + t("del") + '</button>' +
+    '</div>';
+  }
+
+  function pairHtml(){
+    return headHtml() +
+      '<div class="body">' +
+        '<div class="card">' +
+          '<h4>' + t("pairTitle") + '</h4>' +
+          '<p>' + t("pairDesc") + '</p>' +
+          '<div class="field"><label>' + t("pairCode") + '</label><input value="K7QM-3ZP9-XR4T" spellcheck="false"></div>' +
+          '<div class="field"><label>' + t("deviceName") + '</label><input value="Chrome \u4fa7\u680f \u00b7 PC"></div>' +
+          '<button class="btn primary" data-act="pair">' + t("pairBtn") + '</button>' +
+          '<div class="fold ' + (state.open.tool ? 'open' : '') + '">' +
+            '<button class="head" data-act="tool-toggle">' + t("pairHelp") + '<span class="chev">' + icon("chev") + '</span></button>' +
+            '<div class="panel">' + t("pairHelpBody") + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<h4>' + t("server") + '</h4>' +
+          '<div class="code-inline">http://127.0.0.1:8192 \u00b7 ws://127.0.0.1:8192/api/remote/v1/ws</div>' +
+          '<p>Origin \u767d\u540d\u5355\uff1achrome-extension://&lt;\u56fa\u5b9a ID&gt;</p>' +
+        '</div>' +
+        (state.toast ? '<div class="toast">' + esc(state.toast) + '</div>' : '') +
+      '</div>';
+  }
+
+  function settingsHtml(){
+    return headHtml() +
+      '<div class="body">' +
+        '<div class="card">' +
+          '<h4>' + t("server") + '</h4>' +
+          '<div class="row"><span class="grow">127.0.0.1:8192<small>\u9ad8\u7ea7\uff1a\u53ef\u6539\u8fdc\u7a0b\u5730\u5740\uff08\u672c\u671f\u4e0d\u505a\uff09</small></span><button class="btn" data-act="noop">\u4fee\u6539</button></div>' +
+          '<div class="row"><span class="grow">' + t("ctxLen") + '<small>8000 \u5b57\u7b26\uff082000\u201320000\uff09</small></span><input type="range" min="2000" max="20000" step="1000" value="8000" style="width:110px"></div>' +
+          '<div class="row"><span class="grow">' + t("pageCtx") + '<small>activeTab \u6309\u9700\u63d0\u53d6\uff0c\u9ed8\u8ba4\u4e0d\u9644\u52a0</small></span><span class="switch on" data-act="switch"><i></i></span></div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<h4>' + t("langRow") + ' / ' + t("themeRow") + '</h4>' +
+          '<div class="row"><span class="grow">' + t("langRow") + '<small>\u9ed8\u8ba4\u8ddf\u968f\u6d4f\u89c8\u5668</small></span>' +
+            '<select data-act="lang" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px"><option value="auto" ' + (state.lang === "auto" ? "selected" : "") + '>\u8ddf\u968f\u6d4f\u89c8\u5668</option><option value="zh" ' + (state.lang === "zh" ? "selected" : "") + '>\u4e2d\u6587</option><option value="en" ' + (state.lang === "en" ? "selected" : "") + '>English</option></select></div>' +
+          '<div class="row"><span class="grow">' + t("themeRow") + '<small>prefers-color-scheme</small></span>' +
+            '<select data-act="theme" style="border:1px solid var(--line);border-radius:8px;padding:5px 8px"><option value="system" ' + (state.theme === "system" ? "selected" : "") + '>\u8ddf\u968f\u7cfb\u7edf</option><option value="dark" ' + (state.theme === "dark" ? "selected" : "") + '>\u6df1\u8272</option><option value="light" ' + (state.theme === "light" ? "selected" : "") + '>\u6d45\u8272</option></select></div>' +
+        '</div>' +
+        '<div class="card">' +
+          '<h4>' + t("diag") + '</h4>' +
+          '<p>\u534f\u8bae v1 \u00b7 \u8bbe\u5907 Chrome \u4fa7\u680f \u00b7 scope read / write / approvals \u00b7 \u672a\u8bfb\u7a97\u53e3 20 \u4e2a\u4f1a\u8bdd</p>' +
+          '<button class="btn danger" data-act="clear">' + t("clear") + '</button>' +
+        '</div>' +
+        (state.toast ? '<div class="toast">' + esc(state.toast) + '</div>' : '') +
+      '</div>';
+  }
+
+  /* ---------- 工具函数 ---------- */
+  function esc(v){
+    return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function activeSession(){
+    for (var i = 0; i < state.sessions.length; i++){
+      if (!state.archived[state.sessions[i].id]) return state.sessions[i];
+    }
+    return { name: "-" };
+  }
+  function ctxLabel(){
+    return state.ctx === "page" ? t("ctxPage") : state.ctx === "selection" ? t("ctxSel") : t("ctxUrl");
+  }
+  function flash(msg){
+    state.toast = msg;
+    render();
+    clearTimeout(flash._t);
+    flash._t = setTimeout(function(){ state.toast = ""; render(); }, 1600);
+  }
+
+  /* ---------- 渲染 ---------- */
+  function render(){
+    document.documentElement.setAttribute("data-theme", state.theme);
+    I18N.zh.ctxNameNext = state.ctx === "page" ? I18N.zh.ctxSel : state.ctx === "selection" ? I18N.zh.ctxUrl : I18N.zh.ctxPage;
+    I18N.en.ctxNameNext = state.ctx === "page" ? I18N.en.ctxSel : state.ctx === "selection" ? I18N.en.ctxUrl : I18N.en.ctxPage;
+    var html = state.view === "chat" ? chatHtml() : state.view === "history" ? historyHtml() : state.view === "pair" ? pairHtml() : settingsHtml();
+    Array.prototype.forEach.call(document.querySelectorAll(".app"), function(el){
+      el.innerHTML = html;   // 保持顶部（composer 常驻底部），便于对照设计稿
+    });
+  }
+
+  /* ---------- 交互（事件委托） ---------- */
+  document.addEventListener("click", function(e){
+    var el = e.target.closest("[data-act], .seg button");
+    if (!el) return;
+
+    // 顶部工具条
+    if (el.matches(".seg button")){
+      var seg = el.parentElement;
+      if (seg.id === "seg-view") state.view = el.getAttribute("data-view");
+      if (seg.id === "seg-theme") state.theme = el.getAttribute("data-theme");
+      if (seg.id === "seg-lang") state.lang = el.getAttribute("data-lang");
+      if (seg.id === "seg-width") document.getElementById("dev-sidebar").setAttribute("data-width", el.getAttribute("data-width"));
+      if (seg.id === "seg-conn") state.conn = el.getAttribute("data-conn");
+      Array.prototype.forEach.call(seg.children, function(b){ b.classList.toggle("on", b === el); });
+      render();
+      return;
+    }
+
+    var act = el.getAttribute("data-act");
+    if (el.matches(".sess") && !el.hasAttribute("data-act")) act = "sess";
+    switch (act){
+      case "view": state.view = el.getAttribute("data-view"); state.menu = ""; render(); break;
+      case "new-session": flash(state.lang === "zh" ? "\u5df2\u65b0\u5efa\u4f1a\u8bdd\uff08session.create\uff09" : "New session created (session.create)"); break;
+      case "sess": state.view = "chat"; state.menu = ""; var sid = el.getAttribute("data-sid"); state.sessions.forEach(function(s){ if (s.id === sid) s.unread = 0; }); render(); break;
+      case "sess-open": state.view = "chat"; state.menu = ""; render(); break;
+      case "sess-menu": e.stopPropagation(); state.menu = state.menu === el.getAttribute("data-sid") ? "" : el.getAttribute("data-sid"); render(); break;
+      case "op":
+        var op = el.getAttribute("data-op"), id = el.getAttribute("data-sid");
+        if (op === "archive") state.archived[id] = true;
+        if (op === "delete") state.sessions = state.sessions.filter(function(s){ return s.id !== id; });
+        state.menu = "";
+        flash({ rename: t("renamed"), pin: t("pinned"), todo: t("todoOk"), archive: t("archivedOk"), delete: t("deleted") }[op] || "");
+        break;
+      case "tool-toggle": state.open.tool = !state.open.tool; render(); break;
+      case "think-toggle": state.open.think = !state.open.think; render(); break;
+      case "ctx-cycle":
+        state.ctx = state.ctx === "page" ? "selection" : state.ctx === "selection" ? "url" : "page";
+        flash(t("added"));
+        break;
+      case "ctx-remove": state.ctx = "none"; flash(t("clearCtx")); break;
+      case "analyze": state.approval = "analyzed"; render(); break;
+      case "allow": state.approval = "approved"; render(); break;
+      case "deny": state.approval = "rejected"; render(); break;
+      case "stop": state.running = false; flash(state.lang === "zh" ? "\u5df2\u53d1\u9001 session.interrupt" : "Sent session.interrupt"); break;
+      case "send": state.running = true; flash(state.lang === "zh" ? "\u5df2\u53d1\u9001\uff08session.send\uff09" : "Sent (session.send)"); break;
+      case "attach": flash(state.lang === "zh" ? "\u53ef\u9009\uff1a\u622a\u56fe / \u56fe\u7247 / \u6587\u6863" : "Choose: screenshot / image / document"); break;
+      case "pair": flash(state.lang === "zh" ? "\u914d\u5bf9\u6210\u529f\uff1a\u8bbe\u5907 Chrome \u4fa7\u680f\uff08read/write/approvals\uff09" : "Paired: Chrome sidebar (read/write/approvals)"); break;
+      case "clear": flash(state.lang === "zh" ? "\u5df2\u6e05\u9664\u672c\u673a\u51ed\u636e\uff08\u8bbe\u5907\u64a4\u9500\u9700\u5728\u7535\u8111\u7aef\uff09" : "Local credential cleared (revoke on desktop)"); break;
+      case "switch": el.classList.toggle("on"); break;
+      default: break;
+    }
+  });
+
+  document.addEventListener("input", function(e){
+    if (e.target.matches("[data-act='search']")){
+      state.query = e.target.value;
+      render();
+      var box = document.querySelector("[data-act='search']");
+      if (box){ box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    }
+  });
+
+  document.addEventListener("change", function(e){
+    if (e.target.matches("[data-act='lang']")){ state.lang = e.target.value === "auto" ? (navigator.language && navigator.language.indexOf("zh") === 0 ? "zh" : "en") : e.target.value; render(); }
+    if (e.target.matches("[data-act='theme']")){ state.theme = e.target.value; render(); }
+  });
+
+  document.addEventListener("keydown", function(e){
+    if (e.key === "Escape"){ state.menu = ""; render(); }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

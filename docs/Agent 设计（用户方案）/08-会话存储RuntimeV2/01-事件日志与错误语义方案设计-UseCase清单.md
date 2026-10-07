@@ -1,6 +1,6 @@
 # 事件日志与错误语义 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-30 v2（覆盖至：当前工作区；稀疏索引跳过无变化维护）
+- 版本：2026-10-05 v3（覆盖至：当前工作区；Busy 落地链路与事务预算实践补录）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/event_log.py`（777 行）、`event_schema.py`、`config.py`、`versions.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`
@@ -26,7 +26,8 @@
 ### UC-8A3 并发写语义（Busy）
 - **触发**：多进程/多线程同时写。
 - **预期现象**：无法获取写权时抛出 **Busy 超时**（明确可重试错误）；不产生交错写坏行。
-- **依据**：`RuntimeEventLogBusyError`。
+- **规则与边界**：ReAct 写入路径（`append_model_message` 等）上的 Busy 超时按 fail-closed 落地——记 `Runtime V2 model append failed` WARNING 与 `runtime_v2_transaction_timeout … stage=in_process_lock` 诊断，该次运行结算为 `run_failed`（终态带错误文本），仍在飞、未结算的工具执行标为 `unknown`；不静默继续、不自动降级。预算与调整见 UC-8A5；大日志侧的治本手段见 05·UC-8E7。
+- **依据**：`RuntimeEventLogBusyError`、`agent_loop._runtime_v2_append_model_message`（告警后重抛）、`_RuntimeV2RunLifecycle`（终态唯一提交）。
 
 ### UC-8A4 损坏语义（Corruption）
 - **触发**：日志文件被截断/串行错乱。
@@ -36,6 +37,7 @@
 ### UC-8A5 运行时开关
 - **触发**：部署环境差异（V2 主/严格模式、事务超时）。
 - **预期现象**：`runtime_v2_primary/strict/enabled` 语义清晰；严格模式下不合规路径直接失败（而不是静默降级）。
+- **规则与边界**：ReAct 事务预算由 `RUNTIME_V2_REACT_TRANSACTION_TIMEOUT_SECONDS`（兼容旧名 `RUNTIME_V2_TRANSACTION_TIMEOUT_SECONDS`）控制，默认 10 s，非正值视为无限等待（维护类调用默认无限，避免误杀大整理）；2026-10-05 维护把部署值调至 30 s。预算只是容忍度——超大会话应先压缩（05·UC-8E7），否则排队仍会逼近上限。
 - **依据**：`config.py`（runtime_version / strict / timeout）、`versions.py`。
 
 ### UC-8A6 无新稀疏锚点时跳过索引维护
@@ -65,5 +67,6 @@
 
 ## 5. 版本记录
 
+- 2026-10-05 v3：补充 Busy 在 ReAct 写入路径的 fail-closed 落地链路（WARNING → `run_failed` → 在飞执行标 `unknown`）与事务预算实践（默认 10 s、部署 30 s）；交叉引用 05·UC-8E7。
 - 2026-09-30 v2：新增 UC-8A6/8A7，记录稀疏索引无变化跳过、读侧尾部/重建正确性、52 项专项回归，以及索引与两类锁获取诊断；事实日志提交保持原契约。
 - 2026-09-13 v1：拆分首版（承接 UC-801/802）。

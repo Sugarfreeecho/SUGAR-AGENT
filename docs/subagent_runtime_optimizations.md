@@ -67,7 +67,7 @@ task(action="worktree", resume="<child-id>", worktree_action="discard")
 ```
 
 `merge` 仍要求主工作树干净；冲突时自动 abort 并保留 worktree。`discard` 只删除通过路径
-校验的 MyAgent 托管 worktree。
+校验的 SugarAgent 托管 worktree。
 
 ## Plugin/MCP worktree 契约
 
@@ -138,4 +138,4 @@ in-progress 任务的 idle 成员分配。任务创建、完成、成员空闲�
 claim 和 dispatch，因此可连续唤醒成员。claim 仍通过事件事务和 CAS 完成，避免重复分配。
 进程重启后扫描活动 Team，可继续认领持久化的待办任务。
 
-当前调度器面向单 MyAgent 进程；尚未提供多实例分布式 leader election。
+当前调度器面向单 SugarAgent 进程；尚未提供多实例分布式 leader election。

@@ -1,6 +1,6 @@
 # 会话存储 Runtime V2 · 模块整体设计
 
-- 版本：2026-09-20 v4（覆盖至：当前工作区）
+- 版本：2026-10-05 v5（覆盖至：当前工作区；日志压缩实操与写预算维护补录）
 - 用途：本模块总入口；各功能专项设计按四字段逐条审查。
 - 适用实现：`app/runtime_v2/**`（26 文件：event_log / projector / ui_projection / model_projection / snapshot_store / history_ops / migration / repair / log_compaction / extension_state / subagent_store / run_registry / gateway / mirror / legacy_compat …）。
 - 配套：架构图 `workspace/archify_study/runtime_v2/runtime-v2.architecture.html`；能力清单 `会话存储RuntimeV2能力清单.md`（本文件夹）。
@@ -49,6 +49,7 @@ Agent 的"账本"：**events.jsonl 唯一真源** + 投影/快照/迁移/修复�
 
 ## 6. 版本记录
 
+- 2026-10-05 v5：补录超大会话写延迟治理实操（05·UC-8E7）、日志压缩门槛与校验细则（05·UC-8E4）及 Busy 落地链路 / 事务预算实践（01·UC-8A3/8A5）。
 - 2026-09-20 v4：补入未变化 context summary 的进程内提交去重与冷未命中权威读取边界。
 - 2026-09-20 v3：增加运行生命周期闭合不变式；运行注册、看门狗与孤儿对账统一到 exact run 身份。
 - 2026-09-14 v2：补充附件引用真源、懒迁移与跨模块边界。

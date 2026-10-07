@@ -40,7 +40,7 @@
 - **触发**：请求前组合注册表修订检查耗时升高。
 - **预期现象**：`tool_registry_revision_detail` 区分 MCP、session shape、extension、host、executor；host 另记线程 CPU。`host_catalog_revision_timing` 在 ≥50 ms 时记录 invoker 数量、排序、动态可用性回调累计耗时、最长回调名称/耗时及线程 CPU。
 - **规则与边界**：墙钟远大于该线程 CPU 只能说明该线程未持续计算，不能直接认定 MCP、GIL、锁或 I/O 是原因；需同窗口调用栈/子段证据。已有 MCP 后台目录刷新与 stale-hit 保留；本批未给 host 动态可用性回调增加 TTL，也未改变注册表版本失效或可执行性语义。
-- **依据**：`agent_loop.py::_combined_tool_registry_revision`、`host_tool_registry.py::HostToolRegistry.catalog_revision`；`tests/test_tool_registry.py`；复测数值与未验证项见 [09/05](../09-横切能力/05-性能优化基线与已完成项方案设计-UseCase清单.md)。
+- **依据**：`agent_loop.py::_combined_tool_registry_revision`、`host_tool_registry.py::HostToolInvokerRegistry.catalog_revision`；`tests/test_tool_registry.py`；复测数值与未验证项见 [09/05](../09-横切能力/05-性能优化基线与已完成项方案设计-UseCase清单.md)。
 
 ## 3. 边界
 
@@ -55,7 +55,7 @@
 | UC-3A2 | L53–152 |
 | UC-3A3 | L236+ |
 | UC-3A4 | `host_tool_registry.py`、`builtin_host_tools.py` |
-| UC-3A5 | `_combined_tool_registry_revision`、`HostToolRegistry.catalog_revision` |
+| UC-3A5 | `_combined_tool_registry_revision`、`HostToolInvokerRegistry.catalog_revision` |
 
 ## 5. 版本记录
 

@@ -115,11 +115,11 @@ manifest 骨架（要点）：
 ```json
 {
   "manifest_version": 3,
-  "name": "MyAgent Sidebar",
+  "name": "SugarAgent Sidebar",
   "key": "<固定扩展 ID 用的公钥>",
   "permissions": ["sidePanel", "scripting", "storage", "contextMenus", "activeTab"],
   "host_permissions": ["http://127.0.0.1:8192/*", "http://localhost:8192/*"],
-  "action": { "default_title": "打开 MyAgent 侧栏" },
+  "action": { "default_title": "打开 SugarAgent 侧栏" },
   "side_panel": { "default_path": "sidepanel.html" },
   "background": { "service_worker": "background.js" },
   "minimum_chrome_version": "116"

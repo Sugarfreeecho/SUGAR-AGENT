@@ -20,8 +20,8 @@ Qwen Chat Completions 的安全下限是：system 若存在，必须位于消息
 
 1. dsh 用模型能力声明决定是否允许 in-history system；缺省按单一首部 system 处理。
 2. dsh 的 `llm-pi-ai/src/context.ts::splitSystemPrompt` 在只有一个 system 槽位时，让未占用槽位的后置 system 原位折叠为 user，以保留时序。
-3. MyAgent 继续保留多来源 system 的 Core 表达，在请求适配边界采用同样的“**保位置优先于保角色**”策略。
-4. MyAgent 增加工具事务保护：若降级为 user 会切断尚未闭合的 `assistant(tool_calls) → tool` 链，则保角色优先，将该 system 并入首部。
+3. SugarAgent 继续保留多来源 system 的 Core 表达，在请求适配边界采用同样的“**保位置优先于保角色**”策略。
+4. SugarAgent 增加工具事务保护：若降级为 user 会切断尚未闭合的 `assistant(tool_calls) → tool` 链，则保角色优先，将该 system 并入首部。
 
 因此，本设计不是“全局拼接提示词”，而是“按候选模型能力进行无持久副作用的请求投影”。
 

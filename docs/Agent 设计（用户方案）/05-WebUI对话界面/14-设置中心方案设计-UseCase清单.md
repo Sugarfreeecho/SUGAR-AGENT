@@ -51,9 +51,9 @@
 
 ## 3. 边界
 
-- `/setup` 配置向导不动；与设置中心共享同一份 `model_profiles.json`，互不侵入。
+- `/setup` 配置向导不动；与设置中心共享同一份 `.sugaragent/model_profiles.json`，互不侵入。
 - 技能/插件安装区支持本地路径与目录或 ZIP/TAR 拖入（`/api/skills/install-upload`、`/api/plugins/install-upload`；≤5000 文件/≤200 MiB，拒绝非法路径与特殊文件）。
-- 防脏写：验证流程逐分区比对 `model_profiles.json`、`mcp_servers.json`、`.sugaragent/skill_states.json`、`app/.env` 的 SHA256（见验证报告）。
+- 防脏写：验证流程逐分区比对 `.sugaragent/model_profiles.json`、`.sugaragent/mcp_servers.json`、`.sugaragent/skill_states.json`、`app/.env` 的 SHA256（见验证报告）。
 
 ## 4. 依据映射
 

@@ -1,8 +1,8 @@
-# MyAgent · 全模块功能方案设计（UseCase 清单）
+# SugarAgent · 全模块功能方案设计（UseCase 清单）
 
 - 版本：2026-09-13（覆盖至：HEAD `6acc6bf` + 工作区未提交改动——含告警分级、网络恢复、模型档案刷新等）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
-- 适用：MyAgent 全量模块——LLM 接入 / ReAct 运行时 / 工具系统 / 工作区 / WebUI / 能力扩展 / 权限审批 / 会话存储 Runtime V2 / 横切能力（压缩、识图、告警、观测）。
+- 适用：SugarAgent 全量模块——LLM 接入 / ReAct 运行时 / 工具系统 / 工作区 / WebUI / 能力扩展 / 权限审批 / 会话存储 Runtime V2 / 横切能力（压缩、识图、告警、观测）。
 - 配套资料（同目录）：8 份《能力清单》Markdown；架构 HTML 与交付回执位于 `workspace/archify_study/`。
 
 ---
@@ -24,7 +24,7 @@
 
 ## 1. 功能定位与范围
 
-**一句话**：MyAgent 是一个本地运行的通用 Agent 应用——对话界面（WebUI）+ ReAct 执行内核 + 完整工具链（文件/Shell/Web/任务）+ 可扩展体系（插件/技能/MCP/Hooks）+ 安全审批 + 事件溯源式会话存储（Runtime V2）。
+**一句话**：SugarAgent 是一个本地运行的通用 Agent 应用——对话界面（WebUI）+ ReAct 执行内核 + 完整工具链（文件/Shell/Web/任务）+ 可扩展体系（插件/技能/MCP/Hooks）+ 安全审批 + 事件溯源式会话存储（Runtime V2）。
 
 **目标**：
 1. 任意 OpenAI 兼容 / OpenAI Responses / Anthropic 三类端点皆可接入，模型可自动或手动切换；

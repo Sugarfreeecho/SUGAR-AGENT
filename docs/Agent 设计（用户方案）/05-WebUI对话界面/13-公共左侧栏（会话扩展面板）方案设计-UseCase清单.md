@@ -1,6 +1,6 @@
 # 公共左侧栏（会话扩展面板）· 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-04 v3（覆盖至：当前工作区；统一悬停说明与自适应面板宽度）
+- 版本：2026-10-07 v4（覆盖至：当前工作区；栏内插件内容等样式就绪后再入栏）
 - 用途：逐条审查（四字段格式）；核对聊天区左缘「会话扩展面板」是否统一为**一条公共栏（页签式，方案 B）**——一套外壳、一套页签显隐、一套避让/降级逻辑，而不是多套卡片与多套规则并存。
 - 适用实现（拟落点）：新增 `frontend/src/app/modules/public-sidebar.js`；改造 `frontend/src/app/plugin-ui-slots.js`、`frontend/src/app/modules/layout-panels.js`、`frontend/src/app/modules/toc-todo.js`、`frontend/src/styles/app.css`、`frontend/src/shell-body.html`、`frontend/index.html`；插件侧 `plugins/session-todo/**`、`plugins/agent-goal/**`、`plugins/change-review/web/change-review.{js,css}`；后端 `app/plugins/ui.py`（`session.panel` 透传 `group`）；词条 `frontend/src/app/modules/i18n.js`。
 - 上级：`00-WebUI对话界面整体设计.md`｜相关：`11-工作区双侧面板视觉系统方案设计-UseCase清单.md`（视觉原语继承、本条收口“多栏共生”）、`../06-能力扩展加载/08-内置插件-改动审查方案设计-UseCase清单.md`（改动审查内容）、`../../plugin_api_v1.md`（拟增 `group` 字段，实现后同步）。
@@ -80,7 +80,8 @@
 - **触发**：Todo / Goal / 插件面板渲染与清理。
 - **预期现象**：Todo、Goal 仍由插件自绘内容；其余面板仍由宿主声明式渲染；渲染器只被要求“放进页签”，不被要求重写业务。
 - **规则与边界**：`renderSessionPanel(context)`、cleanup（返回 false 保留）、action（`/api/extensions/session-action`）协议不变；插件专有类名（`chat-todo-plan-panel`、`chat-goal-card` 等）留在插件侧，核心不引用；插件 CSS 收敛为“透明节”，不再自建卡壳。
-- **依据**：`plugin-ui-slots.js::renderSessionPanels`；`plugins/{session-todo,agent-goal}/web/session-panel.{js,css}`；`tests/test_plugin_ui_frontend.py`。
+- **规则与边界（样式就绪才入栏）**：栏内/浮窗内插件内容（改动审查卡片、计划/目标面板）只在**插件样式表生效之后**才挂载——宿主在装渲染器前等待 `link` 就绪（`load` / `error` / 8 s 有界超时兜底，见 06/04·UC-6D2），避免"先出一帧未套样式的灰白 `±` 数字"。插件渲染器自身不等待样式；样式失败不阻塞（照旧挂载，仅缺插件样式）。
+- **依据**：`plugin-ui-slots.js::renderSessionPanels`、`pluginStyleReady / ensurePluginStyleLink`；`plugins/{session-todo,agent-goal}/web/session-panel.{js,css}`；`tests/test_plugin_ui_frontend.py`、`tests/js/plugin_ui_slots_runtime.mjs`（样式就绪用例）。
 
 ### UC-5M10 视觉规格（继承 05/11）
 - **触发**：在 light / dark / neutral dark 主题与中英文间切换。
@@ -174,6 +175,7 @@
 
 ## 7. 版本记录
 
+- 2026-10-07 v4：UC-5M9 补"样式就绪才入栏"——宿主挂载插件渲染器前等待其样式表（`pluginStyleReady`，8 s 有界 + error/超时兜底），消除改动审查 `±` 数字"先灰白、1–2 秒后才变红绿"的现象；依据 `plugin-ui-slots.js`，回归 `tests/js/plugin_ui_slots_runtime.mjs` 与 `tests/test_plugin_ui_frontend.py`（详见 `../../CHANGELOG-2026-10-07-插件样式上屏时序修复.md`）。
 - 2026-10-04 v3：新增 UC-5M15《统一悬停说明与自适应面板宽度》——悬停说明全面走 `setUiHoverTip`（布局前绑定、实时更新）；面板宽度变量化并自适应填充（原宽下限）。
 
 - 2026-10-03 v9.4：**计划「进行中」图标改为描边播放三角（参考 DSH/ZCode）**——原 3/4 缺口弧环辨识度差、已退役。参考口径：DSH（`packages/client/ui-tool/.../ToolDetails.tsx`）进行中 = `IconPlayOutlineRegular` 14px、完成 = 对勾、待办 = 10×10 描边方块，且无动画（该包无 `@keyframes`）；ZCode（`apps/zcode-cli/packages/tui/src/app-sidebar.tsx`）侧栏标记 = `[x] / [>] / [ ]`，进行中取 `palette.accent` 强调色。本实现采用描边播放三角（沿用 `.todo-plan-status-icon` 的 stroke 家族 + 既有 `--accent` 高亮，未加动画），path 由 `M12 3.8A8.2 8.2 0 1 1 3.8 12` 改为 `M8.6 6.6 17.6 12 8.6 17.4Z`；待办圆环与完成「圆环+对勾」保持不变。验证：pytest（新增 `test_todo_in_progress_icon_uses_play_glyph_like_dsh_and_zcode`，断言新 path 存在且旧弧环已移除）+ 实机 DOM 探针（进行中 path 生效）+ 截图（`workspace/左侧栏统一_分析/浮窗截图/计划图标_进行中_播放三角_特写.png`、`计划图标_进行中_播放三角_左栏.png`）。

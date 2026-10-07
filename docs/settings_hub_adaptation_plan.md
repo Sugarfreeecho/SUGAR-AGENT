@@ -1,7 +1,7 @@
-# MyAgent 设置中心（单页集成）学习适配方案
+# SugarAgent 设置中心（单页集成）学习适配方案
 
 > 分析对象：ZCode（`D:\AI\AI Agent\OpenAgent\ZCode-main`）、DeepSeek Harness 简称 DSH（`D:\AI\AI Agent\OpenAgent\Deepseek Harness\deepseek-harness`）
-> 落地对象：MyAgent（本仓库）
+> 落地对象：SugarAgent（本仓库）
 > 目标：**把当前散落在 5 个入口的设置活动全部集成到一个「设置中心」页面里**；`/setup` 配置向导保持现状不动。
 
 ---
@@ -9,10 +9,10 @@
 ## 1. 结论先行
 
 1. **两家参考实现的形态不同，但收敛结论一致**：ZCode 是「应用内全屏设置页 + 左栏分类 + 右栏内容」（`packages/ui/src/SettingsPage.tsx`），DSH 是「主窗口内的模态对话框 + 左栏 188px 分类 + 右栏表单」（`ui-settings-general/src/client/SettingsRoot.tsx:76-84`、`SettingsRoot.module.css:89-90, 109-116`）。**都把全部设置收进一个页面/面板，用分类导航切换，而不是散成多个独立页面。**
-2. **MyAgent 当前恰恰是散页形态**：聊天页「界面设置」弹窗（`frontend/src/app/modules/settings.js`）+ `/setup/env`（`app/templates/advance_config.html`，114KB）+ `/setup/mcp`（`mcp_config.html`）+ `/setup/extensions`（`extensions_config.html`）+ 托盘两个菜单项（`tray_launcher.py:894-896`），其中 MCP、插件、权限在三处以上存在重复入口与重复实现。
+2. **SugarAgent 当前恰恰是散页形态**：聊天页「界面设置」弹窗（`frontend/src/app/modules/settings.js`）+ `/setup/env`（`app/templates/advance_config.html`，114KB）+ `/setup/mcp`（`mcp_config.html`）+ `/setup/extensions`（`extensions_config.html`）+ 托盘两个菜单项（`tray_launcher.py:894-896`），其中 MCP、插件、权限在三处以上存在重复入口与重复实现。
 3. **建议方案**：新增单一 `/settings` 设置中心页（无构建步骤的静态页，与现有 setup 页同源），采用**注册表驱动的分区（section）** 结构（学 DSH 的 `settings.section` 槽位），左栏分组导航 + 右栏内容 + 顶部全局搜索（学 ZCode 的导航/面包屑/作用域徽标），**统一保存语义与串行写队列**（学 ZCode 的 `settingsWriteQueue`），**显示"默认 / 已覆盖"来源三态与密钥只写不读**（学 DSH 的 `describe(value/base/user)` 与 `credential-ref`）。
 4. 旧路由 `/setup/env`、`/setup/mcp`、`/setup/extensions` **不删除**，改为渲染同一个设置中心并按 section 预选（深链兼容），保证托盘、文档、现有测试与用户收藏链接不断。
-5. `/setup` 配置向导**完全不动**：它只依赖"是否存在可用 model profile"这一门槛（`app/webui.py:7187-7223`），设置中心与它共享同一份 `model_profiles.json`，互不侵入。
+5. `/setup` 配置向导**完全不动**：它只依赖"是否存在可用 model profile"这一门槛（`app/webui.py:7187-7223`），设置中心与它共享同一份 `.sugaragent/model_profiles.json`，互不侵入。
 
 ---
 
@@ -22,7 +22,7 @@
 |---|---|
 | 参考 A | ZCode 主仓，重点 `packages/ui/src/settings/*`、`packages/services/src/setting/*`、`lib/settingsNavigation.ts`、`settingsPageConfig.ts` |
 | 参考 B | DSH 主仓，重点 `packages/client/ui-settings*/`（10 个包 + README.zh.md）、`packages/settings/settings/src/*`、`packages/client/AGENTS.md` |
-| 本文对 MyAgent 的证据 | 仓库内静态阅读，均给出「文件:行」引用；未运行任何修改 |
+| 本文对 SugarAgent 的证据 | 仓库内静态阅读，均给出「文件:行」引用；未运行任何修改 |
 | 未验证项 | ZCode `migration` section 无入口（疑似 dead path）；DSH `navIcon` 里 `archived-sessions` 无注册方。两者均不影响本方案 |
 
 ---
@@ -110,7 +110,7 @@
 
 ## 5. 两家对照与共识
 
-| 维度 | ZCode | DSH | 对 MyAgent 的结论 |
+| 维度 | ZCode | DSH | 对 SugarAgent 的结论 |
 |---|---|---|---|
 | 容器 | 应用内全屏设置页（合成 tab + 覆盖层） | 主窗口模态对话框（portal） | 取"**一个页面**"；形态选静态页（见 §8 D1） |
 | 导航 | 3 组 16 分区 + 面包屑 + 页内 Tabs | 5 分区（order 账本）+ 行槽位 | **注册表驱动 + 分组**，分组数控制在 5 以内 |
@@ -119,12 +119,12 @@
 | 并发写 | 单写队列 + 提交临界区不可超时 | revision 栅栏 + 冲突保留草稿 | 两者都要：**前端串行 + 后端版本/冲突语义** |
 | 来源可见性 | 作用域徽标 default/user/workspace | value/base/user 三态 + 恢复默认 | **显示"默认 / 已覆盖" + 一键恢复默认** |
 | 密钥 | — | 只写只回存在性（credential-ref） | 已有 `_env_key_sensitive`（`webui.py:7498`），升级为"只写 + 显示是否已配置" |
-| 扩展贡献 | 固定 section 列表（config 驱动） | 完全槽位化，第三方可插 | MyAgent 已有 `settings.section` 插件槽（`plugin-ui-slots.js:169`）→ **合并进同一页面** |
-| 主要缺点 | 巨文件 + 双轨 IA + 双持久化通道 | 包膨胀 + 插件配置双入口 + 无搜索 | 都要在 MyAgent 里提前规避 |
+| 扩展贡献 | 固定 section 列表（config 驱动） | 完全槽位化，第三方可插 | SugarAgent 已有 `settings.section` 插件槽（`plugin-ui-slots.js:169`）→ **合并进同一页面** |
+| 主要缺点 | 巨文件 + 双轨 IA + 双持久化通道 | 包膨胀 + 插件配置双入口 + 无搜索 | 都要在 SugarAgent 里提前规避 |
 
 ---
 
-## 6. MyAgent 现状清点
+## 6. SugarAgent 现状清点
 
 ### 6.1 现有设置入口全景
 
@@ -146,9 +146,9 @@
 | 1 | 界面风格、字号、会话目录密度、语言 | 聊天弹窗 | localStorage：`myagent-theme` / `myagent-font-level` / `myagent-session-list-mode` / `myagent-language`（应用逻辑 `settings.js:88-102`） | 常规 › 外观与语言 |
 | 2 | 新会话默认权限模式 | 聊天页权限下拉 | localStorage `myagent-new-session-permission-mode`（`permissions.js:4-41`） | 常规 › 新会话默认 |
 | 3 | 新会话默认模型档案 | 聊天页模型下拉 | localStorage `myagent-new-session-model-profile`（`model-profiles.js:10-36`）+ `/api/model_profiles` | 常规 › 新会话默认 |
-| 4 | 模型档案 CRUD / 排序 / 启停 / 上下文探测 | `/setup/env`「模型配置」 | `model_profiles.json` + `/api/model_profiles*`（`webui.py:3684-3798`） | 模型与连接 › 模型档案 |
+| 4 | 模型档案 CRUD / 排序 / 启停 / 上下文探测 | `/setup/env`「模型配置」 | `.sugaragent/model_profiles.json` + `/api/model_profiles*`（`webui.py:3684-3798`） | 模型与连接 › 模型档案 |
 | 5 | 环境变量分组编辑（7 组 + 其他） | `/setup/env`「环境变量」 | `app/.env` + `/api/env`（`webui.py:7249-7370` 分组表、`:8093` 读、`:8189` 写） | 运行时与环境 › 环境变量 |
-| 6 | MCP 服务器配置（JSON 文本） | `/setup/env`「MCP」、`/setup/mcp` | `mcp_servers.json` + `/api/mcp_config`（`webui.py:8045-8092`） | 能力与扩展 › MCP |
+| 6 | MCP 服务器配置（JSON 文本） | `/setup/env`「MCP」、`/setup/mcp` | `.sugaragent/mcp_servers.json` + `/api/mcp_config`（`webui.py:8045-8092`） | 能力与扩展 › MCP |
 | 7 | MCP 工具开关 / 服务器注册 | 聊天页 Skill 弹层「MCP」页签 | `/api/mcp/tools`、`/api/mcp/servers/{name}/register`、`/api/mcp/tools/{fn}/enabled` | 能力与扩展 › MCP |
 | 8 | 插件启停 | 聊天页 Skill 弹层「插件」、`/setup/env` 插件表 | `/api/plugins/{id}/enabled`（`webui.py:7828`） | 能力与扩展 › 插件 |
 | 9 | 插件安装 / 更新 / 删除 / 依赖 | `/setup/extensions` | `/api/plugins/install`、`DELETE /api/plugins/{id}`、`/dependencies` | 能力与扩展 › 插件 |
@@ -164,7 +164,7 @@
 | 19 | 其它总开关（SECURITY / EGRESS_HELPER / HOOKS / PLUGINS / EXTENSION_REGISTRATION_APPROVAL / AGENT_TEAM） | 混在环境变量文本里 | `.env`（默认注入见 `webui.py:8099-8106`；`AGENT_TEAM_ENABLED` 见 `app/agent_team/config.py:9`） | 常规 › 功能开关 |
 | 20 | 托盘 / 文档 / 面板互链 | 见 §6.1 | — | 统一收敛到「设置中心」+ 深链 |
 
-> 说明：会话级设置（当前会话的模型与权限模式）**不进设置中心**，中心只提供"新会话默认值"，避免把"当前状态"和"默认配置"混在一页（ZCode 用作用域徽标表达同类区分，MyAgent 用分区归属表达）。
+> 说明：会话级设置（当前会话的模型与权限模式）**不进设置中心**，中心只提供"新会话默认值"，避免把"当前状态"和"默认配置"混在一页（ZCode 用作用域徽标表达同类区分，SugarAgent 用分区归属表达）。
 
 ### 6.3 现存问题（单页集成的动因）
 
@@ -541,10 +541,10 @@ patch(key, value) → 域内写队列（env / models / mcp / plugins 四个域�
 「通用」分区里一颗药丸式步进器（数值居中、悬停显出贴在右侧的上下箭头列），后面跟 `px` 单位，
 取值是**整数 12–17 px**、默认 14，落到正文轴 `--dsh-content-font-size`（`packages/client/ui-theme/src/{theme-settings.ts,client/FontSizeRow.tsx}`）。
 
-| 项 | MyAgent 落地 |
+| 项 | SugarAgent 落地 |
 | --- | --- |
 | 控件 | 同样式药丸：药丸内是**可直接输入的数值**（DSH 那里只读、只能点箭头），右侧悬浮上下箭头（悬停/聚焦显出），尾巴 `px`；行下加一句「12–20 px，可直接输入数字，或点右侧箭头逐级调」 |
-| 范围 | 12–20 px、整数、默认 16（DSH 是 12–17/默认 14；MyAgent 原来的「标准」= 16px，保持观感不动，上限放宽到 20） |
+| 范围 | 12–20 px、整数、默认 16（DSH 是 12–17/默认 14；SugarAgent 原来的「标准」= 16px，保持观感不动，上限放宽到 20） |
 | 存储 | 新增 `myagent-font-size-px`；旧的 `myagent-font-level`（0/1/2 = 14/16/17）仍然同步维护，老读者不受影响；缺 px 键时按档位回落 |
 | 应用 | 聊天页 `applyFontSize(px)` 设 root 字号 + `data-font-size`（保留 `data-font-level`），`restoreUiPreferences()` 以 px 为准；设置中心把 `--st-fs*` 按「px − 2」为基准等比换算 |
 | 实时 | 走 §15.5 的偏好回推：输入/点箭头立刻写 localStorage 并 postMessage，浮层背后聊天页当帧跟变 |
