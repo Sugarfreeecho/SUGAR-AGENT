@@ -1,6 +1,6 @@
 # 性能优化基线与已完成项 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v4（覆盖至：当前工作区；增加 change-review 批次优化与独立 A/B）
+- 版本：2026-10-07 v5（覆盖至：当前工作区；会话加载第三波：UI 行存储、执行检查点与有界派生缓存）
 - 用途：把历史性能完成项和本会话已实现的本地运行优化转成稳定索引、验收口径和模块归属；实现完成与性能目标达成分别记录。
 - 适用实现：`app/agent_{loop,harness,goal,openai,tokenizer,tools}.py`、`app/execution_metrics.py`、`app/stream_event_bridge.py`、`app/host_tool_registry.py`、`app/attachments/**`、Runtime V2 与扩展加载相关实现。
 - 上级：`00-横切能力整体设计.md`
@@ -227,6 +227,23 @@ change-review 扫描边界依据 `plugins/change-review/store.py::_ensure_worksp
 
 **正确性验证**：本批 207 passed：`test_change_review_plugin.py`、`test_plugin_ui_frontend.py`、`test_agent_loop_runtime_v2.py`、`test_stream_resilience.py`、`test_agent_harness_reconcile.py`。新增覆盖 5 次写入仅一次补扫、声明路径立即采用 turn 起点、外部工具边界、重启/outbox 重试、提交失败、基线清理与历史修剪、完整签名并行/恢复 mtime、首次文件上限、UI/模型投影隔离、源会话与历史晚展开/重复/隔离；`execution_recovery_runtime.cjs` 另验证重建工具行保留执行范围。前端 Vite build 已成功；本批不与历史重叠回归组相加成全量成绩。
 
+### 4.7 会话加载第三波：UI 行存储、执行检查点与有界派生缓存（2026-10-07）
+
+**本批实现**（实现完成；本批只做机制与正确性证据，未做新的整体性能测量）：
+
+| 机制 | 落地与边界 |
+|---|---|
+| UI 行存储 | 新增 `ui_row_store.py`：不可变行段 `ui_rows_*.jsonl`（每行 sha256 + 文件号/偏移/长度定位），索引只存 `row_locations`/`row_version`；读取按位置直取并逐段校验，损坏时经失效路径重建一次；旧代在 120 s 宽限后回收 |
+| 执行恢复检查点 | 新增 `recovery_checkpoint.py`：终态事件（助手终稿/`run_finished`/`failed`/`interrupted`）后合并调度后台检查点（每会话一个实时引用、待写 ≤64、估算 ≤64 MB）；跨进程锁 + 原子替换写 `execution_recovery.chk`；`cancel()` 接入会话删除；失败只告警、不反噬持久事实 |
+| 派生缓存守卫 | 新增 `derived_cache.py`：head/tail 4 KiB + 文件身份 + mtime/size 的廉价"追加式"守卫；发布前双相 `seal_source`（全量 sha256）；"等大小但 mtime 变化"= 修复过的日志，永不信任 |
+| 有界缓存 | 执行日志 128 MB、UI 事件 128 MB、索引 32 MB、页 64 MB 软预算与修剪；活跃生成中的会话不受修剪；生成中会话的首页缓存只保留最新一页 |
+| 字节边界回读 | `event_log.iter_from_offset`/`read_metadata`：从已封存边界重放；非单调或读取期间源被替换时丢弃缓存并只回退一次（不回退到无界重试） |
+| 观测 | `/history_snapshot` 载荷与日志新增 `loading_diagnostics`（索引/页/行来源、锁等待、回放事件与字节、拷贝耗时、记录数） |
+
+**边界**：全部为可重建派生品——任何失效（版本不符、校验失败、段损坏、源被替换）只丢弃并从事实重放，绝不把持久追加失败化或重试已执行工具；`min_runtime_seq` 过滤下移只是省去"先物化再丢弃"（与旧的后置过滤语义一致）。
+
+**验证**：随机制更新 7 处契约（页面来源标签 `runtime_v2_seq_index → runtime_v2_ui_rows`；"边读边追加"挂点迁移到行存储/迭代边界；陈旧索引重建在缓存失效后走磁盘路径）；全量 pytest **2311 passed / 5 skipped / 0 failed**、node 34/34。**收益未测**：打开会话的整体提速仍需新代码加载后的同任务复测。
+
 ## 5. 边界
 
 - 本篇不取代各模块专项：网络、分词、工具、Skills、Runtime V2 和附件的详细行为以对应 UC 为准。
@@ -235,6 +252,7 @@ change-review 扫描边界依据 `plugins/change-review/store.py::_ensure_worksp
 
 ## 6. 版本记录
 
+- 2026-10-07 v5：新增 §4.7，记录会话加载第三波（UI 行存储、执行恢复检查点、派生缓存守卫、有界缓存与 `loading_diagnostics`）；全部为可重建派生品、失败只降级，7 处契约随机制更新，整体收益待复测。
 - 2026-10-05 v4：增加 UC-9E8/§4.6，记录 P2 默认批次合并、P1 保守配置和实测否定默认并行、P6 分段与显式保险丝、耐久补扫/严格交付及 1006/4301 文件 A/B；明确单次 sweep、首次基线和生产整体目标仍未证明改善。
 - 2026-10-05 v3：完整补录本会话 09-29/30 的 6 项优化与配套计时修正/诊断，建立 10 行模块映射；保留三次直接轮间复测、Goal 采样/复制 A/B、专项验证、四类同步事实边界和未达成状态；注明 10-05 change-review 仍有全量枚举现状。
 - 2026-09-23 v2：移除 3.18 长会话软收敛检查点行与 UC-9E4 的收敛描述；相关落点同步下架。

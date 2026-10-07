@@ -1,6 +1,6 @@
 # 事件日志与错误语义 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v3（覆盖至：当前工作区；Busy 落地链路与事务预算实践补录）
+- 版本：2026-10-07 v4（覆盖至：当前工作区；派生加速器：UI 行段与执行恢复检查点）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/event_log.py`（777 行）、`event_schema.py`、`config.py`、`versions.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`
@@ -56,6 +56,13 @@
 - **规则与边界**：原 Busy 超时与跨进程互斥保持；进程内 RLock 本来已按会话复用，本批没有延长 Windows `msvcrt.locking` 持锁窗口。无达到阈值的记录只表示未观测到相应慢事件，不能证明不存在更短等待。
 - **依据**：`SessionEventLog._lock_for` 及事务锁/索引计时；[09/04 · UC-9D11](../09-横切能力/04-观测与运行看板方案设计-UseCase清单.md)。
 
+### UC-8A8 派生加速器：UI 行段与执行恢复检查点（2026-10-07）
+
+- **触发**：打开历史页/翻页/追加后扩展索引；执行日志终态事件提交后。
+- **预期现象**：UI 索引可只引用行段位置（`row_locations` + `UI_ROW_PROJECTION_VERSION`），按偏移直读并逐段 sha256 校验；执行日志冷读优先加载检查点（`EXECUTION_RECOVERY_VERSION`），再从其封存的字节边界增量回放。
+- **规则与边界**：全部为**可重建派生品**——版本不符、源被替换、校验失败、段损坏只丢弃并回到事实重放，绝不让持久追加失败化；发布前对事件源做双相封存（head/tail 廉价守卫 + 全量 sha256）；"等大小但 mtime 变化"按修复过的日志拒绝信任；跨进程写检查点复用快照存储的跨进程锁；**删除会话先取消待写检查点**；加载与逐出只影响速度，不影响事件语义与修复路径（UC-8A4）。
+- **依据**：`ui_row_store.py`、`recovery_checkpoint.py`、`derived_cache.py`、`event_log.iter_from_offset`、`execution_journal.read/checkpoint_cached`；`tests/runtime_v2/test_ui_projection.py`、`tests/test_session_loading_performance.py`。
+
 ## 3. 边界
 
 - 事件类型清单由 `event_schema.py` 白名单管理（新增类型需要登记）；
@@ -67,6 +74,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-07 v4：新增 UC-8A8（UI 行段与执行恢复检查点；派生失败只降级、双相封存、删除会话取消语义）。
 - 2026-10-05 v3：补充 Busy 在 ReAct 写入路径的 fail-closed 落地链路（WARNING → `run_failed` → 在飞执行标 `unknown`）与事务预算实践（默认 10 s、部署 30 s）；交叉引用 05·UC-8E7。
 - 2026-09-30 v2：新增 UC-8A6/8A7，记录稀疏索引无变化跳过、读侧尾部/重建正确性、52 项专项回归，以及索引与两类锁获取诊断；事实日志提交保持原契约。
 - 2026-09-13 v1：拆分首版（承接 UC-801/802）。
