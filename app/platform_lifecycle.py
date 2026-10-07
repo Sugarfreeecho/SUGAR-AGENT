@@ -23,7 +23,18 @@ except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
 
 
 HOST = "127.0.0.1"
-PORT = 8192
+
+
+def _env_port() -> int:
+    """桌面版/多实例：允许用 MYAGENT_SERVER_PORT 覆盖端口，默认 8192。"""
+
+    try:
+        return int(os.getenv("MYAGENT_SERVER_PORT") or 8192)
+    except (TypeError, ValueError):
+        return 8192
+
+
+PORT = _env_port()
 BASE_URL = f"http://{HOST}:{PORT}"
 SYSTEMD_UNIT = "sugaragent.service"
 LAUNCHD_SERVER_LABEL = "com.sugaragent.server"

@@ -1,0 +1,42 @@
+# SugarAgent 桌面版内置依赖（派生自 app/requirements.txt，做减法）
+#
+# 保留：应用本体运行时真正需要的库
+# 移除（体积/场景原因，用户后续可按需 pip 安装到内置运行时）：
+#   playwright      —— 浏览器自动化（含浏览器内核，>300MB）
+#   matplotlib      —— 图表绘制
+#   pandas          —— 数据分析
+#   pymupdf         —— PDF 渲染（保留轻量的 pdfplumber 用于取文本/表格）
+#   markitdown      —— 文档转 Markdown
+#   sentry-sdk / coverage / pytest / pytest-asyncio  —— 开发与监控工具
+#   python-magic    —— Windows 上需额外 libmagic
+aiofiles==23.2.1
+aiohttp==3.9.0
+cachetools==5.3.2
+chardet==5.2.0
+ddgs==9.0
+defusedxml
+fastapi==0.136.1
+httptools==0.6.1
+httpx
+jinja2
+jsonschema>=4.18,<5
+lark-oapi
+loguru==0.7.3
+mcp==1.28.1
+openai>=1.30,<3
+openpyxl
+orjson==3.9.0
+packaging>=23.2
+pdfplumber
+pillow
+psutil>=5.9,<8
+python-dotenv
+python-multipart
+pywin32; sys_platform == "win32"
+pyyaml
+requests
+ripgrep==14.1.0
+sse-starlette
+tiktoken==0.9.0
+tokenizers==0.15.0
+uvicorn

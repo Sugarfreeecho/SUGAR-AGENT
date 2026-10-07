@@ -67,7 +67,18 @@ MSG_UPDATE_CONFIRM = (
 MSG_OPERATION_BUSY = "Agent \u6b63\u5728\u6267\u884c\u91cd\u542f\u6216\u66f4\u65b0\uff0c\u8bf7\u7a0d\u5019\u3002"
 
 HOST = "127.0.0.1"
-PORT = 8192
+
+
+def _env_port() -> int:
+    """桌面版/多实例：允许用 MYAGENT_SERVER_PORT 覆盖端口，默认 8192。"""
+
+    try:
+        return int(os.getenv("MYAGENT_SERVER_PORT") or 8192)
+    except (TypeError, ValueError):
+        return 8192
+
+
+PORT = _env_port()
 BASE_URL = f"http://{HOST}:{PORT}"
 WM_TRAY = win32con.WM_USER + 20
 WM_RESTORE_TRAY = win32con.WM_USER + 21

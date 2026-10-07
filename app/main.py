@@ -70,7 +70,11 @@ if __name__ == "__main__":
     refresh_executor_client_from_env()
 
     _listen_host = "127.0.0.1"
-    _listen_port = 8192
+    # 桌面版/多实例支持：允许用 MYAGENT_SERVER_PORT 覆盖监听端口（默认仍是 8192）。
+    try:
+        _listen_port = int(os.getenv("MYAGENT_SERVER_PORT") or 8192)
+    except (TypeError, ValueError):
+        _listen_port = 8192
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

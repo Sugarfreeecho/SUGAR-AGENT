@@ -28,7 +28,18 @@ except ImportError:
 
 APP_NAME = "Agent 智能会话助手"
 HOST = "127.0.0.1"
-PORT = 8192
+
+
+def _env_port() -> int:
+    """桌面版/多实例：允许用 MYAGENT_SERVER_PORT 覆盖端口，默认 8192。"""
+
+    try:
+        return int(os.getenv("MYAGENT_SERVER_PORT") or 8192)
+    except (TypeError, ValueError):
+        return 8192
+
+
+PORT = _env_port()
 PROCESS_SYNCHRONIZE = 0x00100000
 WAIT_TIMEOUT = 0x00000102
 CREATE_FLAGS = (

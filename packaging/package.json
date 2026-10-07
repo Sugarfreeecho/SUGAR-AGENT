@@ -1,0 +1,22 @@
+{
+  "name": "sugaragent",
+  "productName": "SugarAgent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SugarAgent 桌面版：Electron 外壳 + 便携 Python 运行时 + NSIS 一键安装包",
+  "author": "SugarAgent",
+  "license": "UNLICENSED",
+  "main": "electron/main.js",
+  "scripts": {
+    "payload": "node scripts/prepare-payload.mjs",
+    "payload:fast": "node scripts/prepare-payload.mjs --skip-deps --skip-frontend",
+    "icons": "python ../python/python.exe scripts/make-icons.py",
+    "dist:dir": "node scripts/build.mjs --dir",
+    "dist": "node scripts/build.mjs",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3"
+  }
+}
