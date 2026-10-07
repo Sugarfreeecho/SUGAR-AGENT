@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>General Agent · 设置</title>
+<title>SugarAgent · 设置</title>
 <link rel="icon" href="data:,">
 <script>
 window.__MYAGENT_SETTINGS__ = __SETTINGS_BOOTSTRAP__;
@@ -19,6 +19,21 @@ window.__MYAGENT_SETTINGS__ = __SETTINGS_BOOTSTRAP__;
   if (window.__MYAGENT_SETTINGS__.embedded || window.self !== window.top) {
     root.classList.add('st-embedded');
   }
+  /* 字号：与 core.js 的 applyStFontSize 同款，提前应用避免首帧闪变（--st-fs* 供 settings.css 消费）。 */
+  try {
+    var fp = parseInt(localStorage.getItem('myagent-font-size-px'), 10);
+    if (isNaN(fp)) {
+      var lv = parseInt(localStorage.getItem('myagent-font-level'), 10);
+      if (isNaN(lv) || lv < 0 || lv > 2) lv = 1;
+      fp = [14, 16, 17][lv];
+    }
+    fp = Math.max(12, Math.min(20, Math.round(fp)));
+    var sbase = Math.max(11, fp - 2);
+    root.style.setProperty('--st-fs', sbase + 'px');
+    root.style.setProperty('--st-fs-lg', fp + 'px');
+    root.style.setProperty('--st-fs-sm', Math.max(10, sbase - 1) + 'px');
+    root.style.setProperty('--st-fs-xs', Math.max(9, sbase - 2) + 'px');
+  } catch (e2) { /* 保持默认档 */ }
 })();
 </script>
 <link rel="stylesheet" href="/static/settings/settings.css?v=__SETTINGS_ASSET_VERSION__">

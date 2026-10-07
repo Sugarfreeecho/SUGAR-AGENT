@@ -1766,7 +1766,7 @@ def manage_subagent_worktree(
             return f"Error: failed to stage worktree changes: {(add.stderr or '').strip()}"
         commit = _worktree_command(
             root,
-            ["commit", "-m", f"MyAgent subagent {validated[:12]}"],
+            ["commit", "-m", f"SugarAgent subagent {validated[:12]}"],
         )
         if commit.returncode != 0:
             return f"Error: failed to commit worktree changes: {(commit.stderr or commit.stdout).strip()}"

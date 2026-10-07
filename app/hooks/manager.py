@@ -30,7 +30,7 @@ _DECISION_STRENGTH = {"continue": 0, "allow": 1, "ask": 2, "pause": 3, "deny": 4
 
 
 class HookManager:
-    """Load, register, and safely dispatch MyAgent hooks.
+    """Load, register, and safely dispatch SugarAgent hooks.
 
     Dispatches for the same event are serialized, while different event names
     may run concurrently. A context-local guard prevents a hook callback from

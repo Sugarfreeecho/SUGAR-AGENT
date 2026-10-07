@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════════
    设置中心 · 外壳（注册表 / 导航 / i18n / 主题 / API / 组件 / 弹窗）
-   MyAgent · /settings
+   SugarAgent · /settings
    ═══════════════════════════════════════════════════════════════════════ */
 (function () {
   'use strict';
@@ -17,7 +17,7 @@
   const LS_THEME = 'myagent-theme';
   const LS_FONT = 'myagent-font-level';
   const LS_FONT_PX = 'myagent-font-size-px';
-  /* 字号轴：学 DSH 的整数 px 步进（那边 12–17），这里按 MyAgent 现状把上限放到 20 */
+  /* 字号轴：学 DSH 的整数 px 步进（那边 12–17），这里按 SugarAgent 现状把上限放到 20 */
   const FONT_MIN = 12;
   const FONT_MAX = 20;
   const FONT_DEFAULT = 16;
@@ -240,13 +240,14 @@
   }
   /* 设置中心自己的文字尺度跟着字号轴走：比正文低 2px 为基准，其余档位保持原先的相对关系 */
   function applyStFontSize(px) {
-    const base = Math.max(11, clampFont(px) - 2);
+    const fpx = clampFont(px);
+    const base = Math.max(11, fpx - 2);
     const root = document.documentElement;
-    root.setAttribute('data-font-size', String(clampFont(px)));
+    root.setAttribute('data-font-size', String(fpx));
     root.style.setProperty('--st-fs', base + 'px');
-    root.style.setProperty('--st-fs-lg', (base + 2) + 'px');
-    root.style.setProperty('--st-fs-sm', (base - 0.5) + 'px');
-    root.style.setProperty('--st-fs-xs', (base - 1.5) + 'px');
+    root.style.setProperty('--st-fs-lg', fpx + 'px');
+    root.style.setProperty('--st-fs-sm', Math.max(10, base - 1) + 'px');
+    root.style.setProperty('--st-fs-xs', Math.max(9, base - 2) + 'px');
   }
 
   /* ── 导航 / 分区渲染 ────────────────────────────────────────────────── */
@@ -477,6 +478,7 @@
       font: read('myagent-font-level'),
       fontPx: read('myagent-font-size-px'),
       list: read('myagent-session-list-mode'),
+      groupby: read('myagent-session-group-by'),
       lang: read('myagent-language'),
       permissionMode: read('myagent-new-session-permission-mode') || '',
     };
@@ -489,6 +491,7 @@
     font: 'myagent-font-level',
     fontPx: 'myagent-font-size-px',
     list: 'myagent-session-list-mode',
+    groupby: 'myagent-session-group-by',
     lang: 'myagent-language',
   };
   function setPref(name, value) {

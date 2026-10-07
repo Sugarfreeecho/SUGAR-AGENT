@@ -179,7 +179,7 @@ def validate_replay(directory, config):
     try:
         contract = json.loads((root / RECORDING_MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return failure("trajectory_coordinate_contract_missing", "No MyAgent coordinate contract accompanies this recording. Legacy screenshot-scaled coordinates can drift; re-record through this host before replay. No action was dispatched.")
+        return failure("trajectory_coordinate_contract_missing", "No SugarAgent coordinate contract accompanies this recording. Legacy screenshot-scaled coordinates can drift; re-record through this host before replay. No action was dispatched.")
     if not isinstance(contract, dict) or not isinstance(contract.get("windows"), dict):
         return failure("trajectory_coordinate_contract_invalid", "The coordinate contract has an invalid structure. No action was dispatched.")
     maximum = config.get("max_image_dimension")

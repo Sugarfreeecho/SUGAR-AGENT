@@ -227,7 +227,7 @@ cd "MyAgent Developer"
 
 ### 2. 配置
 
-首次启动后通过浏览器向导创建 model profile。模型名称、API 地址、密钥、上下文窗口和推理参数全部保存在 `model_profiles.json`，运行时不再从 `.env` 读取。
+首次启动后通过浏览器向导创建 model profile。模型名称、API 地址、密钥、上下文窗口和推理参数全部保存在 `.sugaragent/model_profiles.json`，运行时不再从 `.env` 读取。
 
 升级旧版本时，如果 `app/.env` 中存在一套完整的旧模型配置，启动过程会自动将其一次性注册为 model profile。已有等价 profile 时直接复用，不会重复创建；导入后的 profile 可独立编辑，后续启动不会再被 `.env` 覆盖。
 
@@ -441,7 +441,7 @@ Slash Command 和生命周期回调，也可在同一插件包中携带 Skill、
 
 ### LLM 配置
 
-仅通过 `model_profiles.json` 配置模型，运行时可切换并按优先级故障转移。每个 profile 包含：
+仅通过 `.sugaragent/model_profiles.json` 配置模型，运行时可切换并按优先级故障转移。每个 profile 包含：
 
 - 模型名称与类型
 - API Base URL 与 API Key
@@ -511,7 +511,7 @@ Chat Completions 将工具图片抽取到连续工具结果之后的 user 消息
 
 ### MCP 配置
 
-参考 `app/mcp_servers.json.example`，支持三种 transport：
+配置文件默认位于 `.sugaragent/mcp_servers.json`（可用 `MCP_SERVERS_PATH` 覆盖；首次读取时自动迁移根目录旧文件）。参考 `app/mcp_servers.json.example`，支持三种 transport：
 
 ```json
 {
@@ -671,11 +671,11 @@ events.
 `GOAL_MAX_CONSECUTIVE_FAILURES` 仅控制运行中断后的连续重试暂停阈值（默认 `3`）。
 Judge 可通过 `GOAL_JUDGE_MAX_OUTPUT_TOKENS`、`GOAL_JUDGE_EVIDENCE_MAX_CHARS`、
 `GOAL_JUDGE_MAX_PARSE_FAILURES` 和 `GOAL_JUDGE_MAX_TRANSPORT_FAILURES` 调整。
-修改这些环境变量后需要重启 MyAgent。
+修改这些环境变量后需要重启 SugarAgent。
 
 Set `GOAL_ENABLED=0` (also accepts `false`, `no`, or `off`) to disable the entire feature; it is enabled by
 default. When disabled, Goal tools are omitted, server-side continuation stops, and Goal control mutations are
 rejected. `GOAL_RUNNER_POLL_SECONDS` controls the server scan interval (default `2`, minimum `0.5` seconds), and
 runtime errors immediately pause the Goal until the user resumes it. `GOAL_MAX_CONSECUTIVE_FAILURES` controls
-the pause threshold for repeated interrupted runs only (default `3`). Restart MyAgent after
+the pause threshold for repeated interrupted runs only (default `3`). Restart SugarAgent after
 changing these environment variables.

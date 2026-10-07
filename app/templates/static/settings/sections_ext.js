@@ -317,11 +317,11 @@
           W.row(t('地址方式', 'URL'), t('SSE / streamable-http 远程服务', 'SSE / streamable-http'),
             '<input class="st-input" data-field="mcp-url" style="width:192px" placeholder="http://127.0.0.1:3005/sse">' +
             W.btn(t('添加', 'Add'), 'mcp-add-url', 'primary')) +
-          W.adv(t('高级：直接编辑 mcp_servers.json', 'Advanced: edit mcp_servers.json'), advanced)) +
+          W.adv(t('高级：直接编辑 .sugaragent/mcp_servers.json', 'Advanced: edit .sugaragent/mcp_servers.json'), advanced)) +
         W.card(t('已添加服务器', 'Added servers'), t('按服务器分组 · 悬停工具名看说明', 'Grouped by server — hover tools for descriptions'),
           serverRows || W.empty(t('还没有 MCP 服务器', 'No MCP servers yet'))) +
-        W.note(t('配置文件：<span class="st-mono">' + esc(d.config.path || 'mcp_servers.json') + '</span>。保存后会自动重载连接。',
-          'Config file: <span class="st-mono">' + esc(d.config.path || 'mcp_servers.json') + '</span>. Connections reload on save.'));
+        W.note(t('配置文件：<span class="st-mono">' + esc(d.config.path || '.sugaragent/mcp_servers.json') + '</span>。保存后会自动重载连接。',
+          'Config file: <span class="st-mono">' + esc(d.config.path || '.sugaragent/mcp_servers.json') + '</span>. Connections reload on save.'));
     },
     onToggle(key, on) {
       if (key.indexOf('mcp:') !== 0) return;

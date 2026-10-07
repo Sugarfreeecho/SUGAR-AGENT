@@ -3,7 +3,7 @@ MCP（Model Context Protocol）桥：支持 stdio / SSE / Streamable HTTP，配�
 默认免注册确认（EXTENSION_REGISTRATION_APPROVAL_ENABLED=1 时启用摘要绑定的统一扩展注册审批），
 工具调用走中央权限策略，结构化日志。
 
-配置：`PROJECT_ROOT/mcp_servers.json` 或 `MCP_SERVERS_JSON`；路径可用 `MCP_SERVERS_PATH`。
+配置：`PROJECT_ROOT/.sugaragent/mcp_servers.json` 或 `MCP_SERVERS_JSON`；路径可用 `MCP_SERVERS_PATH`。
 禁用：`MCP_ENABLED=0`；未安装 `mcp` 包时跳过。
 """
 
@@ -67,6 +67,9 @@ _last_config_error: Optional[str] = None
 _MCP_TOOLS_STATE_PATH = PROJECT_ROOT / ".sugaragent" / "mcp_tools_state.json"
 _DEFAULT_MCP_TOOLS_STATE_PATH = _MCP_TOOLS_STATE_PATH
 _LEGACY_MCP_TOOLS_STATE_PATH = PROJECT_ROOT / "mcp_tools_state.json"
+_MCP_SERVERS_CONFIG_PATH = PROJECT_ROOT / ".sugaragent" / "mcp_servers.json"
+_LEGACY_MCP_SERVERS_CONFIG_PATH = PROJECT_ROOT / "mcp_servers.json"
+_mcp_config_migration_lock = threading.Lock()
 _mcp_tool_state_lock = threading.RLock()
 _disabled_mcp_tools: set[str] = set()
 _disabled_mcp_tools_loaded = False
@@ -358,10 +361,14 @@ def _enabled_flag() -> bool:
 
 
 def _config_path() -> Path:
+    """配置路径：`MCP_SERVERS_PATH` 优先，否则 `.sugaragent/mcp_servers.json`。"""
     custom = (os.getenv("MCP_SERVERS_PATH") or "").strip()
     if custom:
         return Path(custom).expanduser()
-    return (PROJECT_ROOT / "mcp_servers.json").resolve()
+    if _LEGACY_MCP_SERVERS_CONFIG_PATH.exists() and not _MCP_SERVERS_CONFIG_PATH.exists():
+        with _mcp_config_migration_lock:
+            _migrate_legacy_state_path(_MCP_SERVERS_CONFIG_PATH, _LEGACY_MCP_SERVERS_CONFIG_PATH)
+    return _MCP_SERVERS_CONFIG_PATH.resolve()
 
 
 def get_config_path() -> Path:

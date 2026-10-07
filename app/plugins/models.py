@@ -1,4 +1,4 @@
-"""Data models shared by MyAgent's declarative and executable plugin system."""
+"""Data models shared by SugarAgent's declarative and executable plugin system."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,7 +11,7 @@ COMPATIBILITY_STATUSES = {"native", "compatible", "partial", "unsupported"}
 
 @dataclass(frozen=True)
 class PluginCompatibilityReport:
-    """Describes how faithfully a plugin can run in MyAgent."""
+    """Describes how faithfully a plugin can run in SugarAgent."""
 
     status: str
     warnings: Tuple[str, ...] = ()
@@ -55,7 +55,7 @@ class PluginResource:
 
 @dataclass(frozen=True)
 class PluginRuntimeSpec:
-    """Executable runtime declared by a native MyAgent plugin."""
+    """Executable runtime declared by a native SugarAgent plugin."""
 
     runtime_type: str
     entrypoint: Path

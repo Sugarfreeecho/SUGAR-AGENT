@@ -559,7 +559,7 @@ class PolicyEngine:
                     return result(
                         DecisionOutcome.DENY,
                         "security_control.protected",
-                        "MyAgent security policy and authorization state cannot be accessed by tools.",
+                        "SugarAgent security policy and authorization state cannot be accessed by tools.",
                     )
                 if request.action != "fs.read" and protected_path(path, self.workspace):
                     return result(

@@ -963,9 +963,9 @@ def build_env_static(session_id: Optional[str] = None) -> str:
 - **Calendar month (host local time)**: **{current_year_month}**
 - **OS**: {platform.system()} | **Python**: {platform.python_version()}
 {run_shell_executor_hint}
-- **MCP extensions** (optional): With `mcp_servers.json` at the project root (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects and exposes tools as `mcp_<server_alias>_<tool_name>`. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
+- **MCP extensions** (optional): With `.sugaragent/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects and exposes tools as `mcp_<server_alias>_<tool_name>`. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
 - **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
-  - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `mcp_servers.json`.
+  - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `.sugaragent/mcp_servers.json`.
   - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.
 - **Work root** (`WORK_DIR`): {wdir}
   - Virtual `/` maps to this directory. Relative paths and virtual paths like `/outputs/a.txt` resolve under `WORK_DIR`.

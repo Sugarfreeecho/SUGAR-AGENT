@@ -121,7 +121,7 @@ def test_managed_worktree_can_diff_and_merge_cleanly(tmp_path, monkeypatch):
 
     git("init")
     git("config", "user.email", "tests@example.invalid")
-    git("config", "user.name", "MyAgent Tests")
+    git("config", "user.name", "SugarAgent Tests")
     (repo / "base.txt").write_text("base\n", encoding="utf-8")
     git("add", "base.txt")
     git("commit", "-m", "base")
@@ -184,7 +184,7 @@ def test_managed_worktree_can_start_from_dirty_main_checkout(tmp_path, monkeypat
 
     git("init")
     git("config", "user.email", "tests@example.invalid")
-    git("config", "user.name", "MyAgent Tests")
+    git("config", "user.name", "SugarAgent Tests")
     (repo / "base.txt").write_text("base\n", encoding="utf-8")
     git("add", "base.txt")
     git("commit", "-m", "base")

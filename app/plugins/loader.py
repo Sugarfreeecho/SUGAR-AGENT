@@ -1,4 +1,4 @@
-"""Manifest adapters and safe discovery for MyAgent plugins.
+"""Manifest adapters and safe discovery for SugarAgent plugins.
 
 The loader is deliberately declarative.  It reads JSON and resource files but
 never imports or executes Python (or any other plugin code).
@@ -477,7 +477,7 @@ def _runtime_declaration(
     if source_format != "native":
         return (
             None,
-            ["Executable runtimes are only enabled for native MyAgent plugins"],
+            ["Executable runtimes are only enabled for native SugarAgent plugins"],
             True,
         )
     if isinstance(value, str):

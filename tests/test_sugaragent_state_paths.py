@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -187,3 +188,49 @@ def test_default_state_paths_live_under_sugaragent():
 
     assert agent_tools.SKILL_STATE_PATH == ROOT / ".sugaragent" / "skill_states.json"
     assert agent_mcp._MCP_TOOLS_STATE_PATH == ROOT / ".sugaragent" / "mcp_tools_state.json"
+
+
+def test_default_config_paths_live_under_sugaragent():
+    import agent_mcp
+    import model_profiles
+
+    assert agent_mcp._MCP_SERVERS_CONFIG_PATH == ROOT / ".sugaragent" / "mcp_servers.json"
+    assert (
+        model_profiles.profile_store_path(ROOT)
+        == ROOT / ".sugaragent" / "model_profiles.json"
+    )
+
+
+def test_mcp_servers_config_is_migrated_to_sugaragent(monkeypatch, tmp_path):
+    import agent_mcp
+
+    legacy = tmp_path / "mcp_servers.json"
+    legacy.write_text(
+        json.dumps({"servers": {"demo": {"command": "python"}}}),
+        encoding="utf-8",
+    )
+    new = tmp_path / ".sugaragent" / "mcp_servers.json"
+
+    monkeypatch.delenv("MCP_SERVERS_PATH", raising=False)
+    monkeypatch.setattr(agent_mcp, "_MCP_SERVERS_CONFIG_PATH", new)
+    monkeypatch.setattr(agent_mcp, "_LEGACY_MCP_SERVERS_CONFIG_PATH", legacy)
+
+    assert agent_mcp._config_path() == new.resolve()
+    assert new.is_file()
+    assert not legacy.exists()
+
+
+def test_model_profile_store_is_migrated_to_sugaragent(tmp_path):
+    import model_profiles
+
+    legacy = tmp_path / "model_profiles.json"
+    legacy.write_text(
+        json.dumps({"profiles": [{"id": "legacy-root"}]}),
+        encoding="utf-8",
+    )
+    new = tmp_path / ".sugaragent" / "model_profiles.json"
+
+    assert model_profiles.profile_store_path(tmp_path) == new
+    assert model_profiles.load_store(tmp_path)["profiles"][0]["id"] == "legacy-root"
+    assert new.is_file()
+    assert not legacy.exists()

@@ -13,7 +13,7 @@
 - A stale provider token checkpoint keeps the prior provider-scale value with `pending_recalculation=true`; projection errors are explicit and never trigger a silent local-scale switch.
 - `history_snapshot.timing` includes `read_page`, `count`, `user_turns`, `context_tokens`, `todo_plan`, and `total`; retain `open_session_timing` and `pre_api_timing` diagnostics.
 
-# General Agent 工程规格说明
+# SugarAgent 工程规格说明
 
 版本日期：2026-06-07
 
@@ -501,7 +501,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ## 11. 配置规格
 
-主要配置文件：`model_profiles.json`（模型）与 `app/.env`（非模型运行设置）。
+主要配置文件：`.sugaragent/model_profiles.json`（模型）与 `app/.env`（非模型运行设置）。
 
 ### 11.1 LLM 配置
 
@@ -555,6 +555,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 ### 11.4 MCP 配置
 
+配置文件默认：`.sugaragent/mcp_servers.json`（`MCP_SERVERS_PATH` 可覆盖；首次读取时自动迁移根目录旧文件）。
 示例文件：`app/mcp_servers.json.example`
 
 支持 transport：
@@ -593,7 +594,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - 默认文件操作必须限制在 `WORK_DIR`。
 - 删除文件应采用软删除或受控删除策略。
 - 凭据文件（`.env`、密钥文件等）读取一律要求审批，且每次都要确认（不支持“始终允许/本会话允许”）；写入/修改仍拒绝，凭据导出（上传、复制到外部、网络发送）无条件拒绝。
-- MyAgent 自身敏感资源（`app/.env`、`config.bin`、`secret_loader`、安全策略与授权库）不允许被工具读取或写入，工具结果不得泄露。
+- SugarAgent 自身敏感资源（`app/.env`、`config.bin`、`secret_loader`、安全策略与授权库）不允许被工具读取或写入，工具结果不得泄露。
 - 路径解析必须处理 Windows/Posix 差异、引号、重定向和 shell token。
 
 ### 12.2 Shell

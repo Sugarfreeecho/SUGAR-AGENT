@@ -15,7 +15,7 @@
  *   归一化后每个健康行：
  *     { childId, parentId, activity: 'running'|'inactive', hasChildren, mode, label, depth, raw }
  *
- * 说明：MyAgent 后端目前没有 dsh 的 descriptor mode 字段，因此 mode 采用
+ * 说明：SugarAgent 后端目前没有 dsh 的 descriptor mode 字段，因此 mode 采用
  * 「可续接」推断规则而不是持久化描述符（见 inferMode），新 UI 应用它来选举
  * 编辑器；后续若后端补 descriptor，只需替换 inferMode 的实现。
  */
@@ -293,7 +293,7 @@ var subagentCatalogStore = (function () {
     }
 
     /**
-     * 可续接性推断（MyAgent 暂无 descriptor）：
+     * 可续接性推断（SugarAgent 暂无 descriptor）：
      *  - simple / virtual 无独立会话 → one-shot（best-of-n-runner 等汇总行）；
      *  - 有独立会话目录（可通过 /sessions/{id}/messages 读）→ continuable。
      * 这里用「是否有 output_file / 是否为 virtual_task」保守判断，宁可标 one-shot。

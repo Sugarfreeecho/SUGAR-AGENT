@@ -11,7 +11,7 @@
                         </button>
                     </div>
                     <div class="sidebar-brand-copy">
-                        <div class="sidebar-brand-text">General Agent</div>
+                        <div class="sidebar-brand-text">SugarAgent</div>
                         <div class="sidebar-brand-sub" aria-label="Self-Upgrade General Agent Runtime - 自优化通用智能平台" data-ui-tip="Self-Upgrade General Agent Runtime - 自优化通用智能平台" title="Self-Upgrade General Agent Runtime - 自优化通用智能平台">
                             <span class="sidebar-brand-sub-line sidebar-brand-sub-line--en">Self-Upgrade General Agent Runtime</span>
                             <span class="sidebar-brand-sub-line sidebar-brand-sub-line--zh">自优化通用智能平台</span>
@@ -29,7 +29,36 @@
                 </div>
             </div>
             <div class="sidebar-new-chat-wrap">
-                <button id="new-session-btn" type="button" class="new-session-btn" data-ui-tip="新建会话">新建对话</button>
+                <div class="sidebar-new-chat-row">
+                    <button id="new-session-btn" type="button" class="new-session-btn" data-ui-tip="新建会话（在当前工作目录中）"><span class="new-session-btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"></circle><path d="M12 8.6v6.8M8.6 12h6.8"></path></svg></span><span class="new-session-btn-label">新建会话</span></button>
+                    <div class="sidebar-popup sidebar-new-chat-options" id="new-session-options" data-sidebar-popup="1">
+                    <button type="button" id="new-session-menu-btn" class="new-session-menu-btn" aria-label="新建会话选项：当前工作目录 / 新工作目录" aria-haspopup="menu" aria-expanded="false" data-popup-trigger data-ui-tip="新建会话选项"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"></path></svg></span></button>
+                        <div id="new-session-menu" class="sidebar-popup-menu new-session-menu" role="menu" aria-label="新建会话选项">
+                            <button type="button" class="new-session-menu-item" role="menuitem" data-new-session-scope="current">在当前工作目录新建会话</button>
+                            <button type="button" class="new-session-menu-item" role="menuitem" data-new-session-scope="new">在新工作目录新建会话</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="session-list-head" class="session-list-head">
+                <button type="button" id="session-head-toggle" class="session-list-head-toggle" aria-expanded="true" aria-label="会话列表" data-ui-tip="折叠或展开列表">
+                    <span class="session-list-head-label" id="session-head-label">会话</span>
+                    <span class="session-list-head-count" id="session-head-count">0</span>
+                    <span class="session-list-head-chev" aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"></path></svg></span>
+                </button>
+                <div class="session-list-head-actions">
+                    <button type="button" id="session-search-btn" class="session-head-icon" aria-label="搜索会话" aria-expanded="false" data-ui-tip="搜索会话"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></button>
+                    <div class="sidebar-popup" id="session-view-options" data-sidebar-popup="1">
+                        <button type="button" class="session-head-icon" data-popup-trigger aria-haspopup="menu" aria-expanded="false" aria-label="视图选项" data-ui-tip="视图选项"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14M12 5v14M19 5v14"></path><circle cx="5" cy="14" r="2"></circle><circle cx="12" cy="9" r="2"></circle><circle cx="19" cy="15" r="2"></circle></svg></button>
+                        <div class="sidebar-popup-menu session-view-menu" id="session-view-menu" role="menu" aria-label="视图选项"></div>
+                    </div>
+                    <button type="button" id="session-add-folder-btn" class="session-head-icon" aria-label="在新文件夹中新建会话" data-ui-tip="在新文件夹中新建会话"><span data-app-icon="folder-plus"></span></button>
+                </div>
+                <div class="session-search-box" id="session-search-box" hidden>
+                    <span class="session-search-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></span>
+                    <input id="session-search-input" class="session-search-input" type="text" placeholder="搜索会话名称" aria-label="搜索会话名称" autocomplete="off" spellcheck="false" maxlength="120">
+                    <button type="button" id="session-search-clear" class="session-head-icon" aria-label="清除搜索" data-ui-tip="清除搜索"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+                </div>
             </div>
             <div id="sessions-list" class="sessions-list" role="listbox"></div>
             <div class="sidebar-runtime" role="status" aria-live="polite">
@@ -37,7 +66,7 @@
                     <span class="sidebar-runtime-dot" aria-hidden="true"></span>
                     <span id="sidebar-runtime-status">Runtime 在线</span>
                 </span>
-                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v5.20261005</span>
+                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v5.20261007</span>
             </div>
         </aside>
 

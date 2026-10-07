@@ -1,6 +1,6 @@
-"""Public Plugin API v1 used inside MyAgent Python plugin workers.
+"""Public Plugin API v1 used inside SugarAgent Python plugin workers.
 
-The SDK intentionally has no dependency on the MyAgent host runtime.  A plugin
+The SDK intentionally has no dependency on the SugarAgent host runtime.  A plugin
 may either expose a module-level ``plugin = Plugin()`` registry or define
 ``setup(plugin: Plugin)`` and register capabilities on the supplied registry.
 """

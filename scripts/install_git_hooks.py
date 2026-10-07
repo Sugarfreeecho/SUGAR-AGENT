@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install local Git hooks for General Agent development."""
+"""Install local Git hooks for SugarAgent development."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ python scripts/check_frontend_commit_policy.py
 
 def main() -> int:
     if not (ROOT / ".git").exists():
-        print("Not inside the General Agent Git worktree.")
+        print("Not inside the SugarAgent Git worktree.")
         return 2
     HOOKS.mkdir(parents=True, exist_ok=True)
     (HOOKS / "pre-commit").write_text(PRE_COMMIT_BODY, encoding="utf-8")

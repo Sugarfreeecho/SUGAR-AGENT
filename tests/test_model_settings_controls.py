@@ -39,7 +39,7 @@ def test_capability_preview_is_generated_without_persisting_profiles(tmp_path, m
     capabilities = response.json()["capabilities"]
     assert capabilities["capability_source"] == "automatic:models-table"
     assert capabilities["capability_description"]
-    assert not (tmp_path / "model_profiles.json").exists()
+    assert not (tmp_path / ".sugaragent" / "model_profiles.json").exists()
 
 
 @pytest.fixture

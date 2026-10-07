@@ -1,4 +1,4 @@
-"""Data models and public constants for MyAgent's hook runtime."""
+"""Data models and public constants for SugarAgent's hook runtime."""
 from __future__ import annotations
 
 import os

@@ -1,4 +1,4 @@
-"""Durable, session-scoped Goal lifecycle for MyAgent."""
+"""Durable, session-scoped Goal lifecycle for SugarAgent."""
 from __future__ import annotations
 
 import asyncio

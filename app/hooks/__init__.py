@@ -1,4 +1,4 @@
-"""Public hook API for MyAgent.
+"""Public hook API for SugarAgent.
 
 Typical integration::
 

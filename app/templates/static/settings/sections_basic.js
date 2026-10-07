@@ -8,6 +8,7 @@
 
   const LS = {
     theme: 'myagent-theme', font: 'myagent-font-level', list: 'myagent-session-list-mode',
+    groupby: 'myagent-session-group-by',
     perm: 'myagent-new-session-permission-mode', model: 'myagent-new-session-model-profile',
   };
   const readLS = (key, fallback) => {
@@ -61,6 +62,7 @@
         theme: themeValue(),
         fontPx: A.storedFontPx(),
         list: readLS(LS.list, 'detailed') === 'compact' ? 'compact' : 'detailed',
+        groupby: readLS(LS.groupby, 'time') === 'workdir' ? 'workdir' : 'time',
         lang: A.lang,
         perm: readLS(LS.perm, '') || defaultPermission,
         model: readLS(LS.model, ''),
@@ -82,6 +84,7 @@
             'Type a value (' + A.FONT_MIN + '–' + A.FONT_MAX + ' px) or use the arrows'),
           W.fontStepper(d.fontPx)) +
         W.row(t('会话列表', 'Session list'), '', W.seg('list', d.list, [{ v: 'compact', t: t('紧凑', 'Compact') }, { v: 'detailed', t: t('详细', 'Detailed') }])) +
+        W.row(t('会话分组', 'Session grouping'), '', W.seg('groupby', d.groupby, [{ v: 'time', t: t('按时间', 'By time') }, { v: 'workdir', t: t('按工作目录', 'By workspace folder') }])) +
         W.row(t('语言', 'Language'), '', W.seg('lang', d.lang, [{ v: 'zh', t: '中文' }, { v: 'en', t: 'English' }]))) +
         W.card(t('新会话默认', 'New-session defaults'), t('只影响以后新建的会话', 'New sessions only'),
           W.row(t('权限模式', 'Permission mode'),
@@ -107,6 +110,7 @@
         return;
       }
       if (key === 'list') { A.setPref('list', value === 'compact' ? 'compact' : 'detailed'); toast(t('会话列表已切换', 'Session list updated')); reload(); return; }
+      if (key === 'groupby') { A.setPref('groupby', value === 'workdir' ? 'workdir' : 'time'); toast(t('会话分组已切换', 'Session grouping updated')); reload(); return; }
       if (key === 'perm') { writeLS(LS.perm, value); A.notifyHostPrefs(); toast(t('新会话默认权限已保存', 'Default permission saved')); reload(); return; }
     },
     /* 边输边生效：空串先不动，等离焦 / 回车时由 after() 里的 commit 规范化 */
@@ -522,9 +526,9 @@
         (rows ? '<div class="st-profile-list" data-profile-list>' + rows + '</div>' : '') ||
           W.empty(t('还没有模型，点「添加模型」开始。', 'No models yet — click Add model.')),
         W.btn(t('添加模型', 'Add model'), 'model-add', 'primary')) +
-        W.note(t('模型档案保存在 <span class="st-mono">model_profiles.json</span>；密钥只写不回显。' +
+        W.note(t('模型档案保存在 <span class="st-mono">.sugaragent/model_profiles.json</span>；密钥只写不回显。' +
           '拖左侧手柄调整优先级，也可以选中手柄后按 <span class="st-mono">↑</span> / <span class="st-mono">↓</span>。',
-          'Profiles live in <span class="st-mono">model_profiles.json</span>; keys are write-only. ' +
+          'Profiles live in <span class="st-mono">.sugaragent/model_profiles.json</span>; keys are write-only. ' +
           'Drag the handle — or focus it and press <span class="st-mono">↑</span> / <span class="st-mono">↓</span> — to change priority.'));
     },
     onToggle(key, on) {

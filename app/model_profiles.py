@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import shutil
+import threading
 import time
 import uuid
 from functools import lru_cache
@@ -20,6 +23,9 @@ from llm import (
     resolve_profile_provider,
     resolve_provider,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW = 128_000
@@ -967,19 +973,49 @@ def probe_model_context(
 
 
 def profile_store_path(project_root: Path) -> Path:
-    return Path(project_root).resolve() / "model_profiles.json"
+    return Path(project_root).resolve() / ".sugaragent" / "model_profiles.json"
 
 
 def legacy_profile_store_path(project_root: Path) -> Path:
+    """更早的位置：`app/model_profiles.json`。"""
     return Path(project_root).resolve() / "app" / "model_profiles.json"
+
+
+def root_legacy_profile_store_path(project_root: Path) -> Path:
+    """2026-10 之前的位置：项目根目录 `model_profiles.json`。"""
+    return Path(project_root).resolve() / "model_profiles.json"
+
+
+_profile_store_migration_lock = threading.Lock()
+
+
+def _migrate_legacy_profile_store(project_root: Path) -> None:
+    """把历史位置的 model_profiles.json 一次性移入 `.sugaragent/`（幂等）。"""
+    target = profile_store_path(project_root)
+    if target.is_file():
+        return
+    for legacy in (
+        root_legacy_profile_store_path(project_root),
+        legacy_profile_store_path(project_root),
+    ):
+        if not legacy.is_file():
+            continue
+        with _profile_store_migration_lock:
+            if target.is_file() or not legacy.is_file():
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(legacy), str(target))
+                logger.info("Migrated %s -> %s", legacy, target)
+            except OSError:
+                logger.warning("Could not migrate %s to %s", legacy, target, exc_info=True)
+        return
 
 
 def load_store(project_root: Path) -> dict:
     path = profile_store_path(project_root)
     if not path.is_file():
-        legacy_path = legacy_profile_store_path(project_root)
-        if legacy_path.is_file():
-            path = legacy_path
+        _migrate_legacy_profile_store(project_root)
     if not path.is_file():
         return {"profiles": []}
     try:

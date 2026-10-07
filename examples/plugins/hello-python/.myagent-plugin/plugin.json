@@ -3,7 +3,7 @@
   "id": "example.hello-python",
   "name": "Hello Python",
   "version": "1.0.0",
-  "description": "Minimal MyAgent Plugin API v1 example.",
+  "description": "Minimal SugarAgent Plugin API v1 example.",
   "runtime": {
     "type": "python",
     "entrypoint": "./plugin.py",

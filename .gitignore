@@ -76,6 +76,10 @@ frontend/ux-optimization-concept.html
 # Legacy root-level runtime state files (moved into .sugaragent/)
 skill_states.json
 mcp_tools_state.json
+# Legacy protection for config files now living in .sugaragent/
+# (root entries below stay ignored so stale copies are never committed)
+mcp_servers.json
+model_profiles.json
 
 # Local debugging artifacts (analysis snapshots, Playwright MCP captures)
 .analysis/

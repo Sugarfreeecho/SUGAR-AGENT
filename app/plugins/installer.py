@@ -1,4 +1,4 @@
-"""Install, update, remove, and prepare dependencies for MyAgent plugins."""
+"""Install, update, remove, and prepare dependencies for SugarAgent plugins."""
 from __future__ import annotations
 
 import os

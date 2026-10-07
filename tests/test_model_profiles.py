@@ -10,8 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 import model_profiles
 
 
-def test_profile_store_defaults_to_project_root(tmp_path):
-    assert model_profiles.profile_store_path(tmp_path) == tmp_path / "model_profiles.json"
+def test_profile_store_defaults_to_sugaragent_state_dir(tmp_path):
+    assert (
+        model_profiles.profile_store_path(tmp_path)
+        == tmp_path / ".sugaragent" / "model_profiles.json"
+    )
 
 
 def test_models_table_is_bundled_inside_app():
@@ -263,7 +266,7 @@ def test_specific_modality_failure_preserves_other_media_capabilities(tmp_path):
     assert public["failed_modalities"]["image"]["reason"] == "provider rejected image_url"
 
 
-def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
+def test_load_store_migrates_legacy_app_location(tmp_path):
     legacy_dir = tmp_path / "app"
     legacy_dir.mkdir()
     (legacy_dir / "model_profiles.json").write_text(
@@ -272,6 +275,20 @@ def test_load_store_reads_legacy_app_location_when_default_missing(tmp_path):
     )
 
     assert model_profiles.load_store(tmp_path)["profiles"][0]["id"] == "legacy"
+    assert not (legacy_dir / "model_profiles.json").exists()
+    assert model_profiles.profile_store_path(tmp_path).is_file()
+
+
+def test_load_store_migrates_legacy_root_location(tmp_path):
+    legacy = tmp_path / "model_profiles.json"
+    legacy.write_text(
+        json.dumps({"profiles": [{"id": "legacy-root"}]}),
+        encoding="utf-8",
+    )
+
+    assert model_profiles.load_store(tmp_path)["profiles"][0]["id"] == "legacy-root"
+    assert not legacy.exists()
+    assert model_profiles.profile_store_path(tmp_path).is_file()
 
 
 def test_extract_context_window_from_error_message():
@@ -646,6 +663,7 @@ def test_model_order_contains_only_saved_profiles(tmp_path):
 
 def test_legacy_env_profile_metadata_is_discarded_on_save(tmp_path):
     path = model_profiles.profile_store_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"env_profile": {"priority": 1}, "profiles": []}),
         encoding="utf-8",

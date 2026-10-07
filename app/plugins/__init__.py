@@ -1,4 +1,4 @@
-"""Declarative resources and executable Plugin API runtimes for MyAgent.
+"""Declarative resources and executable Plugin API runtimes for SugarAgent.
 
 Supported package markers:
 
@@ -42,6 +42,7 @@ from .security import (
     safe_plugin_path,
 )
 from .runtime import (
+    DeferredTokenExpiredError,
     PluginRuntimeError,
     PluginRuntimeRegistry,
     RuntimeToolBinding,
@@ -66,6 +67,7 @@ from .settings import (
 )
 
 __all__ = [
+    "DeferredTokenExpiredError",
     "COMPATIBILITY_STATUSES",
     "MANIFEST_MARKERS",
     "PluginChangeSet",

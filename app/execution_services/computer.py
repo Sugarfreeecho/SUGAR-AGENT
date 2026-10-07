@@ -182,7 +182,7 @@ class ComputerUseManager:
                     if original == "get_window_state":
                         description += " MyAgent: max_dimension caps the returned preview only. Use coordinate_mapping or the attachment's preview-to-driver conversion; the driver's screenshot coordinate space stays at its configured size."
                     if original == "replay_trajectory":
-                        description += " MyAgent requires a coordinate contract created by this host; old recordings and snapshot/zoom-token trajectories are refused before input. Replay counts are delivery, not task verification."
+                        description += " SugarAgent requires a coordinate contract created by this host; old recordings and snapshot/zoom-token trajectories are refused before input. Replay counts are delivery, not task verification."
                     if original in WINDOW_ACTIONS and isinstance(verify_schema, dict):
                         verification = deepcopy(verify_schema)
                         verification["properties"] = {key: value for key, value in verification.get("properties", {}).items()

@@ -1,6 +1,6 @@
 "use strict";
 
-// Persistent newline-delimited JSON worker for MyAgent Plugin API v1.
+// Persistent newline-delimited JSON worker for SugarAgent Plugin API v1.
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
@@ -553,7 +553,7 @@ async function loadOpenCodeRegistry(entrypoint, root) {
   }
   const registry = new PluginRegistry();
   const unavailable = () => {
-    throw new Error("This OpenCode host API is unavailable in MyAgent");
+    throw new Error("This OpenCode host API is unavailable in SugarAgent");
   };
   const hostContext = {
     project: { name: path.basename(root), path: root },
