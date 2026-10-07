@@ -643,7 +643,7 @@ class RuntimeUiProjectionTests(unittest.TestCase):
 
             page = RuntimeUiProjection(tmp).read_ui_page("s1", turns=5)
 
-            self.assertEqual(page.get("source"), "runtime_v2_seq_index")
+            self.assertEqual(page.get("source"), "runtime_v2_ui_rows")
             self.assertEqual(page["events"][0]["content"], "u25")
             self.assertEqual(page["events"][-1]["content"], "a29")
 
@@ -656,20 +656,26 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             index = projection._read_or_build_ui_index("s1")
             self.assertEqual(index["total"], 2)
 
-            original_read_by_seqs = projection.event_log.read_by_seqs
+            # Row-store pages no longer fetch facts by seq; the append now lands
+            # while the published rows are being materialized.
+            from app.runtime_v2.ui_row_store import UiRowStore
+            original_row_read = UiRowStore.read
             appended = False
 
-            def append_during_indexed_read(session_id, sequences):
+            def append_during_row_read(store, files, locations):
                 nonlocal appended
                 if not appended:
                     appended = True
                     mirror.mirror_ui_event("s1", {"type": "llm_response", "content": "new-tail"})
-                return original_read_by_seqs(session_id, sequences)
+                return original_row_read(store, files, locations)
 
-            projection.event_log.read_by_seqs = append_during_indexed_read
-            page = projection.read_ui_page("s1", turns=50)
+            UiRowStore.read = append_during_row_read
+            try:
+                page = projection.read_ui_page("s1", turns=50)
+            finally:
+                UiRowStore.read = original_row_read
 
-            self.assertEqual(page.get("source"), "runtime_v2_seq_index")
+            self.assertEqual(page.get("source"), "runtime_v2_ui_rows")
             self.assertEqual(page["total"], 2)
             self.assertEqual(
                 [(event["type"], event["content"]) for event in page["events"]],

@@ -6860,6 +6860,7 @@ async def get_session_history_snapshot(
                 "setup": int((_time.perf_counter() - worker_started_at) * 1000),
             }
             t_phase = _time.perf_counter()
+            page_diagnostics = {}
             page = projection.read_ui_page(
                 session_id,
                 limit=lim,
@@ -6867,6 +6868,7 @@ async def get_session_history_snapshot(
                 after_index=after_index,
                 turns=tv,
                 event_budget=event_budget_value,
+                diagnostics=page_diagnostics,
             )
             timings["read_page"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
@@ -6906,7 +6908,10 @@ async def get_session_history_snapshot(
                 timings["context_tokens"] = 0
                 timings["todo_plan"] = 0
             t_phase = _time.perf_counter()
-            recovery = execution_journal.read(session_id)
+            page_seqs = [int(event.get("runtime_seq") or 0) for event in page.get("events") or []]
+            recovery_diagnostics = {}
+            recovery = execution_journal.read(session_id,
+                min_runtime_seq=min(page_seqs) if page_seqs else None, diagnostics=recovery_diagnostics)
             timings["execution_recovery"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
             try:
@@ -6917,13 +6922,8 @@ async def get_session_history_snapshot(
             recovery["projection_version"] = PROJECTOR_VERSION
             # Auxiliary records may be newer; stable execution identities make
             # their subsequent replay idempotent.
-            page_seqs = [int(event.get("runtime_seq") or 0) for event in page.get("events") or []]
             recovery["last_runtime_seq"] = max(recovery_cursor, max(page_seqs, default=0),
                                                int(page.get("last_runtime_seq") or 0))
-            if page_seqs:
-                lower_bound = min(page_seqs)
-                recovery["execution_records"] = [row for row in recovery["execution_records"]
-                    if int(row.get("first_runtime_seq") or 0) >= lower_bound]
             if not run_state.get("run_active"):
                 for row in recovery["execution_records"]:
                     if row.get("status") in {"running", "generating", "waiting_execution"}:
@@ -6943,6 +6943,7 @@ async def get_session_history_snapshot(
                 "run_started_at": run_state.get("run_started_at"),
                 "active_run": run_state.get("active_run"),
                 "history_mode": "current_turn" if active_turn_only else "recent_turns",
+                "loading_diagnostics": {"page": page_diagnostics, "execution": recovery_diagnostics},
                 **recovery,
             }
             timings["prepare_response"] = int((_time.perf_counter() - t_phase) * 1000)
@@ -6961,13 +6962,16 @@ async def get_session_history_snapshot(
             })
             logger.info("open_session_timing session=%s page_source=%s messages=%s bytes=%s timing=%s",
                         session_id, page.get("source"), len(page.get("events") or []), len(body), timings)
+            logger.info("open_session_loading_details session=%s page=%s execution=%s",
+                        session_id, page_diagnostics, recovery_diagnostics)
             if elapsed_ms >= 500:
                 logger.warning("/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s "
                                "elapsed_ms=%s bytes=%s queue=%sms setup=%sms read_page=%sms user_turns=%sms "
-                               "execution_recovery=%sms prepare_response=%sms serialize=%sms",
+                               "execution_recovery=%sms prepare_response=%sms serialize=%sms page_details=%s execution_details=%s",
                                session_id, tv, lim, before_index, elapsed_ms, len(body), timings["queue"],
                                timings["setup"], timings["read_page"], timings["user_turns"],
-                               timings["execution_recovery"], timings["prepare_response"], timings["serialize"])
+                               timings["execution_recovery"], timings["prepare_response"], timings["serialize"],
+                               page_diagnostics, recovery_diagnostics)
             return response
         except Exception as exc:
             logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)

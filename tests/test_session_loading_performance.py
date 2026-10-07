@@ -74,15 +74,15 @@ def test_cold_journal_read_does_not_block_another_sessions_generation(tmp_path, 
     journal = ExecutionJournal(tmp_path)
     journal.log.append("slow", "message_user", {"content": "slow"})
     entered, release = threading.Event(), threading.Event()
-    original = journal.log.read_after_seq
+    original = journal.log.iter_from_offset
 
-    def gated_read(session_id, seq, **kwargs):
+    def gated_iter(session_id, offset, **kwargs):
         if session_id == "slow":
             entered.set()
             assert release.wait(5)
-        return original(session_id, seq, **kwargs)
+        yield from original(session_id, offset, **kwargs)
 
-    monkeypatch.setattr(journal.log, "read_after_seq", gated_read)
+    monkeypatch.setattr(journal.log, "iter_from_offset", gated_iter)
     with ThreadPoolExecutor(max_workers=2) as pool:
         slow = pool.submit(journal.read, "slow")
         try:
@@ -171,17 +171,17 @@ def test_incremental_index_stops_at_its_published_file_boundary(tmp_path, monkey
     projection = RuntimeUiProjection(tmp_path)
     projection._read_or_build_ui_index("s")
     log.append("s", "message_user", {"content": "second"})
-    original = projection.event_log.read_after_seq
+    original = projection.event_log.iter_from_offset
     appended = False
 
-    def append_before_read(session_id, seq, **kwargs):
+    def append_before_iter(session_id, offset, **kwargs):
         nonlocal appended
         if not appended:
             appended = True
             log.append("s", "message_user", {"content": "third"})
-        return original(session_id, seq, **kwargs)
+        yield from original(session_id, offset, **kwargs)
 
-    monkeypatch.setattr(projection.event_log, "read_after_seq", append_before_read)
+    monkeypatch.setattr(projection.event_log, "iter_from_offset", append_before_iter)
     second = projection.read_ui_page("s", turns=1)
     assert second["last_runtime_seq"] == 2
     assert [row["content"] for row in second["events"]] == ["second"]

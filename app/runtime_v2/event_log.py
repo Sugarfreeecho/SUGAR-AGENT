@@ -159,6 +159,7 @@ class SessionEventLog:
             fh.flush()
         self._update_seq_cache(session_id, events[-1].seq)
         self._update_seq_offset_index_after_append(session_id, events, encoded, start_offset)
+        self._checkpoint_recovery_on_finish(session_id, events)
         return events
 
     def _append_unlocked(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> RuntimeEvent:
@@ -179,6 +180,7 @@ class SessionEventLog:
             fh.flush()
         self._update_seq_cache(session_id, event.seq)
         self._update_seq_offset_index_after_append(session_id, [event], [encoded], start_offset)
+        self._checkpoint_recovery_on_finish(session_id, [event])
         return event
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
@@ -206,19 +208,36 @@ class SessionEventLog:
             self._update_seq_offset_index_after_append(
                 event.session_id, [event], [encoded], start_offset
             )
+            self._checkpoint_recovery_on_finish(event.session_id, [event])
             return event
+
+    def _checkpoint_recovery_on_finish(self, session_id: str, events: Iterable[RuntimeEvent]) -> None:
+        if not any(event.type in {"assistant_final_committed", "message_assistant_final",
+                                  "run_finished", "run_failed", "run_interrupted"} for event in events):
+            return
+        try:
+            from .execution_journal import ExecutionJournal
+            ExecutionJournal.checkpoint_cached(self, session_id, events)
+        except Exception:
+            # A rebuildable derivative must never turn a durable append into
+            # a reported failure or cause a retry of an executed tool.
+            logger.warning("execution_recovery_schedule_failed session=%s", session_id, exc_info=True)
 
     def read_all(self, session_id: str) -> List[RuntimeEvent]:
         return list(self.iter_events(session_id))
 
     def read_after_seq(self, session_id: str, after_seq: int, *, end_offset: Optional[int] = None) -> List[RuntimeEvent]:
+        return list(self.iter_after_seq(session_id, after_seq, end_offset=end_offset))
+
+    def iter_after_seq(self, session_id: str, after_seq: int, *, end_offset: Optional[int] = None,
+                       read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
         after = int(after_seq)
         entries = self._read_or_build_seq_offset_index(session_id)
         offset = self._offset_at_or_before_seq(entries, after + 1)
-        return [
-            ev for ev in self._iter_events_from_offset(session_id, offset, end_offset=end_offset)
-            if ev.seq > after
-        ]
+        for event in self._iter_events_from_offset(session_id, offset, end_offset=end_offset,
+                                                   read_metadata=read_metadata):
+            if event.seq > after:
+                yield event
 
     def read_by_seqs(self, session_id: str, sequences: Iterable[int]) -> List[RuntimeEvent]:
         """Read indexed visible facts without decoding intervening stream updates.
@@ -352,15 +371,27 @@ class SessionEventLog:
                 break
         return list(rows)
 
-    def iter_events(self, session_id: str, *, end_offset: Optional[int] = None) -> Iterable[RuntimeEvent]:
-        yield from self._iter_events_from_offset(session_id, 0, end_offset=end_offset)
+    def iter_events(self, session_id: str, *, end_offset: Optional[int] = None,
+                    read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
+        yield from self._iter_events_from_offset(session_id, 0, end_offset=end_offset,
+                                                read_metadata=read_metadata)
 
-    def _iter_events_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None) -> Iterable[RuntimeEvent]:
+    def iter_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None,
+                         read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
+        """Replay a previously validated complete-fact byte boundary."""
+        yield from self._iter_events_from_offset(session_id, offset, end_offset=end_offset,
+                                                read_metadata=read_metadata)
+
+    def _iter_events_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None,
+                                 read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
         path = self.event_path(session_id)
         if not path.exists():
             return
         with path.open("rb") as fh:
             fh.seek(max(0, int(offset)))
+            if read_metadata is not None:
+                opened_stat = os.fstat(fh.fileno())
+                read_metadata["identity"] = [int(opened_stat.st_dev), int(opened_stat.st_ino)]
             line_number = 0
             while True:
                 remaining = None if end_offset is None else int(end_offset) - fh.tell()
@@ -378,7 +409,10 @@ class SessionEventLog:
                 if not line:
                     continue
                 try:
-                    yield event_from_record(json.loads(line.decode("utf-8")))
+                    event = event_from_record(json.loads(line.decode("utf-8")))
+                    if read_metadata is not None:
+                        read_metadata.update(byte_offset=fh.tell(), last_runtime_seq=int(event.seq))
+                    yield event
                 except Exception as exc:
                     raise RuntimeEventLogCorruptionError(
                         session_id,

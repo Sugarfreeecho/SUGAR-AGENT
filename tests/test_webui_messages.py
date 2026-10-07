@@ -390,7 +390,7 @@ def test_messages_turn_page_prefers_runtime_v2_projection(monkeypatch, tmp_path)
     ))
     payload = _json_response_payload(response)
 
-    assert payload["source"] == "runtime_v2_seq_index"
+    assert payload["source"] == "runtime_v2_ui_rows"
     assert payload["total"] == 4
     assert [event["content"] for event in payload["events"]] == ["u0", "a0", "u1", "a1"]
     assert fake.page_calls == []
@@ -623,7 +623,7 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     assert "serialize;dur=" in response.headers["server-timing"]
     assert "queue;dur=" in response.headers["server-timing"]
     assert payload["elapsed_ms"] == payload["timing"]["total"]
-    assert payload["messages"]["source"] == "runtime_v2_seq_index"
+    assert payload["messages"]["source"] == "runtime_v2_ui_rows"
     assert [event["content"] for event in payload["messages"]["events"] if event.get("content")] == [
         "first question",
         "first answer",

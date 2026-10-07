@@ -44,6 +44,9 @@ def test_ui_index_with_stale_version_rebuilds(tmp_path):
     data["total"] = 999
     path.write_text(json.dumps(data), encoding="utf-8")
 
+    # In-process caches stay authoritative while warm; simulate a cold start so
+    # the stale on-disk index is rebuilt rather than served from memory.
+    projection.invalidate_cache("s1")
     rebuilt = projection.read_user_turns_light("s1")
 
     assert len(rebuilt) == 1

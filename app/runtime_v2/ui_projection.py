@@ -4,12 +4,15 @@ import os
 import json
 import threading
 import uuid
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
-from .versions import UI_PROJECTION_INDEX_VERSION
+from .versions import UI_PROJECTION_INDEX_VERSION, UI_ROW_PROJECTION_VERSION
+from .derived_cache import estimate_bytes, file_identity, seal_source, source_boundary, source_matches
+from .ui_row_store import UiRowStore
 from .blob_store import BlobStore
 from .mirror import RuntimeMirror
 from .config import runtime_v2_enabled
@@ -29,6 +32,10 @@ class RuntimeUiProjection:
     _recent_page_cache: Dict[tuple[str, tuple[bool, int, int], int, int], dict] = {}
     _recent_page_cache_order: List[tuple[str, tuple[bool, int, int], int, int]] = []
     _index_locks: Dict[str, threading.RLock] = {}
+    _index_cache: Dict[str, dict] = {}
+    _index_cache_sizes: Dict[str, int] = {}
+    _events_cache_sizes: Dict[str, int] = {}
+    _recent_page_cache_sizes: Dict[tuple, int] = {}
 
     def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.sessions_dir = Path(sessions_dir)
@@ -353,7 +360,7 @@ class RuntimeUiProjection:
         latest_truncate_seq = 0
         has_history_ops = False
         active_run_id = ""
-        for event in self.event_log.iter_events(session_id, end_offset=end_offset):
+        for event in self.event_log.iter_events(session_id, end_offset=end_offset, read_metadata=read_metadata):
             active_run_id = self._active_run_after_event(event, active_run_id)
             if read_metadata is not None:
                 read_metadata.update(last_runtime_seq=int(event.seq), last_run_id=active_run_id)
@@ -500,23 +507,58 @@ class RuntimeUiProjection:
     def _ui_index_path(self, session_id: str) -> Path:
         return self.event_log.session_dir(session_id) / "snapshots" / "ui_projection_index.json"
 
-    def _read_or_build_ui_index(self, session_id: str) -> dict:
+    def seed_compacted_ui(self, session_id: str, ui_events: List[dict], runtime_seq: int) -> dict:
+        """Publish already computed baseline rows while owning the log transaction."""
         with self._cache_lock:
             lock = self._index_locks.setdefault(self._cache_key(session_id), threading.RLock())
         with lock:
-            return self._read_or_build_ui_index_unlocked(session_id)
+            stat = self.event_log.event_path(session_id).stat()
+            signature = (True, int(stat.st_mtime_ns), int(stat.st_size))
+            metadata = {"byte_offset": int(stat.st_size), "last_runtime_seq": int(runtime_seq),
+                        "last_run_id": "", "identity": file_identity(stat)}
+            return self._publish_ui_rows(session_id, self._normalize_react_process_order(ui_events),
+                                         signature, metadata, 0, False)
 
-    def _read_or_build_ui_index_unlocked(self, session_id: str) -> dict:
+    def _read_or_build_ui_index(self, session_id: str, diagnostics: Optional[dict] = None) -> dict:
+        started = time.perf_counter()
+        with self._cache_lock:
+            lock = self._index_locks.setdefault(self._cache_key(session_id), threading.RLock())
+        with lock:
+            if diagnostics is not None:
+                diagnostics["index_lock_wait_ms"] = round((time.perf_counter() - started) * 1000, 3)
+            return self._read_or_build_ui_index_unlocked(session_id, diagnostics)
+
+    def _read_or_build_ui_index_unlocked(self, session_id: str, diagnostics: Optional[dict] = None) -> dict:
         signature = self._event_log_signature(session_id)
         path = self._ui_index_path(session_id)
+        key = str(path.resolve())
+        with self._cache_lock:
+            cached = self._index_cache.get(key)
+        if cached is not None and tuple(cached.get("signature") or ()) == signature:
+            if not cached.get("source") or source_matches(self.event_log.event_path(session_id), cached["source"]):
+                if diagnostics is not None:
+                    diagnostics["index"] = "memory"
+                return cached
         try:
-            with path.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
+            data = cached
+            if data is None:
+                with path.open("r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            if data.get("row_locations") is not None:
+                if (data.get("row_version") != UI_ROW_PROJECTION_VERSION
+                        or len(data["row_locations"]) != int(data.get("total") or 0)
+                        or not source_matches(self.event_log.event_path(session_id), data["source"], full=cached is None)):
+                    raise ValueError("stale derived UI rows")
             if (
                 isinstance(data, dict)
                 and int(data.get("index_version") or 0) == UI_PROJECTION_INDEX_VERSION
                 and tuple(data.get("signature") or ()) == signature
             ):
+                if data.get("has_history_ops") and data.get("row_locations") is None:
+                    raise ValueError("history edits require materialized UI rows")
+                self._remember_ui_index(path, data)
+                if diagnostics is not None:
+                    diagnostics["index"] = "disk"
                 return data
             if (
                 isinstance(data, dict)
@@ -526,24 +568,47 @@ class RuntimeUiProjection:
             ):
                 extended = self._extend_ui_index(session_id, data, signature)
                 if extended is not None:
+                    self._remember_ui_index(path, extended)
+                    if diagnostics is not None:
+                        diagnostics["index"] = "extended"
                     return extended
         except Exception:
             pass
         try:
+            if diagnostics is not None:
+                diagnostics["index"] = "rebuilt"
             return self._build_ui_index(session_id, signature)
         except Exception:
             return {}
 
+    def _remember_ui_index(self, path: Path, data: dict) -> None:
+        key = str(path.resolve())
+        retained = estimate_bytes(data)
+        with self._cache_lock:
+            self._index_cache.pop(key, None)
+            self._index_cache[key] = data
+            self._index_cache_sizes[key] = retained
+            while len(self._index_cache) > 1 and (len(self._index_cache) > 64
+                    or sum(self._index_cache_sizes.get(k, 0) for k in self._index_cache) > 32 * 1024 * 1024):
+                oldest = next(iter(self._index_cache))
+                self._index_cache.pop(oldest)
+                self._index_cache_sizes.pop(oldest, None)
+
     def _build_ui_index(self, session_id: str, signature: Optional[tuple[bool, int, int]] = None) -> dict:
         if signature is None:
             signature = self._event_log_signature(session_id)
-        read_metadata = {"last_runtime_seq": 0, "last_run_id": ""}
+        read_metadata = {"last_runtime_seq": 0, "last_run_id": "", "byte_offset": 0}
         projected, latest_truncate_seq, has_history_ops = self._project_visible_ui_entries(
             session_id,
             hydrate=False,
             end_offset=int(signature[2]),
             read_metadata=read_metadata,
         )
+        return self._publish_ui_rows(session_id, projected, signature, read_metadata,
+                                     latest_truncate_seq, has_history_ops)
+
+    def _publish_ui_rows(self, session_id, projected, signature, read_metadata,
+                         latest_truncate_seq, has_history_ops):
         entries: List[tuple[int, str, str]] = []
         react_order_tail: Optional[List[int]] = None
         for ui in projected:
@@ -578,7 +643,19 @@ class RuntimeUiProjection:
             "user_turns": user_turns,
         }
         path = self._ui_index_path(session_id)
+        if signature[0]:
+            boundary = source_boundary(self.event_log.event_path(session_id), read_metadata["byte_offset"])
+            if read_metadata.get("identity") != boundary["identity"]:
+                raise ValueError("event source changed during UI projection")
+            source = seal_source(self.event_log.event_path(session_id), boundary)
+            store = UiRowStore(path.parent)
+            name, locations = store.write(projected)
+            data.update(row_version=UI_ROW_PROJECTION_VERSION, row_files=[name],
+                        row_locations=locations, source=source)
         self._write_ui_index(path, data)
+        self._remember_ui_index(path, data)
+        if data.get("row_files"):
+            store.cleanup(data["row_files"])
         return data
 
     @staticmethod
@@ -597,7 +674,15 @@ class RuntimeUiProjection:
         signature: tuple[bool, int, int],
     ) -> Optional[dict]:
         after_seq = int(data.get("last_runtime_seq") or 0)
-        events = self.event_log.read_after_seq(session_id, after_seq, end_offset=int(signature[2]))
+        read_metadata = {"byte_offset": int((data.get("source") or {}).get("offset") or 0)}
+        if data.get("source"):
+            events = list(self.event_log.iter_from_offset(session_id, read_metadata["byte_offset"],
+                          end_offset=int(signature[2]), read_metadata=read_metadata))
+        else:
+            events = list(self.event_log.iter_after_seq(session_id, after_seq, end_offset=int(signature[2]),
+                                                       read_metadata=read_metadata))
+        if data.get("source") and read_metadata.get("identity") != data["source"]["identity"]:
+            return None
         if not events:
             # A changed file with no higher sequence is a rewrite/repair, not an
             # append-only extension. Rebuild rather than trusting stale offsets.
@@ -610,6 +695,8 @@ class RuntimeUiProjection:
             "message_rewritten",
         }
         if any(event.type in semantic_ops for event in events):
+            if data.get("row_locations") is not None:
+                return self._reproject_ui_tail(session_id, data, signature, events, read_metadata)
             return None
         extended = dict(data)
         user_indices = [int(value) for value in extended.get("user_indices") or []]
@@ -627,6 +714,7 @@ class RuntimeUiProjection:
                 react_order_tail = None
         if len(runtime_seqs) != total or len(run_ids) != total:
             return None
+        added_rows = []
         for event in events:
             active_run_id = self._active_run_after_event(event, active_run_id)
             ui = self._with_run_id(self.event_to_ui(event), event, active_run_id)
@@ -641,6 +729,8 @@ class RuntimeUiProjection:
                     # A late LLM commit must be inserted before an already
                     # indexed tool row. Rebuild so runtime_seqs reflects the
                     # repaired visual order instead of extending incorrectly.
+                    if data.get("row_locations") is not None:
+                        return self._reproject_ui_tail(session_id, data, signature, events, read_metadata)
                     return None
                 react_order_tail = current_order
             if str(ui.get("type") or "") == "user":
@@ -651,6 +741,7 @@ class RuntimeUiProjection:
                 })
             runtime_seqs.append(int(event.seq))
             run_ids.append(str(ui.get("run_id") or ""))
+            added_rows.append({**ui, "runtime_seq": int(event.seq), "runtime_event_type": event.type})
             total += 1
         extended.update({
             "signature": list(signature),
@@ -663,8 +754,57 @@ class RuntimeUiProjection:
             "last_run_id": active_run_id,
             "react_order_tail": list(react_order_tail) if react_order_tail is not None else None,
         })
+        if data.get("row_locations") is not None:
+            files = list(data["row_files"])
+            locations = list(data["row_locations"])
+            if added_rows:
+                store = UiRowStore(self._ui_index_path(session_id).parent)
+                if len(files) >= 128:
+                    return self._reproject_ui_tail(session_id, data, signature, events, read_metadata)
+                name, added_locations = store.write(added_rows, file_number=len(files))
+                files.append(name)
+                locations.extend(added_locations)
+            extended.update(row_files=files, row_locations=locations,
+                            source=seal_source(self.event_log.event_path(session_id),
+                                source_boundary(self.event_log.event_path(session_id), read_metadata["byte_offset"])))
         self._write_ui_index(self._ui_index_path(session_id), extended)
         return extended
+
+    def _reproject_ui_tail(self, session_id, data, signature, events, read_metadata):
+        """Apply history edits/order repairs to derived rows, not old facts."""
+        store = UiRowStore(self._ui_index_path(session_id).parent)
+        out = store.read(data["row_files"], data["row_locations"])
+        active_run_id = str(data.get("last_run_id") or "")
+        latest_truncate_seq = int(data.get("latest_truncate_seq") or 0)
+        has_history_ops = bool(data.get("has_history_ops"))
+        for event in events:
+            active_run_id = self._active_run_after_event(event, active_run_id)
+            payload = event.payload or {}
+            if event.type == "runtime_snapshot_compacted":
+                out = [dict(row) for row in payload.get("ui_events") or [] if isinstance(row, dict)]
+            elif event.type == "legacy_truncate_observed":
+                out = self._normalize_before_history_op(out)
+                new_count = payload.get("new_event_count")
+                if new_count is None:
+                    new_count = payload.get("before_index")
+                try:
+                    out = out[:max(0, int(new_count))]
+                    latest_truncate_seq = event.seq
+                except (TypeError, ValueError):
+                    pass
+            elif event.type == "visible_range_changed":
+                out = self._apply_visible_range_to_projected_events(self._normalize_before_history_op(out), payload)
+                latest_truncate_seq = event.seq
+            elif event.type in {"message_deleted", "message_rewritten"}:
+                out = self._apply_history_op_to_projected_events(self._normalize_before_history_op(out), event)
+                has_history_ops = True
+            else:
+                ui = self._with_run_id(self.event_to_ui(event), event, active_run_id)
+                if ui is not None:
+                    out.append({**ui, "runtime_seq": int(event.seq), "runtime_event_type": event.type})
+        metadata = {**read_metadata, "last_runtime_seq": int(events[-1].seq), "last_run_id": active_run_id}
+        return self._publish_ui_rows(session_id, self._normalize_react_process_order(out), signature,
+                                     metadata, latest_truncate_seq, has_history_ops)
 
     @staticmethod
     def _write_ui_index(path: Path, data: dict) -> None:
@@ -686,7 +826,11 @@ class RuntimeUiProjection:
     def invalidate_cache(self, session_id: str) -> None:
         key = self._cache_key(session_id)
         with self._cache_lock:
+            index_key = str(self._ui_index_path(session_id).resolve())
+            self._index_cache.pop(index_key, None)
+            self._index_cache_sizes.pop(index_key, None)
             self._events_cache.pop(key, None)
+            self._events_cache_sizes.pop(key, None)
             try:
                 self._events_cache_order.remove(key)
             except ValueError:
@@ -694,6 +838,7 @@ class RuntimeUiProjection:
             stale_pages = [cache_key for cache_key in self._recent_page_cache if cache_key[0] == key]
             for cache_key in stale_pages:
                 self._recent_page_cache.pop(cache_key, None)
+                self._recent_page_cache_sizes.pop(cache_key, None)
                 try:
                     self._recent_page_cache_order.remove(cache_key)
                 except ValueError:
@@ -708,18 +853,45 @@ class RuntimeUiProjection:
         signature = self._event_log_signature(session_id)
         with self._cache_lock:
             cached = self._events_cache.get(key)
-            if cached and cached[0] == signature:
-                return [dict(event) for event in cached[1]]
-        projected = self._events_to_ui(session_id, self.event_log.read_all(session_id))
+        if cached and cached[0] == signature:
+            return [dict(event) for event in cached[1]]
+        projected = self._events_to_ui(session_id, self.event_log.iter_events(session_id,
+                                      end_offset=signature[2]))
+        retained = estimate_bytes(projected)
         with self._cache_lock:
             self._events_cache[key] = (signature, projected)
             if key in self._events_cache_order:
                 self._events_cache_order.remove(key)
             self._events_cache_order.append(key)
-            while len(self._events_cache_order) > self._events_cache_max:
+            self._events_cache_sizes[key] = retained
+            while len(self._events_cache_order) > 1 and (len(self._events_cache_order) > self._events_cache_max
+                    or sum(self._events_cache_sizes.get(k, 0) for k in self._events_cache) > 128 * 1024 * 1024):
                 old_key = self._events_cache_order.pop(0)
                 self._events_cache.pop(old_key, None)
+                self._events_cache_sizes.pop(old_key, None)
         return [dict(event) for event in projected]
+
+    def _remember_recent_page(self, key, page):
+        retained = estimate_bytes(page)
+        with self._cache_lock:
+            # A generating chat changes its signature constantly. Retaining
+            # every previous first page wastes memory without serving a reader.
+            for old in list(self._recent_page_cache):
+                if old[0] == key[0]:
+                    self._recent_page_cache.pop(old, None)
+                    self._recent_page_cache_sizes.pop(old, None)
+                    try:
+                        self._recent_page_cache_order.remove(old)
+                    except ValueError:
+                        pass
+            self._recent_page_cache[key] = page
+            self._recent_page_cache_order.append(key)
+            self._recent_page_cache_sizes[key] = retained
+            while len(self._recent_page_cache_order) > 1 and (len(self._recent_page_cache_order) > self._events_cache_max
+                    or sum(self._recent_page_cache_sizes.get(k, 0) for k in self._recent_page_cache) > 64 * 1024 * 1024):
+                old = self._recent_page_cache_order.pop(0)
+                self._recent_page_cache.pop(old, None)
+                self._recent_page_cache_sizes.pop(old, None)
 
     def _event_log_signature(self, session_id: str) -> tuple[bool, int, int]:
         path = self.event_log.event_path(session_id)
@@ -743,6 +915,7 @@ class RuntimeUiProjection:
         turns: Optional[int] = None,
         event_budget: Optional[int] = None,
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
+        diagnostics: Optional[dict] = None,
     ) -> dict:
         recent_key = None
         if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
@@ -751,22 +924,18 @@ class RuntimeUiProjection:
             with self._cache_lock:
                 cached = self._recent_page_cache.get(recent_key)
             if cached is not None:
+                if diagnostics is not None:
+                    diagnostics["page"] = "memory"
                 return self._copy_page(cached)
         if legacy_loader is None:
             indexed = self._read_indexed_ui_page(
                 session_id, limit=limit, before_index=before_index, after_index=after_index,
                 target_index=target_index, turns=turns, event_budget=event_budget,
+                diagnostics=diagnostics,
             )
             if indexed is not None:
                 if recent_key is not None:
-                    with self._cache_lock:
-                        self._recent_page_cache[recent_key] = indexed
-                        if recent_key in self._recent_page_cache_order:
-                            self._recent_page_cache_order.remove(recent_key)
-                        self._recent_page_cache_order.append(recent_key)
-                        while len(self._recent_page_cache_order) > self._events_cache_max:
-                            old_key = self._recent_page_cache_order.pop(0)
-                            self._recent_page_cache.pop(old_key, None)
+                    self._remember_recent_page(recent_key, indexed)
                 return indexed
         if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
             budget = max(1, int(event_budget)) if event_budget is not None else 0
@@ -781,14 +950,7 @@ class RuntimeUiProjection:
                 event_budget=budget or None,
             )
             if page is not None:
-                with self._cache_lock:
-                    self._recent_page_cache[cache_key] = page
-                    if cache_key in self._recent_page_cache_order:
-                        self._recent_page_cache_order.remove(cache_key)
-                    self._recent_page_cache_order.append(cache_key)
-                    while len(self._recent_page_cache_order) > self._events_cache_max:
-                        old_key = self._recent_page_cache_order.pop(0)
-                        self._recent_page_cache.pop(old_key, None)
+                self._remember_recent_page(cache_key, page)
                 return page
         events = self.read_ui_events(session_id, legacy_loader=legacy_loader)
         return self._page_events(
@@ -801,14 +963,19 @@ class RuntimeUiProjection:
             event_budget=event_budget,
         )
 
-    def _read_indexed_ui_page(self, session_id: str, **options) -> Optional[dict]:
-        index = self._read_or_build_ui_index(session_id)
-        if not index or index.get("has_history_ops"):
+    def _read_indexed_ui_page(self, session_id: str, *, diagnostics: Optional[dict] = None,
+                               _rebuilt: bool = False, **options) -> Optional[dict]:
+        started = time.perf_counter()
+        index = self._read_or_build_ui_index(session_id, diagnostics)
+        if diagnostics is not None:
+            diagnostics["index_ms"] = round((time.perf_counter() - started) * 1000, 3)
+        if not index:
             return None
         total = int(index.get("total") or 0)
         seqs = [int(seq) for seq in index.get("runtime_seqs") or []]
         run_ids = list(index.get("run_ids") or [])
-        if len(seqs) != total or len(run_ids) != total or any(seq <= 0 for seq in seqs):
+        if (len(seqs) != total or len(run_ids) != total
+                or (index.get("row_locations") is None and any(seq <= 0 for seq in seqs))):
             return None
         users = set(index.get("user_indices") or [])
         # Reuse the exact paging contract on metadata, never on full payloads.
@@ -816,19 +983,58 @@ class RuntimeUiProjection:
             [{"type": "user" if pos in users else ""} for pos in range(total)], **options
         )
         start, end = page["range_start"], page["range_end"]
+        if index.get("row_locations") is not None:
+            try:
+                started = time.perf_counter()
+                rows = UiRowStore(self._ui_index_path(session_id).parent).read(
+                    index["row_files"], index["row_locations"][start:end])
+                if [int(row.get("runtime_seq") or 0) for row in rows] != seqs[start:end]:
+                    raise ValueError("UI row identity does not match index")
+                page.update(events=[self._hydrate_blob_refs(session_id, row) for row in rows],
+                            source="runtime_v2_ui_rows", last_runtime_seq=int(index.get("last_runtime_seq") or 0))
+                if diagnostics is not None:
+                    diagnostics.update(page="ui_rows", rows=len(rows),
+                                       rows_ms=round((time.perf_counter() - started) * 1000, 3))
+                return page
+            except (OSError, KeyError, IndexError, TypeError, ValueError):
+                if _rebuilt:
+                    return None
+                if diagnostics is not None:
+                    diagnostics["rebuild_reason"] = "row_corruption"
+                self.invalidate_cache(session_id)
+                # Rebuild once from facts, then serve the selected rows. Do not
+                # repeatedly probe the huge baseline through tail windows.
+                rebuilt = self._read_or_build_ui_index(session_id)
+                if rebuilt.get("row_locations") is None:
+                    return None
+                return self._read_indexed_ui_page(session_id, diagnostics=diagnostics, _rebuilt=True, **options)
+        if index.get("has_history_ops"):
+            return None
         wanted = seqs[start:end]
         by_seq = {event.seq: event for event in self.event_log.read_by_seqs(session_id, wanted)}
         selected = []
         for pos in range(start, end):
             event = by_seq.get(seqs[pos])
             if event is None:
-                return None  # Compacted baselines require the semantic projector.
+                if _rebuilt:
+                    return None
+                if diagnostics is not None:
+                    diagnostics["rebuild_reason"] = "compacted_rows"
+                # Upgrade an existing thin index lazily when its rows live in a
+                # compacted baseline rather than independent physical facts.
+                self.invalidate_cache(session_id)
+                rebuilt = self._read_or_build_ui_index(session_id)
+                if rebuilt.get("row_locations") is None:
+                    return None
+                return self._read_indexed_ui_page(session_id, diagnostics=diagnostics, _rebuilt=True, **options)
             ui = self._with_run_id(self._event_to_ui(session_id, event), event, run_ids[pos])
             if ui is None:
                 return None
             selected.append(ui)
         page.update(events=selected, source="runtime_v2_seq_index",
                     last_runtime_seq=int(index.get("last_runtime_seq") or 0))
+        if diagnostics is not None:
+            diagnostics.update(page="seq_index", rows=len(selected))
         return page
 
     @staticmethod
@@ -851,7 +1057,10 @@ class RuntimeUiProjection:
         history operations explicitly request a full reprojection.
         """
         lim = max(1, min(int(limit), 500))
-        runtime_events = self.event_log.read_after_seq(session_id, int(after_runtime_seq))
+        captured_latest = self.event_log.next_seq(session_id) - 1
+        signature = self._event_log_signature(session_id)
+        runtime_events = self.event_log.iter_after_seq(session_id, int(after_runtime_seq),
+                                                      end_offset=signature[2])
         projected: List[dict] = []
         last_runtime_seq = int(after_runtime_seq)
         active_run_id = ""
@@ -886,7 +1095,7 @@ class RuntimeUiProjection:
             "events": projected,
             "last_runtime_seq": last_runtime_seq,
             "requires_reprojection": False,
-            "has_more": bool(runtime_events and last_runtime_seq < int(runtime_events[-1].seq)),
+            "has_more": last_runtime_seq < captured_latest,
         }
 
     @staticmethod

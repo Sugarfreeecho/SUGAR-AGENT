@@ -8,10 +8,13 @@ from __future__ import annotations
 import copy
 import json
 import threading
+import time
 from typing import Any
 
 from .event_log import SessionEventLog
 from .event_schema import now_iso
+from .derived_cache import estimate_bytes, file_identity, source_boundary, source_matches
+from .recovery_checkpoint import RecoveryCheckpoint
 
 
 EVENT_TYPE = "execution_recorded"
@@ -22,6 +25,27 @@ STREAM_TYPES = {
     "llm_reasoning", "llm_response",
     "approval_requested", "interaction_requested",
 }
+
+
+def _timed_replay(events, diagnostics):
+    if diagnostics is None:
+        yield from events
+        return
+    iterator = iter(events)
+    read_seconds = apply_seconds = 0.0
+    while True:
+        started = time.perf_counter()
+        try:
+            event = next(iterator)
+        except StopIteration:
+            read_seconds += time.perf_counter() - started
+            break
+        read_seconds += time.perf_counter() - started
+        started = time.perf_counter()
+        yield event
+        apply_seconds += time.perf_counter() - started
+    diagnostics.update(read_parse_ms=round(read_seconds * 1000, 3),
+                       apply_ms=round(apply_seconds * 1000, 3))
 
 
 def apply_execution_update(records: dict, payload: dict, seq: int = 0) -> dict | None:
@@ -55,6 +79,7 @@ class ExecutionJournal:
     _guard = threading.RLock()
     _cache: dict[str, dict] = {}
     _session_locks: dict[str, threading.RLock] = {}
+    _cache_budget = 128 * 1024 * 1024
 
     def __init__(self, root, path_resolver=None):
         self.log = SessionEventLog(root, path_resolver=path_resolver)
@@ -64,29 +89,100 @@ class ExecutionJournal:
         with self._guard:
             return self._session_locks.setdefault(key, threading.RLock())
 
-    def _state(self, session_id: str) -> dict:
+    @classmethod
+    def _trim_cache_locked(cls):
+        total = sum(int(state.get("_estimated_bytes") or 0) for state in cls._cache.values())
+        while len(cls._cache) > 1 and (len(cls._cache) > 64 or total > cls._cache_budget):
+            now = time.monotonic()
+            oldest = next((key for key, state in cls._cache.items()
+                           if state.get("_valid", True)
+                           and not (set(state.get("active_runs") or {}) - state.get("_closed_runs", set()))
+                           and now - state.get("_recent_write", 0) >= 30), None)
+            if oldest is None:
+                break  # Active generators retain their state even over the soft budget.
+            total -= int(cls._cache.pop(oldest).get("_estimated_bytes") or 0)
+
+    @classmethod
+    def checkpoint_cached(cls, log, session_id: str, events=()) -> None:
+        """Flush an already warm journal on finalization without cold replay."""
+        key = str(log.event_path(session_id).resolve())
+        with cls._guard:
+            state = cls._cache.get(key)
+        if state is not None:
+            journal = cls(log.root, path_resolver=log._path_resolver)
+            with journal._session_lock(session_id):
+                with cls._guard:
+                    state = cls._cache.get(key)
+                if state is None:
+                    return
+                finished = {str(event.run_id or (event.payload or {}).get("run_id") or "") for event in events
+                            if event.type in {"run_finished", "run_failed", "run_interrupted"}}
+                state.setdefault("_closed_runs", set()).update(finished)
+                RecoveryCheckpoint.schedule(journal, session_id, state, force=True)
+
+    def _state(self, session_id: str, diagnostics: dict | None = None, *, allow_checkpoint=True) -> dict:
         key = str(self.log.event_path(session_id).resolve())
         with self._guard:
-            state = self._cache.get(key)
+            state = self._cache.pop(key, None)
+            if state is not None:
+                self._cache[key] = state
+        started = time.perf_counter()
         latest = self.log.next_seq(session_id) - 1
+        if diagnostics is not None:
+            diagnostics["seq_cursor_ms"] = round((time.perf_counter() - started) * 1000, 3)
         try:
             stat = self.log.event_path(session_id).stat()
             signature = (stat.st_mtime_ns, stat.st_size)
         except FileNotFoundError:
             signature = None
-        if (state is None or state["seq"] > latest
+        mode = "memory"
+        if (state is None or not state.get("_valid", True) or state["seq"] > latest
+                or (state.get("source") and signature is not None
+                    and (state["source"].get("identity") != file_identity(stat)
+                         or (state.get("signature") != signature
+                             and not source_matches(self.log.event_path(session_id), state["source"]))))
                 or (state["seq"] == latest and state.get("signature") != signature)):
-            state = {"seq": 0, "records": {}, "group": "legacy:0", "turn": "", "revision": 0,
-                     "last_final_seq": 0, "ui_ids": {}, "boundaries": []}
+            started = time.perf_counter()
+            state = RecoveryCheckpoint.load(self, session_id) if allow_checkpoint else None
+            if state is not None and int(state["seq"]) > latest:
+                state = None
+            mode = "checkpoint" if state is not None else "facts"
+            if diagnostics is not None:
+                diagnostics["checkpoint_read_ms"] = round((time.perf_counter() - started) * 1000, 3)
+            if state is None:
+                state = {"seq": 0, "records": {}, "group": "legacy:0", "turn": "", "revision": 0,
+                         "last_final_seq": 0, "ui_ids": {}, "boundaries": [], "offset": 0, "active_runs": {}}
+            state["_valid"] = False
             with self._guard:
-                if len(self._cache) >= 64:
-                    self._cache.pop(next(iter(self._cache)))
                 self._cache[key] = state
+                self._trim_cache_locked()
         elif state["seq"] == latest and state.get("signature") == signature:
+            if diagnostics is not None:
+                diagnostics.update(source=mode, replay_events=0, replay_bytes=0)
             return state
-        for event in self.log.read_after_seq(session_id, state["seq"],
-                                             end_offset=signature[1] if signature else 0):
+        if diagnostics is not None:
+            diagnostics["source"] = mode
+        start_offset = int(state.get("offset") or 0)
+        metadata = {"byte_offset": start_offset}
+        state["_valid"] = False
+        replay_events = 0
+        force_checkpoint = mode == "facts"
+        events = self.log.iter_from_offset(session_id, start_offset,
+                                           end_offset=signature[1] if signature else 0,
+                                           read_metadata=metadata)
+        for event in _timed_replay(events, diagnostics):
+            if event.seq <= state["seq"]:
+                raise ValueError("execution journal event boundary is not monotonic")
+            replay_events += 1
+            force_checkpoint = force_checkpoint or event.type in {
+                "assistant_final_committed", "message_assistant_final", "run_finished", "run_failed", "run_interrupted"}
             payload = event.payload or {}
+            run_id = str(event.run_id or payload.get("run_id") or "")
+            if event.type == "run_started" and run_id:
+                state["active_runs"][run_id] = True
+                state.get("_closed_runs", set()).discard(run_id)
+            elif event.type in {"run_finished", "run_failed", "run_interrupted"} and run_id:
+                state["active_runs"].pop(run_id, None)
             if event.type in {"message_user", "user_turn_committed"} and payload.get("ui_type") != "user_steer":
                 state["turn"] = str(event.seq)
                 state["group"] = "turn:" + str(event.seq)
@@ -124,6 +220,8 @@ class ExecutionJournal:
                     state.update(group="legacy:0", turn="", last_final_seq=0, boundaries=[])
                 if event.type == "runtime_snapshot_compacted":
                     baseline = payload.get("snapshot") or {}
+                    state["active_runs"] = {str(key): True for key, row in (baseline.get("runs") or {}).items()
+                                            if isinstance(row, dict) and row.get("status") == "running"}
                     state["records"] = copy.deepcopy(baseline.get("executions") or {})
                     state["boundaries"] = []
                     for ui in payload.get("ui_events") or []:
@@ -144,15 +242,57 @@ class ExecutionJournal:
                     row["ui_runtime_seq"] = event.seq
             state["seq"] = event.seq
         state["signature"] = signature
+        state["offset"] = metadata["byte_offset"]
+        if signature is not None:
+            state["source"] = source_boundary(self.log.event_path(session_id), state["offset"])
+            if state["source"]["identity"] != file_identity(stat):
+                # Replacement during a read must not publish a mixed generation.
+                with self._guard:
+                    self._cache.pop(key, None)
+                raise ValueError("execution journal event source changed during recovery")
+        if diagnostics is not None:
+            diagnostics.update(replay_events=replay_events, replay_bytes=state["offset"] - start_offset)
+        if mode == "facts":
+            state["_estimated_bytes"] = estimate_bytes(state)
+            with self._guard:
+                self._trim_cache_locked()
+        state["_valid"] = True
+        RecoveryCheckpoint.schedule(self, session_id, state, force=force_checkpoint)
         return state
 
-    def read(self, session_id: str) -> dict:
+    def read(self, session_id: str, *, min_runtime_seq: int | None = None,
+             diagnostics: dict | None = None) -> dict:
+        started = time.perf_counter()
         with self._session_lock(session_id):
-            state = self._state(session_id)
+            if diagnostics is not None:
+                diagnostics["lock_wait_ms"] = round((time.perf_counter() - started) * 1000, 3)
+            started = time.perf_counter()
+            for attempt in range(2):
+                try:
+                    state = self._state(session_id, diagnostics, allow_checkpoint=attempt == 0)
+                    break
+                except Exception as exc:
+                    with self._guard:
+                        self._cache.pop(str(self.log.event_path(session_id).resolve()), None)
+                    if not isinstance(exc, ValueError) or attempt:
+                        raise
+                    # A replaced source or inconsistent derived byte boundary
+                    # gets one fresh recovery from facts, never an endless retry.
+                    if diagnostics is not None:
+                        diagnostics["fallback"] = "source_or_checkpoint_boundary"
+            if diagnostics is not None:
+                diagnostics["state_ms"] = round((time.perf_counter() - started) * 1000, 3)
+            started = time.perf_counter()
+            records = [row for row in state["records"].values()
+                       if min_runtime_seq is None or int(row.get("first_runtime_seq") or 0) >= min_runtime_seq]
+            copied = copy.deepcopy(records)
+            if diagnostics is not None:
+                diagnostics.update(copy_ms=round((time.perf_counter() - started) * 1000, 3),
+                                   records=len(records), total_records=len(state["records"]))
             return {"last_runtime_seq": state["seq"], "projection_revision": state["revision"],
                     "last_final_seq": state["last_final_seq"],
                     "process_group_id": state["group"],
-                    "execution_records": copy.deepcopy(list(state["records"].values()))}
+                    "execution_records": copied}
 
     def record(self, session_id: str, event: dict) -> dict:
         if event.get("_subagent_forward"):
@@ -180,6 +320,7 @@ class ExecutionJournal:
                         }, run)
                 event["preserve_execution_records"] = True
                 event["cleanup_scope"] = "none"
+                RecoveryCheckpoint.schedule(self, session_id, state, force=True)
                 return event
             tool_id = str(event.get("tool_call_id") or event.get("id") or "")
             is_tool = kind.startswith("tool_") or kind in {"approval_requested", "interaction_requested"}
@@ -282,11 +423,17 @@ class ExecutionJournal:
             return event
 
     def _append(self, session_id, state, update, run):
+        state["_valid"] = False
+        state["_recent_write"] = time.monotonic()
         event = self.log._append_unlocked(session_id, EVENT_TYPE, update, run_id=run)
         apply_execution_update(state["records"], update, event.seq)
         state["seq"] = event.seq
         stat = self.log.event_path(session_id).stat()
         state["signature"] = (stat.st_mtime_ns, stat.st_size)
+        state["offset"] = stat.st_size
+        state["source"] = source_boundary(self.log.event_path(session_id), state["offset"])
+        state["_valid"] = True
+        RecoveryCheckpoint.schedule(self, session_id, state)
         return event
 
     def anchor(self, session_id: str, tool_call_id: str, run_id: str = "") -> dict:

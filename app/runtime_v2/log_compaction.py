@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -13,6 +14,8 @@ from .event_schema import RuntimeEvent, now_iso
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
 from .ui_projection import RuntimeUiProjection
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeV2LogCompactionError(RuntimeError):
@@ -95,6 +98,12 @@ class RuntimeV2LogCompactionService:
                 self.snapshots.stamp_event_log(session_id, rebuilt, path)
                 self.snapshots.write(session_id, rebuilt)
                 self.ui_projection.invalidate_cache(session_id)
+                try:
+                    self.ui_projection.seed_compacted_ui(session_id, ui_events, compacted.seq)
+                except Exception:
+                    # The facts are committed. A derivative can be rebuilt on
+                    # demand without declaring the successful compaction failed.
+                    logger.warning("compacted_ui_rows_seed_failed session=%s", session_id, exc_info=True)
                 return {
                     "compacted": True,
                     "events_before": len(events),

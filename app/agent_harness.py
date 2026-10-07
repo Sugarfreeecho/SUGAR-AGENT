@@ -7129,12 +7129,17 @@ class SessionManager:
                 logger.debug("persist session deletion tombstone failed: %s", delete_id, exc_info=True)
         try:
             from runtime_v2 import SnapshotStore
+            from runtime_v2.execution_journal import ExecutionJournal
+            from runtime_v2.recovery_checkpoint import RecoveryCheckpoint
 
             checkpoint_store = SnapshotStore(
                 self.sessions_dir,
                 path_resolver=self._resolve_session_path,
             )
+            recovery_journal = ExecutionJournal(self.sessions_dir, self._resolve_session_path)
             for delete_id in delete_ids:
+                if not RecoveryCheckpoint.cancel(recovery_journal, delete_id, timeout_seconds=0.5):
+                    logger.warning("delete session is waiting on an execution recovery checkpoint: %s", delete_id)
                 if not checkpoint_store.cancel_checkpoint(delete_id, timeout_seconds=0.5):
                     logger.warning(
                         "delete session is waiting on a slow Runtime V2 snapshot: %s",
