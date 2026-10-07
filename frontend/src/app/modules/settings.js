@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// General Agent · 智能会话 — 完整逻辑
+// SugarAgent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
 const chatContainer = document.getElementById('chat-container');
@@ -92,6 +92,31 @@ function applySessionListMode(mode, persist) {
     var next = mode === 'compact' ? 'compact' : 'detailed';
     document.documentElement.setAttribute('data-session-list-mode', next);
     if (persist) localStorage.setItem(LS_SESSION_LIST_MODE, next);
+    // 视图选项菜单里的同名项对勾要保持一致。
+    if (typeof syncSessionViewMenu === 'function') syncSessionViewMenu();
+}
+
+/**
+ * 会话目录的二级分组方式：时间 / 工作目录。
+ * 取值与持久化在 state/session-selectors.js（getSessionGroupBy / setSessionGroupBy），
+ * 侧栏与设置面板的按钮共用同一状态（都带 data-session-group-by）。
+ */
+function syncSessionGroupControls(mode) {
+    var current = mode || ((typeof getSessionGroupBy === 'function') ? getSessionGroupBy() : 'time');
+    document.querySelectorAll('[data-session-group-by]').forEach(function (btn) {
+        var active = String(btn.getAttribute('data-session-group-by') || '') === current;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+
+function applySessionGroupBy(mode, persist) {
+    var next = mode === 'workdir' ? 'workdir' : 'time';
+    if (persist && typeof setSessionGroupBy === 'function') setSessionGroupBy(next);
+    syncSessionGroupControls(next);
+    if (typeof syncSessionViewMenu === 'function') syncSessionViewMenu();
+    // 分组方式已进渲染键（布局键），这里仍强制重绘一次，切换立即生效。
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
 }
 
 function restoreUiPreferences() {
@@ -101,6 +126,7 @@ function restoreUiPreferences() {
     else if (t === 'dark' || t === 'purple') applyUiTheme('purple', false);
     else applyUiTheme('light', false);
     applySessionListMode(getStoredSessionListMode(), false);
+    syncSessionGroupControls();
 }
 restoreUiPreferences();
 
@@ -210,6 +236,11 @@ function applyHostPrefs(prefs) {
         if (!currentSessionId && typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector('');
     }
     try { restoreUiPreferences(); } catch (e) { /* ignore */ }
+    /* 「会话分组」是列表渲染输入：设置中心改分组时同步对勾并立即重绘（与侧栏视图菜单共用同一状态键）。 */
+    if (prefs && Object.prototype.hasOwnProperty.call(prefs, 'groupby') && typeof syncSessionGroupControls === 'function') {
+        syncSessionGroupControls();
+        if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
+    }
     var lang = prefs && prefs.lang;
     if (lang && typeof applyUiLanguage === 'function') {
         var next = lang === 'en' ? 'en' : 'zh-CN';
@@ -223,6 +254,11 @@ window.addEventListener('storage', function (event) {
     if (!key) return;
     if (key === LS_UI_THEME || key === LS_UI_FONT || key === LS_SESSION_LIST_MODE) {
         try { restoreUiPreferences(); } catch (e) { /* ignore */ }
+    } else if (key === 'myagent-session-group-by') {
+        try {
+            if (typeof syncSessionGroupControls === 'function') syncSessionGroupControls();
+            if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
+        } catch (e) { /* ignore */ }
     } else if (key === 'myagent-new-session-permission-mode' && typeof setNewSessionPermissionMode === 'function') {
         setNewSessionPermissionMode(event.newValue || '');
         if (!currentSessionId && typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector('');

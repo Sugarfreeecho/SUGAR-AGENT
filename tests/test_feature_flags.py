@@ -621,7 +621,8 @@ def test_frontend_session_switch_async_work_is_session_scoped():
     catalog = (ROOT / "frontend/src/app/state/subagent-catalog-store.js").read_text(encoding="utf-8")
     frames = (ROOT / "frontend/src/app/modules/subagent-frames.js").read_text(encoding="utf-8")
 
-    assert "if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;" in sessions
+    assert "if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;" in sessions
+    assert "if (loadController.signal.aborted || loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;" in sessions
     assert "rebuildToc({ localOnly: true });" in sessions
     assert sessions.count("if (switchToken === switchSessionEpoch && sessionId === currentSessionId)") >= 1
     # The rebuilt subagent catalog refreshes per parent with single-flight
@@ -1034,9 +1035,9 @@ def test_frontend_new_session_prefetches_hidden_draft_and_coalesces_materializat
     skills = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
-    draft_body = sessions.split("async function createNewSession()", 1)[1].split(
-        "async function materializeNewSession()", 1
-    )[0]
+    draft_start = sessions.index("async function createNewSession(")
+    materialize_start = sessions.index("async function materializeNewSession()", draft_start)
+    draft_body = sessions[draft_start:materialize_start]
     materialize_body = sessions.split("async function materializeNewSession()", 1)[1]
 
     assert "let materializeNewSessionQueue = null;" in sessions
@@ -1135,7 +1136,8 @@ def test_frontend_loaded_session_defers_layout_refresh_until_smooth_bottom_finis
     assert "chatContainer.addEventListener('scrollend', onScrollEnd);" in rendering
     assert "retargetCount < 1" in rendering
     assert "if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;" in scroll
-    assert "&& !(typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())" in scroll
+    assert "&& typeof isHistorySmoothScrollActive === 'function'" in scroll
+    assert "&& isHistorySmoothScrollActive()" in scroll
     image_wait_at = sessions.index("await waitForHistoryImageLayout(")
     metadata_wait_at = sessions.index("await prepareWorkspaceImageLayout(")
     hydrate_at = sessions.index("finishHistoryHydration();", image_wait_at)
@@ -1169,9 +1171,10 @@ def test_frontend_older_history_auto_load_preserves_viewport():
     assert "function maybeAutoLoadOlderHistory()" in scroll
     assert "chatContainer.scrollTop > HISTORY_AUTO_LOAD_TOP_PX" in scroll
     assert "maybeAutoLoadOlderHistory();" in sse
-    assert "prependScrollTop = cc.scrollTop" in scroll
-    assert "prependScrollHeight = cc.scrollHeight" in scroll
-    assert "prependScrollTop + Math.max(0, cc.scrollHeight - prependScrollHeight)" in scroll
+    assert "top: port.scrollTop, height: port.scrollHeight, lastTop: port.scrollTop };" in scroll
+    assert "delta = state.top + port.scrollHeight - state.height - port.scrollTop;" in scroll
+    assert "function restoreHistoryPrependViewport(state)" in scroll
+    assert "stream._historyPrependViewport = state;" in scroll
 
 
 def test_frontend_run_state_cleanup_is_run_id_scoped():

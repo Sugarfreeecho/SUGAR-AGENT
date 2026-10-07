@@ -72,7 +72,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '请求失败': 'Request failed', '撤销失败，请重试。': 'Undo failed. Please try again.'
 });
 Object.assign(UI_TRANSLATIONS_EN, {
-    '新会话': 'New session', '停止 <span class="loader">': 'Stop <span class="loader">', '加载会话': 'Load session',
+    '新会话': 'New session', '新建会话': 'New session', '停止 <span class="loader">': 'Stop <span class="loader">', '加载会话': 'Load session',
     '取消置顶': 'Unpin', '取消归档': 'Unarchive', '删除会话': 'Delete session', '此操作不可恢复': 'This action cannot be undone',
     '无法同步服务器。': 'Could not sync with the server.', '当前没有选中的会话。': 'No session is currently selected.',
     '消息定位索引无效，可能需要刷新当前会话。': 'The message index is invalid. Refresh the current session.',
@@ -104,6 +104,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     // Session navigation and lifecycle
     '置顶目录': 'Pinned', '归档目录': 'Archived', '刷新归档目录': 'Refresh archived sessions',
     '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '今天': 'Today', '昨天': 'Yesterday', '近7天': 'Last 7 days',
+    '近三天': 'Last 3 days', '近半月': 'Last 15 days', '近一月': 'Last 30 days',
     '近14天': 'Last 14 days', '加载会话': 'Load session', '加载会话列表失败': 'Failed to load sessions',
     '加载历史消息失败': 'Failed to load message history', '创建新会话失败': 'Failed to create session',
     '未选择会话': 'No session selected', '暂无提问': 'No questions yet', '打开工作目录': 'Open workspace',
@@ -129,6 +130,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '创建分支未生效。': 'The fork was not created.', '工具': 'Tool', '执行过程': 'Execution process',
     '本段过程已折叠': 'This process section is collapsed', '信息': 'Info', '错误': 'Error', '回复': 'Response',
     '思考': 'Reasoning', '压缩': 'Compression', '裁剪': 'Trim', '要点': 'Key points', '状态': 'Status',
+    '压缩思考': 'Compression reasoning',
     '评审': 'Review', '结论': 'Verdict', '通过': 'Passed', '需要继续': 'More work required',
     '评审失败': 'Review failed', '理由': 'Reason', '失败类型': 'Failure type',
     '工具调用生成中...': 'Preparing tool call...', '执行中...': 'Running...', '执行结果': 'Result',
@@ -189,6 +191,32 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '此请求已结束，仅供查看，无法再次操作。': 'This request has ended. It is read-only and cannot be changed.',
     // Session grouping
     '刷新归档目录': 'Refresh archived sessions', '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '加载中...': 'Loading...',
+    // 会话目录分组方式（时间 / 工作目录）与「新建到指定目录」
+    '会话分组': 'Session grouping', '会话分组方式': 'Session grouping',
+    '按时间分组': 'Group by time', '按工作目录分组': 'Group by workspace folder',
+    '工作目录': 'Workspace folder', '默认工作目录': 'Default workspace',
+    '新建会话选项': 'New session options',
+    '会话工作目录': 'Session working directory',
+    '本会话工作目录': 'Session working directory',
+    '选择会话目录': 'Choose session directory',
+    '选择': 'Choose',
+    '在当前工作目录新建会话': 'New session in the current workspace',
+    '在新工作目录新建会话': 'New session in a new workspace',
+    '选择工作目录': 'Choose a workspace folder',
+    '无法打开系统目录选择器，请直接填写新会话的工作目录绝对路径。': 'The system folder picker is unavailable. Type the absolute path of the workspace for the new session.',
+    '工作目录绝对路径': 'Absolute workspace path', '在此目录新建': 'Create here',
+    // 侧栏静态头（搜索 / 视图选项 / 在新文件夹中新建）与工作目录分组动作（DSH 式布局）
+    '新建会话（在当前工作目录中）': 'New session (in the current workspace)',
+    '新建会话选项：当前工作目录 / 新工作目录': 'New session options: current workspace / new workspace',
+    '折叠或展开列表': 'Collapse or expand the list',
+    '工作区': 'Workspaces', '搜索会话': 'Search sessions', '搜索会话名称': 'Search session names',
+    '清除搜索': 'Clear search', '视图选项': 'View options', '分组方式': 'Group by',
+    '按时间': 'By time', '按工作目录': 'By workspace folder', '列表模式': 'List mode',
+    '筛选会话': 'Filter sessions', '隐藏已归档': 'Hide archived', '全部': 'All', '仅已归档': 'Archived only',
+    '没有匹配的会话': 'No matching sessions',
+    '复制路径': 'Copy path', '在资源管理器打开': 'Open in File Explorer',
+    '在默认工作目录中新建会话': 'New session in the default workspace',
+    '默认工作目录的更多操作': 'More actions for the default workspace',
     // Subagent controls（面板已移除，保留通用文案）
     '任务': 'Tasks', '会话': 'Sessions', '允许一次': 'Allow once', '拒绝': 'Deny',
     '展开查看执行过程': 'Expand to view process', '退出全屏': 'Exit full screen', '停止': 'Stop',
@@ -443,6 +471,8 @@ function translateUiString(value) {
         .replace(/^(\d+)分钟$/, '$1 min')
         .replace(/^(\d+) 分钟$/, '$1 min')
         .replace(/^已加载 (\d+) 个自定义域名（内置清单始终生效）。$/, '$1 custom domain(s) loaded (the built-in list always applies).')
+        .replace(/^在“(.+)”中新建会话$/, 'New session in “$1”')
+        .replace(/^“(.+)”的更多操作$/, 'More actions for “$1”')
         .replace(/^已保存 (\d+) 个自定义域名，新会话立即生效。$/, '$1 custom domain(s) saved; new sessions take effect immediately.')
         .replace(/^已清除本会话规则（(\d+) 条）。$/, 'Session rules cleared ($1).')
         .replace(/^已选择 (\d+) 个 Skill$/, '$1 skills selected')
@@ -752,7 +782,7 @@ function applyUiLanguage(language, persist) {
     uiLanguage = language === 'en' ? 'en' : 'zh-CN';
     document.documentElement.lang = uiLanguage;
     document.documentElement.setAttribute('data-language', uiLanguage);
-    document.title = uiLanguage === 'en' ? 'General Agent · Intelligent Chat' : 'General Agent · 智能会话';
+    document.title = uiLanguage === 'en' ? 'SugarAgent · Intelligent Chat' : 'SugarAgent · 智能会话';
     if (persist) localStorage.setItem(LS_UI_LANGUAGE, uiLanguage);
     if (uiI18nObserver) uiI18nObserver.disconnect();
     translateUiNode(document.body);

@@ -524,6 +524,7 @@ function cancelSmoothStreamFollowForSessionSwitch() {
     }
     smoothFollowController.reset(chatContainer);
     var stream = getVisibleChatStream();
+    if (typeof cancelHistoryPrependViewport === 'function') cancelHistoryPrependViewport(stream);
     if (stream) stream.querySelectorAll('.process-aggregate-body').forEach(function (port) {
         smoothFollowController.reset(port);
     });
@@ -562,6 +563,7 @@ function persistHistoryPagingToStream(streamEl, paging) {
         range_end: Number(paging.range_end) || 0,
         has_older: !!paging.has_older,
         has_newer: !!paging.has_newer,
+        manual_history: !!paging.manual_history,
     });
 }
 
@@ -577,6 +579,7 @@ function restoreHistoryPagingFromStream(streamEl) {
             range_end: Number(raw.range_end) || 0,
             has_older: !!raw.has_older,
             has_newer: !!raw.has_newer,
+            manual_history: !!raw.manual_history,
         };
     } catch (_e) {
         delete streamEl.dataset.historyPaging;
@@ -669,8 +672,21 @@ async function ensureLatestHistoryTailForLiveAppend(sessionId) {
 
 var HISTORY_AUTO_LOAD_TOP_PX = 32;
 
+/** 当前轮首屏保持轻量；读者主动翻阅后，允许继续自动向前分页。 */
+function enableHistoryAutoLoadForReader() {
+    var stream = getVisibleChatStream();
+    if (stream) stream._historyAutoLoadEnabled = true;
+}
+
 /** 滚到历史顶部附近时自动向前分页；按钮仍保留为加载状态提示和手动兜底。 */
 function maybeAutoLoadOlderHistory() {
+    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
+    if (typeof sessionStore !== 'undefined' && sessionStore.ui && sessionStore.ui.loadingMessages) return;
+    var stream = getVisibleChatStream();
+    if (!stream || stream.hidden) return;
+    var paging = getSessionHistoryPaging(currentSessionId);
+    if (paging && paging.manual_history && !stream._historyAutoLoadEnabled
+        && sessionHasLiveHistoryOwner(currentSessionId)) return;
     if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
     if (!chatContainer || chatContainer.scrollTop > HISTORY_AUTO_LOAD_TOP_PX) return;
     void loadOlderHistoryChunk({ trigger: 'scroll-top' });
@@ -694,8 +710,107 @@ function updateHistorySentinelVisibility() {
 
 function resetSessionHistoryPaging() {
     setSessionHistoryPaging(null);
+    var stream = getVisibleChatStream();
+    cancelHistoryPrependViewport(stream);
+    if (stream) {
+        delete stream._historyOlderLoadToken;
+        delete stream._historyAutoLoadEnabled;
+    }
     historyOlderLoading = false;
     updateHistorySentinelVisibility();
+}
+
+function cancelHistoryPrependViewport(stream) {
+    if (stream && stream._historyPrependViewport) stream._historyPrependViewport.stop();
+}
+
+/** 在插入前记录可见元素。总高度差会把下方的增长也算进去，元素锚点不会。 */
+function captureHistoryPrependViewport(stream, port, sid) {
+    if (!port || stream.parentNode !== port) return null;
+    cancelHistoryPrependViewport(stream);
+    var viewport = port.getBoundingClientRect();
+    var anchors = [];
+    function remember(node) {
+        var rect = node.getBoundingClientRect();
+        if (rect.height > 0 && rect.bottom > viewport.top) {
+            anchors.push({ node: node, offset: rect.top - viewport.top });
+            return true;
+        }
+        return false;
+    }
+    var children = Array.from(stream.children);
+    for (var i = 0; i < children.length && anchors.length < 3; i += 1) {
+        var child = children[i];
+        if (child.id === 'history-load-sentinel' || !remember(child)) continue;
+        // 相邻过程框合并可能移除外框，但其中的执行行会保留。
+        if (child.classList.contains('process-aggregate')) {
+            var rows = child.querySelectorAll('.feed-item');
+            for (var j = 0; j < rows.length; j += 1) {
+                if (remember(rows[j])) break;
+            }
+        }
+    }
+    return { stream: stream, port: port, sessionId: sid, anchors: anchors,
+        top: port.scrollTop, height: port.scrollHeight, lastTop: port.scrollTop };
+}
+
+function restoreHistoryPrependViewport(state) {
+    if (!state || state.sessionId !== currentSessionId
+        || state.stream !== getVisibleChatStream() || state.stream.parentNode !== state.port
+        || (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())) return false;
+    var port = state.port;
+    var delta = null;
+    for (var i = 0; i < state.anchors.length; i += 1) {
+        var anchor = state.anchors[i];
+        if (!state.stream.contains(anchor.node)) continue;
+        delta = anchor.node.getBoundingClientRect().top - port.getBoundingClientRect().top - anchor.offset;
+        break;
+    }
+    if (delta == null) delta = state.top + port.scrollHeight - state.height - port.scrollTop;
+    if (Math.abs(delta) > 0.5) setScrollTopImmediate(port, port.scrollTop + delta);
+    state.lastTop = port.scrollTop;
+    return true;
+}
+
+/** 补偿下一帧折叠测量和迟到的图片；读者再次操作或切换会话时立即退出。 */
+function settleHistoryPrependViewport(state) {
+    if (!state || !restoreHistoryPrependViewport(state)) return;
+    var stream = state.stream, port = state.port;
+    var observer = null, timer = 0, raf = 0, stopped = false;
+    var inputs = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+    function stop() {
+        if (stopped) return;
+        stopped = true;
+        if (observer) observer.disconnect();
+        if (timer) clearTimeout(timer);
+        if (raf) cancelAnimationFrame(raf);
+        inputs.forEach(function (type) { port.removeEventListener(type, stop, true); });
+        port.removeEventListener('scroll', onScroll);
+        stream.removeEventListener('load', correct, true);
+        if (stream._historyPrependViewport === state) delete stream._historyPrependViewport;
+    }
+    function correct() {
+        if (stopped) return;
+        if (!restoreHistoryPrependViewport(state)) stop();
+    }
+    function onScroll() {
+        if (Math.abs(port.scrollTop - state.lastTop) > 1) stop();
+    }
+    state.stop = stop;
+    stream._historyPrependViewport = state;
+    inputs.forEach(function (type) { port.addEventListener(type, stop, { capture: true, passive: true }); });
+    port.addEventListener('scroll', onScroll, { passive: true });
+    stream.addEventListener('load', correct, true);
+    if (typeof ResizeObserver === 'function') {
+        observer = new ResizeObserver(correct);
+        observer.observe(stream);
+        observer.observe(port);
+    }
+    raf = requestAnimationFrame(function () {
+        correct();
+        if (!stopped) raf = requestAnimationFrame(correct);
+    });
+    timer = setTimeout(stop, 3000);
 }
 
 async function loadOlderHistoryChunk(opts) {
@@ -707,14 +822,14 @@ async function loadOlderHistoryChunk(opts) {
         ph = restoreHistoryPagingFromStream(stream);
         if (ph) sessionHistoryPaging = ph;
     }
-    if (!sid || !ph || ph.sessionId !== sid || !ph.has_older || historyOlderLoading) return;
+    if (!sid || !stream || !ph || ph.sessionId !== sid || !ph.has_older || historyOlderLoading) return;
     historyOlderLoading = true;
-    var prevReplaying = replayingMessages;
-    replayingMessages = true;
+    var historyLoadToken = {};
+    stream._historyOlderLoadToken = historyLoadToken;
+    var prevReplaying = null;
     updateHistorySentinelVisibility();
     var cc = chatContainer;
-    var prependScrollTop = null;
-    var prependScrollHeight = null;
+    var prependViewport = null;
     var loadedOlder = false;
     try {
         var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));
@@ -722,11 +837,14 @@ async function loadOlderHistoryChunk(opts) {
             + '/messages?turns=' + encodeURIComponent(String(pageTurns))
             + '&before_index=' + ph.range_start
             + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
-        var response = await fetch(url);
+        var response = await fetchWithTimeout(url, {}, 30000);
         var data = await response.json();
         if (!response.ok || !data || typeof data !== 'object') return;
         // 自动加载请求返回前可能已切换会话，旧页不能插入新的可见消息流。
-        if (sid !== currentSessionId || stream !== getVisibleChatStream()) return;
+        if (sid !== currentSessionId || stream !== getVisibleChatStream()
+            || stream._historyOlderLoadToken !== historyLoadToken) return;
+        prevReplaying = replayingMessages;
+        replayingMessages = true;
         var events = data.events;
         if (!Array.isArray(events) || events.length === 0) {
             setSessionHistoryPaging(Object.assign({}, ph, { has_older: !!data.has_older }));
@@ -750,14 +868,11 @@ async function loadOlderHistoryChunk(opts) {
         var sen = stream && stream.querySelector('#history-load-sentinel');
         if (stream && frag.childNodes.length) {
             // fetch 期间用户仍可能滚动，所以必须在真正插入前才记录视口。
-            // 插入后补上新增的高度，原来可见的内容就会停在相同屏幕位置。
-            if (cc && stream.parentNode === cc) {
-                prependScrollTop = cc.scrollTop;
-                prependScrollHeight = cc.scrollHeight;
-            }
+            prependViewport = captureHistoryPrependViewport(stream, cc, sid);
             stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);
         }
         loadedOlder = true;
+        if (typeof mergeAdjacentExecutionGroups === 'function') mergeAdjacentExecutionGroups(stream);
         setSessionHistoryPaging({
             sessionId: sid,
             total: typeof data.total === 'number' ? data.total : ph.total,
@@ -765,28 +880,25 @@ async function loadOlderHistoryChunk(opts) {
             range_end: ph.range_end,
             has_older: !!data.has_older,
             has_newer: !!ph.has_newer,
+            manual_history: false,
         });
     } catch (e) {
         console.error('加载更早消息失败:', e);
     } finally {
-        historyOlderLoading = false;
-        updateHistorySentinelVisibility();
+        if (stream._historyOlderLoadToken === historyLoadToken) {
+            delete stream._historyOlderLoadToken;
+            if (sid === currentSessionId && stream === getVisibleChatStream()) {
+                historyOlderLoading = false;
+                updateHistorySentinelVisibility();
+            }
+        }
         if (loadedOlder) {
             bindExistingLogs(stream);
             if (!opts.keepTocStable) rebuildToc();
             scheduleTocActiveUpdate();
         }
-        if (
-            cc && stream && stream.parentNode === cc
-            && prependScrollTop != null && prependScrollHeight != null
-            && !(typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())
-        ) {
-            setScrollTopImmediate(
-                cc,
-                prependScrollTop + Math.max(0, cc.scrollHeight - prependScrollHeight)
-            );
-        }
-        replayingMessages = prevReplaying;
+        settleHistoryPrependViewport(prependViewport);
+        if (prevReplaying !== null) replayingMessages = prevReplaying;
     }
 }
 

@@ -131,6 +131,24 @@ function positionUiHoverTooltip(ev) {
     el.style.top = y + 'px';
 }
 
+/**
+ * 菜单 / 搜索这类「就地展开的浮层」打开期间抑制悬停提示：提示框会压住菜单投影（DSH 行为）。
+ * 不显示 + 立即隐藏两件事一起做，保证提示与菜单不重叠。
+ */
+function uiHoverTipsSuppressed() {
+    if (typeof document === 'undefined' || !document.querySelector) return false;
+    return !!document.querySelector(
+        '.sidebar-popup.is-open, .session-more-wrap.is-open, .session-list-head.is-searching'
+    );
+}
+
+/** 展开浮层时立即撤掉已经可见的悬停提示。 */
+function hideUiHoverTipsNow() {
+    if (typeof clearUiHoverTipTimer === 'function') clearUiHoverTipTimer();
+    if (typeof uiHoverTipActiveEl !== 'undefined') uiHoverTipActiveEl = null;
+    if (typeof hideUiHoverTooltip === 'function') hideUiHoverTooltip();
+}
+
 /** 统一悬停说明（替代原生 title），文案来自 data-ui-tip；停留超过 UI_HOVER_TIP_DELAY_MS 才显示 */
 function bindUiHoverTip(el) {
     if (!el || el._uiHoverTipBound) return;
@@ -146,6 +164,7 @@ function bindUiHoverTip(el) {
     el._uiHoverTipBound = true;
     el.removeAttribute('title');
     el.addEventListener('mouseenter', function (ev) {
+        if (uiHoverTipsSuppressed()) return;
         var t = el.getAttribute('data-ui-tip');
         if (t == null || !String(t).trim()) return;
         clearUiHoverTipTimer();
@@ -154,6 +173,11 @@ function bindUiHoverTip(el) {
         uiHoverTipLastEv = ev;
         uiHoverTipTimer = setTimeout(function () {
             uiHoverTipTimer = null;
+            // 延迟期间浮层可能已经打开：此时不再显示，避免与菜单重叠。
+            if (uiHoverTipsSuppressed()) {
+                hideUiHoverTooltip();
+                return;
+            }
             if (uiHoverTipActiveEl !== el || !isUiHoverTipTriggerHovered(el)) {
                 hideUiHoverTooltip();
                 return;
@@ -174,6 +198,7 @@ function bindUiHoverTip(el) {
         hideUiHoverTooltip();
     });
     el.addEventListener('focus', function () {
+        if (uiHoverTipsSuppressed()) return;
         var t = el.getAttribute('data-ui-tip');
         if (t == null || !String(t).trim()) return;
         if (typeof translateUiString === 'function') t = translateUiString(t);

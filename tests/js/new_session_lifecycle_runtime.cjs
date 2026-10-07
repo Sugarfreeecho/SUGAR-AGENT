@@ -8,9 +8,17 @@ const source = fs.readFileSync(
   path.join(root, 'frontend', 'src', 'app', 'modules', 'session-management.js'),
   'utf8',
 );
-const start = source.indexOf('async function createNewSession()');
+const renderingSource = fs.readFileSync(
+  path.join(root, 'frontend', 'src', 'app', 'modules', 'message-rendering.js'),
+  'utf8',
+);
+const start = source.indexOf('async function createNewSession(');
 assert(start >= 0, 'new-session lifecycle functions are missing');
 const lifecycleSource = source.slice(start);
+const welcomeSyncStart = renderingSource.indexOf('function syncWelcomeSessionDirectory(');
+const welcomeSyncEnd = renderingSource.indexOf('function setWelcome()', welcomeSyncStart);
+assert(welcomeSyncStart >= 0 && welcomeSyncEnd > welcomeSyncStart, 'welcome directory renderer is missing');
+const welcomeSyncSource = renderingSource.slice(welcomeSyncStart, welcomeSyncEnd);
 
 let fetchCalls = 0;
 let postCalls = 0;
@@ -21,17 +29,52 @@ let createRequestOptions = null;
 let committedModelSession = '';
 let committedPermissionStatus = null;
 const createGate = new Promise((resolve) => { releaseCreate = resolve; });
-const stream = { querySelector: () => null };
+const directoryName = {
+  textContent: '',
+  attributes: Object.create(null),
+  setAttribute(name, value) { this.attributes[name] = String(value); },
+  removeAttribute(name) { delete this.attributes[name]; },
+};
+const directoryPath = {
+  textContent: '',
+  title: '',
+  setAttribute() {},
+  removeAttribute() {},
+};
+const directoryCard = {
+  hidden: true,
+  querySelector(selector) {
+    if (selector === '[data-welcome-session-directory-name]') return directoryName;
+    if (selector === '[data-welcome-session-directory-path]') return directoryPath;
+    return null;
+  },
+};
+const stream = {
+  querySelector(selector) {
+    if (selector === '.welcome-session-directory') return directoryCard;
+    if (selector === '.welcome') return {};
+    return null;
+  },
+};
 const messageInput = { value: '', focus() {} };
 const pendingStorage = new Map();
 const legacyStorage = new Map();
+let welcomeDirectoryClickHandler = null;
 const ctx = vm.createContext({
   console: { warn() {}, error: console.error.bind(console), log: console.log.bind(console) },
   Promise,
   String,
   CustomEvent: function CustomEvent(name, init) { this.name = name; this.detail = init.detail; },
   performance: { now: () => 1 },
-  document: { dispatchEvent() {} },
+  document: {
+    dispatchEvent() {},
+    addEventListener(type, handler) { if (type === 'click') welcomeDirectoryClickHandler = handler; },
+    getElementById() { return null; },
+  },
+  window: {
+    __WORK_DIR__: 'C:\\default-workspace',
+    MyAgentPathPicker: { async pickPath() { return ''; } },
+  },
   localStorage: {
     getItem(key) { return legacyStorage.get(key) || null; },
     setItem(key, value) { legacyStorage.set(key, value); },
@@ -45,6 +88,8 @@ const ctx = vm.createContext({
   NEW_SESSION_DRAFT_KEY: '__new_session_draft__',
   messageInput,
   currentSessionId: 'existing',
+  newSessionWorkDir: '',
+  newSessionWorkDirRevision: 0,
   materializeNewSessionQueue: null,
   switchSessionEpoch: 0,
   messageLoadEpoch: 0,
@@ -102,7 +147,7 @@ const ctx = vm.createContext({
     fetchCalls += 1;
     if (String(url) === '/sessions/stored-draft' || String(url) === '/sessions/legacy-draft') {
       const id = String(url).split('/').pop();
-      return { ok: true, json: async () => ({ id, draft: true }) };
+      return { ok: true, json: async () => ({ id, draft: true, work_dir: 'C:\\default-workspace' }) };
     }
     postCalls += 1;
     createRequestOptions = options;
@@ -114,7 +159,12 @@ const ctx = vm.createContext({
       ok: true,
       json: async () => ({
         session_id: 'created',
-        session: { id: 'created', name: 'New', draft: true },
+        session: {
+          id: 'created',
+          name: 'New',
+          draft: true,
+          work_dir: JSON.parse(options.body).work_dir || 'C:\\default-workspace',
+        },
         model_profile_id: 'profile-fast',
         permission_status: { mode: 'approve_for_me' },
       }),
@@ -127,9 +177,11 @@ vm.runInContext(
     + `let pendingNewSession = null;\nlet prefetchNewSessionPromise = null;\n`
     + `const PENDING_NEW_SESSION_KEY = 'myagent-pending-new-session-id';\n`
     + `${lifecycleSource}\n`
+    + `${welcomeSyncSource}\n`
     + 'globalThis.__createNewSession = createNewSession;\n'
     + 'globalThis.__materializeNewSession = materializeNewSession;\n'
-    + 'globalThis.__ensurePrefetchedNewSession = ensurePrefetchedNewSession;',
+    + 'globalThis.__ensurePrefetchedNewSession = ensurePrefetchedNewSession;\n'
+    + 'globalThis.__startNewSessionInDir = startNewSessionInDir;',
   ctx,
 );
 
@@ -191,6 +243,45 @@ vm.runInContext(
   const fallbackId = await ctx.__materializeNewSession();
   assert.strictEqual(fallbackId, 'created', 'failed prefetch falls back to ordinary creation');
   assert.strictEqual(JSON.parse(createRequestOptions.body).prefetch, undefined);
+
+  // Choosing a directory must put that exact path on the hidden-draft POST;
+  // the server fixes a session's work_dir at creation time.
+  pendingStorage.clear();
+  ctx.setCurrentSessionState(null);
+  vm.runInContext(
+    'pendingNewSession = null; prefetchNewSessionPromise = null; '
+      + 'prefetchNewSessionWorkDir = null; newSessionWorkDir = ""; newSessionWorkDirRevision = 0;',
+    ctx,
+  );
+  failPrefetch = false;
+  createRequestOptions = null;
+  const chosenWorkDir = 'C:\\selected-workspace';
+  await ctx.__startNewSessionInDir(chosenWorkDir);
+  assert.strictEqual(JSON.parse(createRequestOptions.body).work_dir, chosenWorkDir);
+  assert.strictEqual(
+    vm.runInContext('pendingNewSession.workDir', ctx),
+    chosenWorkDir,
+    'the selected directory remains attached to the pending draft',
+  );
+
+  // The welcome-card picker follows the same path and updates the visible path
+  // before the asynchronous draft prefetch finishes.
+  const cardWorkDir = 'D:\\card-workspace';
+  ctx.window.MyAgentPathPicker.pickPath = async () => cardWorkDir;
+  const clickEvent = {
+    target: {
+      closest(selector) {
+        return selector === '[data-welcome-session-directory-picker]' ? this : null;
+      },
+      disabled: false,
+    },
+    preventDefault() {},
+    stopPropagation() {},
+  };
+  await welcomeDirectoryClickHandler(clickEvent);
+  assert.strictEqual(directoryPath.textContent, cardWorkDir);
+  assert.strictEqual(directoryName.textContent, 'card-workspace');
+  assert.strictEqual(JSON.parse(createRequestOptions.body).work_dir, cardWorkDir);
 
   process.stdout.write('new session lifecycle runtime checks passed\n');
 })().catch((error) => {

@@ -1,6 +1,6 @@
 /**
  * 子代理只读编辑器占位 + 续接提示（dsh 的 `SubagentReadOnlyComposer` 与
- * 「结果未纳入父回答」提示的 MyAgent 载体）。
+ * 「结果未纳入父回答」提示的 SugarAgent 载体）。
  *
  * 编辑器三态由 subagentUiDecisions 判定，本模块只负责呈现：
  *   - read-only：在输入区上方插入一条只读说明，并锁死输入/发送；

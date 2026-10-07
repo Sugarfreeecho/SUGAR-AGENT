@@ -343,51 +343,297 @@ function sweepDurableImagePreviews() {
 }
 
 function durableAttachmentImageHost(container) {
-    if (!container.classList || !container.classList.contains('msg-wrap--user')) {
-        return { host: container, thumbnail: false };
-    }
-    var strip = container.querySelector('.msg-user-attachment-strip');
+    var userMessage = container.classList && container.classList.contains('msg-wrap--user')
+        ? container
+        : (container.closest ? container.closest('.msg-wrap--user') : null);
+    var processRow = container.classList && container.classList.contains('feed-item')
+        ? container
+        : (container.closest ? container.closest('.feed-item') : null);
+    if (!userMessage && !processRow) return { host: container, thumbnail: false, processRow: false };
+    var host = userMessage || processRow;
+    var selector = userMessage ? '.msg-user-attachment-strip' : '.feed-attachment-strip';
+    var strip = host.querySelector(selector);
     if (!strip) {
         strip = document.createElement('div');
-        strip.className = 'msg-user-attachment-strip';
+        strip.className = userMessage ? 'msg-user-attachment-strip' : (processRow ? 'feed-attachment-strip' : 'msg-attachment-strip');
         strip.setAttribute('role', 'group');
         strip.setAttribute('aria-label', '图片附件');
-        var toolbar = container.querySelector('.msg-toolbar');
-        container.insertBefore(strip, toolbar || null);
+        if (userMessage) {
+            var toolbar = userMessage.querySelector('.msg-toolbar');
+            userMessage.insertBefore(strip, toolbar || null);
+        } else if (processRow) {
+            var feedRow = processRow.querySelector('.feed-row');
+            if (feedRow && feedRow.parentNode === processRow) processRow.insertBefore(strip, feedRow.nextSibling);
+            else processRow.appendChild(strip);
+        }
     }
-    return { host: strip, thumbnail: true };
+    return { host: strip, thumbnail: true, processRow: !!processRow };
+}
+
+function attachmentImageSizeLabel(item, ref) {
+    var bytes = Number((ref && (ref.bytes || ref.size)) || (item && (item.size || item.bytes)) || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return '图片';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (Math.round(bytes / 102.4) / 10) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (Math.round(bytes / 104857.6) / 10) + ' MB';
+    return (Math.round(bytes / 107374182.4) / 10) + ' GB';
+}
+
+function createDurableAttachmentCard(item, ref, processRow) {
+    var card = document.createElement('figure');
+    card.className = processRow ? 'feed-attachment-card' : 'msg-attachment-card';
+
+    var name = String((item && item.name) || (ref && ref.name) || '图片附件');
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'msg-attachment-preview-trigger';
+    trigger.setAttribute('aria-label', '放大查看 ' + name);
+    trigger.setAttribute('data-ui-tip', '点击放大查看');
+
+    var img = document.createElement('img');
+    img.className = 'msg-workspace-image msg-attachment-image msg-attachment-thumbnail';
+    img.dataset.attachmentId = ref.attachmentId;
+    img.alt = name;
+    var width = Number(ref.width || (item && item.width) || 0);
+    var height = Number(ref.height || (item && item.height) || 0);
+    if (width > 0) img.width = width;
+    if (height > 0) img.height = height;
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    trigger.appendChild(img);
+    card.appendChild(trigger);
+
+    var copy = document.createElement('figcaption');
+    copy.className = 'msg-attachment-copy';
+    var title = document.createElement('span');
+    title.className = 'msg-attachment-name';
+    title.textContent = name;
+    var meta = document.createElement('small');
+    meta.className = 'msg-attachment-meta';
+    var mediaType = String(ref.mediaType || (item && item.mediaType) || 'image/png');
+    var format = mediaType.split('/').pop().toUpperCase().replace('JPEG', 'JPG');
+    meta.textContent = attachmentImageSizeLabel(item, ref) + ' · ' + format;
+    copy.appendChild(title);
+    copy.appendChild(meta);
+    card.appendChild(copy);
+    return { card: card, image: img };
+}
+
+var durableAttachmentPreviewDialog = null;
+function ensureDurableAttachmentPreviewDialog() {
+    if (durableAttachmentPreviewDialog || !document.body) return durableAttachmentPreviewDialog;
+    var dialog = document.createElement('dialog');
+    dialog.className = 'attachment-image-viewer';
+    dialog.setAttribute('aria-label', '图片预览');
+    var header = document.createElement('div');
+    header.className = 'attachment-image-viewer-head';
+    var caption = document.createElement('span');
+    caption.className = 'attachment-image-viewer-caption';
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'attachment-image-viewer-close';
+    close.setAttribute('aria-label', '关闭图片预览');
+    close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
+    close.addEventListener('click', function () { dialog.close(); });
+    header.appendChild(caption);
+    header.appendChild(close);
+    var stage = document.createElement('div');
+    stage.className = 'attachment-image-viewer-stage';
+    var canvas = document.createElement('div');
+    canvas.className = 'attachment-image-viewer-canvas';
+    var image = document.createElement('img');
+    image.alt = '';
+    image.decoding = 'async';
+    image.draggable = false;
+    canvas.appendChild(image);
+    stage.appendChild(canvas);
+    var panel = document.createElement('div');
+    panel.className = 'attachment-image-viewer-panel';
+    panel.appendChild(header);
+    panel.appendChild(stage);
+    dialog.appendChild(panel);
+    dialog.addEventListener('click', function (event) {
+        if (event.target === dialog) dialog.close();
+    });
+    stage.addEventListener('wheel', function (event) {
+        if (!dialog.open || !dialog._previewFitSize || !event.deltaY) return;
+        event.preventDefault();
+        var previousScale = Number(dialog._previewScale) || 1;
+        var delta = event.deltaY * (event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? dialog._previewFitSize.viewportHeight : 1));
+        var nextScale = Math.max(0.2, Math.min(8, previousScale * Math.exp(-delta * 0.0016)));
+        if (nextScale === previousScale) return;
+        dialog._previewScale = nextScale;
+        if (dialog._previewZoomFrame) return;
+        dialog._previewZoomFrame = window.requestAnimationFrame(function () {
+            dialog._previewZoomFrame = 0;
+            if (dialog.open && dialog._previewFitSize) {
+                applyDurableAttachmentPreviewScale(dialog, dialog._previewScale);
+            }
+        });
+    }, { passive: false });
+    dialog.addEventListener('close', function () {
+        dialog._previewGeneration = (Number(dialog._previewGeneration) || 0) + 1;
+        cancelDurableAttachmentPreviewFrames(dialog);
+        dialog._previewFitSize = null;
+        image.onload = null;
+        image.style.visibility = 'hidden';
+    });
+    if (typeof window.ResizeObserver === 'function') {
+        dialog._previewResizeObserver = new window.ResizeObserver(function () {
+            if (dialog.open && dialog._previewFitSize) scheduleDurableAttachmentPreviewFit(dialog);
+        });
+        dialog._previewResizeObserver.observe(canvas);
+    }
+    document.body.appendChild(dialog);
+    dialog._previewImage = image;
+    dialog._previewStage = stage;
+    dialog._previewCanvas = canvas;
+    dialog._previewCaption = caption;
+    durableAttachmentPreviewDialog = dialog;
+    return dialog;
+}
+
+function measureDurableAttachmentPreviewFit(dialog) {
+    var image = dialog && dialog._previewImage;
+    var canvas = dialog && dialog._previewCanvas;
+    if (!image || !canvas || !image.naturalWidth || !image.naturalHeight) return null;
+    var availableWidth = canvas.clientWidth;
+    var availableHeight = canvas.clientHeight;
+    if (availableWidth <= 0 || availableHeight <= 0) return null;
+    var fitScale = Math.min(1, availableWidth / image.naturalWidth, availableHeight / image.naturalHeight);
+    return { width: image.naturalWidth * fitScale, height: image.naturalHeight * fitScale, viewportHeight: availableHeight };
+}
+
+function applyDurableAttachmentPreviewScale(dialog, scale) {
+    var image = dialog && dialog._previewImage;
+    if (!image || !dialog._previewFitSize) return;
+    // Keep the fitted bitmap size stable; only the centered compositor transform changes while zooming.
+    image.style.transform = 'translate3d(-50%, -50%, 0) scale(' + scale + ')';
+}
+
+function cancelDurableAttachmentPreviewFrames(dialog) {
+    if (dialog._previewZoomFrame) window.cancelAnimationFrame(dialog._previewZoomFrame);
+    if (dialog._previewFitFrame) window.cancelAnimationFrame(dialog._previewFitFrame);
+    dialog._previewZoomFrame = 0;
+    dialog._previewFitFrame = 0;
+}
+
+function scheduleDurableAttachmentPreviewFit(dialog) {
+    if (!dialog.open || dialog._previewFitFrame) return;
+    var generation = dialog._previewGeneration;
+    dialog._previewFitFrame = window.requestAnimationFrame(function () {
+        dialog._previewFitFrame = 0;
+        if (dialog._previewGeneration !== generation || !dialog.open) return;
+        var fitSize = measureDurableAttachmentPreviewFit(dialog);
+        if (!fitSize) return;
+        dialog._previewFitSize = fitSize;
+        dialog._previewImage.style.width = fitSize.width + 'px';
+        dialog._previewImage.style.height = fitSize.height + 'px';
+        applyDurableAttachmentPreviewScale(dialog, Number(dialog._previewScale) || 1);
+        dialog._previewImage.style.visibility = '';
+    });
+}
+
+function resetDurableAttachmentPreviewZoom(dialog) {
+    var image = dialog && dialog._previewImage;
+    if (!image) return;
+    cancelDurableAttachmentPreviewFrames(dialog);
+    var generation = (Number(dialog._previewGeneration) || 0) + 1;
+    dialog._previewGeneration = generation;
+    dialog._previewScale = 1;
+    dialog._previewFitSize = null;
+    image.style.visibility = 'hidden';
+    var fitWhenReady = function () {
+        if (dialog._previewGeneration === generation) scheduleDurableAttachmentPreviewFit(dialog);
+    };
+    if (typeof image.decode === 'function') {
+        image.onload = null;
+        image.decode().then(fitWhenReady, function () {
+            if (dialog._previewGeneration !== generation) return;
+            image.onload = fitWhenReady;
+            if (image.complete && image.naturalWidth) fitWhenReady();
+        });
+    } else {
+        image.onload = fitWhenReady;
+        if (image.complete && image.naturalWidth) fitWhenReady();
+    }
+}
+
+function openChatImagePreview(thumbnail) {
+    if (!thumbnail) return;
+    var dialog = ensureDurableAttachmentPreviewDialog();
+    if (!dialog) return;
+    var source = thumbnail.currentSrc || thumbnail.src;
+    if (!source) return;
+    if (dialog._previewImage.src !== source) dialog._previewImage.src = source;
+    dialog._previewImage.alt = thumbnail.alt || '图片预览';
+    dialog._previewCaption.textContent = thumbnail.alt || '图片预览';
+    resetDurableAttachmentPreviewZoom(dialog);
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    // The decode fallback can be ready synchronously, before showModal lays out the viewport.
+    if (typeof dialog._previewImage.decode !== 'function' && dialog._previewImage.complete && dialog._previewImage.naturalWidth) {
+        scheduleDurableAttachmentPreviewFit(dialog);
+    }
+}
+
+if (typeof document !== 'undefined' && typeof window !== 'undefined' && !window.__durableAttachmentPreviewBound) {
+    window.__durableAttachmentPreviewBound = true;
+    document.addEventListener('click', function (event) {
+        var target = event.target;
+        if (!target || !target.closest) return;
+        var trigger = target.closest('.msg-attachment-preview-trigger');
+        var image = target.closest('img') || (trigger && trigger.querySelector('img'));
+        if (!image || image.closest('.attachment-image-viewer')) return;
+        var inChatContent = !!image.closest('.message, .feed-item');
+        var durableAttachment = image.classList.contains('msg-attachment-image');
+        var composerAttachment = !!image.closest('.composer-attachment-preview');
+        if (!inChatContent && !durableAttachment && !composerAttachment && !trigger) return;
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openChatImagePreview(image);
+    }, true);
 }
 
 function renderDurableAttachmentImages(container, references) {
-    if (!container || !Array.isArray(references)) return;
-    var imageHost = durableAttachmentImageHost(container);
-    references.forEach(function (item) {
+    if (!container || !Array.isArray(references) || !references.length) return;
+    var imageReferences = references.filter(function (item) {
         var ref = item && (item.attachment || item);
-        if (!ref || !/^sha256:[a-f0-9]{64}$/.test(ref.attachmentId || '')) return;
-        if (container.querySelector('[data-attachment-id="' + ref.attachmentId + '"]')) return;
-        var img = document.createElement('img');
-        img.className = 'msg-workspace-image msg-attachment-image';
-        if (imageHost.thumbnail) img.classList.add('msg-attachment-thumbnail');
-        img.dataset.attachmentId = ref.attachmentId;
-        img.alt = ref.name || 'Image attachment';
-        img.width = ref.width;
-        img.height = ref.height;
-        if (!imageHost.thumbnail) {
-            img.style.maxWidth = '100%';
-            img.style.height = 'auto';
-            img.style.maxHeight = '60vh';
-            img.style.objectFit = 'contain';
+        return !!(ref && /^sha256:[a-f0-9]{64}$/.test(ref.attachmentId || ''));
+    });
+    if (!imageReferences.length) return;
+    var imageHost = durableAttachmentImageHost(container);
+    imageReferences.forEach(function (item) {
+        var ref = item && (item.attachment || item);
+        if (imageHost.host.querySelector('[data-attachment-id="' + ref.attachmentId + '"]')) return;
+        var previewImage;
+        if (imageHost.thumbnail) {
+            var attachmentCard = createDurableAttachmentCard(item, ref, imageHost.processRow);
+            imageHost.host.appendChild(attachmentCard.card);
+            previewImage = attachmentCard.image;
+        } else {
+            previewImage = document.createElement('img');
+            previewImage.className = 'msg-workspace-image msg-attachment-image';
+            previewImage.dataset.attachmentId = ref.attachmentId;
+            previewImage.alt = ref.name || 'Image attachment';
+            previewImage.width = ref.width;
+            previewImage.height = ref.height;
+            previewImage.style.maxWidth = '100%';
+            previewImage.style.height = 'auto';
+            previewImage.style.maxHeight = '60vh';
+            previewImage.style.objectFit = 'contain';
+            previewImage.loading = 'lazy';
+            previewImage.decoding = 'async';
+            imageHost.host.appendChild(previewImage);
         }
-        img.loading = 'lazy';
-        img.decoding = 'async';
-        imageHost.host.appendChild(img);
         var entry = durableImagePreviews.get(ref.attachmentId);
         if (entry) {
-            entry.nodes.push(img);
-            if (entry.url) img.src = entry.url;
+            entry.nodes.push(previewImage);
+            if (entry.url) previewImage.src = entry.url;
             return;
         }
-        entry = { nodes: [img], url: '', controller: typeof AbortController === 'function' ? new AbortController() : null };
+        entry = { nodes: [previewImage], url: '', controller: typeof AbortController === 'function' ? new AbortController() : null };
         durableImagePreviews.set(ref.attachmentId, entry);
         if (!durableImageObserver) {
             durableImageObserver = new MutationObserver(sweepDurableImagePreviews);
@@ -403,7 +649,11 @@ function renderDurableAttachmentImages(container, references) {
                 entry.url = URL.createObjectURL(blob);
                 entry.nodes.forEach(function (node) { node.src = entry.url; });
             }).catch(function () {
-                entry.nodes.forEach(function (node) { node.alt = 'Image attachment unavailable'; });
+                entry.nodes.forEach(function (node) {
+                    node.alt = '图片暂不可用';
+                    var card = node.closest('.msg-attachment-card, .feed-attachment-card');
+                    if (card) card.classList.add('is-unavailable');
+                });
                 if (durableImagePreviews.get(ref.attachmentId) === entry) durableImagePreviews.delete(ref.attachmentId);
                 sweepDurableImagePreviews();
             });

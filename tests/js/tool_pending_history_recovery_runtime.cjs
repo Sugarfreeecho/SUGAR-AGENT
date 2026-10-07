@@ -4,6 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/app/modules/sse-handling.js'), 'utf8');
+const renderingSource = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/app/modules/message-rendering.js'), 'utf8');
 function fn(name) {
   const match = source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'));
   assert(match, `missing ${name}`);
@@ -64,7 +65,7 @@ async function testHistoryRebuildAcceptsPendingToolReplay() {
   const accepted = new Map([['s::event_bus', 7]]);
   let replayedPending = false;
   let historyLoads = 0;
-  const stream = {querySelector: () => null};
+  const stream = {querySelector: () => null, querySelectorAll: () => []};
   const sessionStore = {
     getActiveRunInfo: () => null,
     shouldAcceptSseEvent(sid, seq, scope) {
@@ -105,7 +106,9 @@ async function testHistoryRebuildAcceptsPendingToolReplay() {
     scheduleActiveSessionReconnect() {},
     applyContextTokenLabelForCurrentSession() {},
   });
-  vm.runInContext(fn('attachSessionEventStream'), context);
+  const findGroup = renderingSource.match(/^function findExecutionProcessGroup\([^]*?^}/m);
+  assert(findGroup, 'missing findExecutionProcessGroup');
+  vm.runInContext(findGroup[0] + '\n' + fn('attachSessionEventStream'), context);
   await context.attachSessionEventStream('s', {skipInitialLoad: true});
   assert.equal(historyLoads, 1);
   assert.equal(replayedPending, true,

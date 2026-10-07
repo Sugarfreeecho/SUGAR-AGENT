@@ -1,0 +1,178 @@
+/* Shared motion for content panels that expand or collapse in the UI. */
+:root {
+    --ui-collapse-duration: 220ms;
+    --ui-collapse-easing: var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+    --ui-panel-collapse-duration: 280ms;
+    interpolate-size: allow-keywords;
+}
+
+.session-section-body,
+.session-group-body {
+    height: auto;
+    overflow: visible;
+    opacity: 1;
+    transition:
+        height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        opacity var(--ui-collapse-duration) ease,
+        padding-block var(--ui-collapse-duration) var(--ui-collapse-easing),
+        visibility 0s linear 0s;
+}
+
+.session-section.is-collapsed > .session-section-body,
+.session-group.is-collapsed > .session-group-body {
+    display: block;
+    height: 0;
+    overflow: hidden;
+    padding-block: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 0s, var(--ui-collapse-duration);
+    pointer-events: none;
+}
+
+.skill-picker-group-items {
+    height: auto;
+    overflow: visible;
+    opacity: 1;
+    transition:
+        height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        opacity var(--ui-collapse-duration) ease,
+        padding-block var(--ui-collapse-duration) var(--ui-collapse-easing),
+        border-color var(--ui-collapse-duration) ease,
+        visibility 0s linear 0s;
+}
+
+.skill-picker-group.is-collapsed > .skill-picker-group-items {
+    height: 0;
+    overflow: hidden;
+    padding-block: 0;
+    border-block-color: transparent;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 0s, 0s, var(--ui-collapse-duration);
+    pointer-events: none;
+}
+
+.dock-files-children {
+    height: auto;
+    overflow: visible;
+    opacity: 1;
+    transition:
+        height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        opacity var(--ui-collapse-duration) ease,
+        visibility 0s linear 0s;
+}
+
+.dock-files-children.is-collapsed {
+    height: 0;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, var(--ui-collapse-duration);
+    pointer-events: none;
+}
+
+.human-terminal-summary,
+.human-terminal-detail {
+    height: auto;
+    overflow: visible;
+    opacity: 1;
+    transition:
+        height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        padding-block var(--ui-collapse-duration) var(--ui-collapse-easing),
+        opacity var(--ui-collapse-duration) ease,
+        visibility 0s linear 0s;
+}
+
+.human-interaction-card.is-collapsed > .human-terminal-detail,
+.human-interaction-card.is-expanded > .human-terminal-summary {
+    height: 0;
+    overflow: hidden;
+    padding-block: 0;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 0s, var(--ui-collapse-duration);
+    pointer-events: none;
+}
+
+.process-aggregate > .process-aggregate-body {
+    display: block;
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    opacity: 1;
+    transition:
+        height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        min-height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        padding-block var(--ui-collapse-duration) var(--ui-collapse-easing),
+        opacity var(--ui-collapse-duration) ease,
+        border-color var(--ui-collapse-duration) ease,
+        visibility 0s linear 0s;
+}
+
+.process-aggregate.is-collapsed > .process-aggregate-body,
+:root .process-aggregate:not(.subagent-grid-card).is-collapsed > .process-aggregate-body {
+    display: block;
+    height: 0;
+    min-height: 0;
+    overflow: hidden;
+    padding-block: 0;
+    border-block-color: transparent;
+    opacity: 0;
+    visibility: hidden;
+    transition-delay: 0s, 0s, 0s, 0s, 0s, var(--ui-collapse-duration);
+    pointer-events: none;
+}
+
+.feed-chunk {
+    transition:
+        max-height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        box-shadow 0.2s ease;
+}
+
+.feed-chunk-scroller {
+    transition:
+        max-height var(--ui-collapse-duration) var(--ui-collapse-easing),
+        opacity var(--ui-collapse-duration) ease;
+}
+
+.session-section-chev,
+.session-time-group-chev,
+.process-chev::before,
+.process-aggregate-chevron,
+.feed-row-collapse-chevron,
+.skill-picker-group-chevron {
+    transition-duration: var(--ui-collapse-duration);
+    transition-timing-function: var(--ui-collapse-easing);
+}
+
+.human-terminal-toggle::after {
+    transition: transform var(--ui-collapse-duration) var(--ui-collapse-easing);
+}
+
+.user-msg-full {
+    transition-duration: var(--ui-collapse-duration);
+    transition-timing-function: var(--ui-collapse-easing);
+}
+
+.dock-rightbar,
+.dock-rightbar.is-collapsed {
+    transition: width var(--ui-panel-collapse-duration) var(--ui-collapse-easing);
+}
+
+.dock-rightbar > .dock-surface {
+    transition: transform var(--ui-panel-collapse-duration) var(--ui-collapse-easing), visibility 0s linear 0s;
+}
+
+.dock-rightbar.is-collapsed > .dock-surface {
+    transition:
+        transform var(--ui-panel-collapse-duration) var(--ui-collapse-easing),
+        visibility 0s linear var(--ui-panel-collapse-duration);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --ui-collapse-duration: 1ms;
+        --ui-panel-collapse-duration: 1ms;
+    }
+}

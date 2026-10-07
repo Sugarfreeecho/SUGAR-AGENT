@@ -186,7 +186,7 @@ async function testUnreadNavigation() {
 }
 
 async function testUnreadHistoryLoadLayout() {
-  const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1, messageLoadEpoch: 0,
+  const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1, messageLoadEpoch: 0, AbortController,
     sessionStore: { ui: {} }, replayingMessages: false, suppressTocDuringSessionLoad: false,
     HISTORY_DIALOGUES_PER_PAGE: 20, HISTORY_EVENT_BUDGET: 1000,
     chatContainer: navigationPort(), isSessionRunning: () => false, isServerStreamActive: () => false,

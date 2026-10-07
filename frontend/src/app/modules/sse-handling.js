@@ -123,6 +123,8 @@ function shouldApplySseSeqFilter(parsed) {
         || type === 'key_context_progress'
         || type === 'context_trim_delta'
         || type === 'context_summary_delta'
+        || type === 'context_summary_reasoning_delta'
+        || type === 'context_summary_reasoning_end'
         || type === 'key_context_delta'
         || type === 'context_trim_body'
         || type === 'context_summary_body'
@@ -449,6 +451,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 if (eventSessionId === runSessionId && !parsed.agent_id
                     && (parsed.type === 'run_started' || parsed.type === 'run_attached'
                         || parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta'
+                        || parsed.type === 'context_summary_reasoning_delta'
                         || parsed.type === 'tool_call_delta' || parsed.type === 'tool_command_delta'
                         || parsed.type === 'tool_pending' || parsed.type === 'tool_execution_state')
                     && typeof syncRenderContextRunScope === 'function') {
@@ -636,7 +639,18 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                         continue;
                     }
                     if (parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta') appendLlmStreamDelta(runCtx, parsed, runSessionId);
-                    else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
+                    else if (parsed.type === 'context_summary_reasoning_delta') appendCompressionReasoningDelta(runCtx, parsed, runSessionId);
+                    else if (parsed.type === 'context_summary_reasoning_end') finishCompressionReasoning(runCtx);
+                    else if (parsed.type === 'context_summary_delta') {
+                        finishCompressionReasoning(runCtx, false);
+                        appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
+                    }
+                    else if (parsed.type === 'context_summary_progress') {
+                        // 等待提示不能收尾正在流入的摘要，否则最终正文会追加而不是替换草稿。
+                        if (!runCtx || !runCtx.progressStream || !runCtx.progressStream['context-summary']) {
+                            appendProgressLog(runCtx, parsed.content, 'context-summary', runSessionId);
+                        }
+                    }
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
                     else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
                     else if (parsed.type === 'cache_stats' && eventSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
@@ -1233,7 +1247,11 @@ async function attachSessionEventStream(sessionId, opts) {
         if (runSessionId !== currentSessionId) return;
         requestExtensionStateConvergence(runSessionId, 'stream-attaching');
         if (!opts.skipInitialLoad) {
-            await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
+            const historyLoaded = await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
+            if (historyLoaded === false) {
+                reattachFailed = true;
+                return;
+            }
             if (runSessionId !== currentSessionId) return;
             streamHistoryRecoveryBySession.delete(runSessionId);
             // The rebuilt history has no ephemeral tool rows. Accept the
@@ -1249,6 +1267,7 @@ async function attachSessionEventStream(sessionId, opts) {
             var attachTailReady = await ensureLatestHistoryTailForLiveAppend(runSessionId);
             if (!attachTailReady || runSessionId !== currentSessionId) return;
         }
+        if (!opts.force && !isServerStreamActive(runSessionId)) return;
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
         savedRecovery = typeof executionRecoveryBySession !== 'undefined' ? executionRecoveryBySession.get(String(sessionId)) : null;
@@ -1256,8 +1275,10 @@ async function attachSessionEventStream(sessionId, opts) {
         var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};
         runCtx.runId = String(activeInfoForAttach.run_id || activeInfoForAttach.runId || '');
         runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();
-        var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
+        runCtx.processGroupId = savedRecovery && savedRecovery.processGroupId || '';
+        var existingProcessGroup = findExecutionProcessGroup(runCtx.stream, runCtx.processGroupId, runCtx.runId);
         if (existingProcessGroup) {
+            runCtx.processGroupId = existingProcessGroup.dataset.processGroupId || runCtx.processGroupId;
             runCtx.currentProcessGroup = existingProcessGroup;
             // History replay may contain interrupt generations greater than zero.
             // Restore that ordering state before appending reconnected live rows.
@@ -2375,12 +2396,22 @@ function enqueueCurrentInputAsFollowup(options) {
     if (typeof window.consumeSelectedSkillsForSend === 'function') {
         selectedSkills = window.consumeSelectedSkillsForSend();
     }
-    var attachments = window.MyAgentPathPicker
+    var rememberedAttachments = window.MyAgentPathPicker
         && typeof window.MyAgentPathPicker.chatAttachments === 'function'
-        ? window.MyAgentPathPicker.chatAttachments(messageInput).filter(function (attachment) {
-            return attachment && attachment.path && rawMessage.indexOf(String(attachment.path)) >= 0;
-        })
+        ? window.MyAgentPathPicker.chatAttachments(messageInput)
         : [];
+    var attachments = rememberedAttachments.filter(function (attachment) {
+            return attachment && attachment.path && rawMessage.indexOf(String(attachment.path)) >= 0;
+        });
+    var omittedAttachments = rememberedAttachments.filter(function (attachment) {
+        return attachment && attachment.path && !attachments.some(function (attached) {
+            return String(attached.path) === String(attachment.path);
+        });
+    });
+    if (omittedAttachments.length && window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.cleanupChatUploads === 'function') {
+        void window.MyAgentPathPicker.cleanupChatUploads(omittedAttachments);
+    }
     var item = appendFollowupQueueItem(sid, rawMessage, visibleMessage, selectedSkills, attachments);
     if (!item) return false;
     if (isSubagentComposerSession(sid)) {
@@ -3840,6 +3871,15 @@ async function sendMessage(options) {
     const attachmentsForRun = rememberedAttachments.filter(function (item) {
         return item && item.path && rawMessage.indexOf(String(item.path)) >= 0;
     });
+    var omittedAttachments = rememberedAttachments.filter(function (item) {
+        return item && item.path && !attachmentsForRun.some(function (attached) {
+            return String(attached.path) === String(item.path);
+        });
+    });
+    if (omittedAttachments.length && window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.cleanupChatUploads === 'function') {
+        void window.MyAgentPathPicker.cleanupChatUploads(omittedAttachments);
+    }
     if (attachmentsForRun.length) {
         formData.append('attachments', JSON.stringify(attachmentsForRun));
     }
@@ -3873,6 +3913,8 @@ async function sendMessage(options) {
     if (!switchedAway) applyContextTokenLabelForCurrentSession();
     let streamEventIdx = preCount + 1;
     let streamDisconnectedUnexpectedly = false;
+    let chatAcceptedByServer = false;
+    if (!options.fromQueue) messageInput._myAgentInFlightUploads = attachmentsForRun.slice();
     try {
         reportClientPipelineStep(clientTimingCtx, 'build_form_data', _clientStepStart, { followupSteer: !!renderAsSteer });
         _clientStepStart = nowPipelineMs();
@@ -3895,8 +3937,9 @@ async function sendMessage(options) {
         if (response.status === 409) {
             streamDisconnectedUnexpectedly = true;
             rollbackOptimisticUserEvent(runSessionId, preCount);
+            var keepAttachmentsForRetry = !!options.fromQueue;
             if (!options.fromQueue && isMyAgentFeatureEnabled('followupRestart', false)) {
-                appendFollowupQueueItem(
+                keepAttachmentsForRetry = !!appendFollowupQueueItem(
                     runSessionId,
                     rawMessage,
                     displayMessage,
@@ -3909,18 +3952,30 @@ async function sendMessage(options) {
                    会把真实路径重新变成胶囊并重建映射，显示形态不变。 */
                 messageInput.value = rawMessage;
                 rewriteInputWorkspacePaths();
+                if (attachmentsForRun.length && window.MyAgentPathPicker
+                        && typeof window.MyAgentPathPicker.addChatAttachments === 'function') {
+                    window.MyAgentPathPicker.addChatAttachments(messageInput, attachmentsForRun);
+                }
                 persistInputDraft(runSessionId, messageInput.value);
                 if (typeof window.setSelectedSkillsForCurrentSession === 'function') {
                     window.setSelectedSkillsForCurrentSession(selectedSkillsForRun);
                 }
                 autoResizeTextarea();
+                keepAttachmentsForRetry = true;
             }
+            if (!keepAttachmentsForRetry && attachmentsForRun.length && window.MyAgentPathPicker
+                    && typeof window.MyAgentPathPicker.cleanupChatUploads === 'function') {
+                void window.MyAgentPathPicker.cleanupChatUploads(attachmentsForRun);
+            }
+            if (!options.fromQueue) delete messageInput._myAgentInFlightUploads;
             scheduleActiveSessionReconnect(runSessionId, { delayMs: 0, failure: true });
             return false;
         }
         var responseContentType = String(response.headers && response.headers.get
             ? (response.headers.get('content-type') || '')
             : '').toLowerCase();
+        chatAcceptedByServer = !!(response.ok && responseContentType.indexOf('text/event-stream') >= 0);
+        if (chatAcceptedByServer && !options.fromQueue) delete messageInput._myAgentInFlightUploads;
         if (response.ok && responseContentType.indexOf('text/event-stream') >= 0
             && typeof options.onRunStarted === 'function') {
             try {
@@ -3938,6 +3993,12 @@ async function sendMessage(options) {
         return true;
     } catch (error) {
         reportClientPipelineStep(clientTimingCtx, 'chat_fetch_or_sse_error', _clientStepStart, { error: (error && error.message) ? String(error.message) : String(error) });
+        if (!chatAcceptedByServer && !options.fromQueue && attachmentsForRun.length
+                && window.MyAgentPathPicker
+                && typeof window.MyAgentPathPicker.cleanupChatUploads === 'function') {
+            void window.MyAgentPathPicker.cleanupChatUploads(attachmentsForRun);
+        }
+        if (!options.fromQueue) delete messageInput._myAgentInFlightUploads;
         if (error.name === 'AbortError') {
             if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
         }
@@ -4107,6 +4168,22 @@ messageInput.addEventListener('keydown', function onComposerInputKeydown(e) {
     if (!isInputSubmitShortcut(e, 'chat')) return;
     e.preventDefault();
     dispatchComposerAction(false);
+});
+// 捕获阶段也记录嵌套滚动区的阅读意图；真正补页仍由主视口到达顶部触发。
+chatContainer.addEventListener('wheel', function (e) {
+    if (e.deltaY < 0) enableHistoryAutoLoadForReader();
+}, { capture: true, passive: true });
+chatContainer.addEventListener('wheel', function (e) {
+    if (e.deltaY < 0 && !e.defaultPrevented) maybeAutoLoadOlderHistory();
+}, { passive: true });
+chatContainer.addEventListener('touchstart', enableHistoryAutoLoadForReader, { capture: true, passive: true });
+chatContainer.addEventListener('pointerdown', enableHistoryAutoLoadForReader, { capture: true, passive: true });
+chatContainer.addEventListener('keydown', function (e) {
+    if (e.target && e.target.closest && e.target.closest('input, textarea, [contenteditable="true"]')) return;
+    if (e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home') {
+        enableHistoryAutoLoadForReader();
+        maybeAutoLoadOlderHistory();
+    }
 });
 chatContainer.addEventListener('scroll', function () {
     refreshLiveAutoFollowPins();

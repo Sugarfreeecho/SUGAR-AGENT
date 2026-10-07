@@ -217,8 +217,13 @@ function updateHumanInteractionSessionBadge(sessionId) {
         badge = document.createElement('span');
         badge.className = 'session-human-badge';
         badge.setAttribute('aria-label', '待处理的人机交互');
+        // 插入锚点必须取"参照节点的真实父节点"：改版后 .session-more-wrap 挪进了
+        // .session-item-actions，不再是 .session-item-head 的直接子节点；若仍写
+        // head.insertBefore(badge, more)，会抛 NotFoundError，并连带弄死切换会话
+        // 与发送（两者都会经过 syncSessionListIndicatorClasses 调用链）。
         var more = head.querySelector('.session-more-wrap');
-        head.insertBefore(badge, more || null);
+        if (more && more.parentNode) more.parentNode.insertBefore(badge, more);
+        else head.appendChild(badge);
     }
     if (badge) {
         var hasQuestions = counts.questions > 0;
@@ -1509,7 +1514,8 @@ function createHumanTerminalCard(record, sessionId) {
     var detail = humanElement('div', 'human-terminal-detail');
     var detailId = 'human-terminal-detail-' + kind + '-' + String(card.dataset.interactionId || '').replace(/[^a-zA-Z0-9_-]/g, '-');
     detail.id = detailId;
-    detail.hidden = true;
+    detail.setAttribute('aria-hidden', 'true');
+    detail.inert = true;
     detail.appendChild(humanElement(
         'div',
         'human-readonly-notice',
@@ -1531,8 +1537,10 @@ function createHumanTerminalCard(record, sessionId) {
             toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
             if (typeof setUiRuntimeText === 'function') setUiRuntimeText(toggle, expanded ? '收起' : '展开');
             else toggle.textContent = expanded ? '收起' : '展开';
-            summary.hidden = expanded;
-            detail.hidden = !expanded;
+            summary.setAttribute('aria-hidden', expanded ? 'true' : 'false');
+            summary.inert = expanded;
+            detail.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            detail.inert = !expanded;
             card.classList.toggle('is-expanded', expanded);
             card.classList.toggle('is-collapsed', !expanded);
         });

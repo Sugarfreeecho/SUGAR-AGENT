@@ -165,11 +165,24 @@ function syncSessionDraftBadges(sessionId) {
     });
 }
 
+/** 同步行内高频动作（置顶）的按下态与文案；状态变了也不重建行。 */
+function syncSessionRowQuickActions(itemDiv, sessionId) {
+    var btn = itemDiv && itemDiv.querySelector ? itemDiv.querySelector('[data-session-pin]') : null;
+    if (!btn) return;
+    var sess = findSessionForActions(sessionId, null);
+    var pinned = !!(sess && sess.pinned);
+    var label = pinned ? '取消置顶' : '置顶会话';
+    btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    btn.setAttribute('data-ui-tip', label);
+    btn.classList.toggle('is-on', pinned);
+}
+
 /** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
     syncSessionDraftBadge(itemDiv, sessionId);
+    syncSessionRowQuickActions(itemDiv, sessionId);
     itemDiv.classList.remove('is-generating', 'is-finalizing', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
@@ -214,8 +227,8 @@ function sidebarHighlightedSessionId() {
     return sid;
 }
 
-/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关 */
-function syncSessionListIndicatorClasses() {
+/** 指示器全量同步的本体（同步执行，读取的永远是最新状态）。 */
+function performSessionListIndicatorSync() {
     if (!sessionsList) return;
     var highlightedId = sidebarHighlightedSessionId();
     sessionsList.querySelectorAll('.session-item').forEach(function (div) {
@@ -226,6 +239,20 @@ function syncSessionListIndicatorClasses() {
         applySessionItemIndicators(div, sid);
     });
     if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
+}
+
+/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关。
+ *  突发合并：同一帧内被多处（多为 SSE 高频分支）连续调用时只跑一次——幂等操作，合并后状态一致。 */
+var sessionIndicatorSyncQueued = false;
+function syncSessionListIndicatorClasses() {
+    if (sessionIndicatorSyncQueued) return;
+    sessionIndicatorSyncQueued = true;
+    var run = function () {
+        sessionIndicatorSyncQueued = false;
+        performSessionListIndicatorSync();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else run();
 }
 
 function sessionSectionExpanded(key) {
@@ -246,6 +273,11 @@ function closeAllSessionMenus() {
         var b = w.querySelector('.session-more-btn');
         if (b) b.setAttribute('aria-expanded', 'false');
     });
+    document.querySelectorAll('.sidebar-popup.is-open').forEach(function (p) {
+        p.classList.remove('is-open');
+        var t = p.querySelector('[data-popup-trigger]');
+        if (t) t.setAttribute('aria-expanded', 'false');
+    });
 }
 (function bindSessionMenuDocumentCloserOnce() {
     if (window.__myAgentSessionMenuCloser) return;
@@ -253,13 +285,153 @@ function closeAllSessionMenus() {
     document.addEventListener('click', closeAllSessionMenus);
 })();
 
+/* ── 侧栏通用弹出菜单（视图选项 / 分组动作 / 会话行动作共用） ──────────────
+   结构：<div class="sidebar-popup" data-sidebar-popup>
+          <button data-popup-trigger aria-haspopup="menu" aria-expanded="false">…</button>
+          <div class="sidebar-popup-menu" role="menu">…</div></div>
+   行为对齐 DSH：Esc 关闭并把焦点还给触发按钮、外部 pointerdown 关闭、
+   ↑↓/Home/End 在菜单项之间走查。 */
+function sidebarPopupMenuItems(popup) {
+    if (!popup) return [];
+    return Array.prototype.slice.call(
+        popup.querySelectorAll('.sidebar-popup-menu [role="menuitem"]:not([disabled]), .sidebar-popup-menu [role="menuitemradio"]:not([disabled])')
+    );
+}
+
+function setSidebarPopupOpen(popup, open, opts) {
+    if (!popup) return;
+    var options = opts || {};
+    var trigger = popup.querySelector('[data-popup-trigger]');
+    var next = !!open;
+    if (next) {
+        // 同时只允许一个侧栏弹出层（含会话行菜单）。
+        document.querySelectorAll('.sidebar-popup.is-open').forEach(function (other) {
+            if (other !== popup) setSidebarPopupOpen(other, false);
+        });
+        document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {
+            w.classList.remove('is-open');
+            var b = w.querySelector('.session-more-btn');
+            if (b) b.setAttribute('aria-expanded', 'false');
+        });
+    }
+    popup.classList.toggle('is-open', next);
+    if (trigger) trigger.setAttribute('aria-expanded', next ? 'true' : 'false');
+    // 菜单展开期间抑制/撤掉悬停提示，避免提示框压住菜单投影。
+    if (next && typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();
+    if (next && options.focusFirst) {
+        var items = sidebarPopupMenuItems(popup);
+        if (items.length) requestAnimationFrame(function () { items[0].focus(); });
+    }
+    if (!next && options.returnFocus && trigger && typeof trigger.focus === 'function') {
+        try { trigger.focus(); } catch (e) { /* ignore */ }
+    }
+}
+
+/** 给一个 .sidebar-popup 绑定开关、键盘与外部关闭；items 变化时由调用方重建菜单内容。 */
+function bindSidebarPopup(popup) {
+    if (!popup || popup.dataset.popupBound === '1') return;
+    popup.dataset.popupBound = '1';
+    var trigger = popup.querySelector('[data-popup-trigger]');
+    if (!trigger) return;
+    if (typeof bindUiHoverTip === 'function') bindUiHoverTip(trigger);
+    trigger.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var willOpen = !popup.classList.contains('is-open');
+        // e.detail === 0 表示键盘触发（Enter/Space）：打开后把焦点送给第一项。
+        setSidebarPopupOpen(popup, willOpen, { focusFirst: willOpen && e.detail === 0 });
+    });
+    popup.addEventListener('keydown', function (e) {
+        if (!popup.classList.contains('is-open')) return;
+        var items = sidebarPopupMenuItems(popup);
+        if (!items.length) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            setSidebarPopupOpen(popup, false, { returnFocus: true });
+            return;
+        }
+        var idx = items.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            items[idx < 0 ? 0 : (idx + 1) % items.length].focus();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            items[idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length].focus();
+        } else if (e.key === 'Home') {
+            e.preventDefault();
+            items[0].focus();
+        } else if (e.key === 'End') {
+            e.preventDefault();
+            items[items.length - 1].focus();
+        }
+    });
+}
+
+// 全局只有一个 pointerdown 关闭器：弹出层随列表重绘频繁重建，逐元素挂 document 监听会累积泄漏。
+(function bindSidebarPopupDocumentCloserOnce() {
+    if (window.__myAgentSidebarPopupCloser) return;
+    window.__myAgentSidebarPopupCloser = true;
+    document.addEventListener('pointerdown', function (e) {
+        var open = document.querySelectorAll('.sidebar-popup.is-open, .session-more-wrap.is-open');
+        if (!open.length) return;
+        open.forEach(function (popup) {
+            if (popup.contains(e.target)) return;
+            if (popup.classList.contains('sidebar-popup')) setSidebarPopupOpen(popup, false);
+            else {
+                popup.classList.remove('is-open');
+                var b = popup.querySelector('.session-more-btn');
+                if (b) b.setAttribute('aria-expanded', 'false');
+            }
+        });
+    }, true);
+})();
+
+var SIDEBAR_ICON_SVG = {
+    search: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>',
+    sliders: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5v14M12 5v14M19 5v14"></path><circle cx="5" cy="14" r="2"></circle><circle cx="12" cy="9" r="2"></circle><circle cx="19" cy="15" r="2"></circle></svg>',
+    folderPlus: window.MyAgentIcons.svg('folder-plus'),
+    plus: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>',
+    dots: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>',
+    pin: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>',
+    close: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>',
+    chevron: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>',
+    check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
+    newChat: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="M12 8.6v6.8M8.6 12h6.8"></path></svg>',
+};
+
 (function bindSessionListDelegatedSwitcherOnce() {
     if (!sessionsList || window.__myAgentSessionListSwitcher) return;
     window.__myAgentSessionListSwitcher = true;
+    // 指针刚进入该行就点了图标（⋯ / 置顶）：那枚图标是 hover 之后才浮出的，
+    // 用户来不及"瞄准"它 —— 判定为"想点这一行"，拦下这次点击并切换会话。
+    // 行情景：行右侧正是相对时间的位置，用户点那里切会话时会撞上刚浮出的 ⋯。
+    // 真正想点图标的人（进入该行 ≥220ms 后才点）不受影响。
+    sessionsList.addEventListener('click', function (e) {
+        var iconTarget = e.target;
+        if (!iconTarget || !iconTarget.closest) return;
+        var icon = iconTarget.closest('.session-more-btn, [data-session-pin]');
+        if (!icon) return;
+        var iconRow = icon.closest('.session-item');
+        if (!iconRow || !sessionsList.contains(iconRow)) return;
+        var hoverAt = Number(iconRow.dataset.hoverAt || 0);
+        if (!hoverAt || Date.now() - hoverAt >= 220) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var iconSid = iconRow.dataset.sessionId;
+        if (!iconSid) return;
+        if (iconSid === currentSessionId) {
+            clearSessionUnreadState(iconSid);
+        } else {
+            Promise.resolve(switchSession(iconSid)).catch(function (err) {
+                console.error('切换会话失败:', err);
+            });
+        }
+    }, true);
     sessionsList.addEventListener('click', function (e) {
         var target = e.target;
         if (!target || !target.closest) return;
-        if (target.closest('button, .session-more-wrap, .session-more-menu, input, textarea, a')) return;
+        if (target.closest('button, .session-item-actions, .session-more-wrap, .session-more-menu, .sidebar-popup, input, textarea, a')) return;
         if (target.isContentEditable) return;
         var row = target.closest('.session-item');
         if (!row || !sessionsList.contains(row)) return;
@@ -576,9 +748,43 @@ function bindSessionActionMenu(wrap, getSession, rowDiv) {
             if (!wasOpen) {
                 wrap.classList.add('is-open');
                 moreBtn.setAttribute('aria-expanded', 'true');
+                // 打开后把焦点留在触发按钮上：↑↓/Esc 的键盘走查才有事件起点。
+                try { moreBtn.focus(); } catch (err) { /* ignore */ }
+                if (typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();
             }
         });
     }
+    // DSH 对齐：Esc 关闭并把焦点还给触发按钮，↑↓/Home/End 在菜单项之间走查。
+    wrap.addEventListener('keydown', function (e) {
+        var menu = wrap.querySelector('.session-more-menu');
+        if (!menu || !wrap.classList.contains('is-open')) return;
+        var items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitem"]'));
+        if (!items.length) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            wrap.classList.remove('is-open');
+            if (moreBtn) {
+                moreBtn.setAttribute('aria-expanded', 'false');
+                try { moreBtn.focus(); } catch (err) { /* ignore */ }
+            }
+            return;
+        }
+        var idx = items.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            items[idx < 0 ? 0 : (idx + 1) % items.length].focus();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            items[idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length].focus();
+        } else if (e.key === 'Home') {
+            e.preventDefault();
+            items[0].focus();
+        } else if (e.key === 'End') {
+            e.preventDefault();
+            items[items.length - 1].focus();
+        }
+    });
     wrap.addEventListener('click', function (e) {
         var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
         if (!target || !wrap.contains(target)) return;
@@ -635,6 +841,10 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     const div = document.createElement('div');
     div.className = 'session-item';
     div.dataset.sessionId = sess.id || '';
+    // 记录指针进入本行的时刻（见上面的 capture 拦截）：用于区分"点这一行"与"点浮出的图标"。
+    div.addEventListener('mouseenter', function () {
+        div.dataset.hoverAt = String(Date.now());
+    });
     if (sidebarHighlightedSessionId() === sess.id) div.classList.add('active');
     if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
     if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
@@ -648,10 +858,17 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
         + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
+        // 置顶标记（DSH 同款）：行尾、相对时间之后的一枚 16px 图钉；hover 时与时间一起淡出，
+        // 把位置让给行内动作（置顶/⋯），避免同一位置出现两个图钉。
+        + '<span class="session-pin-mark" aria-label="置顶" title="置顶"' + (sess.pinned ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.pin + '</span>'
         + '</div>'
         + '<div class="session-last-query"></div>'
         + '</div>'
+        + '<div class="session-item-actions">'
+        + '<button type="button" class="session-row-icon session-row-pin" data-session-pin aria-label="置顶会话" aria-pressed="false" data-ui-tip="置顶会话">'
+        + SIDEBAR_ICON_SVG.pin + '</button>'
         + buildSessionMoreMenuMarkup()
+        + '</div>'
         + '</div>';
     if (typeof updateHumanInteractionSessionBadge === 'function') {
         setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
@@ -662,12 +879,14 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     var dateEl = div.querySelector('.session-item-date');
     var dateLine = '';
     if (dateEl) {
-        dateLine = typeof formatSessionListDate === 'function' ? formatSessionListDate(sess) : '';
-        if (dateLine) {
-            dateEl.innerHTML = (typeof sessionDateIcon === 'function' ? sessionDateIcon() : '') + dateLine;
-        } else {
-            dateEl.textContent = '';
-        }
+        // 行列尾用相对时间（DSH 风格），完整时间仍在整行 tooltip 里。
+        // 活动时间戳落一份在 DOM 上：30 秒共享时钟据此做纯文本刷新（不动列表结构）。
+        var activityTs = typeof sessionActivityTimestampMs === 'function' ? sessionActivityTimestampMs(sess) : 0;
+        if (activityTs > 0) dateEl.setAttribute('data-activity-at', String(activityTs));
+        dateLine = typeof formatSessionListRelativeTime === 'function'
+            ? formatSessionListRelativeTime(sess)
+            : '';
+        dateEl.textContent = dateLine || '';
     }
     var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';
     if (itemTip) {
@@ -679,6 +898,26 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     bindSessionActionMenu(moreWrap, function () {
         return findSessionForActions(sess.id, sess);
     }, div);
+    var pinBtn = div.querySelector('[data-session-pin]');
+    if (pinBtn) {
+        bindUiHoverTip(pinBtn);
+        pinBtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var target = findSessionForActions(sess.id, sess);
+            if (!target) return;
+            Promise.resolve(toggleSessionPinnedFromMenu(target)).catch(function (err) {
+                console.error('置顶失败:', err);
+            });
+                // 点「置顶」按钮时也切换到该会话：行尾这个位置在原版里就是"点行切会话"的热区，
+                // 用户期望点这里能进入该会话（置顶动作照旧执行）。
+                if (String(sess.id) !== String(currentSessionId || '') && typeof switchSession === 'function') {
+                    Promise.resolve(switchSession(sess.id)).catch(function (err) {
+                        console.error('切换会话失败:', err);
+                    });
+                }
+        });
+    }
     var nameEl = div.querySelector('.session-name');
     if (nameEl) {
         nameEl.addEventListener('dblclick', function (e) {
@@ -692,7 +931,112 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         });
     }
     applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
+    ensureSidebarTextTimesAutoRefresh();
     return div;
+}
+
+/** 侧栏行时间自动刷新（学 DSH 的 relative-clock）：30 秒共享节拍（经统一节拍器）+ 聚焦/可见性即时补拍。
+ *  只更新 .session-item-date 的文本，不触碰列表结构。 */
+function refreshSessionListTimes(root) {
+    var scope = root || document;
+    if (!scope || !scope.querySelectorAll) return;
+    if (typeof formatSessionListRelativeTimeFromTs !== 'function') return;
+    var now = Date.now();    // 一次采样：列表所有行共用同一 now（与 DSH 的行 props 传递方式一致）
+    scope.querySelectorAll('.session-item-date[data-activity-at]').forEach(function (el) {
+        var ts = Number(el.getAttribute('data-activity-at')) || 0;
+        var txt = ts > 0 ? formatSessionListRelativeTimeFromTs(ts, now) : '';
+        if (el.textContent !== txt) el.textContent = txt;
+    });
+}
+
+// ═══════════════════════════════════════════════════════════
+// 侧栏统一刷新节拍（学 DSH 的共享时钟思路）
+//   一个动态定时器驱动所有周期性刷新任务：任务各自带周期与可见性策略；
+//   「只在可见时有意义」的任务在窗口隐藏时整体跳过；恢复可见/聚焦时立即补拍。
+//   取代此前彼此独立的 5s / 30s / 60s 三个 setInterval。
+// ═══════════════════════════════════════════════════════════
+var sidebarRefreshTasks = [];
+var sidebarRefreshTimer = null;
+
+function registerSidebarRefreshTask(key, everyMs, run, opts) {
+    opts = opts || {};
+    if (!key || typeof run !== 'function') return;
+    var existing = sidebarRefreshTasks.find(function (t) { return t.key === key; });
+    if (existing) {
+        existing.everyMs = Math.max(1000, Number(everyMs) || 30000);
+        existing.run = run;
+        existing.runWhenHidden = !!opts.runWhenHidden;
+    } else {
+        // lastAt = 0：注册后的第一次到期判定即为「立即执行」（保留各任务"启动先跑一次"的旧语义）。
+        sidebarRefreshTasks.push({
+            key: key,
+            everyMs: Math.max(1000, Number(everyMs) || 30000),
+            run: run,
+            runWhenHidden: !!opts.runWhenHidden,
+            lastAt: 0,
+        });
+    }
+    scheduleSidebarRefreshTimer();
+}
+
+function scheduleSidebarRefreshTimer() {
+    if (sidebarRefreshTimer) { clearTimeout(sidebarRefreshTimer); sidebarRefreshTimer = null; }
+    var now = Date.now();
+    var nextIn = Infinity;
+    sidebarRefreshTasks.forEach(function (t) {
+        if (document.hidden && !t.runWhenHidden) return;
+        nextIn = Math.min(nextIn, Math.max(t.lastAt + t.everyMs - now, 0));
+    });
+    // 全部任务都被隐藏跳过时不再武装定时器，等 visibilitychange 重新校准。
+    if (!isFinite(nextIn)) return;
+    sidebarRefreshTimer = setTimeout(runSidebarRefreshDue, Math.max(nextIn, 16));
+}
+
+function runSidebarRefreshDue() {
+    sidebarRefreshTimer = null;
+    var now = Date.now();
+    sidebarRefreshTasks.forEach(function (t) {
+        if (document.hidden && !t.runWhenHidden) return;
+        if (now - t.lastAt < t.everyMs) return;
+        t.lastAt = now;
+        try { t.run(); } catch (e) { /* 单任务失败不影响其它任务 */ }
+    });
+    scheduleSidebarRefreshTimer();
+}
+
+/** 恢复可见 / 聚焦时立即补拍「可见才有意义」的任务（跳过常驻任务，避免聚焦触发额外网络请求）。 */
+function catchUpSidebarRefresh() {
+    var now = Date.now();
+    sidebarRefreshTasks.forEach(function (t) {
+        if (t.runWhenHidden || document.hidden) return;
+        t.lastAt = now;
+        try { t.run(); } catch (e) { /* ignore */ }
+    });
+    scheduleSidebarRefreshTimer();
+}
+
+document.addEventListener('visibilitychange', function () {
+    if (document.hidden) scheduleSidebarRefreshTimer();   // 隐藏：按隐藏策略重排
+    else catchUpSidebarRefresh();                          // 恢复可见：立即补拍
+});
+window.addEventListener('focus', catchUpSidebarRefresh);
+
+/** 只读调试句柄：用于自动化验证节拍统一与任务周期。 */
+window.__sidebarRefreshDebug = function () {
+    return sidebarRefreshTasks.map(function (t) {
+        return { key: t.key, everyMs: t.everyMs, runWhenHidden: t.runWhenHidden, lastAt: t.lastAt };
+    });
+};
+
+/** 两类时间文案（侧栏相对时间 + 消息绝对时间）共用一个 30 秒任务：
+ *  同属分钟粒度、同属"只改文本"，分两个任务只是重复；合并后一拍完成、状态天然一致。 */
+function ensureSidebarTextTimesAutoRefresh() {
+    if (window.__sidebarTextTimesBound) return;
+    window.__sidebarTextTimesBound = true;
+    registerSidebarRefreshTask('text-times', 30000, function () {
+        refreshSessionListTimes();
+        if (typeof refreshUserMessageTimes === 'function') refreshUserMessageTimes(document);
+    }, { runWhenHidden: false });
 }
 
 const sessionTitleRefreshState = Object.create(null);
@@ -815,13 +1159,19 @@ async function refreshSingleSessionRow(sessionId) {
 
 let sessionListLoadEpoch = 0;
 let sessionListLoadPromise = null;
-let sessionListRenderKey = '';
+let sessionListLayoutKey = '';
+let sessionListContentMap = null;
 let materializeNewSessionQueue = null;
 // 点“新会话”后立即启动的后台预取（服务端隐藏草稿会话）：{ sessionId, response, session }。
 // 页面内重复点击与刷新后重新进入草稿态都复用它，避免把会话文件创建算进首条消息的等待。
 let pendingNewSession = null;
 let prefetchNewSessionPromise = null;
+let prefetchNewSessionWorkDir = null;
 const PENDING_NEW_SESSION_KEY = 'myagent-pending-new-session-id';
+// 下一个新会话要用的工作目录（绝对路径）。由「在新工作目录新建会话」设置，
+// 随 POST /sessions 的 work_dir 字段提交；会话创建后即清空，回到全局默认目录。
+let newSessionWorkDir = '';
+let newSessionWorkDirRevision = 0;
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
@@ -833,49 +1183,159 @@ function syncArchivedSessionStateFromStore() {
     archivedSessionsCount = sessionStore.archivedCount;
 }
 
-function computeSessionListRenderKey() {
-    const sessions = sessionStore.list();
+/** 渲染键拆两半（增量渲染的地基）：
+ *  - 布局键：分组方式/筛选 + 实际渲染出的 (区块·分组·会话) 有序序列 + 归档计数类装饰。
+ *    只在"结构或顺序"变化时改变（新建/删除/置顶/归档/排序变化 → 整表重建）。
+ *  - 内容键：每会话的"可见字段"指纹（名字/待办/活动时间/预览/工作目录…）。
+ *    纯内容变化可以只替换受影响的行，不再整表重建。 */
+function computeSessionListLayoutKey() {
+    const sections = selectSessionSections();
+    const query = (typeof getSessionListSearchQuery === 'function') ? getSessionListSearchQuery() : '';
     const parts = [
+        'groupBy=' + (typeof getSessionGroupBy === 'function' ? getSessionGroupBy() : 'time'),
+        'q=' + query,
+        'archive=' + (typeof getSessionArchiveFilter === 'function' ? getSessionArchiveFilter() : 'show'),
         'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),
         'archivedCount=' + String(sessionStore.archivedCount || 0),
+        'archivedVisible=' + String(sessionStore.archivedVisibleCount || 0),
+        'searching=' + (query ? '1' : '0'),
     ];
-    for (let i = 0; i < sessions.length; i += 1) {
-        const s = sessions[i];
-        if (!s || !s.id) continue;
-        parts.push([
-            s.id,
+    const pushIds = function (tag, list) {
+        if (!Array.isArray(list)) return;
+        for (let i = 0; i < list.length; i += 1) {
+            const s = list[i];
+            if (s && s.id) parts.push(tag + ':' + s.id);
+        }
+    };
+    pushIds('p', sections.pinned);
+    if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
+        sections.normalGroups.forEach(function (group) {
+            parts.push('g:' + String((group && group.key) || ''));
+            // 实际渲染出的行 = 配额截断后的集合；「显示更多」按钮存在与否也进键，
+            // 展开/收起时布局键变化 → 触发整表重建。
+            var vis = (group && group.isWorkDirGroup && typeof sessionGroupSessionsVisible === 'function')
+                ? sessionGroupSessionsVisible(group, { noLimit: !!query })
+                : { rows: (group && group.sessions) || [], hiddenCount: 0 };
+            pushIds('n', vis.rows);
+            if (vis.hiddenCount > 0) parts.push('of:' + String((group && group.key) || ''));
+        });
+    } else {
+        pushIds('n', sections.normal);
+    }
+    pushIds('a', sections.archived);
+    return parts.join('\u001e');
+}
+
+function computeSessionListContentMap() {
+    const map = Object.create(null);
+    const stamp = function (s) {
+        if (!s || !s.id) return;
+        map[s.id] = [
             s.name || '',
             s.pinned ? 'p' : '',
             s.todo ? 't' : '',
             s.archived ? 'a' : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
-        ].join('\u001f'));
+            s.work_dir || '',
+            s.work_dir_label || '',
+            s.work_dir_is_default ? 'd' : '',
+        ].join('\u001f');
+    };
+    sessionStore.list().forEach(stamp);
+    sessionStore.archivedList().forEach(stamp);
+    return map;
+}
+
+function sessionContentMapsEqual(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    for (let i = 0; i < keys.length; i += 1) {
+        if (a[keys[i]] !== b[keys[i]]) return false;
     }
-    const archived = sessionStore.archivedList();
-    for (let j = 0; j < archived.length; j += 1) {
-        const a = archived[j];
-        if (!a || !a.id) continue;
-        parts.push('arch=' + [
-            a.id,
-            a.name || '',
-            a.pinned ? 'p' : '',
-            a.todo ? 't' : '',
-            a.last_activity_at || a.updated_at || '',
-            a.last_user_preview || '',
-        ].join('\u001f'));
+    return true;
+}
+
+/** 内容级变化：只就地替换受影响的会话行（保序、保结构）。
+ *  stream 映射按"实际渲染出的集合"构建，与整表渲染语义一致；
+ *  行数过多（> 24）时退化为整表重建，避免逐行替换的调度开销得不偿失。 */
+function patchSessionListRows(ids) {
+    if (!sessionsList || !ids || !ids.length) return;
+    const sections = selectSessionSections();
+    const nextStreamMap = Object.create(null);
+    const collect = function (s) {
+        if (s && s.id) nextStreamMap[s.id] = !!s.stream_active;
+    };
+    (sections.pinned || []).forEach(collect);
+    if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
+        sections.normalGroups.forEach(function (g) {
+            // 与渲染/布局键一致：stream 映射只覆盖"实际渲染出的行"。
+            var rows = (g && g.isWorkDirGroup && typeof sessionGroupSessionsVisible === 'function')
+                ? sessionGroupSessionsVisible(g, {
+                    noLimit: !!(typeof getSessionListSearchQuery === 'function' && getSessionListSearchQuery())
+                }).rows
+                : ((g && g.sessions) || []);
+            rows.forEach(collect);
+        });
+    } else {
+        (sections.normal || []).forEach(collect);
     }
-    return parts.join('\u001e');
+    (sections.archived || []).forEach(collect);
+
+    const allSessions = selectAllSessions();
+    const byId = Object.create(null);
+    allSessions.forEach(function (s) { if (s && s.id) byId[s.id] = s; });
+
+    let replaced = 0;
+    ids.forEach(function (id) {
+        const sess = byId[id];
+        if (!sess) return;
+        let node = null;
+        try {
+            node = sessionsList.querySelector('.session-item[data-session-id="' +
+                ((window.CSS && CSS.escape) ? CSS.escape(id) : id) + '"]');
+        } catch (e) { node = null; }
+        if (!node) return;
+        node.replaceWith(buildAndBindSessionRow(sess, allSessions, nextStreamMap));
+        replaced += 1;
+    });
+    applyServerStreamActiveMap(nextStreamMap);
+    if (replaced) {
+        normalizeTruncatedSessionNames(sessionsList);
+        if (typeof syncSessionListHead === 'function') {
+            syncSessionListHead(sections, { searching: !!getSessionListSearchQuery() });
+        }
+        syncSessionListIndicatorClasses();
+    }
+    renderSessionTitleFromStore();
 }
 
 function renderSessionListIfChanged(force) {
-    const nextKey = computeSessionListRenderKey();
-    if (!force && nextKey === sessionListRenderKey) {
+    const nextLayout = computeSessionListLayoutKey();
+    const nextContent = computeSessionListContentMap();
+    if (!force && nextLayout === sessionListLayoutKey && sessionContentMapsEqual(nextContent, sessionListContentMap)) {
         syncSessionListIndicatorClasses();
         renderSessionTitleFromStore();
         return;
     }
-    sessionListRenderKey = nextKey;
+    const layoutChanged = nextLayout !== sessionListLayoutKey;
+    const prevContent = sessionListContentMap;
+    sessionListLayoutKey = nextLayout;
+    sessionListContentMap = nextContent;
+
+    if (!force && !layoutChanged && prevContent) {
+        const changedIds = [];
+        for (const id in nextContent) {
+            if (prevContent[id] !== nextContent[id]) changedIds.push(id);
+        }
+        if (changedIds.length && changedIds.length <= 24) {
+            patchSessionListRows(changedIds);
+            return;
+        }
+    }
+
     const nextStreamMap = renderSessionListFromStore();
     applyServerStreamActiveMap(nextStreamMap);
     renderSessionTitleFromStore();
@@ -889,7 +1349,8 @@ function clearSessionListError() {
 
 function renderSessionListError(message) {
     if (!sessionsList) return;
-    sessionListRenderKey = '';
+    sessionListLayoutKey = '';
+    sessionListContentMap = null;
     sessionsList.classList.add('sessions-list--error');
     sessionsList.dataset.loadError = '1';
     sessionsList.innerHTML = '';
@@ -1037,7 +1498,6 @@ function updateSidebarRuntimeStatus(nextStatus) {
     footer.dataset.runtimeStatus = state;
 }
 
-var runtimeStatusHeartbeatTimer = null;
 var runtimeStatusHeartbeatPending = false;
 var runtimeTakeoverBySession = Object.create(null);
 var lastUiActivationSeq = 0;
@@ -1130,22 +1590,29 @@ async function refreshRuntimeStatus() {
 }
 
 function startRuntimeStatusHeartbeat() {
-    if (runtimeStatusHeartbeatTimer) clearInterval(runtimeStatusHeartbeatTimer);
-    void refreshRuntimeStatus();
-    runtimeStatusHeartbeatTimer = setInterval(refreshRuntimeStatus, 5000);
+    // 统一节拍：5 秒任务；窗口隐藏时仍需运行（要支持「服务端拉起窗口 / 自动接管」能力）。
+    registerSidebarRefreshTask('runtime-status', 5000, function () {
+        void refreshRuntimeStatus();
+    }, { runWhenHidden: true });
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
     options = options || {};
     const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
-    if (options.signal) return fetch(url, options);
     const controller = new AbortController();
+    const outerSignal = options.signal;
+    const abortFromOuter = function () { controller.abort(); };
+    if (outerSignal) {
+        if (outerSignal.aborted) controller.abort();
+        else outerSignal.addEventListener('abort', abortFromOuter, { once: true });
+    }
     const timer = setTimeout(function () { controller.abort(); }, ms);
     const nextOptions = Object.assign({}, options, { signal: controller.signal });
     try {
         return await fetch(url, nextOptions);
     } finally {
         clearTimeout(timer);
+        if (outerSignal) outerSignal.removeEventListener('abort', abortFromOuter);
     }
 }
 
@@ -1411,9 +1878,10 @@ async function reconcileRunStateFromServer(opts) {
         const info = sessionStore.getActiveRunInfo(currentSessionId) || {};
         const run = getSessionRunState(currentSessionId);
         const ctx = run && run.ctx;
+        const recovery = executionRecoveryBySession.get(String(currentSessionId)) || {};
         const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
             ? ctx.currentProcessGroup
-            : (getVisibleChatStream() && getVisibleChatStream().querySelector('.process-aggregate:last-of-type'));
+            : findExecutionProcessGroup(getVisibleChatStream(), recovery.processGroupId, info.run_id || info.runId);
         if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);
     }
     syncSessionListIndicatorClasses();
@@ -1441,6 +1909,8 @@ function showSessionLoadRetry(sessionId) {
     stream.appendChild(row);
 }
 
+var sessionHistoryLoadController = null;
+
 async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)
         ? performance.now()
@@ -1448,20 +1918,25 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};
     const loadToken = ++messageLoadEpoch;
+    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();
+    const loadController = new AbortController();
+    sessionHistoryLoadController = loadController;
     let historyHydrationStream = null;
     const finishHistoryHydration = function () {
         if (historyHydrationStream) {
-            historyHydrationStream.hidden = false;
+            if (loadToken === messageLoadEpoch || historyHydrationStream !== getVisibleChatStream()) {
+                historyHydrationStream.hidden = false;
+            }
             historyHydrationStream = null;
         }
-        if (loadToken === messageLoadEpoch) hideLoading();
+        if (loadToken !== messageLoadEpoch) return;
+        hideLoading();
         if (typeof attachAllHumanInteractionCards === 'function') {
             attachAllHumanInteractionCards(getVisibleChatStream());
         }
     };
     sessionStore.ui.loadingMessages = true;
     suppressTocDuringSessionLoad = true;
-    replayingMessages = true;
     if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
         cancelSmoothStreamFollowForHistoryLoad();
     }
@@ -1472,83 +1947,87 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         let historySource = 'messages';
         let snapshotTiming = null;
         let savedExecutions = [];
+        let manualHistory = false;
         const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
         if (canUseSnapshot) {
-            try {
-                const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
-                    + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
-                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
-                    + '&include_aux=false';
-                for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
-                    const snapshotResp = await fetchWithTimeout(snapshotUrl, {}, 15000);
-                    const snapshot = await snapshotResp.json().catch(function () { return null; });
-                    if (snapshot && snapshot.migration_pending) {
-                        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-                        const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));
-                        await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
-                        continue;
-                    }
-                    if (snapshotResp.ok) {
-                    if (snapshot && snapshot.ok && snapshot.messages) {
-                        raw = snapshot.messages;
-                        savedExecutions = Array.isArray(snapshot.execution_records) ? snapshot.execution_records : [];
-                        executionRecoveryBySession.set(String(sessionId), {
-                            lastRuntimeSeq:Number(snapshot.last_runtime_seq || 0),
-                            revision:Number(snapshot.projection_revision || 0),
-                            projectionVersion:Number(snapshot.projection_version || 0),
-                        });
-                        executionRecordsBySession.set(String(sessionId), new Map());
-                        historySource = 'history_snapshot';
-                        snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'
-                            ? snapshot.timing
-                            : null;
-                        if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {
-                            uiEventCountCache.updateFromServer(sessionId, snapshot.count);
-                        }
-                        if (Array.isArray(snapshot.user_turns)) {
-                            snapshotTocTurns = snapshot.user_turns;
-                            if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
-                        }
-                        if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
-                            recordContextTokens(
-                                sessionId,
-                                snapshot.context_tokens.estimated,
-                                snapshot.context_tokens.threshold,
-                                snapshot.context_tokens.breakdown
-                            );
-                        }
-                        if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
-                            const __snapActive = !!(snapshot.stream_active || snapshot.run_active);
-                            sessionStore.applyActiveRunForSession(
-                                sessionId,
-                                snapshot.active_run || (__snapActive ? {
-                                    session_id: sessionId,
-                                    run_active: true,
-                                    started_at: snapshot.run_started_at || null,
-                                    runtime_v2: snapshot.source === 'runtime_v2_snapshot',
-                                } : null)
-                            );
-                        }
-                    }
-                    }
-                    break;
+            const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
+                + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
+                + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
+                + '&include_aux=false&prefer_active_turn=true';
+            for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
+                const snapshotResp = await fetchWithTimeout(snapshotUrl, { signal: loadController.signal }, 30000);
+                const snapshot = await snapshotResp.json().catch(function () { return null; });
+                if (snapshot && snapshot.migration_pending) {
+                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+                    if (migrationAttempt === 119) throw new Error('历史迁移尚未完成，请稍后重新加载');
+                    const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));
+                    await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
+                    continue;
                 }
-            } catch (snapshotErr) {
-                console.warn('history snapshot unavailable, falling back to messages:', snapshotErr);
+                // Only an older server/runtime needs the compatibility route.
+                // Retrying the same projection on timeout doubles its work.
+                if ([404, 405, 409].indexOf(snapshotResp.status) >= 0) break;
+                if (!snapshotResp.ok || !snapshot || !snapshot.ok || !snapshot.messages) {
+                    throw new Error('history snapshot failed: ' + snapshotResp.status);
+                }
+                raw = snapshot.messages;
+                manualHistory = snapshot.history_mode === 'current_turn';
+                savedExecutions = Array.isArray(snapshot.execution_records) ? snapshot.execution_records : [];
+                executionRecoveryBySession.set(String(sessionId), {
+                    lastRuntimeSeq:Number(snapshot.last_runtime_seq || 0),
+                    revision:Number(snapshot.projection_revision || 0),
+                    projectionVersion:Number(snapshot.projection_version || 0),
+                    processGroupId:String(snapshot.process_group_id || ''),
+                });
+                executionRecordsBySession.set(String(sessionId), new Map());
+                historySource = 'history_snapshot';
+                snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'
+                    ? snapshot.timing
+                    : null;
+                if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {
+                    uiEventCountCache.updateFromServer(sessionId, snapshot.count);
+                }
+                if (Array.isArray(snapshot.user_turns)) {
+                    snapshotTocTurns = snapshot.user_turns;
+                    if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
+                }
+                if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
+                    recordContextTokens(
+                        sessionId,
+                        snapshot.context_tokens.estimated,
+                        snapshot.context_tokens.threshold,
+                        snapshot.context_tokens.breakdown
+                    );
+                }
+                if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
+                    const __snapActive = !!(snapshot.stream_active || snapshot.run_active);
+                    sessionStore.applyActiveRunForSession(
+                        sessionId,
+                        snapshot.active_run || (__snapActive ? {
+                            session_id: sessionId,
+                            run_active: true,
+                            started_at: snapshot.run_started_at || null,
+                            runtime_v2: snapshot.source === 'runtime_v2_snapshot',
+                        } : null)
+                    );
+                }
+                break;
             }
         }
         if (!raw) {
+            manualHistory = !opts.full && !!(getSessionRunState(sessionId) || isServerStreamActive(sessionId));
             let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
             if (!opts.full) {
-                url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE
+                url += '?turns=' + (manualHistory ? 1 : HISTORY_DIALOGUES_PER_PAGE)
                     + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
             }
-            const response = await fetchWithTimeout(url, {}, 15000);
+            const response = await fetchWithTimeout(url, { signal: loadController.signal }, 30000);
             if (!response.ok) throw new Error('messages failed: ' + response.status);
             raw = await response.json();
         }
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
+        replayingMessages = true;
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.fetch', elapsedSince(openSessionStartedAt));
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();
@@ -1580,6 +2059,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 range_end: pageRangeEnd,
                 has_older: !!raw.has_older,
                 has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,
+                manual_history: manualHistory,
             };
             uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
         } else {
@@ -1598,6 +2078,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 range_end: pageMeta.range_end,
                 has_older: !!pageMeta.has_older,
                 has_newer: !!pageMeta.has_newer,
+                manual_history: !!pageMeta.manual_history,
             });
             ensureHistorySentinel(getVisibleChatStream());
         }
@@ -1683,7 +2164,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             });
             return true;
         }
-        if (!opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
+        if (!manualHistory && !opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
             await loadOlderHistoryChunk({ keepTocStable: true });
             if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         }
@@ -1725,7 +2206,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         });
         return true;
     } catch (error) {
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;
+        if (loadController.signal.aborted || loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
         appendLogVisible('加载历史消息失败', 'error-log');
@@ -1733,6 +2214,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         showSessionLoadRetry(sessionId);
         return false;
     } finally {
+        if (sessionHistoryLoadController === loadController) sessionHistoryLoadController = null;
         finishHistoryHydration();
         if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
@@ -1785,6 +2267,7 @@ function beforeSessionMessageSnapshotAvailable() {
 
 async function switchSession(sessionId, opts) {
     opts = opts || {};
+    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();
     if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
     // 子代理寻址：任何不是"由寻址栈驱动"的会话切换都退出寻址态
     // （返回父会话时栈已先弹出，此处同样得到正确结果）。
@@ -1979,7 +2462,18 @@ async function switchSession(sessionId, opts) {
     });
 }
 
-async function createNewSession() {
+async function createNewSession(targetWorkDir) {
+    if (typeof targetWorkDir === 'string') {
+        const requestedWorkDir = targetWorkDir.trim();
+        if (requestedWorkDir !== newSessionWorkDir) {
+            newSessionWorkDir = requestedWorkDir;
+            newSessionWorkDirRevision += 1;
+            clearPendingNewSession();
+        }
+        if (typeof syncWelcomeSessionDirectory === 'function') {
+            syncWelcomeSessionDirectory(null, requestedWorkDir);
+        }
+    }
     const leavingSessionId = currentSessionId;
     if (!leavingSessionId) {
         setCurrentSessionState(null);
@@ -2030,6 +2524,609 @@ async function createNewSession() {
     return null;
 }
 
+/* ── 新建会话：可选工作目录 ────────────────────────────────────────────────
+   菜单两项：在当前工作目录新建 / 在新工作目录新建（复用 MyAgentPathPicker 的原生目录
+   选择器）。选定的目录只作用于「下一个新会话」：草稿态会立刻按新目录重开隐藏草稿
+   （服务端 work_dir 建会话时指定、之后不可改），已有会话则等下次点新建时生效。 */
+
+/** 目录选择器不可用（无原生对话框 / 无该 API）时的手填兜底；返回绝对路径或 null。 */
+function promptNewSessionWorkDirFallback(initial) {
+    if (typeof openUiModal !== 'function') return Promise.resolve(null);
+    return openUiModal({
+        title: '选择工作目录',
+        message: '无法打开系统目录选择器，请直接填写新会话的工作目录绝对路径。',
+        inputLabel: '工作目录绝对路径',
+        inputValue: String(initial || ''),
+        inputPlaceholder: 'D:\\work\\my-project',
+        confirmText: '在此目录新建',
+        cancelText: '取消',
+    }).then(function (value) {
+        return typeof value === 'string' ? value : null;
+    });
+}
+
+async function pickNewSessionWorkDir() {
+    const initial = activeSessionWorkDir()
+        || newSessionWorkDirTarget()
+        || ((typeof getActiveWorkDir === 'function') ? getActiveWorkDir() : '');
+    const picker = (typeof window !== 'undefined' && window.MyAgentPathPicker)
+        ? window.MyAgentPathPicker
+        : null;
+    if (picker && typeof picker.pickPath === 'function') {
+        try {
+            const picked = await picker.pickPath('directory', initial, false);
+            if (picked) return String(picked);
+            return null; // 用户取消
+        } catch (error) {
+            console.warn('目录选择器不可用，改为手填路径:', error);
+        }
+    }
+    return promptNewSessionWorkDirFallback(initial);
+}
+
+(function bindWelcomeSessionDirectoryPickerOnce() {
+    if (typeof window === 'undefined' || window.__myAgentWelcomeSessionDirectoryBound) return;
+    window.__myAgentWelcomeSessionDirectoryBound = true;
+    document.addEventListener('click', async function (event) {
+        const target = event.target && event.target.closest
+            ? event.target.closest('[data-welcome-session-directory-picker]')
+            : null;
+        if (!target || target.disabled || currentSessionId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        target.disabled = true;
+        let selectedWorkDir = '';
+        try {
+            const picked = await pickNewSessionWorkDir();
+            const workDir = String(picked || '').trim();
+            if (!workDir || currentSessionId) return;
+            selectedWorkDir = workDir;
+            // Update the existing draft in place. Keep any text already typed in
+            // the composer; only its hidden server draft is recreated for this path.
+            await applyNewSessionWorkDir(workDir);
+        } catch (error) {
+            console.error('选择会话目录失败:', error);
+        } finally {
+            target.disabled = false;
+            if (typeof syncWelcomeSessionDirectory === 'function') {
+                syncWelcomeSessionDirectory(null, selectedWorkDir || undefined);
+            }
+        }
+    });
+})();
+
+/** 记下目标目录；草稿态下立刻按新目录重开隐藏草稿（旧草稿的 work_dir 不可改）。 */
+function applyNewSessionWorkDir(workDir) {
+    const next = String(workDir || '').trim();
+    if (next === newSessionWorkDir) return Promise.resolve(null);
+    newSessionWorkDir = next;
+    newSessionWorkDirRevision += 1;
+    const targetRevision = newSessionWorkDirRevision;
+    if (typeof syncWelcomeSessionDirectory === 'function') syncWelcomeSessionDirectory(null, next);
+    clearPendingNewSession();
+    const inFlight = prefetchNewSessionPromise
+        ? Promise.resolve(prefetchNewSessionPromise).catch(function () { return null; })
+        : Promise.resolve(null);
+    return inFlight.then(function () {
+        // The old request may have finished after clearPendingNewSession() and
+        // published a draft for its previous directory. ensurePrefetchedNewSession()
+        // checks the captured target before reusing or creating a draft.
+        if (currentSessionId) return null;
+        return ensurePrefetchedNewSession();
+    }).then(function (pending) {
+        if (targetRevision === newSessionWorkDirRevision
+                && next === newSessionWorkDirTarget()
+                && typeof syncWelcomeSessionDirectory === 'function') {
+            syncWelcomeSessionDirectory(null, next);
+        }
+        return pending;
+    });
+}
+
+/** 「在新工作目录新建会话」：选目录 → 记下 → 进入新会话草稿态。 */
+async function startNewSessionInFolder() {
+    const picked = await pickNewSessionWorkDir();
+    const dir = String(picked || '').trim();
+    if (!dir) return null;
+    return startNewSessionInDir(dir);
+}
+
+/** 在指定工作目录（空=服务端默认目录）里新建会话；各入口共用这一条链路。 */
+async function startNewSessionInDir(dir) {
+    const next = String(dir || '').trim();
+    await applyNewSessionWorkDir(next);
+    return createNewSession(next);
+}
+
+/** 当前会话（= 当前分组）的工作目录；没有会话（草稿态）时返回空串。 */
+function activeSessionWorkDir() {
+    const active = currentSessionId ? sessionStore.get(currentSessionId) : null;
+    return (active && typeof active.work_dir === 'string') ? active.work_dir.trim() : '';
+}
+
+/** 主按钮与菜单「当前工作目录」：在当前会话的目录里新建（DSH 的当前工作区语义）。 */
+async function startNewSessionInCurrentDir() {
+    // 已在草稿态：只回到草稿，不改变已选定的目标目录（否则会把刚建好的草稿丢掉）。
+    if (!currentSessionId) return createNewSession();
+    return startNewSessionInDir(activeSessionWorkDir());
+}
+
+// 刷新后重新进入草稿态时，草稿自身的工作目录来自服务端；把待用目录恢复成它，
+// 避免下一次 ensurePrefetchedNewSession 把仍然有效的草稿当成「目录不符」丢弃。
+(function restorePendingNewSessionWorkDirOnce() {
+    const stored = readStoredPendingNewSession();
+    if (stored && typeof stored.work_dir === 'string' && stored.work_dir) {
+        newSessionWorkDir = stored.work_dir;
+    }
+})();
+
+/** 「新会话」右侧 ▾：当前目录 / 新目录两条入口（开关与键盘行为走通用弹出层）。 */
+(function bindNewSessionMenuOnce() {
+    const menu = document.getElementById('new-session-menu');
+    const popup = document.getElementById('new-session-options');
+    if (!menu || !popup || window.__myAgentNewSessionMenuBound) return;
+    window.__myAgentNewSessionMenuBound = true;
+    bindSidebarPopup(popup);
+    menu.querySelectorAll('[data-new-session-scope]').forEach(function (item) {
+        item.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            setSidebarPopupOpen(popup, false);
+            const scope = String(item.getAttribute('data-new-session-scope') || '');
+            const task = scope === 'new' ? startNewSessionInFolder() : startNewSessionInCurrentDir();
+            Promise.resolve(task).catch(function (error) {
+                console.error('新建会话失败:', error);
+            });
+        });
+    });
+})();
+
+/* ── 工作目录分组头的 hover 动作：在该目录新建会话 / 目录更多操作 ────────── */
+
+/** 复制工作目录绝对路径到剪贴板（失败时回退到临时 textarea）。 */
+function copyWorkDirPath(path) {
+    var text = String(path || '');
+    if (!text) return;
+    var done = function () {
+        if (typeof showCopyFeedback === 'function') showCopyFeedback();
+    };
+    var fallback = function () {
+        try {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '1');
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+            done();
+        } catch (e) {
+            console.error('复制工作目录路径失败:', e);
+        }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else {
+        fallback();
+    }
+}
+
+/** 在系统文件管理器中打开工作目录（复用后端已有的 open-workspace-dir）。 */
+function revealWorkDirInExplorer(path) {
+    var rel = String(path || '');
+    if (!rel) return;
+    fetch('/api/open-workspace-dir?' + new URLSearchParams({ rel: rel }))
+        .then(function (response) { return response.json().catch(function () { return { ok: false }; }); })
+        .then(function (data) {
+            if (typeof showOpenFileFeedback !== 'function') return;
+            if (data && data.ok) showOpenFileFeedback('已请求打开');
+            else showOpenFileFeedback((data && data.error) ? ('无法打开：' + data.error) : '无法打开文件');
+        })
+        .catch(function () {
+            if (typeof showOpenFileFeedback === 'function') showOpenFileFeedback('无法连接服务');
+        });
+}
+
+/** 工作目录重命名：只改侧栏显示名（localStorage 记忆，空名恢复为目录名），不动磁盘。 */
+async function renameWorkDirGroup(group, workDirPath) {
+    var current = String((group && group.title) || '');
+    var requested = await openUiModal({
+        title: '重命名工作目录',
+        subtitle: '只改侧栏显示的名称（留空恢复为目录名），不影响磁盘目录',
+        message: String(workDirPath || '') ? ('目录：' + String(workDirPath)) : '',
+        inputLabel: '显示名称',
+        inputValue: current,
+        inputMaxLength: 60,
+        inputRequired: false,
+        confirmText: '保存名称',
+        cancelText: '取消',
+    });
+    if (typeof requested !== 'string') return;
+    var next = requested.trim().slice(0, 60);
+    if (typeof setWorkDirCustomLabel === 'function') setWorkDirCustomLabel(group.key, next);
+    renderSessionListIfChanged(true);
+}
+
+/** 工作目录分组的拖拽排序（Pointer 事件；移动超过阈值才算拖拽，原地点击仍是折叠/展开）。
+ *  顺序写入 localStorage（getWorkDirOrder/setWorkDirOrder），下次渲染按新顺序排布。 */
+function bindSessionGroupDrag(wrap, headRow, group) {
+    if (!wrap || !headRow || !group || !group.isWorkDirGroup) return;
+    if (headRow.dataset.groupDragBound === '1') return;
+    headRow.dataset.groupDragBound = '1';
+    var drag = null;
+    var suppressClickUntil = 0;
+    var DRAG_THRESHOLD_PX = 5;
+
+    // 拖拽结束后抑制紧随其后的 click（否则会顺带触发折叠开关）。
+    headRow.addEventListener('click', function (e) {
+        if (Date.now() < suppressClickUntil) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    }, true);
+
+    headRow.addEventListener('pointerdown', function (e) {
+        if (e.button !== 0) return;
+        var t = e.target;
+        if (t && t.closest && t.closest('.session-group-actions')) return;   // 动作区自己处理
+        drag = { pointerId: e.pointerId, startY: e.clientY, started: false, target: null, half: null };
+    });
+
+    function clearDropIndicators() {
+        document.querySelectorAll('.session-group.is-drop-before, .session-group.is-drop-after')
+            .forEach(function (el) { el.classList.remove('is-drop-before', 'is-drop-after'); });
+    }
+
+    function updateDropIndicator(clientY) {
+        clearDropIndicators();
+        drag.target = null;
+        drag.half = null;
+        var groups = document.querySelectorAll('.session-group');
+        for (var i = 0; i < groups.length; i += 1) {
+            var el = groups[i];
+            if (el === wrap) continue;
+            var r = el.getBoundingClientRect();
+            if (clientY < r.top || clientY > r.bottom) continue;
+            var half = clientY < (r.top + r.bottom) / 2 ? 'before' : 'after';
+            drag.target = el;
+            drag.half = half;
+            el.classList.add(half === 'before' ? 'is-drop-before' : 'is-drop-after');
+            return;
+        }
+    }
+
+    headRow.addEventListener('pointermove', function (e) {
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        if (!drag.started) {
+            if (Math.abs(e.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
+            drag.started = true;
+            wrap.classList.add('is-dragging');
+            document.body.classList.add('session-group-drag-active');
+            try { headRow.setPointerCapture(drag.pointerId); } catch (err) { /* ignore */ }
+        }
+        e.preventDefault();
+        updateDropIndicator(e.clientY);
+    });
+
+    function finishDrag(e) {
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        var started = drag.started;
+        var target = drag.target;
+        var half = drag.half;
+        drag = null;
+        wrap.classList.remove('is-dragging');
+        document.body.classList.remove('session-group-drag-active');
+        clearDropIndicators();
+        if (!started) return;
+        suppressClickUntil = Date.now() + 400;
+        if (!target) return;
+        // 以 DOM 顺序为基准重排（搜索态下只含可见组；未渲染的组按原相对顺序保留在后面）。
+        var domKeys = [];
+        document.querySelectorAll('.session-group').forEach(function (el) {
+            var key = el.dataset.groupKey;
+            if (key && key.indexOf('workdir:') === 0) {
+                domKeys.push(key);
+            }
+        });
+        var fromKey = wrap.dataset.groupKey;
+        var targetKey = target.dataset.groupKey;
+        var prevOrder = (typeof getWorkDirOrder === 'function') ? getWorkDirOrder() : [];
+        prevOrder.forEach(function (key) {
+            if (domKeys.indexOf(key) < 0) domKeys.push(key);
+        });
+        var fromIdx = domKeys.indexOf(fromKey);
+        if (fromIdx < 0) return;
+        domKeys.splice(fromIdx, 1);
+        var at = domKeys.indexOf(targetKey);
+        if (at < 0) return;
+        domKeys.splice(half === 'before' ? at : at + 1, 0, fromKey);
+        if (typeof setWorkDirOrder === 'function') setWorkDirOrder(domKeys);
+        renderSessionListIfChanged(false);
+    }
+    headRow.addEventListener('pointerup', finishDrag);
+    headRow.addEventListener('pointercancel', function (e) {
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        drag = null;
+        wrap.classList.remove('is-dragging');
+        document.body.classList.remove('session-group-drag-active');
+        clearDropIndicators();
+    });
+}
+
+/** 工作目录分组头右侧：+（在该目录新建）/ ⋯（重命名、复制路径、在资源管理器打开）。 */
+function buildSessionGroupActions(group, workDirPath) {
+    const actions = document.createElement('div');
+    actions.className = 'session-group-actions';
+    // 标题可能是自定义名（默认组也可改名），动作文案统一用当前显示名。
+    const name = String((group && group.title) || '');
+    const newLabel = '在“' + name + '”中新建会话';
+    const moreLabel = '“' + name + '”的更多操作';
+
+    const newBtn = document.createElement('button');
+    newBtn.type = 'button';
+    newBtn.className = 'session-row-icon session-group-icon';
+    newBtn.setAttribute('aria-label', newLabel);
+    newBtn.setAttribute('data-ui-tip', newLabel);
+    newBtn.innerHTML = SIDEBAR_ICON_SVG.plus;
+    bindUiHoverTip(newBtn);
+    newBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        Promise.resolve(startNewSessionInDir(workDirPath)).catch(function (err) {
+            console.error('在该工作目录中新建会话失败:', err);
+        });
+    });
+
+    const popup = document.createElement('div');
+    popup.className = 'sidebar-popup session-group-popup';
+    popup.setAttribute('data-sidebar-popup', '1');
+    popup.innerHTML = '<button type="button" class="session-row-icon session-group-icon" data-popup-trigger'
+        + ' aria-haspopup="menu" aria-expanded="false"'
+        + ' aria-label="' + escapeHtml(moreLabel) + '" data-ui-tip="' + escapeHtml(moreLabel) + '">'
+        + SIDEBAR_ICON_SVG.dots + '</button>'
+        + '<div class="sidebar-popup-menu session-group-menu" role="menu" aria-label="'
+        + escapeHtml(moreLabel) + '">'
+        + '<button type="button" role="menuitem" data-group-action="rename">重命名</button>'
+        + '<button type="button" role="menuitem" data-group-action="copy">复制路径</button>'
+        + '<button type="button" role="menuitem" data-group-action="reveal">在资源管理器打开</button>'
+        + '</div>';
+    bindSidebarPopup(popup);
+    popup.addEventListener('click', function (e) {
+        const item = (e.target && e.target.closest) ? e.target.closest('[data-group-action]') : null;
+        if (!item) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setSidebarPopupOpen(popup, false);
+        const action = item.getAttribute('data-group-action');
+        if (action === 'copy') copyWorkDirPath(workDirPath);
+        else if (action === 'reveal') revealWorkDirInExplorer(workDirPath);
+        else if (action === 'rename') renameWorkDirGroup(group, workDirPath);
+    });
+
+    actions.appendChild(newBtn);
+    actions.appendChild(popup);
+    return actions;
+}
+
+/* ── 侧栏静态头：会话 / 工作区 + 搜索 + 视图选项 + 在新文件夹中新建 ──────── */
+
+function buildSessionViewMenuMarkup() {
+    function row(attr, value, text) {
+        return '<button type="button" role="menuitemradio" aria-checked="false" '
+            + attr + '="' + value + '">'
+            + '<span class="session-view-menu-text">' + text + '</span>'
+            + '<span class="session-view-menu-check" aria-hidden="true">' + SIDEBAR_ICON_SVG.check + '</span>'
+            + '</button>';
+    }
+    return '<div class="sidebar-popup-label" role="presentation">分组方式</div>'
+        + row('data-session-group-by', 'time', '按时间')
+        + row('data-session-group-by', 'workdir', '按工作目录')
+        + '<div class="sidebar-popup-separator" role="separator"></div>'
+        + '<div class="sidebar-popup-label" role="presentation">列表模式</div>'
+        + row('data-session-list-mode-option', 'compact', '紧凑')
+        + row('data-session-list-mode-option', 'detailed', '详细')
+        + '<div class="sidebar-popup-separator" role="separator"></div>'
+        + '<div class="sidebar-popup-label" role="presentation">筛选会话</div>'
+        + row('data-session-archive-filter', 'hide', '隐藏已归档')
+        + row('data-session-archive-filter', 'show', '全部')
+        + row('data-session-archive-filter', 'only', '仅已归档');
+}
+
+/** 让视图选项菜单的对勾与当前状态（分组方式 / 列表模式 / 归档筛选）一致。 */
+function syncSessionViewMenu() {
+    const menu = document.getElementById('session-view-menu');
+    if (!menu) return;
+    const groupBy = (typeof getSessionGroupBy === 'function') ? getSessionGroupBy() : 'time';
+    const listMode = (typeof getStoredSessionListMode === 'function') ? getStoredSessionListMode() : 'detailed';
+    const archiveFilter = (typeof getSessionArchiveFilter === 'function') ? getSessionArchiveFilter() : 'show';
+    const mark = function (selector, attr, value) {
+        menu.querySelectorAll(selector).forEach(function (btn) {
+            const on = String(btn.getAttribute(attr)) === String(value);
+            btn.classList.toggle('is-active', on);
+            if (btn.getAttribute('role') === 'menuitemradio') {
+                btn.setAttribute('aria-checked', on ? 'true' : 'false');
+            }
+        });
+    };
+    mark('[data-session-group-by]', 'data-session-group-by', groupBy);
+    mark('[data-session-list-mode-option]', 'data-session-list-mode-option', listMode);
+    mark('[data-session-archive-filter]', 'data-session-archive-filter', archiveFilter);
+}
+
+/** 切换归档筛选（show=显示归档区段，历史行为；hide=不渲染；only=只看归档）。 */
+function applySessionArchiveFilter(filter) {
+    const next = (typeof setSessionArchiveFilter === 'function') ? setSessionArchiveFilter(filter) : filter;
+    syncSessionViewMenu();
+    if (next === 'only' && !sessionStore.archivedLoaded) {
+        void loadArchivedSessions({ background: true, forceRender: true });
+    }
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
+}
+
+function setSessionSearchExpanded(expanded, opts) {
+    const head = document.getElementById('session-list-head');
+    const box = document.getElementById('session-search-box');
+    const btn = document.getElementById('session-search-btn');
+    const input = document.getElementById('session-search-input');
+    if (!head || !box || !btn) return;
+    const next = !!expanded;
+    head.classList.toggle('is-searching', next);
+    box.hidden = !next;
+    btn.setAttribute('aria-expanded', next ? 'true' : 'false');
+    if (next && typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();
+    if (next) {
+        if (input) {
+            input.focus();
+            if (opts && opts.selectInput) input.select();
+        }
+    } else if (input) {
+        input.value = '';
+    }
+}
+
+function applySessionListSearch(value) {
+    setSessionListSearchQuery(value);
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
+}
+
+/** 收起/展开「会话（工作区）」区段；标题在侧栏静态头里，被折叠的区段体仍在列表内。 */
+function toggleSessionListHeadCollapse() {
+    const next = !sessionSectionExpanded('normal');
+    persistSessionSectionExpanded('normal', next);
+    const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;
+    if (sec) sec.classList.toggle('is-collapsed', !next);
+    syncSessionListHead(null, {});
+}
+
+/** 每次列表重绘后同步静态头：标题（会话 / 工作区）、计数、折叠态、视图选项对勾。 */
+function syncSessionListHead(sections, opts) {
+    const head = document.getElementById('session-list-head');
+    if (!head) return;
+    const options = opts || {};
+    const labelEl = document.getElementById('session-head-label');
+    if (labelEl) {
+        const workDirGrouping = (typeof getSessionGroupBy === 'function') && getSessionGroupBy() === 'workdir';
+        labelEl.textContent = workDirGrouping ? '工作区' : '会话';
+    }
+    const countEl = document.getElementById('session-head-count');
+    if (countEl && sections) countEl.textContent = String((sections.normal || []).length);
+    if (options.searching !== undefined) {
+        const head2 = document.getElementById('session-list-head');
+        if (head2) head2.classList.toggle('is-filtering', !!options.searching);
+    }
+    const expanded = sessionSectionExpanded('normal');
+    const toggle = document.getElementById('session-head-toggle');
+    if (toggle) {
+        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        toggle.classList.toggle('is-collapsed', !expanded);
+    }
+    const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;
+    if (sec) sec.classList.toggle('is-collapsed', !expanded);
+    syncSessionViewMenu();
+}
+
+(function mountSessionListHeadOnce() {
+    const head = document.getElementById('session-list-head');
+    if (!head || head.dataset.headMounted === '1') return;
+    head.dataset.headMounted = '1';
+
+    const viewMenu = document.getElementById('session-view-menu');
+    if (viewMenu) viewMenu.innerHTML = buildSessionViewMenuMarkup();
+    const viewPopup = document.getElementById('session-view-options');
+    if (viewPopup) {
+        bindSidebarPopup(viewPopup);
+        viewPopup.addEventListener('click', function (e) {
+            const item = (e.target && e.target.closest) ? e.target.closest('[role="menuitemradio"]') : null;
+            if (!item) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setSidebarPopupOpen(viewPopup, false);
+            const groupBy = item.getAttribute('data-session-group-by');
+            const listMode = item.getAttribute('data-session-list-mode-option');
+            const archive = item.getAttribute('data-session-archive-filter');
+            if (groupBy && typeof applySessionGroupBy === 'function') applySessionGroupBy(groupBy, true);
+            else if (listMode && typeof applySessionListMode === 'function') applySessionListMode(listMode, true);
+            else if (archive) applySessionArchiveFilter(archive);
+            syncSessionViewMenu();
+        });
+    }
+
+    const toggle = document.getElementById('session-head-toggle');
+    if (toggle) {
+        toggle.addEventListener('click', function (e) {
+            e.preventDefault();
+            toggleSessionListHeadCollapse();
+        });
+    }
+
+    const searchBtn = document.getElementById('session-search-btn');
+    const searchBox = document.getElementById('session-search-box');
+    const searchInput = document.getElementById('session-search-input');
+    const searchClear = document.getElementById('session-search-clear');
+    const collapseSearch = function (returnFocus) {
+        applySessionListSearch('');
+        setSessionSearchExpanded(false);
+        if (returnFocus && searchBtn) {
+            try { searchBtn.focus(); } catch (err) { /* ignore */ }
+        }
+    };
+    if (searchBtn) {
+        searchBtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const next = !head.classList.contains('is-searching');
+            setSessionSearchExpanded(next, { selectInput: true });
+        });
+    }
+    if (searchInput) {
+        searchInput.addEventListener('input', function () {
+            applySessionListSearch(searchInput.value);
+        });
+        searchInput.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            collapseSearch(true);
+        });
+    }
+    if (searchClear) {
+        searchClear.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            collapseSearch(true);
+        });
+        bindUiHoverTip(searchClear);
+    }
+    // DSH 对齐：点击外部时若有查询词只失焦（保留过滤），没有查询词才收起。
+    document.addEventListener('pointerdown', function (e) {
+        if (!head.classList.contains('is-searching')) return;
+        if (head.contains(e.target)) return;
+        if (getSessionListSearchQuery()) {
+            if (searchInput && document.activeElement === searchInput) searchInput.blur();
+            return;
+        }
+        setSessionSearchExpanded(false);
+    }, true);
+
+    const addFolder = document.getElementById('session-add-folder-btn');
+    if (addFolder) {
+        if (window.MyAgentIcons) window.MyAgentIcons.mount(addFolder);
+        bindUiHoverTip(addFolder);
+        addFolder.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            Promise.resolve(startNewSessionInFolder()).catch(function (err) {
+                console.error('在新文件夹中新建会话失败:', err);
+            });
+        });
+    }
+    if (searchBox && searchInput) searchBox.hidden = true;
+    syncSessionViewMenu();
+    syncSessionListHead(null, {});
+})();
+
 async function materializeNewSession() {
     if (currentSessionId) return currentSessionId;
     if (materializeNewSessionQueue) return materializeNewSessionQueue;
@@ -2041,7 +3138,7 @@ async function materializeNewSession() {
     return materializeNewSessionQueue;
 }
 
-function collectNewSessionCreateOptions() {
+function collectNewSessionCreateOptions(targetWorkDir) {
     const createOptions = {};
     if (typeof newSessionModelProfileId === 'function') {
         const modelProfileId = newSessionModelProfileId();
@@ -2055,7 +3152,17 @@ function collectNewSessionCreateOptions() {
         const permissionMode = selectedNewSessionPermissionMode();
         if (permissionMode) createOptions.permission_mode = permissionMode;
     }
+    // 会话创建时指定工作目录，之后不可改（服务端契约：POST /sessions 的可选 work_dir）。
+    const workDir = (typeof targetWorkDir === 'string')
+        ? targetWorkDir.trim()
+        : newSessionWorkDirTarget();
+    if (workDir) createOptions.work_dir = workDir;
     return createOptions;
+}
+
+/** 当前待用的新会话工作目录；空串表示用服务端全局默认目录。 */
+function newSessionWorkDirTarget() {
+    return String(newSessionWorkDir || '').trim();
 }
 
 function readStoredPendingNewSession() {
@@ -2079,7 +3186,7 @@ function readStoredPendingNewSession() {
     return null;
 }
 
-function writeStoredPendingNewSession(sessionId, data) {
+function writeStoredPendingNewSession(sessionId, data, workDir) {
     try {
         if (!sessionId) {
             sessionStorage.removeItem(PENDING_NEW_SESSION_KEY);
@@ -2089,6 +3196,8 @@ function writeStoredPendingNewSession(sessionId, data) {
             session_id: String(sessionId),
             model_profile_id: (data && data.model_profile_id) || '',
             permission_mode: (data && data.permission_status && data.permission_status.mode) || '',
+            // 记录草稿用的是哪个工作目录：刷新后重新进入草稿态时据此判断能否复用。
+            work_dir: String(workDir || '').trim(),
         }));
     } catch (error) { /* 存储不可用时退化为页面内复用 */ }
 }
@@ -2098,38 +3207,84 @@ function clearPendingNewSession() {
     writeStoredPendingNewSession('');
 }
 
+function sessionWorkDirMatchesTarget(session, targetWorkDir) {
+    const actual = String(session && session.work_dir || '').trim();
+    const defaultWorkDir = (typeof window !== 'undefined') ? window.__WORK_DIR__ : '';
+    const expected = String(targetWorkDir || defaultWorkDir || '').trim();
+    if (!actual || !expected) return false;
+    function normalize(path) {
+        const windowsPath = /^[a-z]:[\\/]/i.test(path) || path.indexOf('\\') >= 0;
+        const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+        return windowsPath ? normalized.toLowerCase() : normalized;
+    }
+    return normalize(actual) === normalize(expected);
+}
+
 /**
  * 后台预取：创建隐藏草稿会话（服务端 metadata.draft，首条 user 事件落盘后才进入列表）。
  * 页面内多次点击“新会话”复用同一份；刷新后重新进入草稿态时按记录的会话 ID 复用。
  */
 function ensurePrefetchedNewSession() {
     if (currentSessionId) return Promise.resolve(null);
-    if (pendingNewSession) return Promise.resolve(pendingNewSession);
-    if (prefetchNewSessionPromise) return prefetchNewSessionPromise;
-    prefetchNewSessionPromise = Promise.resolve()
-        .then(function () { return prefetchNewSessionInner(); })
+    const targetWorkDir = newSessionWorkDirTarget();
+    if (pendingNewSession) {
+        if (String(pendingNewSession.workDir || '') === targetWorkDir) {
+            return Promise.resolve(pendingNewSession);
+        }
+        clearPendingNewSession();
+    }
+    if (prefetchNewSessionPromise) {
+        if (String(prefetchNewSessionWorkDir || '') === targetWorkDir) {
+            return prefetchNewSessionPromise;
+        }
+        return Promise.resolve(prefetchNewSessionPromise).catch(function () { return null; }).then(function () {
+            if (currentSessionId) return null;
+            return ensurePrefetchedNewSession();
+        });
+    }
+    const targetRevision = newSessionWorkDirRevision;
+    const promise = Promise.resolve()
+        .then(function () { return prefetchNewSessionInner(targetWorkDir, targetRevision); })
         .catch(function (error) {
             console.warn('新会话后台预取失败，发送时回退为即时创建:', error);
             clearPendingNewSession();
             return null;
         })
         .finally(function () {
-            prefetchNewSessionPromise = null;
+            if (prefetchNewSessionPromise === promise) {
+                prefetchNewSessionPromise = null;
+                prefetchNewSessionWorkDir = null;
+            }
         });
-    return prefetchNewSessionPromise;
+    prefetchNewSessionWorkDir = targetWorkDir;
+    prefetchNewSessionPromise = promise;
+    return promise;
 }
 
-async function prefetchNewSessionInner() {
+async function prefetchNewSessionInner(targetWorkDir, targetRevision) {
     const prefetchStartedAt = performance.now();
-    const stored = readStoredPendingNewSession();
+    const requestIsCurrent = function () {
+        return targetRevision === newSessionWorkDirRevision
+            && targetWorkDir === newSessionWorkDirTarget();
+    };
+    let stored = readStoredPendingNewSession();
+    // 用户刚换了目标工作目录：旧草稿是在别的目录（或默认目录）建的，且 work_dir 不可改，
+    // 只能丢弃重开，否则新会话会落在错误目录里。
+    if (stored && String(stored.work_dir || '') !== targetWorkDir) {
+        writeStoredPendingNewSession('');
+        stored = null;
+    }
     if (stored) {
         try {
             const response = await fetch('/sessions/' + encodeURIComponent(stored.session_id), { cache: 'no-store' });
             if (response.ok) {
                 const sess = await response.json();
-                if (sess && sess.id && sess.draft) {
+                if (sess && sess.id && sess.draft
+                        && sessionWorkDirMatchesTarget(sess, targetWorkDir)
+                        && requestIsCurrent()) {
                     pendingNewSession = {
                         sessionId: String(sess.id),
+                        workDir: targetWorkDir,
                         response: {
                             model_profile_id: stored.model_profile_id || '',
                             permission_status: stored.permission_mode ? { mode: stored.permission_mode } : null,
@@ -2142,7 +3297,8 @@ async function prefetchNewSessionInner() {
         } catch (error) { /* 校验失败则重新预取 */ }
         writeStoredPendingNewSession('');
     }
-    const createOptions = collectNewSessionCreateOptions();
+    if (!requestIsCurrent()) return null;
+    const createOptions = collectNewSessionCreateOptions(targetWorkDir);
     const response = await fetch('/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2151,12 +3307,16 @@ async function prefetchNewSessionInner() {
     if (!response.ok) throw new Error('HTTP ' + response.status);
     const data = await response.json();
     if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
+    // A directory switch can happen while POST /sessions is in flight. Do not
+    // let the stale response become the pending draft for the newly selected path.
+    if (!requestIsCurrent() || !sessionWorkDirMatchesTarget(data.session, targetWorkDir)) return null;
     pendingNewSession = {
         sessionId: String(data.session_id),
+        workDir: targetWorkDir,
         response: data,
         session: data.session || null,
     };
-    writeStoredPendingNewSession(pendingNewSession.sessionId, data);
+    writeStoredPendingNewSession(pendingNewSession.sessionId, data, targetWorkDir);
     if (typeof uiPerformance !== 'undefined') {
         uiPerformance.sample(pendingNewSession.sessionId, 'session.prefetch', performance.now() - prefetchStartedAt);
     }
@@ -2230,6 +3390,8 @@ async function materializeNewSessionInner() {
             sessionId = String(data.session_id);
         }
         clearPendingNewSession();
+        // 这次选定的工作目录已被本会话消费；下一次「新建对话」回到全局默认目录。
+        newSessionWorkDir = '';
         createdSessionId = sessionId;
         const session = (data && data.session)
             || (prefetched && prefetched.session)

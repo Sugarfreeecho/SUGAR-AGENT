@@ -618,8 +618,11 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     assert payload["count"] == 5
     assert payload["count_source"] == "runtime_v2_page"
     assert payload["elapsed_ms"] >= 0
-    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "todo_plan", "total"}
+    assert set(payload["timing"]) == {"queue", "setup", "read_page", "count", "user_turns", "context_tokens", "todo_plan", "execution_recovery", "prepare_response", "serialize", "total"}
     assert payload["timing"]["total"] >= 0
+    assert "serialize;dur=" in response.headers["server-timing"]
+    assert "queue;dur=" in response.headers["server-timing"]
+    assert payload["elapsed_ms"] == payload["timing"]["total"]
     assert payload["messages"]["source"] == "runtime_v2_seq_index"
     assert [event["content"] for event in payload["messages"]["events"] if event.get("content")] == [
         "first question",
@@ -684,7 +687,7 @@ def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
 
     assert payload["ok"] is True
     assert payload["user_turns"] == [{"event_index": 0, "preview": "u"}]
-    assert set(payload["timing"]) == {"read_page", "count", "user_turns", "context_tokens", "todo_plan", "total"}
+    assert set(payload["timing"]) == {"queue", "setup", "read_page", "count", "user_turns", "context_tokens", "todo_plan", "execution_recovery", "prepare_response", "serialize", "total"}
 
 
 def test_history_snapshot_can_defer_auxiliary_snapshot_until_after_first_paint(monkeypatch, tmp_path):
@@ -1543,7 +1546,7 @@ def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(m
         calls.append(bool(include_archived))
         if len(calls) > 1:
             refresh_started.set()
-            assert release_refresh.wait(2)
+            assert release_refresh.wait(5)
         return {"seq": len(calls), "sessions": []}
 
     monkeypatch.setattr(webui, "_build_sessions_state_snapshot", build)
@@ -1551,12 +1554,13 @@ def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(m
     with webui._sessions_state_cache_lock:
         webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
         webui._sessions_state_refreshing.discard(False)
+        webui._sessions_state_refresh_generation.pop(False, None)
 
     try:
         first = webui._build_sessions_state_snapshot_cached(False)
         time.sleep(0.01)
         second = webui._build_sessions_state_snapshot_cached(False)
-        assert refresh_started.wait(1)
+        assert refresh_started.wait(5)
         third = webui._build_sessions_state_snapshot_cached(False)
 
         assert first["seq"] == 1

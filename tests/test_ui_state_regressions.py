@@ -41,6 +41,8 @@ def test_catalog_hover_then_click_keeps_list_open(browser_page):
 def test_change_diff_survives_live_updates_and_new_turn(browser_page):
     page = browser_page
     page.set_content('<div id="host"></div>')
+    # The production bootstrap installs folder-icons.js before this module.
+    page.evaluate("window.MyAgentIcons = { svg: () => '<svg></svg>' }")
     load_module(page, "dock/embedder/right-column.js")
     page.evaluate("""() => {
       window.currentSessionId = 'session';

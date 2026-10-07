@@ -1,5 +1,6 @@
 import { marked } from 'marked';
 import { initPluginUiSlots } from './plugin-ui-slots.js';
+import configSource from './config.js?raw';
 import i18nSource from './modules/i18n.js?raw';
 import settingsSource from './modules/settings.js?raw';
 import inputActionsSource from './modules/input-actions.js?raw';
@@ -140,7 +141,13 @@ globalThis.__myagentSubagentProbe = {
 };
 `;
 
+// config.js 以 ESM 形式书写（保留 export 供外部 import）；页面运行时把它并进共享
+// 作用域，因此这里去掉行首 export。共享作用域里的事件回调都在文件体执行完之后才
+// 触发，函数声明 hoist 后即可被各模块直接调用（getActiveWorkDir / readRuntimeConfig）。
+const configSourceForUi = configSource.replace(/^export\s+/gm, '');
+
 const uiSources = [
+    configSourceForUi,
     i18nSource,
     settingsSource,
     inputActionsSource,

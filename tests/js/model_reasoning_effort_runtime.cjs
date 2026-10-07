@@ -13,6 +13,7 @@ const ctx = vm.createContext({
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     document: { getElementById: () => null }, renderModelProfileControl: () => {},
     newSessionModelProfileId: () => 'p1', selectedNewSessionPermissionMode: () => 'ask_for_approval',
+    newSessionWorkDirTarget: () => '',
     fetch: (url, options) => new Promise(resolve => { calls.push({url, body: JSON.parse(options.body)}); pending.push(resolve); }),
 });
 vm.runInContext(['newSessionReasoningEffort', 'commitNewSessionReasoningEffort', 'currentSessionReasoningEffort', 'setCurrentSessionReasoningEffort'].map(name => fn(source, name)).join('\n') +

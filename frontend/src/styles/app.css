@@ -86,6 +86,8 @@
     --session-more-menu-bg: var(--floating-surface-raised);
     --answer-panel-bg: rgba(38, 38, 58, 0.52);
     --code-surface-bg: #1c1d2e;
+    /* 侧栏统一内容内缩：主按钮 / 列表头 / 列表行 / 菜单共用同一条右基准线 */
+    --sidebar-inset: 0.75rem;
     --table-header-bg: #2a2c44;
     --panel-bg: #181825;
     --modal-bg: #26263a;
@@ -344,7 +346,7 @@ button, input, select, textarea { font-family: var(--sans);
    侧边栏
    ═══════════════════════════════════════ */
 .sidebar {
-    width: 220px; min-width: 120px;
+    width: var(--sidebar-width-px, 220px); min-width: 120px;
     max-width: min(480px, 55vw);
     flex: 0 0 auto;
     background: var(--surface-glass);
@@ -454,47 +456,260 @@ button, input, select, textarea { font-family: var(--sans);
     font-size: inherit;
 }
 
-/* 介于 General Agent 下沿与「置顶目录」上沿之间的条带，垂直居中「新建对话」 */
+/* 介于 SugarAgent 下沿与「置顶目录」上沿之间的条带，垂直居中「新建对话」 */
 .sidebar-new-chat-wrap {
     flex-shrink: 0;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.52rem 0.85rem 0.48rem;
+    flex-direction: column;
+    align-items: stretch;
+    /* 左/右内缩 = 统一右基准（--sidebar-inset） */
+    /* 下方留白收紧：与列表头之间的竖直间隙调小 */
+    padding: 0.52rem var(--sidebar-inset) 0.24rem;
 }
 .new-session-btn {
     margin: 0;
-    padding: 0.55rem 0.9rem;
-    width: 100%;
-    max-width: 100%;
+    padding: 0 0.9rem;
+    height: 2.25rem;                   /* 36px @16（DSH 38px 收薄一档）；rem → 随字号缩放 */
+    min-width: 0;
     box-sizing: border-box;
-    background: var(--surface-glass2); color: var(--text-primary);
+    background: var(--surface-glass3); /* 比侧栏底色亮约两档的低对比填充，不用彩色强调 */
+    color: var(--text-primary);
     border: 1px solid var(--border-glass);
-    border-radius: var(--radius-sm);
-    font-size: var(--ui-text-md); font-weight: 500;
+    border-radius: 10px;
+    font-size: 0.82rem; font-weight: 600;
     font-family: var(--sans); cursor: pointer;
-    transition: border-color 0.22s var(--ease-out-expo), box-shadow 0.22s var(--ease-out-expo), color 0.22s var(--ease-out-expo);
+    transition: background 0.2s var(--ease-out-expo), border-color 0.2s var(--ease-out-expo), color 0.2s var(--ease-out-expo);
     display: flex; align-items: center; gap: 0.45rem;
     justify-content: center;
-    line-height: var(--ui-line-md);
-    min-height: 2.5rem;
 }
 .new-session-btn:hover {
-    background: var(--floating-hover);
+    background: rgba(var(--brand-glow-rgb),0.16);
     border-color: var(--border-brand-accent);
-    box-shadow: none;
 }
-.new-session-btn:active { transform: scale(0.98); }
-.new-session-btn::before {
-    content: '+'; font-size: var(--ui-text-lg); font-weight: 500; line-height: 1;
+.new-session-btn:focus-visible { border-color: var(--border-brand-accent); outline: none; }
+.new-session-btn:active { transform: scale(0.985); }
+.new-session-btn-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; opacity: 0.92; }
+.new-session-btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.new-session-btn-icon svg { width: 0.9375rem; height: 0.9375rem; }   /* 15px @16 */
+.new-session-menu-btn svg { width: 0.875rem; height: 0.875rem; }     /* 14px @16 */
+
+/* 「新会话」+ 右侧窄 ▾：分裂按钮（分离式）观感，两块共用填充、外沿圆角拼接 */
+.sidebar-new-chat-row {
+    position: relative;
+    display: flex; align-items: stretch; gap: 0;
+    width: 100%;
 }
+.sidebar-new-chat-row .new-session-btn {
+    flex: 1 1 auto; width: auto; min-width: 0;
+    border-top-right-radius: 0; border-bottom-right-radius: 0;
+    /* 「新建会话」的**文字**相对整个按钮（含右侧 ▾）居中，图标保持"紧贴文字左侧"的相对位置：
+       文字中心 = (主按钮宽 + 左内边距 - 右内边距)/2 + (图标宽 + 间隙)/2，令其等于整行中心
+       ⇒ 左内边距 = 右内边距(0.9rem) + ▾宽(2.1rem) − 图标(0.9375rem) − 间隙(0.45rem)。 */
+    padding-left: calc(0.9rem + 2.1rem - 0.9375rem - 0.45rem);
+}
+.new-session-menu-btn {
+    flex: 0 0 auto; width: 2.1rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--surface-glass3); color: var(--text-secondary);
+    border: 1px solid var(--border-glass); border-left: 0;
+    border-radius: 0 10px 10px 0;
+    font-family: var(--sans); font-size: 0.7rem; line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s var(--ease-out-expo), color 0.2s var(--ease-out-expo);
+}
+.new-session-menu-btn:hover,
+.new-session-menu-btn:focus-visible,
+.sidebar-new-chat-row.is-menu-open .new-session-menu-btn {
+    color: var(--text-primary);
+    background: rgba(var(--brand-glow-rgb),0.16);
+}
+.new-session-menu {
+    /* 外观与开合由通用 .sidebar-popup / .sidebar-popup-menu 提供 */
+    /* 宽度策略见下方 .sidebar-popup-menu.new-session-menu */
+}
+/* 锚定整行（而非 ▾ 按钮）：菜单左右边缘都能与主按钮对齐 */
+.sidebar-popup.sidebar-new-chat-options { flex: 0 0 auto; align-items: stretch; position: static; }
+
+/* 侧栏会话列表静态头：左侧弱化灰标题（会话 / 工作区）+ 右侧三个图标（DSH 布局）。
+   整行按 DSH 节奏：行高 36px @16、标题字号与会话标题一致（0.82rem）；图标与尺寸全部 rem → 随字号缩放。 */
+.session-list-head {
+    flex-shrink: 0;
+    position: relative;
+    display: flex; align-items: center; gap: 0.4rem;
+    /* 左右内缩 = 统一右基准（--sidebar-inset） */
+    /* 上下留白收紧（原 0.2 / 0.3rem） */
+    margin: 0.08rem var(--sidebar-inset) 0.1rem;
+    min-height: 2.25rem;
+}
+.session-list-head-toggle {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; align-items: center; gap: 0.4rem;
+    padding: 0.16rem 0.24rem;
+    background: none; border: 0; border-radius: 6px;
+    color: var(--text-placeholder);
+    /* 字号与会话标题一致（.session-name 为 0.82rem）；字号变大后收紧字距 */
+    font-family: var(--sans); font-size: 0.82rem; font-weight: 700;
+    letter-spacing: 0.02em; text-transform: uppercase;
+    cursor: pointer; text-align: left;
+    transition: color 0.16s;
+}
+.session-list-head-toggle:hover, .session-list-head-toggle:focus-visible { color: var(--text-secondary); }
+.session-list-head-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-list-head-count {
+    flex: 0 0 auto; font-size: 0.7rem; font-weight: 600;
+    color: var(--text-subtle);
+    background: rgba(255,255,255,0.04); padding: 0.1rem 0.5rem; border-radius: 10px;
+}
+:root.theme-light .session-list-head-count { background: rgba(0,0,0,0.05); color: var(--text-secondary); }
+.session-list-head-chev {
+    flex: 0 0 auto; display: inline-flex; align-items: center;
+    color: var(--text-placeholder);
+    transition: transform 0.2s var(--ease-out-expo);
+}
+.session-list-head-chev svg { width: 1rem; height: 1rem; }
+.session-list-head-toggle.is-collapsed .session-list-head-chev { transform: rotate(-90deg); }
+.session-list-head-actions {
+    /* 图标中心距 ≈32px：DSH 实测 32.5px（盒 1.75rem + 缝 0.25rem）；rem → 随字号缩放 */
+    flex: 0 0 auto; display: flex; align-items: center; gap: 0.25rem;
+    /* 图标盒子对称居中后，最右按钮的高亮框自然向右多出半格（28-16=12 → 6px）；让出等量负外边距，
+       字形右缘仍落在统一右基准线上，高亮框与图标同心。 */
+    margin-right: -0.375rem;
+}
+/* 视图选项菜单相对整行定位：200px 菜单右对齐列表头右沿，避免向左溢出侧栏 */
+.session-list-head-actions .sidebar-popup { position: static; }
+.session-list-head.is-searching .session-list-head-toggle,
+.session-list-head.is-searching .session-list-head-actions { display: none; }
+.session-head-icon {
+    /* DSH 实测比例：按钮盒 28px、字形 14-16px（其标题 13px 时）；全部 rem → 随字号缩放 */
+    flex: 0 0 auto; width: 1.75rem; height: 1.75rem;
+    /* 字形在盒子里居中：高亮框与图标同心（字形与右基准的对齐由容器负外边距保证） */
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border: 0; border-radius: 8px;
+    background: transparent; color: var(--text-tertiary);
+    cursor: pointer;
+    transition: background 0.16s, color 0.16s;
+}
+/* 图标字形 16px @16（DSH 侧栏标准线描尺寸）；rem → 随字号缩放 */
+.session-head-icon svg { width: 1rem; height: 1rem; }
+#session-search-btn svg { width: 0.875rem; height: 0.875rem; }   /* DSH 搜索字形 14px @16 */
+.session-head-icon:hover, .session-head-icon:focus-visible, .session-head-icon[aria-expanded="true"] {
+    background: rgba(255,255,255,0.06); color: var(--text-primary);
+}
+:root.theme-light .session-head-icon:hover,
+:root.theme-light .session-head-icon:focus-visible,
+:root.theme-light .session-head-icon[aria-expanded="true"] { background: rgba(15,23,42,0.06); }
+
+/* 搜索：展开成输入框，右侧 ✕ 清除；有查询词时点击外部只失焦（DSH 行为） */
+.session-search-box {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; align-items: center; gap: 0.3rem;
+    padding: 0 0.2rem 0 0.3rem;
+    height: 1.625rem;
+    border: 1px solid var(--border-glass); border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+}
+.session-search-box[hidden] { display: none; }
+:root.theme-light .session-search-box { background: rgba(15,23,42,0.04); }
+.session-search-ico { flex: 0 0 auto; display: inline-flex; color: var(--text-placeholder); }
+.session-search-input {
+    flex: 1 1 auto; min-width: 0;
+    border: 0; background: transparent; outline: none;
+    color: var(--text-primary);
+    font-family: var(--sans); font-size: 0.72rem;
+}
+.session-search-input::placeholder { color: var(--text-placeholder); }
+.session-search-box .session-head-icon { width: 1.25rem; height: 1.25rem; }
+.session-search-ico svg { width: 0.875rem; height: 0.875rem; }   /* 14px @16 */
+.session-list-empty {
+    margin: 0.5rem 0.6rem;
+    color: var(--text-placeholder);
+    font-family: var(--sans); font-size: 0.72rem;
+}
+
+/* 侧栏通用弹出菜单（视图选项 / 分组动作 / 会话行菜单共用外观） */
+.sidebar-popup { position: relative; display: inline-flex; align-items: center; }
+.sidebar-popup-menu {
+    position: absolute; right: 0; top: calc(100% + 4px);
+    min-width: 12.5rem; padding: 0.26rem 0;   /* DSH: 视图菜单最小宽 200px */
+    background: var(--floating-surface-raised);
+    border: 1px solid var(--floating-border); border-radius: var(--radius-sm);
+    box-shadow: var(--floating-shadow);
+    z-index: 130; visibility: hidden; opacity: 0;
+    transform: translateY(-5px);
+    transition: opacity 0.16s var(--ease-out-expo), transform 0.16s var(--ease-out-expo), visibility 0.16s;
+}
+.sidebar-popup.is-open .sidebar-popup-menu { visibility: visible; opacity: 1; transform: translateY(0); }
+/* 分组菜单锚定分组头整行：右边缘与其它菜单同一右基准 */
+.sidebar-popup.session-group-popup { position: static; }
+.sidebar-popup-menu.session-group-menu { min-width: min(10rem, 100%); }
+.sidebar-popup-menu button {
+    display: flex; align-items: center; gap: 0.4rem;
+    width: 100%; text-align: left;
+    padding: 0.42rem 0.7rem; border: none; background: none;
+    font-size: 0.76rem; color: var(--text-secondary);
+    cursor: pointer; font-family: var(--sans);
+    transition: background 0.14s, color 0.14s;
+}
+.sidebar-popup-menu button:hover,
+.sidebar-popup-menu button:focus-visible { background: var(--floating-selected); color: var(--text-primary); outline: none; }
+.sidebar-popup-label {
+    padding: 0.34rem 0.7rem 0.18rem;
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-placeholder);
+}
+.sidebar-popup-separator { height: 1px; margin: 0.26rem 0.44rem; background: var(--border-glass); }
+.session-view-menu-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-view-menu-check { flex: 0 0 auto; display: inline-flex; opacity: 0; color: var(--accent-1); }
+.session-view-menu-check svg { width: 0.875rem; height: 0.875rem; }   /* 14px @16 */
+.sidebar-popup-menu button.is-active .session-view-menu-check { opacity: 1; }
+/* 三个菜单统一宽度策略：不超出内容列（100% = 锚定的整行宽），右边缘同一基准 */
+.sidebar-popup-menu.session-view-menu { min-width: min(12.5rem, 100%); }
+.sidebar-popup-menu.new-session-menu { min-width: min(12.5rem, 100%); }
+
+/* 工作目录分组头的 hover 动作：＋（在该目录新建）/ ⋯（复制路径、打开目录） */
+.session-group-head {
+    position: relative;                 /* 动作区绝对定位到本行右基准 */
+    display: flex; align-items: center; gap: 0;
+    /* 分组标题上方留白收紧（0.38 → 0.24rem），列表整体更紧凑 */
+    margin: 0.24rem 0 0.12rem;
+}
+/* 二级分组之间要有"一级→二级"同等的空隙（此前相邻分组头只剩 3.8px，显得太挤）；
+   段间用更大的上边距，与首组（承接一级标题）的节奏统一。 */
+.session-group + .session-group .session-group-head { margin-top: 0.42rem; }
+.session-group-head .session-time-group-title {
+    /* 只占自身宽度（可被压缩），让箭头紧跟标题 —— 与一级目录「标题 + 计数 + 箭头」同构；
+       右侧的 hover 动作由 .session-group-actions 的 margin-left:auto 顶到行尾。 */
+    flex: 0 1 auto; min-width: 0; width: auto; margin: 0;
+    padding: 0 0 0 0.65rem;             /* 左内缩与会话行文字列一致 */
+}
+.session-group-actions {
+    /* 静止时与原版一致（用户偏好）：0 宽、内容向左溢出贴在标题尾部——
+       标题可用整行宽度（不被挤窄）；图标本就透明，静止不产生可见重叠。
+       hover / 聚焦 / 弹层打开时才占真实宽度——标题随之收缩走省略号，消除重叠。
+       行高两态一致（图标始终参与高度），不再上下跳动。
+       不给弹出菜单当 containing block（菜单要按整行宽算 100%）。 */
+    position: static;
+    flex: 0 0 auto; width: 0; margin-left: auto;
+    display: flex; align-items: center; justify-content: flex-end; gap: 0.05rem;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.16s var(--ease-out-expo);
+}
+.session-group:hover .session-group-actions,
+.session-group:focus-within .session-group-actions,
+.session-group:has(.sidebar-popup.is-open) .session-group-actions {
+    width: auto; padding-left: 0.35rem;
+    opacity: 1; pointer-events: auto;
+}
+/* 注：二级箭头不再"hover 时让位"——它与标题同组、位置在行左半部分，
+   右侧 hover 动作浮出时不会与它重叠（用户反馈：以前 hover/展开时箭头被遮挡或消失）。 */
 
 .sessions-list {
     flex: 1; overflow-y: auto;
     /* 恒定预留 + 双边缘对称（both-edges）：右侧真实条带（5px）与左侧虚拟条带等宽，
        两侧可见空隙相等且都把条宽计入（12.2px ≈ 侧栏其它元素 12-13.6px 的内缩）。 */
     scrollbar-gutter: stable both-edges;
-    padding: 0.06rem 0.45rem 1rem;
+    /* 行内容左右边缘 = --sidebar-inset（减去滚动条槽宽），与主按钮/列表头同一右基准 */
+    padding: 0.06rem calc(var(--sidebar-inset) - 5px) 1rem;
 }
 .sidebar-runtime {
     flex: 0 0 auto;
@@ -569,54 +784,112 @@ button, input, select, textarea { font-family: var(--sans);
     line-height: 1.45;
 }
 .session-section { margin-bottom: 0.35rem; }
+/* 一级目录（归档目录）：排版与侧栏列表头（会话 / 工作区）完全一致
+   —— 弱化灰标题 + 计数胶囊 + 箭头，不用卡片底色；
+   二级目录（今天 / 近7天 / 工作目录名）继续用 .session-time-group-title 的小字号。 */
 .session-section-toggle {
-    width: calc(100% - 0.9rem); margin: 0.28rem 0.45rem 0.12rem;
-    padding: 0.5rem 0.75rem;
-    display: flex; align-items: center; justify-content: space-between; gap: 0.45rem;
-    background: rgba(255,255,255,0.025);
-    border: 1px solid rgba(255,255,255,0.05);
-    border-radius: var(--radius-sm);
-    font-size: var(--ui-text-sm); font-weight: 500; letter-spacing: 0;
-    color: var(--text-tertiary); cursor: pointer;
+    /* 左/右内缩与列表头对齐（列表本身已有 ~7px 内边距，这里补齐到 ≈16px 起点）；
+       计数与箭头紧跟标题（与列表头"会话 [4] ⌄"同构），不再用 space-between 推到最右。 */
+    width: calc(100% - 0.4rem); margin: 0.28rem 0.2rem 0.12rem;
+    padding: 0.1rem 0.2rem 0.1rem 0.05rem;
+    display: flex; align-items: center; justify-content: flex-start; gap: 0.4rem;
+    background: none; border: 0; border-radius: 6px;
+    min-height: 2.25rem;
+    font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
+    color: var(--text-placeholder); cursor: pointer;
     font-family: var(--sans); text-align: left;
-    transition: border-color 0.2s, color 0.2s, background 0.2s;
+    transition: color 0.16s;
     box-sizing: border-box;
-    min-height: 2.5rem;
-    line-height: var(--ui-line-sm);
-    border-color: transparent;
 }
 .session-section-toggle:hover {
     color: var(--text-secondary);
-    border-color: rgba(255,255,255,0.08);
-    background: rgba(255,255,255,0.04);
 }
-:root.theme-light .session-section-toggle { background: rgba(0,0,0,0.025); border-color: transparent; }
-:root.theme-light .session-section-toggle:hover { background: rgba(0,0,0,0.04); }
-.session-section-toggle-label { text-transform: none; flex: 1; min-width: 0; }
-.session-section-meta { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+/* flex: 0 1 auto —— 与列表头同构：标题只占自身宽度，计数/箭头紧随其后
+   （若是 flex:1，标题会撑满整行把胶囊推到行尾） */
+.session-section-toggle-label { text-transform: uppercase; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-section-meta { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
 .session-section-count {
-    font-size: var(--ui-text-xs); font-weight: 500;
+    font-size: 0.7rem; font-weight: 600;
     color: var(--text-subtle);
-    background: rgba(255,255,255,0.04); padding: 0.06rem 0.42rem; border-radius: 8px;
+    background: rgba(255,255,255,0.04); padding: 0.1rem 0.5rem; border-radius: 10px;
 }
 :root.theme-light .session-section-count { background: rgba(0,0,0,0.05); color: var(--text-secondary); }
 .session-section-chev {
-    font-size: 1.07rem; color: var(--text-placeholder); transition: transform 0.25s var(--ease-out-expo);
-    display: inline-block; width: 1.07rem; min-width: 1.07rem; max-width: 1.07rem; text-align: center;
+    color: var(--text-placeholder); transition: transform 0.25s var(--ease-out-expo);
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1rem; min-width: 1rem; max-width: 1rem;
     box-sizing: border-box;
 }
+.session-section-chev svg { width: 1rem; height: 1rem; }
 .session-section.is-collapsed .session-section-chev { transform: rotate(-90deg); }
 .session-section.is-collapsed .session-section-body { display: none; }
 .session-section-body { padding-top: 0.02rem; }
+/* 二级分组（时间 / 工作目录共用）：整行可点，折叠状态按分组 key 记忆 */
+.session-group { position: relative; margin-bottom: 0.12rem; }
 .session-time-group-title {
-    margin: 0.625rem 0.55rem 0.25rem;
+    box-sizing: border-box;
+    width: calc(100% - 1.1rem);
+    margin: 0.38rem 0.55rem 0.12rem;
     padding: 0 0.18rem;
+    display: flex; align-items: center; gap: 0.3rem;
+    background: none; border: 0; cursor: pointer; text-align: left;
     color: var(--text-placeholder);
+    font-family: var(--sans);
+    /* 二级目录字号 = 会话标题字号（.session-name 为 0.82rem） */
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+}
+.session-time-group-title:hover { color: var(--text-secondary); }
+.session-time-group-ico { flex: 0 0 auto; display: inline-flex; align-items: center; color: inherit; }
+.session-time-group-ico svg { width: 1rem; height: 1rem; }   /* 随字号同步（与折叠箭头同级） */
+.session-time-group-ico:empty { display: none; }
+.session-time-group-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-time-group-chev {
+    /* 与一级目录箭头同款同位置：紧跟标题，不再被推到行尾、也不在 hover 时让位消失 */
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1rem; min-width: 1rem; max-width: 1rem;
+    color: var(--text-placeholder);
+    transition: transform 0.2s var(--ease-out-expo);
+}
+.session-time-group-chev svg { display: block; width: 1rem; height: 1rem; }
+.session-group.is-collapsed .session-time-group-chev { transform: rotate(-90deg); }
+.session-group.is-collapsed .session-group-body { display: none; }
+.session-group-body { padding-top: 0.02rem; }
+/* 「每个工作目录默认显示前 5 个会话」：其余收起，点这里展开 */
+.session-group-more {
+    width: calc(100% - 0.9rem);
+    margin: 0.1rem 0.45rem 0.28rem;
+    padding: 0.28rem 0.6rem;
+    border: 1px dashed var(--border-glass);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-tertiary);
+    font-family: var(--sans);
     font-size: var(--ui-text-xs);
     font-weight: 500;
-    letter-spacing: 0;
-    line-height: var(--ui-line-xs);
+    cursor: pointer;
+    transition: color 0.16s var(--ease-out-expo), border-color 0.16s var(--ease-out-expo);
 }
+.session-group-more:hover { color: var(--text-secondary); border-color: var(--text-placeholder); }
+/* 拖拽排序：插入位置指示线 + 拖动中的样式 */
+.session-group.is-drop-before::before,
+.session-group.is-drop-after::after {
+    content: '';
+    position: absolute; left: 0.65rem; right: 0.55rem; height: 2px;
+    border-radius: 1px;
+    background: var(--accent-1);
+    box-shadow: 0 0 0.4rem var(--accent-glow);
+    pointer-events: none;
+}
+.session-group.is-drop-before::before { top: -0.12rem; }
+.session-group.is-drop-after::after { bottom: -0.12rem; }
+.session-group.is-dragging { opacity: 0.55; }
+body.session-group-drag-active { cursor: grabbing; user-select: none; }
+body.session-group-drag-active .session-group-head,
+body.session-group-drag-active .session-group-head * { cursor: grabbing !important; }
 :root.theme-light .session-time-group-title { color: var(--text-subtle); }
 .session-archive-load-btn {
     width: calc(100% - 0.9rem);
@@ -649,10 +922,13 @@ button, input, select, textarea { font-family: var(--sans);
 
 .session-item {
     display: flex; flex-direction: column; align-items: stretch; gap: 0.25rem;
-    padding: 0.5rem 0.75rem; margin: 0.15rem 0;
+    /* 右侧留出呼吸位：相对时间与行内动作不再紧贴卡片右边缘（用户反馈太贴） */
+    padding: 0.5rem 0.45rem 0.5rem 0.65rem; margin: 0.15rem 0;
     border-radius: var(--radius-sm); cursor: pointer;
-    border: 1px solid transparent;
-    transition: background-color 0.18s ease, border-color 0.18s ease; position: relative;
+    /* 用内阴影当 1px 描边：不占布局，内容右边缘能精确落在右基准上 */
+    border: 0;
+    box-shadow: inset 0 0 0 1px transparent;
+    transition: background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease; position: relative;
 }
 .session-item:has(.session-more-wrap.is-open) {
     z-index: 30;
@@ -660,7 +936,7 @@ button, input, select, textarea { font-family: var(--sans);
 .session-item::after {
     content: '';
     position: absolute; top: 0; right: 0; bottom: 0;
-    width: 2.7rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    width: 4.4rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     pointer-events: none; z-index: 2;
     opacity: 0;
     background: linear-gradient(to left, rgba(18, 18, 28, 0.92), rgba(18, 18, 28, 0));
@@ -695,58 +971,75 @@ button, input, select, textarea { font-family: var(--sans);
     cursor: pointer; letter-spacing: 0;
 }
 .session-item-date {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     min-width: 0;
-    max-width: 0;
+    max-width: 9rem;
     overflow: hidden;
     display: inline-flex;
     align-items: center;
     gap: 0.2rem;
-    font-size: var(--ui-text-xs); line-height: var(--ui-line-xs); color: var(--text-secondary);
-    font-family: var(--sans); font-weight: 400;
+    font-size: 0.62rem; line-height: 1.2; color: var(--text-tertiary);
+    font-family: var(--sans); font-weight: 600;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
-    margin-left: 0;
+    margin-left: 0.5rem;
     margin-right: 0;
-    opacity: 0;
+    opacity: 0.85;
     pointer-events: none;
-    transition: max-width 0.22s var(--ease-out-expo), opacity 0.18s, margin-left 0.22s var(--ease-out-expo), margin-right 0.22s var(--ease-out-expo);
+    transition: max-width 0.2s var(--ease-out-expo), opacity 0.16s var(--ease-out-expo), margin-left 0.2s var(--ease-out-expo);
 }
 .session-item-date svg {
     flex: 0 0 auto;
+    width: 0.6875rem; height: 0.6875rem;   /* 11px @16 */
     opacity: 0.85;
 }
+/* 行内动作浮出时隐藏相对时间（DSH：避免与动作图标重复占用右侧空间） */
 .session-item:hover .session-item-date,
 .session-item:focus-within .session-item-date,
 .session-item:has(.session-more-wrap.is-open) .session-item-date {
-    max-width: 12rem;
-    margin-left: 0.4rem;
-    margin-right: 1.4rem;
-    opacity: 0.9;
+    /* 只淡出、不塌陷：右侧槽位原样留给动作图标，标题不会被回流拉长到图标下方
+       （否则标题尾部汉字会与置顶/⋯ 图标叠在一起，放大看是无法辨认的重叠字形）。 */
+    opacity: 0;
 }
 .session-item:hover .session-last-query { color: var(--text-secondary); }
 .session-item.active .session-last-query { color: var(--text-secondary); }
+
+/* 行内动作浮出时，标题尾部渐隐：动作图标（置顶/⋯）压住的那一段不再显字，
+   否则 14px 图标叠在汉字上，放大看就是一团认不出来的"怪字形"。 */
+.session-item:hover .session-name,
+.session-item:focus-within .session-name,
+.session-item:has(.session-more-wrap.is-open) .session-name {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.2rem), transparent calc(100% - 0.5rem));
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.2rem), transparent calc(100% - 0.5rem));
+}
 .session-item:hover {
     background: rgba(255,255,255,0.03);
-    border-color: rgba(255,255,255,0.04);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
 }
 .session-item.active {
     background: rgba(var(--brand-glow-rgb),0.1);
-    border-color: rgba(var(--brand-glow-rgb),0.2);
+    box-shadow: inset 0 0 0 1px rgba(var(--brand-glow-rgb),0.2);
 }
 .session-item.active::before {
     content: ''; position: absolute; left: -0.45rem;
     top: 0.4rem; bottom: 0.4rem; width: 3px; border-radius: 2px;
     background: var(--accent-gradient);
 }
-:root.theme-light .session-item:hover { background: rgba(var(--brand-accent-rgb),0.06); border-color: rgba(var(--brand-accent-rgb),0.1); }
-:root.theme-light .session-item.active { background: rgba(var(--brand-accent-rgb),0.12); border-color: rgba(var(--brand-accent-rgb),0.2); }
+:root.theme-light .session-item:hover { background: rgba(var(--brand-accent-rgb),0.06); box-shadow: inset 0 0 0 1px rgba(var(--brand-accent-rgb),0.1); }
+:root.theme-light .session-item.active { background: rgba(var(--brand-accent-rgb),0.12); box-shadow: inset 0 0 0 1px rgba(var(--brand-accent-rgb),0.2); }
 
 :root[data-session-list-mode="compact"] .session-item {
     gap: 0;
-    padding: 0.42rem 0.56rem;
-    margin: 0.08rem 0;
+    padding: 0 0.45rem 0 0.56rem;
+    height: 2rem;                /* DSH 行高：含边框整行 32px */
+    min-height: 2rem;
+    box-sizing: border-box;
+    justify-content: center;
+    margin: 0.06rem 0;
 }
+:root[data-session-list-mode="compact"] .session-item-head { min-height: 2rem; }
+:root[data-session-list-mode="compact"] .session-item-title-row { min-height: 2rem; }
+:root[data-session-list-mode="compact"] .session-name { padding: 0 0.2rem 0 0; line-height: 1.2; font-size: 0.8rem; }
 :root[data-session-list-mode="compact"] .session-last-query {
     display: none;
 }
@@ -762,7 +1055,8 @@ button, input, select, textarea { font-family: var(--sans);
     flex: 1; min-width: 0; font-size: var(--ui-text-md); line-height: var(--ui-line-md);
     color: var(--text-primary);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    padding: 0; border-radius: 4px;
+    /* 右侧留出省略号的呼吸位，避免省略号与相邻汉字字形挤在一起 */
+    padding: 2px 0.2rem 2px 0; border-radius: 4px;
     cursor: pointer; transition: color 0.15s;
     font-weight: 400;
 }
@@ -782,14 +1076,28 @@ button, input, select, textarea { font-family: var(--sans);
     border-radius: 999px;
     background: rgba(249, 226, 175, 0.16);
     color: var(--amber-accent);
-    font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-size: 0.58rem;               /* 原始档：与 10-02 版一致（令牌化曾放大为 0.75rem） */
+    font-weight: 750;
     line-height: 1;
     white-space: nowrap;
 }
 .session-draft-badge[hidden] { display: none; }
 .session-todo-badge[hidden] { display: none; }
 .session-review-badge[hidden] { display: none; }
+/* 置顶标记（DSH 同款）：行尾、相对时间之后的 16px 图钉，纯灰无底色；
+   hover / 焦点 / 菜单展开时与相对时间一起淡出，把位置让给行内动作（避免两个图钉重叠）。 */
+.session-pin-mark {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-left: 0.35rem;
+    color: var(--text-placeholder);
+    transition: opacity 0.16s var(--ease-out-expo);
+}
+.session-pin-mark svg { width: 1rem; height: 1rem; display: block; }
+.session-pin-mark[hidden] { display: none; }
+.session-item:hover .session-pin-mark,
+.session-item:focus-within .session-pin-mark,
+.session-item:has(.session-more-wrap.is-open) .session-pin-mark { opacity: 0; }
 .plugin-session-badges {
     display: inline-flex; align-items: center; gap: 0.2rem;
     flex: 0 1 auto; min-width: 0; margin-left: 0.25rem;
@@ -874,25 +1182,83 @@ button, input, select, textarea { font-family: var(--sans);
     z-index: 4; display: flex; align-items: center;
     pointer-events: none;
 }
+.session-item:has(.sidebar-popup.is-open) { z-index: 30; }
+/* 行内动作区：置顶图标 + ⋯ 菜单；hover / :focus-within 浮出（键盘 Tab 也能到达并可见） */
+.session-item-actions {
+    /* 与相对时间同一右边缘：都留出 0.45rem 空隙，不再贴住卡片右边 */
+    position: absolute; right: 0.45rem; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; gap: 0.06rem;
+    z-index: 4;
+    /* 默认不参与命中：容器自身约 50px 宽会盖住"相对时间"那一段，
+       若默认 auto，用户点行右半边切不了会话（命中的是隐形 ⋯ 按钮）。 */
+    pointer-events: none;
+}
+.session-item-actions .session-more-wrap {
+    position: relative; right: auto; top: auto; transform: none;
+    z-index: 5;
+    /* 跟随容器（默认 none、行 hover/菜单展开时 auto），不要写死 none 否则会屏蔽子树 */
+    pointer-events: inherit;
+}
+/* 右侧动作只在"行 hover / 行内有焦点 / 菜单展开"时恢复命中；
+   恢复后其后代（⋯ 按钮、弹出的菜单及其条目）一并可点。 */
+.session-item:hover .session-item-actions,
+.session-item:focus-within .session-item-actions,
+.session-item:has(.session-more-wrap.is-open) .session-item-actions,
+.session-item:has(.sidebar-popup.is-open) .session-item-actions { pointer-events: auto; }
+.session-item:has(.session-more-wrap.is-open) .session-more-menu,
+.session-item:has(.session-more-wrap.is-open) .session-more-menu *,
+.session-item:has(.sidebar-popup.is-open) .session-item-actions .sidebar-popup,
+.session-item:has(.sidebar-popup.is-open) .session-item-actions .sidebar-popup * { pointer-events: auto; }
+.session-row-icon {
+    flex: 0 0 auto; width: 1.5rem; height: 1.5rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border: 0; border-radius: 6px;
+    background: transparent; color: var(--text-tertiary);
+    cursor: pointer;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.16s, background 0.16s, color 0.16s;
+}
+.session-row-icon svg { width: 0.875rem; height: 0.875rem; }   /* 14px @16 */
+.session-item:hover .session-row-icon,
+.session-item:focus-within .session-row-icon,
+.session-item:has(.session-more-wrap.is-open) .session-row-icon,
+.session-item:has(.sidebar-popup.is-open) .session-row-icon { opacity: 1; pointer-events: auto; }
+.session-row-icon:hover, .session-row-icon:focus-visible {
+    background: rgba(255,255,255,0.07); color: var(--text-primary);
+}
+:root.theme-light .session-row-icon:hover,
+:root.theme-light .session-row-icon:focus-visible { background: rgba(0,0,0,0.06); }
+.session-row-icon.is-on { color: var(--accent-1); }
+/* 分组头的两个动作由 .session-group-actions 统一控制显隐与命中，图标本身常显 */
+.session-group-actions .session-row-icon { opacity: 1; }
+/* 命中只在分组头 hover / 头内有焦点 / 菜单展开时恢复；否则折叠箭头整行可点，
+   右侧不该出现"看不见但能点"的 ＋/⋯ 死区。 */
+.session-group:hover .session-group-actions .session-row-icon,
+.session-group:focus-within .session-group-actions .session-row-icon,
+.session-group:has(.sidebar-popup.is-open) .session-group-actions .session-row-icon,
+.session-group:has(.sidebar-popup.is-open) .session-group-actions .sidebar-popup,
+.session-group:has(.sidebar-popup.is-open) .session-group-actions .sidebar-popup * { pointer-events: auto; }
+
 .session-more-wrap.is-open {
     z-index: 120;
 }
 .session-more-btn {
     background: none; border: none; color: var(--text-tertiary);
-    cursor: pointer; padding: 0; width: 26px; height: 26px;
+    cursor: pointer; padding: 0; width: 1.625rem; height: 1.625rem;
     border-radius: 6px; font-size: 0; line-height: 1; letter-spacing: 0;
     opacity: 0; transition: opacity 0.18s, background 0.18s, color 0.18s;
     font-family: var(--sans);
     display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
-    pointer-events: auto;
+    /* 命中由 .session-item-actions 统一门控（默认 none，行 hover/菜单展开时 auto） */
 }.session-more-btn .session-more-dots {
     display: inline-flex; flex-direction: row; align-items: center;
-    justify-content: center; gap: 3px; vertical-align: middle; padding: 0 1px;
+    justify-content: center; gap: 0.1875rem; vertical-align: middle; padding: 0 1px;
 }.session-more-btn .session-more-dots span {
-    display: block; width: 3px; height: 3px;
+    display: block; width: 0.1875rem; height: 0.1875rem;
     border-radius: 50%; background: currentColor;
 }
 .session-item:hover .session-more-btn,
+.session-item:focus-within .session-more-btn,
 .session-more-wrap.is-open .session-more-btn { opacity: 0.65; }
 .session-more-btn:hover {
     opacity: 1 !important; background: rgba(255,255,255,0.06); color: var(--text-secondary);
@@ -907,7 +1273,8 @@ button, input, select, textarea { font-family: var(--sans);
     z-index: 130; visibility: hidden; opacity: 0;
     transform: translateY(-5px);
     transition: opacity 0.16s var(--ease-out-expo), transform 0.16s var(--ease-out-expo), visibility 0.16s;
-    pointer-events: auto;
+    /* 收起时不可点：命中由 `.session-more-wrap.is-open` 那组规则恢复 */
+    pointer-events: none;
 }
 .session-more-wrap.is-open .session-more-menu { visibility: visible; opacity: 1; transform: translateY(0); }
 .session-more-menu button {
@@ -963,7 +1330,8 @@ button, input, select, textarea { font-family: var(--sans);
     min-height: 44px; flex-shrink: 0;
     position: relative; z-index: 300; overflow: visible;
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0.4rem 0.7rem 0.4rem 0.35rem;
+    /* 顶部内边距 0.4→0.2rem：平衡标题上方留白与"标题→副标题"间距（对比 zip 的微调，2026-10-07） */
+    padding: 0.2rem 0.7rem 0.4rem 0.35rem;
     border-bottom: 1px solid var(--border-glass);
     background: var(--titlebar-bg);
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
@@ -981,7 +1349,8 @@ button, input, select, textarea { font-family: var(--sans);
     position: relative; right: auto; top: auto; transform: none;
     z-index: 140; pointer-events: auto;
 }
-.breadcrumb-session-actions .session-more-btn { opacity: 0.68; }
+/* 光心微调：标题行盒中心比文字视觉中心高约 1px，把 ⋯ 点位下移对齐（2026-10-07） */
+.breadcrumb-session-actions .session-more-btn { opacity: 0.68; transform: translateY(1px); }
 .breadcrumb-session-actions .session-more-menu { left: 0; right: auto; }
 #breadcrumb-sub {
     display: block; font-size: 0.6rem; color: var(--text-subtle);
@@ -997,7 +1366,7 @@ button, input, select, textarea { font-family: var(--sans);
     text-align: right; max-width: min(62%, 24rem); min-width: 0;
 }
 .ctx-wrap {
-    /* Preserve the original 14px design scale within the 16px UI. */
+    /* Keep the context meter on the original 14px scale inside the 16px UI. */
     --ctx-unit: 0.875rem;
     font-family: var(--mono); font-size: calc(0.63 * var(--ctx-unit)); line-height: 1.3;
     color: var(--text-tertiary); display: block; min-width: calc(7 * var(--ctx-unit));
@@ -1668,32 +2037,360 @@ button, input, select, textarea { font-family: var(--sans);
 .msg-wrap--user > .msg-user-attachment-strip {
     display: flex;
     flex-flow: row wrap;
-    align-items: center;
+    align-items: flex-start;
     justify-content: flex-end;
-    gap: 0.4rem;
-    width: min(88%, 32rem);
-    margin-top: 0.4rem;
+    gap: 0.5rem;
+    width: min(88%, 38rem);
+    margin-top: 0.48rem;
 }
 .msg-wrap--user > .msg-user-attachment-strip:empty { display: none; }
-.msg-wrap--user > .msg-user-attachment-strip .msg-attachment-thumbnail {
-    display: block;
+.msg-wrap--user > .msg-user-attachment-strip .msg-attachment-card {
+    width: fit-content;
+    max-width: min(100%, 19rem);
+}
+.msg-attachment-strip {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: flex-start;
+    gap: 0.45rem;
+    width: 100%;
+    margin-top: 0.38rem;
+}
+.msg-attachment-card,
+.feed-attachment-card,
+.composer-attachment-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 3.7rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.62rem;
+    box-sizing: border-box;
+    width: min(100%, 19rem);
+    min-width: 0;
+    margin: 0;
+    padding: 0.46rem 0.58rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 12px;
+    background: var(--surface-glass2);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.1);
+}
+.msg-attachment-preview-trigger {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     flex: 0 0 auto;
-    width: 6.75rem;
-    height: 5rem;
-    max-width: 6.75rem;
-    max-height: 5rem;
+    width: 3.7rem;
+    height: 2.8rem;
+    overflow: hidden;
+    padding: 0;
+    border: 1px solid var(--border-glass);
+    border-radius: 8px;
+    background: var(--surface-glass3);
+    color: var(--text-tertiary);
+    cursor: zoom-in;
+    transition: border-color 0.16s ease, background 0.16s ease;
+}
+.msg-attachment-image { cursor: zoom-in; }
+.msg-attachment-preview-trigger::after {
+    content: '↗';
+    position: absolute;
+    right: 0.18rem;
+    bottom: 0.18rem;
+    display: grid;
+    place-items: center;
+    width: 1.05rem;
+    height: 1.05rem;
+    border-radius: 5px;
+    background: rgba(12,14,18,0.72);
+    color: #fff;
+    font: 0.72rem/1 var(--sans);
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 0.16s ease, transform 0.16s ease;
+    pointer-events: none;
+}
+.msg-attachment-preview-trigger:hover,
+.msg-attachment-preview-trigger:focus-visible {
+    border-color: var(--border-brand-accent);
+    background: rgba(var(--accent-rgb),0.08);
+    outline: none;
+}
+.msg-attachment-preview-trigger:hover::after,
+.msg-attachment-preview-trigger:focus-visible::after { opacity: 1; transform: translateY(0); }
+.msg-attachment-preview-trigger .msg-attachment-thumbnail {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
     object-fit: contain;
     object-position: center;
+}
+.msg-attachment-copy,
+.composer-attachment-copy {
+    display: grid;
+    gap: 0.16rem;
+    min-width: 0;
+}
+.msg-attachment-name,
+.composer-attachment-name {
+    display: block;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    font-weight: 550;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.msg-attachment-meta,
+.composer-attachment-meta {
+    display: block;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 0.68rem;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.feed-attachment-strip {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: flex-start;
+    gap: 0.42rem;
+    margin: 0.1rem 0.55rem 0 calc(var(--feed-label-cols, 3.5rem) + 0.9rem);
+}
+.feed-attachment-strip:empty { display: none; }
+.feed-attachment-card {
+    grid-template-columns: 3.35rem minmax(0, 1fr);
+    width: min(100%, 17rem);
+    padding: 0.38rem 0.48rem;
+    background: color-mix(in srgb, var(--feed-item-bg, var(--surface-glass2)) 58%, var(--surface-glass2));
+    box-shadow: none;
+}
+.feed-attachment-card .msg-attachment-preview-trigger {
+    width: 3.35rem;
+    height: 2.55rem;
+}
+.msg-attachment-card.is-unavailable .msg-attachment-preview-trigger::after { content: '不可用'; font-size: 0.62rem; }
+.composer-attachment-tray {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: flex-start;
+    gap: 0.45rem;
+    margin: 0 0 0.45rem;
+}
+.composer-attachment-tray[hidden] { display: none !important; }
+.composer-attachment-card {
+    grid-template-columns: 3.7rem minmax(0, 1fr) 1.35rem;
+    width: min(100%, 20rem);
+    padding-right: 0.35rem;
+}
+.composer-attachment-preview { width: 3.7rem; height: 2.8rem; }
+.composer-attachment-preview img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+.composer-attachment-badge {
+    display: grid;
+    place-items: center;
+    width: 3.7rem;
+    height: 2.8rem;
     border: 1px solid var(--border-glass);
+    border-radius: 8px;
+    background: var(--surface-glass3);
+    color: var(--text-tertiary);
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+}
+.composer-attachment-remove {
+    align-self: start;
+    display: grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin: -0.18rem -0.2rem 0 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-tertiary);
+    font: 1rem/1 var(--sans);
+    cursor: pointer;
+}
+.composer-attachment-remove:hover,
+.composer-attachment-remove:focus-visible {
+    background: var(--floating-hover);
+    color: var(--text-primary);
+    outline: none;
+}
+.attachment-image-viewer {
+    box-sizing: border-box;
+    position: fixed;
+    inset: 0;
+    display: none;
+    place-items: center;
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+}
+.attachment-image-viewer[open] {
+    display: grid;
+}
+.attachment-image-viewer-panel {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    width: min(90vw, 76rem);
+    height: min(86vh, 54rem);
+    max-width: calc(100vw - 2rem);
+    max-height: calc(100vh - 2rem);
+    padding: 0 0.5rem 0.5rem;
+    overflow: hidden;
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-md);
+    background: var(--surface-glass2);
+    box-shadow: var(--shadow-soft), var(--shadow-glow);
+    animation: attachmentImageViewerIn 0.12s ease-out both;
+}
+.attachment-image-viewer::backdrop {
+    background: rgba(4,4,10,0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+@keyframes attachmentImageViewerIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+.attachment-image-viewer-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1rem;
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    height: 3.75rem;
+    min-height: 3.75rem;
+    padding: 0 0.65rem 0 1rem;
+    border-bottom: 1px solid var(--border-glass);
+}
+.attachment-image-viewer-caption {
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: var(--ui-text-lg);
+    font-weight: 600;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.attachment-image-viewer-close {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    align-self: center;
+    box-sizing: border-box;
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: 1px solid var(--border-glass);
+    border-radius: 8px;
+    background: var(--surface-glass3);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.18s, color 0.18s, border-color 0.18s;
+}
+.attachment-image-viewer-close svg {
+    display: block;
+    width: 1rem;
+    height: 1rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+.attachment-image-viewer-close:hover,
+.attachment-image-viewer-close:focus-visible {
+    border-color: var(--border-brand-accent);
+    background: var(--floating-hover);
+    color: var(--text-primary);
+    outline: none;
+}
+.attachment-image-viewer-stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0.6rem;
+    overflow: hidden;
+    contain: layout paint;
+    overscroll-behavior: contain;
+    background: transparent;
+}
+.attachment-image-viewer-canvas {
+    position: absolute;
+    inset: 0.6rem;
+}
+.attachment-image-viewer-canvas img {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: block;
+    max-width: none;
+    max-height: none;
+    transform: translate3d(-50%, -50%, 0) scale(1);
+    transform-origin: center;
+    transition: none;
+    object-fit: contain;
     border-radius: var(--radius-sm);
-    background: rgba(0,0,0,0.18);
-    box-shadow: 0 5px 16px rgba(0,0,0,0.16);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.18);
 }
-:root.theme-light .msg-wrap--user > .msg-user-attachment-strip .msg-attachment-thumbnail {
+.attachment-image-viewer[open] .attachment-image-viewer-canvas img {
+    will-change: transform;
+}
+:root.theme-light .msg-attachment-card,
+:root.theme-light .composer-attachment-card {
+    background: rgba(255,255,255,0.84);
+    box-shadow: 0 4px 14px rgba(15,23,42,0.07);
+}
+:root.theme-light .feed-attachment-card { background: rgba(255,255,255,0.78); }
+:root.theme-light .msg-attachment-preview-trigger,
+:root.theme-light .composer-attachment-badge {
+    background: #f2f3f5;
+    border-color: rgba(15,23,42,0.1);
+}
+:root.theme-light .attachment-image-viewer {
+    background: transparent;
+    box-shadow: none;
+}
+:root.theme-light .attachment-image-viewer-panel {
+    background: #fff;
     border-color: rgba(0,0,0,0.08);
-    background: #f7f8fc;
-    box-shadow: 0 5px 14px rgba(0,0,0,0.08);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.08);
 }
+:root.theme-light .attachment-image-viewer::backdrop { background: rgba(246,248,252,0.57); }
+:root.theme-light .attachment-image-viewer-canvas img { box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+:root.theme-light .msg-attachment-name,
+:root.theme-light .composer-attachment-name { color: var(--text-primary); }
+:root.theme-light .msg-attachment-meta,
+:root.theme-light .composer-attachment-meta { color: var(--text-tertiary); }
 .user-message-time {
     display: inline-flex;
     align-items: center;
@@ -1735,6 +2432,7 @@ button, input, select, textarea { font-family: var(--sans);
     box-shadow: 0 3px 16px rgba(0,0,0,0.05);
 }
 
+/* Final 卡片正文与会话列表的会话名同档：--ui-text-md（用户气泡、输入框保持各自尺度） */
 .message {
     word-wrap: break-word; line-height: 1.65; font-size: var(--ui-text-lg);
     padding: 0.85rem 1.1rem; border-radius: var(--radius-lg);
@@ -1825,7 +2523,7 @@ button, input, select, textarea { font-family: var(--sans);
     background: var(--bot-bubble); border: 1px solid var(--bot-bubble-border);
     color: var(--text-primary);
     border-bottom-left-radius: var(--radius-sm);
-    font-size: var(--ui-text-lg); padding: 0.7rem 0.95rem; line-height: 1.65;
+    font-size: var(--ui-text-md); padding: 0.7rem 0.95rem; line-height: 1.65;
     backdrop-filter: none;
 }
 :root.theme-light .message.assistant { color: var(--text-primary); }
@@ -1908,7 +2606,8 @@ button, input, select, textarea { font-family: var(--sans);
 }
 :root.theme-dark .message td { border-color: rgba(var(--accent-rgb), 0.16); }
 .message hr { border: none; border-top: 1px solid var(--border-glass); margin: 0.8em 0; }
-.message img { max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+.message img { max-width: 100%; height: auto; border-radius: var(--radius-sm); cursor: zoom-in; }
+.feed-item img { cursor: zoom-in; }
 .message img[data-history-image-fallback="1"] {
     display: block;
     width: min(100%, 36rem, 142.2222vh);
@@ -2155,6 +2854,39 @@ button, input, select, textarea { font-family: var(--sans);
 }
 .welcome strong { display: block; color: var(--text-primary); font-size: var(--ui-text-lg); font-weight: 500; margin-bottom: 0.4rem; }
 .welcome p { color: var(--text-tertiary); font-size: var(--ui-text-md); line-height: 1.6; max-width: 360px; margin: 0 auto; }
+.welcome-session-directory {
+    box-sizing: border-box;
+    display: flex; align-items: center; gap: 0.7rem;
+    width: min(26rem, 100%); margin: 1.25rem auto 0; padding: 0.72rem 0.82rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 14px;
+    background: var(--surface-glass2, rgba(255,255,255,.035));
+    text-align: left;
+    transition: border-color 0.16s, background 0.16s, box-shadow 0.16s;
+}
+.welcome-session-directory[hidden] { display: none; }
+.welcome-session-directory-icon { flex: 0 0 auto; width: 1.25rem; height: 1.25rem; color: var(--accent-1); }
+.welcome-session-directory-copy { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; gap: 0.08rem; }
+.welcome-session-directory-caption { color: var(--text-tertiary); font-size: 0.66rem; line-height: 1.2; }
+.welcome-session-directory-name { overflow: hidden; color: var(--text-primary); font-size: 0.79rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-session-directory-path { overflow: hidden; color: var(--text-tertiary); font-size: 0.65rem; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-session-directory-picker {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.18rem;
+    min-height: 2rem; padding: 0.35rem 0.58rem;
+    border: 1px solid var(--border-glass); border-radius: 8px;
+    background: var(--surface-glass3, rgba(255,255,255,.035));
+    color: var(--text-secondary); font: inherit; font-size: 0.7rem; font-weight: 600;
+    cursor: pointer; transition: border-color 0.16s, background 0.16s, color 0.16s;
+}
+.welcome-session-directory-picker svg { width: 0.78rem; height: 0.78rem; }
+.welcome-session-directory-picker:hover,
+.welcome-session-directory-picker:focus-visible {
+    border-color: var(--border-brand-accent);
+    background: rgba(var(--brand-glow-rgb), 0.1);
+    color: var(--text-primary); outline: none;
+}
+.welcome-session-directory-picker:disabled { opacity: 0.55; cursor: wait; }
 
 /* ═══════════════ 执行过程 ═══════════════ */
 .process-aggregate {
@@ -3720,6 +4452,7 @@ button, input, select, textarea { font-family: var(--sans);
     padding: 0.26rem;
     border-top: 1px solid var(--border-glass);
 }
+.skill-picker-group-items[hidden] { display: none !important; }
 .skill-picker-group-empty {
     display: flex;
     align-items: center;
@@ -3753,9 +4486,6 @@ button, input, select, textarea { font-family: var(--sans);
 .mcp-server-register-btn:disabled {
     cursor: wait;
     opacity: 0.58;
-}
-.skill-picker-group-items[hidden] {
-    display: none;
 }
 .skill-picker-group-items .skill-picker-option {
     border-radius: 7px;
@@ -4885,17 +5615,17 @@ button, input, select, textarea { font-family: var(--sans);
     align-items: center;
     justify-content: center;
     width: auto;
-    min-width: 18px;
-    height: 18px;
+    min-width: 1.125rem;   /* 18px @16 → 随字号缩放 */
+    height: 1.125rem;
     padding: 0 0.28rem;
     margin-left: auto;
     border-radius: 50%;
     background: var(--amber-accent);
     color: #30291f;
-    font-size: 0.76rem;
+    font-size: 0.62rem;    /* 恢复经典比例（原 0.68rem/18px 档） */
     line-height: 1;
-    font-weight: 800;
-    box-shadow: 0 0 0 3px rgba(249, 226, 175, 0.08);
+    font-weight: 600;      /* 原 800 在 0.62rem 小字号下笔画糊在一起（?/! 像被压扁）；600 干净且仍有强调 */
+    box-shadow: 0 0 0 0.1875rem rgba(249, 226, 175, 0.08);
 }
 .session-item.has-human-pending .session-name { color: var(--text-primary); }
 
@@ -5113,7 +5843,6 @@ button, input, select, textarea { font-family: var(--sans);
 .human-terminal-toggle:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 .human-terminal-toggle::after { content: '⌄'; display: inline-block; margin-left: 0.32rem; transform: rotate(-90deg); }
 .human-terminal-toggle[aria-expanded="true"]::after { transform: rotate(0); }
-.human-terminal-detail[hidden], .human-terminal-summary[hidden] { display: none; }
 .human-readonly-notice {
     margin: 0.8rem 1rem 0;
     padding: 0.5rem 0.65rem;
@@ -5849,6 +6578,7 @@ textarea.plugin-setting-control { resize: vertical; }
     font-size: var(--ui-text-xs); font-weight: 500; letter-spacing: 0;
     cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    transform: translateY(1px); /* 光心微调：与标题文字视觉中心对齐（2026-10-07） */
 }
 .breadcrumb-back-chip:hover {
     color: var(--text-primary);
@@ -5875,6 +6605,7 @@ textarea.plugin-setting-control { resize: vertical; }
     font-family: var(--sans); font-size: 0.66rem; font-weight: 500;
     line-height: 1; cursor: pointer; white-space: nowrap;
     transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    transform: translateY(1px); /* 光心微调：与标题文字视觉中心对齐（2026-10-07） */
 }
 .subagent-catalog-trigger.hidden { display: none; }
 .subagent-catalog-trigger:hover,

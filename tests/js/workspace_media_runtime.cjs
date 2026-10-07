@@ -78,7 +78,8 @@ const hoverTipBindings = [];
 let historyImageTimeout = null;
 const context = vm.createContext({
   console,
-  document: { createElement: (tagName) => new FakeElement(tagName) },
+  window: {},
+  document: { createElement: (tagName) => new FakeElement(tagName), addEventListener() {} },
   currentSessionId: 'history-session',
   requestAnimationFrame(callback) { callback(); return 1; },
   setTimeout(callback, delay) {

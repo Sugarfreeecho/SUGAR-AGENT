@@ -1375,11 +1375,25 @@ function refreshProcessAggregateStats(agg) {
 var executionRecordsBySession = new Map();
 var executionRecoveryBySession = new Map();
 
+function findExecutionProcessGroup(stream, groupId, runId) {
+    if (!stream) return null;
+    var groups = Array.from(stream.querySelectorAll('.process-aggregate'));
+    if (groupId) return groups.reverse().find(function (group) {
+        return group.dataset.processGroupId === String(groupId);
+    }) || null;
+    if (runId) return groups.reverse().find(function (group) {
+        return group.dataset.processRunId === String(runId) && !group.dataset.procEndedAt;
+    }) || null;
+    var users = Array.from(stream.querySelectorAll('.msg-wrap--user[data-runtime-seq]'));
+    var latest = users[users.length - 1];
+    if (latest) return findExecutionProcessGroup(stream, 'turn:' + latest.dataset.runtimeSeq, '');
+    return null;
+}
+
 function selectExecutionProcessGroup(ctx, groupId) {
     if (!ctx || !ctx.stream || !groupId) return;
     ctx.processGroupId = String(groupId);
-    var groups = Array.from(ctx.stream.querySelectorAll('.process-aggregate'));
-    var existing = groups.find(function (group) { return group.dataset.processGroupId === ctx.processGroupId; });
+    var existing = findExecutionProcessGroup(ctx.stream, ctx.processGroupId, '');
     if (existing) ctx.currentProcessGroup = existing;
     else if (ctx.currentProcessGroup && !ctx.currentProcessGroup.dataset.processGroupId) ctx.currentProcessGroup.dataset.processGroupId = ctx.processGroupId;
     else if (ctx.currentProcessGroup && ctx.currentProcessGroup.dataset.processGroupId !== ctx.processGroupId) ctx.currentProcessGroup = null;
@@ -1564,6 +1578,12 @@ function ensureProcessGroup(ctx) {
     if (!ctx || !ctx.stream) return null;
     /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行过程框 */
     if (ctx.currentProcessGroup && !ctx.currentProcessGroup.isConnected && !replayingMessages) ctx.currentProcessGroup = null;
+    if (ctx.processGroupId) {
+        var identified = findExecutionProcessGroup(ctx.stream, ctx.processGroupId, '');
+        if (identified) ctx.currentProcessGroup = identified;
+        else if (ctx.currentProcessGroup && ctx.currentProcessGroup.dataset.processGroupId
+            && ctx.currentProcessGroup.dataset.processGroupId !== String(ctx.processGroupId)) ctx.currentProcessGroup = null;
+    }
     if (ctx.currentProcessGroup) return ctx.currentProcessGroup;
     var last = ctx.stream.lastElementChild;
     if (last && last.classList.contains('process-aggregate') && (!ctx.processGroupId || last.dataset.processGroupId === ctx.processGroupId)) {
@@ -1574,6 +1594,7 @@ function ensureProcessGroup(ctx) {
     const wrap = document.createElement('div');
     wrap.className = 'process-aggregate';
     if (ctx.processGroupId) wrap.dataset.processGroupId = String(ctx.processGroupId);
+    if (ctx.runId) wrap.dataset.processRunId = String(ctx.runId);
     var replayCollapsed = !!replayingMessages;
     if (replayCollapsed) wrap.classList.add('is-collapsed');
     if (!replayingMessages) wrap.classList.add('is-running');
@@ -1613,6 +1634,17 @@ function ensureProcessGroup(ctx) {
 
 function sealProcessGroup(ctx) {
     if (!ctx) return;
+    if (ctx.stream && ctx.processGroupId) {
+        Array.from(ctx.stream.querySelectorAll('.process-aggregate')).forEach(function (group) {
+            if (group.dataset.processGroupId !== String(ctx.processGroupId)) return;
+            group.classList.remove('is-running');
+            if (group.dataset.procStartedAt && !group.dataset.procEndedAt) group.dataset.procEndedAt = String(procNow());
+            refreshProcessAggregateStats(group);
+        });
+        if (!ctx.currentProcessGroup || !ctx.currentProcessGroup.isConnected) {
+            ctx.currentProcessGroup = findExecutionProcessGroup(ctx.stream, ctx.processGroupId, '');
+        }
+    }
     if (!ctx.currentProcessGroup) return;
     const agg = ctx.currentProcessGroup;
     // Release the nested follower before the context loses its process group.
@@ -2005,7 +2037,7 @@ window.addEventListener('blur', function () {
     updateUiPresenceActive();
 });
 
-const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>`;
+const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p><div class="welcome-session-directory" role="group" aria-label="本会话工作目录" hidden>${window.MyAgentIcons.svg('folder', 'welcome-session-directory-icon')}<div class="welcome-session-directory-copy"><span class="welcome-session-directory-caption">会话工作目录</span><span class="welcome-session-directory-name" data-welcome-session-directory-name>默认工作目录</span><span class="welcome-session-directory-path" data-welcome-session-directory-path data-i18n-skip="1"></span></div><button type="button" class="welcome-session-directory-picker" data-welcome-session-directory-picker aria-label="选择会话目录"><span>选择</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button></div></div>`;
 
 function historyLoadScrollsToBottom(sessionId, mode) {
     if (mode === 'bottom') return true;
@@ -2192,6 +2224,55 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
     return Promise.resolve(false);
 }
 
+function syncWelcomeSessionDirectory(root, workDirOverride) {
+    const scope = root || getVisibleChatStream() || chatContainer;
+    const card = scope && scope.querySelector
+        ? scope.querySelector('.welcome-session-directory')
+        : null;
+    if (!card) return;
+    const isDraft = (typeof currentSessionId === 'undefined') || !currentSessionId;
+    card.hidden = !isDraft;
+    if (!isDraft) return;
+
+    const hasWorkDirOverride = typeof workDirOverride === 'string';
+    const pendingWorkDir = (typeof pendingNewSession !== 'undefined' && pendingNewSession)
+        ? String(pendingNewSession.workDir || (pendingNewSession.session && pendingNewSession.session.work_dir) || '').trim()
+        : '';
+    const selectedPath = hasWorkDirOverride
+        ? workDirOverride.trim()
+        : ((typeof newSessionWorkDirTarget === 'function')
+            ? (String(newSessionWorkDirTarget() || '').trim() || pendingWorkDir)
+            : pendingWorkDir);
+    const defaultPath = (typeof window !== 'undefined') ? String(window.__WORK_DIR__ || '').trim() : '';
+    const path = selectedPath || defaultPath;
+    const parts = path.replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean);
+    const normalizeWorkDir = function (value) {
+        const normalized = String(value || '').replace(/\\/g, '/').replace(/\/+$/, '');
+        return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
+    };
+    const isDefaultPath = !selectedPath
+        || (!!defaultPath && normalizeWorkDir(selectedPath) === normalizeWorkDir(defaultPath));
+    const name = isDefaultPath ? '默认工作目录' : (parts[parts.length - 1] || selectedPath);
+    const nameNode = card.querySelector('[data-welcome-session-directory-name]');
+    const pathNode = card.querySelector('[data-welcome-session-directory-path]');
+    if (nameNode) {
+        if (!isDefaultPath) {
+            nameNode.removeAttribute('data-ui-runtime-text');
+            nameNode.setAttribute('data-i18n-skip', '1');
+            nameNode.textContent = name;
+        } else {
+            nameNode.removeAttribute('data-i18n-skip');
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(nameNode, name);
+            else nameNode.textContent = name;
+        }
+    }
+    if (pathNode) {
+        pathNode.textContent = path;
+        pathNode.title = path;
+    }
+    if (typeof translateUiNode === 'function') translateUiNode(card);
+}
+
 function setWelcome() {
     resetSessionHistoryPaging();
     const vs = getVisibleChatStream();
@@ -2204,6 +2285,9 @@ function setWelcome() {
         const vs2 = getVisibleChatStream();
         if (vs2) vs2.insertAdjacentHTML('beforeend', WELCOME_HTML);
         else chatContainer.innerHTML = WELCOME_HTML;
+    }
+    if (typeof syncWelcomeSessionDirectory === 'function') {
+        syncWelcomeSessionDirectory(vs || getVisibleChatStream() || chatContainer);
     }
     rebuildToc();
 }
@@ -2418,7 +2502,8 @@ function workspaceRelFromForeignWorkspaceAbs(absNorm, workDir) {
 
 function stripWorkspaceRootPrefixFromRelPath(relPath) {
     var t = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+    // 路径根 = 当前会话的工作目录（getActiveWorkDir 取不到时回退全局默认目录）
+    var w = getActiveWorkDir();
     var baseName = String(w || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).pop();
     if (baseName && t.toLowerCase().indexOf(baseName.toLowerCase() + '/') === 0) {
         return t.slice(baseName.length + 1);
@@ -2426,9 +2511,14 @@ function stripWorkspaceRootPrefixFromRelPath(relPath) {
     return t;
 }
 
-/** 标题栏与侧栏：工作目录绝对路径与会话 ID（与服务端 window.__WORK_DIR__ 一致） */
+/** 标题栏与侧栏：工作目录绝对路径与会话 ID（工作目录取该会话自己的 work_dir） */
 function buildSessionWorkspaceSubtitle(sessionId) {
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+    var sess = (sessionId && typeof sessionStore !== 'undefined' && sessionStore)
+        ? sessionStore.get(sessionId)
+        : null;
+    var w = (sess && typeof sess.work_dir === 'string' && sess.work_dir)
+        ? sess.work_dir
+        : getActiveWorkDir();
     if (!sessionId) return w || '';
     if (w) {
         var workspaceLink = '<a href="#" data-workspace-open="' + w + '" class="msg-link-workspace-open" style="color:inherit;text-decoration:inherit;cursor:pointer;" data-ui-tip="打开工作目录">' + w + '</a>';
@@ -2464,15 +2554,56 @@ function localizeSessionPlaceholderName(name) {
     return s;
 }
 
-function formatSessionListDate(sess) {
-    if (!sess) return '';
+/** 会话活动时间戳（毫秒）；缺失或不可解析时返回 0。 */
+function sessionActivityTimestampMs(sess) {
+    if (!sess) return 0;
     var raw = sess.last_activity_at || sess.updated_at || sess.created_at || '';
     var ts = Date.parse(String(raw));
     if (!Number.isFinite(ts)) {
         var numeric = Number(raw);
         if (Number.isFinite(numeric) && numeric > 0) ts = numeric;
     }
-    if (!Number.isFinite(ts) || ts <= 0) return '';
+    return (Number.isFinite(ts) && ts > 0) ? ts : 0;
+}
+
+/** 相对时间文案（时间戳版；now 可注入——侧栏共享时钟一次采样、所有行共用同一基准）。 */
+function formatSessionListRelativeTimeFromTs(ts, nowMs) {
+    if (!ts) return '';
+    var english = sessionListUiEnglish();
+    var diff = (typeof nowMs === 'number' ? nowMs : Date.now()) - ts;
+    if (diff < 0) diff = 0;
+    var minute = 60000;
+    var hour = 60 * minute;
+    var day = 24 * hour;
+    if (diff < minute) return english ? 'now' : '刚刚';
+    if (diff < hour) {
+        var mins = Math.floor(diff / minute);
+        return english ? (mins + 'm') : (mins + '分钟');
+    }
+    if (diff < day) {
+        var hours = Math.floor(diff / hour);
+        return english ? (hours + 'h') : (hours + '小时');
+    }
+    if (diff < 30 * day) {
+        var days = Math.floor(diff / day);
+        return english ? (days + 'd') : (days + '天');
+    }
+    if (diff < 365 * day) {
+        var months = Math.floor(diff / (30 * day));
+        return english ? (months + 'mo') : (months + '个月');
+    }
+    var years = Math.floor(diff / (365 * day));
+    return english ? (years + 'y') : (years + '年');
+}
+
+/** 侧栏行列尾的相对时间（DSH 风格：刚刚 / 3分钟 / 2小时 / 1天 / 3个月 / 2年）。 */
+function formatSessionListRelativeTime(sess) {
+    return formatSessionListRelativeTimeFromTs(sessionActivityTimestampMs(sess));
+}
+
+function formatSessionListDate(sess) {
+    var ts = sessionActivityTimestampMs(sess);
+    if (!ts) return '';
     var d = new Date(ts);
     var now = new Date();
     var english = sessionListUiEnglish();
@@ -2540,9 +2671,9 @@ function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {
     var dateEl = div.querySelector('.session-item-date');
     var dateLine = '';
     if (dateEl) {
-        dateLine = formatSessionListDate({ last_activity_at: new Date().toISOString() });
+        dateLine = formatSessionListRelativeTime({ last_activity_at: new Date().toISOString() });
         if (dateLine) {
-            dateEl.innerHTML = sessionDateIcon() + dateLine;
+            dateEl.textContent = dateLine;
         } else {
             dateEl.textContent = '';
         }
@@ -2947,17 +3078,17 @@ function makeHrefFromAutoLinkToken(s) {
         return fileUrlFromFsPath(m[1].toUpperCase() + ':/' + rest);
     }
     if (t.charAt(0) === '/' && t.charAt(1) !== '/') {
-        var unixWorkDir = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__.replace(/\/+$/, '') : '';
+        var unixWorkDir = getActiveWorkDir().replace(/\/+$/, '');
         if (unixWorkDir.charAt(0) === '/' && (t === unixWorkDir || t.indexOf(unixWorkDir + '/') === 0)) {
             return fileUrlFromFsPath(t);
         }
         if (!workspaceRelativePathAutoLinkOk(t)) return null;
-        var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+        var w = getActiveWorkDir();
         var abs = joinWorkDirAndRelativeSlashPath(w, t);
         if (abs) return fileUrlFromFsPath(abs);
     }
     if (workspaceRelativePathNoSlashAutoLinkOk(t)) {
-        var wr = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+        var wr = getActiveWorkDir();
         if (!wr) return null;
         var absRel = pathJoinBaseName(wr, t.replace(/\\/g, '/'));
         if (absRel) return fileUrlFromFsPath(absRel);
@@ -2971,7 +3102,7 @@ function makeHrefFromAutoLinkToken(s) {
 function pathTokenToWorkspaceOpenRel(token) {
     var t = cleanPathTokenForLink(token);
     if (!t || /^https?:\/\//i.test(t)) return null;
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+    var w = getActiveWorkDir();
     var uncFlat = t.replace(/\//g, '\\');
     if (/^\\\\([^\\]+)\\([^\\]+)/i.test(uncFlat)) {
         return uncFlat;
@@ -3090,7 +3221,7 @@ function workspaceOpenTipPath(original, wsRel) {
     if (raw.charAt(0) === '/' && raw.charAt(1) !== '/') return raw;
     var rel = String(wsRel || raw || '').replace(/\\/g, '/').replace(/^\/+/, '');
     if (/^[A-Za-z]:\//.test(rel) || /^\\\\/.test(rel)) return rel.replace(/\//g, '\\');
-    var w = (typeof window.__WORK_DIR__ === 'string') ? window.__WORK_DIR__ : '';
+    var w = getActiveWorkDir();
     if (!w || !rel) return rel || raw;
     var joined = pathJoinBaseName(w, rel);
     return String(w).charAt(0) === '/' ? joined : joined.replace(/\//g, '\\');
@@ -3152,12 +3283,36 @@ function removeInputPathToken(label) {
     try { messageInput.focus(); } catch (e) {}
 }
 
+function removeInputPathTokenForPath(path) {
+    var identity = normalizeInputPathTokenIdentity(path);
+    if (!identity || !messageInput) return false;
+    var label = Object.keys(inputPathTokenMap).find(function (candidate) {
+        return normalizeInputPathTokenIdentity(inputPathTokenMap[candidate]) === identity;
+    });
+    if (!label) return false;
+    removeInputPathToken(label);
+    return true;
+}
+
+if (typeof window !== 'undefined') window.removeInputPathTokenForPath = removeInputPathTokenForPath;
+
+function inputPathHasStructuredAttachment(path) {
+    var picker = typeof window !== 'undefined' && window.MyAgentPathPicker;
+    if (!picker || typeof picker.chatAttachments !== 'function') return false;
+    var identity = normalizeInputPathTokenIdentity(path);
+    if (!identity) return false;
+    return picker.chatAttachments(messageInput).some(function (attachment) {
+        return attachment && normalizeInputPathTokenIdentity(attachment.path) === identity;
+    });
+}
+
 function refreshInputPathChips() {
     var host = ensureInputPathChipHost();
     if (!host || !messageInput) return;
     var text = String(messageInput.value || '');
     var labels = Object.keys(inputPathTokenMap).filter(function (label) {
-        return label && text.indexOf(label) >= 0;
+        return label && text.indexOf(label) >= 0
+            && !inputPathHasStructuredAttachment(inputPathTokenMap[label]);
     });
     if (!labels.length) {
         host.innerHTML = '';
@@ -5030,23 +5185,14 @@ function refreshUserMessageTimes(root) {
     scope.querySelectorAll('.user-message-time[data-created-at]').forEach(function (el) {
         var raw = el.getAttribute('data-created-at') || '';
         var txt = formatUserMessageTimestamp(raw);
-        if (txt) el.textContent = txt;
+        if (txt && el.textContent !== txt) el.textContent = txt;
     });
-}
-
-function ensureUserMessageTimeAutoRefresh() {
-    if (window.__userMessageTimeAutoRefreshBound) return;
-    window.__userMessageTimeAutoRefreshBound = true;
-    window.addEventListener('focus', function () { refreshUserMessageTimes(document); });
-    document.addEventListener('visibilitychange', function () {
-        if (!document.hidden) refreshUserMessageTimes(document);
-    });
-    setInterval(function () { refreshUserMessageTimes(document); }, 60000);
 }
 
 function appendMessage(ctx, role, content, meta, runSessionId) {
     meta = meta || {};
-    ensureUserMessageTimeAutoRefresh();
+    // 消息时间自动刷新由统一节拍器的共享任务负责（见 session-management 的 ensureSidebarTextTimesAutoRefresh）。
+    if (typeof ensureSidebarTextTimesAutoRefresh === 'function') ensureSidebarTextTimesAutoRefresh();
     stripWelcome(ctx);
     if (role === 'user' && meta.eventIndex != null && Number.isFinite(Number(meta.eventIndex))) {
         var streamRoot = (ctx && ctx.stream) || chatContainer;

@@ -1,4 +1,5 @@
-newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+// 主按钮 = 在当前分组（当前会话）的工作目录里新建会话；▾ 里另有当前目录 / 新目录两条入口。
+newSessionBtn.addEventListener('click', async () => { await startNewSessionInCurrentDir(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');

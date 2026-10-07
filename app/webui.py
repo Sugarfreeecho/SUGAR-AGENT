@@ -190,6 +190,11 @@ UI_LOG_TRUNCATE_KEEP_LINES = max(10, int(os.getenv("UI_LOG_TRUNCATE_KEEP_LINES",
 
 # 正在向前端推流的 /chat 连接数（按 session）。刷新页面后仍可根据此项显示「生成中」黄点。
 _active_chat_by_session: dict[str, int] = {}
+# Short-lived protection for uploaded files already handed to an accepted chat
+# request. A browser cleanup beacon racing the response must not remove a file
+# while the agent is still reading it.
+_accepted_chat_upload_paths: dict[str, float] = {}
+_accepted_chat_upload_paths_lock = threading.RLock()
 # 上次活跃时间戳（按 session），用于清理僵尸计数器（浏览器非正常关闭导致未递减）
 _active_chat_last_seen: dict[str, float] = {}
 # Read-only reconnect/observer streams are deliberately separate from run
@@ -3039,6 +3044,32 @@ async def install_uploaded_package(request: Request):
             await form.close()
 
 
+def _managed_chat_upload_path(raw_path: str) -> Optional[Path]:
+    if not isinstance(raw_path, str) or not raw_path.strip() or len(raw_path) > 4096:
+        return None
+    candidate = Path(raw_path)
+    try:
+        if candidate.is_symlink():
+            return None
+        resolved = candidate.resolve(strict=False)
+        relative = resolved.relative_to((WORK_DIR / "uploads" / "chat").resolve())
+    except (OSError, ValueError):
+        return None
+    if len(relative.parts) != 2 or not re.fullmatch(r"\d{8}", relative.parts[0]):
+        return None
+    return resolved
+
+
+def _protect_accepted_chat_uploads(paths: list[Path]) -> None:
+    now = time.time()
+    with _accepted_chat_upload_paths_lock:
+        for path, expires_at in list(_accepted_chat_upload_paths.items()):
+            if expires_at <= now:
+                _accepted_chat_upload_paths.pop(path, None)
+        for path in paths:
+            _accepted_chat_upload_paths[str(path)] = now + 3600
+
+
 @fastapi_app.post("/api/upload-chat-files")
 async def upload_chat_files(files: list[UploadFile] = File(...), request: Request = None):
     from attachments.access import principal_for_request
@@ -3139,6 +3170,38 @@ async def upload_chat_files(files: list[UploadFile] = File(...), request: Reques
             except Exception:
                 pass
     return JSONResponse({"ok": True, "files": saved})
+
+
+@fastapi_app.post("/api/upload-chat-files/cleanup")
+async def cleanup_unsent_chat_uploads(request: Request):
+    from attachments.access import principal_for_request
+    principal_for_request(request, globals().get("_remote_control_gateway"), "write")
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid cleanup request"}, status_code=400)
+    paths = payload.get("paths") if isinstance(payload, dict) else None
+    if not isinstance(paths, list) or len(paths) > 500:
+        return JSONResponse({"ok": False, "error": "paths must be an array of at most 500 entries"}, status_code=400)
+
+    removed = 0
+    seen: set[str] = set()
+    for raw_path in paths:
+        resolved = _managed_chat_upload_path(raw_path)
+        if resolved is None:
+            continue
+        if str(resolved) in seen or not resolved.is_file():
+            continue
+        with _accepted_chat_upload_paths_lock:
+            if _accepted_chat_upload_paths.get(str(resolved), 0) > time.time():
+                continue
+        seen.add(str(resolved))
+        try:
+            resolved.unlink()
+            removed += 1
+        except OSError:
+            logger.debug("Could not remove unsent chat upload %s", resolved, exc_info=True)
+    return JSONResponse({"ok": True, "removed": removed})
 
 
 @fastapi_app.get("/api/attachments/{attachment_id}")
@@ -6043,6 +6106,13 @@ async def chat(
     )
     ui_base_message = str(ui_message or "").strip() or message
     ui_message = _build_ui_message_with_selected_skills(ui_base_message, valid_selected_skills)
+    _protect_accepted_chat_uploads([
+        managed_path
+        for block in structured_attachments
+        if isinstance(block, dict) and block.get("type") == "local_file"
+        and isinstance(block.get("local_file"), dict)
+        and (managed_path := _managed_chat_upload_path(str(block["local_file"].get("path") or ""))) is not None
+    ])
 
     async def event_generator():
         if sid:
@@ -6727,13 +6797,15 @@ async def get_session_history_snapshot(
     turns: Optional[int] = Query(5, ge=1, le=50),
     event_budget: Optional[int] = Query(None, ge=50, le=5000),
     include_aux: bool = Query(True),
+    prefer_active_turn: bool = Query(False),
 ):
     """Return the initial V2 history page plus TOC/count in one request."""
     import time as _time
 
     t0 = _time.perf_counter()
 
-    def _build_snapshot_response() -> JSONResponse:
+    def _build_snapshot_response() -> Response:
+        worker_started_at = _time.perf_counter()
         try:
             from runtime_v2 import runtime_v2_primary
 
@@ -6769,6 +6841,13 @@ async def get_session_history_snapshot(
             lim = int(limit) if limit is not None else 200
             tv = int(turns) if turns is not None else None
             event_budget_value = event_budget if isinstance(event_budget, int) else None
+            run_state = _session_run_state_fields_light(session_id)
+            active_turn_only = (
+                prefer_active_turn is True and bool(run_state.get("run_active"))
+                and before_index is None and after_index is None
+            )
+            if active_turn_only:
+                tv = 1
             # Capture BEFORE reading the page. Any concurrent commit is replayed
             # on reconnect; non-UI history edits already projected in this page
             # are acknowledged too, avoiding repeated invalidation loops.
@@ -6776,7 +6855,10 @@ async def get_session_history_snapshot(
             execution_journal = ExecutionJournal(session_manager.repository.sessions_dir,
                                                  session_manager._resolve_session_path)
             recovery_cursor = execution_journal.log.next_seq(session_id) - 1
-            timings: dict[str, int] = {}
+            timings: dict[str, int] = {
+                "queue": int((worker_started_at - t0) * 1000),
+                "setup": int((_time.perf_counter() - worker_started_at) * 1000),
+            }
             t_phase = _time.perf_counter()
             page = projection.read_ui_page(
                 session_id,
@@ -6823,46 +6905,21 @@ async def get_session_history_snapshot(
                 # multi-megabyte Runtime snapshot before any messages appear.
                 timings["context_tokens"] = 0
                 timings["todo_plan"] = 0
-            elapsed_ms = int((_time.perf_counter() - t0) * 1000)
-            timings["total"] = elapsed_ms
-            logger.info(
-                "open_session_timing session=%s source=%s page_source=%s messages=%s "
-                "total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms todo_plan=%sms",
-                session_id,
-                "runtime_v2_snapshot",
-                str(page.get("source") or "runtime_v2_projection") if isinstance(page, dict) else "unknown",
-                len(page.get("events") or []) if isinstance(page, dict) else 0,
-                elapsed_ms,
-                timings["read_page"],
-                timings["count"],
-                timings["user_turns"],
-                timings["context_tokens"],
-                timings["todo_plan"],
-            )
-            if elapsed_ms >= 500:
-                logger.warning(
-                    "/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s elapsed_ms=%s read_page=%sms count=%sms user_turns=%sms context_tokens=%sms",
-                    session_id,
-                    tv,
-                    lim,
-                    before_index,
-                    elapsed_ms,
-                    timings["read_page"],
-                    timings["count"],
-                    timings["user_turns"],
-                    timings["context_tokens"],
-                )
+            t_phase = _time.perf_counter()
+            recovery = execution_journal.read(session_id)
+            timings["execution_recovery"] = int((_time.perf_counter() - t_phase) * 1000)
+            t_phase = _time.perf_counter()
             try:
                 run_state = _session_run_state_fields_light(session_id)
             except Exception:
                 run_state = {"stream_active": False, "run_active": False, "run_started_at": None}
-            recovery = execution_journal.read(session_id)
             from runtime_v2.versions import PROJECTOR_VERSION
             recovery["projection_version"] = PROJECTOR_VERSION
             # Auxiliary records may be newer; stable execution identities make
             # their subsequent replay idempotent.
             page_seqs = [int(event.get("runtime_seq") or 0) for event in page.get("events") or []]
-            recovery["last_runtime_seq"] = max(recovery_cursor, max(page_seqs, default=0))
+            recovery["last_runtime_seq"] = max(recovery_cursor, max(page_seqs, default=0),
+                                               int(page.get("last_runtime_seq") or 0))
             if page_seqs:
                 lower_bound = min(page_seqs)
                 recovery["execution_records"] = [row for row in recovery["execution_records"]
@@ -6871,7 +6928,7 @@ async def get_session_history_snapshot(
                 for row in recovery["execution_records"]:
                     if row.get("status") in {"running", "generating", "waiting_execution"}:
                         row["status"] = "unknown" if row.get("executed") else "interrupted"
-            return JSONResponse(content={
+            content = {
                 "ok": True,
                 "source": "runtime_v2_snapshot",
                 "session_id": session_id,
@@ -6881,14 +6938,37 @@ async def get_session_history_snapshot(
                 "user_turns": user_turns,
                 "todo_plan": todo_plan,
                 "context_tokens": context_tokens,
-                "elapsed_ms": elapsed_ms,
-                "timing": timings,
                 "stream_active": bool(run_state.get("stream_active")),
                 "run_active": bool(run_state.get("run_active")),
                 "run_started_at": run_state.get("run_started_at"),
                 "active_run": run_state.get("active_run"),
+                "history_mode": "current_turn" if active_turn_only else "recent_turns",
                 **recovery,
+            }
+            timings["prepare_response"] = int((_time.perf_counter() - t_phase) * 1000)
+            t_phase = _time.perf_counter()
+            # Serialize the large payload once, then append the small timing
+            # fields. This reports encoding cost without encoding it twice.
+            body = json.dumps(content, ensure_ascii=False, allow_nan=False,
+                              separators=(",", ":")).encode("utf-8")
+            timings["serialize"] = int((_time.perf_counter() - t_phase) * 1000)
+            elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+            timings["total"] = elapsed_ms
+            body = b"".join((memoryview(body)[:-1], b',"elapsed_ms":', str(elapsed_ms).encode("ascii"),
+                             b',"timing":', json.dumps(timings, separators=(",", ":")).encode("ascii"), b'}'))
+            response = Response(content=body, media_type="application/json", headers={
+                "Server-Timing": ", ".join(f"{phase};dur={duration}" for phase, duration in timings.items())
             })
+            logger.info("open_session_timing session=%s page_source=%s messages=%s bytes=%s timing=%s",
+                        session_id, page.get("source"), len(page.get("events") or []), len(body), timings)
+            if elapsed_ms >= 500:
+                logger.warning("/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s "
+                               "elapsed_ms=%s bytes=%s queue=%sms setup=%sms read_page=%sms user_turns=%sms "
+                               "execution_recovery=%sms prepare_response=%sms serialize=%sms",
+                               session_id, tv, lim, before_index, elapsed_ms, len(body), timings["queue"],
+                               timings["setup"], timings["read_page"], timings["user_turns"],
+                               timings["execution_recovery"], timings["prepare_response"], timings["serialize"])
+            return response
         except Exception as exc:
             logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)
             return JSONResponse(content={
@@ -7703,7 +7783,7 @@ def _load_config_wizard_html() -> str:
     return """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>首次配置</title></head>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei','PingFang SC','Hiragino Sans GB','Helvetica Neue',Helvetica,Arial,sans-serif}button,input{font-family:inherit}</style>
 <body style="max-width:480px;margin:2rem auto;padding:1rem;">
-<h1>General Agent · 首次配置</h1>
+<h1>SugarAgent · 首次配置</h1>
 <p>缺少 <code>templates/first_time_config.html</code>，使用简易表单。</p>
 <form id="f"><label>API Key<input id="k" type="password" style="width:100%;margin:.5rem 0"></label>
 <label>API Base URL<input id="u" type="text" placeholder="https://api.deepseek.com" style="width:100%;margin:.5rem 0"></label>

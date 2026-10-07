@@ -29,6 +29,9 @@ def typography_page(browser_page):
       document.querySelector('#breadcrumb-text').textContent = '排版与布局验证';
       document.querySelector('#model-profile-current').innerHTML = '<span class="composer-model-current-name">DeepSeek</span><span class="composer-model-current-effort">xhigh</span>';
       document.querySelector('#chat-stream').innerHTML = `
+        <div class="msg-wrap msg-wrap--user">
+          <div class="message user">中文用户提问 User question</div>
+        </div>
         <div class="msg-wrap msg-wrap--assistant msg-wrap--answer-frame">
           <div class="message assistant"><h2>阅读清晰的中文标题</h2>
           <p>中文与 English 混排内容保持自然的行距。<strong>重点内容</strong>应适度强调。</p>
@@ -82,10 +85,16 @@ def test_shell_text_scales_without_composer_overlap(typography_page, width, size
         left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width};};
       return {body:style('.message.assistant'),code:style('.message.assistant pre code'),
         caption:style('.session-last-query'),title:style('#breadcrumb-text'),
+        session:style('.session-name'),bubble:style('.message.user'),composer:style('#message-input'),
         input:rect('.input-wrapper'),permission:rect('#permission-mode-trigger'),model:rect('#model-profile-trigger'),
         overflow:document.documentElement.scrollWidth>innerWidth,viewport:innerWidth};
     }""")
-    assert result["body"]["size"] == pytest.approx(size)
+    # The final card body shares the session-list session-name step (--ui-text-md = 14/16 rem);
+    # the user bubble (0.98rem) and the composer input (--ui-text-lg = 1rem) keep their own steps.
+    assert result["body"]["size"] == pytest.approx(size * 14 / 16)
+    assert result["body"]["size"] == pytest.approx(result["session"]["size"])
+    assert result["bubble"]["size"] == pytest.approx(size * 0.98)
+    assert result["composer"]["size"] == pytest.approx(size)
     assert result["code"]["size"] == pytest.approx(size * 13 / 16)
     assert result["caption"]["size"] == pytest.approx(size * 12 / 16)
     assert result["title"]["weight"] == "700"

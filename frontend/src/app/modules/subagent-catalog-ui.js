@@ -10,7 +10,7 @@
  * 数据：只读 subagentCatalogStore 的快照（对象层持有业务数据，本模块不缓存事实）；
  *      打开目录时 setCatalogOpen(parentId, true) 触发单飞刷新。
  *
- * 与 dsh 的差异（有意）：MyAgent 后端暂无 hasChildren 树形展开，因此目录只列
+ * 与 dsh 的差异（有意）：SugarAgent 后端暂无 hasChildren 树形展开，因此目录只列
  * 直接子代（够用且与后端契约一致）；后代汇总数由 summarizeDescendants 提供。
  */
 var subagentCatalogUi = (function () {

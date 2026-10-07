@@ -295,7 +295,11 @@ function securityRulesContext() {
     var win = typeof window !== 'undefined' ? window : globalThis;
     return {
         sessionId: String(currentSessionId || ''),
-        workspace: String((win && win.__WORK_DIR__) || ''),
+        // 规则作用域里的 workspace 就是路径根：跟随当前会话的工作目录
+        // （getActiveWorkDir 取不到时回退全局默认目录）。
+        workspace: String((typeof getActiveWorkDir === 'function')
+            ? getActiveWorkDir()
+            : ((win && win.__WORK_DIR__) || '')),
     };
 }
 

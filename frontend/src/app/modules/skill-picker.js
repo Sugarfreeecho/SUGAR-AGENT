@@ -170,7 +170,7 @@ function skillPickerGroupHtml(tab, key, title, summary, bodyHtml, summaryClass) 
         + '<span class="skill-picker-group-name">' + skillPickerEscape(title) + '</span>'
         + '<span class="' + skillPickerEscape(summaryClassName) + '">' + skillPickerEscape(summary) + '</span>'
         + '</button>'
-        + '<div class="skill-picker-group-items"' + (collapsed ? ' hidden' : '') + '>' + bodyHtml + '</div>'
+        + '<div class="skill-picker-group-items" aria-hidden="' + (collapsed ? 'true' : 'false') + '"' + (collapsed ? ' inert' : '') + '>' + bodyHtml + '</div>'
         + '</section>';
 }
 
@@ -478,7 +478,10 @@ function renderSkillPicker(opts) {
             group.classList.toggle('is-collapsed', collapsed);
             button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
             var items = group.querySelector('.skill-picker-group-items');
-            if (items) items.hidden = collapsed;
+            if (items) {
+                items.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+                items.inert = collapsed;
+            }
         });
     });
     var clear = e.popover.querySelector('.skill-picker-clear');

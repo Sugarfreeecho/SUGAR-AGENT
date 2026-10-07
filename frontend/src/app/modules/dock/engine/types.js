@@ -58,6 +58,16 @@ function dockCreateMinter(seed) {
     };
 }
 
+/** True when a value has the pane-node discriminant. */
+function dockIsPaneNode(node) {
+    return !!node && typeof node === 'object' && node.kind === 'pane';
+}
+
+/** True when a value has the split-node discriminant. */
+function dockIsSplitNode(node) {
+    return !!node && typeof node === 'object' && node.kind === 'split';
+}
+
 /**
  * Reject an unhandled discriminant at the end of a closed switch.
  * @param {never} value The discriminant the switch did not handle.

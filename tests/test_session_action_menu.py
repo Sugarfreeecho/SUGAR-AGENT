@@ -50,5 +50,7 @@ def test_titlebar_has_persistent_session_action_menu():
     assert "function syncTitlebarSessionMenu(sess)" in sessions
     assert "bindSessionActionMenu(wrap" in sessions
     assert "syncTitlebarSessionMenu(sess" in rendering
-    assert ".breadcrumb-session-actions .session-more-btn { opacity: 0.68; }" in styles
+    style_start = styles.index(".breadcrumb-session-actions .session-more-btn {")
+    style_block = styles[style_start:styles.index("}", style_start)]
+    assert "opacity: 0.68;" in style_block
     assert ".session-item:hover .session-more-btn" in styles
