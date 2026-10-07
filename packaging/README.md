@@ -6,10 +6,10 @@
 
 | 产物 | 路径 | 体积 |
 |---|---|---|
-| 安装包（向导式，默认） | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe` | ≈ 202 MB |
+| 安装包（向导式，默认） | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe` | ≈ 251 MB |
 | 安装包差分块 | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe.blockmap` | ≈ 200 KB |
-| 未打包目录版 | `packaging/build/dist/win-unpacked/`（3487 文件 / ≈ 641 MB） | 调试用 |
-| 运行时载荷 | `packaging/build/payload/`（3413 文件 / ≈ 273 MB） | 中间产物 |
+| 未打包目录版 | `packaging/build/dist/win-unpacked/`（45898 文件 / ≈ 682 MB） | 调试用 |
+| 运行时载荷 | `packaging/build/payload/`（45877 文件 / ≈ 365 MB） | 中间产物 |
 
 安装后：程序在 `%LOCALAPPDATA%\Programs\sugaragent`（**按用户安装，不需要管理员权限**），用户数据在工作目录 `%USERPROFILE%\Documents\SugarAgent\workspace`，桌面/开始菜单都有 `SugarAgent` 快捷方式，并注册标准卸载项。
 
@@ -48,6 +48,7 @@ packaging/
 ## 构建
 
 前置：Windows x64、Node.js ≥ 22（本机 v24）、仓库内 `python\python.exe` 可用；首次构建需要联网拉取 pip wheel。
+**换机打包请先读 [HOWTO-另一台电脑打包.md](HOWTO-另一台电脑打包.md)**（含 `python\` 与 `workspace\skills` 两个「不在 git 的必备输入」清单）。
 
 ```powershell
 cd packaging
@@ -132,4 +133,4 @@ resources/runtime/
 
 ## 版本号
 
-版本号在 `packaging/package.json` 的 `version`（当前 `1.0.0`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里并重新构建。
+版本号在 `packaging/package.json` 的 `version`（当前 `1.5.1`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里（连带 `package-lock.json` 中自身 2 处）并重新构建。
