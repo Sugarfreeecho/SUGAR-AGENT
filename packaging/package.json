@@ -1,7 +1,7 @@
 {
   "name": "sugaragent",
   "productName": "SugarAgent",
-  "version": "1.0.0",
+  "version": "1.5.1",
   "private": true,
   "description": "SugarAgent 桌面版：Electron 外壳 + 便携 Python 运行时 + NSIS 一键安装包",
   "author": "SugarAgent",
