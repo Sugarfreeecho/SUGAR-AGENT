@@ -101,6 +101,7 @@ node scripts\smoke-payload.mjs --port 8399     # ③ 冒烟（≈0.5min）
 | electron 下载慢 | `npm install` 前设 `$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/'` |
 | npm 慢 | `npm config set registry https://registry.npmmirror.com` |
 | 重打时报文件被占用 | 关闭正在运行的 SugarAgent；杀软扫描期间稍等重试 |
+| 另一台需要 `frontend/` 吗 | 正常打包**不需要**——载荷只取 `app/`（含已随 commit 入库的 `app\templates\dist`）、`plugins/`、`python/`、`workspace\skills`；只有要在另一台**重建前端**时才需要它（外加其 `node_modules`），此时用 `--build-frontend` |
 | 前端改了没进包 | 打包只取 `app\templates\dist`：先在 `frontend\` 跑 `npm run build`（或 `prepare-payload --build-frontend`） |
 | 技能模板没更新 | 模板拷自 `workspace\skills`（不是 app 内），确认该目录是最新 |
 | 想要更小的包 | `$env:SUGARAGENT_MAX_COMPRESSION='1'`（更慢） |
