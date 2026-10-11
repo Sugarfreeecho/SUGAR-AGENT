@@ -11,7 +11,7 @@
 | 未打包目录版 | `packaging/build/dist/win-unpacked/`（45898 文件 / ≈ 682 MB） | 调试用 |
 | 运行时载荷 | `packaging/build/payload/`（45877 文件 / ≈ 365 MB） | 中间产物 |
 
-安装后：程序在 `%LOCALAPPDATA%\Programs\sugaragent`（**按用户安装，不需要管理员权限**），用户数据在工作目录 `%USERPROFILE%\Documents\SugarAgent\workspace`，桌面/开始菜单都有 `SugarAgent` 快捷方式，并注册标准卸载项。
+安装后：程序在 `%LOCALAPPDATA%\Programs\sugaragent`（**按用户安装，不需要管理员权限**），默认工作目录在安装目录的 `resources/runtime/workspace`，与 `app/`、`python/` 保持源码版的相对位置。安装目录不可写时使用 `%APPDATA%\SugarAgent\workspace`。桌面/开始菜单都有 `SugarAgent` 快捷方式，并注册标准卸载项。
 
 ### 安装器形态
 
@@ -110,10 +110,14 @@ resources/runtime/
 | 端口 | 默认 8192，被占用时自动顺延到 8199；同时通过 `MYAGENT_SERVER_PORT` 告知后端与内部链接 |
 | 环境变量 | 只继承系统变量，模型/搜索/云厂商密钥一类变量被显式过滤，保证新装用户一定是"未配置"状态 |
 | 首启向导 | 未检测到可用模型配置时，窗口直接打开应用自带的 `/setup` 配置向导 |
-| 技能模板 | 首次启动把 `workspace-template/skills` 铺到 `Documents\SugarAgent\workspace\skills`（已存在则不动） |
-| 托盘 | 关闭窗口＝最小化到托盘；托盘菜单：打开主界面 / 配置向导 / 浏览器打开 / 重启内置服务 / 打开日志 / 打开工作目录 / 退出 |
+| 技能模板 | 首次启动把 `workspace-template/skills` 铺到默认 `workspace/skills`（已存在则不动） |
+| 窗口尺寸 | 初始 1440×920；支持自由缩放和半屏停靠，不设应用级最小宽高 |
+| 托盘 | 关闭窗口＝最小化到托盘；托盘菜单：打开主界面 / 浏览器打开 / 重启内置服务 / 打开后台日志 / 打开工作目录 / 退出；后台日志复用源码版实时彩色终端查看器 |
+| 通知跳转 | 使用独立的 `sugaragent-desktop://open-ui` 协议唤起桌面窗口；会话通知保留会话定位，使用当前后端端口 |
+| 原生主题 | 页面浅色 / 深色 / 紫色同步到 Electron 原生主题，窗口边框和菜单随页面主题切换 |
 | 退出 | 退出时按进程树结束内置 Python（`taskkill /T /F`）；后端异常退出会弹恢复对话框 |
-| 数据保留 | 工作目录在"文档"下，卸载/重装不影响会话与技能；`%APPDATA%\SugarAgent` 保留 |
+| 配置目录 | 模型档案、MCP 与启停状态保存在 `resources/runtime/.config`；工作区内的附件、缓存也使用 `.config`，启动时自动迁移旧 `.sugaragent`，已有新配置优先，冲突旧文件保留；打包时排除载荷内的用户配置和工作区 |
+| 数据保留 | 覆盖安装和卸载均保留 `resources/runtime/workspace`、`resources/runtime/.config` 和尚未迁移的 `.sugaragent`；`%APPDATA%\SugarAgent` 保留；此前在“文档”下的工作目录不自动迁移 |
 | 状态文件 | `%APPDATA%\SugarAgent\desktop-status.json` 记录端口、后端 PID、窗口目标，便于排查与自动化校验 |
 
 ## 对应用本体做的小改动

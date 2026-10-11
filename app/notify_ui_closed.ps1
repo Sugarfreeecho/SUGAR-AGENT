@@ -12,9 +12,8 @@
     fails, the script falls back to an AUMID of an already installed app
     (PowerShell, Windows Terminal, ...) so the toast still shows.
 
-    Clicking the toast opens the WebUI through the sugaragent:// URL protocol.
-    The protocol delegates to the windowless tray activation entrypoint, which
-    focuses an existing WebUI page before opening a new browser tab.
+    Desktop toasts use sugaragent-desktop://, registered by the Electron shell.
+    Source launches use sugaragent:// and the windowless tray entrypoint.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -28,18 +27,19 @@ $Message = if ($env:SUGARAGENT_NOTIFY_MESSAGE) {
 } else {
     "SugarAgent is running in the background; tasks will not be interrupted."
 }
-$SugarAgentAumid = "SugarAgent.MyAgent.UI"
+$IsDesktop = $env:SUGARAGENT_DESKTOP -eq '1'
+$SugarAgentAumid = if ($IsDesktop) { "com.sugaragent.desktop" } else { "SugarAgent.MyAgent.UI" }
 $AumidRegistryPath = "HKCU:\Software\Classes\AppUserModelId\$SugarAgentAumid"
 $TrayIconPath = Join-Path $Root "app\assets\sugar_tray.ico"
 
-$OpenUiProtocol = "sugaragent"
+$OpenUiProtocol = if ($IsDesktop) { "sugaragent-desktop" } else { "sugaragent" }
 $OpenUiProtocolRoot = "HKCU:\Software\Classes\$OpenUiProtocol"
-$OpenUiLaunchUri = "sugaragent://open-ui"
+$OpenUiLaunchUri = "${OpenUiProtocol}://open-ui"
 # Session deep link: the notify dispatcher passes the originating session id,
 # so clicking the toast jumps straight to that conversation.
 $NotifySession = if ($env:SUGARAGENT_NOTIFY_SESSION) { $env:SUGARAGENT_NOTIFY_SESSION } else { "" }
 if ($NotifySession -match '^[A-Za-z0-9][A-Za-z0-9\-]{0,63}$') {
-    $OpenUiLaunchUri = "sugaragent://open-ui?session=$NotifySession"
+    $OpenUiLaunchUri = "${OpenUiProtocol}://open-ui?session=$NotifySession"
 }
 $WebUiUrl = "http://127.0.0.1:8192/"
 $PythonwPath = Join-Path $Root "python\pythonw.exe"
@@ -149,7 +149,9 @@ try {
     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
 
-    $null = Register-OpenUiProtocol
+    # Electron owns the desktop protocol. Never replace it with the source
+    # tray/browser command when the embedded backend emits a notification.
+    if (-not $IsDesktop) { $null = Register-OpenUiProtocol }
 
     $candidateAppIds = @()
     if (Register-SugarAgentAumid) {

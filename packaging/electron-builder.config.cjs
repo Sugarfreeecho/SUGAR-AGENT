@@ -28,10 +28,12 @@ module.exports = {
   directories: { output: 'build/dist', buildResources: 'assets' },
   files: ['electron/**/*', 'package.json'],
   asar: true,
+  protocols: [{ name: 'SugarAgent Desktop', schemes: ['sugaragent-desktop'] }],
   // 只保留中英两种 Chromium 语言包：默认 55 个语言包占 ~48MB
   electronLanguages: ['zh-CN', 'en-US'],
   extraResources: [
-    { from: 'build/payload', to: 'runtime', filter: ['**/*'] },
+    // 复用载荷时也不把本机用户数据打进安装包，避免覆盖保留的配置/工作区。
+    { from: 'build/payload', to: 'runtime', filter: ['**/*', '!.config{,/**}', '!.sugaragent{,/**}', '!workspace{,/**}'] },
     { from: 'assets/tray.ico', to: 'tray.ico' },
   ],
   win: {

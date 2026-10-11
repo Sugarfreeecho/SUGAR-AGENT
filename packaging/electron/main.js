@@ -10,7 +10,7 @@
  *  4. 后端异常退出时给出可操作的恢复对话框。
  */
 
-const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } = require('electron')
+const { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, shell } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const http = require('node:http')
@@ -30,6 +30,7 @@ const SKILL_TEMPLATE = path.join(RUNTIME_DIR, 'workspace-template', 'skills')
 const TRAY_ICON = path.join(process.resourcesPath, 'tray.ico')
 const USER_DIR = app.getPath('userData')
 const LOG_DIR = path.join(USER_DIR, 'logs')
+const OPEN_UI_PROTOCOL = 'sugaragent-desktop'
 
 const IS_WINDOWS = process.platform === 'win32'
 const IS_DEV = process.env.SUGARAGENT_DEV === '1'
@@ -38,8 +39,11 @@ let mainWindow = null
 let tray = null
 let backend = null
 let backendLogStream = null
+let backendLogFile = null
 let quitting = false
 let restartTimer = null
+let uiReady = false
+let pendingActivation = parseDesktopActivation(process.argv)
 
 // ---------------------------------------------------------------- logging ---
 
@@ -96,16 +100,33 @@ function runtimeIsWritable() {
 
 let layout = null
 
-function resolveLayout() {
+function resolveLayout(refresh = false) {
+  if (refresh) layout = null
   if (layout) return layout
   const writable = runtimeIsWritable()
-  // 工作目录放在“文档”下，卸载/重装都不会带走用户的会话与技能
-  const workDir = path.join(app.getPath('documents'), 'SugarAgent', 'workspace')
+  // 保持源码目录关系：workspace/ 与 app/、python/ 同级。
+  // 只读安装目录沿用用户目录兜底，不依赖启动快捷方式的工作目录。
+  const cwd = writable ? RUNTIME_DIR : USER_DIR
   layout = {
     writable,
-    workDir,
+    workDir: path.join(cwd, 'workspace'),
     logDir: path.join(USER_DIR, 'app-logs'),
-    cwd: writable ? RUNTIME_DIR : USER_DIR,
+    cwd,
+  }
+  // Use the backend's path resolver before seeding or exposing native actions.
+  const probe = spawnSync(PYTHON_EXE, [path.join(RUNTIME_DIR, 'app', 'workspace_paths.py'),
+    '--project-root', RUNTIME_DIR, '--work-dir', layout.workDir, '--log-dir', layout.logDir], {
+    cwd,
+    env: { ...process.env, WORK_DIR: process.env.WORK_DIR || layout.workDir, LOG_DIR: process.env.LOG_DIR || layout.logDir, MYAGENT_DOTENV_OVERRIDE: '1', PYTHONUTF8: '1' },
+    encoding: 'utf8', windowsHide: true, timeout: 10000,
+  })
+  try {
+    if (probe.status !== 0) throw new Error('path probe failed')
+    const paths = JSON.parse(probe.stdout)
+    if (!path.isAbsolute(paths.work_dir) || !path.isAbsolute(paths.skills_dir) || !path.isAbsolute(paths.log_dir)) throw new Error('invalid configured paths')
+    Object.assign(layout, { workDir: paths.work_dir, skillsDir: paths.skills_dir, logDir: paths.log_dir })
+  } catch (error) {
+    log(`工作目录配置读取失败，使用默认路径：${error.message}`)
   }
   if (!writable) log('安装目录不可写：后端将使用用户目录作为工作根')
   return layout
@@ -130,6 +151,7 @@ function backendEnv() {
     SUGARAGENT_DESKTOP_VERSION: app.getVersion(),
     MYAGENT_SERVER_PORT: String(activePort),
     WORK_DIR: current.workDir,
+    SKILLS_DIR: current.skillsDir || path.join(current.workDir, 'skills'),
     LOG_DIR: current.logDir,
   })
   return env
@@ -138,7 +160,7 @@ function backendEnv() {
 /** 第一次运行时把打包好的技能模板铺到工作目录（只在缺失时复制）。 */
 function seedWorkspace() {
   const current = resolveLayout()
-  const skillsDir = path.join(current.workDir, 'skills')
+  const skillsDir = current.skillsDir || path.join(current.workDir, 'skills')
   try {
     fs.mkdirSync(current.workDir, { recursive: true })
     if (fs.existsSync(skillsDir) || !fs.existsSync(SKILL_TEMPLATE)) return
@@ -154,8 +176,36 @@ function seedWorkspace() {
 function openBackendLog() {
   ensureLogDir()
   const name = `backend-${new Date().toISOString().slice(0, 10)}.log`
-  backendLogStream = fs.createWriteStream(path.join(LOG_DIR, name), { flags: 'a' })
+  backendLogFile = path.join(LOG_DIR, name)
+  backendLogStream = fs.createWriteStream(backendLogFile, { flags: 'a' })
   return backendLogStream
+}
+
+/** 与源码版“运行日志”一致：在独立终端中实时追踪后端输出并按级别着色。 */
+function openBackendLogs() {
+  const viewer = path.join(RUNTIME_DIR, 'app', 'colored_log_viewer.ps1')
+  if (!fs.existsSync(viewer)) {
+    dialog.showErrorBox('无法打开后台日志', `缺少日志查看器：${viewer}`)
+    return false
+  }
+  ensureLogDir()
+  const logFile = backendLogFile || path.join(LOG_DIR, `backend-${new Date().toISOString().slice(0, 10)}.log`)
+  fs.appendFileSync(logFile, '', 'utf8')
+  // Start-Process 创建可见的独立控制台；辅助 PowerShell 自身保持隐藏。
+  // 参数里的双引号保留空格路径，单引号按 PowerShell 字符串规则转义。
+  const quote = value => `'${String(value).replace(/'/g, "''")}'`
+  const args = ['-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', `"${viewer}"`, '-Path', `"${logFile}"`]
+  const command = `Start-Process -FilePath 'powershell.exe' -ArgumentList @(${args.map(quote).join(', ')}) -WindowStyle Normal`
+  const launcher = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  launcher.on('error', error => {
+    log(`日志查看器启动失败：${error.message}`)
+    dialog.showErrorBox('无法打开后台日志', error.message)
+  })
+  launcher.unref()
+  return true
 }
 
 function startBackend() {
@@ -224,6 +274,7 @@ function stopBackend() {
 }
 
 function restartBackend() {
+  layout = null
   stopBackend()
   if (restartTimer) clearTimeout(restartTimer)
   restartTimer = setTimeout(async () => {
@@ -308,10 +359,46 @@ function isConfigured() {
 
 // ------------------------------------------------------------------ window ---
 
-async function loadApp() {
+/** Native fallback for editing and embedded pages. Renderer menus prevent the
+ * DOM contextmenu default, so only unhandled targets reach this event. */
+function installNativeContextMenu(contents) {
+  contents.on('context-menu', (event, params) => {
+    const flags = params.editFlags || {}
+    const items = []
+    const label = (zh, en) => contents.sugarAgentLanguage === 'en' ? en : zh
+    const edit = (role, zh, en, flag) => ({ role, label: label(zh, en), enabled: !!flags[flag] })
+    if (params.isEditable) {
+      items.push(edit('undo', '撤销', 'Undo', 'canUndo'), edit('redo', '重做', 'Redo', 'canRedo'),
+        { type: 'separator' }, edit('cut', '剪切', 'Cut', 'canCut'), edit('copy', '复制', 'Copy', 'canCopy'),
+        edit('paste', '粘贴', 'Paste', 'canPaste'), { type: 'separator' },
+        edit('selectAll', '全选', 'Select all', 'canSelectAll'))
+    } else if (params.selectionText) {
+      items.push(edit('copy', '复制', 'Copy', 'canCopy'))
+    }
+    if (/^https?:\/\//i.test(params.linkURL || '')) {
+      if (items.length) items.push({ type: 'separator' })
+      const url = params.linkURL
+      items.push({ label: label('在浏览器中打开链接', 'Open link in browser'), click: () => shell.openExternal(url).catch(() => {}) },
+        { label: label('复制链接地址', 'Copy link address'), click: () => clipboard.writeText(url) })
+    }
+    if (params.mediaType === 'image' && params.hasImageContents) {
+      if (items.length) items.push({ type: 'separator' })
+      items.push({ label: label('复制图片', 'Copy image'), click: () => contents.copyImageAt(params.x, params.y) })
+      if (/^(https?:|blob:|data:image\/)/i.test(params.srcURL || '')) {
+        items.push({ label: label('保存图片', 'Save image'), click: () => contents.downloadURL(params.srcURL) })
+      }
+    }
+    if (!items.length) return
+    event.preventDefault()
+    const window = BrowserWindow.fromWebContents(contents)
+    Menu.buildFromTemplate(items).popup({ window, frame: params.frame || undefined })
+  })
+}
+
+async function loadApp(session = '') {
   if (!mainWindow) return
   const configured = isConfigured()
-  const target = configured ? '/' : '/setup'
+  const target = configured ? (session ? `/?session=${encodeURIComponent(session)}` : '/') : '/setup'
   log(`加载界面 ${target}（configured=${configured}）`)
   await mainWindow.loadURL(`${baseUrl()}${target}`)
   writeStatus({ backendState: 'ready', windowTarget: target, configured })
@@ -321,10 +408,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
-    minWidth: 1024,
-    minHeight: 700,
     show: false,
-    backgroundColor: '#0f1115',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#151517' : '#ffffff',
     title: 'SugarAgent',
     icon: TRAY_ICON,
     autoHideMenuBar: true,
@@ -377,6 +462,79 @@ function showWindow() {
   mainWindow.focus()
 }
 
+// -------------------------------------------------------- desktop activation ---
+
+function parseDesktopActivation(argv) {
+  for (const value of argv) {
+    try {
+      const url = new URL(value)
+      if (url.protocol !== `${OPEN_UI_PROTOCOL}:` || url.hostname !== 'open-ui'
+          || (url.pathname && url.pathname !== '/')) continue
+      const session = url.searchParams.get('session') || ''
+      return { session: /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(session) ? session : '' }
+    } catch {
+      /* 非协议命令行参数 */
+    }
+  }
+  return null
+}
+
+function registerDesktopProtocol() {
+  const registered = app.isPackaged
+    ? app.setAsDefaultProtocolClient(OPEN_UI_PROTOCOL)
+    : app.setAsDefaultProtocolClient(OPEN_UI_PROTOCOL, process.execPath, [app.getAppPath()])
+  if (!registered) log('桌面通知协议注册失败')
+}
+
+/** 复用前端现有的会话激活机制，正常情况下无需重载页面。 */
+function requestSessionActivation(session) {
+  return new Promise(resolve => {
+    const body = JSON.stringify({ path: '/', session })
+    const request = http.request({
+      host: HOST, port: activePort, path: '/api/ui-activation', method: 'POST', timeout: 1500,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, response => {
+      let data = ''
+      response.setEncoding('utf8')
+      response.on('data', chunk => { data += chunk })
+      response.on('end', () => {
+        try { resolve(response.statusCode === 200 && JSON.parse(data).reused === true) }
+        catch { resolve(false) }
+      })
+      response.on('error', () => resolve(false))
+    })
+    request.on('timeout', () => { request.destroy(); resolve(false) })
+    request.on('error', () => resolve(false))
+    request.end(body)
+  })
+}
+
+async function activateDesktop(activation) {
+  // 启动过程中只记住请求；窗口由正常启动流程创建，避免重复创建和空白窗口。
+  if (!uiReady) {
+    pendingActivation = activation
+    return
+  }
+  showWindow()
+  if (!activation.session) return
+  const url = new URL(mainWindow.webContents.getURL())
+  if (url.pathname === '/setup') return
+  if (url.pathname === '/' && await requestSessionActivation(activation.session)) return
+  await mainWindow.loadURL(`${baseUrl()}/?session=${encodeURIComponent(activation.session)}`)
+}
+
+function applyNativeTheme(event, theme) {
+  // 仅允许本地应用的顶层窗口同步主题，嵌入的插件页面不能控制原生外观。
+  if (!mainWindow || event.sender !== mainWindow.webContents
+      || event.senderFrame !== mainWindow.webContents.mainFrame) return false
+  let url
+  try { url = new URL(event.senderFrame.url) } catch { return false }
+  if (url.origin !== baseUrl() || !['light', 'dark', 'purple'].includes(theme)) return false
+  nativeTheme.themeSource = theme === 'light' ? 'light' : 'dark'
+  mainWindow.setBackgroundColor({ light: '#ffffff', dark: '#151517', purple: '#1e1e2e' }[theme])
+  return true
+}
+
 // ------------------------------------------------------------------- tray ---
 
 function trayImage() {
@@ -389,11 +547,10 @@ function createTray() {
   tray.setToolTip('SugarAgent')
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开主界面', click: () => showWindow() },
-    { label: '打开配置向导', click: () => { showWindow(); mainWindow.loadURL(`${baseUrl()}/setup`) } },
     { label: '在浏览器中打开', click: () => shell.openExternal(`${baseUrl()}/`) },
     { type: 'separator' },
     { label: '重启内置服务', click: () => restartBackend() },
-    { label: '打开日志目录', click: () => shell.openPath(LOG_DIR) },
+    { label: '打开后台日志', click: () => openBackendLogs() },
     { label: '打开工作目录', click: () => shell.openPath(resolveLayout().workDir) },
     { type: 'separator' },
     { label: '退出 SugarAgent', click: () => { quitting = true; app.quit() } },
@@ -419,7 +576,13 @@ function registerIpc() {
     workDir: resolveLayout().workDir,
   }))
   ipcMain.handle('sugaragent:restart-backend', () => { restartBackend(); return true })
-  ipcMain.handle('sugaragent:open-logs', () => shell.openPath(LOG_DIR))
+  ipcMain.handle('sugaragent:open-logs', () => openBackendLogs())
+  ipcMain.on('sugaragent:theme', applyNativeTheme)
+  ipcMain.on('sugaragent:language', (event, language) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame) return
+    try { if (new URL(event.senderFrame.url).origin !== baseUrl()) return } catch { return }
+    event.sender.sugarAgentLanguage = language === 'en' ? 'en' : 'zh-CN'
+  })
   ipcMain.handle('sugaragent:open-workdir', () => shell.openPath(resolveLayout().workDir))
   ipcMain.handle('sugaragent:open-external', (_event, url) => {
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) return shell.openExternal(url)
@@ -431,11 +594,19 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => showWindow())
+  // Also covers settings/setup child windows and context menus in their frames.
+  app.on('web-contents-created', (_event, contents) => installNativeContextMenu(contents))
+  app.on('second-instance', (_event, argv) => {
+    void activateDesktop(parseDesktopActivation(argv) || { session: '' })
+      .catch(error => log(`桌面通知激活失败：${error.message}`))
+  })
 
   app.whenReady().then(async () => {
     app.setAppUserModelId('com.sugaragent.desktop')
+    // 前端默认浅色；载入后 preload 会按实际页面主题同步原生边框和菜单。
+    nativeTheme.themeSource = 'light'
     ensureLogDir()
+    registerDesktopProtocol()
     log(`启动 SugarAgent ${app.getVersion()}（runtime=${RUNTIME_DIR}）`)
     registerIpc()
     if (IS_DEV) {
@@ -455,7 +626,15 @@ if (!gotLock) {
       return
     }
     createWindow()
-    await loadApp()
+    const initialActivation = pendingActivation
+    pendingActivation = null
+    await loadApp(initialActivation ? initialActivation.session : '')
+    uiReady = true
+    if (pendingActivation) {
+      const activation = pendingActivation
+      pendingActivation = null
+      await activateDesktop(activation)
+    }
     createTray()
     app.on('activate', () => showWindow())
   })

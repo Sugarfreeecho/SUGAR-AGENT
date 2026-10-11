@@ -305,7 +305,11 @@ function main() {
   fs.mkdirSync(path.join(PAYLOAD, 'python', 'Scripts'), { recursive: true })
 
   if (!SKIP_SKILLS) {
-    const skills = path.join(REPO, 'workspace', 'skills')
+    const pathsProbe = spawnSync(REPO_PYTHON, [path.join(REPO, 'app', 'workspace_paths.py'), '--project-root', REPO], {
+      encoding: 'utf8', windowsHide: true, timeout: 10000,
+    })
+    if (pathsProbe.status !== 0) throw new Error('无法读取技能模板目录配置：' + (pathsProbe.stderr || 'path probe failed'))
+    const skills = JSON.parse(pathsProbe.stdout).skills_dir
     if (fs.existsSync(skills)) {
       log('· 拷贝技能模板 ——')
       copyTree(skills, path.join(PAYLOAD, 'workspace-template', 'skills'), {
@@ -313,7 +317,7 @@ function main() {
         label: 'skills 模板',
       })
     } else {
-      log('· 跳过技能模板：workspace/skills 不存在')
+      log(`· 跳过技能模板：${skills} 不存在`)
     }
   }
 

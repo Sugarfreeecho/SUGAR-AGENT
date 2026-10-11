@@ -1,9 +1,10 @@
 ; SugarAgent 安装器定制（由 electron-builder 的 nsis.include 引入，被置于生成脚本最前面）
 ;
-; 这里做三件事：
+; 这里做四件事：
 ;   1) 只做“仅当前用户”安装：跳过 electron-builder 那个带未本地化英文的“为哪位用户安装”页；
 ;   2) 增加“快捷方式选项”页，让用户自己决定是否创建桌面/开始菜单快捷方式；
-;   3) 安装后回收未勾选的快捷方式，卸载时回收 installer store 缓存（约 200MB）。
+;   3) 安装后回收未勾选的快捷方式，卸载时回收 installer store 缓存（约 200MB）；
+;   4) 更新/卸载只删除应用文件，保留与 app/python 同级的 workspace 和 .config。
 
 ; ---- 1) 仅当前用户安装 ----------------------------------------------------
 ; 安装模式页在 Pre 回调里先读 $isForceMachineInstall / $isForceCurrentInstall，
@@ -95,3 +96,48 @@ FunctionEnd
   ; 卸载时回收本包的 installer store
   RMDir /r "$LOCALAPPDATA\${SUGARAGENT_UPDATER_CACHE}"
 !macroend
+
+; patch-nsis.mjs 保留升级时的原子移动/失败回滚，排除用户工作目录和配置。
+; 最终删除阶段从模板回调到这里，仅递归进入用户数据的两级祖先，
+; 其余应用目录用原生 RMDir /r 清理，保留目录本身不遍历、不移动。
+Function un.SugarAgentRemoveFiles
+  Exch $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  FindFirst $R1 $R2 "$INSTDIR$R0\*.*"
+
+  sugar_remove_loop:
+    StrCmp $R2 "" sugar_remove_done
+    StrCmp $R2 "." sugar_remove_next
+    StrCmp $R2 ".." sugar_remove_next
+    StrCmp "$R0\$R2" "\resources\runtime\workspace" sugar_remove_next
+    StrCmp "$R0\$R2" "\resources\runtime\.config" sugar_remove_next
+    StrCmp "$R0\$R2" "\resources\runtime\.sugaragent" sugar_remove_next
+    StrCmp "$R0\$R2" "\resources" sugar_remove_ancestor
+    StrCmp "$R0\$R2" "\resources\runtime" sugar_remove_ancestor
+    IfFileExists "$INSTDIR$R0\$R2\*.*" 0 sugar_remove_file
+    RMDir /r "$INSTDIR$R0\$R2"
+    Goto sugar_remove_next
+
+  sugar_remove_file:
+    Delete "$INSTDIR$R0\$R2"
+    Goto sugar_remove_next
+
+  sugar_remove_ancestor:
+    Push "$R0\$R2"
+    Call un.SugarAgentRemoveFiles
+
+  sugar_remove_next:
+    FindNext $R1 $R2
+    Goto sugar_remove_loop
+
+  sugar_remove_done:
+    FindClose $R1
+    ; 不使用 /r：保留包含 workspace/.config 的 runtime/resources/安装目录。
+    RMDir "$INSTDIR$R0"
+    Pop $R3
+    Pop $R2
+    Pop $R1
+    Pop $R0
+FunctionEnd

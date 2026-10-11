@@ -49,7 +49,7 @@ function main() {
     run(process.execPath, args, { cwd: PACKAGING })
   }
 
-  // electron-builder 模板的中文补丁（幂等；npm install 覆盖模板后会自动重打）
+  // 模板的中文/工作目录保留补丁（幂等；npm install 覆盖模板后会自动重打）
   run(process.execPath, [path.join(HERE, 'patch-nsis.mjs')], { cwd: PACKAGING })
 
   // Node 20+ 不允许直接 spawn .cmd 垫片，统一用 node 执行 CLI 入口
