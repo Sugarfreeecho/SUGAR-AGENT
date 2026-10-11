@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -195,7 +198,7 @@ def select_sessions(sessions_dir: Path, limit: int, session_id: str = "") -> Lis
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark V1 legacy reads against Runtime V2 projections.")
-    parser.add_argument("--sessions-dir", default=str(ROOT / "workspace" / "sessions"))
+    parser.add_argument("--sessions-dir", default=str(WORKSPACE_ROOT / "sessions"))
     parser.add_argument("--session-id", default="")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=5)

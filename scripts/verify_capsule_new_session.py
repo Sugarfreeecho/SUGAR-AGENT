@@ -29,11 +29,14 @@ from pathlib import Path
 import requests
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root, server_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from subagent_ui_verify import Cdp, _browser_path, _free_port, _seed_subagents, _wait_eval  # noqa: E402
 
-FIX_DIR = ROOT / "workspace" / "子代理样式块恢复"
+FIX_DIR = WORKSPACE_ROOT / "子代理样式块恢复"
 
 CAPSULE_JS = (
     "(() => {"
@@ -121,7 +124,8 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8192")
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
-    session_root = ROOT / "workspace" / "sessions"
+    workspace_root = server_workspace_root(base)
+    session_root = workspace_root / "sessions"
     tag = uuid.uuid4().hex[:6]
     sub_name = "capsule sub " + tag
     plain_name = "capsule plain " + tag

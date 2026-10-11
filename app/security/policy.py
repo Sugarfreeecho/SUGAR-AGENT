@@ -24,6 +24,7 @@ _PROTECTED_NAMES = {
     ".agents",
     ".myagent",
     ".sugaragent",
+    ".config",
     "hooks.json",
 }
 _SENSITIVE_PARTS = {

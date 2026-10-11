@@ -5,13 +5,14 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from config_paths import config_path
 
 
 logger = logging.getLogger(__name__)
 
 
 def migrate_legacy_state_dir(new: Path, legacy: Path) -> Path:
-    """Move a legacy ``.myagent`` state directory to ``.sugaragent`` once."""
+    """Move a legacy ``.myagent`` state directory to ``.config`` once."""
     if legacy.exists() and not new.exists():
         try:
             new.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +63,7 @@ class RemoteControlConfig:
             Path(configured_dir).expanduser()
             if configured_dir
             else migrate_legacy_state_dir(
-                Path(project_root) / ".sugaragent" / "remote-control",
+                config_path(project_root, "remote-control"),
                 Path(project_root) / ".myagent" / "remote-control",
             )
         )

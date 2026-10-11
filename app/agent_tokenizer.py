@@ -914,12 +914,13 @@ def messages_for_openai_turns(llm_history: List[Any]) -> List[Any]:
 
 def build_env_static(session_id: Optional[str] = None) -> str:
     """Build the Environment block: calendar month, OS, paths, session storage (no live workspace listing)."""
-    from agent_harness import PROJECT_ROOT as AGENT_PROJECT_ROOT, WORK_DIR, session_manager
+    from agent_harness import PROJECT_ROOT as AGENT_PROJECT_ROOT, WORK_DIR, session_manager, session_work_dir
     from agent_tools import describe_run_shell_executor_for_prompt
 
     sid = (session_id or "").strip()
 
-    wdir = str(WORK_DIR.resolve())
+    work_root = session_work_dir(sid)
+    wdir = str(work_root)
     proj = str(AGENT_PROJECT_ROOT.resolve())
 
     session_lines = ""
@@ -932,14 +933,14 @@ def build_env_static(session_id: Optional[str] = None) -> str:
             is_v2 = True
         sdir = session_manager._get_session_path(sid).resolve()
         try:
-            v_session = "/" + str(sdir.relative_to(WORK_DIR.resolve())).replace("\\", "/")
+            v_session = "/" + str(sdir.relative_to(work_root)).replace("\\", "/")
         except ValueError:
-            v_session = f"/sessions/{sid}"
+            v_session = str(sdir)
         v_key = f"{v_session}/key_context.md"
         v_todo = f"{v_session}/todo_plan.md"
         session_lines = f"""
 - **Session storage directory**: {sdir}
-  - Virtual path from `WORK_DIR`: `{v_session}`. Use this virtual path with file tools when possible; OS-absolute paths are shown only for orientation.
+  - File-tools path: `{v_session}`. Storage outside the active project uses its native absolute path.
   - Main files: `llm_history.json`, `dialogue_history.json` (user↔final from `ui_events`), `work_messages.json`, `ui_events.json`, `key_context.md`, `todo_plan.md`, `metadata.json`, plus related artifacts.
   - Read or grep this directory when in-context messages are insufficient and you need persisted history or the event stream.
   - Persistent key facts belong in `key_context.md`: `{v_key}`. Use `context_manage` with `mode=edit_key_context` to revise it.
@@ -948,7 +949,7 @@ def build_env_static(session_id: Optional[str] = None) -> str:
         if is_v2:
             session_lines = f"""
 - **Session storage directory**: {sdir}
-  - Runtime V2 canonical path from `WORK_DIR`: `{v_session}`.
+  - Runtime V2 canonical storage path: `{v_session}`. This shared storage may be outside the active project.
   - Canonical facts and rebuildable state live in `events.jsonl`, `snapshots/latest.json`, metadata, indexes, and referenced blobs. Legacy `llm_history.json`, `ui_events.json`, `key_context.md`, and `todo_plan.md` may be absent or stale and must not be used as context authority.
   - The server injects the active model context and summary. Use `context_manage` for explicit compact/summary edits and `update_todo` for the live plan; do not directly edit Runtime V2 storage files.
   - Use the conversation history APIs/UI when older visible history is needed."""
@@ -963,11 +964,12 @@ def build_env_static(session_id: Optional[str] = None) -> str:
 - **Calendar month (host local time)**: **{current_year_month}**
 - **OS**: {platform.system()} | **Python**: {platform.python_version()}
 {run_shell_executor_hint}
-- **MCP extensions** (optional): With `.sugaragent/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects and exposes tools as `mcp_<server_alias>_<tool_name>`. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
+- **MCP extensions** (optional): With `.config/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects and exposes tools as `mcp_<server_alias>_<tool_name>`. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
 - **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
-  - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `.sugaragent/mcp_servers.json`.
+  - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `.config/mcp_servers.json`.
   - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.
 - **Work root** (`WORK_DIR`): {wdir}
+  - Global default and shared data root: {WORK_DIR.resolve()}. Sessions and attachments remain in this shared root.
   - Virtual `/` maps to this directory. Relative paths and virtual paths like `/outputs/a.txt` resolve under `WORK_DIR`.
   - `write_file`, `apply_patch`, `edit_file`, `web_download`, `delete_file` (soft-delete target: `WORK_DIR/.trash/`), and restricted `run_shell` resolve relative paths under this tree; **native absolute paths outside WORK_DIR are permitted** after the user approves the target directory through the approval card in restricted modes (full access allows them directly).
   - `delete_file` refuses protected tool state under `sessions/`, `skills/`, `.trash/`, and their children.

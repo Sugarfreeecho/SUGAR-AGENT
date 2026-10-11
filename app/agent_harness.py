@@ -137,11 +137,8 @@ _INITIAL_MODEL_PROFILE = model_profiles.top_profile(PROJECT_ROOT) or {}
 
 def _env_path(name: str, default: Path | str, *, base: Path = PROJECT_ROOT) -> Path:
     """Resolve .env paths relative to the project root, not the launch cwd."""
-    raw = (os.getenv(name) or "").strip()
-    path = Path(raw).expanduser() if raw else Path(default).expanduser()
-    if not path.is_absolute():
-        path = base / path
-    return path.resolve()
+    from workspace_paths import resolve_env_path
+    return resolve_env_path(name, default, base=base)
 
 
 WORK_DIR = _env_path("WORK_DIR", PROJECT_ROOT / "workspace")
@@ -184,10 +181,15 @@ def session_work_dir_override(metadata: Optional[dict] = None) -> str:
     """
     if not isinstance(metadata, dict):
         return ""
-    return normalize_session_work_dir(metadata.get("work_dir"))
+    raw = str(metadata.get("work_dir") or "").strip()
+    try:
+        path = Path(raw).expanduser()
+        return str(Path(os.path.abspath(str(path)))) if raw and path.is_absolute() else ""
+    except (OSError, ValueError):
+        return ""
 
 
-def session_work_root_raw(metadata: Optional[dict] = None) -> str:
+def session_work_root_raw(metadata: Optional[dict] = None, *, metadata_loader=None, _seen=None) -> str:
     """会话的工作根（字符串）；没有任何会话级设置时返回空串。
 
     优先级：子代理工作目录 → git worktree → 用户指定的会话目录。
@@ -205,6 +207,17 @@ def session_work_root_raw(metadata: Optional[dict] = None) -> str:
         if not path.is_absolute():
             continue
         return str(path)
+    # Older child sessions did not persist the inherited root. Resolve their
+    # parent chain without rewriting metadata or silently choosing another project.
+    parent = str(meta.get("parent_session_id") or "").strip() if meta.get("is_subagent") else ""
+    seen = set(_seen or ())
+    if parent and parent not in seen:
+        seen.add(parent)
+        try:
+            loader = metadata_loader or session_manager._load_metadata
+            return session_work_root_raw(loader(parent), metadata_loader=loader, _seen=seen)
+        except (OSError, ValueError, AttributeError):
+            pass
     return ""
 
 
@@ -242,12 +255,14 @@ def session_work_dir_projection(
                 meta = session_manager._load_metadata(sid) or {}
             except Exception:
                 meta = {}
-    override = session_work_dir_override(meta)
-    path = Path(override) if override else WORK_DIR
+    path = session_work_root(meta)
+    is_default = os.path.normcase(str(path)) == os.path.normcase(str(WORK_DIR.resolve()))
     return {
         "work_dir": str(path),
+        "effective_work_dir": str(path),
         "work_dir_label": path.name or str(path),
-        "work_dir_is_default": not bool(override),
+        "work_dir_is_default": is_default,
+        "work_dir_available": path.is_dir(),
     }
 
 
@@ -3798,7 +3813,7 @@ class SessionManager:
                     "todo": todo,
                     "goal_review_pending": goal_review_pending,
                     "pinned_at": pinned_at if pinned else None,
-                    "work_dir": normalize_session_work_dir(meta.get("work_dir")) or None,
+                    "work_dir": session_work_dir_override(meta) or None,
                     "draft": bool(meta.get("draft", False)),
                     "unread_result": bool(meta.get("unread_result", False)),
                     "unread_result_at": meta.get("unread_result_at"),
@@ -4941,6 +4956,7 @@ class SessionManager:
                     "best_of_attempt": int(meta.get("best_of_attempt") or 0),
                     "git_worktree_path": str(meta.get("git_worktree_path") or ""),
                     "subagent_work_dir": str(meta.get("subagent_work_dir") or ""),
+                    **session_work_dir_projection(cid, meta),
                     "git_worktree_state": str(meta.get("git_worktree_state") or ""),
                     "forked_from_parent": bool(meta.get("forked_from_parent")),
                     "model_profile_id": str(meta.get("model_profile_id") or ""),
@@ -5957,9 +5973,9 @@ class SessionManager:
                     if isinstance(src_auth, list) and src_auth:
                         meta["authorized_dirs"] = [str(x) for x in src_auth if str(x).strip()]
                     else:
-                        meta["authorized_dirs"] = [str(WORK_DIR.resolve())]
+                        meta["authorized_dirs"] = [str(session_work_root(meta))]
                 except Exception:
-                    meta["authorized_dirs"] = [str(WORK_DIR.resolve())]
+                    meta["authorized_dirs"] = [str(session_work_root(meta))]
                 meta["branched_from"] = sid
                 meta["branch_before_index"] = before_index
                 meta["ui_event_count"] = len(new_events)
@@ -6566,6 +6582,9 @@ class SessionManager:
         }
         try:
             parent_metadata = self._load_metadata(parent_id) or {}
+            inherited_root = session_work_root_raw(parent_metadata, metadata_loader=self._load_metadata)
+            if inherited_root:
+                metadata["work_dir"] = str(Path(inherited_root).resolve())
             parent_prompt_language = parent_metadata.get("prompt_language")
             if parent_prompt_language:
                 metadata["prompt_language"] = normalize_prompt_language(parent_prompt_language)
@@ -6573,7 +6592,7 @@ class SessionManager:
             if isinstance(parent_auth, list) and parent_auth:
                 metadata["authorized_dirs"] = [str(x) for x in parent_auth if str(x).strip()]
             else:
-                metadata["authorized_dirs"] = [str(WORK_DIR.resolve())]
+                metadata["authorized_dirs"] = [str(session_work_root(metadata))]
         except Exception:
             try:
                 metadata["authorized_dirs"] = [str(WORK_DIR.resolve())]
@@ -7210,9 +7229,11 @@ class SessionManager:
             d["pinned_at"] = d.get("updated_at") or d.get("created_at")
         # 会话工作目录投影（侧栏按工作目录分组用）：直接读索引行、不再碰磁盘，
         # 避免 /sessions/state 轮询时对每个会话各做一次 metadata I/O。
-        wd_override = normalize_session_work_dir(d.get("work_dir"))
+        wd_override = session_work_dir_override(d)
         wd_path = wd_override or str(WORK_DIR)
         d["work_dir"] = wd_path
+        d["effective_work_dir"] = wd_path
+        d["work_dir_available"] = Path(wd_path).is_dir() if wd_override else True
         d["work_dir_label"] = Path(wd_path).name or wd_path
         d["work_dir_is_default"] = not bool(wd_override)
         sid = d.get("id")

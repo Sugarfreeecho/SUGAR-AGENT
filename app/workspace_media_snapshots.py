@@ -8,6 +8,7 @@ import re
 import uuid
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+from config_paths import config_path, resolve_legacy_config_path
 
 
 IMAGE_SUFFIXES = frozenset({
@@ -46,7 +47,7 @@ def _local_image_path(destination: str, work_dir: Path) -> Path | None:
     if not (candidate.is_absolute() or is_windows_absolute):
         candidate = work_dir / raw.lstrip("/\\")
     try:
-        candidate = Path(os.path.abspath(str(candidate))).resolve()
+        candidate = resolve_legacy_config_path(Path(os.path.abspath(str(candidate))), work_dir)
     except (OSError, RuntimeError, ValueError):
         return None
     if candidate.suffix.lower() not in IMAGE_SUFFIXES or not candidate.is_file():
@@ -55,7 +56,7 @@ def _local_image_path(destination: str, work_dir: Path) -> Path | None:
 
 
 def _snapshot_image(source: Path, work_dir: Path) -> str:
-    target_dir = work_dir / ".sugaragent" / "history-media"
+    target_dir = config_path(work_dir, "history-media")
     target_dir.mkdir(parents=True, exist_ok=True)
     temporary = target_dir / f".{uuid.uuid4().hex}.tmp"
     digest = hashlib.sha256()
@@ -134,7 +135,7 @@ def _closing_paren(line: str, start: int) -> int:
     return -1
 
 
-def _rewrite_line(line: str, work_dir: Path) -> str:
+def _rewrite_line(line: str, work_dir: Path, source_root: Path | None = None) -> str:
     output: list[str] = []
     cursor = 0
     index = 0
@@ -170,7 +171,10 @@ def _rewrite_line(line: str, work_dir: Path) -> str:
         span = _destination_span(body)
         replacement = None
         if span:
-            source = _local_image_path(span[2], work_dir)
+            raw = span[2].lstrip("/\\")
+            # Durable historical images always belong to shared storage.
+            lookup_root = work_dir if raw.startswith((".config/history-media/", ".sugaragent/history-media/")) else (source_root or work_dir)
+            source = _local_image_path(span[2], lookup_root)
             if source is not None:
                 try:
                     replacement = _snapshot_image(source, work_dir)
@@ -189,10 +193,11 @@ def _rewrite_line(line: str, work_dir: Path) -> str:
     return "".join(output)
 
 
-def snapshot_workspace_images(content: str, work_dir: os.PathLike[str] | str) -> str:
+def snapshot_workspace_images(content: str, work_dir: os.PathLike[str] | str, *, source_root: os.PathLike[str] | str | None = None) -> str:
     """Copy local Markdown images once and rewrite their UI-facing destinations."""
     text = str(content or "")
     root = Path(work_dir).resolve()
+    source = Path(source_root).resolve() if source_root else root
     lines = text.splitlines(keepends=True)
     fenced = False
     fence_char = ""
@@ -211,5 +216,5 @@ def snapshot_workspace_images(content: str, work_dir: os.PathLike[str] | str) ->
         elif fenced:
             rewritten.append(line)
         else:
-            rewritten.append(_rewrite_line(line, root))
+            rewritten.append(_rewrite_line(line, root, source))
     return "".join(rewritten)

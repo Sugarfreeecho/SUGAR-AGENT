@@ -25,6 +25,7 @@ from attachments.metrics import snapshot as metrics_snapshot
 from attachments.metrics import count, duration
 from attachments.registry import AttachmentRegistry
 from attachments.locking import attachment_lock
+from config_paths import config_path
 
 TERMINAL = {"completed", "failed", "cancelled"}
 
@@ -47,7 +48,7 @@ async def read_json(request, limit=256 * 1024):
 class VisionJobs:
     def __init__(self, work_dir, candidate_resolver):
         self.work_dir = Path(work_dir)
-        self.path = self.work_dir / ".sugaragent" / "vision" / "requests.sqlite3"
+        self.path = config_path(self.work_dir, "vision", "requests.sqlite3")
         self.candidate_resolver = candidate_resolver
         self._schema_ready = False
 
@@ -389,7 +390,7 @@ def register_vision_api(app, work_dir, candidate_resolver, gateway_resolver):
         except (TypeError, ValueError):
             raise HTTPException(400, "graceSeconds must be finite and at least 86400") from None
         return await asyncio.to_thread(garbage_collect, get_attachment_store(work_dir),
-                                       [Path(work_dir) / "sessions", Path(work_dir) / ".sugaragent" / "vision"],
+                                       [Path(work_dir) / "sessions", config_path(work_dir, "vision")],
                                        dry_run=payload.get("dryRun", True) is not False,
                                        grace_seconds=grace)
 

@@ -30,6 +30,9 @@ import requests
 import websocket
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root, server_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 
 
 def _browser_path() -> Path:
@@ -95,6 +98,7 @@ def main() -> int:
     ap.add_argument("--base-url", default="http://127.0.0.1:8192")
     args = ap.parse_args()
     base = args.base_url.rstrip("/")
+    workspace_root = server_workspace_root(base)
 
     # ---- 1) 静态 CSS 层面：重复规则检测 ----
     css = open(ROOT / "frontend" / "src" / "styles" / "app.css", encoding="utf-8").read()
@@ -300,7 +304,7 @@ def main() -> int:
             requests.delete(base + f"/sessions/{sid}", timeout=15)
         except Exception:
             pass
-        shutil.rmtree(ROOT / "workspace" / "sessions" / sid, ignore_errors=True)
+        shutil.rmtree(workspace_root / "sessions" / sid, ignore_errors=True)
 
 
 if __name__ == "__main__":

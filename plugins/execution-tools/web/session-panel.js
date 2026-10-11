@@ -139,6 +139,18 @@ export function renderSessionPanel(context) {
         let retryTimer = null;
         let inputQueue = Promise.resolve();
         let writable = false;
+        const contextMenu = globalThis.MyAgentContextMenu;
+        const unbindMenu = contextMenu?.bind(area, () => [
+            { label: '复制选中文本', disabled: !terminal.hasSelection(), action: () => contextMenu.copy(terminal.getSelection()) },
+            { label: '粘贴', disabled: !writable || disposed, action: async () => {
+                const text = await navigator.clipboard.readText();
+                if (writable && !disposed) { terminal.paste(text); terminal.focus(); }
+            } },
+            { label: '全选', action: () => terminal.selectAll() },
+            { label: '清空终端视图', action: () => terminal.clear() },
+            { label: '回到底部', action: () => terminal.scrollToBottom() },
+            null, { label: '关闭视图', action: () => closeView?.() },
+        ]);
         const action = (name, data) => request(`${prefix}/terminals/${encodeURIComponent(session.id)}/${name}`, { ...data, connection });
         const connect = () => {
             if (disposed) return;
@@ -183,6 +195,7 @@ export function renderSessionPanel(context) {
             clearTimeout(resizeTimer);
             observer.disconnect();
             input.dispose();
+            unbindMenu?.();
             terminal.dispose();
             remove();
         };
@@ -249,7 +262,7 @@ export function renderSessionPanel(context) {
     }).catch((error) => { computerStatus.textContent = error.message; });
 
     async function refresh() {
-        if (!alive || busy || document.hidden) return;
+        if (!alive || busy || document.hidden || globalThis.MyAgentContextMenu?.isOpenFor(root)) return;
         busy = true;
         try {
             const [jobResult, terminalResult] = await Promise.all([request(prefix + '/jobs'), request(prefix + '/terminals')]);

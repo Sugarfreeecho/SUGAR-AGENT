@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from remote_control.config import migrate_legacy_state_dir
+from config_paths import config_path
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -50,7 +51,7 @@ class FeishuConfig:
             Path(configured_dir).expanduser()
             if configured_dir
             else migrate_legacy_state_dir(
-                Path(project_root) / ".sugaragent" / "feishu",
+                config_path(project_root, "feishu"),
                 Path(project_root) / ".myagent" / "feishu",
             )
         )

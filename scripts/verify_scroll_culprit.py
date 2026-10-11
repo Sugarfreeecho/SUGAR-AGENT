@@ -22,6 +22,9 @@ import requests
 import websocket
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root, server_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 
 
 def _browser_path() -> Path:
@@ -124,6 +127,7 @@ def main() -> int:
     ap.add_argument("--base-url", default="http://127.0.0.1:8192")
     args = ap.parse_args()
     base = args.base_url.rstrip("/")
+    workspace_root = server_workspace_root(base)
 
     created = requests.post(base + "/sessions", timeout=90)
     created.raise_for_status()
@@ -132,7 +136,7 @@ def main() -> int:
     requests.put(base + f"/sessions/{sid}/name", data={"name": name}, timeout=30)
 
     # seed a couple of subagents so the trigger shows (worst case for title overflow)
-    subs = ROOT / "workspace" / "sessions" / sid / "subagents"
+    subs = workspace_root / "sessions" / sid / "subagents"
     subs.mkdir(parents=True, exist_ok=True)
     now = time.time()
     rows = [{
@@ -217,7 +221,7 @@ def main() -> int:
             requests.delete(base + f"/sessions/{sid}", timeout=15)
         except Exception:
             pass
-        shutil.rmtree(ROOT / "workspace" / "sessions" / sid, ignore_errors=True)
+        shutil.rmtree(workspace_root / "sessions" / sid, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,9 @@ import websocket
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root, server_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 APP_ROOT = ROOT / "app"
 
 
@@ -166,7 +169,7 @@ def main() -> int:
     owned_work_dir: Path | None = None
     if args.base_url:
         base_url = args.base_url.rstrip("/")
-        session_root = ROOT / "workspace" / "sessions"
+        session_root = server_workspace_root(base_url) / "sessions"
     else:
         port = _free_port()
         base_url = f"http://127.0.0.1:{port}"

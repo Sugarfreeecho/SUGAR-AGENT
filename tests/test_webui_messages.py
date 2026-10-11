@@ -291,7 +291,7 @@ def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_pat
     assert len(payload["files"]) == 1
     saved = payload["files"][0]
     assert saved["name"] == "clipboard-image.png"
-    assert saved["rel"].replace("\\", "/").startswith(".sugaragent/attachments/v1/")
+    assert saved["rel"].replace("\\", "/").startswith(".config/attachments/v1/")
     path = Path(saved["path"])
     assert path.is_file()
     assert saved["attachment"]["attachmentId"].startswith("sha256:")

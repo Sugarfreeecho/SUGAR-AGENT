@@ -8,6 +8,7 @@ import shutil
 import threading
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional
+from config_paths import config_path
 
 from .loader import discover_plugins, path_resources, skill_resources
 from .models import (
@@ -33,7 +34,7 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 
 
 def _migrate_legacy_path(new: Path, legacy: Path) -> Path:
-    """Move a legacy ``.myagent`` state path to ``.sugaragent`` once."""
+    """Move a legacy ``.myagent`` state path to ``.config`` once."""
     if legacy.exists() and not new.exists():
         try:
             new.parent.mkdir(parents=True, exist_ok=True)
@@ -95,26 +96,30 @@ def plugins_enabled() -> bool:
 def default_discovery_dirs() -> tuple[Path, ...]:
     """Resolve configurable project and user plugin search roots."""
 
+    project_root = Path(__file__).resolve().parents[2]
+    def resolve(raw: str) -> Path:
+        value = Path(raw.strip()).expanduser()
+        return (value if value.is_absolute() else project_root / value).resolve()
     configured = os.getenv("PLUGINS_DIRS", "").strip()
     if configured:
         return tuple(
-            Path(item).expanduser()
+            resolve(item)
             for item in configured.split(os.pathsep)
             if item.strip()
         )
     single = os.getenv("PLUGINS_DIR", "").strip()
     if single:
-        return (Path(single).expanduser(),)
-    project_root = Path(__file__).resolve().parents[2]
+        return (resolve(single),)
     return (project_root / "plugins", _user_plugins_dir())
 
 
 def default_state_path() -> Path:
     configured = os.getenv("PLUGINS_STATE_PATH", "").strip()
     if configured:
-        return Path(configured).expanduser()
+        path = Path(configured).expanduser()
+        return (path if path.is_absolute() else Path(__file__).resolve().parents[2] / path).resolve()
     return _migrate_legacy_path(
-        Path(__file__).resolve().parents[2] / ".sugaragent" / "plugins-state.json",
+        config_path(Path(__file__).resolve().parents[2], "plugins-state.json"),
         Path(__file__).resolve().parents[2] / ".myagent" / "plugins-state.json",
     )
 

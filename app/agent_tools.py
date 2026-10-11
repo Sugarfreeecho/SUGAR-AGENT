@@ -33,6 +33,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+from config_paths import config_path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -148,7 +149,7 @@ _skills_full_cache: Dict[str, Any] = {"sig": None, "skills": None}
 _skills_catalog_generation = 0
 _skill_state_lock = threading.RLock()
 _skills_scan_lock = threading.RLock()
-SKILL_STATE_PATH = PROJECT_ROOT / ".sugaragent" / "skill_states.json"
+SKILL_STATE_PATH = config_path(PROJECT_ROOT, "skill_states.json")
 _DEFAULT_SKILL_STATE_PATH = SKILL_STATE_PATH
 _LEGACY_SKILL_STATE_PATH = PROJECT_ROOT / "skill_states.json"
 _read_file_line_count_cache: Dict[str, Tuple[int, int, int]] = {}
@@ -156,7 +157,7 @@ _read_file_line_count_cache_lock = threading.RLock()
 
 
 def _migrate_legacy_state_path(new: Path, legacy: Path) -> None:
-    """Move a legacy root-level state file into .sugaragent once."""
+    """Move a legacy root-level state file into .config once."""
     if legacy.exists() and not new.exists():
         try:
             new.parent.mkdir(parents=True, exist_ok=True)

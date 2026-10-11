@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 APP = ROOT / "app"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -320,7 +323,7 @@ def summarize(rows: List[SessionAudit]) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit V1 legacy files against Runtime V2 projections.")
-    parser.add_argument("--sessions-dir", default=str(ROOT / "workspace" / "sessions"))
+    parser.add_argument("--sessions-dir", default=str(WORKSPACE_ROOT / "sessions"))
     parser.add_argument("--session-id", default="")
     parser.add_argument("--repair-ui", action="store_true")
     parser.add_argument("--repair-model", action="store_true")

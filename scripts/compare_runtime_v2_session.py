@@ -7,6 +7,9 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 APP = ROOT / "app"
 if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
@@ -84,7 +87,7 @@ def compare(legacy_rows: list[dict], v2_rows: list[dict]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compare legacy ui_events.json with Runtime V2 projection.")
     parser.add_argument("session_id")
-    parser.add_argument("--sessions-dir", default=str(ROOT / "workspace" / "sessions"))
+    parser.add_argument("--sessions-dir", default=str(WORKSPACE_ROOT / "sessions"))
     args = parser.parse_args()
 
     sessions_dir = Path(args.sessions_dir)

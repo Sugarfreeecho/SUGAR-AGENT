@@ -34,6 +34,7 @@ design-previews/
 workspace/
 .myagent/
 .sugaragent/
+.config/
 
 # Bundled/interpreter/runtime folders
 python/
@@ -73,10 +74,10 @@ mcp_servers.json
 extension-picker-demo.html
 frontend/ux-optimization-concept.html
 
-# Legacy root-level runtime state files (moved into .sugaragent/)
+# Legacy root-level runtime state files (moved into .config/)
 skill_states.json
 mcp_tools_state.json
-# Legacy protection for config files now living in .sugaragent/
+# Legacy protection for config files now living in .config/
 # (root entries below stay ignored so stale copies are never committed)
 mcp_servers.json
 model_profiles.json
@@ -84,6 +85,8 @@ model_profiles.json
 # Local debugging artifacts (analysis snapshots, Playwright MCP captures)
 .analysis/
 .playwright-mcp/
+# Recycle folder used by the agent runtime when it soft-deletes scratch files
+.trash/
 
 # Local skeleton-width audit screenshots
 skeleton-width-audit/

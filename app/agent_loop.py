@@ -73,8 +73,10 @@ from agent_harness import (
     ToolMessage,
     COMPACT_TRUNCATED_BOUNDARY_SYSTEM_EXACT,
     WORK_DIR,
+    PROJECT_ROOT,
     session_work_root,
     session_work_root_raw,
+    session_work_dir,
     LocalNetworkUnavailableError,
     machine_network_available,
     _redact_runtime_log_text,
@@ -665,7 +667,8 @@ async def _dispatch_state_hook(
     data = dict(payload or {})
     data.setdefault("session_id", str(state.get("session_id") or ""))
     data.setdefault("run_id", str(state.get("_runtime_v2_run_id") or ""))
-    data.setdefault("project_root", str(WORK_DIR))
+    data.setdefault("app_root", str(PROJECT_ROOT))
+    data.setdefault("shared_root", str(WORK_DIR))
     try:
         hook_meta = session_manager._load_metadata(data["session_id"]) or {}
     except Exception:
@@ -673,6 +676,7 @@ async def _dispatch_state_hook(
     # 含用户指定的会话工作目录：默认目录/子代理 worktree 的行为与以前完全一致，
     # 只有"自定义目录的根会话"才会多出 workspace_root（这正是需要的）。
     hook_workspace = session_work_root_raw(hook_meta)
+    data.setdefault("project_root", str(session_work_root(hook_meta)))
     if hook_workspace:
         data.setdefault("workspace_root", hook_workspace)
         data.setdefault("worktree_isolated", bool(hook_meta.get("git_worktree_managed")))
@@ -2199,7 +2203,8 @@ def _build_static_segments_for_session(
         else None
     )
     if isinstance(inherited, list) and inherited and all(isinstance(item, str) for item in inherited):
-        return tuple(inherited)
+        # Preserve inherited instructions while rebuilding session-specific paths.
+        return tuple(env_static if item.lstrip().startswith("## Environment") else item for item in inherited)
     if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
         from agent_subagent import SUBAGENT_RUN_INSTRUCTION
 
@@ -2642,7 +2647,7 @@ def _latest_official_user_turn_id(session_id: str) -> str:
 
 def _snapshot_assistant_ui_content(session_id: str, content: str) -> str:
     try:
-        return snapshot_workspace_images(str(content or ""), WORK_DIR)
+        return snapshot_workspace_images(str(content or ""), WORK_DIR, source_root=session_work_dir(session_id))
     except Exception as exc:
         logger.warning("Workspace image snapshot failed for %s: %s", session_id, exc)
         return str(content or "")
@@ -4598,7 +4603,7 @@ def _tool_command_preview(tool_name: str, tool_args: Any) -> str:
     return redact_sensitive_tool_text(f"{tool_name}({arg_text})")
 
 
-def _record_temporary_write_file(state: Dict[str, Any], tool_name: str, tool_args: Any, failed: bool) -> None:
+def _record_temporary_write_file(state: Dict[str, Any], tool_name: str, tool_args: Any, failed: bool, resolved_path: str = "") -> None:
     if failed or tool_name != "write_file" or not isinstance(tool_args, dict):
         return
     if not bool(tool_args.get("temporary")):
@@ -4610,7 +4615,11 @@ def _record_temporary_write_file(state: Dict[str, Any], tool_name: str, tool_arg
         or ""
     )
     try:
-        p = safe_work_path(str(raw)) if str(raw).strip() else safe_work_path(AGENT_DEFAULT_WRITE_FILENAME)
+        if resolved_path:
+            p = Path(resolved_path).resolve()
+        else:
+            with tool_work_dir_override(session_work_dir(state.get("session_id"))):
+                p = safe_work_path(str(raw)) if str(raw).strip() else safe_work_path(AGENT_DEFAULT_WRITE_FILENAME)
     except Exception as e:
         logger.warning("temporary write_file path cannot be registered: %s", e)
         return
@@ -4635,8 +4644,10 @@ def _save_result_to_tempfile(
     """
     try:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"tool_result_{ts}_{tool_name}.txt"
-        temp_path = safe_work_path(f".tool_results/{filename}")
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", tool_name)
+        filename = f"tool_result_{ts}_{safe_name}_{uuid.uuid4().hex[:8]}.txt"
+        with tool_work_dir_override(WORK_DIR):
+            temp_path = safe_work_path(f".tool_results/{filename}")
         temp_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path.write_text(result_str, encoding="utf-8")
 
@@ -4647,8 +4658,8 @@ def _save_result_to_tempfile(
             bucket.append(sp)
         state["_temporary_write_files"] = bucket
 
-        # 用虚拟路径展示给模型（和 read_file 的输出格式一致）
-        virtual_path = f"/.tool_results/{filename}"
+        # Shared tool output storage is independent of the session's work root.
+        virtual_path = str(temp_path.resolve())
         if preview_chars is None:
             preview_chars = max(0, int(LLM_CONTEXT_TRUNCATE_KEEP_CHARS)) // 2
         preview_chars = max(0, int(preview_chars))
@@ -4712,7 +4723,15 @@ def _cleanup_temporary_write_files(state: Dict[str, Any]) -> List[str]:
     remaining: List[str] = []
     for p in files:
         try:
-            result = delete_file(path=p)
+            cleanup_root = session_work_dir(state.get("session_id"))
+            if Path(p).resolve().parent == (WORK_DIR / ".tool_results").resolve():
+                cleanup_root = WORK_DIR
+            elif Path(p).is_file() and not Path(p).resolve().is_relative_to(cleanup_root):
+                # Only exact files registered by a successful temporary write
+                # are eligible, including explicitly approved external writes.
+                cleanup_root = Path(p).resolve().parent
+            with tool_work_dir_override(cleanup_root):
+                result = delete_file(path=p)
             if str(result).lower().startswith("error:") or str(result).lower().startswith("failed"):
                 remaining.append(p)
                 logger.warning("temporary write_file cleanup failed for %s: %s", p, result)
@@ -5427,6 +5446,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # a skill/plugin change costs one request of staleness at most.
             _static_key = (
                 str(state.get("session_id") or ""),
+                str(session_work_root(session_meta)),
                 bool(session_meta.get("is_subagent")) if isinstance(session_meta, dict) else False,
                 isinstance(session_meta.get("fork_runtime_config"), dict)
                 and bool((session_meta.get("fork_runtime_config") or {}).get("system_segments"))
@@ -5753,11 +5773,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             {
                                 "type": "status",
                                 "content": (
-                                    "【模型报告上下文已满，开始压缩】正在进行上下文裁剪后重试原请求"
-                                    "（可能需数秒，请稍候）…"
+                                    "【模型报告上下文已满，开始压缩】正在整理上下文后重试原请求…"
                                     if forced_context_limit_compress
-                                    else "【上下文窗口已满，开始压缩】正在进行上下文裁剪以控制 token"
-                                    "（可能需数秒，请稍候）…"
+                                    else "【上下文窗口已满，开始压缩】正在整理上下文…"
                                 ),
                             },
                             emit=emit,
@@ -5811,11 +5829,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 state,
                                 emit,
                                 interval_sec=6.0,
-                                keepalive_event={
-                                    "type": "context_summary_progress",
-                                    "content": "【Responses 压缩】官方 compact 仍在生成，请稍候…",
-                                    "ephemeral": True,
-                                },
                             )
                         except Exception as compact_exc:
                             logger.info(
@@ -5881,11 +5894,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             emit,
                             interval_sec=6.0,
                             thread_hint_queue=_hint_q,
-                            keepalive_event={
-                                "type": "context_summary_progress",
-                                "content": "【上下文摘要】摘要模型仍在生成或等待响应中，请稍候…",
-                                "ephemeral": True,
-                            },
                         )
                     post_compact_hook = await _dispatch_state_hook(
                         "PostCompact",
@@ -6824,7 +6832,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     and tool_descriptor.invocation_kind is ToolInvocationKind.MCP
                 ):
                     started = time.perf_counter()
-                    mcp_work_dir = session_work_root_raw(session_meta)
+                    mcp_work_dir = str(session_work_root(session_meta))
                     active_candidate = iter_client.current_candidate() if callable(getattr(iter_client, "current_candidate", None)) else {}
                     mcp_modalities = active_candidate.get("input_modalities") or __import__("agent_openai")._client_input_modalities(iter_client)
                     change_review_capture = _begin_change_review_capture(
@@ -6875,7 +6883,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     and tool_descriptor.invocation_kind is ToolInvocationKind.PLUGIN
                 ):
                     started = time.perf_counter()
-                    plugin_work_dir = session_work_root_raw(session_meta)
+                    plugin_work_dir = str(session_work_root(session_meta))
                     change_review_capture = _begin_change_review_capture(
                         plugin_work_dir, observe_workspace=True
                     )
@@ -6934,6 +6942,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_func = tools_dict.get(tool_name)
                 tool_failed = False
                 tool_invoke_started = time.perf_counter()
+                temporary_write_path = ""
                 change_review_capture = None
                 change_review_changes = []
                 change_review_tool_failed = False
@@ -7097,6 +7106,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                             emit,
                                             "tool",
                                         )
+                                    if tool_name == "write_file" and isinstance(tool_args, dict) and tool_args.get("temporary"):
+                                        try:
+                                            raw_temp = tool_args.get("path") or tool_args.get("target_directory") or tool_args.get("file_path") or AGENT_DEFAULT_WRITE_FILENAME
+                                            temporary_write_path = str(safe_work_path(str(raw_temp)))
+                                        except (ValueError, OSError):
+                                            logger.warning("Could not capture temporary write path", exc_info=True)
                                 except BaseException:
                                     change_review_tool_failed = True
                                     raise
@@ -7150,6 +7165,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     ),
                 )
                 response["tool_status"]["duration_ms"] = tool_invoke_ms
+                response["_temporary_write_path"] = temporary_write_path
                 if change_review_changes:
                     # UI-only metadata: model history reads the original result
                     # fields and never consumes this plugin-owned value.
@@ -9333,6 +9349,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         str(res.get("tool_name") or ""),
                         res.get("tool_args"),
                         bool(res.get("tool_failed")),
+                        str(res.get("_temporary_write_path") or ""),
                     )
                     tool_post_timings["record_temp_file"] = _timing_ms(_t_tool_post)
                     _pipeline_step_timing_log("tool_result_post_step_timing", state["session_id"], "record_temp_file", tool_post_timings["record_temp_file"], react_iter=int(iter_count))
@@ -10339,7 +10356,10 @@ async def astream_events(
             {
                 "session_id": session_id,
                 "run_id": runtime_v2_run_id,
-                "project_root": str(WORK_DIR),
+                "project_root": str(session_work_dir(session_id)),
+                "workspace_root": str(session_work_dir(session_id)),
+                "app_root": str(PROJECT_ROOT),
+                "shared_root": str(WORK_DIR),
                 "prompt_language": prompt_language,
             },
         )

@@ -440,23 +440,24 @@ async def invoke_plugin_tool(
                 f"Plugin tool {function_name!r} has unsupported effect "
                 f"{effect!r} for worktree isolation."
             )
+    if work_dir and contract.get("declared"):
         root = Path(work_dir).resolve()
+        root_argument = str(contract.get("workspace_root_argument") or "")
+        if root_argument:
+            call_arguments[root_argument] = str(root)
         for argument_name in contract.get("path_arguments") or []:
             raw_path = str(call_arguments.get(argument_name) or "").strip()
             if not raw_path:
                 continue
-            candidate = Path(raw_path)
-            candidate = (
-                candidate.resolve()
-                if candidate.is_absolute()
-                else (root / candidate).resolve()
-            )
-            try:
-                candidate.relative_to(root)
-            except ValueError as exc:
-                raise ValueError(
-                    f"Plugin argument {argument_name!r} escapes the managed worktree."
-                ) from exc
+            from security.policy import canonical_path
+            candidate = canonical_path(raw_path, root)
+            if require_worktree_isolation:
+                try:
+                    candidate.relative_to(root)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Plugin argument {argument_name!r} escapes the managed worktree."
+                    ) from exc
             call_arguments[argument_name] = str(candidate)
     trusted_context = {
         "session_id": str(session_id or ""),

@@ -586,7 +586,14 @@ def classify_hook(
     ).strip()
     raw_cwd = str(getattr(command_spec, "cwd", "") or "").strip()
     source_root = Path(getattr(definition, "source_root", workspace)).resolve()
-    cwd = canonical_path(raw_cwd, source_root) if raw_cwd else source_root
+    from hooks.executor import _replace_roots
+    project_root = Path(payload.get("workspace_root") or payload.get("project_root") or workspace).resolve()
+    command = _replace_roots(command, definition, project_root)
+    raw_cwd = _replace_roots(raw_cwd, definition, project_root)
+    if payload.get("worktree_isolated") or (not raw_cwd and getattr(definition, "source_id", "") == "project"):
+        cwd = project_root
+    else:
+        cwd = canonical_path(raw_cwd, source_root) if raw_cwd else source_root
     config_payload = {
         "hook_id": str(getattr(definition, "id", "")),
         "event": str(getattr(definition, "event", "")),

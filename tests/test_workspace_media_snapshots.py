@@ -38,7 +38,7 @@ def test_snapshot_is_content_addressed_and_preserves_markdown_title(tmp_path):
     lines = rewritten.splitlines()
     assert lines[0].endswith(' "caption")')
     assert _snapshot_path(lines[0], tmp_path) == _snapshot_path(lines[1], tmp_path)
-    assert len(list((tmp_path / ".sugaragent" / "history-media").glob("*.png"))) == 1
+    assert len(list((tmp_path / ".config" / "history-media").glob("*.png"))) == 1
 
 
 def test_snapshot_skips_external_images_and_code_examples(tmp_path):
@@ -54,10 +54,21 @@ def test_snapshot_skips_external_images_and_code_examples(tmp_path):
     assert "![remote](https://example.com/image.png)" in rewritten
     assert "`![inline](local.png)`" in rewritten
     assert "![fenced](local.png)" in rewritten
-    assert "![local](<.sugaragent/history-media/" in rewritten
+    assert "![local](<.config/history-media/" in rewritten
 
 
 def test_snapshot_leaves_missing_and_non_image_files_unchanged(tmp_path):
     (tmp_path / "report.txt").write_text("text", encoding="utf-8")
     content = "![missing](missing.png)\n![text](report.txt)"
     assert snapshot_workspace_images(content, tmp_path) == content
+
+
+def test_resnapshot_of_old_history_link_survives_directory_migration(tmp_path):
+    legacy = tmp_path / ".sugaragent/history-media/old.png"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"old-history-image")
+
+    rewritten = snapshot_workspace_images("![old](<.sugaragent/history-media/old.png>)", tmp_path)
+
+    assert "![old](<.config/history-media/" in rewritten
+    assert _snapshot_path(rewritten, tmp_path).read_bytes() == b"old-history-image"

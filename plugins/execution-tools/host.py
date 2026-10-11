@@ -185,10 +185,10 @@ def install(app, context, plugin):
         data = await body(request)
         service = checked(session_id)
         tm = terminal_manager(service)
-        from agent_tools import _resolve_shell_working_dir, active_tool_work_dir
+        from agent_tools import _resolve_shell_working_dir
+        from agent_harness import session_work_dir
         meta = manager._load_metadata_unlocked(session_id) or {}
-        from pathlib import Path
-        root = Path(meta.get("subagent_work_dir") or meta.get("git_worktree_path") or active_tool_work_dir())
+        root = session_work_dir(session_id, meta)
         try:
             return await service.call(tm.open, session_id, actor="user",
                 name=str(data.get("name") or "shell"),

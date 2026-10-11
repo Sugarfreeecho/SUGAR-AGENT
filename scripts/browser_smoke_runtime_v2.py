@@ -18,6 +18,9 @@ import websocket
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root, server_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 APP_ROOT = ROOT / "app"
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
@@ -104,6 +107,7 @@ def run(base_url: str) -> dict:
     from runtime_v2 import RuntimeHistoryOps, RuntimeSubagentStore
     from runtime_v2.config import runtime_version
 
+    workspace_root = server_workspace_root(base_url)
     active_runtime = int(runtime_version())
     if active_runtime != 2:
         raise AssertionError(f"Runtime V2 required, got {active_runtime}")
@@ -114,12 +118,12 @@ def run(base_url: str) -> dict:
     if not session_id:
         raise AssertionError("session creation returned no id")
 
-    ops = RuntimeHistoryOps(ROOT / "workspace" / "sessions")
+    ops = RuntimeHistoryOps(workspace_root / "sessions")
     for index in range(1, 9):
         ops.commit_user_turn(session_id, f"browser smoke question {index} " + ("x" * 120))
         ops.commit_assistant_final(session_id, f"browser smoke answer {index} " + ("y" * 240))
     child_id = str(uuid.uuid4())
-    subagents = RuntimeSubagentStore(ROOT / "workspace" / "sessions")
+    subagents = RuntimeSubagentStore(workspace_root / "sessions")
     subagents.upsert_task(session_id, child_id, {
         "description": "browser smoke child",
         "subagent_type": "explore",

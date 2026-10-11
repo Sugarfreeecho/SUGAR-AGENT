@@ -3,7 +3,7 @@ MCP（Model Context Protocol）桥：支持 stdio / SSE / Streamable HTTP，配�
 默认免注册确认（EXTENSION_REGISTRATION_APPROVAL_ENABLED=1 时启用摘要绑定的统一扩展注册审批），
 工具调用走中央权限策略，结构化日志。
 
-配置：`PROJECT_ROOT/.sugaragent/mcp_servers.json` 或 `MCP_SERVERS_JSON`；路径可用 `MCP_SERVERS_PATH`。
+配置：`PROJECT_ROOT/.config/mcp_servers.json` 或 `MCP_SERVERS_JSON`；路径可用 `MCP_SERVERS_PATH`。
 禁用：`MCP_ENABLED=0`；未安装 `mcp` 包时跳过。
 """
 
@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 import httpx
 
 from agent_harness import PROJECT_ROOT
+from config_paths import config_path
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +65,10 @@ _tool_catalog_generation = 0
 _SIGNATURE_CACHE_TTL_SEC = 1.0
 _last_config_error: Optional[str] = None
 
-_MCP_TOOLS_STATE_PATH = PROJECT_ROOT / ".sugaragent" / "mcp_tools_state.json"
+_MCP_TOOLS_STATE_PATH = config_path(PROJECT_ROOT, "mcp_tools_state.json")
 _DEFAULT_MCP_TOOLS_STATE_PATH = _MCP_TOOLS_STATE_PATH
 _LEGACY_MCP_TOOLS_STATE_PATH = PROJECT_ROOT / "mcp_tools_state.json"
-_MCP_SERVERS_CONFIG_PATH = PROJECT_ROOT / ".sugaragent" / "mcp_servers.json"
+_MCP_SERVERS_CONFIG_PATH = config_path(PROJECT_ROOT, "mcp_servers.json")
 _LEGACY_MCP_SERVERS_CONFIG_PATH = PROJECT_ROOT / "mcp_servers.json"
 _mcp_config_migration_lock = threading.Lock()
 _mcp_tool_state_lock = threading.RLock()
@@ -76,7 +77,7 @@ _disabled_mcp_tools_loaded = False
 
 
 def _migrate_legacy_state_path(new: Path, legacy: Path) -> None:
-    """Move a legacy root-level state file into .sugaragent once."""
+    """Move a legacy root-level state file into .config once."""
     if legacy.exists() and not new.exists():
         try:
             new.parent.mkdir(parents=True, exist_ok=True)
@@ -361,7 +362,7 @@ def _enabled_flag() -> bool:
 
 
 def _config_path() -> Path:
-    """配置路径：`MCP_SERVERS_PATH` 优先，否则 `.sugaragent/mcp_servers.json`。"""
+    """配置路径：`MCP_SERVERS_PATH` 优先，否则 `.config/mcp_servers.json`。"""
     custom = (os.getenv("MCP_SERVERS_PATH") or "").strip()
     if custom:
         return Path(custom).expanduser()
@@ -1331,20 +1332,25 @@ async def _invoke_tool_by_fname_impl(
                 f"Error: MCP tool `{function_name}` has unsupported effect "
                 f"{effect!r} for worktree isolation."
             )
+    if work_dir and contract.get("declared"):
         root = Path(work_dir).resolve()
+        root_argument = str(contract.get("workspace_root_argument") or "")
+        if root_argument:
+            call_arguments[root_argument] = str(root)
         for argument_name in contract.get("path_arguments") or []:
             raw_path = str(call_arguments.get(argument_name) or "").strip()
             if not raw_path:
                 continue
-            candidate = Path(raw_path)
-            candidate = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-            try:
-                candidate.relative_to(root)
-            except ValueError:
-                return (
-                    f"Error: MCP argument `{argument_name}` escapes the managed "
-                    "worktree."
-                )
+            from security.policy import canonical_path
+            candidate = canonical_path(raw_path, root)
+            if require_worktree_isolation:
+                try:
+                    candidate.relative_to(root)
+                except ValueError:
+                    return (
+                        f"Error: MCP argument `{argument_name}` escapes the managed "
+                        "worktree."
+                    )
             call_arguments[argument_name] = str(candidate)
     srv = _servers.get(alias)
     if srv is None:

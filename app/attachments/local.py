@@ -6,6 +6,7 @@ import re
 import stat
 import uuid
 from pathlib import Path
+from config_paths import config_path
 
 from .errors import AttachmentError
 from .normalization import EXTENSIONS, decode_image, normalize_image
@@ -47,8 +48,8 @@ def safe_name(name):
 
 class LocalAttachmentStore:
     def __init__(self, work_dir, limits=None, normalization_policy=None, normalization_max_dimension=8192):
-        self.root = Path(work_dir).resolve() / ".sugaragent" / "attachments" / "v1"
-        self.cache_root = Path(work_dir).resolve() / ".sugaragent" / "cache" / "attachments" / "request-images"
+        self.root = config_path(work_dir, "attachments", "v1")
+        self.cache_root = config_path(work_dir, "cache", "attachments", "request-images")
         self.limits = limits or ImageAttachmentLimits()
         self.normalization_policy = normalization_policy or ImageRequestPolicy()
         self.normalization_max_dimension = normalization_max_dimension

@@ -3,10 +3,10 @@ import os
 from pathlib import Path
 from typing import List
 
-def _get_work_dir() -> Path:
+def _get_work_dir(session_id: str = "", metadata: dict | None = None) -> Path:
     try:
-        from agent_harness import WORK_DIR
-        return Path(WORK_DIR).resolve()
+        from agent_harness import session_work_dir
+        return session_work_dir(session_id, metadata).resolve()
     except Exception:
         return Path.cwd().resolve()
 
@@ -48,7 +48,7 @@ def _is_path_authorized(canonical: Path, authorized: List[Path]) -> bool:
     return False
 
 def get_authorized_dirs_for_session(session_id: str, workspace: Path | None = None) -> List[Path]:
-    ws = workspace or _get_work_dir()
+    ws = workspace or _get_work_dir(session_id)
     sid = str(session_id or "").strip()
     if not sid:
         return [ws.resolve()]
@@ -59,8 +59,8 @@ def get_authorized_dirs_for_session(session_id: str, workspace: Path | None = No
         if isinstance(meta, dict):
             raw_list = meta.get("authorized_dirs")
             if isinstance(raw_list, list) and raw_list:
-                out: List[Path] = []
-                seen = set()
+                out: List[Path] = [ws.resolve()]
+                seen = {os.path.normcase(str(ws.resolve()))}
                 for item in raw_list:
                     s = str(item or "").strip()
                     if not s:
@@ -93,7 +93,7 @@ def is_path_authorized_for_session(canonical: Path, session_id: str, workspace: 
     return _is_path_authorized(canonical, auth)
 
 def compute_required_authorization_dirs(paths: List[Path], session_id: str, workspace: Path | None = None) -> List[Path]:
-    ws = workspace or _get_work_dir()
+    ws = workspace or _get_work_dir(session_id)
     auth = get_authorized_dirs_for_session(session_id, ws)
     required: List[Path] = []
     seen = set()
@@ -154,7 +154,7 @@ def add_authorized_dir(session_id: str, dir_path: str | Path) -> List[Path]:
                 meta = {}
             existing = meta.get("authorized_dirs")
             if not isinstance(existing, list):
-                ws = _get_work_dir()
+                ws = _get_work_dir(sid, meta)
                 existing = [str(ws.resolve())]
             existing_normed: List[str] = []
             seen = set()
@@ -204,7 +204,7 @@ def ensure_session_authorized_dirs(session_id: str) -> List[Path]:
             if not isinstance(meta, dict):
                 meta = {}
             if not isinstance(meta.get("authorized_dirs"), list) or not meta.get("authorized_dirs"):
-                ws = _get_work_dir()
+                ws = _get_work_dir(sid, meta)
                 meta["authorized_dirs"] = [str(ws.resolve())]
                 meta["updated_at"] = __import__("datetime").datetime.now().isoformat()
                 session_manager._save_metadata_unlocked(sid, meta)

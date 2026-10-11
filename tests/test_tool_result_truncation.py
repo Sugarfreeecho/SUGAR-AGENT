@@ -29,7 +29,7 @@ def test_long_tool_result_is_saved_and_ui_matches_llm(tmp_path, monkeypatch):
 
     assert ui_view == llm_view
     assert "返回结果已被截断" in llm_view
-    assert "完整结果已落盘保存在 /.tool_results/" in llm_view
+    assert str(Path(state["_temporary_write_files"][0]).resolve()) in llm_view
     assert llm_view.count("返回结果已被截断") == 2
     assert "A" * 20 in llm_view
     assert "TAIL_SHOULD_NOT_APPEAR" not in llm_view

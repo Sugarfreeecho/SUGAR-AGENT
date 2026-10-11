@@ -38,6 +38,7 @@ from agent_harness import (
     logger,
     reset_executor_failure_state_for_session,
     session_manager,
+    session_work_root_raw,
     todo_manager,
 )
 from agent_subagent_events import (
@@ -1062,26 +1063,36 @@ def filter_tools_for_session(
     return out
 
 
-def _resolve_attachment_path(raw: str) -> Optional[Path]:
+def _task_workspace(session_id: str = "") -> Path:
+    try:
+        meta = session_manager._load_metadata(session_id) if session_id else {}
+        raw = session_work_root_raw(meta, metadata_loader=session_manager._load_metadata)
+        return Path(raw).resolve() if raw else WORK_DIR.resolve()
+    except (OSError, ValueError, AttributeError):
+        return WORK_DIR.resolve()
+
+
+def _resolve_attachment_path(raw: str, work_dir: Optional[Path] = None) -> Optional[Path]:
     s = (raw or "").strip().strip('"').strip("'")
     if not s:
         return None
+    root = Path(work_dir or WORK_DIR).resolve()
     p = Path(s)
     if not p.is_absolute():
         if s.startswith("/"):
-            p = WORK_DIR / s.lstrip("/")
+            p = root / s.lstrip("/")
         else:
-            p = WORK_DIR / s
+            p = root / s
     try:
         p = p.resolve()
-        p.relative_to(WORK_DIR.resolve())
+        p.relative_to(root)
     except (ValueError, OSError):
         if not p.is_file():
             return None
     return p if p.is_file() else None
 
 
-def load_file_attachments_block(paths: List[str]) -> str:
+def load_file_attachments_block(paths: List[str], work_dir: Optional[Path] = None) -> str:
     """将附件路径读入 prompt 块。
 
     文本附件就地摘录；图片使用带引号的绝对路径，由统一的消息
@@ -1095,7 +1106,7 @@ def load_file_attachments_block(paths: List[str]) -> str:
         if re.fullmatch(r"https?://\S+", raw_value, flags=re.IGNORECASE):
             lines.append(f"- ![remote image attachment]({raw_value})")
             continue
-        p = _resolve_attachment_path(str(raw))
+        p = _resolve_attachment_path(str(raw), work_dir)
         if p is None:
             lines.append(f"- {raw!r}: (not found or outside WORK_DIR)")
             continue
@@ -1138,6 +1149,7 @@ def build_subagent_user_message(
     file_attachments: Optional[List[str]] = None,
     best_of_attempt: int = 0,
     best_of_total: int = 0,
+    attachment_work_dir: Optional[Path] = None,
 ) -> str:
     if readonly:
         access_mode = "严格只读（无写入、Shell、Web 或 MCP）"
@@ -1160,7 +1172,7 @@ def build_subagent_user_message(
         parts.append("\n续接要求：沿用已验证的状态，只执行下面的追加指令；除非必要，不要重做已完成工作。")
     parts.append("\n### 父 Agent 指令\n")
     parts.append((prompt or "").strip())
-    attach_block = load_file_attachments_block(list(file_attachments or []))
+    attach_block = load_file_attachments_block(list(file_attachments or []), attachment_work_dir)
     if attach_block:
         parts.append("\n" + attach_block)
     parts.extend([
@@ -1397,11 +1409,12 @@ def _is_subagent_user_interrupt_final(text: str) -> bool:
     return t in ("interrupted",)
 
 
-def _git_worktree_add(run_dir: Path, attempt: int) -> Optional[Tuple[Path, str]]:
+def _git_worktree_add(run_dir: Path, attempt: int, work_dir: Optional[Path] = None) -> Optional[Tuple[Path, str]]:
     """
     best-of-n：若 WORK_DIR 在 git 仓库内，为单次尝试创建 worktree。
     返回 (worktree_path, branch_name) 或 None。
     """
+    work_dir = Path(work_dir or WORK_DIR).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     wt_path = run_dir / f"attempt_{attempt}_worktree"
     git_file = wt_path / ".git"
@@ -1411,7 +1424,7 @@ def _git_worktree_add(run_dir: Path, attempt: int) -> Optional[Tuple[Path, str]]
     try:
         git_root = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(WORK_DIR),
+            cwd=str(work_dir),
             capture_output=True,
             text=True,
             timeout=15,
@@ -1423,7 +1436,7 @@ def _git_worktree_add(run_dir: Path, attempt: int) -> Optional[Tuple[Path, str]]
         branch = f"subagent/best-of-{uuid.uuid4().hex[:8]}-a{attempt}"
         r = subprocess.run(
             ["git", "worktree", "add", "-B", branch, str(wt_path), "HEAD"],
-            cwd=str(WORK_DIR),
+            cwd=str(work_dir),
             capture_output=True,
             text=True,
             timeout=60,
@@ -1440,11 +1453,12 @@ def _git_worktree_add(run_dir: Path, attempt: int) -> Optional[Tuple[Path, str]]
         return None
 
 
-def _git_root_and_relative_work_dir() -> Optional[Tuple[Path, Path]]:
+def _git_root_and_relative_work_dir(work_dir: Optional[Path] = None) -> Optional[Tuple[Path, Path]]:
+    work_dir = Path(work_dir or WORK_DIR).resolve()
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(WORK_DIR),
+            cwd=str(work_dir),
             capture_output=True,
             text=True,
             timeout=15,
@@ -1454,7 +1468,7 @@ def _git_root_and_relative_work_dir() -> Optional[Tuple[Path, Path]]:
         if result.returncode != 0:
             return None
         root = Path((result.stdout or "").strip()).expanduser().resolve()
-        relative = WORK_DIR.resolve().relative_to(root)
+        relative = work_dir.relative_to(root)
         return root, relative
     except Exception:
         return None
@@ -1465,13 +1479,13 @@ def _managed_worktree_base(git_root: Path) -> Path:
     return git_root.parent / ".myagent-worktrees" / f"{git_root.name}-{digest}"
 
 
-def _create_managed_worktree(child_id: str) -> Optional[Tuple[Path, Path, str, str]]:
+def _create_managed_worktree(child_id: str, work_dir: Optional[Path] = None) -> Optional[Tuple[Path, Path, str, str]]:
     """Create a task worktree outside the main checkout.
 
     Returns ``(worktree_root, subagent_work_dir, branch, base_commit)``.
     """
 
-    located = _git_root_and_relative_work_dir()
+    located = _git_root_and_relative_work_dir(work_dir)
     if located is None:
         return None
     git_root, relative_work_dir = located
@@ -1516,11 +1530,25 @@ def _create_managed_worktree(child_id: str) -> Optional[Tuple[Path, Path, str, s
         return None
 
 
-def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
+def _git_worktree_remove(worktree_path: Path, branch: str = "", git_root: str | Path = "") -> None:
     """移除 git worktree 及临时分支（忽略非致命错误）。"""
     wt = Path(worktree_path)
     branch_name = (branch or "").strip()
-    git_cwd = str(WORK_DIR)
+    # Resolve ownership while the worktree still exists, never from a different
+    # session's default project. Persisted ownership also works after removal.
+    if not git_root and wt.is_dir():
+        try:
+            common = _worktree_command(wt, ["rev-parse", "--git-common-dir"])
+            if common.returncode == 0:
+                common_path = Path(common.stdout.strip())
+                common_path = common_path if common_path.is_absolute() else wt / common_path
+                git_root = common_path.resolve().parent
+        except (OSError, ValueError):
+            pass
+    if not git_root:
+        logger.warning("Cannot determine owning Git repository for worktree %s", wt)
+        return
+    git_cwd = str(Path(git_root).resolve())
     if wt.is_dir() or wt.is_file():
         try:
             subprocess.run(
@@ -1534,7 +1562,7 @@ def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
             )
         except Exception as e:
             logger.debug("git worktree remove 失败 %s: %s", wt, e)
-        if wt.exists() and _safe_managed_worktree_path(wt):
+        if wt.exists() and _safe_managed_worktree_path(wt, Path(git_cwd)):
             try:
                 shutil.rmtree(wt, ignore_errors=True)
             except Exception:
@@ -1554,12 +1582,12 @@ def _git_worktree_remove(worktree_path: Path, branch: str = "") -> None:
             logger.debug("git branch -D 失败 %s: %s", branch_name, e)
 
 
-def _safe_managed_worktree_path(path: Path) -> bool:
+def _safe_managed_worktree_path(path: Path, git_root: Optional[Path] = None) -> bool:
     """Allow fallback deletion only for paths created by subagent worktree code."""
 
     try:
         resolved = path.expanduser().resolve()
-        located = _git_root_and_relative_work_dir()
+        located = (git_root, Path(".")) if git_root else None
         if located is not None:
             managed = _managed_worktree_base(located[0]).resolve()
             resolved.relative_to(managed)
@@ -1577,12 +1605,15 @@ def _safe_managed_worktree_path(path: Path) -> bool:
 
 
 def _persist_worktree_meta(child_id: str, worktree_path: Path, branch: str) -> None:
+    located = _git_root_and_relative_work_dir(_task_workspace(child_id))
+    relative = located[1] if located else Path(".")
     session_manager.patch_subagent_metadata(
         child_id,
         {
             "git_worktree_path": str(worktree_path),
-            "subagent_work_dir": str(worktree_path),
+            "subagent_work_dir": str((worktree_path / relative).resolve()),
             "git_worktree_branch": branch,
+            "git_worktree_main_root": str(located[0]) if located else "",
         },
     )
 
@@ -1599,7 +1630,7 @@ def cleanup_git_worktree_for_session(child_session_id: str) -> None:
     branch = str(meta.get("git_worktree_branch") or "").strip()
     if not wt_raw:
         return
-    _git_worktree_remove(Path(wt_raw), branch)
+    _git_worktree_remove(Path(wt_raw), branch, meta.get("git_worktree_main_root") or "")
     session_manager.patch_subagent_metadata(
         child_session_id,
         {
@@ -1618,8 +1649,9 @@ def _persist_managed_worktree(
     branch: str,
     base_commit: str,
 ) -> None:
-    located = _git_root_and_relative_work_dir()
-    git_root = located[0] if located is not None else WORK_DIR.resolve()
+    source_root = _task_workspace(child_id)
+    located = _git_root_and_relative_work_dir(source_root)
+    git_root = located[0] if located is not None else source_root
     session_manager.patch_subagent_metadata(
         child_id,
         {
@@ -1729,7 +1761,7 @@ def manage_subagent_worktree(
         )
         return f"Retained managed worktree for {validated}: {root} ({branch})."
     if op == "discard":
-        _git_worktree_remove(root, branch)
+        _git_worktree_remove(root, branch, meta.get("git_worktree_main_root") or "")
         session_manager.patch_subagent_metadata(
             validated,
             {
@@ -1748,7 +1780,7 @@ def manage_subagent_worktree(
     main_root_raw = str(meta.get("git_worktree_main_root") or "").strip()
     main_root = Path(main_root_raw).resolve() if main_root_raw else None
     if main_root is None or not main_root.is_dir():
-        located = _git_root_and_relative_work_dir()
+        located = _git_root_and_relative_work_dir(_task_workspace(parent_session_id))
         main_root = located[0] if located is not None else None
     if main_root is None:
         return "Error: cannot locate the main Git worktree for merge."
@@ -1782,7 +1814,7 @@ def manage_subagent_worktree(
                 f"worktree was retained. {(merged.stderr or merged.stdout).strip()}"
             )
     merge_commit = (_worktree_command(main_root, ["rev-parse", "HEAD"]).stdout or "").strip()
-    _git_worktree_remove(root, branch)
+    _git_worktree_remove(root, branch, main_root)
     session_manager.patch_subagent_metadata(
         validated,
         {
@@ -1824,6 +1856,7 @@ def cleanup_best_of_run_worktrees(parent_session_id: str, run_id: str) -> None:
         _git_worktree_remove(
             Path(str(item.get("path") or "")),
             str(item.get("branch") or ""),
+            item.get("git_root") or "",
         )
     try:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -1857,6 +1890,7 @@ def _register_best_of_worktree(
             "path": str(wt_path),
             "branch": branch,
             "child_hint": "",
+            "git_root": str((_git_root_and_relative_work_dir(_task_workspace(parent_session_id)) or ("",))[0]),
         }
     )
     manifest.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -2705,7 +2739,7 @@ async def _run_single_subagent(
         and hasattr(session_manager, "patch_subagent_metadata")
     ):
         try:
-            managed = await asyncio.to_thread(_create_managed_worktree, child_id)
+            managed = await asyncio.to_thread(_create_managed_worktree, child_id, _task_workspace(parent_session_id))
         except asyncio.CancelledError:
             await _fail_unstarted_subagent(
                 child_id, parent_session_id, description, subagent_type,
@@ -2772,7 +2806,7 @@ async def _run_single_subagent(
             / best_of_run_id
         )
         try:
-            wt_info = _git_worktree_add(run_dir, best_of_attempt)
+            wt_info = _git_worktree_add(run_dir, best_of_attempt, _task_workspace(parent_session_id))
         except Exception as exc:
             return await _fail_unstarted_subagent(
                 child_id, parent_session_id, description, subagent_type,
@@ -2805,7 +2839,7 @@ async def _run_single_subagent(
                 image_refs.append(ref)
                 attachment_paths.append(attachment_store.image_host_path(ref))
                 continue
-            path = _resolve_attachment_path(str(raw))
+            path = _resolve_attachment_path(str(raw), _task_workspace(parent_session_id))
             if path is not None and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}:
                 image_paths.append(str(path))
                 attachment_paths.append(str(path))
@@ -2820,6 +2854,7 @@ async def _run_single_subagent(
             file_attachments=attachment_paths,
             best_of_attempt=best_of_attempt,
             best_of_total=best_of_total,
+            attachment_work_dir=_task_workspace(parent_session_id),
         )
         execution_started = True
         return await _execute_subagent_run(

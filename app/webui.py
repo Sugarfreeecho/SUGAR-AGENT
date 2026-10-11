@@ -76,6 +76,7 @@ from agent_tools import discover_skills, set_skill_enabled
 import model_profiles
 import execution_metrics
 from path_picker_util import pick_native_path
+from config_paths import resolve_legacy_config_path
 
 from notification_providers import notify_user
 
@@ -2037,8 +2038,34 @@ async def get_index(request: Request):
     )
 
 
+def _workspace_request_root(session_id: str = "", work_dir: str = "") -> Path:
+    """Resolve one request without changing the application's shared workspace."""
+    from agent_harness import session_work_dir
+    from fastapi import HTTPException
+
+    sid = session_id.strip() if isinstance(session_id, str) else ""
+    if sid:
+        try:
+            metadata = session_manager._load_metadata(sid)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=404, detail="session not found") from exc
+        if not metadata:
+            raise HTTPException(status_code=404, detail="session not found")
+        root = session_work_dir(sid, metadata)
+    elif isinstance(work_dir, str) and work_dir.strip():
+        root = Path(work_dir.strip()).expanduser()
+        if not root.is_absolute():
+            raise HTTPException(status_code=400, detail="work_dir must be absolute")
+        root = root.resolve()
+    else:
+        root = WORK_DIR.resolve()
+    if not root.is_dir():
+        raise HTTPException(status_code=404, detail=f"work directory unavailable: {root}")
+    return root
+
+
 def _resolve_allowed_local_path(
-    raw_value: str, require_file: bool = False
+    raw_value: str, require_file: bool = False, work_root: Optional[Path] = None
 ) -> Path:
     """Resolve a native absolute or virtual workspace path.
 
@@ -2052,27 +2079,32 @@ def _resolve_allowed_local_path(
     if not raw:
         raise ValueError("empty path")
 
-    work_root = WORK_DIR.resolve()
+    work_root = (work_root or WORK_DIR).resolve()
+    # These paths name durable application storage, even in a project session.
+    shared_rel = raw.lstrip("/\\").replace("\\", "/")
+    if shared_rel.startswith((".config/history-media/", ".sugaragent/history-media/",
+                              ".config/attachments/", ".sugaragent/attachments/", "uploads/chat/")):
+        work_root = WORK_DIR.resolve()
     windows_absolute = bool(re.match(r"^[A-Za-z]:[\\/]", raw))
     native = Path(raw).expanduser()
     native_absolute = windows_absolute or native.is_absolute()
 
     if native_absolute:
-        resolved_native = Path(os.path.abspath(str(native))).resolve()
+        resolved_native = resolve_legacy_config_path(Path(os.path.abspath(str(native))), work_root)
         if resolved_native.exists():
             candidate = resolved_native
         else:
-            virtual = (work_root / raw.lstrip("/\\")).resolve()
+            virtual = resolve_legacy_config_path(work_root / raw.lstrip("/\\"), work_root)
             if virtual.exists():
                 candidate = virtual
             else:
                 raise FileNotFoundError(raw)
     else:
         rel_raw = raw.lstrip("/\\")
-        candidate = (work_root / rel_raw).resolve()
+        candidate = resolve_legacy_config_path(work_root / rel_raw, work_root)
         first = rel_raw.replace("\\", "/").split("/", 1)[0]
-        if first and first.lower() == WORK_DIR.name.lower() and not candidate.exists():
-            candidate = (WORK_DIR.parent / rel_raw).resolve()
+        if first and first.lower() == work_root.name.lower() and not candidate.exists():
+            candidate = resolve_legacy_config_path(work_root.parent / rel_raw, work_root)
 
     if require_file:
         if not candidate.is_file():
@@ -2085,6 +2117,8 @@ def _resolve_allowed_local_path(
 @fastapi_app.get("/api/open-workspace-file")
 async def open_workspace_file(
     rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径"),
+    session_id: str = "",
+    work_dir: str = "",
 ):
     """
     用系统默认应用打开本机文件。浏览器禁止从 http(s) 页面跳转 file://，故通过后端 os.startfile / open / xdg-open 打开。
@@ -2098,7 +2132,7 @@ async def open_workspace_file(
         return JSONResponse({"ok": False, "error": "路径为空"}, status_code=400)
     try:
         safe_path = await asyncio.wait_for(
-            run_in_threadpool(_resolve_allowed_local_path, raw, False),
+            run_in_threadpool(_resolve_allowed_local_path, raw, False, _workspace_request_root(session_id, work_dir)),
             timeout=5.0,
         )
     except asyncio.TimeoutError:
@@ -2128,6 +2162,8 @@ async def open_workspace_file(
 async def open_workspace_dir(
     rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径（文件或目录）"),
     probe: int = Query(0, description="1=只做路径校验，不真的唤出文件管理器（供测试）"),
+    session_id: str = "",
+    work_dir: str = "",
 ):
     """Reveal a file's folder in the system file manager (or open the folder).
 
@@ -2144,7 +2180,7 @@ async def open_workspace_dir(
         return JSONResponse({"ok": False, "error": "路径为空"}, status_code=400)
     try:
         safe_path = await asyncio.wait_for(
-            run_in_threadpool(_resolve_allowed_local_path, raw, False),
+            run_in_threadpool(_resolve_allowed_local_path, raw, False, _workspace_request_root(session_id, work_dir)),
             timeout=5.0,
         )
     except asyncio.TimeoutError:
@@ -2182,11 +2218,11 @@ async def open_workspace_dir(
     return JSONResponse({"ok": True, "path": str(safe_path)})
 
 
-def _resolve_workspace_view_path(raw_value: str) -> Path:
+def _resolve_workspace_view_path(raw_value: str, work_root: Optional[Path] = None) -> Path:
     raw = unquote(raw_value or "").strip().strip('"').strip("'")
     if not raw:
         raise ValueError("empty path")
-    return _resolve_allowed_local_path(raw, True)
+    return _resolve_allowed_local_path(raw, True, work_root)
 
 
 def _svg_length_px(raw_value: Any) -> Optional[float]:
@@ -2270,8 +2306,8 @@ def _cached_workspace_image_dimensions(
     return int(width), int(height)
 
 
-def _workspace_image_metadata_item(rel: str) -> dict[str, Any]:
-    path = _resolve_workspace_view_path(rel)
+def _workspace_image_metadata_item(rel: str, work_root: Optional[Path] = None) -> dict[str, Any]:
+    path = _resolve_workspace_view_path(rel, work_root)
     if path.suffix.lower() not in _VIEWABLE_IMAGE_SUFFIXES:
         raise ValueError("not a supported image")
     stat = path.stat()
@@ -2293,9 +2329,10 @@ async def _workspace_media_response(
     *,
     allowed_suffixes: set[str],
     kind_label: str,
+    work_root: Optional[Path] = None,
 ):
     try:
-        cand = await run_in_threadpool(_resolve_workspace_view_path, rel)
+        cand = await run_in_threadpool(_resolve_workspace_view_path, rel, work_root)
     except ValueError:
         return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
     except PermissionError:
@@ -2331,16 +2368,19 @@ async def _workspace_media_response(
 @fastapi_app.get("/api/workspace-media")
 async def workspace_media(
     rel: str = Query("", description="Media path relative to workspace, or a native absolute path"),
+    session_id: str = "",
+    work_dir: str = "",
 ):
     return await _workspace_media_response(
         rel,
         allowed_suffixes=_VIEWABLE_MEDIA_SUFFIXES,
         kind_label="media",
+        work_root=_workspace_request_root(session_id, work_dir),
     )
 
 
 @fastapi_app.post("/api/workspace-image-metadata")
-async def workspace_image_metadata(request: Request):
+async def workspace_image_metadata(request: Request, session_id: str = "", work_dir: str = ""):
     try:
         body = await request.json()
     except Exception:
@@ -2355,12 +2395,13 @@ async def workspace_image_metadata(request: Request):
             if isinstance(rel, str) and str(rel).strip()
         )
     )
+    root = _workspace_request_root(session_id or body.get("session_id", ""), work_dir or body.get("work_dir", ""))
 
     def _collect() -> list[dict[str, Any]]:
         images: list[dict[str, Any]] = []
         for rel in clean_rels:
             try:
-                images.append(_workspace_image_metadata_item(rel))
+                images.append(_workspace_image_metadata_item(rel, root))
             except (ValueError, PermissionError, FileNotFoundError, OSError):
                 continue
             except Exception as exc:
@@ -2380,11 +2421,14 @@ async def workspace_image_metadata(request: Request):
 @fastapi_app.get("/api/workspace-image")
 async def workspace_image(
     rel: str = Query("", description="Image path relative to workspace, or a native absolute path"),
+    session_id: str = "",
+    work_dir: str = "",
 ):
     return await _workspace_media_response(
         rel,
         allowed_suffixes=_VIEWABLE_IMAGE_SUFFIXES,
         kind_label="image",
+        work_root=_workspace_request_root(session_id, work_dir),
     )
 
 
@@ -2392,6 +2436,8 @@ async def workspace_image(
 async def workspace_file_text(
     rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径"),
     max_bytes: int = Query(200000, ge=1024, le=2000000),
+    session_id: str = "",
+    work_dir: str = "",
 ):
     """Read one workspace file's text for the details column's document page.
 
@@ -2399,8 +2445,9 @@ async def workspace_file_text(
     with ``truncated`` reported so the UI can say so. The path resolves through
     the same allowed-root gate as the workspace media endpoints.
     """
+    root = _workspace_request_root(session_id, work_dir)
     try:
-        path = await run_in_threadpool(_resolve_workspace_view_path, rel)
+        path = await run_in_threadpool(_resolve_workspace_view_path, rel, root)
     except ValueError:
         return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
     except PermissionError:
@@ -2442,7 +2489,8 @@ async def workspace_file_text(
 
 
 @fastapi_app.get("/api/workspace-assets/{rel:path}")
-async def workspace_assets(rel: str):
+@fastapi_app.get("/api/sessions/{session_id}/workspace-assets/{rel:path}")
+async def workspace_assets(rel: str, session_id: str = "", work_dir: str = ""):
     """Serve one workspace file as-is, for the details column's HTML preview.
 
     The URL shape keeps sibling assets resolvable: a document at
@@ -2451,8 +2499,9 @@ async def workspace_assets(rel: str):
     allowed-root gate as the other workspace readers; the response is no-store
     so a reload always reflects the file on disk.
     """
+    root = _workspace_request_root(session_id, work_dir)
     try:
-        path = await run_in_threadpool(_resolve_workspace_view_path, rel)
+        path = await run_in_threadpool(_resolve_workspace_view_path, rel, root)
     except ValueError:
         return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
     except PermissionError:
@@ -2571,8 +2620,8 @@ def _is_workspace_visible_dir(name: str) -> bool:
     return name not in _WORKSPACE_FILE_SKIP_DIRS and not name.startswith(".venv")
 
 
-def _resolve_workspace_rel_dir(rel_dir: str) -> Path:
-    root = WORK_DIR.resolve()
+def _resolve_workspace_rel_dir(rel_dir: str, work_root: Optional[Path] = None) -> Path:
+    root = (work_root or WORK_DIR).resolve()
     rel = str(rel_dir or "").strip().replace("\\", "/").strip("/")
     target = (root / rel).resolve() if rel else root
     target.relative_to(root)
@@ -2581,9 +2630,9 @@ def _resolve_workspace_rel_dir(rel_dir: str) -> Path:
     return target
 
 
-def _list_workspace_dir(rel_dir: str) -> list[dict]:
-    root = WORK_DIR.resolve()
-    target = _resolve_workspace_rel_dir(rel_dir)
+def _list_workspace_dir(rel_dir: str, work_root: Optional[Path] = None) -> list[dict]:
+    root = (work_root or WORK_DIR).resolve()
+    target = _resolve_workspace_rel_dir(rel_dir, root)
     dirs: list[dict] = []
     files: list[dict] = []
     with os.scandir(target) as it:
@@ -2601,8 +2650,8 @@ def _list_workspace_dir(rel_dir: str) -> list[dict]:
     return dirs + files
 
 
-def _scan_workspace_files(query: str) -> list[dict]:
-    root = WORK_DIR.resolve()
+def _scan_workspace_files(query: str, work_root: Optional[Path] = None) -> list[dict]:
+    root = (work_root or WORK_DIR).resolve()
     q = (query or "").strip().lower()
     terms = [x for x in re.split(r"\s+", q) if x]
     matches: list[dict] = []
@@ -2655,17 +2704,29 @@ def _scan_workspace_files(query: str) -> list[dict]:
 async def list_workspace_files(
     q: str = Query("", max_length=200),
     dir: str = Query("", max_length=1000),
+    session_id: str = "",
+    work_dir: str = "",
 ):
+    root = _workspace_request_root(session_id, work_dir)
     try:
         query = (q or "").strip()
         if query:
-            files = await run_in_threadpool(_scan_workspace_files, query)
+            files = await run_in_threadpool(_scan_workspace_files, query, root)
         else:
-            files = await run_in_threadpool(_list_workspace_dir, dir)
-        return JSONResponse({"ok": True, "root": str(WORK_DIR.resolve()), "files": files})
+            files = await run_in_threadpool(_list_workspace_dir, dir, root)
+        return JSONResponse({"ok": True, "root": str(root), "files": files})
+    except (FileNotFoundError, ValueError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
     except Exception as exc:
         logger.warning("workspace file scan failed: %s", exc)
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@fastapi_app.get("/api/workspace-info")
+async def workspace_info():
+    from agent_harness import SKILLS_DIR
+    return {"work_dir": str(WORK_DIR.resolve()), "sessions_dir": str(session_manager.sessions_dir.resolve()),
+            "skills_dir": str(SKILLS_DIR.resolve())}
 
 
 @fastapi_app.get("/api/skills")
@@ -3272,6 +3333,8 @@ async def api_pick_path(request: Request):
             status_code=400,
         )
     initial = str(data.get("initial") or "")
+    if not initial:
+        initial = str(_workspace_request_root(data.get("session_id", ""), data.get("work_dir", "")))
     multiple = bool(data.get("multiple", False))
     try:
         chosen = await run_in_threadpool(pick_native_path, kind, initial, multiple)
@@ -9283,6 +9346,7 @@ async def _config_check(req: _Request, call_next):
         "/api/pick-path",
         "/api/upload-chat-files",
         "/api/workspace-files",
+        "/api/workspace-info",
     ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/extensions/") or p.startswith("/api/skills/") or p.startswith("/api/security/") or p.startswith("/api/mcp/tools/") or p.startswith("/api/mcp/servers/") or p.startswith("/api/features/") or p.startswith("/api/remote/v1/"):
         return await call_next(req)
     if not _is_configured():

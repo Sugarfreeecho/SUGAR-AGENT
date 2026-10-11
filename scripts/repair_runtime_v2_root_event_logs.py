@@ -8,6 +8,9 @@ from uuid import UUID
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -42,7 +45,7 @@ def main() -> int:
             "Normal session paths never invoke this service."
         )
     )
-    parser.add_argument("--sessions-dir", default=str(ROOT / "workspace" / "sessions"))
+    parser.add_argument("--sessions-dir", default=str(WORKSPACE_ROOT / "sessions"))
     parser.add_argument(
         "--session-id",
         action="append",

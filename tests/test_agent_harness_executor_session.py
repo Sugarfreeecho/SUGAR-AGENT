@@ -241,7 +241,37 @@ def test_background_stream_falls_back_when_primary_has_reasoning_but_no_text():
     ))
 
     assert [event.text for event in events if event.kind == "content_delta"] == ["summary"]
-    assert all(event.text != "hidden" for event in events)
+    assert [event.kind for event in events] == [
+        "reasoning_delta", "reasoning_reset", "content_delta", "finish",
+    ]
+    assert events[0].text == "hidden"
+
+
+def test_main_stream_does_not_switch_after_reasoning_output():
+    import pytest
+    import agent_harness
+
+    calls = []
+
+    class Transport:
+        def __init__(self, name):
+            self.name = name
+
+        def stream_completion(self, **_kwargs):
+            calls.append(self.name)
+            yield agent_harness.TransportEvent("reasoning_delta", text="thinking")
+            raise TimeoutError("stream disconnected")
+
+    client = agent_harness.ExecutorLLMClient([
+        {"transport": Transport(name), "provider": "openai", "model": name,
+         "max_output_tokens": 100}
+        for name in ("primary", "backup")
+    ])
+    events = client.stream_completion(messages=[], request_context=agent_harness.LLMRequestContext())
+    assert next(events).text == "thinking"
+    with pytest.raises(TimeoutError, match="disconnected"):
+        next(events)
+    assert calls == ["primary"]
 
 
 def test_fallback_client_switches_after_api_error_and_uses_each_profile_full_limit():

@@ -11,6 +11,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict
+from config_paths import config_path
 
 from .security import PluginSecurityError, normalize_namespace
 
@@ -37,7 +38,7 @@ def default_plugin_storage_root() -> Path:
         if not candidate.is_absolute():
             candidate = default_workspace_root() / candidate
         return candidate.resolve()
-    return (default_workspace_root() / ".sugaragent" / "plugins").resolve()
+    return config_path(default_workspace_root(), "plugins").resolve()
 
 
 def _is_within(path: Path, root: Path) -> bool:

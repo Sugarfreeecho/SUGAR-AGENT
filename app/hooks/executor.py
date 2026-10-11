@@ -152,11 +152,13 @@ class CommandHookExecutor:
         self.project_root = Path(project_root).expanduser().resolve()
         self.source_environment = source_environment
 
-    def _cwd(self, definition: HookDefinition) -> Path:
+    def _cwd(self, definition: HookDefinition, project_root: Optional[Path] = None) -> Path:
         raw_cwd = definition.command.cwd
         if not raw_cwd:
+            if definition.source_id == "project" and project_root is not None:
+                return project_root
             return definition.source_root
-        expanded = _replace_roots(raw_cwd, definition, self.project_root)
+        expanded = _replace_roots(raw_cwd, definition, project_root or self.project_root)
         path = Path(expanded).expanduser()
         if not path.is_absolute():
             path = definition.source_root / path
@@ -208,7 +210,8 @@ class CommandHookExecutor:
         command = definition.command.platform_command()
         if not command:
             return self._failure(definition, started, "No command is configured for this platform.")
-        command = _replace_roots(command, definition, self.project_root)
+        project_root = Path(payload.get("workspace_root") or payload.get("project_root") or self.project_root).expanduser().resolve()
+        command = _replace_roots(command, definition, project_root)
         try:
             workspace_root = str(payload.get("workspace_root") or "").strip()
             worktree_isolated = bool(payload.get("worktree_isolated"))
@@ -219,16 +222,18 @@ class CommandHookExecutor:
                         f"Hook worktree directory does not exist: {cwd}"
                     )
             else:
-                cwd = self._cwd(definition)
+                cwd = self._cwd(definition, project_root)
             stdin_data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
             env = build_hook_environment(
                 definition,
-                self.project_root,
+                project_root,
                 source_environment=self.source_environment,
             )
             if workspace_root:
                 env["MYAGENT_WORKSPACE_ROOT"] = workspace_root
                 env["MYAGENT_WORKTREE_ISOLATED"] = "1" if worktree_isolated else "0"
+            env["MYAGENT_APP_ROOT"] = str(payload.get("app_root") or self.project_root)
+            env["MYAGENT_SHARED_ROOT"] = str(payload.get("shared_root") or self.project_root)
             kwargs: Dict[str, Any] = {}
             if os.name == "nt":
                 kwargs["creationflags"] = hidden_flags(new_process_group=True)

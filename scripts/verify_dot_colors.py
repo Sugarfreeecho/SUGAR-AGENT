@@ -26,6 +26,9 @@ import requests
 import websocket
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from app.workspace_paths import configured_workspace_root, server_workspace_root
+WORKSPACE_ROOT = configured_workspace_root(ROOT)
 
 
 def _browser_path() -> Path:
@@ -110,6 +113,7 @@ def main() -> int:
     ap.add_argument("--base-url", default="http://127.0.0.1:8192")
     args = ap.parse_args()
     base = args.base_url.rstrip("/")
+    workspace_root = server_workspace_root(base)
 
     created = requests.post(base + "/sessions", timeout=90)
     created.raise_for_status()
@@ -121,7 +125,7 @@ def main() -> int:
     unread_child = str(uuid.uuid4())
     read_child = str(uuid.uuid4())
     failed_child = str(uuid.uuid4())
-    seed(ROOT / "workspace" / "sessions" / sid, [
+    seed(workspace_root / "sessions" / sid, [
         {"child": running_child, "label": "色标-进行中", "status": "running"},
         {"child": unread_child, "label": "色标-完成未读", "status": "completed"},
         {"child": read_child, "label": "色标-完成已读", "status": "completed"},
@@ -231,7 +235,7 @@ def main() -> int:
             requests.delete(base + f"/sessions/{sid}", timeout=15)
         except Exception:
             pass
-        shutil.rmtree(ROOT / "workspace" / "sessions" / sid, ignore_errors=True)
+        shutil.rmtree(workspace_root / "sessions" / sid, ignore_errors=True)
 
 
 if __name__ == "__main__":
