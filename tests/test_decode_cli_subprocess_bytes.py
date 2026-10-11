@@ -68,3 +68,11 @@ def test_utf8_line_with_stray_bad_byte_stays_utf8(on_windows):
     # 单行只含个别坏字节时不应整行改写为 GBK；保持可读并以替换符标注坏字节。
     data = b"OK \xff" + "中文测试".encode("utf-8") + b"\n"
     assert agent_tools._decode_cli_subprocess_bytes(data) == "OK \ufffd中文测试\n"
+
+
+def test_ps_gbk_line_with_accidental_utf8_runs_decodes(on_windows):
+    # 真实案例（2026-10-11）：PS 以 GBK 写出的中文行中混有“恰好合法 UTF-8”的字节对，
+    # 替换符占比 11/24（低于 1/2、高于 1/3）；旧阈值 bad*2 漏判，整行显示为 “���ٻع飨…”。
+    text = "=== 快速回归（后端 + 前端相关） ==="
+    data = text.encode("gbk") + b"\r\n"
+    assert agent_tools._decode_cli_subprocess_bytes(data) == text + "\r\n"

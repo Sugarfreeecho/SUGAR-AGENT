@@ -1239,8 +1239,8 @@ def _subprocess_env_for_shell() -> Dict[str, str]:
 
 def _decode_byte_line(line: bytes) -> str:
     """
-    单行兜底解码（混合编码流专用）：UTF-8 严格优先；该行“非 ASCII 字节里绝大多数不是合法 UTF-8”时按 GBK；
-    其余情况保留 UTF-8 替换符结果。
+    单行兜底解码（混合编码流专用）：UTF-8 严格优先；该行“非 ASCII 字节中 UTF-8 替换符占比不低于约 1/3”
+    时按 GBK；其余情况保留 UTF-8 替换符结果。
     """
     try:
         return line.decode("utf-8")
@@ -1249,7 +1249,9 @@ def _decode_byte_line(line: bytes) -> str:
     replaced = line.decode("utf-8", errors="replace")
     bad = replaced.count("\ufffd")
     non_ascii = sum(1 for b in line if b >= 0x80)
-    if bad >= 2 and non_ascii and bad * 2 >= non_ascii:
+    # 阈值取约 1/3：PS/GBK 文本行常混有“恰好合法 UTF-8”的字节对（如 U+067B/U+0639/U+98E8），
+    # 使替换符占比低于 1/2（实测 11/24）而漏判；同时仍高于“UTF-8 行个别坏字节”的比例（如 1/13）。
+    if bad >= 2 and non_ascii and bad * 3 >= non_ascii:
         try:
             return line.decode("gbk")
         except UnicodeDecodeError:
@@ -1586,6 +1588,33 @@ def _posix_shell_eval_wrapper(script: str) -> str:
 def _powershell_encoded_command_b64(script: str) -> str:
     """UTF-16 LE → Base64，供 ``powershell -EncodedCommand`` 使用。"""
     return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
+# Windows PowerShell 执行器：统一 UTF-8 I/O 的脚本前置（RUN_SHELL_PS_UTF8=0 可关闭）。
+_RUN_SHELL_PS_UTF8_PRELUDE = (
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+    "$OutputEncoding=[Text.Encoding]::UTF8;"
+    "$ProgressPreference='SilentlyContinue';"
+)
+
+
+def _powershell_script_with_utf8_prelude(script: str) -> str:
+    """
+    为 Windows PowerShell 脚本前置 UTF-8 输出配置，消除混合编码误码（2026-10-11 实测修复）：
+
+    - ``[Console]::OutputEncoding``：PS 自有字符串（Write-Output 等）按 UTF-8 写出；同时统一
+      对原生命令输出（含经 Select-Object 等管道）的读取编码——否则 node/python 的 UTF-8 输出
+      经 GBK 读入后会被替换符损伤（如 ``✓`` 变 ``�?``），PS 中文按 GBK 写出也会在捕获侧变成
+      ``���ٻع飨…``；
+    - ``$OutputEncoding``：统一 PS 文本管道写入原生命令的编码（PS 5.1 默认为 ASCII）；
+    - ``$ProgressPreference``：顺带消除 CLIXML 进度记录噪音。实测设置后 ``chcp`` 仍为 936
+      （仅改 .NET 侧编码，不动控制台代码页）。
+
+    设为 ``RUN_SHELL_PS_UTF8=0`` 可关闭（恢复旧行为；主要影响“GBK 工具输出经管道”的场景）。
+    """
+    if os.getenv("RUN_SHELL_PS_UTF8", "1").strip().lower() in ("0", "false", "no"):
+        return script
+    return _RUN_SHELL_PS_UTF8_PRELUDE + script
 
 
 def _compose_shell_command(command: str, args: Optional[List[str]]) -> str:
@@ -2480,7 +2509,8 @@ async def run_shell(
 
     Env vars: ``RUN_CLI_CLOSE_STDIN``, ``RUN_CLI_NO_WINDOW`` (Windows), ``RUN_CLI_BASH_LOGIN``,
     ``RUN_SHELL_USE_BASH`` (Windows: ``0`` skips bash → PowerShell only), ``RUN_SHELL_BASH``,
-    ``RUN_SHELL_POWERSHELL``, ``RUN_CLI_PREPEND_AGENT_PYTHON_DIR`` — see code / harness docs.
+    ``RUN_SHELL_POWERSHELL``, ``RUN_SHELL_PS_UTF8`` (``0`` 关闭 PowerShell UTF-8 前置),
+    ``RUN_CLI_PREPEND_AGENT_PYTHON_DIR`` — see code / harness docs.
 
     **Nested quoting / long ``python -c``**: when thresholds match, ``-c`` body is written under workspace
     ``.run_shell_temp/`` as a temp ``.py``, executed as ``python <path>``, then deleted (disable with
@@ -2631,7 +2661,9 @@ async def run_shell(
                             "RUN_SHELL_USE_BASH requested but no bash.exe found; using PowerShell"
                         )
                 win_env = _run_shell_env_with_prepended_agent_python_dir(child_env)
-                ps_enc = _powershell_encoded_command_b64(full_cmd)
+                ps_enc = _powershell_encoded_command_b64(
+                    _powershell_script_with_utf8_prelude(full_cmd)
+                )
                 ps_argv = [
                     ps_exe,
                     "-NoProfile",
