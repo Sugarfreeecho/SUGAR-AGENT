@@ -149,17 +149,29 @@
 .dock-chip.is-quiet .dock-chip-title { mask-image: none; }
 
 /* A 20px icon button inset 4px from the chip's end, holding a glyph in the
-   tertiary ink; hidden means untouchable too. */
+   tertiary ink; hidden means untouchable too.
+   Centring is done with `top: 50%` + `translateY(-50%)` instead of `top: 4px`:
+   an absolutely positioned child is placed against the *padding* box, and the
+   light theme gives the chip a 1px border (`html.theme-light .dock-chip`), so a
+   flat 4px landed the 20px circle 1px low there while the borderless dark theme
+   was correct. The 50% offset is border-agnostic — the padding-box centre and
+   the border-box centre of a symmetrically bordered chip coincide.
+   The 2px bottom padding is optical, not layout: Segoe UI's `×` centres on the
+   maths axis, which sits ~1px below the centre of a `line-height: 1` box at
+   `0.8rem`, so the ink needs a 1px lift (bottom padding moves the content box up
+   by half its value). Measured ink offsets: 0.25px @ root 16px, ≤0.4px across the
+   three font steps (14/16/17px); the glyph is unchanged. */
 .dock-chip-close {
     position: absolute;
-    top: 4px;
+    top: 50%;
     right: 4px;
+    transform: translateY(-50%);
     display: flex;
     align-items: center;
     justify-content: center;
     width: 20px;
     height: 20px;
-    padding: 0;
+    padding: 0 0 2px;
     color: var(--text-tertiary);
     font-size: 0.8rem;
     line-height: 1;
@@ -465,7 +477,7 @@
     overflow: hidden;
     color: var(--text-secondary);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -655,7 +667,7 @@
 .dock-guide-card-icon { flex: none; display: inline-flex; }
 .dock-guide-card-icon svg { width: 20px; height: 20px; }
 .dock-guide-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.dock-guide-card-title { font-size: var(--ui-text-md); font-weight: 500; }
+.dock-guide-card-title { font-size: var(--ui-text-md); font-weight: 400; }
 .dock-guide-card-desc { color: var(--text-tertiary); font-size: var(--ui-text-xs); }
 .dock-doc-fallback {
     display: flex;
@@ -735,7 +747,7 @@
 .dock-diff-line.is-added { color: var(--green-accent); }
 .dock-diff-line.is-removed { color: var(--red-accent); }
 .dock-diff-line.is-hunk { color: var(--blue-accent); }
-.dock-diff-line.is-file { color: var(--text-tertiary); font-weight: 500; }
+.dock-diff-line.is-file { color: var(--text-tertiary); font-weight: 400; }
 
 /* ── feedback round 3 ─────────────────────────────────────────────────────── */
 

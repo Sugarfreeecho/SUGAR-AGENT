@@ -97,6 +97,20 @@ class DockFloatLayerView {
             const header = document.createElement('header');
             header.className = 'dock-float-header';
             header.setAttribute('data-dock-float-grip', paneId);
+            header.tabIndex = 0;
+            const openMenu = event => {
+                if (!globalThis.MyAgentContextMenu || !this.state) return;
+                const id = dockOnlyTabId(dockGetPane(this.state, paneId));
+                globalThis.MyAgentContextMenu.open(event, [
+                    { label: this.labels.dockFloat || '放回主区', action: () => this.intents.unfloatPane(paneId) },
+                    { label: this.labels.closeFloat || '关闭浮窗', disabled: !this.canCloseTab(id),
+                        action: () => { if (this.canCloseTab(id)) this.intents.closeTab(id); } },
+                ], header);
+            };
+            header.addEventListener('contextmenu', openMenu);
+            header.addEventListener('keydown', event => {
+                if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openMenu(event);
+            });
             header.addEventListener('pointerdown', (event) => this.drag('move', paneId, event));
             const title = document.createElement('div');
             title.className = 'dock-chip dock-float-title';

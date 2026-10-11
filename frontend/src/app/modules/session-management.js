@@ -267,13 +267,20 @@ function persistSessionSectionExpanded(key, expanded) {
         localStorage.setItem(LS_SESSION_SECTION_PREFIX + key, expanded ? '1' : '0');
     } catch (e) { /* ignore */ }
 }
-function closeAllSessionMenus() {
+function closeAllSessionMenus(event) {
+    // 旧写法把「点任意处都关掉所有侧栏弹层」当成兜底，于是弹层内部一点就没了
+    // （导入会话面板里的输入框 / 来源切换 / 拖拽区全都点不了）。现在：来自弹层内部的
+    // click 不再由这里收口——菜单项该关的自己关（视图选项、新建会话菜单都有显式
+    // setSidebarPopupOpen(popup,false)），无参调用（会话/分组动作后的收尾）仍全关。
+    var target = event && event.target;
     document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {
+        if (target && w.contains(target)) return;
         w.classList.remove('is-open');
         var b = w.querySelector('.session-more-btn');
         if (b) b.setAttribute('aria-expanded', 'false');
     });
     document.querySelectorAll('.sidebar-popup.is-open').forEach(function (p) {
+        if (target && p.contains(target)) return;
         p.classList.remove('is-open');
         var t = p.querySelector('[data-popup-trigger]');
         if (t) t.setAttribute('aria-expanded', 'false');
@@ -861,13 +868,14 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         // 置顶标记（DSH 同款）：行尾、相对时间之后的一枚 16px 图钉；hover 时与时间一起淡出，
         // 把位置让给行内动作（置顶/⋯），避免同一位置出现两个图钉。
         + '<span class="session-pin-mark" aria-label="置顶" title="置顶"' + (sess.pinned ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.pin + '</span>'
-        + '</div>'
-        + '<div class="session-last-query"></div>'
-        + '</div>'
+        // 动作区与相对时间共用标题行的定位容器，避免被第二行摘要拉低。
         + '<div class="session-item-actions">'
         + '<button type="button" class="session-row-icon session-row-pin" data-session-pin aria-label="置顶会话" aria-pressed="false" data-ui-tip="置顶会话">'
         + SIDEBAR_ICON_SVG.pin + '</button>'
         + buildSessionMoreMenuMarkup()
+        + '</div>'
+        + '</div>'
+        + '<div class="session-last-query"></div>'
         + '</div>'
         + '</div>';
     if (typeof updateHumanInteractionSessionBadge === 'function') {
@@ -2266,6 +2274,7 @@ function beforeSessionMessageSnapshotAvailable() {
 }
 
 async function switchSession(sessionId, opts) {
+    if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);
     opts = opts || {};
     if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();
     if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
@@ -2463,6 +2472,7 @@ async function switchSession(sessionId, opts) {
 }
 
 async function createNewSession(targetWorkDir) {
+    if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);
     if (typeof targetWorkDir === 'string') {
         const requestedWorkDir = targetWorkDir.trim();
         if (requestedWorkDir !== newSessionWorkDir) {
@@ -2641,7 +2651,7 @@ async function startNewSessionInDir(dir) {
 /** 当前会话（= 当前分组）的工作目录；没有会话（草稿态）时返回空串。 */
 function activeSessionWorkDir() {
     const active = currentSessionId ? sessionStore.get(currentSessionId) : null;
-    return (active && typeof active.work_dir === 'string') ? active.work_dir.trim() : '';
+    return active ? String(active.effective_work_dir || active.subagent_work_dir || active.git_worktree_path || active.work_dir || '').trim() : '';
 }
 
 /** 主按钮与菜单「当前工作目录」：在当前会话的目录里新建（DSH 的当前工作区语义）。 */
@@ -3027,6 +3037,373 @@ function syncSessionListHead(sections, opts) {
     syncSessionViewMenu();
 }
 
+/* 列表头「刷新」最多等列表 1.2s：超时就直接重载（重载本身还会再拉一次列表），
+   保证按钮不会出现"点了没反应"。 */
+var SESSION_REFRESH_LIST_WAIT_MS = 1200;
+
+/**
+ * 侧栏列表头第三个按钮 = 刷新：先把会话列表强制拉新，再整页重载。
+ * 桌面端没有浏览器刷新按钮，这里是唯一的整页刷新入口，两件事一起做——
+ * ① 列表：`loadSessions({ force: true })` 立即向服务端取最新会话（含归档计数）；
+ * ② 页面：`location.reload()` 让所有面板、插件与滚动状态重新初始化。
+ * （原「在新文件夹中新建会话」入口保留在「新建会话 ▾」菜单里，不丢功能。）
+ */
+function refreshSessionListAndPage(btn) {
+    if (btn) {
+        btn.classList.add('is-busy');
+        btn.setAttribute('aria-busy', 'true');
+    }
+    var listRefresh = null;
+    try {
+        listRefresh = (typeof loadSessions === 'function') ? loadSessions({ force: true }) : null;
+    } catch (err) {
+        console.error('刷新会话列表失败:', err);
+    }
+    var listSettled = Promise.resolve(listRefresh).catch(function (err) {
+        console.error('刷新会话列表失败:', err);
+    });
+    var deadline = new Promise(function (resolve) {
+        window.setTimeout(resolve, SESSION_REFRESH_LIST_WAIT_MS);
+    });
+    Promise.race([listSettled, deadline]).then(function () {
+        window.location.reload();
+    });
+}
+
+/* ── 导入会话（列表头「文件夹+」按钮）───────────────────────────────────────
+   还原「导出会话」产生的 zip（会话目录名 = 原会话 id，内含 events.jsonl 等），
+   四条途径：压缩包（浏览）/ 文件夹（浏览）/ 手输或粘贴路径 / 直接拖进面板或按钮。
+   落点：POST /api/sessions/import（本机路径）· /api/sessions/import-upload（浏览器拖入）。
+   后端沿用原会话 id；仅当 id 已被占用时换新 id 并改写会话自有引用（标记为副本）。 */
+var SESSION_IMPORT_ARCHIVE_EXT = /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz)$/i;
+var SESSION_IMPORT_MAX_FILES = 5000;
+var SESSION_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
+
+function buildSessionImportMarkup() {
+    return ''
+        + '<div class="session-import-head">'
+        +   '<span class="session-import-title">导入会话</span>'
+        +   '<span class="session-import-hint">还原「导出会话」下载的 zip，或整个会话文件夹</span>'
+        + '</div>'
+        + '<div class="session-import-kinds" role="tablist" aria-label="导入来源">'
+        +   '<button type="button" class="session-import-kind is-active" role="tab" aria-selected="true" data-import-kind="zip">压缩包</button>'
+        +   '<button type="button" class="session-import-kind" role="tab" aria-selected="false" data-import-kind="dir">文件夹</button>'
+        + '</div>'
+        + '<div class="session-import-path-row">'
+        +   '<input class="session-import-input" type="text" data-import-path aria-label="会话路径" placeholder="D:\\downloads\\session-xxxx.zip" autocomplete="off" spellcheck="false" maxlength="4096">'
+        +   '<button type="button" class="session-import-browse" data-import-browse>浏览…</button>'
+        + '</div>'
+        + '<div class="session-import-drop" data-import-drop>把会话 zip 或会话文件夹拖到这里（可多个）</div>'
+        + '<p class="session-import-status" data-import-status role="status" aria-live="polite" hidden></p>'
+        + '<div class="session-import-actions">'
+        +   '<button type="button" class="session-import-submit" data-import-submit>导入</button>'
+        + '</div>';
+}
+
+function sessionImportPlaceholder(kind) {
+    return kind === 'dir' ? 'D:\\sessions\\<会话目录>' : 'D:\\downloads\\session-xxxx.zip';
+}
+
+/** 与设置中心 package_import.js 同一套取数方式：目录用 webkitGetAsEntry 递归，压缩包取单文件。
+    批量：每个目录 / 每个压缩包各算一个包，零散文件合成一个包。 */
+async function collectDroppedSessionPackages(dataTransfer) {
+    var items = Array.prototype.slice.call((dataTransfer && dataTransfer.items) || []).filter(function (item) {
+        return item.kind === 'file';
+    });
+    var entries = items.map(function (item) { return item.webkitGetAsEntry ? item.webkitGetAsEntry() : null; });
+    var fallback = Array.prototype.slice.call((dataTransfer && dataTransfer.files) || []);
+    var bytes = 0;
+    function budget(size, count) {
+        bytes += size;
+        if (count > SESSION_IMPORT_MAX_FILES || bytes > SESSION_IMPORT_MAX_BYTES) {
+            throw new Error('目录最多 5000 个文件，总大小不能超过 200 MB');
+        }
+    }
+    function add(sink, file, path) {
+        budget(file.size, sink.files.length + 1);
+        sink.files.push({ file: file, path: path });
+    }
+    async function walk(entry, prefix, depth, sink) {
+        if (depth > 40) throw new Error('目录层级过深');
+        var path = prefix + entry.name;
+        if (entry.isFile) {
+            var file = await new Promise(function (resolve, reject) { entry.file(resolve, reject); });
+            add(sink, file, path);
+            return;
+        }
+        if (!entry.isDirectory) return;
+        var reader = entry.createReader();
+        for (;;) {
+            var children = await new Promise(function (resolve, reject) { reader.readEntries(resolve, reject); });
+            if (!children.length) return;
+            for (var i = 0; i < children.length; i += 1) await walk(children[i], path + '/', depth + 1, sink);
+        }
+    }
+    if (entries.length && entries.every(Boolean)) {
+        var packages = [];
+        var loose = { kind: 'dir', files: [] };
+        for (var index = 0; index < entries.length; index += 1) {
+            var entry = entries[index];
+            if (entry.isDirectory) {
+                var dirSink = { kind: 'dir', files: [] };
+                await walk(entry, '', 0, dirSink);
+                packages.push(dirSink);
+            } else if (SESSION_IMPORT_ARCHIVE_EXT.test(entry.name)) {
+                var zipSink = { kind: 'zip', files: [] };
+                await walk(entry, '', 0, zipSink);
+                packages.push(zipSink);
+            } else {
+                await walk(entry, '', 0, loose);
+            }
+        }
+        if (loose.files.length) packages.push(loose);
+        return packages;
+    }
+    var archives = fallback.filter(function (file) {
+        return SESSION_IMPORT_ARCHIVE_EXT.test(file.webkitRelativePath || file.name);
+    });
+    var rest = fallback.filter(function (file) { return archives.indexOf(file) < 0; });
+    var out = archives.map(function (file) {
+        var sink = { kind: 'zip', files: [] };
+        add(sink, file, file.name);
+        return sink;
+    });
+    if (rest.length) {
+        var restSink = { kind: 'dir', files: [] };
+        rest.forEach(function (file) { add(restSink, file, file.webkitRelativePath || file.name); });
+        out.push(restSink);
+    }
+    return out;
+}
+
+function mountSessionImportOnce() {
+    var popup = document.getElementById('session-import');
+    var menu = document.getElementById('session-import-menu');
+    if (!popup || !menu || popup.dataset.importMounted === '1') return;
+    popup.dataset.importMounted = '1';
+    menu.innerHTML = buildSessionImportMarkup();
+    bindSidebarPopup(popup);
+
+    var kind = 'zip';
+    var busy = false;
+    var input = menu.querySelector('[data-import-path]');
+    var statusLine = menu.querySelector('[data-import-status]');
+    var submit = menu.querySelector('[data-import-submit]');
+    var browse = menu.querySelector('[data-import-browse]');
+    var drop = menu.querySelector('[data-import-drop]');
+
+    function setStatus(text, isError) {
+        if (!statusLine) return;
+        statusLine.textContent = text || '';
+        statusLine.hidden = !text;
+        statusLine.classList.toggle('is-error', !!isError);
+    }
+
+    function setKind(next) {
+        kind = next === 'dir' ? 'dir' : 'zip';
+        Array.prototype.forEach.call(menu.querySelectorAll('[data-import-kind]'), function (button) {
+            var active = button.getAttribute('data-import-kind') === kind;
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        if (input) input.placeholder = sessionImportPlaceholder(kind);
+        setStatus('');
+    }
+
+    function setBusy(next) {
+        busy = !!next;
+        popup.setAttribute('aria-busy', busy ? 'true' : 'false');
+        Array.prototype.forEach.call(menu.querySelectorAll('button, input'), function (control) {
+            control.disabled = busy;
+        });
+    }
+
+    /** 汇总一批导入结果：刷新列表、单个成功时切过去、一次弹窗说明成败。 */
+    async function finishImportBatch(imported, failed) {
+        var ok = Array.isArray(imported) ? imported : [];
+        var bad = Array.isArray(failed) ? failed : [];
+        if (!ok.length && bad.length) {
+            var only = bad.length === 1 ? bad[0].error : '全部失败：' + bad.map(function (item) { return item.error; }).join('；');
+            throw new Error(only);
+        }
+        setStatus('');
+        setSidebarPopupOpen(popup, false);
+        if (input) input.value = '';
+        try {
+            await loadSessions({ force: true });
+            if (ok.length === 1 && ok[0].id) await switchSession(ok[0].id);
+        } catch (err) {
+            console.error('导入后刷新会话列表失败', err);
+        }
+        var lines = [];
+        lines.push(ok.length === 1
+            ? '会话「' + String(ok[0].name || '未命名') + '」已导入。'
+            : '已导入 ' + ok.length + ' 个会话。');
+        var remapped = ok.filter(function (item) { return item && item.remapped; }).length;
+        if (remapped) lines.push(remapped + ' 个因原 id 被占用，已换新 id 作为副本导入。');
+        var attachments = ok.reduce(function (sum, item) { return sum + ((item && item.attachments) || 0); }, 0);
+        if (attachments) lines.push('已同时还原 ' + attachments + ' 张图片附件。');
+        if (bad.length) {
+            lines.push('失败 ' + bad.length + ' 个：' + bad.map(function (item) {
+                return String(item.source || '') + '（' + String(item.error || '') + '）';
+            }).join('；'));
+        }
+        showUiAlert({
+            title: bad.length ? '部分导入完成' : '已导入会话',
+            message: lines.join(''),
+            variant: bad.length ? 'error' : 'info',
+        });
+    }
+
+    async function importFromPath() {
+        var raw = input ? String(input.value || '') : '';
+        var sources = String(raw).split(/[\r\n;]+/).map(function (item) { return item.trim(); }).filter(Boolean);
+        if (!sources.length) {
+            setStatus(kind === 'dir' ? '请填写会话文件夹路径' : '请填写会话压缩包路径', true);
+            if (input) input.focus();
+            return;
+        }
+        if (sources.length > 1) setStatus('正在导入 ' + sources.length + ' 个会话…');
+        var response = await fetch('/api/sessions/import', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sources: sources, kind: kind }),
+        });
+        var result = await response.json().catch(function () { return {}; });
+        if (!response.ok || !result.ok) throw new Error(result.error || '导入失败');
+        await finishImportBatch(result.imported, result.failed);
+    }
+
+    async function importFromDrop(dataTransfer) {
+        var packages = await collectDroppedSessionPackages(dataTransfer);
+        if (!packages.length) throw new Error('没有可导入的文件');
+        var bad = null;
+        for (var i = 0; i < packages.length; i += 1) {
+            var pack = packages[i];
+            if (pack.kind === 'zip' && (pack.files.length !== 1 || !SESSION_IMPORT_ARCHIVE_EXT.test(pack.files[0].path))) {
+                bad = pack;
+                break;
+            }
+        }
+        if (bad) throw new Error('请拖入会话导出的 ZIP / TAR 压缩包，或整个会话文件夹');
+        var imported = [];
+        var failed = [];
+        for (var index = 0; index < packages.length; index += 1) {
+            var item = packages[index];
+            setKind(item.kind);
+            setStatus(packages.length > 1
+                ? '正在导入会话…（' + (index + 1) + '/' + packages.length + '）'
+                : '正在导入会话…');
+            try {
+                var form = new FormData();
+                form.append('kind', item.kind);
+                item.files.forEach(function (entry) { form.append('files', entry.file, entry.path); });
+                var response = await fetch('/api/sessions/import-upload', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: form,
+                });
+                var result = await response.json().catch(function () { return {}; });
+                if (!response.ok || !result.ok) throw new Error(result.error || '导入失败');
+                imported.push(result.session);
+            } catch (error) {
+                failed.push({
+                    source: (item.files[0] && item.files[0].path) || '',
+                    error: String((error && error.message) || error || '导入失败'),
+                });
+            }
+        }
+        await finishImportBatch(imported, failed);
+    }
+
+    async function runImport(task) {
+        if (busy) return;
+        setBusy(true);
+        setStatus('正在导入会话…');
+        try {
+            await task();
+        } catch (error) {
+            setStatus(String((error && error.message) || error || '导入失败'), true);
+            showUiAlert({
+                title: '导入失败',
+                message: String((error && error.message) || error || '无法导入该会话'),
+                variant: 'error',
+            });
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    Array.prototype.forEach.call(menu.querySelectorAll('[data-import-kind]'), function (button) {
+        button.addEventListener('click', function () {
+            if (busy) return;
+            setKind(button.getAttribute('data-import-kind'));
+        });
+    });
+    if (submit) {
+        submit.addEventListener('click', function () { runImport(importFromPath); });
+    }
+    if (input) {
+        input.addEventListener('keydown', function (event) {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            event.stopPropagation();
+            runImport(importFromPath);
+        });
+    }
+    if (browse) {
+        browse.addEventListener('click', async function () {
+            if (busy) return;
+            var picker = typeof window !== 'undefined' ? window.MyAgentPathPicker : null;
+            if (!picker || typeof picker.pickPath !== 'function') {
+                setStatus('当前环境不支持系统文件选择框，请直接粘贴路径或拖入', true);
+                return;
+            }
+            try {
+                var chosen = await picker.pickPath(kind === 'dir' ? 'directory' : 'file', input ? input.value : '', true);
+                if (Array.isArray(chosen) && !chosen.length) return;
+                if (!chosen) return;
+                if (input) {
+                    // <input> 会吃掉换行：多选结果用「; 」拼接，导入时按 [\r\n;] 再拆开
+                    input.value = Array.isArray(chosen) ? chosen.join('; ') : chosen;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                setStatus('');
+            } catch (error) {
+                setStatus(String((error && error.message) || error || '无法打开选择对话框'), true);
+            }
+        });
+    }
+    // 拖拽：整个弹出层（含收起状态的按钮）都收，面板内高亮提示。
+    function hasDraggedFiles(event) {
+        return !!(event.dataTransfer && Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') >= 0);
+    }
+    popup.addEventListener('dragover', function (event) {
+        if (!hasDraggedFiles(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = busy ? 'none' : 'copy';
+        popup.classList.add('is-dragover');
+    });
+    popup.addEventListener('dragleave', function (event) {
+        if (!popup.contains(event.relatedTarget)) popup.classList.remove('is-dragover');
+    });
+    popup.addEventListener('drop', function (event) {
+        if (!hasDraggedFiles(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        popup.classList.remove('is-dragover');
+        runImport(function () { return importFromDrop(event.dataTransfer); });
+    });
+    popup.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape' || !popup.classList.contains('is-open')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setSidebarPopupOpen(popup, false, { returnFocus: true });
+    });
+}
+
 (function mountSessionListHeadOnce() {
     const head = document.getElementById('session-list-head');
     if (!head || head.dataset.headMounted === '1') return;
@@ -3052,6 +3429,7 @@ function syncSessionListHead(sections, opts) {
             syncSessionViewMenu();
         });
     }
+    mountSessionImportOnce();
 
     const toggle = document.getElementById('session-head-toggle');
     if (toggle) {
@@ -3110,16 +3488,14 @@ function syncSessionListHead(sections, opts) {
         setSessionSearchExpanded(false);
     }, true);
 
-    const addFolder = document.getElementById('session-add-folder-btn');
-    if (addFolder) {
-        if (window.MyAgentIcons) window.MyAgentIcons.mount(addFolder);
-        bindUiHoverTip(addFolder);
-        addFolder.addEventListener('click', function (e) {
+    // 第三个按钮已由「在新文件夹中新建会话」改为「刷新会话列表和页面」（见 refreshSessionListAndPage）。
+    const refreshBtn = document.getElementById('session-refresh-btn');
+    if (refreshBtn) {
+        bindUiHoverTip(refreshBtn);
+        refreshBtn.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
-            Promise.resolve(startNewSessionInFolder()).catch(function (err) {
-                console.error('在新文件夹中新建会话失败:', err);
-            });
+            refreshSessionListAndPage(refreshBtn);
         });
     }
     if (searchBox && searchInput) searchBox.hidden = true;

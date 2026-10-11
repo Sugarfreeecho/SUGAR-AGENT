@@ -548,7 +548,7 @@ button, input, select, textarea { font-family: var(--sans);
     background: none; border: 0; border-radius: 6px;
     color: var(--text-placeholder);
     /* 字号与会话标题一致（.session-name 为 0.82rem）；字号变大后收紧字距 */
-    font-family: var(--sans); font-size: 0.82rem; font-weight: 700;
+    font-family: var(--sans); font-size: 0.82rem; font-weight: 600;
     letter-spacing: 0.02em; text-transform: uppercase;
     cursor: pointer; text-align: left;
     transition: color 0.16s;
@@ -556,7 +556,7 @@ button, input, select, textarea { font-family: var(--sans);
 .session-list-head-toggle:hover, .session-list-head-toggle:focus-visible { color: var(--text-secondary); }
 .session-list-head-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-list-head-count {
-    flex: 0 0 auto; font-size: 0.7rem; font-weight: 600;
+    flex: 0 0 auto; font-size: 0.7rem; font-weight: 400;
     color: var(--text-subtle);
     background: rgba(255,255,255,0.04); padding: 0.1rem 0.5rem; border-radius: 10px;
 }
@@ -569,35 +569,54 @@ button, input, select, textarea { font-family: var(--sans);
 .session-list-head-chev svg { width: 1rem; height: 1rem; }
 .session-list-head-toggle.is-collapsed .session-list-head-chev { transform: rotate(-90deg); }
 .session-list-head-actions {
-    /* 图标中心距 ≈32px：DSH 实测 32.5px（盒 1.75rem + 缝 0.25rem）；rem → 随字号缩放 */
-    flex: 0 0 auto; display: flex; align-items: center; gap: 0.25rem;
+    /* 图标中心距 ≈29.6px（盒 1.75rem + 缝 0.1rem）：按反馈收紧了原 0.25rem 的缝，
+       三个按钮更像一组；rem → 随字号缩放 */
+    flex: 0 0 auto; display: flex; align-items: center; gap: 0.1rem;
     /* 图标盒子对称居中后，最右按钮的高亮框自然向右多出半格（28-16=12 → 6px）；让出等量负外边距，
        字形右缘仍落在统一右基准线上，高亮框与图标同心。 */
-    margin-right: -0.375rem;
+    /* 盒 22px、最大字形 16px → 右侧多出 3px，让出等量负外边距 */
+    margin-right: -0.1875rem;
 }
 /* 视图选项菜单相对整行定位：200px 菜单右对齐列表头右沿，避免向左溢出侧栏 */
 .session-list-head-actions .sidebar-popup { position: static; }
 .session-list-head.is-searching .session-list-head-toggle,
 .session-list-head.is-searching .session-list-head-actions { display: none; }
 .session-head-icon {
-    /* DSH 实测比例：按钮盒 28px、字形 14-16px（其标题 13px 时）；全部 rem → 随字号缩放 */
-    flex: 0 0 auto; width: 1.75rem; height: 1.75rem;
+    /* 按钮盒 22px（DSH 原为 28px）：盒内留白 6px/边时按钮之间看着空一大截，
+       按反馈把作用范围收小到 1.375rem；字形 15-16px 不变，全部 rem → 随字号缩放 */
+    flex: 0 0 auto; width: 1.375rem; height: 1.375rem;
     /* 字形在盒子里居中：高亮框与图标同心（字形与右基准的对齐由容器负外边距保证） */
     display: inline-flex; align-items: center; justify-content: center;
-    padding: 0; border: 0; border-radius: 8px;
+    padding: 0; border: 0; border-radius: 7px;
     background: transparent; color: var(--text-tertiary);
     cursor: pointer;
     transition: background 0.16s, color 0.16s;
 }
-/* 图标字形 16px @16（DSH 侧栏标准线描尺寸）；rem → 随字号缩放 */
+/* 字形按「墨迹等大」配比（16px 档墨迹 9.3–12px 归一）：默认 16px；
+   搜索 14→16px（原墨迹只有 9.3px，和邻居的 12px 差一档，看着就是没对齐） */
 .session-head-icon svg { width: 1rem; height: 1rem; }
-#session-search-btn svg { width: 0.875rem; height: 0.875rem; }   /* DSH 搜索字形 14px @16 */
+/* 滑块 / 文件夹字形墨迹偏大（12 宽），降到 15px 与其余三枚墨迹同档 */
+#session-view-options [data-popup-trigger] svg,
+#session-import [data-popup-trigger] svg { width: 0.9375rem; height: 0.9375rem; }
+/* 刷新字形与右侧详情栏的刷新钮同款同尺寸：15px @16（同一枚 dsh 圆形箭头，
+   见 dock/embedder/right-column.js::DOCK_ICON_REFRESH） */
+#session-refresh-btn svg { width: 0.9375rem; height: 0.9375rem; }
 .session-head-icon:hover, .session-head-icon:focus-visible, .session-head-icon[aria-expanded="true"] {
     background: rgba(255,255,255,0.06); color: var(--text-primary);
 }
 :root.theme-light .session-head-icon:hover,
 :root.theme-light .session-head-icon:focus-visible,
 :root.theme-light .session-head-icon[aria-expanded="true"] { background: rgba(15,23,42,0.06); }
+/* 刷新按钮：点击到整页重载之间给一圈转动 + 高亮，说明"已受理" */
+.session-head-icon.is-busy,
+.session-head-icon.is-busy:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
+.session-head-icon.is-busy svg { animation: session-head-spin 0.8s linear infinite; }
+:root.theme-light .session-head-icon.is-busy,
+:root.theme-light .session-head-icon.is-busy:hover { background: rgba(15,23,42,0.06); }
+@keyframes session-head-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .session-head-icon.is-busy svg { animation: none; }
+}
 
 /* 搜索：展开成输入框，右侧 ✕ 清除；有查询词时点击外部只失焦（DSH 行为） */
 .session-search-box {
@@ -654,7 +673,7 @@ button, input, select, textarea { font-family: var(--sans);
 .sidebar-popup-menu button:focus-visible { background: var(--floating-selected); color: var(--text-primary); outline: none; }
 .sidebar-popup-label {
     padding: 0.34rem 0.7rem 0.18rem;
-    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em;
+    font-size: 0.6rem; font-weight: 600; letter-spacing: 0.08em;
     text-transform: uppercase; color: var(--text-placeholder);
 }
 .sidebar-popup-separator { height: 1px; margin: 0.26rem 0.44rem; background: var(--border-glass); }
@@ -665,6 +684,67 @@ button, input, select, textarea { font-family: var(--sans);
 /* 三个菜单统一宽度策略：不超出内容列（100% = 锚定的整行宽），右边缘同一基准 */
 .sidebar-popup-menu.session-view-menu { min-width: min(12.5rem, 100%); }
 .sidebar-popup-menu.new-session-menu { min-width: min(12.5rem, 100%); }
+
+/* ── 导入会话面板（列表头 · 文件夹+ 按钮）──────────────────────────────────
+   面板宽度跟随锚定整行（100% = 列表头内容列），右缘与统一右基准对齐；
+   压缩包 / 文件夹切换 + 路径输入 + 浏览 + 拖拽区四条途径同框。 */
+.sidebar-popup-menu.session-import-menu {
+    /* 面板宽度锁在锚定整行内（100% = 列表头内容列），文字可任意断行 → 不会顶出侧栏 */
+    width: 100%; min-width: 0; max-width: 100%;
+    box-sizing: border-box;
+    padding: 0.6rem 0.7rem 0.7rem;
+    display: flex; flex-direction: column; gap: 0.45rem;
+}
+.session-import-head { display: flex; flex-direction: column; gap: 0.12rem; }
+.session-import-title { font-size: 0.8rem; font-weight: 600; color: var(--text-primary); }
+.session-import-hint { font-size: 0.62rem; line-height: 1.45; color: var(--text-placeholder); overflow-wrap: anywhere; }
+.session-import-kinds {
+    display: flex; align-items: center; gap: 0.1rem; padding: 0.1rem;
+    border: 1px solid var(--border-glass); border-radius: 8px;
+    background: rgba(255,255,255,0.03);
+}
+/* 面板内的按钮都在 .sidebar-popup-menu 的通用按钮规则之上：宽度、内边距、字号统一改回局部值 */
+.session-import-menu .session-import-kind,
+.session-import-menu .session-import-browse,
+.session-import-menu .session-import-submit {
+    width: auto; padding: 0; background: none;
+    font-family: var(--sans); font-size: 0.68rem; color: var(--text-tertiary);
+}
+.session-import-menu .session-import-kind { flex: 1 1 0; justify-content: center; height: 1.5rem; border-radius: 6px; }
+.session-import-kind.is-active { background: var(--floating-selected); color: var(--text-primary); }
+.session-import-path-row { display: flex; align-items: center; gap: 0.3rem; }
+.session-import-input {
+    flex: 1 1 auto; min-width: 0; height: 1.75rem; padding: 0 0.5rem;
+    border: 1px solid var(--floating-border); border-radius: 8px;
+    background: var(--surface-glass2); color: var(--text-secondary);
+    font-family: var(--mono); font-size: 0.66rem;
+}
+.session-import-input::placeholder { color: var(--text-placeholder); }
+.session-import-menu .session-import-browse {
+    flex: 0 0 auto; height: 1.75rem; padding: 0 0.55rem;
+    border: 1px solid var(--floating-border); border-radius: 8px;
+    background: var(--surface-glass2); color: var(--text-secondary); font-size: 0.7rem;
+}
+.session-import-drop {
+    display: flex; align-items: center; justify-content: center; min-height: 3.2rem;
+    padding: 0.4rem 0.5rem; border: 1px dashed var(--floating-border); border-radius: 8px;
+    color: var(--text-placeholder); font-size: 0.66rem; line-height: 1.4; text-align: center;
+    overflow-wrap: anywhere; min-width: 0;
+    transition: border-color 0.16s, color 0.16s, background 0.16s;
+}
+.sidebar-popup.is-dragover .session-import-drop {
+    border-color: rgba(var(--accent-rgb),0.5); background: rgba(var(--accent-rgb),0.1); color: var(--text-secondary);
+}
+.sidebar-popup.is-dragover .session-head-icon { background: rgba(var(--accent-rgb),0.14); color: var(--text-primary); }
+.session-import-status { margin: 0; font-size: 0.66rem; line-height: 1.4; color: var(--text-placeholder); overflow-wrap: anywhere; }
+.session-import-status.is-error { color: var(--red-accent); }
+.session-import-actions { display: flex; justify-content: flex-end; }
+.session-import-menu .session-import-submit {
+    height: 1.75rem; padding: 0 0.9rem; border: 1px solid rgba(var(--accent-rgb),0.36);
+    border-radius: 8px; background: rgba(var(--accent-rgb),0.16);
+    color: var(--text-primary); font-size: 0.72rem; font-weight: 600;
+}
+.session-import-menu button[disabled] { opacity: 0.5; cursor: default; }
 
 /* 工作目录分组头的 hover 动作：＋（在该目录新建）/ ⋯（复制路径、打开目录） */
 .session-group-head {
@@ -795,7 +875,7 @@ button, input, select, textarea { font-family: var(--sans);
     display: flex; align-items: center; justify-content: flex-start; gap: 0.4rem;
     background: none; border: 0; border-radius: 6px;
     min-height: 2.25rem;
-    font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
+    font-size: 0.82rem; font-weight: 600; letter-spacing: 0.02em;
     color: var(--text-placeholder); cursor: pointer;
     font-family: var(--sans); text-align: left;
     transition: color 0.16s;
@@ -809,7 +889,7 @@ button, input, select, textarea { font-family: var(--sans);
 .session-section-toggle-label { text-transform: uppercase; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-section-meta { display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0; }
 .session-section-count {
-    font-size: 0.7rem; font-weight: 600;
+    font-size: 0.7rem; font-weight: 400;
     color: var(--text-subtle);
     background: rgba(255,255,255,0.04); padding: 0.1rem 0.5rem; border-radius: 10px;
 }
@@ -837,11 +917,18 @@ button, input, select, textarea { font-family: var(--sans);
     font-family: var(--sans);
     /* 二级目录字号 = 会话标题字号（.session-name 为 0.82rem） */
     font-size: 0.82rem;
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0.02em;
     line-height: 1.2;
 }
 .session-time-group-title:hover { color: var(--text-secondary); }
+/* 一级（列表头「会话/工作区」、置顶/归档目录）与二级（今天/昨天/工作目录名）目录标题
+   共用同一条更淡的字色：--text-placeholder 再降到 82%（向透明混合，深浅三套主题一致，
+   观感都是"比正文明显弱一档"）。hover / 焦点仍走 --text-secondary，反馈不变。
+   （2026-10-09：先统一一级=二级，再按「还可以再淡一点」整体降一档。） */
+.session-list-head-toggle,
+.session-section-toggle,
+.session-time-group-title { color: color-mix(in srgb, var(--text-placeholder) 82%, transparent); }
 .session-time-group-ico { flex: 0 0 auto; display: inline-flex; align-items: center; color: inherit; }
 .session-time-group-ico svg { width: 1rem; height: 1rem; }   /* 随字号同步（与折叠箭头同级） */
 .session-time-group-ico:empty { display: none; }
@@ -869,7 +956,7 @@ button, input, select, textarea { font-family: var(--sans);
     color: var(--text-tertiary);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     cursor: pointer;
     transition: color 0.16s var(--ease-out-expo), border-color 0.16s var(--ease-out-expo);
 }
@@ -890,7 +977,10 @@ button, input, select, textarea { font-family: var(--sans);
 body.session-group-drag-active { cursor: grabbing; user-select: none; }
 body.session-group-drag-active .session-group-head,
 body.session-group-drag-active .session-group-head * { cursor: grabbing !important; }
-:root.theme-light .session-time-group-title { color: var(--text-subtle); }
+/* 浅色主题不再单独加深二级目录标题：深色两套主题下「一级 = 二级」同为 --text-placeholder，
+   浅色此前把它压到 --text-subtle（#4b4d61，几乎等于正文色），二级比一级重一档、层级倒挂。
+   与一级目录标题（.session-list-head-toggle / .session-section-toggle）保持同一档色。
+   （历史：2026-10-09 按「浅色二级目录字体颜色太深」反馈移除 theme-light 覆盖。） */
 .session-archive-load-btn {
     width: calc(100% - 0.9rem);
     margin: 0.18rem 0.45rem 0.35rem;
@@ -901,7 +991,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-secondary);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     cursor: pointer;
     transition: background 0.18s var(--ease-out-expo), border-color 0.18s var(--ease-out-expo), color 0.18s var(--ease-out-expo);
 }
@@ -979,7 +1069,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     align-items: center;
     gap: 0.2rem;
     font-size: 0.62rem; line-height: 1.2; color: var(--text-tertiary);
-    font-family: var(--sans); font-weight: 600;
+    font-family: var(--sans); font-weight: 400;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     margin-left: 0.5rem;
@@ -1061,11 +1151,10 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     font-weight: 400;
 }
 .session-item:hover .session-name { color: var(--text-primary); }
-.session-item.active .session-name { color: var(--text-primary); font-weight: 500; }
+.session-item.active .session-name { color: var(--text-primary); font-weight: 400; }
 :root.theme-light .session-name { color: var(--text-primary); font-weight: 400; }
 .session-draft-badge,
-.session-todo-badge,
-.session-review-badge {
+.session-todo-badge {
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
@@ -1076,14 +1165,18 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     border-radius: 999px;
     background: rgba(249, 226, 175, 0.16);
     color: var(--amber-accent);
-    font-size: 0.58rem;               /* 原始档：与 10-02 版一致（令牌化曾放大为 0.75rem） */
-    font-weight: 750;
+    /* 字号与行尾相对时间（.session-item-date 0.62rem）同档：同排的小字统一到一档。
+       历史：08-12 原始档 0.58rem → 10-04 令牌化放大到 --ui-text-xs（0.75rem）
+       → 10-07 回滚 0.58rem → 10-09 先升令牌档再回滚 → 现按反馈对齐到 0.62rem。
+       盒体（内边距 / 圆角）不变，因此胶囊高度仍由这档字号 + 0.14rem 内边距决定。 */
+    font-size: 0.62rem;
+    /* 字重与相对时间同档（400）：小字号胶囊再加粗会压过会话名，也更显得"比时间粗一截" */
+    font-weight: 400;
     line-height: 1;
     white-space: nowrap;
 }
 .session-draft-badge[hidden] { display: none; }
 .session-todo-badge[hidden] { display: none; }
-.session-review-badge[hidden] { display: none; }
 /* 置顶标记（DSH 同款）：行尾、相对时间之后的 16px 图钉，纯灰无底色；
    hover / 焦点 / 菜单展开时与相对时间一起淡出，把位置让给行内动作（避免两个图钉重叠）。 */
 .session-pin-mark {
@@ -1100,16 +1193,23 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .session-item:has(.session-more-wrap.is-open) .session-pin-mark { opacity: 0; }
 .plugin-session-badges {
     display: inline-flex; align-items: center; gap: 0.2rem;
-    flex: 0 1 auto; min-width: 0; margin-left: 0.25rem;
+    flex: 0 1 auto; min-width: 0; margin-left: 0.4rem;
 }
 .plugin-session-badge {
     display: inline-flex; align-items: center; flex: 0 1 auto;
     min-width: 0; max-width: 5rem; overflow: hidden; text-overflow: ellipsis;
-    padding: 0.12rem 0.28rem; border: 1px solid var(--border-glass); border-radius: 999px;
+    /* 与「待办 / 草稿 / 目标」三枚同规格：字体从 --ui-text-xs(12px) 收到 0.62rem、内边距对齐，
+       插件角标不再比旁边的胶囊大一圈（2026-10-11 按反馈统一） */
+    padding: 0.14rem 0.36rem; border: 1px solid var(--border-glass); border-radius: 999px;
     background: var(--surface-glass2); color: var(--text-secondary);
-    font: 500 var(--ui-text-xs)/1 var(--sans); white-space: nowrap;
+    font: 400 0.62rem/1 var(--sans); white-space: nowrap;
 }
 .plugin-session-badge--info { border-color: rgba(var(--accent-rgb), 0.36); color: var(--accent-2); }
+/* 浅色主题没有覆盖 --accent-2，info 角标会落到紫黑主题的浅薰衣草（浅底上几乎看不清）；
+   改成与「待办」胶囊同一条品牌靛蓝（2026-10-11 按反馈）。 */
+:root.theme-light .plugin-session-badge--info {
+    border-color: rgba(99, 102, 241, 0.3); background: rgba(99, 102, 241, 0.12); color: #4f46e5;
+}
 .plugin-session-badge--success { border-color: rgba(166,227,161,0.4); color: var(--green-accent); }
 .plugin-session-badge--warning { border-color: rgba(211,167,47,0.45); color: #d3a72f; }
 .plugin-session-badge--danger { border-color: rgba(243,139,168,0.45); color: #f38ba8; }
@@ -1126,18 +1226,15 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 :root.theme-light .session-todo-badge {
     border-color: rgba(var(--brand-accent-rgb), 0.3);
     background: rgba(var(--brand-accent-rgb), 0.12);
-    color: var(--accent-1);
+    /* 浅色主题没有覆盖 --accent-1，会落到紫黑主题的浅薰衣草 #cba6f7（浅底上几乎看不清）；
+       改为品牌靛蓝 700，与「草稿」的琥珀、插件 `success` 角标的绿一望可辨。 */
+    color: #4f46e5;
 }
-.session-review-badge {
-    border-color: rgba(166, 227, 161, 0.34);
-    background: rgba(166, 227, 161, 0.14);
-    color: var(--green-accent);
-}
-:root.theme-light .session-review-badge {
-    border-color: rgba(52, 140, 86, 0.28);
-    background: rgba(52, 168, 83, 0.12);
-    color: #247a43;
-}
+/* 已删除：`.session-goal-badge`（行内「目标」占位胶囊 + 五档 data-goal-status 配色）。
+   它顶替了更早的「修改审查」胶囊，但两者都没有生产者（全仓检索只命中本文件与构建产物，
+   `sessionManagement.buildAndBindSessionRow()` 从不插入该节点），属死代码；
+   行尾的目标状态现由插件角标承载（agent-goal 的 `Goal` = 进行中 / `待审核` = 完成待审）。
+   2026-10-11 按反馈删除；若将来要恢复行内目标胶囊，请连同生产者一起加回，不要只留样式。 */
 .session-item.is-generating .session-name::before {
     content: ''; display: inline-block; width: 6px; height: 6px;
     border-radius: 50%; background: var(--amber-accent);
@@ -1150,17 +1247,15 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     margin-right: 5px; box-shadow: 0 0 7px color-mix(in srgb, var(--accent-1) 45%, transparent);
     vertical-align: 0.08em;
 }
-.session-item.has-plugin-activity .session-name::before {
-    content: ''; display: inline-block; width: 6px; height: 6px;
-    border-radius: 50%; background: var(--amber-accent);
-    margin-right: 5px; box-shadow: 0 0 8px rgba(249,226,175,0.5);
-    vertical-align: 0.08em; animation: pulse-dot 1.4s ease-in-out infinite;
-}
 .session-item.is-unread-result .session-name::before {
     content: ''; display: inline-block; width: 6px; height: 6px;
     border-radius: 50%; background: var(--green-accent);
     margin-right: 5px; box-shadow: 0 0 8px rgba(166,227,161,0.4);
     vertical-align: 0.08em;
+}
+/* 浅色主题的「有新结果」绿点改用深色主题那支亮绿（2026-10-11 按反馈） */
+:root.theme-light .session-item.is-unread-result .session-name::before {
+    background: #4ed17e; box-shadow: 0 0 8px rgba(78, 209, 126, 0.5);
 }
 .session-item.is-unread-failed .session-name::before {
     content: ''; display: inline-block; width: 6px; height: 6px;
@@ -1185,14 +1280,19 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .session-item:has(.sidebar-popup.is-open) { z-index: 30; }
 /* 行内动作区：置顶图标 + ⋯ 菜单；hover / :focus-within 浮出（键盘 Tab 也能到达并可见） */
 .session-item-actions {
-    /* 与相对时间同一右边缘：都留出 0.45rem 空隙，不再贴住卡片右边 */
-    position: absolute; right: 0.45rem; top: 50%; transform: translateY(-50%);
+    /* 跟随标题行的中心和右边缘；卡片自身的右内边距已提供留白。 */
+    position: absolute; right: 0; top: 50%; transform: translateY(-50%);
     display: flex; align-items: center; gap: 0.06rem;
     z-index: 4;
     /* 默认不参与命中：容器自身约 50px 宽会盖住"相对时间"那一段，
        若默认 auto，用户点行右半边切不了会话（命中的是隐形 ⋯ 按钮）。 */
     pointer-events: none;
 }
+/* 注：不再为"置顶行"把动作区左推 1.35rem。
+   动作区（置顶图钉钮 + ⋯）与时间/图钉共用同一条右基准（卡片右内边距内侧）：
+   - 未置顶行：行尾是相对时间 → ⋯ 与时间文本右侧对齐（用户 10-07 的要求）；
+   - 置顶行：行尾是置顶图钉 → ⋯ 与图钉右侧对齐（图钉 hover 时淡出，动作区原地接位，
+     不会出现"⋯ 停在时间右沿、右边空出图钉一格"的错位）。 */
 .session-item-actions .session-more-wrap {
     position: relative; right: auto; top: auto; transform: none;
     z-index: 5;
@@ -1340,7 +1440,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .breadcrumb { flex: 1 1 auto; min-width: 0; }
 .breadcrumb-title-row { display: flex; align-items: center; min-width: 0; }
 #breadcrumb-text {
-    color: var(--text-primary); font-weight: 700;
+    color: var(--text-primary); font-weight: 600;
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: 0.95rem; letter-spacing: -0.01em;
 }
@@ -1366,16 +1466,18 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     text-align: right; max-width: min(62%, 24rem); min-width: 0;
 }
 .ctx-wrap {
-    /* Keep the context meter on the original 14px scale inside the 16px UI. */
-    --ctx-unit: 0.875rem;
-    font-family: var(--mono); font-size: calc(0.63 * var(--ctx-unit)); line-height: 1.3;
+    /* 右上角读数：已用/上限与百分比统一 0.625 × 1rem = 10px（默认根字号 16px）。
+       单位是 rem + --ctx-unit，所以会随「设置 → 字号」的根字号等比缩放；
+       --ctx-unit 同时驱动 min-width/间距，改一处即等比调整整组。 */
+    --ctx-unit: 1rem;
+    font-family: var(--mono); font-size: calc(0.625 * var(--ctx-unit)); line-height: 1.3;
     color: var(--text-tertiary); display: block; min-width: calc(7 * var(--ctx-unit));
 }
 .ctx-row {
     display: flex; align-items: baseline; justify-content: space-between; gap: calc(0.4 * var(--ctx-unit));
 }
-.ctx-label { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-.ctx-pct { flex-shrink: 0; font-size: calc(0.58 * var(--ctx-unit)); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.ctx-label { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); white-space: nowrap; }
+.ctx-pct { flex-shrink: 0; font-size: calc(0.625 * var(--ctx-unit)); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .ctx-bar {
     display: block; height: 3px; border-radius: 4px;
     background: rgba(255,255,255,0.05); margin-top: calc(0.2 * var(--ctx-unit)); overflow: hidden;
@@ -1414,9 +1516,9 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .ctx-card-head { display: flex; align-items: center; gap: 0.375rem; }
 .ctx-card-headline { color: var(--text-tertiary); }
 .ctx-card-headline:empty { display: none; }
-.ctx-card-pct { font-weight: 500; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.ctx-card-pct { font-weight: 400; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .ctx-card-figures {
-    margin-left: auto; font-weight: 500;
+    margin-left: auto; font-weight: 400;
     color: var(--text-primary); font-variant-numeric: tabular-nums;
 }
 .ctx-card-bar {
@@ -1473,7 +1575,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .history-load-sentinel[hidden] { display: none !important; }
 .history-load-older-btn {
-    font-family: var(--sans); font-size: var(--ui-text-xs); font-weight: 500;
+    font-family: var(--sans); font-size: var(--ui-text-xs); font-weight: 400;
     color: var(--text-secondary); background: var(--surface-glass3);
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
     padding: 0.35rem 0.85rem; cursor: pointer;
@@ -1565,7 +1667,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .workspace-side-panel-meta {
     margin: 0 0 0.3rem; padding: 0 0.15rem 0.35rem;
     color: var(--text-tertiary);
-    font: 500 0.61rem/1.35 var(--sans);
+    font: 400 0.61rem/1.35 var(--sans);
     font-variant-numeric: tabular-nums;
     border-bottom: 1px solid var(--workspace-side-panel-meta-border);
 }
@@ -1786,7 +1888,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     width: 100%; height: 100%; display: block;
     fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
-.pni-label { flex: none; font: 500 var(--ui-text-sm)/1.3 var(--sans); color: var(--text-primary); letter-spacing: 0; }
+.pni-label { flex: none; font: 400 var(--ui-text-sm)/1.3 var(--sans); color: var(--text-primary); letter-spacing: 0; }
 .pni-chip {
     flex: 0 0 auto; min-width: 0; font-size: var(--ui-text-xs); line-height: 1.4; padding: 0.09rem 0.44rem;
     border-radius: 999px; border: 1px solid rgba(var(--accent-rgb),0.35);
@@ -1806,8 +1908,8 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     flex: 1 999 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font: 400 var(--ui-text-xs)/1.3 var(--sans); color: var(--text-tertiary);
 }
-.pni-summary .pn-add { color: var(--green-accent, #a6e3a1); font-style: normal; font-weight: 500; }
-.pni-summary .pn-del { color: var(--red-accent, #f38ba8); font-style: normal; font-weight: 500; }
+.pni-summary .pn-add { color: var(--green-accent, #a6e3a1); font-style: normal; font-weight: 400; }
+.pni-summary .pn-del { color: var(--red-accent, #f38ba8); font-style: normal; font-weight: 400; }
 :root.theme-light .pni-summary .pn-add { color: #247a43; }
 :root.theme-light .pni-summary .pn-del { color: #c0392b; }
 .pni-actions { flex: none; display: flex; align-items: center; gap: 0.19rem; }
@@ -1821,7 +1923,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .pni-btn--text {
     width: auto; padding: 0 0.5rem; min-height: 1.44rem;
     border: 1px solid var(--border-glass);
-    font: 500 var(--ui-text-xs)/1.2 var(--sans); color: var(--text-secondary);
+    font: 400 var(--ui-text-xs)/1.2 var(--sans); color: var(--text-secondary);
 }
 .pni-btn--text:hover { border-color: rgba(var(--accent-rgb),0.45); background: rgba(var(--accent-rgb),0.12); color: var(--text-primary); }
 .pni-chev { flex: none; width: 0.8rem; height: 0.8rem; color: var(--text-tertiary); transition: transform 0.15s ease; pointer-events: none; }
@@ -1862,7 +1964,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     padding: 0.55rem 0.6rem 0.5rem 0.75rem;
     border-bottom: 1px solid var(--border-glass);
 }
-.pnp-title { font: 500 var(--ui-text-md)/1.3 var(--sans); letter-spacing: 0; color: var(--text-primary); }
+.pnp-title { font: 400 var(--ui-text-md)/1.3 var(--sans); letter-spacing: 0; color: var(--text-primary); }
 .pnp-close {
     width: 1.25rem; height: 1.25rem; display: grid; place-items: center;
     border: 0; border-radius: 6px; background: transparent; color: var(--text-tertiary);
@@ -1995,7 +2097,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .msg-wrap.is-inline-rewriting .msg-toolbar { opacity: 0; pointer-events: none; }
 
 .msg-tb {
-    font-size: 0.62rem; font-family: var(--sans); font-weight: 500;
+    font-size: 0.62rem; font-family: var(--sans); font-weight: 400;
     padding: 0.18rem 0.4rem; border-radius: 6px;
     border: 1px solid var(--border-glass);
     background: var(--surface-glass3); backdrop-filter: blur(8px);
@@ -2144,7 +2246,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     overflow: hidden;
     color: var(--text-primary);
     font-size: 0.76rem;
-    font-weight: 550;
+    font-weight: 400;
     line-height: 1.3;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2279,7 +2381,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .attachment-image-viewer-head {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 1rem;
     flex: 0 0 auto;
@@ -2290,18 +2392,75 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     border-bottom: 1px solid var(--border-glass);
 }
 .attachment-image-viewer-caption {
-    display: flex;
-    align-items: center;
-    align-self: stretch;
+    display: block;
     min-width: 0;
     overflow: hidden;
     color: var(--text-primary);
     font-size: var(--ui-text-lg);
-    font-weight: 600;
+    font-weight: 400;
     line-height: 1.3;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.attachment-image-viewer-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.attachment-image-viewer-action {
+    height: 2rem;
+    min-width: 2rem;
+    padding: 0 0.55rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 6px;
+    background: var(--surface-glass3);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--ui-text-sm);
+    white-space: nowrap;
+    cursor: pointer;
+}
+.attachment-image-viewer-action:hover:not(:disabled),
+.attachment-image-viewer-action:focus-visible {
+    border-color: var(--border-brand-accent);
+    background: var(--floating-hover);
+    color: var(--text-primary);
+}
+.attachment-image-viewer-action:disabled { opacity: 0.45; cursor: default; }
+.attachment-image-viewer-zoom {
+    display: block;
+    flex: 0 0 auto;
+    width: 3.2rem;
+    height: 1.5em;
+    contain: strict;
+    min-width: 3.2rem;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: var(--ui-text-sm);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+}
+.attachment-image-viewer-footer {
+    display: flex;
+    justify-content: space-between;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
+    padding: 0.35rem 0.65rem;
+    color: var(--text-tertiary);
+    font-size: var(--ui-text-sm);
+    font-variant-numeric: tabular-nums;
+}
+.attachment-image-viewer-status {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-secondary);
+    font-size: var(--ui-text-md);
+    pointer-events: none;
+}
+.attachment-image-viewer-status[hidden] { display: none; }
 .attachment-image-viewer-close {
     display: grid;
     place-items: center;
@@ -2343,27 +2502,39 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     contain: layout paint;
     overscroll-behavior: contain;
     background: transparent;
+    touch-action: none;
+    user-select: none;
 }
+.attachment-image-viewer-stage.can-pan { cursor: grab; }
+.attachment-image-viewer-stage.is-dragging { cursor: grabbing; }
 .attachment-image-viewer-canvas {
     position: absolute;
     inset: 0.6rem;
 }
 .attachment-image-viewer-canvas img {
     position: absolute;
-    top: 50%;
-    left: 50%;
+    top: 0;
+    left: 0;
     display: block;
     max-width: none;
     max-height: none;
-    transform: translate3d(-50%, -50%, 0) scale(1);
-    transform-origin: center;
     transition: none;
+    transform-origin: 0 0;
     object-fit: contain;
     border-radius: var(--radius-sm);
     box-shadow: 0 8px 28px rgba(0,0,0,0.18);
 }
-.attachment-image-viewer[open] .attachment-image-viewer-canvas img {
-    will-change: transform;
+@media (max-width: 640px) {
+    .attachment-image-viewer-head {
+        grid-template-columns: minmax(0, 1fr) auto;
+        height: auto;
+        min-height: 3.75rem;
+        gap: 0.45rem;
+        padding: 0.6rem;
+    }
+    .attachment-image-viewer-controls { grid-row: 2; grid-column: 1 / -1; justify-content: center; }
+    .attachment-image-viewer-close { grid-column: 2; grid-row: 1; }
+    .attachment-image-viewer-footer { justify-content: center; text-align: center; }
 }
 :root.theme-light .msg-attachment-card,
 :root.theme-light .composer-attachment-card {
@@ -2583,7 +2754,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .message a { color: var(--accent-3); text-decoration: underline; text-decoration-color: rgba(var(--accent-rgb),0.2); }
 .message a:hover { color: var(--accent-3); text-decoration-color: rgba(var(--accent-rgb),0.4); }
-:root.theme-light .message a { color: #4338ca; text-decoration-color: rgba(67,56,202,0.3); font-weight: 500; }
+:root.theme-light .message a { color: #4338ca; text-decoration-color: rgba(67,56,202,0.3); font-weight: 400; }
 :root.theme-light .message a:hover { color: #312e81; text-decoration-color: rgba(49,46,129,0.45); }
 :root.theme-dark .message :not(pre) > code {
     color: var(--content-accent-text);
@@ -2852,7 +3023,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     0%,100% { box-shadow: 0 4px 32px var(--accent-brand-glow); }
     50% { box-shadow: 0 4px 52px rgba(var(--brand-glow-rgb),0.38); }
 }
-.welcome strong { display: block; color: var(--text-primary); font-size: var(--ui-text-lg); font-weight: 500; margin-bottom: 0.4rem; }
+.welcome strong { display: block; color: var(--text-primary); font-size: var(--ui-text-lg); font-weight: 400; margin-bottom: 0.4rem; }
 .welcome p { color: var(--text-tertiary); font-size: var(--ui-text-md); line-height: 1.6; max-width: 360px; margin: 0 auto; }
 .welcome-session-directory {
     box-sizing: border-box;
@@ -2868,7 +3039,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .welcome-session-directory-icon { flex: 0 0 auto; width: 1.25rem; height: 1.25rem; color: var(--accent-1); }
 .welcome-session-directory-copy { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; gap: 0.08rem; }
 .welcome-session-directory-caption { color: var(--text-tertiary); font-size: 0.66rem; line-height: 1.2; }
-.welcome-session-directory-name { overflow: hidden; color: var(--text-primary); font-size: 0.79rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-session-directory-name { overflow: hidden; color: var(--text-primary); font-size: 0.79rem; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .welcome-session-directory-path { overflow: hidden; color: var(--text-tertiary); font-size: 0.65rem; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .welcome-session-directory-picker {
     flex: 0 0 auto;
@@ -2966,7 +3137,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .process-aggregate-title-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 0.12rem; min-width: 0; flex: 1; }
 .process-aggregate-stats {
     display: flex; justify-content: space-between; gap: 1rem; width: 100%;
-    font-size: 0.58rem; font-weight: 500; color: var(--text-subtle);
+    font-size: 0.58rem; font-weight: 400; color: var(--text-subtle);
     font-variant-numeric: tabular-nums; line-height: 1.35; max-width: 100%;
 }
 .process-aggregate-brief {
@@ -3321,6 +3492,8 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 
 .feed-row .feed-label {
     display: block; flex: 0 0 var(--feed-label-cols); width: var(--feed-label-cols);
+    /* 保持 700：标签是中文（思考/回复/工具），雅黑只有 400/700 两档，600/700 同为
+       Bold、500/400 同为 Regular——降档只会把中文一起改轻，对英文没有增益。2026-10-09 */
     min-width: 0; font-size: 0.69rem; font-weight: 700;
     line-height: 1.5; color: #808090; letter-spacing: 0.02em;
     padding: 0.1rem 0.1rem 0 0; font-family: var(--sans);
@@ -3336,7 +3509,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     transition: box-shadow 0.2s ease;
 }
 .feed-chunk-scroller {
-    font-size: 0.74rem; font-weight: 500; line-height: 1.5; color: var(--text-secondary);
+    font-size: 0.74rem; font-weight: 400; line-height: 1.5; color: var(--text-secondary);
     font-family: var(--sans); padding: var(--scroller-pad-y) 0;
     white-space: pre-wrap; word-break: break-word; min-height: 0;
     max-height: calc(var(--line) * 2.5 + var(--scroller-pad-y) * 2);
@@ -3348,6 +3521,17 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     scrollbar-gutter: stable;
 }
 .feed-chunk.is-streaming .feed-chunk-scroller { max-height: none; overflow: visible; }
+.context-summary-content { flex: 1 1 0; min-width: 0; }
+.context-summary-reasoning { margin-top: 0.2rem; }
+.context-summary-reasoning > summary {
+    width: fit-content; cursor: pointer;
+    color: var(--text-secondary); font-family: var(--sans);
+    font-size: 0.69rem; line-height: 1.5;
+}
+.context-summary-reasoning > .feed-chunk { cursor: text; }
+.context-summary-reasoning > summary:focus-visible {
+    outline: 1px solid var(--accent-1); outline-offset: 2px;
+}
 .feed-chunk.is-overflowing:not(.expanded):not(.is-streaming)::after {
     content: ""; position: absolute; left: 0; right: 0; bottom: 0;
     height: 1.45rem; pointer-events: none;
@@ -3376,23 +3560,6 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 :root.theme-light .feed-item.feed--answer .feed-chunk-scroller { color: #0f172a; }
 :root.theme-light .feed-item.feed--err .feed-chunk-scroller { color: #7f1d1d; }
 :root.theme-light .feed-item.feed--st .feed-chunk-scroller { color: var(--text-secondary); }
-
-/* 流式窗口化渲染（长文本「高度冻结」修复，见 session-scroll-history.js）：
-   流式期间长文本渲染成 [头部文本] + [占位撑高] + [尾部窗口] 三段。
-   占位块的高度由被省略内容的实测渲染高度撑起（阅读时向上滚即可看到，
-   与终态投影同构），提示文本绝对定位、不占高度，保证切换瞬间总高度不变。 */
-.feed-chunk-window-head,
-.feed-chunk-window-tail {
-    display: block;
-    text-overflow: inherit;
-}
-.feed-chunk-omitted { position: relative; }
-.feed-chunk-omitted-note {
-    position: absolute; left: 0; top: 0; right: 0;
-    font-size: 0.68rem; line-height: 1.5; color: var(--text-tertiary);
-    opacity: 0.66; white-space: normal; word-break: break-word;
-    pointer-events: none; user-select: none;
-}
 
 /* 执行过程：回复/追问保持原亮度；其他条目展开时中间亮度(80%)、
    折叠时最底亮度(50%)。filter 只作用于无背景的文字容器，
@@ -3519,7 +3686,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--process-text-muted);
     font-family: var(--sans);
     font-size: 0.58rem;
-    font-weight: 500;
+    font-weight: 400;
     line-height: 1.35;
 }
 :root .process-aggregate:not(.subagent-grid-card) .process-aggregate-stats > span {
@@ -3682,7 +3849,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 :root .process-aggregate:not(.subagent-grid-card) > .process-aggregate-body > .feed-item .feed-chunk-scroller {
     color: var(--process-text-soft);
     font-size: 0.74rem;
-    font-weight: 500;
+    font-weight: 400;
     line-height: 1.6;
 }
 :root .process-aggregate:not(.subagent-grid-card) > .process-aggregate-body > .feed-item .feed-chunk {
@@ -3823,7 +3990,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .skeleton-copy {
     text-align: center;
     font-size: var(--ui-text-md);
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: 0;
     color: var(--text-tertiary);
     position: relative;
@@ -3858,7 +4025,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     z-index: 300;
     border-top: 1px solid var(--border-glass);
     background: var(--surface-glass);
-    backdrop-filter: none; -webkit-backdrop-filter: none;
+    backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
     padding: 0.6rem 0.5rem 0.6rem 0; flex-shrink: 0;
     display: flex; flex-direction: column; align-items: center;
     width: 100%; box-sizing: border-box;
@@ -3877,7 +4044,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     flex: 0 0 auto; padding: 0.22rem 0.52rem;
     border: 1px solid var(--border-glass); border-radius: 999px;
     background: var(--surface-glass2); color: var(--text-secondary);
-    font: 500 var(--ui-text-xs)/1.25 var(--sans); cursor: pointer;
+    font: 400 var(--ui-text-xs)/1.25 var(--sans); cursor: pointer;
     transition: color .16s, border-color .16s, background .16s;
 }
 .plugin-composer-action:hover,
@@ -4073,7 +4240,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(var(--accent-rgb),0.14);
     color: var(--accent-2);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
 }
 .followup-queue-text {
     min-width: 0;
@@ -4097,7 +4264,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-secondary);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     line-height: 1;
     padding: 0 0.48rem;
     cursor: pointer;
@@ -4116,7 +4283,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-secondary);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     line-height: 1;
     padding: 0 1.2rem 0 0.48rem;
     cursor: pointer;
@@ -4165,7 +4332,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-primary); background: var(--floating-selected); border-color: rgba(var(--accent-rgb),0.24);
 }
 .followup-mode-option-copy { min-width: 0; display: grid; gap: 0.12rem; }
-.followup-mode-option-name { font-size: var(--ui-text-xs); font-weight: 500; line-height: 1.2; }
+.followup-mode-option-name { font-size: var(--ui-text-xs); font-weight: 400; line-height: 1.2; }
 .followup-mode-option-description {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     color: var(--text-tertiary); font-size: var(--ui-text-xs); line-height: 1.25;
@@ -4173,7 +4340,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .followup-mode-option-selected {
     visibility: hidden; padding: 0.16rem 0.34rem; border-radius: 999px;
     color: var(--accent-2); background: rgba(var(--accent-rgb),0.12);
-    font-size: var(--ui-text-xs); font-weight: 500; white-space: nowrap;
+    font-size: var(--ui-text-xs); font-weight: 400; white-space: nowrap;
 }
 .followup-mode-option.is-selected .followup-mode-option-selected { visibility: visible; }
 .feed-item[data-steer-pending="1"] {
@@ -4224,7 +4391,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     flex: 1 1 auto;
     min-width: 0;
     background: var(--surface-glass2);
-    border: 1px solid var(--border-glass); border-radius: 12px;
+    border: 1px solid var(--border-glass); border-radius: 18px;
     padding: 0.4rem 0.5rem 0.4rem 0.55rem;
     transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
@@ -4237,8 +4404,8 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 
 #message-input {
     flex: 1; background: transparent; border: none;
-    color: var(--text-primary); font-size: var(--ui-text-lg);
-    line-height: 1.6; font-family: var(--sans);
+    color: var(--text-primary); font-size: 0.95rem;
+    line-height: 1.5; font-family: var(--sans);
     padding: 0.45rem 0; min-height: 1.3rem;
     max-height: 50vh; resize: none; outline: none;
 }
@@ -4283,7 +4450,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: #fff;
     font-family: var(--sans);
     font-size: 0.55rem;
-    font-weight: 800;
+    font-weight: 600;
     line-height: 1;
     display: flex;
     align-items: center;
@@ -4324,13 +4491,13 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .skill-picker-title {
     color: var(--text-secondary);
     font-size: var(--ui-text-md);
-    font-weight: 500;
+    font-weight: 400;
 }
 .skill-picker-total {
     margin-left: 0.38rem;
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
 }
 .skill-picker-clear {
     border: 1px solid transparent;
@@ -4362,7 +4529,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-tertiary);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     cursor: pointer;
     padding: 0.24rem 0.62rem;
     transition: color 0.16s, background 0.16s, border-color 0.16s;
@@ -4429,14 +4596,14 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     overflow: hidden;
     color: inherit;
     font-size: var(--ui-text-md);
-    font-weight: 500;
+    font-weight: 400;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 .skill-picker-group-summary {
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     white-space: nowrap;
 }
 .skill-picker-group-summary.is-undiscovered {
@@ -4476,7 +4643,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(var(--accent-rgb),0.1);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     cursor: pointer;
 }
 .mcp-server-register-btn:hover:not(:disabled) {
@@ -4546,7 +4713,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-tertiary);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     cursor: pointer;
     opacity: 0;
     pointer-events: auto;
@@ -4562,8 +4729,11 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .skill-picker-toggle[data-enabled="false"] {
     color: var(--green-accent);
 }
+/* 开关（禁用/启用）只在 hover 或键盘聚焦时浮出：:focus-within 会把鼠标点过的那一行
+   一直留着焦点，开关就"常显"了；改用 :focus-visible（鼠标点击不命中、Tab 命中），
+   键盘可达性不变、鼠标路径回到 hover 才显。 */
 .skill-picker-option:hover .skill-picker-toggle,
-.skill-picker-option:focus-within .skill-picker-toggle {
+.skill-picker-option:has(:focus-visible) .skill-picker-toggle {
     opacity: 1;
 }
 .skill-picker-toggle-ico {
@@ -4586,7 +4756,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(255,255,255,0.04);
     font-family: var(--mono);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     white-space: nowrap;
     max-width: 8rem;
     overflow: hidden;
@@ -4609,18 +4779,19 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(255,255,255,0.04);
     font-family: var(--mono);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     white-space: nowrap;
 }
 .plugin-state {
     color: var(--green-accent);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     margin-left: 0.32rem;
 }
 .plugin-state.is-off {
     color: var(--red-accent);
 }
+/* 插件行右侧预留动作位（浮出前后行高/文字宽度不变，避免 hover 时跳版） */
 .plugin-option { padding-right: 2.7rem; }
 .plugin-option.has-page { padding-right: 4.7rem; }
 .plugin-option-actions {
@@ -4632,10 +4803,15 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     align-items: center;
     gap: 0.25rem;
     margin: 0;
-    opacity: 1;
-    pointer-events: auto;
+    /* 与技能 / 模型行同规矩：静止不显（含已启用/被选中的插件），
+       hover 或键盘聚焦才浮出「停用/启用 + 打开页面」。此前是常显。 */
+    opacity: 0;
+    pointer-events: none;
     transform: translateY(-50%);
+    transition: opacity 0.18s;
 }
+.plugin-option:hover .plugin-option-actions,
+.plugin-option:has(:focus-visible) .plugin-option-actions { opacity: 1; pointer-events: auto; }
 .plugin-option-actions .skill-picker-toggle {
     position: static;
     opacity: 1;
@@ -4663,7 +4839,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     display: block;
     color: inherit;
     font-size: var(--ui-text-sm);
-    font-weight: 500;
+    font-weight: 400;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -4821,7 +4997,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .composer-model-cell-chevron { display: flex; flex: 0 0 12px; color: var(--text-tertiary); }
 .composer-model-cell-chevron svg { width: 12px; height: 12px; }
-.composer-model-effort-option { justify-content: space-between; font-weight: 500; }
+.composer-model-effort-option { justify-content: space-between; font-weight: 400; }
 .composer-model-check { display: grid; place-items: center; flex: 0 0 14px; }
 .composer-model-check svg { width: 14px; height: 14px; }
 .composer-model-cell:hover,
@@ -4886,7 +5062,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-tertiary);
     font-family: var(--sans);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     cursor: pointer;
     opacity: 0;
     pointer-events: auto;
@@ -4902,8 +5078,10 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .composer-model-toggle[data-enabled="false"] {
     color: var(--green-accent);
 }
+/* 同 .skill-picker-toggle：开关只在 hover / 键盘聚焦时浮出。
+   旧写法 :focus-within 会让"点过的那一行"（含菜单打开时被程序聚焦的当前模型行）常显。 */
 .composer-model-option-row:hover .composer-model-toggle,
-.composer-model-option-row:focus-within .composer-model-toggle {
+.composer-model-option-row:has(:focus-visible) .composer-model-toggle {
     opacity: 1;
 }
 .composer-model-toggle-ico {
@@ -4920,7 +5098,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .composer-model-option-name {
     display: block;
     font-size: var(--composer-model-font-size);
-    font-weight: 500;
+    font-weight: 400;
     line-height: 1.25rem;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -5114,7 +5292,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     align-items: center;
     gap: 0.34rem;
     width: 100%;
-    min-height: 1.875rem;
+    min-height: 30px;
     padding: 0.22rem 0.48rem;
     border: 1px solid var(--border-glass);
     border-radius: 10px;
@@ -5197,7 +5375,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     white-space: nowrap;
     color: inherit;
     font-size: var(--ui-text-sm);
-    font-weight: 500;
+    font-weight: 400;
 }
 .composer-permission-caret {
     flex: none;
@@ -5260,7 +5438,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .permission-mode-label {
     display: block;
     font-size: var(--ui-text-sm);
-    font-weight: 500;
+    font-weight: 400;
     color: var(--text-primary);
 }
 .permission-mode-option.is-active .permission-mode-label::after {
@@ -5481,7 +5659,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     flex: 0 0 auto;
     color: var(--text-primary);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     white-space: nowrap;
 }
 .human-todo-floater-chips {
@@ -5509,7 +5687,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .human-todo-chip .human-todo-count {
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: 400;
 }
 /* 明细只保留在 DOM 内供读屏播报（单行条不再展示两行文字） */
 .human-todo-detail {
@@ -5535,7 +5713,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
-    font: 500 var(--ui-text-xs)/1 var(--sans);
+    font: 400 var(--ui-text-xs)/1 var(--sans);
     transition: background 0.15s var(--ease-out-expo), border-color 0.15s var(--ease-out-expo), color 0.15s var(--ease-out-expo), transform 0.12s ease;
 }
 .human-todo-floater-btn:hover,
@@ -5618,13 +5796,24 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     min-width: 1.125rem;   /* 18px @16 → 随字号缩放 */
     height: 1.125rem;
     padding: 0 0.28rem;
-    margin-left: auto;
+    /* 与「草稿/待办/审查」胶囊同一个标记区（标题行行尾，紧随胶囊、在相对时间之前）：
+       间距同胶囊的 0.4rem；不再用 margin-left:auto —— 那是它当初挂在 .session-item-actions
+       （整行垂直居中的绝对定位动作区）里时的写法，在「详细」两行模式下会落到两行之间。 */
+    flex: 0 0 auto;
+    margin-left: 0.4rem;
+    white-space: nowrap;    /* 行被挤满时不许折行（盒高固定 1.125rem，折行会溢出圆外） */
+    /* 浮出的「置顶/⋯」动作带一层右侧渐隐遮罩（.session-item::after，z-index 2）：
+       徽标抬到它上面，hover 时状态不被遮罩吃掉。 */
+    position: relative;
+    z-index: 3;
     border-radius: 50%;
     background: var(--amber-accent);
     color: #30291f;
-    font-size: 0.62rem;    /* 恢复经典比例（原 0.68rem/18px 档） */
+    /* 字形 0.62rem（盒体 1.125rem 不动，字形/圆 ≈ 0.55 = 经典比例）。
+       2026-10-09 曾随胶囊一起升到 --ui-text-xs（0.75rem），当天一并回滚。 */
+    font-size: 0.62rem;
     line-height: 1;
-    font-weight: 600;      /* 原 800 在 0.62rem 小字号下笔画糊在一起（?/! 像被压扁）；600 干净且仍有强调 */
+    font-weight: 600;      /* 原 800 在 0.62rem 小字号下笔画糊在一起（?/! 像被压扁）；图标是中文标点，保持 600（雅黑 Bold），不随英文降档 */
     box-shadow: 0 0 0 0.1875rem rgba(249, 226, 175, 0.08);
 }
 .session-item.has-human-pending .session-name { color: var(--text-primary); }
@@ -5705,7 +5894,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 @keyframes autoReviewSpin { to { transform: rotate(360deg); } }
 .auto-review-text { min-width: 0; flex: 1; }
-.auto-review-title { font-weight: 500; }
+.auto-review-title { font-weight: 400; }
 .auto-review-risk {
     margin-left: 0.35rem;
     padding: 0.05rem 0.4rem;
@@ -5713,7 +5902,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(243, 139, 168, 0.18);
     color: var(--red-accent, #f38ba8);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     text-transform: uppercase;
     vertical-align: 0.08rem;
 }
@@ -5805,18 +5994,18 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     border-radius: 10px;
     background: rgba(var(--accent-rgb), 0.14);
     color: var(--accent-2);
-    font-weight: 800;
+    font-weight: 600;
 }
 .human-approval-card .human-card-icon { background: rgba(249, 226, 175, 0.12); color: var(--amber-accent); }
 .human-card-head-copy { min-width: 0; flex: 1; }
 .human-card-kicker {
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: 0;
     text-transform: uppercase;
 }
-.human-card-title { margin: 0.12rem 0 0; color: var(--text-primary); font-size: var(--ui-text-lg); font-weight: 500; }
+.human-card-title { margin: 0.12rem 0 0; color: var(--text-primary); font-size: var(--ui-text-lg); font-weight: 400; }
 .human-card-status {
     flex: 0 0 auto;
     padding: 0.22rem 0.5rem;
@@ -5860,7 +6049,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     padding: 0.55rem 1rem 0;
     overflow-x: auto;
 }
-.human-question-progress { display: none; padding: 0.6rem 1rem 0; color: var(--text-secondary); font-size: var(--ui-text-sm); font-weight: 500; }
+.human-question-progress { display: none; padding: 0.6rem 1rem 0; color: var(--text-secondary); font-size: var(--ui-text-sm); font-weight: 400; }
 .human-question-tab {
     border: 1px solid transparent;
     border-radius: 999px;
@@ -5911,7 +6100,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: var(--accent-brand-gradient);
     color: #fff;
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     line-height: 1;
 }
 .human-option > input { margin-top: 0.2rem; accent-color: var(--accent-1); }
@@ -5925,7 +6114,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-interaction-card.is-readonly textarea:disabled { opacity: 1; cursor: default; color: var(--text-secondary); }
 .human-interaction-card.is-readonly .human-other-shortcut { display: none !important; }
 .human-option-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0.2rem; }
-.human-option-label { color: var(--text-primary); font-size: var(--ui-text-md); font-weight: 500; }
+.human-option-label { color: var(--text-primary); font-size: var(--ui-text-md); font-weight: 400; }
 .human-other-header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
 .human-option-description { color: var(--text-secondary); font-size: var(--ui-text-sm); line-height: 1.45; }
 .human-option-preview { margin-top: 0.35rem; color: var(--text-secondary); font-size: var(--ui-text-sm); }
@@ -5973,7 +6162,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }
 .human-approval-decisions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; }
 .human-egress-summary { margin-top: 0.75rem; padding: 0.65rem 0.72rem; border: 1px solid rgba(137, 180, 250, 0.2); border-radius: 8px; background: rgba(137, 180, 250, 0.045); }
-.human-egress-label { margin-bottom: 0.35rem; color: var(--text-primary); font-weight: 500; font-size: var(--ui-text-sm); }
+.human-egress-label { margin-bottom: 0.35rem; color: var(--text-primary); font-weight: 400; font-size: var(--ui-text-sm); }
 .human-egress-row { color: var(--text-soft); font-size: var(--ui-text-xs); line-height: 1.45; overflow-wrap: anywhere; }
 .human-egress-row.is-warning { color: var(--amber-accent); }
 .human-egress-enforcement { margin-top: 0.42rem; font-size: var(--ui-text-xs); }
@@ -6016,7 +6205,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-interaction-card.is-readonly .human-approval-decisions button.is-selected::before {
     content: '✓';
     margin-right: 0.32rem;
-    font-weight: 500;
+    font-weight: 400;
 }
 .human-deny-btn { color: var(--red-accent); }
 .human-approval-subtitle { margin-bottom: 0.45rem; color: var(--amber-accent); font: var(--ui-text-sm) var(--mono); }
@@ -6034,7 +6223,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     margin-bottom: 0.22rem;
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: 0;
 }
 .human-approval-review-text {
@@ -6078,7 +6267,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     border-color: rgba(243, 139, 168, 0.34);
     background: rgba(243, 139, 168, 0.07);
 }
-.human-approval-analysis-title { color: var(--text-primary); font-weight: 500; }
+.human-approval-analysis-title { color: var(--text-primary); font-weight: 400; }
 .human-approval-analysis-risk {
     display: inline-flex;
     margin-left: 0.55rem;
@@ -6087,7 +6276,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(var(--text-primary-rgb), 0.08);
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
-    font-weight: 500;
+    font-weight: 400;
 }
 .human-approval-analysis-reason { margin-top: 0.35rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .human-approval-analysis-hint { margin-top: 0.35rem; color: var(--text-tertiary); font-size: var(--ui-text-xs); }
@@ -6099,7 +6288,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(243, 139, 168, 0.06);
 }
 .human-approval-rejection-editor[hidden] { display: none; }
-.human-approval-rejection-label { display: block; color: var(--text-primary); font-size: var(--ui-text-sm); font-weight: 500; }
+.human-approval-rejection-label { display: block; color: var(--text-primary); font-size: var(--ui-text-sm); font-weight: 400; }
 .human-approval-rejection-input {
     display: block;
     width: 100%;
@@ -6183,7 +6372,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .rewrite-undo-toast.is-on { display: flex; pointer-events: auto; }
 .rewrite-undo-toast .rewrite-undo-btn {
     background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass);
-    color: var(--text-primary); font-size: var(--ui-text-xs); font-weight: 500;
+    color: var(--text-primary); font-size: var(--ui-text-xs); font-weight: 400;
     padding: 0.2rem 0.6rem; border-radius: 6px; cursor: pointer;
     transition: background 0.18s;
 }
@@ -6221,13 +6410,13 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .ui-modal__icon--danger { color: var(--red-accent); background: rgba(243,139,168,0.1); border-color: rgba(243,139,168,0.28); }
 .ui-modal__icon--info { color: var(--accent-2); background: rgba(129,140,248,0.12); border-color: rgba(129,140,248,0.22); }
 .ui-modal__titles { min-width: 0; }
-.ui-modal__title { font-size: var(--ui-text-lg); font-weight: 500; color: var(--text-primary); letter-spacing: 0; line-height: 1.35; margin: 0; }
+.ui-modal__title { font-size: var(--ui-text-lg); font-weight: 400; color: var(--text-primary); letter-spacing: 0; line-height: 1.35; margin: 0; }
 .ui-modal__subtitle { font-size: var(--ui-text-sm); color: var(--text-tertiary); margin: 0.25rem 0 0; line-height: 1.45; }
 .ui-modal__body { font-size: var(--ui-text-md); color: var(--text-secondary); line-height: 1.6; margin: 0 0 1.15rem; padding-left: 3.1rem; }
 .ui-modal__body:empty { display: none; margin: 0; padding: 0; }
 .ui-modal__input-label {
     display: block; margin: 0 0 0.38rem;
-    color: var(--text-secondary); font-size: var(--ui-text-xs); font-weight: 500;
+    color: var(--text-secondary); font-size: var(--ui-text-xs); font-weight: 400;
 }
 .ui-modal__input-label[hidden], .ui-modal__input[hidden], .ui-modal__input-hint[hidden],
 .ui-modal-select-control[hidden], .ui-modal-select-menu[hidden] { display: none; }
@@ -6236,7 +6425,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     margin: 0 0 1.15rem; padding: 0.58rem 0.68rem;
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
     background: rgba(0,0,0,0.2); color: var(--text-primary);
-    font: 500 var(--ui-text-md)/1.35 var(--sans); outline: none;
+    font: 400 var(--ui-text-md)/1.35 var(--sans); outline: none;
     transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
 }
 .ui-modal__input-hint { align-self: center; margin-right: auto; }
@@ -6265,11 +6454,11 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .ui-modal-select-trigger-copy { min-width: 0; display: grid; gap: 0.16rem; }
 .ui-modal-select-current {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--text-primary); font-size: var(--ui-text-md); font-weight: 500; line-height: 1.25;
+    color: var(--text-primary); font-size: var(--ui-text-md); font-weight: 400; line-height: 1.25;
 }
 .ui-modal-select-current-meta {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--text-tertiary); font: 500 var(--ui-text-xs)/1.25 var(--mono);
+    color: var(--text-tertiary); font: 400 var(--ui-text-xs)/1.25 var(--mono);
 }
 .ui-modal-select-current-meta:empty { display: none; }
 .ui-modal-select-chevron {
@@ -6304,15 +6493,15 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .ui-modal-select-option-copy { min-width: 0; display: grid; gap: 0.18rem; }
 .ui-modal-select-option-name {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: var(--ui-text-sm); font-weight: 500; line-height: 1.3;
+    font-size: var(--ui-text-sm); font-weight: 400; line-height: 1.3;
 }
 .ui-modal-select-option-meta {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    color: var(--text-tertiary); font: 500 var(--ui-text-xs)/1.3 var(--mono);
+    color: var(--text-tertiary); font: 400 var(--ui-text-xs)/1.3 var(--mono);
 }
 .ui-modal-select-option-check {
     width: 1.35rem; height: 1.35rem; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 999px; color: transparent; background: transparent; font-size: var(--ui-text-sm); font-weight: 500;
+    border-radius: 999px; color: transparent; background: transparent; font-size: var(--ui-text-sm); font-weight: 400;
 }
 .ui-modal-select-option.is-selected .ui-modal-select-option-check {
     color: #fff; background: var(--accent-brand-gradient);
@@ -6328,7 +6517,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 :root.theme-light .ui-modal-select-option.is-selected { border-color: rgba(var(--brand-accent-rgb),0.24); }
 .ui-modal__actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.15rem; }
 .ui-modal-btn {
-    font-family: var(--sans); font-size: var(--ui-text-md); font-weight: 500;
+    font-family: var(--sans); font-size: var(--ui-text-md); font-weight: 400;
     padding: 0.45rem 1rem; border-radius: var(--radius-sm); cursor: pointer;
     border: 1px solid transparent;
     transition: all 0.2s var(--ease-out-expo);
@@ -6368,7 +6557,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
     margin-bottom: 1rem; padding-bottom: 0.65rem; border-bottom: 1px solid var(--border-glass);
 }
-.settings-modal__title { margin: 0; font-size: var(--ui-text-lg); font-weight: 500; color: var(--text-primary); letter-spacing: 0; }
+.settings-modal__title { margin: 0; font-size: var(--ui-text-lg); font-weight: 400; color: var(--text-primary); letter-spacing: 0; }
 .settings-modal__close {
     flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: none;
     border-radius: var(--radius-sm);
@@ -6389,7 +6578,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .plugin-settings-form { display: grid; gap: .65rem; margin-top: .55rem; }
 .plugin-setting-field { display: grid; gap: .22rem; min-width: 0; }
-.plugin-setting-label { color: var(--text-secondary); font: 500 var(--ui-text-xs)/1.35 var(--sans); }
+.plugin-setting-label { color: var(--text-secondary); font: 400 var(--ui-text-xs)/1.35 var(--sans); }
 .plugin-setting-description { color: var(--text-tertiary); font: var(--ui-text-xs)/1.4 var(--sans); }
 .plugin-setting-control {
     box-sizing: border-box; width: 100%; min-width: 0; padding: .46rem .55rem;
@@ -6409,7 +6598,7 @@ textarea.plugin-setting-control { resize: vertical; }
 .plugin-settings-status { min-height: 1rem; color: var(--text-tertiary); font: var(--ui-text-xs)/1.4 var(--sans); }
 .plugin-settings-status.is-error { color: #f38ba8; }
 .settings-modal__label {
-    font-size: var(--ui-text-xs); font-weight: 500; letter-spacing: 0;
+    font-size: var(--ui-text-xs); font-weight: 400; letter-spacing: 0;
     text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 0.55rem;
 }
 .settings-modal__label--sub { margin-top: 0.75rem; margin-bottom: 0.45rem; }
@@ -6426,7 +6615,7 @@ textarea.plugin-setting-control { resize: vertical; }
 :root.theme-light .settings-font-step { background: rgba(0,0,0,0.025); }
 .settings-font-step:hover { border-color: rgba(var(--accent-rgb),0.38); color: var(--text-primary); }
 .settings-font-step.is-active { border-color: rgba(var(--accent-rgb),0.55); background: rgba(var(--accent-rgb),0.14); color: var(--text-primary); box-shadow: 0 0 0 1px rgba(var(--accent-rgb),0.18); }
-.settings-font-a { font-weight: 700; line-height: 1; display: block; }
+.settings-font-a { font-weight: 600; line-height: 1; display: block; }
 .settings-font-a--sm { font-size: 0.72rem; }
 .settings-font-a--md { font-size: 0.98rem; }
 .settings-font-a--lg { font-size: 1.22rem; }
@@ -6436,7 +6625,7 @@ textarea.plugin-setting-control { resize: vertical; }
     flex: 1; padding: 0.52rem 0.65rem;
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
     background: rgba(255,255,255,0.03); color: var(--text-secondary);
-    font-family: var(--sans); font-size: var(--ui-text-md); font-weight: 500;
+    font-family: var(--sans); font-size: var(--ui-text-md); font-weight: 400;
     cursor: pointer; transition: all 0.18s var(--ease-out-expo);
 }
 :root.theme-light .settings-theme-btn { background: rgba(0,0,0,0.025); }
@@ -6452,7 +6641,7 @@ textarea.plugin-setting-control { resize: vertical; }
     padding: 0.52rem 0.85rem;
     border: 1px solid rgba(var(--accent-rgb),0.32); border-radius: var(--radius-sm);
     background: rgba(var(--accent-rgb),0.1); color: var(--text-primary);
-    font-family: var(--sans); font-size: var(--ui-text-md); font-weight: 500;
+    font-family: var(--sans); font-size: var(--ui-text-md); font-weight: 400;
     cursor: pointer; transition: all 0.18s var(--ease-out-expo);
 }
 :root.theme-light .settings-advanced-btn { background: rgba(var(--brand-accent-rgb),0.06); border-color: rgba(var(--brand-accent-rgb),0.24); }
@@ -6534,7 +6723,7 @@ textarea.plugin-setting-control { resize: vertical; }
     border-radius: 999px;
     background: linear-gradient(180deg, rgba(var(--text-primary-rgb), 0.07), rgba(var(--text-primary-rgb), 0.04));
     color: var(--text-secondary);
-    font-family: var(--sans); font-size: 0.72rem; font-weight: 500; line-height: 1;
+    font-family: var(--sans); font-size: 0.72rem; font-weight: 400; line-height: 1;
     cursor: pointer;
     transition: color 0.16s var(--ease-out-expo), border-color 0.16s var(--ease-out-expo),
                 background 0.16s var(--ease-out-expo), transform 0.16s var(--ease-out-expo);
@@ -6575,7 +6764,7 @@ textarea.plugin-setting-control { resize: vertical; }
     padding: 0.12rem 0.45rem; border-radius: var(--radius-sm);
     border: 1px solid var(--border-glass); background: var(--surface-glass3);
     color: var(--text-secondary); font-family: var(--sans);
-    font-size: var(--ui-text-xs); font-weight: 500; letter-spacing: 0;
+    font-size: var(--ui-text-xs); font-weight: 400; letter-spacing: 0;
     cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
     transform: translateY(1px); /* 光心微调：与标题文字视觉中心对齐（2026-10-07） */
@@ -6602,7 +6791,7 @@ textarea.plugin-setting-control { resize: vertical; }
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.028);
     color: var(--text-tertiary);
-    font-family: var(--sans); font-size: 0.66rem; font-weight: 500;
+    font-family: var(--sans); font-size: 0.66rem; font-weight: 400;
     line-height: 1; cursor: pointer; white-space: nowrap;
     transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
     transform: translateY(1px); /* 光心微调：与标题文字视觉中心对齐（2026-10-07） */
@@ -6670,7 +6859,7 @@ textarea.plugin-setting-control { resize: vertical; }
 .subagent-catalog-status.is-error { background: rgba(243, 139, 168, 0.9); }      /* 红色：错误 */
 .subagent-catalog-name {
     flex: 1 1 auto; min-width: 0;
-    color: var(--text-primary); font-size: 0.72rem; font-weight: 600;
+    color: var(--text-primary); font-size: 0.72rem; font-weight: 400;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .subagent-catalog-meta {

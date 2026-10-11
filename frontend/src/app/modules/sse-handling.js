@@ -142,6 +142,37 @@ function sseSequenceScope(parsed) {
     return scope;
 }
 
+function seedEphemeralRecoveryScope(ctx, sessionId) {
+    if (!ctx) return;
+    var streams = new Map();
+    var records = executionRecordsBySession.get(String(sessionId || ''));
+    if (records) records.forEach(function (record) {
+        var runId = String(record.run_id || '');
+        var streamSeq = Number(record.stream_seq || 0);
+        if (runId && streamSeq > 0) streams.set(runId, Math.max(streams.get(runId) || 0, streamSeq));
+    });
+    ctx.recoveryStreamSeqByRunId = streams;
+}
+
+function shouldSkipRecoveredEphemeralEvent(event, ctx) {
+    if (!event || !event.ephemeral || !ctx) return false;
+    var executionSeq = Number(event.execution_runtime_seq || 0);
+    if (executionSeq > 0 && executionSeq <= Number(ctx.lastRuntimeSeq || 0)) return true;
+    // Older servers retain compression waits and sleep notices without a
+    // runtime cursor. A newer recovered request in the same run proves these
+    // previews are stale. Do this before they can change the process group.
+    var type = String(event.type || '');
+    if (type === 'runtime_resumed' || /^context_(trim|summary)_(progress|delta|reasoning_delta|reasoning_end)$/.test(type)
+        || /^key_context_(progress|delta)$/.test(type)) {
+        if (event.replayed_recent && type === 'runtime_resumed') return true;
+        var streamSeq = Number(event.stream_seq || 0);
+        var recoveredSeq = ctx.recoveryStreamSeqByRunId
+            && ctx.recoveryStreamSeqByRunId.get(String(event.run_id || event.runId || ''));
+        if (streamSeq > 0 && streamSeq < Number(recoveredSeq || 0)) return true;
+    }
+    return false;
+}
+
 function endRunForClient(sessionId, ctx, opts) {
     opts = opts || {};
     var sid = String(sessionId || '');
@@ -446,6 +477,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 // Observer-only control messages refresh extension snapshots;
                 // they are not chat history and must not enter seq/cursor handling.
                 if (consumeExtensionControlEvent(parsed, eventSessionId)) continue;
+                if (eventSessionId === runSessionId && shouldSkipRecoveredEphemeralEvent(parsed, runCtx)) continue;
                 if (shouldApplySseSeqFilter(parsed)
                     && !sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq, sseSequenceScope(parsed))) continue;
                 if (eventSessionId === runSessionId && !parsed.agent_id
@@ -646,10 +678,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                         appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
                     }
                     else if (parsed.type === 'context_summary_progress') {
-                        // 等待提示不能收尾正在流入的摘要，否则最终正文会追加而不是替换草稿。
-                        if (!runCtx || !runCtx.progressStream || !runCtx.progressStream['context-summary']) {
-                            appendProgressLog(runCtx, parsed.content, 'context-summary', runSessionId);
-                        }
+                        appendProgressLog(runCtx, parsed.content, 'context-summary', runSessionId);
                     }
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
                     else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
@@ -1272,6 +1301,7 @@ async function attachSessionEventStream(sessionId, opts) {
         runCtx = newDomContext(getVisibleChatStream());
         savedRecovery = typeof executionRecoveryBySession !== 'undefined' ? executionRecoveryBySession.get(String(sessionId)) : null;
         runCtx.lastRuntimeSeq = savedRecovery ? Number(savedRecovery.lastRuntimeSeq || 0) : 0;
+        seedEphemeralRecoveryScope(runCtx, runSessionId);
         var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};
         runCtx.runId = String(activeInfoForAttach.run_id || activeInfoForAttach.runId || '');
         runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();

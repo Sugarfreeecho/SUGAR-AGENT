@@ -35,6 +35,7 @@ import eventDispatchSource from './modules/event-dispatch.js?raw';
 import sessionManagementSource from './modules/session-management.js?raw';
 import sseHandlingSource from './modules/sse-handling.js?raw';
 import layoutPanelsSource from './modules/layout-panels.js?raw';
+import contextMenusSource from './modules/context-menus.js?raw';
 import dockTypesSource from './modules/dock/engine/types.js?raw';
 import dockTreeSource from './modules/dock/engine/tree.js?raw';
 import dockConstraintsSource from './modules/dock/engine/constraints.js?raw';
@@ -182,6 +183,7 @@ const uiSources = [
     sessionManagementSource,
     sseHandlingSource,
     layoutPanelsSource,
+    contextMenusSource,
     dockTypesSource,
     dockTreeSource,
     dockConstraintsSource,
@@ -200,7 +202,7 @@ const uiSources = [
     dockRightColumnSource,
 ];
 
-Function('"use strict";\n' + uiSources.join('\n\n') + '\n\n' + uiWiring + '\n//# sourceURL=myagent-ui.js')();
+Function('"use strict";\n' + uiSources.join('\n\n') + '\n\nreadRuntimeConfig(globalThis);\n' + uiWiring + '\n//# sourceURL=myagent-ui.js')();
 
 void initPluginUiSlots();
 

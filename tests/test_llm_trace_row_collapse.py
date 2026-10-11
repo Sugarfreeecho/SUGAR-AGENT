@@ -21,7 +21,10 @@ def test_reasoning_row_control_is_independent() -> None:
     creator = rendering.split("function createProcessFeedRow", 1)[1].split(
         "function appendLlmStreamDelta", 1
     )[0]
-    assert "type === 'tool-call' || type === 'llm-reasoning'" in creator
+    # 本批把「压缩思考」移出 createProcessFeedRow（改为压缩行内 details），
+    # 条件收敛为命名变量；语义不变：tool-call 与 llm-reasoning 行可折叠。
+    assert "var isReasoningRow = type === 'llm-reasoning';" in creator
+    assert "rowCanCollapse = type === 'tool-call' || isReasoningRow" in creator
     assert "chunk.classList.add('expanded')" in creator
     assert "type === 'llm-reasoning' && !streamOpts.streaming" in creator
     assert "function handleLlmRowChunkClick" in rendering

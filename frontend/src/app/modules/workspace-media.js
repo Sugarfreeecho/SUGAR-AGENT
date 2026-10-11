@@ -429,6 +429,28 @@ function ensureDurableAttachmentPreviewDialog() {
     header.className = 'attachment-image-viewer-head';
     var caption = document.createElement('span');
     caption.className = 'attachment-image-viewer-caption';
+    var controls = document.createElement('div');
+    controls.className = 'attachment-image-viewer-controls';
+    var zoomOut = createDurableAttachmentPreviewButton('−', '缩小图片', function () {
+        zoomDurableAttachmentPreview(dialog, dialog._previewScale / 1.25);
+    });
+    var zoomLabel = document.createElement('output');
+    zoomLabel.className = 'attachment-image-viewer-zoom';
+    zoomLabel.setAttribute('aria-label', '图片缩放比例');
+    var zoomIn = createDurableAttachmentPreviewButton('+', '放大图片', function () {
+        zoomDurableAttachmentPreview(dialog, dialog._previewScale * 1.25);
+    });
+    var actualSize = createDurableAttachmentPreviewButton('100%', '原始尺寸', function () {
+        if (dialog._previewFitSize) zoomDurableAttachmentPreview(dialog, 1 / dialog._previewFitSize.scale, null, true);
+    });
+    var fit = createDurableAttachmentPreviewButton('适应窗口', '适应窗口', function () {
+        zoomDurableAttachmentPreview(dialog, 1, null, true);
+    });
+    controls.appendChild(zoomOut);
+    controls.appendChild(zoomLabel);
+    controls.appendChild(zoomIn);
+    controls.appendChild(actualSize);
+    controls.appendChild(fit);
     var close = document.createElement('button');
     close.type = 'button';
     close.className = 'attachment-image-viewer-close';
@@ -436,6 +458,7 @@ function ensureDurableAttachmentPreviewDialog() {
     close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
     close.addEventListener('click', function () { dialog.close(); });
     header.appendChild(caption);
+    header.appendChild(controls);
     header.appendChild(close);
     var stage = document.createElement('div');
     stage.className = 'attachment-image-viewer-stage';
@@ -447,10 +470,22 @@ function ensureDurableAttachmentPreviewDialog() {
     image.draggable = false;
     canvas.appendChild(image);
     stage.appendChild(canvas);
+    var status = document.createElement('div');
+    status.className = 'attachment-image-viewer-status';
+    status.setAttribute('role', 'status');
+    stage.appendChild(status);
+    var footer = document.createElement('div');
+    footer.className = 'attachment-image-viewer-footer';
+    var dimensions = document.createElement('span');
+    var hint = document.createElement('span');
+    hint.textContent = '滚轮缩放 · 拖拽移动 · 双击切换原始尺寸';
+    footer.appendChild(dimensions);
+    footer.appendChild(hint);
     var panel = document.createElement('div');
     panel.className = 'attachment-image-viewer-panel';
     panel.appendChild(header);
     panel.appendChild(stage);
+    panel.appendChild(footer);
     dialog.appendChild(panel);
     dialog.addEventListener('click', function (event) {
         if (event.target === dialog) dialog.close();
@@ -458,24 +493,58 @@ function ensureDurableAttachmentPreviewDialog() {
     stage.addEventListener('wheel', function (event) {
         if (!dialog.open || !dialog._previewFitSize || !event.deltaY) return;
         event.preventDefault();
-        var previousScale = Number(dialog._previewScale) || 1;
         var delta = event.deltaY * (event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? dialog._previewFitSize.viewportHeight : 1));
-        var nextScale = Math.max(0.2, Math.min(8, previousScale * Math.exp(-delta * 0.0016)));
-        if (nextScale === previousScale) return;
-        dialog._previewScale = nextScale;
-        if (dialog._previewZoomFrame) return;
-        dialog._previewZoomFrame = window.requestAnimationFrame(function () {
-            dialog._previewZoomFrame = 0;
-            if (dialog.open && dialog._previewFitSize) {
-                applyDurableAttachmentPreviewScale(dialog, dialog._previewScale);
-            }
-        });
+        zoomDurableAttachmentPreview(dialog, dialog._previewScale * Math.exp(-delta * 0.0016), event);
     }, { passive: false });
+    stage.addEventListener('dblclick', function (event) {
+        if (!dialog._previewFitSize) return;
+        event.preventDefault();
+        var actualScale = 1 / dialog._previewFitSize.scale;
+        zoomDurableAttachmentPreview(dialog, Math.abs(dialog._previewScale - actualScale) < 0.001 ? 1 : actualScale, event);
+    });
+    stage.addEventListener('pointerdown', function (event) {
+        var fitSize = dialog._previewFitSize;
+        if (!fitSize || event.button !== 0 || !durableAttachmentPreviewCanPan(dialog)) return;
+        event.preventDefault();
+        dialog._previewDrag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+        stage.setPointerCapture(event.pointerId);
+        stage.classList.add('is-dragging');
+    });
+    stage.addEventListener('pointermove', function (event) {
+        var drag = dialog._previewDrag;
+        if (!drag || drag.id !== event.pointerId) return;
+        dialog._previewOffsetX += event.clientX - drag.x;
+        dialog._previewOffsetY += event.clientY - drag.y;
+        drag.x = event.clientX;
+        drag.y = event.clientY;
+        clampDurableAttachmentPreviewPan(dialog);
+        scheduleDurableAttachmentPreviewRender(dialog);
+    });
+    var stopDrag = function () {
+        var drag = dialog._previewDrag;
+        dialog._previewDrag = null;
+        stage.classList.remove('is-dragging');
+        if (drag && stage.hasPointerCapture(drag.id)) stage.releasePointerCapture(drag.id);
+    };
+    stage.addEventListener('pointerup', stopDrag);
+    stage.addEventListener('pointercancel', stopDrag);
+    stage.addEventListener('lostpointercapture', stopDrag);
+    dialog.addEventListener('keydown', function (event) {
+        if (!dialog._previewFitSize || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.key === '+' || event.key === '=') zoomDurableAttachmentPreview(dialog, dialog._previewScale * 1.25);
+        else if (event.key === '-') zoomDurableAttachmentPreview(dialog, dialog._previewScale / 1.25);
+        else if (event.key === '0') zoomDurableAttachmentPreview(dialog, 1, null, true);
+        else if (event.key === '1') zoomDurableAttachmentPreview(dialog, 1 / dialog._previewFitSize.scale, null, true);
+        else return;
+        event.preventDefault();
+    });
     dialog.addEventListener('close', function () {
         dialog._previewGeneration = (Number(dialog._previewGeneration) || 0) + 1;
         cancelDurableAttachmentPreviewFrames(dialog);
         dialog._previewFitSize = null;
+        stopDrag();
         image.onload = null;
+        image.onerror = null;
         image.style.visibility = 'hidden';
     });
     if (typeof window.ResizeObserver === 'function') {
@@ -484,38 +553,141 @@ function ensureDurableAttachmentPreviewDialog() {
         });
         dialog._previewResizeObserver.observe(canvas);
     }
+    window.addEventListener('resize', function () {
+        if (dialog.open && dialog._previewFitSize) scheduleDurableAttachmentPreviewFit(dialog);
+    });
     document.body.appendChild(dialog);
     dialog._previewImage = image;
     dialog._previewStage = stage;
     dialog._previewCanvas = canvas;
     dialog._previewCaption = caption;
+    dialog._previewZoomLabel = zoomLabel;
+    dialog._previewControls = [zoomOut, zoomIn, actualSize, fit];
+    dialog._previewStatus = status;
+    dialog._previewDimensions = dimensions;
     durableAttachmentPreviewDialog = dialog;
     return dialog;
+}
+
+function createDurableAttachmentPreviewButton(label, title, onClick) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'attachment-image-viewer-action';
+    button.textContent = label;
+    button.title = title;
+    button.setAttribute('aria-label', title);
+    button.addEventListener('click', onClick);
+    return button;
 }
 
 function measureDurableAttachmentPreviewFit(dialog) {
     var image = dialog && dialog._previewImage;
     var canvas = dialog && dialog._previewCanvas;
     if (!image || !canvas || !image.naturalWidth || !image.naturalHeight) return null;
-    var availableWidth = canvas.clientWidth;
-    var availableHeight = canvas.clientHeight;
+    var rect = canvas.getBoundingClientRect();
+    var availableWidth = rect.width;
+    var availableHeight = rect.height;
     if (availableWidth <= 0 || availableHeight <= 0) return null;
     var fitScale = Math.min(1, availableWidth / image.naturalWidth, availableHeight / image.naturalHeight);
-    return { width: image.naturalWidth * fitScale, height: image.naturalHeight * fitScale, viewportHeight: availableHeight };
+    return { width: image.naturalWidth * fitScale, height: image.naturalHeight * fitScale,
+        scale: fitScale, viewportWidth: availableWidth, viewportHeight: availableHeight, left: rect.left, top: rect.top };
 }
 
-function applyDurableAttachmentPreviewScale(dialog, scale) {
+function durableAttachmentPreviewCanPan(dialog) {
+    var fitSize = dialog._previewFitSize;
+    return fitSize && (fitSize.width * dialog._previewScale > fitSize.viewportWidth
+        || fitSize.height * dialog._previewScale > fitSize.viewportHeight);
+}
+
+function clampDurableAttachmentPreviewPan(dialog) {
+    var fitSize = dialog._previewFitSize;
+    if (!fitSize) return;
+    var maxX = Math.max(0, (fitSize.width * dialog._previewScale - fitSize.viewportWidth) / 2);
+    var maxY = Math.max(0, (fitSize.height * dialog._previewScale - fitSize.viewportHeight) / 2);
+    dialog._previewOffsetX = Math.max(-maxX, Math.min(maxX, dialog._previewOffsetX || 0));
+    dialog._previewOffsetY = Math.max(-maxY, Math.min(maxY, dialog._previewOffsetY || 0));
+}
+
+function zoomDurableAttachmentPreview(dialog, scale, anchor, center) {
+    var fitSize = dialog._previewFitSize;
+    if (!dialog.open || !fitSize) return;
+    var previousScale = dialog._previewScale || 1;
+    // Even a very large original must be reachable at 100%, with up to 400% for inspecting pixels.
+    var nextScale = Math.max(0.2, Math.min(Math.max(8, 4 / fitSize.scale), scale));
+    var ratio = nextScale / previousScale;
+    var anchorX = anchor && Number.isFinite(anchor.clientX) ? anchor.clientX - fitSize.left - fitSize.viewportWidth / 2 : 0;
+    var anchorY = anchor && Number.isFinite(anchor.clientY) ? anchor.clientY - fitSize.top - fitSize.viewportHeight / 2 : 0;
+    dialog._previewOffsetX = center ? 0 : anchorX - (anchorX - dialog._previewOffsetX) * ratio;
+    dialog._previewOffsetY = center ? 0 : anchorY - (anchorY - dialog._previewOffsetY) * ratio;
+    dialog._previewScale = nextScale;
+    clampDurableAttachmentPreviewPan(dialog);
+    scheduleDurableAttachmentPreviewRender(dialog, !!center);
+}
+
+function scheduleDurableAttachmentPreviewRender(dialog, sharp) {
+    dialog._previewRenderSharp = !!sharp;
+    if (!dialog.open || dialog._previewZoomFrame) return;
+    dialog._previewZoomFrame = window.requestAnimationFrame(function () {
+        dialog._previewZoomFrame = 0;
+        if (dialog.open && dialog._previewFitSize) {
+            applyDurableAttachmentPreviewScale(dialog, dialog._previewScale, dialog._previewRenderSharp);
+        }
+    });
+}
+
+function applyDurableAttachmentPreviewScale(dialog, scale, sharp) {
     var image = dialog && dialog._previewImage;
-    if (!image || !dialog._previewFitSize) return;
-    // Keep the fitted bitmap size stable; only the centered compositor transform changes while zooming.
-    image.style.transform = 'translate3d(-50%, -50%, 0) scale(' + scale + ')';
+    var fitSize = dialog && dialog._previewFitSize;
+    if (!image || !fitSize) return;
+    var width = fitSize.width * scale;
+    var height = fitSize.height * scale;
+    var pixelRatio = window.devicePixelRatio || 1;
+    var left = (fitSize.viewportWidth - width) / 2 + dialog._previewOffsetX;
+    var top = (fitSize.viewportHeight - height) / 2 + dialog._previewOffsetY;
+    // Align in screen coordinates: the centered panel itself can start on a fractional pixel.
+    left = Math.round((fitSize.left + left) * pixelRatio) / pixelRatio - fitSize.left;
+    top = Math.round((fitSize.top + top) * pixelRatio) / pixelRatio - fitSize.top;
+    var raster = dialog._previewRasterSize;
+    if (dialog._previewSettleTimer) window.clearTimeout(dialog._previewSettleTimer);
+    dialog._previewSettleTimer = 0;
+    if (sharp || !raster) {
+        // Commit original detail once interaction stops, instead of resizing and painting every frame.
+        image.style.width = width + 'px';
+        image.style.height = height + 'px';
+        image.style.left = left + 'px';
+        image.style.top = top + 'px';
+        image.style.transform = 'none';
+        image.style.willChange = '';
+        dialog._previewRasterSize = { width: width, height: height, left: left, top: top };
+    } else {
+        // Keep the last sharp raster stable during input; the compositor handles the movement.
+        if (image.style.willChange !== 'transform') image.style.willChange = 'transform';
+        image.style.transform = 'translate3d(' + (left - raster.left) + 'px, ' + (top - raster.top)
+            + 'px, 0) scale(' + (width / raster.width) + ')';
+        var generation = dialog._previewGeneration;
+        dialog._previewSettleTimer = window.setTimeout(function () {
+            dialog._previewSettleTimer = 0;
+            if (dialog.open && dialog._previewGeneration === generation) scheduleDurableAttachmentPreviewRender(dialog, true);
+        }, 120);
+    }
+    var zoomText = Math.round(fitSize.scale * scale * 100) + '%';
+    var now = Date.now();
+    // Text replacement also invalidates layout. Keep the live indicator responsive at 10 Hz.
+    if (sharp || !raster || now - (dialog._previewZoomLabelUpdatedAt || 0) >= 100) {
+        if (dialog._previewZoomLabel.textContent !== zoomText) dialog._previewZoomLabel.textContent = zoomText;
+        dialog._previewZoomLabelUpdatedAt = now;
+    }
+    dialog._previewStage.classList.toggle('can-pan', !!durableAttachmentPreviewCanPan(dialog));
 }
 
 function cancelDurableAttachmentPreviewFrames(dialog) {
     if (dialog._previewZoomFrame) window.cancelAnimationFrame(dialog._previewZoomFrame);
     if (dialog._previewFitFrame) window.cancelAnimationFrame(dialog._previewFitFrame);
+    if (dialog._previewSettleTimer) window.clearTimeout(dialog._previewSettleTimer);
     dialog._previewZoomFrame = 0;
     dialog._previewFitFrame = 0;
+    dialog._previewSettleTimer = 0;
+    dialog._previewImage.style.willChange = '';
 }
 
 function scheduleDurableAttachmentPreviewFit(dialog) {
@@ -527,10 +699,12 @@ function scheduleDurableAttachmentPreviewFit(dialog) {
         var fitSize = measureDurableAttachmentPreviewFit(dialog);
         if (!fitSize) return;
         dialog._previewFitSize = fitSize;
-        dialog._previewImage.style.width = fitSize.width + 'px';
-        dialog._previewImage.style.height = fitSize.height + 'px';
-        applyDurableAttachmentPreviewScale(dialog, Number(dialog._previewScale) || 1);
+        clampDurableAttachmentPreviewPan(dialog);
+        applyDurableAttachmentPreviewScale(dialog, Number(dialog._previewScale) || 1, true);
         dialog._previewImage.style.visibility = '';
+        dialog._previewStatus.hidden = true;
+        dialog._previewDimensions.textContent = dialog._previewImage.naturalWidth + ' × ' + dialog._previewImage.naturalHeight;
+        dialog._previewControls.forEach(function (button) { button.disabled = false; });
     });
 }
 
@@ -541,8 +715,23 @@ function resetDurableAttachmentPreviewZoom(dialog) {
     var generation = (Number(dialog._previewGeneration) || 0) + 1;
     dialog._previewGeneration = generation;
     dialog._previewScale = 1;
+    dialog._previewOffsetX = 0;
+    dialog._previewOffsetY = 0;
     dialog._previewFitSize = null;
+    dialog._previewRasterSize = null;
+    image.style.transform = 'none';
     image.style.visibility = 'hidden';
+    dialog._previewZoomLabel.textContent = '—';
+    dialog._previewDimensions.textContent = '';
+    dialog._previewStatus.hidden = false;
+    dialog._previewStatus.textContent = '正在加载原图…';
+    dialog._previewControls.forEach(function (button) { button.disabled = true; });
+    dialog._previewStage.classList.remove('can-pan');
+    var showError = function () {
+        if (dialog._previewGeneration !== generation || !dialog.open) return;
+        dialog._previewStatus.textContent = '图片加载失败，请关闭后重试';
+    };
+    image.onerror = showError;
     var fitWhenReady = function () {
         if (dialog._previewGeneration === generation) scheduleDurableAttachmentPreviewFit(dialog);
     };
@@ -552,10 +741,12 @@ function resetDurableAttachmentPreviewZoom(dialog) {
             if (dialog._previewGeneration !== generation) return;
             image.onload = fitWhenReady;
             if (image.complete && image.naturalWidth) fitWhenReady();
+            else if (image.complete) showError();
         });
     } else {
         image.onload = fitWhenReady;
         if (image.complete && image.naturalWidth) fitWhenReady();
+        else if (image.complete) showError();
     }
 }
 
@@ -563,18 +754,16 @@ function openChatImagePreview(thumbnail) {
     if (!thumbnail) return;
     var dialog = ensureDurableAttachmentPreviewDialog();
     if (!dialog) return;
-    var source = thumbnail.currentSrc || thumbnail.src;
+    var source = thumbnail.src || thumbnail.currentSrc;
     if (!source) return;
     if (dialog._previewImage.src !== source) dialog._previewImage.src = source;
     dialog._previewImage.alt = thumbnail.alt || '图片预览';
     dialog._previewCaption.textContent = thumbnail.alt || '图片预览';
-    resetDurableAttachmentPreviewZoom(dialog);
-    if (typeof dialog.showModal === 'function') dialog.showModal();
-    else dialog.setAttribute('open', '');
-    // The decode fallback can be ready synchronously, before showModal lays out the viewport.
-    if (typeof dialog._previewImage.decode !== 'function' && dialog._previewImage.complete && dialog._previewImage.naturalWidth) {
-        scheduleDurableAttachmentPreviewFit(dialog);
+    if (!dialog.open) {
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
     }
+    resetDurableAttachmentPreviewZoom(dialog);
 }
 
 if (typeof document !== 'undefined' && typeof window !== 'undefined' && !window.__durableAttachmentPreviewBound) {

@@ -5,7 +5,6 @@ const COLLAPSIBLE_PANELS = [
     '.dock-files-children',
     '.human-terminal-summary',
     '.human-terminal-detail',
-    '.process-aggregate-body',
 ].join(',');
 
 function isPanelCollapsed(panel) {
@@ -25,11 +24,6 @@ document.addEventListener('transitionend', function (event) {
     if (event.propertyName !== 'opacity') return;
     const panel = event.target;
     if (!panel || !panel.matches || !panel.matches(COLLAPSIBLE_PANELS)) return;
-
-    if (panel.classList.contains('process-aggregate-body')) {
-        panel.style.overflow = '';
-        return;
-    }
 
     panel.style.overflow = isPanelCollapsed(panel) ? '' : 'visible';
 });

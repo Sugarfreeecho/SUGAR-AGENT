@@ -17,12 +17,13 @@ def test_execution_trace_rows_have_readable_text_weight_and_size() -> None:
         "> .process-aggregate-body > .feed-item .feed-label"
     )
 
-    assert ".feed-chunk-scroller {\n    font-size: 0.74rem; font-weight: 500;" in styles
+    # 2026-10-09 全站字重降档：Windows/Segoe UI 的 500 会命中 Semibold，英文要变轻须落到 400。
+    assert ".feed-chunk-scroller {\n    font-size: 0.74rem; font-weight: 400;" in styles
     assert ".feed-row .feed-label {" in styles
     assert "min-width: 0; font-size: 0.69rem; font-weight: 700;" in styles
     assert ":root.theme-light .feed-row .feed-label { color: var(--text-secondary); font-weight: 700; }" in styles
     assert row_selector in styles
-    assert "font-size: 0.74rem;\n    font-weight: 500;\n    line-height: 1.6;" in styles
+    assert "font-size: 0.74rem;\n    font-weight: 400;\n    line-height: 1.6;" in styles
     assert label_selector in styles
     assert "font-size: 0.69rem;\n    font-weight: 700;" in styles
     assert "color-mix(in srgb, var(--process-text-muted) 72%, var(--process-text))" in styles

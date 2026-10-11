@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("playwright.sync_api")
-from tests.test_llm_stream_window_geometry import browser_page
+from tests.test_llm_stream_full_text_browser import browser_page
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -90,14 +90,15 @@ def test_shell_text_scales_without_composer_overlap(typography_page, width, size
         overflow:document.documentElement.scrollWidth>innerWidth,viewport:innerWidth};
     }""")
     # The final card body shares the session-list session-name step (--ui-text-md = 14/16 rem);
-    # the user bubble (0.98rem) and the composer input (--ui-text-lg = 1rem) keep their own steps.
+    # the user bubble (0.98rem) and the composer input (0.95rem — 2026-10-10 还原旧版输入栏，契约随动) keep their own steps.
     assert result["body"]["size"] == pytest.approx(size * 14 / 16)
     assert result["body"]["size"] == pytest.approx(result["session"]["size"])
     assert result["bubble"]["size"] == pytest.approx(size * 0.98)
-    assert result["composer"]["size"] == pytest.approx(size)
+    assert result["composer"]["size"] == pytest.approx(size * 0.95)
     assert result["code"]["size"] == pytest.approx(size * 13 / 16)
     assert result["caption"]["size"] == pytest.approx(size * 12 / 16)
-    assert result["title"]["weight"] == "700"
+    # 2026-10-09 全站字重降一档（英文偏重）：700/800→600，650/600/550→500。
+    assert result["title"]["weight"] == "600"
     assert "Segoe UI" in result["body"]["family"] and "Microsoft YaHei" in result["body"]["family"]
     assert not result["overflow"]
     for name in ("permission", "model"):
@@ -120,13 +121,17 @@ def test_custom_panel_and_trace_type_is_preserved(typography_page):
     for name in ("plan", "review"):
         assert result[name]["size"] == pytest.approx(9.92)
         assert result[name]["line"] == pytest.approx(12.896)
+        # 面板标题是中文，保持原设计字重（雅黑 650 与 700 同为 Bold）。
         assert result[name]["weight"] == "650"
     for name in ("planMeta", "reviewMeta"):
         assert result[name]["size"] == pytest.approx(8.96)
         assert result[name]["line"] == pytest.approx(11.648)
     assert result["item"]["height"] >= result["item"]["line"] * 2
-    assert result["trace"]["size"] == pytest.approx(11.84) and result["trace"]["weight"] == "500"
+    # 2026-10-09：Windows 上 Segoe UI 的 500 会命中 Semibold（实测与 600 等宽），
+    # 英文要变轻必须落到 400（Regular）；中文 400/500 都是 Regular，观感不变。
+    assert result["trace"]["size"] == pytest.approx(11.84) and result["trace"]["weight"] == "400"
     assert result["trace"]["line"] == pytest.approx(18.944)
+    # 标签（思考/回复/工具）是中文，回退到原设计的 700。
     assert result["label"]["size"] == pytest.approx(11.04) and result["label"]["weight"] == "700"
 
 
@@ -259,7 +264,9 @@ def test_brand_header_small_text_and_final_card_frame_are_preserved(typography_p
     }""")
     assert result["tagline"] == pytest.approx(8.96)
     assert result["subtitle"] == pytest.approx(9.6)
-    assert result["context"] == pytest.approx(8.82)
+    # 本批将上下文读数统一为 0.625 × 1rem(--ctx-unit) = 10px，随「设置 → 字号」等比缩放
+    #（旧：0.63 × 0.875rem = 8.82px）。
+    assert result["context"] == pytest.approx(10)
     assert result["border"] == "1px" and result["borderColor"] != "rgba(0, 0, 0, 0)"
     assert result["shadow"] != "none"
 

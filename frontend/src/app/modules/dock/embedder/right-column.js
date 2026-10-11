@@ -200,10 +200,11 @@ function dockRightSize(bytes) {
 /** The workspace-relative form of an absolute path, when it is inside the workspace. */
 function dockRightRelPath(path) {
     const text = String(path || '');
-    const marker = 'workspace' + (text.indexOf('\\') >= 0 ? '\\' : '/');
-    const index = text.toLowerCase().lastIndexOf(marker.toLowerCase());
-    if (index < 0) return text;
-    return text.slice(index + marker.length).replace(/\\/g, '/');
+    const root = String(getActiveWorkDir() || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalized = text.replace(/\\/g, '/');
+    const compare = /^[A-Za-z]:/.test(root) ? normalized.toLowerCase() : normalized;
+    const base = /^[A-Za-z]:/.test(root) ? root.toLowerCase() : root;
+    return base && compare.startsWith(base + '/') ? normalized.slice(root.length + 1) : text;
 }
 
 /** The basename of a path. */
@@ -291,7 +292,7 @@ function dockRightSystemCard(rel) {
     open.className = 'dock-link-button';
     open.textContent = dockRightText('openSystem');
     open.addEventListener('click', () => {
-        void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
+        void fetch(workspaceApiUrl('/api/open-workspace-file', { rel: rel }));
     });
     wrap.appendChild(note);
     wrap.appendChild(open);
@@ -323,7 +324,7 @@ function dockRightOpenPathSmart(pathValue) {
         dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(rel));
         return;
     }
-    void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
+    void fetch(workspaceApiUrl('/api/open-workspace-file', { rel: rel }));
 }
 
 /** The seed thunk for this column: an emptied pane is backfilled with its "start" page. */
@@ -725,6 +726,13 @@ function dockRightSurfaceKey(sessionId) {
 /** The session-switch hook: show the entering session's own column surface. */
 function dockRightHandleSessionSwitch(sessionId) {
     if (!dockRightState.host) return;
+    const workSessionId = String(currentSessionId || sessionId || '');
+    if (dockRightState.workSessionId !== workSessionId) {
+        dockRightState.workSessionId = workSessionId;
+        dockRightState.host.querySelectorAll('[data-dock-files]').forEach((page) => {
+            if (page.__dockWorkspaceReload) page.__dockWorkspaceReload();
+        });
+    }
     const sid = dockRightSurfaceKey(sessionId);
     if (!sid) return;
     if (dockRightState.sessionId === sid) return;
@@ -879,11 +887,13 @@ function dockRightOpenPageKind(kind, replaceTab, paneId, revealIfOpened) {
         revealIfOpened: Boolean(revealIfOpened),
     }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     dockRightState.sessionId = sessionId;
+    dockRightEnsureWidthMode(sessionId);
     dockRightRender();
 }
 
 /** The workspace tree page. */
 function dockRightFilesBody(tab) {
+    let loadId = 0;
     const el = document.createElement('div');
     el.className = 'dock-files';
     el.setAttribute('data-dock-files', tab.id);
@@ -906,15 +916,19 @@ function dockRightFilesBody(tab) {
     pathRow.appendChild(refresh);
     const tree = document.createElement('div');
     tree.className = 'dock-files-tree';
-    refresh.addEventListener('click', () => {
+    const reload = () => {
+        const version = ++loadId;
         tree.replaceChildren();
-        void dockRightLoadDir(tree, '', 0, { onRoot: (root) => { pathLabel.textContent = root; } });
-    });
+        void dockRightLoadDir(tree, '', 0, { context: getWorkspaceRequestContext(),
+            isCurrent: () => version === loadId, onRoot: (root) => { pathLabel.textContent = root; } });
+    };
+    refresh.addEventListener('click', reload);
+    el.__dockWorkspaceReload = reload;
     el.appendChild(pathRow);
     el.appendChild(tree);
     dockRightTrackScroll(tab.id, tree);
     el.__dockRestore = tree.__dockRestore;
-    void dockRightLoadDir(tree, '', 0, { onRoot: (root) => { pathLabel.textContent = root; } });
+    reload();
     return el;
 }
 
@@ -925,9 +939,10 @@ async function dockRightLoadDir(container, dir, depth, options) {
     loading.textContent = dockRightText('loading');
     container.appendChild(loading);
     try {
-        const response = await fetch('/api/workspace-files?' + new URLSearchParams({ dir: dir || '' }));
+        const response = await fetch(workspaceApiUrl('/api/workspace-files', { dir: dir || '' }, options && options.context));
         const data = await response.json();
         loading.remove();
+        if (options && options.isCurrent && !options.isCurrent()) return;
         if (!response.ok || !data || data.ok !== true || !Array.isArray(data.files)) {
             throw new Error((data && data.error) || ('HTTP ' + response.status));
         }
@@ -945,14 +960,14 @@ async function dockRightLoadDir(container, dir, depth, options) {
             container.appendChild(empty);
             return;
         }
-        for (let i = 0; i < rows.length; i += 1) container.appendChild(dockRightFileRow(rows[i], depth));
+        for (let i = 0; i < rows.length; i += 1) container.appendChild(dockRightFileRow(rows[i], depth, options));
     } catch (error) {
         loading.textContent = dockRightText('loadFailed') + ': ' + (error && error.message ? error.message : error);
     }
 }
 
 /** One row of the tree: a directory that expands, or a file that opens. */
-function dockRightFileRow(item, depth) {
+function dockRightFileRow(item, depth, options) {
     const wrap = document.createElement('div');
     wrap.className = 'dock-files-node';
     const isDir = item.kind === 'directory';
@@ -985,7 +1000,7 @@ function dockRightFileRow(item, depth) {
     }
     wrap.appendChild(row);
     if (!isDir) {
-        row.addEventListener('click', () => dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(item.rel)));
+        row.addEventListener('click', () => dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(item.path || item.rel)));
         return wrap;
     }
     const children = document.createElement('div');
@@ -1004,7 +1019,7 @@ function dockRightFileRow(item, depth) {
         if (caret) caret.textContent = expanding ? '▾' : '▸';
         if (expanding && !loaded) {
             loaded = true;
-            void dockRightLoadDir(children, item.rel, depth + 1);
+            void dockRightLoadDir(children, item.rel, depth + 1, options);
         }
     });
     wrap.appendChild(children);
@@ -1040,9 +1055,11 @@ function dockRightDocumentBody(tab) {
     const el = document.createElement('div');
     el.className = 'dock-doc';
     el.setAttribute('data-dock-document', tab.id);
-    const rel = decodeURIComponent(String(tab.contentId || '').slice(DOCK_RIGHT_FILE_PREFIX.length));
+    const rel = workspaceAbsolutePath(decodeURIComponent(String(tab.contentId || '').slice(DOCK_RIGHT_FILE_PREFIX.length)), getWorkspaceRequestContext());
+    el.setAttribute('data-dock-file-rel', rel);
     const suffix = dockRightSuffix(rel);
-    const state = { abort: null, released: false, rel: rel, suffix: suffix };
+    const context = getWorkspaceRequestContext();
+    const state = { abort: null, released: false, rel: rel, suffix: suffix, context };
     dockRightState.tabState[tab.id] = state;
 
     const head = document.createElement('div');
@@ -1066,7 +1083,7 @@ function dockRightDocumentBody(tab) {
     reveal.title = dockRightText('reveal');
     reveal.innerHTML = DOCK_ICON_REVEAL;
     reveal.addEventListener('click', () => {
-        void fetch('/api/open-workspace-dir?' + new URLSearchParams({ rel: rel }))
+        void fetch(workspaceApiUrl('/api/open-workspace-dir', { rel: rel }))
             .then((response) => response.json().catch(() => null))
             .then((data) => {
                 if (typeof showOpenFileFeedback === 'function') {
@@ -1083,7 +1100,7 @@ function dockRightDocumentBody(tab) {
     openSystem.className = 'dock-link-button';
     openSystem.textContent = dockRightText('openSystem');
     openSystem.addEventListener('click', () => {
-        void fetch('/api/open-workspace-file?' + new URLSearchParams({ rel: rel }));
+        void fetch(workspaceApiUrl('/api/open-workspace-file', { rel: rel }));
     });
     // The refresh control keeps the head's far right corner on every page;
     // the system-open action sits beside the title instead (it ran between
@@ -1101,19 +1118,19 @@ function dockRightDocumentBody(tab) {
         const image = document.createElement('img');
         image.className = 'dock-doc-image';
         image.alt = name.textContent;
-        image.src = '/api/workspace-image?' + new URLSearchParams({ rel: rel });
+        image.src = workspaceApiUrl('/api/workspace-image', { rel: rel });
         image.addEventListener('error', () => {
             content.replaceChildren(dockRightSystemCard(rel));
         });
         content.appendChild(image);
         refresh.addEventListener('click', () => {
-            image.src = '/api/workspace-image?' + new URLSearchParams({ rel: rel, _: String(Date.now()) });
+            image.src = workspaceApiUrl('/api/workspace-image', { rel: rel, _: String(Date.now()) }, context);
         });
     } else if (DOCK_RIGHT_AUDIO_SUFFIXES.indexOf(suffix) >= 0 || DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0) {
         const media = document.createElement(DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0 ? 'video' : 'audio');
         media.className = 'dock-doc-media';
         media.controls = true;
-        media.src = '/api/workspace-media?' + new URLSearchParams({ rel: rel });
+        media.src = workspaceApiUrl('/api/workspace-media', { rel: rel });
         content.appendChild(media);
         refresh.addEventListener('click', () => {
             try { media.load(); } catch (error) { /* ignore */ }
@@ -1132,7 +1149,7 @@ function dockRightDocumentBody(tab) {
         toggle.type = 'button';
         toggle.className = 'dock-link-button dock-doc-source-toggle';
         toggle.setAttribute('data-dock-doc-source-toggle', '1');
-        const assetUrl = '/api/workspace-assets/' + String(rel).split(/[\\/]/).map(encodeURIComponent).join('/');
+        const assetUrl = workspaceAssetUrl(rel, context);
         const renderPreview = () => {
             mode = 'preview';
             content.style.padding = '0';
@@ -1166,8 +1183,8 @@ function dockRightDocumentBody(tab) {
         // Markdown renders through the app's own pipeline (`renderMarkdown`,
         // the same parser the chat uses), so documents look identical in the
         // column and the timeline; a toggle keeps the raw source one click away.
-        const baseDir = String(rel).replace(/[\\/][^\\/]*$/, '');
-        const assetBase = '/api/workspace-assets/' + (baseDir ? baseDir.split(/[\\/]/).map(encodeURIComponent).join('/') + '/' : '');
+        const baseDir = String(rel).replace(/[^/\\]*$/, '');
+        const assetBase = workspaceAssetUrl(baseDir, context);
         let mode = 'rendered';
         const toggle = document.createElement('button');
         toggle.type = 'button';
@@ -1182,10 +1199,10 @@ function dockRightDocumentBody(tab) {
             content.style.padding = '';
             content.replaceChildren(dockRightNote(dockRightText('loading')));
             try {
-                const scanned = await dockRightFetchJSON('/api/workspace-file-text?' + new URLSearchParams({
+                const scanned = await dockRightFetchJSON(workspaceApiUrl('/api/workspace-file-text', {
                     rel: rel,
                     max_bytes: String(DOCK_RIGHT_TEXT_MAX_BYTES),
-                }));
+                }, context));
                 const data = scanned.data;
                 if (state.released) return;
                 if (!scanned.response.ok || !data || data.ok !== true) {
@@ -1241,10 +1258,10 @@ async function dockRightLoadText(content, state) {
     try {
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
         state.abort = controller;
-        const response = await fetch('/api/workspace-file-text?' + new URLSearchParams({
+        const response = await fetch(workspaceApiUrl('/api/workspace-file-text', {
             rel: state.rel,
             max_bytes: String(DOCK_RIGHT_TEXT_MAX_BYTES),
-        }), controller ? { signal: controller.signal } : undefined);
+        }, state.context), controller ? { signal: controller.signal } : undefined);
         const data = await response.json().catch(() => null);
         if (state.released) return;
         if (!response.ok || !data || data.ok !== true) {
@@ -1462,8 +1479,16 @@ function dockRightChangesBody(tab) {
                 if (body) { body.classList.add('is-open'); body.setAttribute('aria-hidden', 'false'); }
                 if (toggle) { toggle.classList.add('is-open'); toggle.setAttribute('aria-expanded', 'true'); }
             }
-            if (toggle) toggle.focus();
-            requestAnimationFrame(() => target.scrollIntoView({ block: 'center' }));
+            if (toggle) toggle.focus({ preventScroll: true });
+            requestAnimationFrame(() => {
+                if (state.released || !target.isConnected) return;
+                // Scroll only this list: scrolling ancestors while the column
+                // slides in pulls the entire app sideways and changes its reveal.
+                const targetRect = target.getBoundingClientRect();
+                const listRect = list.getBoundingClientRect();
+                list.scrollTop += targetRect.top - listRect.top
+                    - (list.clientHeight - targetRect.height) / 2;
+            });
             state.focusRequest = null;
             dockRightChangeReviewFocus.delete(String(state.sessionId || ''));
         } else if (!focus.snapshotId && !focus.path && state.selectedTurnId) {
@@ -1676,6 +1701,7 @@ function dockRightChangeRow(row, state, rerender) {
     item.className = 'dock-change' + (row._reverted ? ' is-reverted' : '');
     item.setAttribute('data-dock-snapshot-id', String(row.snapshot_id || ''));
     item.setAttribute('data-dock-change-path', String(row.path || ''));
+    item.__myagentContextDiff = String(row.diff || '');
     const head = document.createElement('div'); head.className = 'dock-change-head';
     const toggle = document.createElement('button');
     toggle.type = 'button'; toggle.className = 'dock-change-toggle'; toggle.textContent = '›';

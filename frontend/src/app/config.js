@@ -18,6 +18,8 @@ export function readRuntimeConfig(root = globalThis) {
   }
   if (typeof w.__WORK_DIR__ !== 'string') w.__WORK_DIR__ = '';
   if (typeof w.__SESSIONS_DIR__ !== 'string') w.__SESSIONS_DIR__ = '';
+  w.MyAgentWorkspace = { context: getWorkspaceRequestContext, apiUrl: workspaceApiUrl,
+    absolutePath: workspaceAbsolutePath, assetUrl: workspaceAssetUrl };
   return {
     contextWindow: w.__CONTEXT_WINDOW__,
     logTruncateKeepLines: w.__UI_LOG_TRUNCATE_KEEP_LINES__,
@@ -38,15 +40,76 @@ export function getActiveWorkDir(root = globalThis) {
     const sid = (typeof currentSessionId !== 'undefined' && currentSessionId)
       ? String(currentSessionId)
       : '';
-    if (sid
-      && typeof sessionStore !== 'undefined' && sessionStore
-      && typeof sessionStore.get === 'function') {
-      session = sessionStore.get(sid);
-    }
+    if (sid) session = workspaceSessionRecord(sid);
   } catch (e) {
     // 作用域变量不可用（ESM 消费方 / 页面初始化早期）→ 走全局默认目录
     session = null;
   }
-  if (session && typeof session.work_dir === 'string' && session.work_dir) return session.work_dir;
+  if (session) {
+    const value = session.effective_work_dir || session.subagent_work_dir || session.git_worktree_path || session.work_dir;
+    if (typeof value === 'string' && value) return value;
+  }
+  if (typeof currentSessionId === 'undefined' || !currentSessionId) {
+    const draft = typeof newSessionWorkDir !== 'undefined' ? String(newSessionWorkDir || '') : '';
+    if (draft) return draft;
+    if (typeof pendingNewSession !== 'undefined' && pendingNewSession) {
+      const pending = pendingNewSession.session || {};
+      const value = pending.effective_work_dir || pending.subagent_work_dir || pending.git_worktree_path
+        || pending.work_dir || pendingNewSession.workDir;
+      if (value) return String(value);
+    }
+  }
   return (typeof w.__WORK_DIR__ === 'string') ? w.__WORK_DIR__ : '';
+}
+
+export function getWorkspaceRequestContext(sessionId) {
+  const sid = typeof sessionId === 'string' ? sessionId
+    : (typeof currentSessionId !== 'undefined' ? String(currentSessionId || '') : '');
+  if (sid) return { session_id: sid };
+  const root = getActiveWorkDir();
+  return root ? { work_dir: root } : {};
+}
+
+export function workspaceSessionRecord(sessionId) {
+  const sid = String(sessionId || '');
+  if (typeof sessionStore !== 'undefined' && sessionStore && typeof sessionStore.get === 'function') {
+    const session = sessionStore.get(sid);
+    if (session) return session;
+  }
+  if (typeof subagentCatalogStore !== 'undefined' && subagentCatalogStore) {
+    const address = subagentCatalogStore.getAddress(sid);
+    const entries = address ? subagentCatalogStore.entriesOf(address.parentSessionId) : [];
+    const entry = entries.find(item => item.childId === sid);
+    if (entry && entry.raw) return entry.raw;
+  }
+  return null;
+}
+
+export function workspaceApiUrl(endpoint, params = {}, context) {
+  const query = new URLSearchParams(Object.assign({}, context || getWorkspaceRequestContext(), params));
+  return endpoint + (query.toString() ? '?' + query : '');
+}
+
+export function workspaceAbsolutePath(path, context) {
+  const raw = String(path || '').replace(/\\/g, '/');
+  if (/^[A-Za-z]:\//.test(raw) || raw.startsWith('//')) return raw;
+  let root = getActiveWorkDir();
+  if (context && context.work_dir) root = context.work_dir;
+  else if (context && context.session_id) {
+    const session = workspaceSessionRecord(context.session_id);
+    if (session) root = session.effective_work_dir || session.subagent_work_dir || session.git_worktree_path || session.work_dir || root;
+  }
+  root = String(root || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (root.startsWith('/') && (raw === root || raw.startsWith(root + '/'))) return raw;
+  const rel = raw.replace(/^\/+/, '');
+  if (/^(?:\.config|\.sugaragent)\/(?:history-media|attachments)\//.test(rel) || rel.startsWith('uploads/chat/')) {
+    root = String(globalThis.__WORK_DIR__ || root).replace(/\\/g, '/').replace(/\/+$/, '');
+  }
+  return root ? root + '/' + rel : raw;
+}
+
+export function workspaceAssetUrl(path, context) {
+  const ctx = context || getWorkspaceRequestContext();
+  const base = ctx.session_id ? '/api/sessions/' + encodeURIComponent(ctx.session_id) + '/workspace-assets/' : '/api/workspace-assets/';
+  return base + workspaceAbsolutePath(path, ctx).split('/').map(encodeURIComponent).join('/');
 }

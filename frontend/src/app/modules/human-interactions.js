@@ -217,12 +217,16 @@ function updateHumanInteractionSessionBadge(sessionId) {
         badge = document.createElement('span');
         badge.className = 'session-human-badge';
         badge.setAttribute('aria-label', '待处理的人机交互');
-        // 插入锚点必须取"参照节点的真实父节点"：改版后 .session-more-wrap 挪进了
-        // .session-item-actions，不再是 .session-item-head 的直接子节点；若仍写
-        // head.insertBefore(badge, more)，会抛 NotFoundError，并连带弄死切换会话
-        // 与发送（两者都会经过 syncSessionListIndicatorClasses 调用链）。
-        var more = head.querySelector('.session-more-wrap');
-        if (more && more.parentNode) more.parentNode.insertBefore(badge, more);
+        // 徽标与「草稿 / 待办 / 审查」胶囊同处一个标记区：标题行行尾、相对时间之前。
+        // 此前它插在 .session-more-wrap 前，而那个 wrap 挂在 .session-item-actions ——
+        // 一个"相对整行垂直居中"（top:50% + translateY）的绝对定位动作区；于是徽标在
+        // 「详细」两行模式下落到两行之间，与标题行里的胶囊错位（用户反馈：显示居中很丑）。
+        // 锚点仍要取"参照节点的真实父节点"并逐级兜底：这里在会话指示器同步的调用链上，
+        // 抛 NotFoundError 会连带弄死切换会话与发送。
+        var titleRow = head.querySelector('.session-item-title-row');
+        var dateAnchor = head.querySelector('.session-item-date');
+        if (titleRow && dateAnchor && dateAnchor.parentNode === titleRow) titleRow.insertBefore(badge, dateAnchor);
+        else if (titleRow) titleRow.appendChild(badge);
         else head.appendChild(badge);
     }
     if (badge) {

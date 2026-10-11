@@ -20,10 +20,11 @@ function statusIconMarkup(status) {
             + '<circle cx="12" cy="12" r="8.2"/><path d="M8.3 12.4l2.6 2.6 4.9-5.2"/></svg>';
     }
     if (status === 'in_progress') {
-        /* 进行中：描边播放三角（对齐 DSH 的 IconPlayOutlineRegular；ZCode 侧栏同样以 “[>]” 表达进行中）。
-           旧的 3/4 缺口弧环不易辨识，已退役。 */
+        /* 进行中：右半实心的圆（2026-10-11 按反馈换掉原描边播放三角；与待处理/已完成同为圆，
+           靠填充一半表达“在跑”）。 */
         return '<svg viewBox="0 0 24 24" aria-hidden="true" class="todo-plan-status-icon">'
-            + '<path d="M8.6 6.6 17.6 12 8.6 17.4Z"/></svg>';
+            + '<circle cx="12" cy="12" r="8.2"/>'
+            + '<path d="M12 3.8a8.2 8.2 0 0 1 0 16.4z" fill="currentColor" stroke="none"/></svg>';
     }
     return '<svg viewBox="0 0 24 24" aria-hidden="true" class="todo-plan-status-icon">'
         + '<circle cx="12" cy="12" r="8.2"/></svg>';

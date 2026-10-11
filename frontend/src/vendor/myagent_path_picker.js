@@ -95,7 +95,8 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ kind: kind || 'directory', initial: initial || '', multiple: !!multiple }),
+        body: JSON.stringify(Object.assign({ kind: kind || 'directory', initial: initial || '', multiple: !!multiple },
+          global.MyAgentWorkspace ? global.MyAgentWorkspace.context() : {})),
         signal: controller ? controller.signal : undefined,
       });
     } finally {
@@ -226,19 +227,27 @@
     return Math.round(n / 107374182.4) / 10 + ' GB';
   }
 
-  async function fetchWorkspaceFiles(query, dir, signal) {
+  async function fetchWorkspaceFiles(query, dir, signal, context) {
     var params = [];
     if (query) params.push('q=' + encodeURIComponent(query));
     else if (dir) params.push('dir=' + encodeURIComponent(dir));
     var url = '/api/workspace-files' + (params.length ? ('?' + params.join('&')) : '');
+    if (window.MyAgentWorkspace) {
+      url = window.MyAgentWorkspace.apiUrl('/api/workspace-files', query ? { q: query } : { dir: dir || '' }, context);
+    }
     var r = await fetch(url, { credentials: 'same-origin', signal: signal });
     var j = await r.json().catch(function () { return { ok: false, error: '读取工作区文件失败' }; });
     if (!r.ok || !j.ok) throw new Error((j && j.error) || '读取工作区文件失败');
     return Array.isArray(j.files) ? j.files : [];
   }
 
+  function activeWorkspaceRoot() {
+    return global.MyAgentWorkspace ? global.MyAgentWorkspace.absolutePath('').replace(/[\\/]+$/, '') : String(global.__WORK_DIR__ || '');
+  }
+
   function currentChatSessionId() {
     try {
+      if (global.MyAgentWorkspace) return String(global.MyAgentWorkspace.context().session_id || '');
       return typeof currentSessionId !== 'undefined' ? String(currentSessionId || '') : '';
     } catch (_error) {
       return '';
@@ -771,8 +780,16 @@
       });
     }
 
+    function workspaceContextKey() {
+      return JSON.stringify(global.MyAgentWorkspace ? global.MyAgentWorkspace.context() : {});
+    }
+
+    function ownsWorkspaceRequest(key) {
+      return state.open && key === state.workspaceKey && key === workspaceContextKey();
+    }
+
     function workspaceRootName() {
-      var root = String(global.__WORK_DIR__ || 'workspace');
+      var root = String(activeWorkspaceRoot() || 'workspace');
       var parts = root.split(/[\\/]+/).filter(Boolean);
       return parts[parts.length - 1] || 'workspace';
     }
@@ -787,7 +804,7 @@
       if (abs && rel && abs.toLowerCase().slice(-rel.length) === rel.toLowerCase()) {
         return abs.slice(0, Math.max(0, abs.length - rel.length)).replace(/[\\/]+$/, '');
       }
-      return String(global.__WORK_DIR__ || '').replace(/[\\/]+$/, '');
+      return activeWorkspaceRoot();
     }
 
     function joinNativePath(root, rel) {
@@ -803,13 +820,13 @@
         kind: 'directory',
         name: node.name || node.rel || workspaceRootName(),
         rel: node.rel || '',
-        path: node.path || joinNativePath(String(global.__WORK_DIR__ || ''), node.rel || ''),
+        path: node.path || joinNativePath(activeWorkspaceRoot(), node.rel || ''),
       };
     }
 
     function buildTree(items) {
       var root = makeDir(workspaceRootName(), '', true);
-      root.path = String(global.__WORK_DIR__ || '').replace(/[\\/]+$/, '');
+      root.path = activeWorkspaceRoot();
       root.loaded = !!state.loadedDirs.__root__;
       function ensureDir(parts, rootPath) {
         var node = root;
@@ -979,12 +996,13 @@
 
     function loadNow() {
       var q = search.value || '';
+      var workspaceKey = state.workspaceKey;
       if (state.controller) state.controller.abort();
       state.controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       render(state.items, true);
-      fetchWorkspaceFiles(q, '', state.controller ? state.controller.signal : undefined)
+      fetchWorkspaceFiles(q, '', state.controller ? state.controller.signal : undefined, state.workspaceContext)
         .then(function (items) {
-          if (!state.open) return;
+          if (!ownsWorkspaceRequest(workspaceKey)) return;
           if (q) {
             render(items, false);
           } else {
@@ -995,17 +1013,18 @@
         })
         .catch(function (err) {
           if (err && err.name === 'AbortError') return;
-          if (state.open) render([], false, (err && err.message) || '读取失败');
+          if (ownsWorkspaceRequest(workspaceKey)) render([], false, (err && err.message) || '读取失败');
         });
     }
 
     function loadDir(rel) {
+      var workspaceKey = state.workspaceKey;
       var key = rel || '__root__';
       if (state.loadedDirs[key]) return;
       state.loadedDirs[key] = true;
-      fetchWorkspaceFiles('', rel || '', undefined)
+      fetchWorkspaceFiles('', rel || '', undefined, state.workspaceContext)
         .then(function (items) {
-          if (!state.open || search.value) return;
+          if (!ownsWorkspaceRequest(workspaceKey) || search.value) return;
           mergeLoadedItems(items);
           render(state.items, false);
         })
@@ -1020,7 +1039,10 @@
     }
 
     function open() {
+      if (state.open && state.workspaceKey !== workspaceContextKey()) close();
       if (state.open) { positionPanel(); try { search.focus(); search.select(); } catch (e) {} return; }
+      state.workspaceContext = global.MyAgentWorkspace ? global.MyAgentWorkspace.context() : {};
+      state.workspaceKey = workspaceContextKey();
       state.open = true;
       panel.classList.add('is-open');
       panel.setAttribute('aria-hidden', 'false');
@@ -1171,7 +1193,7 @@
       ev.preventDefault();
       if (ev.altKey) { fileInput.click(); return; }
       if (!ev.shiftKey) { panelApi.toggle(); return; }
-      var initial = (global && typeof global.__WORK_DIR__ === 'string') ? global.__WORK_DIR__ : '';
+      var initial = activeWorkspaceRoot();
       runPick(button, 'file', initial, function (p) {
         var paths = Array.isArray(p) ? p : (p ? [p] : []);
         if (!paths.length) return;

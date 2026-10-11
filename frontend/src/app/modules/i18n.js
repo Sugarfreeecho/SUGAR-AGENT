@@ -3,6 +3,24 @@
 // added later) instead of coupling every renderer to a framework.
 const LS_UI_LANGUAGE = 'myagent-language';
 const UI_TRANSLATIONS_EN = {
+    '右键菜单': 'Context menu', '打开会话': 'Open session', '复制会话 ID': 'Copy session ID',
+    '复制消息': 'Copy message', '复制选中文本': 'Copy selected text', '复制代码': 'Copy code',
+    '删除本条及之后的对话': 'Delete this message and following conversation',
+    '展开 / 折叠分组': 'Expand / collapse group', '展开目录': 'Expand folder', '折叠目录': 'Collapse folder',
+    '复制相对路径': 'Copy relative path', '预览文件': 'Preview file', '刷新文件': 'Refresh file',
+    '复制差分': 'Copy diff', '展开 / 折叠差分': 'Expand / collapse diff',
+    '复制内容': 'Copy content', '复制执行内容': 'Copy execution content', '复制输出': 'Copy output', '复制信息': 'Copy details',
+    '展开执行过程': 'Expand execution', '折叠执行过程': 'Collapse execution',
+    '跳转到此消息': 'Go to this message', '回到最新消息': 'Go to latest message',
+    '展开 / 折叠历史面板': 'Toggle history panel', '展开 / 折叠会话状态面板': 'Toggle session status panel',
+    '刷新会话列表': 'Refresh sessions', '在当前工作目录新建会话': 'New session in current workspace',
+    '移至浮动窗口': 'Move to floating window', '关闭其他标签': 'Close other tabs', '关闭右侧标签': 'Close tabs to the right',
+    '粘贴': 'Paste', '全选': 'Select all', '清空终端视图': 'Clear terminal view', '回到底部': 'Scroll to bottom',
+    '暂停播放': 'Pause playback', '静音': 'Mute', '取消静音': 'Unmute',
+    '循环播放': 'Loop playback', '取消循环播放': 'Disable loop', '复制媒体地址': 'Copy media address',
+    '播放': 'Play', '打开链接': 'Open link', '复制链接地址': 'Copy link address',
+    '打开文件': 'Open file', '移除附件': 'Remove attachment', '清除计划': 'Clear plan',
+    '查看改动': 'View changes', '查看本轮改动': 'View changes for this turn',
     '自优化通用智能平台': 'Self-optimizing general intelligence platform',
     '界面设置': 'Interface settings', '新建会话': 'New session', '新建对话': 'New chat', '切换语言': 'Switch language', '切换为英文': 'Switch to English', '切换为中文': 'Switch to Chinese',
     '会话列表': 'Session list', '拖动调整侧栏宽度': 'Drag to resize sidebar', '聊天': 'Chat',
@@ -139,6 +157,11 @@ Object.assign(UI_TRANSLATIONS_EN, {
     'Mermaid 流程图放大预览': 'Expanded Mermaid diagram preview', '关闭放大预览': 'Close expanded preview',
     '下载保存 Mermaid 流程图为图片': 'Download Mermaid diagram as an image', '下载图片': 'Download image',
     '放大显示 Mermaid 流程图': 'Expand Mermaid diagram', '点击查看图片': 'Click to view image',
+    '图片预览': 'Image preview', '关闭图片预览': 'Close image preview',
+    '缩小图片': 'Zoom out', '放大图片': 'Zoom in', '图片缩放比例': 'Image zoom level',
+    '原始尺寸': 'Actual size', '适应窗口': 'Fit to window',
+    '滚轮缩放 · 拖拽移动 · 双击切换原始尺寸': 'Scroll to zoom · Drag to pan · Double-click for actual size',
+    '正在加载原图…': 'Loading original image…', '图片加载失败，请关闭后重试': 'Image could not load. Close and retry.',
     '移除文件路径': 'Remove file path', '响应异常': 'Invalid response', '已调用系统打开文件': 'Asked the system to open the file',
     '无法打开文件': 'Could not open file', '无法连接服务': 'Could not connect to the service',
     '已在详情栏打开': 'Opened in the details column',
@@ -205,9 +228,10 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '选择工作目录': 'Choose a workspace folder',
     '无法打开系统目录选择器，请直接填写新会话的工作目录绝对路径。': 'The system folder picker is unavailable. Type the absolute path of the workspace for the new session.',
     '工作目录绝对路径': 'Absolute workspace path', '在此目录新建': 'Create here',
-    // 侧栏静态头（搜索 / 视图选项 / 在新文件夹中新建）与工作目录分组动作（DSH 式布局）
+    // 侧栏静态头（搜索 / 视图选项 / 刷新）与工作目录分组动作（DSH 式布局）
     '新建会话（在当前工作目录中）': 'New session (in the current workspace)',
     '新建会话选项：当前工作目录 / 新工作目录': 'New session options: current workspace / new workspace',
+    '刷新会话列表和页面': 'Refresh the session list and the page',
     '折叠或展开列表': 'Collapse or expand the list',
     '工作区': 'Workspaces', '搜索会话': 'Search sessions', '搜索会话名称': 'Search session names',
     '清除搜索': 'Clear search', '视图选项': 'View options', '分组方式': 'Group by',
@@ -258,6 +282,24 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '置顶会话': 'Pin session', '设为待办': 'Mark as todo', '取消待办': 'Remove todo', '待办': 'Todo', '待审核': 'Pending review', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
     '编辑会话名称': 'Edit the session name', '会话名称': 'Session name', '保存名称': 'Save name',
     '导出会话': 'Export session', '下载会话文件': 'Download session files', '确认导出': 'Export', '输入内容': 'Input', '草稿': 'Draft'
+});
+Object.assign(UI_TRANSLATIONS_EN, {
+    // 导入会话（列表头 · 文件夹+ 按钮：压缩包 / 文件夹 / 路径 / 拖拽）
+    '导入会话': 'Import session', '导入来源': 'Import source', '压缩包': 'Archive', '文件夹': 'Folder',
+    '浏览…': 'Browse…', '导入': 'Import', '会话路径': 'Session path',
+    '还原「导出会话」下载的 zip，或整个会话文件夹': 'Restore the ZIP downloaded by “Export session”, or a whole session folder',
+    '把会话 zip 或会话文件夹拖到这里（可多个）': 'Drop session ZIPs or session folders here (several at once)',
+    '部分导入完成': 'Partially imported',
+    '正在导入会话…': 'Importing session…', '已导入会话': 'Session imported',
+    '导入失败': 'Import failed', '无法导入该会话': 'Could not import this session',
+    '请填写会话压缩包路径': 'Enter the session archive path',
+    '请填写会话文件夹路径': 'Enter the session folder path',
+    '没有可导入的文件': 'No importable files',
+    '一次请拖入一个会话目录或压缩包': 'Drop one session folder or archive at a time',
+    '目录最多 5000 个文件，总大小不能超过 200 MB': 'A folder may hold at most 5000 files and 200 MB',
+    '目录层级过深': 'Directory nesting is too deep',
+    '请拖入会话导出的 ZIP / TAR 压缩包，或整个会话文件夹': 'Drop the exported session ZIP/TAR archive, or the whole session folder',
+    '当前环境不支持系统文件选择框，请直接粘贴路径或拖入': 'No system file dialog is available here; paste a path or drop the files instead'
 });
 Object.assign(UI_TRANSLATIONS_EN, {
     // Agent runtime status events (including compression and recovery)
@@ -603,6 +645,11 @@ function translateUiString(value) {
         .replace(/^移除 (.+)$/, 'Remove $1')
         .replace(/^确定删除会话「(.+)」吗？其中的消息与记录将被移除。$/, 'Delete session “$1”? Its messages and records will be removed.')
         .replace(/^将会话「(.+)」对应的 session 文件夹压缩为 ZIP 并下载。$/, 'Compress the session folder for “$1” as a ZIP file and download it.')
+        .replace(/^会话「(.+)」已导入。$/, 'Session “$1” imported.')
+        .replace(/^原 id 已被占用，已换新 id 作为副本导入。$/, 'The original id was taken; it was imported as a copy with a new id.')
+        .replace(/^已同时还原 (\d+) 张图片附件。$/, 'Restored $1 image attachments too.')
+        .replace(/^已导入 (\d+) 个会话。$/, '$1 sessions imported.')
+        .replace(/^(\d+) 个因原 id 被占用，已换新 id 作为副本导入。$/, '$1 imported as copies with new ids (original id was taken).')
         .replace(/^工具 (\d+) 次$/, '$1 tool calls')
         .replace(/^失败 (\d+) 次$/, '$1 failures')
         .replace(/工具\s*(\d+)\s*次/g, '$1 tool calls')
@@ -626,6 +673,7 @@ function translateUiString(value) {
         .replace(/^第 (\d+) 条，共 (\d+) 条：拖拽或按上下方向键调整顺序$/, 'Item $1 of $2: drag or press \u2191/\u2193 to reorder')
         .replace(/^验证：(.+)$/, 'Verification: $1')
         .replace(/【上下文窗口已满，开始压缩】/g, '[Context window full; starting compression]')
+        .replace(/【模型报告上下文已满，开始压缩】/g, '[Model reports context full; starting compression]')
         .replace(/【上下文压缩已完成】/g, '[Context compression completed]')
         .replace(/【上下文摘要】/g, '[Context summary]')
         .replace(/【上下文裁剪】/g, '[Context trimming]')
@@ -633,6 +681,8 @@ function translateUiString(value) {
         .replace(/上下文窗口已满，开始压缩/g, 'Context window full; starting compression')
         .replace(/上下文压缩已完成/g, 'Context compression completed')
         .replace(/正在进行上下文裁剪以控制 token（可能需数秒，请稍候）…/g, 'Trimming context to control tokens (this may take a few seconds; please wait)…')
+        .replace(/正在整理上下文后重试原请求…/g, 'Preparing context before retrying the request…')
+        .replace(/正在整理上下文…/g, 'Preparing context…')
         .replace(/摘要模型仍在生成或等待响应中，请稍候…/g, 'The summary model is still generating or waiting for a response; please wait…')
         .replace(/模型仍在更新要点或等待响应中，请稍候…/g, 'The model is still updating key points or waiting for a response; please wait…')
         .replace(/已完成上下文裁剪与摘要以控制长度/g, 'Context trimming and summarization completed to control length')
@@ -694,8 +744,6 @@ function translateUiString(value) {
         .replace(/^占本阶段 (.+)$/, 'Share of phase $1')
         .replace(/^(.+) 次 LLM 请求$/, '$1 LLM requests')
         .replace(/^(.+) 个模型。$/, '$1 models.')
-        .replace(/^… \[中间省略 (\d+) 行（输出中）\] …$/, '… [$1 lines omitted (streaming)] …')
-        .replace(/^… \[中间省略约 (\d+) 字符（输出中）\] …$/, '… [about $1 characters omitted (streaming)] …')
         .replace(/^\.\.\. \[中间省略 (\d+) 行\] \.\.\.$/, '... [$1 lines omitted] ...')
         .replace(/^\.\.\. \[中间省略约 (\d+) 字符\] \.\.\.$/, '... [about $1 characters omitted] ...');
 }

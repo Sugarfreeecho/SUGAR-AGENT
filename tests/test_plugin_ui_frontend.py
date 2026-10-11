@@ -287,9 +287,11 @@ def test_todo_plan_items_clamp_to_three_lines_with_hover_tip():
 def test_todo_in_progress_icon_uses_play_glyph_like_dsh_and_zcode():
     source = (ROOT / "plugins/session-todo/web/session-panel.js").read_text(encoding="utf-8")
 
-    # 进行中 = 描边播放三角（DSH 用 IconPlayOutlineRegular，ZCode 侧栏用 “[>]” + 强调色）
-    assert "M8.6 6.6 17.6 12 8.6 17.4Z" in source
-    # 旧的 3/4 缺口弧环已退役
+    # 进行中 = 右半实心圆（2026-10-11 按反馈替换原描边播放三角；与待办/完成同为圆族，
+    # 靠填充一半表达“在跑”）。
+    assert '<path d="M12 3.8a8.2 8.2 0 0 1 0 16.4z" fill="currentColor" stroke="none"/>' in source
+    # 描边播放三角（v9.4 契约）与更早的 3/4 缺口弧环均已退役
+    assert "M8.6 6.6 17.6 12 8.6 17.4Z" not in source
     assert "A8.2 8.2 0 1 1 3.8 12" not in source
     # 待办/完成的圆环族保持不变
     assert 'circle cx="12" cy="12" r="8.2"' in source

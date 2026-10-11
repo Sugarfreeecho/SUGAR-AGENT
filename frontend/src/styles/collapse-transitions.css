@@ -95,35 +95,6 @@
     pointer-events: none;
 }
 
-.process-aggregate > .process-aggregate-body {
-    display: block;
-    height: auto;
-    overflow-x: hidden;
-    overflow-y: auto;
-    opacity: 1;
-    transition:
-        height var(--ui-collapse-duration) var(--ui-collapse-easing),
-        min-height var(--ui-collapse-duration) var(--ui-collapse-easing),
-        padding-block var(--ui-collapse-duration) var(--ui-collapse-easing),
-        opacity var(--ui-collapse-duration) ease,
-        border-color var(--ui-collapse-duration) ease,
-        visibility 0s linear 0s;
-}
-
-.process-aggregate.is-collapsed > .process-aggregate-body,
-:root .process-aggregate:not(.subagent-grid-card).is-collapsed > .process-aggregate-body {
-    display: block;
-    height: 0;
-    min-height: 0;
-    overflow: hidden;
-    padding-block: 0;
-    border-block-color: transparent;
-    opacity: 0;
-    visibility: hidden;
-    transition-delay: 0s, 0s, 0s, 0s, 0s, var(--ui-collapse-duration);
-    pointer-events: none;
-}
-
 .feed-chunk {
     transition:
         max-height var(--ui-collapse-duration) var(--ui-collapse-easing),

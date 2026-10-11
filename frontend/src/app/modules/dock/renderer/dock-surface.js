@@ -234,6 +234,10 @@ class DockSurfaceView {
         strip.appendChild(fill);
         strip.appendChild(splitButton);
         strip.appendChild(chrome);
+        strip.addEventListener('contextmenu', event => {
+            const currentPane = this.state && this.state.nodes[pane.id];
+            if (currentPane && currentPane.activeTabId) this.openMenu(currentPane.activeTabId, strip, event);
+        });
         el.appendChild(strip);
         el.appendChild(body);
         entry = { el: el, strip: strip, tabsBox: tabsBox, addButton: addButton, splitButton: splitButton, chrome: chrome, body: body, chips: Object.create(null), bodyTabId: undefined };
@@ -347,7 +351,8 @@ class DockSurfaceView {
         chip.setAttribute('data-dock-tab', tabId);
         chip.addEventListener('contextmenu', (event) => {
             event.preventDefault();
-            this.openMenu(tabId, event.currentTarget);
+            event.stopPropagation();
+            this.openMenu(tabId, event.currentTarget, event);
         });
         chip.addEventListener('pointerdown', (event) => {
             // A secondary press is the menu, never a drag.
@@ -360,6 +365,10 @@ class DockSurfaceView {
         });
         chip.addEventListener('keydown', (event) => {
             if (event.target !== event.currentTarget) return;
+            if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                this.openMenu(tabId, chip, event);
+                return;
+            }
             const next = this.chipToFocus(event.key, pane.tabs, tabId);
             if (next !== undefined) {
                 event.preventDefault();
@@ -625,11 +634,39 @@ class DockSurfaceView {
         return map[zone] || map.center || '移入此面板';
     }
 
-    /** A small context menu for a chip: duplicate and close. */
-    openMenu(tabId, anchor) {
+    /** Tab actions use the same workbench menu as the pane bodies. */
+    openMenu(tabId, anchor, event) {
         this.dismissMenu();
         const state = this.state;
         if (!state || !state.tabs[tabId]) return;
+        if (globalThis.MyAgentContextMenu) {
+            const pane = dockFindTabPane(state, tabId);
+            const paneId = pane && pane.id;
+            const valid = () => !!(this.state && this.state.tabs[tabId]);
+            const closeOthers = pane ? pane.tabs.filter(id => id !== tabId && this.canCloseTab(id)) : [];
+            const closeRight = pane ? pane.tabs.slice(pane.tabs.indexOf(tabId) + 1).filter(id => this.canCloseTab(id)) : [];
+            const closeMany = ids => ids.forEach(id => {
+                if (this.state.tabs[id] && this.canCloseTab(id)) this.intents.closeTab(id);
+            });
+            const block = paneId ? this.splitBlock(paneId) : 'budget';
+            const items = [
+                { label: this.labels.duplicateTab || '复制标签', valid, action: () => this.intents.duplicateTab(tabId) },
+                { label: this.labels.splitPane || '左右分屏', disabled: !!block, valid,
+                    title: block === 'width' ? this.labels.splitPaneNarrow : block ? this.labels.splitPaneDisabled : '',
+                    action: () => { if (!this.splitBlock(paneId)) this.intents.splitPane(paneId); } },
+                { label: '移至浮动窗口', valid, action: () => this.intents.floatTab(tabId,
+                    dockFloatRectAt(anchor.getBoundingClientRect().left, anchor.getBoundingClientRect().bottom, DOCK_FLOAT_DEFAULT_SIZE)) },
+                null,
+                { label: this.labels.closeTab || '关闭标签', disabled: !this.canCloseTab(tabId), valid,
+                    action: () => { if (this.canCloseTab(tabId)) this.intents.closeTab(tabId); } },
+                { label: '关闭其他标签', disabled: !closeOthers.length, valid, action: () => closeMany(closeOthers) },
+                { label: '关闭右侧标签', disabled: !closeRight.length, valid, action: () => closeMany(closeRight) },
+            ];
+            if (paneId && this.canAddTab(paneId)) items.unshift({ label: this.labels.addTab || '添加标签', valid, action: () => this.intents.addTab(paneId) });
+            globalThis.MyAgentContextMenu.open(event || { type: 'keydown', preventDefault() {}, stopPropagation() {} }, items, anchor);
+            this.menu = { shared: true, anchor };
+            return;
+        }
         const menu = document.createElement('div');
         menu.className = 'dock-menu';
         menu.setAttribute('role', 'menu');
@@ -670,6 +707,11 @@ class DockSurfaceView {
 
     dismissMenu() {
         if (!this.menu) return;
+        if (this.menu.shared) {
+            if (globalThis.MyAgentContextMenu.isOpenFor(this.menu.anchor)) globalThis.MyAgentContextMenu.close(false);
+            this.menu = null;
+            return;
+        }
         if (this.menu.__dockDismiss) document.removeEventListener('pointerdown', this.menu.__dockDismiss, true);
         if (this.menu.parentNode) this.menu.parentNode.removeChild(this.menu);
         this.menu = null;

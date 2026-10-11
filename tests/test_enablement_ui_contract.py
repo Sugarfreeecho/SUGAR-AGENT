@@ -138,7 +138,12 @@ def test_skill_picker_exposes_enablement_controls():
     plugin_actions_css = styles[styles.index(".plugin-option-actions {"):styles.index(".plugin-option-actions .skill-picker-toggle")]
     assert "opacity: 1;" in plugin_actions_css
     assert "pointer-events: auto;" in plugin_actions_css
-    assert "pointer-events: none;" not in plugin_actions_css
+    # 本批起插件动作与技能 / 模型行同规矩：静止隐藏、hover 或键盘聚焦浮出并可点（此前常显）。
+    # 守卫意图（动作必须可点）改为成对断言：静止 hidden + 浮出恢复 auto。
+    assert "opacity: 0;" in plugin_actions_css
+    assert "pointer-events: none;" in plugin_actions_css
+    assert ".plugin-option:hover .plugin-option-actions," in plugin_actions_css
+    assert ".plugin-option:has(:focus-visible) .plugin-option-actions { opacity: 1; pointer-events: auto; }" in plugin_actions_css
     assert ".plugin-option-action {" not in styles
     assert "grid-auto-rows: max-content" in styles
     assert "align-content: start" in styles

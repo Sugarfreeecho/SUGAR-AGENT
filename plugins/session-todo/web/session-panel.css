@@ -50,5 +50,10 @@
 :root.theme-light .session-todo-panel-host .todo-plan--completed .todo-plan-status-tag { color:#247a43; }
 :root.theme-light .session-todo-panel-host .chat-todo-plan-close { color:var(--text-secondary); }
 :root.theme-light .session-todo-panel-host .chat-todo-plan-close:hover { background:rgba(0,0,0,.05); color:var(--text-primary); }
+/* 浅色档的角标文字色：本规则特异性 (0,4,0) 高于 app.css 的
+   `:root.theme-light .plugin-session-badge--info` (0,3,0)，会把它压掉；
+   而浅色主题并没有定义 --accent-1 / --accent-2（两个令牌只在紫黑/深黑里赋值），
+   原来写 var(--accent-1) 会回退成紫黑主题的浅薰衣草 #cba6f7 ——浅底上几乎看不清。
+   2026-10-11 按反馈改为与 app.css 同一支品牌靛蓝。 */
 .plugin-session-badge[data-plugin-id="session-todo"] { border-color:rgba(var(--accent-rgb),.36); background:rgba(var(--accent-rgb),.16); color:var(--accent-2); }
-:root.theme-light .plugin-session-badge[data-plugin-id="session-todo"] { border-color:rgba(var(--brand-accent-rgb),.3); background:rgba(var(--brand-accent-rgb),.12); color:var(--accent-1); }
+:root.theme-light .plugin-session-badge[data-plugin-id="session-todo"] { border-color:rgba(var(--brand-accent-rgb),.3); background:rgba(var(--brand-accent-rgb),.12); color:#4f46e5; }

@@ -14,7 +14,7 @@
                     "id": "active-plan",
                     "namespace": "plan",
                     "path": "/has_plan",
-                    "label": "Todo",
+                    "label": "Plan",
                     "description": "This session has an active plan.",
                     "variant": "info",
                     "when": "truthy"

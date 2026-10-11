@@ -1437,9 +1437,14 @@ function updateExecutionRecord(sessionId, update) {
     if (!records) { records = new Map(); executionRecordsBySession.set(sid, records); }
     var id = String(update.execution_id || '');
     if (!id) return null;
-    var row = Object.assign({}, records.get(id) || {}, update);
     var prior = records.get(id) || {};
     if (update.last_runtime_seq && Number(update.last_runtime_seq) <= Number(prior.last_runtime_seq || 0)) return prior;
+    var row = Object.assign({}, prior);
+    Object.keys(update).forEach(function (key) {
+        // Partial stream frames omit metadata. Keep the name/arguments/group
+        // from the recovered record instead of replacing them with undefined.
+        if (update[key] !== undefined) row[key] = update[key];
+    });
     [['text_delta', 'content'], ['name_delta', 'tool'], ['arguments_delta', 'arguments_raw'], ['output_delta', 'output']].forEach(function (pair) {
         if (Object.prototype.hasOwnProperty.call(update, pair[0])) row[pair[1]] = String(prior[pair[1]] || '') + String(update[pair[0]] || '');
         delete row[pair[0]];
@@ -1529,7 +1534,8 @@ function renderExecutionRecord(ctx, record, sessionId) {
     row.removeAttribute('data-tool-pending');
     row.dataset.eventCommitted = '1';
     var scroller = row.querySelector('.feed-chunk-scroller');
-    var uiText = truncateLogTextForUi(text);
+    var uiText = record.kind === 'tool' ? truncateLogTextForUi(text) : text;
+    if (scroller && record.kind !== 'tool') scroller._llmRawText = text;
     if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
     var chunk = row.querySelector('.feed-chunk');
     if (chunk) { chunk.classList.toggle('is-streaming', record.status === 'generating'); refreshFeedChunkOverflow(chunk); }
@@ -1569,7 +1575,12 @@ function renderExecutionEvent(ctx, event, sessionId) {
     if (type === 'tool_call_delta') Object.assign(update, {status:'generating', tool_call_id:event.id, name_delta:event.name_delta || '', arguments_delta:event.arguments_delta || ''});
     else if (type === 'tool_command_delta') Object.assign(update, {status:'running', output_delta:event.delta || '', tool_call_id:event.tool_call_id});
     else if (type === 'tool_pending') Object.assign(update, {status:'waiting_execution', tool:event.tool, args:event.args, command_preview:event.command_preview, tool_call_id:event.tool_call_id});
-    else if (type === 'tool_execution_state') Object.assign(update, {status:event.status, tool_call_id:event.tool_call_id});
+    else if (type === 'tool_execution_state') {
+        Object.assign(update, {status:event.status, tool_call_id:event.tool_call_id});
+        ['tool', 'args', 'command_preview', 'result', 'stdout', 'stderr', 'process_state', 'exit_code', 'duration_ms', 'executed'].forEach(function (key) {
+            if (event[key] !== undefined && event[key] !== null) update[key] = event[key];
+        });
+    }
     else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], ui_committed:true}, event.ui ? {ui:event.ui} : null);
     else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating', text_delta:event.delta || ''});
     else if (type === 'llm_reasoning' || type === 'llm_response') Object.assign(update, {status:event.execution_status || 'completed', content:event.content || '', ui_committed:true});
@@ -3115,12 +3126,6 @@ function pathTokenToWorkspaceOpenRel(token) {
     if (win) {
         var rest = (win[2] || '').replace(/\\/g, '/');
         var absNorm = (win[1].toUpperCase() + ':/' + rest).replace(/\/+/g, '/');
-        if (w) {
-            var absRel = workspaceRelFromNormalizedAbs(absNorm, w);
-            if (absRel != null) return absRel;
-            var foreignRel = workspaceRelFromForeignWorkspaceAbs(absNorm, w);
-            if (foreignRel != null) return foreignRel;
-        }
         return absNorm;
     }
     if (!w) return null;
@@ -3135,16 +3140,16 @@ function pathTokenToWorkspaceOpenRel(token) {
         if (wDrive) {
             var rootedAbs = (wDrive[1].toUpperCase() + ':' + slashRooted).replace(/\/+/g, '/');
             var rootedRel = workspaceRelFromNormalizedAbs(rootedAbs, w);
-            if (rootedRel != null) return rootedRel;
+            if (rootedRel != null) return rootedAbs;
         }
         if (!workspaceRelativePathAutoLinkOk(slashRooted)) return null;
-        return slashRooted.replace(/^\/+/, '');
+        return typeof workspaceAbsolutePath === 'function' ? workspaceAbsolutePath(slashRooted) : slashRooted.replace(/^\/+/, '');
     }
     if (t === '.env' && typeof window.__APP_DOTENV_PATH__ === 'string' && window.__APP_DOTENV_PATH__) {
         return window.__APP_DOTENV_PATH__;
     }
     var relPath = stripWorkspaceRootPrefixFromRelPath(t);
-    if (workspaceRelativePathNoSlashAutoLinkOk(relPath)) return relPath;
+    if (workspaceRelativePathNoSlashAutoLinkOk(relPath)) return typeof workspaceAbsolutePath === 'function' ? workspaceAbsolutePath(relPath) : relPath;
     return null;
 }
 
@@ -3173,8 +3178,8 @@ function markdownHrefToWorkspaceOpenRel(href) {
         return '/' + fsPath.replace(/^\/+/, '').replace(/\\/g, '/');
     }
     if (/^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw)) return raw.replace(/\\/g, '/');
-    if (/[\\/]/.test(raw)) return stripWorkspaceRootPrefixFromRelPath(raw);
-    return stripWorkspaceRootPrefixFromRelPath(raw);
+    var relative = stripWorkspaceRootPrefixFromRelPath(raw);
+    return typeof workspaceAbsolutePath === 'function' ? workspaceAbsolutePath(relative) : relative;
 }
 
 function workspaceOpenDisplayLabel(original, wsRel) {
@@ -4140,7 +4145,6 @@ const TRACE_ROW = {
     'compact-summary': { label: '压缩', c: 'feed--cmp' },
     'context-trim': { label: '裁剪', c: 'feed--trim' },
     'context-summary': { label: '压缩', c: 'feed--cmp' },
-    'context-summary-reasoning': { label: '压缩思考', c: 'feed--llm' },
     'key-context': { label: '要点', c: 'feed--key' },
     'plugin-extension': { label: '扩展', c: 'feed--plugin-extension' },
     'user-steer':  { label: '追问', c: 'feed--answer' },
@@ -4867,8 +4871,8 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     row.setAttribute('data-react-generation', String(rowGeneration));
     if (rowRunId) row.setAttribute('data-run-id', String(rowRunId));
     if (toolCallIdOpt != null && String(toolCallIdOpt) !== '') row.setAttribute('data-tool-call-id', String(toolCallIdOpt));
-    var isReasoningRow = type === 'llm-reasoning' || type === 'context-summary-reasoning';
-    var rowCanCollapse = type === 'tool-call' || type === 'llm-reasoning' || type === 'context-summary-reasoning';
+    var isReasoningRow = type === 'llm-reasoning';
+    var rowCanCollapse = type === 'tool-call' || isReasoningRow;
     var initialCollapseLabel = isReasoningRow ? '收起思考' : '收起工具行';
     var rowCollapseBtn = rowCanCollapse
         ? '<button type="button" class="feed-row-collapse" aria-expanded="true" aria-label="' + initialCollapseLabel + '">'
@@ -4883,7 +4887,6 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     const chunk = row.querySelector('.feed-chunk');
     const sc = row.querySelector('.feed-chunk-scroller');
     if (isReasoningRow) chunk.classList.add('expanded');
-    if (type === 'context-summary-reasoning') row.querySelector('.feed-label').title = meta.label;
     if (rowCanCollapse) {
         const collapseBtn = row.querySelector('.feed-row-collapse');
         if (collapseBtn) {
@@ -4897,7 +4900,8 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     var txtForUi = initialText;
     if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
     if (type === 'llm-response') row._processBriefRawText = String(txtForUi || '');
-    var initialUiText = truncateLogTextForUi(txtForUi);
+    var initialUiText = type === 'llm-reasoning' || type === 'llm-response'
+        ? txtForUi : truncateLogTextForUi(txtForUi);
     if (type === 'status' || type === 'error-log' || type === 'tool-call'
         || type === 'compact-summary' || type === 'context-trim'
         || type === 'context-summary' || type === 'key-context') {
@@ -4926,7 +4930,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
        帧整行再跳高（窄栏实测裁切 289px、释放瞬间单帧跳 440px，行内文字与下方内容
        一起被甩动）。这类行不做插入高度动画，让行高直接跟随内容。 */
     var isLiveStreamRow = !!(streamOpts.streaming
-        && (isReasoningRow || type === 'llm-response'));
+        && (isReasoningRow || type === 'llm-response' || type === 'context-summary'));
     if (!isHistoryHydrate && !isInitialLiveStatusRow && !isLiveStreamRow) {
         animateSmoothTraceRowInsertion(row);
     }
@@ -5044,19 +5048,6 @@ function appendLlmStreamDelta(ctx, ev, runSessionId) {
     scheduleLlmDeltaFlush(ctx, runSessionId);
 }
 
-/**
- * 摘掉流式标记时，把窗口化渲染（长文本流式，见 session-scroll-history.js）
- * 收敛回既有终态投影：先测量后替换，避免可见内容大幅跳变。
- * 调用前先摘 is-streaming，行高回到既有折叠规则后，替换本身不再改变行高。
- */
-function endLlmStreamChunkProjection(chunk) {
-    if (!chunk) return null;
-    var sc = typeof chunk.querySelector === 'function' ? chunk.querySelector('.feed-chunk-scroller') : null;
-    chunk.classList.remove('is-streaming');
-    if (sc && typeof collapseWindowedLlmText === 'function') collapseWindowedLlmText(sc);
-    return sc;
-}
-
 function finalizeActiveLlmReasoningRow(ctx) {
     var l = ctx && ctx.llm;
     var scroller = l && l.llmStreamReasoningScroller;
@@ -5065,7 +5056,7 @@ function finalizeActiveLlmReasoningRow(ctx) {
     var row = scroller.closest ? scroller.closest('.feed-item.feed--llm') : null;
     var chunk = row && row.querySelector ? row.querySelector('.feed-chunk') : null;
     if (chunk) {
-        endLlmStreamChunkProjection(chunk);
+        chunk.classList.remove('is-streaming');
         scheduleFeedChunkOverflowRefresh(chunk);
     }
     autoCollapseLlmReasoningRow(row);
@@ -5082,8 +5073,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
     }
     var ri = reactIter != null && Number.isFinite(Number(reactIter)) ? Math.max(1, Math.floor(Number(reactIter))) : null;
     var rawText = trimSurroundingBlankLines(String(content || ''));
-    var txt = truncateLogTextForUi(rawText);
-    if (!txt.trim()) return null;
+    if (!rawText.trim()) return null;
     var existing = findExistingLlmFeedRow(ctx, logType, ri);
     if (existing) {
         // Drain the old reveal buffer before installing the authoritative text.
@@ -5093,7 +5083,7 @@ function upsertLlmFeedRow(ctx, content, logType, runSessionId, reactIter) {
         if (logType === 'llm-response') existing._processBriefRawText = rawText;
         if (sc) writeLlmStreamText(sc, rawText, logType === 'llm-response' ? 'response' : 'reasoning');
         if (ch) {
-            endLlmStreamChunkProjection(ch);
+            ch.classList.remove('is-streaming');
             scheduleFeedChunkOverflowRefresh(ch);
         }
         existing.removeAttribute('data-llm-live-row');
@@ -5355,6 +5345,8 @@ function bindFeedChunkInteraction(ch) {
     ch.removeEventListener('click', handleTraceChunkClick);
     ch.removeEventListener('click', handleToolRowChunkClick);
     ch.removeEventListener('click', handleLlmRowChunkClick);
+    // 压缩行内的思考由 details 控制开合，文本本身可直接选择。
+    if (ch.closest('.context-summary-reasoning')) return;
     // Tool rows use the row-level fold (feed-row-collapse) as their single
     // collapse affordance; clicking the command text toggles the same fold.
     // Keep the content-height expand for LLM/log/etc. rows.
@@ -5491,32 +5483,55 @@ function finalizeProgressStreamChunks(ctx) {
 function discardProgressStreamChunks(ctx) {
     if (!ctx) return;
     var streamRoot = ctx.stream;
-    var rows = [];
+    var chunks = [];
     var types = ctx.progressStream ? Object.keys(ctx.progressStream) : [];
     for (var i = 0; i < types.length; i += 1) {
         var st = ctx.progressStream[types[i]];
         if (!st) continue;
         if (st.flushRaf) cancelAnimationFrame(st.flushRaf);
-        var row = st.scroller && st.scroller.closest ? st.scroller.closest('.feed-item') : null;
-        if (row && rows.indexOf(row) < 0) rows.push(row);
+        var chunk = st.scroller && st.scroller.closest ? st.scroller.closest('.feed-chunk') : null;
+        if (chunk && chunks.indexOf(chunk) < 0) chunks.push(chunk);
     }
     if (streamRoot) {
         streamRoot.querySelectorAll(
             '.feed-item[data-log-type="context-trim"] .feed-chunk.is-streaming, '
             + '.feed-item[data-log-type="context-summary"] .feed-chunk.is-streaming, '
-            + '.feed-item[data-log-type="context-summary-reasoning"] .feed-chunk.is-streaming, '
             + '.feed-item[data-log-type="key-context"] .feed-chunk.is-streaming'
         ).forEach(function (chunk) {
-            var row = chunk.closest('.feed-item');
-            if (row && rows.indexOf(row) < 0) rows.push(row);
+            if (chunks.indexOf(chunk) < 0) chunks.push(chunk);
         });
     }
-    rows.forEach(function (row) {
-        if (row && row.parentNode) row.remove();
+    chunks.forEach(function (chunk) {
+        var row = chunk.closest('.feed-item');
+        if (!row || !row.parentNode) return;
+        if (row.getAttribute('data-log-type') !== 'context-summary') {
+            row.remove();
+            return;
+        }
+        // 同一压缩行还包含状态和已结束的思考；只清理当前活动草稿。
+        var reasoning = chunk.closest('.context-summary-reasoning');
+        if (reasoning) reasoning.remove();
+        else {
+            var sc = chunk.querySelector('.feed-chunk-scroller');
+            var raw = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
+            var head = typeof sc._contextProgressBodyOffset === 'number'
+                ? raw.slice(0, sc._contextProgressBodyOffset).trim() : '';
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, head);
+            else sc.textContent = head;
+            sc._contextProgressBodyOffset = head.length;
+            chunk.classList.remove('is-streaming');
+            refreshFeedChunkOverflow(chunk);
+        }
+        var summary = row.querySelector('.feed-chunk-scroller');
+        if (!row.querySelector('.context-summary-reasoning') && !summary.textContent.trim()) row.remove();
     });
     ctx.progressStream = {};
     if (ctx.progressScrollers) {
-        ['context-trim', 'context-summary', 'context-summary-reasoning', 'key-context'].forEach(function (type) {
+        var reasoningScroller = ctx.progressScrollers['context-summary-reasoning'];
+        var reasoning = reasoningScroller && reasoningScroller.closest('.context-summary-reasoning');
+        if (reasoning) reasoning.removeAttribute('data-compression-live');
+        delete ctx.progressScrollers['context-summary-reasoning'];
+        ['context-trim', 'context-summary', 'key-context'].forEach(function (type) {
             var scroller = ctx.progressScrollers[type];
             if (!scroller || !scroller.isConnected) delete ctx.progressScrollers[type];
         });
@@ -5545,7 +5560,41 @@ function ensureProgressScroller(ctx, logType, runSessionId) {
     return sc;
 }
 
-/** 压缩推理只在当前执行过程显示，与主模型思考和摘要正文使用独立行。 */
+/** 思考和摘要共用一条压缩行，重试的思考使用各自可折叠的区块。 */
+function createCompressionReasoningScroller(ctx, runSessionId) {
+    var summary = ctx.progressScrollers && ctx.progressScrollers['context-summary'];
+    if (!summary || !summary.isConnected) {
+        summary = createProcessFeedRow(ctx, 'context-summary', '', { streaming: true }, runSessionId);
+        if (summary) ctx.progressScrollers['context-summary'] = summary;
+    }
+    if (!summary) return null;
+    var row = summary.closest('.feed-item');
+    var content = row.querySelector('.context-summary-content');
+    if (!content) {
+        content = document.createElement('div');
+        content.className = 'context-summary-content';
+        var summaryChunk = summary.closest('.feed-chunk');
+        summaryChunk.parentNode.insertBefore(content, summaryChunk);
+        content.appendChild(summaryChunk);
+    }
+    var reasoning = document.createElement('details');
+    reasoning.className = 'context-summary-reasoning';
+    reasoning.open = true;
+    reasoning.setAttribute('data-compression-live', '1');
+    reasoning.innerHTML = '<summary>思考</summary><div class="feed-chunk expanded is-streaming">'
+        + '<div class="feed-chunk-scroller"></div></div>';
+    var sc = reasoning.querySelector('.feed-chunk-scroller');
+    bindFeedChunkScrollChain(sc);
+    reasoning.addEventListener('toggle', function () {
+        refreshFeedChunkOverflow(sc.closest('.feed-chunk'));
+        scrollContentAreaIfFollow(ctx, runSessionId, 'text');
+    });
+    content.appendChild(reasoning);
+    if (typeof translateUiNode === 'function') translateUiNode(reasoning.querySelector('summary'));
+    return sc;
+}
+
+/** 压缩推理只在当前执行过程的压缩行内显示，与主模型思考状态独立。 */
 function appendCompressionReasoningDelta(ctx, event, runSessionId) {
     if (!ctx || !event || !event.delta) return;
     var logType = 'context-summary-reasoning';
@@ -5553,7 +5602,7 @@ function appendCompressionReasoningDelta(ctx, event, runSessionId) {
     if (!ctx.progressStream) ctx.progressStream = {};
     var sc = ctx.progressScrollers[logType];
     if (!sc || !sc.isConnected) {
-        sc = createProcessFeedRow(ctx, logType, '', { streaming: true }, runSessionId);
+        sc = createCompressionReasoningScroller(ctx, runSessionId);
         if (!sc) return;
         ctx.progressScrollers[logType] = sc;
     }
@@ -5581,11 +5630,14 @@ function finishCompressionReasoning(ctx, requestEnded) {
     finalizeProgressStreamForType(ctx, logType);
     var sc = ctx.progressScrollers && ctx.progressScrollers[logType];
     if (sc && sc.isConnected) {
-        var row = sc.closest('.feed-item');
-        autoCollapseLlmReasoningRow(row);
-        if (requestEnded !== false && row) row.removeAttribute('data-llm-live-row');
+        var reasoning = sc.closest('.context-summary-reasoning');
+        if (reasoning && !reasoning._compressionReasoningFinished) {
+            reasoning.open = false;
+            reasoning._compressionReasoningFinished = true;
+        }
+        if (requestEnded !== false && reasoning) reasoning.removeAttribute('data-compression-live');
     }
-    // 摘要正文开始时保留行引用；请求结束后下一轮/重试创建自己的推理行。
+    // 正文开始时保留引用；请求结束后下一轮/重试在同一压缩行内新建思考区。
     if (requestEnded !== false && ctx.progressScrollers) delete ctx.progressScrollers[logType];
 }
 
@@ -5595,20 +5647,15 @@ function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
     var text = String(content || '').trim();
     if (!text) return;
     var st = ctx.progressStream && ctx.progressStream[logType];
-    var bodyOffset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : null;
-    var hadStream = bodyOffset != null;
     finalizeProgressStreamForType(ctx, logType);
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
+    var bodyOffset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : sc._contextProgressBodyOffset;
     var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
-    var merged;
-    if (hadStream) {
-        merged = prevTxt.slice(0, bodyOffset).replace(/\s+$/, '') + '\n\n' + text;
-    } else if (prevTxt.trim()) {
-        merged = prevTxt.trim() + '\n\n' + text;
-    } else {
-        merged = text;
-    }
+    var head = (typeof bodyOffset === 'number' ? prevTxt.slice(0, bodyOffset) : prevTxt).trim();
+    var prefix = head ? head + '\n\n' : '';
+    var merged = prefix + text;
+    sc._contextProgressBodyOffset = prefix.length;
     var persistedText = truncateLogTextForUi(merged);
     if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, persistedText);
     else sc.textContent = persistedText;
@@ -5635,14 +5682,13 @@ function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {
     var st = ctx.progressStream[logType];
     if (!st) {
         var sourceText = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
-        var head = sourceText.trim();
-        var bodyOffset = sourceText.length;
-        if (head) {
-            var streamHead = head + '\n\n';
-            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, streamHead);
-            else sc.textContent = streamHead;
-            bodyOffset = streamHead.length;
-        }
+        var head = (typeof sc._contextProgressBodyOffset === 'number'
+            ? sourceText.slice(0, sc._contextProgressBodyOffset) : sourceText).trim();
+        var streamHead = head ? head + '\n\n' : '';
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, streamHead);
+        else sc.textContent = streamHead;
+        var bodyOffset = streamHead.length;
+        sc._contextProgressBodyOffset = bodyOffset;
         st = { scroller: sc, pending: '', flushRaf: 0, bodyOffset: bodyOffset };
         ctx.progressStream[logType] = st;
     }
@@ -5650,38 +5696,32 @@ function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {
     scheduleProgressDeltaFlush(ctx, runSessionId, logType);
 }
 
-/** 同类型进度行合并追加，实现裁剪/压缩/要点分轨流式展示 */
+/** 每个阶段只展示最新状态；更新状态时保留正在生成或已提交的正文。 */
 function appendProgressLog(ctx, content, logType, runSessionId) {
     if (!ctx) return;
-    finalizeProgressStreamForType(ctx, logType);
-    if (!ctx.progressScrollers) ctx.progressScrollers = {};
     var line = String(content || '');
     if (!line.trim()) return;
-    var prev = ctx.progressScrollers[logType];
-    if (prev && prev.isConnected) {
-        var prevTxt = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(prev) : (prev.textContent || '');
-        var progressText = truncateLogTextForUi(prevTxt ? (prevTxt + '\n' + line) : line);
-        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(prev, progressText);
-        else prev.textContent = progressText;
-        var chMerge = prev.closest('.feed-chunk');
-        if (chMerge) {
-            refreshFeedChunkOverflow(chMerge);
-            requestAnimationFrame(function () { refreshFeedChunkOverflow(chMerge); });
-        }
-        scrollContentAreaIfFollow(ctx, runSessionId, 'text');
-        return;
-    }
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
-    var firstProgressText = truncateLogTextForUi(line);
-    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, firstProgressText);
-    else sc.textContent = firstProgressText;
-    var chNew = sc.closest('.feed-chunk');
-    if (chNew) {
-        refreshFeedChunkOverflow(chNew);
-        requestAnimationFrame(function () { refreshFeedChunkOverflow(chNew); });
+    if (sc._contextProgressStatus === line) return;
+    flushProgressDeltaText(ctx, logType);
+    var st = ctx.progressStream && ctx.progressStream[logType];
+    var offset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : sc._contextProgressBodyOffset;
+    var previous = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
+    var body = typeof offset === 'number' ? previous.slice(offset) : '';
+    var prefix = line + (body || st ? '\n\n' : '');
+    var progressText = truncateLogTextForUi(prefix + body);
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, progressText);
+    else sc.textContent = progressText;
+    sc._contextProgressStatus = line;
+    sc._contextProgressBodyOffset = prefix.length;
+    if (st) st.bodyOffset = prefix.length;
+    var ch = sc.closest('.feed-chunk');
+    if (ch) {
+        refreshFeedChunkOverflow(ch);
+        requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });
     }
-    scrollContentAreaIfFollow(ctx, runSessionId);
+    scrollContentAreaIfFollow(ctx, runSessionId, 'text');
 }
 
 function finalizeProgressStreamForType(ctx, logType) {

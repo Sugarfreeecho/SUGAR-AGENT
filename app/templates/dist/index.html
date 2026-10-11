@@ -30,8 +30,8 @@
             document.documentElement.style.setProperty('--sidebar-width-px', sw + 'px');
         }
     } catch (e) {}</script>
-  <script type="module" crossorigin src="/assets/main-B_mPBPj8.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/main-BekzvA-B.css">
+  <script type="module" crossorigin src="/assets/main-CY3E_0xp.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/main-Cbkpc6ct.css">
 </head>
 <body>
 <div class="app">
@@ -88,7 +88,18 @@
                     <button type="button" class="session-head-icon" data-popup-trigger aria-haspopup="menu" aria-expanded="false" aria-label="视图选项" data-ui-tip="视图选项"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14M12 5v14M19 5v14"></path><circle cx="5" cy="14" r="2"></circle><circle cx="12" cy="9" r="2"></circle><circle cx="19" cy="15" r="2"></circle></svg></button>
                     <div class="sidebar-popup-menu session-view-menu" id="session-view-menu" role="menu" aria-label="视图选项"></div>
                 </div>
-                <button type="button" id="session-add-folder-btn" class="session-head-icon" aria-label="在新文件夹中新建会话" data-ui-tip="在新文件夹中新建会话"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path><path d="M12 11v6M9 14h6"></path></svg></button>
+                <!-- 第三个按钮：导入会话（原「在新文件夹中新建会话」的文件夹+字形，功能改为导入）。
+                     内容由 session-management.js 的 mountSessionImportOnce() 填充：
+                     压缩包 / 文件夹 / 手输路径 / 拖拽四条途径，落到 POST /api/sessions/import[-upload]。 -->
+                <div class="sidebar-popup" id="session-import" data-sidebar-popup="1">
+                    <button type="button" class="session-head-icon" data-popup-trigger aria-haspopup="dialog" aria-expanded="false" aria-label="导入会话" data-ui-tip="导入会话"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g transform="translate(0 -0.5)"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path><path d="M12 11v6M9 14h6"></path></g></svg></button>
+                    <div class="sidebar-popup-menu session-import-menu" id="session-import-menu" role="dialog" aria-label="导入会话"></div>
+                </div>
+                <!-- 第四个按钮：刷新会话列表 + 整页（桌面端没有浏览器刷新按钮，这是唯一入口）。
+                     原「在新文件夹中新建会话」仍在「新建会话 ▾」菜单里。
+                     字形 = 右侧详情栏刷新钮同一枚 dsh 圆形箭头
+                     （dock/embedder/right-column.js::DOCK_ICON_REFRESH：16×16 视框 / stroke 1.4 / 15px）。 -->
+                <button type="button" id="session-refresh-btn" class="session-head-icon" aria-label="刷新会话列表和页面" data-ui-tip="刷新会话列表和页面"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.62-3.76" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" fill="none"/><path d="M13.4 2.6v3.1h-3.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></button>
             </div>
             <div class="session-search-box" id="session-search-box" hidden>
                 <span class="session-search-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></span>
@@ -102,7 +113,7 @@
                     <span class="sidebar-runtime-dot" aria-hidden="true"></span>
                     <span id="sidebar-runtime-status">Runtime 在线</span>
                 </span>
-                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v5.20261007</span>
+                <span id="sidebar-runtime-version" class="sidebar-runtime-version">v5.20261011</span>
             </div>
         </aside>
 
