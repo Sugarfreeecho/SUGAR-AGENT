@@ -13,7 +13,7 @@ import model_profiles
 def test_profile_store_defaults_to_sugaragent_state_dir(tmp_path):
     assert (
         model_profiles.profile_store_path(tmp_path)
-        == tmp_path / ".sugaragent" / "model_profiles.json"
+        == tmp_path / ".config" / "model_profiles.json"
     )
 
 
@@ -35,15 +35,16 @@ def test_normalized_custom_model_name_selects_latest_table_match():
     assert metadata["intel_score"] == 39.5
     assert metadata["coding_score"] is None
     assert metadata["agentic_score"] is None
-    assert metadata["input_price_per_m"] == 0.15
-    assert metadata["output_price_per_m"] == 0.6
+    # Prices follow the 2026-10-10 models table snapshot.
+    assert metadata["input_price_per_m"] == 0.3
+    assert metadata["output_price_per_m"] == 1.2
     assert limits["context_window"] == 1048576
     assert limits["context_source"] == "table"
     assert capabilities["matched_model_id"] == "deepseek/deepseek-v4.1-flash"
     assert capabilities["capability_source"] == "automatic:models-table"
     assert capabilities["model_prices"] == {
-        "input_per_m": 0.15,
-        "output_per_m": 0.6,
+        "input_per_m": 0.3,
+        "output_per_m": 1.2,
     }
     assert capabilities["capability_description"] == (
         "适合：低成本/多并发、高难度、调查调研；"
@@ -83,7 +84,8 @@ def test_model_task_capabilities_come_only_from_table_metadata():
         "MiniMax-M3": {"low_cost_concurrency", "multimodal_candidate", "coding", "agent"},
         "gpt-5.4": {"multimodal_candidate", "coding"},
         "claude-opus-4.8": {"hard_reasoning", "research", "multimodal_candidate", "coding", "agent"},
-        "glm-5.2": {"low_cost_concurrency", "coding", "agent"},
+        # 2026-10-10 snapshot prices GLM 5.2 at $7.0/M output, above the low-cost cap.
+        "glm-5.2": {"coding", "agent"},
         "gemini-3.1-pro": {"multimodal_candidate", "long_context"},
         "grok-4.5": {"hard_reasoning", "research", "multimodal_candidate", "coding", "agent"},
         "mimo-v2.5-pro": {"low_cost_concurrency", "coding", "agent"},
@@ -100,7 +102,8 @@ def test_model_task_capabilities_come_only_from_table_metadata():
     assert "适合：低成本/多并发、代码、Agent" in deepseek["capability_description"]
     assert "Best for: low-cost/high-concurrency, coding, agent workflows" in deepseek["capability_description_en"]
     # Missing or lower table scores must not inherit capabilities from older releases.
-    for model in ("deepseek-v4-flash", "MiniMax-M3", "gpt-5.4", "glm-5.2", "mimo-v2.5-pro", "kimi-k2.6"):
+    # GPT-5.4 now carries intel 39.0 in the table, so its hard_reasoning tag is table-derived.
+    for model in ("deepseek-v4-flash", "MiniMax-M3", "glm-5.2", "mimo-v2.5-pro", "kimi-k2.6"):
         tags = set(model_profiles.infer_model_task_capabilities(model)["capability_tags"])
         assert not tags & {"hard_reasoning", "research"}, model
     assert "agent" not in model_profiles.infer_model_task_capabilities("gpt-5.4")["capability_tags"]

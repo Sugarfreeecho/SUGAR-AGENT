@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 import httpx
+from config_paths import config_path
 
 from llm import (
     LLMProvider,
@@ -248,6 +249,26 @@ def _select_latest_model_record(records: list[dict[str, Any]]) -> Optional[dict[
     return max(records, key=_model_candidate_sort_key) if records else None
 
 
+def _query_names_table_variant(model_id: Any, record: dict[str, Any]) -> bool:
+    """Colon-qualified SKUs (e.g. ``...:batch``) only win when the query names the qualifier."""
+    suffix = str(record.get("suffix") or "")
+    if ":" not in suffix:
+        return True
+    qualifier = _normalized_model_match_key(suffix.rsplit(":", 1)[-1])
+    if not qualifier:
+        return True
+    return qualifier in _normalized_model_match_key(model_id)
+
+
+def _prefer_query_named_variants(
+    model_id: Any, records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    preferred = [
+        record for record in records if _query_names_table_variant(model_id, record)
+    ]
+    return preferred or records
+
+
 @lru_cache(maxsize=8)
 def _read_model_table(
     path_text: str,
@@ -345,7 +366,9 @@ def _model_table_record_for_model(model_id: str) -> Optional[dict[str, Any]]:
         if record.get("match_key") in match_keys or record.get("suffix_match_key") in match_keys
     ]
     if exact_normalized:
-        return _select_latest_model_record(exact_normalized)
+        return _select_latest_model_record(
+            _prefer_query_named_variants(normalized_id, exact_normalized)
+        )
 
     fuzzy_matches: list[dict[str, Any]] = []
     for match_key in match_keys:
@@ -357,7 +380,9 @@ def _model_table_record_for_model(model_id: str) -> Optional[dict[str, Any]]:
                 continue
             if candidate.startswith(match_key) or match_key.startswith(candidate):
                 fuzzy_matches.append(record)
-    return _select_latest_model_record(fuzzy_matches)
+    return _select_latest_model_record(
+        _prefer_query_named_variants(normalized_id, fuzzy_matches)
+    )
 
 
 def model_table_metadata_for_model(model_id: str) -> Optional[dict[str, Any]]:
@@ -973,7 +998,7 @@ def probe_model_context(
 
 
 def profile_store_path(project_root: Path) -> Path:
-    return Path(project_root).resolve() / ".sugaragent" / "model_profiles.json"
+    return config_path(project_root, "model_profiles.json")
 
 
 def legacy_profile_store_path(project_root: Path) -> Path:
@@ -990,7 +1015,7 @@ _profile_store_migration_lock = threading.Lock()
 
 
 def _migrate_legacy_profile_store(project_root: Path) -> None:
-    """把历史位置的 model_profiles.json 一次性移入 `.sugaragent/`（幂等）。"""
+    """把历史位置的 model_profiles.json 一次性移入 `.config/`（幂等）。"""
     target = profile_store_path(project_root)
     if target.is_file():
         return
