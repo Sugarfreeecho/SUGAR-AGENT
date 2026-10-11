@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
@@ -459,13 +461,90 @@ def test_compression_reasoning_reaches_ui_before_summary_and_stays_out_of_result
     assert all(not should_persist_ui_event(frame) for frame in frames if frame["type"].startswith("context_summary_reasoning"))
 
 
+@pytest.mark.parametrize("degraded", [False, True])
+@pytest.mark.parametrize("failed_primary", [False, True])
+def test_compression_reasoning_is_live_through_real_candidate_and_worker(monkeypatch, degraded, failed_primary):
+    import asyncio
+    import queue
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    import agent_harness
+    import agent_loop
+    import agent_memory
+    from agent_openai import run_chat_completion_stream_worker
+
+    seen = threading.Event()
+    frames = []
+    turns = []
+    monkeypatch.setattr(agent_memory, "load_prompt_template", lambda _name: "compress")
+    monkeypatch.setattr(agent_harness.cpu_pressure, "snapshot", lambda: SimpleNamespace(degraded=degraded))
+    monkeypatch.setattr(agent_harness, "_candidate_retry_policy", lambda: (0, 0.0))
+    monkeypatch.setattr(agent_harness, "_claim_additional_recovery_request", lambda: True)
+    monkeypatch.setattr(agent_harness, "machine_network_available", lambda: True)
+
+    class Transport:
+        def __init__(self, fails=False):
+            self.fails = fails
+
+        def stream_completion(self, **_kwargs):
+            yield agent_harness.TransportEvent("reasoning_delta", text="discarded" if self.fails else "live thinking")
+            if self.fails:
+                raise TimeoutError("candidate disconnected")
+            assert seen.wait(timeout=2), "reasoning was buffered until summary content"
+            time.sleep(0.12)
+            yield agent_harness.TransportEvent("content_delta", text="<recap>finished recap</recap><summary>- key</summary>")
+            yield agent_harness.TransportEvent("finish", finish_reason="stop")
+
+    candidates = [
+        {"transport": Transport(fails), "model": str(index), "provider": "openai-compatible",
+         "max_output_tokens": 200}
+        for index, fails in enumerate(([True, False] if failed_primary else [False]))
+    ]
+    client = agent_harness.ExecutorLLMClient(candidates)
+    monkeypatch.setattr(agent_harness, "resolve_executor_config_for_session", lambda _sid: (client, "fixture", 200, 1000))
+
+    def worker(sync_q, *args, **kwargs):
+        class QueueProxy:
+            def put(self, item):
+                if item is not None and item[0] == "turn":
+                    turns.append(item[1])
+                sync_q.put(item)
+        run_chat_completion_stream_worker(QueueProxy(), *args, **kwargs)
+
+    def hint_sink(event):
+        frames.append(event)
+        if event.get("type") == "context_summary_reasoning_delta" and event.get("delta") == "live thinking":
+            seen.set()
+
+    monkeypatch.setattr(agent_harness, "run_chat_completion_stream_worker", worker)
+    hint_queue = queue.Queue()
+    result = asyncio.run(agent_loop._await_thread_with_sse_keepalive(
+        lambda: agent_memory._run_compress_executor_dialogue(
+            "", [agent_memory.UserMessage(content="old"), agent_memory.AssistantMessage(content="answer")],
+            stream_sink=lambda piece: hint_queue.put({"type": "context_summary_delta", "delta": piece}),
+            hint_sink=hint_queue.put,
+        ),
+        {"session_id": "", "stream_events": []}, hint_sink,
+        interval_sec=0.04, thread_hint_queue=hint_queue,
+    ))
+    assert result == ("finished recap", "- key")
+    expected = ["context_summary_reasoning_delta", "context_summary_delta", "context_summary_reasoning_end"]
+    if failed_primary:
+        expected = ["context_summary_reasoning_delta", "context_summary_reasoning_end"] + expected
+    assert [frame["type"] for frame in frames if frame["type"] != "sse_keepalive"] == expected
+    assert any(frame["type"] == "sse_keepalive" for frame in frames)
+    assert turns[-1].reasoning_content == "live thinking"
+
+
 def test_compression_reasoning_closes_each_failed_attempt(monkeypatch):
     import agent_memory
 
     frames = []
     monkeypatch.setattr(agent_memory, "load_prompt_template", lambda _name: "compress")
 
-    def stream(_msgs, on_content_delta=None, session_id="", *, on_reasoning_delta=None):
+    def stream(_msgs, on_content_delta=None, session_id="", *, on_reasoning_delta=None, on_reasoning_end=None):
         on_reasoning_delta("thinking")
         return "invalid"
 

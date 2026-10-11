@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("playwright.sync_api")
-from tests.test_llm_stream_window_geometry import browser_page
+from tests.test_llm_stream_full_text_browser import browser_page
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,12 +74,13 @@ def compression_page(browser_page):
         "handleLlmRowChunkClick", "bindFeedChunkInteraction", "appendLog",
         "flushProgressDeltaText", "scheduleProgressDeltaFlush", "ensureProgressScroller",
         "appendProgressStreamDelta", "appendProgressLog", "applyProgressPersistedBody",
-        "appendCompressionReasoningDelta", "finishCompressionReasoning",
+        "createCompressionReasoningScroller", "appendCompressionReasoningDelta", "finishCompressionReasoning",
         "finalizeProgressStreamForType", "finalizeProgressStreamChunks", "discardProgressStreamChunks",
     ]
     setup += "\n".join(function_source(rendering, name) for name in rendering_functions)
     setup += "\n".join(function_source(sse, name) for name in (
-        "shouldApplySseSeqFilter", "sseSequenceScope", "consumeAgentSseResponseInner"))
+        "shouldApplySseSeqFilter", "sseSequenceScope", "shouldSkipRecoveredEphemeralEvent",
+        "consumeAgentSseResponseInner"))
     setup += function_source(dispatch, "renderEvent")
     setup += function_source(messages, "renderMessageRecord")
     setup += function_source(reducer, "markUiEventStoreApplied") + function_source(reducer, "applySessionEvent")
@@ -107,15 +108,18 @@ def reasoning(text, **extra):
     return {"type": "context_summary_reasoning_delta", "ephemeral": True, "delta": text, **extra}
 
 
-def test_live_reasoning_is_separate_from_summary_and_can_be_reopened(compression_page):
+def test_live_reasoning_shares_summary_row_and_can_be_reopened(compression_page):
     page = compression_page
     text = "先整理\n<script>window.unwanted=true</script>\n再写摘要。"
     send(page, reasoning(text))
-    row = page.locator('[data-log-type="context-summary-reasoning"]')
-    assert row.locator('.feed-label').text_content() == "压缩思考"
-    assert row.locator('.feed-chunk-scroller').text_content() == text
-    assert "is-collapsed" not in row.get_attribute("class")
-    assert row.locator('.feed-chunk').get_attribute("class").endswith("is-streaming")
+    row = page.locator('[data-log-type="context-summary"]')
+    thought = row.locator('.context-summary-reasoning')
+    assert row.count() == 1
+    assert page.locator('[data-log-type="context-summary-reasoning"]').count() == 0
+    assert row.locator('.feed-label').text_content() == "压缩"
+    assert thought.locator('.feed-chunk-scroller').text_content() == text
+    assert thought.get_attribute("open") is not None
+    assert thought.locator('.feed-chunk').get_attribute("class").endswith("is-streaming")
     assert row.locator('script').count() == 0
     assert page.evaluate("recorded.length") == 0
 
@@ -123,34 +127,61 @@ def test_live_reasoning_is_separate_from_summary_and_can_be_reopened(compression
          {"type": "context_summary_progress", "ephemeral": True, "content": "still waiting"},
          {"type": "context_summary_reasoning_end", "ephemeral": True},
          {"type": "context_summary_body", "content": "最终摘要"})
-    assert "is-collapsed" in row.get_attribute("class")
-    assert row.get_attribute("data-llm-live-row") is None
-    assert row.locator('.feed-chunk-scroller').text_content() == text
-    assert page.locator('[data-log-type="context-summary"] .feed-chunk-scroller').text_content().strip() == "最终摘要"
+    assert row.count() == 1
+    assert thought.get_attribute("open") is None
+    assert thought.get_attribute("data-compression-live") is None
+    assert thought.locator('.feed-chunk-scroller').text_content() == text
+    assert row.locator('.context-summary-content > .feed-chunk > .feed-chunk-scroller').text_content().strip() == "still waiting\n\n最终摘要"
     assert page.locator('[data-log-type="llm-reasoning"] .feed-chunk-scroller').text_content() == "主模型推理"
     assert page.evaluate("ctx.llm.marker") == "main"
-    row.hover()
-    row.locator('.feed-row-collapse').click()
-    assert "is-collapsed" not in row.get_attribute("class")
+    thought.locator('summary').click()
+    assert thought.get_attribute("open") is not None
 
 
 def test_reconnect_snapshot_replaces_preview_and_keeps_whitespace(compression_page):
     page = compression_page
     send(page, reasoning("prefix"))
     send(page, reasoning("prefix\n新增", replayed_snapshot=True), reasoning(" tail\n"))
-    row = page.locator('[data-log-type="context-summary-reasoning"]')
+    row = page.locator('[data-log-type="context-summary"]')
     assert row.count() == 1
-    assert row.locator('.feed-chunk-scroller').text_content() == "prefix\n新增 tail\n"
+    assert row.locator('.context-summary-reasoning .feed-chunk-scroller').text_content() == "prefix\n新增 tail\n"
 
 
-def test_retry_uses_new_row_and_interrupt_discards_only_active_preview(compression_page):
+def test_retry_stays_in_same_row_and_interrupt_discards_only_active_preview(compression_page):
     page = compression_page
     send(page, reasoning("first request"), {"type": "context_summary_reasoning_end", "ephemeral": True},
          reasoning("retry"))
-    rows = page.locator('[data-log-type="context-summary-reasoning"]')
-    assert rows.count() == 2
-    assert "is-collapsed" not in rows.nth(1).get_attribute("class")
+    row = page.locator('[data-log-type="context-summary"]')
+    thoughts = row.locator('.context-summary-reasoning')
+    assert row.count() == 1
+    assert thoughts.count() == 2
+    assert thoughts.nth(1).get_attribute("open") is not None
     send(page, {"type": "llm_stream_aborted", "ephemeral": True, "cleanup_scope": "drafts_only"})
-    assert rows.count() == 1
-    assert rows.first.locator('.feed-chunk-scroller').text_content() == "first request"
+    assert row.count() == 1
+    assert thoughts.count() == 1
+    assert thoughts.first.locator('.feed-chunk-scroller').text_content() == "first request"
     assert page.evaluate("Object.keys(ctx.progressStream).length") == 0
+
+
+def test_compression_progress_replaces_status_without_losing_summary(compression_page):
+    page = compression_page
+    send(page, *[{"type": "context_trim_progress", "content": text}
+                 for text in ("准备裁剪", "正在微压", "裁剪完成")])
+    trim = page.locator('[data-log-type="context-trim"] .feed-chunk-scroller')
+    assert trim.count() == 1
+    assert trim.text_content() == "裁剪完成"
+    send(page, {"type": "context_summary_progress", "content": "正在生成摘要"},
+         *[{"type": "context_summary_progress", "ephemeral": True, "content": "等待摘要"}] * 20)
+    summary = page.locator('[data-log-type="context-summary"] .feed-chunk-scroller')
+    assert summary.count() == 1
+    assert summary.text_content() == "等待摘要"
+    send(page, {"type": "context_summary_delta", "ephemeral": True, "delta": "draft"},
+         {"type": "context_summary_progress", "content": "整理摘要"},
+         {"type": "context_summary_delta", "ephemeral": True, "delta": " tail"})
+    assert summary.text_content() == "整理摘要\n\ndraft tail"
+    assert page.evaluate("!!ctx.progressStream['context-summary']") is True
+    send(page, {"type": "context_summary_body", "content": "完整摘要"},
+         {"type": "context_summary_progress", "content": "摘要完成"},
+         {"type": "context_summary_progress", "content": "摘要完成"})
+    assert summary.text_content() == "摘要完成\n\n完整摘要"
+    assert page.evaluate("!!ctx.progressStream['context-summary']") is False

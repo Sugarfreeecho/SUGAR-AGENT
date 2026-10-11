@@ -1242,6 +1242,12 @@ def _run_compress_executor_dialogue(
                         "ephemeral": True,
                     })
 
+            def _end_reasoning() -> None:
+                nonlocal reasoning_streamed
+                if reasoning_streamed and hint_sink is not None:
+                    reasoning_streamed = False
+                    hint_sink({"type": "context_summary_reasoning_end", "ephemeral": True})
+
             call_msgs = msgs
             if attempt:
                 strict = (
@@ -1258,12 +1264,13 @@ def _run_compress_executor_dialogue(
                 }
                 if hint_sink is not None:
                     stream_kwargs["on_reasoning_delta"] = _reasoning_delta
+                    stream_kwargs["on_reasoning_end"] = _end_reasoning
                 try:
                     raw = executor_chat_complete_stream(call_msgs, **stream_kwargs)
                 finally:
                     if reasoning_streamed and hint_sink is not None:
                         try:
-                            hint_sink({"type": "context_summary_reasoning_end", "ephemeral": True})
+                            _end_reasoning()
                         except Exception:
                             pass
             else:

@@ -2898,6 +2898,17 @@ def run_chat_completion_stream_worker(
                 return
             chunk_count += 1
             if isinstance(chunk, TransportEvent):
+                if chunk.kind == "reasoning_reset":
+                    # A background candidate failed before producing an answer.
+                    # Its live preview stays in the UI, but not in the next turn.
+                    reasoning_parts.clear()
+                    reasoning_field = None
+                    actual_model = ""
+                    reasoning_boundary_filter = _NativeBoundaryStreamFilter()
+                    reasoning_dsml_filter = _DsmlStreamFilter(enabled=bool(tools))
+                    if emit_deltas:
+                        sync_q.put(("reasoning_end", None))
+                    continue
                 if chunk.kind == "provider_state":
                     if isinstance(chunk.provider_data, dict):
                         provider_data = dict(chunk.provider_data)

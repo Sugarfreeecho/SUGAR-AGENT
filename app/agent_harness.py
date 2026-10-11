@@ -2304,7 +2304,7 @@ class ExecutorLLMClient:
         return _DirectStreamTransport(target)
 
     def stream_completion(self, **kwargs: Any) -> Any:
-        """Return a normalized stream, switching profiles only before first output."""
+        """Stream normalized events; background reasoning remains provisional."""
         return self._stream_completion_iter(dict(kwargs))
 
     def _stream_completion_iter(self, kwargs: Dict[str, Any]) -> Any:
@@ -2409,9 +2409,14 @@ class ExecutorLLMClient:
                     attempted_candidates += 1
                     pending_events: List[TransportEvent] = []
                     emitted_content = False
+                    emitted_reasoning = False
                     _attempt_started = time.perf_counter()
                     for event in transport.stream_completion(**call_kwargs):
                         if background_text_request and not emitted_content:
+                            if isinstance(event, TransportEvent) and event.kind == "reasoning_delta":
+                                emitted_reasoning = emitted_reasoning or bool(event.text)
+                                yield event
+                                continue
                             # Reasoning is live stream progress, not evidence that
                             # final text will be absent.  The transport's read
                             # timeout handles a truly silent connection; only a
@@ -2444,6 +2449,10 @@ class ExecutorLLMClient:
                     # different answers into one assistant turn.
                     if emitted_output:
                         raise
+                    if background_text_request and emitted_reasoning:
+                        # The preview is visible, but no answer was committed.
+                        # Close it before another attempt and discard its reasoning.
+                        yield TransportEvent("reasoning_reset")
                     if _is_network_connectivity_error(exc) and not machine_network_available():
                         raise LocalNetworkUnavailableError(
                             "The local machine is offline; waiting for network recovery."
@@ -2738,12 +2747,14 @@ def executor_chat_complete_stream(
     session_id: str = "",
     *,
     on_reasoning_delta: Optional[Callable[[str], None]] = None,
+    on_reasoning_end: Optional[Callable[[], None]] = None,
 ) -> str:
     """
     执行端多轮 chat 流式补全；正文与推理分别回调，供压缩/要点 SSE 推送。
     返回完整正文（与 executor_chat_complete 一致）。
     """
-    buffer_only = bool(cpu_pressure.snapshot().degraded)
+    # An explicit reasoning preview must stay live while compression is running.
+    buffer_only = bool(cpu_pressure.snapshot().degraded) and on_reasoning_delta is None
 
     import queue as _queue
 
@@ -2772,6 +2783,7 @@ def executor_chat_complete_stream(
     parts: List[str] = []
     buffered_final = ""
     buffered_reasoning = ""
+    reasoning_delivered = False
     err: Optional[BaseException] = None
     while True:
         item = sync_q.get()
@@ -2787,25 +2799,40 @@ def executor_chat_complete_stream(
                 except Exception:
                     pass
         elif tag == "reasoning" and payload and on_reasoning_delta:
+            reasoning_delivered = True
             try:
                 on_reasoning_delta(payload if isinstance(payload, str) else str(payload))
             except Exception:
                 pass
+        elif tag == "reasoning_end":
+            reasoning_delivered = False
+            if on_reasoning_end:
+                try:
+                    on_reasoning_end()
+                except Exception:
+                    pass
         elif tag == "turn" and payload is not None:
             buffered_final = str(getattr(payload, "content", "") or "")
             buffered_reasoning = str(getattr(payload, "reasoning_content", "") or "")
+        elif tag == "complete_response" and payload is not None:
+            try:
+                turn = parse_assistant_message(payload.choices[0].message)
+                buffered_final = str(turn.content or "")
+                buffered_reasoning = str(turn.reasoning_content or "")
+            except Exception as exc:
+                err = exc
         elif tag == "err" and isinstance(payload, BaseException):
             err = payload
     t.join()
     if err is not None:
         raise err
     text = "".join(parts) or buffered_final
-    if buffer_only and buffered_reasoning and on_reasoning_delta:
+    if not reasoning_delivered and buffered_reasoning and on_reasoning_delta:
         try:
             on_reasoning_delta(buffered_reasoning)
         except Exception:
             pass
-    if buffer_only and text and on_content_delta:
+    if not parts and text and on_content_delta:
         try:
             on_content_delta(text)
         except Exception:
