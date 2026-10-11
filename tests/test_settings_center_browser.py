@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from tests.test_llm_stream_window_geometry import browser_page
+from tests.test_llm_stream_full_text_browser import browser_page
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -272,11 +272,12 @@ def test_skill_picker_updates_kind_after_source_switch(settings_page):
     _mock_json(page, "/api/pick-path", {"path": "D:\\chosen\\example.zip"}, method="POST")
     page.evaluate("MyAgentSettings.showSection('skills',{force:true})")
     page.locator('[data-act="skill-add"]').click()
-    field = page.locator('[data-field="source"]')
-    assert field.get_attribute("data-path-kind") == "directory"
+    # The source field is a batch textarea; the browse button carries the picker kind.
+    browse = page.locator("#st-dlg-body [data-browse-kind]")
+    assert browse.get_attribute("data-browse-kind") == "directory"
     page.locator('#st-dlg-body [data-val="zip"]').click()
-    assert field.get_attribute("data-path-kind") == "file"
-    page.locator("#st-dlg-body .path-browse-btn").click()
+    assert browse.get_attribute("data-browse-kind") == "file"
+    browse.click()
     page.wait_for_function("document.querySelector('[data-field=source]').value.endsWith('example.zip')")
     page.locator("#st-dlg-ok").click()
     page.locator("#st-dialog").wait_for(state="hidden")

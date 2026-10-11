@@ -88,7 +88,11 @@
     try { data = await res.json(); } catch (e) { data = null; }
     if (!res.ok) {
       const msg = (data && (data.error || data.detail)) || ('HTTP ' + res.status);
-      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      const error = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      // 结构化冲突（技能已存在 → 409 conflict）等要靠 payload 决定下一步
+      error.payload = data;
+      error.status = res.status;
+      throw error;
     }
     if (data && data.ok === false) throw new Error(data.error || t('请求失败', 'Request failed'));
     return data || {};

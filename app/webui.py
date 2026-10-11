@@ -2840,8 +2840,11 @@ _SKILL_ARCHIVE_MAX_ENTRIES = 5000
 _SKILL_ARCHIVE_MAX_BYTES = 200 * 1024 * 1024
 
 
-def _extract_skill_archive(archive: Path, root: Path) -> None:
-    """Extract only bounded regular files/directories inside the staging root."""
+def _extract_skill_archive(archive: Path, root: Path, label: str = "技能") -> None:
+    """Extract only bounded regular files/directories inside the staging root.
+
+    ``label`` 只影响报错文案（技能 / 插件 / 会话共用同一条解包路径）。
+    """
     import stat
     import tarfile
     from pathlib import PurePosixPath
@@ -2852,10 +2855,10 @@ def _extract_skill_archive(archive: Path, root: Path) -> None:
     def destination(name: str) -> Path:
         relative = PurePosixPath(name.replace("\\", "/"))
         if relative.is_absolute() or ".." in relative.parts or ":" in name:
-            raise ValueError("压缩包里包含非法路径")
+            raise ValueError(f"{label}压缩包里包含非法路径")
         target = (root / relative).resolve()
         if not target.is_relative_to(root):
-            raise ValueError("压缩包里包含非法路径")
+            raise ValueError(f"{label}压缩包里包含非法路径")
         return target
 
     def copy_entry(name: str, size: int, is_dir: bool, reader) -> Path:
@@ -2865,13 +2868,13 @@ def _extract_skill_archive(archive: Path, root: Path) -> None:
             target.mkdir(parents=True, exist_ok=True)
             return target
         if size < 0 or used_bytes + size > _SKILL_ARCHIVE_MAX_BYTES:
-            raise ValueError("技能压缩包解压体积超过 200 MB 限制")
+            raise ValueError(f"{label}压缩包解压体积超过 200 MB 限制")
         target.parent.mkdir(parents=True, exist_ok=True)
         with reader() as source, target.open("wb") as output:
             while chunk := source.read(64 * 1024):
                 used_bytes += len(chunk)
                 if used_bytes > _SKILL_ARCHIVE_MAX_BYTES:
-                    raise ValueError("技能压缩包解压体积超过 200 MB 限制")
+                    raise ValueError(f"{label}压缩包解压体积超过 200 MB 限制")
                 output.write(chunk)
         return target
 
@@ -2879,26 +2882,48 @@ def _extract_skill_archive(archive: Path, root: Path) -> None:
         with zipfile.ZipFile(archive) as bundle:
             entries = bundle.infolist()
             if len(entries) > _SKILL_ARCHIVE_MAX_ENTRIES:
-                raise ValueError("技能压缩包文件数超过 5000 限制")
+                raise ValueError(f"{label}压缩包文件数超过 5000 限制")
             for entry in entries:
                 file_type = stat.S_IFMT(entry.external_attr >> 16)
                 if file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
-                    raise ValueError("技能压缩包不能包含链接或特殊文件")
+                    raise ValueError(f"{label}压缩包不能包含链接或特殊文件")
                 copy_entry(entry.filename, entry.file_size, entry.is_dir(), lambda: bundle.open(entry))
     else:
         with tarfile.open(archive) as bundle:
             for count, entry in enumerate(bundle, 1):
                 if count > _SKILL_ARCHIVE_MAX_ENTRIES:
-                    raise ValueError("技能压缩包文件数超过 5000 限制")
+                    raise ValueError(f"{label}压缩包文件数超过 5000 限制")
                 if not (entry.isfile() or entry.isdir()):
-                    raise ValueError("技能压缩包不能包含链接或特殊文件")
+                    raise ValueError(f"{label}压缩包不能包含链接或特殊文件")
                 target = copy_entry(entry.name, entry.size, entry.isdir(), lambda: bundle.extractfile(entry))
                 if entry.isfile() and os.name != "nt":
                     target.chmod(entry.mode & 0o777)
 
 
-def _install_skill_from(source: str, kind: str) -> Path:
-    """把 dir / zip / git 来源的技能复制进 SKILLS_DIR，返回目标目录。"""
+class SkillConflictError(ValueError):
+    """安装目标已存在：带上冲突名与建议名，供前端弹「取消 / 覆盖 / 改名」。"""
+
+    def __init__(self, name: str, suggested: str):
+        super().__init__("技能已存在：" + name)
+        self.name = name
+        self.suggested = suggested
+
+
+def _skill_free_name(skills_root: Path, name: str) -> str:
+    """给已存在的技能名挑一个空闲的改名建议：name-2 / name-3 …（最多试到 -50）。"""
+    for index in range(2, 51):
+        candidate = f"{name}-{index}"
+        if not (skills_root / candidate).exists():
+            return candidate
+    return name + "-copy"
+
+
+def _install_skill_from(source: str, kind: str, *, on_conflict: str = "cancel", rename_to: str = "") -> Path:
+    """把 dir / zip / git 来源的技能复制进 SKILLS_DIR，返回目标目录。
+
+    ``on_conflict``：cancel（默认，抛 SkillConflictError 让前端问用户）·
+    overwrite（覆盖同名技能）· rename（装到 ``rename_to`` 指定的名字下）。
+    """
     import shutil
     import tempfile
     import zipfile
@@ -2945,9 +2970,25 @@ def _install_skill_from(source: str, kind: str) -> Path:
             else:
                 raise ValueError("来源不存在：" + source)
 
-        dest = skills_root / _skill_install_name(src_dir)
+        declared = _skill_install_name(src_dir)
+        target_name = declared
+        if on_conflict == "rename" and str(rename_to or "").strip():
+            target_name = str(rename_to).strip()
+            if not _SKILL_NAME_RE.fullmatch(target_name):
+                raise ValueError(
+                    "技能名只能用小写字母、数字、点、下划线与短横线，且以字母或数字开头"
+                )
+        dest = skills_root / target_name
         if dest.exists():
-            raise ValueError("技能已存在：" + dest.name)
+            if on_conflict == "overwrite":
+                # 先装到旁边再换名，避免复制失败时把老技能删没了
+                staging = dest.with_name(dest.name + ".installing")
+                shutil.rmtree(staging, ignore_errors=True)
+                shutil.copytree(src_dir, staging)
+                shutil.rmtree(dest, ignore_errors=True)
+                os.replace(staging, dest)
+                return dest
+            raise SkillConflictError(dest.name, _skill_free_name(skills_root, declared))
         shutil.copytree(src_dir, dest)
         return dest
     finally:
@@ -3000,8 +3041,25 @@ async def install_skill(request: Request):
         return JSONResponse({"ok": False, "error": "source is required"}, status_code=400)
     if kind not in ("dir", "zip", "git", ""):
         return JSONResponse({"ok": False, "error": "kind must be dir / zip / git"}, status_code=400)
+    on_conflict = str(payload.get("on_conflict") or "").strip().lower()
+    if on_conflict not in ("", "cancel", "overwrite", "rename"):
+        return JSONResponse({"ok": False, "error": "on_conflict must be cancel / overwrite / rename"}, status_code=400)
+    rename_to = str(payload.get("rename_to") or "").strip()
     try:
-        dest = await run_in_threadpool(_install_skill_from, source, kind)
+        dest = await run_in_threadpool(
+            functools.partial(
+                _install_skill_from,
+                source,
+                kind,
+                on_conflict=on_conflict or "cancel",
+                rename_to=rename_to,
+            )
+        )
+    except SkillConflictError as exc:
+        return JSONResponse(
+            {"ok": False, "error": str(exc), "conflict": {"name": exc.name, "suggested": exc.suggested}},
+            status_code=409,
+        )
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     except Exception as exc:  # pragma: no cover - defensive
@@ -3009,6 +3067,42 @@ async def install_skill(request: Request):
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
     _invalidate_skills_cache()
     return JSONResponse({"ok": True, "name": dest.name, "path": str(dest)})
+
+
+@fastapi_app.delete("/api/skills/{skill_name}")
+async def remove_registered_skill(skill_name: str):
+    """移除本机技能目录里的技能（插件自带的技能由插件页移除）。"""
+    import shutil as _shutil
+
+    name = str(skill_name or "").strip()
+    if not _SKILL_NAME_RE.fullmatch(name):
+        return JSONResponse({"ok": False, "error": "技能名不合法"}, status_code=400)
+
+    def _remove() -> Path:
+        skills = discover_skills(include_disabled=True)
+        target = next((s for s in skills if str(s.get("name") or "") == name), None)
+        if target is None:
+            raise ValueError("没有找到这个技能：" + name)
+        if str(target.get("source") or "") != "project":
+            raise ValueError("该技能由插件提供，请到「插件」页移除对应的插件：" + name)
+        base_dir = Path(str(target.get("base_dir") or "")).resolve()
+        skills_root = _skills_root_dir()
+        if base_dir == skills_root or skills_root not in base_dir.parents:
+            raise ValueError("只能移除技能目录里的技能：" + name)
+        if not (base_dir / "SKILL.md").is_file():
+            raise ValueError("目录里没有 SKILL.md，已跳过：" + name)
+        _shutil.rmtree(base_dir)
+        return base_dir
+
+    try:
+        removed = await run_in_threadpool(_remove)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("skill remove failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "移除技能失败：%s" % exc}, status_code=500)
+    _invalidate_skills_cache()
+    return JSONResponse({"ok": True, "name": name, "path": str(removed)})
 
 
 @fastapi_app.post("/api/skills/install-upload")
@@ -3045,6 +3139,10 @@ async def install_uploaded_package(request: Request):
             raise ValueError("请选择一个目录或压缩包；最多 5000 个文件")
         if kind == "zip" and len(files) != 1:
             raise ValueError("一次只能上传一个压缩包")
+        on_conflict = str(form.get("on_conflict") or "").strip().lower()
+        if on_conflict not in ("", "cancel", "overwrite", "rename"):
+            raise ValueError("on_conflict must be cancel / overwrite / rename")
+        rename_to = str(form.get("rename_to") or "").strip()
         with tempfile.TemporaryDirectory(prefix="myagent-package-upload-") as temporary:
             root = Path(temporary)
             contents = root / "contents"
@@ -3092,12 +3190,25 @@ async def install_uploaded_package(request: Request):
                 source = await run_in_threadpool(_find_skill_dir, source)
                 if source is None:
                     raise ValueError("目录里没有找到 SKILL.md")
-                dest = await run_in_threadpool(_install_skill_from, str(source), "dir")
+                dest = await run_in_threadpool(
+                    functools.partial(
+                        _install_skill_from,
+                        str(source),
+                        "dir",
+                        on_conflict=on_conflict or "cancel",
+                        rename_to=rename_to,
+                    )
+                )
                 _invalidate_skills_cache()
                 result = {"name": dest.name, "path": str(dest)}
             return JSONResponse({"ok": True, **result})
     except HTTPException as exc:
         return JSONResponse({"ok": False, "error": str(exc.detail)}, status_code=413 if ingress_bytes > ingress_limit else exc.status_code)
+    except SkillConflictError as exc:
+        return JSONResponse(
+            {"ok": False, "error": str(exc), "conflict": {"name": exc.name, "suggested": exc.suggested}},
+            status_code=409,
+        )
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     finally:
@@ -7660,6 +7771,296 @@ async def export_session(session_id: str):
         headers={"Cache-Control": "no-store"},
         background=BackgroundTask(_remove_session_export_archive, str(archive_path)),
     )
+
+
+# ── 会话导入（把导出 zip / 会话目录还原成一个会话）────────────────────────────
+# 导出 zip 的结构：<会话目录名>/（整棵会话树）+ 可选的 attachments/（图片包）。
+# 导入时沿用原会话 id（events / snapshots 里写死了它，改 id 需要重写自有引用）；
+# 只有在 id 已被占用时才换新 id，并把自有文本文件里的旧 id 改写掉。
+_SESSION_IMPORT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
+
+
+def _find_session_root(root: Path) -> Optional[Path]:
+    """在目录 / 解包结果里定位含 events.jsonl 的那一层会话目录。"""
+    if not root.is_dir():
+        return None
+    if (root / "events.jsonl").is_file():
+        return root
+    candidates = [
+        child for child in sorted(root.iterdir())
+        if child.is_dir() and (child / "events.jsonl").is_file()
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _session_origin_id(session_dir: Path) -> str:
+    """会话原始 id：优先目录名（导出 zip 的根目录就是会话目录），回退 events.jsonl 的 session_id。"""
+    name = session_dir.name.strip()
+    if _SESSION_IMPORT_ID_RE.fullmatch(name):
+        return name
+    try:
+        with (session_dir / "events.jsonl").open(encoding="utf-8", errors="replace") as source:
+            for line in source:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                candidate = str(event.get("session_id") or "").strip() if isinstance(event, dict) else ""
+                if _SESSION_IMPORT_ID_RE.fullmatch(candidate):
+                    return candidate
+                break
+    except OSError:
+        pass
+    return ""
+
+
+def _remap_session_id(session_dir: Path, old: str, new: str) -> int:
+    """把会话自有文本文件（events / snapshots / 索引 / blobs）里的旧 id 改写为新 id，返回改写文件数。"""
+    if not old or old == new:
+        return 0
+    changed = 0
+    for path in sorted(session_dir.rglob("*")):
+        if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {".json", ".jsonl", ".txt", ".md"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if old not in text:
+            continue
+        path.write_text(text.replace(old, new), encoding="utf-8")
+        changed += 1
+    return changed
+
+
+def _sanitize_imported_session(session_dir: Path, *, name_suffix: str = "") -> dict:
+    """导入进来的会话是"死"的：清掉指向本机运行时的字段，保证列表里显示为可打开的普通会话。"""
+    meta: dict = {}
+    try:
+        payload = json.loads((session_dir / "metadata.json").read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            meta = payload
+    except (OSError, ValueError):
+        meta = {}
+    meta["active_run_id"] = None
+    meta["interrupt_requested"] = False
+    meta["unread_result"] = False
+    meta["goal_review_pending"] = False
+    meta["archived"] = False
+    name = str(meta.get("name") or "").strip()
+    if name_suffix:
+        name = (name + name_suffix)[:160]
+    meta["name"] = name or "导入的会话"
+    (session_dir / "metadata.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return meta
+
+
+def _import_session_tree(session_root: Path, *, move: bool, archive_path: Optional[Path] = None) -> dict:
+    """把一个会话目录放进 sessions 根下；id 空闲沿用原 id，冲突则换新 id 并改写自有引用。"""
+    import shutil
+
+    sessions_dir = Path(session_manager.repository.sessions_dir).resolve()
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    origin = _session_origin_id(session_root)
+    target = origin if (origin and not (sessions_dir / origin).exists()) else str(uuid.uuid4())
+    remapped = bool(origin) and target != origin
+    destination = sessions_dir / target
+    if destination.exists():
+        raise ValueError("目标会话目录已存在，请重试")
+    if move:
+        shutil.move(str(session_root), str(destination))
+    else:
+        shutil.copytree(session_root, destination, symlinks=False)
+    rewritten = _remap_session_id(destination, origin, target) if remapped else 0
+    meta = _sanitize_imported_session(destination, name_suffix="（导入）" if remapped else "")
+    restored = 0
+    if archive_path is not None:
+        try:
+            with zipfile.ZipFile(archive_path) as bundle:
+                has_bundle = any(name.startswith("attachments/") for name in bundle.namelist())
+            if has_bundle:
+                from attachments.lifecycle import import_bundle
+
+                restored = len(import_bundle(get_attachment_store(WORK_DIR), archive_path) or [])
+        except Exception as exc:  # 附件包坏了不该毁掉整次导入
+            logger.warning("session import: attachment bundle restore failed: %s", exc)
+    _invalidate_sessions_state_cache()
+    return {
+        "id": target,
+        "name": str(meta.get("name") or ""),
+        "remapped": remapped,
+        "idRewriteFiles": rewritten,
+        "attachments": restored,
+    }
+
+
+def _import_session_from(source: str, kind: str = "") -> dict:
+    """按本机路径导入：会话目录（复制）或会话压缩包（解包后搬入）。"""
+    raw = str(source or "").strip()
+    if not raw:
+        raise ValueError("请选择会话压缩包或会话文件夹")
+    path = Path(os.path.expanduser(raw))
+    if not path.exists():
+        raise ValueError("路径不存在：%s" % raw)
+    resolved = path.resolve()
+    sessions_dir = Path(session_manager.repository.sessions_dir).resolve()
+    if resolved == sessions_dir or sessions_dir in resolved.parents:
+        raise ValueError("不能从会话目录内部导入；请选择外部的会话 ZIP 或会话文件夹")
+    if resolved.is_dir():
+        root = _find_session_root(resolved)
+        if root is None:
+            raise ValueError("目录里没有找到会话（缺少 events.jsonl）")
+        return _import_session_tree(root, move=False)
+    if not resolved.is_file():
+        raise ValueError("请选择会话文件夹，或 .zip / .tar 会话压缩包")
+    with tempfile.TemporaryDirectory(prefix="myagent-session-import-") as staging:
+        extracted = Path(staging) / "extracted"
+        extracted.mkdir()
+        _extract_skill_archive(resolved, extracted, label="会话")
+        root = _find_session_root(extracted)
+        if root is None:
+            raise ValueError("压缩包里没有找到会话（缺少 events.jsonl）")
+        return _import_session_tree(root, move=True, archive_path=resolved)
+
+
+@fastapi_app.post("/api/sessions/import")
+async def import_session_api(request: Request):
+    """导入会话（本机路径：会话目录或导出 zip）。"""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    payload = data if isinstance(data, dict) else {}
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind not in ("dir", "zip", ""):
+        return JSONResponse({"ok": False, "error": "kind must be dir / zip"}, status_code=400)
+    raw_sources = payload.get("sources")
+    if isinstance(raw_sources, list):
+        batch = [str(item or "").strip() for item in raw_sources if str(item or "").strip()]
+        if not batch:
+            return JSONResponse({"ok": False, "error": "sources is required"}, status_code=400)
+        if len(batch) > 200:
+            return JSONResponse({"ok": False, "error": "一次最多导入 200 个会话"}, status_code=400)
+        imported: list = []
+        failed: list = []
+        for item in batch:
+            try:
+                imported.append(await run_in_threadpool(_import_session_from, item, kind))
+            except ValueError as exc:
+                failed.append({"source": item, "error": str(exc)})
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("session import failed for %s: %s", item, exc)
+                failed.append({"source": item, "error": "导入失败：%s" % exc})
+        return JSONResponse({"ok": True, "imported": imported, "failed": failed})
+    source = str(payload.get("source") or "").strip()
+    try:
+        session = await run_in_threadpool(_import_session_from, source, kind)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("session import failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "导入失败：%s" % exc}, status_code=500)
+    return JSONResponse({"ok": True, "session": session})
+
+
+@fastapi_app.post("/api/sessions/import-upload")
+async def import_session_upload(request: Request):
+    """浏览器拖入的会话目录 / 会话压缩包（客户端拿不到绝对路径，走上传）。"""
+    from pathlib import PurePosixPath
+    from starlette.datastructures import UploadFile as FormUploadFile
+    from starlette.exceptions import HTTPException
+    from starlette.formparsers import MultiPartException
+
+    # 与 /api/skills/install-upload 同一套入口限流：200 MB + 5000 文件（含头部开销）。
+    ingress_limit = _SKILL_ARCHIVE_MAX_BYTES + _SKILL_ARCHIVE_MAX_ENTRIES * 4096
+    ingress_bytes = 0
+    receive = request.receive
+
+    async def limited_receive():
+        nonlocal ingress_bytes
+        message = await receive()
+        ingress_bytes += len(message.get("body", b""))
+        if ingress_bytes > ingress_limit:
+            raise MultiPartException("上传总大小超过 200 MB")
+        return message
+
+    form = None
+    try:
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > ingress_limit:
+            return JSONResponse({"ok": False, "error": "上传总大小超过 200 MB"}, status_code=413)
+        form = await Request(request.scope, receive=limited_receive).form(
+            max_files=_SKILL_ARCHIVE_MAX_ENTRIES, max_fields=8
+        )
+        kind = form.get("kind")
+        files = form.getlist("files")
+        if kind not in {"dir", "zip"} or not files or not all(isinstance(upload, FormUploadFile) for upload in files):
+            raise ValueError("请选择一个会话目录或会话压缩包；最多 5000 个文件")
+        if kind == "zip" and len(files) != 1:
+            raise ValueError("一次只能上传一个压缩包")
+        with tempfile.TemporaryDirectory(prefix="myagent-session-upload-") as temporary:
+            root = Path(temporary)
+            contents = root / "contents"
+            contents.mkdir()
+            used_bytes = 0
+            seen = set()
+            archive_upload = None
+            for upload in files:
+                name = upload.filename or ""
+                parts = name.split("/")
+                relative = PurePosixPath(name)
+                if (not name or relative.is_absolute() or len(parts) > 40 or "\\" in name or ":" in name
+                    or any(part in {"", ".", ".."} or part.endswith((" ", ".")) or
+                           re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", part)
+                           for part in parts)):
+                    raise ValueError("上传文件包含非法路径")
+                identity = name.casefold()
+                if identity in seen:
+                    raise ValueError("上传文件路径重复")
+                seen.add(identity)
+                target = contents.joinpath(*parts)
+                if not target.resolve().is_relative_to(contents.resolve()):
+                    raise ValueError("上传文件包含非法路径")
+                if isinstance(upload.size, int) and used_bytes + upload.size > _SKILL_ARCHIVE_MAX_BYTES:
+                    return JSONResponse({"ok": False, "error": "上传总大小超过 200 MB"}, status_code=413)
+                await run_in_threadpool(target.parent.mkdir, parents=True, exist_ok=True)
+                with target.open("wb") as output:
+                    while chunk := await upload.read(64 * 1024):
+                        used_bytes += len(chunk)
+                        if used_bytes > _SKILL_ARCHIVE_MAX_BYTES:
+                            return JSONResponse({"ok": False, "error": "上传总大小超过 200 MB"}, status_code=413)
+                        await run_in_threadpool(output.write, chunk)
+                if kind == "zip":
+                    archive_upload = target
+            source = contents
+            if kind == "zip":
+                source = root / "extracted"
+                source.mkdir()
+                await run_in_threadpool(_extract_skill_archive, archive_upload, source, "会话")
+            session_root = await run_in_threadpool(_find_session_root, source)
+            if session_root is None:
+                raise ValueError("没有找到会话（缺少 events.jsonl）")
+            session = await run_in_threadpool(
+                _import_session_tree,
+                session_root,
+                move=True,
+                archive_path=archive_upload if kind == "zip" else None,
+            )
+            return JSONResponse({"ok": True, "session": session})
+    except HTTPException as exc:
+        status = 413 if ingress_bytes > ingress_limit else exc.status_code
+        return JSONResponse({"ok": False, "error": str(exc.detail)}, status_code=status)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    finally:
+        if form is not None:
+            await form.close()
 
 
 @fastapi_app.put("/sessions/{session_id}/archive")

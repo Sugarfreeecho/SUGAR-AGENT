@@ -4,7 +4,7 @@
 (function () {
   'use strict';
   const A = window.MyAgentSettings;
-  const { t, esc, api, W, icon, toast, reportError, askConfirm, openDialog, dialogValue, reload } = A;
+  const { t, esc, api, W, icon, toast, reportError, askConfirm, openDialog, closeDialog, dialogValue, reload } = A;
 
   const LS = {
     theme: 'myagent-theme', font: 'myagent-font-level', list: 'myagent-session-list-mode',
@@ -526,9 +526,9 @@
         (rows ? '<div class="st-profile-list" data-profile-list>' + rows + '</div>' : '') ||
           W.empty(t('还没有模型，点「添加模型」开始。', 'No models yet — click Add model.')),
         W.btn(t('添加模型', 'Add model'), 'model-add', 'primary')) +
-        W.note(t('模型档案保存在 <span class="st-mono">.sugaragent/model_profiles.json</span>；密钥只写不回显。' +
+        W.note(t('模型档案保存在 <span class="st-mono">.config/model_profiles.json</span>；密钥只写不回显。' +
           '拖左侧手柄调整优先级，也可以选中手柄后按 <span class="st-mono">↑</span> / <span class="st-mono">↓</span>。',
-          'Profiles live in <span class="st-mono">.sugaragent/model_profiles.json</span>; keys are write-only. ' +
+          'Profiles live in <span class="st-mono">.config/model_profiles.json</span>; keys are write-only. ' +
           'Drag the handle — or focus it and press <span class="st-mono">↑</span> / <span class="st-mono">↓</span> — to change priority.'));
     },
     onToggle(key, on) {
@@ -562,7 +562,145 @@
   });
 
   /* ── 技能 ───────────────────────────────────────────────────────────── */
+  /* 批量安装队列：逐个走 /api/skills/install；遇到同名就把冲突块画在对话框里等用户选
+     「覆盖 / 改名 / 取消本次」，选完继续下一个。 */
+  let skillQueue = null;
+  let skillPendingDrop = null;
+  const RENAME_FIELD = 'renameTo';
+
+  function renderSkillConflict(conflict, label) {
+    const body = document.getElementById('st-dlg-body');
+    if (!body) return;
+    const block = document.createElement('div');
+    block.className = 'st-skill-conflict';
+    block.innerHTML = W.row(t('技能已存在', 'Skill already exists'),
+      t('同名技能已在技能目录里，选择怎么继续。', 'A skill with this name is already installed — choose how to continue.'),
+      '<div class="st-skill-conflict-actions">' +
+        '<button type="button" class="st-btn sm" data-act="skill-conflict" data-mode="overwrite">' +
+          t('覆盖', 'Overwrite') + '「' + esc(label || '') + '」</button>' +
+        '<button type="button" class="st-btn sm" data-act="skill-conflict" data-mode="rename">' +
+          t('改名安装', 'Install under new name') + '</button>' +
+        '<button type="button" class="st-btn sm text danger" data-act="skill-conflict" data-mode="cancel">' +
+          t('取消本次', 'Skip this one') + '</button>' +
+        '<input class="st-input" data-field="' + RENAME_FIELD + '" value="' + esc((conflict && conflict.suggested) || '') + '" ' +
+          'placeholder="' + t('新名字', 'New name') + '">' +
+      '</div>');
+    body.appendChild(block);
+    body.scrollTop = body.scrollHeight;
+    const okBtn = document.getElementById('st-dlg-ok');
+    if (okBtn) okBtn.disabled = true;
+  }
+
+  function clearSkillConflict() {
+    const body = document.getElementById('st-dlg-body');
+    if (body) {
+      const block = body.querySelector('.st-skill-conflict');
+      if (block) block.remove();
+    }
+    const okBtn = document.getElementById('st-dlg-ok');
+    if (okBtn) okBtn.disabled = false;
+  }
+
+  function conflictChoice(mode, el) {
+    if (mode !== 'rename') return { mode: mode };
+    const body = document.getElementById('st-dlg-body');
+    const input = body && body.querySelector('[data-field="' + RENAME_FIELD + '"]');
+    return { mode: 'rename', rename_to: input ? input.value.trim() : '' };
+  }
+
+  async function runSkillQueue() {
+    const queue = skillQueue;
+    while (queue && queue.index < queue.paths.length) {
+      const path = queue.paths[queue.index];
+      try {
+        const result = await api('/api/skills/install', { method: 'POST', body: { source: path, kind: queue.kind } });
+        queue.results.push({ ok: true, name: result.name || path });
+      } catch (error) {
+        const conflict = error && error.payload && error.payload.conflict;
+        if (conflict && conflict.name) {
+          queue.pending = { path: path, conflict: conflict };
+          renderSkillConflict(conflict, conflict.name);
+          return true;   // 对话框留着，等冲突块上的按钮
+        }
+        queue.results.push({ ok: false, name: path, error: (error && error.message) || String(error) });
+      }
+      queue.index += 1;
+    }
+    finishSkillQueue();
+    return false;
+  }
+
+  function finishSkillQueue() {
+    const queue = skillQueue;
+    skillQueue = null;
+    if (!queue) return;
+    const installed = queue.results.filter((item) => item.ok).length;
+    const failed = queue.results.filter((item) => !item.ok);
+    if (installed) {
+      toast(queue.results.length > 1
+        ? t('已安装 ', 'Installed ') + installed + t(' 个技能', ' skills')
+        : t('已安装技能', 'Skill installed'));
+    }
+    if (failed.length) {
+      reportError(new Error(t('失败 ', 'Failed ') + failed.length + t(' 个：', ': ')
+        + failed.map((item) => (item.name ? item.name + '（' + item.error + '）' : item.error)).join('；')));
+    }
+    // 队列跑完就收掉对话框（无论成功与否；冲突块上的按钮走完也回到这里）
+    closeDialog();
+    reload();
+  }
+
+  /** 拖入触发的冲突：包已经在内存里，选定后就地重试（package_import.js 调用）。 */
+  function askSkillConflictOnDrop(conflict) {
+    return new Promise((resolve) => {
+      clearSkillConflict();
+      renderSkillConflict(conflict, conflict && conflict.name);
+      skillPendingDrop = { resolve: resolve };
+    });
+  }
+
+  function settleSkillConflict(mode, el) {
+    const pending = skillQueue && skillQueue.pending;
+    if (pending && skillQueue) {
+      const choice = conflictChoice(mode, el);
+      const path = pending.path;
+      const kind = skillQueue.kind;
+      skillQueue.pending = null;
+      clearSkillConflict();
+      if (choice.mode === 'cancel') {
+        skillQueue.results.push({ ok: false, name: path, cancelled: true, error: t('已取消', 'Cancelled') });
+        skillQueue.index += 1;
+        runSkillQueue().then((keep) => { if (keep !== true) closeDialog(); });
+        return;
+      }
+      api('/api/skills/install', {
+        method: 'POST',
+        body: { source: path, kind: kind, on_conflict: choice.mode, rename_to: choice.rename_to || '' },
+      })
+        .then((result) => { skillQueue.results.push({ ok: true, name: result.name || path }); })
+        .catch((error) => {
+          skillQueue.results.push({ ok: false, name: path, error: (error && error.message) || String(error) });
+        })
+        .then(() => {
+          skillQueue.index += 1;
+          return runSkillQueue();
+        })
+        .then((keep) => { if (keep !== true) closeDialog(); })
+        .catch(reportError);
+      return;
+    }
+    if (skillPendingDrop) {
+      const resolver = skillPendingDrop.resolve;
+      skillPendingDrop = null;
+      clearSkillConflict();
+      resolver(conflictChoice(mode, el));
+    }
+  }
+
   function skillDialog() {
+    if (window.MyAgentPackageImport && window.MyAgentPackageImport.registerConflictResolver) {
+      window.MyAgentPackageImport.registerConflictResolver('skills', askSkillConflictOnDrop);
+    }
     let source = 'dir';
     const build = () => (
       W.row(t('安装来源', 'Source'), '', W.seg('skillSrc', source, [
@@ -571,11 +709,16 @@
         { v: 'git', t: t('Git 地址', 'Git URL') },
       ])) +
       W.row(source === 'git' ? t('仓库地址', 'Repository') : t('路径', 'Path'),
-        t('技能文件夹里需要有 SKILL.md', 'The folder must contain SKILL.md'),
-        '<div class="st-package-source" data-package-kind="skills"><input class="st-input" data-field="source"' +
-          (source === 'git' ? '' : ' data-path-kind="' + (source === 'zip' ? 'file' : 'directory') + '"') + ' placeholder="' +
-          (source === 'git' ? 'https://github.com/…/my-skill.git' : source === 'zip' ? 'D:\\downloads\\my-skill.zip' : 'D:\\skills\\my-skill') + '">' +
-          '<span class="st-muted st-package-hint">' + t('也可将技能目录或压缩包拖到这里直接安装', 'Drop a skill folder or archive here to install') + '</span></div>') +
+        t('技能文件夹里需要有 SKILL.md；支持批量：每行一个路径', 'The folder must contain SKILL.md — batch: one path per line'),
+        '<div class="st-package-source" data-package-kind="skills" data-package-resolve="skills">' +
+          (source === 'git'
+            ? '<input class="st-input" data-field="source" placeholder="https://github.com/…/my-skill.git">'
+            : '<textarea class="st-input st-skill-sources" data-field="source" rows="2" spellcheck="false" placeholder="' +
+              (source === 'zip' ? 'D:\\downloads\\my-skill.zip' : 'D:\\skills\\my-skill') + '"></textarea>' +
+              '<button type="button" class="st-btn sm" data-browse-kind="' + (source === 'zip' ? 'file' : 'directory') + '" ' +
+              'data-browse-field="source" data-browse-multiple="1">' + t('浏览…', 'Browse…') + '</button>') +
+          '<span class="st-muted st-package-hint">' + t('可一次拖入多个技能目录 / 压缩包；也可把多个路径粘到上面（每行一个）',
+            'Drop several skill folders/archives at once, or paste several paths (one per line)') + '</span></div>') +
       '<div class="st-divider"><span>' + t('或', 'or') + '</span></div>' +
       W.row(t('新建技能', 'Create new'), t('会在技能目录生成 SKILL.md 骨架', 'Creates a SKILL.md skeleton'),
         '<input class="st-input" data-field="name" placeholder="pdf-report">') +
@@ -609,9 +752,10 @@
           return;
         }
         if (!src) { toast(t('请填写路径或技能名称', 'Provide a path or a skill name'), true); return true; }
-        await api('/api/skills/install', { method: 'POST', body: { source: src, kind: source } });
-        toast(t('已安装技能', 'Skill installed'));
-        reload();
+        /* 批量：一行一个路径；git 地址一行一个仓库。 */
+        const paths = String(src).split(/[\r\n;]+/).map((item) => item.trim()).filter(Boolean);
+        skillQueue = { paths: paths, kind: source, index: 0, results: [] };
+        return await runSkillQueue();
       },
     });
   }
@@ -625,7 +769,10 @@
       /* 说明不进列表：名字上挂浮框，悬停/聚焦才显示完整 description */
       const rows = skills.map((s) => W.lrow(W.tip(esc(s.name), s.description || '', 'st-mono'), '',
         (s.enabled === false ? W.chip(t('已停用', 'Off')) : W.chip(t('已启用', 'On'))) +
-        W.sw('skill:' + s.name, s.enabled !== false), s.name + ' ' + (s.description || ''))).join('');
+        W.sw('skill:' + s.name, s.enabled !== false) +
+        '<button type="button" class="st-btn sm text danger" data-act="skill-del" data-name="' + esc(s.name) + '">' +
+          t('移除', 'Remove') + '</button>',
+        s.name + ' ' + (s.description || ''))).join('');
       return W.search(t('搜索技能', 'Search skills'), A.search) +
         W.card(t('已安装技能', 'Installed skills'),
           t('技能是带 SKILL.md 的文件夹 · 悬停技能名看说明', 'A skill is a folder with SKILL.md — hover a name for its description'),
@@ -643,8 +790,21 @@
         .then(() => toast(on ? t('已启用', 'Enabled') : t('已停用', 'Disabled')))
         .catch((err) => { reportError(err); reload(); });
     },
-    onAction(act) {
-      if (act === 'skill-add') skillDialog();
+    onAction(act, el) {
+      if (act === 'skill-add') { skillDialog(); return; }
+      if (act === 'skill-conflict') { settleSkillConflict(el && el.getAttribute('data-mode'), el); return; }
+      if (act === 'skill-del') {
+        const name = el && el.getAttribute('data-name');
+        if (!name) return;
+        askConfirm(
+          t('移除技能「', 'Remove skill “') + name + t('」？该技能目录会被删除，不可恢复。', '”? Its folder is deleted permanently.'),
+          () => {
+            api('/api/skills/' + encodeURIComponent(name), { method: 'DELETE' })
+              .then(() => { toast(t('已移除技能', 'Skill removed')); reload(); })
+              .catch(reportError);
+          }
+        );
+      }
     },
   });
 })();

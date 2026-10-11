@@ -3,6 +3,13 @@
   'use strict';
   const A = window.MyAgentSettings;
   const MAX_FILES = 5000, MAX_BYTES = 200 * 1024 * 1024;
+  const ARCHIVE_RE = /\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz)$/i;
+  /* 安装冲突（技能）：由分区注册的解析器接管「取消 / 覆盖 / 改名」 */
+  const conflictResolvers = {};
+
+  function registerConflictResolver(key, resolver) {
+    if (key) conflictResolvers[key] = resolver;
+  }
 
   async function droppedFiles(data) {
     const items = Array.from(data.items || []).filter((item) => item.kind === 'file');
@@ -11,33 +18,95 @@
     const fallback = Array.from(data.files || []);
     const files = [];
     let bytes = 0;
-    const add = (file, path) => {
+    const add = (file, path, sink) => {
       bytes += file.size;
-      if (files.length >= MAX_FILES || bytes > MAX_BYTES) throw new Error(A.t('目录最多 5000 个文件，总大小不能超过 200 MB', 'Maximum 5000 files and 200 MB'));
-      files.push({ file, path });
+      const target = sink ? sink.files : files;
+      if (target.length >= MAX_FILES || bytes > MAX_BYTES) throw new Error(A.t('目录最多 5000 个文件，总大小不能超过 200 MB', 'Maximum 5000 files and 200 MB'));
+      target.push({ file, path });
     };
-    async function walk(entry, prefix, depth) {
+    async function walk(entry, prefix, depth, sink) {
       if (depth > 40) throw new Error(A.t('目录层级过深', 'Directory nesting is too deep'));
       const path = prefix + entry.name;
       if (entry.isFile) {
         const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
-        add(file, path);
+        add(file, path, sink);
       } else if (entry.isDirectory) {
         const reader = entry.createReader();
         for (;;) {
           const children = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
           if (!children.length) break;
-          for (const child of children) await walk(child, path + '/', depth + 1);
+          for (const child of children) await walk(child, path + '/', depth + 1, sink);
         }
       }
     }
     if (entries.length && entries.every(Boolean)) {
-      if (entries.length !== 1) throw new Error(A.t('一次请拖入一个目录或压缩包', 'Drop one folder or archive at a time'));
-      await walk(entries[0], '', 0);
-      return { files, kind: entries[0].isDirectory ? 'dir' : 'zip' };
+      // 批量：每个目录 / 每个压缩包各算一个包，零散文件合成一个包
+      const packages = [];
+      const loose = { kind: 'dir', files: [] };
+      const push = (entry, sink) => walk(entry, '', 0, sink);
+      for (const entry of entries) {
+        if (entry.isDirectory) {
+          const sink = { kind: 'dir', files: [] };
+          await push(entry, sink);
+          packages.push(sink);
+        } else if (ARCHIVE_RE.test(entry.name)) {
+          const sink = { kind: 'zip', files: [] };
+          await push(entry, sink);
+          packages.push(sink);
+        } else {
+          await push(entry, loose);
+        }
+      }
+      if (loose.files.length) packages.push(loose);
+      return packages;
     }
-    for (const file of fallback) add(file, file.webkitRelativePath || file.name);
-    return { files, kind: files.some((item) => item.path.includes('/')) ? 'dir' : 'zip' };
+    const archives = fallback.filter((file) => ARCHIVE_RE.test(file.webkitRelativePath || file.name));
+    const rest = fallback.filter((file) => !archives.includes(file));
+    const packages = archives.map((file) => {
+      add(file, file.name);
+      return { kind: 'zip', files: files.splice(0, files.length) };
+    });
+    if (rest.length) {
+      const sink = { kind: 'dir', files: [] };
+      rest.forEach((file) => {
+        bytes += file.size;
+        if (sink.files.length >= MAX_FILES || bytes > MAX_BYTES) {
+          throw new Error(A.t('目录最多 5000 个文件，总大小不能超过 200 MB', 'Maximum 5000 files and 200 MB'));
+        }
+        sink.files.push({ file, path: file.webkitRelativePath || file.name });
+      });
+      packages.push(sink);
+    }
+    return packages;
+  }
+
+  /** 上传一个包；技能遇到同名时交给分区的冲突解析器，按选择重试。 */
+  async function uploadPackage(packageKind, pack, resolverKey) {
+    const post = async (mode, renameTo) => {
+      const form = new FormData();
+      form.append('kind', pack.kind);
+      if (mode) form.append('on_conflict', mode);
+      if (renameTo) form.append('rename_to', renameTo);
+      pack.files.forEach(({ file, path }) => form.append('files', file, path));
+      const response = await fetch('/api/' + packageKind + '/install-upload', {
+        method: 'POST', credentials: 'same-origin', body: form,
+      });
+      const result = await response.json().catch(() => ({}));
+      return { response, result };
+    };
+    let { response, result } = await post();
+    while (response.status === 409 && result && result.conflict && resolverKey && conflictResolvers[resolverKey]) {
+      const choice = await conflictResolvers[resolverKey](result.conflict);
+      if (!choice || choice.mode === 'cancel') {
+        return { ok: false, name: result.conflict.name, cancelled: true, error: A.t('已取消', 'Cancelled') };
+      }
+      ({ response, result } = await post(choice.mode, choice.rename_to));
+    }
+    if (!response.ok || !result.ok) {
+      const label = (pack.files[0] && pack.files[0].path) || '';
+      return { ok: false, name: label, error: result.error || A.t('安装失败', 'Installation failed') };
+    }
+    return { ok: true, name: result.name || '' };
   }
 
   function bind(root) {
@@ -49,8 +118,12 @@
         if (!input || !window.MyAgentPathPicker) return;
         button.disabled = true;
         try {
-          const path = await MyAgentPathPicker.pickPath(button.dataset.browseKind, input.value, false);
-          if (path) {
+          const multiple = button.dataset.browseMultiple === '1';
+          const path = await MyAgentPathPicker.pickPath(button.dataset.browseKind, input.value, multiple);
+          if (path && Array.isArray(path)) {
+            if (path.length) input.value = path.join('\n');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          } else if (path) {
             input.value = button.dataset.browseCommand ? '"' + path.replace(/"/g, '\\"') + '"' : path;
             input.dispatchEvent(new Event('input', { bubbles: true }));
           }
@@ -85,19 +158,34 @@
         const dialogOk = zone.closest('#st-dlg-body') ? document.getElementById('st-dlg-ok') : null;
         if (dialogOk) dialogOk.disabled = true;
         try {
-          const { files, kind } = await droppedFiles(event.dataTransfer);
-          if (!files.length) throw new Error(A.t('目录中没有可安装的文件', 'No installable files in this folder'));
-          if (kind === 'zip' && (files.length !== 1 || !/\.(zip|tar|tar\.gz|tgz|tar\.bz2|tbz2|tar\.xz|txz)$/i.test(files[0].path))) {
-            throw new Error(A.t('请拖入技能 / 插件目录或 ZIP、TAR 压缩包', 'Drop a package folder or ZIP/TAR archive'));
-          }
+          const packages = await droppedFiles(event.dataTransfer);
+          if (!packages.length) throw new Error(A.t('目录中没有可安装的文件', 'No installable files in this folder'));
+          const bad = packages.find((pack) => pack.kind === 'zip'
+            && (pack.files.length !== 1 || !ARCHIVE_RE.test(pack.files[0].path)));
+          if (bad) throw new Error(A.t('请拖入技能 / 插件目录或 ZIP、TAR 压缩包', 'Drop a package folder or ZIP/TAR archive'));
           A.toast(A.t('正在解析并安装…', 'Parsing and installing…'));
-          const form = new FormData();
-          form.append('kind', kind);
-          files.forEach(({ file, path }) => form.append('files', file, path));
-          const response = await fetch('/api/' + zone.dataset.packageKind + '/install-upload', { method: 'POST', credentials: 'same-origin', body: form });
-          const result = await response.json();
-          if (!response.ok || !result.ok) throw new Error(result.error || A.t('安装失败', 'Installation failed'));
-          A.toast(A.t('已安装', 'Installed'));
+          const results = [];
+          for (const pack of packages) {
+            results.push(await uploadPackage(zone.dataset.packageKind, pack, zone.dataset.packageResolve));
+          }
+          const installed = results.filter((item) => item.ok).length;
+          const failed = results.filter((item) => !item.ok);
+          if (!installed) {
+            throw new Error(failed.length === 1
+              ? failed[0].error
+              : A.t('全部失败：', 'All failed: ') + failed.map((item) => item.error).join('；'));
+          }
+          if (failed.length) {
+            A.reportError(new Error(
+              A.t('部分成功：已安装 ', 'Partially done: installed ') + installed
+              + A.t(' 个，失败 ', ', failed ') + failed.length + A.t(' 个：', ': ')
+              + failed.map((item) => (item.name ? item.name + '（' + item.error + '）' : item.error)).join('；')
+            ));
+          } else {
+            A.toast(packages.length > 1
+              ? A.t('已安装 ', 'Installed ') + installed + A.t(' 个', '')
+              : A.t('已安装', 'Installed'));
+          }
           if (dialogOk && zone.isConnected && !document.getElementById('st-dialog').hidden) A.closeDialog();
           A.reload();
         } catch (error) { A.reportError(error); }
@@ -109,5 +197,5 @@
       });
     });
   }
-  window.MyAgentPackageImport = { bind };
+  window.MyAgentPackageImport = { bind, registerConflictResolver };
 })();

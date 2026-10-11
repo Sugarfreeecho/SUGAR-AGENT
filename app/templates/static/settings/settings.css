@@ -436,3 +436,13 @@ select.st-input {
 .st-toast.err { background: var(--st-danger); color: #fff; }
 /* Search hides existing rows so edited form values and input focus survive. */
 [hidden] { display: none !important; }
+
+/* ── 技能：批量路径输入 / 安装冲突块（覆盖 · 改名 · 取消本次） ───────────── */
+textarea.st-input.st-skill-sources { min-height: 56px; }
+.st-skill-conflict {
+  margin-top: 10px; padding: 10px 12px;
+  border: 1px solid var(--st-border); border-radius: 8px;
+  background: var(--st-card);
+}
+.st-skill-conflict-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.st-skill-conflict-actions .st-input { width: 180px; height: 28px; font-family: var(--st-mono); }
