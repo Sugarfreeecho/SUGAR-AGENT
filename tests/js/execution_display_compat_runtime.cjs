@@ -60,16 +60,19 @@ function runtime() {
     getLastProcessFeedItem: body => body.children.at(-1),
     getUiRuntimeText: sc => sc.textContent, setUiRuntimeText: (sc, text) => { sc.textContent = text; },
     findToolCallRow: (ctx, id) => ctx.currentProcessGroup.body.children.find(row => row.dataset.toolCallId === id),
-    discardPendingToolRowRender() {}, rememberToolStreamRow() {}, truncateLogTextForUi: text => text,
+    discardPendingToolRowRender() {}, rememberToolStreamRow() {},
+    LOG_TRUNCATE_HEAD_LINES: 100, LOG_TRUNCATE_TAIL_LINES: 100,
+    LOG_TRUNCATE_HEAD_CHARS: 12000, LOG_TRUNCATE_TAIL_CHARS: 12000,
     refreshFeedChunkOverflow() {}, refreshAggregateStatsSmart() {}, reactGenerationForContext: () => 0,
     unregisterProcessAggregateRow() {}, registerProcessAggregateRow() {}, scrollContentAreaIfFollow() {},
     renderEvent() { throw new Error('execution identity must use the durable renderer'); }});
   vm.runInContext(rendering.slice(rendering.indexOf('var executionRecordsBySession'), rendering.indexOf('function ensureProcessGroup')), c);
+  vm.runInContext(fn(rendering, 'truncateLogTextForUi'), c);
   for (const name of ['removeTemporaryStatus', 'upsertTemporaryStatus', 'formatToolDraftLine', 'formatToolPendingLine']) {
     vm.runInContext(fn(rendering, name), c);
   }
   vm.runInContext(fn(messages, 'renderMessageRecord'), c);
-  for (const name of ['shouldApplySseSeqFilter', 'sseSequenceScope', 'consumeAgentSseResponseInner']) vm.runInContext(fn(sse, name), c);
+  for (const name of ['shouldApplySseSeqFilter', 'sseSequenceScope', 'shouldSkipRecoveredEphemeralEvent', 'consumeAgentSseResponseInner']) vm.runInContext(fn(sse, name), c);
   return c;
 }
 async function send(c, ui, events) {
@@ -110,6 +113,21 @@ async function main() {
     await send(c, ui, [waiting, update(3, {execution_id: 'text', kind, status: 'generating', text_delta: '恢复的正文'})]);
     assert.equal(ui.pending(), 0, `execution_update/${kind} must clear the wait row`);
     assert.equal(ui.row('text').scroller.textContent, '恢复的正文');
+  }
+
+  for (const kind of ['reasoning', 'response']) {
+    const c = runtime(), ui = display();
+    const text = Array.from({length: 400}, (_, i) => `row ${i} 中间正文`).join('\n')
+      + '\n' + '超长单行😀 '.repeat(4000);
+    const type = kind === 'reasoning' ? 'llm_reasoning' : 'llm_response';
+    await send(c, ui, [event(type + '_delta', 'long', {delta: text})]);
+    assert.equal(ui.row('long').scroller.textContent, text);
+    await send(c, ui, [event(type, 'long', {execution_runtime_seq: 3, content: text + ' completed'})]);
+    assert.equal(ui.row('long').scroller.textContent, text + ' completed');
+    const recovered = display();
+    c.replayingMessages = true;
+    c.renderExecutionRecord(recovered.ctx, c.executionRecordsBySession.get('parent').get('long'), 'parent');
+    assert.equal(recovered.row('long').scroller.textContent, text + ' completed');
   }
 
   const c = runtime(), ui = display();

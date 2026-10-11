@@ -46,7 +46,7 @@ async function testDurableSubagentEventsKeepHistoryCursorCurrent() {
     markRunAbortReason() {},
   });
   vm.runInContext([
-    fn('shouldApplySseSeqFilter'), fn('sseSequenceScope'),
+    fn('shouldApplySseSeqFilter'), fn('sseSequenceScope'), fn('shouldSkipRecoveredEphemeralEvent'),
     fn('consumeAgentSseResponseInner'), fn('checkSessionStreamProgress'),
   ].join('\n'), context);
   const response = {ok: true, headers: {get: () => 'text/event-stream'},
@@ -83,6 +83,8 @@ async function testHistoryRebuildAcceptsPendingToolReplay() {
   const context = vm.createContext({
     console, Date, Number, String, Promise, AbortController,
     currentSessionId: 's', streamHistoryRecoveryBySession: new Set(['s']),
+    executionRecordsBySession: new Map(),
+    appendLog: () => null,
     sessionStore,
     getSessionRunState: () => null,
     getRunAbortReason: () => '',
@@ -108,7 +110,7 @@ async function testHistoryRebuildAcceptsPendingToolReplay() {
   });
   const findGroup = renderingSource.match(/^function findExecutionProcessGroup\([^]*?^}/m);
   assert(findGroup, 'missing findExecutionProcessGroup');
-  vm.runInContext(findGroup[0] + '\n' + fn('attachSessionEventStream'), context);
+  vm.runInContext(findGroup[0] + '\n' + fn('attachSessionEventStream') + '\n' + fn('seedEphemeralRecoveryScope'), context);
   await context.attachSessionEventStream('s', {skipInitialLoad: true});
   assert.equal(historyLoads, 1);
   assert.equal(replayedPending, true,

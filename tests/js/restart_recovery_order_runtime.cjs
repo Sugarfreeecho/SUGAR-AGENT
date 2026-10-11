@@ -100,6 +100,7 @@ async function checkResumedSseTokens() {
   const sseContext = vm.createContext({
     console, Date, Number, String, Promise, TextDecoder,
     SSE_IDLE_TIMEOUT_MS: 1000,
+    streamHistoryRecoveryBySession: new Set(),
     sessionStore: {
       shouldAcceptSseEvent(sid, seq, scope) {
         const key = sid + '::' + scope;
@@ -118,6 +119,7 @@ async function checkResumedSseTokens() {
   vm.runInContext([
     fn('shouldApplySseSeqFilter', sse),
     fn('sseSequenceScope', sse),
+    fn('shouldSkipRecoveredEphemeralEvent', sse),
     fn('consumeAgentSseResponseInner', sse),
   ].join('\n'), sseContext);
   const event = (seq, delta) => 'data: ' + JSON.stringify({

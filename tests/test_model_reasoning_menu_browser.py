@@ -8,7 +8,7 @@ import pytest
 playwright = pytest.importorskip("playwright.sync_api")
 expect = playwright.expect
 
-from tests.test_llm_stream_window_geometry import browser_page
+from tests.test_llm_stream_full_text_browser import browser_page
 
 ROOT = Path(__file__).resolve().parents[1]
 

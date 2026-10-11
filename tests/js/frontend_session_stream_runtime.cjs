@@ -333,7 +333,14 @@ async function main() {
     const text = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
     flushText(rt.context, longSc, text, part, smooth);
     flushText(rt.context, longSc, '\nlast', part, smooth);
-    assert.equal(longSc.textContent, rt.context.truncateLogTextForUi(text + '\nlast'));
+    assert.equal(longSc.textContent, text + '\nlast');
+    const singleSc = scroller();
+    const singleText = '长文本😀 '.repeat(6000);
+    flushText(rt.context, singleSc, singleText, part, smooth);
+    assert.equal(singleSc.textContent, singleText);
+    flushText(rt.context, singleSc, '末尾', part, smooth);
+    assert.equal(singleSc.textContent, singleText + '末尾');
+    assert.equal(singleSc.writes, 1, 'long output must keep appending to the same text node');
   }
   // A reconnect snapshot replaces both visible and accumulated text.
   const recovered = scroller();

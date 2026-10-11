@@ -54,7 +54,8 @@ function runtime() {
   const ctx = {stream, currentProcessGroup: group, processGroupId: groupId, runId: oldRun, reactGeneration: 0,
     llm: {llmDeltaLastSeq: null, llmStreamReasoningIter: null, llmStreamReasoningScroller: null}};
   const c = vm.createContext({console, Math, Number, String, Map, Set, Object, Array, JSON, Date, Promise, TextDecoder,
-    replayingMessages: false, currentSessionId: 's', document: {dispatchEvent() {}}, CustomEvent: function () {},
+    replayingMessages: false, currentSessionId: 's', streamHistoryRecoveryBySession: new Set(),
+    document: {dispatchEvent() {}}, CustomEvent: function () {},
     resetLlmState(target) { resets++; target.llm = {llmDeltaLastSeq: null, llmStreamReasoningIter: null, llmStreamReasoningScroller: null}; },
     renderPluginExtensionEvent: () => false, applyMessageEvent() {}, uiEventReactIter: event => event.react_iter,
     removeTemporaryStatus() {}, discardPendingToolRowRender() {}, truncateLogTextForUi: text => text,
@@ -85,8 +86,8 @@ function runtime() {
   const start = rendering.indexOf('var executionRecordsBySession');
   vm.runInContext(rendering.slice(start, rendering.indexOf('function ensureProcessGroup', start)), c);
   vm.runInContext(fn(messages, 'renderMessageRecord'), c);
-  vm.runInContext(['shouldApplySseSeqFilter', 'sseSequenceScope', 'consumeAgentSseResponseInner',
-    'restoreReactGenerationFromProcessGroup'].map(name => fn(sse, name)).join('\n'), c);
+  vm.runInContext(['shouldApplySseSeqFilter', 'sseSequenceScope', 'shouldSkipRecoveredEphemeralEvent',
+    'consumeAgentSseResponseInner', 'restoreReactGenerationFromProcessGroup'].map(name => fn(sse, name)).join('\n'), c);
   return {c, ctx, group, groups, body, counters: () => ({writes, follows, resets}),
     order: () => body.children.map(item => [item.dataset.runId, Number(item.dataset.reactIter), Number(item.dataset.reactGeneration)])};
 }

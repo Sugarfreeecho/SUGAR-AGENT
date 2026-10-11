@@ -93,6 +93,7 @@ function fixture() {
   vm.runInContext(modelSource.match(/^function noteModelBindingChanged\([^]*?^}/m)[0] + '\n' + [
     fn('shouldApplySseSeqFilter'),
     fn('sseSequenceScope'),
+    fn('shouldSkipRecoveredEphemeralEvent'),
     fn('consumeAgentSseResponseInner'),
     fn('checkSessionStreamProgress'),
     fn('consumeAgentSseResponse'),

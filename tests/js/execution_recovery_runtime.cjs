@@ -132,6 +132,7 @@ async function main() {
     finalizeLlmStreamChunks(){}, renderMessageRecord(){}, renderExecutionEvent:()=>false,
     scheduleFinalVisibleAfterRunIfEnabled(){},
   });
+  vm.runInContext(section(sse, 'function shouldSkipRecoveredEphemeralEvent(', 'function endRunForClient('), c);
   vm.runInContext(section(sse, 'async function consumeAgentSseResponseInner', 'function latestVisibleUserEventIndex'), c);
   const events = [
     {type:'run_finished', session_id:'child', agent_id:'child', _subagent_forward:true, run_id:'child-run'},

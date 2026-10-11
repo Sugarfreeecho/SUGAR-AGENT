@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from tests.test_llm_stream_window_geometry import browser_page
+from tests.test_llm_stream_full_text_browser import browser_page
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,8 +41,11 @@ def test_catalog_hover_then_click_keeps_list_open(browser_page):
 def test_change_diff_survives_live_updates_and_new_turn(browser_page):
     page = browser_page
     page.set_content('<div id="host"></div>')
-    # The production bootstrap installs folder-icons.js before this module.
+    # The production bootstrap installs folder-icons.js and evaluates config.js
+    # into the shared scope (getActiveWorkDir / workspaceApiUrl) before this module.
     page.evaluate("window.MyAgentIcons = { svg: () => '<svg></svg>' }")
+    page.add_script_tag(content=(ROOT / "frontend/src/app/config.js").read_text(
+        encoding="utf-8").replace("export function", "function"))
     load_module(page, "dock/embedder/right-column.js")
     page.evaluate("""() => {
       window.currentSessionId = 'session';

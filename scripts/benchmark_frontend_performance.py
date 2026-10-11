@@ -73,7 +73,7 @@ def main():
                   const sc=document.getElementById('sc'),unit='word 中文 abc '.repeat(8)+'\\n';
                   writeLlmStreamText(sc,unit.repeat(Math.ceil(size/unit.length)).slice(0,size),'reasoning');
                 }""", size)
-                page.wait_for_function("!document.getElementById('sc')._llmWindow.layoutJob", timeout=30000)
+                page.wait_for_function("!document.getElementById('sc')._llmWindow?.layoutJob", timeout=30000)
                 result = page.evaluate("""() => {
                   window.measureSteps=[];
                   if(typeof createLlmStreamLayoutMeasurement==='function') {
@@ -86,10 +86,15 @@ def main():
                     };
                   }
                   subject.style.width='600px';window.measureStart=performance.now();
-                  refreshLlmStreamWindowGeometry(document.getElementById('sc'),true);
+                  const sc=document.getElementById('sc');
+                  if(typeof refreshLlmStreamWindowGeometry==='function') {
+                    refreshLlmStreamWindowGeometry(sc,true);
+                  } else {
+                    sc.getBoundingClientRect();
+                  }
                   return {call_ms:performance.now()-measureStart};
                 }""")
-                page.wait_for_function("!document.getElementById('sc')._llmWindow.layoutJob", timeout=30000)
+                page.wait_for_function("!document.getElementById('sc')._llmWindow?.layoutJob", timeout=30000)
                 result.update(page.evaluate("""() => ({
                   completion_ms:performance.now()-measureStart,
                   max_slice_ms:measureSteps.length?Math.max(...measureSteps):null
