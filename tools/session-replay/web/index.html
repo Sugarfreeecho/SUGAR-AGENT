@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>会话重放与卡顿记录</title><link rel="stylesheet" href="/web/tool.css"></head>
+<body><main class="workspace">
+<header><div class="eyebrow">SUGARAGENT · SESSION REPLAY</div><h1>会话重放与卡顿记录</h1><p>导入历史，选择轮次，重复播放并记录看到的停顿。</p></header>
+<section class="card"><div class="heading"><h2>导入会话</h2><span class="badge">本机离线处理</span></div>
+<div class="row"><button id="choose-zip" class="primary">选择会话 ZIP</button><button id="choose-folder">选择会话文件夹</button><input id="zip-input" type="file" accept=".zip" hidden><input id="folder-input" type="file" webkitdirectory multiple hidden></div>
+<label for="source-path">或粘贴本机的会话目录／ZIP 路径</label><div class="row"><input id="source-path" type="text" placeholder="D:\…\workspace\sessions\会话ID"><button id="import-path">导入路径</button></div>
+<p class="hint">目录应包含 events.jsonl；metadata.json、snapshots、blobs 会一并读取。应用“导出会话”的 ZIP 可直接导入。</p><div id="import-status" class="status" role="status"></div>
+<div id="candidate-area" hidden><label for="candidate">此材料含多个会话</label><div class="row"><select id="candidate"></select><button id="choose-candidate">导入所选会话</button></div></div></section>
+<section class="card"><h2>选择重放范围</h2><div class="grid">
+<label>会话<select id="session" aria-label="会话"></select></label>
+<label>前端版本<select id="version" aria-label="前端版本"></select></label>
+<label>任务<select id="run" aria-label="任务"></select></label>
+<label>播放范围<select id="scope" aria-label="播放范围"><option value="text">流式文本片段</option><option value="step">执行轮次（含工具）</option><option value="run">整次任务</option></select></label>
+<label class="span-2">轮次<select id="segment" aria-label="轮次"></select></label>
+</div><p class="hint">选择 10/07 后，重放页提供 21 项对照开关，含完整 1004 资源基线、脚本／样式交叉组合和整模块回退。比较连续上滑时保留“自动跟随最新文字”和“平滑跟随动画”；点击“应用并重载本段”后生效，实际资源来源与配置会写入记录。</p><p id="segment-info" class="hint"></p><p id="session-warning" class="notice" hidden></p>
+<div class="row"><button id="open-replay" class="primary" disabled>打开重放</button><button id="refresh">刷新记录</button><a id="download-report" class="button" href="/api/replay/report.zip">导出卡顿报告 ZIP</a></div></section>
+<section class="card"><div class="heading"><h2>播放记录</h2><span id="record-count" class="badge">0 次</span></div><p class="hint">每次播放自动保存。RAF 是浏览器动画回调间隔，不是显示器实际 FPS；切后台、暂停和变速会标注在记录中。</p><div class="table-wrap"><table><thead><tr><th>时间</th><th>版本／轮次</th><th>改动配置</th><th>状态</th><th>平均回调/秒</th><th>P95 / 最长间隔</th><th>肉眼标记</th><th>记录</th></tr></thead><tbody id="records"></tbody></table></div></section>
+<footer><span id="data-location"></span><button id="stop-service" class="quiet">停止服务</button></footer>
+</main><script src="/web/api.js"></script><script src="/web/manager.js"></script></body></html>
