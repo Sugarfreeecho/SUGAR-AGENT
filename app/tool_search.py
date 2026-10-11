@@ -1,5 +1,12 @@
 """Session-scoped progressive tool disclosure without provider extensions.
 
+Built-in whitelist disclosure: tools listed in ``RESIDENT_TOOLS`` stay in the
+model-facing tool array; every other executable tool — including anything a
+new MCP server, plugin or provider adds later — is collected into the
+tool-search catalog automatically.  ``.config/tool_search.json`` is an
+optional override only; a missing, deleted or corrupt file keeps the built-in
+default (enabled) instead of restoring the full catalog.
+
 Schemas are hidden only after authorization/profile filtering. The call bridge
 never executes a tool itself: the loop decodes it before policy selection and
 uses the existing hooks, approval, audit and invocation pipeline.
@@ -18,22 +25,44 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from tool_registry import ToolInvocationKind, ToolRegistry
+from config_paths import config_path
 
 logger = logging.getLogger(__name__)
 BRIDGE_NAMES = frozenset({"tool_search", "tool_describe", "tool_call"})
-CONFIG_PATH = Path(__file__).resolve().parents[1] / ".sugaragent" / "tool_search.json"
+# Built-in residency whitelist: tools listed here stay in the model-facing
+# tool array.  Everything executable that is NOT listed (new MCP servers, new
+# plugin tools, provider additions) is collected into the tool-search catalog
+# automatically.  Add a name here deliberately to keep it resident.
+RESIDENT_TOOLS = frozenset({
+    # Core built-ins (app/agent_tools.py OPENAI_TOOL_DEFINITIONS)
+    "activate_skill", "apply_patch", "ask_user", "context_manage",
+    "delete_file", "glob", "grep", "history_context", "ls", "read_file",
+    "run_shell", "task", "web_download", "web_fetch", "web_search",
+    "write_file",
+    # Bundled plugin host tools (agent-goal / agent-team / session-todo /
+    # execution-tools)
+    "create_goal", "get_goal", "update_goal", "team", "update_todo",
+    "job_output", "job_list", "job_kill",
+    "terminal_open", "terminal_send", "terminal_read", "terminal_signal",
+    "terminal_close", "terminal_list",
+})
+CONFIG_PATH = config_path(Path(__file__).resolve().parents[1], "tool_search.json")
 _config_lock = threading.RLock()
 _config_cache: tuple[Any, Any] | None = None
 
 
 @dataclass(frozen=True)
 class ToolSearchConfig:
-    # Missing/deleted config restores the original tool catalog.
-    enabled: str = "off"
+    # Built-in default: whitelist disclosure is ON.  The optional config file
+    # only overrides it; a missing/deleted/corrupt file keeps this default
+    # instead of restoring the full catalog.
+    enabled: str = "on"
     threshold_pct: float = 10.0
     threshold_tokens: int = 20_000
     search_default_limit: int = 5
     max_search_limit: int = 20
+    # Deprecated no-op, kept so older config files keep parsing; residency is
+    # governed by RESIDENT_TOOLS plus explicit pins.
     defer_plugin_tools: bool = False
     pinned_tools: tuple[str, ...] = ()
 
@@ -85,7 +114,7 @@ def load_config() -> ToolSearchConfig:
         except FileNotFoundError:
             config = ToolSearchConfig()
         except (OSError, ValueError, TypeError):
-            logger.warning("Invalid tool search config; using full catalog", exc_info=True)
+            logger.warning("Invalid tool search config; using built-in whitelist defaults", exc_info=True)
             config = ToolSearchConfig()
         # Explicit off in the file wins even over an environment override.
         override = revision[-1].strip().lower()
@@ -199,12 +228,15 @@ def assemble(registry: ToolRegistry, *, context_window: int | None, pinned_names
         logger.warning("Tool search bridge name conflict; retaining full catalog")
         return
     pinned = frozenset(pinned_names) | frozenset(config.pinned_tools)
-    names = frozenset(d.name for d in registry.descriptors() if d.executable and d.name not in pinned and (
-        d.invocation_kind is ToolInvocationKind.MCP or
-        d.owner == "computer-use" or
-        (config.defer_plugin_tools and (d.invocation_kind is ToolInvocationKind.PLUGIN or
-            (d.invocation_kind is ToolInvocationKind.HOST_SERVICE and not d.owner.startswith("core."))))
-    ))
+    # Built-in whitelist disclosure: only the resident whitelist (plus
+    # explicit pins) stays in the model-facing catalog.  Everything else
+    # executable is deferred — including tools that did not exist when this
+    # list was written.
+    resident = RESIDENT_TOOLS | pinned
+    names = frozenset(
+        d.name for d in registry.descriptors()
+        if d.executable and d.name not in resident
+    )
     deferred = [registry.require(name).openai_definition() for name in sorted(names)]
     deferred_tokens = count_tool_definition_tokens(deferred)
     if not names or not should_activate(config, deferred_tokens, context_window):

@@ -274,6 +274,10 @@ def test_agent_catalog_records_tool_sources_without_name_prefixes(monkeypatch):
     import agent_mcp
     import agent_subagent
 
+    # This test pins source recording, not disclosure; keep the built-in
+    # whitelist disclosure out of the catalog so the names stay exact.
+    monkeypatch.setenv("MYAGENT_TOOL_SEARCH", "off")
+
     host = _definition("local_action")
     mcp = _definition("remote_action")
     plugin = _definition("business_action")

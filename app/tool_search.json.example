@@ -4,6 +4,5 @@
   "threshold_tokens": 20000,
   "search_default_limit": 5,
   "max_search_limit": 20,
-  "defer_plugin_tools": false,
   "pinned_tools": []
 }

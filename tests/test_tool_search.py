@@ -39,18 +39,22 @@ def isolated_config(tmp_path, monkeypatch):
     monkeypatch.delenv("MYAGENT_TOOL_SEARCH", raising=False)
 
 
-def test_config_hot_reload_off_delete_and_environment_rollback(monkeypatch):
-    assert tool_search.load_config().enabled == "off"
-    tool_search.save_config({"enabled": "on"})
+def test_config_hot_reload_delete_falls_back_to_builtin_and_environment_rollback(monkeypatch):
+    # Built-in default: whitelist disclosure is ON without any config file.
     assert tool_search.load_config().enabled == "on"
-    before = tool_search.config_revision()
-    monkeypatch.setenv("MYAGENT_TOOL_SEARCH", "auto")
-    assert tool_search.config_revision() != before
+    tool_search.save_config({"enabled": "auto"})
     assert tool_search.load_config().enabled == "auto"
+    before = tool_search.config_revision()
+    monkeypatch.setenv("MYAGENT_TOOL_SEARCH", "off")
+    assert tool_search.config_revision() != before
+    assert tool_search.load_config().enabled == "off"
     tool_search.save_config({"enabled": "off"})
+    monkeypatch.setenv("MYAGENT_TOOL_SEARCH", "on")
+    # An explicit off in the file wins over an environment override.
     assert tool_search.load_config().enabled == "off"
     tool_search.CONFIG_PATH.unlink()
-    assert tool_search.load_config().enabled == "off"
+    # Deleting the file restores the built-in default (on), not the full catalog.
+    assert tool_search.load_config().enabled == "on"
 
 
 @pytest.mark.parametrize("raw", [{"enabled": "bad"}, {"threshold_pct": float("nan")},
@@ -93,10 +97,24 @@ def test_100_mcp_tools_reduce_request_but_preserve_authorized_execution_and_pins
     assert len(json.loads(json.dumps(schemas))) == 5
 
 
+def test_builtin_default_whitelist_defers_unknown_tools():
+    # No config file: the built-in defaults activate whitelist disclosure and
+    # everything outside RESIDENT_TOOLS — including brand-new plugin/MCP tools
+    # — is collected automatically.
+    registry = catalog(1)
+    registry.register_definition(definition("brand_new_plugin_tool"), invocation_kind="plugin", owner="plugins")
+    tool_search.assemble(registry, context_window=100)
+    assert registry.disclosure is not None
+    assert registry.disclosure.names == {"mcp_browser_action_0", "brand_new_plugin_tool"}
+    visible = {row["function"]["name"] for row in registry.definitions()}
+    assert "read_file" in visible
+    assert "mcp_browser_action_0" not in visible
+
+
 def test_off_keeps_request_exact_and_bridge_name_conflict_is_not_shadowed():
     registry = catalog(2)
     before = json.dumps(registry.definitions())
-    tool_search.assemble(registry, context_window=100, config=tool_search.ToolSearchConfig())
+    tool_search.assemble(registry, context_window=100, config=tool_search.ToolSearchConfig(enabled="off"))
     assert json.dumps(registry.definitions()) == before
     assert registry.disclosure is None
     registry.register_definition(definition("tool_search"), invocation_kind="plugin", owner="external")
@@ -133,7 +151,7 @@ def test_search_describe_call_scope_and_immutable_assistant_message():
         tool_search.resolve_call(registry, {"name": "tool_call", "args": {"name": "mcp_browser_action_1", "arguments": "{}"}})
 
 
-def test_computer_provider_is_deferred_by_owner_and_global_pins_are_respected():
+def test_non_whitelisted_provider_tools_defer_and_global_pins_are_respected():
     registry = catalog(1)
     registry.register_definition(definition("computer_click"), invocation_kind="host_service", owner="computer-use")
     registry.register_definition(definition("computer_state"), invocation_kind="host_service", owner="computer-use")
