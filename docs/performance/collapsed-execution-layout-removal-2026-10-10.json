@@ -1,0 +1,44 @@
+{
+  "scope": "1007真实日志重放，替换为当前构建CSS；仅功能和布局验证",
+  "jank_tested": false,
+  "before": [
+    {
+      "display": "block",
+      "rects": 1,
+      "characters": 365525,
+      "childRects": 1
+    }
+  ],
+  "after": [
+    {
+      "display": "none",
+      "rects": 0,
+      "characters": 365525,
+      "childRects": 0
+    }
+  ],
+  "opened": {
+    "display": "block",
+    "rects": 1,
+    "characters": 365525,
+    "childRects": 1
+  },
+  "closed": {
+    "display": "none",
+    "rects": 0,
+    "characters": 365525,
+    "childRects": 0
+  },
+  "packets": 218,
+  "text_verified": true,
+  "errors": [],
+  "follow_mode": "smooth",
+  "dist_sync_passed": true,
+  "existing_tests_passed": 9,
+  "user_requested_feature_removal": true,
+  "production_refresh_required": true,
+  "source_files": [
+    "frontend/src/styles/collapse-transitions.css",
+    "frontend/src/app/modules/collapse-transitions.js"
+  ]
+}

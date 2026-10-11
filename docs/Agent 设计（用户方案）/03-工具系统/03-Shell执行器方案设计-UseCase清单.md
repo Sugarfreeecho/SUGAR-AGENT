@@ -1,6 +1,6 @@
 # Shell 执行器 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-07 v3（覆盖至：当前工作区；UC-3C5 子进程输出解码链修订）
+- 版本：2026-10-11 v4（覆盖至：当前工作区；UC-3C5 判据 1/3 + PowerShell UTF-8 前置）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（L574–2331：shell 选择/进程管理/物化/环境）。
 - 上级：`00-工具系统整体设计.md`
@@ -38,9 +38,9 @@
 
 ### UC-3C5 环境与编码
 - **触发**：子进程输出二进制/乱码；需要内置 Python。
-- **预期现象**：二进制输出被摘要化（不喷终端）；编码解码健壮——UTF-8 严格优先，整段失败后按“行”在 UTF-8 / GBK 间择优（混合编码流两端都能正确显示，如 PowerShell 的 GBK 日期行不再变 `�`）；兜底只替换无法解码的字节；内置 Python 目录自动前置（脚本可直接用）；stderr 有修复提示（如缺依赖给命令）。
-- **规则与边界**：不以“结果含 U+FFFD”作为整套回退 GBK 的信号——合法 UTF-8 文本可自带 U+FFFD（历史误例：`B2 \"�\" ENDB` 曾被改写为 `B2 \"锟絓" ENDB`）；逐行 GBK 仅在“该行非 ASCII 字节中，UTF-8 非法字节 ≥2 且占比 ≥50%”时启用，避免个别坏字节的 UTF-8 行被整行改写；流式输出的切片安全见 09/07 UC-9F7。
-- **依据**：`_decode_byte_line / _decode_cli_subprocess_bytes / _summarize_shell_stream_if_binary_like / _run_shell_env_with_prepended_agent_python_dir / _run_cli_stderr_hints`；回归 `tests/test_decode_cli_subprocess_bytes.py`。
+- **预期现象**：二进制输出被摘要化（不喷终端）；编码解码健壮——UTF-8 严格优先，整段失败后按“行”在 UTF-8 / GBK 间择优（混合编码流两端都能正确显示，如 PowerShell 的 GBK 日期行不再变 `�`）；兜底只替换无法解码的字节；Windows PowerShell 执行器统一前置 UTF-8 I/O（PS 自有中文按 UTF-8 写出；原生命令输出含经 `Select-Object` 等管道按 UTF-8 读入——消除「PS 中文 GBK 写出」与「UTF-8 输出经管道被 GBK 误读（`✓`→`�?`）」两类误码）；CLIXML 进度噪音被消除；内置 Python 目录自动前置（脚本可直接用）；stderr 有修复提示（如缺依赖给命令）。
+- **规则与边界**：不以“结果含 U+FFFD”作为整套回退 GBK 的信号——合法 UTF-8 文本可自带 U+FFFD（历史误例：`B2 \"�\" ENDB` 曾被改写为 `B2 \"锟絓" ENDB`）；逐行 GBK 阈值（2026-10-11 放宽）：非 ASCII 字节中替换符 ≥2 且 ≥约 1/3 时启用（实测 PS 中文行 11/24 曾被漏判为 `���ٻع飨…`），仍高于“UTF-8 行个别坏字节”比例（如 1/13）不误改写；PowerShell UTF-8 前置可由 `RUN_SHELL_PS_UTF8=0` 关闭，代价是 GBK 工具（如 cmd 内建）输出“经管道”时会被按 UTF-8 误读（直连输出走字节透传不受影响）；流式输出的切片安全见 09/07 UC-9F7。
+- **依据**：`_decode_byte_line / _decode_cli_subprocess_bytes / _powershell_script_with_utf8_prelude / _summarize_shell_stream_if_binary_like / _run_shell_env_with_prepended_agent_python_dir / _run_cli_stderr_hints`；回归 `tests/test_decode_cli_subprocess_bytes.py`、`tests/test_run_shell_ps_utf8_prelude.py`。
 
 ## 3. 边界
 
@@ -55,10 +55,11 @@
 | UC-3C2 | L1665–1777 |
 | UC-3C3 | L1478–1627 |
 | UC-3C4 | L670–1454（路径收窄段，含 9-14 基准修复） |
-| UC-3C5 | L1192–1354、L2053–2072（2026-10-07 复核） |
+| UC-3C5 | L1193–1354（解码链/环境）、L1601–1625（UTF-8 前置）、L2660–2670（EncodedCommand 组装）（2026-10-11 复核） |
 
 ## 5. 版本记录
 
 - 2026-09-13 v1：拆分首版（承接 UC-306/307）。
 - 2026-09-14 v2：UC-3C4 补充"相对路径按生效工作目录（workdir）解析"与只读 git/歧义输入边界（配合当日路径基准修复）。
 - 2026-10-07 v3：UC-3C5 修订子进程输出解码链——移除“含 U+FFFD 即回退 GBK”的误判（曾把合法 UTF-8 改写为 GBK 误码“锟絓/閿熸枻鎷穃”类）；整段失败改为按行在 UTF-8 / GBK 间择优，兜底只替换无法解码的字节；新增回归 `tests/test_decode_cli_subprocess_bytes.py`（8 用例）；依据映射行号按当前工作区复核。
+- 2026-10-11 v4：UC-3C5 双修复——①逐行 GBK 判据放宽至约 1/3（修复 `���ٻع飨…` 类漏判，+1 回归用例）；②Windows PowerShell 执行器统一 UTF-8 I/O 前置（`_powershell_script_with_utf8_prelude`，消除 PS 中文 GBK 写出与管道解码损伤，`RUN_SHELL_PS_UTF8=0` 可关，+回归 `tests/test_run_shell_ps_utf8_prelude.py`）；映射行号按当前工作区复核。

@@ -7,7 +7,7 @@
 - Built frontend checked into the repository: `app/templates/dist/`
 - Tests: `tests/`
 - Plugin discovery root: `plugins/`
-- Project MCP configuration: `.sugaragent/mcp_servers.json`
+- Project MCP configuration: `.config/mcp_servers.json`
 
 ## Verification
 
@@ -20,4 +20,4 @@ Build the frontend after source changes because production assets are committed.
 
 ## Integration notes
 
-Context7, Playwright, and GitHub are global MCP servers declared in `.sugaragent/mcp_servers.json`; they are intentionally independent of this Plugin's enablement lifecycle. The MCP bridge supports stdio, SSE, and Streamable HTTP. `${NAME}` references in remote MCP headers resolve from the process environment only when a connection is created, so tracked configuration can name a secret without containing it.
+Context7, Playwright, and GitHub are global MCP servers declared in `.config/mcp_servers.json`; they are intentionally independent of this Plugin's enablement lifecycle. The MCP bridge supports stdio, SSE, and Streamable HTTP. `${NAME}` references in remote MCP headers resolve from the process environment only when a connection is created, so tracked configuration can name a secret without containing it.

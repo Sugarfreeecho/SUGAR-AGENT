@@ -1,10 +1,10 @@
 # 工具按需披露
 
-MyAgent 将模型看到的工具定义与当前会话获准执行的目录分开。开启后，内置工具、会话管理、后台任务和终端工具常驻；MCP 与 Computer Use 工具通过 `tool_search`、`tool_describe`、`tool_call` 按需使用。Computer Use 即使由宿主服务提供，也按其来源参与延迟披露。
+MyAgent 将模型看到的工具定义与当前会话获准执行的目录分开。内置白名单披露**默认开启**：白名单常驻工具（内置工具、会话管理、后台任务与终端工具，见 `app/tool_search.py` 的 `RESIDENT_TOOLS`）保持在工具清单中；**其余一切可执行工具（含新增的 MCP 服务器、插件工具）自动收入 tool search**，由 `tool_search`、`tool_describe`、`tool_call` 按需取用。Computer Use 即使由宿主服务提供，也按其来源参与延迟披露。
 
 ## 配置
 
-在设置中心的 MCP 页面选择「工具按需披露」，或将 `app/tool_search.json.example` 复制到 `.sugaragent/tool_search.json`：
+披露策略内置（白名单常驻 + 其余全部延迟），默认开启、无需配置文件。`.config/tool_search.json` 是**可选覆盖**（例如临时切 `auto/off`、追加常驻项），可参考 `app/tool_search.json.example`；设置中心 MCP 页的「工具按需披露」卡片也可写回该文件：
 
 ```json
 {
@@ -13,18 +13,17 @@ MyAgent 将模型看到的工具定义与当前会话获准执行的目录分开
   "threshold_tokens": 20000,
   "search_default_limit": 5,
   "max_search_limit": 20,
-  "defer_plugin_tools": false,
   "pinned_tools": []
 }
 ```
 
-- `on`：有可延迟工具就启用，适合工具较多的当前配置。
+- `on`（内置默认）：有可延迟工具就启用。
 - `auto`：延迟工具定义的本地估算 token 达到上下文窗口的 `threshold_pct%` **或** `threshold_tokens`，即启用。工具数量不作为 token 占用的替代指标。
-- `off`：恢复完整目录。缺少、删除或损坏配置文件也关闭披露；不会删除任何工具。
-- `pinned_tools`：以模型工具名指定常驻豁免，可用于宿主提供的 Computer Use 工具。
-- `defer_plugin_tools`：同时延迟非核心插件及其宿主服务工具，默认关闭。
+- `off`：恢复完整目录，不会删除任何工具。
+- `pinned_tools`：以模型工具名追加常驻豁免（可覆盖白名单外的工具）。
+- `defer_plugin_tools`：**已弃用**（兼容保留、忽略）；常驻与否由白名单与 pin 决定。
 
-`MYAGENT_TOOL_SEARCH=on|auto|off` 可覆盖已启用配置的模式；文件明确 `off` 或文件不存在时，环境变量不能重新开启。配置在下一次请求组装时生效。首次升级 Python 代码须重启后端；后续配置调整无需重启。
+**配置文件不存在/被删除/损坏时使用内置默认（on），不再关闭披露。** `MYAGENT_TOOL_SEARCH=on|auto|off` 可覆盖未明确 `off` 的配置；文件明确 `off` 时环境变量不能重新开启。配置在下一次请求组装时生效。首次升级 Python 代码须重启后端；后续配置调整无需重启。
 
 MCP 服务器支持以下增量设置，旧的逐工具开关仍然生效：
 

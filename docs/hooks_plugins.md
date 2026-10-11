@@ -16,7 +16,7 @@ STOP_HOOK_MAX_RETRIES=3
 
 PLUGINS_ENABLED=1
 PLUGINS_DIR=../workspace/plugins
-PLUGINS_STATE_PATH=../workspace/.sugaragent/plugins-state.json
+PLUGINS_STATE_PATH=../workspace/.config/plugins-state.json
 ```
 `HOOKS_ENABLED` 与 `PLUGINS_ENABLED` 都默认开启，`0`、`false`、`no`、`off` 表示关闭。
 
@@ -138,7 +138,7 @@ Manifest 示例：
 
 ### 仓库工程 Plugin 与全局 MCP
 
-仓库内置的 `plugins/repo-engineering` 是一个 Codex 兼容声明式 Plugin，只提供仓库审查、实现、聚焦测试、变更日志和发布检查 Skill。通用工具独立配置在 `.sugaragent/mcp_servers.json`，不会随该 Plugin 的启停而增删：
+仓库内置的 `plugins/repo-engineering` 是一个 Codex 兼容声明式 Plugin，只提供仓库审查、实现、聚焦测试、变更日志和发布检查 Skill。通用工具独立配置在 `.config/mcp_servers.json`，不会随该 Plugin 的启停而增删：
 
 - `context7`：查询当前库文档，默认只读。
 - `playwright`：无头、隔离的本地浏览器验证，按外部写入能力执行权限策略。

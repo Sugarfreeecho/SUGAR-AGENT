@@ -1,7 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
 > 对象：SugarAgent WebUI（前端 SPA + FastAPI Web 服务）
-> 代码版本：当前工作区（2026-10-07；平滑跟随为固定刚度软弹簧（DS 同款）；含会话侧栏宽度首帧恢复、侧栏会话列表改版（视觉/字号自适应、刷新节拍与增量渲染、目录组配额·拖拽·重命名、时间分桶与自动归档 30 天）、顶部通知与权限警示视觉系统、右侧历史纳入同款外壳（标题栏风格一致 + 描边）、子代理执行活跃性、follow-up 队列拖拽/键盘排序、公共左侧栏页签、设置中心、系统字体与排版令牌、模型两级菜单、统一悬停说明、执行工具会话面板与终端（xterm）、执行恢复渲染、上下文拆解浮窗、工具按需披露与 MCP 服务器级筛选、排队消息连续运行、执行回执证据链、插件界面样式就绪再上屏；新建会话与草稿目录、目录图标；压缩 reasoning 独立实时行与活动流续接；输入附件卡片及未发送副本清理、全区域图片居中预览）
+> 代码版本：当前工作区（2026-10-11；平滑跟随为固定刚度软弹簧（DS 同款）；含会话侧栏宽度首帧恢复、侧栏会话列表改版（视觉/字号自适应、刷新节拍与增量渲染、目录组配额·拖拽·重命名、时间分桶与自动归档 30 天）、会话行尾状态胶囊与插件角标（规格入档 + 浅色档配色修正）、顶部通知与权限警示视觉系统、右侧历史纳入同款外壳（标题栏风格一致 + 描边）、子代理执行活跃性、follow-up 队列拖拽/键盘排序、公共左侧栏页签、设置中心、系统字体与排版令牌、模型两级菜单、统一悬停说明、执行工具会话面板与终端（xterm）、执行恢复渲染、上下文拆解浮窗、工具按需披露与 MCP 服务器级筛选、排队消息连续运行、执行回执证据链、插件界面样式就绪再上屏；新建会话与草稿目录、目录图标；压缩 reasoning 即时透传与活动流续接、静默心跳和单条阶段状态；输入附件卡片及未发送副本清理、全区域图片居中预览；桌面右键菜单与原生菜单仲裁）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
 
 ## 1. 前端架构与状态
@@ -14,7 +14,7 @@
 | 事件派发与 reducer：SSE 事件 → 状态归约 → 渲染 | `modules/event-dispatch.js`、`state/session-event-reducer.js` | 【图】 |
 | 布局面板与 Toast 容器 | `modules/layout-panels.js` | 【单】 |
 | 会话侧栏宽度首帧恢复（head 同步读取 `sidebar-width-px` → `--sidebar-width-px`；拖动后 mouseup 持久化） | `frontend/index.html`、`styles/app.css`、`modules/layout-panels.js` | 【单】 |
-| 标题栏用量表与标题区视觉基准（移除 `--ctx-unit` 缩放恢复参考值；`.titlebar` 顶部内边距 0.2rem；⋯ 与子代理胶囊 `translateY(1px)` 光心对齐，仅顶栏实例） | `styles/app.css` | 【单】 |
+| 标题栏用量表与标题区视觉基准（用量表字号 `calc(0.625 * 1rem)`＝16px 档 10px 随设置缩放；`.titlebar` 顶部内边距 0.2rem；⋯ 与子代理胶囊 `translateY(1px)` 光心对齐，仅顶栏实例） | `styles/app.css` | 【单】 |
 | 插件 UI 插槽（插件可注入界面位） | `app/plugin-ui-slots.js` | 【卡】 |
 | i18n 与主题（浅色/深色切换） | `modules/i18n.js`、`settings.js` | 【卡】 |
 | Windows 启动与页面激活（托盘单一打开者、后台/节能标签精确选择、可信失败回退） | `app/tray_launcher.py`、`app/platform_lifecycle.py` | 【单】 |
@@ -23,7 +23,8 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 消息渲染（Markdown、工具执行轨迹、附件图片） | `modules/message-rendering.js`、`state/message-renderers.js` | 【图】 |
-| 本地压缩 reasoning 实时行（安全纯文本、正文到达后默认收起、重试分行；仅运行态） | `modules/message-rendering.js`、`modules/event-dispatch.js`、`state/session-event-reducer.js`；05/02·UC-5B10 | 【单】 |
+| 本地压缩 reasoning 与摘要共用一条压缩记录（行内思考区实时展开、正文到达后收起且可手动展开，重试在记录内分区；安全纯文本，仅运行态） | `modules/message-rendering.js`、`modules/event-dispatch.js`、`state/session-event-reducer.js`；05/02·UC-5B10 | 【单】 |
+| 压缩阶段状态覆盖更新（每轨迹只保留最新状态，重复等待提示去重，状态更新保留流式/最终正文） | `message-rendering.js::appendProgressLog / applyProgressPersistedBody`、`agent_loop._await_thread_with_sse_keepalive`；05/02·UC-5B13 | 【单】 |
 | 耐久图片卡片与全区域预览：用户气泡/执行过程使用紧凑图片附件卡，输入框和最终回答图片也可打开共享居中浮窗；滚轮居中缩放按帧合并，图片行不额外增加底部间距，最终回答原排版与非图片执行条目不变 | modules/workspace-media.js、styles/app.css；05/02·UC-5B5/5B12 | 【单】 |
 | 平滑流式输出（固定刚度软弹簧跟随：ω=√180、单帧 ≤20px、无长尾） | `modules/smooth-stream.js` | 【卡】 |
 | 滚动历史锚点与回看 | `modules/session-scroll-history.js` | 【卡】 |
@@ -42,6 +43,8 @@
 | follow-up 队列保存耐久引用，并向服务端同步 queue pin | `modules/sse-handling.js`、`POST /api/attachments/references` | 【单】 |
 | follow-up 队列手动排序（拖拽握把/落点吸附/边缘自动滚动/键盘 ↑↓；拖拽期重绘推迟） | `modules/sse-handling.js`、`styles/app.css`、`modules/i18n.js` | 【单】 |
 | 设置中心（/settings）：分区注册表（宿主 9 分区 + 插件 `settings.section` 声明）、旧路由深链兼容、只提交改动的保存、搜索/缓存/脏数据保护 | `app/templates/settings_center.html`、`app/templates/static/settings/*`、`app/plugins/settings.py` | 【单】 |
+| 技能管理与会话导入：本机技能移除、同名安装冲突三选一（取消/覆盖/改名）、会话包导入（沿用/换 id 与引用改写） | `static/settings/package_import.js`、`sections_basic.js`；05/14·UC-5N7~5N8 | 【单】 |
+| 桌面右键菜单（14 类对象；键盘 Shift+F10 与方向键、Esc/Tab 关闭恢复焦点；生成中禁用改写与历史删除；原生菜单互斥与 frame 定位） | `modules/context-menus.js`、`styles/context-menus.css`、Electron `installNativeContextMenu`；05/16·UC-5Q1~5Q6 | 【单】 |
 
 ## 4. SSE 与实时管道
 | 能力 | 位置 | 状态 |
@@ -83,6 +86,7 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 会话列表/归档/删除/恢复（recover_sessions） | `modules/session-management.js`、后端 sessions API | 【图】 |
+| 会话行尾标记区：待办/草稿胶囊（`.session-*-badge`，`padding .14rem .36rem` / `999px` / `400 .62rem`）、插件角标（`.plugin-session-badge--<variant>`，manifest `label` + `variant`，在册 5 枚：Plan / Team / Goal / 待审核 / Game）、`?`/`!` 待处理徽标、相对时间、置顶图钉与悬停动作；浅色档 `info` 一律品牌靛蓝 `#4f46e5`、`success` 落 `#247a43`（含插件 `[data-plugin-id]` 覆盖规则的配色修正与 agent-goal `review-goal` 声明恢复）；行内「目标」占位胶囊 `.session-goal-badge` 已删除（无生产者） | `styles/app.css`、`modules/session-management.js`、`modules/human-interactions.js`、`plugin-ui-slots.js::renderSessionBadges`、`plugins/session-todo/web/session-panel.css`、`plugins/agent-goal/.myagent-plugin/plugin.json`；05/06·UC-5F17 及附录 | 【单】 |
 | 新建会话主按钮沿用当前会话工作目录；草稿态保留已选目录；箭头菜单收敛为当前目录 / 新目录两项 | `session-management.js::startNewSessionInCurrentDir / startNewSessionInFolder`、`shell-body.html`；05/06·UC-5F11 | 【单】 |
 | 欢迎页会话目录卡片：目录名/完整路径/选择按钮，选目录时保留输入草稿 | `message-rendering.js::syncWelcomeSessionDirectory`、`session-management.js::applyNewSessionWorkDir`；05/06·UC-5F12 | 【单】 |
 | 隐藏草稿携带 work_dir；目录与选择版本共同校验，丢弃迟到响应；按标签页恢复且校验服务端实际目录 | `collectNewSessionCreateOptions / ensurePrefetchedNewSession / prefetchNewSessionInner / sessionWorkDirMatchesTarget`；05/06·UC-5F13 | 【单】 |
@@ -115,6 +119,11 @@
 
 ## 9. 版本记录
 
+- 2026-10-11（v41）：补录桌面右键菜单（14 类对象、键盘与关闭条件、生成态限制、原生菜单互斥、插件 `bind` 接口）与技能管理/会话导入入口；05/16 新增、05/00 v32 与 05/14 v3 同步；05/02 v22（用量表 10px）与 05/13 v9.5（进行中图标）补记同步。
+- 2026-10-11（v40）：删除行内「目标」占位胶囊 `.session-goal-badge`（+`data-goal-status` 五档配色与浅色覆盖，共 9 条规则；无生产者）——行尾目标状态由 agent-goal 的 `Goal`（进行中）/`待审核`（完成待审）两枚插件角标承载；`npm run build` + `verify:dist` 通过（服务中 `main-Cbkpc6ct.css`，检索 `session-goal-badge`/`data-goal-status` 0 命中），实机复核行尾标记无回归；同步 05/06 v15 与 `示意图/`（`三种goal对照.html` ③ 区标注"已删除 · 历史记录"）。
+- 2026-10-11（v39）：补录会话行尾标记区——待办/草稿胶囊、插件角标（`session.badge` 投影，在册 Plan/Team/Goal/待审核/Game）、`?`/`!` 待处理徽标、相对时间与置顶图钉的规格与配色；修复浅色档角标文字色（`plugins/session-todo/web/session-panel.css` 的 `[data-plugin-id]` 覆盖规则引用浅色档未定义的 `--accent-1`，实机 computed `rgb(203,166,247)`→`rgb(79,70,229)`）；恢复被工作区误删的 agent-goal `review-goal`（`待审核`）声明——`tests/test_plugin_ui_contributions.py` 由 2 failed 转 21 passed，实机 200 会话投影复现该角标；两枚 goal 角标浅/深档配色已实测（Goal=靛蓝/浅薰衣草，待审核=#247a43/#a6e3a1）。同步 05/06 v14 与 `05-WebUI对话界面/示意图/`（实际渲染示意 HTML + 截图）。
+- 2026-10-11（v38）：压缩思考合并到同条压缩记录，实时展开、正文开始后收起且可再次展开；重试分区、中断局部清理，保留状态与已结束思考（05/02 v21、05/03 v9、09/01 v6）。
+- 2026-10-11（v37）：修复后台候选层等待正文才释放 reasoning；候选失败结束预览后切换，资源压力下显式思考回调仍实时。压缩等待用静默心跳，前端阶段状态覆盖更新并保留正文（09/01 v5、05/02 v20、05/03 v8）。
 - 2026-10-07（v36）：补录会话侧栏列表改版——列表视觉与字号自适应（首帧防闪）、行标记微交互与点置顶切入会话、侧栏时间刷新与统一节拍、列表增量渲染（内容流单行替换）、视图选项缺省（隐藏已归档/详细）、目录组默认前 5 与分级展开·拖拽排序·重命名、时间分桶（置顶/今天/昨天/近三天/近7天/近半月/近一月）与自动归档 30 天；详见 05/06·UC-5F16~5F23。
 - 2026-10-07（v35）：修正执行过程图片卡片尾部多余间距；图片行与下一条恢复原有间距规则，非图片行保持不变（05/02·UC-5B5）。
 - 2026-10-07（v34）：标题行胶囊光心对齐——子代理返回胶囊与目录触发器同款 `translateY(1px)`（与 ⋯ 一致）；两胶囊中心 16.09→17.09px（见 05/02·UC-5B11）。

@@ -1,6 +1,6 @@
 # 设置中心（/settings）· 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v2（覆盖至：当前工作区；遮罩/Esc 层级与 MCP 工具披露）
+- 版本：2026-10-11 v3（覆盖至：当前工作区；技能管理与会话包导入）
 - 用途：逐条审查（四字段格式）；核对散落在多处的设置入口是否统一收敛为一个「设置中心」页面，以及分区注册、保存语义、缓存与脏数据保护的边界。
 - 适用实现：`app/templates/settings_center.html`（无构建步骤的静态页）、`app/templates/static/settings/{core.js,sections_basic.js,sections_ext.js,sections_ops.js,plugin_sections.js,package_import.js,settings.css}`、`app/webui.py`（静态服务与设置相关路由）、`app/plugins/settings.py`（插件设置 schema）、`frontend/src/app/modules/settings.js`（聊天页齿轮入口与浮层接线）。
 - 上级：`00-WebUI对话界面整体设计.md`｜相关：`06-会话档案与技能面板方案设计-UseCase清单.md`（模型档案管理）、[`../../settings_plugin_api.md`](../../settings_plugin_api.md)（插件设置页签声明接口）、`../../settings_hub_adaptation_plan.md`（参考实现学习与适配方案）、`../../settings_center_verification.md`（逐分区验证报告）。
@@ -49,6 +49,20 @@
 - **规则与边界**：关闭保护只针对脏状态；无改动时行为不变。
 - **依据**：`sections_ops.js` / `core.js`、`tests/test_settings_center_browser.py`（无头 Edge 实测）、`tests/test_settings_modal_sections.py`。
 
+### UC-5N7 技能管理：本机移除与同名安装冲突
+
+- **触发**：在设置中心「技能」分区移除本机技能；或安装（拖入/选择）与既有技能同名的包。
+- **预期现象**：移除只删除本机技能目录并刷新列表；同名冲突弹出三选一（取消 / 覆盖 / 改名导入），改名导入生成不冲突的新目录名；冲突处理通过 `registerConflictResolver` 由宿主统一接线。
+- **规则与边界**：覆盖仅在用户确认后发生；上传限额 5000 文件/200 MiB 与既有安装区一致；技能启用状态仍走 `/api/skills/{name}/enabled`。
+- **依据**：`static/settings/package_import.js`（`registerConflictResolver`）、`sections_basic.js`；回归 `tests/test_skills_admin.py`。
+
+### UC-5N8 会话包导入
+
+- **触发**：导入导出的会话包（ZIP）或会话目录。
+- **预期现象**：导入生成新会话并进入正常会话列表；无冲突时沿用原会话 id；id 冲突时分配新 id 并改写包内自有引用，保证消息与附件引用一致。
+- **规则与边界**：导入不覆盖既有会话；共享存储（会话库/附件）边界同 04/00；损坏包明确报错、不产生半成品会话。
+- **依据**：设置中心「技能/档案」安装链路的会话导入入口；回归 `tests/test_session_import.py`。
+
 ## 3. 边界
 
 - `/setup` 配置向导不动；与设置中心共享同一份 `.sugaragent/model_profiles.json`，互不侵入。
@@ -64,8 +78,11 @@
 | UC-5N3/5N6 | `sections_ops.js`、`core.js`、`webui.py` |
 | UC-5N4 | `sections_basic.js`、`model-profiles.js` |
 | UC-5N5 | `core.js`、`webui.py` 静态段 |
+| UC-5N7 | `static/settings/package_import.js`（冲突仲裁）、`tests/test_skills_admin.py` |
+| UC-5N8 | 会话导入链路、`tests/test_session_import.py` |
 
 ## 5. 版本记录
 
+- 2026-10-11 v3：新增 UC-5N7（技能移除与同名安装冲突三选一）与 UC-5N8（会话包导入：沿用/换 id 与引用改写）。
 - 2026-10-05 v2：内编辑窗口支持遮罩关闭、Esc 优先关确认框/编辑窗（遮罩关闭不触发保存/确认）；MCP 页新增「工具按需披露」开关与按服务器批量启停/常驻按钮。
 - 2026-10-03 v1：拆分首版——设置中心（/settings）落地：5 入口收敛单页、分区注册表与插件设置声明、只提交改动的保存语义（.env 原子写）、搜索/缓存/脏数据保护；旧模板与加载器移除，`/setup` 向导与旧路由深链兼容不变。待提交后补提交号。

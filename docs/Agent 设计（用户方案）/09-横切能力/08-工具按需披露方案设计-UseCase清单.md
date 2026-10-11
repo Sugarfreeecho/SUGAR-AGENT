@@ -1,6 +1,6 @@
 # 工具按需披露 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v1（覆盖至：当前工作区；tool_search 桥接与计量）
+- 版本：2026-10-10 v2（覆盖至：当前工作区；pinned_tools 与配置语义收口）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/tool_search.py`、`app/tool_registry.py`、`app/builtin_host_tools.py`、`app/agent_mcp.py`、`app/agent_loop.py`、`frontend/src/app/modules/session-scroll-history.js`、设置中心 MCP 页。
 - 上级：`00-横切能力整体设计.md`；对接：`../02-ReAct运行时`（工具循环/审批/Hook）、`../06-能力扩展加载`（MCP/插件）、`../05-WebUI对话界面`（设置与浮窗计量）。
@@ -9,14 +9,14 @@
 
 ## 1. 功能定位
 
-把"模型看到的工具定义"与"会话获准执行的目录"分开：内置/会话管理/后台任务/终端常驻，MCP 与 Computer Use 经 `tool_search / tool_describe / tool_call` 按需取用。
+把"模型看到的工具定义"与"会话获准执行的目录"分开：内置白名单常驻（`RESIDENT_TOOLS`），其余工具（含新增 MCP/插件工具）经 `tool_search / tool_describe / tool_call` 按需取用；默认开启，配置文件为可选覆盖。
 
 ## 2. UseCase
 
 ### UC-9G1 披露策略与开关
 - **触发**：请求组装（每次按 generation 失效判断）。
 - **预期现象**：`on`（有可延迟工具即启用）/`auto`（延迟定义本地估算 token ≥ 窗口 `threshold_pct%` 或 `threshold_tokens`）/`off`（完整目录）。
-- **规则与边界**：配置缺失/删除/损坏 = 关闭披露，不删除任何工具；`pinned_tools` 常驻豁免、`defer_plugin_tools` 默认关闭；`MYAGENT_TOOL_SEARCH` 只能覆盖已开启配置（文件 off/缺失不能被环境变量重新开启）；设置中心 MCP 页提供开关。
+- **规则与边界**：内置白名单披露默认开启（`RESIDENT_TOOLS` 常驻；其余工具——含新增 MCP/插件工具——自动收入 tool search）；配置缺失/删除/损坏 = 使用内置默认，不删除任何工具；`pinned_tools`/MCP `tools.pin` 可追加常驻；`defer_plugin_tools` 已弃用；`MYAGENT_TOOL_SEARCH` 只能覆盖未明确 off 的配置（文件 off 不能被环境变量重新开启）；设置中心 MCP 页提供开关。
 - **依据**：`tool_search.py`、设置中心 `sections_ext.js`；回归 `tests/test_tool_search.py`。
 
 ### UC-9G2 桥接调用与执行边界
@@ -42,4 +42,5 @@
 
 ## 4. 版本记录
 
+- 2026-10-10 v2：UC-9G1 规则收口——`pinned_tools`/MCP `tools.pin` 追加常驻、`defer_plugin_tools` 已弃用、配置缺失/删除/损坏=内置默认 `on`（不删除工具）、`MYAGENT_TOOL_SEARCH` 不能重开文件 `off`；同步 `docs/tool-disclosure.md` 与 `tests/test_tool_search.py`。
 - 2026-10-05 v1：初版——UC-9G1 策略与开关、UC-9G2 桥接边界、UC-9G3 MCP 筛选、UC-9G4 计量与失效。

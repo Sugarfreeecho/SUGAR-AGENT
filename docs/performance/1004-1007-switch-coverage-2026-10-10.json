@@ -1,0 +1,1588 @@
+{
+  "date": "2026-10-10",
+  "refs": {
+    "old": "de2d6d6",
+    "current": "cf8024b"
+  },
+  "statistics": {
+    "changed_frontend_src_files": 34,
+    "changed_top_level_named_functions": 198,
+    "changed_functions_exactly_restored_by_source_switches": 12
+  },
+  "scope": "Static comparison. Source-function counts exclude object methods, arrow functions, top-level statements, HTML, CSS, and plugin/backend changes; not a runtime coverage percentage.",
+  "switches": [
+    {
+      "id": "auto_follow",
+      "label": "自动跟随最新文字",
+      "commit": "shared",
+      "scope": "source",
+      "source_operations": 10,
+      "module_operations": 0,
+      "css_override": true
+    },
+    {
+      "id": "smooth_follow",
+      "label": "平滑跟随动画",
+      "commit": "shared",
+      "scope": "source",
+      "source_operations": 1,
+      "module_operations": 0,
+      "css_override": false
+    },
+    {
+      "id": "collapsed_layout",
+      "label": "折叠执行框保留在布局",
+      "commit": "cf741f2",
+      "scope": "css",
+      "source_operations": 0,
+      "module_operations": 0,
+      "css_override": true
+    },
+    {
+      "id": "size_motion",
+      "label": "高度与尺寸动画",
+      "commit": "cf741f2",
+      "scope": "css",
+      "source_operations": 0,
+      "module_operations": 0,
+      "css_override": true
+    },
+    {
+      "id": "overflow_switch",
+      "label": "动画期间切换 overflow",
+      "commit": "cf741f2",
+      "scope": "module",
+      "source_operations": 0,
+      "module_operations": 2,
+      "css_override": false
+    },
+    {
+      "id": "process_reuse",
+      "label": "执行过程分组复用",
+      "commit": "cf741f2",
+      "scope": "source",
+      "source_operations": 4,
+      "module_operations": 0,
+      "css_override": false
+    },
+    {
+      "id": "history_anchor",
+      "label": "历史补页锚点补偿",
+      "commit": "cf741f2",
+      "scope": "uncovered",
+      "source_operations": 2,
+      "module_operations": 0,
+      "css_override": false
+    },
+    {
+      "id": "review_updates",
+      "label": "改动审阅实时更新",
+      "commit": "a2889c2",
+      "scope": "conditional",
+      "source_operations": 2,
+      "module_operations": 0,
+      "css_override": false
+    },
+    {
+      "id": "plugin_style_wait",
+      "label": "插件启动等待样式",
+      "commit": "a2889c2",
+      "scope": "module",
+      "source_operations": 0,
+      "module_operations": 1,
+      "css_override": false
+    },
+    {
+      "id": "sidebar_rendering",
+      "label": "侧栏分组与名称测量",
+      "commit": "cf741f2",
+      "scope": "source",
+      "source_operations": 3,
+      "module_operations": 0,
+      "css_override": true
+    },
+    {
+      "id": "compression_reasoning",
+      "label": "压缩思考流式展示",
+      "commit": "cf8024b",
+      "scope": "conditional",
+      "source_operations": 2,
+      "module_operations": 0,
+      "css_override": false
+    },
+    {
+      "id": "media_cards",
+      "label": "附件卡片与图片预览",
+      "commit": "cf741f2",
+      "scope": "conditional",
+      "source_operations": 3,
+      "module_operations": 0,
+      "css_override": false
+    }
+  ],
+  "frontend_src_files": [
+    "frontend/src/app/config.js",
+    "frontend/src/app/folder-icons.js",
+    "frontend/src/app/index.js",
+    "frontend/src/app/modules/collapse-transitions.js",
+    "frontend/src/app/modules/dock/embedder/right-column.js",
+    "frontend/src/app/modules/dock/embedder/surface-store.js",
+    "frontend/src/app/modules/dock/engine/types.js",
+    "frontend/src/app/modules/event-dispatch.js",
+    "frontend/src/app/modules/human-interactions.js",
+    "frontend/src/app/modules/i18n.js",
+    "frontend/src/app/modules/layout-panels.js",
+    "frontend/src/app/modules/message-rendering.js",
+    "frontend/src/app/modules/permissions.js",
+    "frontend/src/app/modules/session-management.js",
+    "frontend/src/app/modules/session-scroll-history.js",
+    "frontend/src/app/modules/settings.js",
+    "frontend/src/app/modules/shared-state-and-dialogs.js",
+    "frontend/src/app/modules/skill-picker.js",
+    "frontend/src/app/modules/sse-handling.js",
+    "frontend/src/app/modules/subagent-catalog-ui.js",
+    "frontend/src/app/modules/subagent-composer-ui.js",
+    "frontend/src/app/modules/toc-todo.js",
+    "frontend/src/app/modules/workspace-media.js",
+    "frontend/src/app/plugin-ui-slots.js",
+    "frontend/src/app/state/session-event-reducer.js",
+    "frontend/src/app/state/session-renderers.js",
+    "frontend/src/app/state/session-selectors.js",
+    "frontend/src/app/state/session-store.js",
+    "frontend/src/app/state/subagent-catalog-store.js",
+    "frontend/src/main.js",
+    "frontend/src/shell-body.html",
+    "frontend/src/styles/app.css",
+    "frontend/src/styles/collapse-transitions.css",
+    "frontend/src/vendor/myagent_path_picker.js"
+  ],
+  "entries": [
+    {
+      "file": "frontend/src/app/config.js",
+      "old_exact_raw_source_in_archive": false,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "getActiveWorkDir",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/folder-icons.js",
+      "old_exact_raw_source_in_archive": null,
+      "current_exact_raw_source_in_archive": false,
+      "functions": [
+        {
+          "name": "svg",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "mount",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/index.js",
+      "old_exact_raw_source_in_archive": false,
+      "current_exact_raw_source_in_archive": false,
+      "functions": []
+    },
+    {
+      "file": "frontend/src/app/modules/collapse-transitions.js",
+      "old_exact_raw_source_in_archive": null,
+      "current_exact_raw_source_in_archive": false,
+      "functions": [
+        {
+          "name": "isPanelCollapsed",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/dock/embedder/right-column.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "dockRightFileRow",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "dockRightChangesBody",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "dockRightChangeRow",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/dock/embedder/surface-store.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "dockActionStep",
+          "status": "removed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/dock/engine/types.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "dockIsPaneNode",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "dockIsSplitNode",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/event-dispatch.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "renderEvent",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/human-interactions.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "applyHumanInteractionEvent",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "updateHumanInteractionSessionBadge",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "createHumanApprovalCard",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "analyzeHumanApproval",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "createHumanTerminalCard",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renderHumanInteractionEvent",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renderHumanApprovalAnalysis",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/i18n.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "translateUiString",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "applyUiLanguage",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/layout-panels.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": []
+    },
+    {
+      "file": "frontend/src/app/modules/message-rendering.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "branchFinalTextMatches",
+          "status": "removed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "selectExecutionProcessGroup",
+          "status": "changed",
+          "switches": [
+            "process_reuse"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "renderExecutionRecord",
+          "status": "changed",
+          "switches": [
+            "review_updates"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "renderExecutionEvent",
+          "status": "changed",
+          "switches": [
+            "review_updates"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "ensureProcessGroup",
+          "status": "changed",
+          "switches": [
+            "process_reuse"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "sealProcessGroup",
+          "status": "changed",
+          "switches": [
+            "process_reuse"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "setWelcome",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "stripWorkspaceRootPrefixFromRelPath",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "buildSessionWorkspaceSubtitle",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "formatSessionListDate",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "updateSidebarLastUserPreviewImmediate",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "makeHrefFromAutoLinkToken",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "pathTokenToWorkspaceOpenRel",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "workspaceOpenTipPath",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "refreshInputPathChips",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "createProcessFeedRow",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "refreshUserMessageTimes",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "ensureUserMessageTimeAutoRefresh",
+          "status": "removed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "appendMessage",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "flushProgressDeltaText",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "finalizeProgressStreamChunks",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "discardProgressStreamChunks",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "findExecutionProcessGroup",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "syncWelcomeSessionDirectory",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionActivityTimestampMs",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "formatSessionListRelativeTimeFromTs",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "formatSessionListRelativeTime",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "removeInputPathTokenForPath",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "inputPathHasStructuredAttachment",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "appendCompressionReasoningDelta",
+          "status": "added",
+          "switches": [
+            "compression_reasoning"
+          ],
+          "restored_to_1004": false
+        },
+        {
+          "name": "finishCompressionReasoning",
+          "status": "added",
+          "switches": [
+            "compression_reasoning"
+          ],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/permissions.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "securityRulesContext",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/session-management.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "applySessionItemIndicators",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "syncSessionListIndicatorClasses",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "closeAllSessionMenus",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "bindSessionActionMenu",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "buildAndBindSessionRow",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "computeSessionListRenderKey",
+          "status": "removed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renderSessionListIfChanged",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renderSessionListError",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "startRuntimeStatusHeartbeat",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "fetchWithTimeout",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "reconcileRunStateFromServer",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "loadSessionMessages",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "switchSession",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "createNewSession",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "collectNewSessionCreateOptions",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "writeStoredPendingNewSession",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "ensurePrefetchedNewSession",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "prefetchNewSessionInner",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "materializeNewSessionInner",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "syncSessionRowQuickActions",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "performSessionListIndicatorSync",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sidebarPopupMenuItems",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setSidebarPopupOpen",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "bindSidebarPopup",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "refreshSessionListTimes",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "registerSidebarRefreshTask",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "scheduleSidebarRefreshTimer",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "runSidebarRefreshDue",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "catchUpSidebarRefresh",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "ensureSidebarTextTimesAutoRefresh",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "computeSessionListLayoutKey",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "computeSessionListContentMap",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionContentMapsEqual",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "patchSessionListRows",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "promptNewSessionWorkDirFallback",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "pickNewSessionWorkDir",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "applyNewSessionWorkDir",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "startNewSessionInFolder",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "startNewSessionInDir",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "activeSessionWorkDir",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "startNewSessionInCurrentDir",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "copyWorkDirPath",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "revealWorkDirInExplorer",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renameWorkDirGroup",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "bindSessionGroupDrag",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "buildSessionGroupActions",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "buildSessionViewMenuMarkup",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "syncSessionViewMenu",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "applySessionArchiveFilter",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setSessionSearchExpanded",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "applySessionListSearch",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "toggleSessionListHeadCollapse",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "syncSessionListHead",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "newSessionWorkDirTarget",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionWorkDirMatchesTarget",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/session-scroll-history.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "contextBreakdownOrNull",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renderContextBreakdownCard",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setContextTokenLabel",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "refreshContextTokensFromServer",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "cancelSmoothStreamFollowForSessionSwitch",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "persistHistoryPagingToStream",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "restoreHistoryPagingFromStream",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "maybeAutoLoadOlderHistory",
+          "status": "changed",
+          "switches": [
+            "history_anchor"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "resetSessionHistoryPaging",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "loadOlderHistoryChunk",
+          "status": "changed",
+          "switches": [
+            "history_anchor"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "ensureContextBreakdownForCurrentSession",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "enableHistoryAutoLoadForReader",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "cancelHistoryPrependViewport",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "captureHistoryPrependViewport",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "restoreHistoryPrependViewport",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "settleHistoryPrependViewport",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/settings.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "applySessionListMode",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "restoreUiPreferences",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "applyHostPrefs",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "syncSessionGroupControls",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "applySessionGroupBy",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/shared-state-and-dialogs.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "splitUserMessageVisualLines",
+          "status": "removed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/skill-picker.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "skillPickerGroupHtml",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renderSkillPickerMcpToolsHtml",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "renderSkillPicker",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/sse-handling.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "shouldApplySseSeqFilter",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "consumeAgentSseResponseInner",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "startContinueAfterSubagents",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "attachSessionEventStream",
+          "status": "changed",
+          "switches": [
+            "process_reuse"
+          ],
+          "restored_to_1004": false
+        },
+        {
+          "name": "normalizeStoredFollowupItem",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "persistFollowupQueue",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "followupQueueRenderSignature",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "getFollowupStatusText",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "appendFollowupQueueItem",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "enqueueCurrentInputAsFollowup",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "moveFollowupQueueItem",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "withdrawFollowup",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "syncFollowupQueueFromServer",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "removeConsumedFollowupSteer",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "scheduleAcceptedFollowupWatch",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sendQueuedFollowupAsChat",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sendFollowupNowImpl",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sendMessage",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "publishFollowupQueueToRun",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "ensureQueuedFollowupRegistered",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/subagent-catalog-ui.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": []
+    },
+    {
+      "file": "frontend/src/app/modules/subagent-composer-ui.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": []
+    },
+    {
+      "file": "frontend/src/app/modules/toc-todo.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "bindUiHoverTip",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "uiHoverTipsSuppressed",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "hideUiHoverTipsNow",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/modules/workspace-media.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "durableAttachmentImageHost",
+          "status": "changed",
+          "switches": [
+            "media_cards"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "renderDurableAttachmentImages",
+          "status": "changed",
+          "switches": [
+            "media_cards"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "attachmentImageSizeLabel",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "createDurableAttachmentCard",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "ensureDurableAttachmentPreviewDialog",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "measureDurableAttachmentPreviewFit",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "applyDurableAttachmentPreviewScale",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "cancelDurableAttachmentPreviewFrames",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "scheduleDurableAttachmentPreviewFit",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "resetDurableAttachmentPreviewZoom",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "openChatImagePreview",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/plugin-ui-slots.js",
+      "old_exact_raw_source_in_archive": false,
+      "current_exact_raw_source_in_archive": false,
+      "functions": [
+        {
+          "name": "loadPluginChatExtensions",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "loadPluginSessionPanelRenderers",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "pluginStyleReady",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "ensurePluginStyleLink",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/state/session-event-reducer.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "applySessionEvent",
+          "status": "changed",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/state/session-renderers.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "renderSessionListFromStore",
+          "status": "changed",
+          "switches": [
+            "sidebar_rendering"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "normalizeTruncatedSessionNames",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "appendSessionGroupBlock",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionGroupChevronSvg",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/state/session-selectors.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": [
+        {
+          "name": "selectNormalSessionTimeGroups",
+          "status": "changed",
+          "switches": [
+            "sidebar_rendering"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "selectSessionSections",
+          "status": "changed",
+          "switches": [
+            "sidebar_rendering"
+          ],
+          "restored_to_1004": true
+        },
+        {
+          "name": "getSessionGroupBy",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setSessionGroupBy",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "selectSessionWorkDir",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionWorkDirIdentity",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionWorkDirGroupLabel",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "getWorkDirOrder",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setWorkDirOrder",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "getWorkDirCustomLabel",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setWorkDirCustomLabel",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionGroupRevealStageOf",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "advanceSessionGroupReveal",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "resetSessionGroupReveal",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionGroupSessionsVisible",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "selectNormalSessionWorkDirGroups",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "selectNormalSessionGroups",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "getSessionListSearchQuery",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setSessionListSearchQuery",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "getSessionArchiveFilter",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "setSessionArchiveFilter",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "sessionMatchesListSearch",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        },
+        {
+          "name": "selectSessionsMatchingSearch",
+          "status": "added",
+          "switches": [],
+          "restored_to_1004": false
+        }
+      ]
+    },
+    {
+      "file": "frontend/src/app/state/session-store.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": []
+    },
+    {
+      "file": "frontend/src/app/state/subagent-catalog-store.js",
+      "old_exact_raw_source_in_archive": true,
+      "current_exact_raw_source_in_archive": true,
+      "functions": []
+    },
+    {
+      "file": "frontend/src/main.js",
+      "old_exact_raw_source_in_archive": false,
+      "current_exact_raw_source_in_archive": false,
+      "functions": []
+    },
+    {
+      "file": "frontend/src/vendor/myagent_path_picker.js",
+      "old_exact_raw_source_in_archive": false,
+      "current_exact_raw_source_in_archive": false,
+      "functions": []
+    }
+  ]
+}

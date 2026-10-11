@@ -1,0 +1,139 @@
+{
+  "tool_version": "1.0.0",
+  "portable_no_python_or_node_on_path": true,
+  "outside_workspace_launch": true,
+  "folder_and_zip_import": true,
+  "unit_tests_passed": 7,
+  "unchanged_main_js_css_versions": 5,
+  "test_context_tokens": 228423,
+  "browser_checks": [
+    {
+      "version": "20260930",
+      "speed": 8,
+      "status": "completed",
+      "text_verified": true,
+      "text_checks": [
+        {
+          "execution_id": "bfbfd431-b574-4223-a18b-df3a32f69861:reasoning:41:0",
+          "expected_sha256": "002d24f57835a9a5a48fbcb704762e737bf30eb95675b5e9692e3e1a98eb4c11",
+          "expected_characters": 28592,
+          "rendered_characters": 23392,
+          "projected_characters": 23392,
+          "retained_characters": 28592,
+          "source_text_verified": true,
+          "ui_projection_verified": true,
+          "found": true,
+          "verified": true,
+          "check_mode": "retained_text_and_ui_projection"
+        }
+      ]
+    },
+    {
+      "version": "20261007",
+      "speed": 8,
+      "status": "completed",
+      "text_verified": true,
+      "text_checks": [
+        {
+          "execution_id": "bfbfd431-b574-4223-a18b-df3a32f69861:reasoning:41:0",
+          "expected_sha256": "002d24f57835a9a5a48fbcb704762e737bf30eb95675b5e9692e3e1a98eb4c11",
+          "expected_characters": 28592,
+          "rendered_characters": 23392,
+          "projected_characters": 23392,
+          "retained_characters": 28592,
+          "source_text_verified": true,
+          "ui_projection_verified": true,
+          "found": true,
+          "verified": true,
+          "check_mode": "execution_record_and_ui_projection"
+        }
+      ]
+    },
+    {
+      "version": "20261004",
+      "speed": 8,
+      "status": "completed",
+      "text_verified": true,
+      "text_checks": [
+        {
+          "execution_id": "bfbfd431-b574-4223-a18b-df3a32f69861:reasoning:41:0",
+          "expected_sha256": "002d24f57835a9a5a48fbcb704762e737bf30eb95675b5e9692e3e1a98eb4c11",
+          "expected_characters": 28592,
+          "rendered_characters": 23392,
+          "projected_characters": 23392,
+          "retained_characters": 28592,
+          "source_text_verified": true,
+          "ui_projection_verified": true,
+          "found": true,
+          "verified": true,
+          "check_mode": "execution_record_and_ui_projection"
+        }
+      ]
+    },
+    {
+      "version": "20261003",
+      "speed": 8,
+      "status": "completed",
+      "text_verified": true,
+      "text_checks": [
+        {
+          "execution_id": "bfbfd431-b574-4223-a18b-df3a32f69861:reasoning:41:0",
+          "expected_sha256": "002d24f57835a9a5a48fbcb704762e737bf30eb95675b5e9692e3e1a98eb4c11",
+          "expected_characters": 28592,
+          "rendered_characters": 23392,
+          "projected_characters": 23392,
+          "retained_characters": 28592,
+          "source_text_verified": true,
+          "ui_projection_verified": true,
+          "found": true,
+          "verified": true,
+          "check_mode": "retained_text_and_ui_projection"
+        }
+      ]
+    },
+    {
+      "version": "20261009",
+      "speed": 8,
+      "status": "completed",
+      "text_verified": true,
+      "text_checks": [
+        {
+          "execution_id": "bfbfd431-b574-4223-a18b-df3a32f69861:reasoning:41:0",
+          "expected_sha256": "002d24f57835a9a5a48fbcb704762e737bf30eb95675b5e9692e3e1a98eb4c11",
+          "expected_characters": 28592,
+          "rendered_characters": 23392,
+          "projected_characters": 23392,
+          "retained_characters": 28592,
+          "source_text_verified": true,
+          "ui_projection_verified": true,
+          "found": true,
+          "verified": true,
+          "check_mode": "execution_record_and_ui_projection"
+        }
+      ]
+    }
+  ],
+  "note": "8x browser runs verify replay correctness, not version performance ranking. Source and packaged EXE also exercised pause/resume, markers, text and step ranges.",
+  "final_package_sha256": "ba1aaed9ee76bf1b655768bd709734fd61dfc932d7c7c41c6752b97c11fe0b76",
+  "final_executable_step_replay": {
+    "version": "20260930",
+    "status": "completed",
+    "text_verified": true,
+    "text_checks": [
+      {
+        "execution_id": "bfbfd431-b574-4223-a18b-df3a32f69861:reasoning:37:0",
+        "expected_sha256": "bb625722ca874fbfa31220b2d4a0873000a440e2438dcfca2fdf2465a8f95219",
+        "expected_characters": 8522,
+        "rendered_characters": 8522,
+        "projected_characters": 8522,
+        "retained_characters": 8522,
+        "source_text_verified": true,
+        "ui_projection_verified": true,
+        "found": true,
+        "verified": true,
+        "check_mode": "retained_text_and_ui_projection"
+      }
+    ]
+  },
+  "final_executable_marker_count": 1
+}

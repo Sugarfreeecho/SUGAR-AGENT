@@ -133,6 +133,16 @@ WebUI 按 dsh 的三段式布局：最左会话列表、中间会话、右侧一
 但从不认领手势）；chips 让步、条尾控件永不让步；焦点落 click 不落 press；嵌套
 关闭按钮停止自己的 press；全屏用主题 accent。
 
+**chip 关闭按钮垂直光心（2026-10-11 修复）**：`×` 原本偏低 2.25px（浅色主题），两个
+成因——(a) `.dock-chip-close` 用 `top: 4px` 定位于**内边距盒**，而浅色主题给胶囊加了
+1px 描边（`html.theme-light .dock-chip`），20px 圆因此整体低 1px（深色主题无描边不受影响）；
+(b) `×` 的墨迹中心在 `line-height: 1` 的盒里天然偏低约 1px（Segoe UI 的乘号居中在
+数学轴上）。改法：`top: 50%` + `translateY(-50%)`（与描边无关，对称描边下内边距盒中心
+即边框盒中心）+ 2px 底部内边距（内容盒上移 1px，纯光学，字形不变）。实测（8x 截图，
+墨迹中心 vs 胶囊中心，默认 16px 字号档）：2.25px → 0.25px；三档字号 14/16/17px 均
+≤0.4px；12–20px 全档 ≤0.9px（余量为字形栅格化取整）。样式位置见
+`frontend/src/styles/dock.css` 的 `.dock-chip-close`。
+
 ## 6. 公开接口
 
 `globalThis.MyAgentDock`（`myagent:dock-ready` 后可用）：

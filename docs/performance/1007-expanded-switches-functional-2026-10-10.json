@@ -1,0 +1,376 @@
+{
+  "tool_version": "1.0.5",
+  "jank_tested": false,
+  "playback_speed": 8,
+  "scope": "真实日志功能校验，不评价肉眼流畅度",
+  "samples": [
+    {
+      "label": "会话加载、侧栏与刷新模块",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"session_modules\"],\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "流式事件与执行渲染模块",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"stream_pipeline\"],\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "历史与滚动状态模块",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"history_module\"],\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "上下文卡片刷新",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"context_refresh\"],\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "审批、终端与交互模块",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"interaction_modules\"],\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "媒体展示完整模块",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"media_module\"],\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "1004脚本＋1007样式",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"js_bundle\"],\"assets\":{\"js\":\"20261004\",\"css\":\"20261007\",\"html\":\"20261007\",\"plugin\":\"20261007\"},\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "1007脚本＋1004样式",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"css_bundle\"],\"assets\":{\"js\":\"20261007\",\"css\":\"20261004\",\"html\":\"20261007\",\"plugin\":\"20261007\"},\"mode\":\"smooth\"}"
+        }
+      }
+    },
+    {
+      "label": "1004完整基线",
+      "proof": {
+        "result": {
+          "type": "string",
+          "value": "{\"status\":\"完成，文字校验通过 · 22.7 / 22.7 秒 · 218/218 条事件\",\"errors\":[],\"verified\":true,\"inputs\":218,\"disabled\":[\"frontend_bundle\"],\"assets\":{\"js\":\"20261004\",\"css\":\"20261004\",\"html\":\"20261004\",\"plugin\":\"20261004\"},\"mode\":\"smooth\"}"
+        }
+      }
+    }
+  ],
+  "saved_functional_records": [
+    {
+      "file": "20261010-220433-611275cb.json",
+      "disabled": [
+        "review_updates",
+        "plugin_style_wait",
+        "session_modules",
+        "context_refresh",
+        "stream_pipeline",
+        "history_module",
+        "interaction_modules",
+        "media_module"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261004"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220618-22c9db3e.json",
+      "disabled": [
+        "session_modules"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220626-28bac641.json",
+      "disabled": [
+        "stream_pipeline"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220633-2106ba21.json",
+      "disabled": [
+        "history_module"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220726-15038111.json",
+      "disabled": [
+        "context_refresh"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220732-f9a28eff.json",
+      "disabled": [
+        "interaction_modules"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220812-ea342fb9.json",
+      "disabled": [
+        "media_module"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220841-42ba3227.json",
+      "disabled": [
+        "js_bundle"
+      ],
+      "assets": {
+        "js": "20261004",
+        "css": "20261007",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220913-7576cd19.json",
+      "disabled": [
+        "css_bundle"
+      ],
+      "assets": {
+        "js": "20261007",
+        "css": "20261004",
+        "html": "20261007",
+        "plugin": "20261007"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-220938-f776e238.json",
+      "disabled": [
+        "frontend_bundle"
+      ],
+      "assets": {
+        "js": "20261004",
+        "css": "20261004",
+        "html": "20261004",
+        "plugin": "20261004"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    },
+    {
+      "file": "20261010-221146-60d490e5.json",
+      "disabled": [
+        "frontend_bundle"
+      ],
+      "assets": {
+        "js": "20261004",
+        "css": "20261004",
+        "html": "20261004",
+        "plugin": "20261004"
+      },
+      "mode": "smooth",
+      "text_verified": true,
+      "inputs": 218,
+      "errors": []
+    }
+  ],
+  "portable_release": {
+    "tool_version": "1.0.5",
+    "directory": "D:\\AI\\AI Agent\\MyAgent Developer\\tools\\session-replay\\dist\\SessionReplay-1.0.5",
+    "zip": "D:\\AI\\AI Agent\\MyAgent Developer\\tools\\session-replay\\dist\\SessionReplay-Windows-x64-1.0.5.zip",
+    "release_sha256": "132a6e387e6ed4256aecf262d38994b53574717482dd3ec95c9b44bc6eb602bd",
+    "release_contains_user_data": false,
+    "copied_data_files": [
+      {
+        "file": "inputs/77dc386c-fe09-4863-a50d-1a3233060de2.zip",
+        "sha256": "1f0dd2de244b8a687bfebff1d1a0c630de9c965ccf5a37229f9b58aae2538b1a"
+      },
+      {
+        "file": "results/20261010-211504-c4b32e9a.json",
+        "sha256": "985eb58955b6e0ca6f15fe5d03585aa333f3ff7282a6e5ef90fc0a6659351024"
+      },
+      {
+        "file": "results/20261010-211533-580d13d6.json",
+        "sha256": "39295150cbfbf4e275ad632749b5b43548ea0532fd9648e97ca64ae8d83ef630"
+      },
+      {
+        "file": "results/20261010-214402-31af9945.json",
+        "sha256": "cb0ff8fdfc42082f552baf93b238cbcaf6b5a079c533d9e2b99155442ca20aba"
+      },
+      {
+        "file": "sessions/3a56084f8cb8f3cb48a690a9/catalog.json",
+        "sha256": "b9c19965a3787ef0a170bc194a73fcfc3fa9175376b67a350f0d25636fe90bb9"
+      },
+      {
+        "file": "sessions/3a56084f8cb8f3cb48a690a9/session.json",
+        "sha256": "4c215de89de4046ed81875d8dacdc7f3d2a1a8170b6d49941de087b479dbce8e"
+      },
+      {
+        "file": "sessions/4715ac5dc046425ed7bb28e7/catalog.json",
+        "sha256": "d926bd95b30b8351032093d8877db3c009487ce00070089422ff968cc521b31a"
+      },
+      {
+        "file": "sessions/4715ac5dc046425ed7bb28e7/session.json",
+        "sha256": "ab67de23382befd9b32aa2e759b29b24beba986ca86c82eed45a7d6956228ad2"
+      },
+      {
+        "file": "sessions/7bfc7f2d56200f3bb487271d/catalog.json",
+        "sha256": "4bc3c46f84239288294ae05b65ea6ca75b2fb8b65d6eaa448e5b942886c029b2"
+      },
+      {
+        "file": "sessions/7bfc7f2d56200f3bb487271d/session.json",
+        "sha256": "d7e1353264a7e310dae782ea1eeee0dd28d8c263dd4da2949709116331bd9804"
+      },
+      {
+        "file": "sessions/8c634c9663a50f7df12d54f5/catalog.json",
+        "sha256": "5f8fcf0285ec20b8b3cd538689037a30f974effa2126847b54b69073b35c2e7e"
+      },
+      {
+        "file": "sessions/8c634c9663a50f7df12d54f5/session.json",
+        "sha256": "316ce3b07f99ef076f1bf17653d3725150bf8636e678a77f226203802648b314"
+      },
+      {
+        "file": "sessions/b202205e2fdabce4ba23152a/catalog.json",
+        "sha256": "ecc07b011d15875c88e6ea25bf2ff726610334d21066c6d0d7510f77df34e62e"
+      },
+      {
+        "file": "sessions/b202205e2fdabce4ba23152a/session.json",
+        "sha256": "8253cd3dc9c20a983b53135f5aa285c1422e1262a2e78c6ce1313455d9ba17c9"
+      },
+      {
+        "file": "sessions/b3c648aa9f9cd2778ce1e2bf/catalog.json",
+        "sha256": "2be5caac54c7e8ca908dfad71710abfae2265a4b5116ef8ef2cfc91ee814706c"
+      },
+      {
+        "file": "sessions/b3c648aa9f9cd2778ce1e2bf/session.json",
+        "sha256": "361502bb1e67b426161a7e017dff13779eef1132a2c5276993a029fe7a5fc975"
+      },
+      {
+        "file": "sessions/fe11eb3a5bf5a2e355922a7b/catalog.json",
+        "sha256": "8c67173eb45c670286a60b8fcd45eb9f1fe8a738eb82552448eabe77941997ae"
+      },
+      {
+        "file": "sessions/fe11eb3a5bf5a2e355922a7b/session.json",
+        "sha256": "7b0f51e68df51f3bff5bf25f9f5157c8ebdccd7434bc9266a6387452090dd461"
+      },
+      {
+        "file": "新增增量会话.json",
+        "sha256": "afcec76f108c3c171ba5e14fd0dd1d727a33ca2ed363b95c07696d382d0e159d"
+      },
+      {
+        "file": "新增增量会话.txt",
+        "sha256": "873253b64a40091872da4243e29b65bfe083932ef8f3c52f19fb3cd5651a1a52"
+      }
+    ],
+    "sessions": 7,
+    "records": 3,
+    "archived_assets_verified": 10,
+    "old_directory_untouched": true
+  },
+  "verification": {
+    "python_tests_passed": 17,
+    "archived_js_variant_parse_checks_passed": true,
+    "follow_behavior_checks_passed": true,
+    "replay_api_checks_passed": true,
+    "production_frontend_modified_this_task": false
+  },
+  "portable_exe_verified": true,
+  "screenshot": "D:\\AI\\AI Agent\\MyAgent Developer\\tools\\session-replay\\dist\\1007-expanded-switches.png"
+}

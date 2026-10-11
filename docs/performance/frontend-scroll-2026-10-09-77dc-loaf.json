@@ -1,0 +1,83 @@
+{
+  "sessionId": "77dc386c-fe09-4863-a50d-1a3233060de2",
+  "page": "http://127.0.0.1:8192/?_=1791529770",
+  "captureMethod": "Temporary PerformanceObserver for long-animation-frame entries on the existing user tab. Selected aggregate values transcribed from the bounded capture; this is not a full CPU or display trace.",
+  "startedAt": "2026-10-09T07:35:18.356Z",
+  "endedAt": "2026-10-09T07:36:02.703Z",
+  "elapsedMs": 44347.6,
+  "hiddenAtEnd": false,
+  "entryLimit": 120,
+  "entryCount": 120,
+  "firstFrameStartTimeMs": 1548169.1,
+  "lastFrameStartTimeMs": 1586861.8,
+  "observerDisconnectedAndDeleted": true,
+  "pluginSource": {
+    "url": "http://127.0.0.1:8192/plugin-assets/change-review/change-review.js?v=b6d053284b215821486b0393ccb6fbf9b8cf25047f6cc33e391bd0b4f4187ef5",
+    "localPath": "plugins/change-review/web/change-review.js",
+    "servedAndLocalBytesMatched": true,
+    "byteLength": 49740,
+    "sha256": "c245188851e6132cb29e29e3d7be014f1bc18fcd156c822a7e9e2472b610d0d9"
+  },
+  "attributedCallbacks": [
+    {
+      "source": "pluginSource",
+      "sourceCharPosition": 14040,
+      "localLine": 324,
+      "invoker": "FrameRequestCallback",
+      "mappedCallback": "scheduleViewportSync callback -> syncActiveAggregateToViewport",
+      "count": 29,
+      "totalDurationMs": 2362.8,
+      "forcedStyleAndLayoutDurationMs": 2337.8,
+      "maxDurationMs": 173.8,
+      "maxForcedStyleAndLayoutDurationMs": 171.2
+    },
+    {
+      "source": "pluginSource",
+      "sourceCharPosition": 29272,
+      "localLine": 671,
+      "invoker": "TimerHandler:setTimeout",
+      "mappedCallback": "scheduleScanExisting callback -> scanExisting",
+      "count": 3,
+      "totalDurationMs": 349.2,
+      "forcedStyleAndLayoutDurationMs": 305.4,
+      "maxDurationMs": 152.5,
+      "maxForcedStyleAndLayoutDurationMs": 134.6
+    },
+    {
+      "source": "pluginSource",
+      "sourceCharPosition": 29094,
+      "localLine": 664,
+      "invoker": "FrameRequestCallback",
+      "mappedCallback": "scheduleRender callback -> render",
+      "count": 3,
+      "totalDurationMs": 61.1,
+      "forcedStyleAndLayoutDurationMs": 0,
+      "maxDurationMs": 29.1,
+      "maxForcedStyleAndLayoutDurationMs": 0
+    },
+    {
+      "sourceURL": "http://127.0.0.1:8192/assets/main-C25LcJ-W.js",
+      "sourceCharPosition": 369908,
+      "invoker": "DOMWindow.onscroll",
+      "count": 1,
+      "totalDurationMs": 14,
+      "forcedStyleAndLayoutDurationMs": 0,
+      "maxDurationMs": 14,
+      "maxForcedStyleAndLayoutDurationMs": 0
+    }
+  ],
+  "sourceInspection": {
+    "scrollListener": "document.addEventListener('scroll', viewportListener, true)",
+    "path": ["scheduleViewportSync", "syncActiveAggregateToViewport", "viewportAggregate", "viewedTurnRange / visibilityMetric"],
+    "layoutReads": ["getComputedStyle", "scrollTop / clientHeight / scrollHeight", "getBoundingClientRect"]
+  },
+  "conclusion": "A concrete callback repeatedly triggers expensive synchronous style/layout during the reported stuttering session. Causality and the upstream source of dirty layout require an isolation comparison before fixing it.",
+  "limits": [
+    "The bounded list reached its limit, so it does not cover every slow frame over the full capture interval.",
+    "Several slow frames have no script attribution. The listed callbacks are not a complete explanation of all stalls.",
+    "A layout-reading callback can force expensive layout dirtied by another component; attribution does not prove that the plugin caused all layout invalidation.",
+    "Callback and forced-layout durations overlap other performance metrics and must not be added to them.",
+    "No controlled disabled/enabled comparison or actual display-displacement measurement was performed in this capture.",
+    "The plugin source was inspected without modification. No production rendering or scrolling code changed during this diagnosis."
+  ]
+}

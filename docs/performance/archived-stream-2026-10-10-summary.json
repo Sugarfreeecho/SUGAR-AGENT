@@ -1,0 +1,2760 @@
+{
+  "method": "Original archived bundles/CSS/plugins; isolated mocked APIs and deterministic SSE; foreground Edge through CUA; no model invocation; RAF cadence is not compositor FPS.",
+  "manifest": {
+    "work": "C:\\Users\\SUGARF~1\\AppData\\Local\\Temp\\archived-stream-replay-kp187suf",
+    "tokenizer": "cl100k_base",
+    "versions": [
+      {
+        "version": "20260930",
+        "archive": "D:\\AI\\AI Agent\\SugarAgent Version\\version\\20260930.zip",
+        "archive_sha256": "029f65ef57d298860bc4127485dbfb67e81186672cd98695dc09624612a2596a",
+        "directory": "C:\\Users\\SUGARF~1\\AppData\\Local\\Temp\\archived-stream-replay-kp187suf\\20260930",
+        "js": "/assets/main-BgYfhbZb.js",
+        "css": "/assets/main-CWclt11u.css",
+        "js_sha256": "91cd086c251b088eb728078b627d93a90759b08edfc890954368eab41d21a36f",
+        "css_sha256": "6abaf7bd1a42d20fe88086ed8c4b07b07a26f73f057b32b1d915966e56b27d5e",
+        "source_present": true,
+        "plugin_present": true
+      },
+      {
+        "version": "20261003",
+        "archive": "D:\\AI\\AI Agent\\MyAgent Developer\\20261003.zip",
+        "archive_sha256": "35cfd9046a50da00f2d92db6521b037474a81dca55567159f88b22e58c9de397",
+        "directory": "C:\\Users\\SUGARF~1\\AppData\\Local\\Temp\\archived-stream-replay-kp187suf\\20261003",
+        "js": "/assets/main-DH8VlRyA.js",
+        "css": "/assets/main-dYsFId0u.css",
+        "js_sha256": "914394b502fb77fd1cbb4c7890a934413bfab7466d1884f1b317971bab71fa82",
+        "css_sha256": "2994c5af36a66af626bf6f9b1ed09977c39d8175d9ab045a96ea8f0c2675b995",
+        "source_present": true,
+        "plugin_present": true
+      },
+      {
+        "version": "20261004",
+        "archive": "D:\\AI\\AI Agent\\MyAgent Developer\\20261004.zip",
+        "archive_sha256": "25eaa028652ad09489db79c867fdaee2bdb05b932e2b40b3c0c2c595dffd735e",
+        "directory": "C:\\Users\\SUGARF~1\\AppData\\Local\\Temp\\archived-stream-replay-kp187suf\\20261004",
+        "js": "/assets/main-4D7D2on2.js",
+        "css": "/assets/main-BEgsZt3f.css",
+        "js_sha256": "6dbd5c7a814ad1d1b73b61f3b432deed7f76d8a19678b975dd1600a951705877",
+        "css_sha256": "c4591bdd2b37bdff0f6eabd059e899e6ec5909efb16f7722dce82bb92c2a7bd5",
+        "source_present": true,
+        "plugin_present": true
+      },
+      {
+        "version": "20261007",
+        "archive": "D:\\AI\\AI Agent\\MyAgent Developer\\20261007.zip",
+        "archive_sha256": "d68d50522f773276caa77483f8360d3243aab828bdf71efffcf21543d4ac8165",
+        "directory": "C:\\Users\\SUGARF~1\\AppData\\Local\\Temp\\archived-stream-replay-kp187suf\\20261007",
+        "js": "/assets/main-B_mPBPj8.js",
+        "css": "/assets/main-BekzvA-B.css",
+        "js_sha256": "55d350bb9c45aa41441bf6c73647989429a4cc7f0a3997d458b32afe8ab22e28",
+        "css_sha256": "f65c0a9bad01dbe2a76562827438ac7f6093bb7f90ab0e634814a2d8c38b3f05",
+        "source_present": false,
+        "plugin_present": true
+      },
+      {
+        "version": "20261009",
+        "archive": "D:\\AI\\AI Agent\\MyAgent Developer\\20261009.zip",
+        "archive_sha256": "9ccdf7da5c0073234e07fd245e8902b5b3d11b54c3679497435831463f601d45",
+        "directory": "C:\\Users\\SUGARF~1\\AppData\\Local\\Temp\\archived-stream-replay-kp187suf\\20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668",
+        "css_sha256": "bab75e7d02921c4387f71965389ab229c734ab05878976178b6795a1a15bf86f",
+        "source_present": false,
+        "plugin_present": true
+      }
+    ]
+  },
+  "samples": [
+    {
+      "version": "20260930",
+      "assets": {
+        "version": "20260930",
+        "js": "/assets/main-BgYfhbZb.js",
+        "css": "/assets/main-CWclt11u.css",
+        "js_sha256": "91cd086c251b088eb728078b627d93a90759b08edfc890954368eab41d21a36f"
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": false,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 23009.3,
+        "baseline_frame_ms": 33,
+        "raf_hz": 15.197,
+        "p95_gap_ms": 164.9,
+        "p99_gap_ms": 379.2,
+        "max_gap_ms": 461.7,
+        "gaps_over_1_5_frames": 138,
+        "gaps_over_50ms": 135,
+        "longtasks": 94,
+        "longtask_ms": 11197,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20260930-large-1-cadence.json"
+    },
+    {
+      "version": "20260930",
+      "assets": {
+        "version": "20260930",
+        "js": "/assets/main-BgYfhbZb.js",
+        "css": "/assets/main-CWclt11u.css",
+        "js_sha256": "91cd086c251b088eb728078b627d93a90759b08edfc890954368eab41d21a36f"
+      },
+      "scenario": "large",
+      "probe": "motion",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": false,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 23162.9,
+        "baseline_frame_ms": 32.9,
+        "raf_hz": 18.967,
+        "p95_gap_ms": 115.4,
+        "p99_gap_ms": 247.5,
+        "max_gap_ms": 411.9,
+        "gaps_over_1_5_frames": 181,
+        "gaps_over_50ms": 144,
+        "longtasks": 87,
+        "longtask_ms": 8071,
+        "moving_frames": 127,
+        "max_scroll_step_px": 9.5,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "validity_note": "240 events, visible throughout, baseline 32.9ms; removed erroneous low-test-RAF validity gate",
+      "raw_file": "20260930-large-1-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 51,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20260930",
+      "assets": {
+        "version": "20260930",
+        "js": "/assets/main-BgYfhbZb.js",
+        "css": "/assets/main-CWclt11u.css",
+        "js_sha256": "91cd086c251b088eb728078b627d93a90759b08edfc890954368eab41d21a36f"
+      },
+      "scenario": "large",
+      "probe": "motion",
+      "trial": 1791600946894,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": false,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22896.9,
+        "empty_frame_ms": 32.8,
+        "baseline_frame_ms": 33.1,
+        "raf_hz": 12.922,
+        "p95_gap_ms": 214.3,
+        "p99_gap_ms": 346.2,
+        "max_gap_ms": 428.7,
+        "gaps_over_1_5_frames": 166,
+        "gaps_over_50ms": 156,
+        "longtasks": 122,
+        "longtask_ms": 13337,
+        "moving_frames": 120,
+        "max_scroll_step_px": 9,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T02:55:23.955Z",
+            "updatedAt": "2026-10-10T02:55:46.895Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 295,
+                    "totalMs": 22845,
+                    "maxMs": 428.7000000000007,
+                    "meanMs": 77.44067796610169,
+                    "p95UpperMs": 250
+                  },
+                  "follow.work": {
+                    "count": 295,
+                    "totalMs": 1684.5000002384186,
+                    "maxMs": 144.10000002384186,
+                    "meanMs": 5.710169492333622,
+                    "p95UpperMs": 33.4
+                  },
+                  "stream.flush": {
+                    "count": 233,
+                    "totalMs": 1576.3000000715256,
+                    "maxMs": 250.90000009536743,
+                    "meanMs": 6.765236051809123,
+                    "p95UpperMs": 50
+                  },
+                  "stream.frameGap": {
+                    "count": 206,
+                    "totalMs": 17158.699999999986,
+                    "maxMs": 428.7000000000007,
+                    "meanMs": 83.2946601941747,
+                    "p95UpperMs": 250
+                  },
+                  "layout.overflowBatch": {
+                    "count": 119,
+                    "totalMs": 65.89999985694885,
+                    "maxMs": 28.600000023841858,
+                    "meanMs": 0.5537815114029315,
+                    "p95UpperMs": 1
+                  }
+                },
+                "counters": {
+                  "text.nodeReplacements": 1,
+                  "stream.revealedCodePoints": 960,
+                  "text.nodeAppends": 232,
+                  "layout.overflowCandidates": 119
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20260930-large-1791600946894-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 50,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20260930",
+      "assets": {
+        "version": "20260930",
+        "js": "/assets/main-BgYfhbZb.js",
+        "css": "/assets/main-CWclt11u.css",
+        "js_sha256": "91cd086c251b088eb728078b627d93a90759b08edfc890954368eab41d21a36f"
+      },
+      "scenario": "small",
+      "probe": "motion",
+      "trial": 1791600994378,
+      "context_label_tokens": 8000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 8000,
+      "history_characters": 22137,
+      "history_rows": 23,
+      "dom_elements": 189,
+      "capabilities": {
+        "executionRecords": false,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22818,
+        "empty_frame_ms": 16.6,
+        "baseline_frame_ms": 32.9,
+        "raf_hz": 15.561,
+        "p95_gap_ms": 181.3,
+        "p99_gap_ms": 280.2,
+        "max_gap_ms": 346.1,
+        "gaps_over_1_5_frames": 316,
+        "gaps_over_50ms": 155,
+        "longtasks": 99,
+        "longtask_ms": 10828,
+        "moving_frames": 120,
+        "max_scroll_step_px": 9,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T02:56:11.518Z",
+            "updatedAt": "2026-10-10T02:56:34.379Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 354,
+                    "totalMs": 22815.2,
+                    "maxMs": 346.10000000000036,
+                    "meanMs": 64.4497175141243,
+                    "p95UpperMs": 250
+                  },
+                  "follow.work": {
+                    "count": 354,
+                    "totalMs": 1292.9000005722046,
+                    "maxMs": 185,
+                    "meanMs": 3.652259888622047,
+                    "p95UpperMs": 16.7
+                  },
+                  "stream.flush": {
+                    "count": 287,
+                    "totalMs": 1802.1000009775162,
+                    "maxMs": 150.10000002384186,
+                    "meanMs": 6.279094080061032,
+                    "p95UpperMs": 33.4
+                  },
+                  "stream.frameGap": {
+                    "count": 258,
+                    "totalMs": 17076.10000000001,
+                    "maxMs": 313.2999999999993,
+                    "meanMs": 66.18643410852717,
+                    "p95UpperMs": 250
+                  },
+                  "layout.overflowBatch": {
+                    "count": 144,
+                    "totalMs": 118.1000006198883,
+                    "maxMs": 84.79999995231628,
+                    "meanMs": 0.8201388931936688,
+                    "p95UpperMs": 2
+                  }
+                },
+                "counters": {
+                  "text.nodeReplacements": 1,
+                  "stream.revealedCodePoints": 960,
+                  "text.nodeAppends": 286,
+                  "layout.overflowCandidates": 144
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20260930-small-1791600994378-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 49,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261003",
+      "assets": {
+        "version": "20261003",
+        "js": "/assets/main-DH8VlRyA.js",
+        "css": "/assets/main-dYsFId0u.css",
+        "js_sha256": "914394b502fb77fd1cbb4c7890a934413bfab7466d1884f1b317971bab71fa82"
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": false,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": false,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22886.6,
+        "baseline_frame_ms": 65.9,
+        "raf_hz": 10.088,
+        "p95_gap_ms": 280.1,
+        "p99_gap_ms": 494.6,
+        "max_gap_ms": 1005.6,
+        "gaps_over_1_5_frames": 80,
+        "gaps_over_50ms": 135,
+        "longtasks": 117,
+        "longtask_ms": 14638,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261003-large-1-cadence.json"
+    },
+    {
+      "version": "20261003",
+      "assets": {
+        "version": "20261003",
+        "js": "/assets/main-DH8VlRyA.js",
+        "css": "/assets/main-dYsFId0u.css",
+        "js_sha256": "914394b502fb77fd1cbb4c7890a934413bfab7466d1884f1b317971bab71fa82"
+      },
+      "scenario": "large",
+      "probe": "motion",
+      "trial": 1791600905780,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": false,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22788.4,
+        "empty_frame_ms": 16.6,
+        "baseline_frame_ms": 33,
+        "raf_hz": 11.062,
+        "p95_gap_ms": 230.8,
+        "p99_gap_ms": 461.6,
+        "max_gap_ms": 560.5,
+        "gaps_over_1_5_frames": 240,
+        "gaps_over_50ms": 155,
+        "longtasks": 123,
+        "longtask_ms": 14209,
+        "moving_frames": 107,
+        "max_scroll_step_px": 9.5,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T02:54:42.988Z",
+            "updatedAt": "2026-10-10T02:55:05.781Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 250,
+                    "totalMs": 22846.199999999997,
+                    "maxMs": 560.5,
+                    "meanMs": 91.38479999999998,
+                    "p95UpperMs": 250
+                  },
+                  "follow.work": {
+                    "count": 250,
+                    "totalMs": 1154.8000000715256,
+                    "maxMs": 178.29999995231628,
+                    "meanMs": 4.619200000286102,
+                    "p95UpperMs": 16.7
+                  },
+                  "stream.flush": {
+                    "count": 193,
+                    "totalMs": 1074.6999999284744,
+                    "maxMs": 82.89999997615814,
+                    "meanMs": 5.568393782012821,
+                    "p95UpperMs": 25
+                  },
+                  "stream.frameGap": {
+                    "count": 164,
+                    "totalMs": 16202.700000000004,
+                    "maxMs": 560.5,
+                    "meanMs": 98.79695121951222,
+                    "p95UpperMs": 250
+                  },
+                  "layout.overflowBatch": {
+                    "count": 98,
+                    "totalMs": 35.69999945163727,
+                    "maxMs": 13.800000071525574,
+                    "meanMs": 0.3642857086901762,
+                    "p95UpperMs": 2
+                  }
+                },
+                "counters": {
+                  "text.nodeReplacements": 1,
+                  "stream.revealedCodePoints": 960,
+                  "text.nodeAppends": 192,
+                  "layout.overflowCandidates": 98
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261003-large-1791600905780-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 37,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261003",
+      "assets": {
+        "version": "20261003",
+        "js": "/assets/main-DH8VlRyA.js",
+        "css": "/assets/main-dYsFId0u.css",
+        "js_sha256": "914394b502fb77fd1cbb4c7890a934413bfab7466d1884f1b317971bab71fa82"
+      },
+      "scenario": "small",
+      "probe": "motion",
+      "trial": 1791601061160,
+      "context_label_tokens": 8000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 8000,
+      "history_characters": 22137,
+      "history_rows": 23,
+      "dom_elements": 189,
+      "capabilities": {
+        "executionRecords": false,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22889.1,
+        "empty_frame_ms": 32.8,
+        "baseline_frame_ms": 32.9,
+        "raf_hz": 12.507,
+        "p95_gap_ms": 197.9,
+        "p99_gap_ms": 741.8,
+        "max_gap_ms": 1087,
+        "gaps_over_1_5_frames": 157,
+        "gaps_over_50ms": 114,
+        "longtasks": 91,
+        "longtask_ms": 10523,
+        "moving_frames": 112,
+        "max_scroll_step_px": 8.5,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T02:57:18.267Z",
+            "updatedAt": "2026-10-10T02:57:41.161Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 286,
+                    "totalMs": 22901.1,
+                    "maxMs": 1087,
+                    "meanMs": 80.07377622377622,
+                    "p95UpperMs": 250
+                  },
+                  "follow.work": {
+                    "count": 286,
+                    "totalMs": 1177.3999990224838,
+                    "maxMs": 135.5,
+                    "meanMs": 4.116783213365328,
+                    "p95UpperMs": 16.7
+                  },
+                  "stream.flush": {
+                    "count": 218,
+                    "totalMs": 1058.7999999523163,
+                    "maxMs": 107.89999997615814,
+                    "meanMs": 4.856880733726221,
+                    "p95UpperMs": 33.4
+                  },
+                  "stream.frameGap": {
+                    "count": 192,
+                    "totalMs": 17889.100000000006,
+                    "maxMs": 1087,
+                    "meanMs": 93.17239583333337,
+                    "p95UpperMs": 500
+                  },
+                  "layout.overflowBatch": {
+                    "count": 111,
+                    "totalMs": 62.90000021457672,
+                    "maxMs": 43,
+                    "meanMs": 0.5666666685997903,
+                    "p95UpperMs": 1
+                  }
+                },
+                "counters": {
+                  "text.nodeReplacements": 1,
+                  "stream.revealedCodePoints": 960,
+                  "text.nodeAppends": 217,
+                  "layout.overflowCandidates": 111
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261003-small-1791601061160-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 41,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261004",
+      "assets": {
+        "version": "20261004",
+        "js": "/assets/main-4D7D2on2.js",
+        "css": "/assets/main-BEgsZt3f.css",
+        "js_sha256": "6dbd5c7a814ad1d1b73b61f3b432deed7f76d8a19678b975dd1600a951705877"
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22768.5,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 33.923,
+        "p95_gap_ms": 82.3,
+        "p99_gap_ms": 132,
+        "max_gap_ms": 329.6,
+        "gaps_over_1_5_frames": 279,
+        "gaps_over_50ms": 68,
+        "longtasks": 90,
+        "longtask_ms": 7104,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261004-large-1-cadence.json"
+    },
+    {
+      "version": "20261004",
+      "assets": {
+        "version": "20261004",
+        "js": "/assets/main-4D7D2on2.js",
+        "css": "/assets/main-BEgsZt3f.css",
+        "js_sha256": "6dbd5c7a814ad1d1b73b61f3b432deed7f76d8a19678b975dd1600a951705877"
+      },
+      "scenario": "large",
+      "probe": "motion",
+      "trial": 1791600799307,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22793.3,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 52.512,
+        "p95_gap_ms": 33,
+        "p99_gap_ms": 49.5,
+        "max_gap_ms": 131.8,
+        "gaps_over_1_5_frames": 136,
+        "gaps_over_50ms": 9,
+        "longtasks": 19,
+        "longtask_ms": 1376,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T02:52:56.494Z",
+            "updatedAt": "2026-10-10T02:53:19.308Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 1195,
+                    "totalMs": 22772.8,
+                    "maxMs": 131.80000000000018,
+                    "meanMs": 19.05673640167364,
+                    "p95UpperMs": 33.4
+                  },
+                  "follow.work": {
+                    "count": 1195,
+                    "totalMs": 979.2000004053116,
+                    "maxMs": 16.100000023841858,
+                    "meanMs": 0.8194142262805955,
+                    "p95UpperMs": 4
+                  },
+                  "layout.overflowBatch": {
+                    "count": 236,
+                    "totalMs": 14.30000102519989,
+                    "maxMs": 0.8000000715255737,
+                    "meanMs": 0.06059322468305038,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 236
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261004-large-1791600799307-motion.json",
+      "observed_max_generated_characters": 0,
+      "motion_sample_valid": false,
+      "small_scroll_steps_0_5_to_1_px": 0,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261004",
+      "assets": {
+        "version": "20261004",
+        "js": "/assets/main-4D7D2on2.js",
+        "css": "/assets/main-BEgsZt3f.css",
+        "js_sha256": "6dbd5c7a814ad1d1b73b61f3b432deed7f76d8a19678b975dd1600a951705877",
+        "plugins": true
+      },
+      "scenario": "large",
+      "probe": "motion",
+      "trial": 1791601150405,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2601,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22763.5,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 53.929,
+        "p95_gap_ms": 32.9,
+        "p99_gap_ms": 49.5,
+        "max_gap_ms": 313.2,
+        "gaps_over_1_5_frames": 79,
+        "gaps_over_50ms": 10,
+        "longtasks": 9,
+        "longtask_ms": 1182,
+        "moving_frames": 328,
+        "max_scroll_step_px": 20,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T02:58:47.638Z",
+            "updatedAt": "2026-10-10T02:59:10.406Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 1226,
+                    "totalMs": 22750.300000000003,
+                    "maxMs": 313.2000000000007,
+                    "meanMs": 18.556525285481243,
+                    "p95UpperMs": 33.4
+                  },
+                  "follow.work": {
+                    "count": 1226,
+                    "totalMs": 621.5999997854233,
+                    "maxMs": 11.899999976158142,
+                    "meanMs": 0.507014681717311,
+                    "p95UpperMs": 2
+                  },
+                  "layout.overflowBatch": {
+                    "count": 230,
+                    "totalMs": 13.200001001358032,
+                    "maxMs": 0.7000000476837158,
+                    "meanMs": 0.05739130870155666,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 230
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261004-large-1791601150405-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 134,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261004",
+      "assets": {
+        "version": "20261004",
+        "js": "/assets/main-4D7D2on2.js",
+        "css": "/assets/main-BEgsZt3f.css",
+        "js_sha256": "6dbd5c7a814ad1d1b73b61f3b432deed7f76d8a19678b975dd1600a951705877",
+        "plugins": true
+      },
+      "scenario": "small",
+      "probe": "motion",
+      "trial": 1791601187901,
+      "context_label_tokens": 8000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 8000,
+      "history_characters": 22137,
+      "history_rows": 23,
+      "dom_elements": 189,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22753.9,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 60.528,
+        "p95_gap_ms": 16.6,
+        "p99_gap_ms": 16.7,
+        "max_gap_ms": 33.1,
+        "gaps_over_1_5_frames": 4,
+        "gaps_over_50ms": 0,
+        "longtasks": 0,
+        "longtask_ms": 0,
+        "moving_frames": 229,
+        "max_scroll_step_px": 3.5,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T02:59:25.144Z",
+            "updatedAt": "2026-10-10T02:59:47.902Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 1376,
+                    "totalMs": 22749.5,
+                    "maxMs": 33.10000000000218,
+                    "meanMs": 16.533066860465116,
+                    "p95UpperMs": 16.7
+                  },
+                  "follow.work": {
+                    "count": 1376,
+                    "totalMs": 776.7000004053116,
+                    "maxMs": 11.700000047683716,
+                    "meanMs": 0.5644622095968834,
+                    "p95UpperMs": 2
+                  },
+                  "layout.overflowBatch": {
+                    "count": 240,
+                    "totalMs": 17.700000166893005,
+                    "maxMs": 0.7000000476837158,
+                    "meanMs": 0.07375000069538752,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 240
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261004-small-1791601187901-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 167,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261007",
+      "assets": {
+        "version": "20261007",
+        "js": "/assets/main-B_mPBPj8.js",
+        "css": "/assets/main-BekzvA-B.css",
+        "js_sha256": "55d350bb9c45aa41441bf6c73647989429a4cc7f0a3997d458b32afe8ab22e28"
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22826.6,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 8.072,
+        "p95_gap_ms": 362.5,
+        "p99_gap_ms": 988.9,
+        "max_gap_ms": 1680.9,
+        "gaps_over_1_5_frames": 77,
+        "gaps_over_50ms": 71,
+        "longtasks": 70,
+        "longtask_ms": 20240,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261007-large-1-cadence.json"
+    },
+    {
+      "version": "20261007",
+      "assets": {
+        "version": "20261007",
+        "js": "/assets/main-B_mPBPj8.js",
+        "css": "/assets/main-BekzvA-B.css",
+        "js_sha256": "55d350bb9c45aa41441bf6c73647989429a4cc7f0a3997d458b32afe8ab22e28"
+      },
+      "scenario": "large",
+      "probe": "motion",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22803,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 8.035,
+        "p95_gap_ms": 527.3,
+        "p99_gap_ms": 560.3,
+        "max_gap_ms": 593.4,
+        "gaps_over_1_5_frames": 93,
+        "gaps_over_50ms": 92,
+        "longtasks": 93,
+        "longtask_ms": 20837,
+        "moving_frames": 90,
+        "max_scroll_step_px": 10,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261007-large-1-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 27,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261007",
+      "assets": {
+        "version": "20261007",
+        "js": "/assets/main-B_mPBPj8.js",
+        "css": "/assets/main-BekzvA-B.css",
+        "js_sha256": "55d350bb9c45aa41441bf6c73647989429a4cc7f0a3997d458b32afe8ab22e28",
+        "plugins": true
+      },
+      "scenario": "small",
+      "probe": "motion",
+      "trial": 1791601226931,
+      "context_label_tokens": 8000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 8000,
+      "history_characters": 22137,
+      "history_rows": 23,
+      "dom_elements": 188,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22748.2,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 48.245,
+        "p95_gap_ms": 33.2,
+        "p99_gap_ms": 82.5,
+        "max_gap_ms": 362.8,
+        "gaps_over_1_5_frames": 143,
+        "gaps_over_50ms": 24,
+        "longtasks": 48,
+        "longtask_ms": 3928,
+        "moving_frames": 190,
+        "max_scroll_step_px": 4.5,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T03:00:04.180Z",
+            "updatedAt": "2026-10-10T03:00:26.931Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 1096,
+                    "totalMs": 22733.6,
+                    "maxMs": 362.8000000000029,
+                    "meanMs": 20.742335766423356,
+                    "p95UpperMs": 33.4
+                  },
+                  "follow.work": {
+                    "count": 1096,
+                    "totalMs": 543.6999990940094,
+                    "maxMs": 15.399999976158142,
+                    "meanMs": 0.49607664150913267,
+                    "p95UpperMs": 2
+                  },
+                  "layout.overflowBatch": {
+                    "count": 227,
+                    "totalMs": 10.000000357627869,
+                    "maxMs": 0.5,
+                    "meanMs": 0.044052865011576514,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 227
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261007-small-1791601226931-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 123,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668"
+      },
+      "scenario": "label",
+      "probe": "cadence",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 8000,
+      "history_characters": 22137,
+      "history_rows": 23,
+      "dom_elements": 188,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22753.7,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 51.909,
+        "p95_gap_ms": 33,
+        "p99_gap_ms": 65.8,
+        "max_gap_ms": 626.3,
+        "gaps_over_1_5_frames": 119,
+        "gaps_over_50ms": 13,
+        "longtasks": 40,
+        "longtask_ms": 3178,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261009-label-1-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668"
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22881.5,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 9.675,
+        "p95_gap_ms": 329.6,
+        "p99_gap_ms": 395.4,
+        "max_gap_ms": 675.7,
+        "gaps_over_1_5_frames": 90,
+        "gaps_over_50ms": 83,
+        "longtasks": 81,
+        "longtask_ms": 19818,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261009-large-1-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668"
+      },
+      "scenario": "large",
+      "probe": "motion",
+      "trial": 1,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22759.1,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 6.248,
+        "p95_gap_ms": 725.1,
+        "p99_gap_ms": 922.9,
+        "max_gap_ms": 923.1,
+        "gaps_over_1_5_frames": 67,
+        "gaps_over_50ms": 65,
+        "longtasks": 64,
+        "longtask_ms": 20730,
+        "moving_frames": 73,
+        "max_scroll_step_px": 10,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261009-large-1-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 20,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668",
+        "plugins": false
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1791601307742,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22786.4,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 8.438,
+        "p95_gap_ms": 527.5,
+        "p99_gap_ms": 659.5,
+        "max_gap_ms": 676.1,
+        "gaps_over_1_5_frames": 90,
+        "gaps_over_50ms": 88,
+        "longtasks": 86,
+        "longtask_ms": 20605,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T03:01:24.955Z",
+            "updatedAt": "2026-10-10T03:01:47.742Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 192,
+                    "totalMs": 22771.3,
+                    "maxMs": 676.0999999999985,
+                    "meanMs": 118.60052083333333,
+                    "p95UpperMs": 1000
+                  },
+                  "follow.work": {
+                    "count": 192,
+                    "totalMs": 80.29999935626984,
+                    "maxMs": 2.6999999284744263,
+                    "meanMs": 0.4182291633139054,
+                    "p95UpperMs": 2
+                  },
+                  "layout.overflowBatch": {
+                    "count": 45,
+                    "totalMs": 1.7999995946884155,
+                    "maxMs": 0.19999992847442627,
+                    "meanMs": 0.0399999909930759,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 45
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261009-large-1791601307742-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668",
+        "plugins": false,
+        "observerTiming": true
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1791601448226,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22988.6,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 7.928,
+        "p95_gap_ms": 544.3,
+        "p99_gap_ms": 692.4,
+        "max_gap_ms": 791.6,
+        "gaps_over_1_5_frames": 87,
+        "gaps_over_50ms": 84,
+        "longtasks": 85,
+        "longtask_ms": 20873,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T03:03:45.236Z",
+            "updatedAt": "2026-10-10T03:04:08.226Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.work": {
+                    "count": 182,
+                    "totalMs": 75.30000042915344,
+                    "maxMs": 2.899999976158142,
+                    "meanMs": 0.4137362660942497,
+                    "p95UpperMs": 2
+                  },
+                  "layout.overflowBatch": {
+                    "count": 43,
+                    "totalMs": 1.700000286102295,
+                    "maxMs": 0.20000004768371582,
+                    "meanMs": 0.03953489037447198,
+                    "p95UpperMs": 0.5
+                  },
+                  "follow.frameGap": {
+                    "count": 181,
+                    "totalMs": 22956.4,
+                    "maxMs": 791.6000000000022,
+                    "meanMs": 126.83093922651935,
+                    "p95UpperMs": 1000
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 43
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "observer_metrics": [
+        {
+          "type": "MutationObserver",
+          "callback": "function (mutations) {\n        mutations.forEach(function (mutation) {\n            mutation.addedNodes.forEach(function (node) {\n                if (node.nodeType === Node.ELEMENT_NODE) translateUiNode(node);\n                else if (node.nodeType === Node.TEX",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initUiI18n (myagent-ui.js:858:22)\n    at eval (myagent-ui.js:881:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 85,
+          "totalMs": 28.100000143051147,
+          "maxMs": 2.1999999284744263
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            if (root.classList.contains('is-open')) pubarCloseNarrowPopover();\n            pubarRenderNarrowStrip();\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initPublicSidebar (myagent-ui.js:12039:36)\n    at eval (myagent-ui.js:12078:9)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initPanelAutoCollapse (myagent-ui.js:29205:33)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initPanelAutoCollapse (myagent-ui.js:29210:41)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedulePanelEdgeTabsLayout() {\n    if (panelEdgeTabsRaf != null) return;\n    panelEdgeTabsRaf = requestAnimationFrame(function () {\n        panelEdgeTabsRaf = null;\n        layoutPanelEdgeTabs();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initPanelEdgeTabsLayout (myagent-ui.js:29043:29)\n    at eval (myagent-ui.js:29317:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initComposerSideControlLayout (myagent-ui.js:29303:36)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initComposerSideControlLayout (myagent-ui.js:29308:44)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function syncToastComposerOffset() {\n    var panel = document.querySelector('.panel');\n    var toastHost = document.querySelector('.toast-host');\n    if (!panel || !toastHost) return;\n    toastHost.style.setProperty('--toast-composer-height', Math.ceil(panel.g",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at initToastComposerOffset (myagent-ui.js:29236:35)\n    at eval (myagent-ui.js:29319:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "() => this.remeasure()",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at DockSurfaceView.mount (myagent-ui.js:31632:29)\n    at dockRightEnsureMounted (myagent-ui.js:33431:28)\n    at dockRightInit (myagent-ui.js:34921:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "() => {\n        const row = list.querySelector('.session-item.active[data-session-id]');\n        const sid = row ? String(row.getAttribute('data-session-id') || '') : '';\n        if (sid) dockRightHandleSessionSwitch(sid);\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at dockRightWatchSessions (myagent-ui.js:33786:35)\n    at dockRightInit (myagent-ui.js:34922:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function(n){const t=new Set;n.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){t.add(i)})}),Array.from(r.removedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){$t.delete(i),Dt.delete(i)})})}),t.size&&vr(Ar",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at Wu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:6553)\n    at zu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:7534)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "n=>{if(n.some(s=>Array.from(s.addedNodes).includes(this.document.documentElement))&&(t=!1,this.window.dispatchEvent(new CustomEvent(e)),!t)){this.window.addEventListener(e,r);for(const s of this.onGlobalListenersRemoved)s()}}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at to._setupGlobalListenersRemovalDetection (<anonymous>:24:2182)\n    at new to (<anonymous>:13:6801)\n    at <anonymous>:26:40\n    at <anonymous>:37:3",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13823:46)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 80,
+          "totalMs": 1.6000003814697266,
+          "maxMs": 0.20000004768371582
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13832:44)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleProcessViewportClampSweep() {\n    if (processViewportClampScheduled) return;\n    processViewportClampScheduled = true;\n    requestAnimationFrame(function () {\n        processViewportClampScheduled = false;\n        if (typeof document === 'unde",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:12:79)\n    at ensureProcessViewportClampBinding (myagent-ui.js:13782:24)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13839:5)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      ],
+      "raw_file": "20261009-large-1791601448226-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668",
+        "plugins": false,
+        "observerTiming": true
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1791601586792,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22968.1,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 8.72,
+        "p95_gap_ms": 527.7,
+        "p99_gap_ms": 593.7,
+        "max_gap_ms": 610.1,
+        "gaps_over_1_5_frames": 90,
+        "gaps_over_50ms": 90,
+        "longtasks": 90,
+        "longtask_ms": 20605,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T03:06:03.822Z",
+            "updatedAt": "2026-10-10T03:06:26.792Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 200,
+                    "totalMs": 22951.8,
+                    "maxMs": 610.0999999999985,
+                    "meanMs": 114.759,
+                    "p95UpperMs": 1000
+                  },
+                  "follow.work": {
+                    "count": 200,
+                    "totalMs": 92.49999904632568,
+                    "maxMs": 3.399999976158142,
+                    "meanMs": 0.46249999523162844,
+                    "p95UpperMs": 2
+                  },
+                  "layout.overflowBatch": {
+                    "count": 46,
+                    "totalMs": 1.9000002145767212,
+                    "maxMs": 0.10000002384185791,
+                    "meanMs": 0.041304352490798286,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 46
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "observer_metrics": [
+        {
+          "type": "MutationObserver",
+          "callback": "function (mutations) {\n        mutations.forEach(function (mutation) {\n            mutation.addedNodes.forEach(function (node) {\n                if (node.nodeType === Node.ELEMENT_NODE) translateUiNode(node);\n                else if (node.nodeType === Node.TEX",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initUiI18n (myagent-ui.js:858:22)\n    at eval (myagent-ui.js:881:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 91,
+          "totalMs": 35.50000071525574,
+          "maxMs": 2.200000047683716
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            if (root.classList.contains('is-open')) pubarCloseNarrowPopover();\n            pubarRenderNarrowStrip();\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPublicSidebar (myagent-ui.js:12039:36)\n    at eval (myagent-ui.js:12078:9)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelAutoCollapse (myagent-ui.js:29205:33)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelAutoCollapse (myagent-ui.js:29210:41)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedulePanelEdgeTabsLayout() {\n    if (panelEdgeTabsRaf != null) return;\n    panelEdgeTabsRaf = requestAnimationFrame(function () {\n        panelEdgeTabsRaf = null;\n        layoutPanelEdgeTabs();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelEdgeTabsLayout (myagent-ui.js:29043:29)\n    at eval (myagent-ui.js:29317:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initComposerSideControlLayout (myagent-ui.js:29303:36)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initComposerSideControlLayout (myagent-ui.js:29308:44)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function syncToastComposerOffset() {\n    var panel = document.querySelector('.panel');\n    var toastHost = document.querySelector('.toast-host');\n    if (!panel || !toastHost) return;\n    toastHost.style.setProperty('--toast-composer-height', Math.ceil(panel.g",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initToastComposerOffset (myagent-ui.js:29236:35)\n    at eval (myagent-ui.js:29319:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "() => this.remeasure()",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at DockSurfaceView.mount (myagent-ui.js:31632:29)\n    at dockRightEnsureMounted (myagent-ui.js:33431:28)\n    at dockRightInit (myagent-ui.js:34921:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "() => {\n        const row = list.querySelector('.session-item.active[data-session-id]');\n        const sid = row ? String(row.getAttribute('data-session-id') || '') : '';\n        if (sid) dockRightHandleSessionSwitch(sid);\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at dockRightWatchSessions (myagent-ui.js:33786:35)\n    at dockRightInit (myagent-ui.js:34922:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function(n){const t=new Set;n.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){t.add(i)})}),Array.from(r.removedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){$t.delete(i),Dt.delete(i)})})}),t.size&&vr(Ar",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at Wu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:6553)\n    at zu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:7534)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "n=>{if(n.some(s=>Array.from(s.addedNodes).includes(this.document.documentElement))&&(t=!1,this.window.dispatchEvent(new CustomEvent(e)),!t)){this.window.addEventListener(e,r);for(const s of this.onGlobalListenersRemoved)s()}}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at to._setupGlobalListenersRemovalDetection (<anonymous>:24:2182)\n    at new to (<anonymous>:13:6801)\n    at <anonymous>:26:40\n    at <anonymous>:37:3",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13823:46)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 86,
+          "totalMs": 1.7000000476837158,
+          "maxMs": 0.19999992847442627
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13832:44)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleProcessViewportClampSweep() {\n    if (processViewportClampScheduled) return;\n    processViewportClampScheduled = true;\n    requestAnimationFrame(function () {\n        processViewportClampScheduled = false;\n        if (typeof document === 'unde",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at ensureProcessViewportClampBinding (myagent-ui.js:13782:24)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13839:5)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      ],
+      "call_metrics": [
+        {
+          "name": "renderExecutionRecord",
+          "calls": 240,
+          "totalMs": 119.10000014305115,
+          "maxMs": 6.799999952316284
+        },
+        {
+          "name": "renderExecutionEvent",
+          "calls": 240,
+          "totalMs": 130.60000014305115,
+          "maxMs": 7.299999952316284
+        },
+        {
+          "name": "updateExecutionRecord",
+          "calls": 240,
+          "totalMs": 8.50000011920929,
+          "maxMs": 0.5
+        },
+        {
+          "name": "applyMessageEvent",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "scrollContentAreaIfFollow",
+          "calls": 240,
+          "totalMs": 18.0999995470047,
+          "maxMs": 0.6000000238418579
+        },
+        {
+          "name": "refreshAggregateStatsSmart",
+          "calls": 241,
+          "totalMs": 29.200000405311584,
+          "maxMs": 3.100000023841858
+        },
+        {
+          "name": "registerProcessAggregateRow",
+          "calls": 241,
+          "totalMs": 1.499999761581421,
+          "maxMs": 0.10000002384185791
+        },
+        {
+          "name": "syncRenderContextRunScope",
+          "calls": 480,
+          "totalMs": 2.600000262260437,
+          "maxMs": 0.20000004768371582
+        },
+        {
+          "name": "renderDurableAttachmentImages",
+          "calls": 240,
+          "totalMs": 1.299999713897705,
+          "maxMs": 0.2999999523162842
+        },
+        {
+          "name": "refreshFeedChunkOverflow",
+          "calls": 240,
+          "totalMs": 1,
+          "maxMs": 0.10000002384185791
+        },
+        {
+          "name": "scheduleFeedChunkOverflowRefresh",
+          "calls": 327,
+          "totalMs": 1,
+          "maxMs": 0.19999992847442627
+        },
+        {
+          "name": "applySkippedRuntimeV2EventMetadata",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      ],
+      "raw_file": "20261009-large-1791601586792-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668",
+        "plugins": false,
+        "observerTiming": true
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1791601667394,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2534,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": false,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22745.3,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 60.373,
+        "p95_gap_ms": 16.8,
+        "p99_gap_ms": 16.9,
+        "max_gap_ms": 65.9,
+        "gaps_over_1_5_frames": 3,
+        "gaps_over_50ms": 1,
+        "longtasks": 0,
+        "longtask_ms": 0,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T03:07:24.647Z",
+            "updatedAt": "2026-10-10T03:07:47.395Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 1372,
+                    "totalMs": 22741.600000000006,
+                    "maxMs": 65.89999999999418,
+                    "meanMs": 16.575510204081638,
+                    "p95UpperMs": 25
+                  },
+                  "follow.work": {
+                    "count": 1372,
+                    "totalMs": 408.6999979019165,
+                    "maxMs": 4.5,
+                    "meanMs": 0.2978862958468779,
+                    "p95UpperMs": 1
+                  }
+                },
+                "counters": {}
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "observer_metrics": [
+        {
+          "type": "MutationObserver",
+          "callback": "function (mutations) {\n        mutations.forEach(function (mutation) {\n            mutation.addedNodes.forEach(function (node) {\n                if (node.nodeType === Node.ELEMENT_NODE) translateUiNode(node);\n                else if (node.nodeType === Node.TEX",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initUiI18n (myagent-ui.js:858:22)\n    at eval (myagent-ui.js:881:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 6,
+          "totalMs": 1.1999999284744263,
+          "maxMs": 0.3999999761581421
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            if (root.classList.contains('is-open')) pubarCloseNarrowPopover();\n            pubarRenderNarrowStrip();\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPublicSidebar (myagent-ui.js:12039:36)\n    at eval (myagent-ui.js:12078:9)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelAutoCollapse (myagent-ui.js:29205:33)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelAutoCollapse (myagent-ui.js:29210:41)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedulePanelEdgeTabsLayout() {\n    if (panelEdgeTabsRaf != null) return;\n    panelEdgeTabsRaf = requestAnimationFrame(function () {\n        panelEdgeTabsRaf = null;\n        layoutPanelEdgeTabs();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelEdgeTabsLayout (myagent-ui.js:29043:29)\n    at eval (myagent-ui.js:29317:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initComposerSideControlLayout (myagent-ui.js:29303:36)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initComposerSideControlLayout (myagent-ui.js:29308:44)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function syncToastComposerOffset() {\n    var panel = document.querySelector('.panel');\n    var toastHost = document.querySelector('.toast-host');\n    if (!panel || !toastHost) return;\n    toastHost.style.setProperty('--toast-composer-height', Math.ceil(panel.g",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initToastComposerOffset (myagent-ui.js:29236:35)\n    at eval (myagent-ui.js:29319:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "() => this.remeasure()",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at DockSurfaceView.mount (myagent-ui.js:31632:29)\n    at dockRightEnsureMounted (myagent-ui.js:33431:28)\n    at dockRightInit (myagent-ui.js:34921:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "() => {\n        const row = list.querySelector('.session-item.active[data-session-id]');\n        const sid = row ? String(row.getAttribute('data-session-id') || '') : '';\n        if (sid) dockRightHandleSessionSwitch(sid);\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at dockRightWatchSessions (myagent-ui.js:33786:35)\n    at dockRightInit (myagent-ui.js:34922:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function(n){const t=new Set;n.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){t.add(i)})}),Array.from(r.removedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){$t.delete(i),Dt.delete(i)})})}),t.size&&vr(Ar",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at Wu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:6553)\n    at zu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:7534)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "n=>{if(n.some(s=>Array.from(s.addedNodes).includes(this.document.documentElement))&&(t=!1,this.window.dispatchEvent(new CustomEvent(e)),!t)){this.window.addEventListener(e,r);for(const s of this.onGlobalListenersRemoved)s()}}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at to._setupGlobalListenersRemovalDetection (<anonymous>:24:2182)\n    at new to (<anonymous>:13:6801)\n    at <anonymous>:26:40\n    at <anonymous>:37:3",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13823:46)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13832:44)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleProcessViewportClampSweep() {\n    if (processViewportClampScheduled) return;\n    processViewportClampScheduled = true;\n    requestAnimationFrame(function () {\n        processViewportClampScheduled = false;\n        if (typeof document === 'unde",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at ensureProcessViewportClampBinding (myagent-ui.js:13782:24)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13839:5)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13823:46)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13832:44)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35071:25)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      ],
+      "call_metrics": [
+        {
+          "name": "renderExecutionRecord",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "renderExecutionEvent",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "updateExecutionRecord",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "applyMessageEvent",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "scrollContentAreaIfFollow",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "refreshAggregateStatsSmart",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "registerProcessAggregateRow",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "syncRenderContextRunScope",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "renderDurableAttachmentImages",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "refreshFeedChunkOverflow",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "scheduleFeedChunkOverflowRefresh",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "applySkippedRuntimeV2EventMetadata",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      ],
+      "native_performance_delta": {
+        "LayoutCount": 9,
+        "RecalcStyleCount": 1586,
+        "LayoutDuration": 0.238965,
+        "RecalcStyleDuration": 0.47074400000000005,
+        "DevToolsCommandDuration": 0.037957000000000005,
+        "ScriptDuration": 0.634627,
+        "V8CompileDuration": 0,
+        "TaskDuration": 4.65358,
+        "TaskOtherDuration": 3.271287,
+        "ThreadTime": 4.081338,
+        "ProcessTime": 5.8598630000000185
+      },
+      "invalid_reason": "Repeated replay hit SSE sequence deduplication; rendering calls=0",
+      "raw_file": "20261009-large-1791601667394-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668",
+        "plugins": false,
+        "observerTiming": true
+      },
+      "scenario": "large",
+      "probe": "cadence",
+      "trial": 1791601770452,
+      "context_label_tokens": 128000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 128000,
+      "history_characters": 354215,
+      "history_rows": 355,
+      "dom_elements": 2541,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22788.1,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 8.739,
+        "p95_gap_ms": 478,
+        "p99_gap_ms": 544.1,
+        "max_gap_ms": 560.5,
+        "gaps_over_1_5_frames": 98,
+        "gaps_over_50ms": 98,
+        "longtasks": 97,
+        "longtask_ms": 20724,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "generated_characters": 960,
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T03:09:07.663Z",
+            "updatedAt": "2026-10-10T03:09:30.452Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 199,
+                    "totalMs": 22787.4,
+                    "maxMs": 560.5,
+                    "meanMs": 114.50954773869347,
+                    "p95UpperMs": 500
+                  },
+                  "follow.work": {
+                    "count": 199,
+                    "totalMs": 76.29999995231628,
+                    "maxMs": 3.100000023841858,
+                    "meanMs": 0.383417085187519,
+                    "p95UpperMs": 1
+                  },
+                  "layout.overflowBatch": {
+                    "count": 50,
+                    "totalMs": 1.7000000476837158,
+                    "maxMs": 0.19999992847442627,
+                    "meanMs": 0.034000000953674316,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 50
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "observer_metrics": [
+        {
+          "type": "MutationObserver",
+          "callback": "function (mutations) {\n        mutations.forEach(function (mutation) {\n            mutation.addedNodes.forEach(function (node) {\n                if (node.nodeType === Node.ELEMENT_NODE) translateUiNode(node);\n                else if (node.nodeType === Node.TEX",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initUiI18n (myagent-ui.js:858:22)\n    at eval (myagent-ui.js:881:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 100,
+          "totalMs": 36.19999957084656,
+          "maxMs": 2.100000023841858
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            if (root.classList.contains('is-open')) pubarCloseNarrowPopover();\n            pubarRenderNarrowStrip();\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPublicSidebar (myagent-ui.js:12039:36)\n    at eval (myagent-ui.js:12078:9)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelAutoCollapse (myagent-ui.js:29205:33)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function schedule() {\n        if (panelCollapseRaf != null) return;\n        panelCollapseRaf = requestAnimationFrame(function () {\n            panelCollapseRaf = null;\n            runPanelAutoCollapseCheck();\n        });\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelAutoCollapse (myagent-ui.js:29210:41)\n    at eval (myagent-ui.js:29316:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function schedulePanelEdgeTabsLayout() {\n    if (panelEdgeTabsRaf != null) return;\n    panelEdgeTabsRaf = requestAnimationFrame(function () {\n        panelEdgeTabsRaf = null;\n        layoutPanelEdgeTabs();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initPanelEdgeTabsLayout (myagent-ui.js:29043:29)\n    at eval (myagent-ui.js:29317:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initComposerSideControlLayout (myagent-ui.js:29303:36)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function scheduleComposerSideControlLayout() {\n    if (composerSideControlsRaf != null) return;\n    composerSideControlsRaf = requestAnimationFrame(function () {\n        composerSideControlsRaf = null;\n        syncComposerSideControlLayout();\n    });\n}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initComposerSideControlLayout (myagent-ui.js:29308:44)\n    at eval (myagent-ui.js:29318:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function syncToastComposerOffset() {\n    var panel = document.querySelector('.panel');\n    var toastHost = document.querySelector('.toast-host');\n    if (!panel || !toastHost) return;\n    toastHost.style.setProperty('--toast-composer-height', Math.ceil(panel.g",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at initToastComposerOffset (myagent-ui.js:29236:35)\n    at eval (myagent-ui.js:29319:1)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "() => this.remeasure()",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at DockSurfaceView.mount (myagent-ui.js:31632:29)\n    at dockRightEnsureMounted (myagent-ui.js:33431:28)\n    at dockRightInit (myagent-ui.js:34921:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "() => {\n        const row = list.querySelector('.session-item.active[data-session-id]');\n        const sid = row ? String(row.getAttribute('data-session-id') || '') : '';\n        if (sid) dockRightHandleSessionSwitch(sid);\n    }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at dockRightWatchSessions (myagent-ui.js:33786:35)\n    at dockRightInit (myagent-ui.js:34922:5)\n    at eval (myagent-ui.js:35000:10)\n    at http://127.0.0.1:18341/assets/main-C2yaRHia.js:35041:30",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function(n){const t=new Set;n.forEach(function(r){Array.from(r.addedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){t.add(i)})}),Array.from(r.removedNodes||[]).forEach(function(s){Qi(s).forEach(function(i){$t.delete(i),Dt.delete(i)})})}),t.size&&vr(Ar",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at Wu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:6553)\n    at zu (http://127.0.0.1:18341/assets/main-C2yaRHia.js:95:7534)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "n=>{if(n.some(s=>Array.from(s.addedNodes).includes(this.document.documentElement))&&(t=!1,this.window.dispatchEvent(new CustomEvent(e)),!t)){this.window.addEventListener(e,r);for(const s of this.onGlobalListenersRemoved)s()}}",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at to._setupGlobalListenersRemovalDetection (<anonymous>:24:2182)\n    at new to (<anonymous>:13:6801)\n    at <anonymous>:26:40\n    at <anonymous>:37:3",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "MutationObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13823:46)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35073:25)",
+          "calls": 94,
+          "totalMs": 2.09999942779541,
+          "maxMs": 0.3999999761581421
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function () {\n            scheduleProcessAggregateHeightUi(agg);\n        }",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13832:44)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)\n    at eval (myagent-ui.js:35073:25)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "type": "ResizeObserver",
+          "callback": "function scheduleProcessViewportClampSweep() {\n    if (processViewportClampScheduled) return;\n    processViewportClampScheduled = true;\n    requestAnimationFrame(function () {\n        processViewportClampScheduled = false;\n        if (typeof document === 'unde",
+          "stack": "Error\n    at new window.<computed> (http://127.0.0.1:18341/__bench/bootstrap.js:13:79)\n    at ensureProcessViewportClampBinding (myagent-ui.js:13782:24)\n    at bindProcessAggregateHeightButton (myagent-ui.js:13839:5)\n    at bindProcessAggregate (myagent-ui.js:13902:5)\n    at ensureProcessGroup (myagent-ui.js:14377:5)\n    at getProcessBody (myagent-ui.js:14418:15)\n    at createProcessFeedRow (myagent-ui.js:17603:18)\n    at appendLog (myagent-ui.js:18156:12)\n    at upsertLlmFeedRow (myagent-ui.js:17857:12)\n    at renderEvent (myagent-ui.js:21075:9)",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      ],
+      "call_metrics": [
+        {
+          "name": "renderExecutionRecord",
+          "calls": 240,
+          "totalMs": 110.00000023841858,
+          "maxMs": 3.6999999284744263
+        },
+        {
+          "name": "renderExecutionEvent",
+          "calls": 240,
+          "totalMs": 120.20000052452087,
+          "maxMs": 4.199999928474426
+        },
+        {
+          "name": "updateExecutionRecord",
+          "calls": 240,
+          "totalMs": 7.600000381469727,
+          "maxMs": 0.3999999761581421
+        },
+        {
+          "name": "applyMessageEvent",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        },
+        {
+          "name": "scrollContentAreaIfFollow",
+          "calls": 240,
+          "totalMs": 18.100000023841858,
+          "maxMs": 1
+        },
+        {
+          "name": "refreshAggregateStatsSmart",
+          "calls": 241,
+          "totalMs": 27.199999690055847,
+          "maxMs": 1.100000023841858
+        },
+        {
+          "name": "registerProcessAggregateRow",
+          "calls": 241,
+          "totalMs": 1.4999998807907104,
+          "maxMs": 0.10000002384185791
+        },
+        {
+          "name": "syncRenderContextRunScope",
+          "calls": 480,
+          "totalMs": 4.2000004053115845,
+          "maxMs": 0.20000004768371582
+        },
+        {
+          "name": "renderDurableAttachmentImages",
+          "calls": 240,
+          "totalMs": 0.10000002384185791,
+          "maxMs": 0.10000002384185791
+        },
+        {
+          "name": "refreshFeedChunkOverflow",
+          "calls": 240,
+          "totalMs": 1.0000001192092896,
+          "maxMs": 0.10000002384185791
+        },
+        {
+          "name": "scheduleFeedChunkOverflowRefresh",
+          "calls": 335,
+          "totalMs": 0.5,
+          "maxMs": 0.10000002384185791
+        },
+        {
+          "name": "applySkippedRuntimeV2EventMetadata",
+          "calls": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      ],
+      "native_performance_delta": {
+        "LayoutCount": 104,
+        "RecalcStyleCount": 711,
+        "LayoutDuration": 0.48428299999999996,
+        "RecalcStyleDuration": 9.313113999999999,
+        "DevToolsCommandDuration": 0.219506,
+        "ScriptDuration": 0.756826,
+        "V8CompileDuration": 0,
+        "TaskDuration": 25.510416,
+        "TaskOtherDuration": 14.736687,
+        "ThreadTime": 22.460707,
+        "ProcessTime": 25.23061400000006
+      },
+      "raw_file": "20261009-large-1791601770452-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668"
+      },
+      "scenario": "small",
+      "probe": "cadence",
+      "trial": 1,
+      "context_label_tokens": 8000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 8000,
+      "history_characters": 22137,
+      "history_rows": 23,
+      "dom_elements": 188,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22760.3,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 60.721,
+        "p95_gap_ms": 16.6,
+        "p99_gap_ms": 16.7,
+        "max_gap_ms": 16.8,
+        "gaps_over_1_5_frames": 0,
+        "gaps_over_50ms": 0,
+        "longtasks": 0,
+        "longtask_ms": 0,
+        "moving_frames": 0,
+        "max_scroll_step_px": null,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "raw_file": "20261009-small-1-cadence.json"
+    },
+    {
+      "version": "20261009",
+      "assets": {
+        "version": "20261009",
+        "js": "/assets/main-C2yaRHia.js",
+        "css": "/assets/main-BS-v3xZ2.css",
+        "js_sha256": "678bec701829630aea60d885a1acac6290aa0453910bd708334249347f043668",
+        "plugins": true
+      },
+      "scenario": "small",
+      "probe": "motion",
+      "trial": 1791601270941,
+      "context_label_tokens": 8000,
+      "history_tokenizer": "cl100k_base",
+      "history_tokens": 8000,
+      "history_characters": 22137,
+      "history_rows": 23,
+      "dom_elements": 188,
+      "capabilities": {
+        "executionRecords": true,
+        "smooth": true
+      },
+      "environment": {
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0",
+        "width": 1280,
+        "height": 800,
+        "dpr": 1,
+        "reducedMotion": false
+      },
+      "valid": true,
+      "errors": [],
+      "summary": {
+        "duration_ms": 22755,
+        "empty_frame_ms": 16.5,
+        "baseline_frame_ms": 16.5,
+        "raf_hz": 49.553,
+        "p95_gap_ms": 49.2,
+        "p99_gap_ms": 66,
+        "max_gap_ms": 131.9,
+        "gaps_over_1_5_frames": 165,
+        "gaps_over_50ms": 19,
+        "longtasks": 46,
+        "longtask_ms": 3350,
+        "moving_frames": 186,
+        "max_scroll_step_px": 8.5,
+        "reverse_steps": 0
+      },
+      "visibility": [],
+      "archived_runtime_metrics": {
+        "version": 1,
+        "reports": [
+          {
+            "revision": "session-stream-2026-09-06-v1",
+            "startedAt": "2026-10-10T03:00:48.184Z",
+            "updatedAt": "2026-10-10T03:01:10.942Z",
+            "sessions": [
+              {
+                "sessionId": "replay-session",
+                "timings": {
+                  "follow.frameGap": {
+                    "count": 1126,
+                    "totalMs": 22739.6,
+                    "maxMs": 131.89999999999964,
+                    "meanMs": 20.19502664298401,
+                    "p95UpperMs": 50
+                  },
+                  "follow.work": {
+                    "count": 1126,
+                    "totalMs": 626.4999980926514,
+                    "maxMs": 36,
+                    "meanMs": 0.5563943144694949,
+                    "p95UpperMs": 2
+                  },
+                  "layout.overflowBatch": {
+                    "count": 236,
+                    "totalMs": 11.199999213218689,
+                    "maxMs": 0.5,
+                    "meanMs": 0.04745762378482495,
+                    "p95UpperMs": 0.5
+                  }
+                },
+                "counters": {
+                  "layout.overflowCandidates": 236
+                }
+              }
+            ],
+            "sessionLimit": 12,
+            "frameNote": "Visible-page callback intervals, not display FPS; histogram p95 is an upper bound."
+          }
+        ]
+      },
+      "raw_file": "20261009-small-1791601270941-motion.json",
+      "observed_max_generated_characters": 960,
+      "motion_sample_valid": true,
+      "small_scroll_steps_0_5_to_1_px": 122,
+      "main_reverse_steps": 0,
+      "anchor_downward_steps": 0
+    }
+  ],
+  "selected": [
+    {
+      "version": "20260930",
+      "small": "20260930-small-1791600994378-motion.json",
+      "large": "20260930-large-1791600946894-motion.json"
+    },
+    {
+      "version": "20261003",
+      "small": "20261003-small-1791601061160-motion.json",
+      "large": "20261003-large-1791600905780-motion.json"
+    },
+    {
+      "version": "20261004",
+      "small": "20261004-small-1791601187901-motion.json",
+      "large": "20261004-large-1791601150405-motion.json"
+    },
+    {
+      "version": "20261007",
+      "small": "20261007-small-1791601226931-motion.json",
+      "large": "20261007-large-1-motion.json"
+    },
+    {
+      "version": "20261009",
+      "small": "20261009-small-1791601270941-motion.json",
+      "large": "20261009-large-1-motion.json"
+    }
+  ]
+}

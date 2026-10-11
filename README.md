@@ -198,14 +198,14 @@ SugarAgent/
 ├── tests/                        # 测试套件（84+ Python 测试 + tests/js 运行时测试）
 ├── docs/                         # 设计文档与 CHANGELOG
 ├── logs/                         # 运行日志
-├── .sugaragent/                  # 本地运行状态（技能/MCP 启停、缓存等，不入库）
+├── .config/                  # 本地运行状态（技能/MCP 启停、缓存等，不入库）
 ├── RUN.bat                       # Windows 一键启动脚本
 ├── RUN.sh                        # Ubuntu/macOS 一键启动脚本
 ├── SPEC.md                       # 工程规格说明
 └── .gitignore                    # Git 忽略规则
 ```
 
-> 说明：`skill_states.json`（技能启停）、`mcp_tools_state.json`（MCP 工具启停）等运行时状态文件仅存在于本地，统一存放在 `.sugaragent/`，不纳入版本库；克隆后所有技能默认启用。
+> 说明：`skill_states.json`（技能启停）、`mcp_tools_state.json`（MCP 工具启停）等运行时状态文件仅存在于本地，统一存放在 `.config/`，不纳入版本库；克隆后所有技能默认启用。启动时自动迁移旧 `.sugaragent/`，已有 `.config` 内容优先，冲突旧文件保留；桌面版覆盖安装和卸载都保留配置与工作区。
 
 ---
 
@@ -227,7 +227,7 @@ cd "MyAgent Developer"
 
 ### 2. 配置
 
-首次启动后通过浏览器向导创建 model profile。模型名称、API 地址、密钥、上下文窗口和推理参数全部保存在 `.sugaragent/model_profiles.json`，运行时不再从 `.env` 读取。
+首次启动后通过浏览器向导创建 model profile。模型名称、API 地址、密钥、上下文窗口和推理参数全部保存在 `.config/model_profiles.json`，运行时不再从 `.env` 读取。
 
 升级旧版本时，如果 `app/.env` 中存在一套完整的旧模型配置，启动过程会自动将其一次性注册为 model profile。已有等价 profile 时直接复用，不会重复创建；导入后的 profile 可独立编辑，后续启动不会再被 `.env` 覆盖。
 
@@ -441,7 +441,7 @@ Slash Command 和生命周期回调，也可在同一插件包中携带 Skill、
 
 ### LLM 配置
 
-仅通过 `.sugaragent/model_profiles.json` 配置模型，运行时可切换并按优先级故障转移。每个 profile 包含：
+仅通过 `.config/model_profiles.json` 配置模型，运行时可切换并按优先级故障转移。每个 profile 包含：
 
 - 模型名称与类型
 - API Base URL 与 API Key
@@ -454,7 +454,7 @@ Slash Command 和生命周期回调，也可在同一插件包中携带 Skill、
 
 ### 图片附件与请求预算
 
-附件位于 `{WORK_DIR}/.sugaragent/attachments/v1/`，归一化副本只读；请求版缓存位于 `.sugaragent/cache/attachments/request-images/`。消息和事件保存引用，图片 base64 仅存在于请求构造内存。`GET /api/attachments/{sha256:id}` 返回校验后的图片；浏览器为队列、历史和工具行创建临时 blob URL，移除 DOM 时释放。
+附件位于 `{WORK_DIR}/.config/attachments/v1/`，归一化副本只读；请求版缓存位于 `.config/cache/attachments/request-images/`。消息和事件保存引用，图片 base64 仅存在于请求构造内存。`GET /api/attachments/{sha256:id}` 返回校验后的图片；浏览器为队列、历史和工具行创建临时 blob URL，移除 DOM 时释放。
 
 Chat Completions 将工具图片抽取到连续工具结果之后的 user 消息；Responses 在 `function_call_output.output` 中原生嵌入；Anthropic 在 `tool_result.content` 中原生嵌入。每张图附带 sha256、请求版尺寸和归一化只读路径。超过请求预算时按 DSH quanta 规则从最旧图片开始替换为含身份、路径的占位文字，不修改持久化历史。
 
@@ -511,7 +511,7 @@ Chat Completions 将工具图片抽取到连续工具结果之后的 user 消息
 
 ### MCP 配置
 
-配置文件默认位于 `.sugaragent/mcp_servers.json`（可用 `MCP_SERVERS_PATH` 覆盖；首次读取时自动迁移根目录旧文件）。参考 `app/mcp_servers.json.example`，支持三种 transport：
+配置文件默认位于 `.config/mcp_servers.json`（可用 `MCP_SERVERS_PATH` 覆盖；首次读取时自动迁移根目录旧文件）。参考 `app/mcp_servers.json.example`，支持三种 transport：
 
 ```json
 {

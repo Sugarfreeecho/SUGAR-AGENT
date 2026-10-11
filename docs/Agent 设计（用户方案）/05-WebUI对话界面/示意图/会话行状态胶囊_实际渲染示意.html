@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="theme-purple">
+<head>
+<meta charset="UTF-8">
+<title>侧栏会话条目 · 行尾状态胶囊与插件角标（实际渲染示意）</title>
+<!--
+  位置：docs/Agent 设计（用户方案）/05-WebUI对话界面/示意图/（对应 05/06·UC-5F17 行尾标记区）
+  生成：2026-10-11；样式与「当前工程代码」同步，并已按实机实测核对。
+
+  本文件是「当前工程代码」样式的可视化示意（可直接在浏览器打开，四个开关：主题 / 根字号 / 列表模式 / 中英）：
+  样式全部照抄自  frontend/src/styles/app.css（.:root / .theme-light / .theme-dark 变量块 + .session-* 规则）
+  与  frontend/src/app/modules/session-management.js::buildAndBindSessionRow 的真实 DOM 结构、
+  frontend/src/app/modules/human-interactions.js::updateHumanInteractionSessionBadge、
+  frontend/src/app/plugin-ui-slots.js::renderSessionBadges。
+
+  与本文件同目录的实测截图：
+  · 示意_紫黑主题_中文.png / 示意_浅色主题_中文.png / 示意_紫黑主题_English.png / 示意_浅色主题_English.png
+  · 局部_胶囊对照_3x.png / 局部_插件角标_3x.png
+  · 实机_Plan角标修复前后.png（插件角标浅色档配色修复对照）、实机_修复后_浅色_Plan行.png（修复后实机行）
+
+  唯一的手工补充：
+  · .demo-hover / .demo-hover-only —— 把 :hover 规则复刻到类上，便于静态截图里展示悬停态；
+  · 页面外壳（.wrap/.toolbar/.panel/.spec）—— 仅为展示用，不属于产品样式的解释范围。
+-->
+<style>
+/* ══════════ 1. 主题变量（照抄 app.css :root / :root.theme-light / :root.theme-dark） ══════════ */
+:root {
+    color-scheme: dark;
+    --accent-rgb: 203, 166, 247;
+    --brand-accent-rgb: 99, 102, 241;
+    --brand-strong-rgb: 139, 92, 246;
+    --brand-glow-rgb: 108, 92, 231;
+    --text-primary-rgb: 205, 214, 244;
+    --space-bg: #1e1e2e;
+    --space-bg2: #181825;
+    --surface-glass: rgba(22, 22, 36, 0.96);
+    --surface-glass2: rgba(40, 40, 60, 0.94);
+    --surface-glass3: rgba(62, 63, 86, 0.78);
+    --border-glass: rgba(var(--text-primary-rgb), 0.055);
+    --border-accent: rgba(var(--accent-rgb), 0.22);
+    --text-primary: #cdd6f4;
+    --text-secondary: #a6adc8;
+    --text-tertiary: #6c7086;
+    --text-subtle: #7f849c;
+    --text-soft: #bac2de;
+    --text-placeholder: #585b70;
+    --accent-1: #cba6f7;
+    --accent-2: #d4b8fc;
+    --accent-gradient: linear-gradient(135deg, #b4befe 0%, #cba6f7 50%, #dac2f0 100%);
+    --green-accent: #a6e3a1;
+    --red-accent: #f38ba8;
+    --amber-accent: #f9e2af;
+    --floating-surface-raised: rgba(55, 56, 78, 0.99);
+    --floating-border: rgba(var(--text-primary-rgb), 0.09);
+    --floating-shadow: 0 16px 44px rgba(0, 0, 0, .42), 0 0 0 1px rgba(var(--accent-rgb), .035);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    --ui-text-xs: 0.75rem;
+    --ui-text-sm: 0.8125rem;
+    --ui-text-md: 0.875rem;
+    --ui-line-xs: 1.125rem;
+    --ui-line-md: 1.375rem;
+    --radius-sm: 8px;
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    --sidebar-inset: 0.75rem;
+}
+:root.theme-light {
+    color-scheme: light;
+    --accent-rgb: 99, 102, 241;
+    --brand-accent-rgb: 99, 102, 241;
+    --brand-glow-rgb: 108, 92, 231;
+    --text-primary-rgb: 14, 15, 26;
+    --space-bg: #e4e9f2;
+    --surface-glass: rgba(255, 255, 255, 0.93);
+    --surface-glass2: rgba(255, 255, 255, 0.98);
+    --surface-glass3: rgba(242, 245, 250, 0.98);
+    --border-glass: rgba(0, 0, 0, 0.09);
+    --text-primary: #0e0f1a;
+    --text-secondary: #282a3a;
+    --text-tertiary: #484a5e;
+    --text-subtle: #4b4d61;
+    --text-soft: #52556b;
+    --text-placeholder: #757989;
+    --green-accent: #15803d;
+    --red-accent: #b91c1c;
+    --floating-surface-raised: rgba(255, 255, 255, 0.99);
+    --floating-border: rgba(15, 23, 42, 0.10);
+    --floating-shadow: 0 16px 42px rgba(15, 23, 42, .14), 0 2px 8px rgba(15, 23, 42, .05);
+}
+:root.theme-dark {
+    color-scheme: dark;
+    --accent-rgb: 103, 158, 254;
+    --brand-accent-rgb: 65, 118, 230;
+    --brand-glow-rgb: 65, 118, 230;
+    --text-primary-rgb: 249, 250, 251;
+    --space-bg: #151517;
+    --surface-glass: rgba(27, 27, 28, 0.97);
+    --surface-glass2: rgba(44, 44, 46, 0.98);
+    --surface-glass3: rgba(53, 54, 56, 0.96);
+    --border-glass: rgba(255, 255, 255, 0.06);
+    --text-primary: #f9fafb;
+    --text-secondary: #cfd3d6;
+    --text-tertiary: #81858c;
+    --text-subtle: #979da6;
+    --text-placeholder: #61666b;
+    --accent-1: #679efe;
+    --accent-2: #93c5fd;
+    --accent-gradient: linear-gradient(135deg, #4176e6 0%, #679efe 52%, #93c5fd 100%);
+    --green-accent: #4ed17e;
+    --red-accent: #f25a5a;
+    --amber-accent: #f7ad31;
+    --floating-surface-raised: rgba(53, 54, 56, 0.99);
+    --floating-border: rgba(255, 255, 255, 0.08);
+    --floating-shadow: 0 16px 44px rgba(0, 0, 0, .46), 0 0 0 1px rgba(255, 255, 255, .018);
+}
+
+/* ══════════ 2. 会话行（照抄 app.css .session-item 及其子元素） ══════════ */
+.session-item {
+    display: flex; flex-direction: column; align-items: stretch; gap: 0.25rem;
+    padding: 0.5rem 0.45rem 0.5rem 0.65rem; margin: 0.15rem 0;
+    border-radius: var(--radius-sm); cursor: pointer;
+    border: 0;
+    box-shadow: inset 0 0 0 1px transparent;
+    transition: background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease; position: relative;
+}
+.session-item::after {
+    content: '';
+    position: absolute; top: 0; right: 0; bottom: 0;
+    width: 4.4rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    pointer-events: none; z-index: 2;
+    opacity: 0;
+    background: linear-gradient(to left, rgba(18, 18, 28, 0.92), rgba(18, 18, 28, 0));
+    transition: opacity 0.16s var(--ease-out-expo);
+}
+:root.theme-light .session-item::after {
+    background: linear-gradient(to left, rgba(246, 247, 251, 0.96), rgba(246, 247, 251, 0));
+}
+.session-item-head { display: flex; align-items: center; gap: 0.5rem; width: 100%; min-width: 0; position: relative; }
+.session-item-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.session-item-title-row { display: flex; align-items: center; min-width: 0; position: relative; }
+.session-name {
+    flex: 1; min-width: 0; font-size: var(--ui-text-md); line-height: var(--ui-line-md);
+    color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 2px 0.2rem 2px 0; border-radius: 4px;
+    cursor: pointer; transition: color 0.15s;
+    font-weight: 400;
+}
+.session-last-query {
+    font-size: var(--ui-text-xs); line-height: var(--ui-line-xs); color: var(--text-tertiary);
+    font-family: var(--sans);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer; letter-spacing: 0;
+}
+.session-item-date {
+    flex: 0 0 auto; min-width: 0; max-width: 9rem;
+    overflow: hidden; display: inline-flex; align-items: center; gap: 0.2rem;
+    font-size: 0.62rem; line-height: 1.2; color: var(--text-tertiary);
+    font-family: var(--sans); font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    margin-left: 0.5rem; margin-right: 0;
+    opacity: 0.85; pointer-events: none;
+    transition: max-width 0.2s var(--ease-out-expo), opacity 0.16s var(--ease-out-expo), margin-left 0.2s var(--ease-out-expo);
+}
+.session-item:hover { background: rgba(255,255,255,0.03); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04); }
+.session-item.active { background: rgba(var(--brand-glow-rgb),0.1); box-shadow: inset 0 0 0 1px rgba(var(--brand-glow-rgb),0.2); }
+.session-item.active .session-name { color: var(--text-primary); font-weight: 400; }
+.session-item.active::before {
+    content: ''; position: absolute; left: -0.45rem;
+    top: 0.4rem; bottom: 0.4rem; width: 3px; border-radius: 2px;
+    background: var(--accent-gradient);
+}
+:root.theme-light .session-item:hover { background: rgba(var(--brand-accent-rgb),0.06); box-shadow: inset 0 0 0 1px rgba(var(--brand-accent-rgb),0.1); }
+:root.theme-light .session-item.active { background: rgba(var(--brand-accent-rgb),0.12); box-shadow: inset 0 0 0 1px rgba(var(--brand-accent-rgb),0.2); }
+
+/* 悬停时的浮出行为（原规则用 :hover，这里同时挂 .demo-hover 以便静态示意） */
+.session-item:hover::after, .session-item.demo-hover::after { opacity: 1; }
+.session-item:hover .session-item-date, .session-item.demo-hover .session-item-date { opacity: 0; }
+.session-item:hover .session-name, .session-item.demo-hover .session-name {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.2rem), transparent calc(100% - 0.5rem));
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.2rem), transparent calc(100% - 0.5rem));
+}
+.session-item:hover .session-pin-mark, .session-item.demo-hover .session-pin-mark { opacity: 0; }
+.session-item-actions {
+    position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; gap: 0.06rem;
+    z-index: 4; pointer-events: none;
+}
+.session-item:hover .session-item-actions, .session-item.demo-hover .session-item-actions { pointer-events: auto; }
+.session-row-icon {
+    flex: 0 0 auto; width: 1.5rem; height: 1.5rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border: 0; border-radius: 6px;
+    background: transparent; color: var(--text-tertiary);
+    cursor: pointer; opacity: 0; pointer-events: none;
+    transition: opacity 0.16s, background 0.16s, color 0.16s;
+}
+.session-row-icon svg { width: 0.875rem; height: 0.875rem; }
+.session-item:hover .session-row-icon, .session-item.demo-hover .session-row-icon { opacity: 1; pointer-events: auto; }
+.session-more-btn {
+    background: none; border: none; color: var(--text-tertiary);
+    cursor: pointer; padding: 0; width: 1.625rem; height: 1.625rem;
+    border-radius: 6px; font-size: 0; line-height: 1; letter-spacing: 0;
+    opacity: 0; transition: opacity 0.18s, background 0.18s, color 0.18s;
+    display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
+}
+.session-more-btn .session-more-dots { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 0.1875rem; padding: 0 1px; }
+.session-more-btn .session-more-dots span { display: block; width: 0.1875rem; height: 0.1875rem; border-radius: 50%; background: currentColor; }
+.session-item:hover .session-more-btn, .session-item.demo-hover .session-more-btn { opacity: 0.65; }
+
+/* 名称前的状态点（.is-generating / .is-finalizing / .is-unread-*） */
+.session-item.is-generating .session-name::before,
+.session-item.is-finalizing .session-name::before,
+.session-item.is-unread-result .session-name::before,
+.session-item.is-unread-failed .session-name::before {
+    content: ''; display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; margin-right: 5px; vertical-align: 0.08em;
+}
+.session-item.is-generating .session-name::before { background: var(--amber-accent); box-shadow: 0 0 8px rgba(249,226,175,0.5); animation: pulse-dot 1.4s ease-in-out infinite; }
+.session-item.is-finalizing .session-name::before { background: var(--accent-1); box-shadow: 0 0 7px color-mix(in srgb, var(--accent-1) 45%, transparent); }
+.session-item.is-unread-result .session-name::before { background: var(--green-accent); box-shadow: 0 0 8px rgba(166,227,161,0.4); }
+.session-item.is-unread-failed .session-name::before { background: var(--red-accent); box-shadow: 0 0 8px rgba(243,139,168,0.45); }
+:root.theme-light .session-item.is-unread-result .session-name::before { background: #4ed17e; box-shadow: 0 0 8px rgba(78, 209, 126, 0.5); }
+.session-item.is-generating.is-unread-result .session-name::before,
+.session-item.is-generating.is-unread-failed .session-name::before { animation: pulse-dot 1.4s ease-in-out infinite; }
+@keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.8); } }
+
+/* 置顶图钉（行尾、相对时间之后） */
+.session-pin-mark {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    margin-left: 0.35rem; color: var(--text-placeholder);
+    transition: opacity 0.16s var(--ease-out-expo);
+}
+.session-pin-mark svg { width: 1rem; height: 1rem; display: block; }
+
+/* ══════════ 3. 行尾状态胶囊（照抄 app.css） ══════════ */
+.session-draft-badge,
+.session-todo-badge {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    margin-left: 0.4rem; padding: 0.14rem 0.36rem;
+    border: 1px solid rgba(249, 226, 175, 0.34);
+    border-radius: 999px;
+    background: rgba(249, 226, 175, 0.16);
+    color: var(--amber-accent);
+    font-size: 0.62rem; font-weight: 400; line-height: 1; white-space: nowrap;
+}
+.session-draft-badge[hidden], .session-todo-badge[hidden] { display: none; }
+:root.theme-light .session-draft-badge { border-color: rgba(180, 138, 42, 0.3); background: rgba(246, 196, 68, 0.16); color: #8a6712; }
+.session-todo-badge { border-color: rgba(var(--accent-rgb), 0.36); background: rgba(var(--accent-rgb), 0.16); color: var(--accent-2); }
+:root.theme-light .session-todo-badge { border-color: rgba(var(--brand-accent-rgb), 0.3); background: rgba(var(--brand-accent-rgb), 0.12); color: #4f46e5; }
+/* `.session-goal-badge`（行内「目标」占位胶囊，五档 data-goal-status）已于 2026-10-11 从 app.css 删除：
+   它一直没有生产者。要看它曾经的样子与实测，见同目录 `三种goal对照.html`（③ 区已标注“已删除”）。 */
+
+/* 插件投影的会话角标 */
+.plugin-session-badges { display: inline-flex; align-items: center; gap: 0.2rem; flex: 0 1 auto; min-width: 0; margin-left: 0.4rem; }
+.plugin-session-badge {
+    display: inline-flex; align-items: center; flex: 0 1 auto;
+    min-width: 0; max-width: 5rem; overflow: hidden; text-overflow: ellipsis;
+    padding: 0.14rem 0.36rem; border: 1px solid var(--border-glass); border-radius: 999px;
+    background: var(--surface-glass2); color: var(--text-secondary);
+    font: 400 0.62rem/1 var(--sans); white-space: nowrap;
+}
+.plugin-session-badge--info { border-color: rgba(var(--accent-rgb), 0.36); color: var(--accent-2); }
+:root.theme-light .plugin-session-badge--info { border-color: rgba(99, 102, 241, 0.3); background: rgba(99, 102, 241, 0.12); color: #4f46e5; }
+.plugin-session-badge--success { border-color: rgba(166,227,161,0.4); color: var(--green-accent); }
+.plugin-session-badge--warning { border-color: rgba(211,167,47,0.45); color: #d3a72f; }
+.plugin-session-badge--danger { border-color: rgba(243,139,168,0.45); color: #f38ba8; }
+
+/* 待处理人机交互徽标（? / ! / 数字），与胶囊同处一个标记区 */
+.session-human-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: auto; min-width: 1.125rem; height: 1.125rem;
+    padding: 0 0.28rem;
+    flex: 0 0 auto; margin-left: 0.4rem; white-space: nowrap;
+    position: relative; z-index: 3;
+    border-radius: 50%;
+    background: var(--amber-accent);
+    color: #30291f;
+    font-size: 0.62rem; line-height: 1; font-weight: 600;
+    box-shadow: 0 0 0 0.1875rem rgba(249, 226, 175, 0.08);
+}
+
+/* 紧凑模式（照抄 :root[data-session-list-mode="compact"]） */
+:root[data-session-list-mode="compact"] .session-item {
+    gap: 0; padding: 0 0.45rem 0 0.56rem;
+    height: 2rem; min-height: 2rem; box-sizing: border-box;
+    justify-content: center; margin: 0.06rem 0;
+}
+:root[data-session-list-mode="compact"] .session-item-head { min-height: 2rem; }
+:root[data-session-list-mode="compact"] .session-item-title-row { min-height: 2rem; }
+:root[data-session-list-mode="compact"] .session-name { padding: 0 0.2rem 0 0; line-height: 1.2; font-size: 0.8rem; }
+:root[data-session-list-mode="compact"] .session-last-query { display: none; }
+:root[data-session-list-mode="compact"] .session-item.active::before { top: 0.32rem; bottom: 0.32rem; }
+
+/* ══════════ 4. 页面外壳（示意用，非产品样式） ══════════ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { font-size: 16px; }
+body {
+    font-family: var(--sans); background: var(--space-bg); color: var(--text-primary);
+    padding: 18px 18px 40px; font-size: var(--ui-text-sm); -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1180px; margin: 0 auto; }
+h1 { font-size: 1.05rem; font-weight: 700; letter-spacing: .01em; }
+h2 { font-size: 0.82rem; font-weight: 700; color: var(--text-secondary); margin: 22px 0 8px; letter-spacing: .04em; text-transform: uppercase; }
+.lede { margin-top: 6px; color: var(--text-tertiary); font-size: 0.72rem; line-height: 1.6; }
+.lede code, .spec code { font-family: var(--mono, monospace); font-size: 0.68rem; color: var(--text-soft); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 4px; }
+.toolbar .seg { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border-glass); border-radius: 8px; background: var(--surface-glass2); }
+.toolbar button {
+    font-family: var(--sans); font-size: 0.7rem; color: var(--text-secondary);
+    background: transparent; border: 0; border-radius: 6px; padding: 0.28rem 0.55rem; cursor: pointer;
+}
+.toolbar button.is-on { background: rgba(var(--accent-rgb), 0.18); color: var(--text-primary); }
+.boards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.panel { border: 1px solid var(--border-glass); border-radius: 12px; background: var(--surface-glass); overflow: hidden; }
+.panel > header { padding: 8px 12px; border-bottom: 1px solid var(--border-glass); font-size: 0.68rem; color: var(--text-tertiary); letter-spacing: .04em; display: flex; justify-content: space-between; gap: 8px; }
+.panel > header b { color: var(--text-secondary); font-weight: 600; }
+.sidebar-mock { width: 100%; padding: 6px 0 10px; }
+.sessions-list {
+    max-width: 320px;
+    padding: 0.06rem calc(var(--sidebar-inset) - 5px) 0.4rem;
+    border-right: 1px solid var(--border-glass);
+}
+.case-label { font-size: 0.62rem; color: var(--text-placeholder); padding: 0 0 2px; letter-spacing: .02em; }
+.case { padding: 6px 12px 2px; }
+.chiprow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 6px 12px 12px; }
+.chiprow .session-draft-badge, .chiprow .session-todo-badge, .chiprow .session-human-badge { margin-left: 0; }
+.iso { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.iso > span:last-child { font-size: 0.58rem; color: var(--text-placeholder); font-family: var(--mono, monospace); }
+.spec { width: 100%; border-collapse: collapse; font-size: 0.68rem; }
+.spec th, .spec td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border-glass); vertical-align: top; }
+.spec th { color: var(--text-placeholder); font-weight: 600; letter-spacing: .03em; white-space: nowrap; }
+.spec td { color: var(--text-secondary); }
+.spec td code { color: var(--accent-2); }
+.note { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border-glass); border-left: 3px solid rgba(var(--accent-rgb), .5); border-radius: 8px; background: var(--surface-glass2); font-size: 0.68rem; line-height: 1.7; color: var(--text-secondary); }
+.note b { color: var(--text-primary); }
+.badge-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.62rem; color: var(--text-placeholder); padding: 0 12px 12px; }
+.panel-body { padding: 8px 12px 12px; }
+.panel-body .spec { font-size: 0.66rem; }
+.panel-body .spec th, .panel-body .spec td { padding: 4px 6px; }
+.panel-body .spec tr:last-child td { border-bottom: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <h1>侧栏会话条目 · 行尾「状态胶囊」样式示意 <span style="font-size:.7rem;color:var(--text-placeholder)">v3：补插件角标 / 中英对照；删除「目标」占位胶囊</span></h1>
+    <p class="lede">
+        样式逐条照抄工程代码：<code>frontend/src/styles/app.css</code>（<code>:root</code> / <code>.theme-light</code> / <code>.theme-dark</code> 变量块与 <code>.session-item</code> 系列规则）、
+        DOM 结构照抄 <code>frontend/src/app/modules/session-management.js</code> 的 <code>buildAndBindSessionRow()</code>。
+        主题 / 字号 / 列表模式开关与产品内的 <code>data-session-list-mode</code>、<code>html{font-size}</code> 机制一致；
+        新增「中文 / English」开关，复刻 <code>i18n.js</code> 的 <code>data-language</code> 行为——只替换词典与运行时分支命中的文案，
+        插件角标（manifest 原文）、<code>?</code>/<code>!</code> 徽标 aria 文案、空摘要「暂无提问」在英文档下保持原样（与现状一致）。
+    </p>
+
+    <div class="toolbar">
+        <div class="seg" role="group" aria-label="主题">
+            <button type="button" data-theme="theme-purple" class="is-on">紫黑（默认）</button>
+            <button type="button" data-theme="theme-dark">深黑</button>
+            <button type="button" data-theme="theme-light">浅色</button>
+        </div>
+        <div class="seg" role="group" aria-label="根字号">
+            <button type="button" data-fs="14">14px</button>
+            <button type="button" data-fs="16" class="is-on">16px</button>
+            <button type="button" data-fs="17">17px</button>
+            <button type="button" data-fs="20">20px</button>
+        </div>
+        <div class="seg" role="group" aria-label="列表模式">
+            <button type="button" data-mode="detailed" class="is-on">详细</button>
+            <button type="button" data-mode="compact">紧凑</button>
+        </div>
+        <div class="seg" role="group" aria-label="界面语言">
+            <button type="button" data-lang="zh-CN" class="is-on">中文</button>
+            <button type="button" data-lang="en">English</button>
+        </div>
+    </div>
+
+    <div class="boards">
+        <section class="panel">
+            <header><b>① 真实排布</b><span>行内两行（标题 + 最近提问）· 侧栏默认 220px</span></header>
+            <div class="sidebar-mock">
+                <div class="sessions-list">
+                    <!-- 当前会话 + 待办 -->
+                    <div class="session-item active" data-session-id="s1">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">侧栏会话行标记区重构</span>
+                                <span class="session-todo-badge" aria-label="待办">待办</span>
+                                <span class="session-item-date">刚刚</span>
+                                <span class="session-pin-mark" aria-label="置顶" title="置顶" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg></span>
+                                <div class="session-item-actions">
+                                    <button type="button" class="session-row-icon" aria-label="置顶会话"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg></button>
+                                    <button type="button" class="session-more-btn" aria-label="更多"><span class="session-more-dots"><span></span><span></span><span></span></span></button>
+                                </div>
+                            </div>
+                            <div class="session-last-query">看下当前工程代码前端会话栏的状态胶囊样式</div>
+                        </div></div>
+                    </div>
+
+                    <!-- 草稿 -->
+                    <div class="session-item" data-session-id="s2">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">打包脚本排错记录</span>
+                                <span class="session-draft-badge" aria-label="草稿">草稿</span>
+                                <span class="session-item-date">3分钟</span>
+                                <span class="session-pin-mark" hidden></span>
+                            </div>
+                            <div class="session-last-query">claude 帮我看看打包脚本为什么失败</div>
+                        </div></div>
+                    </div>
+
+                    <!-- 待办 + 草稿 -->
+                    <div class="session-item" data-session-id="s3">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">周会纪要（未发送）</span>
+                                <span class="session-todo-badge" aria-label="待办">待办</span>
+                                <span class="session-draft-badge" aria-label="草稿">草稿</span>
+                                <span class="session-item-date">12分钟</span>
+                            </div>
+                            <div class="session-last-query">把这周的会议纪要整理成待办</div>
+                        </div></div>
+                    </div>
+
+                    <!-- 待办 + 草稿 + 插件角标 + 待处理徽标 + 时间 + 图钉（全组合） -->
+                    <div class="session-item" data-session-id="s4">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">压缩链路长期目标</span>
+                                <span class="session-todo-badge" aria-label="待办">待办</span>
+                                <span class="session-draft-badge" aria-label="草稿">草稿</span>
+
+                                <span class="plugin-session-badges"><span class="plugin-session-badge plugin-session-badge--info">Plan</span></span>
+                                <span class="session-human-badge" aria-label="有 1 个问题待回答">?</span>
+                                <span class="session-item-date">1小时</span>
+                                <span class="session-pin-mark" aria-label="置顶" title="置顶"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg></span>
+                            </div>
+                            <div class="session-last-query">继续推进压缩链路的长期目标</div>
+                        </div></div>
+                    </div>
+
+                    <!-- 运行中 / 结果点 -->
+                    <div class="session-item is-generating" data-session-id="s5">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">正在生成（黄点脉冲）</span>
+                                <span class="session-item-date">2小时</span>
+                            </div>
+                            <div class="session-last-query">帮我把这个模块重写一遍</div>
+                        </div></div>
+                    </div>
+                    <div class="session-item is-unread-result" data-session-id="s6">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">有新结果（绿点）</span>
+                                <span class="session-item-date">1天</span>
+                            </div>
+                            <div class="session-last-query">生成一份月度报告</div>
+                        </div></div>
+                    </div>
+                    <div class="session-item is-unread-failed" data-session-id="s7">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">上次失败（红点）</span>
+                                <span class="session-item-date">3天</span>
+                            </div>
+                            <div class="session-last-query">跑一下全量测试</div>
+                        </div></div>
+                    </div>
+
+                    <!-- 悬停态（.demo-hover 复刻 :hover 规则） -->
+                    <div class="session-item demo-hover" data-session-id="s8">
+                        <div class="session-item-head"><div class="session-item-main">
+                            <div class="session-item-title-row">
+                                <span class="session-name">悬停：时间淡出 · 置顶与 ⋯ 浮出</span>
+                                <span class="session-todo-badge" aria-label="待办">待办</span>
+                                <span class="session-item-date">2天</span>
+                                <span class="session-pin-mark" hidden></span>
+                                <div class="session-item-actions">
+                                    <button type="button" class="session-row-icon" aria-label="置顶会话"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg></button>
+                                    <button type="button" class="session-more-btn" aria-label="更多"><span class="session-more-dots"><span></span><span></span><span></span></span></button>
+                                </div>
+                            </div>
+                            <div class="session-last-query">暂无提问</div>
+                        </div></div>
+                    </div>
+                </div>
+                <div class="badge-legend">
+                    <span>▲ 最后一行叠加了 .demo-hover，用于静态展示悬停态（真实交互由 :hover 触发）</span>
+                    <span>▲ 行宽不足时的让位顺序：标题（.session-name 为 flex:1 + 省略号）先被压缩，行尾胶囊与徽标为 flex:0 0 auto 保持完整——「全组合」行标题截断即此规则的真实表现</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" id="pill-iso">
+            <header><b>② 逐枚胶囊对照</b><span>隔离展示（不依赖行宽）</span></header>
+            <div class="case"><div class="case-label">待办 / 草稿（当前唯一在产的两枚文字胶囊）</div></div>
+            <div class="chiprow">
+                <span class="iso"><span class="session-todo-badge">待办</span><span>.session-todo-badge</span></span>
+                <span class="iso"><span class="session-draft-badge">草稿</span><span>.session-draft-badge</span></span>
+            </div>
+            <div class="case"><div class="case-label">目标胶囊「.session-goal-badge」已于 2026-10-11 删除（占位样式、无生产者）——历史样式与再接线注意事项见 <code>三种goal对照.html</code> ③ 区</div></div>
+            <div class="case"><div class="case-label">插件投影角标 4 档（.plugin-session-badge--*）</div></div>
+            <div class="chiprow">
+                <span class="iso"><span class="plugin-session-badge plugin-session-badge--info">info</span><span>--info</span></span>
+                <span class="iso"><span class="plugin-session-badge plugin-session-badge--success">success</span><span>--success</span></span>
+                <span class="iso"><span class="plugin-session-badge plugin-session-badge--warning">warning</span><span>--warning</span></span>
+                <span class="iso"><span class="plugin-session-badge plugin-session-badge--danger">danger</span><span>--danger</span></span>
+                <span class="iso"><span class="plugin-session-badge plugin-session-badge--info">超长角标会被截断省略…</span><span>max-width: 5rem + ellipsis</span></span>
+            </div>
+            <div class="case"><div class="case-label">待处理人机交互徽标（圆形，非胶囊）</div></div>
+            <div class="chiprow">
+                <span class="iso"><span class="session-human-badge">?</span><span>仅问题 → ?</span></span>
+                <span class="iso"><span class="session-human-badge">!</span><span>仅审批 → !</span></span>
+                <span class="iso"><span class="session-human-badge">!2</span><span>同类多项 → !N</span></span>
+                <span class="iso"><span class="session-human-badge">3</span><span>两类都有 → 纯数量</span></span>
+            </div>
+            <div class="case"><div class="case-label">行尾其它元素</div></div>
+            <div class="chiprow">
+                <span class="iso"><span class="session-item-date" style="opacity:.85">2小时</span><span>.session-item-date（相对时间）</span></span>
+                <span class="iso"><span class="session-pin-mark" style="margin-left:0"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg></span><span>.session-pin-mark（置顶图钉）</span></span>
+            </div>
+        </section>
+    </div>
+
+    <h2>③ 插件会话角标 · 在册 5 枚（session.badge 槽位）</h2>
+    <section class="panel">
+        <header><b>文案与配色由插件 manifest 声明</b><span>4×info + 1×success（待审核）</span></header>
+        <div class="chiprow">
+            <span class="iso"><span class="plugin-session-badge plugin-session-badge--info">Plan</span><span>session-todo · /has_plan</span></span>
+            <span class="iso"><span class="plugin-session-badge plugin-session-badge--info">Team</span><span>agent-team · /status</span></span>
+            <span class="iso"><span class="plugin-session-badge plugin-session-badge--info">Goal</span><span>agent-goal · /status（进行中）</span></span>
+            <span class="iso"><span class="plugin-session-badge plugin-session-badge--success">待审核</span><span>agent-goal · /review_status（完成待审）</span></span>
+            <span class="iso"><span class="plugin-session-badge plugin-session-badge--info">Game</span><span>game-arena · /game_id</span></span>
+            <span class="iso"><span class="plugin-session-badge">neutral</span><span>variant 默认档（CSS 基样式，当前无插件使用）</span></span>
+        </div>
+        <div class="panel-body">
+            <table class="spec">
+                <thead><tr><th>插件</th><th>槽位声明</th><th>显示条件</th><th>文案 / 配色</th></tr></thead>
+                <tbody>
+                    <tr><td>session-todo（左栏「计划」页签）</td><td><code>id: active-plan · namespace: plan · path: /has_plan</code></td><td><code>when: truthy</code></td><td>label <code>Plan</code> · variant <code>info</code></td></tr>
+                    <tr><td>agent-team</td><td><code>id: active-team · namespace: team · path: /status</code></td><td><code>when: equals · equals: "active"</code></td><td>label <code>Team</code> · variant <code>info</code></td></tr>
+                    <tr><td>agent-goal（目标进行中）</td><td><code>id: active-goal · namespace: goal · path: /status</code></td><td><code>when: equals · equals: "active"</code></td><td>label <code>Goal</code> · variant <code>info</code>（另带 <code>display: badge</code>）</td></tr>
+                    <tr><td>agent-goal（完成待人工审核）</td><td><code>id: review-goal · namespace: goal · path: /review_status</code></td><td><code>when: equals · equals: "pending"</code></td><td>label <code>待审核</code> · variant <code>success</code></td></tr>
+                    <tr><td>game-arena</td><td><code>id: active-game · namespace: current-game · path: /game_id</code></td><td><code>when: truthy</code></td><td>label <code>Game</code> · variant <code>info</code></td></tr>
+                    <tr><td colspan="4">运行时约束（<code>plugin-ui-slots.js::normalizeProjectedItem</code>）：label 截断至 64 字、description 200 字；<code>variant ∈ {neutral, info, success, warning, danger}</code>；<code>display ∈ {badge, activity}</code>，<code>activity</code> 不显示胶囊而转为行级活动态；每会话最多 16 枚、每屏最多 200 行参与投影。</td></tr>
+                    <tr><td colspan="4">
+                        <b>同一个 agent-goal 的两枚角标是两件事</b>：<code>Goal</code> = 目标进行中；<code>待审核</code> = Judge 判定完成、等你审核（<code>review_status=pending</code>）。实机实测（2026-10-11，插件样式表已加载）：
+                        <code>Goal</code> 浅色 <code>rgb(79,70,229)</code>（由 app.css 的 <code>--info</code> 浅色修正胜出，插件自述规则特异性更低）／紫黑 <code>rgb(212,184,252)</code>；
+                        <code>待审核</code> 浅色 <code>rgb(36,122,67)</code> + 底 <code>rgba(52,168,83,.12)</code>（插件自己的浅色规则 0,5,0 胜出）／紫黑 <code>rgb(166,227,161)</code>。
+                        另注：插件样式表是按需注入的（挂载该插件渲染器时才挂 <code>&lt;link&gt;</code>），量配色前先确认它已在页面上。
+                    </td></tr>
+                    <tr><td colspan="4">
+                        插件还能用自己的样式表按 <code>[data-plugin-id]</code> 覆盖角标配色（<code>plugins/&lt;id&gt;/web/session-panel.css</code>，经 <code>/plugin-assets/&lt;id&gt;/session-panel.css?v=&lt;内容 hash&gt;</code> 注入，
+                        特异性 (0,2,0)~(0,4,0)，会压过 app.css 的 <code>--info</code> 规则）。<br>
+                        ⚠ 踩坑：浅色主题只定义了 <code>--accent-rgb / --brand-accent-rgb / --green-accent / --red-accent</code>，<b>没有</b> <code>--accent-1/2/3</code>（见 ⑤ 规格表）；
+                        light 档里写 <code>var(--accent-1)</code> 会回退成紫黑主题的浅薰衣草 <code>#cba6f7</code>。session-todo 的浅色档原本就是 <code>color: var(--accent-1)</code>
+                        （特异性 0,4,0 压掉了 app.css 的 10-11 修复），实测 computed <code>rgb(203,166,247)</code>；<b>2026-10-11 已改为 <code>#4f46e5</code></b>，实测 <code>rgb(79,70,229)</code>。
+                    </td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <h2>④ 中英对照（i18n.js 词典 + 运行时分支）</h2>
+    <section class="panel">
+        <header><b>行内元素的两种语言</b><span>data-language="en" 时按词典替换</span></header>
+        <div class="panel-body">
+            <table class="spec">
+                <thead><tr><th>行内元素</th><th>中文</th><th>English</th><th>来源</th></tr></thead>
+                <tbody>
+                    <tr><td>待办胶囊</td><td>待办</td><td>Todo</td><td>i18n.js 词典（文本节点替换，含 aria-label）</td></tr>
+                    <tr><td>草稿胶囊</td><td>草稿</td><td>Draft</td><td>同上</td></tr>
+                    <tr><td>「目标」胶囊（CSS 占位，暂无渲染方）</td><td>目标</td><td>Goal</td><td>i18n.js 词典（<code>'目标': 'Goal'</code>，与左栏页签共用词条）</td></tr>
+                    <tr><td>图钉 tooltip / aria</td><td>置顶</td><td>Pin</td><td>i18n.js 属性表（aria-label / title / data-ui-tip / placeholder）</td></tr>
+                    <tr><td>行内置顶按钮</td><td>置顶会话</td><td>Pin session</td><td>同上</td></tr>
+                    <tr><td>行尾 ⋯ 按钮</td><td>更多</td><td>More</td><td>同上</td></tr>
+                    <tr><td>相对时间</td><td>刚刚 / 3分钟 / 2小时 / 1天</td><td>now / 3m / 2h / 1d</td><td><code>formatSessionListRelativeTimeFromTs</code> 英文分支（非词典）</td></tr>
+                    <tr><td>待处理徽标 aria</td><td>有 N 个问题待回答 / 有 N 个审批待处理</td><td>（无词条 → 保持中文）</td><td><code>human-interactions.js</code> 运行时拼装</td></tr>
+                    <tr><td>空提问摘要</td><td>暂无提问</td><td>（保持中文）</td><td>词典虽有 <code>No questions yet</code>，但 <code>formatSessionListSubtitle</code> 无英文分支，且 <code>.session-last-query</code> 在 i18n 内容豁免表内</td></tr>
+                    <tr><td>插件角标</td><td colspan="2">Plan / Team / Goal / Game —— manifest 原文，两种语言下相同</td><td><code>.myagent-plugin/plugin.json</code> 的 <code>ui.session.badge</code></td></tr>
+                    <tr><td>会话名 / 提问预览</td><td colspan="2">不翻译（用户 / 模型内容）</td><td>i18n 内容豁免表：<code>.session-name</code>、<code>.session-last-query</code></td></tr>
+                    <tr><td>⋯ 菜单内的「设为待办 / 取消待办」</td><td>设为待办 / 取消待办</td><td>Mark as todo / Remove todo</td><td>i18n.js 词典（菜单项，不在行尾标记区）</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <h2>⑤ 规格（全部取自 frontend/src/styles/app.css）</h2>
+    <table class="spec">
+        <thead><tr><th>元素</th><th>关键声明</th><th>取值</th></tr></thead>
+        <tbody>
+            <tr><td>胶囊通用盒体<br><code>.session-todo-badge</code> / <code>-draft-</code></td><td><code>padding</code> / <code>border-radius</code> / <code>border</code> / <code>font</code> / <code>margin-left</code></td><td><code>0.14rem 0.36rem</code> · <code>999px</code> · <code>1px solid</code> · <code>400 0.62rem/1</code> · <code>0.4rem</code></td></tr>
+            <tr><td>「待办」配色</td><td>border / background / color</td><td><code>rgba(var(--accent-rgb), .36)</code> · <code>rgba(var(--accent-rgb), .16)</code> · <code>var(--accent-2)</code>（浅色：<code>#4f46e5</code>）</td></tr>
+            <tr><td>「草稿」配色</td><td>border / background / color</td><td><code>rgba(249,226,175,.34)</code> · <code>rgba(249,226,175,.16)</code> · <code>var(--amber-accent)</code>（浅色：<code>#8a6712</code> on <code>rgba(246,196,68,.16)</code>）</td></tr>
+            <tr><td>「目标」配色（<b>已删除</b>）</td><td>原为默认 + 4 档 <code>[data-goal-status]</code></td><td>2026-10-11 随 <code>.session-goal-badge</code> 一并删除（占位样式、无生产者）；历史取值与渲染见 <code>三种goal对照.html</code> ③ 区</td></tr>
+            <tr><td>插件角标<br><code>.plugin-session-badge</code></td><td>padding / border-radius / border / background / 字体 / 上限</td><td><code>0.14rem 0.36rem</code> · <code>999px</code> · <code>var(--border-glass)</code> · <code>var(--surface-glass2)</code> · <code>400 0.62rem/1</code> · <code>max-width:5rem</code> + 省略号</td></tr>
+            <tr><td>待处理徽标<br><code>.session-human-badge</code></td><td>尺寸 / 外形 / 配色 / 层级</td><td><code>min-width/height 1.125rem</code>（按需横向加宽）· <code>border-radius:50%</code> · 琥珀底 <code>#30291f</code> 字 · 600 字重 · <code>z-index:3</code>（浮在悬停遮罩之上）</td></tr>
+            <tr><td>相对时间<br><code>.session-item-date</code></td><td>字号 / 颜色 / 数字对齐 / 间距 / 交互</td><td><code>0.62rem</code> · <code>var(--text-tertiary)</code> · <code>tabular-nums</code> · <code>margin-left:.5rem</code> · <code>pointer-events:none</code>，悬停 <code>opacity:0</code></td></tr>
+            <tr><td>置顶图钉<br><code>.session-pin-mark</code></td><td>尺寸 / 颜色 / 交互</td><td><code>1rem</code> 图标 · <code>var(--text-placeholder)</code> · 悬停与时间一起淡出</td></tr>
+            <tr><td>行右侧遮罩<br><code>.session-item::after</code></td><td>尺寸 / 渐变</td><td>宽 <code>4.4rem</code>，深色 <code>rgba(18,18,28,.92)→0</code>；浅色 <code>rgba(246,247,251,.96)→0</code>，仅悬停显示</td></tr>
+            <tr><td>随字号缩放</td><td>根字号机制</td><td>胶囊 / 徽标均用 <code>rem</code>；<code>html{font-size}</code> 由设置写为 12–20px，整条一起缩放</td></tr>
+        </tbody>
+    </table>
+
+    <div class="note">
+        <b>四处需要留意的代码事实：</b><br>
+        ① 当前有渲染方的行尾标记只有 <b>待办 / 草稿 / 插件角标 / ?! 待处理徽标</b>（生产者分别在 <code>session-management.js</code>、<code>plugin-ui-slots.js</code>、<code>human-interactions.js</code>）；<br>
+        ② <b>行内「目标」占位胶囊（<code>.session-goal-badge</code> + 五档 <code>data-goal-status</code>）已于 2026-10-11 删除</b>——它顶替了更早的「修改审查」胶囊，但两者都没有生产者（全仓检索只命中 <code>app.css</code> 与构建产物，<code>buildAndBindSessionRow()</code> 从不插入该节点）；删除后行尾的目标状态由插件角标承载。历史样式与实测见 <code>三种goal对照.html</code> ③ 区；<br>
+        ③ <b>「待办」胶囊与插件「Plan」角标是两套来源</b>：前者是会话元数据里手动「设为待办」的标记（<code>app/agent_harness.py</code> 的 <code>meta["todo"]</code> → <code>sess.todo</code>，行内位置固定在标题旁、非插件角标），后者来自 session-todo 插件状态 <code>/has_plan</code>，经 <code>session.badge</code> 槽位投影为 <code>.plugin-session-badge</code>（插在相对时间之前）。二者可同时出现在同一行。<br>
+        ④ <b>两枚 agent-goal 角标别混</b>：插件 <code>Goal</code>（<code>active-goal</code>，目标进行中，<code>variant: info</code>——浅色靛蓝 / 紫黑浅薰衣草）与插件 <code>待审核</code>（<code>review-goal</code>，Judge 判定完成等你审核，<code>variant: success</code>——浅色 <code>#247a43</code> / 紫黑 <code>#a6e3a1</code>）。两枚文案都是 manifest 字面量、不经词典；「目标」占位胶囊（③ 兄弟）已删除，别再照它接线。
+    </div>
+</div>
+
+<script>
+(function () {
+    var root = document.documentElement;
+    document.querySelectorAll('[data-theme]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            root.classList.remove('theme-purple', 'theme-dark', 'theme-light');
+            root.classList.add(btn.dataset.theme);
+            document.querySelectorAll('[data-theme]').forEach(function (b) { b.classList.toggle('is-on', b === btn); });
+        });
+    });
+    document.querySelectorAll('[data-fs]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            root.style.fontSize = btn.dataset.fs + 'px';
+            document.querySelectorAll('[data-fs]').forEach(function (b) { b.classList.toggle('is-on', b === btn); });
+        });
+    });
+    document.querySelectorAll('[data-mode]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            root.setAttribute('data-session-list-mode', btn.dataset.mode);
+            document.querySelectorAll('[data-mode]').forEach(function (b) { b.classList.toggle('is-on', b === btn); });
+        });
+    });
+    root.setAttribute('data-session-list-mode', 'detailed');
+
+    // 中英切换：复刻产品行为——词典命中项替换，未命中项（用户内容、插件 manifest 文案）保持原样
+    var TIME_MAP = { '刚刚': 'now', '3分钟': '3m', '12分钟': '12m', '1小时': '1h', '2小时': '2h', '1天': '1d', '2天': '2d', '3天': '3d' };
+    var TIME_BACK = {};
+    Object.keys(TIME_MAP).forEach(function (k) { TIME_BACK[TIME_MAP[k]] = k; });
+    function setBadgeText(sel, value) {
+        document.querySelectorAll(sel).forEach(function (el) {
+            el.textContent = value;
+            el.setAttribute('aria-label', value);
+        });
+    }
+    function applyLang(lang) {
+        var en = lang === 'en';
+        root.setAttribute('data-language', en ? 'en' : 'zh-CN');
+        root.lang = en ? 'en' : 'zh-CN';
+        setBadgeText('.session-todo-badge', en ? 'Todo' : '待办');
+        setBadgeText('.session-draft-badge', en ? 'Draft' : '草稿');
+        // 注：行内「目标」占位胶囊（.session-goal-badge）已于 2026-10-11 删除；
+        // i18n.js 词典里仍有 '目标': 'Goal' / '计划': 'Plan'（与左栏页签共用词条），插件角标不经词典。
+        document.querySelectorAll('.session-item-date').forEach(function (el) {
+            var t = el.textContent.trim();
+            var next = en ? (TIME_MAP[t] || t) : (TIME_BACK[t] || t);
+            if (next !== t) el.textContent = next;
+        });
+        document.querySelectorAll('.session-pin-mark').forEach(function (el) {
+            el.setAttribute('aria-label', en ? 'Pin' : '置顶');
+            el.setAttribute('title', en ? 'Pin' : '置顶');
+        });
+        document.querySelectorAll('.session-row-icon').forEach(function (el) {
+            el.setAttribute('aria-label', en ? 'Pin session' : '置顶会话');
+        });
+        document.querySelectorAll('.session-more-btn').forEach(function (el) {
+            el.setAttribute('aria-label', en ? 'More' : '更多');
+        });
+        // 说明：.session-human-badge（? / !）的 aria 文案与「暂无提问」在代码中无词典分支，
+        // 语言切换时保持中文——这里刻意不改，保持与产品一致。
+    }
+    document.querySelectorAll('[data-lang]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            applyLang(btn.dataset.lang);
+            document.querySelectorAll('[data-lang]').forEach(function (b) { b.classList.toggle('is-on', b === btn); });
+        });
+    });
+})();
+</script>
+</body>
+</html>

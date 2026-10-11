@@ -1,6 +1,6 @@
 # 打开协议与路径选择器 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-07 v3（覆盖至：当前工作区；Windows 确认结果与会话目录选择）
+- 版本：2026-10-11 v4（覆盖至：当前工作区；选择器初始目录跟随会话与失效目录语义）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/webui.py`（`open_workspace_file / _resolve_allowed_local_path / api_pick_path`）、`frontend/src/vendor/myagent_path_picker.js`、`app/path_picker_util.py`。
 - 上级：`00-工作区整体设计.md`
@@ -40,7 +40,7 @@
 
 - **触发**：新建菜单或欢迎页请求选择会话目录；系统选择器不可用，或用户取消选择。
 - **预期现象**：前端向 `POST /api/pick-path` 提交 `kind=directory / initial / multiple=false`；成功取得 `path` 后交给新会话目录链路。取消返回 `cancelled=true` 并保留原状态；选择器不可用时提供填写绝对路径的模态框。
-- **规则与边界**：选出路径与创建会话是两次独立请求；选择器返回值不替代 `POST /sessions` 的目录校验。取消不能当成默认目录确认，选择新目录也不改变全局 `WORK_DIR` 设置。后端模块修改后须重启服务加载，前端模块修改后须构建并核对 dist。
+- **规则与边界**：选出路径与创建会话是两次独立请求；选择器返回值不替代 `POST /sessions` 的目录校验。取消不能当成默认目录确认，选择新目录也不改变全局 `WORK_DIR` 设置；原生选择器初始目录跟随当前会话/草稿目录（见 04/01 · UC-4A8），会话目录失效时保留配置身份、不回落默认根。后端模块修改后须重启服务加载，前端模块修改后须构建并核对 dist。
 - **依据**：`webui.py::api_pick_path / create_session`、`vendor/myagent_path_picker.js::pickPath`、`session-management.js::pickNewSessionWorkDir / promptNewSessionWorkDirFallback`；界面语义见 [05/06 · UC-5F11~5F13](../05-WebUI对话界面/06-会话档案与技能面板方案设计-UseCase清单.md)。
 
 ## 3. 边界
@@ -64,6 +64,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-11 v4：原生选择器初始目录跟随当前会话/草稿；会话目录失效不回落默认根（配合 04/01 · UC-4A8 与 04/05 · UC-4E6）。
 - 2026-10-07 v3：新增 UC-4F4~4F5，记录 `GetFolder` 错取浏览目录的根因、改用 `GetResult` 的确认结果契约、HRESULT 取消/失败处理、会话目录选择 API 与手填兜底；补录 COM 回归和人工验收边界。
 
 - 2026-09-14 v2：修正 `api_pick_path` 行号（L2459）并更新版本线至 `d022831`。

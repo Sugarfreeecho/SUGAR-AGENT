@@ -1,0 +1,350 @@
+{
+  "sessionId": "77dc386c-fe09-4863-a50d-1a3233060de2",
+  "userReportedState": "Automatic upward follow during generation still stutters after the attempted changes. Local operation also stutters; very fast LLM output can mask it.",
+  "captureMethod": "Read-only CDP Runtime.evaluate of the existing bounded UI performance snapshot; selected values transcribed from two snapshots, not a full browser trace.",
+  "page": {
+    "href": "http://127.0.0.1:8192/?_=1791529770",
+    "browser": "Edge",
+    "assets": [
+      "main-C25LcJ-W.js",
+      "main-9tKfHumA.css"
+    ],
+    "revision": "session-stream-2026-10-09-v2",
+    "reportStartedAt": "2026-10-09T07:09:30.820Z",
+    "firstCapturedAt": "2026-10-09T07:23:31.114Z",
+    "secondCapturedAt": "2026-10-09T07:25:06.666Z",
+    "timezoneForDisplay": "Asia/Shanghai",
+    "hiddenAtFirstCapture": false,
+    "hiddenAtSecondCapture": false,
+    "sseYieldsAtFirstCapture": 332
+  },
+  "backendState": {
+    "capturedAt": "2026-10-09T07:21:47.456014+00:00",
+    "stream_active": true,
+    "run_active": true
+  },
+  "interval": {
+    "elapsedMs": 95552,
+    "metrics": {
+      "ui.longTask": {
+        "countAdded": 368,
+        "totalMsAdded": 31599,
+        "meanMsAdded": 85.87
+      },
+      "stream.sseEventWork": {
+        "countAdded": 527,
+        "totalMsAdded": 826,
+        "meanMsAdded": 1.57
+      },
+      "stream.sseWorkSlice": {
+        "countAdded": 63,
+        "totalMsAdded": 829.6,
+        "meanMsAdded": 13.17
+      },
+      "follow.work": {
+        "countAdded": 3639,
+        "totalMsAdded": 14666.1,
+        "meanMsAdded": 4.03
+      },
+      "follow.frameGap": {
+        "countAdded": 3639,
+        "totalMsAdded": 95556.8,
+        "meanMsAdded": 26.26
+      },
+      "stream.flush": {
+        "countAdded": 1002,
+        "totalMsAdded": 664.8,
+        "meanMsAdded": 0.66
+      },
+      "stream.frameGap": {
+        "countAdded": 997,
+        "totalMsAdded": 37637.1,
+        "meanMsAdded": 37.75
+      }
+    }
+  },
+  "selectedRecentSlowSamples": [
+    {
+      "at": "2026-10-09T07:25:04.550Z",
+      "metric": "stream.frameGap",
+      "durationMs": 98.8
+    },
+    {
+      "at": "2026-10-09T07:25:04.670Z",
+      "metric": "ui.longTask",
+      "durationMs": 59
+    },
+    {
+      "at": "2026-10-09T07:25:04.711Z",
+      "metric": "follow.frameGap",
+      "durationMs": 65.9
+    },
+    {
+      "at": "2026-10-09T07:25:04.725Z",
+      "metric": "stream.frameGap",
+      "durationMs": 65.9
+    },
+    {
+      "at": "2026-10-09T07:25:04.947Z",
+      "metric": "ui.longTask",
+      "durationMs": 138
+    },
+    {
+      "at": "2026-10-09T07:25:04.947Z",
+      "metric": "ui.longTask",
+      "durationMs": 100
+    },
+    {
+      "at": "2026-10-09T07:25:05.030Z",
+      "metric": "follow.frameGap",
+      "durationMs": 214.2
+    },
+    {
+      "at": "2026-10-09T07:25:05.040Z",
+      "metric": "stream.frameGap",
+      "durationMs": 214.2
+    },
+    {
+      "at": "2026-10-09T07:25:05.084Z",
+      "metric": "ui.longTask",
+      "durationMs": 89
+    },
+    {
+      "at": "2026-10-09T07:25:05.086Z",
+      "metric": "follow.frameGap",
+      "durationMs": 132
+    },
+    {
+      "at": "2026-10-09T07:25:05.102Z",
+      "metric": "stream.frameGap",
+      "durationMs": 132
+    },
+    {
+      "at": "2026-10-09T07:25:05.666Z",
+      "metric": "ui.longTask",
+      "durationMs": 147
+    },
+    {
+      "at": "2026-10-09T07:25:05.671Z",
+      "metric": "follow.frameGap",
+      "durationMs": 148.3
+    }
+  ],
+  "cumulativeMetricsAtFirstCapture": {
+    "ui.longTask": {
+      "count": 1395,
+      "totalMs": 110262,
+      "maxMs": 1183
+    },
+    "stream.flush": {
+      "count": 7831,
+      "maxMs": 8.399999976158142
+    },
+    "stream.frameGap": {
+      "count": 7785,
+      "maxMs": 214.40000000002328
+    },
+    "stream.sseEventWork": {
+      "count": 2928,
+      "maxMs": 64
+    },
+    "follow.work": {
+      "count": 34338,
+      "maxMs": 69.89999997615814
+    },
+    "follow.frameGap": {
+      "count": 34335,
+      "maxMs": 3759.0999999999767
+    }
+  },
+  "selectedBackendLog": {
+    "atLocal": "2026-10-09 15:19:51,898",
+    "timezone": "Asia/Shanghai",
+    "metric": "llm_local_consumer_timing",
+    "react_iter": 25,
+    "worker_done_to_consumed_ms": 1757,
+    "bridge_emit_max_ms": 1632,
+    "bridge_emit_total_ms": 1644,
+    "bridge_emit_calls": 184
+  },
+  "postRollbackPageSizeSnapshot": {
+    "capturedAt": "2026-10-09T09:10:49.053Z",
+    "href": "http://127.0.0.1:8192/?_=1791532193",
+    "mainAsset": "main-BzyXYhjB.js",
+    "hidden": false,
+    "userObservation": "A new session is smooth at the beginning and becomes choppy later; the user cannot yet distinguish which kind of context or content growth matters.",
+    "chatStreamElementCount": 3185,
+    "userMessageCount": 5,
+    "processGroupCount": 5,
+    "expandedProcessGroupCount": 1,
+    "executionRowCount": 390,
+    "streamingChunkCount": 0,
+    "scrollerDomTextUtf16Units": 1031339,
+    "maxScrollerDomTextUtf16Units": 24025,
+    "contextReadout": "403k / 512k (78.7%)",
+    "limits": [
+      "DOM text totals include collapsed groups; they are not visible character counts or model token counts.",
+      "This is one page-size snapshot with no streaming text chunk at capture, not a reproduction of active scroll stutter or a smooth/stuttering pair.",
+      "The old timing samples in this file belong to the pre-rollback build; this new entry measures only post-rollback page size."
+    ]
+  },
+  "limits": [
+    "Callback intervals are not display FPS or model generation intervals.",
+    "Long-task duration and instrumented callback duration can overlap; do not add or subtract them to infer an unattributed remainder.",
+    "Slow-sample timestamps are recording times and the bounded buffer is not a complete trace.",
+    "Cumulative maxima are not maxima calculated solely over the sampling interval.",
+    "Backend bridge timing is not isolated persistence timing or frontend frame timing.",
+    "Page-level long tasks are associated with the selected session by the existing observer, without script or layout attribution.",
+    "This sample confirms continued stalls after event-yield instrumentation, not the precise causal code path."
+  ],
+  "restoredEarlyBuildVerification": {
+    "checkedAt": "2026-10-09T14:33:57.250765+00:00",
+    "userObservation": "Restored code in the current directory, restarted and refreshed; the version described as 1002 seems to stutter already.",
+    "pageHref": "http://127.0.0.1:8192/?_=1791554173",
+    "uiVersionLabel": "v5.20261002",
+    "observedLoadedMainAssets": [
+      "main-DH8VlRyA.js",
+      "main-dYsFId0u.css"
+    ],
+    "matchingArchive": "20261003.zip",
+    "fileChecks": [
+      {
+        "path": "app/templates/dist/index.html",
+        "sha256": "3a2364ac7189e5984c04554502846720efe57dbd3b975206cf7d53def8bfa935",
+        "exactArchiveMatch": true,
+        "zipEntryLocalTime": [
+          2026,
+          10,
+          3,
+          10,
+          26,
+          28
+        ]
+      },
+      {
+        "path": "app/templates/dist/assets/main-DH8VlRyA.js",
+        "sha256": "914394b502fb77fd1cbb4c7890a934413bfab7466d1884f1b317971bab71fa82",
+        "exactArchiveMatch": true,
+        "zipEntryLocalTime": [
+          2026,
+          10,
+          3,
+          10,
+          26,
+          28
+        ]
+      },
+      {
+        "path": "app/templates/dist/assets/main-dYsFId0u.css",
+        "sha256": "2994c5af36a66af626bf6f9b1ed09977c39d8175d9ab045a96ea8f0c2675b995",
+        "exactArchiveMatch": true,
+        "zipEntryLocalTime": [
+          2026,
+          10,
+          3,
+          10,
+          26,
+          28
+        ]
+      },
+      {
+        "path": "plugins/change-review/web/change-review.js",
+        "sha256": "8312b956e583410a8dcaf6386eda3e6e1602c7c94e25db210a95f1ba9b75d126",
+        "exactArchiveMatch": true,
+        "zipEntryLocalTime": [
+          2026,
+          10,
+          3,
+          1,
+          21,
+          28
+        ]
+      },
+      {
+        "path": "app/webui.py",
+        "sha256": "fbc3bc71af27d65cb3910d570bb483d83bd9d8dccb96c959dcc4d57127ec3029",
+        "exactArchiveMatch": true,
+        "zipEntryLocalTime": [
+          2026,
+          10,
+          3,
+          0,
+          22,
+          4
+        ]
+      },
+      {
+        "path": "app/agent_loop.py",
+        "sha256": "bb9c28daf27a2be0f81152b091b8d4b398e03899639e02025bd4c336c9cb3cb3",
+        "exactArchiveMatch": true,
+        "zipEntryLocalTime": [
+          2026,
+          10,
+          3,
+          0,
+          42,
+          12
+        ]
+      }
+    ],
+    "archiveSmoothStreamEqualsGit930NormalizedNewlines": true,
+    "archiveFeatures": {
+      "longTextHeadTailWindow": true,
+      "synchronousFullWindowLayoutMeasurement": true,
+      "messageChannelWindowMeasurement": false,
+      "pluginViewedTurnRange": true,
+      "nearBottomStillScansUserPositionsBeforeSelectingLastTurn": true,
+      "laterRenderExecutionRecordPath": false,
+      "laterFollowAccelerationCap": false
+    },
+    "limits": [
+      "This verifies asset versions and compares local files with a backup; no new old-build scroll displacement or slow-frame pair was captured.",
+      "The UI version label, archive-entry timestamps and Git commit dates are different signals; none alone establishes first introduction.",
+      "Page main-asset URLs were observed; exact byte comparisons are between local files and the archive, not an independent browser response hash.",
+      "Current frontend source modules are not a complete match for this restored runtime; rebuilding would change the baseline.",
+      "Earlier timing evidence in this document belongs to a different build and session."
+    ]
+  },
+  "disabledSwitchRuntimeVerification": {
+    "userObservation": "Both switches are off, but automatic upward scrolling still stutters.",
+    "href": "http://127.0.0.1:8192/?_=1791554173",
+    "loadedMainAsset": "main-69rUiErE.js",
+    "initialCaptureAt": "2026-10-09T15:14:52.245Z",
+    "storedPreferences": {
+      "changeReviewViewportSync": "0",
+      "llmStreamWindow": "0"
+    },
+    "runtimePreferences": {
+      "changeReviewViewportSync": false,
+      "llmStreamWindow": false
+    },
+    "probeStartedAt": "2026-10-09T15:15:27.055Z",
+    "probeEndedAt": "2026-10-09T15:16:08.739Z",
+    "durationMs": 41684,
+    "capturedScrollEvents": 1280,
+    "interceptedRafSchedules": 5589,
+    "pluginViewportCallbackSchedules": 0,
+    "pluginViewportCallbackExecutions": 0,
+    "activeWindowCountAtStartAndEnd": [
+      0,
+      0
+    ],
+    "pendingWindowMeasurementCountAtStartAndEnd": [
+      0,
+      0
+    ],
+    "streamingChunkCountAtStartAndEnd": [
+      2,
+      2
+    ],
+    "temporaryRafWrapperRestored": true,
+    "temporaryScrollListenerRemoved": true,
+    "limits": [
+      "This verifies the current browser page at port 8192, not other clients or ports.",
+      "Viewport callbacks were identified by their function source at RAF scheduling. The temporary wrapper was removed afterwards.",
+      "The probe counts work and state; it does not measure continuous onscreen displacement or quantify subjective stutter.",
+      "Disabling viewport selection does not disable the entire review plugin, its rendering or placement work.",
+      "This sample belongs to the switched early build, distinct from older timing evidence elsewhere in this document."
+    ]
+  }
+}

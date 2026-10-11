@@ -1,0 +1,239 @@
+{
+  "scenario": "1200 buffered response deltas in one readable-stream packet; real complete production HTML, JS and CSS; no artificial per-event delay",
+  "environment": {
+    "browser": "headless Edge",
+    "viewport": [
+      1100,
+      800
+    ],
+    "api": "offline mock",
+    "externalFonts": "blocked"
+  },
+  "baselineBundle": "main-BCuMgbJq.js",
+  "afterBundle": "main-DW3il6S1.js",
+  "cssBundle": "main-PRMehQZb.css",
+  "baseline": {
+    "events": 1200,
+    "elapsedMs": 62.800000071525574,
+    "paintsDuringDispatch": 0,
+    "firstTextPaintMs": null,
+    "received": 6000,
+    "expected": 6000,
+    "shownAtEof": 0,
+    "metrics": null,
+    "completedCorrectly": true,
+    "errors": []
+  },
+  "after": [
+    {
+      "events": 1200,
+      "elapsedMs": 176.19999992847443,
+      "rafTicksDuringDispatch": 7,
+      "firstTextCommitMs": 20.399999976158142,
+      "revealsDuringDispatch": 7,
+      "received": 6000,
+      "expected": 6000,
+      "shownAtEof": 2797,
+      "metrics": {
+        "sessionId": "review",
+        "timings": {
+          "stream.readWait": {
+            "count": 2,
+            "totalMs": 0.8999999761581421,
+            "maxMs": 0.5999999046325684,
+            "meanMs": 0.44999998807907104,
+            "p95UpperMs": 1
+          },
+          "stream.sseEventWork": {
+            "count": 1200,
+            "totalMs": 59.19999969005585,
+            "maxMs": 2.700000047683716,
+            "meanMs": 0.04933333307504654,
+            "p95UpperMs": 0.5
+          },
+          "stream.deltaGap": {
+            "count": 1199,
+            "totalMs": 172.60000002384186,
+            "maxMs": 26.700000047683716,
+            "meanMs": 0.1439532944318948,
+            "p95UpperMs": 0.5
+          },
+          "stream.sseWorkSlice": {
+            "count": 8,
+            "totalMs": 59.19999969005585,
+            "maxMs": 8.099999904632568,
+            "meanMs": 7.399999961256981,
+            "p95UpperMs": 16.7
+          },
+          "stream.flush": {
+            "count": 7,
+            "totalMs": 12.699999928474426,
+            "maxMs": 3.5,
+            "meanMs": 1.8142857040677751,
+            "p95UpperMs": 4
+          },
+          "follow.work": {
+            "count": 6,
+            "totalMs": 6.699999928474426,
+            "maxMs": 2.399999976158142,
+            "meanMs": 1.1166666547457378,
+            "p95UpperMs": 4
+          },
+          "stream.frameGap": {
+            "count": 6,
+            "totalMs": 147.53600000000006,
+            "maxMs": 33,
+            "meanMs": 24.589333333333343,
+            "p95UpperMs": 33.4
+          },
+          "layout.overflowBatch": {
+            "count": 3,
+            "totalMs": 2.1999999284744263,
+            "maxMs": 1.2999999523162842,
+            "meanMs": 0.7333333094914755,
+            "p95UpperMs": 2
+          },
+          "follow.frameGap": {
+            "count": 5,
+            "totalMs": 115.20000000000005,
+            "maxMs": 33,
+            "meanMs": 23.04000000000001,
+            "p95UpperMs": 33.4
+          }
+        },
+        "counters": {
+          "stream.receivedBytes": 300186,
+          "stream.deltaEvents": 1200,
+          "stream.receivedUtf16Units": 6000,
+          "stream.sseYields": 7,
+          "text.nodeReplacements": 1,
+          "stream.revealedCodePoints": 2238,
+          "text.nodeAppends": 6,
+          "layout.overflowCandidates": 3
+        },
+        "slowSamples": []
+      },
+      "completedCorrectly": true,
+      "errors": []
+    },
+    {
+      "events": 1200,
+      "elapsedMs": 291.8000000715256,
+      "rafTicksDuringDispatch": 10,
+      "firstTextCommitMs": 30.90000009536743,
+      "revealsDuringDispatch": 10,
+      "received": 6000,
+      "expected": 6000,
+      "shownAtEof": 3582,
+      "metrics": {
+        "sessionId": "review",
+        "timings": {
+          "stream.readWait": {
+            "count": 2,
+            "totalMs": 2.0999999046325684,
+            "maxMs": 1.5999999046325684,
+            "meanMs": 1.0499999523162842,
+            "p95UpperMs": 2
+          },
+          "stream.sseEventWork": {
+            "count": 1200,
+            "totalMs": 86.80000019073486,
+            "maxMs": 4.5,
+            "meanMs": 0.07233333349227905,
+            "p95UpperMs": 0.5
+          },
+          "stream.deltaGap": {
+            "count": 1199,
+            "totalMs": 284.60000002384186,
+            "maxMs": 44.60000002384186,
+            "meanMs": 0.2373644704118781,
+            "p95UpperMs": 0.5
+          },
+          "stream.sseWorkSlice": {
+            "count": 11,
+            "totalMs": 86.80000019073486,
+            "maxMs": 8.800000190734863,
+            "meanMs": 7.890909108248624,
+            "p95UpperMs": 16.7
+          },
+          "stream.flush": {
+            "count": 10,
+            "totalMs": 17.100000023841858,
+            "maxMs": 4.700000047683716,
+            "meanMs": 1.7100000023841857,
+            "p95UpperMs": 8
+          },
+          "ui.longTask": {
+            "count": 2,
+            "totalMs": 112,
+            "maxMs": 59,
+            "meanMs": 56,
+            "p95UpperMs": 100
+          },
+          "follow.work": {
+            "count": 9,
+            "totalMs": 10.199999928474426,
+            "maxMs": 1.899999976158142,
+            "meanMs": 1.1333333253860474,
+            "p95UpperMs": 2
+          },
+          "stream.frameGap": {
+            "count": 9,
+            "totalMs": 263.202,
+            "maxMs": 65.50199999999995,
+            "meanMs": 29.244666666666667,
+            "p95UpperMs": 100
+          },
+          "layout.overflowBatch": {
+            "count": 4,
+            "totalMs": 3.3000000715255737,
+            "maxMs": 1.9000000953674316,
+            "meanMs": 0.8250000178813934,
+            "p95UpperMs": 2
+          },
+          "follow.frameGap": {
+            "count": 8,
+            "totalMs": 197.70000000000005,
+            "maxMs": 33.09999999999991,
+            "meanMs": 24.712500000000006,
+            "p95UpperMs": 33.4
+          }
+        },
+        "counters": {
+          "stream.receivedBytes": 300186,
+          "stream.deltaEvents": 1200,
+          "stream.receivedUtf16Units": 6000,
+          "stream.sseYields": 10,
+          "text.nodeReplacements": 1,
+          "stream.revealedCodePoints": 2866,
+          "text.nodeAppends": 9,
+          "layout.overflowCandidates": 4
+        },
+        "slowSamples": [
+          {
+            "at": "2026-10-09T02:31:23.638Z",
+            "metric": "ui.longTask",
+            "durationMs": 53
+          },
+          {
+            "at": "2026-10-09T02:31:23.638Z",
+            "metric": "ui.longTask",
+            "durationMs": 59
+          },
+          {
+            "at": "2026-10-09T02:31:23.641Z",
+            "metric": "stream.frameGap",
+            "durationMs": 65.5
+          }
+        ]
+      },
+      "completedCorrectly": true,
+      "errors": []
+    }
+  ],
+  "notes": [
+    "Callback counts and text DOM commits are not display FPS.",
+    "Elapsed dispatch time includes intentional yields; this is not an end-to-end speed benchmark.",
+    "The controlled replay does not establish the source of all intermittent production stalls."
+  ]
+}

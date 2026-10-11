@@ -1,6 +1,6 @@
 # SSE 管道与断线续看 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-07 v7（覆盖至：当前工作区；压缩 reasoning 活动流续接）
+- 版本：2026-10-11 v10（覆盖至：当前工作区；睡眠/恢复的旧临时帧过滤）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（3.6k 行）、`modules/event-dispatch.js`、后端 `runtime_v2_session_stream`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -67,9 +67,18 @@
 
 ### UC-5C9 压缩 reasoning 活动流续接
 - **触发**：本地摘要流在 reasoning 增量期间发生 SSE 断线重连，或同一运行的另一个观察流接入。
-- **预期现象**：重连后可从进程内聚合的累计 reasoning 快照恢复当前“压缩思考”行；前端以快照替换已有草稿，不重复拼接；收到该次摘要请求的结束事件后清除活动快照，后续不会把已结束思考当作活跃内容再次恢复。
-- **规则与边界**：快照仅服务于活动运行期，非 Runtime V2 耐久事件，不用于刷新历史会话恢复已结束的 reasoning。结束/清理按压缩请求身份收束，失败候选和下一次重试保持独立；reasoning 的生产端及展示规则见 09/01·UC-9A11 与 05/02·UC-5B10。
+- **预期现象**：重连后可从进程内聚合的累计 reasoning 快照恢复“压缩”记录内的当前思考区；前端以快照替换已有草稿，不重复拼接，也不新增压缩行。收到该次摘要请求的结束事件后清除活动快照，后续不会把已结束思考当作活跃内容再次恢复。
+- **规则与边界**：快照仅服务于活动运行期，非 Runtime V2 耐久事件，不用于刷新历史会话恢复已结束的 reasoning。失败候选和下一次重试在同一条压缩记录内使用独立思考区；中断清理只移除活动草稿并释放引用，保留同条记录内的状态和已结束思考。reasoning 的生产端及展示规则见 09/01·UC-9A11 与 05/02·UC-5B10。
 - **依据**：`session_event_bus.py` 的活动 reasoning 聚合/结束清理、`webui.py` 的运行态投影、`sse-handling.js` 与 `session-event-reducer.js` 的快照归并。
+
+候选仅输出 reasoning 后失败/无正文时，也发送结束事件并清除其活动快照；下一候选的预览另起一行。等待压缩的连接心跳使用 `sse_keepalive`，前端只维持连接，不追加“仍在生成”日志；阶段状态展示见 05/02·UC-5B13。
+
+### UC-5C10 睡眠/断线恢复的旧临时帧过滤
+
+- **触发**：浏览器睡眠、断线重连或刷新后恢复订阅；服务端事件总线仍缓存着上一轮的临时执行帧。
+- **预期现象**：恢复订阅按 `after_runtime_seq` 过滤；持久化追赶完成后再次过滤队列中已被恢复的执行帧（覆盖订阅与追赶之间的竞态）；客户端在运行状态归约与分组选择前跳过**不新于**已恢复游标的临时执行帧，并按同一 run 已恢复的请求序号过滤旧摘要预览与旧睡眠提示（兼容尚未重启的旧后端）。
+- **规则与边界**：工具状态按稳定执行 ID 只保留最新、完成即清理；压缩等待只保存当前一条并在持久化进度/正文提交时清理；睡眠恢复仅通知在线订阅者、不进入重连缓存。过滤只影响临时回放帧，不改变事件语义与耐久历史；后端缓存修复需服务重启生效，前端过滤在页面重载后生效。
+- **依据**：`session_event_bus.py`、`webui.py`、`sse-handling.js::shouldSkipRecoveredEphemeralEvent / seedEphemeralRecoveryScope`、`message-rendering.js`（部分更新不覆盖完整元数据）；现场记录 [../../performance/睡眠恢复重复执行过程-2026-10-11.md](../../performance/睡眠恢复重复执行过程-2026-10-11.md)；回归 `tests/js/execution_display_compat_runtime.cjs`、`tests/js/execution_recovery_runtime.cjs`、`tests/js/restart_recovery_order_runtime.cjs`、`tests/js/tool_pending_history_recovery_runtime.cjs`。
 
 ## 3. 边界
 
@@ -88,9 +97,14 @@
 | UC-5C6 | `session-event-reducer.js` 终态归约；`sse-handling.js` 终结/重挂；`webui.py` 跨进程恢复租约 |
 | UC-5C7 | `webui.py::stream_session_events`（子代理执行判定 / 无本地 worker 收流） |
 | UC-5C8 | `StreamEventBridge`、`_run_react_node_off_loop`、`_prune_stream_ephemeral` |
+| UC-5C9 | `session_event_bus.py` 活动快照；`agent_harness / agent_openai / agent_memory` 候选重置与预览结束；`sse-handling.js` 续接 |
+| UC-5C10 | `session_event_bus.py` 临时帧生命周期；`sse-handling.js::shouldSkipRecoveredEphemeralEvent / seedEphemeralRecoveryScope`；`webui.py` 订阅恢复/追赶；`message-rendering.js` 元数据保留 |
 
 ## 5. 版本记录
 
+- 2026-10-11 v10：新增 UC-5C10（睡眠/恢复的旧临时帧过滤：`after_runtime_seq` 过滤、追赶后再过滤、客户端跳过不新于游标的临时帧；工具状态按执行 ID 最新化、睡眠恢复不进重连缓存；后端需重启、前端需重载的生效边界）。
+- 2026-10-11 v9：压缩 reasoning 快照恢复到同条压缩记录内；候选重试分区、活动草稿局部清理，与 UC-5B10 的展示合并规则保持一致。
+- 2026-10-11 v8：压缩等待改为静默心跳，候选失败关闭其 reasoning 预览并清理活动快照；补齐 UC-5C9 依据映射。
 - 2026-10-07 v7：新增 UC-5C9，明确压缩 reasoning 只在活动期保留累计快照供 SSE 重连恢复；前端以快照替换草稿，结束即清除，不进入耐久历史。
 - 2026-09-30 v6：新增 UC-5C8，补录三个模型临时增量的异步排队、同身份相邻合并、其他事件确认、退出排空与草稿清理屏障；不改变耐久回放游标。
 - 2026-09-28 v5：新增 UC-5C7《子代理会话的流唤醒与收流》——子代理执行中的会话心跳缩短为 1s 并优先重抽投影，无本地 worker 活动时正常 `[DONE]` 收流。

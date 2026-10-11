@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-07 v19（覆盖至：当前工作区；图片附件卡片与原有过程行距）
+- 版本：2026-10-11 v22（覆盖至：当前工作区；压缩思考与摘要合并为同一条记录；用量表 10px 基准）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -66,16 +66,16 @@
 - **规则与边界**：分母为压缩摘要阈值（非原始窗口），卡底保留一行灰色口径说明；有构成数据时不叠加纯文字提示，无构成时保留旧提示且不出现卡片；卡片贴在触发器右缘向下展开（不引入测量式锚定）；构成由 `build_context_breakdown` 本地估算（系统段按内容缓存计价、工具定义按 schema 余量、对话消息取整包估值余量），快照缺构成时端点只补构成不改总量。
 - **依据**：`agent_tokenizer.py::build_context_breakdown`、`agent_loop.py`（pre-request 事件 / 压缩检查点 / 端点载荷）、`webui.py::get_session_context_tokens`、`session-scroll-history.js`（渲染）、`context-store.js`、`session-event-reducer.js`、`i18n.js`；回归 `tests/test_context_breakdown.py`、`tests/js/context_breakdown_card_runtime.cjs`。
 
-### UC-5B10 上下文压缩思考实时行
+### UC-5B10 上下文压缩行内的实时思考
 - **触发**：本地上下文压缩摘要模型以 `context_summary_reasoning_delta` 流式返回 reasoning，或运行中活动流续接后收到当前思考的聚合快照。
-- **预期现象**：在执行过程区域中追加独立“压缩思考”行，实时显示模型已输出内容；压缩摘要正文继续进入自己的正文行。思考行开始时展开，摘要正文开始后自动收起，用户可再次点开查看。
-- **规则与边界**：思考内容以纯文本安全插入，不解析为 Markdown/HTML；临时运行态不进入用户/助手消息历史。候选重试形成新行；收到 `context_summary_reasoning_end`、失败、取消或中断时只收束对应活动行。活动流续接收到累计快照时替换本地草稿而非追加，避免重复；主对话 reasoning 与压缩 reasoning 相互独立。
+- **预期现象**：执行过程只显示一条“压缩”记录，最新状态、摘要正文和可折叠的“思考”区在同一条记录内呈现。思考开始时展开并实时更新；摘要正文开始或思考请求结束后自动收起，用户可再次展开查看。
+- **规则与边界**：思考内容以纯文本安全插入，不解析为 Markdown/HTML；临时运行态不进入用户/助手消息历史。候选重试在同一条压缩记录内新增思考区，各次内容分别保留；自动收起仅执行一次，后续正文增量不覆盖用户手动展开的选择。中断只清理活动思考/正文草稿，保留最新状态与已结束的思考，清除活动引用；累计快照替换当前思考草稿而非追加。主对话 reasoning 与压缩 reasoning 相互独立。
 - **依据**：`message-rendering.js`、`event-dispatch.js`、`sse-handling.js`、`session-event-reducer.js`、`i18n.js`；后端投影见 `session_event_bus.py`。事件续接见 05/03·UC-5C9；压缩生产端见 09/01·UC-9A11。
 
 ### UC-5B11 标题栏用量表基准与标题区留白/⋯ 光心微调
 - **触发**：打开会话页，观察右上角上下文用量表、会话标题区与标题行末尾的 ⋯ 菜单按钮。
 - **预期现象**：用量表按参考基线（zip 源机）渲染，16px 档实测——条内文字 10.08px / 最小宽 112px / 行间距 6.4px / 百分比 9.28px / 进度条上边距 3.2px；会话标题上方留白 6.19px，与「标题→副标题」间距 5.39px 接近；⋯ 点位中心与标题文字视觉中心对齐（相对大写/CJK 光心与全墨迹中心偏差均 ≤ 0.5px）；子代理寻址视图的返回胶囊（`.breadcrumb-back-chip`）与「· N 个子代理」目录触发器（`.subagent-catalog-trigger`）同款处理——两胶囊中心与 ⋯ 一致（16px 档实测 17.09px）。
-- **规则与边界**：移除用量表的 `--ctx-unit: 0.875rem` 缩放，改回基准值（`0.63rem / 7rem / 0.4rem / 0.58rem / 0.2rem`）；hover 拆解卡（UC-5B9）样式不动。`.titlebar` 顶部内边距 `0.4 → 0.2rem`（其余三边不变），用于平衡上下留白；⋯ 光心对齐用 `transform: translateY(1px)`，只作用于顶栏实例（`.breadcrumb-session-actions .session-more-btn`），侧栏会话行按钮与弹出菜单定位不受影响；返回胶囊与目录触发器同样 `transform: translateY(1px)`（仅顶栏实例），标题行内「文字 / ⋯ / 胶囊」光心一致。
+- **规则与边界**：用量表字号统一为 `calc(0.625 * 1rem)`（16px 档 10px，随设置字号等比缩放；旧 `0.63 × 0.875rem` 组合已于 2026-10-11 退役），其余基准（`7rem / 0.4rem / 0.58rem / 0.2rem`）不变；hover 拆解卡（UC-5B9）样式不动。`.titlebar` 顶部内边距 `0.4 → 0.2rem`（其余三边不变），用于平衡上下留白；⋯ 光心对齐用 `transform: translateY(1px)`，只作用于顶栏实例（`.breadcrumb-session-actions .session-more-btn`），侧栏会话行按钮与弹出菜单定位不受影响；返回胶囊与目录触发器同样 `transform: translateY(1px)`（仅顶栏实例），标题行内「文字 / ⋯ / 胶囊」光心一致。
 - **依据**：`frontend/src/styles/app.css`；实测与截图见 `../../../workspace/桌面版打包_20261006/`（`顶栏对比分析.md` §八~§十、`titlebar_measure.json`、`ctx_meter_after.json`、`dots_vs_text_metrics.json`、`dots_alignment_after_fix.json`）。
 
 ### UC-5B12 全区域图片预览浮窗与居中缩放
@@ -83,6 +83,12 @@
 - **预期现象**：图片统一在设置窗口同类的居中浮窗内打开，背景为半透明模糊遮罩；标题和关闭按钮在标题栏内垂直居中，标题字号使用设置字号令牌。打开时图片按窗口可视区域等比例完整适配；滚轮可在 0.2× 至 8× 间缩放，图片始终围绕视口中心保持居中。所有图片入口共用预览浮窗，最终回答卡片原有图片排版不变。
 - **规则与边界**：图片解码完成后再显示，窗口尺寸变化时重算适配尺寸。滚轮事件按动画帧合并；缩放只更新已适配图片的合成变换，不在每个滚轮事件中重复读取布局或改写尺寸，避免打开和连续缩放卡顿。标题字号跟随设置字号令牌 --ui-text-lg。遮罩点击或关闭按钮可关闭浮窗。
 - **依据**：workspace-media.js 的 ensureDurableAttachmentPreviewDialog、scheduleDurableAttachmentPreviewFit 与 applyDurableAttachmentPreviewScale；styles/app.css 的 attachment-image-viewer 样式；tests/js/image_preview_runtime.cjs、tests/test_workspace_media_runtime.py。
+
+### UC-5B13 压缩阶段的单条状态更新
+- **触发**：上下文裁剪、历史摘要或 key_context 更新进入新阶段，或旧会话回放连续进度事件。
+- **预期现象**：裁剪/压缩/要点各保留一条最新状态；重复等待提示不堆叠，静默心跳不生成界面日志。压缩思考在同一条“压缩”记录内流式展示，最终摘要与要点全文仍可查看。
+- **规则与边界**：状态更新只替换同轨迹行的状态前缀，保留正在生成或已提交的正文；相同状态不重复写入。最终全文替换流式草稿；完成状态到达后仍保留正文。实时接收和历史回放使用同一规则。
+- **依据**：`message-rendering.js::appendProgressLog / appendProgressStreamDelta / applyProgressPersistedBody`、`sse-handling.js`、`event-dispatch.js`、`agent_loop._await_thread_with_sse_keepalive`；浏览器回归 `tests/test_compression_reasoning_browser.py`。
 
 ## 3. 边界
 
@@ -96,6 +102,9 @@
 
 ## 5. 版本记录
 
+- 2026-10-11 v22：UC-5B11 修订——用量表字号改 `calc(0.625 * 1rem)`（16px 档 10px）并随设置字号等比缩放；旧 `0.63rem × 0.875` 组合退役，其余基准不变。回归 `tests/test_frontend_typography_browser.py`（`.ctx-wrap` ≈ 10px）。
+- 2026-10-11 v21：按用户要求将压缩思考合并至压缩记录内；思考区实时展开、正文开始后收起且可再次展开，重试不新增压缩行，中断只移除活动草稿并保留同条记录中的其他内容。
+- 2026-10-11 v20：新增 UC-5B13，阶段状态覆盖更新、重复提示去重、静默心跳；更新状态不收束摘要流，最终正文替换草稿并保留最新状态。
 - 2026-10-07 v19：修正 UC-5B5 的执行过程图片卡片间距——图片容器不再额外添加下边距，图片条目与下一条的距离恢复到原有过程行间距；非图片条目规则保持不变。
 - 2026-10-07 v18：UC-5B11 补记——子代理返回胶囊（`.breadcrumb-back-chip`）与目录触发器（`.subagent-catalog-trigger`）同款 `translateY(1px)` 光心对齐；两胶囊中心 16.09→17.09px，与 ⋯ 及标题文字光心一致。前后实测与 3x 对比见 `workspace/桌面版打包_20261006/`（`subagent_chip_metrics_before.json`、`subagent_chip_metrics_after3.json`、`subagent_chip_before_3x.png`、`subagent_chip_after_3x.png`）。
 - 2026-10-07 v17：新增 UC-5B12《全区域图片预览浮窗与居中缩放》并扩展 UC-5B5——输入框、用户气泡、执行过程和最终回答图片复用居中预览；标题/关闭控件垂直居中且标题字号跟随设置；滚轮缩放按帧合并并保持视口居中，图片布局变更不影响非图片执行条目及最终回答的原排版。

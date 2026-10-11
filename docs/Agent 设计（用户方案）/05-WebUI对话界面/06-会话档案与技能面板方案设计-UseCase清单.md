@@ -1,8 +1,9 @@
 # 会话、档案与技能面板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-07 v13（覆盖至：当前工作区；新建会话入口、草稿工作目录与目录图标；侧栏会话列表改版：视觉与字号自适应、标记微交互、刷新节拍与增量渲染、视图缺省、目录组配额·拖拽·重命名、时间分桶与自动归档 30 天）
+- 版本：2026-10-11 v15（覆盖至：当前工作区；新建会话入口、草稿工作目录与目录图标；侧栏会话列表改版：视觉与字号自适应、标记微交互、刷新节拍与增量渲染、视图缺省、目录组配额·拖拽·重命名、时间分桶与自动归档 30 天；行尾状态胶囊与插件角标规格、浅色档配色修正；行内「目标」占位胶囊移除——行尾目标由 Goal/待审核角标承载）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`modules/message-rendering.js`、`app/folder-icons.js`、`vendor/myagent_path_picker.js`、`frontend/index.html`、`frontend/src/styles/app.css`、`frontend/src/app/modules/layout-panels.js`、`modules/session-management.js`、`modules/model-profiles.js`、`modules/settings.js`、`modules/skill-picker.js`、`modules/i18n.js`、`state/session-selectors.js`、`state/session-renderers.js`、对应后端 API（含 `agent_harness.py` 自动归档）。
+- 适用实现：`modules/message-rendering.js`、`app/folder-icons.js`、`vendor/myagent_path_picker.js`、`frontend/index.html`、`frontend/src/styles/app.css`、`frontend/src/app/modules/layout-panels.js`、`modules/session-management.js`、`modules/model-profiles.js`、`modules/settings.js`、`modules/skill-picker.js`、`modules/i18n.js`、`modules/human-interactions.js`、`plugin-ui-slots.js`、`plugins/session-todo/web/session-panel.css`、`plugins/agent-goal/web/session-panel.css`、`state/session-selectors.js`、`state/session-renderers.js`、对应后端 API（含 `agent_harness.py` 自动归档、`plugins/ui.py` 的 `session.badge` 投影）。
+- 实际渲染示意：`示意图/`（本文件夹内）——`会话行状态胶囊_实际渲染示意.html`（可切换主题 / 根字号 / 列表模式 / 中英）与 4 张主题·语言截图、2 张 3× 局部图、2 张实机对照图。
 - 上级：`00-WebUI对话界面整体设计.md`
 
 ---
@@ -122,11 +123,82 @@
 - **规则与边界**：字号、主题与列表模式在页面 `<head>` 的同步脚本中于解析阶段应用（首帧即最终态，无"先默认后跳变"）；控件尺寸使用 rem 令牌（`--ui-text-*`）随根字号缩放；行规格、右基准与内缩参照 dsh 侧栏。视觉改动仅限「新建会话按钮及其以下」区域，品牌区不动。
 - **依据**：`frontend/index.html`（首帧脚本）、`session-management.js`、`state/session-renderers.js`、`styles/app.css`；改版来源与逐轮适配记录见 [`../../../workspace/patch_20261006/分析报告.md`](../../../workspace/patch_20261006/分析报告.md) 与《应用记录》§1–§11。
 
-### UC-5F17 会话行标记与微交互（胶囊 / 待处理徽标 / 置顶钮）
-- **触发**：会话处于草稿/待办/审查/待处理状态；悬停会话行；点击行内置顶按钮。
-- **预期现象**：行尾按状态显示胶囊（草稿/待办/审查）与 ?/! 黄色待处理徽标；悬停行尾浮出「置顶、⋯」动作；点「置顶」= 置顶/取消置顶并**切入该会话**（已是当前会话则只切换置顶不切换）。
-- **规则与边界**：胶囊与徽标随字号缩放；?/! 字形用 600 字重（原 800 在 0.62rem 小字号下笔画糊连、观感"压扁"）；指针刚进行不足 220ms 时的图标点击视为"点整行"（切换会话、不触发图标动作）；⋯ 菜单内的「置顶会话」保持纯置顶、不切换会话。
-- **依据**：`human-interactions.js::updateHumanInteractionSessionBadge`、`session-management.js`（行内指示同步、防误点委托、置顶按钮 handler）、`styles/app.css::.session-human-badge`；实测见《应用记录》§4/§14/§18/§23。
+### UC-5F17 会话行标记与微交互（行尾胶囊 / 插件角标 / 待处理徽标 / 置顶钮）
+- **触发**：会话处于草稿 / 待办 / 计划（插件） / 待处理状态；悬停会话行；点击行内置顶按钮。
+- **预期现象**：行尾按状态显示胶囊（草稿 / 待办 / 插件角标）与 `?`、`!` 琥珀色待处理徽标，其后是相对时间与置顶图钉；悬停时相对时间与图钉淡出、行尾浮出「置顶、⋯」动作（并带右侧渐隐遮罩、标题尾部渐隐）；点「置顶」= 置顶/取消置顶并**切入该会话**（已是当前会话则只切换置顶不切换）。
+- **规则与边界**：
+  - **盒体**（两枚文字胶囊「待办 / 草稿」共用）：`padding .14rem .36rem`、`border-radius 999px`、`1px` 描边、`font 400 .62rem/1`、`margin-left .4rem`、`flex 0 0 auto`（**不参与压缩**；行宽不足时先压标题，见 UC-5F16）；尺寸全用 `rem`，随设置字号 12–20px 成比例缩放。
+  - **配色**：待办 = 品牌靛蓝；草稿 = 琥珀；插件角标 = manifest `variant` 决定（在册 5 枚：4 枚 `info` + 1 枚 `success`「待审核」），并允许插件用 `[data-plugin-id]` 规则覆盖；浅色档的 `info` 一律落品牌靛蓝 `#4f46e5`、`success` 落 `#247a43`。逐档取值与层叠顺序见下方《附录 · 行尾标记区规格》。
+  - **行内「目标」占位胶囊已删除**（2026-10-11）：`.session-goal-badge` 及其 `data-goal-status` 五档配色曾只有样式、**没有渲染方**（`buildAndBindSessionRow()` 从不生成该节点），与同样无生产者的旧「修改审查」胶囊同属死代码，已从 `app.css` 移除并留删除说明注释；行尾目标状态现由 agent-goal 的两枚插件角标承载（`Goal` / `待审核`）。**若要恢复，请连同生产者一起加回，不要只留样式。**
+  - **i18n**：胶囊文字走词典（`待办→Todo`、`草稿→Draft`；词典里的 `目标→Goal`、`计划→Plan` 供左栏页签等使用）；插件角标文案是 manifest 字面量（两种语言相同）；`?`/`!` 徽标的 aria 文案与空摘要「暂无提问」无词典分支，英文档保持中文。
+  - `?`/`!` 字形用 600 字重（原 800 在 0.62rem 小字号下笔画糊连、观感"压扁"）；指针刚进行不足 220ms 时的图标点击视为"点整行"（切换会话、不触发图标动作）；⋯ 菜单内的「置顶会话」保持纯置顶、不切换会话。
+- **依据**：`human-interactions.js::updateHumanInteractionSessionBadge`、`session-management.js`（行内指示同步、防误点委托、置顶按钮 handler）、`plugin-ui-slots.js::renderSessionBadges / normalizeProjectedItem`、`styles/app.css::.session-draft-badge / .session-todo-badge / .plugin-session-badge* / .session-human-badge / .session-item-date / .session-pin-mark`（`.session-goal-badge` 已于 2026-10-11 删除）、`plugins/session-todo/web/session-panel.css` 与 `plugins/agent-goal/web/session-panel.css`（按 `[data-plugin-id]` 的角标覆盖）、`app/plugins/ui.py`（`session.badge` 投影与 `when/equals` 求值）；实测见《应用记录》§4/§14/§18/§23 与本文 §4.1 的 2026-10-11 复核。实际渲染示意：[示意图/会话行状态胶囊_实际渲染示意.html](示意图/会话行状态胶囊_实际渲染示意.html)。
+
+#### 附录（UC-5F17）· 行尾标记区规格（2026-10-11 实机复核）
+
+**表 1 · 行尾元素与来源**（自左向右）
+
+| # | 元素 | class | 文案 / 内容 | 生产者 |
+|---|---|---|---|---|
+| 1 | 待办胶囊 | `.session-todo-badge` | 待办 ↔ Todo | `session-management.js::buildAndBindSessionRow`（数据源 `meta.todo`，即会话菜单「设为待办」） |
+| 2 | 草稿胶囊 | `.session-draft-badge` | 草稿 ↔ Draft | 同上（`syncSessionDraftBadges`） |
+| 3 | 目标胶囊（**已删除** 2026-10-11） | ~~`.session-goal-badge`~~ | 原为「目标 ↔ Goal」+ `data-goal-status` 五档 | 一直没有生产者（仅样式）；已从 `app.css` 删除，历史渲染见 [示意图/三种goal对照.png](示意图/三种goal对照.png) ③ 区 |
+| 4 | 插件角标 | `.plugin-session-badges > .plugin-session-badge.plugin-session-badge--<variant>` | manifest `label` 原样（Plan / Team / Goal / 待审核 / Game） | `plugin-ui-slots.js::renderSessionBadges` ← `POST /api/extensions/session-ui` 投影 |
+| 5 | 待处理徽标 | `.session-human-badge` | `?` / `!` / `!N` / 纯数量 | `human-interactions.js::updateHumanInteractionSessionBadge` |
+| 6 | 相对时间 | `.session-item-date` | 刚刚 / 3分钟 / 2小时 / 1天 ↔ now / 3m / 2h / 1d | `message-rendering.js::formatSessionListRelativeTimeFromTs` |
+| 7 | 置顶图钉 | `.session-pin-mark` | 16px 图钉 | `session-management.js`（`sess.pinned`） |
+| 8 | 行内动作（悬停） | `.session-item-actions` | 置顶钮 + ⋯ | 同上（命中由行 hover/focus 门控） |
+
+插入锚点：插件角标与待处理徽标都插入 `.session-item-date` 之前（同一「标记区」），两者相对顺序取决于插入时机；行尾动作区是绝对定位，与时间/图钉共用同一右基准。
+
+**表 2 · 插件角标在册 5 枚**（各插件 `.myagent-plugin/plugin.json` 的 `ui.session.badge`；`variant` = 4×`info` + 1×`success`）
+
+| 插件 | 槽位声明（namespace · path） | 显示条件 | label | variant |
+|---|---|---|---|---|
+| session-todo（左栏「计划」页签） | `plan` · `/has_plan` | `truthy` | `Plan` | `info` |
+| agent-team | `team` · `/status` | `equals "active"` | `Team` | `info` |
+| agent-goal（进行中） | `goal` · `/status` | `equals "active"`（另带 `display: badge`） | `Goal` | `info` |
+| agent-goal（完成待人工审核） | `goal` · `/review_status` | `equals "pending"` | `待审核` | `success` |
+| game-arena | `current-game` · `/game_id` | `truthy` | `Game` | `info` |
+
+运行时约束（`plugin-ui-slots.js::normalizeProjectedItem`）：label ≤ 64 字、description ≤ 200 字；`variant ∈ {neutral, info, success, warning, danger}`；`display ∈ {badge, activity}`（`activity` 转行级活动态、不显示胶囊）；每会话 ≤ 16 枚、每屏 ≤ 200 行参与投影。
+
+> **同一插件的两枚 goal 角标分工**：`Goal` = 目标进行中（蓝／靛）；`待审核` = Judge 判定完成、等用户审核（绿，`review_status=pending`）。两者可分别出现，语义不同，不是重复项。两枚与"已被删除的行内「目标」占位胶囊"的并排实渲染见 [示意图/三种goal对照.png](示意图/三种goal对照.png)（源文件 [示意图/三种goal对照.html](示意图/三种goal对照.html)，浅/深两档，每格标注该档 computed 值；③ 区已标注为**已删除的历史样式**）。
+
+**表 3 · 角标配色的层叠与浅色档坑（10-11 修复）**
+
+| 层 | 规则（简化） | 浅色档结果 |
+|---|---|---|
+| 基样式 | `.plugin-session-badge { background: var(--surface-glass2); color: var(--text-secondary) }` | — |
+| variant | `.plugin-session-badge--info { border-color: rgba(var(--accent-rgb),.36); color: var(--accent-2) }` | `--accent-2` 浅色档未定义 → 回退紫黑浅薰衣草 |
+| app.css 浅色修正（0,3,0） | `:root.theme-light .plugin-session-badge--info { border-color:#6366f14d; background:#6366f11f; color:#4f46e5 }` | 靛蓝（目标态） |
+| 插件覆盖（0,4,0） | `:root.theme-light .plugin-session-badge[data-plugin-id="session-todo"] { … color: var(--accent-1) }` | **修复前**：`--accent-1` 未定义 → `#cba6f7`（浅底上几乎看不清）；**修复后**：`#4f46e5` |
+
+实测（2026-10-11，源码版应用 `127.0.0.1:8192`，light 档，CDP `CSS.getMatchedStylesForNode` + `getComputedStyle`）：修复前 computed `color: rgb(203,166,247)` → 修复后 `rgb(79,70,229)`；当时在册的 4 类 `info` 角标（session-todo / agent-goal / agent-team / game-arena）与无插件 id 对照组在 light 档全部 `rgb(79,70,229)`，紫黑档 `rgb(212,184,252)` 不变。证据图：[示意图/实机_Plan角标修复前后.png](示意图/实机_Plan角标修复前后.png)、[示意图/实机_修复后_浅色_Plan行.png](示意图/实机_修复后_浅色_Plan行.png)。
+
+**表 3 补充 · 两枚 goal 角标的实测配色（2026-10-11，插件样式表已加载）**
+
+| 角标 | light 档 | 紫黑档 | 生效规则 |
+|---|---|---|---|
+| `Goal`（active-goal · info） | `rgb(79,70,229)` / 底 `rgba(99,102,241,.12)` / 边 `rgba(99,102,241,.3)` | `rgb(212,184,252)` / 底 `rgba(203,166,247,.12)` / 边 `rgba(203,166,247,.38)` | light 由 app.css 的 `--info` 浅色修正胜出（0,3,0 > 插件 0,2,0）；紫黑由插件规则胜出 |
+| `待审核`（review-goal · success） | `rgb(36,122,67)`(#247a43) / 底 `rgba(52,168,83,.12)` / 边 `rgba(52,140,86,.28)` | `rgb(166,227,161)` / 底 `rgba(166,227,161,.14)` / 边 `rgba(166,227,161,.34)` | light 由插件自己的浅色规则胜出（0,5,0），与 app.css 的 `--success` 无浅色覆盖互补 |
+
+> 注意：`Goal` 的浅色外观**靠 app.css 兜底**而非插件自述——若日后把 `plugins/agent-goal/web/session-panel.css` 的规则特异性提高到 ≥0,4,0 并继续使用浅色档未定义的 `var(--accent-1/2)`，会复现 session-todo 那种浅底看不清的问题；同理，插件样式表是**按需注入**的（挂载该插件渲染器时才挂 `<link>`），检查配色前先确认样式表已在页面上。
+
+> **令牌缺口（同因残留）**：浅色档只定义了 `--accent-rgb / --brand-accent-rgb / --green-accent / --red-accent`，**没有** `--accent-1 / --accent-2 / --accent-3`（三个令牌只在 `:root` 与 `.theme-dark` 里赋值），因此浅色语境里任何 `var(--accent-1/2/3)` 都会回退成紫黑主题的浅紫。除上面的角标规则外，`app.css:386 / 855` 两处浅色 hover（设置按钮、运行时链接）同样使用了 `var(--accent-1)`——同族、仅 hover 态，本次未改动；若要一次性收口，可在 `.theme-light` 补一组 accent 梯度（全站视觉改动，需单独评审）。
+
+**表 4 · 中英对照**（`modules/i18n.js` 词典 + 运行时分支）
+
+| 行内元素 | 中文 | English | 来源 |
+|---|---|---|---|
+| 待办胶囊 | 待办 | Todo | 词典（文本节点 + `aria-label` 替换） |
+| 草稿胶囊 | 草稿 | Draft | 词典 |
+| 目标胶囊（已删除） | 目标 | Goal | 词典（与左栏页签「目标」共用词条）；该胶囊 2026-10-11 已删，词条仍供左栏页签使用 |
+| 置顶 / 置顶会话 / 更多 | 置顶 / 置顶会话 / 更多 | Pin / Pin session / More | 词典（`aria-label` / `title` / `data-ui-tip`） |
+| 相对时间 | 刚刚 / 3分钟 / 2小时 / 1天 | now / 3m / 2h / 1d | `formatSessionListRelativeTimeFromTs` 英文分支（非词典） |
+| `?`/`!` 徽标 aria、空摘要 | 有 N 个问题待回答 / 暂无提问 | （无词条，保持中文） | `human-interactions.js` 运行时拼装；`formatSessionListSubtitle` 无英文分支且 `.session-last-query` 在 i18n 内容豁免表内 |
+| 插件角标 | Plan / Team / Goal / 待审核 / Game | 同左（manifest 原文） | 插件 `plugin.json`，不经词典 |
+| 会话名 / 提问预览 | — | 不翻译 | i18n 内容豁免表：`.session-name`、`.session-last-query` |
 
 ### UC-5F18 侧栏时间刷新与统一节拍
 - **触发**：长时间停留页面；窗口聚焦/恢复可见。
@@ -181,7 +253,7 @@ UC-5F1~5F10 的代码依据见各用例；本次新增映射如下。
 | UC-5F13 | 目标目录、选择版本、预取复用校验与 `work_dir` 创建参数；后端 `webui.create_session` |
 | UC-5F14 | 会话目录投影、分组选择与渲染、目录分组动作 |
 | UC-5F15 | `app/folder-icons.js` 与四处调用方 |
-| UC-5F16~5F17 | 改版渲染与首帧脚本；行内指示/防误点/置顶按钮 handler |
+| UC-5F16~5F17 | 改版渲染与首帧脚本；行内指示/防误点/置顶按钮 handler；行尾胶囊与插件角标规格（含 `[data-plugin-id]` 覆盖与浅色档配色修正，见 UC-5F17 附录） |
 | UC-5F18~5F19 | 节拍调度器、rAF 合并指示器、布局/内容键与行级替换 |
 | UC-5F20 | 归档筛选与列表模式缺省（首帧/主模块/菜单/设置中心四端一致） |
 | UC-5F21~5F22 | 目录组配额/分级展开；拖拽排序与显示名（localStorage 持久化） |
@@ -206,8 +278,15 @@ flowchart LR
 - 2026-10-07 页面联测：菜单选择 `tests`，再由卡片选择 `frontend`，两次显示路径、真实 `POST /sessions` 和 `GET /sessions/{id}` 的保存路径均一致；输入草稿保留，页面错误为 0，三个测试草稿已删除。联测中的 `/api/pick-path` 返回值做了模拟；Windows 原生结果读取另由 [UC-4F4](../04-工作区/06-打开协议与路径选择器方案设计-UseCase清单.md) 的 COM 回归覆盖。
 - 真实系统对话框的人工验收：在默认目录下单击一个子文件夹后直接确认；菜单和卡片两个入口都应显示并创建到所选子目录。再检查取消选择、刷新恢复草稿、在已有自定义目录会话中直接点主按钮。此次未记录人工点击系统对话框的验收结果。
 - 2026-10-07 侧栏改版联测（Playwright 真机）：首帧防闪零跳变；设置字号 13↔20 双向联动；胶囊/徽标逐字号实测；时间自动刷新 29.5s 节拍翻转与聚焦即时校正；内容流单行替换 vs 整表重建 59–72ms；目录组配额 6→11→59 与"重开重置"；默认组拖拽/重命名往返；时间分桶复算（各桶逐条核对）。证据：`workspace/patch_20261006/icon_audit/*.json` 与《应用记录》§12–§23。
+- 2026-10-11 行尾标记区复核（源码版应用实机 + CDP）：`POST /api/extensions/session-ui` 的投影与 DOM 角标一一对应（session-todo 的 `Plan` 角标出现在「新会话创建流程梳理」行）；`CSS.getMatchedStylesForNode` 列出 5 条命中规则，据此定位「浅色档角标文字被插件 `[data-plugin-id]` 规则（0,4,0）覆盖、且引用了浅色档未定义的 `--accent-1`」的根因；修复后 computed `color` 由 `rgb(203,166,247)` 变为 `rgb(79,70,229)`；四类插件角标 × 浅色/紫黑两档全部复核（见 UC-5F17 附录表 3）。证据图：`示意图/实机_Plan角标修复前后.png`、`示意图/实机_修复后_浅色_Plan行.png`；整页示意图：`示意图/会话行状态胶囊_实际渲染示意.html`。
+- 2026-10-11 goal 角标复核与回归修复：全量 200 会话投影显示在册角标为 `Plan`（session-todo）、`Game`×2（game-arena）、`待审核`（agent-goal）；但工作区当时**删除了 agent-goal manifest 的 `review-goal` 声明**（未提交改动），导致 `tests/test_plugin_ui_contributions.py` 两个用例变红（`assert [] == ['review-goal']`）。恢复声明后该文件 21 passed，实机随即投影出 `{id: review-goal, label: 待审核, variant: success}`。两枚 goal 角标的浅/深档配色实测见附录表 3 补充。
+- 2026-10-11 行内「目标」占位胶囊删除（按反馈）：从 `app.css` 移除 `.session-goal-badge` 及其 `data-goal-status` 五档配色（含浅色覆盖共 9 条规则），原位留删除说明注释；`npm run build` + `verify:dist` 通过，服务中样式表换为 `main-Cbkpc6ct.css`（246 700 B）且检索 `session-goal-badge` / `data-goal-status` 均为 0 命中，`session-todo-badge`、`plugin-session-badge--info` 等仍在；重载实机页面复核行尾标记无回归（Plan 角标仍 `rgb(79,70,229)`）。历史渲染与"再接线须知"见 `示意图/三种goal对照.html` ③ 区。
 
 ## 5. 版本记录
+
+- 2026-10-11 v15：**删除行内「目标」占位胶囊**（`.session-goal-badge` + `data-goal-status` 五档配色，含浅色覆盖）——它顶替的旧「修改审查」胶囊与它自身都没有生产者，属死代码；行尾目标状态由 agent-goal 的两枚插件角标承载。同次口径修正：盒体共享规则由"三枚"改回"两枚（待办 / 草稿）"、表 2 的插件角标记为 5 枚（含 `待审核`）、表 4 中英对照标注该词条仅供左栏页签、`示意图/` 两份示例同步（`三种goal对照.html` ③ 区标注"已删除 · 历史记录"）。验证：`npm run build` + `verify:dist` 通过、服务中 CSS 0 命中且界面无回归（见 §4.1）。
+
+- 2026-10-11 v14：UC-5F17 扩写为「行尾胶囊 / 插件角标 / 待处理徽标 / 置顶钮」，并新增《附录 · 行尾标记区规格》：行尾元素与来源、插件角标在册 5 枚（`session.badge` 声明与 `when/equals` 条件，含 agent-goal 的 `Goal`（进行中）与 `待审核`（完成待审、`success`）两枚分工）、配色层叠与浅色档令牌缺口（`--accent-1/2/3` 只在紫黑/深黑定义）、中英对照。同次修复 `plugins/session-todo/web/session-panel.css` 浅色档角标文字色（`var(--accent-1)` → `#4f46e5`，实机 computed `rgb(203,166,247)`→`rgb(79,70,229)`），并恢复被工作区误删的 agent-goal `review-goal` 声明（`tests/test_plugin_ui_contributions.py` 由 2 failed → 21 passed）；新增实际渲染示意目录 `示意图/`（HTML + 8 张截图）。适用于实现清单与 §4.1 同步。
 
 - 2026-10-07 v13：新增 UC-5F16~5F23——侧栏会话列表改版落地：视觉与字号自适应（含首帧防闪）、行标记微交互与点置顶切入会话、侧栏时间刷新与统一节拍、列表增量渲染、视图选项缺省（隐藏已归档/详细）、目录组默认前 5 与分级展开·拖拽排序·重命名（含默认组）、时间分桶（置顶/今天/昨天/近三天/近7天/近半月/近一月）与自动归档 30 天；UC-5F1/5F14 补交叉引用；补录联测证据。
 
