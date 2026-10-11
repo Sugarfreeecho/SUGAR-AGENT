@@ -6343,7 +6343,7 @@ async def stream_session_events(
         logger.info("stream_recovery session=%s run_id=%s reason=%s client_index=%s client_runtime_seq=%s server_runtime_seq=%s projection_version=%s server_projection_version=%s",
                     sid, recovery_run.get("run_id"), "runtime_incremental" if runtime_cursor is not None else "legacy_index",
                     cursor, runtime_cursor, recovery_server_seq, projection_version if isinstance(projection_version, int) else None, PROJECTOR_VERSION)
-        subscription = subscribe_session_events(sid, replay_recent=True)
+        subscription = subscribe_session_events(sid, replay_recent=True, after_runtime_seq=runtime_cursor)
         next_live_event = asyncio.create_task(subscription.__anext__())
 
         async def drain_projection(projection):
@@ -6484,6 +6484,12 @@ async def stream_session_events(
                         async for payload in drain_projection(projection):
                             yield payload
                     elif event.get("ephemeral"):
+                        execution_seq = int(event.get("execution_runtime_seq") or 0)
+                        if execution_seq and execution_seq <= int(runtime_cursor or 0):
+                            # Catch-up can advance beyond frames already queued
+                            # by the live subscription. The durable execution
+                            # projection has rendered those complete records.
+                            continue
                         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                         await asyncio.sleep(0)
                     else:

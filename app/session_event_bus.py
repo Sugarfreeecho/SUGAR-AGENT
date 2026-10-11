@@ -27,7 +27,11 @@ _SNAPSHOT_DELTA_FIELDS = {
     "key_context_delta": ("delta",),
 }
 
-_LIVE_STATE_TYPES = {"tool_pending"}
+_PROGRESS_STATE_TYPES = {
+    "context_trim_progress", "context_summary_progress", "key_context_progress",
+}
+_LIVE_STATE_TYPES = {"tool_pending", "tool_execution_state"} | _PROGRESS_STATE_TYPES
+_TOOL_TERMINAL_STATES = {"completed", "failed", "timed_out", "interrupted", "unknown"}
 
 
 def add_event_listener(listener) -> None:
@@ -92,6 +96,14 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
                 _accumulate_live_delta_unlocked(sid, event)
             elif event_type in _LIVE_STATE_TYPES:
                 _clear_replayed_status_unlocked(sid)
+                if event_type == "tool_execution_state" and event.get("status") in _TOOL_TERMINAL_STATES:
+                    _prune_recent_ephemeral_unlocked(
+                        sid,
+                        types={"tool_pending", "tool_call_delta", "tool_command_delta"},
+                        run_id=event.get("run_id") or event.get("runId"),
+                        react_iter=event.get("react_iter"),
+                        tool_call_id=event.get("tool_call_id"),
+                    )
                 _store_live_state_unlocked(sid, event)
             else:
                 if event_type == "status":
@@ -99,13 +111,24 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
                     # historical "Thinking..." heartbeat. Replaying all of
                     # them causes remove/append flicker in the frontend.
                     _clear_replayed_status_unlocked(sid)
-                _recent_ephemeral[sid].append(dict(event))
+                # Sleep recovery is a one-time notification. Its durable fact
+                # already exists; replaying it on every refresh creates rows in
+                # whichever process group the preceding cached frame selected.
+                if event_type != "runtime_resumed":
+                    _recent_ephemeral[sid].append(dict(event))
         elif event.get("type") == "tool_call" and str(event.get("tool_call_id") or "").strip():
             _prune_recent_ephemeral_unlocked(
                 sid,
-                types={"tool_pending", "tool_call_delta", "tool_command_delta"},
+                types={"tool_pending", "tool_execution_state", "tool_call_delta", "tool_command_delta"},
+                run_id=event.get("run_id") or event.get("runId"),
                 react_iter=event.get("react_iter"),
                 tool_call_id=event.get("tool_call_id"),
+            )
+        elif event_type in _PROGRESS_STATE_TYPES:
+            # A durable progress update replaces earlier waiting heartbeats,
+            # including completion/failure paths which have no streamed body.
+            _prune_recent_ephemeral_unlocked(
+                sid, types={event_type}, run_id=event.get("run_id") or event.get("runId"),
             )
         elif event.get("type") in {"llm_reasoning", "llm_response"}:
             completed_type = (
@@ -126,7 +149,7 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
             completed_type = str(event.get("type") or "").replace("_body", "_delta")
             _prune_recent_ephemeral_unlocked(
                 sid,
-                types={completed_type},
+                types={completed_type, str(event.get("type") or "").replace("_body", "_progress")},
                 run_id=event.get("run_id") or event.get("runId"),
             )
         subscribers = list(_subscribers.get(sid, ()))
@@ -209,6 +232,13 @@ def _live_state_key(event: Dict[str, Any]) -> Tuple[Any, ...] | None:
     event_type = str(event.get("type") or "")
     if event_type not in _LIVE_STATE_TYPES:
         return None
+    if event_type in _PROGRESS_STATE_TYPES:
+        # Compression is sequential within a run; only its current wait matters.
+        return (event_type, event.get("run_id") or event.get("runId") or "")
+    if event.get("execution_id"):
+        # A shell state can arrive after react_iter has advanced. The durable
+        # execution identity still refers to the same row in that case.
+        return (event_type, event.get("run_id") or event.get("runId") or "", event["execution_id"])
     identity = (
         event.get("tool_call_id")
         or event.get("id")
@@ -220,6 +250,7 @@ def _live_state_key(event: Dict[str, Any]) -> Tuple[Any, ...] | None:
         event_type,
         event.get("run_id") or event.get("runId") or "",
         event.get("react_iter"),
+        event.get("stream_seq"),
         identity,
     )
 
@@ -227,7 +258,9 @@ def _live_state_key(event: Dict[str, Any]) -> Tuple[Any, ...] | None:
 def _store_live_state_unlocked(sid: str, event: Dict[str, Any]) -> None:
     key = _live_state_key(event)
     if key is not None:
-        _live_state_snapshots[sid][key] = dict(event)
+        snapshot = dict(_live_state_snapshots[sid].get(key) or {})
+        snapshot.update({field: value for field, value in event.items() if value is not None})
+        _live_state_snapshots[sid][key] = snapshot
 
 
 def _clear_replayed_status_unlocked(sid: str) -> None:
@@ -392,6 +425,8 @@ async def close_session_stream(session_id: str) -> None:
 async def subscribe_session_events(
     session_id: str,
     replay_recent: bool = True,
+    *,
+    after_runtime_seq: int | None = None,
 ) -> AsyncGenerator[dict | None, None]:
     sid = _sid(session_id)
     if not sid:
@@ -411,7 +446,12 @@ async def subscribe_session_events(
             )
             replay.sort(key=lambda row: int(row.get("event_bus_seq") or row.get("seq") or 0))
             for ev in replay:
-                q.put_nowait(ev)
+                runtime_seq = int(ev.get("execution_runtime_seq") or ev.get("runtime_seq") or 0)
+                if after_runtime_seq is not None and 0 < runtime_seq <= after_runtime_seq:
+                    # The history snapshot already contains the complete row.
+                    # Older partial states must not recreate unloaded turns.
+                    continue
+                q.put_nowait(dict(ev, replayed_recent=True))
         _subscribers[sid].add(subscriber)
     try:
         while True:
