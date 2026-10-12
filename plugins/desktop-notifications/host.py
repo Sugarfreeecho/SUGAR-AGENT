@@ -1,12 +1,21 @@
 """Trusted adapter for the platform-specific desktop notification provider."""
 
+import asyncio
+
+
+async def _notify(*args):
+    from desktop_notify import show_desktop_notification
+
+    # Native notification helpers wait for delivery. Keep the ASGI event loop
+    # available for focus updates, streaming, and other session completions.
+    await asyncio.to_thread(show_desktop_notification, *args)
+
 
 def _register(plugin):
-    from desktop_notify import show_desktop_notification
     from notification_providers import register_notification_provider
 
     register_notification_provider(
-        plugin.plugin_id, show_desktop_notification, replace=True
+        plugin.plugin_id, _notify, replace=True
     )
 
 

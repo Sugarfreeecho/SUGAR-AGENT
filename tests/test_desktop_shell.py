@@ -17,11 +17,39 @@ def test_electron_shell_runtime():
     if not node:
         pytest.skip("Node.js is unavailable")
     result = subprocess.run(
-        [node, "--test", str(ROOT / "tests/js/desktop_shell_runtime.cjs")],
+        [node, "--test", str(ROOT / "tests/js/desktop_shell_runtime.cjs"),
+         str(ROOT / "tests/js/desktop_notifications.cjs")],
         capture_output=True, text=True, encoding="utf-8", timeout=30,
         creationflags=hidden_flags(),
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(
+    os.name != "nt" or os.getenv("MYAGENT_TEST_DESKTOP_NOTIFY") != "1",
+    reason="Native Windows notification smoke is opt-in",
+)
+def test_native_electron_notification_from_hidden_window(tmp_path):
+    electron = ROOT / "packaging/node_modules/electron/dist/electron.exe"
+    if not electron.is_file():
+        pytest.skip("Packaging dependencies are unavailable")
+    env = os.environ.copy()
+    env.pop("ELECTRON_RUN_AS_NODE", None)
+
+    def run(executable):
+        return subprocess.run(
+            [str(executable), "--disable-gpu", str(ROOT / "tests/js/desktop_notification_electron.cjs")],
+            capture_output=True, encoding="utf-8", timeout=30, env=env,
+            creationflags=hidden_flags(),
+        )
+
+    result = run(electron)
+    if "install_dir_access.cc" in result.stderr:
+        runtime = tmp_path / "electron"
+        shutil.copytree(electron.parent, runtime)
+        result = run(runtime / "electron.exe")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "notification delivered while the window was hidden" in result.stdout
 
 
 @pytest.mark.parametrize("desktop,session", [(False, "abc-123"), (True, "abc-123"), (True, ""), (True, '"invalid')])

@@ -1,12 +1,234 @@
 import asyncio
 import sys
 from pathlib import Path
+import time
+from types import SimpleNamespace
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
+
+
+def _isolate_attention_delivery(monkeypatch):
+    import webui
+
+    delivered = []
+
+    async def notify(title, message, session_id=""):
+        delivered.append((message, session_id))
+        return []
+
+    monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_ENABLED", True)
+    monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_GRACE_SEC", 0)
+    monkeypatch.setattr(webui, "_ui_attention_notify_task", None)
+    monkeypatch.setattr(webui, "_ui_closed_notify_task", None)
+    monkeypatch.setattr(webui, "_ui_attention_notify_reasons", {})
+    monkeypatch.setattr(webui, "_ui_presence_tokens", {})
+    monkeypatch.setattr(webui, "_last_ui_attention_notify_at", 0)
+    monkeypatch.setattr(webui, "_notification_context", lambda sid, status, count: ("SugarAgent", status))
+    monkeypatch.setattr(webui, "notify_user", notify)
+    monkeypatch.setattr(webui, "_session_run_state_fields_light", lambda sid: {"run_active": False})
+    import agent_goal
+    monkeypatch.setattr(agent_goal, "manager_for", lambda manager: SimpleNamespace(get=lambda sid: None))
+    return delivered
+
+
+@pytest.mark.parametrize("terminal", ["completed", "interrupted", "failed"])
+def test_latest_terminal_state_wins_during_notification_grace(monkeypatch, terminal):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        for reason in ["failed", "completed", "interrupted", terminal]:
+            webui._schedule_ui_attention_notify("session-1", reason)
+        await webui._ui_attention_notify_task
+        assert delivered == [(terminal, "session-1")]
+
+    asyncio.run(scenario())
+
+
+def test_specific_notification_cancels_queued_generic_window_closed_notice(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        await webui._schedule_ui_closed_notify()
+        generic = webui._ui_closed_notify_task
+        webui._schedule_ui_attention_notify("session-1", "completed")
+        try:
+            assert webui._ui_closed_notify_task is None
+            await webui._ui_attention_notify_task
+            assert delivered == [("completed", "session-1")]
+        finally:
+            generic.cancel()
+            await asyncio.gather(generic, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("continues", ["goal", "new_run"])
+def test_intermediate_run_completion_does_not_claim_entire_session_finished(monkeypatch, continues):
+    import webui
+    import agent_goal
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        if continues == "goal":
+            monkeypatch.setattr(agent_goal, "goal_enabled", lambda: True)
+            monkeypatch.setattr(agent_goal, "manager_for", lambda manager: SimpleNamespace(get=lambda sid: {"status": "active"}))
+        else:
+            monkeypatch.setattr(webui, "_session_run_state_fields_light", lambda sid: {"run_active": True})
+        webui._schedule_ui_attention_notify("session-1", "completed")
+        await webui._ui_attention_notify_task
+        assert delivered == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("event_type", ["approval_requested", "interaction_requested", "run_failed", "run_interrupted"])
+def test_other_attention_events_deliver_with_current_status(monkeypatch, event_type):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        monkeypatch.setattr(webui, "_session_pending_human_count", lambda sid: 2)
+        monkeypatch.setattr(webui, "_UI_ATTENTION_MAIN_LOOP", asyncio.get_running_loop())
+        webui._on_session_event_for_attention_notify("session-1", {"type": event_type})
+        await asyncio.sleep(0)
+        await webui._ui_attention_notify_task
+        assert delivered == [(webui._UI_ATTENTION_NOTIFY_EVENT_TYPES[event_type], "session-1")]
+
+    asyncio.run(scenario())
+
+
+def test_goal_notifies_once_after_its_actual_completion(monkeypatch):
+    import webui
+    import agent_goal
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        goal = {"status": "active"}
+        monkeypatch.setattr(agent_goal, "goal_enabled", lambda: True)
+        monkeypatch.setattr(agent_goal, "manager_for", lambda manager: SimpleNamespace(get=lambda sid: goal))
+        webui._schedule_ui_attention_notify("session-1", "completed")
+        await webui._ui_attention_notify_task
+        assert delivered == []
+        goal["status"] = "completed"
+        webui._schedule_ui_attention_notify("session-1", "completed")
+        await webui._ui_attention_notify_task
+        assert delivered == [("completed", "session-1")]
+
+    asyncio.run(scenario())
+
+
+def test_active_goal_waiting_for_human_input_still_notifies(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        monkeypatch.setattr(webui, "_session_run_state_fields_light", lambda sid: {"run_active": True})
+        monkeypatch.setattr(webui, "_session_pending_human_count", lambda sid: 1)
+        webui._schedule_ui_attention_notify("session-1", "pending")
+        webui._schedule_ui_attention_notify("session-1", "completed")
+        await webui._ui_attention_notify_task
+        assert delivered == [("pending", "session-1")]
+
+    asyncio.run(scenario())
+
+
+def test_resolved_human_request_does_not_emit_a_stale_pending_notice(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        monkeypatch.setattr(webui, "_session_pending_human_count", lambda sid: 0)
+        webui._schedule_ui_attention_notify("session-1", "pending")
+        await webui._ui_attention_notify_task
+        assert delivered == []
+
+    asyncio.run(scenario())
+
+
+def test_completed_run_notifies_after_ui_is_hidden(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = []
+
+        async def notify(title, message, session_id=""):
+            delivered.append((title, message, session_id))
+            return []
+
+        monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_ENABLED", True)
+        monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_GRACE_SEC", 0)
+        monkeypatch.setattr(webui, "_ui_attention_notify_task", None)
+        monkeypatch.setattr(webui, "_ui_attention_notify_reasons", {})
+        monkeypatch.setattr(webui, "_ui_presence_tokens", {"desktop": {"seen_at": time.time(), "active": False}})
+        monkeypatch.setattr(webui, "_notification_context", lambda sid, status, count: ("SugarAgent", status))
+        monkeypatch.setattr(webui, "notify_user", notify)
+        monkeypatch.setattr(webui, "_UI_ATTENTION_MAIN_LOOP", asyncio.get_running_loop())
+        monkeypatch.setattr(webui, "_last_ui_attention_notify_at", 0)
+
+        await asyncio.to_thread(webui._on_session_event_for_attention_notify, "session-1", {"type": "run_finished"})
+        await asyncio.sleep(0)
+        await webui._ui_attention_notify_task
+
+        assert delivered == [("SugarAgent", "completed", "session-1")]
+
+    asyncio.run(scenario())
+
+
+def test_expired_foreground_presence_does_not_suppress_notifications(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_ui_presence_tokens", {"stale": {"seen_at": time.time() - webui._UI_PRESENCE_TOKEN_TTL_SEC - 1, "active": True}})
+    assert webui._ui_presence_has_active() is False
+    assert webui._ui_presence_tokens == {}
+
+
+def test_foreground_ui_still_suppresses_completion_notifications(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_ENABLED", True)
+    monkeypatch.setattr(webui, "_ui_presence_tokens", {"desktop": {"seen_at": time.time(), "active": True}})
+    monkeypatch.setattr(webui, "_ui_attention_notify_reasons", {})
+    webui._schedule_ui_attention_notify("session-1", "completed")
+    assert webui._ui_attention_notify_reasons == {}
+
+
+def test_completion_during_delivery_is_not_lost(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = []
+
+        async def notify(title, message, session_id=""):
+            delivered.append(session_id)
+            if session_id == "session-1":
+                webui._schedule_ui_attention_notify("session-2", "completed")
+            return []
+
+        monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_ENABLED", True)
+        monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_GRACE_SEC", 0)
+        monkeypatch.setattr(webui, "_ui_attention_notify_task", None)
+        monkeypatch.setattr(webui, "_ui_attention_notify_reasons", {})
+        monkeypatch.setattr(webui, "_ui_presence_tokens", {})
+        monkeypatch.setattr(webui, "_notification_context", lambda sid, status, count: ("SugarAgent", status))
+        monkeypatch.setattr(webui, "notify_user", notify)
+        monkeypatch.setattr(webui, "_last_ui_attention_notify_at", 0)
+
+        webui._schedule_ui_attention_notify("session-1", "completed")
+        await webui._ui_attention_notify_task
+        await webui._ui_attention_notify_task
+
+        assert delivered == ["session-1", "session-2"]
+        assert webui._ui_attention_notify_reasons == {}
+
+    asyncio.run(scenario())
 
 def test_worker_session_event_reaches_initialized_server_loop(monkeypatch):
     import webui

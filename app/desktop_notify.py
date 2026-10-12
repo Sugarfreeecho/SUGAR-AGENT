@@ -8,12 +8,14 @@ the actual system-level popup (OS notification or message box fallback).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
 import subprocess
 import threading
 from pathlib import Path
+from urllib.request import ProxyHandler, Request, build_opener
 
 try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
     from proc_flags import hidden_flags
@@ -53,6 +55,8 @@ def show_desktop_notification(
 ) -> None:
     """Show a native desktop notification with the given title and message."""
 
+    if os.getenv("SUGARAGENT_DESKTOP") == "1" and _notify_electron(title, message, session_id):
+        return
     system = platform.system()
     if system == "Windows":
         if _notify_windows_toast(title, message, session_id):
@@ -64,6 +68,33 @@ def show_desktop_notification(
         _notify_linux(title, message)
     else:
         logger.info("Desktop notification is not supported on %s", system)
+
+
+def _notify_electron(title: str, message: str, session_id: str = "") -> bool:
+    """Ask the owning desktop process to deliver and acknowledge a native toast."""
+
+    port = os.getenv("SUGARAGENT_NOTIFY_PORT", "")
+    token = os.getenv("SUGARAGENT_NOTIFY_TOKEN", "")
+    if not port or not token:
+        return False
+    try:
+        port_number = int(port)
+        if not 1 <= port_number <= 65535:
+            return False
+        body = json.dumps({
+            "title": title, "message": message, "session_id": str(session_id or ""),
+        }, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            f"http://127.0.0.1:{port_number}/notify", data=body,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            method="POST",
+        )
+        # Local desktop IPC must never be routed through a configured HTTP proxy.
+        with build_opener(ProxyHandler({})).open(request, timeout=8) as response:
+            return response.status == 200
+    except Exception as exc:
+        logger.warning("Unable to show Electron notification: %s", exc)
+        return False
 
 
 def _notify_windows_toast(title: str, message: str, session_id: str = "") -> bool:

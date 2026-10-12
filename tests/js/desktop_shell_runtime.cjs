@@ -97,7 +97,8 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
   }
   const context = vm.createContext({
     require: name => ({ electron, 'node:fs': fakeFs, 'node:path': path.win32,
-      'node:child_process': childProcess, 'node:http': http, 'node:net': {} })[name],
+      'node:child_process': childProcess, 'node:http': http, 'node:net': {},
+      './notifications': require('../../packaging/electron/notifications') })[name],
     process: { argv, env: {}, resourcesPath: 'D:\\SugarAgent Runtime', platform: 'win32', execPath: 'D:\\SugarAgent\\SugarAgent.exe' },
     __dirname: path.join(ROOT, 'packaging/electron'), URL, Buffer, setTimeout, clearTimeout,
   })
@@ -105,7 +106,8 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
     globalThis.api = { createWindow, createTray, loadApp, openBackendLog, openBackendLogs,
       parseDesktopActivation, registerDesktopProtocol, activateDesktop, applyNativeTheme, installNativeContextMenu, resolveLayout, backendEnv,
       ready: () => { uiReady = true }, pending: () => pendingActivation,
-      port: value => { activePort = value } };
+      port: value => { activePort = value },
+      notifications: value => { notificationBridge = value } };
   `, context)
   return { api: context.api, app, calls, nativeTheme }
 }
@@ -156,6 +158,19 @@ test('desktop protocol registration covers installed and source Electron launche
     assert.equal(registration.length, packaged ? 1 : 3)
     if (!packaged) assert.equal(registration[2][0], 'D:\\Desktop Source')
   }
+})
+
+test('native notification bridge reaches the backend across restarts and closes on quit', () => {
+  const { api, app } = shellHarness()
+  let closed = false
+  api.notifications({ port: 12345, token: 'per-launch-secret', close: () => { closed = true } })
+  for (const refresh of [false, true]) {
+    api.resolveLayout(refresh)
+    assert.equal(api.backendEnv().SUGARAGENT_NOTIFY_PORT, '12345')
+    assert.equal(api.backendEnv().SUGARAGENT_NOTIFY_TOKEN, 'per-launch-secret')
+  }
+  app.emit('will-quit')
+  assert.equal(closed, true)
 })
 
 test('protocol accepts only desktop UI links and validates session ids', () => {

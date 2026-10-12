@@ -5669,6 +5669,7 @@ def _ui_presence_prune(now: float) -> None:
 def _ui_presence_has_active() -> bool:
     """Return True when at least one WebUI tab is visible and focused."""
 
+    _ui_presence_prune(time.time())
     return any(bool(entry.get("active")) for entry in _ui_presence_tokens.values())
 
 
@@ -5833,13 +5834,37 @@ def _schedule_ui_attention_notify(session_id: str, reason: str) -> None:
     with _ui_presence_lock:
         if _ui_presence_has_active():
             return
+    _cancel_pending_ui_closed_notify()
     with _ui_attention_notify_lock:
-        _ui_attention_notify_reasons.setdefault(str(session_id), set()).add(reason)
+        reasons = _ui_attention_notify_reasons.setdefault(str(session_id), set())
+        if reason in {"completed", "failed", "interrupted"}:
+            # A newer run may finish within the same grace window. Its actual
+            # outcome supersedes the old run's outcome instead of assigning
+            # failure a permanent priority over subsequent success.
+            reasons.difference_update({"completed", "failed", "interrupted"})
+        reasons.add(reason)
         if _ui_attention_notify_task and not _ui_attention_notify_task.done():
             return
         _ui_attention_notify_task = asyncio.create_task(
             _delayed_ui_attention_notify()
         )
+
+
+def _ui_attention_terminal_is_obsolete(session_id: str, status: str) -> bool:
+    """A run terminal is not a session completion while work continues."""
+
+    if _session_run_state_fields_light(session_id).get("run_active"):
+        return True
+    if status != "completed":
+        return False
+    try:
+        from agent_goal import goal_enabled, manager_for
+
+        goal = manager_for(session_manager).get(session_id) if goal_enabled() else None
+        return bool(goal and goal.get("status") == "active")
+    except Exception:
+        logger.debug("UI attention goal probe failed", exc_info=True)
+        return False
 
 
 async def _delayed_ui_attention_notify() -> None:
@@ -5858,7 +5883,7 @@ async def _delayed_ui_attention_notify() -> None:
             if _ui_presence_has_active():
                 return
 
-        notifications: list[tuple[str, str]] = []
+        notifications: list[tuple[str, str, str]] = []
         for sid, reasons in pending.items():
             pending_total = 0
             if "pending" in reasons:
@@ -5875,6 +5900,10 @@ async def _delayed_ui_attention_notify() -> None:
                 status = "completed"
             else:
                 continue
+            if status != "pending" and await run_in_threadpool(
+                _ui_attention_terminal_is_obsolete, sid, status
+            ):
+                continue
             ctx = await run_in_threadpool(
                 _notification_context, sid, status, pending_total
             )
@@ -5884,13 +5913,22 @@ async def _delayed_ui_attention_notify() -> None:
         global _last_ui_attention_notify_at
         _last_ui_attention_notify_at = time.time()
         for title, message, notify_session_id in notifications:
-            await notify_user(title, message, session_id=notify_session_id)
+            failures = await notify_user(title, message, session_id=notify_session_id)
+            if failures:
+                logger.warning("UI attention notification failed: %s", "; ".join(failures))
     except asyncio.CancelledError:
         return
     finally:
         global _ui_attention_notify_task
         if _ui_attention_notify_task is asyncio.current_task():
             _ui_attention_notify_task = None
+            # Delivery can yield while other sessions finish. Drain those
+            # reasons too instead of leaving them waiting for another event.
+            with _ui_attention_notify_lock:
+                if _ui_attention_notify_reasons:
+                    _ui_attention_notify_task = asyncio.create_task(
+                        _delayed_ui_attention_notify()
+                    )
 
 
 _UI_ATTENTION_NOTIFY_EVENT_TYPES = {

@@ -32,7 +32,7 @@ async def notify_user(
     """Dispatch a notification; ``session_id`` lets providers deep-link to it.
 
     Providers registered with the legacy two-argument signature keep working:
-    the session id is only appended when provided.
+    the session id is appended only when the callback accepts it.
     """
     failures: list[str] = []
     for provider_id, callback in tuple(_providers.items()):
@@ -40,7 +40,20 @@ async def notify_user(
             if not (title or message):
                 value = callback()
             elif session_id:
-                value = callback(title, message, str(session_id))
+                args = (title, message, str(session_id))
+                try:
+                    signature = inspect.signature(callback)
+                except (TypeError, ValueError):
+                    signature = None
+                if signature is not None:
+                    try:
+                        signature.bind(*args)
+                    except TypeError:
+                        # Check compatibility before invoking: a TypeError
+                        # raised inside a provider must never cause a retry.
+                        signature.bind(title, message)
+                        args = (title, message)
+                value = callback(*args)
             else:
                 value = callback(title, message)
             if inspect.isawaitable(value):

@@ -10,12 +10,13 @@
  *  4. 后端异常退出时给出可操作的恢复对话框。
  */
 
-const { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, shell } = require('electron')
+const { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, shell } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const http = require('node:http')
 const net = require('node:net')
 const path = require('node:path')
+const { createNotificationBridge } = require('./notifications')
 
 const HOST = '127.0.0.1'
 const BASE_PORT = Number(process.env.SUGARAGENT_PORT || 8192)
@@ -44,6 +45,7 @@ let quitting = false
 let restartTimer = null
 let uiReady = false
 let pendingActivation = parseDesktopActivation(process.argv)
+let notificationBridge = null
 
 // ---------------------------------------------------------------- logging ---
 
@@ -149,6 +151,8 @@ function backendEnv() {
     PYTHONUTF8: '1',
     SUGARAGENT_DESKTOP: '1',
     SUGARAGENT_DESKTOP_VERSION: app.getVersion(),
+    SUGARAGENT_NOTIFY_PORT: notificationBridge ? String(notificationBridge.port) : '',
+    SUGARAGENT_NOTIFY_TOKEN: notificationBridge ? notificationBridge.token : '',
     MYAGENT_SERVER_PORT: String(activePort),
     WORK_DIR: current.workDir,
     SKILLS_DIR: current.skillsDir || path.join(current.workDir, 'skills'),
@@ -619,6 +623,13 @@ if (!gotLock) {
     }
     activePort = await findFreePort(BASE_PORT, PORT_SPAN)
     if (activePort !== BASE_PORT) log(`端口 ${BASE_PORT} 已被占用，改用 ${activePort}`)
+    try {
+      notificationBridge = await createNotificationBridge({
+        Notification, icon: TRAY_ICON, activate: activateDesktop, log,
+      })
+    } catch (error) {
+      log(`桌面通知通道启动失败：${error.message}`)
+    }
     startBackend()
     const ready = await waitForBackend(180000)
     if (!ready) {
@@ -648,6 +659,7 @@ if (!gotLock) {
   })
 
   app.on('will-quit', () => {
+    if (notificationBridge) notificationBridge.close()
     stopBackend()
   })
 }
