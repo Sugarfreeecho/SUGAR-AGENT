@@ -768,6 +768,67 @@ def _resolve_stdio_cwd(cwd: Any) -> Optional[str]:
     return str((PROJECT_ROOT / p).resolve())
 
 
+def _enabled_plugin_roots() -> List[str]:
+    """Read import roots from the current enabled-plugin registry."""
+    try:
+        from agent_extensions import load_plugins
+
+        plugins = load_plugins().plugins
+        roots: List[str] = []
+        seen: set[str] = set()
+        for plugin in plugins:
+            root = str(Path(plugin.root).resolve())
+            key = os.path.normcase(root)
+            if key not in seen:
+                seen.add(key)
+                roots.append(root)
+        return roots
+    except Exception as exc:
+        logger.debug("MCP plugin import roots unavailable: %s", exc)
+        return []
+
+
+def _bootstrap_plugin_stdio_args(
+    alias: str, cmd: str, args: List[str], cwd: Optional[str]
+) -> List[str]:
+    """Make plugin modules importable even with an embedded Python ._pth."""
+    executable = cmd.replace("\\", "/").rsplit("/", 1)[-1]
+    if "/" not in alias or not re.fullmatch(
+        r"pythonw?(?:\d+(?:\.\d+)*)?(?:\.exe)?", executable, re.IGNORECASE
+    ):
+        return args
+
+    # Find the interpreter's -m, rather than a script/module argument named -m.
+    module_index = 0
+    while module_index < len(args):
+        option = args[module_index]
+        if option == "-m":
+            break
+        if option in ("-c", "-", "--") or not option.startswith("-"):
+            return args
+        module_index += 2 if option in ("-W", "-X", "--check-hash-based-pycs") else 1
+    if module_index + 1 >= len(args) or not args[module_index + 1]:
+        return args
+
+    roots = _enabled_plugin_roots()
+    if cwd:
+        # Keep this server's working directory ahead of other plugins' roots.
+        root = str(Path(cwd).resolve())
+        roots = [root] + [
+            item for item in roots if os.path.normcase(item) != os.path.normcase(root)
+        ]
+    if not roots:
+        return args
+
+    bootstrap = (
+        "import runpy, sys; "
+        f"sys.path[:0] = {roots!r}; "
+        "sys.argv = sys.argv[1:]; "
+        "runpy.run_module(sys.argv[0], run_name='__main__', alter_sys=True)"
+    )
+    return args[:module_index] + ["-c", bootstrap] + args[module_index + 1:]
+
+
 def _make_stdio_connector(alias: str, cfg: dict, *, register_tools: bool = True) -> _PersistentMcpServer:
     cmd = str(cfg.get("command") or "").strip()
     args = cfg.get("args") or []
@@ -793,6 +854,7 @@ def _make_stdio_connector(alias: str, cfg: dict, *, register_tools: bool = True)
         explicit=explicit_env,
     )
     cwd_s = _resolve_stdio_cwd(cfg.get("cwd") or cfg.get("workingDirectory"))
+    args = _bootstrap_plugin_stdio_args(alias, cmd, args, cwd_s)
     params = StdioServerParameters(command=cmd, args=args, env=env_d, cwd=cwd_s or None)
 
     @asynccontextmanager
