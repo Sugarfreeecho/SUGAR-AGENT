@@ -502,7 +502,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 if (parsed.type === 'execution_update') {
                     var executionUpdate = Object.assign({}, parsed.update, {last_runtime_seq:parsed.runtime_seq});
                     if (!executionUpdate.run_id && parsed.run_id) executionUpdate.run_id = parsed.run_id;
-                    renderExecutionRecord(runCtx, updateExecutionRecord(runSessionId, executionUpdate), runSessionId);
+                    renderExecutionRecord(runCtx, updateExecutionRecord(runSessionId, executionUpdate), runSessionId, {
+                        smoothText: !parsed.replayed_snapshot && Object.prototype.hasOwnProperty.call(executionUpdate, 'text_delta'),
+                        snapshot: !!parsed.replayed_snapshot,
+                    });
                     continue;
                 }
                 if (parsed.type === 'user_steer' && parsed.steer) {

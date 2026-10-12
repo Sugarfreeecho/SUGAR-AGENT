@@ -1402,6 +1402,9 @@ function discardLlmStreamChunks(ctx, ev) {
     }
     if (ctx.llm) {
         const l = ctx.llm;
+        // Execution rows are durable and survive draft cleanup. Keep all text
+        // already received, then release their animation at the abort boundary.
+        if (l.llmExecutionReveals && l.llmExecutionReveals.size) flushExecutionLlmReveals(ctx, {});
         if (l.llmDeltaFlushRaf) {
             cancelAnimationFrame(l.llmDeltaFlushRaf);
             l.llmDeltaFlushRaf = 0;
@@ -1493,6 +1496,57 @@ function appendLlmRevealedText(scroller, segment, part) {
     writeLlmStreamText(scroller, head + segment, part);
 }
 
+function cancelExecutionLlmReveal(ctx, scroller) {
+    var l = ctx && ctx.llm;
+    if (!l || !l.llmExecutionReveals) return;
+    l.llmExecutionReveals.delete(scroller);
+    if (!l.llmExecutionReveals.size && !l.llmPendingReasoningDelta && !l.llmPendingResponseDelta) {
+        if (l.llmDeltaFlushRaf) cancelAnimationFrame(l.llmDeltaFlushRaf);
+        l.llmDeltaFlushRaf = 0;
+        l.llmRevealLastTs = 0;
+    }
+}
+
+function queueExecutionLlmReveal(ctx, scroller, text, part, sessionId) {
+    var l = ctx.llm;
+    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');
+    var target = String(text || '');
+    if (target === head || target.indexOf(head) !== 0) {
+        // A correction is a replacement, rather than an append to old text.
+        cancelExecutionLlmReveal(ctx, scroller);
+        writeLlmStreamText(scroller, target, part);
+        return;
+    }
+    if (!l.llmExecutionReveals) l.llmExecutionReveals = new Map();
+    // The record owns the complete text. Each row owns only its current reveal
+    // target, so repeated deliveries cannot append the same delta twice.
+    l.llmExecutionReveals.set(scroller, {text: target, part: part});
+    scheduleLlmDeltaFlush(ctx, sessionId);
+}
+
+function flushExecutionLlmReveals(ctx, opts) {
+    var pending = ctx.llm.llmExecutionReveals;
+    if (!pending) return 0;
+    var smooth = opts.smooth === true && isSmoothStreamActive();
+    var revealed = 0;
+    pending.forEach(function (state, scroller) {
+        if (!scroller || scroller.isConnected === false) { pending.delete(scroller); return; }
+        var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');
+        if (state.text.indexOf(head) !== 0) {
+            pending.delete(scroller);
+            return;
+        }
+        var tail = state.text.slice(head.length);
+        var take = smooth
+            ? takeSmoothTextPrefix(tail, computeSmoothRevealCount(tail.length, opts.dtMs || 16.67))
+            : {segment: tail, rest: '', count: tail.length};
+        if (take.segment) appendLlmRevealedText(scroller, take.segment, state.part);
+        revealed += take.count;
+        if (!take.rest) pending.delete(scroller);
+    });
+    return revealed;
+}
+
 function flushLlmDeltaText(ctx, opts) {
     if (!ctx || !ctx.llm) return;
     opts = opts || {};
@@ -1532,6 +1586,9 @@ function flushLlmDeltaText(ctx, opts) {
     } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {
         l.llmPendingResponseDelta = '';
     }
+    if (l.llmExecutionReveals && l.llmExecutionReveals.size) {
+        revealedChars += flushExecutionLlmReveals(ctx, opts);
+    }
     return revealedChars;
 }
 
@@ -1559,7 +1616,8 @@ function scheduleLlmDeltaFlush(ctx, runSessionId) {
             uiPerformance.count(runSessionId, 'stream.revealedCodePoints', revealed);
         }
         followStreamProcessScroll(ctx, runSessionId, 'text');
-        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta) {
+        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta
+            || (l.llmExecutionReveals && l.llmExecutionReveals.size)) {
             scheduleLlmDeltaFlush(ctx, runSessionId);
         } else {
             l.llmRevealLastTs = 0;

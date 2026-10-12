@@ -1456,8 +1456,9 @@ function updateExecutionRecord(sessionId, update) {
     return row;
 }
 
-function renderExecutionRecord(ctx, record, sessionId) {
+function renderExecutionRecord(ctx, record, sessionId, opts) {
     if (!ctx || !ctx.stream || !record || !record.execution_id) return;
+    opts = opts || {};
     if (record.kind === 'continuation') return;
     var row = Array.from(ctx.stream.querySelectorAll('[data-execution-id]')).find(function (item) {
         return item.dataset.executionId === String(record.execution_id);
@@ -1466,7 +1467,7 @@ function renderExecutionRecord(ctx, record, sessionId) {
     // The journal replay and event bus can deliver the same token. Do not
     // rewrite its text or move the follow target a second time.
     if (row && runtimeSeq > 0 && row.dataset.executionRenderedSeq === String(runtimeSeq)
-        && row.dataset.executionStatus === String(record.status || '')) return;
+        && row.dataset.executionStatus === String(record.status || '') && !opts.snapshot) return;
     var generation = typeof syncRenderContextRunScope === 'function'
         ? syncRenderContextRunScope(ctx, record) : reactGenerationForContext(ctx);
     var executionGenerations = ctx.reactGenerationsByExecutionId || (ctx.reactGenerationsByExecutionId = new Map());
@@ -1509,9 +1510,15 @@ function renderExecutionRecord(ctx, record, sessionId) {
         if (isExecuting) text = formatToolPendingLine(record.tool, record.args, text);
     }
     if (labels[record.status]) text += '\n[' + labels[record.status] + ']';
+    // Animate live text only. History and recovery snapshots install their
+    // authoritative body immediately, without replaying old typing animations.
+    var smoothText = opts.smoothText === true && record.status === 'generating'
+        && (record.kind === 'reasoning' || record.kind === 'response')
+        && !replayingMessages && !historicalRun && ctx.llm
+        && typeof isSmoothStreamActive === 'function' && isSmoothStreamActive();
     if (!row) {
         var type = record.kind === 'tool' ? 'tool-call' : record.kind === 'reasoning' ? 'llm-reasoning' : 'llm-response';
-        var sc = createProcessFeedRow(ctx, type, text, {reactIter:record.react_iter,
+        var sc = createProcessFeedRow(ctx, type, smoothText ? '' : text, {reactIter:record.react_iter,
             reactGeneration:generation, runId:record.run_id, streaming:record.status === 'generating',
             historyHydrate:historicalRun, suppressFollow:historicalRun}, sessionId, record.tool_call_id || '');
         row = sc && sc.closest ? sc.closest('.feed-item') : null;
@@ -1523,7 +1530,7 @@ function renderExecutionRecord(ctx, record, sessionId) {
     row.dataset.executionRenderedSeq = String(runtimeSeq);
     if (record.run_id) row.dataset.runId = String(record.run_id);
     if (record.react_iter != null) row.dataset.reactIter = String(record.react_iter);
-    if (record.kind === 'response') row._processBriefRawText = String(record.content || '');
+    if (record.kind === 'response' && !smoothText) row._processBriefRawText = String(record.content || '');
     if (row.dataset.reactGeneration == null) row.dataset.reactGeneration = String(generation);
     if (record.tool_call_id) {
         row.dataset.toolCallId = String(record.tool_call_id);
@@ -1535,8 +1542,13 @@ function renderExecutionRecord(ctx, record, sessionId) {
     row.dataset.eventCommitted = '1';
     var scroller = row.querySelector('.feed-chunk-scroller');
     var uiText = record.kind === 'tool' ? truncateLogTextForUi(text) : text;
-    if (scroller && record.kind !== 'tool') scroller._llmRawText = text;
-    if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
+    if (scroller && smoothText) {
+        queueExecutionLlmReveal(ctx, scroller, text, record.kind, sessionId);
+    } else {
+        if (ctx.llm && ctx.llm.llmExecutionReveals) cancelExecutionLlmReveal(ctx, scroller);
+        if (scroller && record.kind !== 'tool') scroller._llmRawText = text;
+        if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
+    }
     var chunk = row.querySelector('.feed-chunk');
     if (chunk) { chunk.classList.toggle('is-streaming', record.status === 'generating'); refreshFeedChunkOverflow(chunk); }
     if (typeof attachHumanInteractionCardsForToolCall === 'function' && record.tool_call_id) attachHumanInteractionCardsForToolCall(ctx.stream, record.tool_call_id);
@@ -1582,10 +1594,14 @@ function renderExecutionEvent(ctx, event, sessionId) {
         });
     }
     else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], ui_committed:true}, event.ui ? {ui:event.ui} : null);
-    else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating', text_delta:event.delta || ''});
+    else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating'},
+        event.replayed_snapshot ? {content:event.delta || ''} : {text_delta:event.delta || ''});
     else if (type === 'llm_reasoning' || type === 'llm_response') Object.assign(update, {status:event.execution_status || 'completed', content:event.content || '', ui_committed:true});
     else return false;
-    renderExecutionRecord(ctx, updateExecutionRecord(sessionId, update), sessionId);
+    renderExecutionRecord(ctx, updateExecutionRecord(sessionId, update), sessionId, {
+        smoothText: !event.replayed_snapshot && (type === 'llm_reasoning_delta' || type === 'llm_response_delta'),
+        snapshot: !!event.replayed_snapshot,
+    });
     return true;
 }
 

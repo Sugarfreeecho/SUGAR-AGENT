@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
     "stream_recovery_runtime.cjs",
     "execution_recovery_runtime.cjs",
     "execution_display_compat_runtime.cjs",
+    "execution_smooth_stream_runtime.cjs",
     "execution_restart_order_runtime.cjs",
     "ui_performance_runtime.cjs",
     "session_store_runtime.cjs",

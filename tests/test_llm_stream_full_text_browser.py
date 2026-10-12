@@ -66,6 +66,7 @@ def page(browser_page):
       function refreshFeedChunkOverflow(){}
       function scheduleFeedChunkOverflowRefresh(){}
       function scrollContentAreaIfFollow(){}
+      function followStreamProcessScroll(){}
       function bumpAggregateMaxReactIter(){}
       function mutateSmoothTraceRowHeight(row,mutation){mutation();}
       function registerMermaidLazy(){}
@@ -85,11 +86,12 @@ def page(browser_page):
         "autoCollapseLlmReasoningRow", "handleTraceChunkClick", "handleToolRowChunkClick",
         "handleLlmRowChunkClick", "bindFeedChunkInteraction", "finalizeActiveLlmReasoningRow",
         "upsertLlmFeedRow", "findExistingLlmFeedRow", "removeDuplicateLlmFeedRows",
-        "updateExecutionRecord", "renderExecutionRecord",
+        "updateExecutionRecord", "renderExecutionRecord", "renderExecutionEvent",
     ))
     setup += "\n".join(function_source(scrolling, name) for name in (
         "writeLlmStreamText", "appendLlmRevealedText", "flushLlmDeltaText", "resetLlmState",
         "finalizeLlmStreamChunks", "discardLlmStreamChunks",
+        "cancelExecutionLlmReveal", "queueExecutionLlmReveal", "flushExecutionLlmReveals", "scheduleLlmDeltaFlush",
     ))
     setup += """
       window.start=(type='llm-reasoning',text='',options={streaming:true,reactIter:1})=>{
@@ -112,6 +114,42 @@ def page(browser_page):
 def assert_equal_height(page):
     values = page.evaluate("heights()")
     assert abs(values["actual"] - values["expected"]) < 1.5
+
+
+@pytest.mark.parametrize("kind", ["reasoning", "response"])
+def test_live_execution_reveals_by_frame_then_preserves_complete_body(page, kind):
+    page.add_script_tag(content=(ROOT / "frontend/src/app/modules/smooth-stream.js").read_text(encoding="utf-8"))
+    result = page.evaluate("""async kind => {
+      body.replaceChildren();ctx.llm={};
+      const text=('正文😀 '.repeat(30)+'\\n').repeat(350)+'END';
+      const event={type:'llm_'+kind+'_delta',execution_id:'live-'+kind,
+        run_id:'run-1',react_iter:1,execution_runtime_seq:1,delta:text};
+      renderExecutionEvent(ctx,event,currentSessionId);
+      const sc=body.querySelector('.feed-chunk-scroller');
+      const before=sc.textContent.length;
+      await new Promise(requestAnimationFrame);
+      const first=sc.textContent.length,node=sc.firstChild;
+      renderExecutionEvent(ctx,event,currentSessionId);
+      renderExecutionEvent(ctx,{...event,delta:' appended',execution_runtime_seq:2},currentSessionId);
+      const afterArrival=sc.textContent.length;
+      await new Promise(requestAnimationFrame);
+      const second=sc.textContent.length,sameNode=node===sc.firstChild;
+      renderExecutionEvent(ctx,{type:'llm_'+kind,execution_id:'live-'+kind,
+        run_id:'run-1',react_iter:1,execution_runtime_seq:3,content:text+' completed'},currentSessionId);
+      finalizeLlmStreamChunks(ctx);
+      await new Promise(requestAnimationFrame);
+      return {before,first,second,afterArrival,total:text.length,sameNode,
+        complete:sc.textContent===text+' completed',rows:body.children.length,
+        pending:ctx.llm.llmExecutionReveals.size,raf:ctx.llm.llmDeltaFlushRaf,
+        childElements:sc.children.length};
+    }""", kind)
+    assert result["before"] == 0
+    assert 0 < result["first"] < result["total"]
+    assert result["first"] < result["second"] <= result["total"] + len(" appended")
+    assert result["afterArrival"] == result["first"]
+    assert result["sameNode"] and result["complete"]
+    assert result["rows"] == 1 and result["childElements"] == 0
+    assert result["pending"] == 0 and result["raf"] == 0
 
 
 @pytest.mark.parametrize("kind", ["llm-reasoning", "llm-response"])

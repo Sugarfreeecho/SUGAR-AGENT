@@ -9747,6 +9747,9 @@ function discardLlmStreamChunks(ctx, ev) {\r
     }\r
     if (ctx.llm) {\r
         const l = ctx.llm;\r
+        // Execution rows are durable and survive draft cleanup. Keep all text\r
+        // already received, then release their animation at the abort boundary.\r
+        if (l.llmExecutionReveals && l.llmExecutionReveals.size) flushExecutionLlmReveals(ctx, {});\r
         if (l.llmDeltaFlushRaf) {\r
             cancelAnimationFrame(l.llmDeltaFlushRaf);\r
             l.llmDeltaFlushRaf = 0;\r
@@ -9838,6 +9841,57 @@ function appendLlmRevealedText(scroller, segment, part) {\r
     writeLlmStreamText(scroller, head + segment, part);\r
 }\r
 \r
+function cancelExecutionLlmReveal(ctx, scroller) {\r
+    var l = ctx && ctx.llm;\r
+    if (!l || !l.llmExecutionReveals) return;\r
+    l.llmExecutionReveals.delete(scroller);\r
+    if (!l.llmExecutionReveals.size && !l.llmPendingReasoningDelta && !l.llmPendingResponseDelta) {\r
+        if (l.llmDeltaFlushRaf) cancelAnimationFrame(l.llmDeltaFlushRaf);\r
+        l.llmDeltaFlushRaf = 0;\r
+        l.llmRevealLastTs = 0;\r
+    }\r
+}\r
+\r
+function queueExecutionLlmReveal(ctx, scroller, text, part, sessionId) {\r
+    var l = ctx.llm;\r
+    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');\r
+    var target = String(text || '');\r
+    if (target === head || target.indexOf(head) !== 0) {\r
+        // A correction is a replacement, rather than an append to old text.\r
+        cancelExecutionLlmReveal(ctx, scroller);\r
+        writeLlmStreamText(scroller, target, part);\r
+        return;\r
+    }\r
+    if (!l.llmExecutionReveals) l.llmExecutionReveals = new Map();\r
+    // The record owns the complete text. Each row owns only its current reveal\r
+    // target, so repeated deliveries cannot append the same delta twice.\r
+    l.llmExecutionReveals.set(scroller, {text: target, part: part});\r
+    scheduleLlmDeltaFlush(ctx, sessionId);\r
+}\r
+\r
+function flushExecutionLlmReveals(ctx, opts) {\r
+    var pending = ctx.llm.llmExecutionReveals;\r
+    if (!pending) return 0;\r
+    var smooth = opts.smooth === true && isSmoothStreamActive();\r
+    var revealed = 0;\r
+    pending.forEach(function (state, scroller) {\r
+        if (!scroller || scroller.isConnected === false) { pending.delete(scroller); return; }\r
+        var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');\r
+        if (state.text.indexOf(head) !== 0) {\r
+            pending.delete(scroller);\r
+            return;\r
+        }\r
+        var tail = state.text.slice(head.length);\r
+        var take = smooth\r
+            ? takeSmoothTextPrefix(tail, computeSmoothRevealCount(tail.length, opts.dtMs || 16.67))\r
+            : {segment: tail, rest: '', count: tail.length};\r
+        if (take.segment) appendLlmRevealedText(scroller, take.segment, state.part);\r
+        revealed += take.count;\r
+        if (!take.rest) pending.delete(scroller);\r
+    });\r
+    return revealed;\r
+}\r
+\r
 function flushLlmDeltaText(ctx, opts) {\r
     if (!ctx || !ctx.llm) return;\r
     opts = opts || {};\r
@@ -9877,6 +9931,9 @@ function flushLlmDeltaText(ctx, opts) {\r
     } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {\r
         l.llmPendingResponseDelta = '';\r
     }\r
+    if (l.llmExecutionReveals && l.llmExecutionReveals.size) {\r
+        revealedChars += flushExecutionLlmReveals(ctx, opts);\r
+    }\r
     return revealedChars;\r
 }\r
 \r
@@ -9904,7 +9961,8 @@ function scheduleLlmDeltaFlush(ctx, runSessionId) {\r
             uiPerformance.count(runSessionId, 'stream.revealedCodePoints', revealed);\r
         }\r
         followStreamProcessScroll(ctx, runSessionId, 'text');\r
-        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta) {\r
+        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta\r
+            || (l.llmExecutionReveals && l.llmExecutionReveals.size)) {\r
             scheduleLlmDeltaFlush(ctx, runSessionId);\r
         } else {\r
             l.llmRevealLastTs = 0;\r
@@ -13884,8 +13942,9 @@ function updateExecutionRecord(sessionId, update) {
     return row;
 }
 
-function renderExecutionRecord(ctx, record, sessionId) {
+function renderExecutionRecord(ctx, record, sessionId, opts) {
     if (!ctx || !ctx.stream || !record || !record.execution_id) return;
+    opts = opts || {};
     if (record.kind === 'continuation') return;
     var row = Array.from(ctx.stream.querySelectorAll('[data-execution-id]')).find(function (item) {
         return item.dataset.executionId === String(record.execution_id);
@@ -13894,7 +13953,7 @@ function renderExecutionRecord(ctx, record, sessionId) {
     // The journal replay and event bus can deliver the same token. Do not
     // rewrite its text or move the follow target a second time.
     if (row && runtimeSeq > 0 && row.dataset.executionRenderedSeq === String(runtimeSeq)
-        && row.dataset.executionStatus === String(record.status || '')) return;
+        && row.dataset.executionStatus === String(record.status || '') && !opts.snapshot) return;
     var generation = typeof syncRenderContextRunScope === 'function'
         ? syncRenderContextRunScope(ctx, record) : reactGenerationForContext(ctx);
     var executionGenerations = ctx.reactGenerationsByExecutionId || (ctx.reactGenerationsByExecutionId = new Map());
@@ -13937,9 +13996,15 @@ function renderExecutionRecord(ctx, record, sessionId) {
         if (isExecuting) text = formatToolPendingLine(record.tool, record.args, text);
     }
     if (labels[record.status]) text += '\\n[' + labels[record.status] + ']';
+    // Animate live text only. History and recovery snapshots install their
+    // authoritative body immediately, without replaying old typing animations.
+    var smoothText = opts.smoothText === true && record.status === 'generating'
+        && (record.kind === 'reasoning' || record.kind === 'response')
+        && !replayingMessages && !historicalRun && ctx.llm
+        && typeof isSmoothStreamActive === 'function' && isSmoothStreamActive();
     if (!row) {
         var type = record.kind === 'tool' ? 'tool-call' : record.kind === 'reasoning' ? 'llm-reasoning' : 'llm-response';
-        var sc = createProcessFeedRow(ctx, type, text, {reactIter:record.react_iter,
+        var sc = createProcessFeedRow(ctx, type, smoothText ? '' : text, {reactIter:record.react_iter,
             reactGeneration:generation, runId:record.run_id, streaming:record.status === 'generating',
             historyHydrate:historicalRun, suppressFollow:historicalRun}, sessionId, record.tool_call_id || '');
         row = sc && sc.closest ? sc.closest('.feed-item') : null;
@@ -13951,7 +14016,7 @@ function renderExecutionRecord(ctx, record, sessionId) {
     row.dataset.executionRenderedSeq = String(runtimeSeq);
     if (record.run_id) row.dataset.runId = String(record.run_id);
     if (record.react_iter != null) row.dataset.reactIter = String(record.react_iter);
-    if (record.kind === 'response') row._processBriefRawText = String(record.content || '');
+    if (record.kind === 'response' && !smoothText) row._processBriefRawText = String(record.content || '');
     if (row.dataset.reactGeneration == null) row.dataset.reactGeneration = String(generation);
     if (record.tool_call_id) {
         row.dataset.toolCallId = String(record.tool_call_id);
@@ -13963,8 +14028,13 @@ function renderExecutionRecord(ctx, record, sessionId) {
     row.dataset.eventCommitted = '1';
     var scroller = row.querySelector('.feed-chunk-scroller');
     var uiText = record.kind === 'tool' ? truncateLogTextForUi(text) : text;
-    if (scroller && record.kind !== 'tool') scroller._llmRawText = text;
-    if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
+    if (scroller && smoothText) {
+        queueExecutionLlmReveal(ctx, scroller, text, record.kind, sessionId);
+    } else {
+        if (ctx.llm && ctx.llm.llmExecutionReveals) cancelExecutionLlmReveal(ctx, scroller);
+        if (scroller && record.kind !== 'tool') scroller._llmRawText = text;
+        if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
+    }
     var chunk = row.querySelector('.feed-chunk');
     if (chunk) { chunk.classList.toggle('is-streaming', record.status === 'generating'); refreshFeedChunkOverflow(chunk); }
     if (typeof attachHumanInteractionCardsForToolCall === 'function' && record.tool_call_id) attachHumanInteractionCardsForToolCall(ctx.stream, record.tool_call_id);
@@ -14010,10 +14080,14 @@ function renderExecutionEvent(ctx, event, sessionId) {
         });
     }
     else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], ui_committed:true}, event.ui ? {ui:event.ui} : null);
-    else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating', text_delta:event.delta || ''});
+    else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating'},
+        event.replayed_snapshot ? {content:event.delta || ''} : {text_delta:event.delta || ''});
     else if (type === 'llm_reasoning' || type === 'llm_response') Object.assign(update, {status:event.execution_status || 'completed', content:event.content || '', ui_committed:true});
     else return false;
-    renderExecutionRecord(ctx, updateExecutionRecord(sessionId, update), sessionId);
+    renderExecutionRecord(ctx, updateExecutionRecord(sessionId, update), sessionId, {
+        smoothText: !event.replayed_snapshot && (type === 'llm_reasoning_delta' || type === 'llm_response_delta'),
+        snapshot: !!event.replayed_snapshot,
+    });
     return true;
 }
 
@@ -25183,7 +25257,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 if (parsed.type === 'execution_update') {
                     var executionUpdate = Object.assign({}, parsed.update, {last_runtime_seq:parsed.runtime_seq});
                     if (!executionUpdate.run_id && parsed.run_id) executionUpdate.run_id = parsed.run_id;
-                    renderExecutionRecord(runCtx, updateExecutionRecord(runSessionId, executionUpdate), runSessionId);
+                    renderExecutionRecord(runCtx, updateExecutionRecord(runSessionId, executionUpdate), runSessionId, {
+                        smoothText: !parsed.replayed_snapshot && Object.prototype.hasOwnProperty.call(executionUpdate, 'text_delta'),
+                        snapshot: !!parsed.replayed_snapshot,
+                    });
                     continue;
                 }
                 if (parsed.type === 'user_steer' && parsed.steer) {
