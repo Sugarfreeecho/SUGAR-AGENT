@@ -56,7 +56,7 @@ node scripts\build.mjs
 node scripts\smoke-payload.mjs --port 8399
 ```
 
-产物：`packaging\build\dist\SugarAgent-Setup-1.5.1-x64.exe`（当前版本以 `packaging/package.json` 为准）。
+产物：`packaging\build\dist\SugarAgent-Setup-1.5.2-x64.exe`（当前版本以 `packaging/package.json` 为准）。
 
 **离线/加速捷径（推荐给低网速机器）**：
 1. 拷 `packaging\build\payload\`（≈365MB）→ 目标机后，用 `node scripts\build.mjs --skip-payload` 跳过 pip；
@@ -81,7 +81,7 @@ node scripts\smoke-payload.mjs --port 8399     # ③ 冒烟（≈0.5min）
 
 ## 4. 版本号与发布
 
-- 版本号 = `packaging/package.json` 的 `version`（当前 **1.5.1**），连带 `package-lock.json` 里**自身 2 处**（顶层 + `packages[""]`；**不要**动依赖条目）。
+- 版本号 = `packaging/package.json` 的 `version`（当前 **1.5.2**），连带 `package-lock.json` 里**自身 2 处**（顶层 + `packages[""]`；**不要**动依赖条目）。
 - 改后安装包文件名、卸载项显示名、窗口标题自动跟随。
 - 发布物：`build\dist\SugarAgent-Setup-<版本>-x64.exe` + `.blockmap`。
 
