@@ -11,7 +11,7 @@
 | 未打包目录版 | `packaging/build/dist/win-unpacked/`（45898 文件 / ≈ 682 MB） | 调试用 |
 | 运行时载荷 | `packaging/build/payload/`（45877 文件 / ≈ 365 MB） | 中间产物 |
 
-安装后：程序在 `%LOCALAPPDATA%\Programs\sugaragent`（**按用户安装，不需要管理员权限**），默认工作目录在安装目录的 `resources/runtime/workspace`，与 `app/`、`python/` 保持源码版的相对位置。安装目录不可写时使用 `%APPDATA%\SugarAgent\workspace`。桌面/开始菜单都有 `SugarAgent` 快捷方式，并注册标准卸载项。
+安装后：程序在 `%LOCALAPPDATA%\Programs\SugarAgent`（**按用户安装，不需要管理员权限**），默认工作目录在安装目录的 `resources/runtime/workspace`，与 `app/`、`python/` 保持源码版的相对位置。安装目录不可写时使用 `%APPDATA%\SugarAgent\workspace`。桌面/开始菜单都有 `SugarAgent` 快捷方式，并注册标准卸载项。卸载只保留工作目录与 `runtime` 内的用户数据，程序文件、Electron userData（`%APPDATA%\SugarAgent`）、应用状态（`%LOCALAPPDATA%\SugarAgent`）与临时目录都会被清掉。
 
 ### 安装器形态
 
@@ -72,7 +72,7 @@ $env:SUGARAGENT_PIP_INDEX='https://pypi.tuna.tsinghua.edu.cn/simple'  # 国内�
 ```powershell
 node scripts\smoke-payload.mjs --port 8399        # 载荷级：启动内置后端并探活
 powershell -File scripts\smoke-desktop.ps1        # 端到端：启动 win-unpacked 并校验窗口
-powershell -File scripts\smoke-desktop.ps1 -AppDir "$env:LOCALAPPDATA\Programs\sugaragent"   # 校验已安装版本
+powershell -File scripts\smoke-desktop.ps1 -AppDir "$env:LOCALAPPDATA\Programs\SugarAgent"   # 校验已安装版本
 ```
 
 ## 载荷内容
@@ -97,7 +97,7 @@ resources/runtime/
 用户后续需要时，可用**随包自带的 pip** 补装到内置运行时（无需再装 Python）：
 
 ```powershell
-"%LOCALAPPDATA%\Programs\sugaragent\resources\runtime\python\python.exe" -m pip install pandas matplotlib
+"%LOCALAPPDATA%\Programs\SugarAgent\resources\runtime\python\python.exe" -m pip install pandas matplotlib
 ```
 
 （安装目录保持程序原地更新不变；补装的包在卸载时随安装目录一起移除。）
@@ -118,7 +118,9 @@ resources/runtime/
 | 原生主题 | 页面浅色 / 深色 / 紫色同步到 Electron 原生主题，窗口边框和菜单随页面主题切换 |
 | 退出 | 退出时按进程树结束内置 Python（`taskkill /T /F`）；后端异常退出会弹恢复对话框 |
 | 配置目录 | 模型档案、MCP 与启停状态保存在 `resources/runtime/.config`；工作区内的附件、缓存也使用 `.config`，启动时自动迁移旧 `.sugaragent`，已有新配置优先，冲突旧文件保留；打包时排除载荷内的用户配置和工作区 |
-| 数据保留 | 覆盖安装和卸载均保留 `resources/runtime/workspace`、`resources/runtime/.config` 和尚未迁移的 `.sugaragent`；`%APPDATA%\SugarAgent` 保留；此前在“文档”下的工作目录不自动迁移 |
+| 数据保留 | 覆盖安装与卸载均保留 `resources/runtime/workspace`、`resources/runtime/.config` 和尚未迁移的 `.sugaragent`；此前在“文档”下的自定义工作目录既不迁移、也不受卸载影响 |
+| 卸载清理 | 用户主动卸载会一并清掉 `%APPDATA%\SugarAgent`（`deleteAppDataOnUninstall`）、`%LOCALAPPDATA%\SugarAgent`（安全库/用户插件）、`%LOCALAPPDATA%\sugaragent*-updater`、`%TEMP%\sugaragent-*`，以及 `sugaragent-desktop` 协议和通知设置注册表键；覆盖安装（安装器用 `--updated` 调用旧卸载器）只换程序文件，这些用户数据与状态全部保留 |
+| 安装器仓库 | 默认**不生成** `%LOCALAPPDATA%\sugaragent-updater\installer.exe`；electron-builder 原本会在这里复制一份 ≈250MB 的安装包，只有带更新渠道（`resources/app-update.yml`，即配置了 `publish`）时才需要它来做差分/修复。条件由 `scripts/patch-nsis.mjs` 第 5 条补丁注入，卸载/升级的回收逻辑保留 |
 | 状态文件 | `%APPDATA%\SugarAgent\desktop-status.json` 记录端口、后端 PID、窗口目标，便于排查与自动化校验 |
 
 ## 对应用本体做的小改动
@@ -138,4 +140,4 @@ resources/runtime/
 
 ## 版本号
 
-版本号在 `packaging/package.json` 的 `version`（当前 `1.5.2`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里（连带 `package-lock.json` 中自身 2 处）并重新构建。
+版本号在 `packaging/package.json` 的 `version`（当前 `1.5.3`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里（连带 `package-lock.json` 中自身 2 处）并重新构建。

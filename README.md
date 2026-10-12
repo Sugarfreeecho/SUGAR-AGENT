@@ -205,7 +205,7 @@ SugarAgent/
 └── .gitignore                    # Git 忽略规则
 ```
 
-> 说明：`skill_states.json`（技能启停）、`mcp_tools_state.json`（MCP 工具启停）等运行时状态文件仅存在于本地，统一存放在 `.config/`，不纳入版本库；克隆后所有技能默认启用。启动时自动迁移旧 `.sugaragent/`，已有 `.config` 内容优先，冲突旧文件保留；桌面版覆盖安装和卸载都保留配置与工作区。
+> 说明：`skill_states.json`（技能启停）、`mcp_tools_state.json`（MCP 工具启停）等运行时状态文件仅存在于本地，统一存放在 `.config/`，不纳入版本库；克隆后所有技能默认启用。启动时自动迁移旧 `.sugaragent/`，已有 `.config` 内容优先，冲突旧文件保留；桌面版覆盖安装保留配置与工作区，卸载只保留工作目录与 `runtime` 内的用户数据（程序文件、`%APPDATA%\SugarAgent`、`%LOCALAPPDATA%\SugarAgent` 会被清掉）。
 
 ---
 

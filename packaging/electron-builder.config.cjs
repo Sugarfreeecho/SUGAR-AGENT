@@ -9,6 +9,13 @@
  *     resources\app.asar                   ← 外壳代码（electron/**）
  *     resources\tray.ico                   ← 托盘图标
  *     resources\runtime\…                  ← 内置运行时（python + app + plugins + skills 模板）
+ *
+ * 卸载策略：除用户数据外不留残留（升级不受影响）。
+ *   · 安装目录：只保留 resources\runtime\{workspace,.config,.sugaragent}
+ *     （见 nsis/installer.nsh 的 un.SugarAgentRemoveFiles 与 scripts/patch-nsis.mjs）
+ *   · %APPDATA%\SugarAgent：由 deleteAppDataOnUninstall 删除；升级走 --updated，用户数据不删
+ *   · %LOCALAPPDATA%\SugarAgent、%LOCALAPPDATA%\sugaragent*-updater、%TEMP%\sugaragent-*、
+ *     sugaragent-desktop 协议与通知注册表键：由 nsis/installer.nsh 的 customUnInstall 清理
  */
 
 const { existsSync } = require('node:fs')
@@ -56,7 +63,9 @@ module.exports = {
     createStartMenuShortcut: true,
     shortcutName: 'SugarAgent',
     uninstallDisplayName: 'SugarAgent 桌面版',
-    deleteAppDataOnUninstall: false,
+    // 卸载（非升级）时删除 %APPDATA%\SugarAgent（Electron userData：缓存/日志/状态）；
+    // 安装目录内的工作目录与配置由 NSIS 侧另行保留，见 nsis/installer.nsh
+    deleteAppDataOnUninstall: true,
     runAfterFinish: true,
     installerLanguages: ['zh_CN', 'en_US'],
     artifactName: SETUP_NAME,

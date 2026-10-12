@@ -1,10 +1,13 @@
 ; SugarAgent 安装器定制（由 electron-builder 的 nsis.include 引入，被置于生成脚本最前面）
 ;
-; 这里做四件事：
+; 这里做五件事：
 ;   1) 只做“仅当前用户”安装：跳过 electron-builder 那个带未本地化英文的“为哪位用户安装”页；
 ;   2) 增加“快捷方式选项”页，让用户自己决定是否创建桌面/开始菜单快捷方式；
 ;   3) 安装后回收未勾选的快捷方式，卸载时回收 installer store 缓存（约 200MB）；
-;   4) 更新/卸载只删除应用文件，保留与 app/python 同级的 workspace 和 .config。
+;   4) 更新/卸载只删除应用文件，保留与 app/python 同级的 workspace、.config 和 .sugaragent；
+;   5) 用户主动卸载时把本产品在本机的其余痕迹一起清掉（应用状态目录、%TEMP% 临时目录、
+;      协议与通知注册表键、Electron userData），只留用户数据；升级只替换程序文件，
+;      用户数据与状态一律保留。用户工作目录（含自定义到安装目录之外的目录）永远不动。
 
 ; ---- 1) 仅当前用户安装 ----------------------------------------------------
 ; 安装模式页在 Pre 回调里先读 $isForceMachineInstall / $isForceCurrentInstall，
@@ -78,6 +81,11 @@ FunctionEnd
 
 !define SUGARAGENT_UPDATER_CACHE "sugaragent-updater"
 
+; 升级/卸载分流：安装器覆盖安装时会把旧卸载器以 `--updated` 调用（见 installUtil.nsh 的
+; uninstallOldVersion），此时只应替换程序文件；只有用户主动卸载才做彻底清理。
+Var sugarUpgradeMode
+Var sugarDeleteAppData
+
 !macro customInstall
   ; 覆盖安装时清掉历史包名（sugaragent-desktop）留下的 installer store
   RMDir /r "$LOCALAPPDATA\sugaragent-desktop-updater"
@@ -93,9 +101,52 @@ FunctionEnd
 !macroend
 
 !macro customUnInstall
-  ; 卸载时回收本包的 installer store
-  RMDir /r "$LOCALAPPDATA\${SUGARAGENT_UPDATER_CACHE}"
+  ${StdUtils.TestParameter} $sugarUpgradeMode "updated"
+  ${StdUtils.TestParameter} $sugarDeleteAppData "delete-app-data"
+  StrCmp "$sugarDeleteAppData" "true" sugar_uninstall_thorough 0
+  StrCmp "$sugarUpgradeMode" "true" sugar_uninstall_upgrade 0
+
+  ; ---- 用户主动卸载：清掉本产品痕迹（工作目录与用户数据保留策略见 un.SugarAgentRemoveFiles）----
+  sugar_uninstall_thorough:
+    RMDir /r "$LOCALAPPDATA\${SUGARAGENT_UPDATER_CACHE}"   ; installer store（约 200MB）
+    RMDir /r "$LOCALAPPDATA\sugaragent-desktop-updater"    ; 历史包名（sugaragent-desktop）遗留
+    RMDir /r "$LOCALAPPDATA\SugarAgent"                    ; 应用状态：安全库（审批/MCP）、用户插件
+    Call un.SugarAgentRemoveTempDirs                       ; %TEMP%\sugaragent-*
+    DeleteRegKey HKCU "Software\Classes\sugaragent-desktop"
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\${APP_ID}"
+    Goto sugar_uninstall_done
+
+  sugar_uninstall_upgrade:
+    ; 升级：只清历史包名遗留；本包 store 由正在运行的安装器随后覆盖为新的安装包
+    RMDir /r "$LOCALAPPDATA\sugaragent-desktop-updater"
+
+  sugar_uninstall_done:
 !macroend
+
+; 清理 %TEMP% 下本产品的临时目录（sugaragent-plugin-runtime-*、sugaragent-egress-nonces 等）。
+; 只删目录、不删同名文件；被占用而删不掉的项忽略错误，交给系统磁盘清理。
+Function un.SugarAgentRemoveTempDirs
+  Push $R0
+  Push $R1
+  Push $R2
+
+  SetOutPath $TEMP
+  FindFirst $R1 $R2 "$TEMP\sugaragent-*"
+  sugar_temp_loop:
+    StrCmp $R2 "" sugar_temp_done
+    IfFileExists "$TEMP\$R2\*.*" 0 sugar_temp_next
+      RMDir /r "$TEMP\$R2"
+    Goto sugar_temp_next
+  sugar_temp_next:
+    FindNext $R1 $R2
+    Goto sugar_temp_loop
+  sugar_temp_done:
+    FindClose $R1
+
+  Pop $R2
+  Pop $R1
+  Pop $R0
+FunctionEnd
 
 ; patch-nsis.mjs 保留升级时的原子移动/失败回滚，排除用户工作目录和配置。
 ; 最终删除阶段从模板回调到这里，仅递归进入用户数据的两级祖先，
