@@ -23,6 +23,9 @@ def main() -> int:
         return 1
 
     image = Image.open(LOGO).convert("RGBA")
+    # The repository's .png source currently contains WebP bytes. Native GDI+
+    # needs an actual PNG; re-encoding also makes the packaged asset unambiguous.
+    image.save(PACKAGING / "electron" / "sugar-logo.png", format="PNG")
     sizes = [(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)]
     target = ASSETS / "app.ico"
     image.save(target, format="ICO", sizes=sizes)

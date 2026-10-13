@@ -9,17 +9,20 @@ const vm = require('node:vm')
 
 const ROOT = path.resolve(__dirname, '../..')
 
-function shellHarness({ argv = [], configured = true, reused = true, packaged = true, writable = true, paths = null } = {}) {
-  const calls = { loads: [], launches: [], requests: [], protocols: [], writes: [], popups: [] }
+function shellHarness({ argv = [], configured = true, reused = true, packaged = true, writable = true, paths = null, autoPaint = true, execPath = 'D:\\SugarAgent\\SugarAgent.exe' } = {}) {
+  const calls = { loads: [], files: [], pipes: [], progress: [], launches: [], requests: [], protocols: [], writes: [], popups: [] }
   const app = Object.assign(new EventEmitter(), {
     isPackaged: packaged,
     getPath: name => `D:\\User's Data\\${name}`,
     getAppPath: () => 'D:\\Desktop Source',
     getVersion: () => 'test',
     requestSingleInstanceLock: () => true,
-    whenReady: () => ({ then: callback => { calls.boot = callback } }),
+    whenReady: () => ({ then: callback => ({ catch: handler => {
+      calls.boot = () => Promise.resolve().then(callback).catch(handler)
+    } }) }),
+    setAppUserModelId() {},
     setAsDefaultProtocolClient: (...args) => { calls.protocols.push(args); return true },
-    quit: () => {},
+    quit: () => { calls.quit = true },
   })
   const nativeTheme = { shouldUseDarkColors: false, themeSource: 'system' }
   class BrowserWindow extends EventEmitter {
@@ -39,12 +42,18 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
     show() { calls.shown = true }
     focus() { calls.focused = true }
     setBackgroundColor(color) { calls.background = color }
+    setProgressBar(value) { calls.progress.push(value) }
     async loadURL(url) { calls.loads.push(url); this.webContents.mainFrame.url = url }
+    async loadFile(file) {
+      calls.files.push(file)
+      this.webContents.mainFrame.url = 'file:///startup.html'
+      if (autoPaint) queueMicrotask(() => this.emit('ready-to-show'))
+    }
   }
   const ipcMain = Object.assign(new EventEmitter(), { handle: () => {} })
   const electron = {
     app, BrowserWindow, ipcMain, nativeTheme,
-    Menu: { buildFromTemplate: items => {
+    Menu: { setApplicationMenu() {}, buildFromTemplate: items => {
       Object.defineProperty(items, 'popup', { value: options => calls.popups.push({ items, options }) })
       return items
     } },
@@ -97,16 +106,26 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
   }
   const context = vm.createContext({
     require: name => ({ electron, 'node:fs': fakeFs, 'node:path': path.win32,
-      'node:child_process': childProcess, 'node:http': http, 'node:net': {},
-      './notifications': require('../../packaging/electron/notifications') })[name],
-    process: { argv, env: {}, resourcesPath: 'D:\\SugarAgent Runtime', platform: 'win32', execPath: 'D:\\SugarAgent\\SugarAgent.exe' },
+      'node:child_process': childProcess, 'node:http': http, 'node:net': {
+        createConnection: name => {
+          const socket = Object.assign(new EventEmitter(), {
+            end: message => { calls.pipeMessage = message }, setTimeout() {}, destroy() {},
+          })
+          calls.pipes.push(name)
+          queueMicrotask(() => socket.emit('connect'))
+          return socket
+        },
+      },
+      './notifications': { createNotificationBridge: async () => ({ port: 12345, token: 'test', close() {} }) } })[name],
+    process: { argv, env: {}, resourcesPath: 'D:\\SugarAgent Runtime', platform: 'win32', execPath },
     __dirname: path.join(ROOT, 'packaging/electron'), URL, Buffer, setTimeout, clearTimeout,
   })
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'packaging/electron/main.js'), 'utf8') + `
     globalThis.api = { createWindow, createTray, loadApp, openBackendLog, openBackendLogs,
-      parseDesktopActivation, registerDesktopProtocol, activateDesktop, applyNativeTheme, installNativeContextMenu, resolveLayout, backendEnv,
+      parseDesktopActivation, registerDesktopProtocol, activateDesktop, applyNativeTheme, installNativeContextMenu, resolveLayout, backendEnv, notifyStartupLauncher,
       ready: () => { uiReady = true }, pending: () => pendingActivation,
       port: value => { activePort = value },
+      bootBackend: (start, wait) => { findFreePort = async () => BASE_PORT; startBackend = start; waitForBackend = wait },
       notifications: value => { notificationBridge = value } };
   `, context)
   return { api: context.api, app, calls, nativeTheme }
@@ -121,6 +140,81 @@ test('default workspace keeps the source layout and follows the read-only fallba
     assert.equal(layout.workDir, path.win32.join(root, 'workspace'))
     assert.equal(api.backendEnv().WORK_DIR, layout.workDir)
   }
+})
+
+test('cold start paints a busy window before backend work and keeps it until the app is loaded', async () => {
+  const { api, calls } = shellHarness({ autoPaint: false })
+  let finishBackend
+  const ready = new Promise(resolve => { finishBackend = resolve })
+  let starts = 0
+  api.bootBackend(() => {
+    starts += 1
+    assert.equal(calls.shown, true, 'startup page must be painted before backend preparation')
+    assert.ok(calls.menu, 'startup window can be reopened from the tray')
+    assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, false)
+  }, () => ready)
+  const boot = calls.boot()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(starts, 0, 'backend preparation must wait for the first paint')
+  assert.equal(calls.files.length, 1)
+  assert.ok(calls.files[0].endsWith('startup.html'))
+  assert.deepEqual(calls.progress, [2])
+  assert.equal(calls.loads.length, 0)
+  const window = calls.window
+  window.emit('ready-to-show')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(starts, 1)
+  assert.equal(calls.loads.length, 0, 'startup page remains visible while backend is not ready')
+  finishBackend(true)
+  await boot
+  assert.equal(calls.window, window, 'main UI must reuse the startup window')
+  assert.deepEqual(calls.loads, ['http://127.0.0.1:8192/'])
+  assert.deepEqual(calls.progress, [2, -1])
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, true)
+})
+
+test('repeated shortcut launches restore the startup window and retain notification navigation', async () => {
+  const { api, app, calls } = shellHarness()
+  let finishBackend
+  const ready = new Promise(resolve => { finishBackend = resolve })
+  let starts = 0
+  api.bootBackend(() => { starts += 1 }, () => ready)
+  const boot = calls.boot()
+  await new Promise(resolve => setImmediate(resolve))
+  const window = calls.window
+  app.emit('second-instance', {}, [])
+  assert.equal(calls.restored && calls.shown && calls.focused, true)
+  assert.equal(calls.window, window)
+  app.emit('second-instance', {}, ['sugaragent-desktop://open-ui?session=during-start'])
+  finishBackend(true)
+  await boot
+  assert.equal(starts, 1)
+  assert.deepEqual(calls.loads, ['http://127.0.0.1:8192/?session=during-start'])
+})
+
+test('startup timeout or backend exception clears busy progress and reports the failure', async () => {
+  for (const fail of [() => false, () => { throw new Error('backend failed') }]) {
+    const { api, calls } = shellHarness()
+    api.bootBackend(() => {}, fail)
+    await calls.boot()
+    assert.deepEqual(calls.progress, [2, -1])
+    assert.equal(calls.loads.length, 0)
+    assert.equal(calls.error[0], 'SugarAgent 无法启动')
+    assert.equal(calls.quit, true)
+  }
+})
+
+test('quitting during startup does not start the backend after the first paint', async () => {
+  const { api, app, calls } = shellHarness({ autoPaint: false })
+  let started = false
+  api.bootBackend(() => { started = true }, () => true)
+  const boot = calls.boot()
+  await new Promise(resolve => setImmediate(resolve))
+  app.emit('before-quit')
+  calls.window.emit('ready-to-show')
+  await boot
+  assert.equal(started, false)
+  assert.equal(calls.menu, undefined)
 })
 
 test('desktop actions and backend environment share configured paths and refresh after restart', () => {
@@ -158,6 +252,26 @@ test('desktop protocol registration covers installed and source Electron launche
     assert.equal(registration.length, packaged ? 1 : 3)
     if (!packaged) assert.equal(registration[2][0], 'D:\\Desktop Source')
   }
+})
+
+test('installed runtime registers protocol activations through the native launcher', () => {
+  const { api, calls } = shellHarness({ execPath: 'D:\\SugarAgent\\SugarAgentRuntime.exe' })
+  api.registerDesktopProtocol()
+  assert.equal(calls.protocols[0][1], 'D:\\SugarAgent\\SugarAgent.exe')
+})
+
+test('native splash handoff only occurs after first paint and accepts generated pipe names', async () => {
+  const name = 'SugarAgent-startup-' + 'a'.repeat(32)
+  const { api, calls } = shellHarness({ argv: ['--sugaragent-startup-pipe=' + name] })
+  api.createWindow()
+  assert.equal(calls.pipes.length, 0)
+  calls.window.emit('ready-to-show')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(calls.pipes[0], '\\\\.\\pipe\\' + name)
+  assert.equal(calls.pipeMessage, 'ready')
+  const invalid = shellHarness({ argv: ['--sugaragent-startup-pipe=other-pipe'] })
+  invalid.api.notifyStartupLauncher()
+  assert.equal(invalid.calls.pipes.length, 0)
 })
 
 test('native notification bridge reaches the backend across restarts and closes on quit', () => {

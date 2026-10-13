@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'">
+  <title>SugarAgent · 即将打开</title>
+  <style>
+    html, body { height: 100%; margin: 0; cursor: progress; }
+    body {
+      display: grid;
+      place-items: center;
+      background: #fff;
+      color: #25252b;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    main { padding: 32px; text-align: center; }
+    .brand-logo { display: block; width: 96px; height: 96px; margin: 0 auto 28px; }
+    .spinner {
+      width: 28px;
+      height: 28px;
+      margin: 0 auto 20px;
+      border: 3px solid #eae8f4;
+      border-top-color: #7962c8;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    .status { margin: 0; font-size: 16px; }
+    .hint { margin: 12px 0 0; color: #73737d; font-size: 13px; line-height: 1.7; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <img class="brand-logo" src="sugar-logo.png" alt="SugarAgent">
+    <div role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <p class="status">即将打开…</p>
+      <p class="hint">首次启动可能需要一些时间，准备完成后将自动打开。</p>
+    </div>
+  </main>
+</body>
+</html>

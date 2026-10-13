@@ -405,7 +405,29 @@ async function loadApp(session = '') {
   const target = configured ? (session ? `/?session=${encodeURIComponent(session)}` : '/') : '/setup'
   log(`加载界面 ${target}（configured=${configured}）`)
   await mainWindow.loadURL(`${baseUrl()}${target}`)
+  mainWindow.setProgressBar(-1)
   writeStatus({ backendState: 'ready', windowTarget: target, configured })
+}
+
+/** 先绘制本地启动页，再进行路径探测、技能复制和后端启动。 */
+async function showStartup() {
+  createWindow()
+  const window = mainWindow
+  const painted = new Promise(resolve => window.once('ready-to-show', resolve))
+  window.setProgressBar(2)
+  await window.loadFile(path.join(__dirname, 'startup.html'))
+  await painted
+}
+
+/** 告知轻量启动入口：Electron 的第一帧已经可见，可以收起原生提示。 */
+function notifyStartupLauncher() {
+  const value = process.argv.find(arg => arg.startsWith('--sugaragent-startup-pipe='))
+  const name = value && value.slice('--sugaragent-startup-pipe='.length)
+  if (!IS_WINDOWS || !/^SugarAgent-startup-[a-f0-9]{32}$/.test(name || '')) return
+  const socket = net.createConnection(`\\\\.\\pipe\\${name}`)
+  socket.on('connect', () => socket.end('ready'))
+  socket.on('error', error => log(`启动提示交接失败：${error.message}`))
+  socket.setTimeout(2000, () => socket.destroy())
 }
 
 function createWindow() {
@@ -425,7 +447,10 @@ function createWindow() {
     },
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow.show())
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show()
+    notifyStartupLauncher()
+  })
   mainWindow.on('close', event => {
     if (quitting) return
     event.preventDefault()
@@ -484,8 +509,11 @@ function parseDesktopActivation(argv) {
 }
 
 function registerDesktopProtocol() {
+  const launcher = path.join(path.dirname(process.execPath), 'SugarAgent.exe')
   const registered = app.isPackaged
-    ? app.setAsDefaultProtocolClient(OPEN_UI_PROTOCOL)
+    ? (IS_WINDOWS && path.basename(process.execPath) === 'SugarAgentRuntime.exe'
+      ? app.setAsDefaultProtocolClient(OPEN_UI_PROTOCOL, launcher, [])
+      : app.setAsDefaultProtocolClient(OPEN_UI_PROTOCOL))
     : app.setAsDefaultProtocolClient(OPEN_UI_PROTOCOL, process.execPath, [app.getAppPath()])
   if (!registered) log('桌面通知协议注册失败')
 }
@@ -514,9 +542,10 @@ function requestSessionActivation(session) {
 }
 
 async function activateDesktop(activation) {
-  // 启动过程中只记住请求；窗口由正常启动流程创建，避免重复创建和空白窗口。
+  // 启动期间复用已有的启动页，保留会话请求直到应用界面就绪。
   if (!uiReady) {
     pendingActivation = activation
+    if (mainWindow) showWindow()
     return
   }
   showWindow()
@@ -547,24 +576,27 @@ function trayImage() {
 }
 
 function createTray() {
-  tray = new Tray(trayImage())
-  tray.setToolTip('SugarAgent')
+  if (!tray) {
+    tray = new Tray(trayImage())
+    tray.setToolTip('SugarAgent')
+    tray.on('double-click', () => showWindow())
+  }
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开主界面', click: () => showWindow() },
-    { label: '在浏览器中打开', click: () => shell.openExternal(`${baseUrl()}/`) },
+    { label: '在浏览器中打开', enabled: uiReady, click: () => shell.openExternal(`${baseUrl()}/`) },
     { type: 'separator' },
-    { label: '重启内置服务', click: () => restartBackend() },
+    { label: '重启内置服务', enabled: uiReady, click: () => restartBackend() },
     { label: '打开后台日志', click: () => openBackendLogs() },
     { label: '打开工作目录', click: () => shell.openPath(resolveLayout().workDir) },
     { type: 'separator' },
     { label: '退出 SugarAgent', click: () => { quitting = true; app.quit() } },
   ]))
-  tray.on('double-click', () => showWindow())
 }
 
 // ------------------------------------------------------------------- boot ---
 
 function fatal(message) {
+  if (mainWindow) mainWindow.setProgressBar(-1)
   dialog.showErrorBox('SugarAgent 无法启动', `${message}\n\n请重新安装，或把本目录下的日志反馈给开发者。`)
   app.quit()
 }
@@ -621,7 +653,12 @@ if (!gotLock) {
     } else {
       Menu.setApplicationMenu(null)
     }
+    await showStartup()
+    if (quitting) return
+    createTray()
+    app.on('activate', () => showWindow())
     activePort = await findFreePort(BASE_PORT, PORT_SPAN)
+    if (quitting) return
     if (activePort !== BASE_PORT) log(`端口 ${BASE_PORT} 已被占用，改用 ${activePort}`)
     try {
       notificationBridge = await createNotificationBridge({
@@ -630,24 +667,28 @@ if (!gotLock) {
     } catch (error) {
       log(`桌面通知通道启动失败：${error.message}`)
     }
+    if (quitting) return
     startBackend()
     const ready = await waitForBackend(180000)
+    if (quitting) return
     if (!ready) {
       fatal(`内置服务在 180 秒内未就绪。\n日志：${path.join(LOG_DIR, `backend-${new Date().toISOString().slice(0, 10)}.log`)}`)
       return
     }
-    createWindow()
     const initialActivation = pendingActivation
     pendingActivation = null
     await loadApp(initialActivation ? initialActivation.session : '')
     uiReady = true
+    createTray()
     if (pendingActivation) {
       const activation = pendingActivation
       pendingActivation = null
       await activateDesktop(activation)
     }
-    createTray()
-    app.on('activate', () => showWindow())
+  }).catch(error => {
+    if (quitting) return
+    log(`桌面启动失败：${error.message}`)
+    fatal(error.message)
   })
 
   app.on('window-all-closed', () => {

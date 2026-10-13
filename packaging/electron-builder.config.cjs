@@ -5,7 +5,8 @@
  *
  * 载荷布局（安装后）：
  *   %LOCALAPPDATA%\Programs\SugarAgent\
- *     SugarAgent.exe                       ← Electron 外壳
+ *     SugarAgent.exe                       ← 轻量原生启动入口（Logo / 系统启动反馈）
+ *     SugarAgentRuntime.exe                ← Electron 外壳
  *     resources\app.asar                   ← 外壳代码（electron/**）
  *     resources\tray.ico                   ← 托盘图标
  *     resources\runtime\…                  ← 内置运行时（python + app + plugins + skills 模板）
@@ -20,6 +21,7 @@
 
 const { existsSync } = require('node:fs')
 const path = require('node:path')
+const { installStartupLauncher } = require('./scripts/startup-launcher.cjs')
 
 // 安装器形态：assisted（默认，带向导页面）/ oneclick（双击即装，仅进度条）
 const INSTALLER_STYLE = process.env.SUGARAGENT_INSTALLER_STYLE === 'oneclick' ? 'oneclick' : 'assisted'
@@ -79,5 +81,6 @@ module.exports = {
       throw new Error(`载荷不完整：缺少 ${python} 或 ${entry}；请先运行 npm run payload`)
     }
     context.packager.appInfo.buildNumber = undefined
+    installStartupLauncher(context)
   },
 }

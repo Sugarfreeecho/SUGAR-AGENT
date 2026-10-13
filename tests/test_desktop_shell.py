@@ -25,6 +25,32 @@ def test_electron_shell_runtime():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_startup_feedback_in_real_electron(tmp_path):
+    if os.name != "nt":
+        pytest.skip("This desktop smoke uses the bundled Windows Electron runtime")
+    electron = ROOT / "packaging/node_modules/electron/dist/electron.exe"
+    if not electron.is_file():
+        pytest.skip("Packaging dependencies are unavailable")
+    env = os.environ.copy()
+    env.pop("ELECTRON_RUN_AS_NODE", None)
+
+    def run(executable):
+        return subprocess.run(
+            [str(executable), "--disable-gpu", str(ROOT / "tests/js/desktop_startup_electron.cjs"),
+             f"--capture={tmp_path / 'startup.png'}"],
+            capture_output=True, encoding="utf-8", timeout=30, env=env,
+            creationflags=hidden_flags(),
+        )
+
+    result = run(electron)
+    if "install_dir_access.cc" in result.stderr:
+        runtime = tmp_path / "electron"
+        shutil.copytree(electron.parent, runtime)
+        result = run(runtime / "electron.exe")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "native busy cursor and UI transition passed" in result.stdout
+
+
 @pytest.mark.skipif(
     os.name != "nt" or os.getenv("MYAGENT_TEST_DESKTOP_NOTIFY") != "1",
     reason="Native Windows notification smoke is opt-in",
