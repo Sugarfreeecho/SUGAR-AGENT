@@ -1,8 +1,8 @@
 # 启动与进程卫生 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v2（覆盖至：当前工作区；活动时间口径与执行面板初始化幂等）
+- 版本：2026-10-13 v3（覆盖至：当前工作区；桌面壳内嵌后端的重启与退出收敛）
 - 用途：逐条审查（四字段格式）；核对"启动依赖自检、子进程控制台窗口统一收敛、根目录状态文件迁移"三类进程/启动卫生机制的对外行为与边界。
-- 适用实现：`app/check_requirements.py`、`RUN.bat` / `RUN.sh`、`app/proc_flags.py`、`scripts/audit_subprocess_flags.py`、`app/platform_lifecycle.py`、`app/tray_launcher.py` 及全仓派生点（`agent_tools` / `agent_subagent` / `runtime_observability` / `agent_updater` / `desktop_notify` / `path_picker_util` / `hooks/executor` / `security/egress_guard` / `plugins/installer` / `plugins/runtime` / `plugins/change-review/store`）、`.gitignore`、`pytest.ini`。
+- 适用实现：`app/check_requirements.py`、`RUN.bat` / `RUN.sh`、`app/proc_flags.py`、`scripts/audit_subprocess_flags.py`、`app/platform_lifecycle.py`、`app/tray_launcher.py` 及全仓派生点（`agent_tools` / `agent_subagent` / `runtime_observability` / `agent_updater` / `desktop_notify` / `path_picker_util` / `hooks/executor` / `security/egress_guard` / `plugins/installer` / `plugins/runtime` / `plugins/change-review/store`）、`.gitignore`、`pytest.ini`、`packaging/electron/main.js`（桌面壳内嵌后端的重启/退出生命周期，见 UC-9E5）。
 - 上级：`00-横切能力整体设计.md`｜相关：`05-WebUI对话界面/07-通知存在性与恢复方案设计-UseCase清单.md`（托盘启动链）、`06-能力扩展加载/05-Skills发现与激活方案设计-UseCase清单.md`（技能状态路径）、`../06-能力扩展加载/06-MCP接入与工具池方案设计-UseCase清单.md`（MCP 工具状态路径）。
 
 ---
@@ -37,6 +37,12 @@
 - **规则与边界**：错误口径的索引无需手工修复（按新口径重算自愈）；全量重建约 0.5s（仅 mtime 新于已存活动时间的会话触发尾扫）。
 - **依据**：`execution_services/notifications.py`、`session_lifecycle.py`、`agent_harness.py::refresh_sessions_index_from_disk`；回归 `tests/test_session_index_startup_rebuild.py`、`tests/test_execution_panel_bootstrap.py`。
 
+### UC-9E5 桌面壳内嵌后端的重启与异常退出收敛（Electron）
+- **触发**：托盘/界面点击"重启内置服务"；后端被主动停止、真实崩溃或启动失败；重启期间收到通知跳转。
+- **预期现象**：主动重启不再触发旧进程的"崩溃恢复"分支或错误弹窗；旧进程迟到的 `exit/close` 事件只登记自己的状态，不会清空新后端引用、不会把消息写进新日志、不会覆盖新后端的就绪状态；连点重启、重启定时器触发前退出、健康请求途中退出、停止失败等边界都有明确收敛（停止失败保留旧引用、不并起第二个后端）；真实的运行中崩溃仍给恢复对话框，迟到的旧对话框不能操作已恢复的后端；重启期间的通知跳转排队、就绪后补处理。
+- **规则与边界**：以 child 对象（而非 PID）登记"预期退出"（`WeakSet`，避免 PID 复用误判）；日志流在 `close` 后关闭（确保 stdout/stderr 排空），同步启动失败也关流并记录日志写入错误；托盘/IPC/崩溃恢复共用重启互斥；启动与异步等待均检查退出状态。生效方式：主进程源码，需重新构建安装包/覆盖安装，**刷新网页或重启 Python 服务无效**。
+- **依据**：`packaging/electron/main.js`（`expectedBackendExits` / `backendRestarting` / `reportFailure`）；回归 `tests/js/desktop_shell_runtime.cjs`（新增 13 项重启回归）、`tests/test_desktop_shell.py`（`electron_shell_runtime`，38 项）；现场记录见 [`../desktop-backend-restart-fix-2026-10-13.md`](../desktop-backend-restart-fix-2026-10-13.md)。
+
 ## 3. 边界
 
 - 三条机制都保持"非 Windows / 常规环境零额外行为"：helper 在非 Windows 返回 0；自检只影响启动路径；状态目录只改默认路径与迁移。
@@ -52,5 +58,6 @@
 
 ## 5. 版本记录
 
+- 2026-10-13 v3：新增 UC-9E5——桌面壳内嵌后端的重启与异常退出收敛（预期退出按 child 对象登记、事件闭包自持 child/日志流、重启互斥与退出态检查、迟到对话框失效；生效需重构建安装包）。
 - 2026-10-05 v2：新增 UC-9E4——启动扫描幂等（不污染活动时间）、活动时间改事件感知（控制事件显式排除）、索引自愈。
 - 2026-10-03 v1：拆分首版——启动依赖自检（每次真实校验 + 缺失补装、~2.3s 快检）、隐藏子进程控制台统一收敛（`proc_flags` + 全仓巡检 + RUN 自适应隐藏）、根目录状态/临时文件迁入 `.sugaragent`（自动迁移与失败降级）。待提交后补提交号。
