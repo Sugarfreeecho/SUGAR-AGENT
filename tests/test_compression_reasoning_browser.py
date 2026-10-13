@@ -20,6 +20,8 @@ def function_source(source, name):
 def compression_page(browser_page):
     page = browser_page
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    scrolling = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     dispatch = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(encoding="utf-8")
     reducer = (ROOT / "frontend/src/app/state/session-event-reducer.js").read_text(encoding="utf-8")
@@ -31,6 +33,7 @@ def compression_page(browser_page):
       var currentSessionId='compression',replayingMessages=false,SSE_IDLE_TIMEOUT_MS=1000;
       var LOG_TRUNCATE_HEAD_LINES=100,LOG_TRUNCATE_TAIL_LINES=100;
       var LOG_TRUNCATE_HEAD_CHARS=12000,LOG_TRUNCATE_TAIL_CHARS=12000;
+      var uiI18nRuntimeOriginal=new WeakMap(),uiLanguage='zh';
       var streamHistoryRecoveryBySession=new Set(),sessionStore={shouldAcceptSseEvent:()=>true};
       window.recorded=[];
       function applyMessageEvent(sid,event,index){recorded.push(event);return {event,index};}
@@ -61,8 +64,6 @@ def compression_page(browser_page):
       function scheduleFinalVisibleAfterRunIfEnabled(){}
       function consumeExtensionControlEvent(){return false;}
       function readSseChunkWithIdleTimeout(reader){return reader.read();}
-      function getUiRuntimeText(sc){return sc.textContent;}
-      function setUiRuntimeText(sc,text){sc.textContent=text;}
       window.ctx={stream:document.getElementById('stream'),progressScrollers:{},progressStream:{},
         currentProcessGroup:document.querySelector('.process-aggregate'),llm:{marker:'main'}};
     """
@@ -78,6 +79,9 @@ def compression_page(browser_page):
         "finalizeProgressStreamForType", "finalizeProgressStreamChunks", "discardProgressStreamChunks",
     ]
     setup += "\n".join(function_source(rendering, name) for name in rendering_functions)
+    setup += "\n".join(function_source(i18n, name) for name in ("setUiRuntimeText", "getUiRuntimeText"))
+    setup += "\n".join(function_source(scrolling, name) for name in (
+        "resetKeyContextStreamFilter", "extractKeyContextVisibleDelta", "appendKeyContextStreamDelta"))
     setup += "\n".join(function_source(sse, name) for name in (
         "shouldApplySseSeqFilter", "sseSequenceScope", "shouldSkipRecoveredEphemeralEvent",
         "consumeAgentSseResponseInner"))
@@ -86,13 +90,13 @@ def compression_page(browser_page):
     setup += function_source(reducer, "markUiEventStoreApplied") + function_source(reducer, "applySessionEvent")
     setup += """
       createProcessFeedRow(ctx,'llm-reasoning','主模型推理',{},currentSessionId);
-      window.deliver=async(events)=>{
+      window.deliver=async(events,wait=true)=>{
         let bytes=new TextEncoder().encode(events.map(event=>'data: '+JSON.stringify(event)+'\\n\\n').join(''));
         let response=new Response(new ReadableStream({start(controller){
           for(let i=0;i<bytes.length;i+=3)controller.enqueue(bytes.slice(i,i+3));controller.close();
         }}),{headers:{'Content-Type':'text/event-stream'}});
         await consumeAgentSseResponseInner(response,ctx,currentSessionId,0);
-        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        if(wait)await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       };
     """
     page.add_script_tag(content=setup)
@@ -106,6 +110,50 @@ def send(page, *events):
 
 def reasoning(text, **extra):
     return {"type": "context_summary_reasoning_delta", "ephemeral": True, "delta": text, **extra}
+
+
+@pytest.mark.parametrize("kind", ["reasoning", "summary", "key"])
+def test_model_progress_reveals_by_frame_and_snapshot_finishes_immediately(compression_page, kind):
+    page = compression_page
+    page.add_script_tag(content=(ROOT / "frontend/src/app/modules/smooth-stream.js").read_text(encoding="utf-8"))
+    result = page.evaluate("""async kind => {
+      window.__MYAGENT_FEATURES__={smoothStream:true};
+      const text='压缩😀'.repeat(200);
+      const type={reasoning:'context_summary_reasoning_delta',summary:'context_summary_delta',key:'key_context_delta'}[kind];
+      const logType={reasoning:'context-summary-reasoning',summary:'context-summary',key:'key-context'}[kind];
+      const wrap=text=>kind==='key'?'<summary>'+text+'</summary>':text;
+      await deliver([{type,delta:wrap(text),ephemeral:true}],false);
+      const sc=ctx.progressStream[logType].scroller,before=sc.textContent;
+      await new Promise(requestAnimationFrame);
+      const first=sc.textContent,node=sc.firstChild;
+      await new Promise(requestAnimationFrame);
+      const second=sc.textContent,sameNode=node===sc.firstChild;
+      await deliver([{type,delta:wrap('snapshot'),ephemeral:true,replayed_snapshot:true}],false);
+      const immediate=sc.textContent,raf=ctx.progressStream[logType].flushRaf;
+      await new Promise(requestAnimationFrame);
+      return {before,first,second,total:text.length,sameNode,immediate,raf,kept:sc.textContent==='snapshot'};
+    }""", kind)
+    assert result["before"] == ""
+    assert 0 < len(result["first"].encode("utf-16-le")) // 2 < result["total"]
+    assert len(result["first"]) < len(result["second"])
+    assert result["sameNode"]
+    assert result["immediate"] == "snapshot" and result["kept"] and result["raf"] == 0
+
+
+def test_interrupt_cancels_unrevealed_compression_reasoning(compression_page):
+    page = compression_page
+    page.add_script_tag(content=(ROOT / "frontend/src/app/modules/smooth-stream.js").read_text(encoding="utf-8"))
+    result = page.evaluate("""async () => {
+      window.__MYAGENT_FEATURES__={smoothStream:true};
+      await deliver([{type:'context_summary_reasoning_delta',delta:'draft'.repeat(500),ephemeral:true}],false);
+      await new Promise(requestAnimationFrame);
+      const st=ctx.progressStream['context-summary-reasoning'],sc=st.scroller;
+      const partial=st.pending.length>0;
+      await deliver([{type:'llm_stream_aborted',ephemeral:true,cleanup_scope:'drafts_only'}],false);
+      await new Promise(requestAnimationFrame);
+      return {partial,removed:!sc.isConnected,pending:Object.keys(ctx.progressStream).length};
+    }""")
+    assert result["partial"] and result["removed"] and result["pending"] == 0
 
 
 def test_live_reasoning_shares_summary_row_and_can_be_reopened(compression_page):

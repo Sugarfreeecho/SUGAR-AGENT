@@ -1325,11 +1325,11 @@ function extractKeyContextVisibleDelta(filter, delta) {
     return out;
 }
 
-function appendKeyContextStreamDelta(ctx, delta, runSessionId) {
+function appendKeyContextStreamDelta(ctx, delta, runSessionId, opts) {
     if (!ctx || !delta) return;
-    if (!ctx.keyContextStreamFilter) resetKeyContextStreamFilter(ctx);
+    if (!ctx.keyContextStreamFilter || (opts && opts.snapshot)) resetKeyContextStreamFilter(ctx);
     var vis = extractKeyContextVisibleDelta(ctx.keyContextStreamFilter, delta);
-    if (vis) appendProgressStreamDelta(ctx, vis, 'key-context', runSessionId);
+    if (vis) appendProgressStreamDelta(ctx, vis, 'key-context', runSessionId, opts);
 }
 
 function isSessionRunning(sessionId) {
@@ -1524,6 +1524,23 @@ function queueExecutionLlmReveal(ctx, scroller, text, part, sessionId) {
     scheduleLlmDeltaFlush(ctx, sessionId);
 }
 
+function queueToolCallLlmReveal(ctx, scroller, tool, argumentsRaw, sessionId) {
+    var name = String(tool || ''), args = String(argumentsRaw || '');
+    var headName = scroller._llmToolName || '', headArgs = scroller._llmToolArgs || '';
+    if ((name === headName && args === headArgs)
+        || name.indexOf(headName) !== 0 || args.indexOf(headArgs) !== 0) {
+        cancelExecutionLlmReveal(ctx, scroller);
+        writeToolCallLlmText(scroller, name, args);
+        return;
+    }
+    var l = ctx.llm;
+    if (!l.llmExecutionReveals) l.llmExecutionReveals = new Map();
+    // Name and arguments are separate append streams. The generated status
+    // footer is presentation only and must never participate in the queue.
+    l.llmExecutionReveals.set(scroller, {part: 'tool', tool: name, argumentsRaw: args});
+    scheduleLlmDeltaFlush(ctx, sessionId);
+}
+
 function flushExecutionLlmReveals(ctx, opts) {
     var pending = ctx.llm.llmExecutionReveals;
     if (!pending) return 0;
@@ -1531,6 +1548,20 @@ function flushExecutionLlmReveals(ctx, opts) {
     var revealed = 0;
     pending.forEach(function (state, scroller) {
         if (!scroller || scroller.isConnected === false) { pending.delete(scroller); return; }
+        if (state.part === 'tool') {
+            var name = scroller._llmToolName || '', args = scroller._llmToolArgs || '';
+            var nameTail = state.tool.slice(name.length), argsTail = state.argumentsRaw.slice(args.length);
+            var tail = nameTail + argsTail;
+            var take = smooth
+                ? takeSmoothTextPrefix(tail, computeSmoothRevealCount(tail.length, opts.dtMs || 16.67))
+                : {segment: tail, rest: '', count: tail.length};
+            var nameLength = Math.min(nameTail.length, take.segment.length);
+            writeToolCallLlmText(scroller, name + take.segment.slice(0, nameLength),
+                args + take.segment.slice(nameLength));
+            revealed += take.count;
+            if (!take.rest) pending.delete(scroller);
+            return;
+        }
         var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');
         if (state.text.indexOf(head) !== 0) {
             pending.delete(scroller);

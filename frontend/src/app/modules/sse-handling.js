@@ -503,7 +503,9 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     var executionUpdate = Object.assign({}, parsed.update, {last_runtime_seq:parsed.runtime_seq});
                     if (!executionUpdate.run_id && parsed.run_id) executionUpdate.run_id = parsed.run_id;
                     renderExecutionRecord(runCtx, updateExecutionRecord(runSessionId, executionUpdate), runSessionId, {
-                        smoothText: !parsed.replayed_snapshot && Object.prototype.hasOwnProperty.call(executionUpdate, 'text_delta'),
+                        smoothText: !parsed.replayed_snapshot && ['text_delta', 'name_delta', 'arguments_delta'].some(function (key) {
+                            return Object.prototype.hasOwnProperty.call(executionUpdate, key);
+                        }),
                         snapshot: !!parsed.replayed_snapshot,
                     });
                     continue;
@@ -678,12 +680,12 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     else if (parsed.type === 'context_summary_reasoning_end') finishCompressionReasoning(runCtx);
                     else if (parsed.type === 'context_summary_delta') {
                         finishCompressionReasoning(runCtx, false);
-                        appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
+                        appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId, {snapshot: !!parsed.replayed_snapshot});
                     }
                     else if (parsed.type === 'context_summary_progress') {
                         appendProgressLog(runCtx, parsed.content, 'context-summary', runSessionId);
                     }
-                    else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
+                    else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId, {snapshot: !!parsed.replayed_snapshot});
                     else if (parsed.type === 'context_tokens' && eventSessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
                     else if (parsed.type === 'cache_stats' && eventSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'runtime_resumed') {

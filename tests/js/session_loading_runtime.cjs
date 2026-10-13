@@ -145,6 +145,7 @@ async function main() {
     Array, String, procNow: () => 20, refreshProcessAggregateStats() {}, updateProcessBrief() {},
     refreshLiveProcessAggregateStats: () => false, stopLiveProcessAggregateStats() {},
     resetKeyContextStreamFilter() {}, finalizeProgressStreamChunks() {},
+    removeTemporaryStatus() {}, discardEmptyTemporaryProcessGroup: () => false,
   });
   vm.runInContext(section(rendering, 'function sealProcessGroup', 'function getProcessBody'), sealContext);
   sealContext.sealProcessGroup({

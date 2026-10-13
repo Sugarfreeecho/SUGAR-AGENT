@@ -1513,7 +1513,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     // Animate live text only. History and recovery snapshots install their
     // authoritative body immediately, without replaying old typing animations.
     var smoothText = opts.smoothText === true && record.status === 'generating'
-        && (record.kind === 'reasoning' || record.kind === 'response')
+        && (record.kind === 'reasoning' || record.kind === 'response' || record.kind === 'tool')
         && !replayingMessages && !historicalRun && ctx.llm
         && typeof isSmoothStreamActive === 'function' && isSmoothStreamActive();
     if (!row) {
@@ -1543,11 +1543,17 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     var scroller = row.querySelector('.feed-chunk-scroller');
     var uiText = record.kind === 'tool' ? truncateLogTextForUi(text) : text;
     if (scroller && smoothText) {
-        queueExecutionLlmReveal(ctx, scroller, text, record.kind, sessionId);
+        if (record.kind === 'tool') queueToolCallLlmReveal(ctx, scroller, record.tool, record.arguments_raw, sessionId);
+        else queueExecutionLlmReveal(ctx, scroller, text, record.kind, sessionId);
     } else {
         if (ctx.llm && ctx.llm.llmExecutionReveals) cancelExecutionLlmReveal(ctx, scroller);
-        if (scroller && record.kind !== 'tool') scroller._llmRawText = text;
-        if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
+        if (scroller && record.kind === 'tool' && record.status === 'generating') {
+            writeToolCallLlmText(scroller, record.tool, record.arguments_raw);
+        } else {
+            if (scroller && record.kind !== 'tool') scroller._llmRawText = text;
+            if (scroller && record.kind === 'tool' && typeof setUiRuntimeText === 'function') setUiRuntimeText(scroller, uiText);
+            else if (scroller && scroller.textContent !== uiText) scroller.textContent = uiText;
+        }
     }
     var chunk = row.querySelector('.feed-chunk');
     if (chunk) { chunk.classList.toggle('is-streaming', record.status === 'generating'); refreshFeedChunkOverflow(chunk); }
@@ -1584,7 +1590,9 @@ function renderExecutionEvent(ctx, event, sessionId) {
     var update = {execution_id:event.execution_id, process_group_id:event.process_group_id,
         kind:category, run_id:event.run_id, react_iter:event.react_iter, stream_seq:event.stream_seq,
         last_runtime_seq:event.execution_runtime_seq};
-    if (type === 'tool_call_delta') Object.assign(update, {status:'generating', tool_call_id:event.id, name_delta:event.name_delta || '', arguments_delta:event.arguments_delta || ''});
+    if (type === 'tool_call_delta') Object.assign(update, event.replayed_snapshot
+        ? {status:'generating', tool_call_id:event.id, tool:event.name_delta || '', arguments_raw:event.arguments_delta || ''}
+        : {status:'generating', tool_call_id:event.id, name_delta:event.name_delta || '', arguments_delta:event.arguments_delta || ''});
     else if (type === 'tool_command_delta') Object.assign(update, {status:'running', output_delta:event.delta || '', tool_call_id:event.tool_call_id});
     else if (type === 'tool_pending') Object.assign(update, {status:'waiting_execution', tool:event.tool, args:event.args, command_preview:event.command_preview, tool_call_id:event.tool_call_id});
     else if (type === 'tool_execution_state') {
@@ -1599,7 +1607,7 @@ function renderExecutionEvent(ctx, event, sessionId) {
     else if (type === 'llm_reasoning' || type === 'llm_response') Object.assign(update, {status:event.execution_status || 'completed', content:event.content || '', ui_committed:true});
     else return false;
     renderExecutionRecord(ctx, updateExecutionRecord(sessionId, update), sessionId, {
-        smoothText: !event.replayed_snapshot && (type === 'llm_reasoning_delta' || type === 'llm_response_delta'),
+        smoothText: !event.replayed_snapshot && (type === 'llm_reasoning_delta' || type === 'llm_response_delta' || type === 'tool_call_delta'),
         snapshot: !!event.replayed_snapshot,
     });
     return true;
@@ -1665,6 +1673,7 @@ function ensureProcessGroup(ctx) {
 
 function sealProcessGroup(ctx) {
     if (!ctx) return;
+    removeTemporaryStatus(ctx);
     if (ctx.stream && ctx.processGroupId) {
         Array.from(ctx.stream.querySelectorAll('.process-aggregate')).forEach(function (group) {
             if (group.dataset.processGroupId !== String(ctx.processGroupId)) return;
@@ -1683,7 +1692,7 @@ function sealProcessGroup(ctx) {
     if (typeof smoothFollowController !== 'undefined') {
         smoothFollowController.cancel(agg.querySelector('.process-aggregate-body'));
     }
-    if (agg.isConnected) {
+    if (agg.isConnected && !discardEmptyTemporaryProcessGroup(agg, ctx)) {
         agg.classList.remove('is-running');
         updateProcessBrief(agg);
         if (agg.dataset.procStartedAt) agg.dataset.procEndedAt = String(procNow());
@@ -4213,6 +4222,23 @@ function discardPendingToolRowRender(ctx, row) {
 function scheduleToolRowRender(ctx, row, runSessionId, kind, parsed) {
     var state = ensureToolStreamRenderState(ctx);
     if (!state || !row) return;
+    if (kind === 'draft' && (replayingMessages || (parsed && parsed.replayed_snapshot))) {
+        state.pendingRows.delete(row);
+        var sc = row.querySelector('.feed-chunk-scroller');
+        if (ctx.llm) cancelExecutionLlmReveal(ctx, sc);
+        if (sc) writeToolCallLlmText(sc, row.dataset.pendingToolName, row.dataset.pendingToolArgs);
+        if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
+        return;
+    }
+    if (kind === 'draft' && !replayingMessages && !(parsed && parsed.replayed_snapshot)
+        && ctx.llm && typeof isSmoothStreamActive === 'function' && isSmoothStreamActive()) {
+        state.pendingRows.delete(row);
+        var sc = row.querySelector('.feed-chunk-scroller');
+        if (sc) queueToolCallLlmReveal(ctx, sc, row.dataset.pendingToolName, row.dataset.pendingToolArgs, runSessionId);
+        var chunk = row.querySelector('.feed-chunk');
+        if (chunk) chunk.classList.add('is-streaming');
+        return;
+    }
     state.pendingRows.set(row, {
         kind: kind,
         parsed: parsed || {},
@@ -4232,8 +4258,10 @@ function scheduleToolRowRender(ctx, row, runSessionId, kind, parsed) {
                 if (targetRow.getAttribute('data-tool-pending') === '1') return;
                 var toolName = targetRow.dataset.pendingToolName || '';
                 var argsRaw = targetRow.dataset.pendingToolArgs || '';
-                var draftText = formatToolDraftLine(toolName, argsRaw);
-                setToolRowText(targetRow, draftText, ctx, opts.runSessionId);
+                var sc = targetRow.querySelector('.feed-chunk-scroller');
+                if (ctx.llm) cancelExecutionLlmReveal(ctx, sc);
+                if (sc) writeToolCallLlmText(sc, toolName, argsRaw);
+                if (!replayingMessages) scrollContentAreaIfFollow(ctx, opts.runSessionId, 'text');
                 return;
             }
             var event = opts.parsed || {};
@@ -4297,6 +4325,7 @@ function setToolRowText(row, text, ctx, runSessionId) {
         row._toolStreamScroller = sc;
     }
     if (sc) {
+        if (ctx && ctx.llm) cancelExecutionLlmReveal(ctx, sc);
         var nextText = truncateLogTextForUi(text);
         if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, nextText);
         else sc.textContent = nextText;
@@ -4315,18 +4344,45 @@ function setToolRowText(row, text, ctx, runSessionId) {
     if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
 }
 
+function discardEmptyTemporaryProcessGroup(agg, ctx) {
+    if (!agg || agg.dataset.temporaryStatusGroup !== '1') return false;
+    var body = agg.querySelector('.process-aggregate-body');
+    if (!body || body.children.length) return false;
+    if (typeof smoothFollowController !== 'undefined') smoothFollowController.cancel(body);
+    if (agg._processHeightMutationObserver) agg._processHeightMutationObserver.disconnect();
+    if (agg._processHeightResizeObserver) agg._processHeightResizeObserver.disconnect();
+    if (agg._processHeightUiRaf) cancelAnimationFrame(agg._processHeightUiRaf);
+    if (ctx && ctx.currentProcessGroup === agg) ctx.currentProcessGroup = null;
+    agg.remove();
+    return true;
+}
+
 // 移除临时状态消息（移除整个 feed-item 条目）
 function removeTemporaryStatus(ctx) {
     // Cleanup must never create a new process group. Terminal signals can be
     // delivered more than once (final, run_finished, and [DONE]).
+    if (!ctx) return;
+    var bodies = new Set();
     var body = getExistingProcessBody(ctx);
-    if (!body) return;
-    var tempStatuses = body.querySelectorAll('[data-temporary-status="1"]');
-    tempStatuses.forEach(function(el) {
-        var row = el.closest ? el.closest('.feed-item') : null;
-        if (row) row.remove(); else el.remove();
+    if (body) bodies.add(body);
+    var tracked = ctx._temporaryStatusScroller;
+    if (tracked && tracked.isConnected && ctx.stream && ctx.stream.contains(tracked)) {
+        var trackedBody = tracked.closest('.process-aggregate-body');
+        if (trackedBody) bodies.add(trackedBody);
+    }
+    bodies.forEach(function (existingBody) {
+        existingBody.querySelectorAll('[data-temporary-status="1"]').forEach(function(el) {
+            var row = el.closest ? el.closest('.feed-item') : null;
+            if (row) { unregisterProcessAggregateRow(row); row.remove(); }
+            else el.remove();
+        });
+        // Group selection may already have moved to the authoritative record.
+        // Remove an abandoned placeholder frame, while keeping the active
+        // empty group available for the real row that is about to be appended.
+        var owner = existingBody.closest('.process-aggregate');
+        if (owner !== ctx.currentProcessGroup) discardEmptyTemporaryProcessGroup(owner, ctx);
     });
-    if (ctx) ctx._temporaryStatusScroller = null;
+    ctx._temporaryStatusScroller = null;
 }
 
 // A thinking/reconnect heartbeat represents one piece of transient state, not
@@ -4360,6 +4416,8 @@ function upsertTemporaryStatus(ctx, content, runSessionId) {
     scroller = appendLog(ctx, content, 'status', runSessionId);
     if (scroller) {
         scroller.dataset.temporaryStatus = '1';
+        var owner = scroller.closest('.process-aggregate');
+        if (owner) owner.dataset.temporaryStatusGroup = '1';
         ctx._temporaryStatusScroller = scroller;
     }
     return scroller;
@@ -4400,6 +4458,11 @@ function appendToolCallDelta(ctx, parsed, runSessionId) {
         }
     }
     
+    // 重连快照携带累计字段，不能作为新增量再追加。
+    if (parsed.replayed_snapshot) {
+        row.dataset.pendingToolName = '';
+        row.dataset.pendingToolArgs = '';
+    }
     // 累积工具名称和参数
     if (parsed.name_delta) {
         row.dataset.pendingToolName = (row.dataset.pendingToolName || '') + String(parsed.name_delta);
@@ -4438,6 +4501,7 @@ function removeAbortedToolDraftRows(ctx, ev) {
         if (runId && rowRunId && rowRunId !== runId) return;
         var state = ctx && ctx._toolStreamRenderState;
         discardPendingToolRowRender(ctx, row);
+        if (ctx && ctx.llm) cancelExecutionLlmReveal(ctx, row.querySelector('.feed-chunk-scroller'));
         if (state) {
             var draftKey = row.getAttribute('data-tool-draft-key');
             var toolCallId = row.getAttribute('data-tool-call-id');
@@ -4495,6 +4559,22 @@ function formatToolCommandLine(tool, args, commandPreview) {
 
 function formatToolDraftLine(tool, argumentsRaw) {
     return tool ? String(tool) + '(' + String(argumentsRaw || '') + '\n生成中...' : '工具调用生成中...';
+}
+
+function writeToolCallLlmText(scroller, tool, argumentsRaw) {
+    var row = scroller.closest('.feed-item');
+    if (row && row.hasAttribute && row.hasAttribute('data-smooth-trace-layout-owned')
+        && typeof cancelSmoothTraceLayoutAnimation === 'function') cancelSmoothTraceLayoutAnimation(row);
+    scroller._llmToolName = String(tool || '');
+    scroller._llmToolArgs = String(argumentsRaw || '');
+    var text = truncateLogTextForUi(formatToolDraftLine(scroller._llmToolName, scroller._llmToolArgs));
+    if (typeof setUiRuntimeText === 'function') setUiRuntimeText(scroller, text, true);
+    else if (scroller.textContent !== text) scroller.textContent = text;
+    var chunk = scroller.closest('.feed-chunk');
+    if (chunk) {
+        chunk.classList.toggle('is-streaming', true);
+        refreshFeedChunkOverflow(chunk);
+    }
 }
 
 function formatToolPendingLine(tool, args, commandPreview) {
@@ -4588,6 +4668,7 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
     if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
     if (draft) {
         discardPendingToolRowRender(ctx, draft);
+        if (ctx && ctx.llm) cancelExecutionLlmReveal(ctx, draft.querySelector('.feed-chunk-scroller'));
         if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
         draft.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));
         rememberToolStreamRow(ctx, draft, toolCallDraftKey(ctx, parsed), parsed.tool_call_id);
@@ -4661,6 +4742,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     var text = rawContent ? rawContent : formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
     if (row) {
         discardPendingToolRowRender(ctx, row);
+        if (ctx && ctx.llm) cancelExecutionLlmReveal(ctx, row.querySelector('.feed-chunk-scroller'));
         var renderState = ctx && ctx._toolStreamRenderState;
         var completedDraftKey = row.getAttribute('data-tool-draft-key');
         if (renderState && completedDraftKey) renderState.draftRows.delete(completedDraftKey);
@@ -5461,7 +5543,7 @@ function appendModelSwitchStatus(ctx, event, runSessionId) {
     return sc;
 }
 
-function flushProgressDeltaText(ctx, logType) {
+function flushProgressDeltaText(ctx, logType, opts) {
     if (!ctx || !ctx.progressStream) return;
     var st = ctx.progressStream[logType];
     if (!st) return;
@@ -5470,15 +5552,31 @@ function flushProgressDeltaText(ctx, logType) {
         st.flushRaf = 0;
     }
     if (st.pending && st.scroller && st.scroller.isConnected) {
+        var modelText = ['context-summary-reasoning', 'context-summary', 'key-context'].indexOf(logType) >= 0;
+        var row = st.scroller.closest('.feed-item');
+        if (modelText && row && row.hasAttribute && row.hasAttribute('data-smooth-trace-layout-owned')
+            && typeof cancelSmoothTraceLayoutAnimation === 'function') cancelSmoothTraceLayoutAnimation(row);
+        var smooth = opts && opts.smooth === true && modelText;
+        var take = smooth
+            ? takeSmoothTextPrefix(st.pending, computeSmoothRevealCount(st.pending.length, opts.dtMs || 16.67))
+            : {segment: st.pending, rest: ''};
         var current = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(st.scroller) : String(st.scroller.textContent || '');
-        var merged = truncateLogTextForUi(current + st.pending);
-        if (logType === 'context-summary-reasoning') st.scroller.textContent = merged;
-        else if (typeof setUiRuntimeText === 'function') setUiRuntimeText(st.scroller, merged);
+        var merged = truncateLogTextForUi(current + take.segment);
+        if (logType === 'context-summary-reasoning') {
+            var node = st.scroller.firstChild;
+            if (node && node === st.scroller.lastChild && node.nodeType === 3 && merged.indexOf(current) === 0) {
+                node.appendData(merged.slice(current.length));
+            } else st.scroller.textContent = merged;
+        }
+        else if (typeof setUiRuntimeText === 'function') setUiRuntimeText(st.scroller, merged, true);
         else st.scroller.textContent = merged;
         var ch = st.scroller.closest('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
+        st.pending = take.rest;
+    } else {
+        st.pending = '';
     }
-    st.pending = '';
+    if (!st.pending) st.revealLastTs = 0;
 }
 
 function finalizeProgressStreamChunks(ctx) {
@@ -5558,10 +5656,15 @@ function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {
     if (!ctx || !ctx.progressStream) return;
     var st = ctx.progressStream[logType];
     if (!st || st.flushRaf) return;
-    st.flushRaf = requestAnimationFrame(function () {
+    st.flushRaf = requestAnimationFrame(function (now) {
         st.flushRaf = 0;
-        flushProgressDeltaText(ctx, logType);
+        var smooth = !replayingMessages && typeof isSmoothStreamActive === 'function' && isSmoothStreamActive();
+        var dtMs = smooth && st.revealLastTs > 0
+            ? smoothStreamClamp(now - st.revealLastTs, 1, 120) : 16.67;
+        st.revealLastTs = now;
+        flushProgressDeltaText(ctx, logType, {smooth: smooth, dtMs: dtMs});
         followStreamProcessScroll(ctx, runSessionId, 'text');
+        if (st.pending) scheduleProgressDeltaFlush(ctx, runSessionId, logType);
     });
 }
 
@@ -5637,7 +5740,8 @@ function appendCompressionReasoningDelta(ctx, event, runSessionId) {
     var chunk = sc.closest('.feed-chunk');
     if (chunk) chunk.classList.add('is-streaming');
     st.pending += String(event.delta);
-    scheduleProgressDeltaFlush(ctx, runSessionId, logType);
+    if (event.replayed_snapshot || replayingMessages) flushProgressDeltaText(ctx, logType);
+    else scheduleProgressDeltaFlush(ctx, runSessionId, logType);
 }
 
 function finishCompressionReasoning(ctx, requestEnded) {
@@ -5686,7 +5790,7 @@ function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
 }
 
 /** 压缩/要点执行端输出：在同一 feed 内流式追加正文（不另起 feed 块） */
-function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {
+function appendProgressStreamDelta(ctx, delta, logType, runSessionId, opts) {
     if (!ctx || !delta) return;
     if (!ctx.progressStream) ctx.progressStream = {};
     var piece = String(delta);
@@ -5708,8 +5812,19 @@ function appendProgressStreamDelta(ctx, delta, logType, runSessionId) {
         st = { scroller: sc, pending: '', flushRaf: 0, bodyOffset: bodyOffset };
         ctx.progressStream[logType] = st;
     }
+    if (opts && opts.snapshot) {
+        if (st.flushRaf) cancelAnimationFrame(st.flushRaf);
+        st.flushRaf = 0;
+        st.pending = '';
+        st.revealLastTs = 0;
+        var sourceText = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');
+        var head = sourceText.slice(0, st.bodyOffset);
+        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, head);
+        else sc.textContent = head;
+    }
     st.pending += piece;
-    scheduleProgressDeltaFlush(ctx, runSessionId, logType);
+    if ((opts && opts.snapshot) || replayingMessages) flushProgressDeltaText(ctx, logType);
+    else scheduleProgressDeltaFlush(ctx, runSessionId, logType);
 }
 
 /** 每个阶段只展示最新状态；更新状态时保留正在生成或已提交的正文。 */
@@ -5720,7 +5835,6 @@ function appendProgressLog(ctx, content, logType, runSessionId) {
     var sc = ensureProgressScroller(ctx, logType, runSessionId);
     if (!sc) return;
     if (sc._contextProgressStatus === line) return;
-    flushProgressDeltaText(ctx, logType);
     var st = ctx.progressStream && ctx.progressStream[logType];
     var offset = st && typeof st.bodyOffset === 'number' ? st.bodyOffset : sc._contextProgressBodyOffset;
     var previous = typeof getUiRuntimeText === 'function' ? getUiRuntimeText(sc) : (sc.textContent || '');

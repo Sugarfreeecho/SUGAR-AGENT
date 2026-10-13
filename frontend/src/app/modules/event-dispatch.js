@@ -237,7 +237,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         finishCompressionReasoning(ctx);
     } else if (event.type === 'context_summary_delta') {
         finishCompressionReasoning(ctx, false);
-        appendProgressStreamDelta(ctx, event.delta, 'context-summary', runSessionId);
+        appendProgressStreamDelta(ctx, event.delta, 'context-summary', runSessionId, {snapshot: !!event.replayed_snapshot});
     } else if (event.type === 'context_summary_body') {
         finishCompressionReasoning(ctx, false);
         applyProgressPersistedBody(ctx, event.content, 'context-summary', runSessionId);
@@ -249,7 +249,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         }
         appendProgressLog(ctx, keyProg, 'key-context', runSessionId);
     } else if (event.type === 'key_context_delta') {
-        appendKeyContextStreamDelta(ctx, event.delta, runSessionId);
+        appendKeyContextStreamDelta(ctx, event.delta, runSessionId, {snapshot: !!event.replayed_snapshot});
     } else if (event.type === 'key_context_body') {
         applyProgressPersistedBody(ctx, event.content, 'key-context', runSessionId);
     } else if (event.type === 'error') {

@@ -299,6 +299,9 @@ async function main() {
     currentSessionId: 's', updateProcessBrief() {}, refreshProcessAggregateStats() {},
     refreshLiveProcessAggregateStats: () => false, stopLiveProcessAggregateStats() {},
     resetKeyContextStreamFilter() {}, finalizeProgressStreamChunks() {},
+    // Seal-side temporary-status hooks are exercised by the display
+    // compatibility and smooth-stream suites; keep this fixture focused.
+    removeTemporaryStatus() {}, discardEmptyTemporaryProcessGroup: () => false,
   });
   sealed.context.body = port();
   sealed.context.ctx = { currentProcessGroup: { isConnected: true, dataset: {},

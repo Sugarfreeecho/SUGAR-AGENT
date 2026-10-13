@@ -27,7 +27,8 @@ function display() {
   group.querySelector = () => body;
   const stream = {children: [group], isConnected: true, querySelectorAll: selector =>
     selector === '.process-aggregate' ? [group]
-      : selector === '[data-execution-id]' ? body.children.filter(row => row.dataset.executionId) : body.children};
+      : selector === '[data-execution-id]' ? body.children.filter(row => row.dataset.executionId) : body.children,
+    contains: node => body.children.some(row => row.scroller === node)};
   const ctx = {stream, currentProcessGroup: group, lastRuntimeSeq: 0, streamEventIndex: 0};
   return {ctx, group, body, rows: () => body.children,
     pending: () => body.querySelectorAll('[data-temporary-status="1"]').length,
@@ -42,7 +43,8 @@ function createRow(ctx, type, text) {
     removeAttribute(name) { delete row.dataset[name.replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase())]; }};
   const chunk = {classList: classList('feed-chunk')};
   const scroller = {dataset: {}, textContent: text, isConnected: true,
-    closest: selector => selector === '.feed-chunk' ? chunk : row};
+    closest: selector => selector === '.feed-chunk' ? chunk
+      : selector === '.process-aggregate-body' ? body : row};
   row.scroller = scroller;
   row.querySelector = selector => selector === '.feed-chunk-scroller' ? scroller : selector === '.feed-chunk' ? chunk : null;
   body.children.push(row);
@@ -68,7 +70,7 @@ function runtime() {
     renderEvent() { throw new Error('execution identity must use the durable renderer'); }});
   vm.runInContext(rendering.slice(rendering.indexOf('var executionRecordsBySession'), rendering.indexOf('function ensureProcessGroup')), c);
   vm.runInContext(fn(rendering, 'truncateLogTextForUi'), c);
-  for (const name of ['removeTemporaryStatus', 'upsertTemporaryStatus', 'formatToolDraftLine', 'formatToolPendingLine']) {
+  for (const name of ['removeTemporaryStatus', 'upsertTemporaryStatus', 'formatToolDraftLine', 'formatToolPendingLine', 'writeToolCallLlmText']) {
     vm.runInContext(fn(rendering, name), c);
   }
   vm.runInContext(fn(messages, 'renderMessageRecord'), c);

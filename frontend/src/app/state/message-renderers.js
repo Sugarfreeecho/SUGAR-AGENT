@@ -2,11 +2,18 @@ function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     if (typeof renderExecutionEvent === 'function' && renderExecutionEvent(ctx, record.event, sid)) return record;
-    if (record.event.type === 'user') {
-        ctx.processGroupId = 'turn:' + String(record.event.runtime_seq || record.index);
-    }
     renderEvent(ctx, record.event, record.index, sid);
-    if (record.event.type === 'final') ctx.processGroupId = 'after-final:' + String(record.event.runtime_seq || record.index);
+    var runtimeSeq = Number(record.event.runtime_seq || record.event.runtimeSeq || 0);
+    if (record.event.type === 'user') {
+        // renderEvent seals the previous turn first. A UI message index is not
+        // a durable sequence: an unnumbered live turn remains provisional so
+        // its thinking row can adopt the first execution record's group ID.
+        ctx.processGroupId = record.event.process_group_id
+            || (runtimeSeq > 0 ? 'turn:' + String(runtimeSeq) : '');
+    }
+    if (record.event.type === 'final') {
+        ctx.processGroupId = runtimeSeq > 0 ? 'after-final:' + String(runtimeSeq) : '';
+    }
     return record;
 }
 

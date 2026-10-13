@@ -781,12 +781,24 @@ function translateUiNode(root) {
 // Runtime-owned process rows are kept separate from model/user content. Store
 // their source text so toggling back to Chinese always restores the original,
 // even when the row was updated while English was active.
-function setUiRuntimeText(el, original) {
+function setUiRuntimeText(el, original, incremental) {
     if (!el) return;
     var source = String(original == null ? '' : original);
     uiI18nRuntimeOriginal.set(el, source);
     el.setAttribute('data-ui-runtime-text', '1');
-    el.textContent = uiLanguage === 'en' ? translateUiString(source) : source;
+    var displayed = uiLanguage === 'en' ? translateUiString(source) : source;
+    var node = el.firstChild;
+    if (incremental && node && node === el.lastChild && node.nodeType === 3) {
+        // Tool drafts keep a status footer after the growing model text. Patch
+        // that text node in place instead of rebuilding its complete body.
+        var previous = node.data, head = 0, tail = 0;
+        while (head < previous.length && head < displayed.length && previous[head] === displayed[head]) head++;
+        while (tail < previous.length - head && tail < displayed.length - head
+            && previous[previous.length - tail - 1] === displayed[displayed.length - tail - 1]) tail++;
+        if (head !== previous.length || head !== displayed.length) {
+            node.replaceData(head, previous.length - head - tail, displayed.slice(head, displayed.length - tail));
+        }
+    } else if (el.textContent !== displayed) el.textContent = displayed;
 }
 
 function getUiRuntimeText(el) {

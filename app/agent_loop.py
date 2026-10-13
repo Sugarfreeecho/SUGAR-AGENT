@@ -2562,6 +2562,8 @@ def _runtime_v2_commit_user_turn(
             model_payload=data,
         )
         state["_last_user_turn_was_deduplicated"] = committed_event is None and bool(operation_id)
+        if ui_type == "user" and committed_event is not None:
+            state["_runtime_v2_user_turn_seq"] = int(getattr(committed_event, "seq", 0) or 0)
         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
         side_effect_event = {
             "type": ui_type,
@@ -3128,6 +3130,13 @@ async def _push_stream_event(
         return
     if context_probe:
         fence_ms = int((time.perf_counter() - probe_started) * 1000)
+    if event.get("type") == "user" and event.get("_runtime_v2_committed"):
+        user_turn_seq = int(state.get("_runtime_v2_user_turn_seq") or 0)
+        if user_turn_seq > 0:
+            # Queued follow-ups are emitted directly as live UI events. Use the
+            # same durable boundary as their later execution records.
+            event["runtime_seq"] = user_turn_seq
+            event["process_group_id"] = f"turn:{user_turn_seq}"
     state["stream_events"].append(event)
     if emit:
         try:

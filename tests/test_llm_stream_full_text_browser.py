@@ -33,6 +33,7 @@ def browser_page():
 def page(browser_page):
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     scrolling = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
     css = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
     browser_page.set_content(
         f"<style>{css}</style><style>.fixture{{width:800px}}"
@@ -49,10 +50,14 @@ def page(browser_page):
       var LOG_TRUNCATE_HEAD_LINES=100,LOG_TRUNCATE_TAIL_LINES=100;
       var LOG_TRUNCATE_HEAD_CHARS=12000,LOG_TRUNCATE_TAIL_CHARS=12000;
       var executionRecordsBySession=new Map();
+      var uiI18nRuntimeOriginal=new WeakMap(),uiLanguage='zh';
+      function translateUiString(text){return text.replace('生成中...', 'Generating...');}
       window.__MYAGENT_FEATURES__={smoothStream:true};
       function isSmoothStreamActive(){return false;}
       function stripWelcome(){}
       function getProcessBody(){return document.getElementById('body');}
+      function getExistingProcessBody(){return document.getElementById('body');}
+      function ensureProcessAggregateState(){return {maxReactIter:1};}
       function reactGenerationForContext(ctx){return ctx.reactGeneration || 0;}
       function insertReactOrderedFeedRow(body,row,type,iter){
         if(iter!=null)row.dataset.reactIter=String(iter);body.append(row);
@@ -73,7 +78,6 @@ def page(browser_page):
       function splitThinkTagsForUi(text){return {content:text};}
       function selectExecutionProcessGroup(){}
       function removeTemporaryStatus(){}
-      function discardPendingToolRowRender(){}
       function getFeedItemText(el){return el.querySelector('.feed-chunk-scroller').textContent;}
       function queryFeedChunksInCtx(ctx,selector){return ctx.currentProcessGroup.querySelectorAll(selector);}
       window.ctx={stream:document.getElementById('stream'),
@@ -87,11 +91,18 @@ def page(browser_page):
         "handleLlmRowChunkClick", "bindFeedChunkInteraction", "finalizeActiveLlmReasoningRow",
         "upsertLlmFeedRow", "findExistingLlmFeedRow", "removeDuplicateLlmFeedRows",
         "updateExecutionRecord", "renderExecutionRecord", "renderExecutionEvent",
+        "formatToolDraftLine", "writeToolCallLlmText", "formatToolPendingLine",
+        "toolCallDraftKey", "ensureToolStreamRenderState", "rememberToolStreamRow",
+        "discardPendingToolRowRender", "findToolCallRow", "findToolDraftRow", "scheduleToolRowRender",
+        "deltaDedupeKey", "hasSeenStreamDelta", "appendToolCallDelta", "appendToolPendingRow",
+        "preferredToolPendingCommandPreview",
     ))
+    setup += "\n".join(function_source(i18n, name) for name in ("setUiRuntimeText", "getUiRuntimeText"))
     setup += "\n".join(function_source(scrolling, name) for name in (
         "writeLlmStreamText", "appendLlmRevealedText", "flushLlmDeltaText", "resetLlmState",
         "finalizeLlmStreamChunks", "discardLlmStreamChunks",
         "cancelExecutionLlmReveal", "queueExecutionLlmReveal", "flushExecutionLlmReveals", "scheduleLlmDeltaFlush",
+        "queueToolCallLlmReveal",
     ))
     setup += """
       window.start=(type='llm-reasoning',text='',options={streaming:true,reactIter:1})=>{
@@ -150,6 +161,49 @@ def test_live_execution_reveals_by_frame_then_preserves_complete_body(page, kind
     assert result["sameNode"] and result["complete"]
     assert result["rows"] == 1 and result["childElements"] == 0
     assert result["pending"] == 0 and result["raf"] == 0
+
+
+@pytest.mark.parametrize("route", ["execution", "legacy"])
+def test_tool_model_fields_reveal_and_stop_when_execution_begins(page, route):
+    page.add_script_tag(content=(ROOT / "frontend/src/app/modules/smooth-stream.js").read_text(encoding="utf-8"))
+    result = page.evaluate("""async route => {
+      body.replaceChildren();ctx.llm={};ctx._toolStreamRenderState=null;
+      const args='{"content":"'+'工具😀'.repeat(500),name='write_file';
+      const event={type:'tool_call_delta',execution_id:route==='execution'?'tool-live':undefined,
+        id:'tool-call',name_delta:name,arguments_delta:args,run_id:'run-1',react_iter:1,
+        execution_runtime_seq:1,delta_seq:1};
+      const deliver=e=>route==='execution'?renderExecutionEvent(ctx,e,currentSessionId):appendToolCallDelta(ctx,e,currentSessionId);
+      deliver(event);const sc=body.querySelector('.feed-chunk-scroller');
+      const before=sc._llmToolArgs||'';
+      await new Promise(requestAnimationFrame);
+      const first=sc._llmToolArgs.length,node=sc.firstChild;
+      deliver({...event,name_delta:'',arguments_delta:' tail',execution_runtime_seq:2,delta_seq:2});
+      const afterArrival=sc._llmToolArgs.length;
+      await new Promise(requestAnimationFrame);
+      const sameNode=node===sc.firstChild,second=sc._llmToolArgs.length;
+      uiLanguage='en';
+      writeToolCallLlmText(sc,sc._llmToolName,sc._llmToolArgs);
+      const localized=sc.textContent.endsWith('Generating...');uiLanguage='zh';
+      const pending={type:'tool_pending',execution_id:event.execution_id,execution_runtime_seq:3,
+        tool:name,tool_call_id:'tool-call',react_iter:1,run_id:'run-1',
+        command_preview:'write_file(path="a.txt")',args:{path:'a.txt'}};
+      if(route==='execution')renderExecutionEvent(ctx,pending,currentSessionId);
+      else appendToolPendingRow(ctx,pending,currentSessionId);
+      const executed=sc.textContent;
+      await new Promise(requestAnimationFrame);
+      return {before,first,afterArrival,second,total:args.length,sameNode,localized,
+        executionImmediate:executed==='write_file(path="a.txt")\\n执行中...',
+        runtimeSourceKept:getUiRuntimeText(sc)===executed,
+        executionKept:sc.textContent===executed,pending:ctx.llm.llmExecutionReveals.size,
+        raf:ctx.llm.llmDeltaFlushRaf,rows:body.children.length};
+    }""", route)
+    assert result["before"] == ""
+    assert 0 < result["first"] < result["total"]
+    assert result["afterArrival"] == result["first"]
+    assert result["first"] < result["second"] <= result["total"] + len(" tail")
+    assert result["sameNode"] and result["localized"]
+    assert result["executionImmediate"] and result["executionKept"] and result["runtimeSourceKept"]
+    assert result["pending"] == 0 and result["raf"] == 0 and result["rows"] == 1
 
 
 @pytest.mark.parametrize("kind", ["llm-reasoning", "llm-response"])
