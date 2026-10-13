@@ -142,4 +142,4 @@ resources/runtime/
 
 ## 版本号
 
-版本号在 `packaging/package.json` 的 `version`（当前 `1.5.3`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里（连带 `package-lock.json` 中自身 2 处）并重新构建。
+版本号在 `packaging/package.json` 的 `version`（当前 `1.5.4`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里（连带 `package-lock.json` 中自身 2 处）并重新构建。
