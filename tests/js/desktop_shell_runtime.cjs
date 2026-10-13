@@ -9,8 +9,9 @@ const vm = require('node:vm')
 
 const ROOT = path.resolve(__dirname, '../..')
 
-function shellHarness({ argv = [], configured = true, reused = true, packaged = true, writable = true, paths = null, autoPaint = true, execPath = 'D:\\SugarAgent\\SugarAgent.exe' } = {}) {
-  const calls = { loads: [], files: [], pipes: [], progress: [], launches: [], requests: [], protocols: [], writes: [], popups: [] }
+function shellHarness({ argv = [], configured = true, reused = true, packaged = true, writable = true, paths = null, autoPaint = true, execPath = 'D:\\SugarAgent\\SugarAgent.exe', manualTimers = false, killResult = { status: 0 }, spawnError = null, deferHealth = false } = {}) {
+  const calls = { loads: [], files: [], pipes: [], progress: [], launches: [], requests: [], protocols: [], writes: [], popups: [], children: [], logStreams: [], dialogs: [], errorBoxes: [], taskkills: [], ipc: new Map(), timers: new Map(), health: [] }
+  let nextTimer = 1
   const app = Object.assign(new EventEmitter(), {
     isPackaged: packaged,
     getPath: name => `D:\\User's Data\\${name}`,
@@ -22,7 +23,7 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
     } }) }),
     setAppUserModelId() {},
     setAsDefaultProtocolClient: (...args) => { calls.protocols.push(args); return true },
-    quit: () => { calls.quit = true },
+    quit: () => { calls.quit = true; app.emit('before-quit'); app.emit('will-quit') },
   })
   const nativeTheme = { shouldUseDarkColors: false, themeSource: 'system' }
   class BrowserWindow extends EventEmitter {
@@ -50,7 +51,7 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
       if (autoPaint) queueMicrotask(() => this.emit('ready-to-show'))
     }
   }
-  const ipcMain = Object.assign(new EventEmitter(), { handle: () => {} })
+  const ipcMain = Object.assign(new EventEmitter(), { handle: (name, callback) => calls.ipc.set(name, callback) })
   const electron = {
     app, BrowserWindow, ipcMain, nativeTheme,
     Menu: { setApplicationMenu() {}, buildFromTemplate: items => {
@@ -63,7 +64,15 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
       setContextMenu(items) { calls.menu = items }
     },
     nativeImage: { createFromPath: () => ({ isEmpty: () => false }) },
-    dialog: { showErrorBox: (...args) => { calls.error = args } },
+    dialog: {
+      showErrorBox: (...args) => { calls.error = args; calls.errorBoxes.push(args) },
+      showMessageBox: options => {
+        let resolve
+        const promise = new Promise(done => { resolve = done })
+        calls.dialogs.push({ options, resolve })
+        return promise
+      },
+    },
     shell: { openExternal: url => { calls.external = url }, openPath: () => {} },
   }
   BrowserWindow.fromWebContents = () => calls.window
@@ -74,10 +83,20 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
       calls.writes.push(args)
     },
     appendFileSync: (...args) => calls.writes.push(args),
-    createWriteStream: file => { calls.logFile = file; return {} },
+    createWriteStream: file => {
+      calls.logFile = file
+      const stream = Object.assign(new EventEmitter(), {
+        ended: false, chunks: [],
+        write(chunk) { assert.equal(this.ended, false, 'output must not write to a closed log'); this.chunks.push(chunk) },
+        end() { assert.equal(this.ended, false, 'close each log once'); this.ended = true },
+      })
+      calls.logStreams.push(stream)
+      return stream
+    },
   }
   const childProcess = {
     spawnSync: (exe, args, options) => {
+      if (exe === 'taskkill') { calls.taskkills.push({ args, options }); return killResult }
       if (args[0].endsWith('workspace_paths.py') && paths) {
         calls.pathProbe = { exe, args, options }
         return { status: 0, stdout: JSON.stringify(paths) }
@@ -86,12 +105,26 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
     },
     spawn: (...args) => {
       calls.launches.push(args)
+      if (spawnError && args[0].endsWith('python.exe')) throw spawnError
       const child = new EventEmitter()
       child.unref = () => {}
+      if (args[0].endsWith('python.exe')) {
+        child.pid = 10000 + calls.children.length
+        child.stdout = { pipe: stream => { child.outputLog = stream } }
+        child.stderr = { pipe: stream => { child.errorLog = stream } }
+        calls.children.push(child)
+      }
       return child
     },
   }
   const http = {
+    get: (options, callback) => {
+      const request = Object.assign(new EventEmitter(), { destroy() {} })
+      const respond = () => callback({ statusCode: 200, resume() {} })
+      calls.health.push({ request, respond, options })
+      if (!deferHealth) queueMicrotask(respond)
+      return request
+    },
     request: (options, callback) => {
       const request = new EventEmitter()
       request.end = body => {
@@ -118,17 +151,37 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
       },
       './notifications': { createNotificationBridge: async () => ({ port: 12345, token: 'test', close() {} }) } })[name],
     process: { argv, env: {}, resourcesPath: 'D:\\SugarAgent Runtime', platform: 'win32', execPath },
-    __dirname: path.join(ROOT, 'packaging/electron'), URL, Buffer, setTimeout, clearTimeout,
+    __dirname: path.join(ROOT, 'packaging/electron'), URL, Buffer,
+    setTimeout: manualTimers ? (callback, delay) => {
+      const id = nextTimer++
+      calls.timers.set(id, { callback, delay })
+      return id
+    } : setTimeout,
+    clearTimeout: manualTimers ? id => calls.timers.delete(id) : clearTimeout,
   })
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'packaging/electron/main.js'), 'utf8') + `
-    globalThis.api = { createWindow, createTray, loadApp, openBackendLog, openBackendLogs,
+    globalThis.api = { createWindow, createTray, loadApp, openBackendLog, openBackendLogs, startBackend, stopBackend, restartBackend, waitForBackend, registerIpc,
       parseDesktopActivation, registerDesktopProtocol, activateDesktop, applyNativeTheme, installNativeContextMenu, resolveLayout, backendEnv, notifyStartupLauncher,
       ready: () => { uiReady = true }, pending: () => pendingActivation,
       port: value => { activePort = value },
+      backend: () => backend, logStream: () => backendLogStream,
       bootBackend: (start, wait) => { findFreePort = async () => BASE_PORT; startBackend = start; waitForBackend = wait },
       notifications: value => { notificationBridge = value } };
   `, context)
   return { api: context.api, app, calls, nativeTheme }
+}
+
+function runRestartTimer(calls) {
+  const entry = [...calls.timers.entries()].find(([, timer]) => timer.delay === 800)
+  assert.ok(entry, 'restart should schedule a single delayed start')
+  const [id, timer] = entry
+  calls.timers.delete(id)
+  return timer.callback()
+}
+
+function lastStatus(calls) {
+  const status = calls.writes.filter(([file]) => file.endsWith('desktop-status.json')).at(-1)
+  return JSON.parse(status[1])
 }
 
 test('default workspace keeps the source layout and follows the read-only fallback', () => {
@@ -227,6 +280,275 @@ test('desktop actions and backend environment share configured paths and refresh
   assert.equal(calls.pathProbe.options.windowsHide, true)
   paths.work_dir = 'F:\\New Projects'
   assert.equal(api.resolveLayout(true).workDir, paths.work_dir)
+})
+
+test('tray restart treats the old exit as expected and reloads after the replacement is ready', async () => {
+  const paths = { work_dir: 'E:\\Projects', skills_dir: 'E:\\Library\\skills', log_dir: 'E:\\Logs' }
+  const { api, calls } = shellHarness({ manualTimers: true, paths })
+  api.createWindow()
+  api.ready()
+  api.createTray()
+  api.startBackend()
+  const old = calls.children[0]
+  const oldLog = calls.logStreams[0]
+  paths.work_dir = 'F:\\New Projects'
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').click(), true)
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, false)
+  assert.equal(calls.taskkills[0].args.join(' '), '/PID 10000 /T /F')
+  assert.equal(calls.taskkills[0].options.windowsHide, true)
+  assert.equal(lastStatus(calls).backendState, 'restarting')
+  old.emit('exit', 1, null)
+  assert.equal(calls.dialogs.length, 0)
+  assert.equal(lastStatus(calls).backendState, 'restarting')
+  assert.equal(oldLog.ended, false, 'drain stdout/stderr before closing the log')
+  old.outputLog.write('last buffered output\n')
+  old.emit('close', 1, null)
+  assert.equal(oldLog.ended, true)
+  await runRestartTimer(calls)
+  assert.equal(calls.children.length, 2)
+  assert.equal(calls.launches[1][2].env.WORK_DIR, paths.work_dir)
+  assert.equal(calls.launches[1][2].env.MYAGENT_SERVER_PORT, '8192')
+  assert.deepEqual(calls.loads, ['http://127.0.0.1:8192/'])
+  assert.equal(lastStatus(calls).backendState, 'ready')
+  assert.equal(lastStatus(calls).backendPid, calls.children[1].pid)
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, true)
+  assert.equal(calls.errorBoxes.length, 0)
+})
+
+test('late exit and close from the old child preserve the new child, status, and log', async () => {
+  const { api, app, calls } = shellHarness({ manualTimers: true })
+  api.createWindow()
+  api.ready()
+  api.startBackend()
+  const old = calls.children[0]
+  api.restartBackend()
+  await runRestartTimer(calls)
+  const fresh = calls.children[1]
+  const currentStatus = lastStatus(calls)
+  const freshLog = calls.logStreams[1]
+  const freshChunks = freshLog.chunks.length
+  old.emit('exit', 1, null)
+  old.emit('close', 1, null)
+  assert.equal(api.backend(), fresh)
+  assert.equal(api.logStream(), freshLog)
+  assert.equal(freshLog.ended, false)
+  assert.equal(freshLog.chunks.length, freshChunks, 'old exit must write only to its own log')
+  assert.deepEqual(lastStatus(calls), currentStatus)
+  assert.equal(await api.waitForBackend(1000), true)
+  assert.equal(calls.dialogs.length, 0)
+  app.quit()
+  assert.equal(calls.taskkills.at(-1).args[1], String(fresh.pid), 'quit must still track and stop the replacement')
+  fresh.emit('exit', 1, null)
+  fresh.emit('close', 1, null)
+  assert.equal(freshLog.ended, true)
+  assert.equal(calls.dialogs.length, 0)
+})
+
+test('tray, IPC, and recovery restarts share one operation while waiting for readiness', async () => {
+  const { api, calls } = shellHarness({ manualTimers: true, deferHealth: true })
+  api.createWindow()
+  api.registerIpc()
+  const restart = calls.ipc.get('sugaragent:restart-backend')
+  assert.equal(restart(), false, 'startup cannot be interrupted by a restart')
+  api.ready()
+  api.startBackend()
+  assert.equal(restart(), true)
+  assert.equal(restart(), false)
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').click(), false)
+  assert.equal(calls.timers.size, 1)
+  const operation = runRestartTimer(calls)
+  assert.equal(calls.children.length, 2)
+  assert.equal(restart(), false, 'keep the guard after the timer fires')
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, false)
+  assert.equal(calls.taskkills.length, 1)
+  calls.health[0].respond()
+  await operation
+  assert.equal(calls.errorBoxes.length, 0)
+  assert.equal(calls.loads.length, 1)
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, true)
+})
+
+test('quit cancels the pending restart and guards a callback already queued for dispatch', async () => {
+  const { api, app, calls } = shellHarness({ manualTimers: true })
+  api.ready()
+  api.startBackend()
+  api.restartBackend()
+  const callback = [...calls.timers.values()][0].callback
+  app.quit()
+  assert.equal(calls.timers.size, 0)
+  await callback()
+  assert.equal(api.startBackend(), null)
+  assert.equal(api.restartBackend(), false)
+  assert.equal(calls.children.length, 1)
+  assert.equal(calls.errorBoxes.length, 0)
+})
+
+test('quit during a pending health probe neither reloads nor reports startup failure', async () => {
+  const { api, app, calls } = shellHarness({ manualTimers: true, deferHealth: true })
+  api.createWindow()
+  api.ready()
+  api.startBackend()
+  api.restartBackend()
+  const operation = runRestartTimer(calls)
+  app.quit()
+  calls.health[0].respond()
+  await operation
+  assert.equal(calls.children.length, 2)
+  assert.equal(calls.taskkills.length, 2)
+  assert.equal(calls.loads.length, 0)
+  assert.equal(calls.errorBoxes.length, 0)
+})
+
+test('a genuine running-service crash shows recovery once and can restart', async () => {
+  const { api, calls } = shellHarness({ manualTimers: true })
+  api.createWindow()
+  api.ready()
+  api.port(8196)
+  api.startBackend()
+  const child = calls.children[0]
+  child.emit('exit', 7, null)
+  child.emit('close', 7, null)
+  assert.equal(calls.dialogs.length, 1)
+  assert.match(calls.dialogs[0].options.message, /code=7/)
+  assert.ok(calls.dialogs[0].options.detail.includes('8196'))
+  assert.equal(lastStatus(calls).backendState, 'exited')
+  assert.equal(lastStatus(calls).backendPid, null)
+  assert.equal(calls.logStreams[0].ended, true)
+  calls.dialogs[0].resolve({ response: 0 })
+  await new Promise(resolve => setImmediate(resolve))
+  await runRestartTimer(calls)
+  assert.equal(calls.taskkills.length, 0, 'the crashed child is already stopped')
+  assert.equal(calls.dialogs.length, 1)
+  assert.equal(lastStatus(calls).backendState, 'ready')
+  assert.deepEqual(calls.loads, ['http://127.0.0.1:8196/'])
+})
+
+test('stale recovery dialogs cannot interrupt a service that has since restarted', async () => {
+  for (const response of [0, 2]) {
+    const { api, calls } = shellHarness({ manualTimers: true })
+    api.createWindow()
+    api.ready()
+    api.startBackend()
+    calls.children[0].emit('exit', 1, null)
+    api.restartBackend()
+    await runRestartTimer(calls)
+    const fresh = calls.children[1]
+    calls.dialogs[0].resolve({ response })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(api.backend(), fresh)
+    assert.equal(calls.timers.size, 0)
+    assert.equal(calls.taskkills.length, 0)
+    assert.equal(calls.quit, undefined)
+  }
+})
+
+test('restart child exit or spawn error produces one real failure instead of a false timeout', async () => {
+  for (const fail of [child => child.emit('exit', 1, null), child => child.emit('error', new Error('spawn EACCES'))]) {
+    const { api, calls } = shellHarness({ manualTimers: true, deferHealth: true })
+    api.createWindow()
+    api.ready()
+    api.startBackend()
+    api.restartBackend()
+    const operation = runRestartTimer(calls)
+    const child = calls.children[1]
+    fail(child)
+    child.emit('close', 1, null)
+    calls.health[0].respond()
+    await operation
+    assert.equal(api.backend(), null)
+    assert.equal(calls.dialogs.length, 0)
+    assert.equal(calls.errorBoxes.length, 1)
+    assert.equal(calls.errorBoxes[0][0], '重启内置服务失败')
+    assert.match(calls.errorBoxes[0][1], /启动失败或已退出/)
+    assert.ok(!calls.errorBoxes[0][1].includes('180 秒'))
+    assert.equal(calls.loads.length, 0, 'a health response cannot revive an exited child')
+    assert.equal(calls.logStreams[1].ended, true)
+    assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, true)
+    assert.equal(lastStatus(calls).backendState, 'exited')
+  }
+})
+
+test('a synchronous spawn exception closes the log and releases the restart guard', async () => {
+  const { api, calls } = shellHarness({ manualTimers: true, spawnError: new Error('spawn failed') })
+  api.createWindow()
+  api.ready()
+  assert.equal(api.restartBackend(), true)
+  await runRestartTimer(calls)
+  assert.equal(calls.logStreams[0].ended, true)
+  assert.equal(api.logStream(), null)
+  assert.equal(calls.errorBoxes.length, 1)
+  assert.match(calls.errorBoxes[0][1], /spawn failed/)
+  assert.equal(lastStatus(calls).backendState, 'exited')
+  assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, true)
+})
+
+test('a true readiness timeout is reported while retaining the live child for cleanup', async () => {
+  const { api, app, calls } = shellHarness({ manualTimers: true })
+  api.createWindow()
+  api.ready()
+  api.bootBackend(api.startBackend, () => false)
+  api.restartBackend()
+  await runRestartTimer(calls)
+  assert.equal(calls.errorBoxes.length, 1)
+  assert.match(calls.errorBoxes[0][1], /180 秒/)
+  assert.equal(calls.loads.length, 0)
+  assert.equal(api.backend(), calls.children[0])
+  app.quit()
+  assert.equal(calls.taskkills.length, 1)
+})
+
+test('a failed taskkill preserves the running child and its later crash is still reported', () => {
+  for (const killResult of [{ status: 1 }, { error: new Error('taskkill not found'), status: null }]) {
+    const { api, calls } = shellHarness({ manualTimers: true, killResult })
+    api.createWindow()
+    api.ready()
+    api.startBackend()
+    const child = calls.children[0]
+    assert.equal(api.restartBackend(), false)
+    assert.equal(api.backend(), child)
+    assert.equal(calls.timers.size, 0)
+    assert.equal(calls.logStreams[0].ended, false)
+    assert.equal(calls.errorBoxes.length, 1)
+    assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, true)
+    child.emit('exit', 2, null)
+    assert.equal(calls.dialogs.length, 1, 'a rejected stop must not mark future exits as expected')
+  }
+})
+
+test('notification navigation is queued while restarting and loaded on the new service', async () => {
+  const { api, calls } = shellHarness({ manualTimers: true })
+  api.createWindow()
+  api.ready()
+  api.startBackend()
+  api.restartBackend()
+  await api.activateDesktop({ session: 'during-restart' })
+  assert.equal(calls.requests.length, 0)
+  assert.equal(calls.loads.length, 0)
+  await runRestartTimer(calls)
+  assert.deepEqual(calls.loads, ['http://127.0.0.1:8192/?session=during-restart'])
+  assert.equal(api.pending(), null)
+})
+
+test('a child exiting during page load is reported and pending notification navigation survives failure', async () => {
+  const { api, calls } = shellHarness({ manualTimers: true })
+  api.createWindow()
+  api.ready()
+  api.startBackend()
+  let finishLoad
+  calls.window.loadURL = () => new Promise(resolve => { finishLoad = resolve })
+  api.restartBackend()
+  const operation = runRestartTimer(calls)
+  await new Promise(resolve => setImmediate(resolve))
+  await api.activateDesktop({ session: 'retry-after-failure' })
+  calls.children[1].emit('exit', 3, null)
+  finishLoad()
+  await operation
+  assert.equal(calls.errorBoxes.length, 1)
+  assert.match(calls.errorBoxes[0][1], /加载界面时退出/)
+  assert.equal(calls.dialogs.length, 0)
+  assert.equal(lastStatus(calls).backendState, 'exited')
+  assert.equal(api.pending().session, 'retry-after-failure')
+  assert.equal(calls.requests.length, 0)
 })
 
 test('tray omits setup and opens a live colored log viewer for the active file', () => {

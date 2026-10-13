@@ -43,6 +43,8 @@ let backendLogStream = null
 let backendLogFile = null
 let quitting = false
 let restartTimer = null
+let backendRestarting = false
+const expectedBackendExits = new WeakSet()
 let uiReady = false
 let pendingActivation = parseDesktopActivation(process.argv)
 let notificationBridge = null
@@ -182,6 +184,7 @@ function openBackendLog() {
   const name = `backend-${new Date().toISOString().slice(0, 10)}.log`
   backendLogFile = path.join(LOG_DIR, name)
   backendLogStream = fs.createWriteStream(backendLogFile, { flags: 'a' })
+  backendLogStream.on('error', error => log(`后端日志写入失败：${error.message}`))
   return backendLogStream
 }
 
@@ -213,7 +216,8 @@ function openBackendLogs() {
 }
 
 function startBackend() {
-  if (backend) return
+  if (quitting) return null
+  if (backend) return backend
   if (!fs.existsSync(PYTHON_EXE)) {
     fatal(`缺少内置 Python 运行时：${PYTHON_EXE}`)
     return
@@ -225,68 +229,144 @@ function startBackend() {
   seedWorkspace()
   const stream = openBackendLog()
   stream.write(`\n===== 启动后端 ${new Date().toISOString()} =====\n`)
-  backend = spawn(PYTHON_EXE, [APP_ENTRY], {
-    cwd: resolveLayout().cwd,
-    env: backendEnv(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  })
-  log(`后端已启动 pid=${backend.pid}`)
+  let child
+  try {
+    child = spawn(PYTHON_EXE, [APP_ENTRY], {
+      cwd: resolveLayout().cwd,
+      env: backendEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+  } catch (error) {
+    stream.end()
+    if (backendLogStream === stream) backendLogStream = null
+    throw error
+  }
+  backend = child
+  log(`后端已启动 pid=${child.pid}`)
   writeStatus({ backendState: 'started' })
-  backend.stdout.pipe(stream, { end: false })
-  backend.stderr.pipe(stream, { end: false })
-  backend.on('error', error => log(`后端启动失败：${error.message}`))
-  backend.on('exit', (code, signal) => {
-    const pid = backend && backend.pid
-    backend = null
-    log(`后端退出 pid=${pid} code=${code} signal=${signal} quitting=${quitting}`)
-    writeStatus({ backendState: 'exited', backendExitCode: code })
-    if (backendLogStream) {
-      backendLogStream.write(`===== 后端退出 code=${code} signal=${signal} =====\n`)
-    }
-    if (quitting) return
+  child.stdout.pipe(stream, { end: false })
+  child.stderr.pipe(stream, { end: false })
+  // close follows exit/error and the end of stdout/stderr. Keep the stream
+  // alive until then so buffered output cannot write into a closed log.
+  child.once('close', () => {
+    stream.end()
+    if (backendLogStream === stream) backendLogStream = null
+  })
+  let failureReported = false
+  const reportFailure = (code, signal, error = null) => {
+    const expected = expectedBackendExits.delete(child)
+    const current = backend === child
+    if (current) backend = null
+    log(`后端退出 pid=${child.pid} code=${code} signal=${signal} quitting=${quitting} expected=${expected}${error ? ` error=${error.message}` : ''}`)
+    stream.write(`===== 后端退出 code=${code} signal=${signal}${error ? ` error=${error.message}` : ''} =====\n`)
+    if (quitting || expected || !current || failureReported) return
+    failureReported = true
+    writeStatus({ backendState: 'exited', backendExitCode: code, ...(error ? { backendError: error.message } : {}) })
+    // Startup and restart own their failure UI; a running service owns its
+    // crash dialog. Never report one failure again as a startup timeout.
+    if (!uiReady || backendRestarting) return
     dialog.showMessageBox({
       type: 'error',
       title: 'SugarAgent 后端已停止',
-      message: `内置服务意外退出（code=${code ?? 'null'}）。`,
-      detail: `日志目录：${LOG_DIR}\n可点击“重启”重新拉起服务；本机 8192 端口被占用也会导致启动失败。`,
+      message: error ? `内置服务启动失败：${error.message}` : `内置服务意外退出（code=${code ?? 'null'}）。`,
+      detail: `日志目录：${LOG_DIR}\n可点击“重启”重新拉起服务；本机 ${activePort} 端口被占用也会导致启动失败。`,
       buttons: ['重启', '打开日志目录', '退出'],
       defaultId: 0,
       cancelId: 2,
     }).then(result => {
+      if (quitting || backend) return
       if (result.response === 0) restartBackend()
       else if (result.response === 1) shell.openPath(LOG_DIR)
       else app.quit()
-    })
-  })
+    }).catch(error => log(`后端恢复对话框失败：${error.message}`))
+  }
+  child.on('error', error => reportFailure(null, null, error))
+  child.on('exit', (code, signal) => reportFailure(code, signal))
+  return child
 }
 
 function stopBackend() {
-  if (!backend || !backend.pid) return
-  const pid = backend.pid
+  const child = backend
+  if (!child) return true
+  if (!child.pid) return false
+  const pid = child.pid
+  // Register before sending the signal: the exit callback may run either
+  // before or after a replacement process has started.
+  expectedBackendExits.add(child)
   log(`停止后端 pid=${pid}`)
   try {
     if (IS_WINDOWS) {
-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
+      const result = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
+      if (result.error) throw result.error
+      if (result.status !== 0) throw new Error(`taskkill 退出码 ${result.status}`)
     } else {
       process.kill(-pid, 'SIGTERM')
     }
   } catch (error) {
+    expectedBackendExits.delete(child)
     log(`停止后端失败：${error && error.message}`)
+    return false
   }
-  backend = null
+  if (backend === child) backend = null
+  return true
 }
 
 function restartBackend() {
+  if (quitting || !uiReady || backendRestarting) return false
+  backendRestarting = true
+  createTray()
+  if (mainWindow) mainWindow.setProgressBar(2)
+  if (!stopBackend()) {
+    backendRestarting = false
+    if (mainWindow) mainWindow.setProgressBar(-1)
+    createTray()
+    dialog.showErrorBox('无法重启内置服务', `旧服务未能停止，请查看日志后重试。\n日志目录：${LOG_DIR}`)
+    return false
+  }
   layout = null
-  stopBackend()
-  if (restartTimer) clearTimeout(restartTimer)
+  writeStatus({ backendState: 'restarting' })
   restartTimer = setTimeout(async () => {
-    startBackend()
-    const ready = await waitForBackend(180000)
-    if (ready) await loadApp()
-    else dialog.showErrorBox('启动超时', `等待内置服务超过 180 秒仍未就绪。\n日志目录：${LOG_DIR}`)
+    restartTimer = null
+    let reloaded = false
+    try {
+      if (quitting) return
+      const child = startBackend()
+      const ready = await waitForBackend(180000, child)
+      if (quitting) return
+      if (!ready) {
+        const message = child && backend === child
+          ? '等待内置服务超过 180 秒仍未就绪。'
+          : '内置服务启动失败或已退出。'
+        dialog.showErrorBox('重启内置服务失败', `${message}\n日志目录：${LOG_DIR}`)
+        return
+      }
+      const activation = pendingActivation
+      pendingActivation = null
+      await loadApp(activation ? activation.session : '')
+      if (quitting) return
+      if (backend !== child) throw new Error('内置服务在加载界面时退出。')
+      reloaded = true
+    } catch (error) {
+      log(`后端重启失败：${error.message}`)
+      if (!quitting) {
+        if (!backend) writeStatus({ backendState: 'exited', backendError: error.message })
+        dialog.showErrorBox('重启内置服务失败', `${error.message}\n日志目录：${LOG_DIR}`)
+      }
+    } finally {
+      backendRestarting = false
+      if (!quitting) {
+        if (mainWindow) mainWindow.setProgressBar(-1)
+        createTray()
+        if (reloaded && pendingActivation) {
+          const activation = pendingActivation
+          pendingActivation = null
+          void activateDesktop(activation).catch(error => log(`桌面通知激活失败：${error.message}`))
+        }
+      }
+    }
   }, 800)
+  return true
 }
 
 // ------------------------------------------------------------- healthcheck ---
@@ -320,11 +400,13 @@ async function findFreePort(start, span) {
   return start
 }
 
-async function waitForBackend(timeoutMs = 180000) {
+async function waitForBackend(timeoutMs = 180000, child = backend) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (!backend) return false
-    if (await probeOnce()) return true
+    if (quitting || !child || backend !== child) return false
+    const ready = await probeOnce()
+    if (quitting || backend !== child) return false
+    if (ready) return true
     await new Promise(resolve => setTimeout(resolve, 400))
   }
   return false
@@ -543,7 +625,7 @@ function requestSessionActivation(session) {
 
 async function activateDesktop(activation) {
   // 启动期间复用已有的启动页，保留会话请求直到应用界面就绪。
-  if (!uiReady) {
+  if (!uiReady || backendRestarting) {
     pendingActivation = activation
     if (mainWindow) showWindow()
     return
@@ -583,9 +665,9 @@ function createTray() {
   }
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开主界面', click: () => showWindow() },
-    { label: '在浏览器中打开', enabled: uiReady, click: () => shell.openExternal(`${baseUrl()}/`) },
+    { label: '在浏览器中打开', enabled: uiReady && !backendRestarting, click: () => shell.openExternal(`${baseUrl()}/`) },
     { type: 'separator' },
-    { label: '重启内置服务', enabled: uiReady, click: () => restartBackend() },
+    { label: '重启内置服务', enabled: uiReady && !backendRestarting, click: () => restartBackend() },
     { label: '打开后台日志', click: () => openBackendLogs() },
     { label: '打开工作目录', click: () => shell.openPath(resolveLayout().workDir) },
     { type: 'separator' },
@@ -611,7 +693,7 @@ function registerIpc() {
     logsDir: LOG_DIR,
     workDir: resolveLayout().workDir,
   }))
-  ipcMain.handle('sugaragent:restart-backend', () => { restartBackend(); return true })
+  ipcMain.handle('sugaragent:restart-backend', () => restartBackend())
   ipcMain.handle('sugaragent:open-logs', () => openBackendLogs())
   ipcMain.on('sugaragent:theme', applyNativeTheme)
   ipcMain.on('sugaragent:language', (event, language) => {
@@ -672,7 +754,8 @@ if (!gotLock) {
     const ready = await waitForBackend(180000)
     if (quitting) return
     if (!ready) {
-      fatal(`内置服务在 180 秒内未就绪。\n日志：${path.join(LOG_DIR, `backend-${new Date().toISOString().slice(0, 10)}.log`)}`)
+      const message = backend ? '内置服务在 180 秒内未就绪。' : '内置服务启动失败或已退出。'
+      fatal(`${message}\n日志：${path.join(LOG_DIR, `backend-${new Date().toISOString().slice(0, 10)}.log`)}`)
       return
     }
     const initialActivation = pendingActivation
@@ -697,6 +780,8 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     quitting = true
+    if (restartTimer !== null) clearTimeout(restartTimer)
+    restartTimer = null
   })
 
   app.on('will-quit', () => {
