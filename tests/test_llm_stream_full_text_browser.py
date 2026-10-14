@@ -206,6 +206,70 @@ def test_tool_model_fields_reveal_and_stop_when_execution_begins(page, route):
     assert result["pending"] == 0 and result["raf"] == 0 and result["rows"] == 1
 
 
+@pytest.mark.parametrize("kind", ["reasoning", "response"])
+@pytest.mark.parametrize("smooth", [False, True])
+def test_execution_blank_lines_stay_trimmed_through_completion_and_next_reply(page, kind, smooth):
+    page.add_script_tag(content=(ROOT / "frontend/src/app/modules/smooth-stream.js").read_text(encoding="utf-8"))
+    result = page.evaluate("""async ({kind,smooth}) => {
+      body.replaceChildren();ctx.llm={};window.__MYAGENT_FEATURES__.smoothStream=smooth;
+      const expected='  第一行正文\\n\\n第二行正文',prefix='\\n \\t\\n',tail='\\n \\t\\n';
+      const event={type:'llm_'+kind+'_delta',execution_id:'blank-lines-'+kind,
+        run_id:'run-1',react_iter:1,execution_runtime_seq:1,delta:prefix+expected};
+      const samples=[];
+      const sample=()=>{
+        // Compare the complete body even when reasoning automatically folds.
+        sc.closest('.feed-item').classList.remove('is-collapsed');
+        samples.push({text:sc.textContent,height:sc.getBoundingClientRect().height});
+      };
+      renderExecutionEvent(ctx,event,currentSessionId);flushLlmDeltaText(ctx);
+      const sc=body.querySelector('.feed-chunk-scroller');sample();
+      const node=sc.firstChild;
+      renderExecutionEvent(ctx,{...event,delta:tail,execution_runtime_seq:2},currentSessionId);
+      flushLlmDeltaText(ctx);sample();
+      const raw=prefix+expected+tail;
+      renderExecutionEvent(ctx,{type:'llm_'+kind,execution_id:event.execution_id,
+        run_id:'run-1',react_iter:1,execution_runtime_seq:3,content:raw},currentSessionId);
+      sample();
+      await new Promise(requestAnimationFrame);sample();
+      const rawPreserved=sc._llmRawText===raw
+        && executionRecordsBySession.get(currentSessionId).get(event.execution_id).content===raw;
+      finalizeLlmStreamChunks(ctx);sample();
+      renderExecutionEvent(ctx,{...event,execution_id:'next-'+kind,react_iter:2,
+        execution_runtime_seq:4,delta:'下一条回复'},currentSessionId);
+      flushLlmDeltaText(ctx);sample();
+      return {expected,samples,rawPreserved,sameNode:node===sc.firstChild};
+    }""", {"kind": kind, "smooth": smooth})
+    assert [sample["text"] for sample in result["samples"]] == [result["expected"]] * 6
+    heights = [sample["height"] for sample in result["samples"]]
+    assert max(heights) - min(heights) < 1.5
+    assert result["rawPreserved"]
+    if smooth:
+        assert result["sameNode"]
+
+
+@pytest.mark.parametrize("kind", ["reasoning", "response"])
+@pytest.mark.parametrize("recovery", ["snapshot", "history"])
+def test_execution_recovery_trims_blank_lines_without_losing_later_line_breaks(page, kind, recovery):
+    result = page.evaluate("""({kind,recovery}) => {
+      body.replaceChildren();ctx.llm={};replayingMessages=recovery==='history';
+      const expected='  恢复的正文\\n\\n保留段落',raw='\\n \\t\\n'+expected+'\\n \\t\\n';
+      const id='recovery-'+kind;
+      const record=updateExecutionRecord(currentSessionId,{execution_id:id,kind,
+        run_id:'run-1',react_iter:1,status:'generating',content:raw,last_runtime_seq:1});
+      renderExecutionRecord(ctx,record,currentSessionId,{snapshot:recovery==='snapshot'});
+      const sc=body.querySelector('.feed-chunk-scroller'),recovered=sc.textContent;
+      replayingMessages=false;
+      renderExecutionEvent(ctx,{type:'llm_'+kind+'_delta',execution_id:id,
+        run_id:'run-1',react_iter:1,execution_runtime_seq:2,delta:'后续正文'},currentSessionId);
+      flushLlmDeltaText(ctx);
+      return {expected,recovered,continued:sc.textContent,
+        rawPreserved:sc._llmRawText===raw+'后续正文'};
+    }""", {"kind": kind, "recovery": recovery})
+    assert result["recovered"] == result["expected"]
+    assert result["continued"] == result["expected"] + "\n \t\n后续正文"
+    assert result["rawPreserved"]
+
+
 @pytest.mark.parametrize("kind", ["llm-reasoning", "llm-response"])
 @pytest.mark.parametrize("shape", ["single", "multi"])
 def test_stream_keeps_middle_and_grows_with_full_text(page, kind, shape):

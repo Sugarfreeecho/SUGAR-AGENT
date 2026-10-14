@@ -69,7 +69,7 @@ function runtime() {
     unregisterProcessAggregateRow() {}, registerProcessAggregateRow() {}, scrollContentAreaIfFollow() {},
     renderEvent() { throw new Error('execution identity must use the durable renderer'); }});
   vm.runInContext(rendering.slice(rendering.indexOf('var executionRecordsBySession'), rendering.indexOf('function ensureProcessGroup')), c);
-  vm.runInContext(fn(rendering, 'truncateLogTextForUi'), c);
+  vm.runInContext(['trimSurroundingBlankLines', 'truncateLogTextForUi'].map(name => fn(rendering, name)).join('\n'), c);
   for (const name of ['removeTemporaryStatus', 'upsertTemporaryStatus', 'formatToolDraftLine', 'formatToolPendingLine', 'writeToolCallLlmText']) {
     vm.runInContext(fn(rendering, name), c);
   }

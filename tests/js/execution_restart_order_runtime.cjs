@@ -80,7 +80,7 @@ function runtime() {
   });
   vm.runInContext(['seedRenderContextRunGenerations', 'syncRenderContextRunScope', 'renderEvent']
     .map(name => fn(dispatch, name)).join('\n'), c);
-  vm.runInContext(['reactGenerationForContext', 'reactFeedPhase', 'appendProcessRowBeforePendingAppendSteer',
+  vm.runInContext(['trimSurroundingBlankLines', 'reactGenerationForContext', 'reactFeedPhase', 'appendProcessRowBeforePendingAppendSteer',
     'appendMonotonicProcessRow', 'insertReactOrderedFeedRow', 'appendLlmStreamDelta']
     .map(name => fn(rendering, name)).join('\n'), c);
   const start = rendering.indexOf('var executionRecordsBySession');

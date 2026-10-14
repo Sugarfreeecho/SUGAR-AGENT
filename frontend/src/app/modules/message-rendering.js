@@ -1541,7 +1541,8 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     row.removeAttribute('data-tool-pending');
     row.dataset.eventCommitted = '1';
     var scroller = row.querySelector('.feed-chunk-scroller');
-    var uiText = record.kind === 'tool' ? truncateLogTextForUi(text) : text;
+    // Completed records and recovery snapshots use the same blank-line policy as live reveals.
+    var uiText = record.kind === 'tool' ? truncateLogTextForUi(text) : trimSurroundingBlankLines(text);
     if (scroller && smoothText) {
         if (record.kind === 'tool') queueToolCallLlmReveal(ctx, scroller, record.tool, record.arguments_raw, sessionId);
         else queueExecutionLlmReveal(ctx, scroller, text, record.kind, sessionId);
