@@ -17,6 +17,7 @@ const http = require('node:http')
 const net = require('node:net')
 const path = require('node:path')
 const { createNotificationBridge } = require('./notifications')
+const { removeLegacyElectronShortcuts } = require('./desktop-shortcuts')
 
 const HOST = '127.0.0.1'
 const BASE_PORT = Number(process.env.SUGARAGENT_PORT || 8192)
@@ -48,6 +49,7 @@ const expectedBackendExits = new WeakSet()
 let uiReady = false
 let pendingActivation = parseDesktopActivation(process.argv)
 let notificationBridge = null
+let desktopWindowReport = Promise.resolve()
 
 // ---------------------------------------------------------------- logging ---
 
@@ -347,6 +349,7 @@ function restartBackend() {
       if (quitting) return
       if (backend !== child) throw new Error('内置服务在加载界面时退出。')
       reloaded = true
+      if (mainWindow) void reportDesktopWindowVisibility(mainWindow.isVisible())
     } catch (error) {
       log(`后端重启失败：${error.message}`)
       if (!quitting) {
@@ -445,6 +448,32 @@ function isConfigured() {
 
 // ------------------------------------------------------------------ window ---
 
+function reportDesktopWindowVisibility(visible) {
+  if (!notificationBridge || !uiReady || quitting) return Promise.resolve(false)
+  const body = JSON.stringify({ visible })
+  const authorization = `Bearer ${notificationBridge.token}`
+  // Serialize fast close/reopen transitions so a late hide cannot override a
+  // newer show at the backend and produce a notification over the open app.
+  const send = () => new Promise(resolve => {
+    const request = http.request({
+      host: HOST, port: activePort, path: '/api/ui-desktop-window', method: 'POST', timeout: 1500,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Authorization: authorization },
+    }, response => {
+      response.on('end', () => resolve(response.statusCode === 200))
+      response.on('error', () => resolve(false))
+      response.resume()
+    })
+    request.on('timeout', () => { request.destroy(); resolve(false) })
+    request.on('error', () => resolve(false))
+    request.end(body)
+  })
+  desktopWindowReport = desktopWindowReport.then(send, send).then(ok => {
+    if (!ok && !quitting) log('桌面窗口显示状态同步失败')
+    return ok
+  })
+  return desktopWindowReport
+}
+
 /** Native fallback for editing and embedded pages. Renderer menus prevent the
  * DOM contextmenu default, so only unhandled targets reach this event. */
 function installNativeContextMenu(contents) {
@@ -538,6 +567,8 @@ function createWindow() {
     event.preventDefault()
     mainWindow.hide()
   })
+  mainWindow.on('hide', () => { void reportDesktopWindowVisibility(false) })
+  mainWindow.on('show', () => { void reportDesktopWindowVisibility(true) })
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(baseUrl())) return { action: 'allow' }
     shell.openExternal(url).catch(() => {})
@@ -721,6 +752,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     app.setAppUserModelId('com.sugaragent.desktop')
+    removeLegacyElectronShortcuts({ app, shell, execPath: process.execPath, log })
     // 前端默认浅色；载入后 preload 会按实际页面主题同步原生边框和菜单。
     nativeTheme.themeSource = 'light'
     ensureLogDir()
@@ -762,6 +794,7 @@ if (!gotLock) {
     pendingActivation = null
     await loadApp(initialActivation ? initialActivation.session : '')
     uiReady = true
+    void reportDesktopWindowVisibility(mainWindow.isVisible())
     createTray()
     if (pendingActivation) {
       const activation = pendingActivation

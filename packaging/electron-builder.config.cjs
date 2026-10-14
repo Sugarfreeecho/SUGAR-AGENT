@@ -81,6 +81,6 @@ module.exports = {
       throw new Error(`载荷不完整：缺少 ${python} 或 ${entry}；请先运行 npm run payload`)
     }
     context.packager.appInfo.buildNumber = undefined
-    installStartupLauncher(context)
+    await installStartupLauncher(context)
   },
 }

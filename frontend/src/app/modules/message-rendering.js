@@ -2026,6 +2026,7 @@ function sendUiPresence(action) {
         action: action,
         token: token,
         active: getUiPresenceActive(),
+        desktop: !!window.sugarAgentDesktop,
         session_id: typeof currentSessionId === 'string' ? currentSessionId : ''
     });
     try {

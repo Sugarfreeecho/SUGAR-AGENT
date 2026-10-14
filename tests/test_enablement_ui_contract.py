@@ -166,6 +166,7 @@ def test_ui_presence_tracks_foreground_state_and_attention_notifications():
     # visibility/focus changes instead of waiting for the next heartbeat.
     assert "getUiPresenceActive" in frontend
     assert "active: getUiPresenceActive()" in frontend
+    assert "desktop: !!window.sugarAgentDesktop" in frontend
     assert "sendUiPresence('update')" in frontend
     assert "window.addEventListener('blur'" in frontend
     assert "setTimeout(registerUiPresence, 10000)" in frontend

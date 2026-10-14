@@ -26,8 +26,10 @@ class StartupProbe {
         // Keep the child before its first message loop long enough to observe the OS cursor.
         Thread.Sleep(1000);
         File.WriteAllText(report, new JavaScriptSerializer().Serialize(new { startupFlags = startup.flags, args = args }), Encoding.UTF8);
-        using (var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.Out)) {
-            pipe.Connect(3000); byte[] ready = Encoding.ASCII.GetBytes("ready"); pipe.Write(ready, 0, ready.Length);
+        if (pipeName != null) {
+            using (var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.Out)) {
+                pipe.Connect(3000); byte[] ready = Encoding.ASCII.GetBytes("ready"); pipe.Write(ready, 0, ready.Length);
+            }
         }
         Application.EnableVisualStyles();
         using (var form = new Form { Size = new Size(30, 30), Opacity = 0, ShowInTaskbar = false }) {

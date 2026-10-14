@@ -41,6 +41,8 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
     isMinimized() { return this.minimized }
     restore() { calls.restored = true; this.minimized = false }
     show() { calls.shown = true }
+    hide() { calls.hidden = true; this.emit('hide') }
+    isVisible() { return !!calls.shown && !calls.hidden }
     focus() { calls.focused = true }
     setBackgroundColor(color) { calls.background = color }
     setProgressBar(value) { calls.progress.push(value) }
@@ -129,7 +131,7 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
       const request = new EventEmitter()
       request.end = body => {
         calls.requests.push({ options, body: JSON.parse(body) })
-        const response = Object.assign(new EventEmitter(), { statusCode: 200, setEncoding() {} })
+        const response = Object.assign(new EventEmitter(), { statusCode: 200, setEncoding() {}, resume() {} })
         callback(response)
         response.emit('data', JSON.stringify({ reused }))
         response.emit('end')
@@ -149,7 +151,8 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
           return socket
         },
       },
-      './notifications': { createNotificationBridge: async () => ({ port: 12345, token: 'test', close() {} }) } })[name],
+      './notifications': { createNotificationBridge: async () => ({ port: 12345, token: 'test', close() {} }) },
+      './desktop-shortcuts': { removeLegacyElectronShortcuts() {} } })[name],
     process: { argv, env: {}, resourcesPath: 'D:\\SugarAgent Runtime', platform: 'win32', execPath },
     __dirname: path.join(ROOT, 'packaging/electron'), URL, Buffer,
     setTimeout: manualTimers ? (callback, delay) => {
@@ -193,6 +196,26 @@ test('default workspace keeps the source layout and follows the read-only fallba
     assert.equal(layout.workDir, path.win32.join(root, 'workspace'))
     assert.equal(api.backendEnv().WORK_DIR, layout.workDir)
   }
+})
+
+test('closing to tray reports hidden state to the owning backend without unloading the renderer', async () => {
+  const { api, calls } = shellHarness()
+  api.port(8195)
+  api.notifications({ port: 12345, token: 'per-launch-secret' })
+  api.createWindow()
+  api.ready()
+  let prevented = false
+  calls.window.emit('close', { preventDefault() { prevented = true } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(prevented && calls.hidden, true)
+  const report = calls.requests.find(row => row.options.path === '/api/ui-desktop-window')
+  assert.ok(report, 'hide must reach the backend even though pagehide is never fired')
+  assert.equal(report.options.port, 8195)
+  assert.equal(report.options.headers.Authorization, 'Bearer per-launch-secret')
+  assert.deepEqual(report.body, { visible: false })
+  calls.window.emit('show')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(calls.requests.at(-1).body, { visible: true })
 })
 
 test('cold start paints a busy window before backend work and keeps it until the app is loaded', async () => {

@@ -18,7 +18,8 @@ def test_electron_shell_runtime():
         pytest.skip("Node.js is unavailable")
     result = subprocess.run(
         [node, "--test", str(ROOT / "tests/js/desktop_shell_runtime.cjs"),
-         str(ROOT / "tests/js/desktop_notifications.cjs")],
+         str(ROOT / "tests/js/desktop_notifications.cjs"),
+         str(ROOT / "tests/js/desktop_shortcuts.cjs")],
         capture_output=True, text=True, encoding="utf-8", timeout=30,
         creationflags=hidden_flags(),
     )

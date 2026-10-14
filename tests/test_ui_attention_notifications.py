@@ -18,7 +18,7 @@ def _isolate_attention_delivery(monkeypatch):
 
     delivered = []
 
-    async def notify(title, message, session_id=""):
+    async def notify(title="", message="", session_id=""):
         delivered.append((message, session_id))
         return []
 
@@ -28,6 +28,7 @@ def _isolate_attention_delivery(monkeypatch):
     monkeypatch.setattr(webui, "_ui_closed_notify_task", None)
     monkeypatch.setattr(webui, "_ui_attention_notify_reasons", {})
     monkeypatch.setattr(webui, "_ui_presence_tokens", {})
+    monkeypatch.setattr(webui, "_desktop_ui_hidden", None)
     monkeypatch.setattr(webui, "_last_ui_attention_notify_at", 0)
     monkeypatch.setattr(webui, "_notification_context", lambda sid, status, count: ("SugarAgent", status))
     monkeypatch.setattr(webui, "notify_user", notify)
@@ -36,6 +37,144 @@ def _isolate_attention_delivery(monkeypatch):
     monkeypatch.setattr(agent_goal, "manager_for", lambda manager: SimpleNamespace(get=lambda sid: None))
     return delivered
 
+
+class _PresenceRequest:
+    def __init__(self, payload, token="desktop-test-token"):
+        self.payload = payload
+        self.headers = {"authorization": f"Bearer {token}"}
+
+    async def json(self):
+        return self.payload
+
+
+def _enable_desktop_window_reports(monkeypatch):
+    monkeypatch.setenv("SUGARAGENT_DESKTOP", "1")
+    monkeypatch.setenv("SUGARAGENT_NOTIFY_TOKEN", "desktop-test-token")
+
+
+def test_native_close_delivers_background_notice_despite_hidden_page_heartbeat(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        payload = {"action": "register", "token": "desktop-page", "active": True, "desktop": True}
+        await webui.ui_presence(_PresenceRequest(payload))
+        response = await webui.ui_desktop_window(_PresenceRequest({"visible": False}))
+        assert response.status_code == 200
+        task = webui._ui_closed_notify_task
+        assert task is not None
+        await webui.ui_presence(_PresenceRequest({**payload, "active": False}))
+        assert webui._ui_closed_notify_task is task, 'hidden heartbeat must not cancel the notice'
+        assert webui._ui_presence_has_active() is False
+        await task
+        assert delivered == [("", "")]
+        assert "desktop-page" in webui._ui_presence_tokens, 'the renderer stays available for activation'
+
+    asyncio.run(scenario())
+
+
+def test_reopening_desktop_cancels_pending_background_notice(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        await webui.ui_desktop_window(_PresenceRequest({"visible": False}))
+        task = webui._ui_closed_notify_task
+        await webui.ui_desktop_window(_PresenceRequest({"visible": True}))
+        await asyncio.gather(task, return_exceptions=True)
+        assert webui._ui_closed_notify_task is None
+        assert delivered == []
+
+    asyncio.run(scenario())
+
+
+def test_open_browser_page_still_suppresses_desktop_closed_notice(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        await webui.ui_presence(_PresenceRequest({"action": "register", "token": "browser-page", "active": False}))
+        await webui.ui_desktop_window(_PresenceRequest({"visible": False}))
+        await webui._ui_closed_notify_task
+        assert delivered == []
+
+    asyncio.run(scenario())
+
+
+def test_specific_notice_takes_priority_when_desktop_is_closed(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        await webui.ui_desktop_window(_PresenceRequest({"visible": False}))
+        task = webui._ui_closed_notify_task
+        webui._schedule_ui_attention_notify("session-1", "completed")
+        await asyncio.gather(task, return_exceptions=True)
+        await webui._ui_attention_notify_task
+        assert delivered == [("completed", "session-1")]
+
+    asyncio.run(scenario())
+
+
+def test_desktop_window_reports_require_the_owning_process_token(monkeypatch):
+    import webui
+
+    async def scenario():
+        _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        response = await webui.ui_desktop_window(_PresenceRequest({"visible": False}, token="wrong"))
+        assert response.status_code == 403
+        assert webui._desktop_ui_hidden is None
+        assert webui._ui_closed_notify_task is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("visible", ["false", None, 0])
+def test_desktop_window_reports_reject_non_boolean_state(monkeypatch, visible):
+    import webui
+
+    async def scenario():
+        _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        response = await webui.ui_desktop_window(_PresenceRequest({"visible": visible}))
+        assert response.status_code == 400
+        assert webui._desktop_ui_hidden is None
+
+    asyncio.run(scenario())
+
+
+def test_repeated_native_hide_does_not_repeat_background_notice(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        await webui.ui_desktop_window(_PresenceRequest({"visible": False}))
+        await webui._ui_closed_notify_task
+        await webui.ui_desktop_window(_PresenceRequest({"visible": False}))
+        assert webui._ui_closed_notify_task is None
+        assert delivered == [("", "")]
+
+    asyncio.run(scenario())
+
+
+def test_native_close_respects_disabled_notifications(monkeypatch):
+    import webui
+
+    async def scenario():
+        delivered = _isolate_attention_delivery(monkeypatch)
+        _enable_desktop_window_reports(monkeypatch)
+        monkeypatch.setattr(webui, "_UI_CLOSED_NOTIFY_ENABLED", False)
+        await webui.ui_desktop_window(_PresenceRequest({"visible": False}))
+        assert webui._ui_closed_notify_task is None
+        assert delivered == []
+
+    asyncio.run(scenario())
 
 @pytest.mark.parametrize("terminal", ["completed", "interrupted", "failed"])
 def test_latest_terminal_state_wins_during_notification_grace(monkeypatch, terminal):

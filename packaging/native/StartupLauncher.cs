@@ -52,9 +52,48 @@ internal static class StartupLauncher
     }
     [STAThread]
     private static int Main(string[] args) {
+        bool protocol = false, forceSplash = false;
+        foreach (string arg in args) {
+            if (arg == "--launcher-smoke") forceSplash = true;
+            Uri uri;
+            if (Uri.TryCreate(arg, UriKind.Absolute, out uri)
+                && String.Equals(uri.Scheme, "sugaragent-desktop", StringComparison.OrdinalIgnoreCase)
+                && String.Equals(uri.Host, "open-ui", StringComparison.OrdinalIgnoreCase)
+                && (uri.AbsolutePath == "" || uri.AbsolutePath == "/")) protocol = true;
+        }
+        // Notifications must forward to Electron's single-instance handler
+        // before creating a Form, a startup pipe, or OS startup feedback.
+        if (protocol && !forceSplash) return ForwardProtocol(args);
         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
         using (var splash = new StartupSplash(args)) Application.Run(splash);
         return Environment.ExitCode;
+    }
+
+    private static int ForwardProtocol(string[] args) {
+        ProcessInfo child = new ProcessInfo();
+        string reportPath = null;
+        try {
+            string target;
+            using (var reader = new StreamReader(Resource("LauncherTarget"), Encoding.UTF8)) target = reader.ReadToEnd().Trim();
+            target = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, target);
+            var command = new StringBuilder(Quote(target));
+            foreach (string arg in args) {
+                if (arg.StartsWith("--launcher-report=")) { reportPath = arg.Substring("--launcher-report=".Length); continue; }
+                command.Append(' ').Append(Quote(arg));
+            }
+            var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) };
+            if (!CreateProcess(target, command, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
+                Path.GetDirectoryName(target), ref startup, out child)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (reportPath != null) File.WriteAllText(reportPath, new JavaScriptSerializer().Serialize(
+                new { nativeSplashShown = false, startupFlags = startup.flags, protocolForwarded = true }), Encoding.UTF8);
+            return 0;
+        } catch (Exception error) {
+            MessageBox.Show(error.Message, "SugarAgent 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 1;
+        } finally {
+            if (child.process != IntPtr.Zero) CloseHandle(child.process);
+            if (child.thread != IntPtr.Zero) CloseHandle(child.thread);
+        }
     }
 
     private sealed class StartupSplash : Form

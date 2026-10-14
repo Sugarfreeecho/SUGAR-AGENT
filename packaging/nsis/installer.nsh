@@ -87,6 +87,9 @@ Var sugarUpgradeMode
 Var sugarDeleteAppData
 
 !macro customInstall
+  ; Stable system-notification identity, independent of legacy exe metadata.
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "DisplayName" "SugarAgent"
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "IconUri" "$INSTDIR\resources\tray.ico"
   ; 覆盖安装时清掉历史包名（sugaragent-desktop）留下的 installer store
   RMDir /r "$LOCALAPPDATA\sugaragent-desktop-updater"
 
@@ -113,6 +116,7 @@ Var sugarDeleteAppData
     RMDir /r "$LOCALAPPDATA\SugarAgent"                    ; 应用状态：安全库（审批/MCP）、用户插件
     Call un.SugarAgentRemoveTempDirs                       ; %TEMP%\sugaragent-*
     DeleteRegKey HKCU "Software\Classes\sugaragent-desktop"
+    DeleteRegKey HKCU "Software\Classes\AppUserModelId\${APP_ID}"
     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\${APP_ID}"
     Goto sugar_uninstall_done
 

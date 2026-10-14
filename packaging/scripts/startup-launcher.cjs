@@ -23,13 +23,22 @@ function buildStartupLauncher({ output, target, payload, workDir }) {
   if (result.error || result.status !== 0) throw new Error(result.error ? result.error.message : result.stdout + result.stderr)
 }
 
-function installStartupLauncher(context) {
+async function brandRuntimeExe(context, runtime) {
+  // afterPack runs before electron-builder edits its primary exe. Swapping in
+  // the launcher makes the runtime a secondary exe, which is otherwise only
+  // signed. Explicitly apply the same icon/version/ProductName/LegalCopyright.
+  await context.packager.signAndEditResources(runtime, context.arch, context.outDir,
+    path.basename(runtime, '.exe'), context.packager.platformSpecificBuildOptions.requestedExecutionLevel)
+}
+
+async function installStartupLauncher(context) {
   const name = context.packager.appInfo.productFilename
   const entry = path.join(context.appOutDir, `${name}.exe`)
   const runtimeName = `${name}Runtime.exe`
   const runtime = path.join(context.appOutDir, runtimeName)
   fs.renameSync(entry, runtime)
   try {
+    await brandRuntimeExe(context, runtime)
     buildStartupLauncher({ output: entry, target: runtimeName,
       workDir: path.join(packaging, 'build', 'native-launcher') })
   } catch (error) {
@@ -39,4 +48,4 @@ function installStartupLauncher(context) {
   }
 }
 
-module.exports = { buildStartupLauncher, installStartupLauncher }
+module.exports = { buildStartupLauncher, installStartupLauncher, brandRuntimeExe }

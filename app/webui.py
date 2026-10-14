@@ -7,6 +7,7 @@
 import asyncio
 import functools
 import hashlib
+import hmac
 import json
 import logging
 import mimetypes
@@ -250,6 +251,7 @@ _hook_pipeline_warmup_task: Optional[asyncio.Task] = None
 _prompt_build_warmup_task: Optional[asyncio.Task] = None
 _tokenizer_warmup_task: Optional[asyncio.Task] = None
 _ui_presence_tokens: dict[str, dict[str, Any]] = {}
+_desktop_ui_hidden: Optional[bool] = None
 _ui_activation_seq = 0
 _ui_activation_path = "/"
 _ui_activation_session = ""
@@ -5670,7 +5672,21 @@ def _ui_presence_has_active() -> bool:
     """Return True when at least one WebUI tab is visible and focused."""
 
     _ui_presence_prune(time.time())
-    return any(bool(entry.get("active")) for entry in _ui_presence_tokens.values())
+    return any(
+        bool(entry.get("active")) and _ui_presence_page_is_open(entry)
+        for entry in _ui_presence_tokens.values()
+    )
+
+
+def _ui_presence_page_is_open(entry: dict) -> bool:
+    """A resident Electron renderer is not an open window after close-to-tray."""
+
+    return not (entry.get("desktop") and _desktop_ui_hidden is True)
+
+
+def _ui_presence_has_open_pages() -> bool:
+    _ui_presence_prune(time.time())
+    return any(_ui_presence_page_is_open(entry) for entry in _ui_presence_tokens.values())
 
 
 def _ui_presence_has_reusable(now: Optional[float] = None) -> bool:
@@ -6000,12 +6016,14 @@ async def _schedule_ui_closed_notify() -> None:
         try:
             await asyncio.sleep(_UI_CLOSED_NOTIFY_GRACE_SEC)
             with _ui_presence_lock:
-                if _ui_presence_tokens:
+                if _ui_presence_has_open_pages():
                     return
             # Page-closed notice is session-agnostic: restore the original
             # "still running in the background" copy instead of a
             # status/session/question summary.
-            await notify_user()
+            failures = await notify_user()
+            if failures:
+                logger.warning("UI closed notification failed: %s", "; ".join(failures))
         except asyncio.CancelledError:
             return
         finally:
@@ -6014,6 +6032,34 @@ async def _schedule_ui_closed_notify() -> None:
                 _ui_closed_notify_task = None
 
     _ui_closed_notify_task = asyncio.create_task(delayed_notify())
+
+
+@fastapi_app.post("/api/ui-desktop-window")
+async def ui_desktop_window(request: Request):
+    """Accept native show/hide state from the owning Electron main process."""
+
+    token = os.getenv("SUGARAGENT_NOTIFY_TOKEN", "")
+    authorization = request.headers.get("authorization", "")
+    if (os.getenv("SUGARAGENT_DESKTOP") != "1" or not token
+            or not hmac.compare_digest(authorization.encode("utf-8"), f"Bearer {token}".encode("utf-8"))):
+        return JSONResponse(content={"ok": False}, status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("visible"), bool):
+        return JSONResponse(content={"ok": False}, status_code=400)
+    global _desktop_ui_hidden
+    hidden = not data["visible"]
+    with _ui_presence_lock:
+        changed = _desktop_ui_hidden != hidden
+        _desktop_ui_hidden = hidden
+    if hidden:
+        if changed:
+            await _schedule_ui_closed_notify()
+    else:
+        _cancel_pending_ui_closed_notify()
+    return JSONResponse(content={"ok": True})
 
 
 @fastapi_app.post("/api/ui-presence")
@@ -6046,12 +6092,15 @@ async def ui_presence(request: Request):
                 "seen_at": now,
                 "active": active,
                 "session_id": session_id,
+                "desktop": data.get("desktop") is True,
             }
         elif action == "update":
             entry = _ui_presence_tokens.get(token)
             if entry is not None:
                 entry["seen_at"] = now
                 entry["active"] = active
+                if "desktop" in data:
+                    entry["desktop"] = data["desktop"] is True
                 if session_id:
                     entry["session_id"] = session_id
         else:
@@ -6060,9 +6109,9 @@ async def ui_presence(request: Request):
 
     with _ui_presence_lock:
         has_active_ui = _ui_presence_has_active()
-        has_open_pages = bool(_ui_presence_tokens)
+        has_open_pages = _ui_presence_has_open_pages()
 
-    if action == "register":
+    if action == "register" and has_open_pages:
         _cancel_pending_ui_closed_notify()
     if action in {"register", "update"} and has_active_ui:
         _cancel_pending_ui_attention_notify()
