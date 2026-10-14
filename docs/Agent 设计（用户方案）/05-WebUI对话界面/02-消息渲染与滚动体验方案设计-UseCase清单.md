@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-13 v23（覆盖至：当前工作区；工具调用/进度流的平滑揭示与快照替换；临时状态框清理）
+- 版本：2026-10-14 v24（覆盖至：当前工作区；执行过程框轮次计时）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -96,6 +96,12 @@
 - **规则与边界**：清理同时查看**当前分组**与**已跟踪的临时节点**（`ctx._temporaryStatusScroller` 所在 body），不依赖当前分组选择器；仅删除"临时且为空"的分组框，活跃空组保留给即将追加的真实行；清理幂等（终止信号可能重复送达）。
 - **依据**：`message-rendering.js::removeTemporaryStatus / discardEmptyTemporaryProcessGroup / sealProcessGroup`；回归 `tests/js/execution_display_compat_runtime.cjs`、`tests/js/execution_smooth_stream_runtime.cjs`、`tests/test_llm_stream_full_text_browser.py`。
 
+### UC-5B15 执行过程框的轮次计时（自动追问各轮独立）
+- **触发**：构建执行过程框（实时流式、历史回放、重连恢复、定期对账）。
+- **预期现象**：每个轮次分组有自己的开始时间——取对应 user 消息的提交时间（`created_at`），经 `turn:<runtime_seq>` 匹配；自动追问的第二条及以后不再显示从整个 run 起点累计的耗时。刷新恢复与对账后仍保留该轮已用时间；已封存且未恢复为运行状态的分组不会被重新启动计时。
+- **规则与边界**：未编号的实时分组按当前用户消息位置定位锚点；无用户轮次锚点的分组（如 final 之后的续接分组）回退 run 总起点；实时与历史投影使用同一时间来源；入队的入队时间不作为本轮开始时间。
+- **依据**：`agent_loop.py::_runtime_v2_user_turn_started_at`（随 `runtime_seq` 发送 `created_at`）、`message-rendering.js::procTurnStartedAt / processGroupTurnStartedAt / applyRunStartedAtToProcessGroup`；现场记录 [`../../performance/自动追问执行过程计时-2026-10-14.md`](../../performance/自动追问执行过程计时-2026-10-14.md)。
+
 ## 3. 边界
 
 - 渲染层不修改事件数据——所见即事件流投影。
@@ -108,6 +114,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-14 v24：新增 UC-5B15（执行过程框轮次计时——按 user 消息 `created_at` 建立分组起点，重连/对账不再被 run 总起点覆盖，已封存分组不重启计时；配合 05/01·UC-5A9 的事实序号）。
 - 2026-10-13 v23：新增 UC-5B14（执行分组封存与临时状态框清理——按已跟踪节点跨分组清理、空临时框连观察器一并移除）；UC-5B1 揭示层扩展到工具调用增量与压缩/要点进度流；UC-5B8 补记重放快照按累计值替换（不重放打字动画）。配合 05/01·UC-5A9 的事实序号分组修复。
 - 2026-10-11 v22：UC-5B11 修订——用量表字号改 `calc(0.625 * 1rem)`（16px 档 10px）并随设置字号等比缩放；旧 `0.63rem × 0.875` 组合退役，其余基准不变。回归 `tests/test_frontend_typography_browser.py`（`.ctx-wrap` ≈ 10px）。
 - 2026-10-11 v21：按用户要求将压缩思考合并至压缩记录内；思考区实时展开、正文开始后收起且可再次展开，重试不新增压缩行，中断只移除活动草稿并保留同条记录中的其他内容。

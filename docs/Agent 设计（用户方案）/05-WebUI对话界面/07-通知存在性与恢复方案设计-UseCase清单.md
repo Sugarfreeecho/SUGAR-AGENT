@@ -1,8 +1,8 @@
 # 通知、存在性与恢复 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-21 v6（覆盖至：仅浏览器窗口的标题关键词复用）
+- 版本：2026-10-14 v7（覆盖至：当前工作区；桌面窗口隐藏状态与通知启动器静默转交）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`app/tray_launcher.py`、`app/platform_lifecycle.py`、`app/webui.py`（ui-presence / ui-activation / 通知段）、`modules/message-rendering.js`、`modules/session-management.js`、恢复 runner（`start_react_recovery_runner`）。
+- 适用实现：`app/tray_launcher.py`、`app/platform_lifecycle.py`、`app/webui.py`（ui-presence / ui-activation / ui-desktop-window / 通知段）、`modules/message-rendering.js`、`modules/session-management.js`、恢复 runner（`start_react_recovery_runner`）、桌面壳（`packaging/electron/main.js`、`packaging/electron/desktop-shortcuts.js`、`packaging/native/StartupLauncher.cs`）。
 - 上级：`00-WebUI对话界面整体设计.md`
 
 ---
@@ -21,7 +21,7 @@
 ### UC-5G2 UI 存在性上报
 - **触发**：页面打开/关闭/切前后台。
 - **预期现象**：presence 被上报（后端据此决定通知与资源策略）；页面关闭、进入后台或浏览器节能/睡眠后，会话不因此崩溃。
-- **规则与边界**：前端打开时注册、每 10 秒刷新、关闭时尽力注销；浏览器节能模式可能冻结 JavaScript 定时器，因此 presence 是通知和激活的辅助信号，不作为 Windows 上"这个标签页一定不存在"的唯一依据。后端激活复用窗口使用 20 秒新鲜度，长期遗留 token 再按配置 TTL 清理。
+- **规则与边界**：前端打开时注册、每 10 秒刷新、关闭时尽力注销；浏览器节能模式可能冻结 JavaScript 定时器，因此 presence 是通知和激活的辅助信号，不作为 Windows 上"这个标签页一定不存在"的唯一依据。后端激活复用窗口使用 20 秒新鲜度，长期遗留 token 再按配置 TTL 清理。桌面壳隐藏窗口时经主进程上报（见 UC-5G8）：驻留渲染器的周期心跳不再视为“打开页面”；桌面页面的 presence 带 `desktop` 标记，隐藏状态只影响通知判定，不注销 token。
 - **依据**：`message-rendering.js::registerUiPresence/sendUiPresence`、`webui.ui_presence`、`_ui_presence_has_active`、`_ui_presence_has_reusable`。
 
 ### UC-5G3 恢复运行（刷新/重启后）
@@ -52,6 +52,18 @@
 - **规则与边界**：Windows 托盘激活单次 HTTP 超时为 2.5 秒，失败后间隔 0.15 秒再试一次；HTTP `reused=true` 仍必须配合浏览器标签关键词匹配/前台校验。页面心跳残留、嵌入式页面或 Windows 拒绝前台切换时，记录决策日志并走真实浏览器打开。
 - **依据**：`tray_launcher.UI_ACTIVATION_TIMEOUT_SECONDS`、`_request_webui_activation_with_retry`、`_activate_webui_from_external`、`TrayLauncher._open_url`、`platform_lifecycle.request_webui_activation`。
 
+### UC-5G8 桌面窗口隐藏与后台提示
+- **触发**：桌面壳窗口被关闭到托盘（隐藏）；用户重新打开窗口；隐藏期间发生任务完成/待处理事件。
+- **预期现象**：关闭窗口后按原有宽限延迟发送“仍在后台运行”的通用提示；隐藏期间驻留渲染器的周期心跳**不视为“打开页面”**，不会冒领抑制该提示；重新打开窗口取消待发提示；具体完成/待处理通知优先于通用提示；浏览器仍有打开页面时照旧抑制。
+- **规则与边界**：主进程经每次启动令牌（`SUGARAGENT_DESKTOP=1` + Bearer）调用 `POST /api/ui-desktop-window` 上报 show/hide；主进程侧上报串行化——迟到的 hide 不能覆盖更新的 show；隐藏只影响通知判定，不注销 presence token，渲染器保持可被激活复用；通知发送失败写入日志。
+- **依据**：`webui.py::ui_desktop_window / _ui_presence_page_is_open / _ui_presence_has_open_pages`、`packaging/electron/main.js::reportDesktopWindowVisibility`、`message-rendering.js::sendUiPresence`（`desktop` 标记）；回归 `tests/test_ui_attention_notifications.py`（5 例）、`tests/js/desktop_shell_runtime.cjs`（close-to-tray 上报）、`tests/test_enablement_ui_contract.py`。
+
+### UC-5G9 通知启动器静默转交与安装链品牌
+- **触发**：点击系统通知（`sugaragent-desktop://open-ui` 协议激活）；双击启动；覆盖安装/卸载。
+- **预期现象**：即使协议仍指向旧安装器的 `SugarAgent.exe`，有效通知链接也**直接转交** `SugarAgentRuntime.exe`（不显示原生启动小窗、不建立启动管道、不请求系统忙碌光标）；普通双击保留完整启动反馈。启动时仅清理指向本安装的旧 `Electron.lnk`（桌面 + 开始菜单），其它 Electron 应用快捷方式保留。两个 exe 显式品牌化（图标/产品名/版本/版权）；安装器注册稳定的 `AppUserModelId`（DisplayName/IconUri），卸载时清理。
+- **规则与边界**：协议判定仅限 `sugaragent-desktop://open-ui` 且 host/path 合法；转交经 `CreateProcess`，`--launcher-report` 记录 `nativeSplashShown=false / protocolForwarded=true`；快捷方式判定要求绝对路径且目标落在本安装目录（大小写不敏感）；`afterPack` 先品牌化运行时再编译启动器（钩子等待完成）。
+- **依据**：`packaging/native/StartupLauncher.cs::ForwardProtocol`、`packaging/electron/desktop-shortcuts.js`、`packaging/scripts/startup-launcher.cjs::brandRuntimeExe`、`packaging/nsis/installer.nsh`；回归 `tests/test_startup_launcher.py`、`tests/js/desktop_shortcuts.cjs`、`tests/native/startup_probe.cs`。
+
 ## 3. 边界
 
 - 通知与流观察者重连（UC-5C3）独立：前者管"提醒"，后者管"数据"。
@@ -70,9 +82,12 @@
 | UC-5G5 | `tray_launcher.py::_visible_browser_windows/_visible_webui_windows/_select_webui_browser_tab/_focus_existing_webui_tab/_bring_window_to_foreground` |
 | UC-5G6 | `tray_launcher.py::run_starter/TrayLauncher._start_agent/_auto_open_webui_when_ready/_claim_ui_open_slot` |
 | UC-5G7 | `tray_launcher.py::_request_webui_activation_with_retry/_activate_webui_from_external/TrayLauncher._open_url`、`platform_lifecycle.py::request_webui_activation`、`webui.py::request_ui_activation` |
+| UC-5G8 | `webui.py::ui_desktop_window/_ui_presence_page_is_open/_ui_presence_has_open_pages`、`packaging/electron/main.js::reportDesktopWindowVisibility`、`message-rendering.js::sendUiPresence` |
+| UC-5G9 | `packaging/native/StartupLauncher.cs::ForwardProtocol`、`packaging/electron/desktop-shortcuts.js`、`packaging/scripts/startup-launcher.cjs::brandRuntimeExe`、`packaging/nsis/installer.nsh` |
 
 ## 5. 版本记录
 
+- 2026-10-14 v7：新增 UC-5G8（桌面窗口隐藏与后台提示——主进程 token 上报、隐藏视同无打开页面、显示取消待发、通知优先级；5 例后端回归 + close-to-tray 外壳回归）与 UC-5G9（通知启动器静默转交、旧 `Electron.lnk` 清理、双 exe 品牌与稳定 AppUserModelId）；UC-5G2 补记 `desktop` 标记与“驻留渲染器不算打开页面”。
 - 2026-09-21 v6：恢复浏览器窗口及后台标签的 `General Agent` / `SugarAgent` 关键词匹配；仅保留浏览器进程过滤，不再逐标签核对地址。
 - 2026-09-21 v5：撤销逐标签选中与地址核验扫描；浏览器地址检查改为只读当前标签，避免高频切换和唤醒其它页面。后台标签不再强求复用。
 - 2026-09-21 v4：UC-5G5 改为浏览器进程与实际标签地址双重核验，不再依据窗口或标签标题；扫描失败恢复原标签，避免误认标题含 `SugarAgent` 的其它网页或非浏览器窗口。
