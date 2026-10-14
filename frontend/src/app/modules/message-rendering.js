@@ -1211,9 +1211,14 @@ function processStartedAtToProcNow(startedAt) {
 }
 
 function applyRunStartedAtToProcessGroup(agg, startedAt) {
-    if (!agg || !startedAt) return;
-    var t0 = processStartedAtToProcNow(startedAt);
-    if (!Number.isFinite(Number(t0))) return;
+    if (!agg) return;
+    // Queued user turns share one run, but each process group has its own
+    // clock. Reattach/reconcile must keep that turn's persisted start time.
+    var groupStartedAt = agg.dataset.procTurnStartedAt || startedAt;
+    if (!groupStartedAt) return;
+    if (agg.dataset.procEndedAt && !agg.classList.contains('is-running')) return;
+    var t0 = processStartedAtToProcNow(groupStartedAt);
+    if (t0 == null || !Number.isFinite(t0)) return;
     agg.dataset.procStartedAt = String(t0);
     delete agg.dataset.procEndedAt;
     if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);
@@ -1614,6 +1619,24 @@ function renderExecutionEvent(ctx, event, sessionId) {
     return true;
 }
 
+function processGroupTurnStartedAt(ctx) {
+    if (!ctx || !ctx.stream) return '';
+    var groupId = String(ctx.processGroupId || '');
+    // Post-final continuation groups do not begin with a user turn.
+    if (groupId && groupId.indexOf('turn:') !== 0) return '';
+    var turnSeq = groupId ? groupId.slice(5) : '';
+    var users = Array.from(ctx.stream.querySelectorAll('.msg-wrap--user'));
+    var anchor = users.reverse().find(function (user) {
+        if (turnSeq) return user.getAttribute('data-runtime-seq') === turnSeq;
+        if (Number.isFinite(Number(ctx.lastUserEventIndex)) && Number(ctx.lastUserEventIndex) >= 0) {
+            return user.getAttribute('data-event-index') === String(ctx.lastUserEventIndex);
+        }
+        return true;
+    });
+    var startedAt = anchor && anchor.getAttribute('data-created-at');
+    return startedAt && Number.isFinite(Date.parse(startedAt)) ? startedAt : '';
+}
+
 function ensureProcessGroup(ctx) {
     if (!ctx || !ctx.stream) return null;
     /* DocumentFragment 或未挂上 document 的节点 isConnected 为 false；回放或「加载更早消息」预挂载时需保留同一执行过程框 */
@@ -1635,6 +1658,8 @@ function ensureProcessGroup(ctx) {
     wrap.className = 'process-aggregate';
     if (ctx.processGroupId) wrap.dataset.processGroupId = String(ctx.processGroupId);
     if (ctx.runId) wrap.dataset.processRunId = String(ctx.runId);
+    var turnStartedAt = processGroupTurnStartedAt(ctx);
+    if (turnStartedAt) wrap.dataset.procTurnStartedAt = turnStartedAt;
     var replayCollapsed = !!replayingMessages;
     if (replayCollapsed) wrap.classList.add('is-collapsed');
     if (!replayingMessages) wrap.classList.add('is-running');
@@ -1650,7 +1675,7 @@ function ensureProcessGroup(ctx) {
         + '<button type="button" class="process-aggregate-resize" aria-label="展开执行过程高度" aria-expanded="false" data-ui-tip="展开执行过程高度" hidden>'
         + '<span class="process-aggregate-chevron" aria-hidden="true"></span></button>';
     if (!replayingMessages) {
-        if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
+        if (turnStartedAt || ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
         else {
             wrap.dataset.procStartedAt = String(procNow());
         }

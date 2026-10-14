@@ -2564,6 +2564,7 @@ def _runtime_v2_commit_user_turn(
         state["_last_user_turn_was_deduplicated"] = committed_event is None and bool(operation_id)
         if ui_type == "user" and committed_event is not None:
             state["_runtime_v2_user_turn_seq"] = int(getattr(committed_event, "seq", 0) or 0)
+            state["_runtime_v2_user_turn_started_at"] = str(getattr(committed_event, "timestamp", "") or "")
         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
         side_effect_event = {
             "type": ui_type,
@@ -3137,6 +3138,9 @@ async def _push_stream_event(
             # same durable boundary as their later execution records.
             event["runtime_seq"] = user_turn_seq
             event["process_group_id"] = f"turn:{user_turn_seq}"
+            user_turn_started_at = state.get("_runtime_v2_user_turn_started_at")
+            if user_turn_started_at:
+                event["created_at"] = user_turn_started_at
     state["stream_events"].append(event)
     if emit:
         try:
