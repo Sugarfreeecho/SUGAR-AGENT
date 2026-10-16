@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-14 v24（覆盖至：当前工作区；执行过程框轮次计时）
+- 版本：2026-10-16 v25（覆盖至：当前工作区；执行行索引）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -44,6 +44,7 @@
 ### UC-5B6 长会话性能
 - **触发**：数百条消息的会话。
 - **预期现象**：滚动/输入不卡；历史段懒渲染；内存不持续膨胀。
+- **规则与边界**：执行行更新经**每流共享的 execution_id→执行行索引**定位（不再整表扫描）；索引在历史补页、流清空与节点被替换失效后重建一次，节点被替换时先复核实际 DOM 再收录；50 轮 / 1001 行历史 + 150 条批量更新的隔离复测整批 70→15ms（≈-79%），见 [`../../performance/execution-row-index-2026-10-14.md`](../../performance/execution-row-index-2026-10-14.md)。
 - **依据**：`message-rendering.js`、`session-scroll-history.js`（懒渲染/裁剪）；`ui-performance.js` 仅做采样与直方图诊断（非渲染层优化）。
 
 ### UC-5B7 长用户消息折叠预览（10 行）
@@ -114,6 +115,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-16 v25：UC-5B6 补记——执行行查找改为每流共享索引（历史补页/清空/替换后重建一次）；隔离基准整批 70→15ms、最长 RAF 82.3→16.9ms。
 - 2026-10-14 v24：新增 UC-5B15（执行过程框轮次计时——按 user 消息 `created_at` 建立分组起点，重连/对账不再被 run 总起点覆盖，已封存分组不重启计时；配合 05/01·UC-5A9 的事实序号）。
 - 2026-10-13 v23：新增 UC-5B14（执行分组封存与临时状态框清理——按已跟踪节点跨分组清理、空临时框连观察器一并移除）；UC-5B1 揭示层扩展到工具调用增量与压缩/要点进度流；UC-5B8 补记重放快照按累计值替换（不重放打字动画）。配合 05/01·UC-5A9 的事实序号分组修复。
 - 2026-10-11 v22：UC-5B11 修订——用量表字号改 `calc(0.625 * 1rem)`（16px 档 10px）并随设置字号等比缩放；旧 `0.63rem × 0.875` 组合退役，其余基准不变。回归 `tests/test_frontend_typography_browser.py`（`.ctx-wrap` ≈ 10px）。

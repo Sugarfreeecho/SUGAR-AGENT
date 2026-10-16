@@ -1,6 +1,6 @@
 # 设置中心（/settings）· 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-11 v3（覆盖至：当前工作区；技能管理与会话包导入）
+- 版本：2026-10-16 v4（覆盖至：当前工作区；会话导入安全化与导出/刷新健壮性）
 - 用途：逐条审查（四字段格式）；核对散落在多处的设置入口是否统一收敛为一个「设置中心」页面，以及分区注册、保存语义、缓存与脏数据保护的边界。
 - 适用实现：`app/templates/settings_center.html`（无构建步骤的静态页）、`app/templates/static/settings/{core.js,sections_basic.js,sections_ext.js,sections_ops.js,plugin_sections.js,package_import.js,settings.css}`、`app/webui.py`（静态服务与设置相关路由）、`app/plugins/settings.py`（插件设置 schema）、`frontend/src/app/modules/settings.js`（聊天页齿轮入口与浮层接线）。
 - 上级：`00-WebUI对话界面整体设计.md`｜相关：`06-会话档案与技能面板方案设计-UseCase清单.md`（模型档案管理）、[`../../settings_plugin_api.md`](../../settings_plugin_api.md)（插件设置页签声明接口）、`../../settings_hub_adaptation_plan.md`（参考实现学习与适配方案）、`../../settings_center_verification.md`（逐分区验证报告）。
@@ -60,8 +60,14 @@
 
 - **触发**：导入导出的会话包（ZIP）或会话目录。
 - **预期现象**：导入生成新会话并进入正常会话列表；无冲突时沿用原会话 id；id 冲突时分配新 id 并改写包内自有引用，保证消息与附件引用一致。
-- **规则与边界**：导入不覆盖既有会话；共享存储（会话库/附件）边界同 04/00；损坏包明确报错、不产生半成品会话。
+- **规则与边界**：导入不覆盖既有会话；共享存储（会话库/附件）边界同 04/00；损坏包明确报错、不产生半成品会话。导入先解析附件包（ZIP 或导出目录的 `attachments/manifest.json`）并校验图片附件，缺失即整体失败并回滚暂存；目录形态可逐层定位会话根（≤40 层、不跟随符号链接）；会话 id 取 UUID 规范形，已删除 id 不复用；落点先入同卷暂存目录，成功后原子改名并同步注册索引（`register_imported_session`）；导入重写活动时间并清除 归档/删除/子代理/草稿 等旧标志。导出只收集**图片**引用（正文中引用的哈希不计入）。
 - **依据**：设置中心「技能/档案」安装链路的会话导入入口；回归 `tests/test_session_import.py`。
+
+### UC-5N9 会话导出与整页刷新（索引重建）
+- **触发**：会话菜单点「导出会话」；侧栏列表头点「刷新」（桌面端唯一的整页刷新入口）。
+- **预期现象**：导出先以 `fetch` 检查 HTTP 状态、`Content-Type` 与空文件，再落盘下载并从 `Content-Disposition` 取文件名；进行中按钮显示「正在导出…」且不可重复触发；失败弹错误提示而不是静默无响应（原生下载会吞掉错误正文，Electron 下尤其表现为“点了没反应”）。刷新先调用 `POST /sessions/index/repair` 重建内存索引与 `sessions.json`，再拉新列表（最多等 1.2s）并整页重载；重建失败或超时保留当前页面并提示，按钮恢复可用。
+- **规则与边界**：重建接口失败返回 500 与真实原因，并携带 `state_revision` 供前端失效缓存；重复点击在单飞闸门内合并；重建必须在重载前完成，列表等待超时不阻塞重载（重载本身会再拉一次）。
+- **依据**：`modules/session-management.js`（`exportSessionFromMenu / refreshSessionListAndPage`）、`webui.py::session_export / repair_sessions_index`；回归 `tests/js/session_export_runtime.cjs`、`tests/js/session_refresh_runtime.cjs`、`tests/test_session_index_refresh.py`、`tests/test_session_export.py`。
 
 ## 3. 边界
 
@@ -79,10 +85,12 @@
 | UC-5N4 | `sections_basic.js`、`model-profiles.js` |
 | UC-5N5 | `core.js`、`webui.py` 静态段 |
 | UC-5N7 | `static/settings/package_import.js`（冲突仲裁）、`tests/test_skills_admin.py` |
-| UC-5N8 | 会话导入链路、`tests/test_session_import.py` |
+| UC-5N8 | 会话导入链路（`webui.py::_import_session_tree`、`agent_harness.py::register_imported_session`、`attachments/lifecycle.py::import_bundle/collect_image_references`）、`tests/test_session_import.py` |
+| UC-5N9 | `session-management.js::exportSessionFromMenu/refreshSessionListAndPage`、`webui.py::session_export/repair_sessions_index`、`tests/js/session_export_runtime.cjs`、`tests/js/session_refresh_runtime.cjs`、`tests/test_session_index_refresh.py` |
 
 ## 5. 版本记录
 
+- 2026-10-16 v4：UC-5N8 补记（导入安全化：附件包预解析与图片校验、嵌套根、UUID 规范、暂存+原子发布+索引注册、导入元数据初始化、导出仅收图片引用）；新增 UC-5N9（导出 fetch-blob 健壮性与“索引重建后整页重载”刷新入口）。
 - 2026-10-11 v3：新增 UC-5N7（技能移除与同名安装冲突三选一）与 UC-5N8（会话包导入：沿用/换 id 与引用改写）。
 - 2026-10-05 v2：内编辑窗口支持遮罩关闭、Esc 优先关确认框/编辑窗（遮罩关闭不触发保存/确认）；MCP 页新增「工具按需披露」开关与按服务器批量启停/常驻按钮。
 - 2026-10-03 v1：拆分首版——设置中心（/settings）落地：5 入口收敛单页、分区注册表与插件设置声明、只提交改动的保存语义（.env 原子写）、搜索/缓存/脏数据保护；旧模板与加载器移除，`/setup` 向导与旧路由深链兼容不变。待提交后补提交号。

@@ -1,0 +1,2889 @@
+{
+  "logs": {
+    "since": "2026-10-11",
+    "unique_rows": 29112,
+    "counts": {
+      "llm_stream_timing": 2030,
+      "llm_local_consumer_timing": 2030,
+      "runtime_v2_write_timing": 5239,
+      "pre_api_timing": 2030,
+      "stream_bridge_delivery_timing": 1675,
+      "final_pipeline_timing": 61,
+      "http_transport_timing": 2029,
+      "tool_to_next_llm_first_delta_timing": 1905,
+      "tool_execution_timing": 2813,
+      "tool_result_post_timing": 2863,
+      "tool_to_next_api_timing": 1950,
+      "run_start_timing": 60,
+      "change_review_timing": 2914,
+      "tool_workspace_audit_timing": 1379,
+      "subagent_pending_read_timing": 40,
+      "subagent_note_claim_timing": 39,
+      "round_boundary_metrics_timing": 16,
+      "tool_result_post_metrics_timing": 31,
+      "create_session_timing": 8
+    },
+    "input_token_buckets": {
+      ">=160k": {
+        "pre_api_timing.total": {
+          "n": 1107,
+          "median": 509,
+          "p95": 2824,
+          "max": 21898612
+        },
+        "pre_api_timing.build_messages": {
+          "n": 1107,
+          "median": 9,
+          "p95": 207,
+          "max": 1944
+        },
+        "pre_api_timing.token_estimate": {
+          "n": 1107,
+          "median": 35,
+          "p95": 190,
+          "max": 21897670
+        },
+        "pre_api_timing.resolve_model_config": {
+          "n": 1107,
+          "median": 4,
+          "p95": 162,
+          "max": 916
+        },
+        "tool_to_next_llm_first_delta_timing.total": {
+          "n": 1053,
+          "median": 8313,
+          "p95": 22799,
+          "max": 39857557
+        },
+        "llm_stream_timing.first_delta_ms": {
+          "n": 1107,
+          "median": 7332,
+          "p95": 21858,
+          "max": 63800
+        },
+        "llm_local_consumer_timing.worker_done_to_consumed_ms": {
+          "n": 1107,
+          "median": 1106,
+          "p95": 12157,
+          "max": 88766
+        },
+        "llm_local_consumer_timing.bridge_emit_max_ms": {
+          "n": 1107,
+          "median": 391,
+          "p95": 4157,
+          "max": 35936
+        },
+        "tool_execution_timing.invoke_ms": {
+          "n": 1355,
+          "median": 821,
+          "p95": 25503,
+          "max": 28928514
+        },
+        "tool_result_post_timing.total": {
+          "n": 1406,
+          "median": 0.0,
+          "p95": 5,
+          "max": 650
+        },
+        "tool_result_post_timing.append_model_history": {
+          "n": 1406,
+          "median": 0.0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_result_post_timing.ui_emit": {
+          "n": 1406,
+          "median": 0.0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_to_next_api_timing.total": {
+          "n": 1055,
+          "median": 6,
+          "p95": 55,
+          "max": 1972
+        },
+        "pre_api_timing.round_gap_ms": {
+          "n": 1060,
+          "median": 3.0,
+          "p95": 41,
+          "max": 11644
+        },
+        "final_pipeline_timing.total": {
+          "n": 47,
+          "median": 608,
+          "p95": 3040,
+          "max": 3527
+        },
+        "run_start_timing.total": {
+          "n": 38,
+          "median": 78.5,
+          "p95": 850,
+          "max": 1735
+        },
+        "round_boundary_metrics_timing.total": {
+          "n": 9,
+          "median": 366,
+          "p95": 1220,
+          "max": 1220
+        },
+        "tool_result_post_metrics_timing.total": {
+          "n": 22,
+          "median": 351.5,
+          "p95": 601,
+          "max": 2836
+        }
+      },
+      "80-160k": {
+        "pre_api_timing.total": {
+          "n": 509,
+          "median": 509,
+          "p95": 3480,
+          "max": 19855
+        },
+        "pre_api_timing.build_messages": {
+          "n": 509,
+          "median": 18,
+          "p95": 173,
+          "max": 1471
+        },
+        "pre_api_timing.token_estimate": {
+          "n": 509,
+          "median": 30,
+          "p95": 226,
+          "max": 1038
+        },
+        "pre_api_timing.resolve_model_config": {
+          "n": 509,
+          "median": 13,
+          "p95": 135,
+          "max": 1179
+        },
+        "tool_to_next_llm_first_delta_timing.total": {
+          "n": 467,
+          "median": 4964,
+          "p95": 13133,
+          "max": 322373
+        },
+        "llm_stream_timing.first_delta_ms": {
+          "n": 507,
+          "median": 3924,
+          "p95": 8109,
+          "max": 35173
+        },
+        "llm_local_consumer_timing.worker_done_to_consumed_ms": {
+          "n": 508,
+          "median": 3431.5,
+          "p95": 58194,
+          "max": 647689
+        },
+        "llm_local_consumer_timing.bridge_emit_max_ms": {
+          "n": 508,
+          "median": 81.5,
+          "p95": 2471,
+          "max": 7585
+        },
+        "tool_execution_timing.invoke_ms": {
+          "n": 744,
+          "median": 463.0,
+          "p95": 13286,
+          "max": 167614
+        },
+        "tool_result_post_timing.total": {
+          "n": 745,
+          "median": 0,
+          "p95": 5,
+          "max": 63
+        },
+        "tool_result_post_timing.append_model_history": {
+          "n": 745,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_result_post_timing.ui_emit": {
+          "n": 745,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_to_next_api_timing.total": {
+          "n": 491,
+          "median": 10,
+          "p95": 152,
+          "max": 3627
+        },
+        "pre_api_timing.round_gap_ms": {
+          "n": 493,
+          "median": 8,
+          "p95": 990,
+          "max": 34504
+        },
+        "run_start_timing.total": {
+          "n": 6,
+          "median": 105.5,
+          "p95": 335,
+          "max": 335
+        },
+        "final_pipeline_timing.total": {
+          "n": 7,
+          "median": 293,
+          "p95": 1084,
+          "max": 1084
+        },
+        "round_boundary_metrics_timing.total": {
+          "n": 6,
+          "median": 111.0,
+          "p95": 601,
+          "max": 601
+        },
+        "tool_result_post_metrics_timing.total": {
+          "n": 4,
+          "median": 239.0,
+          "p95": 1200,
+          "max": 1200
+        }
+      },
+      "20-80k": {
+        "pre_api_timing.total": {
+          "n": 342,
+          "median": 293.5,
+          "p95": 3001,
+          "max": 9507
+        },
+        "pre_api_timing.build_messages": {
+          "n": 342,
+          "median": 10.5,
+          "p95": 116,
+          "max": 1749
+        },
+        "pre_api_timing.token_estimate": {
+          "n": 342,
+          "median": 20.0,
+          "p95": 98,
+          "max": 1262
+        },
+        "pre_api_timing.resolve_model_config": {
+          "n": 342,
+          "median": 9.0,
+          "p95": 103,
+          "max": 651
+        },
+        "llm_stream_timing.first_delta_ms": {
+          "n": 342,
+          "median": 2180.0,
+          "p95": 4085,
+          "max": 10590
+        },
+        "llm_local_consumer_timing.worker_done_to_consumed_ms": {
+          "n": 342,
+          "median": 2129.5,
+          "p95": 72228,
+          "max": 361522
+        },
+        "llm_local_consumer_timing.bridge_emit_max_ms": {
+          "n": 342,
+          "median": 51.5,
+          "p95": 1124,
+          "max": 13970
+        },
+        "pre_api_timing.round_gap_ms": {
+          "n": 339,
+          "median": 6,
+          "p95": 389,
+          "max": 7559
+        },
+        "tool_to_next_llm_first_delta_timing.total": {
+          "n": 336,
+          "median": 3123.5,
+          "p95": 9719,
+          "max": 25070
+        },
+        "tool_execution_timing.invoke_ms": {
+          "n": 593,
+          "median": 240,
+          "p95": 8548,
+          "max": 180454
+        },
+        "tool_result_post_timing.total": {
+          "n": 589,
+          "median": 0,
+          "p95": 7,
+          "max": 114
+        },
+        "tool_result_post_timing.append_model_history": {
+          "n": 589,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_result_post_timing.ui_emit": {
+          "n": 589,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_to_next_api_timing.total": {
+          "n": 337,
+          "median": 6,
+          "p95": 107,
+          "max": 1060
+        },
+        "tool_result_post_metrics_timing.total": {
+          "n": 5,
+          "median": 275,
+          "p95": 1312,
+          "max": 1312
+        },
+        "final_pipeline_timing.total": {
+          "n": 2,
+          "median": 3134.5,
+          "p95": 4911,
+          "max": 4911
+        },
+        "run_start_timing.total": {
+          "n": 2,
+          "median": 377.5,
+          "p95": 687,
+          "max": 687
+        },
+        "round_boundary_metrics_timing.total": {
+          "n": 1,
+          "median": 66,
+          "p95": 66,
+          "max": 66
+        }
+      },
+      "<20k": {
+        "pre_api_timing.total": {
+          "n": 72,
+          "median": 277.0,
+          "p95": 5425,
+          "max": 11327
+        },
+        "pre_api_timing.build_messages": {
+          "n": 72,
+          "median": 22.0,
+          "p95": 1208,
+          "max": 2634
+        },
+        "pre_api_timing.token_estimate": {
+          "n": 72,
+          "median": 24.5,
+          "p95": 93,
+          "max": 277
+        },
+        "pre_api_timing.resolve_model_config": {
+          "n": 72,
+          "median": 10.5,
+          "p95": 77,
+          "max": 474
+        },
+        "llm_stream_timing.first_delta_ms": {
+          "n": 72,
+          "median": 1647.0,
+          "p95": 3151,
+          "max": 7074
+        },
+        "llm_local_consumer_timing.worker_done_to_consumed_ms": {
+          "n": 72,
+          "median": 2629.0,
+          "p95": 33485,
+          "max": 69545
+        },
+        "llm_local_consumer_timing.bridge_emit_max_ms": {
+          "n": 72,
+          "median": 0.0,
+          "p95": 646,
+          "max": 4494
+        },
+        "tool_execution_timing.invoke_ms": {
+          "n": 121,
+          "median": 182,
+          "p95": 14960,
+          "max": 86849
+        },
+        "tool_result_post_timing.total": {
+          "n": 123,
+          "median": 0,
+          "p95": 3,
+          "max": 19
+        },
+        "tool_result_post_timing.append_model_history": {
+          "n": 123,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_result_post_timing.ui_emit": {
+          "n": 123,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "tool_to_next_api_timing.total": {
+          "n": 67,
+          "median": 8,
+          "p95": 80,
+          "max": 289
+        },
+        "pre_api_timing.round_gap_ms": {
+          "n": 49,
+          "median": 8,
+          "p95": 432,
+          "max": 4233
+        },
+        "tool_to_next_llm_first_delta_timing.total": {
+          "n": 49,
+          "median": 2808,
+          "p95": 10867,
+          "max": 18684
+        },
+        "final_pipeline_timing.total": {
+          "n": 4,
+          "median": 56.5,
+          "p95": 76,
+          "max": 76
+        },
+        "run_start_timing.total": {
+          "n": 1,
+          "median": 92,
+          "p95": 92,
+          "max": 92
+        }
+      }
+    },
+    "all_metrics": {
+      "llm_local_consumer_timing.worker_done_to_consumed_ms": {
+        "n": 2030,
+        "median": 1409.5,
+        "p95": 35490,
+        "max": 647689
+      },
+      "llm_local_consumer_timing.usage_record_ms": {
+        "n": 2030,
+        "median": 19.0,
+        "p95": 141,
+        "max": 2723
+      },
+      "llm_local_consumer_timing.steer_probe_total_ms": {
+        "n": 2030,
+        "median": 427.0,
+        "p95": 4463,
+        "max": 48368
+      },
+      "llm_local_consumer_timing.steer_probe_max_ms": {
+        "n": 2030,
+        "median": 114.0,
+        "p95": 788,
+        "max": 3161
+      },
+      "llm_local_consumer_timing.steer_probes": {
+        "n": 2030,
+        "median": 46.5,
+        "p95": 172,
+        "max": 2005
+      },
+      "llm_local_consumer_timing.bridge_emit_total_ms": {
+        "n": 2030,
+        "median": 183.0,
+        "p95": 3140,
+        "max": 35941
+      },
+      "llm_local_consumer_timing.bridge_emit_max_ms": {
+        "n": 2030,
+        "median": 172.5,
+        "p95": 3108,
+        "max": 35936
+      },
+      "llm_local_consumer_timing.bridge_emit_calls": {
+        "n": 2030,
+        "median": 42.0,
+        "p95": 538,
+        "max": 4103
+      },
+      "llm_local_consumer_timing.bridge_queued_deltas": {
+        "n": 2030,
+        "median": 1.0,
+        "p95": 1,
+        "max": 1
+      },
+      "llm_local_consumer_timing.bridge_pending_events": {
+        "n": 2030,
+        "median": 0.0,
+        "p95": 1,
+        "max": 2
+      },
+      "tool_to_next_llm_first_delta_timing.total": {
+        "n": 1905,
+        "median": 6226,
+        "p95": 18000,
+        "max": 39857557
+      },
+      "tool_result_post_timing.total": {
+        "n": 2863,
+        "median": 0,
+        "p95": 5,
+        "max": 650
+      },
+      "tool_result_post_timing.redact_result": {
+        "n": 2863,
+        "median": 0,
+        "p95": 4,
+        "max": 126
+      },
+      "tool_result_post_timing.failure_metrics": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 648
+      },
+      "tool_result_post_timing.record_temp_file": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 230
+      },
+      "tool_result_post_timing.append_model_history": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "tool_result_post_timing.ui_emit": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      }
+    },
+    "tool_invocation_ms": {
+      "read_file": {
+        "n": 688,
+        "median": 56.0,
+        "p95": 1736,
+        "max": 23710
+      },
+      "grep": {
+        "n": 571,
+        "median": 197,
+        "p95": 3370,
+        "max": 33261
+      },
+      "write_file": {
+        "n": 252,
+        "median": 316.0,
+        "p95": 2792,
+        "max": 15574
+      },
+      "run_shell": {
+        "n": 821,
+        "median": 4928,
+        "p95": 44093,
+        "max": 28928514
+      },
+      "apply_patch": {
+        "n": 249,
+        "median": 318,
+        "p95": 3112,
+        "max": 17579
+      },
+      "delete_file": {
+        "n": 45,
+        "median": 200,
+        "p95": 1767,
+        "max": 2388
+      },
+      "ls": {
+        "n": 144,
+        "median": 94.0,
+        "p95": 2507,
+        "max": 25025
+      },
+      "glob": {
+        "n": 41,
+        "median": 802,
+        "p95": 106638,
+        "max": 167614
+      },
+      "web_search": {
+        "n": 1,
+        "median": 4130,
+        "p95": 4130,
+        "max": 4130
+      },
+      "activate_skill": {
+        "n": 1,
+        "median": 69,
+        "p95": 69,
+        "max": 69
+      }
+    },
+    "tool_invocation_ms_by_input_tokens": {
+      ">=160k": {
+        "read_file": {
+          "n": 284,
+          "median": 25.5,
+          "p95": 2917,
+          "max": 9462
+        },
+        "grep": {
+          "n": 128,
+          "median": 119.0,
+          "p95": 2892,
+          "max": 18396
+        },
+        "write_file": {
+          "n": 187,
+          "median": 519,
+          "p95": 2974,
+          "max": 15574
+        },
+        "run_shell": {
+          "n": 485,
+          "median": 5743,
+          "p95": 61166,
+          "max": 28928514
+        },
+        "apply_patch": {
+          "n": 210,
+          "median": 589.0,
+          "p95": 2871,
+          "max": 17579
+        },
+        "delete_file": {
+          "n": 44,
+          "median": 191.0,
+          "p95": 1767,
+          "max": 2388
+        },
+        "ls": {
+          "n": 13,
+          "median": 13,
+          "p95": 491,
+          "max": 491
+        },
+        "glob": {
+          "n": 4,
+          "median": 142.0,
+          "p95": 6770,
+          "max": 6770
+        }
+      },
+      "80-160k": {
+        "write_file": {
+          "n": 49,
+          "median": 172,
+          "p95": 2618,
+          "max": 3355
+        },
+        "run_shell": {
+          "n": 179,
+          "median": 5535,
+          "p95": 29556,
+          "max": 112699
+        },
+        "grep": {
+          "n": 244,
+          "median": 333.5,
+          "p95": 3695,
+          "max": 30969
+        },
+        "read_file": {
+          "n": 176,
+          "median": 85.5,
+          "p95": 2017,
+          "max": 23710
+        },
+        "ls": {
+          "n": 43,
+          "median": 217,
+          "p95": 13362,
+          "max": 25025
+        },
+        "apply_patch": {
+          "n": 34,
+          "median": 134.0,
+          "p95": 3370,
+          "max": 3944
+        },
+        "glob": {
+          "n": 17,
+          "median": 10895,
+          "p95": 167614,
+          "max": 167614
+        },
+        "delete_file": {
+          "n": 1,
+          "median": 225,
+          "p95": 225,
+          "max": 225
+        },
+        "activate_skill": {
+          "n": 1,
+          "median": 69,
+          "p95": 69,
+          "max": 69
+        }
+      },
+      "<20k": {
+        "run_shell": {
+          "n": 12,
+          "median": 10966.5,
+          "p95": 24013,
+          "max": 24013
+        },
+        "grep": {
+          "n": 24,
+          "median": 249.0,
+          "p95": 3102,
+          "max": 30079
+        },
+        "read_file": {
+          "n": 32,
+          "median": 146.5,
+          "p95": 2332,
+          "max": 3673
+        },
+        "ls": {
+          "n": 44,
+          "median": 65.5,
+          "p95": 2232,
+          "max": 2596
+        },
+        "glob": {
+          "n": 7,
+          "median": 13864,
+          "p95": 86849,
+          "max": 86849
+        },
+        "web_search": {
+          "n": 1,
+          "median": 4130,
+          "p95": 4130,
+          "max": 4130
+        },
+        "write_file": {
+          "n": 1,
+          "median": 22,
+          "p95": 22,
+          "max": 22
+        }
+      },
+      "20-80k": {
+        "read_file": {
+          "n": 196,
+          "median": 58.5,
+          "p95": 1265,
+          "max": 5864
+        },
+        "grep": {
+          "n": 175,
+          "median": 195,
+          "p95": 2924,
+          "max": 33261
+        },
+        "ls": {
+          "n": 44,
+          "median": 125.0,
+          "p95": 961,
+          "max": 1274
+        },
+        "run_shell": {
+          "n": 145,
+          "median": 2382,
+          "p95": 16006,
+          "max": 180454
+        },
+        "write_file": {
+          "n": 15,
+          "median": 38,
+          "p95": 1114,
+          "max": 1114
+        },
+        "glob": {
+          "n": 13,
+          "median": 49,
+          "p95": 89300,
+          "max": 89300
+        },
+        "apply_patch": {
+          "n": 5,
+          "median": 151,
+          "p95": 530,
+          "max": 530
+        }
+      }
+    },
+    "same_session_comparisons": [
+      {
+        "session": "7d252bd9-b73a-465c-b5f6-f1a3353b4c60",
+        "low": {
+          "total": {
+            "n": 31,
+            "median": 189,
+            "p95": 1218,
+            "max": 3826
+          },
+          "token_estimate": {
+            "n": 31,
+            "median": 11,
+            "p95": 34,
+            "max": 44
+          },
+          "build_messages": {
+            "n": 31,
+            "median": 5,
+            "p95": 37,
+            "max": 100
+          }
+        },
+        "high": {
+          "total": {
+            "n": 55,
+            "median": 256,
+            "p95": 1380,
+            "max": 5112
+          },
+          "token_estimate": {
+            "n": 55,
+            "median": 18,
+            "p95": 33,
+            "max": 53
+          },
+          "build_messages": {
+            "n": 55,
+            "median": 6,
+            "p95": 23,
+            "max": 53
+          }
+        }
+      },
+      {
+        "session": "b25fdd57-8807-4c48-8aaf-be775a1904f6",
+        "low": {
+          "total": {
+            "n": 28,
+            "median": 186.0,
+            "p95": 334,
+            "max": 400
+          },
+          "token_estimate": {
+            "n": 28,
+            "median": 10.0,
+            "p95": 37,
+            "max": 43
+          },
+          "build_messages": {
+            "n": 28,
+            "median": 5.0,
+            "p95": 10,
+            "max": 38
+          }
+        },
+        "high": {
+          "total": {
+            "n": 206,
+            "median": 405.0,
+            "p95": 965,
+            "max": 2728
+          },
+          "token_estimate": {
+            "n": 206,
+            "median": 31.0,
+            "p95": 80,
+            "max": 1370
+          },
+          "build_messages": {
+            "n": 206,
+            "median": 7.0,
+            "p95": 20,
+            "max": 141
+          }
+        }
+      },
+      {
+        "session": "41593ce9-f3d1-4b1a-aee1-95399ceef763",
+        "low": {
+          "total": {
+            "n": 41,
+            "median": 238,
+            "p95": 922,
+            "max": 1408
+          },
+          "token_estimate": {
+            "n": 41,
+            "median": 8,
+            "p95": 36,
+            "max": 51
+          },
+          "build_messages": {
+            "n": 41,
+            "median": 5,
+            "p95": 34,
+            "max": 101
+          }
+        },
+        "high": {
+          "total": {
+            "n": 28,
+            "median": 534.5,
+            "p95": 1490,
+            "max": 2583
+          },
+          "token_estimate": {
+            "n": 28,
+            "median": 25.0,
+            "p95": 59,
+            "max": 121
+          },
+          "build_messages": {
+            "n": 28,
+            "median": 13.0,
+            "p95": 26,
+            "max": 73
+          }
+        }
+      },
+      {
+        "session": "644d8f58-fbaf-4e40-8c87-020eb5268210",
+        "low": {
+          "total": {
+            "n": 27,
+            "median": 222,
+            "p95": 300,
+            "max": 326
+          },
+          "token_estimate": {
+            "n": 27,
+            "median": 16,
+            "p95": 38,
+            "max": 45
+          },
+          "build_messages": {
+            "n": 27,
+            "median": 5,
+            "p95": 8,
+            "max": 88
+          }
+        },
+        "high": {
+          "total": {
+            "n": 135,
+            "median": 342,
+            "p95": 1456,
+            "max": 4624
+          },
+          "token_estimate": {
+            "n": 135,
+            "median": 37,
+            "p95": 208,
+            "max": 2445
+          },
+          "build_messages": {
+            "n": 135,
+            "median": 9,
+            "p95": 132,
+            "max": 1944
+          }
+        }
+      },
+      {
+        "session": "bcae3807-0611-406c-a11e-a335337d5081",
+        "low": {
+          "total": {
+            "n": 23,
+            "median": 142,
+            "p95": 658,
+            "max": 783
+          },
+          "token_estimate": {
+            "n": 23,
+            "median": 32,
+            "p95": 110,
+            "max": 111
+          },
+          "build_messages": {
+            "n": 23,
+            "median": 9,
+            "p95": 35,
+            "max": 43
+          }
+        },
+        "high": {
+          "total": {
+            "n": 49,
+            "median": 580,
+            "p95": 970,
+            "max": 1093
+          },
+          "token_estimate": {
+            "n": 49,
+            "median": 58,
+            "p95": 137,
+            "max": 196
+          },
+          "build_messages": {
+            "n": 49,
+            "median": 17,
+            "p95": 93,
+            "max": 193
+          }
+        }
+      },
+      {
+        "session": "0ba055cb-312a-4f8f-9953-08f0498a5a44",
+        "low": {
+          "total": {
+            "n": 23,
+            "median": 300,
+            "p95": 747,
+            "max": 921
+          },
+          "token_estimate": {
+            "n": 23,
+            "median": 30,
+            "p95": 93,
+            "max": 98
+          },
+          "build_messages": {
+            "n": 23,
+            "median": 16,
+            "p95": 83,
+            "max": 250
+          }
+        },
+        "high": {
+          "total": {
+            "n": 7,
+            "median": 166,
+            "p95": 615,
+            "max": 615
+          },
+          "token_estimate": {
+            "n": 7,
+            "median": 41,
+            "p95": 63,
+            "max": 63
+          },
+          "build_messages": {
+            "n": 7,
+            "median": 10,
+            "p95": 33,
+            "max": 33
+          }
+        }
+      }
+    ],
+    "slow_pre_api_examples": [
+      {
+        "at": "2026-10-11 10:40:20,403",
+        "kind": "pre_api_timing",
+        "session": "77dc386c-fe09-4863-a50d-1a3233060de2",
+        "file": "50fd161b_现在默认注入llm_上下文的有哪些工具.log",
+        "fields": {
+          "total": "21898612ms",
+          "inject_subagent_notes": "0ms",
+          "early_interrupt_checks": "12ms",
+          "context_policy_wait_prebuild": "0ms",
+          "before_round_steer": "1ms",
+          "before_round_callback": "0ms",
+          "before_round_lookup": "0ms",
+          "before_round": "0ms",
+          "key_context_body": "0ms",
+          "static_segments": "0ms",
+          "turn_cache": "22ms",
+          "build_messages": "22ms",
+          "tool_registry_revision": "777ms",
+          "tool_registry_cache_hit": "777ms",
+          "token_estimate": "21897670ms",
+          "model_config_client": "22ms",
+          "model_config_language": "9ms",
+          "model_config_request_context": "9ms",
+          "model_config_compaction": "0ms",
+          "resolve_model_config": "41ms",
+          "model_config_thread_cpu": "0ms",
+          "context_tokens_emit": "35ms",
+          "context_policy_decision": "0ms",
+          "post_config_setup": "36ms",
+          "context_policy_wait_pre_api": "0ms",
+          "final_interrupt_checks": "53ms",
+          "tok_exact": "220",
+          "tok_prefix": "7",
+          "tok_full": "36",
+          "tok_full_chars": "7631304",
+          "tok_request:exact": "1",
+          "tok_request:full": "9",
+          "tok_request:full_chars": "4668418",
+          "tok_request:prefix": "4",
+          "react_iter": "24",
+          "messages": "180",
+          "tools": "129",
+          "estimated_tokens": "174274",
+          "token_estimate_source": "local_estimate",
+          "model": "deepseek-v4.1-flash",
+          "seed": "ok:len=973584",
+          "loop_callback_delay_ms": "31",
+          "gc2_runs": "1",
+          "gc2_objs": "10367",
+          "gc0_runs": "853"
+        },
+        "nums": {
+          "total": 21898612,
+          "inject_subagent_notes": 0,
+          "early_interrupt_checks": 12,
+          "context_policy_wait_prebuild": 0,
+          "before_round_steer": 1,
+          "before_round_callback": 0,
+          "before_round_lookup": 0,
+          "before_round": 0,
+          "key_context_body": 0,
+          "static_segments": 0,
+          "turn_cache": 22,
+          "build_messages": 22,
+          "tool_registry_revision": 777,
+          "tool_registry_cache_hit": 777,
+          "token_estimate": 21897670,
+          "model_config_client": 22,
+          "model_config_language": 9,
+          "model_config_request_context": 9,
+          "model_config_compaction": 0,
+          "resolve_model_config": 41,
+          "model_config_thread_cpu": 0,
+          "context_tokens_emit": 35,
+          "context_policy_decision": 0,
+          "post_config_setup": 36,
+          "context_policy_wait_pre_api": 0,
+          "final_interrupt_checks": 53,
+          "tok_exact": 220,
+          "tok_prefix": 7,
+          "tok_full": 36,
+          "tok_full_chars": 7631304,
+          "tok_request:exact": 1,
+          "tok_request:full": 9,
+          "tok_request:full_chars": 4668418,
+          "tok_request:prefix": 4,
+          "react_iter": 24,
+          "messages": 180,
+          "tools": 129,
+          "estimated_tokens": 174274,
+          "loop_callback_delay_ms": 31,
+          "gc2_runs": 1,
+          "gc2_objs": 10367,
+          "gc0_runs": 853
+        }
+      },
+      {
+        "at": "2026-10-11 12:37:41,391",
+        "kind": "pre_api_timing",
+        "session": "77dc386c-fe09-4863-a50d-1a3233060de2",
+        "file": "77dc386c_1_待办___草稿胶囊_变成同一个___现在有哪几种胶囊_待.log",
+        "fields": {
+          "total": "45101ms",
+          "load_run_bootstrap": "11ms",
+          "load_work_messages": "0ms",
+          "decode_histories": "1ms",
+          "inject_subagent_notes": "0ms",
+          "early_interrupt_checks": "3ms",
+          "context_policy_wait_prebuild": "0ms",
+          "before_round_steer": "2ms",
+          "before_round_callback": "0ms",
+          "before_round_lookup": "0ms",
+          "before_round": "0ms",
+          "key_context_body": "0ms",
+          "static_segments": "0ms",
+          "turn_cache": "23ms",
+          "build_messages": "24ms",
+          "tool_registry_revision": "643ms",
+          "mcp_tool_definitions": "43299ms",
+          "plugin_tool_definitions": "11ms",
+          "subagent_tool_filter": "6ms",
+          "token_estimate": "1691ms",
+          "model_config_client": "0ms",
+          "model_config_language": "17ms",
+          "model_config_request_context": "14ms",
+          "model_config_compaction": "0ms",
+          "resolve_model_config": "32ms",
+          "model_config_thread_cpu": "15ms",
+          "context_tokens_emit": "10ms",
+          "context_policy_decision": "0ms",
+          "post_config_setup": "10ms",
+          "context_policy_wait_pre_api": "0ms",
+          "final_interrupt_checks": "12ms",
+          "tok_exact": "501",
+          "tok_prefix": "13",
+          "tok_full": "97",
+          "tok_full_chars": "23468420",
+          "tok_request:exact": "4",
+          "tok_request:full": "16",
+          "tok_request:full_chars": "9648819",
+          "tok_request:prefix": "7",
+          "react_iter": "1",
+          "messages": "565",
+          "tools": "129",
+          "estimated_tokens": "442520",
+          "token_estimate_source": "local_estimate",
+          "model": "deepseek-v4.1-flash",
+          "seed": "ok:len=1265593"
+        },
+        "nums": {
+          "total": 45101,
+          "load_run_bootstrap": 11,
+          "load_work_messages": 0,
+          "decode_histories": 1,
+          "inject_subagent_notes": 0,
+          "early_interrupt_checks": 3,
+          "context_policy_wait_prebuild": 0,
+          "before_round_steer": 2,
+          "before_round_callback": 0,
+          "before_round_lookup": 0,
+          "before_round": 0,
+          "key_context_body": 0,
+          "static_segments": 0,
+          "turn_cache": 23,
+          "build_messages": 24,
+          "tool_registry_revision": 643,
+          "mcp_tool_definitions": 43299,
+          "plugin_tool_definitions": 11,
+          "subagent_tool_filter": 6,
+          "token_estimate": 1691,
+          "model_config_client": 0,
+          "model_config_language": 17,
+          "model_config_request_context": 14,
+          "model_config_compaction": 0,
+          "resolve_model_config": 32,
+          "model_config_thread_cpu": 15,
+          "context_tokens_emit": 10,
+          "context_policy_decision": 0,
+          "post_config_setup": 10,
+          "context_policy_wait_pre_api": 0,
+          "final_interrupt_checks": 12,
+          "tok_exact": 501,
+          "tok_prefix": 13,
+          "tok_full": 97,
+          "tok_full_chars": 23468420,
+          "tok_request:exact": 4,
+          "tok_request:full": 16,
+          "tok_request:full_chars": 9648819,
+          "tok_request:prefix": 7,
+          "react_iter": 1,
+          "messages": 565,
+          "tools": 129,
+          "estimated_tokens": 442520
+        }
+      },
+      {
+        "at": "2026-10-12 14:52:56,997",
+        "kind": "pre_api_timing",
+        "session": "a874ad4d-2efa-4300-81ba-8c986c9fd179",
+        "file": "a874ad4d_又有新改动_更新下.log",
+        "fields": {
+          "total": "34862ms",
+          "load_run_bootstrap": "9ms",
+          "load_work_messages": "0ms",
+          "decode_histories": "0ms",
+          "inject_subagent_notes": "0ms",
+          "early_interrupt_checks": "1ms",
+          "context_policy_wait_prebuild": "0ms",
+          "before_round_steer": "0ms",
+          "before_round_callback": "0ms",
+          "before_round_lookup": "0ms",
+          "before_round": "0ms",
+          "key_context_body": "0ms",
+          "static_segments": "0ms",
+          "turn_cache": "8ms",
+          "build_messages": "9ms",
+          "tool_registry_revision": "403ms",
+          "mcp_tool_definitions": "33058ms",
+          "plugin_tool_definitions": "6ms",
+          "subagent_tool_filter": "3ms",
+          "token_estimate": "1757ms",
+          "model_config_client": "0ms",
+          "model_config_language": "4ms",
+          "model_config_request_context": "7ms",
+          "model_config_compaction": "0ms",
+          "resolve_model_config": "11ms",
+          "model_config_thread_cpu": "15ms",
+          "context_tokens_emit": "4ms",
+          "context_policy_decision": "0ms",
+          "post_config_setup": "4ms",
+          "context_policy_wait_pre_api": "0ms",
+          "final_interrupt_checks": "5ms",
+          "tok_exact": "349",
+          "tok_prefix": "0",
+          "tok_full": "61",
+          "tok_full_chars": "13485899",
+          "tok_request:exact": "1",
+          "tok_request:full": "14",
+          "tok_request:full_chars": "4818647",
+          "react_iter": "1",
+          "messages": "366",
+          "tools": "33",
+          "estimated_tokens": "332191",
+          "token_estimate_source": "local_estimate",
+          "model": "deepseek-v4.1-flash",
+          "seed": "ok:len=994097"
+        },
+        "nums": {
+          "total": 34862,
+          "load_run_bootstrap": 9,
+          "load_work_messages": 0,
+          "decode_histories": 0,
+          "inject_subagent_notes": 0,
+          "early_interrupt_checks": 1,
+          "context_policy_wait_prebuild": 0,
+          "before_round_steer": 0,
+          "before_round_callback": 0,
+          "before_round_lookup": 0,
+          "before_round": 0,
+          "key_context_body": 0,
+          "static_segments": 0,
+          "turn_cache": 8,
+          "build_messages": 9,
+          "tool_registry_revision": 403,
+          "mcp_tool_definitions": 33058,
+          "plugin_tool_definitions": 6,
+          "subagent_tool_filter": 3,
+          "token_estimate": 1757,
+          "model_config_client": 0,
+          "model_config_language": 4,
+          "model_config_request_context": 7,
+          "model_config_compaction": 0,
+          "resolve_model_config": 11,
+          "model_config_thread_cpu": 15,
+          "context_tokens_emit": 4,
+          "context_policy_decision": 0,
+          "post_config_setup": 4,
+          "context_policy_wait_pre_api": 0,
+          "final_interrupt_checks": 5,
+          "tok_exact": 349,
+          "tok_prefix": 0,
+          "tok_full": 61,
+          "tok_full_chars": 13485899,
+          "tok_request:exact": 1,
+          "tok_request:full": 14,
+          "tok_request:full_chars": 4818647,
+          "react_iter": 1,
+          "messages": 366,
+          "tools": 33,
+          "estimated_tokens": 332191
+        }
+      },
+      {
+        "at": "2026-10-11 14:58:48,633",
+        "kind": "pre_api_timing",
+        "session": "77dc386c-fe09-4863-a50d-1a3233060de2",
+        "file": "77dc386c_你是猪吗_我让你把和胶囊相关的代码移除_你把整个功能移除干啥.log",
+        "fields": {
+          "total": "28622ms",
+          "load_run_bootstrap": "9ms",
+          "load_work_messages": "0ms",
+          "decode_histories": "1ms",
+          "inject_subagent_notes": "0ms",
+          "early_interrupt_checks": "2ms",
+          "context_policy_wait_prebuild": "0ms",
+          "before_round_steer": "1ms",
+          "before_round_callback": "0ms",
+          "before_round_lookup": "0ms",
+          "before_round": "0ms",
+          "key_context_body": "0ms",
+          "static_segments": "0ms",
+          "turn_cache": "15ms",
+          "build_messages": "15ms",
+          "tool_registry_revision": "535ms",
+          "mcp_tool_definitions": "26730ms",
+          "plugin_tool_definitions": "9ms",
+          "subagent_tool_filter": "6ms",
+          "token_estimate": "1815ms",
+          "model_config_client": "0ms",
+          "model_config_language": "3ms",
+          "model_config_request_context": "9ms",
+          "model_config_compaction": "0ms",
+          "resolve_model_config": "13ms",
+          "model_config_thread_cpu": "15ms",
+          "context_tokens_emit": "14ms",
+          "context_policy_decision": "0ms",
+          "post_config_setup": "14ms",
+          "context_policy_wait_pre_api": "0ms",
+          "final_interrupt_checks": "7ms",
+          "tok_exact": "37",
+          "tok_prefix": "0",
+          "tok_full": "4",
+          "tok_full_chars": "2942546",
+          "tok_request:full": "2",
+          "tok_request:full_chars": "2912778",
+          "react_iter": "1",
+          "messages": "704",
+          "tools": "32",
+          "estimated_tokens": "494840",
+          "token_estimate_source": "local_estimate",
+          "model": "deepseek-v4.1-flash",
+          "seed": "ok:len=1551856"
+        },
+        "nums": {
+          "total": 28622,
+          "load_run_bootstrap": 9,
+          "load_work_messages": 0,
+          "decode_histories": 1,
+          "inject_subagent_notes": 0,
+          "early_interrupt_checks": 2,
+          "context_policy_wait_prebuild": 0,
+          "before_round_steer": 1,
+          "before_round_callback": 0,
+          "before_round_lookup": 0,
+          "before_round": 0,
+          "key_context_body": 0,
+          "static_segments": 0,
+          "turn_cache": 15,
+          "build_messages": 15,
+          "tool_registry_revision": 535,
+          "mcp_tool_definitions": 26730,
+          "plugin_tool_definitions": 9,
+          "subagent_tool_filter": 6,
+          "token_estimate": 1815,
+          "model_config_client": 0,
+          "model_config_language": 3,
+          "model_config_request_context": 9,
+          "model_config_compaction": 0,
+          "resolve_model_config": 13,
+          "model_config_thread_cpu": 15,
+          "context_tokens_emit": 14,
+          "context_policy_decision": 0,
+          "post_config_setup": 14,
+          "context_policy_wait_pre_api": 0,
+          "final_interrupt_checks": 7,
+          "tok_exact": 37,
+          "tok_prefix": 0,
+          "tok_full": 4,
+          "tok_full_chars": 2942546,
+          "tok_request:full": 2,
+          "tok_request:full_chars": 2912778,
+          "react_iter": 1,
+          "messages": 704,
+          "tools": 32,
+          "estimated_tokens": 494840
+        }
+      },
+      {
+        "at": "2026-10-11 12:26:58,682",
+        "kind": "pre_api_timing",
+        "session": "a874ad4d-2efa-4300-81ba-8c986c9fd179",
+        "file": "a874ad4d_分析下当前仓库有哪些未提交改动.log",
+        "fields": {
+          "total": "19855ms",
+          "inject_subagent_notes": "0ms",
+          "early_interrupt_checks": "382ms",
+          "context_policy_wait_prebuild": "0ms",
+          "before_round_steer": "267ms",
+          "before_round_callback": "0ms",
+          "before_round_lookup": "0ms",
+          "before_round": "0ms",
+          "key_context_body": "0ms",
+          "static_segments": "5ms",
+          "turn_cache": "552ms",
+          "build_messages": "563ms",
+          "tool_registry_revision": "17779ms",
+          "tool_registry_cache_hit": "17779ms",
+          "token_estimate": "59ms",
+          "model_config_client": "28ms",
+          "model_config_language": "6ms",
+          "model_config_request_context": "387ms",
+          "model_config_compaction": "0ms",
+          "resolve_model_config": "421ms",
+          "model_config_thread_cpu": "31ms",
+          "context_tokens_emit": "313ms",
+          "context_policy_decision": "0ms",
+          "post_config_setup": "314ms",
+          "context_policy_wait_pre_api": "0ms",
+          "final_interrupt_checks": "76ms",
+          "tok_exact": "486",
+          "tok_prefix": "10",
+          "tok_full": "85",
+          "tok_full_chars": "19450658",
+          "tok_request:exact": "3",
+          "tok_request:full": "14",
+          "tok_request:full_chars": "8320363",
+          "tok_request:prefix": "6",
+          "react_iter": "12",
+          "messages": "109",
+          "tools": "129",
+          "estimated_tokens": "158923",
+          "token_estimate_source": "provider_prefix",
+          "model": "deepseek-v4.1-flash",
+          "seed": "ok:len=351438",
+          "round_gap_ms": "395",
+          "loop_callback_delay_ms": "343",
+          "gc2_runs": "0",
+          "gc2_objs": "0",
+          "gc0_runs": "252"
+        },
+        "nums": {
+          "total": 19855,
+          "inject_subagent_notes": 0,
+          "early_interrupt_checks": 382,
+          "context_policy_wait_prebuild": 0,
+          "before_round_steer": 267,
+          "before_round_callback": 0,
+          "before_round_lookup": 0,
+          "before_round": 0,
+          "key_context_body": 0,
+          "static_segments": 5,
+          "turn_cache": 552,
+          "build_messages": 563,
+          "tool_registry_revision": 17779,
+          "tool_registry_cache_hit": 17779,
+          "token_estimate": 59,
+          "model_config_client": 28,
+          "model_config_language": 6,
+          "model_config_request_context": 387,
+          "model_config_compaction": 0,
+          "resolve_model_config": 421,
+          "model_config_thread_cpu": 31,
+          "context_tokens_emit": 313,
+          "context_policy_decision": 0,
+          "post_config_setup": 314,
+          "context_policy_wait_pre_api": 0,
+          "final_interrupt_checks": 76,
+          "tok_exact": 486,
+          "tok_prefix": 10,
+          "tok_full": 85,
+          "tok_full_chars": 19450658,
+          "tok_request:exact": 3,
+          "tok_request:full": 14,
+          "tok_request:full_chars": 8320363,
+          "tok_request:prefix": 6,
+          "react_iter": 12,
+          "messages": 109,
+          "tools": 129,
+          "estimated_tokens": 158923,
+          "round_gap_ms": 395,
+          "loop_callback_delay_ms": 343,
+          "gc2_runs": 0,
+          "gc2_objs": 0,
+          "gc0_runs": 252
+        }
+      }
+    ],
+    "models": {
+      "deepseek-v4.1-flash": 1910,
+      "deepseek-flash": 120
+    },
+    "ordinary_latency_metrics": {
+      "llm_local_consumer_timing.worker_done_to_consumed_ms": {
+        "n": 2012,
+        "median": 1380.0,
+        "p95": 29091,
+        "max": 118562
+      },
+      "llm_local_consumer_timing.usage_record_ms": {
+        "n": 2030,
+        "median": 19.0,
+        "p95": 141,
+        "max": 2723
+      },
+      "llm_local_consumer_timing.steer_probe_total_ms": {
+        "n": 2030,
+        "median": 427.0,
+        "p95": 4463,
+        "max": 48368
+      },
+      "llm_local_consumer_timing.steer_probe_max_ms": {
+        "n": 2030,
+        "median": 114.0,
+        "p95": 788,
+        "max": 3161
+      },
+      "llm_local_consumer_timing.steer_probes": {
+        "n": 2030,
+        "median": 46.5,
+        "p95": 172,
+        "max": 2005
+      },
+      "llm_local_consumer_timing.bridge_emit_total_ms": {
+        "n": 2030,
+        "median": 183.0,
+        "p95": 3140,
+        "max": 35941
+      },
+      "llm_local_consumer_timing.bridge_emit_max_ms": {
+        "n": 2030,
+        "median": 172.5,
+        "p95": 3108,
+        "max": 35936
+      },
+      "llm_local_consumer_timing.bridge_emit_calls": {
+        "n": 2030,
+        "median": 42.0,
+        "p95": 538,
+        "max": 4103
+      },
+      "llm_local_consumer_timing.bridge_queued_deltas": {
+        "n": 2030,
+        "median": 1.0,
+        "p95": 1,
+        "max": 1
+      },
+      "llm_local_consumer_timing.bridge_pending_events": {
+        "n": 2030,
+        "median": 0.0,
+        "p95": 1,
+        "max": 2
+      },
+      "tool_to_next_llm_first_delta_timing.total": {
+        "n": 1900,
+        "median": 6212.0,
+        "p95": 17753,
+        "max": 66640
+      },
+      "tool_result_post_timing.total": {
+        "n": 2863,
+        "median": 0,
+        "p95": 5,
+        "max": 650
+      },
+      "tool_result_post_timing.redact_result": {
+        "n": 2863,
+        "median": 0,
+        "p95": 4,
+        "max": 126
+      },
+      "tool_result_post_timing.failure_metrics": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 648
+      },
+      "tool_result_post_timing.record_temp_file": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 230
+      },
+      "tool_result_post_timing.append_model_history": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "tool_result_post_timing.ui_emit": {
+        "n": 2863,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      }
+    },
+    "latency_samples_over_120_seconds": {
+      "llm_local_consumer_timing.worker_done_to_consumed_ms": 18,
+      "tool_to_next_llm_first_delta_timing.total": 5
+    }
+  },
+  "backend": [
+    {
+      "kind": "incremental_projection",
+      "history_rows": 20,
+      "ms": {
+        "n": 100,
+        "median": 0.15,
+        "p95": 0.751,
+        "max": 39.404
+      }
+    },
+    {
+      "kind": "incremental_projection",
+      "history_rows": 200,
+      "ms": {
+        "n": 100,
+        "median": 0.173,
+        "p95": 0.706,
+        "max": 22.428
+      }
+    },
+    {
+      "kind": "incremental_projection",
+      "history_rows": 1000,
+      "ms": {
+        "n": 100,
+        "median": 0.257,
+        "p95": 1.091,
+        "max": 15.499
+      }
+    },
+    {
+      "kind": "incremental_projection",
+      "history_rows": 5000,
+      "ms": {
+        "n": 100,
+        "median": 0.657,
+        "p95": 2.349,
+        "max": 23.444
+      }
+    },
+    {
+      "kind": "incremental_token_count",
+      "history_chars": 30000,
+      "ms": {
+        "cold": {
+          "n": 5,
+          "median": 344.948,
+          "p95": 529.073,
+          "max": 529.073
+        },
+        "warm": {
+          "n": 5,
+          "median": 0.041,
+          "p95": 0.89,
+          "max": 0.89
+        },
+        "append": {
+          "n": 5,
+          "median": 2.258,
+          "p95": 5.324,
+          "max": 5.324
+        }
+      }
+    },
+    {
+      "kind": "incremental_token_count",
+      "history_chars": 300000,
+      "ms": {
+        "cold": {
+          "n": 5,
+          "median": 2999.427,
+          "p95": 5117.343,
+          "max": 5117.343
+        },
+        "warm": {
+          "n": 5,
+          "median": 0.136,
+          "p95": 0.149,
+          "max": 0.149
+        },
+        "append": {
+          "n": 5,
+          "median": 3.659,
+          "p95": 28.305,
+          "max": 28.305
+        }
+      }
+    },
+    {
+      "kind": "incremental_token_count",
+      "history_chars": 1000000,
+      "ms": {
+        "cold": {
+          "n": 5,
+          "median": 14468.24,
+          "p95": 17419.466,
+          "max": 17419.466
+        },
+        "warm": {
+          "n": 5,
+          "median": 0.364,
+          "p95": 0.403,
+          "max": 0.403
+        },
+        "append": {
+          "n": 5,
+          "median": 6.007,
+          "p95": 38.117,
+          "max": 38.117
+        }
+      }
+    }
+  ],
+  "browser_continuous": {
+    "dist_js": "/assets/main-D7ns97ey.js",
+    "dist_sha256": "72b37e11bc220930cdf2e45ab5cca49edd3aafbfbb4067589feb2302ab5264f3",
+    "headless": true,
+    "rows_per_turn": 20,
+    "text_per_history_row_chars": 720,
+    "new_chars": 1200,
+    "host_before": {
+      "cpu_percent": 9.4,
+      "memory_percent": 80.5
+    },
+    "samples": [
+      {
+        "elapsed_ms": 5896.199999988079,
+        "frames": 357,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": 0.30000001192092896,
+        "render_p95_ms": 0.5,
+        "render_max_ms": 0.699999988079071,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 188,
+        "execution_rows": 21,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 1,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.59999999999991,
+          "max_ms": 32.90000000000009
+        },
+        "host_cpu_percent": 10.7
+      },
+      {
+        "elapsed_ms": 5812.300000011921,
+        "frames": 351,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": 0.3999999761581421,
+        "render_p95_ms": 0.5999999940395355,
+        "render_max_ms": 2.899999976158142,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 1637,
+        "execution_rows": 201,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 10,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.600000000000136,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 0.0
+      },
+      {
+        "elapsed_ms": 5992.800000011921,
+        "frames": 359,
+        "raf_p95_ms": 16.700000000000273,
+        "raf_max_ms": 33,
+        "raf_over_50": 0,
+        "render_median_ms": 0.8999999761581421,
+        "render_p95_ms": 1.0999999940395355,
+        "render_max_ms": 2.399999976158142,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.800000000000182,
+          "max_ms": 32.90000000000009
+        },
+        "host_cpu_percent": 10.9
+      },
+      {
+        "elapsed_ms": 5744.0999999940395,
+        "frames": 347,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": 0.29999998211860657,
+        "render_p95_ms": 0.5,
+        "render_max_ms": 1.2000000178813934,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 349,
+        "execution_rows": 41,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "prune",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000273
+        },
+        "host_cpu_percent": 5.3
+      },
+      {
+        "elapsed_ms": 6009.0999999940395,
+        "frames": 362,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 33.100000000000364,
+        "raf_over_50": 0,
+        "render_median_ms": 0.20000001788139343,
+        "render_p95_ms": 0.3999999761581421,
+        "render_max_ms": 0.5999999940395355,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "map",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.90000000000009,
+          "max_ms": 33.09999999999991
+        },
+        "host_cpu_percent": 54.7
+      },
+      {
+        "elapsed_ms": 5992.5999999940395,
+        "frames": 360,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 33,
+        "raf_over_50": 0,
+        "render_median_ms": 0.9000000059604645,
+        "render_p95_ms": 1.199999988079071,
+        "render_max_ms": 2.5999999940395355,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": false,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000273,
+          "max_ms": 33.19999999999982
+        },
+        "host_cpu_percent": 0.0
+      },
+      {
+        "elapsed_ms": 6008.5999999940395,
+        "frames": 357,
+        "raf_p95_ms": 16.700000000000728,
+        "raf_max_ms": 33,
+        "raf_over_50": 0,
+        "render_median_ms": 0.9000000059604645,
+        "render_p95_ms": 1.5,
+        "render_max_ms": 2,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": false,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.800000000000182,
+          "max_ms": 33
+        },
+        "host_cpu_percent": 0.0
+      },
+      {
+        "elapsed_ms": 6704.700000017881,
+        "frames": 294,
+        "raf_p95_ms": 49.29999999999973,
+        "raf_max_ms": 66,
+        "raf_over_50": 1,
+        "render_median_ms": 0.30000001192092896,
+        "render_p95_ms": 0.5999999940395355,
+        "render_max_ms": 0.9000000059604645,
+        "longtask_count": 2,
+        "longtask_total_ms": 107,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "map",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.600000000000364,
+          "max_ms": 32.79999999999973
+        },
+        "host_cpu_percent": 30.4
+      },
+      {
+        "elapsed_ms": 5762.5999999940395,
+        "frames": 348,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.900000000000546,
+        "raf_over_50": 0,
+        "render_median_ms": 0.20000001788139343,
+        "render_p95_ms": 0.4000000059604645,
+        "render_max_ms": 1.199999988079071,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 349,
+        "execution_rows": 41,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "prune",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000273,
+          "max_ms": 16.799999999999727
+        },
+        "host_cpu_percent": 0.0
+      },
+      {
+        "elapsed_ms": 6410.199999988079,
+        "frames": 335,
+        "raf_p95_ms": 33,
+        "raf_max_ms": 49.5,
+        "raf_over_50": 0,
+        "render_median_ms": 0.9000000059604645,
+        "render_p95_ms": 2.199999988079071,
+        "render_max_ms": 3.800000011920929,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.5,
+          "max_ms": 16.699999999999818
+        },
+        "host_cpu_percent": 77.1
+      },
+      {
+        "elapsed_ms": 5813.199999988079,
+        "frames": 352,
+        "raf_p95_ms": 16.700000000000273,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": 0.30000001192092896,
+        "render_p95_ms": 0.5999999940395355,
+        "render_max_ms": 1,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 1637,
+        "execution_rows": 201,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 10,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 5.4
+      },
+      {
+        "elapsed_ms": 5814.700000017881,
+        "frames": 351,
+        "raf_p95_ms": 16.700000000000045,
+        "raf_max_ms": 16.899999999999636,
+        "raf_over_50": 0,
+        "render_median_ms": 0.20000001788139343,
+        "render_p95_ms": 0.4000000059604645,
+        "render_max_ms": 0.5,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 188,
+        "execution_rows": 21,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 1,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.800000000000182
+        },
+        "host_cpu_percent": 0.0
+      },
+      {
+        "elapsed_ms": 5830.0999999940395,
+        "frames": 353,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": 0.29999998211860657,
+        "render_p95_ms": 0.4000000059604645,
+        "render_max_ms": 0.5,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 188,
+        "execution_rows": 21,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 1,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.699999999999818,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 16.1
+      },
+      {
+        "elapsed_ms": 5911.0999999940395,
+        "frames": 357,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": 0.4000000059604645,
+        "render_p95_ms": 0.699999988079071,
+        "render_max_ms": 0.9000000059604645,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 1637,
+        "execution_rows": 201,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 10,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 21.4
+      },
+      {
+        "elapsed_ms": 6140.800000011921,
+        "frames": 338,
+        "raf_p95_ms": 32.900000000000546,
+        "raf_max_ms": 33.100000000000364,
+        "raf_over_50": 0,
+        "render_median_ms": 1,
+        "render_p95_ms": 1.7999999821186066,
+        "render_max_ms": 2.0999999940395355,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.799999999999955,
+          "max_ms": 32.90000000000009
+        },
+        "host_cpu_percent": 0.0
+      },
+      {
+        "elapsed_ms": 5711.5999999940395,
+        "frames": 345,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": 0.29999998211860657,
+        "render_p95_ms": 0.4000000059604645,
+        "render_max_ms": 0.800000011920929,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 349,
+        "execution_rows": 41,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "prune",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.699999999999818,
+          "max_ms": 16.700000000000273
+        },
+        "host_cpu_percent": 14.0
+      },
+      {
+        "elapsed_ms": 6091.300000011921,
+        "frames": 342,
+        "raf_p95_ms": 32.899999999999636,
+        "raf_max_ms": 49.599999999999454,
+        "raf_over_50": 0,
+        "render_median_ms": 0.29999998211860657,
+        "render_p95_ms": 0.5,
+        "render_max_ms": 0.6000000238418579,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "map",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 33
+        },
+        "host_cpu_percent": 31.2
+      },
+      {
+        "elapsed_ms": 6025.300000011921,
+        "frames": 358,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 33,
+        "raf_over_50": 0,
+        "render_median_ms": 0.9000000059604645,
+        "render_p95_ms": 1.5,
+        "render_max_ms": 2.7000000178813934,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 341,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": false,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.699999999999818,
+          "max_ms": 32.90000000000009
+        },
+        "host_cpu_percent": 18.8
+      }
+    ]
+  },
+  "browser_burst_budget": {
+    "dist_js": "/assets/main-D7ns97ey.js",
+    "dist_sha256": "72b37e11bc220930cdf2e45ab5cca49edd3aafbfbb4067589feb2302ab5264f3",
+    "headless": true,
+    "rows_per_turn": 20,
+    "text_per_history_row_chars": 720,
+    "new_chars": 1200,
+    "host_before": {
+      "cpu_percent": 29.9,
+      "memory_percent": 75.3
+    },
+    "samples": [
+      {
+        "elapsed_ms": 429.39999997615814,
+        "processing_ms": 18.899999976158142,
+        "frames": 26,
+        "raf_p95_ms": 16.800000000000182,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 282,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 188,
+        "execution_rows": 21,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 1,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 14.3,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 505.19999998807907,
+        "processing_ms": 96.2999999821186,
+        "frames": 25,
+        "raf_p95_ms": 16.600000000000364,
+        "raf_max_ms": 115.20000000000027,
+        "raf_over_50": 1,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 1,
+        "longtask_total_ms": 117,
+        "scroll_distance_px": 275,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.90000000000009,
+          "max_ms": 32.700000000000045
+        },
+        "host_cpu_percent": 35.7,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 418.09999999403954,
+        "processing_ms": 15.300000011920929,
+        "frames": 25,
+        "raf_p95_ms": 16.800000000000182,
+        "raf_max_ms": 32.79999999999973,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 276,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "map",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.800000000000182,
+          "max_ms": 16.899999999999864
+        },
+        "host_cpu_percent": 0.0,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 427.60000002384186,
+        "processing_ms": 18.100000023841858,
+        "frames": 26,
+        "raf_p95_ms": 16.700000000000273,
+        "raf_max_ms": 16.90000000000009,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 282,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 349,
+        "execution_rows": 41,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "prune",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.799999999999955
+        },
+        "host_cpu_percent": 1.8,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 857.9000000059605,
+        "processing_ms": 449.80000001192093,
+        "frames": 46,
+        "raf_p95_ms": 32.90000000000009,
+        "raf_max_ms": 33.09999999999991,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 328,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "budget",
+        "plugins": true,
+        "trial": 0,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 0.0,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 878.7000000178814,
+        "processing_ms": 473.90000000596046,
+        "frames": 48,
+        "raf_p95_ms": 32.90000000000009,
+        "raf_max_ms": 33,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 328,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "budget",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 0.0,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 427.19999998807907,
+        "processing_ms": 16.799999982118607,
+        "frames": 26,
+        "raf_p95_ms": 16.59999999999991,
+        "raf_max_ms": 16.600000000000364,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 282,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 349,
+        "execution_rows": 41,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "prune",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.799999999999955
+        },
+        "host_cpu_percent": 21.4,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 427.2000000178814,
+        "processing_ms": 17.900000005960464,
+        "frames": 25,
+        "raf_p95_ms": 16.700000000000273,
+        "raf_max_ms": 32.90000000000009,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 275,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "map",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 0.0,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 476.80000001192093,
+        "processing_ms": 69.19999998807907,
+        "frames": 25,
+        "raf_p95_ms": 16.700000000000273,
+        "raf_max_ms": 82.30000000000018,
+        "raf_over_50": 1,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 1,
+        "longtask_total_ms": 84,
+        "scroll_distance_px": 275,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.600000000000136,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 0.0,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 428.7999999821186,
+        "processing_ms": 16.099999994039536,
+        "frames": 26,
+        "raf_p95_ms": 16.799999999999955,
+        "raf_max_ms": 16.800000000000182,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 282,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 188,
+        "execution_rows": 21,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 1,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 1,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.90000000000009
+        },
+        "host_cpu_percent": 1.9,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 416.39999997615814,
+        "processing_ms": 13.599999994039536,
+        "frames": 26,
+        "raf_p95_ms": 16.600000000000364,
+        "raf_max_ms": 16.700000000000045,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 282,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 188,
+        "execution_rows": 21,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 1,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.799999999999955,
+          "max_ms": 16.90000000000009
+        },
+        "host_cpu_percent": 12.5,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 477.19999998807907,
+        "processing_ms": 70,
+        "frames": 25,
+        "raf_p95_ms": 16.800000000000182,
+        "raf_max_ms": 82.30000000000018,
+        "raf_over_50": 1,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 1,
+        "longtask_total_ms": 84,
+        "scroll_distance_px": 275,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "baseline",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.699999999999818,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 11.7,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 418.30000001192093,
+        "processing_ms": 13.900000005960464,
+        "frames": 26,
+        "raf_p95_ms": 16.59999999999991,
+        "raf_max_ms": 16.600000000000364,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 282,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "map",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.799999999999955,
+          "max_ms": 33
+        },
+        "host_cpu_percent": 0.0,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 427.7000000178814,
+        "processing_ms": 16.30000001192093,
+        "frames": 26,
+        "raf_p95_ms": 16.699999999999818,
+        "raf_max_ms": 16.699999999999818,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 282,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 349,
+        "execution_rows": 41,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "prune",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.600000000000136,
+          "max_ms": 16.600000000000136
+        },
+        "host_cpu_percent": 7.1,
+        "burst": true
+      },
+      {
+        "elapsed_ms": 846.9000000059605,
+        "processing_ms": 437.60000002384186,
+        "frames": 47,
+        "raf_p95_ms": 33,
+        "raf_max_ms": 33,
+        "raf_over_50": 0,
+        "render_median_ms": null,
+        "render_p95_ms": null,
+        "render_max_ms": null,
+        "longtask_count": 0,
+        "longtask_total_ms": 0,
+        "scroll_distance_px": 329,
+        "verified": true,
+        "chat_scroll_distance_px": 0,
+        "process_height": 576,
+        "process_scroll_height": 1129,
+        "dom_nodes": 8077,
+        "execution_rows": 1001,
+        "visibility": "visible",
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0",
+        "turns": 50,
+        "mode": "budget",
+        "plugins": true,
+        "trial": 2,
+        "errors": [],
+        "static_raf": {
+          "p95_ms": 16.700000000000045,
+          "max_ms": 16.700000000000045
+        },
+        "host_cpu_percent": 0.0,
+        "burst": true
+      }
+    ]
+  },
+  "metadata": {
+    "date": "2026-10-14",
+    "timezone": "Asia/Shanghai",
+    "baseline_commit": "ead39b7",
+    "python": "3.10.11 (tags/v3.10.11:7d4cc5a, Apr  5 2023, 00:38:17) [MSC v.1929 64 bit (AMD64)]",
+    "script_sha256": "3c03001658ef475fe5697bf773dfd04fd4d88f21eeffad77739d435084615553",
+    "production_modified": false,
+    "notes": [
+      "Continuous map samples execution_rows=1 was measured through the diagnostic selector override; DOM count remains 8077. Burst samples use the native selector for the count.",
+      "Backend cold-token benchmark used repetitive synthetic text; a concurrent observation recorded 100 percent CPU on all eight logical CPUs and 84 percent memory. Absolute cold-count timings are not an idle baseline.",
+      "Browser measurements are headless RAF cadence and long-task proxies, not compositor FPS.",
+      "Log durations over 120 seconds are retained, with separate conditional statistics, and are not all classified as suspend time."
+    ]
+  }
+}

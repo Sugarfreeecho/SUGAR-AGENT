@@ -33,7 +33,7 @@
 
 ### UC-1G4 首选候选直连与完整回退
 - **触发**：候选链调用首选模型。
-- **预期现象**：首选候选优先通过 `_DirectStreamTransport` 进入本地 httpx 直连流，减少 facade/线程转接开销；直连失败时仍由原候选循环继续重试、熔断或回退。
+- **预期现象**：首选候选使用 Chat Completions 时默认通过 `_DirectStreamTransport` 进入本地 httpx 直连流；Anthropic Messages 与 Responses 保留原生 transport。直连失败时仍由原候选循环继续重试、熔断或回退。
 - **规则与边界**：仅替换首选候选的 transport，不改变候选顺序、请求预算、模态投影、熔断和回退语义；不能把“直连优化”实现成绕过 facade 的单一路径。适配器必须逐一透传同一 chunk 的**全部流事件**（思考/正文/多路工具调用等，见 UC-1G6）。
 - **依据**：`agent_harness._DirectStreamTransport`、`_FallbackCompletions` 候选循环。
 

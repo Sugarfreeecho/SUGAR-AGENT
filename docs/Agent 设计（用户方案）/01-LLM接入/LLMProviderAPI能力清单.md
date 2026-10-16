@@ -1,7 +1,7 @@
 # LLM Provider API 接入层 · 能力清单（代码证据版）
 
 > 对象：SugarAgent（本机 `D:\AI\AI Agent\MyAgent Developer`）的 LLM Provider API 接入子系统
-> 代码版本：当前工作区（2026-10-02；直连适配器事件保真；含 Qwen system prompt 能力投影与探测失败详情透出）
+> 代码版本：当前工作区（2026-10-15；显式协议选择，直连旁路仅用于 Chat Completions）
 > 图例：【图】已画入 v3 全景图节点 / 【卡】在图上卡片中 / 【单】仅本清单（超出 12 主节点容量）
 
 ## 1. 请求生命周期与身份
@@ -31,7 +31,7 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 三条线协议：OpenAI Responses / Chat Completions 兼容 / Anthropic Messages | `llm/transport.py` 三个 Transport 类 | 【图·三端点】 |
-| `auto` 协议判定：官方 host 走原生、其余按兼容；强制 Responses 用档案 `llm_type:openai-responses`（legacy `openai` 归一为 auto） | `llm/transport.py` `detect_provider/resolve_provider` | 【图·边标签】 |
+| 显式选择 `openai-compatible` / `openai-responses` / `anthropic`；默认 Chat Completions，拒绝新提交的 `auto` | `llm/transport.py` `normalize_provider/resolve_profile_provider` | 【图·边标签】 |
 | Responses 状态模式：`stateful`（previous_response_id）/`stateless`（重放）/`auto` | `llm/transport.py` `ResponsesStateMode`；续接判定 `llm/responses/state.py` `ContinuationAnchor`、`evaluate_continuation` | 【卡】 |
 | WebSocket 模式协商：`auto/enabled/disabled`（仅官方 host 探测） | `llm/transport.py` `_responses_websocket_mode` | 【卡】 |
 | Responses 原生压缩：checkpoint 与匹配、可续接 | `llm/responses/compact.py` | 【单】 |
@@ -63,7 +63,7 @@
 | 档案注册表：排序/启停/删除/`fallback_chain()` 候选链来源 | `model_profiles.py` | 【图·档案节点】 |
 | 能力推断与评分门槛（低成本/高智能/编码/Agentic/长上下文；models_table 价格与窗口） | `model_profiles.py` `infer_model_task_capabilities`、`app/data/models_table.md` | 【单】 |
 | 上下文窗口探测：最大 3M token 探针、8s 超时、从报错文本提取窗口；**失败保留原始原因（HTTP 状态/响应体片段/异常文本）供状态栏与日志透出** | `model_profiles.py` `probe_model_context`、`probe_context_window_from_error_detail`、`extract_context_window_from_error` | 【单】 |
-| wire 协议探测：按端点试探可用协议（payload/headers/route-missing 判定） | `model_profiles.py` `detect_wire_protocol` | 【单】 |
+| 旧 `auto` 档案一次性迁移为明确协议并落盘，保存档案不再发送协议探测请求 | `model_profiles.py` `_migrate_legacy_auto_protocol/load_store/upsert_profile` | 【单】 |
 | 模型列表发现：`GET /models` 拉取端点模型目录 | `model_profiles.py` `discover_models` | 【单】 |
 | URL 构造：三个协议端点 + models 端点 | `model_profiles.py` `*_url_for_base` | 【单】 |
 | 专用分支：华为云 API 域名特判 | `model_profiles.py` `is_huawei_api_domain` | 【单】 |
