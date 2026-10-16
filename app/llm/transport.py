@@ -8,11 +8,8 @@ wire formats stay in this module:
 * ``anthropic`` / ``@ai-sdk/anthropic`` -> Anthropic Messages API
 
 This module lives under :mod:`llm` so provider wire protocols do not leak back
-into the harness or orchestration modules. ``auto`` is deliberately
-conservative: only official OpenAI and Anthropic
-hosts select their native protocols; every other endpoint is treated as an
-OpenAI-compatible service.  A custom Responses proxy can be selected
-explicitly with ``EXECUTOR_LLM_TYPE=openai``.
+into the harness or orchestration modules. Profiles select their protocol
+explicitly; an omitted selector defaults to Chat Completions.
 """
 from __future__ import annotations
 
@@ -49,7 +46,6 @@ logger = logging.getLogger(__name__)
 
 
 class LLMProvider(str, Enum):
-    AUTO = "auto"
     OPENAI = "openai"
     OPENAI_COMPATIBLE = "openai-compatible"
     ANTHROPIC = "anthropic"
@@ -64,8 +60,7 @@ class ResponsesStateMode(str, Enum):
 
 
 _PROVIDER_ALIASES = {
-    "": LLMProvider.AUTO,
-    "auto": LLMProvider.AUTO,
+    "": LLMProvider.OPENAI_COMPATIBLE,
     "openai": LLMProvider.OPENAI,
     "responses": LLMProvider.OPENAI,
     "openai-responses": LLMProvider.OPENAI,
@@ -141,33 +136,14 @@ def normalize_responses_state_mode(value: Any) -> ResponsesStateMode:
 
 def normalize_provider(value: Any) -> LLMProvider:
     """Normalize a manual provider selector and reject silent typos."""
+    if isinstance(value, LLMProvider):
+        return value
     key = str(value or "").strip().lower()
     try:
         return _PROVIDER_ALIASES[key]
     except KeyError as exc:
-        allowed = "auto, openai, openai-compatible, anthropic"
+        allowed = "openai-responses, openai-compatible, anthropic"
         raise ValueError(f"unsupported LLM provider {value!r}; expected {allowed}") from exc
-
-
-def detect_provider(base_url: Any, model: Any = "") -> LLMProvider:
-    """Infer the wire protocol from an endpoint without making a paid call."""
-    raw_url = str(base_url or "").strip()
-    host = (urlsplit(raw_url).hostname or "").lower()
-    model_id = str(model or "").strip().lower()
-    if host == "api.openai.com" or host.endswith(".openai.com"):
-        return LLMProvider.OPENAI
-    if host == "api.anthropic.com" or host.endswith(".anthropic.com"):
-        return LLMProvider.ANTHROPIC
-    # A model-only hint is useful for a blank/official-looking Anthropic URL,
-    # but must not override OpenRouter, local gateways, or other proxy hosts.
-    if not host and model_id.startswith("claude-"):
-        return LLMProvider.ANTHROPIC
-    return LLMProvider.OPENAI_COMPATIBLE
-
-
-def resolve_provider(value: Any, base_url: Any, model: Any = "") -> LLMProvider:
-    selected = normalize_provider(value)
-    return detect_provider(base_url, model) if selected is LLMProvider.AUTO else selected
 
 
 def resolve_profile_provider(profile: Dict[str, Any]) -> LLMProvider:
@@ -175,16 +151,12 @@ def resolve_profile_provider(profile: Dict[str, Any]) -> LLMProvider:
 
     Provider semantics v2: ``openai`` means chat-completions (openai-compatible)
     even on a custom proxy; ``openai-responses`` opts into the Responses wire
-    protocol.  Only ``auto``/empty may infer a protocol from the endpoint.
+    protocol. An omitted choice defaults to Chat Completions regardless of URL.
     """
     raw = str(profile.get("llm_type") or "").strip().lower()
     if raw == "openai":
         return LLMProvider.OPENAI_COMPATIBLE
-    return resolve_provider(
-        profile.get("llm_type"),
-        profile.get("base_url"),
-        profile.get("model"),
-    )
+    return normalize_provider(profile.get("llm_type"))
 
 
 def canonical_llm_type(provider: LLMProvider) -> str:

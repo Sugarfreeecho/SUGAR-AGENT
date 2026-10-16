@@ -456,7 +456,7 @@ def test_setup_saves_model_to_profile_not_dotenv(tmp_path, monkeypatch):
     class Request:
         async def json(self):
             return {
-                "llm_provider": "auto",
+                "llm_provider": "openai-compatible",
                 "llm_base_url": "https://api.example.com/v1",
                 "api_key": "profile-key",
                 "model_name": "model-a",
@@ -483,7 +483,28 @@ def test_setup_saves_model_to_profile_not_dotenv(tmp_path, monkeypatch):
     assert len(profiles) == 1
     assert profiles[0]["model"] == "model-a"
     assert profiles[0]["api_key"] == "profile-key"
-    assert profiles[0]["llm_type"] == "auto"
+    assert profiles[0]["llm_type"] == "openai-compatible"
+
+
+def test_setup_rejects_retired_or_unknown_protocol_before_writing(tmp_path, monkeypatch):
+    import webui
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(webui, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(webui, "dotenv_file_path", lambda: env_path)
+    for protocol in ("auto", "openai-respones"):
+        class Request:
+            async def json(self):
+                return {
+                    "llm_provider": protocol, "llm_base_url": "https://gateway.example/v1",
+                    "api_key": "test-key", "model_name": "test-model", "work_dir": "./workspace",
+                }
+
+        result = asyncio.run(webui.save_config(Request()))
+        assert result["ok"] is False
+        assert "unsupported LLM provider" in result["error"]
+    assert not env_path.exists()
+    assert webui.model_profiles.load_store(tmp_path) == {"profiles": []}
 
 
 def test_setup_without_runtime_fields_preserves_existing_env(tmp_path, monkeypatch):

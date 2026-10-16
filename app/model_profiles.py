@@ -22,7 +22,6 @@ from llm import (
     normalize_provider,
     normalize_responses_state_mode,
     resolve_profile_provider,
-    resolve_provider,
 )
 
 
@@ -721,123 +720,6 @@ def anthropic_messages_url_for_base(base_url: str) -> str:
     return base + "/v1/messages"
 
 
-_WIRE_PROTOCOL_TIMEOUT = 12.0
-
-
-def _wire_probe_payload(provider_value: str, model_id: str) -> dict:
-    if provider_value == "openai-responses":
-        return {
-            "model": model_id,
-            "input": [{"role": "user", "content": "ping"}],
-            "max_output_tokens": 1,
-            "stream": False,
-        }
-    if provider_value == "anthropic":
-        return {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
-            "stream": False,
-        }
-    return {
-        "model": model_id,
-        "messages": [{"role": "user", "content": "ping"}],
-        "max_tokens": 1,
-        "stream": False,
-    }
-
-
-def _wire_probe_headers(provider_value: str, api_key: str) -> dict:
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    key = str(api_key or "").strip()
-    if not key:
-        return headers
-    if provider_value == "anthropic":
-        headers["x-api-key"] = key
-        headers["anthropic-version"] = "2023-06-01"
-    else:
-        headers["Authorization"] = "Bearer " + key
-    return headers
-
-
-def _wire_route_missing(provider_value: str, status: int, body: Any) -> bool:
-    """Whether the endpoint says this wire route does not exist at all."""
-    if status in (404, 405):
-        return True
-    if isinstance(body, (dict, list)):
-        text = json.dumps(body, ensure_ascii=False)
-    else:
-        text = str(body or "")
-    lowered = text.lower()
-    if status == 400 and ("not found" in lowered or "unknown route" in lowered):
-        return True
-    return False
-
-
-def detect_wire_protocol(
-    base_url: str,
-    api_key: str,
-    model_id: str,
-    timeout: float = _WIRE_PROTOCOL_TIMEOUT,
-) -> Optional[str]:
-    """Probe which wire protocol an endpoint actually serves for this model.
-
-    Sends a minimal request over each candidate route and judges by the
-    response: 2xx means supported; 4xx that argues about request fields
-    (auth, context, unknown parameter) means the route exists and speaks
-    that protocol; 404/405-style answers mean the route is absent.
-    Returns one of ``openai-responses`` / ``openai-compatible`` / ``anthropic``
-    or None when nothing could be determined (offline, quota walls, etc).
-    """
-    base = _normalize_base_url(base_url)
-    mid = str(model_id or "").strip()
-    if not base or not mid:
-        return None
-    candidates: list[tuple[str, str]] = [
-        ("openai-compatible", chat_completions_url_for_base(base)),
-        ("openai-responses", responses_url_for_base(base)),
-    ]
-    if mid.lower().startswith("claude"):
-        candidates.insert(0, ("anthropic", anthropic_messages_url_for_base(base)))
-    supported: list[str] = []
-    with httpx.Client(timeout=timeout) as client:
-        for provider_value, url in candidates:
-            if not url:
-                continue
-            try:
-                response = client.post(
-                    url,
-                    headers=_wire_probe_headers(provider_value, api_key),
-                    json=_wire_probe_payload(provider_value, mid),
-                )
-            except Exception:
-                continue
-            if 200 <= response.status_code < 300:
-                supported.append(provider_value)
-                continue
-            body: Any = None
-            try:
-                body = response.json()
-            except Exception:
-                body = response.text[:500]
-            if _wire_route_missing(provider_value, response.status_code, body):
-                continue
-            if 400 <= response.status_code < 500:
-                # The route answered with a request-level complaint (auth,
-                # quota, unknown field, context window) so it exists and
-                # parses this wire protocol.
-                supported.append(provider_value)
-    if len(supported) == 1:
-        return supported[0]
-    if len(supported) > 1:
-        # Chat Completions is the most widely shared dialect across
-        # aggregators; prefer it when a gateway mirrors multiple routes.
-        if "openai-compatible" in supported:
-            return "openai-compatible"
-        return supported[0]
-    return None
-
-
 def extract_context_window_from_error(error_body: Any) -> int:
     if isinstance(error_body, (dict, list)):
         text = json.dumps(error_body, ensure_ascii=False)
@@ -894,7 +776,7 @@ def probe_context_window_from_error_detail(
     success; otherwise it carries the transport exception or the raw HTTP
     status and body so callers can surface the real reason to the UI/logs.
     """
-    provider = resolve_provider(llm_type, base_url, model_id)
+    provider = normalize_provider(llm_type)
     if provider is LLMProvider.OPENAI:
         url = responses_url_for_base(base_url)
     elif provider is LLMProvider.ANTHROPIC:
@@ -955,9 +837,9 @@ def probe_model_context(
         raise ValueError("missing model")
     fallback = fallback if isinstance(fallback, dict) else {}
     requested_provider = str(
-        llm_type or fallback.get("llm_type") or "auto"
-    ).strip().lower() or "auto"
-    provider = resolve_provider(requested_provider, base, mid)
+        llm_type or fallback.get("llm_type") or "openai-compatible"
+    ).strip().lower()
+    provider = resolve_profile_provider({"llm_type": requested_provider})
     limits = infer_model_limits(mid, fallback, base_url=base)
     headers = {}
     if str(api_key or "").strip():
@@ -1052,6 +934,12 @@ def load_store(project_root: Path) -> dict:
     profiles = data.get("profiles")
     if not isinstance(profiles, list):
         data["profiles"] = []
+    migrated = False
+    for profile in data["profiles"]:
+        if isinstance(profile, dict) and _migrate_legacy_auto_protocol(profile):
+            migrated = True
+    if migrated:
+        save_store(project_root, data)
     return {"profiles": data["profiles"]}
 
 
@@ -1173,15 +1061,28 @@ def is_usable_profile(profile: object) -> bool:
     return True
 
 
+def _migrate_legacy_auto_protocol(profile: dict) -> bool:
+    """Freeze a retired selector's previous URL mapping once, when importing it."""
+    if str(profile.get("llm_type") or "").strip().lower() != "auto":
+        return False
+    host = (urlsplit(str(profile.get("base_url") or "")).hostname or "").lower()
+    if host == "api.openai.com" or host.endswith(".openai.com"):
+        profile["llm_type"] = "openai-responses"
+    elif host == "api.anthropic.com" or host.endswith(".anthropic.com"):
+        profile["llm_type"] = "anthropic"
+    else:
+        profile["llm_type"] = "openai-compatible"
+    return True
+
+
 def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
     """Translate a complete legacy .env model configuration into a profile payload."""
-    llm_type = str(env.get("EXECUTOR_LLM_TYPE") or "auto").strip().lower() or "auto"
+    llm_type = str(env.get("EXECUTOR_LLM_TYPE") or "openai-compatible").strip().lower()
     # This importer only handles the legacy .env schema, where `openai`
     # historically meant "use the OpenAI SDK against any compatible endpoint".
-    # Preserve that behavior while allowing the profile UI's explicit `openai`
-    # value to retain its new Responses API meaning.
+    # Preserve that behavior using an explicit Chat Completions selector.
     if llm_type in {"openai", "@ai-sdk/openai"}:
-        llm_type = "auto"
+        llm_type = "openai-compatible"
     if llm_type == "local":
         model = str(env.get("LOCAL_LLM") or env.get("EXECUTOR_LLM") or "").strip()
         local_host = str(env.get("LOCAL_LLM_HOST") or "").strip()
@@ -1194,7 +1095,10 @@ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
     api_key = str(env.get("OPENAI_API_KEY") or "").strip()
     if not model or not base_url:
         return None
-    provider = resolve_provider(llm_type, base_url, model)
+    legacy_profile = {"llm_type": llm_type, "base_url": base_url}
+    _migrate_legacy_auto_protocol(legacy_profile)
+    provider = resolve_profile_provider(legacy_profile)
+    llm_type = canonical_llm_type(provider)
     if provider is not LLMProvider.OPENAI_COMPATIBLE and (
         not api_key or "YOUR_API_KEY" in api_key.upper()
     ):
@@ -1228,7 +1132,7 @@ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
 def _legacy_env_profile_identity(profile: dict) -> tuple[str, ...]:
     return (
         str(profile.get("model") or "").strip(),
-        str(profile.get("llm_type") or "auto").strip().lower(),
+        str(profile.get("llm_type") or "openai-compatible").strip().lower(),
         _normalize_base_url(str(profile.get("base_url") or "")),
         str(profile.get("api_key") or "").strip(),
         str(_safe_int(profile.get("context_window"), 0)),
@@ -1320,33 +1224,9 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
         raise ValueError("missing model")
     if not base_url:
         raise ValueError("missing base_url")
-    # Persist the provider semantics v2 canonical value so the stored
-    # ``llm_type`` cannot be re-interpreted differently by resolve time:
-    # explicit chat stays ``openai-compatible``; explicit Responses stays
-    # ``openai-responses``.  ``auto`` is kept as-is so the endpoint inference
-    # still applies on every load.  The raw string is mapped directly (not
-    # through LLMProvider, whose ``openai`` member predates the v2 split).
-    raw_llm_type = str(payload.get("llm_type") or "auto").strip().lower() or "auto"
-    provider = resolve_provider(raw_llm_type, base_url, model)
-    if raw_llm_type == "auto":
-        # A real probe beats hostname guessing: ask the endpoint which wire
-        # protocol it actually serves for this model.  Fall back to endpoint
-        # inference only when the probe cannot tell (offline, quota walls).
-        detected = detect_wire_protocol(base_url, incoming_api_key or existing_api_key, model)
-        if detected:
-            llm_type = detected
-            provider = resolve_provider(detected, base_url, model)
-        else:
-            llm_type = "auto"
-    elif raw_llm_type in {"openai-responses", "responses", "@ai-sdk/openai"}:
-        llm_type = "openai-responses"
-    elif raw_llm_type in {"openai-compatible", "openai_compatible", "compatible", "chat-completions", "local", "@ai-sdk/openai-compatible"}:
-        llm_type = "openai-compatible"
-    elif raw_llm_type == "openai":
-        # v2 UI semantics: a bare explicit ``openai`` selects chat-completions.
-        llm_type = "openai-compatible"
-    else:
-        llm_type = canonical_llm_type(normalize_provider(raw_llm_type))
+    raw_llm_type = payload.get("llm_type", (old or {}).get("llm_type"))
+    provider = resolve_profile_provider({"llm_type": raw_llm_type})
+    llm_type = canonical_llm_type(provider)
     if (
         provider is not LLMProvider.OPENAI_COMPATIBLE
         and not incoming_api_key

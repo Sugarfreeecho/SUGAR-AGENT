@@ -248,12 +248,6 @@
     margin-bottom: 1.1rem;
     align-items: start;
   }
-  .form-row-2:has(#llmProvider) {
-    grid-template-columns: 1fr;
-  }
-  .form-group:has(#llmProvider) {
-    display: none;
-  }
   .form-row-2 .form-group { margin-bottom: 0; }
   .model-hint-below {
     margin-bottom: 1.1rem;
@@ -710,9 +704,13 @@
 
       <div class="form-row-2">
         <div class="form-group">
-          <label>LLM 供应商（自动识别协议） <span class="required">*</span></label>
+          <label for="llmProvider">API 类型 <span class="required">*</span></label>
           <div class="select-wrap">
-          <input type="hidden" id="llmProvider" value="auto">
+            <select id="llmProvider">
+              <option value="openai-compatible">OpenAI Chat Completions</option>
+              <option value="openai-responses">OpenAI Responses</option>
+              <option value="anthropic">Anthropic Messages</option>
+            </select>
           </div>
         </div>
         <div class="form-group">
@@ -748,33 +746,29 @@
 
 <script>
   const providerMap = {
-    deepseek: {
-      baseUrl: 'https://api.deepseek.com',
-      keyPlaceholder: 'sk-...',
-      keyHint: 'DeepSeek',
-      defaultModel: 'deepseek-v4-flash',
-      modelHint: 'DeepSeek 常用：deepseek-v4-flash、deepseek-v4-pro',
-    },
-    auto: {
+    'openai-compatible': {
       baseUrl: 'http://models.ascend.huawei.com/v1',
       keyPlaceholder: 'sk-...',
-      keyHint: '自动识别',
       defaultModel: 'deepseek-v4-flash',
-      modelHint: '根据地址自动选择 Responses、Anthropic Messages 或 OpenAI 兼容协议',
+      modelHint: '使用 OpenAI Chat Completions 协议，请填写服务商提供的模型名称。',
     },
-    local: {
-      baseUrl: 'http://localhost:11434/v1',
-      keyPlaceholder: 'not-needed',
-      keyHint: '本地模型',
-      defaultModel: 'llama3.2',
-      modelHint: '填写 Ollama 已拉取的模型名，如 llama3.2、qwen3.5',
+    'openai-responses': {
+      baseUrl: 'https://api.openai.com/v1',
+      keyPlaceholder: 'sk-...',
+      defaultModel: '',
+      modelHint: '使用 OpenAI Responses 协议，请确认服务商支持此接口。',
+    },
+    anthropic: {
+      baseUrl: 'https://api.anthropic.com',
+      keyPlaceholder: 'sk-ant-...',
+      defaultModel: '',
+      modelHint: '使用 Anthropic Messages 协议，支持原生接口和兼容网关。',
     },
   };
 
   const llmProvider = document.getElementById('llmProvider');
   const baseUrl = document.getElementById('baseUrl');
   const apiKey = document.getElementById('apiKey');
-  const apiKeyGroup = document.getElementById('apiKeyGroup');
   const modelName = document.getElementById('modelName');
   const modelHintEl = document.getElementById('modelHint');
   const status = document.getElementById('status');
@@ -786,12 +780,10 @@
   const modelDiscoveryStatus = document.getElementById('modelDiscoveryStatus');
   const modelDiscoveryList = document.getElementById('modelDiscoveryList');
 
-  let lastProvider = llmProvider.value;
   let modelFetchTimer = null;
   let lastModelFetchKey = '';
   let selectedDiscoveredModelId = '';
   let discoveredModelIds = [];
-  let setupReady = false;
 
   function wizardEsc(value) {
     return String(value == null ? '' : value)
@@ -963,7 +955,7 @@
           base_url: baseUrl.value.trim(),
           api_key: apiKey.value.trim(),
           model: modelId,
-          llm_type: llmProvider.value || 'auto',
+          llm_type: llmProvider.value,
           metadata: model,
         }),
       });
@@ -1066,50 +1058,28 @@
     apiKey.placeholder = p.keyPlaceholder;
     modelHintEl.textContent = p.modelHint;
     modelName.placeholder = p.defaultModel;
-    apiKeyGroup.style.display = provider === 'local' ? 'none' : 'block';
-  }
-
-  function applyProvider(provider, forceModel) {
-    const p = providerMap[provider];
-    if (!p) return;
-    syncProviderUi(provider);
-    const prevDef = providerMap[lastProvider] ? providerMap[lastProvider].defaultModel : '';
-    const cur = modelName.value.trim();
-    if (forceModel || !cur || (prevDef && cur === prevDef)) {
-      baseUrl.value = p.baseUrl;
-      modelName.value = p.defaultModel;
-      if (setupReady) scheduleModelDiscovery();
-    }
-    lastProvider = provider;
   }
 
   var prefill = window.__WIZARD_PREFILL__;
   var hasPrefill = prefill && typeof prefill === 'object' && Object.keys(prefill).length > 0;
 
   if (hasPrefill) {
-    llmProvider.value = 'auto';
-    syncProviderUi(llmProvider.value);
-    lastProvider = llmProvider.value;
+    if (providerMap[prefill.llm_provider]) llmProvider.value = prefill.llm_provider;
     if (prefill.model_name) modelName.value = prefill.model_name;
     if (prefill.llm_base_url) baseUrl.value = prefill.llm_base_url;
     if (prefill.api_key !== undefined && prefill.api_key !== null) apiKey.value = prefill.api_key;
     if (prefill.context_window && contextWindowEl) contextWindowEl.value = prefill.context_window;
     if (prefill.max_output_tokens && maxOutputTokensEl) maxOutputTokensEl.value = prefill.max_output_tokens;
-    var pSel = llmProvider.value;
-    var pm = providerMap[pSel];
-    if (pm) {
-      if (!modelName.value.trim()) modelName.value = pm.defaultModel;
-      if (!baseUrl.value.trim()) baseUrl.value = pm.baseUrl;
-    }
-  } else {
-    applyProvider(llmProvider.value, true);
   }
+  syncProviderUi(llmProvider.value);
+  const initialProvider = providerMap[llmProvider.value];
+  if (!baseUrl.value.trim()) baseUrl.value = initialProvider.baseUrl;
+  if (!modelName.value.trim()) modelName.value = initialProvider.defaultModel;
 
   if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '119808';
   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
-  setupReady = true;
 
-  llmProvider.value = 'auto';
+  llmProvider.addEventListener('change', () => syncProviderUi(llmProvider.value));
   baseUrl.addEventListener('input', scheduleModelDiscovery);
   baseUrl.addEventListener('change', scheduleModelDiscovery);
   apiKey.addEventListener('input', scheduleModelDiscovery);
@@ -1149,7 +1119,7 @@
       return;
     }
 
-    if (provider !== 'local' && !key) {
+    if (!key) {
       showStatus('请填写 API Key', 'error');
       return;
     }

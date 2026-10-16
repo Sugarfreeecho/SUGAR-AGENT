@@ -248,6 +248,71 @@ def test_model_form_shows_metadata_required_fields_and_fixed_efforts(settings_pa
     assert page.locator("#st-dlg-body").evaluate("el=>getComputedStyle(el,'::-webkit-scrollbar').width") == "5px"
 
 
+def test_model_protocol_is_visible_explicit_and_saved(settings_page):
+    page, requests = settings_page
+    page.evaluate("MyAgentSettings.showSection('models',{force:true})")
+    page.locator('[data-act="model-edit"]').click()
+    selector = page.locator('[data-field="llm_type"]')
+    assert selector.is_visible()
+    assert selector.locator('option').evaluate_all("options=>options.map(option=>option.value)") == [
+        "openai-compatible", "openai-responses", "anthropic",
+    ]
+    assert selector.input_value() == "openai-responses"
+    selector.select_option("anthropic")
+    page.locator("#st-dlg-ok").click()
+    page.locator("#st-dialog").wait_for(state="hidden")
+    saved = json.loads(next(request["body"] for request in requests
+                            if request["path"] == "/api/model_profiles" and request["method"] == "POST"))
+    assert saved["llm_type"] == "anthropic"
+    assert saved["base_url"] == "https://example.invalid/v1"
+
+
+@pytest.mark.parametrize("protocol", ["openai-compatible", "openai-responses", "anthropic"])
+def test_setup_protocol_selector_preserves_custom_endpoint_and_submits_it(browser_page, protocol):
+    page = browser_page
+    submissions = []
+
+    def route(request):
+        path = urlsplit(request.request.url).path
+        if path == "/setup":
+            request.fulfill(status=200, content_type="text/html",
+                            body=(ROOT / "app/templates/first_time_config.html").read_text(encoding="utf-8"))
+        elif path == "/static/setup_i18n.js":
+            request.fulfill(status=200, content_type="application/javascript",
+                            body=(ROOT / "app/templates/static/setup_i18n.js").read_text(encoding="utf-8"))
+        elif path == "/api/save_config":
+            submissions.append(json.loads(request.request.post_data))
+            request.fulfill(status=200, content_type="application/json",
+                            body=json.dumps({"ok": False, "error": "fixture prevents navigation"}))
+        elif path.startswith("/api/"):
+            request.fulfill(status=200, content_type="application/json", body='{"ok":true,"models":[]}')
+        else:
+            request.fulfill(status=404, body="")
+
+    page.route("**/*", route)
+    try:
+        page.goto("http://setup.test/setup")
+        selector = page.locator("#llmProvider")
+        assert selector.is_visible()
+        assert selector.locator('option').evaluate_all("options=>options.map(option=>option.value)") == [
+            "openai-compatible", "openai-responses", "anthropic",
+        ]
+        page.locator("#baseUrl").fill("https://gateway.example/v1")
+        page.locator("#modelName").fill("fixture-model")
+        page.locator("#apiKey").fill("fixture-key")
+        selector.select_option(protocol)
+        assert page.locator("#baseUrl").input_value() == "https://gateway.example/v1"
+        assert page.locator("#modelName").input_value() == "fixture-model"
+        page.locator("#submitBtn").click()
+        page.wait_for_function("document.querySelector('.status').textContent.includes('fixture prevents navigation')")
+        assert len(submissions) == 1
+        assert submissions[0]["llm_provider"] == protocol
+        assert submissions[0]["llm_base_url"] == "https://gateway.example/v1"
+    finally:
+        page.goto("about:blank")
+        page.unroute("**/*", route)
+
+
 def test_model_automatic_preview_and_manual_edit_are_not_overwritten(settings_page):
     page, requests = settings_page
     _mock_json(page, "/api/model_profiles/capabilities", {"capabilities": {"capability_description": "Generated description"}}, method="POST")

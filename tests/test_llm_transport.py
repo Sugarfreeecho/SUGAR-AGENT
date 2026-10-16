@@ -21,11 +21,9 @@ from llm import (  # noqa: E402
     ResponsesStateMode,
     TransportEvent,
     chat_messages_to_anthropic,
-    detect_provider,
     merge_streamed_tool_name,
     normalize_provider,
     normalize_responses_state_mode,
-    resolve_provider,
     resolve_profile_provider,
 )
 from llm.responses import responses_capability_cache  # noqa: E402
@@ -52,13 +50,21 @@ def test_provider_aliases(value, expected):
     assert normalize_provider(value) is expected
 
 
-def test_auto_provider_detection_is_host_first_and_conservative():
-    assert detect_provider("https://api.openai.com/v1", "gpt-5") is LLMProvider.OPENAI
-    assert detect_provider("https://api.anthropic.com", "claude-sonnet-4") is LLMProvider.ANTHROPIC
-    assert (
-        detect_provider("https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4")
-        is LLMProvider.OPENAI_COMPATIBLE
-    )
+@pytest.mark.parametrize("base_url", [
+    "https://api.openai.com/v1", "https://api.anthropic.com", "https://gateway.example/v1",
+])
+def test_omitted_provider_uses_chat_without_url_detection(base_url):
+    assert resolve_profile_provider({
+        "base_url": base_url, "model": "claude-test",
+    }) is LLMProvider.OPENAI_COMPATIBLE
+
+
+def test_retired_auto_provider_is_rejected():
+    with pytest.raises(ValueError, match="unsupported LLM provider"):
+        normalize_provider("auto")
+    assert {provider.value for provider in LLMProvider} == {
+        "openai", "openai-compatible", "anthropic",
+    }
 
 
 def test_explicit_openai_profile_uses_responses_on_custom_host():
@@ -99,10 +105,6 @@ def test_custom_openai_profile_is_exposed_as_responses():
     public = model_profiles.public_profile(profile_responses)
     assert public["llm_type"] == "openai-responses"
     assert "legacy_llm_type" not in public
-    assert (
-        resolve_provider("auto", "http://localhost:11434/v1", "qwen3")
-        is LLMProvider.OPENAI_COMPATIBLE
-    )
 
 
 def test_responses_issuer_isolated_by_endpoint_model_and_credential_scope():
@@ -757,14 +759,10 @@ def test_model_profile_persists_canonical_manual_provider(tmp_path):
 def test_model_profile_persists_provider_semantics_v2_values(tmp_path, monkeypatch):
     import model_profiles
 
-    # Explicit choices must never hit the network; only ``auto`` probes.
-    probes = []
+    def no_network(*args, **kwargs):
+        raise AssertionError("saving a profile must not probe protocol endpoints")
 
-    def _fake_detect(base_url, api_key, model_id, **_kwargs):
-        probes.append((base_url, model_id))
-        return None
-
-    monkeypatch.setattr(model_profiles, "detect_wire_protocol", _fake_detect)
+    monkeypatch.setattr(model_profiles.httpx, "Client", no_network)
 
     responses = model_profiles.upsert_profile(
         tmp_path,
@@ -811,77 +809,20 @@ def test_model_profile_persists_provider_semantics_v2_values(tmp_path, monkeypat
 
     assert compatible["llm_type"] == "openai-compatible"
 
-    # Explicit selections never probe the endpoint.
-    assert probes == []
 
-    automatic = model_profiles.upsert_profile(
-        tmp_path,
-        {
-            "model": "auto-test",
-            "llm_type": "auto",
-            "base_url": "https://opencode.ai/zen/go/v1",
-            "api_key": "secret",
-            "context_window": 1000,
-            "max_output_tokens": 100,
-        },
-    )
-
-    # The fake detector cannot tell, so the profile keeps ``auto`` and the
-    # endpoint inference applies on every load.
-    assert automatic["llm_type"] == "auto"
-    assert probes == [("https://opencode.ai/zen/go/v1", "auto-test")]
-
-
-def test_auto_profile_persists_probed_wire_protocol(tmp_path, monkeypatch):
+def test_model_profile_rejects_retired_auto_protocol_without_network(tmp_path, monkeypatch):
     import model_profiles
 
-    def _fake_detect(base_url, api_key, model_id, **_kwargs):
-        return "openai-responses"
+    def no_network(*args, **kwargs):
+        raise AssertionError("retired protocol must fail before any network call")
 
-    monkeypatch.setattr(model_profiles, "detect_wire_protocol", _fake_detect)
-
-    profile = model_profiles.upsert_profile(
-        tmp_path,
-        {
-            "model": "muse-probed",
-            "llm_type": "auto",
-            "base_url": "https://opencode.ai/zen/v1",
-            "api_key": "secret",
-            "context_window": 1000,
-            "max_output_tokens": 100,
-        },
-    )
-
-    assert profile["llm_type"] == "openai-responses"
-
-
-def test_detect_wire_protocol_judges_routes_by_error_shape(monkeypatch):
-    import httpx
-
-    import model_profiles
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/chat/completions"):
-            # A request-level complaint proves the route exists.
-            return httpx.Response(
-                400,
-                json={"error": {"message": "max_tokens is too large"}},
-            )
-        if request.url.path.endswith("/responses"):
-            return httpx.Response(404, json={"error": "Not found"})
-        return httpx.Response(500, text="boom")
-
-    real_client = httpx.Client
-
-    class MockClient(real_client):
-        def __init__(self, *args, **kwargs):
-            super().__init__(transport=httpx.MockTransport(handler))
-
-    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
-    detected = model_profiles.detect_wire_protocol(
-        "https://gateway.example.com/v1", "k", "some-model"
-    )
-    assert detected == "openai-compatible"
+    monkeypatch.setattr(model_profiles.httpx, "Client", no_network)
+    with pytest.raises(ValueError, match="unsupported LLM provider"):
+        model_profiles.upsert_profile(tmp_path, {
+            "model": "test", "llm_type": "auto", "api_key": "secret",
+            "base_url": "https://gateway.example/v1",
+        })
+    assert model_profiles.load_store(tmp_path) == {"profiles": []}
 
 
 def test_legacy_stateless_profile_migrates_to_storage_privacy_flag(tmp_path):
@@ -937,21 +878,21 @@ def test_responses_profile_ui_exposes_only_storage_privacy_switch():
     assert "payload.responses_store_disabled =" in html
 
 
-def test_auto_compatible_profile_can_use_an_authless_local_endpoint(tmp_path):
+def test_compatible_profile_can_use_an_authless_local_endpoint(tmp_path):
     import model_profiles
 
     profile = model_profiles.upsert_profile(
         tmp_path,
         {
             "model": "qwen3",
-            "llm_type": "auto",
+            "llm_type": "openai-compatible",
             "base_url": "http://localhost:11434/v1",
             "context_window": 1000,
             "max_output_tokens": 100,
         },
     )
 
-    assert profile["llm_type"] == "auto"
+    assert profile["llm_type"] == "openai-compatible"
     assert model_profiles.is_usable_profile(profile) is True
 
 
@@ -2067,6 +2008,95 @@ def test_compatible_stream_arguments_survive_single_char_fragments():
     events = list(_compatible_transport_with_chunks(chunks).stream_completion(model="m", messages=[]))
     merged = "".join(event.arguments_delta for event in events if event.kind == "tool_call_delta")
     assert json.loads(merged) == json.loads(payload)
+
+
+@pytest.mark.parametrize("prefer_direct", [None, "1", "0"])
+@pytest.mark.parametrize(
+    ("llm_type", "base_url", "expected_path"),
+    [
+        ("anthropic", "https://gateway.example/v1", "/v1/messages"),
+        ("anthropic", "https://api.anthropic.com", "/v1/messages"),
+        ("openai-responses", "https://gateway.example/v1", "/v1/responses"),
+        ("openai-responses", "https://api.openai.com/v1", "/v1/responses"),
+        ("openai-compatible", "https://gateway.example/v1", "/v1/chat/completions"),
+        ("openai", "https://gateway.example/v1", "/v1/chat/completions"),
+        (None, "https://api.openai.com/v1", "/v1/chat/completions"),
+    ],
+)
+def test_executor_direct_stream_respects_resolved_protocol(
+    monkeypatch, prefer_direct, llm_type, base_url, expected_path,
+):
+    import httpx
+
+    import agent_harness
+    import agent_openai
+
+    if prefer_direct is None:
+        monkeypatch.delenv("LLM_STREAM_PREFER_DIRECT", raising=False)
+    else:
+        monkeypatch.setenv("LLM_STREAM_PREFER_DIRECT", prefer_direct)
+    monkeypatch.setenv("RESPONSES_WEBSOCKET_MODE", "disabled")
+    monkeypatch.setenv("LLM_CANDIDATE_RETRY_ATTEMPTS", "0")
+    monkeypatch.setattr(agent_harness, "_executor_override_cache", {})
+    monkeypatch.setattr(agent_harness, "_executor_transport_cache", {})
+    requests = []
+    direct_calls = []
+    raw_stream = agent_openai._open_raw_http_stream
+
+    def track_direct(*args, **kwargs):
+        direct_calls.append(True)
+        return raw_stream(*args, **kwargs)
+
+    monkeypatch.setattr(agent_openai, "_open_raw_http_stream", track_direct)
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path != expected_path:
+            return httpx.Response(400, json={"error": {
+                "code": "ModelProtocolUnsupported", "message": "wrong protocol",
+            }})
+        if expected_path.endswith("/messages"):
+            events = [
+                {"type": "content_block_delta", "index": 0,
+                 "delta": {"type": "text_delta", "text": "ok"}},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
+                {"type": "message_stop"},
+            ]
+        elif expected_path.endswith("/responses"):
+            events = [
+                {"type": "response.output_text.delta", "delta": "ok"},
+                {"type": "response.completed", "response": {
+                    "id": "resp_test", "model": "test-model",
+                    "status": "completed", "output": [],
+                }},
+            ]
+        else:
+            events = [{"model": "test-model", "choices": [{
+                "delta": {"content": "ok"}, "finish_reason": "stop",
+            }]}]
+        body = "".join("data: " + json.dumps(event) + "\n\n" for event in events)
+        if expected_path.endswith("/chat/completions"):
+            body += "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        monkeypatch.setattr(agent_harness, "executor_http_client", http_client)
+        candidate = agent_harness._profile_candidate({
+            "id": "protocol-test", "llm_type": llm_type, "base_url": base_url,
+            "api_key": "test-key", "model": "test-model", "max_output_tokens": 32,
+            "thinking_mode": "disabled",
+        })
+        client = agent_harness.ExecutorLLMClient([candidate])
+        events = list(client.stream_completion(
+            model="test-model", messages=[{"role": "user", "content": "hello"}],
+        ))
+
+    assert [request.url.path for request in requests] == [expected_path]
+    assert "".join(event.text for event in events if event.kind == "content_delta") == "ok"
+    assert any(event.kind == "finish" for event in events)
+    assert bool(direct_calls) is (
+        expected_path.endswith("/chat/completions") and prefer_direct != "0"
+    )
 
 
 def test_direct_stream_preserves_mixed_text_and_all_tool_calls():

@@ -1006,11 +1006,11 @@ PREFER_DIRECT_ENV = "LLM_STREAM_PREFER_DIRECT"
 def _prefer_direct_stream() -> bool:
     """Whether the preferred candidate streams over the shared httpx client.
 
-    Defaults to enabled: reading the response to EOF returns the connection to
-    the pool, which measured ~850 ms faster per step, and the adapter inside the
-    candidate loop keeps fallback, circuits, modality routing and the request
-    budget intact. Set ``LLM_STREAM_PREFER_DIRECT=0`` to fall back to the in-house
-    transports.
+    Defaults to enabled for Chat Completions candidates: reading the response to
+    EOF returns the connection to the pool, which measured ~850 ms faster per
+    step, and the adapter inside the candidate loop keeps fallback, circuits,
+    modality routing and the request budget intact. Set
+    ``LLM_STREAM_PREFER_DIRECT=0`` to fall back to the in-house transports.
     """
     raw = str(os.getenv(PREFER_DIRECT_ENV) or "").strip().lower()
     if raw in {"0", "false", "no", "off"}:
@@ -2287,11 +2287,15 @@ class ExecutorLLMClient:
     def _direct_transport(item: Dict[str, Any]) -> Optional["_DirectStreamTransport"]:
         """A transport that streams candidate ``item`` over the shared httpx client.
 
-        Used only when ``LLM_STREAM_PREFER_DIRECT`` is set and only for the first
-        candidate: the facade keeps owning fallback, circuits, modality routing
-        and budget, so replacing just the stream source cannot remove any of it.
+        Enabled by default for the first candidate only if its resolved protocol
+        is Chat Completions. The facade keeps owning fallback, circuits, modality
+        routing and budget, so replacing just the stream source preserves them.
         """
         if not _prefer_direct_stream():
+            return None
+        # The raw adapter always posts to /chat/completions. Messages and
+        # Responses candidates must retain their native protocol transports.
+        if item.get("provider") != "openai-compatible":
             return None
         target = item.get("client")
         if target is None:

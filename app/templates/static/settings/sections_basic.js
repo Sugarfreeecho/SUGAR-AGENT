@@ -148,7 +148,7 @@
   });
 
   /* ── 模型 ───────────────────────────────────────────────────────────── */
-  const LLM_TYPES = ['auto', 'openai-compatible', 'openai-responses', 'anthropic'];
+  const LLM_TYPES = ['openai-compatible', 'openai-responses', 'anthropic'];
   const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
   function modelField(label, hint, control, required) {
@@ -182,6 +182,10 @@
         : t('API 地址和模型名称必填；已配置的密钥可留空保留。其他字段按标识填写。', 'Endpoint and model name are required; leave a configured key empty to keep it.'),
       okText: t('保存', 'Save'),
       body:
+        modelField(t('API 类型', 'API type'), t('按服务商要求选择协议', 'Select the protocol required by your provider'),
+          '<select class="st-input" data-field="llm_type">' +
+          LLM_TYPES.map((v) => '<option value="' + v + '"' + ((p.llm_type || 'openai-compatible') === v ? ' selected' : '') + '>' + v + '</option>').join('') +
+          '</select>', true) +
         modelField(t('API 地址', 'API base URL'), t('模型服务的接口地址', 'Model service endpoint'),
           '<input class="st-input" data-field="base_url" value="' + esc(p.base_url || '') + '" placeholder="https://api.openai.com/v1">', true) +
         modelField('API Key', p.api_key_set ? t('已配置，留空表示不修改', 'Configured — leave empty to keep') : t('密钥只写，保存后不再回显', 'Write-only'),
@@ -191,9 +195,6 @@
           W.btn(t('从接口获取', 'Fetch'), 'model-fetch'), true) +
         W.adv(t('高级设置', 'Advanced'),
           modelField(t('方案名称', 'Profile name'), t('留空使用模型名称', 'Defaults to model name'), '<input class="st-input" data-field="name" value="' + esc(p.name || '') + '">') +
-          modelField(t('API 类型', 'API type'), '', '<select class="st-input" data-field="llm_type">' +
-            LLM_TYPES.map((v) => '<option value="' + v + '"' + ((p.llm_type || 'auto') === v ? ' selected' : '') + '>' + v + '</option>').join('') +
-            '</select>') +
           modelField(t('模型总窗口', 'Model window limit'), '', '<input class="st-input" data-field="model_context_window" value="' + esc(p.model_context_window || '') + '">' +
             W.btn(t('探测窗口', 'Probe limit'), 'model-probe')) +
           modelField(t('上下文长度（压缩阈值）', 'Context length (compaction threshold)'), t('达到此长度时压缩上下文；留空保留现有值或使用默认值', 'Compact at this length; keep existing value or default when empty'), '<input class="st-input" data-field="context_window" value="' + esc(p.context_window || '') + '" placeholder="400000">') +
@@ -226,7 +227,7 @@
         const baseUrl = dialogValue('base_url');
         if (!model) { toast(t('请填写模型名称', 'Model name is required'), true); return true; }
         if (!baseUrl) { toast(t('请填写 API 地址', 'API base URL is required'), true); return true; }
-        const payload = { model, base_url: baseUrl, id: p.id, name: dialogValue('name') || model, llm_type: dialogValue('llm_type') || 'auto' };
+        const payload = { model, base_url: baseUrl, id: p.id, name: dialogValue('name') || model, llm_type: dialogValue('llm_type') || 'openai-compatible' };
         const key = dialogValue('api_key');
         if (!key && !p.api_key_set) { toast(t('请填写 API Key', 'API key is required'), true); return true; }
         if (key) payload.api_key = key;

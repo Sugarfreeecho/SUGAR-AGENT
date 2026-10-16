@@ -17,6 +17,40 @@ def test_profile_store_defaults_to_sugaragent_state_dir(tmp_path):
     )
 
 
+def test_retired_protocol_is_migrated_once_without_changing_explicit_profiles(tmp_path, monkeypatch):
+    profiles = [
+        {"id": "official-responses", "llm_type": "auto", "base_url": "https://api.openai.com/v1"},
+        {"id": "official-messages", "llm_type": "auto", "base_url": "https://api.anthropic.com"},
+        {"id": "gateway-chat", "llm_type": "auto", "base_url": "https://gateway.example/v1"},
+        {"id": "explicit-messages", "llm_type": "anthropic", "base_url": "https://gateway.example/v1"},
+    ]
+    model_profiles.save_store(tmp_path, {"profiles": profiles})
+    migrated = model_profiles.load_store(tmp_path)["profiles"]
+    assert [profile["llm_type"] for profile in migrated] == [
+        "openai-responses", "anthropic", "openai-compatible", "anthropic",
+    ]
+    persisted = json.loads(model_profiles.profile_store_path(tmp_path).read_text(encoding="utf-8"))
+    assert persisted["profiles"] == migrated
+
+    def unexpected_write(*args, **kwargs):
+        raise AssertionError("an explicit store must not be rewritten during load")
+
+    monkeypatch.setattr(model_profiles, "save_store", unexpected_write)
+    assert model_profiles.load_store(tmp_path)["profiles"] == migrated
+
+
+def test_profile_update_without_protocol_keeps_existing_explicit_choice(tmp_path):
+    original = model_profiles.upsert_profile(tmp_path, {
+        "llm_type": "anthropic", "base_url": "https://gateway.example/v1",
+        "model": "claude-test", "api_key": "test-key",
+    })
+    updated = model_profiles.upsert_profile(tmp_path, {
+        "id": original["id"], "base_url": original["base_url"], "model": original["model"],
+    })
+    assert updated["llm_type"] == "anthropic"
+    assert updated["api_key"] == "test-key"
+
+
 def test_models_table_is_bundled_inside_app():
     root = Path(__file__).resolve().parents[1]
     expected = root / "app" / "data" / "models_table.md"
@@ -717,7 +751,7 @@ def test_legacy_dotenv_model_config_is_registered_once(tmp_path):
     assert profiles[0]["model"] == "legacy-model"
     assert profiles[0]["name"] == "legacy-model"
     assert profiles[0]["api_key"] == "legacy-key"
-    assert profiles[0]["llm_type"] == "auto"
+    assert profiles[0]["llm_type"] == "openai-compatible"
     assert profiles[0]["temperature"] == "0.2"
     assert profiles[0][model_profiles.LEGACY_ENV_IMPORT_MARKER] is True
     assert model_profiles.is_usable_profile(profiles[0]) is True

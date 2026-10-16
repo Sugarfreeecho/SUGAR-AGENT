@@ -133,7 +133,7 @@ function canonicalLlmType(raw) {
     if (k === 'openai-responses' || k === 'responses' || k === '@ai-sdk/openai') return 'openai-responses';
     if (k === 'openai' || k === 'openai-compatible' || k === 'openai_compatible' || k === 'compatible' || k === 'chat-completions' || k === 'local' || k === '@ai-sdk/openai-compatible') return 'openai';
     if (k === 'anthropic' || k === 'claude' || k === 'messages' || k === '@ai-sdk/anthropic') return 'anthropic';
-    if (k === 'auto' || k === '') return 'auto';
+    if (k === '') return 'openai';
     return k;
 }
 function isResponsesProfile(profile) {
