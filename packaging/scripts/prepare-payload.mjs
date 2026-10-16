@@ -21,6 +21,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+const { assertRuntimeArchives } = createRequire(import.meta.url)('./runtime-archives.cjs')
+const { cleanupPyc } = createRequire(import.meta.url)('./payload-bytecode.cjs')
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const PACKAGING = path.resolve(HERE, '..')
@@ -32,6 +36,8 @@ const REPO_PYTHON = path.join(REPO, 'python', 'python.exe')
 const PAYLOAD_PYTHON = path.join(PAYLOAD, 'python', 'python.exe')
 const REQUIREMENTS = path.join(PACKAGING, 'requirements.desktop.txt')
 const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(PACKAGING, 'package.json'), 'utf8'))
+// Build-only policy: installed applications may still create/reuse caches.
+const PYTHON_BUILD_ENV = { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' }
 
 const flags = new Set(process.argv.slice(2))
 const SKIP_DEPS = flags.has('--skip-deps')
@@ -154,7 +160,8 @@ function installDependencies() {
   if (!fs.existsSync(REPO_PYTHON)) throw new Error(`缺少仓库内置解释器：${REPO_PYTHON}`)
   fs.mkdirSync(SITE_PACKAGES, { recursive: true })
   const args = [
-    '-m', 'pip', 'install',
+    '-B', '-m', 'pip', 'install',
+    '--no-compile',
     '--disable-pip-version-check',
     '--no-warn-script-location',
     '--no-input',
@@ -163,14 +170,15 @@ function installDependencies() {
   ]
   if (process.env.SUGARAGENT_PIP_INDEX) args.push('--index-url', process.env.SUGARAGENT_PIP_INDEX)
   log('· 安装精简依赖到载荷（首次约 2–5 分钟）…')
-  run(REPO_PYTHON, args, { cwd: REPO })
+  run(REPO_PYTHON, args, { cwd: REPO, windowsHide: true, env: PYTHON_BUILD_ENV })
 }
 
 /** 让打包后的运行时自带 pip，用户可随时补装 pandas / playwright 等可选依赖。 */
 function bootstrapPip() {
   if (SKIP_DEPS) return
   const args = [
-    '-m', 'pip', 'install',
+    '-B', '-m', 'pip', 'install',
+    '--no-compile',
     '--disable-pip-version-check',
     '--no-warn-script-location',
     '--no-input',
@@ -180,7 +188,17 @@ function bootstrapPip() {
   ]
   if (process.env.SUGARAGENT_PIP_INDEX) args.push('--index-url', process.env.SUGARAGENT_PIP_INDEX)
   log('· 为载荷内置 pip/setuptools/wheel（支持后续补装依赖）…')
-  run(REPO_PYTHON, args, { cwd: REPO })
+  run(REPO_PYTHON, args, { cwd: REPO, windowsHide: true, env: PYTHON_BUILD_ENV })
+}
+
+function optimizeRuntimeArchives() {
+  log('· 合并飞书 SDK / PPT 图标，保留离线资源并减少安装落盘文件…')
+  run(PAYLOAD_PYTHON, ['-B', path.join(HERE, 'archive-runtime.py'), '--payload', PAYLOAD], {
+    cwd: PAYLOAD, windowsHide: true,
+    env: PYTHON_BUILD_ENV,
+  })
+  // Loose caches in a reused dependency tree are cleaned after all probes.
+  return assertRuntimeArchives(PAYLOAD, { checkBytecode: false })
 }
 
 function verifyImports() {
@@ -193,9 +211,16 @@ function verifyImports() {
     'for name in mods:',
     '    try: importlib.import_module(name)',
     '    except Exception as exc: missing.append(f"{name}: {exc}")',
+    'if not missing:',
+    '    import lark_oapi',
+    '    if ".zip" not in lark_oapi.__file__: missing.append("lark_oapi was not loaded from its archive")',
+    '    from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody',
+    '    from lark_oapi.ws import Client',
     'print("IMPORT_CLEAN" if not missing else "IMPORT_FAIL " + "; ".join(missing))',
   ].join('\n')
-  const result = spawnSync(PAYLOAD_PYTHON, ['-c', probe], { cwd: PAYLOAD, encoding: 'utf8' })
+  const result = spawnSync(PAYLOAD_PYTHON, ['-B', '-c', probe], {
+    cwd: PAYLOAD, encoding: 'utf8', windowsHide: true, env: PYTHON_BUILD_ENV,
+  })
   const output = `${result.stdout || ''}${result.stderr || ''}`.trim()
   log(`· 依赖自检：${output.split(/\r?\n/).pop()}`)
   if (!output.includes('IMPORT_CLEAN')) {
@@ -233,8 +258,8 @@ function ensureRipgrep() {
 }
 
 function dependenciesList() {
-  const result = spawnSync(PAYLOAD_PYTHON, ['-m', 'pip', 'list', '--format=freeze'], {
-    cwd: PAYLOAD, encoding: 'utf8',
+  const result = spawnSync(PAYLOAD_PYTHON, ['-B', '-m', 'pip', 'list', '--format=freeze'], {
+    cwd: PAYLOAD, encoding: 'utf8', windowsHide: true, env: PYTHON_BUILD_ENV,
   })
   const stdout = String(result.stdout || '')
   if (result.status === 0 && stdout.trim()) {
@@ -305,8 +330,8 @@ function main() {
   fs.mkdirSync(path.join(PAYLOAD, 'python', 'Scripts'), { recursive: true })
 
   if (!SKIP_SKILLS) {
-    const pathsProbe = spawnSync(REPO_PYTHON, [path.join(REPO, 'app', 'workspace_paths.py'), '--project-root', REPO], {
-      encoding: 'utf8', windowsHide: true, timeout: 10000,
+    const pathsProbe = spawnSync(REPO_PYTHON, ['-B', path.join(REPO, 'app', 'workspace_paths.py'), '--project-root', REPO], {
+      encoding: 'utf8', windowsHide: true, timeout: 10000, env: PYTHON_BUILD_ENV,
     })
     if (pathsProbe.status !== 0) throw new Error('无法读取技能模板目录配置：' + (pathsProbe.stderr || 'path probe failed'))
     const skills = JSON.parse(pathsProbe.stdout).skills_dir
@@ -324,21 +349,29 @@ function main() {
   installDependencies()
   bootstrapPip()
   const rg = ensureRipgrep()
+  const runtimeArchives = optimizeRuntimeArchives()
   verifyImports()
 
+  const pythonProbe = spawnSync(PAYLOAD_PYTHON, ['-B', '-c', 'import platform;print(platform.python_version())'], {
+    encoding: 'utf8', windowsHide: true, env: PYTHON_BUILD_ENV,
+  })
+  const pythonVersion = String(pythonProbe.stdout || '').trim() || 'unknown'
+  const dependencies = dependenciesList()
+  const bytecodeCleanup = cleanupPyc(PAYLOAD)
+  assertRuntimeArchives(PAYLOAD)
+  log(`· 清理松散字节码：${bytecodeCleanup.files} 文件 / ${human(bytecodeCleanup.bytes)}`)
   const stats = inventory(PAYLOAD)
   const manifest = {
     schemaVersion: 1,
     product: PACKAGE_JSON.productName || 'SugarAgent',
     version: PACKAGE_JSON.version,
     builtAt: new Date().toISOString(),
-    python: (() => {
-      const probe = spawnSync(PAYLOAD_PYTHON, ['-c', 'import platform;print(platform.python_version())'], { encoding: 'utf8' })
-      return String(probe.stdout || '').trim() || 'unknown'
-    })(),
-    dependencies: dependenciesList(),
+    python: pythonVersion,
+    dependencies,
     excludedDependencies: EXCLUDED_PACKAGES,
     ripgrep: rg ? path.relative(PAYLOAD, rg).replace(/\\/g, '/') : null,
+    runtimeArchives,
+    bytecodeCleanup,
     stats,
   }
   fs.writeFileSync(path.join(PAYLOAD, 'runtime-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')

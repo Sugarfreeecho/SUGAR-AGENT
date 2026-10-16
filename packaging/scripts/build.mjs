@@ -40,7 +40,10 @@ function human(bytes) {
 
 function main() {
   if (!SKIP_ICONS) {
-    run(REPO_PYTHON, [path.join(HERE, 'make-icons.py')], { cwd: PACKAGING })
+    run(REPO_PYTHON, ['-B', path.join(HERE, 'make-icons.py')], {
+      cwd: PACKAGING, windowsHide: true,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    })
   }
 
   if (!SKIP_PAYLOAD) {
@@ -63,7 +66,7 @@ function main() {
     env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
   })
 
-  const dist = path.join(PACKAGING, 'build', 'dist')
+  const dist = path.resolve(PACKAGING, process.env.SUGARAGENT_BUILD_OUTPUT || 'build/dist')
   const unpacked = path.join(dist, 'win-unpacked')
   console.log('\n构建产物：')
   if (fs.existsSync(unpacked)) {

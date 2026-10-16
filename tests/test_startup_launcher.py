@@ -29,6 +29,12 @@ const runtime = path.join(output, 'SugarAgentRuntime.exe');
 for (const relative of ['resources/runtime/python/python.exe', 'resources/runtime/app/main.py']) {
   const file = path.join(output, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '');
 }
+const payload = path.join(output, 'resources/runtime');
+fs.writeFileSync(path.join(payload, 'runtime-archives.json'),
+  JSON.stringify({ schemaVersion: 1, sdk: { path: 'python/Lib/site-packages/lark_oapi.zip' } }));
+fs.mkdirSync(path.join(payload, 'python/Lib/site-packages'), { recursive: true });
+fs.writeFileSync(path.join(payload, 'python/Lib/site-packages/lark_oapi.zip'), 'zip');
+fs.writeFileSync(path.join(payload, 'python/Lib/site-packages/sugaragent-runtime-archives.pth'), 'lark_oapi.zip\n');
 fs.writeFileSync(entry, 'unbranded-runtime');
 let release, edited = false, finished = false;
 const gate = new Promise(resolve => { release = resolve });

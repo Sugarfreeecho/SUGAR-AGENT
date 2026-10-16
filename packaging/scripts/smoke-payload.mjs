@@ -66,6 +66,7 @@ async function main() {
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
       MYAGENT_SERVER_PORT: String(PORT),
+      MYAGENT_SECURITY_HOME: path.join(WORK, 'security'),
       WORK_DIR: path.join(WORK, 'workspace'),
       LOG_DIR: path.join(WORK, 'logs'),
       SKILLS_DIR: path.join(WORK, 'workspace', 'skills'),

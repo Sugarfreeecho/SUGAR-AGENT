@@ -9,7 +9,7 @@
   "main": "electron/main.js",
   "scripts": {
     "payload": "node scripts/prepare-payload.mjs",
-    "payload:fast": "node scripts/prepare-payload.mjs --skip-deps --skip-frontend",
+    "payload:fast": "node scripts/prepare-payload.mjs --skip-deps",
     "icons": "python ../python/python.exe scripts/make-icons.py",
     "dist:dir": "node scripts/build.mjs --dir",
     "dist": "node scripts/build.mjs",

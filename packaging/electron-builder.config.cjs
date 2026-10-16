@@ -22,6 +22,7 @@
 const { existsSync } = require('node:fs')
 const path = require('node:path')
 const { installStartupLauncher } = require('./scripts/startup-launcher.cjs')
+const { assertRuntimeArchives } = require('./scripts/runtime-archives.cjs')
 
 // 安装器形态：assisted（默认，带向导页面）/ oneclick（双击即装，仅进度条）
 const INSTALLER_STYLE = process.env.SUGARAGENT_INSTALLER_STYLE === 'oneclick' ? 'oneclick' : 'assisted'
@@ -34,7 +35,7 @@ module.exports = {
   copyright: `Copyright © ${new Date().getFullYear()} SugarAgent`,
   // 直接用 node_modules 里已下载好的 Electron 发行版，避免每次构建重复联网拉取
   electronDist: path.join(__dirname, 'node_modules', 'electron', 'dist'),
-  directories: { output: 'build/dist', buildResources: 'assets' },
+  directories: { output: process.env.SUGARAGENT_BUILD_OUTPUT || 'build/dist', buildResources: 'assets' },
   files: ['electron/**/*', 'package.json'],
   asar: true,
   protocols: [{ name: 'SugarAgent Desktop', schemes: ['sugaragent-desktop'] }],
@@ -73,6 +74,9 @@ module.exports = {
     artifactName: SETUP_NAME,
   },
   compression: process.env.SUGARAGENT_MAX_COMPRESSION === '1' ? 'maximum' : 'normal',
+  beforePack: async () => {
+    assertRuntimeArchives(path.join(__dirname, 'build', 'payload'))
+  },
   afterPack: async context => {
     const payload = path.join(context.appOutDir, 'resources', 'runtime')
     const python = path.join(payload, 'python', 'python.exe')
@@ -80,6 +84,7 @@ module.exports = {
     if (!existsSync(python) || !existsSync(entry)) {
       throw new Error(`载荷不完整：缺少 ${python} 或 ${entry}；请先运行 npm run payload`)
     }
+    assertRuntimeArchives(payload)
     context.packager.appInfo.buildNumber = undefined
     await installStartupLauncher(context)
   },

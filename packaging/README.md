@@ -8,8 +8,10 @@
 |---|---|---|
 | 安装包（向导式，默认） | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe` | ≈ 251 MB |
 | 安装包差分块 | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe.blockmap` | ≈ 200 KB |
-| 未打包目录版 | `packaging/build/dist/win-unpacked/`（45898 文件 / ≈ 682 MB） | 调试用 |
-| 运行时载荷 | `packaging/build/payload/`（45877 文件 / ≈ 365 MB） | 中间产物 |
+| 未打包目录版 | `packaging/build/dist/win-unpacked/` | 调试用；现有产物尚未应用资源归档优化 |
+| 运行时载荷 | `packaging/build/payload/` | 中间产物；下次准备时自动合并飞书 SDK 与 PPT 图标 |
+
+2026-10-14 的 1.5.4 优化包位于 `build/dist-1.5.4/SugarAgent-Setup-1.5.4-x64.exe`（224.5 MiB）；载荷 8,130 个文件、应用 8,152 个文件、松散字节码为 0。构建与验证记录见 `docs/desktop-release-1.5.4-2026-10-14.md`。
 
 安装后：程序在 `%LOCALAPPDATA%\Programs\SugarAgent`（**按用户安装，不需要管理员权限**），默认工作目录在安装目录的 `resources/runtime/workspace`，与 `app/`、`python/` 保持源码版的相对位置。安装目录不可写时使用 `%APPDATA%\SugarAgent\workspace`。桌面/开始菜单都有 `SugarAgent` 快捷方式，并注册标准卸载项。卸载只保留工作目录与 `runtime` 内的用户数据，程序文件、Electron userData（`%APPDATA%\SugarAgent`）、应用状态（`%LOCALAPPDATA%\SugarAgent`）与临时目录都会被清掉。
 
@@ -38,6 +40,8 @@ packaging/
 │  └─ preload.js                 # 最小渲染进程桥接
 ├─ scripts/
 │  ├─ prepare-payload.mjs        # 组装运行时载荷（拷贝 + 裁剪 + pip 安装 + 自检 + 清单）
+│  ├─ archive-runtime.py         # 合并飞书 SDK / PPT 图标，并适配载荷中的图标读取脚本
+│  ├─ runtime-archives.cjs       # 拒绝未优化或已展开图标的旧载荷
 │  ├─ make-icons.py              # PNG → 多尺寸 ICO（应用图标 / 托盘图标）
 │  ├─ build.mjs                  # 一键构建：图标 → 载荷 → electron-builder
 │  ├─ smoke-payload.mjs          # 载荷自检：用内置 Python 真启动后端并探活
@@ -67,6 +71,22 @@ $env:SUGARAGENT_MAX_COMPRESSION='1'; node scripts\build.mjs   # 极限压缩（�
 $env:SUGARAGENT_PIP_INDEX='https://pypi.tuna.tsinghua.edu.cn/simple'  # 国内镜像装依赖
 ```
 
+### SDK 与 PPT 图标归档
+
+载荷准备默认执行资源合并，以减少安装和首次启动时的文件创建与复制：
+
+- 飞书 SDK 的代码与预编译字节码放入 `python/Lib/site-packages/lark_oapi.zip`，通过随载荷写入的 `.pth` 文件直接导入；SDK 的 `.dist-info` 元数据与其它原生依赖保留在磁盘上，`RECORD` 同步记录归档和加载文件以兼容 pip 卸载/升级。归档使用同一便携 Python 生成字节码，载荷自检验证归档导入及消息、长连接入口。
+- PPT 图标放入 `workspace-template/skills/ppt-master/templates/icons/icons.zip`，另有完整名称索引 `icon-archive.json`。源工作区技能不变；只适配载荷副本的图标同步、SVG 解析和预览读取，使用哪个 SVG 才提取哪个。首次启动复制的是归档，完整图标库保持离线可用。
+- 搜索尚未使用的图标：在 `ppt-master` 技能目录运行 `python scripts/sugaragent_icon_archive.py list --library tabler-outline --query home`。文件夹列表只显示已经提取的图标。项目自定义图标优先保留。
+- `runtime-archives.json` 与 `runtime-manifest.json` 记录归档路径、校验摘要和条目数。技能来源读取入口变化时，准备流程会明确失败，要求复核适配。
+- 两处 pip 安装都使用 `--no-compile`，构建期 Python 子进程使用 `-B` / `PYTHONDONTWRITEBYTECODE=1`。所有依赖和版本探针结束后统一清理载荷中的松散字节码；复用依赖时也会清理历史缓存。SDK 和标准库 ZIP 内的字节码保留，运行期仍允许创建缓存。
+
+归档不会在安装结束或首次启动时全量展开。安装器继续使用原有 7z 格式，用户数据保留规则不变。
+
+旧载荷不能直接通过 `--skip-payload` 构建；构建前后都有归档布局校验。需要构建新版本时先执行 `npm run payload:fast`（复用依赖）或 `npm run payload`（重新安装依赖），再执行正常的构建命令。仅修改打包工程时无需执行载荷准备或构建命令。
+
+需要保留已有目录版中的调试数据时，可设置 `SUGARAGENT_BUILD_OUTPUT=build/dist-<版本>`，将新产物构建到独立目录；默认仍为 `build/dist`。
+
 自检：
 
 ```powershell
@@ -82,8 +102,11 @@ resources/runtime/
 ├─ app/                  # 应用代码（含 templates/dist 前端产物、tools、native 的 egress helper）
 ├─ plugins/              # 10 个内置插件
 ├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（85 个依赖）
-│  └─ Scripts/rg.exe     # 文件搜索用的 ripgrep
+│  ├─ Scripts/rg.exe     # 文件搜索用的 ripgrep
+│  └─ Lib/site-packages/lark_oapi.zip # 飞书 SDK，Python 直接从归档加载
 ├─ workspace-template/   # 首次启动铺到工作目录的技能模板（18 个技能，含 docx/pdf/pptx/xlsx）
+│  └─ skills/ppt-master/templates/icons/{icons.zip,icon-archive.json}
+├─ runtime-archives.json # 资源归档布局 / 摘要 / 条目数
 └─ runtime-manifest.json # 版本、依赖清单、体积、排除项
 ```
 
