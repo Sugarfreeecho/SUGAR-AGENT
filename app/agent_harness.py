@@ -7395,6 +7395,38 @@ class SessionManager:
                 return self._session_entry_with_activity(dict(s))
         return None
 
+    def register_imported_session(self, session_id: str) -> None:
+        """Publish one completed import to memory and disk before returning it."""
+        sid = self._normalize_session_id(session_id)
+        metadata = self._load_metadata(sid)
+        if not metadata or self._is_deleted_session(sid):
+            raise ValueError("Cannot register an unavailable imported session")
+        now = datetime.now(timezone.utc).isoformat()
+        created_at = metadata.get("created_at") or now
+        entry = {
+            "id": sid,
+            "name": metadata.get("name") or "导入的会话",
+            "created_at": created_at,
+            "updated_at": metadata.get("updated_at") or created_at,
+            "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
+            "work_dir": session_work_dir_override(metadata) or None,
+            "last_user_preview": str(metadata.get("last_user_preview") or ""),
+            "unread_result_at": metadata.get("unread_result_at"),
+            "unread_result_status": str(metadata.get("unread_result_status") or "success"),
+        }
+        for field in ("archived", "pinned", "todo", "goal_review_pending", "draft", "unread_result"):
+            entry[field] = bool(metadata.get(field, False))
+        with self._lock:
+            previous = self.index
+            self.index = [row for row in previous if row.get("id") != sid] + [entry]
+            try:
+                self.repository.save_index(self.index_file, self.index)
+            except Exception:
+                self.index = previous
+                raise
+        self._known_root_session_ids.add(sid)
+        self._notify_session_state_changed(sid, {"imported"})
+
     def set_session_archived(self, session_id: str, archived: bool) -> None:
         meta_path = self._get_metadata_path(session_id)
         if not meta_path.exists():

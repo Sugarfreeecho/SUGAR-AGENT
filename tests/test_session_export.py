@@ -1,4 +1,5 @@
 import asyncio
+from io import BytesIO
 import json
 import zipfile
 from pathlib import Path
@@ -59,6 +60,86 @@ def test_export_session_rejects_missing_directory(monkeypatch, tmp_path):
 
     response = asyncio.run(webui.export_session("missing"))
     assert response.status_code == 404
+
+
+def test_export_download_ignores_quoted_hashes_and_keeps_real_images(monkeypatch, tmp_path):
+    from PIL import Image
+    from starlette.testclient import TestClient
+
+    import webui
+    from attachments import LocalAttachmentStore, SaveImageAttachment
+    from attachments.lifecycle import collect_image_references, collect_references, import_bundle
+
+    store = LocalAttachmentStore(tmp_path / "source")
+    image = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(image, format="PNG")
+    ref = store.save_images_sync([SaveImageAttachment(image.getvalue(), "image/png")])[0]
+    quoted_hash = "sha256:" + "f" * 64
+    session_dir = tmp_path / "sessions" / "session-1"
+    (session_dir / "snapshots").mkdir(parents=True)
+    event = {"content": [
+        {"type": "image", "attachment": ref},
+        {"type": "text", "text": f"Example identifier: {quoted_hash}"},
+    ]}
+    (session_dir / "events.jsonl").write_text(json.dumps(event) + "\n", encoding="utf-8")
+    (session_dir / "snapshots" / "latest.json").write_text(json.dumps(event), encoding="utf-8")
+    (session_dir / "notes.md").write_text(quoted_hash, encoding="utf-8")
+    # Conservative GC still protects quoted hashes; exports only require real refs.
+    assert collect_references([session_dir]) == {ref["attachmentId"], quoted_hash}
+    assert collect_image_references([session_dir]) == {ref["attachmentId"]}
+    monkeypatch.setattr(webui, "session_manager", _FakeSessionManager(session_dir.parent))
+    monkeypatch.setattr(webui, "get_attachment_store", lambda _: store)
+    monkeypatch.setattr(webui, "_is_configured", lambda: True)
+    built_paths = []
+    build_archive = webui._build_session_export_archive
+
+    def build(session_id):
+        path, name = build_archive(session_id)
+        built_paths.append(path)
+        return path, name
+
+    monkeypatch.setattr(webui, "_build_session_export_archive", build)
+    response = TestClient(webui.fastapi_app).get("/sessions/session-1/export")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert 'filename="session-session-1.zip"' in response.headers["content-disposition"]
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        assert archive.testzip() is None
+        assert json.loads(archive.read("session-1/events.jsonl")) == event
+        manifest = json.loads(archive.read("attachments/manifest.json"))
+        assert [item["ref"]["attachmentId"] for item in manifest["images"]] == [ref["attachmentId"]]
+    restored = LocalAttachmentStore(tmp_path / "restored")
+    assert import_bundle(restored, BytesIO(response.content)) == [manifest["images"][0]["ref"]]
+    assert restored.read_image_sync(ref).data == store.read_image_sync(ref).data
+    assert len(built_paths) == 1 and not built_paths[0].exists()
+
+
+def test_export_missing_real_image_reports_error_without_leaking_archive(monkeypatch, tmp_path):
+    import webui
+    from attachments import LocalAttachmentStore
+
+    session_dir = tmp_path / "sessions" / "session-1"
+    session_dir.mkdir(parents=True)
+    ref = {"attachmentId": "sha256:" + "f" * 64, "mediaType": "image/png",
+           "bytes": 100, "width": 8, "height": 8}
+    (session_dir / "events.jsonl").write_text(json.dumps({"content": [
+        {"type": "image", "attachment": ref},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(webui, "session_manager", _FakeSessionManager(session_dir.parent))
+    monkeypatch.setattr(webui, "get_attachment_store", lambda _: LocalAttachmentStore(tmp_path))
+    created = []
+    mkstemp = webui.tempfile.mkstemp
+
+    def temporary_archive(**kwargs):
+        fd, name = mkstemp(dir=tmp_path, **kwargs)
+        created.append(Path(name))
+        return fd, name
+
+    monkeypatch.setattr(webui.tempfile, "mkstemp", temporary_archive)
+    response = asyncio.run(webui.export_session("session-1"))
+    assert response.status_code == 400
+    assert "Attachment missing or corrupt" in json.loads(response.body)["error"]
+    assert len(created) == 1 and not created[0].exists()
 
 
 def test_rename_session_normalizes_name_and_rejects_blank(monkeypatch):

@@ -50,6 +50,7 @@ def page(browser_page):
       var LOG_TRUNCATE_HEAD_LINES=100,LOG_TRUNCATE_TAIL_LINES=100;
       var LOG_TRUNCATE_HEAD_CHARS=12000,LOG_TRUNCATE_TAIL_CHARS=12000;
       var executionRecordsBySession=new Map();
+      var executionRowsByStream=new WeakMap();
       var uiI18nRuntimeOriginal=new WeakMap(),uiLanguage='zh';
       function translateUiString(text){return text.replace('生成中...', 'Generating...');}
       window.__MYAGENT_FEATURES__={smoothStream:true};
@@ -90,6 +91,7 @@ def page(browser_page):
         "autoCollapseLlmReasoningRow", "handleTraceChunkClick", "handleToolRowChunkClick",
         "handleLlmRowChunkClick", "bindFeedChunkInteraction", "finalizeActiveLlmReasoningRow",
         "upsertLlmFeedRow", "findExistingLlmFeedRow", "removeDuplicateLlmFeedRows",
+        "invalidateExecutionRowIndex", "executionRowIndexForStream", "findIndexedExecutionRow",
         "updateExecutionRecord", "renderExecutionRecord", "renderExecutionEvent",
         "formatToolDraftLine", "writeToolCallLlmText", "formatToolPendingLine",
         "toolCallDraftKey", "ensureToolStreamRenderState", "rememberToolStreamRow",

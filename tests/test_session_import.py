@@ -2,9 +2,11 @@
 import asyncio
 import io
 import json
+import os
 import zipfile
 from pathlib import Path
 
+import pytest
 from starlette.requests import Request
 
 
@@ -19,6 +21,9 @@ class _FakeSessionManager:
 
     def _resolve_session_path(self, session_id: str) -> Path:
         return self.repository.sessions_dir / session_id
+
+    def register_imported_session(self, session_id: str) -> None:
+        assert (self.repository.sessions_dir / session_id / "metadata.json").is_file()
 
 
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
@@ -475,3 +480,206 @@ def test_import_session_upload_endpoint_accepts_multipart_over_asgi(monkeypatch,
     assert payload["ok"] is True
     assert payload["session"]["id"] == SESSION_ID
     assert (sessions_dir / SESSION_ID / "events.jsonl").is_file()
+
+
+@pytest.fixture
+def image_export(monkeypatch, tmp_path):
+    from PIL import Image
+    import webui
+    from attachments import LocalAttachmentStore, SaveImageAttachment
+    from runtime_v2.history_ops import RuntimeHistoryOps
+
+    source = tmp_path / "s"
+    store = LocalAttachmentStore(source)
+    refs = []
+    for mode, color in (("RGB", "red"), ("RGBA", (20, 40, 60, 100))):
+        data = io.BytesIO()
+        Image.new(mode, (12, 8), color).save(data, format="PNG")
+        refs.extend(store.save_images_sync([SaveImageAttachment(data.getvalue(), "image/png")]))
+    session_dir = _write_session(source / "sessions", SESSION_ID)
+    ops = RuntimeHistoryOps(session_dir.parent)
+    ops.commit_user_turn(SESSION_ID, "有两张图片", model_payload={"attachments": [
+        {"attachment": ref} for ref in refs
+    ]})
+    assert ops.snapshots.wait_for_checkpoint(SESSION_ID, timeout_seconds=5)
+    monkeypatch.setattr(webui, "session_manager", _FakeSessionManager(session_dir.parent))
+    monkeypatch.setattr(webui, "get_attachment_store", lambda _: store)
+    archive, _ = webui._build_session_export_archive(SESSION_ID)
+    try:
+        yield archive, store, refs
+    finally:
+        archive.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("route", ["path_zip", "upload_zip", "path_dir", "upload_dir"])
+def test_import_restores_images_and_publishes_persistent_index(monkeypatch, tmp_path, image_export, route):
+    from starlette.testclient import TestClient
+    import agent_harness
+    import webui
+    from attachments import LocalAttachmentStore
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    archive, source_store, refs = image_export
+    destination = tmp_path / "d"
+    sessions_dir = destination / "sessions"
+    sessions_dir.mkdir(parents=True)
+    manager = agent_harness.SessionManager(sessions_dir, destination / "sessions.json")
+    store = LocalAttachmentStore(destination)
+    monkeypatch.setattr(webui, "session_manager", manager)
+    monkeypatch.setattr(webui, "get_attachment_store", lambda _: store)
+    monkeypatch.setattr(webui, "_is_configured", lambda: True)
+    # A full disk rebuild must not be needed during or after an import.
+    monkeypatch.setattr(manager, "refresh_sessions_index_from_disk", lambda: pytest.fail("unexpected full index rebuild"))
+    client = TestClient(webui.fastapi_app, client=("127.0.0.1", 50000))
+    webui._invalidate_sessions_state_cache()
+    assert client.get("/sessions/state").json()["sessions"] == []
+    if route == "path_zip":
+        response = client.post("/api/sessions/import", json={"source": str(archive), "kind": "zip"})
+    elif route == "upload_zip":
+        response = client.post("/api/sessions/import-upload", data={"kind": "zip"},
+                               files={"files": ("session.zip", archive.read_bytes(), "application/zip")})
+    elif route == "path_dir":
+        extracted = tmp_path / "extracted"
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(extracted)
+        response = client.post("/api/sessions/import", json={"source": str(extracted), "kind": "dir"})
+    else:
+        with zipfile.ZipFile(archive) as bundle:
+            files = [("files", ("export/" + name, bundle.read(name), "application/octet-stream"))
+                     for name in bundle.namelist() if not name.endswith("/")]
+        response = client.post("/api/sessions/import-upload", data={"kind": "dir"}, files=files)
+    assert response.status_code == 200, response.text
+    imported = response.json()["session"]
+    assert imported["attachments"] == 2
+    for ref in refs:
+        image = client.get("/api/attachments/" + ref["attachmentId"])
+        assert image.status_code == 200
+        assert image.content == source_store.read_image_sync(ref).data
+    events = RuntimeUiProjection(sessions_dir).read_ui_events(SESSION_ID)
+    user = next(event for event in events if event["type"] == "user")
+    assert [item["attachment"] for item in user["attachments"]] == refs
+    state = client.get("/sessions/state").json()
+    assert [row["id"] for row in state["sessions"]] == [SESSION_ID]
+    assert state["sessions"][0]["archived"] is False
+    assert state["state_revision"] >= imported["state_revision"]
+    assert [row["id"] for row in json.loads(manager.index_file.read_text(encoding="utf-8"))["sessions"]] == [SESSION_ID]
+    restarted = agent_harness.SessionManager(sessions_dir, manager.index_file)
+    assert [row["id"] for row in restarted.list_sessions()] == [SESSION_ID]
+
+
+def test_corrupt_image_bundle_rejects_import_without_partial_session(monkeypatch, tmp_path, image_export):
+    import agent_harness
+    import webui
+    from attachments import LocalAttachmentStore
+
+    archive, _, _ = image_export
+    broken = tmp_path / "broken.zip"
+    with zipfile.ZipFile(archive) as source, zipfile.ZipFile(broken, "w") as target:
+        for name in source.namelist():
+            contents = source.read(name)
+            if name.startswith("attachments/") and name.endswith((".jpg", ".webp")):
+                contents = b"broken image"
+            target.writestr(name, contents)
+    sessions_dir = tmp_path / "d" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    manager = agent_harness.SessionManager(sessions_dir, tmp_path / "d" / "sessions.json")
+    store = LocalAttachmentStore(sessions_dir.parent)
+    monkeypatch.setattr(webui, "session_manager", manager)
+    monkeypatch.setattr(webui, "get_attachment_store", lambda _: store)
+    with pytest.raises(ValueError, match="图片附件恢复失败"):
+        webui._import_session_from(str(broken), "zip")
+    assert list(sessions_dir.iterdir()) == []
+    assert manager.index == []
+    assert not list(store.root.glob("*/*/image.*"))
+
+
+def test_import_registration_failure_rolls_back_new_directory(monkeypatch, tmp_path):
+    import agent_harness
+    import webui
+
+    source = _write_session(tmp_path / "source", SESSION_ID)
+    destination = tmp_path / "sessions"
+    destination.mkdir()
+    manager = agent_harness.SessionManager(destination, tmp_path / "sessions.json")
+
+    def fail_registration(*_args):
+        raise OSError("index write failed")
+
+    monkeypatch.setattr(manager.repository, "save_index", fail_registration)
+    monkeypatch.setattr(webui, "session_manager", manager)
+    with pytest.raises(OSError, match="index write failed"):
+        webui._import_session_from(str(source), "dir")
+    assert list(destination.iterdir()) == []
+    assert source.is_dir()
+    assert manager.index == []
+
+
+def test_renamed_import_folder_uses_event_id_and_clears_hidden_flags(monkeypatch, tmp_path):
+    import agent_harness
+    import webui
+
+    source = _write_session(tmp_path / "source", SESSION_ID)
+    renamed = source.with_name("downloaded-copy")
+    source.rename(renamed)
+    metadata_path = renamed / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(draft=True, deleted=True, is_subagent=True, parent_session_id="old-parent")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    destination = tmp_path / "sessions"
+    destination.mkdir()
+    manager = agent_harness.SessionManager(destination, tmp_path / "sessions.json")
+    monkeypatch.setattr(webui, "session_manager", manager)
+    result = webui._import_session_from(str(renamed), "dir")
+    assert result["id"] == SESSION_ID
+    assert manager.list_sessions()[0]["id"] == SESSION_ID
+
+
+def test_uploaded_session_images_render_after_page_reload(monkeypatch, tmp_path, image_export):
+    from starlette.testclient import TestClient
+    import agent_harness
+    import webui
+    from attachments import LocalAttachmentStore
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    playwright = pytest.importorskip("playwright.sync_api")
+    archive, _, _ = image_export
+    destination = tmp_path / "d"
+    sessions_dir = destination / "sessions"
+    sessions_dir.mkdir(parents=True)
+    manager = agent_harness.SessionManager(sessions_dir, destination / "sessions.json")
+    store = LocalAttachmentStore(destination)
+    monkeypatch.setattr(webui, "session_manager", manager)
+    monkeypatch.setattr(webui, "get_attachment_store", lambda _: store)
+    monkeypatch.setattr(webui, "_is_configured", lambda: True)
+    client = TestClient(webui.fastapi_app, client=("127.0.0.1", 50000))
+    response = client.post("/api/sessions/import-upload", data={"kind": "zip"},
+                           files={"files": ("session.zip", archive.read_bytes(), "application/zip")})
+    assert response.status_code == 200, response.text
+    events = RuntimeUiProjection(sessions_dir).read_ui_events(SESSION_ID)
+    refs = next(event["attachments"] for event in events if event["type"] == "user")
+    media_js = (Path(__file__).resolve().parents[1] / "frontend/src/app/modules/workspace-media.js").read_text(encoding="utf-8")
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True, **({"channel": "msedge"} if os.name == "nt" else {}))
+        try:
+            page = browser.new_page(viewport={"width": 1000, "height": 800})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            def serve_image(route):
+                result = client.get(route.request.url.split("session-import.test", 1)[1])
+                route.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+
+            page.route("http://session-import.test/api/attachments/**", serve_image)
+            page.route("http://session-import.test/", lambda route: route.fulfill(
+                content_type="text/html", body="<!doctype html><div id='images'></div>"))
+            for _ in range(2):
+                page.goto("http://session-import.test/")
+                page.add_script_tag(content=media_js)
+                page.evaluate("refs => renderDurableAttachmentImages(document.getElementById('images'), refs)", refs)
+                page.wait_for_function("""() => {
+                    const images = [...document.querySelectorAll('#images img')];
+                    return images.length === 2 && images.every(image => image.complete && image.naturalWidth === 12);
+                }""")
+            assert not errors
+        finally:
+            browser.close()

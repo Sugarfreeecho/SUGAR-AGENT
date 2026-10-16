@@ -28,7 +28,7 @@ function display() {
   const stream = {children: [group], isConnected: true, querySelectorAll: selector =>
     selector === '.process-aggregate' ? [group]
       : selector === '[data-execution-id]' ? body.children.filter(row => row.dataset.executionId) : body.children,
-    contains: node => body.children.some(row => row.scroller === node)};
+    contains: node => body.children.some(row => row === node || row.scroller === node)};
   const ctx = {stream, currentProcessGroup: group, lastRuntimeSeq: 0, streamEventIndex: 0};
   return {ctx, group, body, rows: () => body.children,
     pending: () => body.querySelectorAll('[data-temporary-status="1"]').length,

@@ -91,3 +91,88 @@ def test_viewed_turn_uses_bounded_geometry_reads_and_preserves_selection(page):
     }""")
     assert all(sample["correct"] and sample["reads"] <= 13 for sample in result)
     assert result[-1]["reads"] == 0 and result[-1]["nearBottom"]
+
+
+def test_execution_updates_reuse_rows_across_history_and_context_changes(page):
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    history = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    page.set_content("<div id='stream'><div class='process-aggregate' data-process-group-id='turn:1'>"
+                     "<div class='process-aggregate-body'></div></div></div>")
+    page.add_script_tag(content="""
+        var replayingMessages=true;
+        function reactGenerationForContext(){return 0;}
+        function discardPendingToolRowRender(){}
+        function removeTemporaryStatus(){}
+        function refreshFeedChunkOverflow(){}
+        function refreshAggregateStatsSmart(){}
+        function refreshProcessAggregateStats(){}
+        function unregisterProcessAggregateRow(){}
+        function registerProcessAggregateRow(){}
+        function trimSurroundingBlankLines(text){return text.trim();}
+        function createProcessFeedRow(ctx,type,text){
+            var group=ctx.currentProcessGroup;
+            if(!group || !ctx.stream.contains(group)){
+                group=document.createElement('div');group.className='process-aggregate';
+                group.dataset.processGroupId='turn:1';
+                group.innerHTML='<div class="process-aggregate-body"></div>';
+                ctx.stream.appendChild(group);ctx.currentProcessGroup=group;
+            }
+            var row=document.createElement('div');row.className='feed-item';
+            row.innerHTML='<div class="feed-chunk"><div class="feed-chunk-scroller"></div></div>';
+            var sc=row.querySelector('.feed-chunk-scroller');sc.textContent=text;
+            group.querySelector('.process-aggregate-body').appendChild(row);return sc;
+        }
+    """ + rendering[rendering.index("var executionRecordsBySession"):
+                      rendering.index("function ensureProcessGroup")]
+        + history[history.index("function emptyChatStreamKeepingStrip("):
+                  history.index("function persistHistoryPagingToStream(")])
+    result = page.evaluate("""() => {
+        const stream=document.getElementById('stream'),body=stream.querySelector('.process-aggregate-body');
+        for(let i=0;i<1000;i++){
+            const row=document.createElement('div');row.className='feed-item';row.dataset.executionId='row-'+i;
+            row.innerHTML='<div class="feed-chunk"><div class="feed-chunk-scroller">old</div></div>';
+            body.appendChild(row);
+        }
+        const card=document.createElement('div');card.dataset.executionId='row-999';card.textContent='approval card';
+        body.lastChild.appendChild(card);
+        let scans=0;const query=stream.querySelectorAll.bind(stream);
+        stream.querySelectorAll=selector=>{if(selector==='[data-execution-id]')scans++;return query(selector);};
+        const context=root=>({stream:root,currentProcessGroup:root.querySelector('.process-aggregate')});
+        const ctx=context(stream);
+        function render(target,id,seq,text){renderExecutionRecord(target,{
+            execution_id:id,kind:'reasoning',status:'completed',process_group_id:'turn:1',
+            last_runtime_seq:seq,content:text},'s');}
+        for(let i=1;i<=150;i++)render(ctx,'row-999',i,'updated '+i);
+        render(context(stream),'row-999',151,'fresh context');
+        const hotScans=scans;
+        const original=body.lastChild;
+        const reused=body.children.length===1000 && original.querySelector('.feed-chunk-scroller').textContent==='fresh context'
+            && card.textContent==='approval card';
+        stream.remove();render(ctx,'row-999',152,'detached stream');
+        const detached=original.querySelector('.feed-chunk-scroller').textContent==='detached stream';
+        document.body.appendChild(stream);
+        original.remove();const recoveredRow=original.cloneNode(true);body.appendChild(recoveredRow);
+        render(ctx,'row-999',153,'recreated');
+        const replacement=body.lastChild;
+        const recreated=replacement===recoveredRow && replacement!==original && replacement.dataset.executionId==='row-999'
+            && body.children.length===1000;
+        const other=document.createElement('div');document.body.appendChild(other);
+        render(context(other),'row-999',1,'other session');
+        const isolated=replacement.querySelector('.feed-chunk-scroller').textContent==='recreated';
+        const frag=document.createDocumentFragment(),older=context(frag);
+        render(older,'older-row',1,'older');
+        stream.insertBefore(frag,stream.firstChild);invalidateExecutionRowIndex(stream);
+        mergeAdjacentExecutionGroups(stream);
+        render(ctx,'older-row',2,'older updated');render(ctx,'row-999',154,'after merge');
+        const merged=stream.querySelectorAll('.process-aggregate').length===1
+            && stream.querySelector('[data-execution-id="older-row"] .feed-chunk-scroller').textContent==='older updated'
+            && replacement.querySelector('.feed-chunk-scroller').textContent==='after merge';
+        const afterPrependScans=scans;
+        emptyChatStreamKeepingStrip(stream);render(context(stream),'row-999',1,'reload');
+        const reloaded=stream.querySelectorAll('.feed-item').length===1
+            && stream.querySelector('.feed-chunk-scroller').textContent==='reload';
+        return {hotScans,afterPrependScans,totalScans:scans,reused,detached,recreated,isolated,merged,reloaded};
+    }""")
+    assert result == {"hotScans": 1, "afterPrependScans": 3, "totalScans": 4,
+                      "reused": True, "detached": True, "recreated": True,
+                      "isolated": True, "merged": True, "reloaded": True}

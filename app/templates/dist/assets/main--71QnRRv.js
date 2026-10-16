@@ -6481,7 +6481,7 @@ function canonicalLlmType(raw) {\r
     if (k === 'openai-responses' || k === 'responses' || k === '@ai-sdk/openai') return 'openai-responses';\r
     if (k === 'openai' || k === 'openai-compatible' || k === 'openai_compatible' || k === 'compatible' || k === 'chat-completions' || k === 'local' || k === '@ai-sdk/openai-compatible') return 'openai';\r
     if (k === 'anthropic' || k === 'claude' || k === 'messages' || k === '@ai-sdk/anthropic') return 'anthropic';\r
-    if (k === 'auto' || k === '') return 'auto';\r
+    if (k === '') return 'openai';\r
     return k;\r
 }\r
 function isResponsesProfile(profile) {\r
@@ -8907,6 +8907,7 @@ function ensureVisibleChatStreamSlot() {\r
 \r
 function emptyChatStreamKeepingStrip(streamEl) {\r
     if (!streamEl) return;\r
+    if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(streamEl);\r
     const strip = streamEl.querySelector('#history-load-sentinel');\r
     Array.from(streamEl.children).forEach(function (ch) {\r
         if (strip && ch === strip) return;\r
@@ -9234,6 +9235,9 @@ async function loadOlderHistoryChunk(opts) {\r
             // fetch 期间用户仍可能滚动，所以必须在真正插入前才记录视口。\r
             prependViewport = captureHistoryPrependViewport(stream, cc, sid);\r
             stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);\r
+            // The fragment was rendered with its own index. Rebuild the target\r
+            // stream once on the next lookup to include the prepended rows.\r
+            if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(stream);\r
         }\r
         loadedOlder = true;\r
         if (typeof mergeAdjacentExecutionGroups === 'function') mergeAdjacentExecutionGroups(stream);\r
@@ -13915,6 +13919,42 @@ function refreshProcessAggregateStats(agg) {
    条：每一步期间产生的一条思考/回复/工具/状态记录（feed item 行单位）。 */
 var executionRecordsBySession = new Map();
 var executionRecoveryBySession = new Map();
+// Share the index across contexts rendering the same stream, including recovery
+// and detached history fragments. Dropping a stream also releases its index.
+var executionRowsByStream = new WeakMap();
+
+function invalidateExecutionRowIndex(stream) {
+    if (stream) executionRowsByStream.delete(stream);
+}
+
+function executionRowIndexForStream(stream) {
+    var rows = executionRowsByStream.get(stream);
+    if (!rows) {
+        rows = new Map();
+        stream.querySelectorAll('[data-execution-id]').forEach(function (row) {
+            var id = String(row.dataset.executionId || '');
+            // Interaction cards can repeat their enclosing execution row's id.
+            // Preserve the first DOM match, as the previous renderer did.
+            if (id && !rows.has(id)) rows.set(id, row);
+        });
+        executionRowsByStream.set(stream, rows);
+    }
+    return rows;
+}
+
+function findIndexedExecutionRow(stream, executionId) {
+    var rows = executionRowIndexForStream(stream);
+    var id = String(executionId);
+    var row = rows.get(id);
+    if (row && (row.dataset.executionId !== id || !stream.contains(row))) {
+        // A history edit may replace the node while retaining its identity.
+        // Reindex once at that boundary to find the replacement and release
+        // removed rows, rather than creating a duplicate execution row.
+        invalidateExecutionRowIndex(stream);
+        return executionRowIndexForStream(stream).get(id) || null;
+    }
+    return row || null;
+}
 
 function findExecutionProcessGroup(stream, groupId, runId) {
     if (!stream) return null;
@@ -14001,9 +14041,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     if (!ctx || !ctx.stream || !record || !record.execution_id) return;
     opts = opts || {};
     if (record.kind === 'continuation') return;
-    var row = Array.from(ctx.stream.querySelectorAll('[data-execution-id]')).find(function (item) {
-        return item.dataset.executionId === String(record.execution_id);
-    });
+    var row = findIndexedExecutionRow(ctx.stream, record.execution_id);
     var runtimeSeq = Number(record.last_runtime_seq || 0);
     // The journal replay and event bus can deliver the same token. Do not
     // rewrite its text or move the follow target a second time.
@@ -14067,6 +14105,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     if (!row) return;
     discardPendingToolRowRender(ctx, row);
     row.dataset.executionId = String(record.execution_id);
+    executionRowIndexForStream(ctx.stream).set(row.dataset.executionId, row);
     row.dataset.executionStatus = String(record.status || '');
     row.dataset.executionRenderedSeq = String(runtimeSeq);
     if (record.run_id) row.dataset.runId = String(record.run_id);
@@ -21617,6 +21656,12 @@ function syncSessionMenuLabels(wrap, sess) {
     if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
     if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';
     if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
+    var exportButton = wrap.querySelector('.session-menu-export');
+    if (exportButton) {
+        var exporting = sessionExportsInFlight.has(String(sess.id));
+        exportButton.disabled = exporting;
+        exportButton.textContent = exporting ? '正在导出…' : '导出会话';
+    }
 }
 
 function beginSidebarMetadataMutation() {
@@ -21778,7 +21823,11 @@ async function renameSessionFromMenu(sess) {
     }
 }
 
+var sessionExportsInFlight = new Set();
+
 async function exportSessionFromMenu(sess) {
+    var sessionId = String(sess.id || '');
+    if (!sessionId || sessionExportsInFlight.has(sessionId)) return;
     var confirmed = await openUiModal({
         title: '导出会话',
         subtitle: '下载会话文件',
@@ -21787,13 +21836,56 @@ async function exportSessionFromMenu(sess) {
         cancelText: '取消',
     });
     if (!confirmed) return;
-    var link = document.createElement('a');
-    link.href = '/sessions/' + encodeURIComponent(sess.id) + '/export';
-    link.download = 'session-' + String(sess.id || 'export') + '.zip';
-    link.hidden = true;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    if (sessionExportsInFlight.has(sessionId)) return;
+    function syncExportMenus() {
+        document.querySelectorAll('.session-more-wrap').forEach(function (wrap) {
+            var menuSession = wrap._sessionMenuSession;
+            if (menuSession && String(menuSession.id) === sessionId) syncSessionMenuLabels(wrap, menuSession);
+        });
+    }
+    sessionExportsInFlight.add(sessionId);
+    syncExportMenus();
+    try {
+        // Read errors before starting a download: native downloads hide HTTP
+        // error bodies, and Electron otherwise appears to do nothing at all.
+        var response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/export', {
+            credentials: 'same-origin',
+            cache: 'no-store',
+        });
+        if (!response.ok) {
+            var payload = await response.json().catch(function () { return {}; });
+            throw new Error(payload.error || '导出请求失败（HTTP ' + response.status + '）');
+        }
+        if (response.redirected || (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/zip') {
+            throw new Error('服务器未返回会话 ZIP 文件，请刷新页面后重试。');
+        }
+        var blob = await response.blob();
+        if (!blob.size) throw new Error('导出文件为空，请重试。');
+        var downloadUrl = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        var filename = (response.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/i);
+        link.href = downloadUrl;
+        link.download = filename ? filename[1] : 'session-' + sessionId + '.zip';
+        link.hidden = true;
+        document.body.appendChild(link);
+        try {
+            link.click();
+        } finally {
+            link.remove();
+            // Give both Chromium and the desktop shell time to consume the URL.
+            setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 60000);
+        }
+    } catch (err) {
+        console.error('导出会话失败', err);
+        showUiAlert({
+            title: '导出失败',
+            message: String((err && err.message) || err || '无法导出该会话'),
+            variant: 'error',
+        });
+    } finally {
+        sessionExportsInFlight.delete(sessionId);
+        syncExportMenus();
+    }
 }
 
 async function deleteSessionFromMenu(sess, rowDiv) {
@@ -24161,37 +24253,62 @@ function syncSessionListHead(sections, opts) {
     syncSessionViewMenu();
 }
 
-/* 列表头「刷新」最多等列表 1.2s：超时就直接重载（重载本身还会再拉一次列表），
-   保证按钮不会出现"点了没反应"。 */
+/* 索引重建必须完成后才能重载。后续列表请求最多等 1.2s，页面重载会再次拉取。 */
 var SESSION_REFRESH_LIST_WAIT_MS = 1200;
+var sessionRefreshInFlight = false;
 
 /**
- * 侧栏列表头第三个按钮 = 刷新：先把会话列表强制拉新，再整页重载。
- * 桌面端没有浏览器刷新按钮，这里是唯一的整页刷新入口，两件事一起做——
- * ① 列表：\`loadSessions({ force: true })\` 立即向服务端取最新会话（含归档计数）；
- * ② 页面：\`location.reload()\` 让所有面板、插件与滚动状态重新初始化。
- * （原「在新文件夹中新建会话」入口保留在「新建会话 ▾」菜单里，不丢功能。）
+ * 侧栏刷新：按会话目录重建内存索引和 sessions.json，拉新列表，再重载页面。
+ * 桌面端也通过此入口完成整页刷新；重建失败时保留当前页面并允许重试。
  */
-function refreshSessionListAndPage(btn) {
+async function refreshSessionListAndPage(btn) {
+    if (sessionRefreshInFlight) return;
+    sessionRefreshInFlight = true;
     if (btn) {
+        btn.disabled = true;
         btn.classList.add('is-busy');
         btn.setAttribute('aria-busy', 'true');
     }
-    var listRefresh = null;
     try {
-        listRefresh = (typeof loadSessions === 'function') ? loadSessions({ force: true }) : null;
-    } catch (err) {
-        console.error('刷新会话列表失败:', err);
-    }
-    var listSettled = Promise.resolve(listRefresh).catch(function (err) {
-        console.error('刷新会话列表失败:', err);
-    });
-    var deadline = new Promise(function (resolve) {
-        window.setTimeout(resolve, SESSION_REFRESH_LIST_WAIT_MS);
-    });
-    Promise.race([listSettled, deadline]).then(function () {
+        var response = await fetchWithTimeout('/sessions/index/repair', {
+            method: 'POST',
+            credentials: 'same-origin',
+        }, 120000);
+        var result = await response.json().catch(function () { return {}; });
+        if (!response.ok || result.ok !== true) {
+            throw new Error(result.error || '重建会话索引失败（HTTP ' + response.status + '）');
+        }
+        var deadlineTimer;
+        try {
+            var listSettled = Promise.resolve().then(function () {
+                return (typeof loadSessions === 'function') ? loadSessions({ force: true }) : null;
+            }).catch(function (err) {
+                console.error('刷新会话列表失败:', err);
+            });
+            var deadline = new Promise(function (resolve) {
+                deadlineTimer = window.setTimeout(resolve, SESSION_REFRESH_LIST_WAIT_MS);
+            });
+            await Promise.race([listSettled, deadline]);
+        } finally {
+            window.clearTimeout(deadlineTimer);
+        }
         window.location.reload();
-    });
+    } catch (err) {
+        console.error('重建会话索引失败:', err);
+        showUiAlert({
+            title: '刷新失败',
+            message: err && err.name === 'AbortError' ? '重建会话索引超时，请稍后重试。'
+                : String((err && err.message) || err || '无法重建会话索引'),
+            variant: 'error',
+        });
+    } finally {
+        sessionRefreshInFlight = false;
+        if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('is-busy');
+            btn.removeAttribute('aria-busy');
+        }
+    }
 }
 
 /* ── 导入会话（列表头「文件夹+」按钮）───────────────────────────────────────

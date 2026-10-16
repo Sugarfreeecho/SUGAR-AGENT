@@ -21,13 +21,13 @@ function runtime({enabled = true, reduced = false} = {}) {
   const group = {isConnected: true, dataset: {processGroupId: 'turn:1'}};
   const body = {querySelectorAll: () => rows, closest: () => group};
   group.querySelector = () => body;
-  const ctx = {stream: {querySelectorAll: () => rows}, currentProcessGroup: group,
+  const ctx = {stream: {querySelectorAll: () => rows, contains: item => rows.includes(item)}, currentProcessGroup: group,
     llm: {}, runId: 'run', reactGeneration: 0, lastRuntimeSeq: 0};
   const c = vm.createContext({console, TextDecoder, Date, Map, Set,
     window: {__MYAGENT_FEATURES__: {smoothStream: enabled}, matchMedia: () => ({matches: reduced})},
     performance: {now: () => now}, requestAnimationFrame(cb) {const id = next++; frames.set(id, cb); return id;},
     cancelAnimationFrame: id => frames.delete(id), setTimeout: () => 1, clearTimeout() {},
-    currentSessionId: 's', replayingMessages: false, executionRecordsBySession: new Map(),
+    currentSessionId: 's', replayingMessages: false, executionRecordsBySession: new Map(), executionRowsByStream: new WeakMap(),
     reactGenerationForContext: target => target.reactGeneration || 0, selectExecutionProcessGroup() {},
     removeTemporaryStatus() {}, refreshFeedChunkOverflow() {},
     scheduleFeedChunkOverflowRefresh() {}, refreshAggregateStatsSmart() {}, autoCollapseLlmReasoningRow() {},
@@ -67,7 +67,8 @@ function runtime({enabled = true, reduced = false} = {}) {
   });
   vm.runInContext(source('smooth-stream'), c);
   vm.runInContext(['setUiRuntimeText', 'getUiRuntimeText'].map(name => fn(source('i18n'), name)).join('\n'), c);
-  vm.runInContext(['trimSurroundingBlankLines', 'updateExecutionRecord', 'renderExecutionRecord', 'renderExecutionEvent']
+  vm.runInContext(['trimSurroundingBlankLines', 'executionRowIndexForStream', 'findIndexedExecutionRow',
+    'updateExecutionRecord', 'renderExecutionRecord', 'renderExecutionEvent']
     .map(name => fn(rendering, name)).join('\n'), c);
   vm.runInContext(['formatToolDraftLine', 'writeToolCallLlmText', 'formatToolPendingLine',
     'ensureToolStreamRenderState', 'rememberToolStreamRow', 'discardPendingToolRowRender',

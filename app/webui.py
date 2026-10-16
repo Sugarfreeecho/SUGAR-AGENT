@@ -7573,12 +7573,18 @@ async def repair_sessions_index():
     import time as _time
 
     t0 = _time.perf_counter()
-    await run_in_threadpool(session_manager.refresh_sessions_index_from_disk)
+    try:
+        await run_in_threadpool(session_manager.refresh_sessions_index_from_disk)
+    except Exception:
+        logger.exception("Failed to rebuild the session index")
+        return JSONResponse(content={"ok": False, "error": "重建会话索引失败，请检查会话目录及索引文件的读写权限。"}, status_code=500)
+    state_revision = _invalidate_sessions_state_cache()
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
     return JSONResponse(content={
         "ok": True,
         "session_count": len(session_manager.index),
         "elapsed_ms": elapsed_ms,
+        "state_revision": state_revision,
     })
 
 
@@ -7827,11 +7833,11 @@ def _build_session_export_archive(session_id: str) -> tuple[Path, str]:
                     raise PermissionError("session export entry is outside the session directory") from exc
                 archive_name = (Path(archive_root) / relative).as_posix()
                 output.write(resolved, archive_name)
-            from attachments.lifecycle import add_bundle, collect_references
+            from attachments.lifecycle import add_bundle, collect_image_references
             from attachments.locking import attachment_lock
             store = get_attachment_store(WORK_DIR)
             with attachment_lock(store.root.parent, "catalog"):
-                add_bundle(output, store, collect_references([session_path]))
+                add_bundle(output, store, collect_image_references([session_path]))
         return archive_path, download_name
     except Exception:
         archive_path.unlink(missing_ok=True)
@@ -7869,22 +7875,28 @@ _SESSION_IMPORT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
 
 def _find_session_root(root: Path) -> Optional[Path]:
     """在目录 / 解包结果里定位含 events.jsonl 的那一层会话目录。"""
-    if not root.is_dir():
-        return None
-    if (root / "events.jsonl").is_file():
-        return root
-    candidates = [
-        child for child in sorted(root.iterdir())
-        if child.is_dir() and (child / "events.jsonl").is_file()
-    ]
-    return candidates[0] if len(candidates) == 1 else None
+    for _ in range(40):
+        if not root.is_dir():
+            return None
+        if (root / "events.jsonl").is_file():
+            return root
+        children = [child for child in sorted(root.iterdir()) if child.is_dir() and not child.is_symlink()]
+        candidates = [child for child in children if (child / "events.jsonl").is_file()]
+        if candidates:
+            return candidates[0] if len(candidates) == 1 else None
+        if len(children) != 1:
+            return None
+        root = children[0]
+    return None
 
 
 def _session_origin_id(session_dir: Path) -> str:
     """会话原始 id：优先目录名（导出 zip 的根目录就是会话目录），回退 events.jsonl 的 session_id。"""
     name = session_dir.name.strip()
-    if _SESSION_IMPORT_ID_RE.fullmatch(name):
-        return name
+    try:
+        return str(uuid.UUID(name))
+    except ValueError:
+        pass
     try:
         with (session_dir / "events.jsonl").open(encoding="utf-8", errors="replace") as source:
             for line in source:
@@ -7937,6 +7949,14 @@ def _sanitize_imported_session(session_dir: Path, *, name_suffix: str = "") -> d
     meta["unread_result"] = False
     meta["goal_review_pending"] = False
     meta["archived"] = False
+    # Import is a new local activity; an old export must not immediately be
+    # auto-archived or retain flags that hide drafts/children from the sidebar.
+    now = datetime.now(timezone.utc).isoformat()
+    meta["imported_at"] = now
+    meta["updated_at"] = now
+    meta.setdefault("created_at", now)
+    for field in ("draft", "deleted", "is_subagent", "parent_session_id", "auto_archived", "auto_archived_at"):
+        meta.pop(field, None)
     name = str(meta.get("name") or "").strip()
     if name_suffix:
         name = (name + name_suffix)[:160]
@@ -7955,35 +7975,63 @@ def _import_session_tree(session_root: Path, *, move: bool, archive_path: Option
     sessions_dir = Path(session_manager.repository.sessions_dir).resolve()
     sessions_dir.mkdir(parents=True, exist_ok=True)
     origin = _session_origin_id(session_root)
-    target = origin if (origin and not (sessions_dir / origin).exists()) else str(uuid.uuid4())
+    from session_lifecycle import is_session_deleted
+    try:
+        canonical_origin = str(uuid.UUID(origin))
+    except ValueError:
+        canonical_origin = ""
+    target = (canonical_origin if (canonical_origin and not (sessions_dir / canonical_origin).exists()
+                                  and not is_session_deleted(canonical_origin)) else str(uuid.uuid4()))
     remapped = bool(origin) and target != origin
     destination = sessions_dir / target
     if destination.exists():
         raise ValueError("目标会话目录已存在，请重试")
-    if move:
-        shutil.move(str(session_root), str(destination))
-    else:
-        shutil.copytree(session_root, destination, symlinks=False)
-    rewritten = _remap_session_id(destination, origin, target) if remapped else 0
-    meta = _sanitize_imported_session(destination, name_suffix="（导入）" if remapped else "")
+    from attachments.lifecycle import collect_image_references, import_bundle
+    from attachments.locking import attachment_lock
+    store = get_attachment_store(WORK_DIR)
     restored = 0
-    if archive_path is not None:
-        try:
+    # Resolve the bundle before moving its session directory. Both ZIP uploads
+    # and extracted directory imports retain this attachments/ sibling.
+    bundle_root = next((root for root in (session_root.parent, session_root)
+                        if (root / "attachments" / "manifest.json").is_file()), None)
+    try:
+        if bundle_root is not None:
+            restored = len(import_bundle(store, bundle_root))
+        elif archive_path is not None:
             with zipfile.ZipFile(archive_path) as bundle:
-                has_bundle = any(name.startswith("attachments/") for name in bundle.namelist())
+                has_bundle = "attachments/manifest.json" in bundle.namelist()
             if has_bundle:
-                from attachments.lifecycle import import_bundle
+                restored = len(import_bundle(store, archive_path))
+        with attachment_lock(store.root.parent, "catalog"):
+            for identity in collect_image_references([session_root]):
+                store.ref_by_id(identity)
+    except Exception as exc:
+        raise ValueError("图片附件恢复失败，导入未完成。请使用包含完整图片附件的原始 ZIP 或导出目录：%s" % exc) from exc
 
-                restored = len(import_bundle(get_attachment_store(WORK_DIR), archive_path) or [])
-        except Exception as exc:  # 附件包坏了不该毁掉整次导入
-            logger.warning("session import: attachment bundle restore failed: %s", exc)
-    _invalidate_sessions_state_cache()
+    # Keep incomplete copies out of startup scans. Publish the complete tree
+    # and its index entry together; never report success before registration.
+    with tempfile.TemporaryDirectory(prefix=".session-import-", dir=sessions_dir) as staging:
+        staged = Path(staging) / target
+        if move:
+            shutil.move(str(session_root), str(staged))
+        else:
+            shutil.copytree(session_root, staged, symlinks=False)
+        rewritten = _remap_session_id(staged, origin, target) if remapped else 0
+        meta = _sanitize_imported_session(staged, name_suffix="（导入）" if remapped else "")
+        staged.rename(destination)
+        try:
+            session_manager.register_imported_session(target)
+        except Exception:
+            destination.rename(staged)
+            raise
+    state_revision = _invalidate_sessions_state_cache()
     return {
         "id": target,
         "name": str(meta.get("name") or ""),
         "remapped": remapped,
         "idRewriteFiles": rewritten,
         "attachments": restored,
+        "state_revision": state_revision,
     }
 
 
@@ -9692,9 +9740,10 @@ async def save_config(req: _Request):
             "compatible": "openai-compatible",
             "anthropic": "anthropic",
             "@ai-sdk/anthropic": "anthropic",
-            "auto": "auto",
         }
-        exec_type = provider_aliases.get(prov, "auto")
+        exec_type = provider_aliases.get(prov or "openai-compatible")
+        if exec_type is None:
+            raise ValueError("unsupported LLM provider; choose openai-compatible, openai-responses, or anthropic")
 
         if not mn:
             raise ValueError("missing model")

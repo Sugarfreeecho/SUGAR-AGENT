@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,14 @@ def test_export_menu_confirms_then_downloads_session_zip():
     assert "'/sessions/' + encodeURIComponent(sess.id) + '/export'" in export_body
     assert "link.download" in export_body
     assert "link.click();" in export_body
+
+
+def test_export_menu_download_runtime():
+    result = subprocess.run(
+        ["node", "--test", str(ROOT / "tests/js/session_export_runtime.cjs")],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_titlebar_has_persistent_session_action_menu():

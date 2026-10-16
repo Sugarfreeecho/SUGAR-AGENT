@@ -1592,20 +1592,24 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 
 /* ── TOC / optional session panels ── */
+.chat-toc,
+.chat-todo-plan {
+    /* 上下各留 3rem，随工作区可用高度伸缩；少量内容居中，长内容在栏内滚动。 */
+    max-height: max(0px, calc(100% - 6rem));
+    display: flex; flex-direction: column;
+}
 .chat-toc {
     position: absolute;
     right: var(--panel-edge-dock-right);
     left: auto;
     top: 50%; transform: translateY(-50%); z-index: 20;
     width: 0; min-width: 0; max-width: var(--toc-panel-width, 9.5rem);
-    max-height: min(80vh, 30rem); overflow: visible; opacity: 0;
-    display: block;
+    overflow: visible; opacity: 0;
     pointer-events: none;
     transition: width 0.35s var(--ease-out-expo), min-width 0.35s var(--ease-out-expo), opacity 0.3s ease;
 }
 .chat-toc-inner {
-    width: 100%; height: 100%; max-height: inherit;
-    min-width: 0; overflow: hidden;
+    width: 100%; min-width: 0; min-height: 0; overflow: hidden;
     display: flex; flex-direction: column; justify-content: center;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -1619,7 +1623,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: var(--floating-surface);
     backdrop-filter: none; -webkit-backdrop-filter: none;
     padding: 0;
-    max-height: min(70vh, 28rem);
+    min-height: 0;
     display: flex; flex-direction: column;
     overflow: hidden;
     box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.1);
@@ -1631,6 +1635,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .chat-toc-title {
     /* 与左侧 pubar-head 同款标题栏：内边距 / 字重字距 / 分隔线一致 */
+    flex: none;
     margin: 0; padding: 0.42rem 0.4rem 0.36rem 0.55rem;
     border-bottom: 1px solid var(--workspace-side-panel-meta-border);
     color: var(--workspace-side-panel-title);
@@ -1639,6 +1644,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .chat-toc-list {
     display: flex; flex-direction: column; gap: 0.15rem;
+    min-height: 0;
     overflow-x: hidden; overflow-y: auto;
     /* 条目空隙对称且最窄：恒定预留 + 双边缘对称（both-edges）；左右内边距为 0，
        两侧可见空隙 = 条宽 5px（不再在条带之外叠加内边距）。 */
@@ -1723,14 +1729,12 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     right: auto;
     top: 50%; transform: translateY(-50%); z-index: 20;
     width: 0; min-width: 0; max-width: var(--todo-panel-width, 9.5rem);
-    max-height: min(80vh, 30rem); overflow: visible; opacity: 0;
-    display: block;
+    overflow: visible; opacity: 0;
     pointer-events: none;
     transition: width 0.35s var(--ease-out-expo), min-width 0.35s var(--ease-out-expo), opacity 0.3s ease;
 }
 .chat-todo-plan-inner {
-    width: 100%; height: 100%; max-height: inherit;
-    min-width: 0; overflow: hidden;
+    width: 100%; min-width: 0; min-height: 0; overflow: hidden;
     display: flex; flex-direction: column; justify-content: flex-start; gap: 0;
     border-radius: 10px;
     /* 同 .chat-toc-panel：会话状态浮层悬在消息流之上，半透明 + blur(18px) 会让身后的滚动文字

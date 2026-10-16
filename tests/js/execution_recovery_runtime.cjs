@@ -19,7 +19,7 @@ function node(classes, attrs = {}) {
 async function main() {
   const group = node('process-aggregate', {processGroupId:'turn:1'});
   const rows = [];
-  const stream = {children:[group], querySelectorAll(selector) {
+  const stream = {children:[group], contains: item => rows.includes(item), querySelectorAll(selector) {
     return selector === '.process-aggregate' ? [group] : rows;
   }};
   const ctx = {stream, currentProcessGroup:group};

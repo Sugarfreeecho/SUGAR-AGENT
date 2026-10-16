@@ -33,6 +33,42 @@ def collect_references(roots):
     return identities
 
 
+def collect_image_references(roots):
+    """Collect stored image refs for export, excluding hashes quoted in text.
+
+    GC deliberately keeps its broader text scan: a false positive there only
+    retains an object, whereas exporting it would require a nonexistent image.
+    """
+    identities = set()
+
+    def visit(value):
+        if isinstance(value, dict):
+            identity = value.get("attachmentId")
+            media_type = value.get("mediaType")
+            if (isinstance(identity, str) and IDENTITY_RE.fullmatch(identity)
+                    and isinstance(media_type, str) and media_type.startswith("image/")):
+                identities.add(identity)
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    for root in roots:
+        for path in Path(root).rglob("*"):
+            if path.is_symlink() or not path.is_file() or path.suffix not in {".json", ".jsonl"}:
+                continue
+            with path.open(encoding="utf-8", errors="replace") as source:
+                records = source if path.suffix == ".jsonl" else [source.read()]
+                for record in records:
+                    try:
+                        value = json.loads(record)
+                    except ValueError:
+                        continue
+                    visit(value)
+    return identities
+
+
 def garbage_collect(store, reference_roots, *, dry_run=True, grace_seconds=7 * 86400):
     if grace_seconds < 0:
         raise ValueError("GC grace period must be nonnegative")
@@ -73,8 +109,40 @@ def add_bundle(archive, store, identities, *, prefix="attachments"):
     return manifest
 
 
+class _DirectoryBundle:
+    """Read an extracted bundle through the same validation as a ZIP bundle."""
+
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+
+    def _path(self, name):
+        if isinstance(name, zipfile.ZipInfo):
+            name = name.filename
+        path = self.root / name
+        if path.is_symlink() or not path.resolve().is_relative_to(self.root):
+            raise AttachmentError("Invalid attachment bundle path", "INVALID_ATTACHMENT_REF")
+        return path
+
+    def getinfo(self, name):
+        info = zipfile.ZipInfo(name)
+        info.file_size = self._path(name).stat().st_size
+        return info
+
+    def read(self, name):
+        return self._path(name).read_bytes()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        pass
+
+
 def import_bundle(store, source, *, prefix="attachments"):
-    with zipfile.ZipFile(source) as archive, tempfile.TemporaryDirectory(prefix="myagent-image-restore-") as staging:
+    bundle = (_DirectoryBundle(source)
+              if isinstance(source, (str, os.PathLike)) and Path(source).is_dir()
+              else zipfile.ZipFile(source))
+    with bundle as archive, tempfile.TemporaryDirectory(prefix="myagent-image-restore-") as staging:
         info = archive.getinfo(f"{prefix}/manifest.json")
         if info.file_size > 4 * 1024 * 1024:
             raise AttachmentError("Attachment manifest too large", "IMAGES_TOO_LARGE")

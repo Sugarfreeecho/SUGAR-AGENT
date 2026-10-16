@@ -543,6 +543,7 @@ function ensureVisibleChatStreamSlot() {
 
 function emptyChatStreamKeepingStrip(streamEl) {
     if (!streamEl) return;
+    if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(streamEl);
     const strip = streamEl.querySelector('#history-load-sentinel');
     Array.from(streamEl.children).forEach(function (ch) {
         if (strip && ch === strip) return;
@@ -870,6 +871,9 @@ async function loadOlderHistoryChunk(opts) {
             // fetch 期间用户仍可能滚动，所以必须在真正插入前才记录视口。
             prependViewport = captureHistoryPrependViewport(stream, cc, sid);
             stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);
+            // The fragment was rendered with its own index. Rebuild the target
+            // stream once on the next lookup to include the prepended rows.
+            if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(stream);
         }
         loadedOlder = true;
         if (typeof mergeAdjacentExecutionGroups === 'function') mergeAdjacentExecutionGroups(stream);

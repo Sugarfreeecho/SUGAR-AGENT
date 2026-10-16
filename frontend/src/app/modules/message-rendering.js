@@ -1379,6 +1379,42 @@ function refreshProcessAggregateStats(agg) {
    条：每一步期间产生的一条思考/回复/工具/状态记录（feed item 行单位）。 */
 var executionRecordsBySession = new Map();
 var executionRecoveryBySession = new Map();
+// Share the index across contexts rendering the same stream, including recovery
+// and detached history fragments. Dropping a stream also releases its index.
+var executionRowsByStream = new WeakMap();
+
+function invalidateExecutionRowIndex(stream) {
+    if (stream) executionRowsByStream.delete(stream);
+}
+
+function executionRowIndexForStream(stream) {
+    var rows = executionRowsByStream.get(stream);
+    if (!rows) {
+        rows = new Map();
+        stream.querySelectorAll('[data-execution-id]').forEach(function (row) {
+            var id = String(row.dataset.executionId || '');
+            // Interaction cards can repeat their enclosing execution row's id.
+            // Preserve the first DOM match, as the previous renderer did.
+            if (id && !rows.has(id)) rows.set(id, row);
+        });
+        executionRowsByStream.set(stream, rows);
+    }
+    return rows;
+}
+
+function findIndexedExecutionRow(stream, executionId) {
+    var rows = executionRowIndexForStream(stream);
+    var id = String(executionId);
+    var row = rows.get(id);
+    if (row && (row.dataset.executionId !== id || !stream.contains(row))) {
+        // A history edit may replace the node while retaining its identity.
+        // Reindex once at that boundary to find the replacement and release
+        // removed rows, rather than creating a duplicate execution row.
+        invalidateExecutionRowIndex(stream);
+        return executionRowIndexForStream(stream).get(id) || null;
+    }
+    return row || null;
+}
 
 function findExecutionProcessGroup(stream, groupId, runId) {
     if (!stream) return null;
@@ -1465,9 +1501,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     if (!ctx || !ctx.stream || !record || !record.execution_id) return;
     opts = opts || {};
     if (record.kind === 'continuation') return;
-    var row = Array.from(ctx.stream.querySelectorAll('[data-execution-id]')).find(function (item) {
-        return item.dataset.executionId === String(record.execution_id);
-    });
+    var row = findIndexedExecutionRow(ctx.stream, record.execution_id);
     var runtimeSeq = Number(record.last_runtime_seq || 0);
     // The journal replay and event bus can deliver the same token. Do not
     // rewrite its text or move the follow target a second time.
@@ -1531,6 +1565,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     if (!row) return;
     discardPendingToolRowRender(ctx, row);
     row.dataset.executionId = String(record.execution_id);
+    executionRowIndexForStream(ctx.stream).set(row.dataset.executionId, row);
     row.dataset.executionStatus = String(record.status || '');
     row.dataset.executionRenderedSeq = String(runtimeSeq);
     if (record.run_id) row.dataset.runId = String(record.run_id);

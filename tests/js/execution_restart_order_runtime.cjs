@@ -46,7 +46,7 @@ function runtime() {
   group.body = body;
   group.querySelectorAll = () => body.children;
   const groups = [group];
-  const stream = {querySelectorAll(selector) {
+  const stream = {contains: item => groups.some(owner => owner.body.children.includes(item)), querySelectorAll(selector) {
     if (selector === '.process-aggregate') return groups;
     const rows = groups.flatMap(owner => owner.body.children);
     return selector === '[data-execution-id]' ? rows.filter(item => item.dataset.executionId) : rows;
