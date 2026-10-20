@@ -93,3 +93,5 @@ skeleton-width-audit/
 
 # Local downloaded toolchains (ffmpeg essentials build etc.)
 tools/
+# One-off probe/scratch dirs from local sessions
+utf8_probe_*/
