@@ -8,9 +8,11 @@ agent_loop 与 agent_subagent 各自维护一份相似但不完全一致的过�
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+from agent_local_timing import local_timed, mark_local
 
 
-async def persist_execution_event(manager, session_id: str, event: Dict[str, Any]) -> Dict[str, Any]:
+@local_timed("execution_dispatch")
+async def persist_execution_event(manager, session_id: str, event: Dict[str, Any], *, commit_ui=False) -> Dict[str, Any]:
     """Persist execution updates before their live presentation, without model writes."""
     if event.get("_subagent_forward"):
         return event
@@ -21,7 +23,22 @@ async def persist_execution_event(manager, session_id: str, event: Dict[str, Any
     if not runtime_v2_primary():
         return event
     import asyncio
+    from runtime_v2 import runtime_v2_strict
+    combined = getattr(manager, "commit_execution_ui_event", None)
+    if (commit_ui and runtime_v2_strict() and callable(combined)
+            and not event.get("_runtime_v2_committed")
+            and event.get("type") in {"tool_call", "llm_reasoning", "llm_response"}
+            and should_persist_ui_event(event)):
+        mark_local("journal_queued")
+        import threading
+        cancelled = threading.Event()
+        try:
+            return await asyncio.to_thread(combined, session_id, event, cancel_event=cancelled)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
     journal = ExecutionJournal(manager.sessions_dir, getattr(manager, "_resolve_session_path", None))
+    mark_local("journal_queued")
     return await asyncio.to_thread(journal.record, session_id, event)
 
 

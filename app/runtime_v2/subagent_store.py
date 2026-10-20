@@ -58,8 +58,11 @@ class RuntimeSubagentStore:
         with log.session_transaction(agent_id):
             event = log._append_unlocked(agent_id, event_type, payload=payload or {}, run_id=run_id)
             snapshot = snapshots.read_for_update(agent_id)
-            if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
-                snapshot = self.projector.project(log.read_all(agent_id))
+            if (not snapshots._projection_version_matches(snapshot)
+                    or int(snapshot.get("last_seq") or 0) != int(event.seq) - 1):
+                snapshot = snapshots.project_after_append(
+                    agent_id, snapshot, log, self.projector, event.seq,
+                )
             else:
                 snapshot = self.projector.project_incremental(snapshot, event)
             snapshots.stamp_event_log(agent_id, snapshot, log.event_path(agent_id))
