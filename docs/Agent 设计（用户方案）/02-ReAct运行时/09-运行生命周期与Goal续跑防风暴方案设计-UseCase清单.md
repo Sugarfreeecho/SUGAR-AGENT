@@ -1,6 +1,6 @@
 # 运行生命周期与 Goal 续跑防风暴 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v4（覆盖至：当前工作区；Goal 失败即停与全窗口轮次回溯）
+- 版本：2026-10-17 v5（监测器立即关闭与订阅清理并发保护）
 - 用途：逐条审查 run 身份、终态落盘、看门狗隔离、Goal 续跑租约与失败熔断。
 - 适用实现：`app/agent_loop.py`、`app/agent_harness.py`、`app/session_lifecycle.py`、`app/main.py`、`app/webui.py`、`app/agent_goal.py`、`app/execution_metrics.py`、`app/runtime_observability.py`、`plugins/agent-goal/runner.py`、`scripts/subagent_ui_verify.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -91,6 +91,13 @@ run 从“取得执行权”到“唯一终态”的完整协议，也是 Goal �
 - **预期现象**：失败/错误首次发生即暂停并保存错误（清空重试时间，等用户恢复）；正常到达 ReAct 迭代上限仍允许续跑；API 错误/上下文恢复失败/输出长度续接耗尽/无效工具调用重试耗尽统一结算 `run_failed`（保留错误卡片与 final，不消费排队输入、不触发 Stop Hook）；续跑查找用户轮次在快速路径未命中时按事件序号分批向前回溯（追问不切换用户轮次）；调度器回收带失败状态的旧续跑按失败结算（失败优先于残留的 ReAct 上限标记）。
 - **依据**：`agent_goal.py`、`plugins/agent-goal/runner.py`、`agent_loop.py`；回归 `tests/test_agent_goal.py`、`tests/test_goal_runner.py`。
 
+### UC-2I14 监测器关闭直接唤醒与新订阅保护
+
+- **触发**：最后一个运行释放共享睡眠/暂停监测器，或关闭等待期间出现新运行订阅。
+- **预期现象**：监测消费循环等待停止事件或原轮询超时，close/stop直接唤醒，不再固定等下一次≤250ms轮询。取消同样进入finally，通知并回收原生watchdog线程。
+- **规则与边界**：最后退订先摘下旧detector/task再等待清理；此间新订阅建立新监测器，旧清理不得清空新引用。旧generation的resume回调不再派发给新订阅。睡眠分类、有效空闲扣除、Windows防睡眠请求引用计数及多会话共享语义保留。观测线程耗尽仍按UC-2I5降级。
+- **依据**：`runtime_power.RuntimeSuspensionMonitor.run`、`_RuntimeSuspensionBroker.subscribe/unsubscribe`；`tests/test_runtime_power.py`验证停止不依赖轮询sleep、取消回收以及退订/新订阅交错。
+
 ## 3. 事件与状态不变式
 
 1. 一个 run 的控制身份始终是 `(session_id, run_id)`；reason 不能作为身份。
@@ -138,6 +145,7 @@ run 从“取得执行权”到“唯一终态”的完整协议，也是 Goal �
 
 ## 6. 版本记录
 
+- 2026-10-17 v5：新增UC-2I14，去除终态关闭监测器的固定轮询等待，修复旧清理与新订阅交错时丢失监测器及旧回调串入新订阅的问题。
 - 2026-10-05 v4：新增 UC-2I13——Goal 失败/错误首次发生即暂停；续跑用户轮次在尾部窗口未命中时按事件序号分批回溯；终止错误统一结算 `run_failed`。
 - 2026-09-30 v3：新增 UC-2I12，Goal 查询从整份投影 deepcopy 改为一致只读 view + Goal 子状态 deepcopy；补隔离/恢复验收并修正指标定时器失败时的锁外补刷。
 - 2026-09-20 v2：补录会话 5cd95437 的第二 WebUI 误接管证据链；新增跨进程 exact-run 租约、共享心跳直接读盘、孤儿宽限保护及验证服务 `WORK_DIR` 隔离契约。

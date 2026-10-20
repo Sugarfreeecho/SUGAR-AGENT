@@ -1,6 +1,6 @@
 # 子代理任务生命周期与事件循环隔离 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-30 v4（覆盖至：当前工作区；父轮通知查询去除无关读取）
+- 版本：2026-10-19 v5（核对共享性能优化与子代理交付缺口）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_subagent.py`（`_BackgroundSubagentLoop`、`SubagentTaskRegistry`、`_execute_subagent_run`）、`app/agent_subagent_events.py`、`app/agent_loop.py`（`_run_react_node_off_loop`）、`app/webui.py`（取消入口）、`tests/test_agent_subagent_runtime_v2.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -80,6 +80,13 @@
 - **规则与边界**：未提供 parent run ID 的旧调用仍按 final index 与 UI 历史判定；claim/ack/release 及结果耐久性保持。空队列早返回仍要先读取 pending 行，不等于完全没有文件检查。存储落点见 [08/04 · UC-8D8](../08-会话存储RuntimeV2/04-扩展子代理与运行注册方案设计-UseCase清单.md)。
 - **依据**：`agent_harness.py::_load_pending_subagent_results / consume_pending_subagent_notifications / claim_pending_subagent_notifications`；`tests/test_agent_harness_reconcile.py`；`subagent_note_claim_timing`。
 
+### UC-2J12 共享性能路径及当前接线范围（实现核对）
+
+- **触发**：确认主Agent轮间优化是否覆盖`task`创建/续跑的前后台子代理。
+- **预期现象**：`_execute_subagent_run._run_core`直接调用共同`react_node`。子代理复用独立于文件I/O池的进程级LLM请求池、流式/非流式及重试trace、同一轮工具模型事实合批、静态段/请求整理/计数缓存、工具目录后台重验、插件manager名称缓存，以及底层EventLog/快照/增量投影优化。静态段键包含session及is_subagent；共用实现不表示复用父会话的提示或权限。WebUI启动预热的快照worker为进程级，对同进程子代理也适用。
+- **规则与边界**：当前并非全部接通。①`child_emit`没有`tool_batch`，共同循环的UI结果批次入口会回退逐条交付；模型事实合批本身仍可用。②子回调调用`persist_execution_event`未传`commit_ui=True`，随后同步`append_ui_event`，没有复用主入口journal/UI单事务交付；心跳metadata也在回调所在循环同步调用。后台子任务共用持久loop，单次同步阻塞可能影响其他子任务，尚无本次性能因果量化。③`task`构建state只有`_subagent_run_id`，未设置供共同计时使用的`_runtime_v2_run_id`，也不经过主入口`execution_metrics.start_run/finish_run`和`run_finalize`；实际子指标出现run_id空串，同子会话多次运行可能合入同一指标行，不能直接拿它计算每次运行的达标率。子代理预约/取消注册表仍有自己的非空run ID，不能把观测缺口误称作所有权完全缺失。
+- **依据**：`agent_subagent.py::_execute_subagent_run / child_emit / _run_core`、`agent_loop.py::_emit_tool_call_sse_batch / _persist_completed_tool_batch / _run_react_node_off_loop`、`agent_subagent_events.py::persist_execution_event`、`execution_metrics.py::_run / record_request`。本次仅核对并记录差异，没有将未接通项标记为已完成；子代理三组既有回归40 passed，17.85秒，不能证明子代理轮间<500ms。完整核对见[多会话报告§5](../../performance/agent-current-sessions-2026-10-19.md#5-子agent优化覆盖复核补充)。
+
 ## 3. 事件与状态不变式
 
 1. 后台任务的生命周期与其创建方的循环解耦：任何父轮临时循环关闭都不构成取消。
@@ -98,6 +105,8 @@
 3. 本批通知查询回归 `tests/test_agent_harness_reconcile.py`：**40 passed**；验证精确 run 过滤、旧调用回退及空队列提前返回。该组与上方子代理生命周期组分别记录，不混作一次全量测试。
 
 ## 5. 版本记录
+
+- 2026-10-19 v5：核实共享ReAct与底层性能优化覆盖子代理；明确专用child_emit缺少UI批次/组合提交、同步回调及task入口计时run ID缺口，未将主会话性能数据外推给子代理。
 
 - 2026-09-30 v4：新增 UC-2J11，记录空 pending 不读 metadata、精确 parent run 通知查询跳过完整 UI 投影，以及原领取/确认/释放语义。
 - 2026-09-28 v3：新增 UC-2J8《首轮先行落盘》、UC-2J9《预约期受控与未启动运行的收敛》、UC-2J10《结果上报与续跑档案》——首条 user 消息在所有权转交前持久化（Runtime V2 `commit_user_turn` / legacy 双路径）；任务挂载前可打断、未启动失败运行释放预约并终结化；归属按 run-id；对账纳入 `pending`；不变式补第 7 条，验收更新为 30 passed。

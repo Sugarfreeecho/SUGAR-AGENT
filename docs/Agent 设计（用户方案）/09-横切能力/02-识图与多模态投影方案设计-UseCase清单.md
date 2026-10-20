@@ -1,6 +1,6 @@
 # API 识图与多模态投影 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-02 v4（覆盖至：当前工作区；读图能力门控与条件化路由文案）
+- 版本：2026-10-17 v5（纯文本附件语法否定结果复用）
 - 用途：按「触发 → 预期现象 → 规则与边界 → 依据」逐条审查图片从接入、存储、模型请求到结果和生命周期的完整链路。
 - 适用实现：`app/attachments/**`、`app/vision_api.py`、`app/agent_openai.py`、`app/llm/transport.py`、`app/agent_harness.py`、`app/agent_loop.py`、`app/agent_mcp.py`、`app/agent_subagent.py`、`app/runtime_v2/**`、`app/webui.py`、`frontend/src/app/modules/{workspace-media,sse-handling,event-dispatch,message-rendering}.js`。
 - 上级：`00-横切能力整体设计.md`
@@ -83,9 +83,9 @@ API 识图把上传、粘贴、拖拽、本地路径、远程图片链接和工�
 ### UC-9B26 附件序列化热路径缓存
 
 - **触发**：长历史中的每条消息通过 `durable_content()` 解析附件存储与远程图片策略。
-- **预期现象**：附件根目录只读取单一 `WORK_DIR` 并记忆化已解析路径，远程图片策略复用缓存，避免对每条历史消息重复读取多组环境变量和执行 Windows `Path.resolve()`。
-- **规则与边界**：显式设置或变化的 `WORK_DIR` 仍必须被尊重；配置更新通过 `invalidate_attachment_env_cache()` 清除缓存。缓存只消除环境/路径解析开销，不跳过附件身份、权限或完整性校验。
-- **依据**：`attachments.__init__.get_attachment_store / invalidate_attachment_env_cache`、`RemoteImagePolicy` 缓存调用点。
+- **预期现象**：附件根目录只读取单一 `WORK_DIR` 并记忆化已解析路径，远程图片策略复用缓存。用户消息在同一字符串对象、相同路径扫描开关下已确认不含附件语法时，将负结果缓存在消息对象内；后续请求不重复运行整段文本的 data/远程图片/本地路径正则。
+- **规则与边界**：负缓存仅存“文本没有候选语法”，不缓存文件存在性、URL 下载、附件身份或权限结论。含候选语法的字符串、结构化可变块、真实图片引用仍走实时准入/请求策略；替换内容或改变扫描开关即重新探测。私有缓存不进入消息 JSON。显式变化的 `WORK_DIR` 仍必须被尊重；配置更新通过 `invalidate_attachment_env_cache()` 清除既有环境缓存。
+- **依据**：`attachments.admission.text_requires_admission`、`agent_messages.UserMessage._attachment_text_scan_cache`、`agent_openai.messages_to_openai_params`；`tests/test_request_text_scan_cache.py`；既有附件环境/远程策略缓存调用点。
 
 ## 4. 远程图片链接
 
@@ -307,6 +307,7 @@ API 识图把上传、粘贴、拖拽、本地路径、远程图片链接和工�
 
 ## 12. 版本记录
 
+- 2026-10-17 v5：更新 UC-9B26，缓存每条纯文本的附件语法否定结果，避免每轮重复正则扫描；可能含附件的文本及可变结构仍执行完整准入，不缓存文件存在性、权限、远程地址解析或候选图片能力。
 - 2026-10-02 v4：新增 UC-9B27《读图在工具层的模型能力门与条件化路由文案》——未声明图片输入的模型 read_file 在加载前拒绝（不入库、不产生图片块），提示切换识图模型或交给识图子代理；提示词与 read_file/task 描述改为条件式（能直读就直读、看不了再委派）。
 
 - 2026-09-20 v3：新增 UC-9B26，记录长历史附件序列化的环境读取与路径解析缓存，不改变附件校验语义。

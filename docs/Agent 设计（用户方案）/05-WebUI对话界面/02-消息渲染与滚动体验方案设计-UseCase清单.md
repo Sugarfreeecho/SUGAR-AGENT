@@ -1,6 +1,6 @@
 # 消息渲染与滚动体验 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-16 v25（覆盖至：当前工作区；执行行索引）
+- 版本：2026-10-16 v27（覆盖至：当前工作区；执行行索引、工具失败判定与统计）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/message-rendering.js`、`modules/smooth-stream.js`、`modules/session-scroll-history.js`、`modules/toc-todo.js`、`modules/workspace-media.js`、`modules/ui-performance.js`。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -59,6 +59,8 @@
 - **触发**：`run_shell` 执行中产生 stdout/stderr；或模型流式给出工具调用参数增量。
 - **预期现象**：运行中输出以节流增量直接刷进对应工具行（首段带"实时输出" / `STDERR:` 前缀；超过 64 KiB 显示截断说明）；工具调用参数增量（`tool_call_delta`）按动画帧合并后渲染，无逐字符抖动。
 - **规则与边界**：实时输出是 **ephemeral**（不落盘、不参与回放，断线不续）；最终结果仍按工具结束后的限长投影（`tool_detail_ui`）提供，UI 以最终结果收口。工具调用增量的**重放快照**（`replayed_snapshot`）按累计值**替换**而非追加（先清空累计再重收）；实时与回放共用同一渲染路径，回放不重放打字动画。
+- **统计口径**：执行过程的失败次数随工具行的结构化状态增量更新；`failed` 与 `timed_out` 计入失败，等待、运行、中断、未知及正文中的错误字样不计入。重复事件只计一次，状态替换、历史恢复及分组合并同步维护计数；后端汇总可补足尚未加载的历史，但不得覆盖为比当前分组工具行更少的工具次数或失败次数。
+- **失败来源**：宿主明确结果、MCP `isError` 与 Shell 进程回执优先；旧式诊断仅在已知内置工具边界适配，普通插件 JSON/文本不推断失败。执行记录保留来源与错误码，详见 [工具执行状态](../../tool_result_status.md)。
 - **依据**：`message-rendering.js`（工具行按帧渲染）、`agent_loop.py::_emit_run_shell_output / _ThreadToAsyncQueue`（`tool_command_delta` 合帧）、`agent_tools.py::_RunShellProgressPublisher`（≈40ms / 8 KiB 节流、64 KiB 上限）。
 
 ### UC-5B9 上下文用量浮窗拆解卡（对齐 DSH）

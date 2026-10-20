@@ -1,6 +1,6 @@
 # Hooks、信任与审计 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-13（覆盖至：HEAD `d022831`）
+- 版本：2026-10-18 v2（同次派发复用插件目录）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/hooks.json.example`、`agent_extensions.py`（L106–1060、L1202–1398）、`security/extensions.py`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -22,6 +22,7 @@
 - **触发**：hooks 文件或插件钩子变化。
 - **预期现象**：签名变化触发管理器重建（SWR）；重建期间旧集合可用；无重复执行。
 - **依据**：`_hook_signature / _schedule_hook_manager_rebuild / hook_manager_for_current_loop`。
+- **10-18补充**：一次`dispatch_hook`或预热已取得的`PluginLoadResult`继续用于本次manager签名计算，不在同次派发里再次解析插件manager和目录。`force=True`仍强制重新加载；没有新增跨派发缓存或延长TTL。Hook实际执行、信任检查、文件签名、启停与审计路径保留。覆盖见`tests/test_runtime_noop_persistence.py`及插件集成/runtime回归。
 
 ### UC-6G3 钩子审计三件套
 - **触发**：钩子开始/结束/失败。
@@ -49,4 +50,5 @@
 
 ## 5. 版本记录
 
+- 2026-10-18 v2：同次Hook派发/预热复用已加载资源，保留强制刷新、信任、开关和审计。
 - 2026-09-13 v1：拆分首版（承接 UC-610~612）。

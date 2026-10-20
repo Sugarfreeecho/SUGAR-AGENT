@@ -41,14 +41,23 @@ Hook 和 Slash Command。声明式 Skill、Hook、Command、MCP、Agent、Prompt
 `plugins/` 目录时才认可该标记，并将其从用户插件目录列表隐藏；插件已有的导航、设置、消息渲染、
 会话徽章和面板贡献仍正常生效。用户目录中的插件不能靠该字段隐藏自身。
 
-`runtime.type` 支持 `python` 和 `node`。插件工具会转换成稳定、无冲突的模型工具名：
+`runtime.type` 支持 `python` 和 `node`。代码型插件和 MCP 工具默认使用最简的模型工具名，
+只有重名（包括与内置工具重名）时才逐级添加来源前缀：
 
 ```text
-plugin_<plugin-id>__<local-tool-name>
+<local-tool-name>
+<plugin-id>__<local-tool-name>
+<plugin-id>__<server-name>__<local-tool-name>
 ```
 
-例如 `org.example.hello` 的 `greet` 会注册为
-`plugin_org_example_hello__greet`。
+例如 `org.example.hello` 的 `greet` 默认注册为 `greet`；不同插件均提供 `greet` 时，
+分别注册为各自的 `<plugin-id>__greet`，如 `org_example_hello__greet`。
+同一插件内多个 MCP 服务器仍有同名工具时，再添加服务器名；独立 MCP 服务器重名时使用
+`<server-name>__<local-tool-name>`。非法字符转换为下划线，超长名称或规范化后仍重名时使用
+摘要后缀，模型工具名最长 64 字符。命名结果不依赖注册顺序。
+
+宿主内部仍以原有 `plugin_<plugin-id>__<local-tool-name>` / `mcp_<server>_<tool>`
+标识绑定工具、保存启停状态和执行权限检查；模型简名通过注册表映射到对应来源。
 
 ## Python 插件
 
@@ -83,6 +92,11 @@ def setup(plugin):
 ```
 
 Handler 的 JSON 参数按关键字传入，返回值必须可转换为 JSON；同步和异步函数均可。
+
+工具正常返回的 JSON 或文本按业务数据处理，顶层 `error`、`ok`、`exit_code` 或文本中的
+`Error:` 不会被通用执行层推断为调用失败。需要报告工具执行失败时，Python handler 应抛出异常，
+Node handler 应抛异常或拒绝 Promise，由 worker 的独立调用状态信封传给宿主。
+内置工具和 MCP 的判定契约见 [工具执行状态](tool_result_status.md)。
 
 ### 代码型 Hook
 

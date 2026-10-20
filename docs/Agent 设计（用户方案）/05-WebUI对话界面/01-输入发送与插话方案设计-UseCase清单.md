@@ -1,6 +1,6 @@
 # 输入、发送与插话 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-13 v8（覆盖至：当前工作区；自动追问事实序号与分组）
+- 版本：2026-10-16 v9（覆盖至：当前工作区；断联恢复与排队追问启动互斥）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/sse-handling.js`（发送/插话主流程 `sendMessage`/`acquireSendPipelineLock`）、`modules/input-actions.js`（输入键助手）、`modules/skill-picker.js`、后端 steer API、`webui.py` 消息路径。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -68,7 +68,8 @@
 - **触发**：会话运行中提交多条普通排队消息（含刷新、排序、撤回、重复提交等操作后）。
 - **预期现象**：当前回答完整保存后，同一 run 按队列顺序领取下一条继续处理；每条消息仍有独立用户轮次、最终回答与改动审查基线；队列清空后才结束本轮运行。
 - **规则与边界**：只在回答完成边界领取，模型/工具执行中途不插入；排序同步服务端、撤回与领取互斥、重复提交/网络延迟/刷新不重建已处理操作；保留所选 Skill 与附件（服务端持久化，刷新可恢复）；手动停止、暂停与执行上限不领取后续；中途停止未开始消息会释放领取状态；赶上 run 已结束时仍可从普通聊天入口启动，但沿用原队列操作去重。自动追问（排队消息）在服务端提交后，其实时 `user` 事件携带该轮**事实序号**（`runtime_seq` 与 `process_group_id=turn:<seq>`）；前端不再以消息位置冒充序号分组，无序号（旧后端）时保留未编号分组、由首条正式执行记录接续；轮内 `user_steer` 不建立新边界。
-- **依据**：`agent_loop.py`（领取边界/生成阶段恢复/事实序号透传）、`webui.py`（队列与 /chat）、`sse-handling.js`、`session-store`/`session-event-reducer`、projector；回归 `tests/test_queued_followup_continuation.py`、`tests/js/followup_dispatch_runtime.cjs`、`tests/js/session_store_runtime.cjs`。
+- **断联恢复边界**：当前会话和后台会话均须查询服务端 `queued_followup_state`；旧运行尚未清理、恢复任务已排入但尚未注册运行、恢复执行中、状态查询失败均不得自动启动下一条。发送锁等待与队列注册之后重新检查，自动发送不使用强制接管；`/chat` 在领取队列操作与占用运行位之前再次检查耐久运行边界，拒绝时保留原操作。恢复完成后继续原队列顺序。停止/失败暂停不自动重试；显式“立即发送”仍可启动暂停的条目，但不能绕过待处理的人机交互或断联恢复。
+- **依据**：`agent_loop.py`（领取边界/生成阶段恢复/事实序号透传）、`webui.py`（队列、启动状态与 /chat）、`sse-handling.js`、`session-store`/`session-event-reducer`、projector；回归 `tests/test_queued_followup_continuation.py`、`tests/test_queued_followup_recovery.py`、`tests/js/followup_dispatch_runtime.cjs`、`tests/js/session_store_runtime.cjs`。
 
 ### UC-5A10 输入附件卡片与未发送副本清理
 - **触发**：在输入框上传图片或其他文件，移除附件、编辑正文后发送、发送失败或离开页面。

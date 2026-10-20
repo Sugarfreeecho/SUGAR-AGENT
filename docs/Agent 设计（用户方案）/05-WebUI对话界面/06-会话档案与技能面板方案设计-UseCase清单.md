@@ -74,19 +74,19 @@
 - **规则与边界**：原先宽度只在前端模块启动后读取，可能晚于浏览器首次绘制。现在 HTML `<head>` 中的同步初始化脚本在页面解析阶段读取 `sidebar-width-px`，按运行时相同规则限制为 `120px` 至 `min(480px, floor(viewport width × 0.5))`，并写入根元素 `--sidebar-width-px`；`.sidebar` 首帧消费该变量。`initSidebarSash` 仍负责拖动和 mouseup 持久化，拖动值继续使用同一范围。
 - **依据**：`frontend/index.html`（首帧前读取并设置 CSS 变量）、`frontend/src/styles/app.css`（`.sidebar` 宽度）、`frontend/src/app/modules/layout-panels.js`（拖动、限幅与 `localStorage` 保存）；生产页面及样式由 Vite 构建至 `app/templates/dist/`。
 
-### UC-5F11 新建会话主按钮与两项菜单
+### UC-5F11 新建会话主按钮与三项菜单
 
 - **触发**：直接点击左上角「新建会话」，或点击右侧箭头展开菜单。
-- **预期现象**：菜单只有「在当前工作目录新建会话」和「在新工作目录新建会话」两项。主按钮与第一项共用当前目录入口；第二项先选目录，确认后进入该目录的新会话草稿。
-- **规则与边界**：已有会话时，「当前」取当前打开会话的 `work_dir`；已经在草稿态时，主按钮保留草稿已选目录；初始未选目录时采用全局默认目录。在新目录入口取消选择则保持原状态。工作目录只作用于新会话，不改写已有会话目录。
-- **依据**：`session-management.js::startNewSessionInCurrentDir / startNewSessionInFolder / startNewSessionInDir / createNewSession`、`frontend/src/shell-body.html` 的 `new-session-btn / new-session-menu`。
+- **预期现象**：菜单顺序固定为「在当前工作目录新建会话」/「在默认工作目录新建对话」/「在新工作目录新建会话」三项。主按钮与第一项共用当前目录入口；第二项回到服务端全局默认目录；第三项先选目录，确认后进入该目录的新会话草稿。
+- **规则与边界**：已有会话时，「当前」取当前打开会话的 `work_dir`；已经在草稿态时，主按钮保留草稿已选目录；初始未选目录时采用全局默认目录。「默认工作目录」一项与主按钮走同一条创建链路（`startNewSessionInDir('')` → `POST /sessions` 不带 `work_dir`），**不改变主按钮既有逻辑**；草稿已选自定义目录时点它会把待用目录切回默认并重建隐藏草稿。在新目录入口取消选择则保持原状态。工作目录只作用于新会话，不改写已有会话目录。
+- **依据**：`session-management.js::startNewSessionInCurrentDir / startNewSessionInDefaultDir / startNewSessionInFolder / startNewSessionInDir / createNewSession`、`frontend/src/shell-body.html` 与 `frontend/index.html` 的 `new-session-btn / new-session-menu`（两份 HTML 同步）、`tests/js/new_session_lifecycle_runtime.cjs`。
 
-### UC-5F12 欢迎页选择会话目录
+### UC-5F12 欢迎页选择会话目录（下拉 + 文件夹图标）
 
-- **触发**：新会话草稿的欢迎页，点击下方「会话工作目录」卡片中的「选择」。
-- **预期现象**：卡片展示目录名、完整路径与目录图标；默认目录显示「默认工作目录」。确认选择后立即更新卡片，并按该目录预取隐藏草稿；输入框中已写内容保留。
-- **规则与边界**：卡片只在无活动会话的草稿态出现；取消选择不改目录。选择器初始路径优先取当前会话目录，其次取草稿目标目录，最后取默认目录。系统选择器不可用时提供绝对路径手填兜底，行为见 [UC-4F5](../04-工作区/06-打开协议与路径选择器方案设计-UseCase清单.md)。目录名与路径按原文展示，不参与界面翻译。
-- **依据**：`message-rendering.js::WELCOME_HTML / syncWelcomeSessionDirectory`、`session-management.js::bindWelcomeSessionDirectoryPickerOnce / pickNewSessionWorkDir / applyNewSessionWorkDir`；`tests/js/new_session_lifecycle_runtime.cjs`。
+- **触发**：新会话草稿的欢迎页，点击下方「会话工作目录」卡片右侧的「选择」或文件夹图标按钮。
+- **预期现象**：卡片展示目录名、完整路径与目录图标；默认目录显示「默认工作目录」。右侧是两个按钮：「选择」展开**已创建工作目录**下拉（默认工作目录 + 各会话自己的工作目录，按最近活动排序，当前生效项打勾），选中即切换；文件夹图标弹出系统「选择文件夹」对话框（原「选择 >」的行为）。确认选择后立即更新卡片，并按该目录预取隐藏草稿；输入框中已写内容保留。
+- **规则与边界**：卡片只在无活动会话的草稿态出现；取消选择不改目录。下拉里选「默认工作目录」等价于目标目录置空（服务端全局默认），且不与主按钮/菜单的创建逻辑分叉。下拉与按钮共用通用弹出层（Esc 关闭并归还焦点、↑↓/Home/End 走查、点外部关闭）；条目文本走 i18n，路径原文展示不翻译。选择器初始路径优先取当前会话目录，其次取草稿目标目录，最后取默认目录。系统选择器不可用时提供绝对路径手填兜底（并把失败原因带进兜底文案），行为见 [UC-4F5](../04-工作区/06-打开协议与路径选择器方案设计-UseCase清单.md)。
+- **依据**：`message-rendering.js::WELCOME_HTML / syncWelcomeSessionDirectory`、`session-management.js::bindWelcomeSessionDirectoryCard / renderWelcomeSessionDirectoryMenu / listCreatedSessionWorkDirs / pickNewSessionWorkDir / applyNewSessionWorkDir`、`styles/app.css` 的 `.welcome-session-directory-actions / .welcome-session-directory-browse / .welcome-session-dir-item`；`tests/js/new_session_lifecycle_runtime.cjs`。
 
 ### UC-5F13 目录选择、隐藏草稿与创建请求一致
 
@@ -249,7 +249,7 @@ UC-5F1~5F10 的代码依据见各用例；本次新增映射如下。
 
 | 用例 | 主要代码依据 |
 |---|---|
-| UC-5F11~5F12 | 新建入口与欢迎页委托事件；`message-rendering.js::syncWelcomeSessionDirectory` |
+| UC-5F11~5F12 | 新建入口三项菜单（含 `startNewSessionInDefaultDir`）与欢迎页委托事件；`message-rendering.js::syncWelcomeSessionDirectory`、`session-management.js::bindWelcomeSessionDirectoryCard / renderWelcomeSessionDirectoryMenu` |
 | UC-5F13 | 目标目录、选择版本、预取复用校验与 `work_dir` 创建参数；后端 `webui.create_session` |
 | UC-5F14 | 会话目录投影、分组选择与渲染、目录分组动作 |
 | UC-5F15 | `app/folder-icons.js` 与四处调用方 |
@@ -283,6 +283,8 @@ flowchart LR
 - 2026-10-11 行内「目标」占位胶囊删除（按反馈）：从 `app.css` 移除 `.session-goal-badge` 及其 `data-goal-status` 五档配色（含浅色覆盖共 9 条规则），原位留删除说明注释；`npm run build` + `verify:dist` 通过，服务中样式表换为 `main-Cbkpc6ct.css`（246 700 B）且检索 `session-goal-badge` / `data-goal-status` 均为 0 命中，`session-todo-badge`、`plugin-session-badge--info` 等仍在；重载实机页面复核行尾标记无回归（Plan 角标仍 `rgb(79,70,229)`）。历史渲染与"再接线须知"见 `示意图/三种goal对照.html` ③ 区。
 
 ## 5. 版本记录
+
+- 2026-10-17 v16：UC-5F11 菜单扩为三项（当前 / **默认** / 新），新增「在默认工作目录新建对话」并明确它不改变主按钮逻辑；UC-5F12 目录卡片改为两个按钮——「选择」展开已创建工作目录下拉（默认 + 各会话目录，最近活动排序、当前项打勾）、文件夹图标保留系统选择框。同批修复目录选择器"同一件事先后弹两种样式窗口"的级联（见 04/06·UC-4F4/4F5）。验证：`npm run build` + `verify:dist` 通过、Playwright 实机联测（菜单三项顺序、卡片两按钮、下拉条目与切换、文件夹按钮走 `POST /api/pick-path`、默认目录回切）通过，`tests/js/new_session_lifecycle_runtime.cjs` 覆盖下拉与文件夹两条链路。
 
 - 2026-10-11 v15：**删除行内「目标」占位胶囊**（`.session-goal-badge` + `data-goal-status` 五档配色，含浅色覆盖）——它顶替的旧「修改审查」胶囊与它自身都没有生产者，属死代码；行尾目标状态由 agent-goal 的两枚插件角标承载。同次口径修正：盒体共享规则由"三枚"改回"两枚（待办 / 草稿）"、表 2 的插件角标记为 5 枚（含 `待审核`）、表 4 中英对照标注该词条仅供左栏页签、`示意图/` 两份示例同步（`三种goal对照.html` ③ 区标注"已删除 · 历史记录"）。验证：`npm run build` + `verify:dist` 通过、服务中 CSS 0 命中且界面无回归（见 §4.1）。
 

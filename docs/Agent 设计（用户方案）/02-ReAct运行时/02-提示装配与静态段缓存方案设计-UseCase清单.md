@@ -1,6 +1,6 @@
 # 提示装配与静态段缓存 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v4（覆盖至：当前工作区）
+- 版本：2026-10-17 v5（系统前缀对象复用与增量缓存命中）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_loop.py`（静态段构建与重建）、`app/agent_tokenizer.py`（分词/缓存/估算）。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -48,6 +48,20 @@
 - **规则与边界**：该开关只用于测量，默认必须关闭；启用后缺少当前本地估算，可能削弱上下文压缩 gate 的准确性，不得作为生产优化常态。
 - **依据**：`agent_tokenizer.estimate_full_input_tokens_for_messages` 的 `CONTEXT_TOKEN_SKIP_LOCAL_ESTIMATE` 分支。
 
+### UC-2B7 系统消息对象保持稳定前缀身份
+
+- **触发**：同一运行内下一轮使用未变化的静态系统段、执行服务指引和 key_context。
+- **预期现象**：按完整内容元组复用 SystemMessage 对象，返回新的外层列表供本轮追加。reasoning 转换、消息 hash 和 flattened text 的既有前缀缓存因此能够命中，不再被每轮新建的第一个 SystemMessage 截断。
+- **规则与边界**：内容元组变化即重建；检查缓存对象内容仍等于来源，防止调用方改写共享消息后延续错误缓存。该缓存仅在当前 State 中存在，不跨会话共享，不缓存权限或工具目录决策，不改变系统段文本和顺序。
+- **依据**：`agent_loop._request_system_messages`；`tests/test_request_system_prefix_cache.py` 验证重装配保持前缀身份、内容变动重建及只 hash 新增尾部。
+
+### UC-2B8 主对话派生保持单遍
+
+- **触发**：持久化运行状态或工具结果后，从 LLM 历史派生用户可见的主对话。
+- **预期现象**：单遍选择每个正常用户段及其最后一条合格终稿，不再创建完整 body、逐段 seg 和两组 finals 临时列表。
+- **规则与边界**：system/tool 不切分用户段；压缩 recap 和 micro-shrink user 不形成新段；微压终稿不替换正常终稿；首条正常 user 之前的助手消息忽略。沿用原消息对象，不缓存可变 metadata，因此终稿标记变化在下一次派生中仍可见。
+- **依据**：`agent_harness.derive_dialogue_from_assistant_history`、`tests/test_dialogue_projection.py`、`tests/test_multimodal_content_text.py`。
+
 ## 3. 边界
 
 - 每轮输入的**可变部分**（新用户消息、压缩摘要）不入静态缓存。
@@ -63,9 +77,12 @@
 | UC-2B4 | `inject_missing_tool_messages`、`messages_for_openai_turns` |
 | UC-2B5 | `agent_tokenizer.warm_tokenizer`、`webui.start_webui_lifecycle` |
 | UC-2B6 | `estimate_full_input_tokens_for_messages` 入口诊断分支 |
+| UC-2B7 | `_request_system_messages`、`tests/test_request_system_prefix_cache.py` |
+| UC-2B8 | `derive_dialogue_from_assistant_history`、`tests/test_dialogue_projection.py` |
 
 ## 5. 版本记录
 
+- 2026-10-17 v5：新增 UC-2B7/2B8，按内容复用系统消息对象并验证共享对象未被改写，使原有 reasoning/hash/文本前缀缓存实际命中；主对话改为单遍派生，保持压缩、微压和终稿选择规则。
 - 2026-09-20 v4：明确“Core 多段 system 装配”和“候选模型 wire 能力投影”的边界，链接 Qwen 首部唯一 system 专项设计。
 - 2026-09-20 v3：补入只用于性能归因的本地 token 估算旁路开关及生产边界。
 - 2026-09-20 v2：补充消息哈希/扁平文本/精确分词的增量缓存，以及 tokenizer 后台预热和并发加载锁。

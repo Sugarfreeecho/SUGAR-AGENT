@@ -128,11 +128,22 @@ Manifest 示例：
 }
 ```
 
-资源会自动命名空间化，例如 `org.example.quality:review` 和
-`plugin_org_example_quality__lint`。Plugin Agent/Prompt 作为可按名称激活的声明式
+声明式资源内部保留命名空间标识，例如 `org.example.quality:review`。
+Skill（含通过 Skill 目录激活的 Agent/Prompt）默认显示并注册为本地名称 `review`，
+仅重名时添加插件前缀，如 `org.example.quality:review`；与项目 Skill 重名时，项目保留简名。
+同一插件的多类指令资源仍重名时，再加入资源类型或目录名，避免互相覆盖。
+原有完整名称仍可用于激活唯一对应的 Skill，启停状态按来源标识保存。
+插件工具默认以 `lint` 等本地名称注册给模型，重名时才添加插件名、服务器名前缀。
+Plugin Agent/Prompt 作为可按名称激活的声明式
 指令资源进入现有 Skill 目录；MCP server 合并到现有 MCP 桥；声明式与代码 Hook
 合并到同一生命周期注册表。完整 SDK、effect/worktree 契约、安装与依赖说明见
 [Plugin API v1](./plugin_api_v1.md)。
+
+Hook 默认使用本地 `id`；未填写时生成 `<event>:<group-index>:<handler-index>`。
+Hook ID 重名时添加插件名前缀，如 `org.example.quality:guard`，同一插件内仍重名时
+再加入事件名、配置来源名。项目 Hook 优先保留唯一简名。
+处理器引用、`source_id`、权限绑定和 `MYAGENT_HOOK_ID` 保留原始执行标识；
+派发给处理器的 `hook.id` 保持原值，`hook.name` 提供当前注册名。
 
 插件启用状态写入原子 JSON。管理页支持单插件启停和重新发现/热重载；Skill、Hook 与 MCP 缓存会同步失效，下一次 Agent 边界立即使用新注册表。
 

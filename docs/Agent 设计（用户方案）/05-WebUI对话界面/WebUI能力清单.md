@@ -87,8 +87,8 @@
 |---|---|---|
 | 会话列表/归档/删除/恢复（recover_sessions） | `modules/session-management.js`、后端 sessions API | 【图】 |
 | 会话行尾标记区：待办/草稿胶囊（`.session-*-badge`，`padding .14rem .36rem` / `999px` / `400 .62rem`）、插件角标（`.plugin-session-badge--<variant>`，manifest `label` + `variant`，在册 5 枚：Plan / Team / Goal / 待审核 / Game）、`?`/`!` 待处理徽标、相对时间、置顶图钉与悬停动作；浅色档 `info` 一律品牌靛蓝 `#4f46e5`、`success` 落 `#247a43`（含插件 `[data-plugin-id]` 覆盖规则的配色修正与 agent-goal `review-goal` 声明恢复）；行内「目标」占位胶囊 `.session-goal-badge` 已删除（无生产者） | `styles/app.css`、`modules/session-management.js`、`modules/human-interactions.js`、`plugin-ui-slots.js::renderSessionBadges`、`plugins/session-todo/web/session-panel.css`、`plugins/agent-goal/.myagent-plugin/plugin.json`；05/06·UC-5F17 及附录 | 【单】 |
-| 新建会话主按钮沿用当前会话工作目录；草稿态保留已选目录；箭头菜单收敛为当前目录 / 新目录两项 | `session-management.js::startNewSessionInCurrentDir / startNewSessionInFolder`、`shell-body.html`；05/06·UC-5F11 | 【单】 |
-| 欢迎页会话目录卡片：目录名/完整路径/选择按钮，选目录时保留输入草稿 | `message-rendering.js::syncWelcomeSessionDirectory`、`session-management.js::applyNewSessionWorkDir`；05/06·UC-5F12 | 【单】 |
+| 新建会话主按钮沿用当前会话工作目录；草稿态保留已选目录；箭头菜单三项：当前工作目录 / **默认工作目录**（新增「在默认工作目录新建对话」）/ 新工作目录 | `session-management.js::startNewSessionInCurrentDir / startNewSessionInDefaultDir / startNewSessionInFolder`、`shell-body.html`、`index.html`；05/06·UC-5F11 | 【单】 |
+| 欢迎页会话目录卡片：目录名/完整路径 + 两个按钮——「选择」（已创建工作目录下拉，当前项打勾）与文件夹图标（系统「选择文件夹」） | `message-rendering.js::WELCOME_HTML / syncWelcomeSessionDirectory`、`session-management.js::bindWelcomeSessionDirectoryCard / renderWelcomeSessionDirectoryMenu / pickNewSessionWorkDir`；05/06·UC-5F12 | 【单】 |
 | 隐藏草稿携带 work_dir；目录与选择版本共同校验，丢弃迟到响应；按标签页恢复且校验服务端实际目录 | `collectNewSessionCreateOptions / ensurePrefetchedNewSession / prefetchNewSessionInner / sessionWorkDirMatchesTarget`；05/06·UC-5F13 | 【单】 |
 | 按工作目录分组与分组新建/复制/打开动作；会话数据集中保存 | `state/session-selectors.js`、`state/session-renderers.js`、`buildSessionGroupActions`；05/06·UC-5F14 | 【单】 |
 | 主聊天目录/文件图标语义统一：folder、folder-open、folder-plus、file、paperclip | `app/folder-icons.js`、`src/main.js` 与目录卡片/分组/详情栏/路径选择器；05/06·UC-5F15 | 【单】 |
@@ -119,6 +119,7 @@
 
 ## 9. 版本记录
 
+- 2026-10-17（v42）：新建菜单加第三项「在默认工作目录新建对话」（当前目录 / 默认目录 / 新目录，主按钮逻辑不变）；欢迎页目录卡片「选择 >」拆成「选择」（已创建工作目录下拉）+ 文件夹图标（系统「选择文件夹」）；同一批修复目录选择器"先在新版窗口选、又要到另一种样式窗口重选"的兜底级联（IFileDialog 固定跑在独立 STA 线程、弹过窗就不再换后端、客户端 50 s 超时放宽），详见 05/06·UC-5F11/5F12 与 04/06·UC-4F4/4F5。
 - 2026-10-11（v41）：补录桌面右键菜单（14 类对象、键盘与关闭条件、生成态限制、原生菜单互斥、插件 `bind` 接口）与技能管理/会话导入入口；05/16 新增、05/00 v32 与 05/14 v3 同步；05/02 v22（用量表 10px）与 05/13 v9.5（进行中图标）补记同步。
 - 2026-10-11（v40）：删除行内「目标」占位胶囊 `.session-goal-badge`（+`data-goal-status` 五档配色与浅色覆盖，共 9 条规则；无生产者）——行尾目标状态由 agent-goal 的 `Goal`（进行中）/`待审核`（完成待审）两枚插件角标承载；`npm run build` + `verify:dist` 通过（服务中 `main-Cbkpc6ct.css`，检索 `session-goal-badge`/`data-goal-status` 0 命中），实机复核行尾标记无回归；同步 05/06 v15 与 `示意图/`（`三种goal对照.html` ③ 区标注"已删除 · 历史记录"）。
 - 2026-10-11（v39）：补录会话行尾标记区——待办/草稿胶囊、插件角标（`session.badge` 投影，在册 Plan/Team/Goal/待审核/Game）、`?`/`!` 待处理徽标、相对时间与置顶图钉的规格与配色；修复浅色档角标文字色（`plugins/session-todo/web/session-panel.css` 的 `[data-plugin-id]` 覆盖规则引用浅色档未定义的 `--accent-1`，实机 computed `rgb(203,166,247)`→`rgb(79,70,229)`）；恢复被工作区误删的 agent-goal `review-goal`（`待审核`）声明——`tests/test_plugin_ui_contributions.py` 由 2 failed 转 21 passed，实机 200 会话投影复现该角标；两枚 goal 角标浅/深档配色已实测（Goal=靛蓝/浅薰衣草，待审核=#247a43/#a6e3a1）。同步 05/06 v14 与 `05-WebUI对话界面/示意图/`（实际渲染示意 HTML + 截图）。

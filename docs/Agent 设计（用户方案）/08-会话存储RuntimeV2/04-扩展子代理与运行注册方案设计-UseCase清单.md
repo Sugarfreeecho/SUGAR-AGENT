@@ -1,6 +1,6 @@
 # 扩展、子代理与运行注册 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-30 v5（覆盖至：当前工作区；pending 通知精确过滤与空队列快返）
+- 版本：2026-10-18 v7（扩展状态受守卫的投影补尾）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/extension_state.py`（432 行）、`subagent_store.py`、`subagent_repository.py`、`run_registry.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`
@@ -21,6 +21,7 @@
 ### UC-8D2 子代理账本
 - **触发**：子代理创建/更新/结束。
 - **预期现象**：子代理状态、输出引用持久化；主会话可见子代理历史（关闭应用后仍可查）；分支复制时随会话走。
+- **规则与边界**：子代理事件提交仍在原事务内耐久追加；独立日志夹入后的投影只补连续后缀，相邻追加也核对投影版本。旧版本、后缀断档/缺失保留全量恢复，详见 [02 · UC-8B7](02-投影回放与快照方案设计-UseCase清单.md)。
 - **依据**：`RuntimeSubagentStore`。
 
 ### UC-8D3 运行注册表
@@ -60,6 +61,15 @@
 - **规则与边界**：未指定 run ID 的旧路径保留 final-index/UI-history 过滤；非空队列所需兼容迁移保留。pending 文件、claim/ack/release 状态和所有权交接仍按原方式持久化；本批没有全局 metadata mtime 缓存。
 - **依据**：`agent_harness.py::_load_pending_subagent_results / consume_pending_subagent_notifications / claim_pending_subagent_notifications`；`tests/test_agent_harness_reconcile.py`。pending 读取和通知领取 ≥50 ms 时记录墙钟/读取线程 CPU 或领取行数等明细，主循环落点见 [02/10 · UC-2J11](../02-ReAct运行时/10-子代理任务生命周期与事件循环隔离方案设计-UseCase清单.md)。
 
+### UC-8D9 扩展状态更新的最小投影范围
+
+- **触发**：扩展CAS、mutate、事件追加或读取命名空间；包括后台任务启动、结束、取结果和通知确认的`execution-tools`状态。
+- **预期现象**：原会话事务中校验投影版本、实际文件身份、size/mtime及seq。已追平则复用不可变投影；同源且落后的快照走既有完整行游标/连续seq补尾，不再每次无条件`read_all()`。`get`在短事务中只复制目标namespace，调用者修改返回值不会污染发布快照。
+- **规则与边界**：冷缓存、旧stamp/旧投影、替换、截断、seq不符及后缀不连续保留实际事实恢复。projector维持COW；实际扩展事实追加、CAS冲突、通知模型事实先于ack、失败传播和检查点契约保持同步，不增加陈旧状态TTL或后台延迟确认。
+- **依据**：`SessionExtensionStateStore._snapshot_for_update/get`及`SnapshotStore.project_after_append`；`tests/runtime_v2/test_extension_append_suffix.py`覆盖journal/外部后缀、同size/mtime/seq替换、截断、旧版本/stamp和不可变发布。13.1MB真实前缀3次局部更新从803–892ms/6次全量读变为5–7ms/0次，完整重放一致；它是局部证据，不能外推整体500ms已达标。详见[88def复核](../../performance/agent-session-8533-run-88def-2026-10-18.md)。
+
+**真实恢复补验**：88def磁盘快照seq7919落后事实7933；副本中仅重绑定文件身份、保留原seq/字节边界，禁止被测路径read_all，14条后缀6.160ms补到finished，模型消息和扩展状态与完整重放一致，旧发布快照不变。此为单次真实数据机制验证，不承诺一般冷恢复耗时。
+
 ## 3. 边界
 
 - 子代理的**界面呈现**见 ../05-WebUI对话界面/04；
@@ -70,6 +80,9 @@
 见上表（runtime_v2 + webui 清理段）。
 
 ## 5. 版本记录
+
+- 2026-10-18 v7：新增UC-8D9，消除后台执行扩展更新事务内无条件全量日志读取；命名空间读取只复制目标行，保留源身份/版本/seq校验、冷恢复和同步通知确认。
+- 2026-10-17 v6：子代理事件追加复用严格后缀补齐，保留相邻版本检查、旧版/断档完整恢复和同步耐久提交。
 
 - 2026-10-04：删除从未接线的 `SubagentRepository / PermissionManager / HealthMonitor` 三个零引用模块及 `subagent_repository.py`；实际子代理存储路径为 `RuntimeSubagentStore`（`subagent_store.py`）。
 
