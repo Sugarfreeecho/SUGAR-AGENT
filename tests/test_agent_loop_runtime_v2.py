@@ -988,6 +988,8 @@ def test_pre_api_total_excludes_nested_diagnostic_spans():
     }
 
     assert agent_loop._pre_api_timing_total(timings) == 435
+    timings.update(tool_registry_total=4200, tool_registry_unattributed=4180)
+    assert agent_loop._pre_api_timing_total(timings) == 4615
 
 
 def test_todo_accepts_multiple_in_progress_items(monkeypatch, tmp_path):

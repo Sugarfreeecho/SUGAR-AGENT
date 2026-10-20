@@ -17,6 +17,10 @@ from typing import Any, Callable, Dict, Optional
 
 TERMINAL_GOAL_STATUSES = {"completed", "blocked", "cancelled"}
 ACTIVE_GOAL_STATUSES = {"active", "paused"}
+FAILED_GOAL_PAUSE_REASONS = {
+    "token_budget_exhausted", "run_failed", "consecutive_run_failures",
+    "judge_parse_failures", "judge_transport_failures", "react_iteration_limit",
+}
 _TRANSIENT_GOAL_FIELDS = {
     "elapsed_seconds",
     "remaining_tokens",
@@ -32,6 +36,20 @@ _GOAL_ACTIVITY_LISTENERS: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] =
 _MANAGER_CACHE: "weakref.WeakKeyDictionary[Any, GoalManager]" = weakref.WeakKeyDictionary()
 _MANAGER_CACHE_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
+
+
+def goal_result_status(goal: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Classify task attention from the durable Goal state, never response text."""
+    if not isinstance(goal, dict) or goal.get("deleted"):
+        return None
+    status = str(goal.get("status") or "")
+    if status == "completed":
+        return "success"
+    if status == "blocked":
+        return "failed"
+    if status == "paused" and goal.get("pause_reason") in FAILED_GOAL_PAUSE_REASONS:
+        return "failed"
+    return "pending"
 
 
 def _track_goal_state(

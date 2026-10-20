@@ -26,6 +26,9 @@ def queued_runtime(monkeypatch, tmp_path):
         def is_interrupt_requested(self, *args):
             return False
 
+        def can_continue_react_session(self, *args):
+            return False
+
         def append_ui_event(self, *args):
             pass
 
@@ -293,6 +296,36 @@ def test_idle_fallback_claims_the_same_operation_only_once(queued_runtime, monke
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("start_state", ["recovering", "busy", "unknown", "paused"])
+def test_idle_fallback_cannot_claim_a_turn_before_recovery_finishes(queued_runtime, monkeypatch, start_state):
+    agent, directory = queued_runtime
+    import webui
+
+    operation = publish(agent, "recovering", "next")["items"][0]
+    recovered = []
+    monkeypatch.setattr(webui, "WORK_DIR", directory)
+    monkeypatch.setattr(webui, "_runtime_v2_legacy_only_migration_pending", lambda *args: {"pending": False})
+    monkeypatch.setattr(webui, "_queued_followup_start_state", lambda _sid, **kwargs: start_state)
+    monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda *args: pytest.fail("blocked queue must not reserve a start"))
+    monkeypatch.setattr(webui, "transition_session_steer", lambda *args, **kwargs: pytest.fail("blocked queue must not claim a turn"))
+
+    async def recover(sid):
+        recovered.append(sid)
+        return True
+
+    monkeypatch.setattr(webui, "recover_react_session", recover)
+    response = asyncio.run(webui.chat(
+        request=SimpleNamespace(), message="next", session_id="recovering", client_run_id="fallback",
+        stream_protocol="runtime_v2", followup_steer=False, queued_followup=True,
+        steer_id=operation["id"], selected_skills="[]", ui_message="next",
+        ui_language="zh-CN", attachments="[]", preserve_unread_result=True,
+    ))
+    assert response.status_code == 409
+    assert json.loads(response.body)["queued_followup_state"] == start_state
+    assert agent.get_session_steer("recovering", steer_id=operation["id"])["item"]["state"] == "queued"
+    assert recovered == (["recovering"] if start_state == "recovering" else [])
+
+
 def test_queued_user_turn_is_projected_live_without_optimistic_skip(queued_runtime, monkeypatch):
     agent, _ = queued_runtime
     import webui
@@ -307,6 +340,66 @@ def test_queued_user_turn_is_projected_live_without_optimistic_skip(queued_runti
     assert payload["ui_event"]["type"] == "user"
     assert payload["ui_event"]["queued_followup"] is True
     assert payload["ui_event"]["turn_id"] == "queued-id"
+
+
+def test_recovery_finishes_original_answer_before_consuming_the_queued_turn(queued_runtime, monkeypatch):
+    agent, directory = queued_runtime
+    import webui
+    from runtime_v2.mirror import RuntimeMirror
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    sid = "recovery-queue"
+    agent._runtime_v2_react_history_ops().commit_user_turn(sid, "original", run_id="lost")
+    mirror = RuntimeMirror(directory)
+    mirror.mirror_run_started(sid, "lost", {"mode": "chat"})
+    mirror.mirror_run_interrupted(sid, "lost", {"reason": "process_restart"})
+    operation = publish(agent, sid, "next")["items"][0]
+    projection = RuntimeUiProjection(directory)
+
+    def unfinished(_sid):
+        events = projection.read_ui_events(_sid)
+        last_user = max((i for i, event in enumerate(events) if event.get("type") == "user"), default=-1)
+        return last_user >= 0 and not any(event.get("type") == "final" for event in events[last_user + 1:])
+
+    monkeypatch.setattr(agent.session_manager, "can_continue_react_session", unfinished)
+    monkeypatch.setattr(webui, "session_manager", agent.session_manager)
+    monkeypatch.setattr(webui, "astream_events_continuation", agent.astream_events_continuation)
+    monkeypatch.setattr(webui, "_runtime_v2_legacy_only_migration_pending", lambda *args: {"pending": False})
+    monkeypatch.setattr(webui, "_react_recovery_workers", {})
+    monkeypatch.setattr(webui, "_react_recovery_attempt_at", {})
+    monkeypatch.setattr(webui, "_human_interaction_recovery_workers", {})
+    answers = []
+
+    async def react(state, emit):
+        events = projection.read_ui_events(sid)
+        users = [event["content"] for event in events if event.get("type") == "user"]
+        answers.append(users[-1])
+        state["final_response"] = "answer " + users[-1]
+        state["_queue_can_continue"] = True
+        return state
+
+    monkeypatch.setattr(agent, "_run_react_node_off_loop", react)
+
+    async def run():
+        assert webui._queued_followup_start_state(sid) == "recovering"
+        response = await webui.chat(
+            request=SimpleNamespace(), message="next", session_id=sid, client_run_id="premature",
+            stream_protocol="runtime_v2", followup_steer=False, queued_followup=True,
+            steer_id=operation["id"], selected_skills="[]", ui_message="next",
+            ui_language="zh-CN", attachments="[]", preserve_unread_result=True,
+        )
+        assert response.status_code == 409
+        assert agent.get_session_steer(sid, steer_id=operation["id"])["item"]["state"] == "queued"
+        await webui._react_recovery_workers[sid]
+        assert webui._queued_followup_start_state(sid) == "ready"
+
+    asyncio.run(run())
+    assert answers == ["original", "next"]
+    conversation = [(event["type"], event["content"]) for event in projection.read_ui_events(sid)
+                    if event.get("type") in {"user", "final"}]
+    assert conversation == [("user", "original"), ("final", "answer original"),
+                            ("user", "next"), ("final", "answer next")]
+    assert agent.get_session_steer(sid, steer_id=operation["id"])["item"]["state"] == "consumed"
 
 
 def test_queued_image_survives_registration_and_turn_commit(queued_runtime, monkeypatch):

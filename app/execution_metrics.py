@@ -21,7 +21,10 @@ _MAX_RUNS = max(1, int(os.getenv("EXECUTION_DASHBOARD_MAX_RUNS", "100")))
 _heartbeat_controls: set[tuple[str, str]] = set()
 _heartbeat_thread: Optional[threading.Thread] = None
 _heartbeat_wakeup = threading.Event()
-_flush_timers: Dict[str, threading.Timer] = {}
+_flush_deadlines: Dict[str, float] = {}
+_flush_active_sessions: set[str] = set()
+_flush_worker: Optional[threading.Thread] = None
+_flush_wakeup = threading.Event()
 _flush_io_locks: Dict[str, threading.Lock] = {}
 _flush_failed_sessions: set[str] = set()
 _FLUSH_DELAY_SEC = max(
@@ -34,6 +37,39 @@ _HEARTBEAT_INTERVAL_SEC = max(
     2.0,
     float(os.getenv("AGENT_RUN_HEARTBEAT_INTERVAL_SECONDS", "15")),
 )
+
+
+class _RequestMetrics(dict):
+    """Owned request data; published roots are copied before the next mutation."""
+
+    __slots__ = ("_published",)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._published = False
+
+
+def _capture_snapshot(data: dict) -> dict:
+    """Freeze request roots under _lock without copying completed histories.
+
+    Writers must obtain request data through _request, which detaches a
+    published root before changing any nested value. Snapshot lists and run
+    headers are private; readers may serialize these roots outside _lock.
+    There is no persistent second copy or cache of completed requests.
+    """
+    captured = {key: copy.deepcopy(value) for key, value in data.items() if key != "runs"}
+    runs = captured["runs"] = []
+    for run in data.get("runs", []):
+        frozen_run = {key: copy.deepcopy(value) for key, value in run.items() if key != "requests"}
+        requests = frozen_run["requests"] = []
+        live_requests = run.get("requests", [])
+        for index, request in enumerate(live_requests):
+            if not isinstance(request, _RequestMetrics):
+                request = live_requests[index] = _RequestMetrics(request)
+            request._published = True
+            requests.append(request)
+        runs.append(frozen_run)
+    return captured
 
 
 def _now() -> str:
@@ -67,6 +103,7 @@ def configure(
     with _lock:
         _heartbeat_controls.clear()
         _heartbeat_wakeup.set()
+    _ensure_flush_worker()
     try:
         import runtime_observability
 
@@ -120,7 +157,7 @@ def _flush_io_lock(session_id: str) -> threading.Lock:
 
 
 def _flush_session(session_id: str, *, fired_timer: bool = False) -> None:
-    """Copy under the metrics lock; serialize and write outside it.
+    """Freeze roots under the metrics lock; serialize and write outside it.
 
     The per-session I/O lock keeps a slow older flush from overwriting a newer
     snapshot. A mutation made during the write schedules the following flush.
@@ -131,15 +168,11 @@ def _flush_session(session_id: str, *, fired_timer: bool = False) -> None:
         io_acquired = time.perf_counter()
         with _lock:
             acquired = time.perf_counter()
-            timer = _flush_timers.get(session_id)
-            if fired_timer and timer is not threading.current_thread():
-                return
-            timer = _flush_timers.pop(session_id, None)
-            if timer is not None and timer is not threading.current_thread():
-                timer.cancel()
+            if not fired_timer:
+                _flush_deadlines.pop(session_id, None)
             _flush_failed_sessions.discard(session_id)
             data = _sessions.get(session_id)
-            snapshot_data = copy.deepcopy(data) if data is not None else None
+            snapshot_data = _capture_snapshot(data) if data is not None else None
         copied = time.perf_counter()
         if snapshot_data is not None:
             _write_now(session_id, snapshot_data)
@@ -160,24 +193,58 @@ def _flush_timer_fired(session_id: str) -> None:
     _flush_session(session_id, fired_timer=True)
 
 
+def _flush_pump() -> None:
+    """Coalesce diagnostics with one process worker, never a new thread per update."""
+    while True:
+        with _lock:
+            now = time.monotonic()
+            due = [sid for sid, deadline in _flush_deadlines.items() if deadline <= now]
+            for sid in due:
+                _flush_deadlines.pop(sid, None)
+                _flush_active_sessions.add(sid)
+            delay = max(0.0, min(_flush_deadlines.values()) - now) if _flush_deadlines else None
+        if due:
+            for sid in due:
+                try:
+                    _flush_session(sid, fired_timer=True)
+                except Exception:
+                    with _lock:
+                        _flush_failed_sessions.add(sid)
+                finally:
+                    with _lock:
+                        _flush_active_sessions.discard(sid)
+            continue
+        _flush_wakeup.wait(delay)
+        _flush_wakeup.clear()
+
+
+def _ensure_flush_worker() -> bool:
+    global _flush_worker
+    with _lock:
+        if _flush_worker is not None and _flush_worker.is_alive():
+            return True
+        thread = threading.Thread(target=_flush_pump, name="execution-metrics-flush", daemon=True)
+        try:
+            thread.start()
+        except RuntimeError:
+            return False
+        _flush_worker = thread
+        return True
+
+
 def _save(session_id: str, data: dict, *, force: bool = False) -> None:
     """Mark metrics dirty and coalesce whole-file rewrites."""
     _sessions[session_id] = data
     if force:
         _flush_failed_sessions.add(session_id)
         return
-    if session_id in _flush_timers:
+    if session_id in _flush_deadlines:
         return
-    timer = threading.Timer(_FLUSH_DELAY_SEC, _flush_timer_fired, args=(session_id,))
-    timer.daemon = True
-    _flush_timers[session_id] = timer
-    try:
-        timer.start()
-    except RuntimeError:
-        # The terminal flush remains durable; never perform slow I/O while the
-        # caller owns the global metrics lock.
-        _flush_timers.pop(session_id, None)
+    if _flush_worker is None or not _flush_worker.is_alive():
         _flush_failed_sessions.add(session_id)
+        return
+    _flush_deadlines[session_id] = time.monotonic() + _FLUSH_DELAY_SEC
+    _flush_wakeup.set()
 
 
 def flush(session_id: Optional[str] = None) -> None:
@@ -186,7 +253,7 @@ def flush(session_id: Optional[str] = None) -> None:
         _flush_session(str(session_id))
         return
     with _lock:
-        pending = set(_flush_timers) | set(_flush_failed_sessions)
+        pending = set(_flush_deadlines) | set(_flush_failed_sessions) | set(_flush_active_sessions)
     for sid in pending:
         _flush_session(sid)
 
@@ -213,12 +280,17 @@ def _run(data: dict, run_id: str, create: bool = True) -> Optional[dict]:
 
 
 def _request(run: dict, react_iter: int, create: bool = True) -> Optional[dict]:
-    for row in run.get("requests", []):
+    requests = run.get("requests", [])
+    for index, row in enumerate(requests):
         if int(row.get("react_iter") or 0) == int(react_iter):
+            if isinstance(row, _RequestMetrics) and row._published:
+                row = copy.deepcopy(row)
+                row._published = False
+                requests[index] = row
             return row
     if not create:
         return None
-    row = {
+    row = _RequestMetrics({
         "react_iter": int(react_iter),
         "status": "preparing",
         "started_at": _now(),
@@ -226,7 +298,7 @@ def _request(run: dict, react_iter: int, create: bool = True) -> Optional[dict]:
         "usage": {},
         "phases": {},
         "tools": [],
-    }
+    })
     run.setdefault("requests", []).append(row)
     return row
 
@@ -338,6 +410,7 @@ def heartbeat_run(session_id: str, run_id: str, stage: str = "") -> None:
 
 
 def record_request(session_id: str, run_id: str, react_iter: int, **fields: Any) -> None:
+    fields = copy.deepcopy(fields)
     started = time.perf_counter()
     with _lock:
         acquired = time.perf_counter()
@@ -359,6 +432,7 @@ def record_request(session_id: str, run_id: str, react_iter: int, **fields: Any)
 
 def record_run_fields(session_id: str, run_id: str, **fields: Any) -> None:
     """Attach run-level timing/accounting fields (startup, round gaps, etc.)."""
+    fields = copy.deepcopy(fields)
     with _lock:
         data = _load(session_id)
         run = _run(data, run_id, create=False)
@@ -371,6 +445,8 @@ def record_run_fields(session_id: str, run_id: str, **fields: Any) -> None:
 
 
 def record_phase(session_id: str, run_id: str, react_iter: int, phase: str, values: Dict[str, Any], **meta: Any) -> None:
+    values = copy.deepcopy(values)
+    meta = copy.deepcopy(meta)
     started = time.perf_counter()
     with _lock:
         acquired = time.perf_counter()
@@ -455,6 +531,7 @@ def record_tool(
     *,
     file_changes: Optional[list[dict]] = None,
 ) -> None:
+    started = time.perf_counter()
     with _lock:
         data = _load(session_id)
         req = _request(_run(data, run_id), react_iter)
@@ -464,6 +541,7 @@ def record_tool(
             "failed": bool(failed),
         })
         _save(session_id, data)
+    metrics_finished = time.perf_counter()
     try:
         import runtime_observability
 
@@ -477,6 +555,17 @@ def record_tool(
             )
     except Exception:
         pass
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    if elapsed_ms >= _SLOW_OPERATION_MS:
+        try:
+            _timing_logger.info(
+                "tool_metrics_timing session=%s react_iter=%d total_ms=%.3f "
+                "execution_metrics_ms=%.3f observability_ms=%.3f",
+                session_id, react_iter, elapsed_ms, (metrics_finished - started) * 1000,
+                elapsed_ms - (metrics_finished - started) * 1000,
+            )
+        except Exception:
+            pass
 
 
 def snapshot(session_id: str) -> dict:
@@ -484,7 +573,8 @@ def snapshot(session_id: str) -> dict:
     # process-wide metrics lock used by active ReAct rounds.
     flush(str(session_id))
     with _lock:
-        data = json.loads(json.dumps(_load(session_id), ensure_ascii=False))
+        captured = _capture_snapshot(_load(session_id))
+    data = json.loads(json.dumps(captured, ensure_ascii=False))
     try:
         import runtime_observability
 
@@ -506,8 +596,9 @@ def snapshot_all(session_names: Optional[Dict[str, str]] = None) -> dict:
     for sid in cached_ids:
         with _lock:
             data = _sessions.get(sid)
-            if data is not None:
-                cached_rows[sid] = copy.deepcopy(data)
+            captured = _capture_snapshot(data) if data is not None else None
+        if captured is not None:
+            cached_rows[sid] = copy.deepcopy(captured)
     disk_rows.update(cached_rows)
     sessions = []
     for sid, data in disk_rows.items():

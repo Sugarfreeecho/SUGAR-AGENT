@@ -22,9 +22,12 @@ import logging
 import shutil
 import copy
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 import time
 import ctypes
 import socket
+import stat
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +38,7 @@ import httpx
 from openai import OpenAI
 import threading
 import model_profiles
+from agent_local_timing import local_timed
 import cpu_pressure
 from llm import (
     LLMRequestContext,
@@ -47,6 +51,8 @@ from llm import (
 
 from agent_messages import UserMessage, AssistantMessage, ToolMessage, SystemMessage
 from agent_openai import (
+    HttpStreamTransportError,
+    _TRANSIENT_TRANSPORT_MARKERS,
     _api_messages_have_media,
     _api_messages_required_modalities,
     _classify_candidate_failure,
@@ -1111,10 +1117,13 @@ class RequestResponseLogger(httpx.Client):
         (hedged) requests overwrite each other, which is a worse failure than a
         missing metric.
         """
+        from agent_request_timing import current_request_trace
+
         self._trace_local.current = {
             "started_at": time.perf_counter(),
             "events": [],
             "metrics": {},
+            "local_request_trace": current_request_trace(),
         }
 
     def _armed_context(self) -> Optional[Dict[str, Any]]:
@@ -1186,6 +1195,14 @@ class RequestResponseLogger(httpx.Client):
         # concurrent requests cannot share one slot.
         extensions = dict(getattr(request, "extensions", {}) or {})
         current = self._armed_context()
+        from agent_request_timing import current_request_trace
+
+        local_request_trace = (current or {}).get("local_request_trace") or current_request_trace()
+        if local_request_trace is not None:
+            local_request_trace.mark("http_send_entered")
+            if current is None:
+                self.start_transport_trace()
+                current = self._armed_context()
         if not isinstance(current, dict):
             # No trace armed on this thread: the transport metrics for this
             # request will be empty. Logged sparingly -- this is a hot path.
@@ -1208,6 +1225,11 @@ class RequestResponseLogger(httpx.Client):
             # httpcore trace names are intentionally retained verbatim so
             # upgrades do not silently collapse new transport phases.
             name = str(event_name)
+            if local_request_trace is not None:
+                if name.endswith("send_request_headers.started"):
+                    local_request_trace.mark("http_headers_started")
+                elif name.endswith("send_request_body.started"):
+                    local_request_trace.mark("http_body_started")
             at_ms = int(max(0.0, (time.perf_counter() - started_at) * 1000.0))
             events = current.setdefault("events", [])
             events.append({"event": name, "at_ms": at_ms})
@@ -1341,10 +1363,16 @@ def _masked_base_label(value: Optional[str]) -> str:
 
 
 def _is_network_connectivity_error(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, TimeoutError, httpx.TransportError)):
+        return True
+    if isinstance(exc, HttpStreamTransportError) and exc.status_code is None:
+        return True
     msg = str(exc or "").lower()
     if "timeout" in msg or "timed out" in msg:
         return True
     if "connection" in msg or "connect" in msg:
+        return True
+    if any(marker in msg for marker in _TRANSIENT_TRANSPORT_MARKERS):
         return True
     try:
         from openai import APIConnectionError, APITimeoutError
@@ -2734,14 +2762,28 @@ def executor_text_complete(prompt: str, session_id: str = "") -> str:
     return str(result.get("text") or "").strip()
 
 
-def executor_chat_complete(messages: List[Any], session_id: str = "") -> str:
+def executor_chat_complete(
+    messages: List[Any], session_id: str = "", *,
+    should_stop: Optional[Callable[[], bool]] = None,
+    completion_info: Optional[Dict[str, Any]] = None,
+) -> str:
     """多轮 chat，走执行端（compress_history_and_key 等结构化上送）。"""
+    if should_stop is not None:
+        return executor_chat_complete_stream(
+            messages, session_id=session_id, should_stop=should_stop,
+            completion_info=completion_info,
+        )
     result = executor_one_shot_complete(
         messages,
         session_id=session_id,
         purpose=LLMRequestPurpose.SUMMARY,
         temperature=EXECUTOR_TEMPERATURE,
     )
+    if completion_info is not None:
+        completion_info.clear()
+        completion_info.update({key: result[key] for key in (
+            "finish_reason", "stop_reason", "usage", "model",
+        ) if key in result})
     return str(result.get("text") or "").strip()
 
 
@@ -2752,6 +2794,8 @@ def executor_chat_complete_stream(
     *,
     on_reasoning_delta: Optional[Callable[[str], None]] = None,
     on_reasoning_end: Optional[Callable[[], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
+    completion_info: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     执行端多轮 chat 流式补全；正文与推理分别回调，供压缩/要点 SSE 推送。
@@ -2764,6 +2808,13 @@ def executor_chat_complete_stream(
 
     sync_q: _queue.Queue = _queue.Queue()
     client, model, max_tokens, _ctx = resolve_executor_config_for_session(session_id)
+    cancelled = threading.Event()
+
+    def _should_abort() -> bool:
+        return bool(
+            cancelled.is_set()
+            or (should_stop is not None and should_stop())
+        )
 
     def _worker() -> None:
         run_chat_completion_stream_worker(
@@ -2775,6 +2826,7 @@ def executor_chat_complete_stream(
             temperature=EXECUTOR_TEMPERATURE,
             max_tokens=max_tokens,
             emit_deltas=not buffer_only,
+            should_abort=_should_abort,
             request_context=LLMRequestContext(
                 session_id=str(session_id or "").strip(),
                 purpose=LLMRequestPurpose.SUMMARY,
@@ -2789,47 +2841,72 @@ def executor_chat_complete_stream(
     buffered_reasoning = ""
     reasoning_delivered = False
     err: Optional[BaseException] = None
-    while True:
-        item = sync_q.get()
-        if item is None:
-            break
-        tag, payload = item
-        if tag == "content" and payload:
-            piece = payload if isinstance(payload, str) else str(payload)
-            parts.append(piece)
-            if on_content_delta:
+    finish_info: Dict[str, Any] = {}
+    try:
+        while True:
+            if should_stop is not None and should_stop():
+                raise InterruptedError("summary request cancelled")
+            try:
+                item = sync_q.get(timeout=0.05)
+            except _queue.Empty:
+                if not t.is_alive():
+                    raise RuntimeError("summary worker exited without a completion marker")
+                continue
+            if item is None:
+                break
+            tag, payload = item
+            if tag == "content" and payload:
+                piece = payload if isinstance(payload, str) else str(payload)
+                parts.append(piece)
+                if on_content_delta:
+                    try:
+                        on_content_delta(piece)
+                    except Exception:
+                        pass
+            elif tag == "reasoning" and payload and on_reasoning_delta:
+                reasoning_delivered = True
                 try:
-                    on_content_delta(piece)
+                    on_reasoning_delta(payload if isinstance(payload, str) else str(payload))
                 except Exception:
                     pass
-        elif tag == "reasoning" and payload and on_reasoning_delta:
-            reasoning_delivered = True
-            try:
-                on_reasoning_delta(payload if isinstance(payload, str) else str(payload))
-            except Exception:
-                pass
-        elif tag == "reasoning_end":
-            reasoning_delivered = False
-            if on_reasoning_end:
+            elif tag == "reasoning_end":
+                reasoning_delivered = False
+                if on_reasoning_end:
+                    try:
+                        on_reasoning_end()
+                    except Exception:
+                        pass
+            elif tag == "turn" and payload is not None:
+                buffered_final = str(getattr(payload, "content", "") or "")
+                buffered_reasoning = str(getattr(payload, "reasoning_content", "") or "")
+            elif tag == "finish" and isinstance(payload, dict):
+                finish_info.update(payload)
+            elif tag == "usage" and isinstance(payload, dict):
+                finish_info["usage"] = dict(payload)
+            elif tag == "complete_response" and payload is not None:
                 try:
-                    on_reasoning_end()
-                except Exception:
-                    pass
-        elif tag == "turn" and payload is not None:
-            buffered_final = str(getattr(payload, "content", "") or "")
-            buffered_reasoning = str(getattr(payload, "reasoning_content", "") or "")
-        elif tag == "complete_response" and payload is not None:
-            try:
-                turn = parse_assistant_message(payload.choices[0].message)
-                buffered_final = str(turn.content or "")
-                buffered_reasoning = str(turn.reasoning_content or "")
-            except Exception as exc:
-                err = exc
-        elif tag == "err" and isinstance(payload, BaseException):
-            err = payload
-    t.join()
+                    choice = payload.choices[0]
+                    turn = parse_assistant_message(choice.message)
+                    buffered_final = str(turn.content or "")
+                    buffered_reasoning = str(turn.reasoning_content or "")
+                    finish_info["finish_reason"] = getattr(choice, "finish_reason", None)
+                    finish_info["stop_reason"] = getattr(choice, "stop_reason", None)
+                    finish_info["model"] = getattr(payload, "model", None)
+                    from agent_openai import extract_usage_dict
+                    finish_info["usage"] = extract_usage_dict(getattr(payload, "usage", None))
+                except Exception as exc:
+                    err = exc
+            elif tag == "err" and isinstance(payload, BaseException):
+                err = payload
+    finally:
+        # The network worker is a daemon; an endpoint that ignores cancellation
+        # must not keep the context-policy lock or publish late preview deltas.
+        cancelled.set()
     if err is not None:
         raise err
+    if completion_info is not None:
+        completion_info.clear()
+        completion_info.update(finish_info)
     text = "".join(parts) or buffered_final
     if not reasoning_delivered and buffered_reasoning and on_reasoning_delta:
         try:
@@ -3593,6 +3670,7 @@ class SessionManager:
     def __init__(self, sessions_dir: Path, index_file: Path):
         self.sessions_dir = sessions_dir
         self.index_file = index_file
+        self._session_path_scope = ContextVar(f"session_paths_{id(self)}", default=None)
         self.repository = SessionRepository(sessions_dir, self._resolve_session_path)
         self.event_log = SessionEventLog(self.repository)
         self._lock = threading.Lock()
@@ -3940,6 +4018,10 @@ class SessionManager:
             stat = path.stat()
             self._subagent_index_cache = dict(idx)
             self._subagent_index_cache_signature = (True, int(stat.st_mtime_ns), int(stat.st_size))
+            scope_var = getattr(self, "_session_path_scope", None)
+            scope = scope_var.get() if scope_var is not None else None
+            if scope is not None and scope["active"]:
+                scope["paths"].clear()
 
     def _register_subagent(self, child_session_id: str, parent_session_id: str) -> None:
         child_id = self._normalize_session_id(child_session_id)
@@ -4015,7 +4097,88 @@ class SessionManager:
             pass
         return None
 
+    @contextmanager
+    def _session_path_resolution_scope(self):
+        """Reuse guarded canonical paths for one runtime operation or fact transaction."""
+        scope_var = getattr(self, "_session_path_scope", None)
+        if scope_var is None:
+            scope_var = ContextVar(f"session_paths_{id(self)}", default=None)
+            self._session_path_scope = scope_var
+        previous = scope_var.get()
+        if previous is not None and previous["active"]:
+            yield
+            return
+        scope = {"active": True, "paths": {}}
+        token = scope_var.set(scope)
+        try:
+            yield
+        finally:
+            scope["active"] = False
+            scope["paths"].clear()
+            scope_var.reset(token)
+
     def _resolve_session_path(
+        self,
+        session_id: str,
+        *,
+        parent_hint: Optional[str] = None,
+        _seen: Optional[set[str]] = None,
+    ) -> Path:
+        scope_var = getattr(self, "_session_path_scope", None)
+        scope = scope_var.get() if scope_var is not None else None
+        if scope is None or not scope["active"]:
+            return self._resolve_session_path_uncached(session_id, parent_hint=parent_hint, _seen=_seen)
+        index_identity = self._session_subagent_index_identity()
+        if scope.get("index_identity") != index_identity:
+            scope["paths"].clear()
+            scope["index_identity"] = index_identity
+        key = (str(self.sessions_dir), str(session_id), parent_hint, frozenset(_seen or ()))
+        if key in scope["paths"]:
+            cached_path, guards = scope["paths"][key]
+            try:
+                if all(self._session_directory_identity(directory) == identity for directory, identity in guards):
+                    return cached_path
+            except OSError:
+                pass
+            scope["paths"].pop(key, None)
+        path = self._resolve_session_path_uncached(session_id, parent_hint=parent_hint, _seen=_seen)
+        if scope["active"] and self._session_subagent_index_identity() == index_identity:
+            try:
+                root = self.sessions_dir.resolve()
+                if self.sessions_dir.absolute() != root:
+                    # A configured alias/junction can be retargeted without
+                    # replacing the old canonical root. Keep resolving it live.
+                    return path
+                relative = path.relative_to(root)
+                directories = [root]
+                for part in relative.parts:
+                    directories.append(directories[-1] / part)
+                guards = tuple((directory, self._session_directory_identity(directory)) for directory in directories)
+                if all(identity[1] and stat.S_ISDIR(identity[2]) and not identity[3] & 0x400
+                       for directory, identity in guards):
+                    if len(scope["paths"]) >= 128:
+                        scope["paths"].clear()
+                    scope["paths"][key] = (path, guards)
+            except (OSError, ValueError):
+                # A path that is not materialized or changed namespaces is not
+                # cacheable; the ordinary resolver remains authoritative.
+                pass
+        return path
+
+    def _session_subagent_index_identity(self) -> tuple:
+        try:
+            info = self._subagent_index_file().stat()
+            return (True, int(info.st_dev), int(info.st_ino), int(info.st_mtime_ns), int(info.st_size))
+        except OSError:
+            return (False,)
+
+    @staticmethod
+    def _session_directory_identity(path: Path) -> tuple:
+        info = path.lstat()
+        return (int(info.st_dev), int(info.st_ino), int(info.st_mode),
+                int(getattr(info, "st_file_attributes", 0)))
+
+    def _resolve_session_path_uncached(
         self,
         session_id: str,
         *,
@@ -4788,8 +4951,6 @@ class SessionManager:
         if ok is False:
             status = "interrupted" if "interrupt" in error.lower() else "failed"
             return {"status": status, "ok": False, "error": error or preview}
-        if preview and re.search(r"(?i)^error:|失败|异常|interrupt", preview):
-            return {"status": "failed", "ok": False, "error": preview}
         if bool(meta.get("interrupt_requested")):
             return {"status": "interrupted", "ok": False, "error": "interrupted"}
         has_final = False
@@ -5290,8 +5451,43 @@ class SessionManager:
             # Result attention is updated only by the terminal lifecycle path.
             pass
         elif event_copy.get("type") in ("run_interrupted", "run_failed"):
-            self.mark_session_unread_result(session_id, status="failed")
+            self.mark_session_unread_result(
+                session_id, status="failed", run_id=str(event_copy.get("run_id") or ""),
+            )
 
+    def commit_execution_ui_event(self, session_id: str, event: Dict[str, Any], *, cancel_event=None) -> Dict[str, Any]:
+        """Commit journal and visible result under one short event transaction."""
+        from runtime_v2 import runtime_v2_react_transaction_timeout_seconds
+        from runtime_v2.execution_journal import ExecutionJournal
+        from runtime_v2.read_probe import read_probe_scope
+
+        journal = ExecutionJournal(self.sessions_dir, self._resolve_session_path)
+        def check_cancelled():
+            if cancel_event is not None and cancel_event.is_set():
+                from asyncio import CancelledError
+                raise CancelledError()
+        check_cancelled()
+        with journal.log.session_transaction(
+            session_id, timeout_seconds=runtime_v2_react_transaction_timeout_seconds()
+        ), read_probe_scope():
+            committed = journal.record(session_id, event)
+            check_cancelled()
+            self.append_ui_event(session_id, committed, require_commit=True)
+        return {**committed, "_runtime_v2_committed": True}
+
+    def commit_execution_ui_events(self, session_id: str, events: List[Dict[str, Any]], *, cancel_event=None) -> List[Dict[str, Any]]:
+        """Commit completed result rows in one synchronous, short transaction."""
+        from runtime_v2 import runtime_v2_react_transaction_timeout_seconds
+        from runtime_v2.execution_journal import ExecutionJournal
+        from runtime_v2.write_probe import batch_append_scope
+        log = ExecutionJournal(self.sessions_dir, self._resolve_session_path).log
+        with log.session_transaction(
+            session_id, timeout_seconds=runtime_v2_react_transaction_timeout_seconds()
+        ), batch_append_scope(log.event_path(session_id)):
+            return [self.commit_execution_ui_event(session_id, event, cancel_event=cancel_event)
+                    for event in events]
+
+    @local_timed("ui_append")
     def append_ui_event(self, session_id: str, event: Dict[str, Any], *, require_commit: bool = False) -> None:
         """追加一条与 SSE 同结构的 UI 事件（供刷新时原样重放）。"""
         if not event or not isinstance(event, dict):
@@ -7571,7 +7767,13 @@ class SessionManager:
             if not isinstance(metadata, dict):
                 metadata = {}
             if result_status == "success" and (
-                metadata.get("unread_result_status") == "failed"
+                (
+                    metadata.get("unread_result_status") == "failed"
+                    and (
+                        not result_run_id
+                        or metadata.get("unread_result_run_id") == result_run_id
+                    )
+                )
                 or bool(metadata.get("interrupt_requested"))
             ):
                 result_status = "failed"
@@ -7587,8 +7789,6 @@ class SessionManager:
         with self._lock:
             for sess in self.index:
                 if sess.get("id") == sid:
-                    if result_status == "success" and sess.get("unread_result_status") == "failed":
-                        result_status = "failed"
                     sess["unread_result"] = True
                     sess["unread_result_at"] = now
                     sess["unread_result_status"] = result_status
@@ -7619,6 +7819,10 @@ class SessionManager:
                 metadata = {}
             current_run_id = str(metadata.get("unread_result_run_id") or "").strip()
             if expected and current_run_id and current_run_id != expected:
+                return False
+            # Reading a failed result (or submitting another turn) does not
+            # resolve it. Only a successful subsequent run replaces the error.
+            if metadata.get("unread_result_status") == "failed":
                 return False
             metadata["unread_result"] = False
             metadata.pop("unread_result_at", None)
@@ -8541,42 +8745,25 @@ def derive_dialogue_from_assistant_history(llm_history: List) -> List:
     仅含 UserMessage / AssistantMessage；用于运行中 state「与模型一致」的主链。落盘的 dialogue_history.json
     由 ui_events 派生，以免上下文压缩折叠后丢失用户可见全文。
     """
-    body: List = []
-    for m in llm_history:
-        if (
-            _is_session_marker_system(m)
-            or is_compress_summary_system_message(m)
-            or is_conversation_compacted_boundary_system(m)
-            or is_conversation_truncated_boundary_system(m)
-            or is_compress_recap_user_message(m)
-            or is_micro_shrink_user_message(m)
-        ):
-            continue
-        body.append(m)
     out: List = []
-    i = 0
-    n = len(body)
-    while i < n:
-        m = body[i]
-        if not isinstance(m, UserMessage):
-            i += 1
-            continue
-        h = m
-        i += 1
-        seg: List = []
-        while i < n and not isinstance(body[i], UserMessage):
-            seg.append(body[i])
-            i += 1
-        finals_all = [
-            x
-            for x in seg
-            if isinstance(x, AssistantMessage) and (getattr(x, "metadata", None) or {}).get("is_final")
-        ]
-        finals = [x for x in finals_all if not is_assistant_message_micro_shrunk(x)]
-        out.append(h)
-        if finals:
-            out.append(finals[-1])
-        # 若 is_final 仅存在于微压条，不附助手，避免 dialogue_history 出现【微压工作块】/截断正文
+    has_user = False
+    has_final = False
+    for message in llm_history:
+        if isinstance(message, UserMessage):
+            if is_compress_recap_user_message(message) or is_micro_shrink_user_message(message):
+                continue
+            out.append(message)
+            has_user, has_final = True, False
+        elif (has_user and isinstance(message, AssistantMessage)
+              and (getattr(message, "metadata", None) or {}).get("is_final")
+              and not is_assistant_message_micro_shrunk(message)):
+            if has_final:
+                out[-1] = message
+            else:
+                out.append(message)
+                has_final = True
+        # System/tool messages never split a user segment. Filtered recap and
+        # micro-shrink users also leave that segment's final selection intact.
     return out
 
 

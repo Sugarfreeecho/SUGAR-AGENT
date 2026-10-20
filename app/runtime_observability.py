@@ -9,8 +9,10 @@ event source of truth.
 from __future__ import annotations
 
 import atexit
+import copy
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -28,6 +30,8 @@ _path_resolver: Optional[Callable[[str], str | Path]] = None
 _MAX_RUNS = max(1, int(os.getenv("RUNTIME_OBSERVABILITY_MAX_RUNS", "100")))
 _TERMINAL = {"finished", "failed", "interrupted", "orphaned", "stale"}
 _cache: Dict[str, dict] = {}
+_versions: Dict[str, int] = {}
+_configuration_epoch = 0
 _flush_timers: Dict[str, threading.Timer] = {}
 _active_runs: set[tuple[str, str]] = set()
 _FLUSH_DELAY_SEC = max(
@@ -58,13 +62,15 @@ def configure(
     *,
     path_resolver: Optional[Callable[[str], str | Path]] = None,
 ) -> None:
-    global _sessions_root, _path_resolver, _last_full_scan_monotonic
+    global _sessions_root, _path_resolver, _last_full_scan_monotonic, _configuration_epoch
     with _lock:
         _flush_all_locked()
         for timer in _flush_timers.values():
             timer.cancel()
         _flush_timers.clear()
         _cache.clear()
+        _versions.clear()
+        _configuration_epoch += 1
         _active_runs.clear()
         _sessions_root = Path(sessions_root)
         _path_resolver = path_resolver
@@ -136,6 +142,7 @@ def _flush_timer_fired(session_id: str) -> None:
 def _schedule_write(session_id: str, data: dict, *, force: bool = False) -> None:
     sid = str(session_id)
     _cache[sid] = data
+    _versions[sid] = _versions.get(sid, 0) + 1
     if force:
         _flush_locked(sid)
         return
@@ -345,25 +352,125 @@ def _parse_time(value: Any) -> Optional[datetime]:
         return None
 
 
+def _observability_paths(root: Optional[Path]) -> list[Path]:
+    """Walk session containers and their subagents, excluding task file trees.
+
+    Runtime V2 stores child sessions only under ``subagents/<id>``. Recursing
+    through every task's checkout, downloads and node_modules adds unrelated
+    filesystem work to the watchdog even when the lock itself is released.
+    """
+    if root is None:
+        return []
+
+    def children(container):
+        try:
+            with os.scandir(container) as entries:
+                return [Path(entry.path) for entry in entries
+                        if entry.is_dir(follow_symlinks=False)
+                        and not (getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & 0x400)]
+        except OSError:
+            return []
+
+    pending, paths = children(root), []
+    while pending:
+        session = pending.pop()
+        path = session / "runtime_observability.json"
+        if path.is_file():
+            paths.append(path)
+        # Do not follow a linked subagent container into an unrelated tree.
+        container = session / "subagents"
+        try:
+            linked = container.is_symlink() or bool(
+                getattr(container.lstat(), "st_file_attributes", 0) & 0x400)
+            if not linked:
+                pending.extend(children(container))
+        except OSError:
+            pass
+    return paths
+
+
 def _stale_scan_paths() -> list[Path]:
     """Scan active sessions normally and periodically reconcile all files."""
     global _last_full_scan_monotonic
-    now = time.monotonic()
-    full_scan = (
-        _last_full_scan_monotonic <= 0
-        or now - _last_full_scan_monotonic >= _FULL_SCAN_INTERVAL_SEC
-    )
+    with _lock:
+        now = time.monotonic()
+        full_scan = (
+            _last_full_scan_monotonic <= 0
+            or now - _last_full_scan_monotonic >= _FULL_SCAN_INTERVAL_SEC
+        )
+        if full_scan:
+            _last_full_scan_monotonic = now
+        root = _sessions_root
+        active = tuple(_active_runs)
     if full_scan:
-        _last_full_scan_monotonic = now
-        return list(_sessions_root.rglob("runtime_observability.json")) if _sessions_root else []
+        return _observability_paths(root)
     paths: list[Path] = []
     seen: set[Path] = set()
-    for session_id, _ in _active_runs:
+    for session_id, _ in active:
         path = _path(session_id)
         if path not in seen and path.exists():
             seen.add(path)
             paths.append(path)
     return paths
+
+
+def _scan_states(paths, epoch):
+    """Read scan inputs without blocking live heartbeats on filesystem work.
+
+    Pending process-local updates win over disk. A version check at publication
+    rejects a scan if a heartbeat, usage update or terminal commit overtook it.
+    Do not force-flush all sessions just to reconcile one background scan.
+    """
+    for path in paths:
+        sid = path.parent.name
+        with _lock:
+            version_before_read = _versions.get(sid, 0)
+            pending_before_read = sid in _flush_timers
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
+            continue
+        sid = str(data.get("session_id") or sid)
+        with _lock:
+            if epoch != _configuration_epoch:
+                return
+            if _versions.get(sid, 0) != version_before_read:
+                continue  # A live update overtook this filesystem read.
+            if sid in _cache and (pending_before_read or sid in _flush_timers):
+                data = _cache[sid]
+            else:
+                _cache[sid] = data
+                # Also invalidate another scanner's captured view.
+                _versions[sid] = _versions.get(sid, 0) + 1
+            version = _versions.get(sid, 0)
+            captured = copy.deepcopy(data)
+        yield sid, captured, version
+
+
+def _publish_scan_state(sid, data, version, epoch, *, changed, active, inactive):
+    with _lock:
+        if epoch != _configuration_epoch or _versions.get(sid, 0) != version:
+            return False
+        _active_runs.update(active)
+        _active_runs.difference_update(inactive)
+        if changed:
+            _schedule_write(sid, data, force=True)
+        return True
+
+
+def _scan_timing(operation, started, enumeration_ms, candidates, skipped):
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    if elapsed_ms >= 100:
+        try:
+            logging.getLogger("agent_harness").info(
+                "observability_scan_timing op=%s total_ms=%.3f enumeration_ms=%.3f "
+                "candidates=%d concurrent_updates_skipped=%d",
+                operation, elapsed_ms, enumeration_ms, candidates, skipped,
+            )
+        except Exception:
+            pass  # A failed diagnostic sink must not stop the watchdog.
 
 
 def scan_stale_runs(
@@ -378,18 +485,17 @@ def scan_stale_runs(
     cutoff = max(1.0, float(max_age_seconds))
     now = datetime.now(timezone.utc)
     stale: list[dict] = []
+    started = time.perf_counter()
     with _lock:
-        # Never let a reconciliation read overwrite a newer debounced in-memory
-        # heartbeat or usage update.
-        _flush_all_locked()
-        for path in _stale_scan_paths():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            sid = str(data.get("session_id") or path.parent.name)
-            _cache[sid] = data
+        epoch = _configuration_epoch
+    paths = _stale_scan_paths()
+    enumeration_ms = (time.perf_counter() - started) * 1000
+    candidates = skipped = 0
+    try:
+        for sid, data, version in _scan_states(paths, epoch):
+            candidates += 1
             changed = False
+            found, active, inactive = [], set(), set()
             for row in data.get("runs") or []:
                 if not isinstance(row, dict) or str(row.get("status") or "") != "running":
                     continue
@@ -397,14 +503,14 @@ def scan_stale_runs(
                 if live_checker is not None:
                     try:
                         if live_checker(sid, rid):
-                            _active_runs.add((sid, rid))
+                            active.add((sid, rid))
                             continue
                     except Exception:
                         pass
                 stamp = _parse_time(row.get("heartbeat_at") or row.get("started_at"))
                 age = cutoff + 1 if stamp is None else max(0.0, (now - stamp).total_seconds())
                 if age <= cutoff:
-                    _active_runs.add((sid, rid))
+                    active.add((sid, rid))
                     continue
                 item = {
                     "session_id": sid,
@@ -412,15 +518,20 @@ def scan_stale_runs(
                     "age_seconds": round(age, 3),
                     "kind": str(row.get("kind") or "agent"),
                 }
-                stale.append(item)
+                found.append(item)
                 if mark:
                     row["status"] = terminal_status
                     row["finished_at"] = _now()
                     row["stale_reason"] = f"heartbeat older than {cutoff:g}s"
                     changed = True
-                    _active_runs.discard((sid, rid))
-            if changed:
-                _schedule_write(sid, data, force=True)
+                    inactive.add((sid, rid))
+            if _publish_scan_state(sid, data, version, epoch, changed=changed,
+                                   active=active, inactive=inactive):
+                stale.extend(found)
+            else:
+                skipped += 1
+    finally:
+        _scan_timing("stale", started, enumeration_ms, candidates, skipped)
     return stale
 
 
@@ -434,15 +545,17 @@ def reconcile_orphaned_runs(
     if _sessions_root is None or not _sessions_root.exists():
         return []
     orphaned: list[dict] = []
+    started = time.perf_counter()
     with _lock:
-        for path in _sessions_root.rglob("runtime_observability.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            sid = str(data.get("session_id") or path.parent.name)
-            _cache[sid] = data
+        epoch, root = _configuration_epoch, _sessions_root
+    paths = _observability_paths(root)
+    enumeration_ms = (time.perf_counter() - started) * 1000
+    candidates = skipped = 0
+    try:
+        for sid, data, version in _scan_states(paths, epoch):
+            candidates += 1
             changed = False
+            found, active, inactive = [], set(), set()
             for row in data.get("runs") or []:
                 if not isinstance(row, dict) or str(row.get("status") or "") != "running":
                     continue
@@ -450,7 +563,7 @@ def reconcile_orphaned_runs(
                 if live_checker is not None:
                     try:
                         if live_checker(sid, rid):
-                            _active_runs.add((sid, rid))
+                            active.add((sid, rid))
                             continue
                     except Exception:
                         pass
@@ -467,7 +580,7 @@ def reconcile_orphaned_runs(
                         datetime.now(timezone.utc) - stamp
                     ).total_seconds() <= grace_seconds:
                         continue
-                orphaned.append(
+                found.append(
                     {
                         "session_id": sid,
                         "run_id": rid,
@@ -478,9 +591,14 @@ def reconcile_orphaned_runs(
                 row["finished_at"] = _now()
                 row["stale_reason"] = "process restarted before run completion"
                 changed = True
-                _active_runs.discard((sid, rid))
-            if changed:
-                _schedule_write(sid, data, force=True)
+                inactive.add((sid, rid))
+            if _publish_scan_state(sid, data, version, epoch, changed=changed,
+                                   active=active, inactive=inactive):
+                orphaned.extend(found)
+            else:
+                skipped += 1
+    finally:
+        _scan_timing("orphaned", started, enumeration_ms, candidates, skipped)
     return orphaned
 
 

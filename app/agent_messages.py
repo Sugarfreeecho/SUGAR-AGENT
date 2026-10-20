@@ -20,11 +20,12 @@ class UserMessage:
     """用户单轮消息（对齐 OpenAI user role）。
     content 可为纯文本 str，或多模态内容数组（List[Dict]）。"""
 
-    __slots__ = ("content", "metadata")
+    __slots__ = ("content", "metadata", "_attachment_text_scan_cache")
 
     def __init__(self, content: Any = "", metadata: Optional[Dict[str, Any]] = None):
         self.content = content or ""
         self.metadata = metadata if metadata is not None else {}
+        self._attachment_text_scan_cache = None
 
     def text(self) -> str:
         """提取可读文本；多模态场景下仅拼接 text 类型片段。"""

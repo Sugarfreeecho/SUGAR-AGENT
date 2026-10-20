@@ -540,3 +540,14 @@ def test_tool_result_record_keeps_change_review_ui_payload(journal):
     updates = [item for item in page["events"] if item.get("type") == "execution_update"]
     assert any(item["update"].get("ui", {}).get("changes", [{}])[0].get("snapshot_id") == "snap-1"
                for item in updates)
+
+
+def test_tool_failure_evidence_survives_history_and_cache_loss(journal):
+    status = {"ok": False, "code": "mcp_tool_error", "source": "mcp_protocol",
+              "timed_out": False, "duration_ms": 17}
+    emit(journal, "tool_call", tool_call_id="call", tool="mcp_demo", result="provider diagnostic", status=status)
+    ExecutionJournal._cache.clear()
+    record = journal.read("s")["execution_records"][0]
+    assert record["status"] == "failed" and record["tool_status"] == status
+    replay = RuntimeUiProjection(journal.log.root).read_ui_after_runtime_seq("s", after_runtime_seq=1)
+    assert any(item.get("update", {}).get("tool_status") == status for item in replay["events"])

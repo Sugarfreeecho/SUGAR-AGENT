@@ -245,20 +245,26 @@ class RuntimeSuspensionMonitor:
             self._thread = None
             await self._stop.wait()
             return
-        while not self._stop.is_set():
-            await asyncio.sleep(min(self.interval_seconds, 0.25))
-            while True:
+        try:
+            while not self._stop.is_set():
                 try:
-                    event = output.get_nowait()
-                except queue.Empty:
+                    await asyncio.wait_for(self._stop.wait(), min(self.interval_seconds, 0.25))
                     break
-                self.accumulated_suspend_seconds += event.suspended_seconds
-                self._suspend_since_progress_seconds += event.suspended_seconds
-                await on_resume(event)
-        self._thread_stop.set()
-        if self._thread is not None:
-            await asyncio.to_thread(self._thread.join, max(1.0, self.interval_seconds * 2.0))
-            self._thread = None
+                except asyncio.TimeoutError:
+                    pass
+                while True:
+                    try:
+                        event = output.get_nowait()
+                    except queue.Empty:
+                        break
+                    self.accumulated_suspend_seconds += event.suspended_seconds
+                    self._suspend_since_progress_seconds += event.suspended_seconds
+                    await on_resume(event)
+        finally:
+            self._thread_stop.set()
+            if self._thread is not None:
+                await asyncio.to_thread(self._thread.join, max(1.0, self.interval_seconds * 2.0))
+                self._thread = None
 
 
 class _RuntimeSuspensionBroker:
@@ -291,20 +297,27 @@ class _RuntimeSuspensionBroker:
         self.subscribers[token] = (monitor, callback)
         if self.task is None or self.task.done():
             self.detector = RuntimeSuspensionMonitor()
-            self.task = asyncio.create_task(self.detector.run(self._dispatch))
+            detector = self.detector
+            async def dispatch_current(event):
+                if self.detector is detector:
+                    await self._dispatch(event)
+            self.task = asyncio.create_task(detector.run(dispatch_current))
         return token
 
     async def unsubscribe(self, token: object) -> None:
         self.subscribers.pop(token, None)
         if self.subscribers or self.detector is None or self.task is None:
             return
-        self.detector.stop()
-        try:
-            await self.task
-        except asyncio.CancelledError:
-            pass
+        detector, task = self.detector, self.task
+        # New subscribers can arrive while cleanup awaits the old task. They
+        # need a fresh detector; old cleanup must not erase their replacement.
         self.detector = None
         self.task = None
+        detector.stop()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 _SUSPENSION_BROKERS: dict[int, _RuntimeSuspensionBroker] = {}

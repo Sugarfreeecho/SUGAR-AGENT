@@ -274,6 +274,8 @@ def test_timer_flush_allows_live_updates_and_flushes_following_changes(tmp_path,
     old_root = execution_metrics._root
     execution_metrics.configure(tmp_path / "sessions")
     execution_metrics._sessions.clear()
+
+
     monkeypatch.setattr(execution_metrics, "_FLUSH_DELAY_SEC", 0.01)
     original_write = execution_metrics._write_now
     write_started = threading.Event()
@@ -308,3 +310,65 @@ def test_timer_flush_allows_live_updates_and_flushes_following_changes(tmp_path,
     assert data["runs"][0]["requests"][0]["latest"] == 3
     execution_metrics._root = old_root
     execution_metrics._sessions.clear()
+
+
+def test_metrics_updates_use_existing_worker_without_starting_timer_threads(tmp_path, monkeypatch):
+    import execution_metrics
+
+    old_root = execution_metrics._root
+    execution_metrics.configure(tmp_path / "sessions")
+    worker = execution_metrics._flush_worker
+    assert worker is not None and worker.is_alive()
+    def forbidden_timer(*args, **kwargs):
+        raise AssertionError("business metric updates must not create Timer threads")
+    monkeypatch.setattr(execution_metrics.threading, "Timer", forbidden_timer)
+    try:
+        for index in range(20):
+            execution_metrics.record_request("shared-flush", "run", index + 1, latest=index)
+        assert execution_metrics._flush_worker is worker
+        execution_metrics.flush("shared-flush")
+        data = json.loads((tmp_path / "sessions/shared-flush/execution_metrics.json").read_text(encoding="utf-8"))
+        assert data["runs"][0]["requests"][-1]["latest"] == 19
+    finally:
+        execution_metrics._root = old_root
+        execution_metrics._sessions.clear()
+
+
+def test_global_flush_waits_for_already_active_background_write(tmp_path, monkeypatch):
+    import threading
+    import execution_metrics
+
+    old_root = execution_metrics._root
+    execution_metrics.configure(tmp_path / "sessions")
+    monkeypatch.setattr(execution_metrics, "_FLUSH_DELAY_SEC", 0.01)
+    original_write = execution_metrics._write_now
+    write_started = threading.Event()
+    release_write = threading.Event()
+    flush_done = threading.Event()
+
+    def delayed_write(session_id, data):
+        if session_id == "drain-active" and not write_started.is_set():
+            write_started.set()
+            assert release_write.wait(3)
+        original_write(session_id, data)
+
+    monkeypatch.setattr(execution_metrics, "_write_now", delayed_write)
+    execution_metrics.record_request("drain-active", "run", 1, latest=42)
+    waiter = threading.Thread(target=lambda: (execution_metrics.flush(), flush_done.set()))
+    try:
+        assert write_started.wait(3)
+        with execution_metrics._lock:
+            assert "drain-active" in execution_metrics._flush_active_sessions
+            assert "drain-active" not in execution_metrics._flush_deadlines
+        waiter.start()
+        assert not flush_done.wait(0.05), "global flush skipped an active disk write"
+    finally:
+        release_write.set()
+        if waiter.ident is not None:
+            waiter.join(3)
+        execution_metrics.flush("drain-active")
+        execution_metrics._root = old_root
+        execution_metrics._sessions.clear()
+    assert flush_done.is_set()
+    data = json.loads((tmp_path / "sessions/drain-active/execution_metrics.json").read_text(encoding="utf-8"))
+    assert data["runs"][0]["requests"][0]["latest"] == 42

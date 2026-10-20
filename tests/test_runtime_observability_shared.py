@@ -4,7 +4,10 @@ import asyncio
 import json
 import sys
 import uuid
+import threading
 from pathlib import Path
+
+import pytest
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 if str(APP_DIR) not in sys.path:
@@ -167,6 +170,134 @@ def test_runtime_watchdog_has_no_wall_clock_hard_timeout():
     assert "subagent_registry.is_running(session_id)" in main_source
     assert "cancel_run_tasks_by_id" in main_source
     assert "run_id=run_id" in main_source
+
+
+@pytest.mark.parametrize("operation", ["stale", "orphaned"])
+@pytest.mark.parametrize("blocked_phase", ["enumeration", "read", "ownership"])
+def test_reconciliation_io_never_blocks_live_heartbeat(tmp_path, monkeypatch, operation, blocked_phase):
+    import runtime_observability as obs
+    obs.configure(tmp_path)
+    obs.start_run("live", "r-live")
+    path = tmp_path / "live/runtime_observability.json"
+    entered, release, heartbeat_done = threading.Event(), threading.Event(), threading.Event()
+    original_paths, original_read = obs._observability_paths, Path.read_text
+    errors, results = [], []
+
+    def block():
+        entered.set()
+        assert release.wait(3), "test did not release scanner"
+
+    def paths(root):
+        if root == tmp_path and blocked_phase == "enumeration":
+            block()
+        return original_paths(root)
+
+    def read(self, *args, **kwargs):
+        value = original_read(self, *args, **kwargs)
+        if self == path and blocked_phase == "read":
+            block()
+        return value
+
+    def live_checker(sid, rid):
+        if blocked_phase == "ownership":
+            block()
+        return False
+
+    monkeypatch.setattr(obs, "_observability_paths", paths)
+    monkeypatch.setattr(Path, "read_text", read)
+    def scan():
+        try:
+            results.extend(obs.scan_stale_runs(30, live_checker=live_checker) if operation == "stale"
+                           else obs.reconcile_orphaned_runs(live_checker=live_checker))
+        except BaseException as exc:
+            errors.append(exc)
+    scanner = threading.Thread(target=scan)
+    scanner.start()
+    assert entered.wait(3)
+    def heartbeat():
+        obs.heartbeat_run("live", "r-live", stage="new-heartbeat")
+        heartbeat_done.set()
+    writer = threading.Thread(target=heartbeat)
+    writer.start()
+    try:
+        assert heartbeat_done.wait(.5), "background scan held the live heartbeat lock"
+    finally:
+        release.set()
+        scanner.join(3)
+        writer.join(3)
+        obs.flush()
+    assert not errors
+    assert not scanner.is_alive()
+    row = obs.snapshot("live")["runs"][0]
+    assert row["stage"] == "new-heartbeat"
+    if blocked_phase != "enumeration":
+        assert row["status"] == "running"
+        assert results == []
+
+
+def test_scan_cannot_restore_old_disk_state_after_pending_heartbeat_flush(tmp_path, monkeypatch):
+    import runtime_observability as obs
+    obs.configure(tmp_path)
+    obs.start_run("live", "r-live")
+    path = tmp_path / "live/runtime_observability.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["runs"][0]["heartbeat_at"] = "2000-01-01T00:00:00Z"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(obs, "_FLUSH_DELAY_SEC", 10)
+    obs.heartbeat_run("live", "r-live", stage="unflushed")
+    entered, release = threading.Event(), threading.Event()
+    original = Path.read_text
+    def read(self, *a, **k):
+        value = original(self, *a, **k)
+        if self == path:
+            entered.set()
+            assert release.wait(3)
+        return value
+    monkeypatch.setattr(Path, "read_text", read)
+    results = []
+    thread = threading.Thread(target=lambda: results.extend(obs.scan_stale_runs(30)))
+    thread.start()
+    try:
+        assert entered.wait(3)
+        obs.flush("live")
+    finally:
+        release.set()
+        thread.join(3)
+    assert not thread.is_alive()
+    assert results == []
+    assert obs.snapshot("live")["runs"][0]["stage"] == "unflushed"
+
+
+def test_failed_scan_timing_logger_cannot_stop_watchdog(monkeypatch):
+    import runtime_observability as obs
+    import time
+    logger = obs.logging.getLogger("agent_harness")
+    def fail(*a, **k):
+        raise RuntimeError("failed log sink")
+    monkeypatch.setattr(logger, "info", fail)
+    obs._scan_timing("stale", time.perf_counter() - 1, 800, 1, 0)
+
+
+def test_observability_discovery_visits_session_containers_only(tmp_path, monkeypatch):
+    import runtime_observability as obs
+    expected = [tmp_path / "root/runtime_observability.json",
+                tmp_path / "root/subagents/child/runtime_observability.json",
+                tmp_path / "root/subagents/child/subagents/grandchild/runtime_observability.json"]
+    ignored = tmp_path / "root/files/node_modules/pkg/runtime_observability.json"
+    for path in [*expected, ignored]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{}', encoding="utf8")
+    visited = []
+    original = obs.os.scandir
+    def scandir(path):
+        visited.append(Path(path))
+        assert "files" not in Path(path).parts
+        return original(path)
+    monkeypatch.setattr(obs.os, "scandir", scandir)
+    assert set(obs._observability_paths(tmp_path)) == set(expected)
+    assert tmp_path in visited
+    assert obs._observability_paths(tmp_path / "missing") == []
+    assert obs._observability_paths(None) == []
 
 
 def test_reference_fork_uses_immutable_parent_prefix(tmp_path, monkeypatch):

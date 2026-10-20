@@ -47,6 +47,35 @@ goal_runtime = _RuntimeProxy()
 goal_runner = _RunnerProxy()
 
 
+@pytest.mark.parametrize("goal,outcome,expected", [
+    ({"status": "paused", "pause_reason": "token_budget_exhausted"}, "finished", "failed"),
+    ({"status": "paused", "pause_reason": "run_failed"}, "finished", "failed"),
+    ({"status": "blocked"}, "finished", "failed"),
+    ({"status": "active"}, "failed", "failed"),
+    ({"status": "active"}, "finished", "pending"),
+    ({"status": "paused", "pause_reason": "manual"}, "finished", "pending"),
+    ({"status": "paused", "pause_reason": "review the failure examples"}, "finished", "pending"),
+    ({"status": "completed"}, "finished", "success"),
+])
+def test_goal_result_attention_uses_structured_state(monkeypatch, goal, outcome, expected):
+    import agent_loop
+
+    marked = []
+    cleared = []
+    manager = SimpleNamespace(
+        clear_session_unread_result=lambda sid: cleared.append(sid),
+        mark_session_unread_result=lambda sid, **kwargs: marked.append((sid, kwargs)),
+    )
+    monkeypatch.setattr(agent_loop, "session_manager", manager)
+    assert goal_runtime._sync_goal_unread_result("s1", goal, outcome, run_id="r1") == expected
+    if expected == "pending":
+        assert cleared == ["s1"]
+        assert marked == []
+    else:
+        assert marked == [("s1", {"status": expected, "run_id": "r1"})]
+        assert cleared == []
+
+
 def test_discover_runnable_goal_sessions(monkeypatch):
     import agent_goal
     import webui

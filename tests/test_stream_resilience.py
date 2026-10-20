@@ -641,6 +641,55 @@ def test_finalizer_accounts_terminal_errors_as_failure(monkeypatch, error_state)
     assert emitted[-1]["type"] == "run_failed"
 
 
+@pytest.mark.parametrize("result_status", ["failed", "pending", "success"])
+def test_finalizer_preserves_workflow_result_in_durable_and_live_terminals(monkeypatch, result_status):
+    import agent_loop
+
+    committed = []
+    emitted = []
+    synced = []
+
+    class Callbacks:
+        @staticmethod
+        def call(name, *args, **kwargs):
+            if name == "record_run_usage":
+                return {"status": "paused", "pause_reason": "token_budget_exhausted"}
+            if name == "sync_unread_result":
+                synced.append(kwargs)
+                return result_status
+
+    class PowerGuard:
+        @staticmethod
+        async def close():
+            pass
+
+    class Lifecycle:
+        @staticmethod
+        async def commit(name, payload):
+            committed.append((name, payload))
+
+    async def emit(event):
+        emitted.append(event)
+
+    async def close_stream(_sid):
+        pass
+
+    monkeypatch.setattr(agent_loop, "_workflow_callbacks", lambda: Callbacks())
+    monkeypatch.setattr(agent_loop, "_clear_steer_run_control", lambda *_args: None)
+    monkeypatch.setattr(agent_loop, "_mark_run_terminal_unread", lambda *_args: None)
+    monkeypatch.setattr(agent_loop, "close_session_stream", close_stream)
+    monkeypatch.setattr(agent_loop.execution_metrics, "finish_run", lambda *_args, **_kwargs: None)
+    asyncio.run(agent_loop._finalize_agent_run_lifecycle(
+        state={"session_id": "s1"}, session_id="s1", run_id="r1",
+        mode="continuation", continuation=True, completed=True,
+        terminal_event={}, runtime_lifecycle=Lifecycle(), power_guard=PowerGuard(),
+        steer_control=None, emit=emit, queue=asyncio.Queue(), consumer_attached=False,
+    ))
+    assert synced == [{"run_id": "r1"}]
+    assert committed == [("run_finished", {"result_status": result_status, "mode": "continuation"})]
+    assert emitted[-1]["result_status"] == result_status
+
+
 def test_runtime_lifecycle_accepts_only_one_concurrent_terminal(monkeypatch):
     import agent_loop
 

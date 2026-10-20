@@ -25,6 +25,7 @@ import inspect
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Mapping, Optional, Tuple
+from agent_local_timing import local_operation, local_step, mark_local
 
 from agent_harness import (
     EXECUTOR_TEMPERATURE,
@@ -79,6 +80,7 @@ from agent_harness import (
     session_work_dir,
     LocalNetworkUnavailableError,
     machine_network_available,
+    _is_network_connectivity_error,
     _redact_runtime_log_text,
 )
 from agent_memory import (
@@ -89,6 +91,7 @@ from agent_memory import (
     run_edit_key_context_instruction,
 )
 from agent_openai import (
+    AssistantTurn,
     _LogicalRequestBudget,
     chat_completion,
     compact_responses_history,
@@ -107,6 +110,7 @@ from tool_registry import (
     ToolRegistryError,
 )
 from host_tool_registry import HostToolInvocationContext, host_tool_invokers
+from tool_result_status import _tool_result_status, legacy_tool_outcome, tool_outcome_status
 import tool_search
 from stream_event_bridge import StreamEventBridge
 from tool_execution_policy import (
@@ -223,6 +227,9 @@ CONTEXT_POLICY_IDLE_TIMEOUT_SEC = max(
 )
 STREAM_WORKER_ABORT_TIMEOUT_SEC = max(
     0.1, float(os.getenv("STREAM_WORKER_ABORT_TIMEOUT_SEC", "5"))
+)
+STREAM_WORKER_IDLE_TIMEOUT_SEC = max(
+    1.0, float(os.getenv("STREAM_WORKER_IDLE_TIMEOUT_SEC", "60"))
 )
 TODO_UPDATE_REMINDER_START_ROUNDS = max(
     0, int(os.getenv("TODO_UPDATE_REMINDER_START_ROUNDS", "20"))
@@ -654,6 +661,7 @@ async def _authorize_hook_before_execute(
     return True, final_decision.reason
 
 
+@local_operation("hook_dispatch", slow_ms=100)
 async def _dispatch_state_hook(
     event: str,
     state: Dict[str, Any],
@@ -669,18 +677,20 @@ async def _dispatch_state_hook(
     data.setdefault("run_id", str(state.get("_runtime_v2_run_id") or ""))
     data.setdefault("app_root", str(PROJECT_ROOT))
     data.setdefault("shared_root", str(WORK_DIR))
-    try:
-        hook_meta = session_manager._load_metadata(data["session_id"]) or {}
-    except Exception:
-        hook_meta = {}
+    with local_step("hook_session_metadata"):
+        try:
+            hook_meta = session_manager._load_metadata(data["session_id"]) or {}
+        except Exception:
+            hook_meta = {}
     # 含用户指定的会话工作目录：默认目录/子代理 worktree 的行为与以前完全一致，
     # 只有"自定义目录的根会话"才会多出 workspace_root（这正是需要的）。
-    hook_workspace = session_work_root_raw(hook_meta)
-    data.setdefault("project_root", str(session_work_root(hook_meta)))
-    if hook_workspace:
-        data.setdefault("workspace_root", hook_workspace)
-        data.setdefault("worktree_isolated", bool(hook_meta.get("git_worktree_managed")))
-    security_workspace = Path(hook_workspace or WORK_DIR).resolve()
+    with local_step("hook_workspace_prepare"):
+        hook_workspace = session_work_root_raw(hook_meta)
+        data.setdefault("project_root", str(session_work_root(hook_meta)))
+        if hook_workspace:
+            data.setdefault("workspace_root", hook_workspace)
+            data.setdefault("worktree_isolated", bool(hook_meta.get("git_worktree_managed")))
+        security_workspace = Path(hook_workspace or WORK_DIR).resolve()
     data["_hook_authorizer"] = lambda definition, call_payload: _authorize_hook_before_execute(
         definition,
         dict(call_payload or {}),
@@ -688,11 +698,12 @@ async def _dispatch_state_hook(
         emit,
         security_workspace,
     )
-    hook_workspace_before = (
-        await asyncio.to_thread(capture_workspace_state, hook_workspace)
-        if hook_workspace
-        else None
-    )
+    with local_step("hook_workspace_before"):
+        hook_workspace_before = (
+            await asyncio.to_thread(capture_workspace_state, hook_workspace)
+            if hook_workspace
+            else None
+        )
     result = await dispatch_hook(
         event,
         data,
@@ -701,10 +712,11 @@ async def _dispatch_state_hook(
         run_id=str(state.get("_runtime_v2_run_id") or ""),
     )
     if hook_workspace:
-        hook_workspace_after = await asyncio.to_thread(
-            capture_workspace_state,
-            hook_workspace,
-        )
+        with local_step("hook_workspace_after"):
+            hook_workspace_after = await asyncio.to_thread(
+                capture_workspace_state,
+                hook_workspace,
+            )
         hook_changes = diff_workspace_states(
             hook_workspace_before,
             hook_workspace_after,
@@ -884,6 +896,16 @@ async def _apply_stop_hooks(
         state["final_response"] = ""
         state = await _run_react_node_off_loop(state, emit)
     return state
+
+
+@contextmanager
+def _runtime_session_path_scope():
+    scope = getattr(session_manager, "_session_path_resolution_scope", None)
+    if callable(scope):
+        with scope():
+            yield
+    else:
+        yield
 
 
 def _active_session_path(session_id: str) -> Path:
@@ -1820,13 +1842,18 @@ def get_context_token_mode(value: Any = None) -> str:
 # ==================== 辅助函数：实时持久化 ====================
 def _persist_session_messages(state: State) -> None:
     """Persist the current model/work/context state if this run owns the fence."""
+    if _runtime_v2_is_primary():
+        state["dialogue"] = derive_dialogue_from_assistant_history(state["llm_history"])
+        # Model messages have their own fresh fence check and durable commit.
+        # With an unchanged summary this path writes nothing; do not open the
+        # ownership file again merely to rediscover that no write is needed.
+        # A real summary commit checks its fence below, before any disk access.
+        _runtime_v2_commit_context_summary(state)
+        return
     if not _state_run_has_write_fence(state):
         logger.info("suppressed stale run persistence: session=%s run=%s", state.get("session_id"), state.get("_runtime_v2_run_id"))
         return
     state["dialogue"] = derive_dialogue_from_assistant_history(state["llm_history"])
-    if _runtime_v2_is_primary():
-        _runtime_v2_commit_context_summary(state)
-        return
     _materialize_lazy_work_messages(state)
     session_manager.update_session(
         state["session_id"],
@@ -2160,6 +2187,7 @@ _PRE_API_NESTED_TIMINGS = frozenset({
     "model_config_request_context",    # inside resolve_model_config
     "model_config_compaction",         # inside resolve_model_config
     "model_config_thread_cpu",         # diagnostic, not wall time
+    "tool_registry_total",            # diagnostic inclusive registry envelope
 })
 
 
@@ -2178,6 +2206,18 @@ def _pre_api_timing_total(timings: Mapping[str, Any]) -> int:
 # path (stale-while-revalidate).
 _STATIC_SEGMENTS_PROCESS_CACHE: Dict[tuple, tuple] = {}
 _STATIC_SEGMENTS_REBUILD_INFLIGHT: set = set()
+
+
+def _request_system_messages(state: State, contents: List[str]) -> List[Any]:
+    """Keep unchanged system-prefix identities for the incremental request caches."""
+    key = tuple(contents)
+    cached = state.get("_request_system_message_cache")
+    if (isinstance(cached, tuple) and len(cached) == 2 and cached[0] == key
+            and all(message.content == content for message, content in zip(cached[1], key))):
+        return list(cached[1])
+    messages = tuple(SystemMessage(content=content) for content in key)
+    state["_request_system_message_cache"] = (key, messages)
+    return list(messages)
 
 
 def _build_static_segments_for_session(
@@ -2409,6 +2449,7 @@ def _runtime_v2_react_history_ops():
     )
 
 
+@local_operation("model_commit", slow_ms=50)
 def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
     sid = str(state.get("session_id") or "").strip()
     if not sid or not _runtime_v2_is_primary():
@@ -2450,6 +2491,8 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
             **payload,
         )
         t_post_call = time.perf_counter()
+        if role == "tool":
+            state["_last_tool_result_committed_perf"] = t_post_call
         step_dict_ms = _timing_ms(t_pre_dict, t_post_dict)
         step_outer_overhead_ms = _timing_ms(t_post_dict, t_pre_call)
         step_inner_total_ms = _timing_ms(t_pre_call, t_post_call)
@@ -2496,18 +2539,18 @@ def _mark_run_terminal_unread(session_id: str, event_type: str, run_id: str = ""
         )
         return
     try:
-        from agent_goal import goal_enabled, manager_for
+        from agent_goal import goal_enabled, goal_result_status, manager_for
 
         goal = manager_for(session_manager).get(session_id) if goal_enabled() else None
-        goal_active = bool(goal and goal.get("status") == "active")
+        result_status = goal_result_status(goal)
     except Exception:
-        goal_active = False
-    if goal_active:
+        result_status = None
+    if result_status == "pending":
         session_manager.clear_session_unread_result(session_id)
     else:
         session_manager.mark_session_unread_result(
             session_id,
-            status="success",
+            status=result_status or "success",
             run_id=run_id,
         )
 
@@ -2743,6 +2786,9 @@ def _runtime_v2_commit_context_summary(state: State) -> None:
     # missed. Observed persist_state: median 8-17 ms, p90 ~660 ms.
     if _RUNTIME_V2_COMMITTED_SUMMARY.get(sid) == summary:
         return
+    if not _state_run_has_write_fence(state):
+        logger.info("suppressed stale run summary persistence: session=%s run=%s", sid, state.get("_runtime_v2_run_id"))
+        return
     try:
         from runtime_v2 import SnapshotStore
 
@@ -2927,6 +2973,7 @@ class _RuntimeV2RunLifecycle:
         ) from last_error
 
 
+@local_operation("run_finalize")
 async def _finalize_agent_run_lifecycle(
     *,
     state: State,
@@ -2947,7 +2994,8 @@ async def _finalize_agent_run_lifecycle(
 
     try:
         try:
-            await power_guard.close()
+            with local_step("power_guard_close"):
+                await power_guard.close()
         except Exception:
             logger.warning(
                 "run power guard cleanup failed: session=%s run_id=%s",
@@ -2968,6 +3016,8 @@ async def _finalize_agent_run_lifecycle(
             if completed
             else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
         )
+        workflow_result_status = None
+        mark_local("workflow_accounting_started")
         try:
             workflow_after_run = _workflow_callbacks().call(
                 "record_run_usage",
@@ -2990,11 +3040,12 @@ async def _finalize_agent_run_lifecycle(
                 )
                 if workflow_event:
                     await emit(workflow_event)
-                _workflow_callbacks().call(
+                workflow_result_status = _workflow_callbacks().call(
                     "sync_unread_result",
                     session_id,
                     workflow_after_run,
                     workflow_outcome,
+                    run_id=run_id,
                 )
         except Exception:
             logger.warning(
@@ -3004,9 +3055,11 @@ async def _finalize_agent_run_lifecycle(
                 exc_info=True,
             )
 
+        mark_local("workflow_accounting_finished")
         _clear_steer_run_control(session_id, steer_control)
         try:
-            _release_pending_queued_turn(state)
+            with local_step("queued_turn_cleanup"):
+                _release_pending_queued_turn(state)
         except Exception:
             logger.warning("queued turn claim cleanup failed: session=%s run_id=%s", session_id, run_id, exc_info=True)
         if completed:
@@ -3015,6 +3068,8 @@ async def _finalize_agent_run_lifecycle(
                 "run_id": run_id,
                 "ephemeral": True,
             }
+        if workflow_result_status in {"success", "failed", "pending"}:
+            terminal_event["result_status"] = workflow_result_status
         terminal_type = str(terminal_event.get("type") or "run_interrupted")
         terminal_payload = {
             key: value
@@ -3024,9 +3079,14 @@ async def _finalize_agent_run_lifecycle(
         terminal_payload.setdefault("mode", mode)
         terminal_error: Optional[BaseException] = None
         try:
-            await runtime_lifecycle.commit(terminal_type, terminal_payload)
-            _mark_run_terminal_unread(session_id, terminal_type, run_id)
-            await emit(terminal_event)
+            with local_step("terminal_commit"):
+                await runtime_lifecycle.commit(terminal_type, terminal_payload)
+            with local_step("terminal_attention"):
+                _mark_run_terminal_unread(session_id, terminal_type, run_id)
+            from agent_subagent_sync import finish_manual_subagent_run
+            await finish_manual_subagent_run(session_manager, state, terminal_event)
+            with local_step("terminal_emit"):
+                await emit(terminal_event)
         except BaseException as exc:
             terminal_error = exc
             logger.error(
@@ -3038,16 +3098,11 @@ async def _finalize_agent_run_lifecycle(
             )
 
         try:
-            execution_metrics.finish_run(
-                session_id,
-                run_id,
-                workflow_outcome,
-                reason=str(
-                    terminal_event.get("reason")
-                    or terminal_event.get("error")
-                    or ""
-                ),
-            )
+            with local_step("metrics_finish"):
+                execution_metrics.finish_run(
+                    session_id, run_id, workflow_outcome,
+                    reason=str(terminal_event.get("reason") or terminal_event.get("error") or ""),
+                )
         except Exception:
             logger.warning(
                 "run metrics finalization failed: session=%s run_id=%s",
@@ -3058,7 +3113,8 @@ async def _finalize_agent_run_lifecycle(
         if terminal_error is not None:
             raise terminal_error
     finally:
-        await close_session_stream(session_id)
+        with local_step("stream_close"):
+            await close_session_stream(session_id)
         if consumer_attached:
             await queue.put(None)
 
@@ -3069,6 +3125,33 @@ def _persist_state_with_model_append(state: State, msg: Any) -> None:
         _persist_state(state)
     else:
         _persist_state(state)
+
+
+@local_operation("model_commit_batch", slow_ms=50)
+def _persist_completed_tool_batch(state: State, messages: List[Any]) -> bool:
+    """Durably commit a ready batch, retaining one fact per tool result."""
+    if len(messages) < 2 or not _runtime_v2_is_primary():
+        return False
+    ops = _runtime_v2_react_history_ops()
+    append = getattr(ops, "append_model_tool_results", None)
+    if not callable(append):
+        return False  # Compatibility/test managers keep their single-result path.
+    if not _state_run_has_write_fence(state):
+        raise asyncio.CancelledError()
+    started = time.perf_counter()
+    payloads = []
+    for message in messages:
+        payload = dict(_message_to_dict(message))
+        if payload.pop("type", None) != "tool":
+            raise ValueError("completed tool batch contains a non-tool message")
+        payloads.append(payload)
+    events = append(state["session_id"], payloads, run_id=state.get("_runtime_v2_run_id") or None)
+    if len(events) != len(messages):
+        raise RuntimeError("completed tool batch did not commit all results")
+    state["_last_tool_result_committed_perf"] = time.perf_counter()
+    logger.info("runtime_v2_tool_batch_commit_timing session=%s run=%s items=%d elapsed_ms=%d",
+                state["session_id"], state.get("_runtime_v2_run_id", ""), len(messages), _timing_ms(started))
+    return True
 
 
 def _persist_state_with_model_replace(state: State, messages: List[Any], reason: str) -> None:
@@ -3216,6 +3299,28 @@ def _should_suppress_model_switch_status(state: State, event: Dict[str, Any]) ->
 
 
 
+class _StreamActivityWatchdog:
+    """Observe model chunks, independently of UI keepalives or delta buffering."""
+
+    def __init__(self, timeout_sec: float):
+        self.timeout_sec = timeout_sec
+        self.last_activity_at: Optional[float] = None
+
+    def touch(self) -> None:
+        self.last_activity_at = time.monotonic()
+
+    def stalled_error(self) -> Optional[TimeoutError]:
+        last_activity = self.last_activity_at
+        # The first-token hedge/deadline policy owns the wait before any output.
+        if last_activity is None:
+            return None
+        if time.monotonic() - last_activity < self.timeout_sec:
+            return None
+        return TimeoutError(
+            f"Model stream idle timeout: no model chunks for {self.timeout_sec:g}s"
+        )
+
+
 class _ThreadToAsyncQueue:
     """Bridge worker-thread events while coalescing model deltas per UI frame."""
 
@@ -3350,7 +3455,8 @@ async def _run_react_node_off_loop(
     if emit is None:
         return await asyncio.to_thread(lambda: asyncio.run(react_node(state, emit=None)))
     main_loop = asyncio.get_running_loop()
-    event_bridge = StreamEventBridge(main_loop, emit)
+    event_bridge = StreamEventBridge(main_loop, emit, session_id=state.get("session_id", ""),
+                                    run_id=state.get("_runtime_v2_run_id", ""))
     bridge_timings: Dict[int, Dict[str, int]] = {}
     state["_stream_bridge_timings"] = bridge_timings
     state["_stream_event_bridge"] = event_bridge
@@ -3394,6 +3500,7 @@ async def _run_react_node_off_loop(
             state.pop("_stream_event_bridge", None)
 
     bridged_emit.flush = event_bridge.flush
+    bridged_emit.tool_batch = event_bridge.send_tool_batch
 
     return await asyncio.to_thread(lambda: asyncio.run(run_and_flush()))
 
@@ -3575,6 +3682,7 @@ def _model_tool_definition_name(definition: Any) -> str:
     return str(function.get("name") or "").strip()
 
 
+@local_operation("registry_revision", slow_ms=50)
 async def _combined_tool_registry_revision(
     session_meta: Mapping[str, Any],
     session_id: str = "",
@@ -3689,6 +3797,85 @@ def _schedule_tool_registry_revalidate(
     return True
 
 
+def _build_host_tool_catalog(session_meta, loaded_plugins=None):
+    """Read live bundled enablement once in this synchronous catalog pass."""
+    from plugins.host import bundled_host_availability_scope
+
+    with bundled_host_availability_scope():
+        combined_tools = list(OPENAI_TOOL_DEFINITIONS)
+        source_by_name = {}
+        for definition in combined_tools:
+            name = _model_tool_definition_name(definition)
+            if not name:
+                continue
+            if host_tool_invokers.has(name):
+                source_by_name[name] = (ToolInvocationKind.HOST_SERVICE, host_tool_invokers.owner(name))
+            elif name in tools_dict:
+                source_by_name[name] = (ToolInvocationKind.HOST, "core.tools")
+            else:
+                source_by_name[name] = (ToolInvocationKind.HOST_SERVICE, "core.services")
+        combined_tools = [
+            item for item in combined_tools
+            if not (host_tool_invokers.has(_model_tool_definition_name(item))
+                    and not host_tool_invokers.is_enabled(_model_tool_definition_name(item)))
+        ]
+        try:
+            from agent_extensions import bundled_host_tool_definitions
+
+            bundled_tools = bundled_host_tool_definitions(session_meta=session_meta, loaded_plugins=loaded_plugins)
+            combined_tools.extend(bundled_tools)
+            for definition in bundled_tools:
+                name = _model_tool_definition_name(definition)
+                if name and host_tool_invokers.has(name) and host_tool_invokers.is_enabled(name):
+                    source_by_name[name] = (ToolInvocationKind.HOST_SERVICE, host_tool_invokers.owner(name))
+        except Exception as exc:
+            logger.warning("bundled host tool definitions failed and were skipped: %s", exc)
+        return combined_tools, source_by_name
+
+
+def _simplify_external_tool_names(
+    registry: ToolRegistry,
+    plugin_contracts: Mapping[str, Mapping[str, Any]],
+    inherited_sources: Optional[Mapping[str, str]] = None,
+) -> None:
+    from tool_naming import ToolNameSource, allocate_tool_names
+
+    sources = []
+    for descriptor in registry.descriptors():
+        name = descriptor.name
+        if descriptor.invocation_kind is ToolInvocationKind.MCP:
+            identity = agent_mcp.get_tool_identity(name)
+            if identity is not None:
+                alias, local_name = identity
+                plugin_id, separator, server_name = alias.partition("/")
+                sources.append(ToolNameSource(
+                    name, local_name, plugin_id if separator else "",
+                    server_name if separator else alias,
+                ))
+        elif descriptor.invocation_kind is ToolInvocationKind.PLUGIN:
+            contract = plugin_contracts.get(name) or {}
+            if contract.get("local_name"):
+                sources.append(ToolNameSource(
+                    name, contract["local_name"], str(contract.get("plugin_id") or ""),
+                ))
+    source_names = {source.source_name for source in sources}
+    source_names.update(source_name for source_name in (inherited_sources or {}).values()
+                        if (descriptor := registry.resolve(source_name)) is not None
+                        and descriptor.invocation_kind is ToolInvocationKind.UNAVAILABLE)
+    reserved = (registry.names() - source_names) | tool_search.BRIDGE_NAMES
+    # Forks retain the exact names in their parent snapshot, with source IDs
+    # carried separately so profile filtering and dispatch remain unambiguous.
+    inherited_names = {}
+    for model_name, source_name in (inherited_sources or {}).items():
+        if source_name in source_names and model_name not in reserved:
+            inherited_names[source_name] = model_name
+    names = allocate_tool_names(
+        [source for source in sources if source.source_name not in inherited_names],
+        reserved=reserved | frozenset(inherited_names.values()),
+    )
+    registry.rename_tools(names | inherited_names)
+
+
 async def build_combined_tool_registry_for_session(
     session_id: str,
     *,
@@ -3716,8 +3903,22 @@ async def build_combined_tool_registry_for_session(
     if not isinstance(session_meta, dict):
         session_meta = {}
 
-    combined_tools: List[Dict[str, Any]] = list(OPENAI_TOOL_DEFINITIONS)
-    source_by_name: Dict[str, tuple[ToolInvocationKind, str]] = {}
+    started = time.perf_counter()
+    try:
+        # load_plugins schedules its stale refresh on the current loop. Obtain
+        # that immutable catalog here; calling it from a plain worker would
+        # turn a stale hit into a synchronous directory rescan.
+        try:
+            from agent_extensions import load_plugins
+            loaded_plugins = tuple(load_plugins().plugins)
+        except Exception as exc:
+            logger.warning("bundled host plugin catalog failed and was skipped: %s", exc)
+            loaded_plugins = ()
+        combined_tools, source_by_name = await asyncio.to_thread(
+            _build_host_tool_catalog, session_meta, loaded_plugins)
+    finally:
+        if timing_callback is not None:
+            timing_callback("host_tool_definitions", started)
     plugin_contracts_by_name: Dict[str, Dict[str, Any]] = {}
 
     def _remember_sources(
@@ -3729,43 +3930,6 @@ async def build_combined_tool_registry_for_session(
             name = _model_tool_definition_name(definition)
             if name:
                 source_by_name.setdefault(name, (invocation_kind, owner))
-
-    for definition in combined_tools:
-        name = _model_tool_definition_name(definition)
-        if not name:
-            continue
-        if host_tool_invokers.has(name):
-            source_by_name[name] = (
-                ToolInvocationKind.HOST_SERVICE,
-                host_tool_invokers.owner(name),
-            )
-        elif name in tools_dict:
-            source_by_name[name] = (ToolInvocationKind.HOST, "core.tools")
-        else:
-            source_by_name[name] = (ToolInvocationKind.HOST_SERVICE, "core.services")
-    combined_tools = [
-        item
-        for item in combined_tools
-        if not (
-            host_tool_invokers.has(_model_tool_definition_name(item))
-            and not host_tool_invokers.is_enabled(_model_tool_definition_name(item))
-        )
-    ]
-
-    try:
-        from agent_extensions import bundled_host_tool_definitions
-
-        bundled_tools = bundled_host_tool_definitions(session_meta=session_meta)
-        combined_tools.extend(bundled_tools)
-        for definition in bundled_tools:
-            name = _model_tool_definition_name(definition)
-            if name and host_tool_invokers.has(name) and host_tool_invokers.is_enabled(name):
-                source_by_name[name] = (
-                    ToolInvocationKind.HOST_SERVICE,
-                    host_tool_invokers.owner(name),
-                )
-    except Exception as exc:
-        logger.warning("bundled host tool definitions failed and were skipped: %s", exc)
 
     async def _load_optional_tools(
         timing_stage: str,
@@ -3799,7 +3963,7 @@ async def build_combined_tool_registry_for_session(
     if include_mcp:
         mcp_tools = await _load_optional_tools(
             "mcp_tool_definitions",
-            agent_mcp.get_tool_definitions,
+            agent_mcp.get_published_tool_definitions,
             await_stage="tool_definitions",
         )
     _remember_sources(mcp_tools, ToolInvocationKind.MCP, "mcp")
@@ -3843,9 +4007,21 @@ async def build_combined_tool_registry_for_session(
         if isinstance(fork_runtime_config, dict)
         else None
     )
+    inherited_sources = (
+        fork_runtime_config.get("tool_sources", {})
+        if isinstance(fork_runtime_config, dict) else {}
+    )
+    if not isinstance(inherited_sources, dict):
+        inherited_sources = {}
+    inherited_sources = {name: source for name, source in inherited_sources.items()
+                         if isinstance(name, str) and isinstance(source, str)}
     if isinstance(inherited_tools, list) and inherited_tools:
         try:
             combined_tools = json.loads(json.dumps(inherited_tools, ensure_ascii=False))
+            for definition in combined_tools:
+                name = _model_tool_definition_name(definition)
+                if name in inherited_sources:
+                    definition["function"]["name"] = inherited_sources[name]
         except (TypeError, ValueError):
             logger.warning(
                 "Ignoring invalid inherited fork tool definitions for session=%s",
@@ -3871,9 +4047,16 @@ async def build_combined_tool_registry_for_session(
         elif invocation_kind is ToolInvocationKind.HOST:
             policy = builtin_tool_policy(name)
         elif invocation_kind is ToolInvocationKind.PLUGIN:
+            plugin_id = (plugin_contracts_by_name.get(name) or {}).get("plugin_id")
+            if plugin_id:
+                owner = f"plugin:{plugin_id}"
             policy = plugin_tool_policy(
                 (plugin_contracts_by_name.get(name) or {}).get("effect", "")
             )
+        elif invocation_kind is ToolInvocationKind.MCP:
+            identity = agent_mcp.get_tool_identity(name)
+            if identity is not None:
+                owner = f"mcp:{identity[0]}"
         try:
             registry.register_definition(
                 definition,
@@ -3907,6 +4090,7 @@ async def build_combined_tool_registry_for_session(
             logger.warning("Duplicate tool registration was skipped: %s", exc)
         except ToolRegistryError as exc:
             logger.warning("Invalid tool registration was skipped: %s", exc)
+    _simplify_external_tool_names(registry, plugin_contracts_by_name, inherited_sources)
     try:
         _, _, _, tool_context_window = resolve_executor_config_for_session(sid)
     except Exception:
@@ -4786,6 +4970,75 @@ def _tool_result_user_denied_ui(
     }
 
 
+def _tool_result_sse_event(res: Dict[str, Any], react_iter: int) -> Dict[str, Any]:
+    ui_result = res.get("tool_detail_ui", res.get("result", ""))
+    if isinstance(ui_result, list):
+        from agent_openai import normalize_content_text
+        ui_result = normalize_content_text(ui_result)
+    elif not isinstance(ui_result, str):
+        ui_result = str(ui_result or "")
+    blocks = res.get("tool_detail_ui")
+    return {
+        "type": "tool_call", "tool": redact_sensitive_tool_text(res["tool_name"]),
+        "args": redact_sensitive_tool_obj(res["tool_args"]),
+        "command_preview": _tool_command_preview(res["tool_name"], res["tool_args"]),
+        "result": redact_sensitive_tool_text(ui_result),
+        "attachments": [block["attachment"] for block in blocks
+                        if isinstance(block, dict) and block.get("type") == "image" and block.get("attachment")]
+                       if isinstance(blocks, list) else [],
+        "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
+        "execution_status": res.get("execution_status"), "tool_call_id": res.get("tool_id") or "",
+        "tool_call_index": res.get("tool_call_index"),
+        "react_iter": int(res.get("execution_react_iter", react_iter)),
+        **({"stream_seq": res["execution_stream_seq"]} if "execution_stream_seq" in res else {}),
+        "ui": redact_sensitive_tool_obj(res.get("ui") or {}),
+    }
+
+
+async def _emit_tool_call_sse_batch(emit, results, react_iter, state):
+    ready = [result for result in results if not result.get("_sse_emitted")]
+    batch = getattr(emit, "tool_batch", None)
+    if len(ready) < 2 or not callable(batch):
+        for result in ready:
+            await _emit_tool_call_sse(emit, result, react_iter, state)
+        return
+    await batch([_tool_result_sse_event(result, react_iter) for result in ready])
+    state["_react_ui_tool_count"] = int(state.get("_react_ui_tool_count", 0) or 0) + len(ready)
+    await _emit_live_metrics(state, emit)
+    await asyncio.sleep(0)
+
+
+def _attach_tool_batch_emitter(emit, state, session_id, run_id, lifecycle, queue, attached):
+    async def emit_batch(events):
+        from runtime_v2 import runtime_v2_primary, runtime_v2_strict
+        combined = getattr(session_manager, "commit_execution_ui_events", None)
+        if (not runtime_v2_primary() or not runtime_v2_strict() or not callable(combined)
+                or any(event.get("type") != "tool_call" or event.get("_subagent_forward")
+                       or not should_persist_ui_event(event) for event in events)):
+            for event in events:
+                await emit(event)
+            return
+        if not lifecycle.allows_stream_event("tool_call"):
+            return
+        rows = [dict(event) for event in events]
+        for row in rows:
+            row.setdefault("run_id", run_id)
+            row.setdefault("stream_seq", state.get("_active_stream_seq"))
+        cancelled = threading.Event()
+        with _runtime_session_path_scope():
+            try:
+                committed = await asyncio.to_thread(combined, session_id, rows, cancel_event=cancelled)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            for row in committed:
+                public = {key: value for key, value in row.items() if key != "_runtime_v2_committed"}
+                await publish_session_event(session_id, public)
+                if attached():
+                    await queue.put(public)
+    emit.tool_batch = emit_batch
+
+
 async def _emit_tool_call_sse(
     emit: Optional[Callable],
     res: Dict[str, Any],
@@ -4799,34 +5052,7 @@ async def _emit_tool_call_sse(
     if not emit or not isinstance(res, dict) or res.get("type") != "tool":
         return
     try:
-        ui_result = res.get("tool_detail_ui", res.get("result", ""))
-        if isinstance(ui_result, list):
-            from agent_openai import normalize_content_text
-
-            ui_result = normalize_content_text(ui_result)
-        elif not isinstance(ui_result, str):
-            ui_result = str(ui_result or "")
-        r = emit(
-            {
-                "type": "tool_call",
-                "tool": redact_sensitive_tool_text(res["tool_name"]),
-                "args": redact_sensitive_tool_obj(res["tool_args"]),
-                "command_preview": _tool_command_preview(res["tool_name"], res["tool_args"]),
-                # Never put the unbounded model-facing result on the browser
-                # stream. _tool_result_details_for_views has already produced a
-                # bounded UI projection and, when needed, a tempfile reference.
-                "result": redact_sensitive_tool_text(ui_result),
-                "attachments": [block["attachment"] for block in res.get("tool_detail_ui", [])
-                                if isinstance(block, dict) and block.get("type") == "image" and block.get("attachment")],
-                "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
-                "execution_status": res.get("execution_status"),
-                "tool_call_id": res.get("tool_id") or "",
-                "tool_call_index": res.get("tool_call_index"),
-                "react_iter": int(res.get("execution_react_iter", react_iter)),
-                **({"stream_seq": res["execution_stream_seq"]} if "execution_stream_seq" in res else {}),
-                "ui": redact_sensitive_tool_obj(res.get("ui") or {}),
-            }
-        )
+        r = emit(_tool_result_sse_event(res, react_iter))
         if inspect.isawaitable(r):
             await r
         if state is not None:
@@ -4852,75 +5078,6 @@ async def _emit_live_metrics(state, emit):
         },
         emit=emit,
     )
-
-
-def _structured_tool_result(result: Any) -> Dict[str, Any]:
-    if isinstance(result, dict):
-        return result
-    if isinstance(result, str) and result.lstrip().startswith("{"):
-        try:
-            value = json.loads(result)
-            if isinstance(value, dict):
-                return value
-        except (ValueError, TypeError):
-            pass
-    return {}
-
-
-def _tool_result_exit_code(tool_name: str, result: Any) -> Optional[int]:
-    value = _structured_tool_result(result)
-    code = value.get("exit_code")
-    if code is None and tool_name in {"job_output", "run_shell"}:
-        code = (value.get("job") or {}).get("exit_code") if isinstance(value.get("job"), dict) else None
-    if isinstance(code, int) and not isinstance(code, bool):
-        return code
-    if tool_name == "run_shell" and not value:
-        matches = list(re.finditer(r"(?mi)^Exit code:\s*(-?\d+)\s*$", str(result or "")))
-        if matches:
-            return int(matches[-1].group(1))
-    return None
-
-
-def _tool_result_indicates_failure(tool_name: str, result: Any) -> bool:
-    """Read result metadata; file contents and echoed commands are not status."""
-    value = _structured_tool_result(result)
-    if value:
-        if value.get("error") is not None or value.get("ok") is False:
-            return True
-        job = value.get("job")
-        if tool_name == "job_output" and isinstance(job, dict) and job.get("status") == "failed":
-            return True
-    code = _tool_result_exit_code(tool_name, result)
-    if code is not None:
-        return code != 0
-    return bool(re.match(r"(?i)^(?:Error\s*:|Error executing command:|Regex error:)", str(result or "").strip()))
-
-
-def _tool_result_status(
-    tool_name: str,
-    result: Any,
-    *,
-    failed: Optional[bool] = None,
-    duration_ms: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Structured status metadata while preserving the existing text result API."""
-    text = str(result or "")
-    sample = text if len(text) <= 16_384 else text[:8192] + "\n" + text[-8192:]
-    value = _structured_tool_result(result)
-    exit_code = _tool_result_exit_code(tool_name, result)
-    is_failed = _tool_result_indicates_failure(tool_name, result) if failed is None else bool(failed)
-    status: Dict[str, Any] = {
-        "ok": not is_failed,
-        "truncated": value.get("truncated") is True if value else bool(re.search(
-            r"(?m)^(?:\[output truncated;|\.\.\. output truncated|\.\.\. \[truncated,)", sample)),
-        "timed_out": value.get("timed_out") is True if value else bool(re.search(
-            r"(?mi)^Error: (?:Command|ripgrep) timed out after \d", sample)),
-    }
-    if exit_code is not None:
-        status["exit_code"] = exit_code
-    if duration_ms is not None:
-        status["duration_ms"] = max(0, int(duration_ms))
-    return status
 
 
 # ==================== 节点函数 ====================
@@ -5104,7 +5261,7 @@ def _classify_api_error_leaf(exc: BaseException) -> dict:
             "context_window": int(context_limit["context_window"]),
         }
 
-    if isinstance(exc, (APIConnectionError, APITimeoutError)) or 'timeout' in msg or 'timed out' in msg or 'connection' in msg:
+    if _is_network_connectivity_error(exc):
         return {"code": "NET", "title": "网络连接失败",
                 "msg": "无法连接到 API 服务器。",
                 "solution": "请检查网络连接、当前 model profile 的 API Base URL、VPN/代理设置。",
@@ -5201,6 +5358,30 @@ def _classify_api_error(exc: BaseException) -> dict:
     return _classify_api_error_leaf(exc)
 
 
+@local_operation("round_entry")
+async def _prepare_react_iteration(state: State, emit, inject_pending_notes) -> tuple[str, bool]:
+    """Preserve the durable entry barrier and expose work before pre_api starts."""
+    with local_step("entry_write_fence"):
+        current = _state_run_has_write_fence(state)
+    if not current:
+        logger.info("stopping stale ReAct run at iteration boundary: session=%s run=%s",
+                    state.get("session_id"), state.get("_runtime_v2_run_id"))
+        raise asyncio.CancelledError()
+    with local_step("entry_file_reviews"):
+        await _flush_file_tool_reviews(state, emit)
+    state.pop('_change_review_batch_active', None)
+    pause_reason = str(state.pop("_workflow_pause_requested", "") or "").strip()
+    if pause_reason:
+        await _push_stream_event(state, {"type": "status", "content": pause_reason}, emit=emit)
+        return pause_reason, False
+    with local_step("entry_subagent_notices"):
+        inject_pending_notes(current_run_only=True)
+    from execution_services.integration import consume_notices
+    with local_step("entry_execution_notices"):
+        changed = await consume_notices(state, _persist_state_with_model_append)
+    return "", changed
+
+
 async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
     """ReAct 循环执行，集成 todo、技能、压缩、重复检测，支持并行工具调用。"""
     # ========== 1. 初始化状态 ==========
@@ -5233,6 +5414,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     state.pop("_run_error", None)
     iter_offset = int(state.get("_queued_react_iter_offset") or 0)
     iter_count = iter_offset
+    previous_request_trace = None
     tool_results = []
     final_content = ""
     llm_stream_seq = int(state.get("_active_stream_seq") or 0)
@@ -5264,6 +5446,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     state.pop("_round_gap_ms_total", None)
     state.pop("_last_round_gap_ms", None)
     state.pop("_run_startup_ms", None)
+    for timing_key in ("_last_tool_returned_perf", "_last_tool_returned_iter",
+                       "_last_tool_result_committed_perf", "_last_model_worker_done_perf"):
+        state.pop(timing_key, None)
 
     session_meta = dict(session_manager._load_metadata(state["session_id"]) or {})
     logger.info("react_init meta_done session=%s", state.get("session_id"))
@@ -5337,32 +5522,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
 
     try:
         while iter_count < max_react_iter:
-            if not _state_run_has_write_fence(state):
-                logger.info(
-                    "stopping stale ReAct run at iteration boundary: session=%s run=%s",
-                    state.get("session_id"),
-                    state.get("_runtime_v2_run_id"),
-                )
-                raise asyncio.CancelledError()
             # Retry/length-continuation branches can bypass the normal tool
             # batch tail. Complete their durable review obligation before the
             # next planning request, while its original execution scope remains.
-            await _flush_file_tool_reviews(state, emit)
-            state.pop('_change_review_batch_active', None)
-            workflow_pause_reason = str(
-                state.pop("_workflow_pause_requested", "") or ""
-            ).strip()
+            workflow_pause_reason, notices_changed = await _prepare_react_iteration(
+                state, emit, _inject_pending_subagent_notes)
             if workflow_pause_reason:
                 final_content = workflow_pause_reason
-                await _push_stream_event(
-                    state,
-                    {"type": "status", "content": workflow_pause_reason},
-                    emit=emit,
-                )
                 break
-            _inject_pending_subagent_notes(current_run_only=True)
-            from execution_services.integration import consume_notices
-            if await consume_notices(state, _persist_state_with_model_append):
+            if notices_changed:
                 llm_history = list(state["llm_history"])
                 work_messages = list(state["work_messages"])
             pre_api_timings: Dict[str, int] = dict(state.pop("_pre_run_timings", {}) or {})
@@ -5549,13 +5717,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         remaining_orphans,
                     )
 
-            llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
+            system_contents = list(static_segments)
             from execution_services.integration import prompt_guidance
             execution_guidance = prompt_guidance()
             if execution_guidance:
-                llm_messages.append(SystemMessage(content=execution_guidance))
+                system_contents.append(execution_guidance)
             if kc_body:
-                llm_messages.append(SystemMessage(content=kc_body))
+                system_contents.append(kc_body)
+            llm_messages: List[Any] = _request_system_messages(state, system_contents)
             llm_messages.extend(turn_msgs)
             _pre_api_timing_mark(pre_api_timings, "turn_cache", _t_pre_api)
             _t_pre_api = time.perf_counter()
@@ -5572,6 +5741,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # measures ~0.1 ms in isolation, so the time is event-loop delay rather
             # than work. Separating the two says which, instead of leaving one
             # number that reads like a slow cache hit.
+            _t_registry_total = _t_pre_api
+            _registry_accounted_before = _pre_api_timing_total(pre_api_timings)
             _t_tool_revision = time.perf_counter()
             tool_revision = await _combined_tool_registry_revision(session_meta, state["session_id"])
             _pre_api_timing_mark(pre_api_timings, "tool_registry_revision", _t_tool_revision)
@@ -5611,10 +5782,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     session_meta=session_meta,
                     awaiter=_live_tool_definition_awaiter,
                     timing_callback=_record_tool_definition_timing,
-                    # Cold process start: stdio MCP servers may take tens of
-                    # seconds; ship the built-in catalog now and let the
-                    # background rebuild add MCP tools once they register.
-                    include_mcp=agent_mcp.mcp_started(),
+                    # Published MCP definitions never wait for discovery. Healthy
+                    # servers can appear while another server is still starting.
+                    include_mcp=True,
                 )
                 combined_tools = tool_registry.definitions()
                 state["_combined_tool_registry_cache"] = {
@@ -5637,11 +5807,24 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         descriptor.openai_definition() for descriptor in tool_registry.descriptors()
                         if descriptor.owner != "core.tool_search"
                     ],
+                    "tool_sources": {
+                        descriptor.name: descriptor.execution_name
+                        for descriptor in tool_registry.descriptors()
+                        if descriptor.source_name
+                    },
                     "_cache_revision": runtime_config_revision,
                 }
                 state["_last_prompt_runtime_config"] = last_prompt_runtime_config
             last_prompt_runtime_config["model_runtime"] = (
                 executor_runtime_snapshot_for_session(state["session_id"])
+            )
+            # Definition callbacks do not cover host loading, definition copies
+            # or the fork runtime snapshot. Preserve those previously invisible
+            # milliseconds without counting the nested callback spans twice.
+            pre_api_timings["tool_registry_total"] = _timing_ms(_t_registry_total)
+            pre_api_timings["tool_registry_unattributed"] = max(
+                0, pre_api_timings["tool_registry_total"]
+                - (_pre_api_timing_total(pre_api_timings) - _registry_accounted_before),
             )
             _t_pre_api = time.perf_counter()
 
@@ -6164,6 +6347,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_id = tool_call["id"]
                 tool_call_index = tool_call.get("index")
                 tool_descriptor = tool_registry.resolve(tool_name)
+                execution_name = tool_descriptor.execution_name if tool_descriptor else tool_name
                 if _runtime_v2_is_primary() and tool_descriptor is not None and tool_descriptor.effect != "read":
                     from runtime_v2.execution_journal import ExecutionJournal
                     uncertain = ExecutionJournal(session_manager.sessions_dir,
@@ -6183,7 +6367,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 security_workspace = session_work_root(session_meta)
                 sec_request, sec_decision, sec_context = authorize_tool(
                     session_id=state["session_id"],
-                    tool_name=tool_name,
+                    tool_name=execution_name,
                     arguments=tool_args if isinstance(tool_args, dict) else {},
                     workspace=security_workspace,
                 )
@@ -6617,7 +6801,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 )
                                 sec_request2, sec_decision2, sec_context2 = authorize_tool(
                                     session_id=state["session_id"],
-                                    tool_name=tool_name,
+                                    tool_name=execution_name,
                                     arguments=tool_args if isinstance(tool_args, dict) else {},
                                     workspace=security_workspace,
                                 )
@@ -6642,7 +6826,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         )
                     sec_request, sec_decision, sec_context = authorize_tool(
                         session_id=state["session_id"],
-                        tool_name=tool_name,
+                        tool_name=execution_name,
                         arguments=tool_args if isinstance(tool_args, dict) else {},
                         workspace=security_workspace,
                     )
@@ -6673,7 +6857,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     raw_result = (
                         outcome.content
                         if outcome.content is not None
-                        else f"Error: {outcome.message or outcome.code}"
+                        else f"Error: {outcome.message or outcome.code}" if outcome.kind is ToolOutcomeKind.FAILED else ""
                     )
                     control_result = outcome.metadata.get("control_result")
                     if json_output and not isinstance(raw_result, str):
@@ -6683,10 +6867,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         result_str = _wrap_read_only_tool_output_lines(raw_result)
                     else:
                         result_str = redact_sensitive_tool_text(raw_result)
-                    tool_failed = bool(
-                        outcome.kind is ToolOutcomeKind.FAILED
-                        or _tool_result_indicates_failure(tool_name, raw_result)
-                    )
+                    tool_failed = outcome.kind is ToolOutcomeKind.FAILED
                     structured_result = isinstance(raw_result, list) and any(
                         isinstance(block, dict) and block.get("type") == "image" for block in raw_result
                     )
@@ -6708,12 +6889,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         "tool_detail_ui": result_for_ui,
                         "result_for_log": result_for_log,
                         "tool_failed": tool_failed,
-                        "tool_status": _tool_result_status(
-                            tool_name,
-                            result_str,
-                            failed=tool_failed,
-                            duration_ms=_timing_ms(started),
-                        ),
+                        "tool_status": tool_outcome_status(outcome, duration_ms=_timing_ms(started)),
+                        "execution_status": outcome.metadata.get("execution_status"),
                         "_tool_outcome_metadata": dict(outcome.metadata),
                     }
                     if isinstance(control_result, dict):
@@ -6857,11 +7034,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         result = await _await_steerable(
                             state,
                             agent_mcp.invoke_tool_by_fname(
-                                tool_name,
+                                execution_name,
                                 tool_args if isinstance(tool_args, dict) else {},
                                 work_dir=mcp_work_dir,
                                 image_enabled="image" in mcp_modalities,
                                 model=active_candidate.get("model") or iter_model,
+                                return_outcome=True,
                                 require_worktree_isolation=bool(
                                     mcp_work_dir
                                     and session_meta.get("git_worktree_managed")
@@ -6870,7 +7048,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             emit,
                             "tool_mcp",
                         )
-                        outcome = ToolOutcome.completed(result)
+                        outcome = result if isinstance(result, ToolOutcome) else ToolOutcome.completed(result)
+                        change_review_tool_failed = outcome.kind is ToolOutcomeKind.FAILED
                     except _SteerRestartRequested:
                         change_review_tool_failed = True
                         raise
@@ -6911,7 +7090,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         result = await _await_steerable(
                             state,
                             invoke_plugin_tool(
-                                tool_name,
+                                execution_name,
                                 tool_args if isinstance(tool_args, dict) else {},
                                 work_dir=plugin_work_dir,
                                 require_worktree_isolation=bool(
@@ -6959,6 +7138,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 change_review_capture = None
                 change_review_changes = []
                 change_review_tool_failed = False
+                shell_execution_state = {}
                 if not tool_func:
                     result = f"未知工具：{tool_name}"
                     tool_failed = True
@@ -7055,11 +7235,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         except Exception:
                             _tool_image_input_enabled = None
                         async def _emit_run_shell_state(payload: dict) -> None:
-                            await _push_stream_event(state, {"type": "tool_execution_state",
-                                "stream_seq": call_stream_seq,
-                                "ephemeral": True, "tool_call_id": tool_id,
-                                "tool_call_index": tool_call_index, "react_iter": int(iter_count),
-                                **payload}, emit=emit)
+                            shell_execution_state.update(payload)
+                            if emit:
+                                await _push_stream_event(state, {"type": "tool_execution_state",
+                                    "stream_seq": call_stream_seq,
+                                    "ephemeral": True, "tool_call_id": tool_id,
+                                    "tool_call_index": tool_call_index, "react_iter": int(iter_count),
+                                    **payload}, emit=emit)
                         with run_shell_runtime_context(
                             interrupt_check=(
                                 _run_shell_should_interrupt
@@ -7071,7 +7253,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 if emit and tool_name == "run_shell"
                                 else None
                             ),
-                            state_sink=_emit_run_shell_state if emit and tool_name == "run_shell" else None,
+                            state_sink=_emit_run_shell_state if tool_name == "run_shell" else None,
                         ):
                             with tool_work_dir_override(worktree_root or None), tool_model_media_context(
                                 image_enabled=_tool_image_input_enabled
@@ -7166,7 +7348,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 outcome = (
                     ToolOutcome.failed("host_tool_error", str(result), content=result)
                     if tool_failed
-                    else ToolOutcome.completed(result)
+                    else legacy_tool_outcome(tool_name, result, execution_state=shell_execution_state)
                 )
                 response = _response_from_outcome(
                     outcome,
@@ -7365,6 +7547,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 audit_before_ms = _timing_ms(audit_before_started)
                 observed_tool_started = time.perf_counter()
                 result = await _execute_one_core(call)
+                # Every backend (native, plugin, MCP, host) passes this boundary.
+                # Keep the following workspace audit and result commit in the gap.
+                state["_last_tool_returned_perf"] = time.perf_counter()
+                state["_last_tool_returned_iter"] = int(call_react_iter)
                 if isinstance(result, dict):
                     result["execution_stream_seq"] = call["_execution_stream_seq"]
                     result["execution_react_iter"] = call_react_iter
@@ -7700,9 +7886,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     return
                 try:
                     early_workspace = session_work_root(session_meta)
+                    early_descriptor = tool_registry.resolve(str(tc.get("name") or ""))
                     _early_request, early_decision, _early_context = authorize_tool(
                         session_id=state["session_id"],
-                        tool_name=str(tc.get("name") or ""),
+                        tool_name=(early_descriptor.execution_name if early_descriptor else str(tc.get("name") or "")),
                         arguments=(tc.get("args") if isinstance(tc.get("args"), dict) else {}),
                         workspace=early_workspace,
                     )
@@ -7717,6 +7904,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 # controls concurrency/approval/cancellation, not start timing.
                 early_tool_tasks[idx] = asyncio.create_task(_run_early_tool_call(idx, tc))
 
+            from agent_request_executor import run_request_worker
+            from agent_request_timing import new_request_trace, request_timing_scope
+            local_request_trace = None
+            stream_error: Optional[BaseException] = None
             if llm_runtime_policy["use_stream"]:
                 _pre_api_tail_ms = int(max(0.0, (time.perf_counter() - _t_pre_api) * 1000.0))
                 execution_metrics.record_request(
@@ -7734,61 +7925,72 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     iter_model,
                 )
                 worker_timing: Dict[str, float] = {}
+                local_request_trace = new_request_trace(
+                    state, int(iter_count), _req_wall_start, previous_trace=previous_request_trace)
+                previous_request_trace = local_request_trace
                 stream_usage_record_ms = 0
                 stream_steer_poller = _StreamSteerPoller(state)
-
-                def _run_stream_worker_logged(_worker_timing=worker_timing):
-                    try:
-                        return run_chat_completion_stream_worker(
-                            sync_q,
-                            iter_client,
-                            iter_model,
-                            llm_messages_to_send,
-                            tools=combined_tools,
-                            temperature=EXECUTOR_TEMPERATURE,
-                            max_tokens=iter_max_output_tokens,
-                            extra_body=EXECUTOR_EXTRA_BODY,
-                            parallel_tool_calls=True,
-                            reasoning_effort=EXECUTOR_REASONING_EFFORT,
-                            request_context=transport_request_context,
-                            should_abort=stream_abort_event.is_set,
-                            transport_observer=executor_http_client,
-                            emit_deltas=bool(llm_runtime_policy.get("emit_deltas", True)),
-                        )
-                    finally:
-                        _worker_timing["completed_at"] = time.perf_counter()
-                        stream_worker_done_event.set()
-                        logger.info(
-                            "llm_worker_completed session=%s react_iter=%s model=%s",
-                            state["session_id"],
-                            int(iter_count),
-                            iter_model,
-                        )
                 async_stream_q: asyncio.Queue = asyncio.Queue()
                 sync_q = _ThreadToAsyncQueue(asyncio.get_running_loop(), async_stream_q)
                 stream_abort_event = threading.Event()
                 stream_worker_done_event = threading.Event()
+                stream_activity = _StreamActivityWatchdog(STREAM_WORKER_IDLE_TIMEOUT_SEC)
+                stream_worker_args = (sync_q, iter_client, iter_model, llm_messages_to_send)
+                stream_worker_kwargs = dict(
+                    tools=combined_tools,
+                    temperature=EXECUTOR_TEMPERATURE,
+                    max_tokens=iter_max_output_tokens,
+                    extra_body=EXECUTOR_EXTRA_BODY,
+                    parallel_tool_calls=True,
+                    reasoning_effort=EXECUTOR_REASONING_EFFORT,
+                    request_context=transport_request_context,
+                    should_abort=stream_abort_event.is_set,
+                    transport_observer=executor_http_client,
+                    emit_deltas=bool(llm_runtime_policy.get("emit_deltas", True)),
+                    on_stream_activity=stream_activity.touch,
+                )
+
+                # A timed-out socket can outlive this iteration. Freeze all worker
+                # inputs so its eventual cleanup cannot touch the next request.
+                def _run_stream_worker_logged(
+                    _worker_timing=worker_timing, _request_trace=local_request_trace,
+                    _args=stream_worker_args, _kwargs=stream_worker_kwargs,
+                    _done=stream_worker_done_event, _sid=state["session_id"],
+                    _react_iter=int(iter_count),
+                ):
+                    try:
+                        _request_trace.mark("worker_entered")
+                        with request_timing_scope(_request_trace):
+                            return run_chat_completion_stream_worker(*_args, **_kwargs)
+                    finally:
+                        _worker_timing["completed_at"] = time.perf_counter()
+                        _done.set()
+                        logger.info(
+                            "llm_worker_completed session=%s react_iter=%s model=%s",
+                            _sid,
+                            _react_iter,
+                            _args[2],
+                        )
                 stream_timing_events: List[Dict[str, Any]] = []
-                def _stream_model_switch_status(ev: Dict[str, Any]) -> None:
+                def _stream_model_switch_status(ev: Dict[str, Any], _queue=sync_q) -> None:
                     if not _should_suppress_model_switch_status(state, ev):
-                        sync_q.put(("status", ev))
+                        _queue.put(("status", ev))
 
                 _set_model_switch_status_callback(
                     iter_client,
                     _stream_model_switch_status,
                 )
-                def _stream_fallback_adopted(sid: str, profile_id: str, model: str) -> None:
+                def _stream_fallback_adopted(sid: str, profile_id: str, model: str, _queue=sync_q) -> None:
                     # 会话绑定已经落地为实际服务的 profile，立刻通知前端对齐选择器。
-                    sync_q.put(("event", _model_profile_bound_event(sid, profile_id, model)))
+                    _queue.put(("event", _model_profile_bound_event(sid, profile_id, model)))
 
                 _set_fallback_adopted_callback(
                     iter_client,
                     _stream_fallback_adopted,
                 )
                 stream_task = asyncio.create_task(
-                    asyncio.to_thread(_run_stream_worker_logged)
+                    run_request_worker(_run_stream_worker_logged, trace=local_request_trace)
                 )
-                stream_error: Optional[BaseException] = None
                 stream_loop = asyncio.get_running_loop()
                 steer_control = _steer_control_from_state(state)
                 steer_signal = (
@@ -7827,6 +8029,21 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 stream_abort_event.set()
                                 break
                         if queue_get_task not in done:
+                            if turn is None and stream_error is None:
+                                stream_error = stream_activity.stalled_error()
+                                if stream_error is not None:
+                                    stream_abort_event.set()
+                                    logger.warning(
+                                        "model stream stalled; reconnecting session=%s react_iter=%s: %s",
+                                        state["session_id"], int(iter_count), stream_error,
+                                    )
+                                    await _push_stream_event(
+                                        state,
+                                        {"type": "status", "ephemeral": True,
+                                         "content": f"模型输出已连续 {STREAM_WORKER_IDLE_TIMEOUT_SEC:g} 秒无更新，正在保存进度并恢复连接…"},
+                                        emit=emit,
+                                    )
+                                    break
                             continue
                         item = queue_get_task.result()
                         queue_get_task = asyncio.create_task(async_stream_q.get())
@@ -8089,6 +8306,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         pass
                     _set_model_switch_status_callback(iter_client, None)
                     _set_fallback_adopted_callback(iter_client, None)
+                    state["_last_model_worker_done_perf"] = worker_timing.get("completed_at", time.perf_counter())
+                    local_request_timing = local_request_trace.snapshot()
+                    execution_metrics.record_request(
+                        state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                        local_request_timing=local_request_timing,
+                    )
+                    logger.info("local_request_timing %s", json.dumps(local_request_timing, separators=(",", ":")))
                     _llm_stream_timing_log(
                         state["session_id"],
                         int(iter_count),
@@ -8416,28 +8640,56 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             # retry and live-row cleanup.
                             raise stream_error
                     t_llm_fallback_start = time.monotonic()
-                    api_resp = await _await_steerable(
-                        state,
-                        asyncio.to_thread(
-                            lambda: chat_completion(
-                                iter_client,
-                                iter_model,
-                                llm_messages_to_send,
-                                tools=combined_tools,
-                                temperature=EXECUTOR_TEMPERATURE,
-                                max_tokens=iter_max_output_tokens,
-                                extra_body=EXECUTOR_EXTRA_BODY,
-                                parallel_tool_calls=True,
-                                reasoning_effort=EXECUTOR_REASONING_EFFORT,
-                                request_context=transport_request_context,
-                            )
-                        ),
-                        emit,
-                        "llm_request",
-                    )
+                    # Buffered/non-streaming policy and stream fallback use the
+                    # same request pool and HTTP observer. A fallback retains
+                    # the first actual send if a stream attempt already sent.
+                    if local_request_trace is None:
+                        local_request_trace = new_request_trace(
+                            state, int(iter_count), _req_wall_start, previous_trace=previous_request_trace)
+                        previous_request_trace = local_request_trace
+                    completion_worker_timing = {}
+                    def _run_completion_worker_logged(_request_trace=local_request_trace,
+                                                      _worker_timing=completion_worker_timing):
+                        try:
+                            with request_timing_scope(_request_trace):
+                                return chat_completion(
+                                    iter_client,
+                                    iter_model,
+                                    llm_messages_to_send,
+                                    tools=combined_tools,
+                                    temperature=EXECUTOR_TEMPERATURE,
+                                    max_tokens=iter_max_output_tokens,
+                                    extra_body=EXECUTOR_EXTRA_BODY,
+                                    parallel_tool_calls=True,
+                                    reasoning_effort=EXECUTOR_REASONING_EFFORT,
+                                    request_context=transport_request_context,
+                                )
+                        finally:
+                            _worker_timing["completed_at"] = time.perf_counter()
+                    try:
+                        api_resp = await _await_steerable(
+                            state,
+                            run_request_worker(_run_completion_worker_logged, trace=local_request_trace),
+                            emit,
+                            "llm_request",
+                        )
+                    finally:
+                        if "completed_at" in completion_worker_timing:
+                            state["_last_model_worker_done_perf"] = completion_worker_timing["completed_at"]
+                        local_request_timing = local_request_trace.snapshot()
+                        execution_metrics.record_request(
+                            state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                            local_request_timing=local_request_timing,
+                        )
+                        logger.info("local_request_timing %s", json.dumps(local_request_timing, separators=(",", ":")))
                     choice0 = api_resp.choices[0]
                     actual_response_model = str(getattr(api_resp, "model", None) or actual_response_model or "").strip()
                     turn = parse_assistant_message(choice0.message, tools=combined_tools)
+                    execution_metrics.record_request(
+                        state["session_id"], str(state.get("_runtime_v2_run_id") or ""), int(iter_count),
+                        status="completed",
+                        duration_ms=int(max(0.0, (time.monotonic() - t_llm_fallback_start) * 1000.0)),
+                    )
                     llm_call_finish = {
                         "finish_reason": getattr(choice0, "finish_reason", None),
                         "stop_reason": getattr(choice0, "stop_reason", None),
@@ -9002,7 +9254,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 llm_history.append(tool_msg_llm)
                 state["llm_history"] = llm_history
                 state["work_messages"] = work_messages
-                state["dialogue"] = derive_dialogue_from_assistant_history(llm_history)
                 if isinstance(replacement_history, list):
                     _persist_state_with_model_replace(
                         state, llm_history, "manual_context_manage"
@@ -9015,6 +9266,44 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     await _emit_tool_call_sse(emit, res, iter_count, state)
                     res["_sse_emitted"] = True
                 return res
+
+            async def checkpoint_ready_tool_results(results: List[Any]) -> None:
+                # Only results already returned by execution are eligible. A
+                # control result can replace history and keeps its old path.
+                ready = []
+                seen = set(checkpointed_tool_result_ids)
+                for result in results:
+                    if (not isinstance(result, dict) or result.get("type") != "tool"
+                            or result.get("_control_result")):
+                        for result in results:
+                            await checkpoint_completed_tool_result(result)
+                        return
+                    identity = str(result.get("tool_id") or "").strip()
+                    if not identity:
+                        for result in results:
+                            await checkpoint_completed_tool_result(result)
+                        return
+                    if identity not in seen:
+                        seen.add(identity)
+                        ready.append(result)
+                messages = [ToolMessage(content=result["tool_detail_llm"], tool_call_id=str(result["tool_id"]).strip())
+                            for result in ready]
+                if not _persist_completed_tool_batch(state, messages):
+                    for result in results:
+                        await checkpoint_completed_tool_result(result)
+                    return
+                # Publish in-memory state only after all model facts succeeded.
+                llm_history.extend(messages)
+                work_messages.extend(ToolMessage(content=result["tool_detail_ui"], tool_call_id=result["tool_id"])
+                                     for result in ready)
+                state["llm_history"], state["work_messages"] = llm_history, work_messages
+                _persist_state(state)
+                for result in ready:
+                    checkpointed_tool_result_ids.add(str(result["tool_id"]).strip())
+                    result["_history_persisted"] = True
+                await _emit_tool_call_sse_batch(emit, ready, iter_count, state)
+                for result in ready:
+                    result["_sse_emitted"] = True
 
             # 记录 LLM 调用详情（可选；与实际上送内容一致，已剥历史 reasoning）
             # Keep the actual request path untouched. The diagnostic trace is
@@ -9077,7 +9366,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 "usage": llm_call_usage,
             }
             state["llm_calls"].append(call_record)
+            _t_call_usage = time.perf_counter()
             workflow_after_call = _workflow_callbacks().call("record_call_usage", state)
+            _call_usage_ms = _timing_ms(_t_call_usage)
+            if _call_usage_ms >= 100:
+                logger.info("workflow_usage_timing session=%s react_iter=%d elapsed_ms=%d",
+                            state["session_id"], int(iter_count), _call_usage_ms)
             if (
                 workflow_after_call
                 and workflow_after_call.get("status") == "paused"
@@ -9153,9 +9447,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             if not done_tasks:
                                 await _raise_if_steer_requested(state, emit, "tool")
                                 continue
+                            successful = [done for done in done_tasks
+                                          if not done.cancelled() and done.exception() is None]
+                            completed = [await done for done in successful]
+                            await checkpoint_ready_tool_results([result for _, result in completed])
+                            # Preserve every successful completed result before
+                            # propagating a sibling's steer/cancellation error.
                             for done in done_tasks:
-                                tc, r = await done
-                                r = await checkpoint_completed_tool_result(r)
+                                if done not in successful:
+                                    await done
+                            for tc, r in completed:
                                 tid = (tc or {}).get("id", "")
                                 if tid is not None:
                                     by_id[tid] = r
@@ -9199,7 +9500,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         chunk_results = await run_group(chunk)
                         exec_results.extend(chunk_results)
 
-                for tool_call in tool_calls_list:
+                for tool_call_position, tool_call in enumerate(tool_calls_list):
                     await _raise_if_steer_requested(state, emit, "tool")
                     if not _state_run_has_write_fence(state):
                         raise asyncio.CancelledError()
@@ -9230,7 +9531,22 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             emit,
                             "tool",
                         )
-                        early_result = await checkpoint_completed_tool_result(early_result)
+                        ready_results = [early_result]
+                        if is_read_only_tool(tool_call):
+                            for following in tool_calls_list[tool_call_position + 1:]:
+                                if not is_read_only_tool(following):
+                                    break
+                                following_index = following.get("index")
+                                try:
+                                    following_task = early_tool_tasks.get(int(following_index))
+                                except (TypeError, ValueError):
+                                    break
+                                if following_task is None or not following_task.done() or following_task.cancelled():
+                                    break
+                                if following_task.exception() is not None:
+                                    break
+                                ready_results.append(following_task.result())
+                        await checkpoint_ready_tool_results(ready_results)
                         exec_results.append(early_result)
                         continue
                     if is_read_only_tool(tool_call):
@@ -9395,6 +9711,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             "command_preview": _tool_command_preview(res["tool_name"], res["tool_args"]),
                             "result": redact_sensitive_tool_text(res["result"]),
                             "status": redact_sensitive_tool_obj(res.get("tool_status") or {}),
+                            "execution_status": res.get("execution_status"),
                             "tool_call_id": res.get("tool_id") or "",
                             "tool_call_index": res.get("tool_call_index"),
                             "react_iter": int(iter_count),
@@ -9799,7 +10116,8 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
     """
     while True:
         try:
-            return await _react_node_once(state, emit=emit)
+            with _runtime_session_path_scope():
+                return await _react_node_once(state, emit=emit)
         except _SteerRestartRequested:
             _rollback_steer_partial_turn(state)
             for event in state.pop("_interrupted_tool_events", []):
@@ -10536,6 +10854,10 @@ async def astream_events(
     )
 
     async def emit(ev: Dict[str, Any]) -> None:
+        with _runtime_session_path_scope():
+            await emit_event(ev)
+
+    async def emit_event(ev: Dict[str, Any]) -> None:
         # 与浏览器 SSE 一致；ephemeral（如 llm_*_delta）仅实时推送，不写入 ui_events
         # 子 agent 转发事件仅推 SSE，不写入父会话 ui_events
         ev = dict(ev)
@@ -10550,7 +10872,7 @@ async def astream_events(
                 event_type,
             )
             return
-        ev = await persist_execution_event(session_manager, session_id, ev)
+        ev = await persist_execution_event(session_manager, session_id, ev, commit_ui=True)
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final":
             model_content = str(ev.get("content") or "")
@@ -10580,6 +10902,8 @@ async def astream_events(
         if consumer_attached:
             await queue.put(public_event)
 
+    _attach_tool_batch_emitter(emit, state, session_id, runtime_v2_run_id, runtime_lifecycle,
+                               queue, lambda: consumer_attached)
     power_guard = AgentRunPowerGuard()
 
     async def on_runtime_resume(resume: RuntimeResume) -> None:
@@ -10647,6 +10971,8 @@ async def astream_events(
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
             await runtime_lifecycle.commit("run_started", {"mode": "chat"})
+            from agent_subagent_sync import start_manual_subagent_run
+            await start_manual_subagent_run(session_manager, state)
             run_start_timings["mirror_run_started"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log(
                 "run_start_step_timing",
@@ -11048,6 +11374,10 @@ async def astream_events_continuation(
     )
 
     async def emit(ev: Dict[str, Any]) -> None:
+        with _runtime_session_path_scope():
+            await emit_event(ev)
+
+    async def emit_event(ev: Dict[str, Any]) -> None:
         ev = dict(ev)
         ev.setdefault("run_id", runtime_v2_run_id)
         ev.setdefault("stream_seq", state.get("_active_stream_seq"))
@@ -11060,7 +11390,7 @@ async def astream_events_continuation(
                 event_type,
             )
             return
-        ev = await persist_execution_event(session_manager, session_id, ev)
+        ev = await persist_execution_event(session_manager, session_id, ev, commit_ui=True)
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final":
             model_content = str(ev.get("content") or "")
@@ -11086,6 +11416,8 @@ async def astream_events_continuation(
         if consumer_attached:
             await queue.put(public_event)
 
+    _attach_tool_batch_emitter(emit, state, session_id, runtime_v2_run_id, runtime_lifecycle,
+                               queue, lambda: consumer_attached)
     power_guard = AgentRunPowerGuard()
 
     async def on_runtime_resume(resume: RuntimeResume) -> None:
@@ -11143,6 +11475,8 @@ async def astream_events_continuation(
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
             await runtime_lifecycle.commit("run_started", {"mode": "continuation"})
+            from agent_subagent_sync import start_manual_subagent_run
+            await start_manual_subagent_run(session_manager, state)
             run_start_timings["mirror_run_started"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log("run_start_step_timing", session_id, "mirror_run_started", run_start_timings["mirror_run_started"], run_id=runtime_v2_run_id, mode="continuation")
             _t_run_start = time.perf_counter()

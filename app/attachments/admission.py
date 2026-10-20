@@ -45,6 +45,15 @@ def _holds_no_admissible_block(value) -> bool:
     return True
 
 
+def text_requires_admission(content: str, *, scan_paths=False, scan_remote=False) -> bool:
+    """Probe attachment syntax only; no file, network, policy or store lookup."""
+    from .content import DATA_IMAGE_RE, IMAGE_PATH_RE, scan_enabled
+
+    return bool(DATA_IMAGE_RE.search(content)
+                or (scan_remote and REMOTE_IMAGE_RE.search(content))
+                or (scan_paths and scan_enabled() and IMAGE_PATH_RE.search(content)))
+
+
 def admit_content(content, context, *, scan_paths=False, scan_remote=False, strict=False):
     from .content import DATA_IMAGE_RE, IMAGE_PATH_RE, scan_enabled
 
@@ -54,9 +63,7 @@ def admit_content(content, context, *, scan_paths=False, scan_remote=False, stri
     # remote policy, recursive block rewrite) must not be paid for plain text.
     if _holds_no_admissible_block(content):
         if isinstance(content, str):
-            if not DATA_IMAGE_RE.search(content) and not (
-                scan_remote and REMOTE_IMAGE_RE.search(content)
-            ) and not (scan_paths and scan_enabled() and IMAGE_PATH_RE.search(content)):
+            if not text_requires_admission(content, scan_paths=scan_paths, scan_remote=scan_remote):
                 return content
         elif scan_remote or scan_paths:
             probes = [(str(block.get("text") or ""), block.get("content"))

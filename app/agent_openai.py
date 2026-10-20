@@ -14,6 +14,7 @@ canonical 为 fallback 前端的规范序列化（保留 <think> + reasoning_con
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import html
 import json
@@ -36,6 +37,7 @@ from agent_messages import AssistantMessage, SystemMessage, ToolMessage, UserMes
 from agent_think import strip_think_blocks
 from attachments.content import durable_content, project_request_images, chat_tool_images, scan_enabled
 from llm import TransportEvent, merge_streamed_tool_name
+from json_encoding import encode_plain_json, _orjson as _wire_orjson
 
 logger = logging.getLogger(__name__)
 
@@ -1164,6 +1166,13 @@ class HttpStreamTransportError(RuntimeError):
         self.provider_code = provider_code
 
 
+def _fast_wire_json(payload: Any) -> Optional[bytes]:
+    """Encode ordinary JSON without accepting types that httpx would reject."""
+    if _wire_orjson is None:
+        return None
+    return encode_plain_json(payload, encoder=_wire_orjson)
+
+
 def _http_stream_chat_completion(
     client: Any,
     *,
@@ -1205,8 +1214,21 @@ def _http_stream_chat_completion(
             logger.debug("无法结算传输 trace", exc_info=True)
 
     try:
+        from agent_request_timing import current_request_trace
+
+        encode_started = time.perf_counter()
+        encoded = _fast_wire_json(payload)
+        body_kwargs = {"json": payload}
+        if encoded is not None:
+            trace = current_request_trace()
+            if trace is not None:
+                trace.mark("wire_json_encode_started", encode_started)
+                trace.mark("wire_json_encode_completed")
+            body_kwargs = {"content": encoded}
+            if not any(str(key).lower() == "content-type" for key in headers):
+                headers = {**headers, "Content-Type": "application/json"}
         with http_client.stream(
-            "POST", url, json=payload, headers=headers,
+            "POST", url, **body_kwargs, headers=headers,
             **({"timeout": request_timeout} if request_timeout else {}),
         ) as response:
             if response.status_code >= 400:
@@ -1597,7 +1619,22 @@ def messages_to_openai_params(
         if isinstance(m, SystemMessage):
             api_msgs.append({"role": "system", "content": m.content or ""})
         elif isinstance(m, UserMessage):
-            m.content = durable_content(m.content, scan=isinstance(m.content, str), remote=True)
+            from attachments.admission import text_requires_admission
+            from attachments.content import scan_enabled
+
+            cached_scan = m._attachment_text_scan_cache
+            scan_paths = scan_enabled()
+            plain_text = isinstance(m.content, str)
+            scan_is_cached = (plain_text and cached_scan is not None
+                              and cached_scan[0] is m.content and cached_scan[1] == scan_paths)
+            if not scan_is_cached:
+                if plain_text and not text_requires_admission(m.content, scan_paths=scan_paths, scan_remote=True):
+                    # Cache only a negative syntax probe. Files, URLs, image refs
+                    # and request-specific image policy still take their live paths.
+                    m._attachment_text_scan_cache = (m.content, scan_paths)
+                else:
+                    m._attachment_text_scan_cache = None
+                    m.content = durable_content(m.content, scan=plain_text, remote=True)
             if isinstance(m.content, list):
                 content_parts: List[Dict[str, Any]] = []
                 for raw_part in m.content:
@@ -2078,7 +2115,8 @@ def run_nonstream_request_with_recovery(
                 _bind_recovery_budget(None)
 
         threading.Thread(
-            target=worker,
+            target=contextvars.copy_context().run,
+            args=(worker,),
             name=f"llm-nonstream-{role}",
             daemon=True,
         ).start()
@@ -2394,6 +2432,7 @@ def run_chat_completion_stream_worker(
     recovery_budget: Optional[_LogicalRequestBudget] = None,
     request_timeout: Optional[float] = None,
     request_context: Optional[Any] = None,
+    on_stream_activity: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     在后台线程中跑 chat.completions(stream=True)。
@@ -2415,7 +2454,14 @@ def run_chat_completion_stream_worker(
             pass
 
     try:
+        from agent_request_timing import current_request_trace
+
+        local_trace = current_request_trace()
+        if local_trace is not None:
+            local_trace.mark("request_conversion_started")
         api_messages = _messages_to_params_for_client(client, messages)
+        if local_trace is not None:
+            local_trace.mark("request_conversion_completed")
         kwargs: Dict[str, Any] = dict(
             model=model,
             messages=api_messages,
@@ -2625,8 +2671,8 @@ def run_chat_completion_stream_worker(
                         return False
                     in_flight_roles.add(request_role)
                 threading.Thread(
-                    target=open_until_first_token,
-                    args=(request_role,),
+                    target=contextvars.copy_context().run,
+                    args=(open_until_first_token, request_role),
                     name=f"llm-first-token-{request_role}",
                     daemon=True,
                 ).start()
@@ -2896,6 +2942,8 @@ def run_chat_completion_stream_worker(
                 close_stream_quietly()
                 put_stream_timing("aborted_during_stream")
                 return
+            if on_stream_activity is not None:
+                on_stream_activity()
             chunk_count += 1
             if isinstance(chunk, TransportEvent):
                 if chunk.kind == "reasoning_reset":

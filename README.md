@@ -551,6 +551,7 @@ Chat Completions 将工具图片抽取到连续工具结果之后的 user 消息
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `OPENAI_HTTP_TIMEOUT` | `300` | LLM 请求超时（秒） |
+| `STREAM_WORKER_IDLE_TIMEOUT_SEC` | `60` | 模型开始返回分片后，连续无新分片的超时（秒）；保留已收到进度并进入网络恢复，页面心跳不会重置此计时 |
 | `OPENAI_MAX_RETRIES` | `4` | LLM 请求最大重试次数 |
 | `OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC` | `30` | 首 token 竞速阈值；设为 `0` 关闭 |
 | `OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES` | `2` | 每次模型调用最多触发的并行竞速次数 |

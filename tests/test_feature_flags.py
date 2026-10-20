@@ -411,7 +411,7 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "followupManualDispatchEpochBySession[sid]" in sse
     assert "isFollowupAutoDispatchSuperseded(sid, dispatchOptions.autoDispatchEpoch)" in sse
     assert "recoverFollowupQueueDrainsFromSessionSnapshot" in sse
-    assert "async function isSessionAutoResumePending(sessionId)" in sse
+    assert "async function isSessionAutoResumePending(sessionId, allowPaused)" in sse
     assert "react_auto_resume" in sse
     assert "?recovery=true" not in sse
     assert "observeServerOwnedReactRecovery" in sse
