@@ -1,7 +1,7 @@
 """
 单轨上下文裁剪与摘要：不完整轮与下一条完整轮合并为一段（连续多个不完整轮先接在一起再与后续完整轮合并）；末尾无完整轮可合并时不做裁剪。**例外**：「[压缩摘要]」User 与其后 micro 段须整段保留至下一条真实 user 之前。
 待摘要段先做噪声工具与 reasoning 收敛，再在「完整保留×N 轮」之前收敛中间 ReAct。**计轮时 `[压缩摘要]` User 不计入**
-（与 `trim_message_dicts_by_kept_user_turns` / ui_events 用户数对齐），避免「摘要站掉一轮」导致尾窗错位、上一轮被吃进摘要；达标判定为当前整包 token ≤ 入口本地整包 token × CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）；达到则不再调用摘要模型。
+（与 `trim_message_dicts_by_kept_user_turns` / ui_events 用户数对齐），避免「摘要站掉一轮」导致尾窗错位、上一轮被吃进摘要；达标判定为当前整包 token ≤ 当前会话上下文窗口 × CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）；达到则不再调用摘要模型。
 摘要有 3 档保留尾窗：第 1 档完整保留 CONTEXT_KEEP_RECENT_TURNS（默认 3）个 user 轮；第 2 档仅 1 个 user 轮；第 3 档最后 1 条 user + 至多 CONTEXT_COMPRESS_ROUND3_MAX_REACT（默认 10）次 ReAct assistant 步。调用模型前先估算尾窗及邻接微压段，超过半窗预算的档位直接跳过；摘要轮尝试次数由 CONTEXT_COMPRESS_MAX_ROUNDS 限制，仍不达标则截尾兜底。
 其后每轮调用一次摘要模型（`compress_history_and_key`），解析 `<recap>` / `<summary>` 后写入 llm 与 key_context；流式结束写 ui_events（context_summary_body / key_context_body）。
 **更早待摘要原文从 llm_history 移除**，顺序为 System（压缩边界）→ User（历史摘要）→ 紧靠尾的微压 legacy 段 → 完整尾部；
@@ -33,7 +33,7 @@ Phase D：待摘要段噪声裁剪 (_apply_phase_d)
     ├─ 带 tool_calls 的 assistant → 去 reasoning + 正文微压
     └─ 无 tool 的 assistant → 剥 reasoning
     ↓
-达标检查？整包 token ≤ 入口本地整包 token × CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）
+达标检查？整包 token ≤ 当前会话上下文窗口 × CONTEXT_COMPRESS_TARGET_RATIO（默认 0.6）
     ↓ 是 → 返回微压后的 work（不调摘要 LLM）
     ↓ 否
 Phase E：完整保留区×3 之前的中间 ReAct 收敛 (_apply_phase_e)
@@ -42,7 +42,7 @@ Phase E：完整保留区×3 之前的中间 ReAct 收敛 (_apply_phase_e)
     ├─ 终稿 assistant 保留
     └─ 中间 ReAct assistant/tool → 微压
     ↓
-达标检查？整包 token ≤ 入口本地整包 token × 0.6
+达标检查？整包 token ≤ 当前会话上下文窗口 × 0.6
     ↓ 是 → 返回微压后的 work
     ↓ 否
 LLM 摘要阶段（最多 CONTEXT_COMPRESS_MAX_ROUNDS 个摘要轮，默认 3；轮内仍可能切换候选或重试格式）
@@ -63,7 +63,7 @@ LLM 摘要阶段（最多 CONTEXT_COMPRESS_MAX_ROUNDS 个摘要轮，默认 3；
        System(Conversation compacted…) → User([压缩摘要] recap) → 微压段 → 完整 tail
     5. prefix 原文从 llm_history 移除
     ↓
-    达标检查？整包 token ≤ 入口本地整包 token × 0.6
+    达标检查？整包 token ≤ 当前会话上下文窗口 × 0.6
     ├─ 是 → 结束摘要 loop
     └─ 否 → 还有轮次？继续下一轮（尾窗更窄）
     ↓
@@ -235,23 +235,21 @@ def _compress_ratio_reached(
     session_id: str,
     work: List,
     key_context: str,
-    baseline_tokens: int,
     *,
     prompt_language: str = "zh-CN",
     tools: Optional[List[Mapping[str, Any]]] = None,
 ) -> bool:
-    """本次压缩是否已相对入口本地基线收缩到目标比例。
+    """本地整包输入是否已降到当前会话窗口的目标比例。
 
     自动入口的 T 可以来自 provider usage 或其他计数方式，只负责决定是否
-    启动。压缩阶段必须固定使用本地的 A（入口）和 N（当前）比较，避免
-    两种口径不一致时把正常流程错误送入截尾兜底。
+    启动。各阶段均以本地整包输入（含静态提示、要点与工具定义）对当前
+    会话窗口判断是否达标，不使用压缩前的输入大小作为分母。
     """
     current_tokens = _full_pack_tokens_compress_work(
         session_id, work, key_context,
         prompt_language=prompt_language, tools=tools,
     )
-    baseline = max(1, int(baseline_tokens))
-    return float(current_tokens) / float(baseline) <= float(CONTEXT_COMPRESS_TARGET_RATIO)
+    return float(current_tokens) / float(_effective_context_window()) <= float(CONTEXT_COMPRESS_TARGET_RATIO)
 
 
 def _full_pack_pct_ui(
@@ -684,19 +682,18 @@ def _choose_summary_round(
     first_round: int,
     tail_keep: int,
     key_context: str,
-    baseline_tokens: int,
     estimate_work: Callable[[List, str], int],
 ) -> Tuple[Optional[Tuple[int, List, List]], bool, str]:
     """Choose a token-feasible tail before paying for an executor summary.
 
     Half a context window is the preferred retained-area ceiling.  The actual
-    local compression target can be looser, so one deepest-tail attempt is
+    window-based compression target can be looser, so one deepest-tail attempt is
     permitted when half-window preservation is impossible but the real target
     remains feasible.  Both checks include static prompt/key context, the
     micro-shrunk adjacent region, and room for the new recap/key facts.
     """
     window = _effective_context_window()
-    actual_budget = min(window, max(1, int(baseline_tokens * float(CONTEXT_COMPRESS_TARGET_RATIO))))
+    actual_budget = min(window, max(1, int(window * float(CONTEXT_COMPRESS_TARGET_RATIO))))
     preferred_budget = min(actual_budget, max(1, window // 2))
     headroom = min(4_096, max(32, int(window * 0.03)), max(1, preferred_budget // 10))
     available: List[Tuple[int, List, List, int]] = []
@@ -752,6 +749,7 @@ def _compress_summary_round(
     round_idx: int = 1,
     session_id: str = "",
     prompt_language: str = "zh-CN",
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[str, str, List]:
     """单次摘要 LLM → recap + key 要点 + legacy 微压段。"""
     hint_list = hints if hints is not None else []
@@ -795,6 +793,7 @@ def _compress_summary_round(
         session_id=session_id,
         prompt_language=prompt_language,
         archive=archive,
+        should_stop=should_stop,
     )
     archive_pointer = str(archive.get("ref") or "").strip()
     if archive_pointer and summary and archive_pointer not in summary:
@@ -1189,6 +1188,7 @@ def _run_compress_executor_dialogue(
     session_id: str = "",
     prompt_language: str = "zh-CN",
     archive: Optional[Mapping[str, Any]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Tuple[str, str]:
     """组包 → trim → 执行端 chat（compress_history_and_key）→ 解析 recap + key。"""
     if not (key_context or "").strip() and not dialogue_msgs:
@@ -1225,7 +1225,11 @@ def _run_compress_executor_dialogue(
             return _compress_executor_excerpt_fallback(
                 dialogue_msgs, suffix=suffix, archive=archive
             ), ""
+        completion_info: dict[str, Any] = {}
+        previous_truncated = False
         for attempt in range(2):
+            if should_stop and should_stop():
+                return "", ""
             reasoning_streamed = False
 
             def _buffer_delta(piece: str) -> None:
@@ -1256,11 +1260,26 @@ def _run_compress_executor_dialogue(
                     "只写已完成的成品；不要写草稿、计划、自我对话、analysis、解释、"
                     "Markdown 围栏或其它标签。"
                 )
+                if previous_truncated:
+                    usage = completion_info.get("usage") or {}
+                    actual_tokens = max(0, int(usage.get("completion_tokens") or 0))
+                    target = max(512, actual_tokens // 2) if actual_tokens else 4096
+                    strict = (
+                        "上一次摘要因输出 token 上限被截断，未能闭合所需标签。请重新压缩表达，"
+                        f"两段成品正文合计尽量控制在 {target} token 以内，给思考和结束标签留出空间。\n"
+                        "先保留用户约束、关键事实、已完成动作、未完成事项和原文归档引用；"
+                        "合并重复叙述，用路径和短说明代替大段源码或工具原文。"
+                        "只输出完整的 <recap>...</recap><summary>...</summary>，"
+                        "不要 analysis、草稿或解释，必须在本次回复内闭合两个标签。"
+                    )
                 call_msgs = list(msgs) + [UserMessage(content=strict)]
+            completion_info.clear()
             if stream_sink is not None:
                 stream_kwargs = {
                     "on_content_delta": _buffer_delta,
                     "session_id": session_id,
+                    "should_stop": should_stop,
+                    "completion_info": completion_info,
                 }
                 if hint_sink is not None:
                     stream_kwargs["on_reasoning_delta"] = _reasoning_delta
@@ -1274,8 +1293,20 @@ def _run_compress_executor_dialogue(
                         except Exception:
                             pass
             else:
-                raw = executor_chat_complete(call_msgs, session_id=session_id).strip()
+                raw = executor_chat_complete(
+                    call_msgs, session_id=session_id,
+                    should_stop=should_stop,
+                    completion_info=completion_info,
+                ).strip()
             recap, key_body = _parse_compress_dialogue_output(raw)
+            finish_reason = str(completion_info.get("finish_reason") or completion_info.get("stop_reason") or "")
+            previous_truncated = finish_reason.lower() in {"length", "max_tokens", "max_output_tokens", "incomplete"}
+            logger.info(
+                "compression_result session=%s attempt=%s model=%s finish_reason=%s output_tokens=%s "
+                "content_chars=%s recap_chars=%s summary_chars=%s",
+                session_id, attempt + 1, completion_info.get("model") or "unknown", finish_reason or "unknown",
+                (completion_info.get("usage") or {}).get("completion_tokens"), len(raw), len(recap), len(key_body),
+            )
             quality_issue = (
                 _compress_dialogue_quality_issue(recap, key_body)
                 if recap and key_body
@@ -1295,10 +1326,14 @@ def _run_compress_executor_dialogue(
                     "compress_history_and_key 格式无效，已丢弃输出并准备重试 attempt=%s",
                     attempt + 1,
                 )
+            if attempt == 1:
+                break
             _push_progress_hint(
                 hints if hints is not None else [],
                 hint_sink,
                 (
+                    "【上下文摘要】输出达到 token 上限，摘要未完成；正在收敛篇幅重新生成…"
+                    if previous_truncated else
                     f"【上下文摘要】第 {attempt + 1} 次摘要仍含草稿/规划内容，已丢弃并准备重试…"
                     if quality_issue
                     else f"【上下文摘要】第 {attempt + 1} 次摘要输出格式无效，已丢弃并准备重试…"
@@ -1320,6 +1355,8 @@ def _run_compress_executor_dialogue(
             dialogue_msgs, suffix=suffix, archive=archive
         ), ""
     except Exception as e:
+        if should_stop and should_stop():
+            return "", ""
         logger.warning("compress_history_and_key 调用失败: %s", e)
         _push_progress_hint(
             hints if hints is not None else [],
@@ -1650,13 +1687,9 @@ def _compress_unified_in_place(
 
         def ratio_reached(messages: List, current_key: str) -> bool:
             return _compress_ratio_reached(
-                session_id, messages, current_key, baseline_tokens,
+                session_id, messages, current_key,
                 prompt_language=prompt_language, tools=tools,
             )
-
-        # A: 本地口径的压缩前基线。T 仅用于外层决定是否进入此流程；此后
-        # 每一步都以当前本地 N / A 判断是否已经压缩充分。
-        baseline_tokens = max(1, estimate_work(work, new_key))
 
         _push_progress_hint(
             hints,
@@ -1707,7 +1740,7 @@ def _compress_unified_in_place(
 
         changed_any = bool(dchg or ech)
 
-        # 本地 N / A 达标后即可退出；不再拿外层触发窗口 T 作为退出条件。
+        # 本地整包输入降到当前会话窗口的目标比例后，才跳过模型摘要。
         if ratio_reached(work, new_key):
             return _preview_llm_for_ui_estimate(work), new_key, changed_any, hints, False, None
 
@@ -1734,7 +1767,7 @@ def _compress_unified_in_place(
             if ratio_reached(work, cur_key):
                 break
             choice, one_attempt, no_choice_reason = _choose_summary_round(
-                work, next_policy_round, tail_keep, cur_key, baseline_tokens,
+                work, next_policy_round, tail_keep, cur_key,
                 estimate_work,
             )
             if choice is None:
@@ -1778,6 +1811,7 @@ def _compress_unified_in_place(
                 round_idx=round_idx,
                 session_id=session_id,
                 prompt_language=prompt_language,
+                should_stop=should_stop,
             )
             if should_stop and should_stop():
                 return snapshot_llm, key_context, False, hints, False, None
@@ -1786,11 +1820,11 @@ def _compress_unified_in_place(
             kb = (key_body or "").strip()
             if kb:
                 key_round_chunks.append(kb)
-            cur_key = _upsert_compress_summary_key_context(
-                session_id,
-                "\n\n".join(key_round_chunks),
-                current_key_context=cur_key,
-            )
+                cur_key = _upsert_compress_summary_key_context(
+                    session_id,
+                    "\n\n".join(key_round_chunks),
+                    current_key_context=cur_key,
+                )
             work, recap = _merge_summary_into_work(summary, micro_prefix, tail)
             if recap:
                 new_recap_text = recap
@@ -1847,9 +1881,9 @@ def _compress_unified_in_place(
                 reason="max_rounds",
             )
             logger.debug(
-                "compress exit fallback: fp_final=%s baseline_tokens=%s target_ratio=%s full_pack_entry=%s did_trunc=%s",
+                "compress exit fallback: fp_final=%s context_window=%s target_ratio=%s full_pack_entry=%s did_trunc=%s",
                 estimate_work(work, new_key),
-                baseline_tokens,
+                _effective_context_window(),
                 CONTEXT_COMPRESS_TARGET_RATIO,
                 int(full_pack),
                 did_trunc,

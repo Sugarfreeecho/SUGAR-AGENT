@@ -757,7 +757,10 @@ class RuntimeProjector:
                 "payload": msg_payload,
                 marker: index,
             }
-            if marker == "replacement_index":
+            # A compacted prefix also represents pre-existing history. Keep
+            # its provenance so a later rewrite does not judge it by the last
+            # visible UI event's (earlier) sequence number.
+            if marker in {"replacement_index", "compacted_index"}:
                 row["replaced_by_seq"] = event.seq
             rows.append(row)
         return rows

@@ -53,7 +53,7 @@ def test_compress_executor_retries_draft_then_accepts_finished_answer(monkeypatc
     calls = []
     monkeypatch.setattr(agent_memory, "load_prompt_template", lambda *_args: "compress")
 
-    def fake_complete(messages, session_id=""):
+    def fake_complete(messages, session_id="", **_kwargs):
         calls.append(messages)
         return next(outputs)
 
@@ -148,7 +148,7 @@ def test_summary_path_skips_three_turn_tail_when_retained_area_exceeds_half_wind
         return 100 + sum(len(str(message.content or "")) for message in messages)
 
     choice, one_attempt, reason = agent_memory._choose_summary_round(
-        work, 1, 3, "", 1200, estimate,
+        work, 1, 3, "", estimate,
     )
 
     assert choice is not None
@@ -210,7 +210,7 @@ def test_summary_path_rejects_all_tails_that_cannot_meet_target(monkeypatch):
     ]
 
     choice, one_attempt, reason = agent_memory._choose_summary_round(
-        work, 1, 1, "", 1500,
+        work, 1, 1, "",
         lambda messages, _key: 100 + sum(len(str(message.content or "")) for message in messages),
     )
 
@@ -223,14 +223,15 @@ def test_summary_path_allows_one_deepest_attempt_when_half_window_is_impossible(
     import agent_memory
 
     monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_COMPRESS_TARGET_RATIO", 0.6)
     monkeypatch.setattr(agent_memory, "CONTEXT_MICRO_WORK_ROUNDS", 0)
     work = [
         agent_memory.UserMessage(content="old"),
         agent_memory.AssistantMessage(content="answer"),
-        agent_memory.UserMessage(content="latest" * 100),
+        agent_memory.UserMessage(content="latest" * 75),
     ]
     choice, one_attempt, reason = agent_memory._choose_summary_round(
-        work, 1, 1, "", 1500,
+        work, 1, 1, "",
         lambda messages, _key: 100 + sum(len(str(message.content or "")) for message in messages),
     )
 
@@ -371,19 +372,66 @@ def test_context_window_override_drives_auto_compress_entry(monkeypatch):
     ) is True
 
 
-def test_compress_completion_uses_local_entry_baseline_not_context_window(monkeypatch):
+@pytest.mark.parametrize("current_tokens, expected", [(599, True), (600, True), (601, False)])
+def test_compress_completion_targets_context_window(monkeypatch, current_tokens, expected):
     import agent_memory
 
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 1000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_COMPRESS_TARGET_RATIO", 0.6)
     monkeypatch.setattr(
         agent_memory,
         "_full_pack_tokens_compress_work",
-        lambda *_args, **_kwargs: 55,
+        lambda *_args, **_kwargs: current_tokens,
     )
 
-    # N / A = 55 / 100 is already below 60%, even if a separately measured
-    # auto-entry T was above a much larger model context window.
-    assert agent_memory._compress_ratio_reached("s1", [], "", 100) is True
-    assert agent_memory._compress_ratio_reached("s1", [], "", 90) is False
+    assert agent_memory._compress_ratio_reached("s1", [], "") is expected
+
+
+@pytest.mark.parametrize("trimmed_tokens, expected_rounds", [(600, []), (892, [1])])
+def test_compression_continues_until_session_window_target(monkeypatch, trimmed_tokens, expected_rounds):
+    import agent_memory
+
+    history = [
+        agent_memory.UserMessage(content="old question"),
+        agent_memory.AssistantMessage(content="old answer"),
+        agent_memory.UserMessage(content="latest question"),
+        agent_memory.AssistantMessage(content="latest answer"),
+    ]
+    trimmed = list(history)
+    trimmed[1] = agent_memory.AssistantMessage(content="trimmed answer")
+    calls = []
+    monkeypatch.setattr(agent_memory, "CONTEXT_WINDOW", 9000)
+    monkeypatch.setattr(agent_memory, "CONTEXT_COMPRESS_TARGET_RATIO", 0.6)
+    monkeypatch.setattr(agent_memory, "_runtime_v2_primary", lambda: True)
+
+    def estimate(_sid, messages, _key, **_kwargs):
+        if any(agent_memory.is_compress_recap_user_message(message) for message in messages):
+            return 500
+        if any(message.content == "trimmed answer" for message in messages):
+            return trimmed_tokens
+        return 1850 if len(messages) == len(history) else 300
+
+    monkeypatch.setattr(agent_memory, "_full_pack_tokens_for_session_preview", estimate)
+    monkeypatch.setattr(agent_memory, "_apply_phase_d", lambda messages, _idx: (messages, False))
+    monkeypatch.setattr(agent_memory, "_apply_phase_e", lambda *_a: (trimmed, True))
+    monkeypatch.setattr(agent_memory, "_assemble_micro_region_only_snap", lambda *_a: [])
+    monkeypatch.setattr(agent_memory, "_upsert_compress_summary_key_context", lambda *_a, **_k: "key")
+    monkeypatch.setattr(
+        agent_memory,
+        "_compress_summary_round",
+        lambda *_a, **kwargs: (calls.append(kwargs["round_idx"]) or "recap", "key", []),
+    )
+
+    out, _key, changed, _hints, used_summary, _recap = agent_memory.run_context_policy(
+        history, "", "session-1", force_user_compact=False, context_window=1000,
+    )
+
+    # A 1850 -> 892 trim is more than a 40% reduction, but remains above
+    # 60% of this session's 1000-token window and must reach the summary model.
+    assert calls == expected_rounds
+    assert changed is True
+    assert used_summary is bool(expected_rounds)
+    assert estimate("session-1", out, "") <= 600
 
 
 def test_compress_executor_stream_delta_is_forwarded_live(monkeypatch):
@@ -393,7 +441,7 @@ def test_compress_executor_stream_delta_is_forwarded_live(monkeypatch):
 
     monkeypatch.setattr(agent_memory, "load_prompt_template", lambda _name: "compress")
 
-    def fake_stream(_msgs, on_content_delta=None, session_id=""):
+    def fake_stream(_msgs, on_content_delta=None, session_id="", **_kwargs):
         if on_content_delta:
             on_content_delta("<recap>live")
         order.append("executor_after_delta")
@@ -544,7 +592,7 @@ def test_compression_reasoning_closes_each_failed_attempt(monkeypatch):
     frames = []
     monkeypatch.setattr(agent_memory, "load_prompt_template", lambda _name: "compress")
 
-    def stream(_msgs, on_content_delta=None, session_id="", *, on_reasoning_delta=None, on_reasoning_end=None):
+    def stream(_msgs, on_content_delta=None, session_id="", *, on_reasoning_delta=None, on_reasoning_end=None, **_kwargs):
         on_reasoning_delta("thinking")
         return "invalid"
 

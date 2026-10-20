@@ -60,6 +60,17 @@ class RuntimeHistoryOps:
             timeout_seconds=self._transaction_timeout_seconds,
         )
 
+    def _snapshot_for_update(self, session_id: str) -> dict:
+        """Catch up under the caller's fact transaction before inspecting state."""
+        snapshot = self.snapshots.read_for_update(session_id)
+        through_seq = self.event_log.next_seq(session_id) - 1
+        if (self.snapshots._projection_version_matches(snapshot)
+                and int(snapshot.get("last_seq") or 0) == through_seq):
+            return snapshot
+        return self.snapshots.project_after_append(
+            session_id, snapshot, self.event_log, self.projector, through_seq,
+        )
+
     def delete_message(self, session_id: str, target_seq: int, reason: str = "") -> RuntimeEvent:
         return self._append_and_snapshot(session_id, "message_deleted", {
             "target_seq": int(target_seq),
@@ -625,6 +636,25 @@ class RuntimeHistoryOps:
         data["content"] = content
         return self._append_and_snapshot(session_id, event_type, data, run_id=run_id)
 
+    def append_model_tool_results(self, session_id: str, payloads: list[dict], *, run_id=None) -> list[RuntimeEvent]:
+        """Commit already completed tool results with one owned fact append.
+
+        Each tool remains a separate model_tool fact. Callers must checkpoint
+        these before awaiting another unfinished tool or sending another API.
+        """
+        if not payloads:
+            return []
+        rows = [{"type": "model_tool", "run_id": run_id,
+                 "payload": {**payload, "role": "tool"}} for payload in payloads]
+        with self._session_transaction(session_id):
+            snapshot = self._snapshot_for_update(session_id)
+            events = self.event_log._append_many_unlocked(session_id, rows)
+            for event in events:
+                snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+            self.snapshots.write_checkpointed(session_id, snapshot)
+            return events
+
     def commit_user_turn(
         self,
         session_id: str,
@@ -639,9 +669,7 @@ class RuntimeHistoryOps:
         """Atomically commit the UI and model representations of one user turn."""
         op_id = str(operation_id or "").strip()
         with self._session_transaction(session_id):
-            snapshot = self.snapshots.read_for_update(session_id)
-            if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
-                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            snapshot = self._snapshot_for_update(session_id)
             if op_id and op_id in set(snapshot.get("operation_ids") or []):
                 return None
             payload = dict(model_payload or {})
@@ -676,9 +704,7 @@ class RuntimeHistoryOps:
     ) -> Optional[RuntimeEvent]:
         op_id = str(operation_id or "").strip()
         with self._session_transaction(session_id):
-            snapshot = self.snapshots.read_for_update(session_id)
-            if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
-                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            snapshot = self._snapshot_for_update(session_id)
             if op_id and op_id in set(snapshot.get("operation_ids") or []):
                 return None
             payload = dict(model_payload or {})
@@ -755,9 +781,7 @@ class RuntimeHistoryOps:
             if isinstance(item, dict)
         ]
         with self._session_transaction(session_id):
-            snapshot = self.snapshots.read_for_update(session_id)
-            if int(snapshot.get("last_seq") or 0) != self.event_log.next_seq(session_id) - 1:
-                snapshot = self.projector.project(self.event_log.read_all(session_id))
+            snapshot = self._snapshot_for_update(session_id)
             current = self._model_message_dicts_from_snapshot(snapshot)
             if current == target:
                 return None
@@ -933,14 +957,20 @@ class RuntimeHistoryOps:
                 event.seq,
             )
             snapshot = self.snapshots.read_for_update(session_id)
-            if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+            t_after_snapshot_read = time.perf_counter()
+            if (
+                not self.snapshots._projection_version_matches(snapshot)
+                or int(snapshot.get("last_seq") or 0) != int(event.seq) - 1
+            ):
                 logger.info(
-                    "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=full_projection_started",
+                    "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=projection_catchup_started",
                     session_id,
                     event_type,
                     str(run_id or ""),
                 )
-                snapshot = self.projector.project(self.event_log.read_all(session_id))
+                snapshot = self.snapshots.project_after_append(
+                    session_id, snapshot, self.event_log, self.projector, event.seq,
+                )
             else:
                 snapshot = self.projector.project_incremental(snapshot, event)
             t_after_project = time.perf_counter()
@@ -955,7 +985,8 @@ class RuntimeHistoryOps:
         t_after_write = time.perf_counter()
         logger.info(
             "rt2_append_and_snapshot session=%s event_type=%s run_id=%s "
-            "step_append_ms=%s step_project_ms=%s step_snapshot_write_ms=%s total_ms=%s",
+            "step_append_ms=%s step_project_ms=%s step_snapshot_write_ms=%s total_ms=%s "
+            "step_snapshot_read_ms=%s step_project_apply_ms=%s",
             session_id,
             event_type,
             str(run_id or ""),
@@ -963,6 +994,8 @@ class RuntimeHistoryOps:
             _rt2_step_ms(t_after_append, t_after_project),
             _rt2_step_ms(t_after_project, t_after_write),
             _rt2_step_ms(t0, t_after_write),
+            _rt2_step_ms(t_after_append, t_after_snapshot_read),
+            _rt2_step_ms(t_after_snapshot_read, t_after_project),
         )
         logger.info(
             "rt2_append_and_snapshot_completed session=%s event_type=%s run_id=%s seq=%s",
@@ -1221,7 +1254,10 @@ class RuntimeHistoryOps:
         payload = row.get("payload")
         if not isinstance(payload, dict):
             payload = {}
-        content = str(payload.get("content") or "")
+        # Match the model projection's content types. Stringifying image blocks
+        # makes unchanged history compare unequal and corrupts rewrite/branch
+        # checkpoints by replacing structured content with its repr.
+        content = copy.deepcopy(payload.get("content") or "")
         if role == "user":
             item = {"type": "user", "content": content}
             if isinstance(payload.get("metadata"), dict):

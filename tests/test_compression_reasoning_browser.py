@@ -41,13 +41,13 @@ def compression_page(browser_page):
       function stripWelcome(){}
       function getProcessBody(){return document.getElementById('body');}
       function reactGenerationForContext(){return 0;}
-      function insertReactOrderedFeedRow(body,row){body.append(row);}
       function bindFeedChunkScrollChain(){}
       function animateSmoothTraceRowInsertion(){}
       function finishStreamScrollIfFollow(){}
       function registerProcessAggregateRow(){}
       function unregisterProcessAggregateRow(){}
       function refreshAggregateStatsSmart(){}
+      function bumpAggregateMaxReactIter(){}
       function refreshFeedChunkOverflow(){}
       function scheduleFeedChunkOverflowRefresh(){}
       function scrollContentAreaIfFollow(){}
@@ -72,6 +72,8 @@ def compression_page(browser_page):
         "trimSurroundingBlankLines", "truncateLogTextForUi", "feedRowCollapseAriaLabel",
         "syncFeedRowCollapseButton", "toggleCollapsibleFeedRow", "autoCollapseLlmReasoningRow",
         "createProcessFeedRow", "handleTraceChunkClick", "handleToolRowChunkClick",
+        "reactFeedPhase", "appendProcessRowBeforePendingAppendSteer", "appendMonotonicProcessRow",
+        "insertReactOrderedFeedRow", "prepareContextProgressRows",
         "handleLlmRowChunkClick", "bindFeedChunkInteraction", "appendLog",
         "flushProgressDeltaText", "scheduleProgressDeltaFlush", "ensureProgressScroller",
         "appendProgressStreamDelta", "appendProgressLog", "applyProgressPersistedBody",
@@ -233,3 +235,56 @@ def test_compression_progress_replaces_status_without_losing_summary(compression
          {"type": "context_summary_progress", "content": "摘要完成"})
     assert summary.text_content() == "摘要完成\n\n完整摘要"
     assert page.evaluate("!!ctx.progressStream['context-summary']") is False
+
+
+@pytest.mark.parametrize("replay", [False, True])
+def test_later_compaction_appends_after_intervening_execution_rows(compression_page, replay):
+    result = compression_page.evaluate("""async replay => {
+      const emit=async event=>replay?renderEvent(ctx,event,0,currentSessionId):await deliver([event]);
+      await emit({type:'context_trim_progress',content:'first trim'});
+      await emit({type:'context_summary_progress',content:'first summary'});
+      await emit({type:'context_summary_body',content:'first recap'});
+      await emit({type:'key_context_body',content:'first key'});
+      createProcessFeedRow(ctx,'llm-reasoning','later reasoning',{reactIter:44},currentSessionId);
+      createProcessFeedRow(ctx,'tool-call','later tool',{reactIter:44},currentSessionId);
+      await emit({type:'context_trim_progress',content:'second trim'});
+      await emit({type:'context_summary_progress',content:'second summary'});
+      await emit({type:'context_summary_body',content:'second recap'});
+      await emit({type:'key_context_body',content:'second key'});
+      return Array.from(document.querySelectorAll('#body > .feed-item')).map(row=>({
+        type:row.dataset.logType,text:row.querySelector('.feed-chunk-scroller').textContent
+      }));
+    }""", replay)
+    assert [row["type"] for row in result] == [
+        "llm-reasoning", "context-trim", "context-summary", "key-context",
+        "llm-reasoning", "tool-call", "context-trim", "context-summary", "key-context",
+    ]
+    assert result[2]["text"] == "first summary\n\nfirst recap"
+    assert result[7]["text"] == "second summary\n\nsecond recap"
+
+
+def test_new_compaction_reasoning_does_not_reopen_old_summary(compression_page):
+    page = compression_page
+    send(page, reasoning("first thought"), {"type": "context_summary_reasoning_end", "ephemeral": True},
+         {"type": "context_summary_body", "content": "first recap"})
+    page.evaluate("createProcessFeedRow(ctx,'tool-call','completed tool',{reactIter:44},currentSessionId)")
+    send(page, reasoning("second thought"))
+    rows = page.locator('[data-log-type="context-summary"]')
+    assert rows.count() == 2
+    assert rows.nth(0).locator('.context-summary-reasoning').get_attribute("open") is None
+    assert rows.nth(1).locator('.context-summary-reasoning .feed-chunk-scroller').text_content() == "second thought"
+    assert page.locator('#body > .feed-item').last.get_attribute('data-log-type') == 'context-summary'
+
+
+def test_pending_followup_does_not_split_active_compaction(compression_page):
+    result = compression_page.evaluate("""async () => {
+      const pending=createProcessFeedRow(ctx,'user-steer','queued',{},currentSessionId).closest('.feed-item');
+      pending.dataset.steerMode='append';pending.dataset.steerPending='1';
+      await deliver([{type:'context_trim_progress',content:'trim'},
+        {type:'context_summary_progress',content:'summarizing'},
+        {type:'context_summary_reasoning_delta',delta:'thinking',ephemeral:true},
+        {type:'context_summary_delta',delta:'draft',ephemeral:true},
+        {type:'context_summary_body',content:'recap'}]);
+      return Array.from(document.querySelectorAll('#body > .feed-item')).map(row=>row.dataset.logType);
+    }""")
+    assert result == ['llm-reasoning', 'context-trim', 'context-summary', 'user-steer']

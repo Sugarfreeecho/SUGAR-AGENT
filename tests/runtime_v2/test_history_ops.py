@@ -309,6 +309,97 @@ class RuntimeHistoryOpsTests(unittest.TestCase):
                 ["u", "a"],
             )
 
+    def test_rewrite_after_finish_prefix_compaction_keeps_pre_turn_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            ops.commit_user_turn("s1", "original request")
+            ops.append_model_message("s1", "assistant", "working draft")
+            ops.append_model_message(
+                "s1", "assistant", "done", metadata={"is_assistant_response": True}
+            )
+            ops.append_model_message("s1", "system", "Loop finished")
+            final = ops.commit_assistant_final("s1", "done")
+            expected = RuntimeModelProjection(tmp).read_message_dicts("s1")
+            expected[1]["content"] = "working draft normalized"
+            finish = ops.reconcile_model_history("s1", expected, reason="finish")
+            self.assertEqual(finish.type, "model_prefix_compacted")
+            self.assertGreater(finish.seq, final.seq)
+
+            target = ops.commit_user_turn("s1", "follow-up to rewrite")
+            # The stopped run can also compact history after the send. Restore
+            # the checkpoint before the target, including the finish prefix.
+            ops.reconcile_model_history(
+                "s1",
+                [{"type": "system", "content": "post-send summary"},
+                 {"type": "user", "content": "follow-up to rewrite"}],
+                reason="auto_context_policy",
+            )
+            op = ops.truncate_visible_history_before_seq(
+                "s1", target_seq=target.seq, keep_to_seq=final.seq
+            )
+
+            self.assertEqual(op.payload["restore_model_messages"], expected)
+            self.assertEqual(RuntimeModelProjection(tmp).read_message_dicts("s1"), expected)
+            replay = ops.projector.project(ops.event_log.read_all("s1"))
+            self.assertEqual(ops._model_message_dicts_from_snapshot(replay), expected)
+            self.assertEqual(
+                [event["content"] for event in RuntimeUiProjection(tmp).read_ui_events("s1")],
+                ["original request", "done"],
+            )
+            ops.commit_user_turn("s1", "rewritten follow-up")
+            self.assertEqual(
+                RuntimeModelProjection(tmp).read_message_dicts("s1"),
+                expected + [{"type": "user", "content": "rewritten follow-up"}],
+            )
+
+    def test_reconcile_multimodal_history_does_not_rewrite_unchanged_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            image = {"type": "image", "attachment": {
+                "attachmentId": "sha256:" + "a" * 64,
+                "mediaType": "image/png", "bytes": 123,
+                "width": 16, "height": 16, "name": "preview.png",
+            }}
+            messages = [
+                {"type": "user", "content": [{"type": "text", "text": "inspect"}, image]},
+                {"type": "assistant", "content": "", "tool_calls": [
+                    {"id": "read-image", "name": "read_file", "args": {"path": "preview.png"}},
+                ]},
+                {"type": "tool", "tool_call_id": "read-image",
+                 "content": [{"type": "text", "text": "preview"}, image]},
+                {"type": "assistant", "content": "done"},
+            ]
+            ops.replace_model_history("s1", messages)
+            before = ops.event_log.read_all("s1")
+
+            self.assertIsNone(ops.reconcile_model_history("s1", messages, reason="finish"))
+            self.assertEqual(ops.event_log.read_all("s1"), before)
+            self.assertEqual(RuntimeModelProjection(tmp).read_message_dicts("s1"), messages)
+
+    def test_rewrite_checkpoint_and_branch_preserve_multimodal_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = RuntimeHistoryOps(tmp)
+            image = {"type": "image", "attachment": {
+                "attachmentId": "sha256:" + "b" * 64,
+                "mediaType": "image/png", "bytes": 123,
+                "width": 16, "height": 16, "name": "preview.png",
+            }}
+            messages = [
+                {"type": "user", "content": [{"type": "text", "text": "inspect"}, image]},
+                {"type": "tool", "tool_call_id": "image-result", "content": [image]},
+                {"type": "assistant", "content": "done"},
+            ]
+            seed = ops.replace_model_history("s1", messages)
+            final = RuntimeMirror(tmp).mirror_ui_event("s1", {"type": "final", "content": "done"})
+            target = ops.commit_user_turn("s1", "rewrite me")
+            op = ops.truncate_visible_history_before_seq(
+                "s1", target_seq=target.seq, keep_to_seq=final.seq
+            )
+            self.assertEqual(op.payload["restore_model_messages"], messages)
+            self.assertEqual(RuntimeModelProjection(tmp).read_message_dicts("s1"), messages)
+            ops.create_branch("branch", source_session_id="s1", branch_from_seq=seed.seq)
+            self.assertEqual(RuntimeModelProjection(tmp).read_message_dicts("branch"), messages)
+
     def test_model_read_repairs_snapshot_left_behind_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             ops = RuntimeHistoryOps(tmp)
