@@ -1,0 +1,1909 @@
+diff --git a/app/agent_extensions.py b/app/agent_extensions.py
+index 0b33d71..1fc8c12 100644
+--- a/app/agent_extensions.py
++++ b/app/agent_extensions.py
+@@ -134,6 +134,8 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
+         tuple(str(path) for path in manager.discovery_dirs),
+         str(manager.state.path),
+     )
++    with _lock:
++        generation = _extension_catalog_generation
+     if not force:
+         with _lock:
+             if (
+@@ -160,7 +162,8 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
+                     return _plugin_cache[2]
+         loaded = manager.load_enabled()
+         with _lock:
+-            _plugin_cache = (time.monotonic(), cache_key, loaded)
++            if generation == _extension_catalog_generation:
++                _plugin_cache = (time.monotonic(), cache_key, loaded)
+         return loaded
+ 
+ 
+@@ -183,6 +186,7 @@ def _schedule_plugin_cache_refresh(
+     if _swr_refresh_in_flight:
+         return True
+     _swr_refresh_in_flight = True
++    generation = _extension_catalog_generation
+     _swr_work_begin()
+ 
+     def _refresh() -> None:
+@@ -191,7 +195,8 @@ def _schedule_plugin_cache_refresh(
+             with _scan_lock:
+                 loaded = manager.load_enabled()
+             with _lock:
+-                _plugin_cache = (time.monotonic(), cache_key, loaded)
++                if generation == _extension_catalog_generation:
++                    _plugin_cache = (time.monotonic(), cache_key, loaded)
+         except Exception:
+             logger.warning("Background plugin cache refresh failed", exc_info=True)
+         finally:
+@@ -609,10 +614,11 @@ async def plugin_command_descriptions() -> list[Dict[str, Any]]:
+     return _plugin_command_catalog(loaded, runtime_rows)
+ 
+ 
+-async def start_plugin_background_services() -> list[Dict[str, Any]]:
++async def start_plugin_background_services(*, loaded: PluginLoadResult | None = None) -> list[Dict[str, Any]]:
+     """Start manifest-declared services by activating their isolated workers."""
+ 
+-    loaded = load_plugins(force=True)
++    if loaded is None:
++        loaded = await asyncio.to_thread(load_plugins, force=True)
+     return await asyncio.to_thread(
+         get_plugin_runtime_registry().background_status,
+         loaded.plugins,
+@@ -924,6 +930,7 @@ def _schedule_hook_manager_rebuild(
+     if _hook_manager_rebuild_in_flight:
+         return
+     _hook_manager_rebuild_in_flight = True
++    generation = _extension_catalog_generation
+     _swr_work_begin()
+ 
+     def _rebuild() -> None:
+@@ -931,7 +938,8 @@ def _schedule_hook_manager_rebuild(
+         try:
+             manager = _build_hook_manager(loaded, runtime_definitions)
+             with _lock:
+-                _hook_managers[loop] = (signature, manager)
++                if generation == _extension_catalog_generation:
++                    _hook_managers[loop] = (signature, manager)
+         except Exception:
+             logger.warning("Background hook manager rebuild failed", exc_info=True)
+         finally:
+@@ -1013,20 +1021,23 @@ def hook_snapshot() -> Dict[str, Any]:
+     }
+ 
+ 
+-def invalidate_extension_caches() -> None:
++def invalidate_extension_caches(*, plugin_id: str | None = None) -> None:
+     global _plugin_cache
+     with _lock:
+         _plugin_cache = None
+         _hook_managers.clear()
+         _bump_extension_catalog_generation()
+-    # A stale-while-revalidate scan may be in flight with pre-invalidation
+-    # data; wait it out (bounded by the scan itself) so its result cannot
+-    # repopulate the cache after this point.
+-    _drain_background_refreshes()
++    # Background refreshes publish only into their original generation. A
++    # targeted toggle must not wait up to 60 seconds for unrelated rebuilds.
++    if plugin_id is None:
++        _drain_background_refreshes()
+     try:
+-        from plugin_host_services import release_all_plugin_leases
++        from plugin_host_services import release_all_plugin_leases, release_plugin_leases
+ 
+-        release_all_plugin_leases()
++        if plugin_id is None:
++            release_all_plugin_leases()
++        else:
++            release_plugin_leases(plugin_id)
+     except Exception:
+         logger.debug("Plugin host-service lease cleanup failed", exc_info=True)
+     try:
+@@ -1035,7 +1046,11 @@ def invalidate_extension_caches() -> None:
+         invalidate_bundled_workflow_callbacks()
+     except Exception:
+         logger.debug("Workflow callback cache cleanup failed", exc_info=True)
+-    get_plugin_runtime_registry().invalidate()
++    registry = get_plugin_runtime_registry()
++    if plugin_id is None:
++        registry.invalidate()
++    else:
++        registry.invalidate(plugin_id=plugin_id)
+ 
+ 
+ def _drain_background_refreshes() -> None:
+@@ -1101,8 +1116,11 @@ def reload_extensions() -> PluginReloadResult:
+ 
+ 
+ def set_plugin_enabled(plugin_id: str, enabled: bool) -> Mapping[str, object]:
++    from plugins import normalize_namespace
++
++    plugin_id = normalize_namespace(plugin_id)
+     state = plugin_manager().set_enabled(plugin_id, enabled)
+-    invalidate_extension_caches()
++    invalidate_extension_caches(plugin_id=plugin_id)
+     try:
+         from agent_tools import invalidate_skills_cache
+ 
+@@ -1425,14 +1443,17 @@ def audit_plugin_inventory(
+     run_id: str = "",
+     *,
+     event_type: str = "plugin_state_changed",
++    reuse_catalog: bool = False,
+ ) -> None:
+     if not _runtime_v2_enabled() or not session_id:
+         return
+     try:
+         ops = _history_ops(session_manager)
+         manager = plugin_manager()
+-        report = manager.discover_report()
+-        loaded_ids = {plugin.plugin_id for plugin in load_plugins(force=True).plugins}
++        report = manager.last_discovery if reuse_catalog else manager.discover_report()
++        loaded = manager.last_load if reuse_catalog else load_plugins(force=True)
++        loaded_ids = {plugin.plugin_id for plugin in loaded.plugins}
++        states = manager.state.read().get("plugins", {})
+         snapshot = ops.snapshots.read(session_id)
+         previous_plugins = snapshot.get("plugins") if isinstance(snapshot, dict) else {}
+         if not isinstance(previous_plugins, dict):
+@@ -1442,7 +1463,7 @@ def audit_plugin_inventory(
+             seen_ids.add(plugin.plugin_id)
+             state = {
+                 "installed": True,
+-                "enabled": manager.is_enabled(plugin.plugin_id) and plugins_enabled(),
++                "enabled": bool(states.get(plugin.plugin_id, {}).get("enabled", True)) and plugins_enabled(),
+                 "loaded": plugin.plugin_id in loaded_ids,
+                 "name": plugin.name,
+                 "version": plugin.version,
+diff --git a/app/agent_loop.py b/app/agent_loop.py
+index b2f21eb..c575baf 100644
+--- a/app/agent_loop.py
++++ b/app/agent_loop.py
+@@ -3833,6 +3833,49 @@ def _build_host_tool_catalog(session_meta, loaded_plugins=None):
+         return combined_tools, source_by_name
+ 
+ 
++def _simplify_external_tool_names(
++    registry: ToolRegistry,
++    plugin_contracts: Mapping[str, Mapping[str, Any]],
++    inherited_sources: Optional[Mapping[str, str]] = None,
++) -> None:
++    from tool_naming import ToolNameSource, allocate_tool_names
++
++    sources = []
++    for descriptor in registry.descriptors():
++        name = descriptor.name
++        if descriptor.invocation_kind is ToolInvocationKind.MCP:
++            identity = agent_mcp.get_tool_identity(name)
++            if identity is not None:
++                alias, local_name = identity
++                plugin_id, separator, server_name = alias.partition("/")
++                sources.append(ToolNameSource(
++                    name, local_name, plugin_id if separator else "",
++                    server_name if separator else alias,
++                ))
++        elif descriptor.invocation_kind is ToolInvocationKind.PLUGIN:
++            contract = plugin_contracts.get(name) or {}
++            if contract.get("local_name"):
++                sources.append(ToolNameSource(
++                    name, contract["local_name"], str(contract.get("plugin_id") or ""),
++                ))
++    source_names = {source.source_name for source in sources}
++    source_names.update(source_name for source_name in (inherited_sources or {}).values()
++                        if (descriptor := registry.resolve(source_name)) is not None
++                        and descriptor.invocation_kind is ToolInvocationKind.UNAVAILABLE)
++    reserved = (registry.names() - source_names) | tool_search.BRIDGE_NAMES
++    # Forks retain the exact names in their parent snapshot, with source IDs
++    # carried separately so profile filtering and dispatch remain unambiguous.
++    inherited_names = {}
++    for model_name, source_name in (inherited_sources or {}).items():
++        if source_name in source_names and model_name not in reserved:
++            inherited_names[source_name] = model_name
++    names = allocate_tool_names(
++        [source for source in sources if source.source_name not in inherited_names],
++        reserved=reserved | frozenset(inherited_names.values()),
++    )
++    registry.rename_tools(names | inherited_names)
++
++
+ async def build_combined_tool_registry_for_session(
+     session_id: str,
+     *,
+@@ -3964,9 +4007,21 @@ async def build_combined_tool_registry_for_session(
+         if isinstance(fork_runtime_config, dict)
+         else None
+     )
++    inherited_sources = (
++        fork_runtime_config.get("tool_sources", {})
++        if isinstance(fork_runtime_config, dict) else {}
++    )
++    if not isinstance(inherited_sources, dict):
++        inherited_sources = {}
++    inherited_sources = {name: source for name, source in inherited_sources.items()
++                         if isinstance(name, str) and isinstance(source, str)}
+     if isinstance(inherited_tools, list) and inherited_tools:
+         try:
+             combined_tools = json.loads(json.dumps(inherited_tools, ensure_ascii=False))
++            for definition in combined_tools:
++                name = _model_tool_definition_name(definition)
++                if name in inherited_sources:
++                    definition["function"]["name"] = inherited_sources[name]
+         except (TypeError, ValueError):
+             logger.warning(
+                 "Ignoring invalid inherited fork tool definitions for session=%s",
+@@ -3992,9 +4047,16 @@ async def build_combined_tool_registry_for_session(
+         elif invocation_kind is ToolInvocationKind.HOST:
+             policy = builtin_tool_policy(name)
+         elif invocation_kind is ToolInvocationKind.PLUGIN:
++            plugin_id = (plugin_contracts_by_name.get(name) or {}).get("plugin_id")
++            if plugin_id:
++                owner = f"plugin:{plugin_id}"
+             policy = plugin_tool_policy(
+                 (plugin_contracts_by_name.get(name) or {}).get("effect", "")
+             )
++        elif invocation_kind is ToolInvocationKind.MCP:
++            identity = agent_mcp.get_tool_identity(name)
++            if identity is not None:
++                owner = f"mcp:{identity[0]}"
+         try:
+             registry.register_definition(
+                 definition,
+@@ -4028,6 +4090,7 @@ async def build_combined_tool_registry_for_session(
+             logger.warning("Duplicate tool registration was skipped: %s", exc)
+         except ToolRegistryError as exc:
+             logger.warning("Invalid tool registration was skipped: %s", exc)
++    _simplify_external_tool_names(registry, plugin_contracts_by_name, inherited_sources)
+     try:
+         _, _, _, tool_context_window = resolve_executor_config_for_session(sid)
+     except Exception:
+@@ -5744,6 +5807,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                         descriptor.openai_definition() for descriptor in tool_registry.descriptors()
+                         if descriptor.owner != "core.tool_search"
+                     ],
++                    "tool_sources": {
++                        descriptor.name: descriptor.execution_name
++                        for descriptor in tool_registry.descriptors()
++                        if descriptor.source_name
++                    },
+                     "_cache_revision": runtime_config_revision,
+                 }
+                 state["_last_prompt_runtime_config"] = last_prompt_runtime_config
+@@ -6279,6 +6347,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                 tool_id = tool_call["id"]
+                 tool_call_index = tool_call.get("index")
+                 tool_descriptor = tool_registry.resolve(tool_name)
++                execution_name = tool_descriptor.execution_name if tool_descriptor else tool_name
+                 if _runtime_v2_is_primary() and tool_descriptor is not None and tool_descriptor.effect != "read":
+                     from runtime_v2.execution_journal import ExecutionJournal
+                     uncertain = ExecutionJournal(session_manager.sessions_dir,
+@@ -6298,7 +6367,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                 security_workspace = session_work_root(session_meta)
+                 sec_request, sec_decision, sec_context = authorize_tool(
+                     session_id=state["session_id"],
+-                    tool_name=tool_name,
++                    tool_name=execution_name,
+                     arguments=tool_args if isinstance(tool_args, dict) else {},
+                     workspace=security_workspace,
+                 )
+@@ -6732,7 +6801,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                                 )
+                                 sec_request2, sec_decision2, sec_context2 = authorize_tool(
+                                     session_id=state["session_id"],
+-                                    tool_name=tool_name,
++                                    tool_name=execution_name,
+                                     arguments=tool_args if isinstance(tool_args, dict) else {},
+                                     workspace=security_workspace,
+                                 )
+@@ -6757,7 +6826,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                         )
+                     sec_request, sec_decision, sec_context = authorize_tool(
+                         session_id=state["session_id"],
+-                        tool_name=tool_name,
++                        tool_name=execution_name,
+                         arguments=tool_args if isinstance(tool_args, dict) else {},
+                         workspace=security_workspace,
+                     )
+@@ -6965,7 +7034,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                         result = await _await_steerable(
+                             state,
+                             agent_mcp.invoke_tool_by_fname(
+-                                tool_name,
++                                execution_name,
+                                 tool_args if isinstance(tool_args, dict) else {},
+                                 work_dir=mcp_work_dir,
+                                 image_enabled="image" in mcp_modalities,
+@@ -7021,7 +7090,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                         result = await _await_steerable(
+                             state,
+                             invoke_plugin_tool(
+-                                tool_name,
++                                execution_name,
+                                 tool_args if isinstance(tool_args, dict) else {},
+                                 work_dir=plugin_work_dir,
+                                 require_worktree_isolation=bool(
+@@ -7817,9 +7886,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
+                     return
+                 try:
+                     early_workspace = session_work_root(session_meta)
++                    early_descriptor = tool_registry.resolve(str(tc.get("name") or ""))
+                     _early_request, early_decision, _early_context = authorize_tool(
+                         session_id=state["session_id"],
+-                        tool_name=str(tc.get("name") or ""),
++                        tool_name=(early_descriptor.execution_name if early_descriptor else str(tc.get("name") or "")),
+                         arguments=(tc.get("args") if isinstance(tc.get("args"), dict) else {}),
+                         workspace=early_workspace,
+                     )
+diff --git a/app/agent_mcp.py b/app/agent_mcp.py
+index 163b7f8..ece610c 100644
+--- a/app/agent_mcp.py
++++ b/app/agent_mcp.py
+@@ -324,33 +324,35 @@ def _register_tools_globally(alias: str, tools: List[Any]) -> int:
+ 
+ def _register_tools_unlocked(alias: str, tools: List[Any]) -> int:
+     global _defs_snapshot
+-    seen_fname: set[str] = set()
++    seen_original: set[str] = set()
+     registered = 0
+     selection = _tool_selections.get(alias, {})
+     include = selection.get("include", frozenset())
+     exclude = selection.get("exclude", frozenset())
+     previous_contracts = dict(_tool_contracts)
+     previous_mapping = dict(_fname_to_tool)
++    previous_names = {pair: name for name, pair in previous_mapping.items()}
+     # A refreshed tools/list is a replacement, including when it is empty.
+     _remove_server_tools_unlocked(alias)
+     for t in tools or []:
+         orig_name = getattr(t, "name", "") or ""
+-        if not orig_name:
++        if not orig_name or orig_name in seen_original:
+             continue
++        seen_original.add(orig_name)
+         desc = getattr(t, "description", "") or ""
+         schema = getattr(t, "inputSchema", None)
+         od = _openai_tool_def(alias, orig_name, desc, schema)
+-        fname = od["function"]["name"]
+-        keys = {orig_name, fname}
++        legacy_name = od["function"]["name"]
++        fname = previous_names.get((alias, orig_name), legacy_name)
++        keys = {orig_name, legacy_name, fname}
+         if (include and not keys & include) or keys & exclude:
+             continue
+-        if fname in seen_fname:
+-            continue
+-        seen_fname.add(fname)
+-        existing = _fname_to_tool.get(fname)
+-        if existing and existing != (alias, orig_name):
+-            logger.warning("MCP: duplicate tool key `%s`, skip `%s.%s`", fname, alias, orig_name)
+-            continue
++        attempt = 0
++        while fname in _fname_to_tool and _fname_to_tool[fname] != (alias, orig_name):
++            digest = hashlib.sha256(json.dumps([alias, orig_name, attempt]).encode("utf-8")).hexdigest()[:10]
++            fname = f"{legacy_name[:109]}_{digest}"
++            attempt += 1
++        od["function"]["name"] = fname
+         _fname_to_tool[fname] = (alias, orig_name)
+         if fname in previous_contracts and previous_mapping.get(fname) == (alias, orig_name):
+             _tool_contracts[fname] = previous_contracts[fname]
+@@ -504,6 +506,12 @@ def _resolve_transport(cfg: dict) -> str:
+     return ""
+ 
+ 
++def get_tool_identity(function_name: str) -> Optional[Tuple[str, str]]:
++    """Return the owning server and original name without parsing prefixes."""
++    with _mcp_tool_state_lock:
++        return _fname_to_tool.get(function_name)
++
++
+ def _safe_function_key(alias: str, tool_name: str) -> str:
+     t = _TOOL_NAME_SAFE.sub("_", tool_name).strip("_").lower() or "tool"
+     if "/" in alias:
+@@ -1075,6 +1083,39 @@ async def force_reload() -> None:
+     await _run_on_mcp_loop(_force_reload_impl())
+ 
+ 
++async def _reload_plugin_impl(plugin_id: str) -> None:
++    """Invalidate one plugin's transports while retaining unrelated connections."""
++    global _loaded_signature, _signature_cache
++    prefix = plugin_id + "/"
++    async with _start_lock:
++        aliases = {alias for alias in (
++            set(_servers) | set(_server_config_signatures) | set(_server_start_errors)
++            | {pair[0] for pair in _fname_to_tool.values()}
++        ) if alias.startswith(prefix)}
++        stopped = []
++        for alias in aliases:
++            previous = _servers.pop(alias, None)
++            with _mcp_tool_state_lock:
++                _remove_server_tools_unlocked(alias)
++            _server_config_signatures.pop(alias, None)
++            _server_retry_state.pop(alias, None)
++            _server_registration_descriptors.pop(alias, None)
++            _server_start_errors.pop(alias, None)
++            if previous is not None:
++                stopped.append(previous.stop())
++        _loaded_signature = None
++        _signature_cache = None
++        if stopped:
++            results = await asyncio.gather(*stopped, return_exceptions=True)
++            for result in results:
++                if isinstance(result, BaseException):
++                    logger.warning("Plugin MCP stop failed id=%s: %s", plugin_id, result)
++
++
++async def reload_plugin(plugin_id: str) -> None:
++    await _run_on_mcp_loop(_reload_plugin_impl(plugin_id))
++
++
+ def _server_configuration_signature(alias: str, cfg: Any) -> str:
+     owner_signature = _plugin_mcp_content_signatures.get(alias.split("/", 1)[0], "") if "/" in alias else ""
+     return hashlib.sha256(json.dumps(
+diff --git a/app/agent_tokenizer.py b/app/agent_tokenizer.py
+index a4bac52..02f17c0 100644
+--- a/app/agent_tokenizer.py
++++ b/app/agent_tokenizer.py
+@@ -964,7 +964,7 @@ def build_env_static(session_id: Optional[str] = None) -> str:
+ - **Calendar month (host local time)**: **{current_year_month}**
+ - **OS**: {platform.system()} | **Python**: {platform.python_version()}
+ {run_shell_executor_hint}
+-- **MCP extensions** (optional): With `.config/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects and exposes tools as `mcp_<server_alias>_<tool_name>`. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
++- **MCP extensions** (optional): With `.config/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects. Tools use their local names by default; plugin and server prefixes are added only to resolve name collisions. Use the exact names in the current tool catalog. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
+ - **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
+   - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `.config/mcp_servers.json`.
+   - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.
+diff --git a/app/agent_tools.py b/app/agent_tools.py
+index ab661da..b9131de 100644
+--- a/app/agent_tools.py
++++ b/app/agent_tools.py
+@@ -217,12 +217,31 @@ def set_skill_enabled(skill_name: str, enabled: bool) -> bool:
+     name = str(skill_name or "").strip()
+     if not name:
+         return False
++    skills = discover_skills(include_disabled=True)
++    matches = [skill for skill in skills if skill["name"] == name]
++    if not matches:
++        matches = [skill for skill in skills
++                   if name in {skill.get("source_name"), skill.get("qualified_name")}]
++    if len(matches) > 1:
++        return False
++    skill = matches[0] if matches else {}
++    state_name = str(skill.get("source_name") or name)
++    legacy_name = str(skill.get("qualified_name") or state_name)
+     with _skill_state_lock:
+         states = _load_skill_enabled_states()
++        for other in skills:
++            other_source = str(other.get("source_name") or other["name"])
++            other_legacy = str(other.get("qualified_name") or other_source)
++            if other_source != other_legacy and other_legacy == state_name:
++                # A legacy alias can be shared by a skill and an Agent/Prompt.
++                # Preserve the other entry before changing that old state key.
++                states.setdefault(other_source, other.get("enabled") is not False)
+         if enabled:
+-            states.pop(name, None)  # enabled is the backward-compatible default
++            states.pop(state_name, None)  # enabled is the backward-compatible default
++            if legacy_name != state_name and states.get(legacy_name) is False:
++                states[state_name] = True
+         else:
+-            states[name] = False
++            states[state_name] = False
+         out = {
+             "version": 1,
+             "skills": {key: {"enabled": value} for key, value in sorted(states.items())},
+@@ -4644,6 +4663,9 @@ def _plugin_instruction_entries() -> List[Dict[str, Any]]:
+         entries.append(
+             {
+                 "name": qualified_name,
++                "source_name": f"{plugin_id}:{kind}:{qualified_name.split(':', 1)[-1]}",
++                "qualified_name": qualified_name,
++                "local_name": qualified_name.split(":", 1)[-1],
+                 "description": f"Plugin {kind} definition: {summary[:240]}",
+                 "path": str(root),
+                 "base_dir": str(root.parent if root.is_file() else root),
+@@ -4657,6 +4679,37 @@ def _plugin_instruction_entries() -> List[Dict[str, Any]]:
+     return entries
+ 
+ 
++def _simplify_skill_names(skills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
++    from collections import Counter
++    from resource_naming import allocate_resource_names
++
++    entries = {}
++    for skill in skills:
++        key = json.dumps([skill.get("source"), skill.get("plugin_id"), skill["path"]])
++        entries.setdefault(key, skill)
++    project_counts = Counter(skill["name"] for skill in entries.values() if not skill.get("plugin_id"))
++    reserved = {name for name, count in project_counts.items() if count == 1}
++    candidates = {}
++    for key, skill in entries.items():
++        original = str(skill["name"])
++        local_name = str(skill.get("local_name") or original)
++        skill.setdefault("source_name", original)
++        skill.setdefault("qualified_name", original)
++        directory = Path(skill["base_dir"]).name
++        if not skill.get("plugin_id") and directory != original:
++            skill["source_name"] = f"project:{directory}:{local_name}"
++        if not skill.get("plugin_id") and original in reserved:
++            continue
++        kind = str(skill.get("resource_kind") or "skill")
++        owner = str(skill.get("plugin_id") or "project")
++        candidates[key] = (local_name, f"{owner}:{local_name}",
++                           f"{owner}:{kind}:{local_name}", f"{owner}:{kind}:{directory}:{local_name}")
++    names = allocate_resource_names(candidates, reserved=reserved)
++    for key, name in names.items():
++        entries[key]["name"] = name
++    return list(entries.values())
++
++
+ def discover_skills(
+     *,
+     include_disabled: bool = False,
+@@ -4729,6 +4782,9 @@ def discover_skills(
+ 
+                 skills.append({
+                     "name": name,
++                    "source_name": name,
++                    "qualified_name": name,
++                    "local_name": name.split(":", 1)[-1] if plugin_id else name,
+                     "description": description,
+                     "path": str(skill_file),
+                     "base_dir": str(skill_dir),
+@@ -4744,16 +4800,11 @@ def discover_skills(
+ 
+         skills.extend(_plugin_instruction_entries())
+ 
+-        name_map = {}
+-        for skill in skills:
+-            name = skill["name"]
+-            if name in name_map:
+-                logger.warning(f"Skill name conflict: {name}, already from {name_map[name]['base_dir']}, overwritten by {skill['base_dir']}")
+-            name_map[name] = skill
+-        out = list(name_map.values())
++        out = _simplify_skill_names(skills)
+         enabled_states = _load_skill_enabled_states()
+         for skill in out:
+-            skill["enabled"] = enabled_states.get(str(skill.get("name") or ""), True)
++            skill["enabled"] = enabled_states.get(skill["source_name"],
++                enabled_states.get(skill["qualified_name"], True))
+         cache["sig"] = sig
+         cache["skills"] = out
+         return list(out) if include_disabled else [s for s in out if s.get("enabled") is not False]
+@@ -4792,8 +4843,13 @@ def get_skills_catalog() -> str:
+ 
+ 
+ def activate_skill(skill_name: str) -> str:
+-    skills = discover_skills()
++    all_skills = discover_skills(include_disabled=True)
++    skills = [s for s in all_skills if s.get("enabled") is not False]
+     skill = next((s for s in skills if s['name'] == skill_name), None)
++    if skill is None:
++        matches = [s for s in all_skills if skill_name in {s.get("source_name"), s.get("qualified_name")}]
++        if len(matches) == 1 and matches[0].get("enabled") is not False:
++            skill = matches[0]
+     if not skill:
+         return f"Error: skill '{skill_name}' not found. Available: {[s['name'] for s in skills]}"
+ 
+diff --git a/app/execution_services/jobs.py b/app/execution_services/jobs.py
+index eb4bd3e..e99daf7 100644
+--- a/app/execution_services/jobs.py
++++ b/app/execution_services/jobs.py
+@@ -117,6 +117,8 @@ class ExecutionService:
+         self._log_locks: dict[tuple[str, str], asyncio.Lock] = {}
+         self.suppressed: set[str] = set()
+         self.closed_owners: set[str] = set()
++        self._stop_reasons: dict[str, set[str]] = {}
++        self._close_reasons: dict[str, set[str]] = {}
+         self.boot_id = uuid.uuid4().hex
+         self.terminals = None
+ 
+@@ -126,6 +128,12 @@ class ExecutionService:
+                 return
+             self._ready.clear()
+             self._closing = False
++            # A new service loop starts a fresh lifetime. An idempotent start
++            # above must retain stop state while the existing loop is alive.
++            self.suppressed.clear()
++            self.closed_owners.clear()
++            self._stop_reasons.clear()
++            self._close_reasons.clear()
+             def run():
+                 loop = asyncio.new_event_loop()
+                 asyncio.set_event_loop(loop)
+@@ -396,8 +404,10 @@ class ExecutionService:
+         return {"outcome": "cancellation-requested", "job": job.public()}
+ 
+     async def stop_owner(self, owner, *, close_terminals=False, reason="user_stop"):
++        self._stop_reasons.setdefault(owner, set()).add(reason)
+         self.suppressed.add(owner)
+         if close_terminals:
++            self._close_reasons.setdefault(owner, set()).add(reason)
+             self.closed_owners.add(owner)
+         for job in tuple(self.jobs.values()):
+             if job.owner != owner:
+@@ -424,9 +434,22 @@ class ExecutionService:
+             if pending:
+                 raise RuntimeError("execution cleanup timed out; resources may still be stopping")
+ 
+-    async def resume_owner(self, owner):
+-        self.suppressed.discard(owner)
+-        self.closed_owners.discard(owner)
++    async def resume_owner(self, owner, *, reason=None):
++        for blocked, reasons in ((self.suppressed, self._stop_reasons),
++                                 (self.closed_owners, self._close_reasons)):
++            if reason is None:
++                reasons.pop(owner, None)
++                blocked.discard(owner)
++            elif owner in reasons:
++                reasons[owner].discard(reason)
++                if not reasons[owner]:
++                    reasons.pop(owner)
++                    blocked.discard(owner)
++
++    async def resume_owners(self, *, reason):
++        """Release one lifecycle cause while retaining explicit session stops."""
++        for owner in tuple(self.suppressed | self.closed_owners):
++            await self.resume_owner(owner, reason=reason)
+ 
+     async def pending_owners(self):
+         return sorted({j.owner for j in self.jobs.values()
+diff --git a/app/hooks/config.py b/app/hooks/config.py
+index c1b1829..27306a4 100644
+--- a/app/hooks/config.py
++++ b/app/hooks/config.py
+@@ -15,6 +15,7 @@ from .models import (
+     HookLoadResult,
+     HookSource,
+ )
++from .naming import name_hook_definitions
+ 
+ 
+ SourceLike = Union[HookSource, str, Path, Mapping[str, Any]]
+@@ -226,13 +227,15 @@ def _parse_document(source: HookSource, document: Mapping[str, Any], order_start
+                     raise HookConfigurationError("priority must be an integer.") from exc
+                 hook_id = str(
+                     raw_handler.get("id")
+-                    or f"{source.source_id}:{event}:{group_index}:{handler_index}"
++                    or f"{event}:{group_index}:{handler_index}"
+                 ).strip()
+                 if not hook_id:
+                     raise HookConfigurationError("Hook id cannot be empty.")
+                 definitions.append(
+                     HookDefinition(
+                         id=hook_id,
++                        local_id=hook_id,
++                        source_hook_id=str(raw_handler.get("id") or f"{source.source_id}:{event}:{group_index}:{handler_index}").strip(),
+                         event=event,
+                         command=_parse_command(raw_handler, inherited),
+                         matcher=matcher,
+@@ -293,7 +296,7 @@ def load_hook_sources(
+                 raise
+             errors.append(str(exc))
+     definitions.sort(key=lambda item: (item.priority, item.order, item.source_id, item.id))
+-    return HookLoadResult(tuple(definitions), tuple(errors), tuple(loaded))
++    return HookLoadResult(name_hook_definitions(definitions), tuple(errors), tuple(loaded))
+ 
+ 
+ def load_hook_definitions(
+diff --git a/app/hooks/executor.py b/app/hooks/executor.py
+index 7123c30..777abc9 100644
+--- a/app/hooks/executor.py
++++ b/app/hooks/executor.py
+@@ -90,7 +90,7 @@ def build_hook_environment(
+             "PYTHONUTF8": "1",
+             "MYAGENT_PROJECT_ROOT": str(project_root),
+             "MYAGENT_HOOK_EVENT": definition.event,
+-            "MYAGENT_HOOK_ID": definition.id,
++            "MYAGENT_HOOK_ID": definition.execution_id,
+             "MYAGENT_HOOK_SOURCE": definition.source_id,
+             "MYAGENT_PLUGIN_ROOT": str(definition.source_root),
+             # Compatibility aliases let imported declarative hook packages use
+diff --git a/app/hooks/manager.py b/app/hooks/manager.py
+index ec87258..0eadf07 100644
+--- a/app/hooks/manager.py
++++ b/app/hooks/manager.py
+@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+ from .config import SourceLike, load_hook_sources
+ from .executor import CommandHookExecutor
+ from .matcher import hook_matches
++from .naming import name_hook_definitions
+ from .models import (
+     SUPPORTED_HOOK_EVENT_SET,
+     HookDefinition,
+@@ -112,7 +113,7 @@ class HookManager:
+                 raise ValueError(f"Unsupported hook event: {definition.event}")
+             checked.append(definition)
+         checked.sort(key=lambda item: (item.priority, item.order, item.source_id, item.id))
+-        self._definitions = tuple(checked)
++        self._definitions = name_hook_definitions(checked)
+         self._config_errors = ()
+         self._loaded_sources = tuple(dict.fromkeys(item.source_id for item in checked))
+ 
+@@ -214,7 +215,7 @@ class HookManager:
+         seen: set = set()
+         definitions = self.hooks_for(event)
+         for definition in definitions:
+-            unique_key = (definition.source_id, definition.plugin_id, definition.id)
++            unique_key = (definition.source_id, definition.plugin_id, definition.execution_id)
+             if unique_key in seen:
+                 warnings.append(f"Duplicate hook registration skipped: {definition.source_id}/{definition.id}")
+                 continue
+@@ -246,7 +247,8 @@ class HookManager:
+             matched += 1
+             call_payload = dict(current_payload)
+             call_payload["hook"] = {
+-                "id": definition.id,
++                "id": definition.execution_id,
++                "name": definition.id,
+                 "source_id": definition.source_id,
+                 "plugin_id": definition.plugin_id,
+             }
+diff --git a/app/hooks/models.py b/app/hooks/models.py
+index 9f1f3dd..e53f988 100644
+--- a/app/hooks/models.py
++++ b/app/hooks/models.py
+@@ -95,6 +95,12 @@ class HookDefinition:
+     order: int = 0
+     handler_ref: str = ""
+     plugin_signature: str = ""
++    local_id: str = ""
++    source_hook_id: str = ""
++
++    @property
++    def execution_id(self) -> str:
++        return self.source_hook_id or self.local_id or self.id
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/app/hooks/naming.py b/app/hooks/naming.py
+new file mode 100644
+index 0000000..b6c6bab
+--- /dev/null
++++ b/app/hooks/naming.py
+@@ -0,0 +1,36 @@
++"""Assign readable hook IDs without changing their execution identities."""
++from __future__ import annotations
++
++import json
++from collections import Counter
++from dataclasses import replace
++from typing import Iterable
++
++from .models import HookDefinition
++
++try:
++    from resource_naming import allocate_resource_names
++except ImportError:  # package-style imports
++    from ..resource_naming import allocate_resource_names
++
++
++def name_hook_definitions(definitions: Iterable[HookDefinition]) -> tuple[HookDefinition, ...]:
++    rows = tuple(definitions)
++    project_counts = Counter((row.local_id or row.id) for row in rows if not row.plugin_id)
++    reserved = {name for name, count in project_counts.items() if count == 1}
++    candidates = {}
++    keys = []
++    for row in rows:
++        local_id = row.local_id or row.id
++        key = json.dumps([row.source_id, row.plugin_id, row.event, row.execution_id])
++        keys.append(key)
++        if not row.plugin_id and local_id in reserved:
++            continue
++        owner = row.plugin_id or "project"
++        source = row.source_id.rsplit(":", 1)[-1]
++        candidates[key] = (local_id, f"{owner}:{local_id}", f"{owner}:{row.event}:{local_id}",
++                           f"{owner}:{source}:{row.event}:{local_id}")
++    names = allocate_resource_names(candidates, reserved=reserved)
++    return tuple(replace(row, id=names.get(key, row.local_id or row.id),
++                         local_id=row.local_id or row.id, source_hook_id=row.execution_id)
++                 for row, key in zip(rows, keys))
+diff --git a/app/plugins/host.py b/app/plugins/host.py
+index 1c48d5b..b26b042 100644
+--- a/app/plugins/host.py
++++ b/app/plugins/host.py
+@@ -10,6 +10,7 @@ from __future__ import annotations
+ 
+ from contextlib import contextmanager
+ from contextvars import ContextVar
++import asyncio
+ import hashlib
+ import importlib.util
+ import inspect
+@@ -26,6 +27,7 @@ _BUNDLED_ROOT = Path(__file__).resolve().parents[2] / "plugins"
+ _MODULES: dict[tuple[str, str], ModuleType] = {}
+ _INSTALLED: set[tuple[int, str, str]] = set()
+ _STARTED: list[tuple[PluginDefinition, ModuleType]] = []
++_LIFECYCLE_LOCK = asyncio.Lock()
+ _AVAILABILITY_SNAPSHOT: ContextVar[dict | None] = ContextVar("bundled_host_availability_snapshot", default=None)
+ 
+ 
+@@ -203,29 +205,45 @@ async def start_bundled_host_extensions(
+     plugins: Sequence[PluginDefinition],
+     context: Mapping[str, Any],
+ ) -> None:
+-    global _STARTED
+-    await stop_bundled_host_extensions(context)
+-    started: list[tuple[PluginDefinition, ModuleType]] = []
+-    for plugin in plugins:
+-        module = _module(plugin)
+-        start = getattr(module, "start", None) if module is not None else None
+-        if callable(start):
+-            value = start(dict(context), plugin)
++    """Reconcile changed extensions without interrupting unchanged services."""
++
++    async with _LIFECYCLE_LOCK:
++        desired = []
++        for plugin in plugins:
++            module = _module(plugin)
++            if callable(getattr(module, "start", None)):
++                desired.append((plugin, module))
++        desired_keys = {(plugin.plugin_id, plugin.content_signature) for plugin, _ in desired}
++        for plugin, module in reversed(_STARTED):
++            if (plugin.plugin_id, plugin.content_signature) not in desired_keys:
++                await _stop_bundled_host_extension(plugin, module, context)
++        started_keys = {(plugin.plugin_id, plugin.content_signature) for plugin, _ in _STARTED}
++        for plugin, module in desired:
++            key = (plugin.plugin_id, plugin.content_signature)
++            if key in started_keys:
++                continue
++            value = module.start(dict(context), plugin)
+             if inspect.isawaitable(value):
+                 await value
+-            started.append((plugin, module))
+-    _STARTED = started
++            # Track each successful start immediately so a later failure does
++            # not orphan services or start them twice on the next refresh.
++            _STARTED.append((plugin, module))
++            started_keys.add(key)
++
++
++async def _stop_bundled_host_extension(plugin, module, context) -> None:
++    stop = getattr(module, "stop", None)
++    if callable(stop):
++        value = stop(dict(context), plugin)
++        if inspect.isawaitable(value):
++            await value
++    _STARTED.remove((plugin, module))
+ 
+ 
+ async def stop_bundled_host_extensions(context: Mapping[str, Any]) -> None:
+-    global _STARTED
+-    started, _STARTED = list(reversed(_STARTED)), []
+-    for plugin, module in started:
+-        stop = getattr(module, "stop", None)
+-        if callable(stop):
+-            value = stop(dict(context), plugin)
+-            if inspect.isawaitable(value):
+-                await value
++    async with _LIFECYCLE_LOCK:
++        for plugin, module in reversed(_STARTED):
++            await _stop_bundled_host_extension(plugin, module, context)
+ 
+ 
+ __all__ = [
+diff --git a/app/plugins/host_hooks.py b/app/plugins/host_hooks.py
+index 7d9990f..d758f08 100644
+--- a/app/plugins/host_hooks.py
++++ b/app/plugins/host_hooks.py
+@@ -122,7 +122,7 @@ class PluginAwareHookExecutor:
+                 str(definition.plugin_id or ""),
+                 definition.plugin_signature,
+                 definition.event,
+-                definition.handler_ref or definition.id,
++                definition.handler_ref or definition.execution_id,
+                 dict(payload),
+                 tuple(self.plugins_provider()),
+             )
+diff --git a/app/plugins/runtime.py b/app/plugins/runtime.py
+index 1a19c0b..b811c51 100644
+--- a/app/plugins/runtime.py
++++ b/app/plugins/runtime.py
+@@ -606,14 +606,17 @@ class PluginRuntimeRegistry:
+         )
+         os.replace(temporary, self._deferred_state_path)
+ 
+-    def invalidate(self, *, preserve_deferred: bool = False) -> None:
++    def invalidate(self, *, preserve_deferred: bool = False, plugin_id: str | None = None) -> None:
+         with self._lock:
+-            workers = tuple(self._workers.values())
++            affected = {key for key in self._workers if plugin_id is None or key[0] == plugin_id}
++            workers = tuple(self._workers[key] for key in affected)
+             deferred_cancellations = []
+             if not preserve_deferred:
+-                for (plugin_id, token), lease in self._deferred_leases.items():
++                for (lease_plugin_id, token), lease in self._deferred_leases.items():
++                    if (lease_plugin_id, lease.plugin_signature) not in affected:
++                        continue
+                     worker = self._workers.get(
+-                        (plugin_id, lease.plugin_signature)
++                        (lease_plugin_id, lease.plugin_signature)
+                     )
+                     if worker is None:
+                         continue
+@@ -625,13 +628,24 @@ class PluginRuntimeRegistry:
+                     }
+                     _merge_supplied_context(context, worker.plugin, supplied)
+                     deferred_cancellations.append((worker, token, context))
+-            self._describe_cache.clear()
+-            self._workers.clear()
+-            self._tool_bindings.clear()
++            for key in affected:
++                self._describe_cache.pop(key, None)
++                self._workers.pop(key, None)
++            self._tool_bindings = {
++                name: binding for name, binding in self._tool_bindings.items()
++                if plugin_id is not None and binding.plugin_id != plugin_id
++            }
+             if not preserve_deferred:
+-                self._deferred_leases.clear()
++                self._deferred_leases = {
++                    key: lease for key, lease in self._deferred_leases.items()
++                    if plugin_id is not None and lease.plugin_id != plugin_id
++                }
+             self._persist_deferred_leases_locked()
+-            self._errors_by_plugin.clear()
++            if plugin_id is None:
++                self._describe_cache.clear()
++                self._errors_by_plugin.clear()
++            else:
++                self._errors_by_plugin.pop(plugin_id, None)
+         for worker, token, context in deferred_cancellations:
+             try:
+                 worker.request(
+@@ -772,11 +786,13 @@ class PluginRuntimeRegistry:
+                                 f"Plugin tool {plugin_id}:{local_name} has an invalid input schema"
+                             )
+                         seen.add(local_name)
+-                        function_name = runtime_tool_name(plugin_id, local_name)
+-                        if function_name in bindings:
+-                            raise PluginRuntimeError(
+-                                f"Runtime tool name collision: {function_name}"
+-                            )
++                        base_name = runtime_tool_name(plugin_id, local_name)
++                        function_name = base_name
++                        attempt = 0
++                        while function_name in bindings:
++                            digest = hashlib.sha256(json.dumps([plugin_id, local_name, attempt]).encode("utf-8")).hexdigest()[:10]
++                            function_name = f"{base_name[:_MAX_FUNCTION_NAME - 11]}_{digest}"
++                            attempt += 1
+                         effect = str(raw.get("effect") or "").strip().lower()
+                         if effect not in {
+                             "",
+@@ -798,6 +814,7 @@ class PluginRuntimeRegistry:
+                         ).strip()
+                         contract = {
+                             "plugin_id": plugin_id,
++                            "local_name": local_name,
+                             "declared": bool(effect),
+                             "effect": effect,
+                             "permissions": dict(plugin.permissions),
+@@ -837,12 +854,12 @@ class PluginRuntimeRegistry:
+                         )
+                 except PluginRuntimeError as exc:
+                     self._errors_by_plugin[plugin_id] = str(exc)
++                    failed_names = {name for name, binding in bindings.items()
++                                    if binding.plugin_id == plugin_id}
+                     definitions = [
+                         item
+                         for item in definitions
+-                        if not str(item["function"]["name"]).startswith(
+-                            f"plugin_{_FUNCTION_SAFE_RE.sub('_', plugin_id)}__"
+-                        )
++                        if item["function"]["name"] not in failed_names
+                     ]
+                     bindings = {
+                         key: value
+diff --git a/app/resource_naming.py b/app/resource_naming.py
+new file mode 100644
+index 0000000..7fd4e1f
+--- /dev/null
++++ b/app/resource_naming.py
+@@ -0,0 +1,31 @@
++"""Choose the shortest unambiguous names for instruction and hook catalogs."""
++from __future__ import annotations
++
++import hashlib
++from collections import Counter
++from typing import Iterable, Mapping
++
++
++def allocate_resource_names(
++    candidates: Mapping[str, Iterable[str]], *, reserved: Iterable[str] = ()
++) -> dict[str, str]:
++    choices = {key: tuple(dict.fromkeys(names)) for key, names in candidates.items()}
++    if any(not names or any(not name for name in names) for names in choices.values()):
++        raise ValueError("Resource names must be non-empty")
++    levels = dict.fromkeys(choices, 0)
++    reserved = frozenset(reserved)
++    while True:
++        names = {}
++        for key, options in choices.items():
++            level = levels[key]
++            if level < len(options):
++                names[key] = options[level]
++            else:
++                digest = hashlib.sha256(f"{key}:{level}".encode("utf-8")).hexdigest()[:10]
++                names[key] = f"{options[-1]}:{digest}"
++        counts = Counter(names.values())
++        conflicts = [key for key, name in names.items() if name in reserved or counts[name] > 1]
++        if not conflicts:
++            return names
++        for key in conflicts:
++            levels[key] += 1
+diff --git a/app/security/runtime.py b/app/security/runtime.py
+index 488ddaa..c7a7843 100644
+--- a/app/security/runtime.py
++++ b/app/security/runtime.py
+@@ -595,7 +595,7 @@ def classify_hook(
+     else:
+         cwd = canonical_path(raw_cwd, source_root) if raw_cwd else source_root
+     config_payload = {
+-        "hook_id": str(getattr(definition, "id", "")),
++        "hook_id": str(getattr(definition, "execution_id", getattr(definition, "id", ""))),
+         "event": str(getattr(definition, "event", "")),
+         "source_id": str(getattr(definition, "source_id", "")),
+         "plugin_id": str(getattr(definition, "plugin_id", "") or ""),
+@@ -617,7 +617,7 @@ def classify_hook(
+     ).hexdigest()
+     return CapabilityRequest.create(
+         action="hook.exec",
+-        resource=command or str(getattr(definition, "id", "hook")),
++        resource=command or str(getattr(definition, "execution_id", getattr(definition, "id", "hook"))),
+         effect="unknown",
+         principal=(
+             f"plugin:{getattr(definition, 'plugin_id', '')}"
+diff --git a/app/tool_naming.py b/app/tool_naming.py
+new file mode 100644
+index 0000000..c6692a4
+--- /dev/null
++++ b/app/tool_naming.py
+@@ -0,0 +1,71 @@
++"""Allocate short model tool names while keeping source identities separate."""
++from __future__ import annotations
++
++import hashlib
++import json
++import re
++from collections import Counter
++from dataclasses import dataclass
++from typing import Iterable
++
++
++_UNSAFE = re.compile(r"[^a-zA-Z0-9_-]+")
++_MAX_NAME = 64
++
++
++def _safe_name(value: str) -> str:
++    name = _UNSAFE.sub("_", value).strip("_") or "tool"
++    if len(name) > _MAX_NAME:
++        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:10]
++        name = f"{name[:_MAX_NAME - 11]}_{digest}"
++    return name
++
++
++@dataclass(frozen=True)
++class ToolNameSource:
++    source_name: str
++    local_name: str
++    plugin_id: str = ""
++    server_name: str = ""
++
++    def candidates(self) -> tuple[str, ...]:
++        parts = [self.local_name]
++        names = [_safe_name(self.local_name)]
++        if self.plugin_id:
++            parts.insert(0, self.plugin_id)
++            names.append(_safe_name("__".join(parts)))
++        if self.server_name:
++            parts.insert(1 if self.plugin_id else 0, self.server_name)
++            names.append(_safe_name("__".join(parts)))
++        return tuple(dict.fromkeys(names))
++
++
++def allocate_tool_names(
++    sources: Iterable[ToolNameSource], *, reserved: Iterable[str] = ()
++) -> dict[str, str]:
++    """Qualify every conflicting name, independent of registration order."""
++    rows = {source.source_name: source for source in sources}
++    identity_counts = Counter((row.plugin_id, row.server_name, row.local_name) for row in rows.values())
++    candidates = {key: row.candidates() for key, row in rows.items()}
++    levels = dict.fromkeys(rows, 0)
++    reserved_names = frozenset(reserved)
++    while True:
++        names = {}
++        for key, choices in candidates.items():
++            level = levels[key]
++            if level < len(choices):
++                names[key] = choices[level]
++            else:
++                # Normalization can collapse distinct plugin/server names.
++                row = rows[key]
++                source_identity = (row.plugin_id, row.server_name, row.local_name)
++                identity = json.dumps([*source_identity, level, key if identity_counts[source_identity] > 1 else ""])
++                digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
++                names[key] = f"{choices[-1][:_MAX_NAME - 11]}_{digest}"
++        counts = Counter(names.values())
++        conflicts = [key for key, name in names.items()
++                     if name in reserved_names or counts[name] > 1]
++        if not conflicts:
++            return names
++        for key in conflicts:
++            levels[key] += 1
+diff --git a/app/tool_registry.py b/app/tool_registry.py
+index 114198d..bd609cc 100644
+--- a/app/tool_registry.py
++++ b/app/tool_registry.py
+@@ -7,7 +7,7 @@ resolve a tool by descriptor instead of inferring its owner from name prefixes.
+ from __future__ import annotations
+ 
+ import json
+-from dataclasses import dataclass, field
++from dataclasses import dataclass, field, replace
+ from enum import Enum
+ from types import MappingProxyType
+ from typing import Any, Dict, Iterable, Mapping, Optional
+@@ -67,6 +67,12 @@ class ToolDescriptor:
+     interactive: bool = False
+     early_stream_safe: bool = True
+     interruptibility: str = "non_interruptible"
++    source_name: str = ""
++
++    @property
++    def execution_name(self) -> str:
++        """Stable source identifier used for authorization and invocation."""
++        return self.source_name or self.name
+ 
+     @classmethod
+     def from_openai_definition(
+@@ -208,6 +214,23 @@ class ToolRegistry:
+     def resolve(self, name: str) -> Optional[ToolDescriptor]:
+         return self._descriptors.get(str(name or "").strip())
+ 
++    def rename_tools(self, names: Mapping[str, str]) -> None:
++        """Atomically change presentation names without changing their binding."""
++        renamed: dict[str, ToolDescriptor] = {}
++        for descriptor in self._descriptors.values():
++            name = names.get(descriptor.name, descriptor.name)
++            if name in renamed:
++                raise DuplicateToolError(f"Duplicate model tool name: {name!r}")
++            if name != descriptor.name:
++                definition = descriptor.openai_definition()
++                definition["function"]["name"] = name
++                descriptor = replace(
++                    descriptor, name=name, source_name=descriptor.execution_name,
++                    _definition_json=json.dumps(definition, ensure_ascii=False, separators=(",", ":")),
++                )
++            renamed[name] = descriptor
++        self._descriptors = renamed
++
+     def require(self, name: str) -> ToolDescriptor:
+         descriptor = self.resolve(name)
+         if descriptor is None:
+diff --git a/app/tool_search.py b/app/tool_search.py
+index 05cf137..c41f89a 100644
+--- a/app/tool_search.py
++++ b/app/tool_search.py
+@@ -228,6 +228,7 @@ def assemble(registry: ToolRegistry, *, context_window: int | None, pinned_names
+         logger.warning("Tool search bridge name conflict; retaining full catalog")
+         return
+     pinned = frozenset(pinned_names) | frozenset(config.pinned_tools)
++    pinned |= frozenset(d.name for d in registry.descriptors() if d.execution_name in pinned)
+     # Built-in whitelist disclosure: only the resident whitelist (plus
+     # explicit pins) stays in the model-facing catalog.  Everything else
+     # executable is deferred — including tools that did not exist when this
+diff --git a/app/webui.py b/app/webui.py
+index 0fd3bcd..ad9ca51 100644
+--- a/app/webui.py
++++ b/app/webui.py
+@@ -22,6 +22,7 @@ import zipfile
+ from collections import defaultdict, deque
+ from contextlib import asynccontextmanager
+ from datetime import datetime, timezone
++from itertools import islice
+ from typing import Any, Dict, Optional
+ 
+ from pathlib import Path
+@@ -32,6 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+ from starlette.background import BackgroundTask
+ from fastapi.staticfiles import StaticFiles
+ from starlette.concurrency import run_in_threadpool
++from agent_local_timing import LocalOperationTrace
+ 
+ from agent import (
+     astream_events,
+@@ -192,12 +194,13 @@ UI_LOG_TRUNCATE_KEEP_LINES = max(10, int(os.getenv("UI_LOG_TRUNCATE_KEEP_LINES",
+ 
+ # 正在向前端推流的 /chat 连接数（按 session）。刷新页面后仍可根据此项显示「生成中」黄点。
+ _active_chat_by_session: dict[str, int] = {}
++_active_chat_tasks_by_session: dict[str, set[asyncio.Task]] = {}
+ # Short-lived protection for uploaded files already handed to an accepted chat
+ # request. A browser cleanup beacon racing the response must not remove a file
+ # while the agent is still reading it.
+ _accepted_chat_upload_paths: dict[str, float] = {}
+ _accepted_chat_upload_paths_lock = threading.RLock()
+-# 上次活跃时间戳（按 session），用于清理僵尸计数器（浏览器非正常关闭导致未递减）
++# Stale timestamps trigger a task-liveness check, never expiration of a live SSE.
+ _active_chat_last_seen: dict[str, float] = {}
+ # Read-only reconnect/observer streams are deliberately separate from run
+ # producers. An observer must never keep an orphaned run "active" or cause 409.
+@@ -600,19 +603,57 @@ def _read_text_cached(path: Path, fallback: str = "") -> str:
+         _STATIC_TEXT_CACHE[key] = (sig, text)
+         return text
+ 
++def _register_active_chat_connection(sid: str) -> asyncio.Task:
++    task = asyncio.current_task()
++    assert task is not None
++    with _chat_start_lock:
++        tasks = _active_chat_tasks_by_session.setdefault(sid, set())
++        tasks.add(task)
++        _active_chat_by_session[sid] = len(tasks)
++        _active_chat_last_seen[sid] = time.time()
++    return task
++
++
++def _unregister_active_chat_connection(sid: str, task: asyncio.Task) -> None:
++    with _chat_start_lock:
++        tasks = _active_chat_tasks_by_session.get(sid)
++        if not tasks or task not in tasks:
++            return  # A stop/reset may already have removed this connection.
++        tasks.discard(task)
++        if tasks:
++            _active_chat_by_session[sid] = len(tasks)
++        else:
++            _clear_active_chat_connections(sid)
++
++
++def _clear_active_chat_connections(sid: str) -> None:
++    with _chat_start_lock:
++        _active_chat_tasks_by_session.pop(sid, None)
++        _active_chat_by_session.pop(sid, None)
++        _active_chat_last_seen.pop(sid, None)
++
++
+ def _cleanup_stale_active_chat():
+     import time as _t
+     now = _t.time()
+-    stale = [sid for sid, ts in list(_active_chat_last_seen.items()) if now - ts > _CHAT_ACTIVE_TIMEOUT_SEC]
+-    for sid in stale:
+-        _active_chat_by_session.pop(sid, None)
+-        _active_chat_last_seen.pop(sid, None)
+     with _chat_start_lock:
++        stale = [sid for sid, ts in list(_active_chat_last_seen.items()) if now - ts > _CHAT_ACTIVE_TIMEOUT_SEC]
++        for sid in stale:
++            tasks = {task for task in _active_chat_tasks_by_session.get(sid, ()) if not task.done()}
++            if tasks:
++                _active_chat_tasks_by_session[sid] = tasks
++                _active_chat_by_session[sid] = len(tasks)
++                _active_chat_last_seen[sid] = now
++            else:
++                _clear_active_chat_connections(sid)
+         stale_starting = []
+         for sid, entry in list(_chat_starting_by_session.items()):
+             ts = entry[0] if isinstance(entry, tuple) else entry
+             if now - float(ts or 0.0) > _CHAT_ACTIVE_TIMEOUT_SEC:
+-                stale_starting.append(sid)
++                if not is_run_active(sid) and not any(
++                    not task.done() for task in _active_chat_tasks_by_session.get(sid, ())
++                ):
++                    stale_starting.append(sid)
+         for sid in stale_starting:
+             _chat_starting_by_session.pop(sid, None)
+ 
+@@ -684,6 +725,34 @@ def _release_session_chat_start(sid: str, token: str = "") -> None:
+         _invalidate_sessions_state_cache()
+ 
+ 
++async def _reserve_session_chat_start_off_loop(sid: str, run_id: str = "") -> Optional[str]:
++    # A durable busy check may rebuild a snapshot or wait for a session lock.
++    def reserve():
++        trace = LocalOperationTrace("chat_admission", session_id=sid, run_id=run_id)
++        try:
++            with trace.bind(), trace.step("reserve_chat_start"):
++                return _reserve_session_chat_start(sid, run_id)
++        finally:
++            if time.perf_counter() - trace.started >= 0.05:
++                trace.log()
++
++    reservation = asyncio.create_task(asyncio.to_thread(reserve))
++    try:
++        return await asyncio.shield(reservation)
++    except asyncio.CancelledError:
++        # The thread can finish after its HTTP caller disconnects. Release only
++        # its own token so it cannot leave a phantom busy session behind.
++        def release_late_result(task):
++            try:
++                token = task.result()
++                if token:
++                    _release_session_chat_start(sid, token)
++            except (asyncio.CancelledError, Exception):
++                logger.debug("Cancelled chat reservation cleanup failed: %s", sid, exc_info=True)
++        reservation.add_done_callback(release_late_result)
++        raise
++
++
+ def _runtime_v2_active_run_info(sid: str) -> dict:
+     sid = str(sid or "").strip()
+     if not sid:
+@@ -851,7 +920,7 @@ async def _run_human_interaction_recovery_background(session_id: str) -> None:
+     if not sid:
+         return
+     recovery_run_id = "interaction-recovery-" + uuid.uuid4().hex
+-    start_token = _reserve_session_chat_start(sid, recovery_run_id) or ""
++    start_token = await _reserve_session_chat_start_off_loop(sid, recovery_run_id) or ""
+     if not start_token:
+         return
+     try:
+@@ -963,18 +1032,18 @@ async def _run_react_recovery_background(session_id: str) -> None:
+         return
+     started_at = time.perf_counter()
+     recovery_run_id = "react-recovery-" + uuid.uuid4().hex
+-    start_token = _reserve_session_chat_start(sid, recovery_run_id) or ""
++    start_token = await _reserve_session_chat_start_off_loop(sid, recovery_run_id) or ""
+     if not start_token:
+         logger.info("ReAct recovery reservation unavailable: session=%s", sid)
+         return
+     event_count = 0
+     outcome = "skipped"
+     try:
+-        if _session_pending_human_count(sid) > 0:
++        if await asyncio.to_thread(_session_pending_human_count, sid) > 0:
+             return
+-        if not _runtime_v2_auto_resume_pending(sid):
++        if not await asyncio.to_thread(_runtime_v2_auto_resume_pending, sid):
+             return
+-        if not session_manager.can_continue_react_session(sid):
++        if not await asyncio.to_thread(session_manager.can_continue_react_session, sid):
+             return
+ 
+         def should_stop(sid_: str) -> bool:
+@@ -1519,7 +1588,7 @@ def _runtime_v2_event_dicts(session_id: str, *, after_seq: int = 0, before_seq:
+     if before_seq is not None:
+         events = log.read_before_seq(session_id, int(before_seq), lim)
+     elif int(after_seq or 0) > 0:
+-        events = log.read_after_seq(session_id, int(after_seq or 0))[:lim]
++        events = list(islice(log.iter_after_seq(session_id, int(after_seq or 0)), lim))
+     else:
+         events = log.read_latest(session_id, lim)
+     return [ev.to_dict() for ev in events]
+@@ -2235,9 +2304,10 @@ async def open_workspace_dir(
+ ):
+     """Reveal a file's folder in the system file manager (or open the folder).
+ 
+-    Windows uses `explorer /select,<file>` so the file itself is highlighted;
+-    macOS uses `open -R`; Linux opens the containing directory. The path goes
+-    through the same allowed-root gate as `/api/open-workspace-file`.
++    Browser requests open the containing directory through the platform opener.
++    Desktop probe requests only resolve the path and type; Electron performs
++    the native open or file selection. Both use the same path validation as
++    `/api/open-workspace-file`.
+     """
+     import os
+     import platform
+@@ -2281,7 +2351,8 @@ async def open_workspace_dir(
+             logger.warning("open-workspace-dir failed: %s", exc)
+ 
+     if int(probe or 0) == 1:
+-        return JSONResponse({"ok": True, "path": str(safe_path), "probe": True})
++        # 桌面主进程复用此校验结果执行系统打开，避免后台线程丢失前台激活资格。
++        return JSONResponse({"ok": True, "path": str(safe_path), "is_dir": safe_path.is_dir(), "probe": True})
+     threading.Thread(target=_reveal_detached, name="open-workspace-dir", daemon=True).start()
+     return JSONResponse({"ok": True, "path": str(safe_path)})
+ 
+@@ -3741,7 +3812,7 @@ async def runtime_v2_session_stream(
+             if await request.is_disconnected():
+                 break
+             try:
+-                events = _runtime_v2_event_dicts(sid, after_seq=cursor, limit=100)
++                events = await asyncio.to_thread(_runtime_v2_event_dicts, sid, after_seq=cursor, limit=100)
+             except Exception as exc:
+                 payload = {
+                     "type": "runtime_v2_stream_error",
+@@ -4905,8 +4976,7 @@ async def delete_session(session_id: str):
+         await stop_session_tree(sid, session_manager, subagent_registry)
+     except Exception as e:
+         logger.exception("stop session before delete failed: %s", e)
+-    _active_chat_by_session.pop(sid, None)
+-    _active_chat_last_seen.pop(sid, None)
++    _clear_active_chat_connections(sid)
+     try:
+         await run_in_threadpool(_run_history_op_locked, sid, session_manager.delete_session, sid)
+     except Exception as e:
+@@ -4938,8 +5008,7 @@ async def interrupt_session(session_id: str, request: Request):
+     session_manager.request_interrupt(sid, run_id, reason=reason)
+     if reason != "followup":
+         session_manager.mark_session_unread_result(sid, status="failed", run_id=run_id)
+-    _active_chat_by_session.pop(sid, None)
+-    _active_chat_last_seen.pop(sid, None)
++    _clear_active_chat_connections(sid)
+     interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, run_id, reason=reason)
+     try:
+         from session_event_bus import publish_session_event
+@@ -5563,8 +5632,7 @@ async def post_session_steer(session_id: str, request: Request):
+         return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
+     aborted = abort_session_steer_run(sid, reason="steer")
+     session_manager.request_interrupt(sid, reason="followup")
+-    _active_chat_by_session.pop(sid, None)
+-    _active_chat_last_seen.pop(sid, None)
++    _clear_active_chat_connections(sid)
+     with _chat_start_lock:
+         _chat_starting_by_session.pop(sid, None)
+     interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, reason="followup")
+@@ -6298,7 +6366,7 @@ async def chat(
+             from runtime_v2 import runtime_v2_primary
+ 
+             migration_gate = (
+-                _runtime_v2_legacy_only_migration_pending(sid)
++                await asyncio.to_thread(_runtime_v2_legacy_only_migration_pending, sid)
+                 if runtime_v2_primary()
+                 else {"pending": False}
+             )
+@@ -6315,7 +6383,9 @@ async def chat(
+                 status_code=425,
+             )
+         if queued_followup:
+-            queue_start_state = _queued_followup_start_state(sid, allow_paused=queued_followup_manual is True)
++            queue_start_state = await asyncio.to_thread(
++                _queued_followup_start_state, sid, allow_paused=queued_followup_manual is True
++            )
+             if queue_start_state != "ready":
+                 if queue_start_state == "recovering":
+                     await recover_react_session(sid)
+@@ -6329,7 +6399,7 @@ async def chat(
+                     status_code=409,
+                 )
+         if (followup_steer or queued_followup) and steer_operation_id:
+-            steer_status = get_session_steer(sid, steer_id=steer_operation_id)
++            steer_status = await asyncio.to_thread(get_session_steer, sid, steer_id=steer_operation_id)
+             steer_item = steer_status.get("item") if isinstance(steer_status.get("item"), dict) else {}
+             if not steer_status.get("ok"):
+                 return JSONResponse(content={"ok": False, "reason": "unknown_steer"}, status_code=409)
+@@ -6346,7 +6416,8 @@ async def chat(
+             expected_run_id = str(steer_item.get("replacement_run_id") or "").strip()
+             if expected_run_id and run_id and expected_run_id != run_id:
+                 return JSONResponse(content={"ok": False, "reason": "replacement_run_mismatch"}, status_code=409)
+-            claimed = transition_session_steer(
++            claimed = await asyncio.to_thread(
++                transition_session_steer,
+                 sid,
+                 steer_operation_id,
+                 claimable,
+@@ -6356,13 +6427,13 @@ async def chat(
+             )
+             if not claimed.get("ok"):
+                 return JSONResponse(content={"ok": False, "reason": "steer_already_claimed"}, status_code=409)
+-        start_token = _reserve_session_chat_start(sid, run_id) or ""
++        start_token = await _reserve_session_chat_start_off_loop(sid, run_id) or ""
+         if not start_token:
+             if (followup_steer or queued_followup) and steer_operation_id:
+-                transition_session_steer(
+-                    sid, steer_operation_id, {"claimed"}, "queued" if queued_followup else "restarting", claimed_by="", claimed_at=0
++                await asyncio.to_thread(
++                    transition_session_steer, sid, steer_operation_id, {"claimed"}, "queued" if queued_followup else "restarting", claimed_by="", claimed_at=0
+                 )
+-            run_state = _session_run_state_fields(sid)
++            run_state = await asyncio.to_thread(_session_run_state_fields, sid)
+             return JSONResponse(
+                 content={
+                     "ok": False,
+@@ -6374,7 +6445,7 @@ async def chat(
+                 },
+                 status_code=409,
+             )
+-        session_manager.clear_interrupt(sid, run_id)
++        await asyncio.to_thread(session_manager.clear_interrupt, sid, run_id)
+ 
+     def should_stop(sid_: str) -> bool:
+         return session_manager.is_interrupt_requested(sid_, run_id)
+@@ -6411,7 +6482,7 @@ async def chat(
+         lines.append("</selected_skills_for_this_conversation>")
+         return "\n".join(lines)
+ 
+-    valid_selected_skills = selected_skill_names(selected_skills)
++    valid_selected_skills = await asyncio.to_thread(selected_skill_names, selected_skills)
+     agent_message = build_agent_message(message, valid_selected_skills)
+     structured_attachments: list[dict[str, Any]] = []
+     try:
+@@ -6472,8 +6543,7 @@ async def chat(
+ 
+     async def event_generator():
+         if sid:
+-            _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
+-            import time as _time_stamp; _active_chat_last_seen[sid] = _time_stamp.time()
++            connection_task = _register_active_chat_connection(sid)
+         main_loop = asyncio.get_running_loop()
+         event_queue: asyncio.Queue = asyncio.Queue()
+         stop_event = threading.Event()
+@@ -6596,11 +6666,7 @@ async def chat(
+             if sid:
+                 _release_session_chat_start(sid, start_token)
+             if sid:
+-                n = _active_chat_by_session.get(sid, 1) - 1
+-                if n <= 0:
+-                    _active_chat_by_session.pop(sid, None)
+-                else:
+-                    _active_chat_by_session[sid] = n
++                _unregister_active_chat_connection(sid, connection_task)
+ 
+     return StreamingResponse(
+         event_generator(),
+@@ -6868,7 +6934,7 @@ async def continue_react_session(
+     sid = (session_id or "").strip()
+     if not sid:
+         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
+-    pending_human = _session_pending_human_counts(sid)
++    pending_human = await asyncio.to_thread(_session_pending_human_counts, sid)
+     if int(pending_human.get("total") or 0) > 0:
+         return JSONResponse(
+             content={
+@@ -6878,17 +6944,17 @@ async def continue_react_session(
+             },
+             status_code=409,
+         )
+-    if recovery and _session_was_manually_stopped(sid):
++    if recovery and await asyncio.to_thread(_session_was_manually_stopped, sid):
+         return JSONResponse(
+             content={"ok": False, "reason": "manually_stopped"},
+             status_code=409,
+         )
+     from workflow_extensions import session_workflows
+-    workflow_source = session_workflows.continuation_source(sid)
+-    if not session_manager.can_continue_react_session(sid) and not workflow_source:
++    workflow_source = await asyncio.to_thread(session_workflows.continuation_source, sid)
++    if not await asyncio.to_thread(session_manager.can_continue_react_session, sid) and not workflow_source:
+         return Response(status_code=204)
+     continuation_run_id = "react-continue-" + uuid.uuid4().hex
+-    start_token = _reserve_session_chat_start(sid, continuation_run_id) or ""
++    start_token = await _reserve_session_chat_start_off_loop(sid, continuation_run_id) or ""
+     if not start_token:
+         return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
+ 
+@@ -6896,9 +6962,7 @@ async def continue_react_session(
+         return session_manager.is_interrupt_requested(sid_, continuation_run_id)
+ 
+     async def event_generator():
+-        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
+-        import time as _time_stamp
+-        _active_chat_last_seen[sid] = _time_stamp.time()
++        connection_task = _register_active_chat_connection(sid)
+         try:
+             try:
+                 async for event in astream_events_continuation(
+@@ -6920,11 +6984,7 @@ async def continue_react_session(
+             except asyncio.CancelledError:
+                 return
+         finally:
+-            n = _active_chat_by_session.get(sid, 1) - 1
+-            if n <= 0:
+-                _active_chat_by_session.pop(sid, None)
+-            else:
+-                _active_chat_by_session[sid] = n
++            _unregister_active_chat_connection(sid, connection_task)
+             _release_session_chat_start(sid, start_token)
+ 
+     return StreamingResponse(
+@@ -6940,20 +7000,18 @@ async def continue_after_subagents(session_id: str, request: Request):
+     sid = (session_id or "").strip()
+     if not sid:
+         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
+-    if not session_manager.has_pending_subagent_notifications(sid):
++    if not await asyncio.to_thread(session_manager.has_pending_subagent_notifications, sid):
+         return Response(status_code=204)
+-    if not session_manager.can_continue_after_subagents(sid):
++    if not await asyncio.to_thread(session_manager.can_continue_after_subagents, sid):
+         return Response(status_code=204)
+-    if _is_session_stream_active(sid):
++    if await asyncio.to_thread(_is_session_stream_active, sid):
+         return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
+ 
+     def should_stop(sid_: str) -> bool:
+         return session_manager.is_interrupt_requested(sid_)
+ 
+     async def event_generator():
+-        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
+-        import time as _time_stamp
+-        _active_chat_last_seen[sid] = _time_stamp.time()
++        connection_task = _register_active_chat_connection(sid)
+         try:
+             try:
+                 async for event in astream_events_continuation(
+@@ -6969,11 +7027,7 @@ async def continue_after_subagents(session_id: str, request: Request):
+             except asyncio.CancelledError:
+                 return
+         finally:
+-            n = _active_chat_by_session.get(sid, 1) - 1
+-            if n <= 0:
+-                _active_chat_by_session.pop(sid, None)
+-            else:
+-                _active_chat_by_session[sid] = n
++            _unregister_active_chat_connection(sid, connection_task)
+ 
+     return StreamingResponse(
+         event_generator(),
+@@ -9292,6 +9346,8 @@ async def invoke_plugin_session_action(request: Request):
+ 
+ @fastapi_app.post("/api/plugins/{plugin_id}/enabled")
+ async def set_plugin_enabled_api(plugin_id: str, request: Request):
++    started = time.perf_counter()
++    timings = {}
+     try:
+         data = await request.json()
+     except Exception:
+@@ -9300,11 +9356,25 @@ async def set_plugin_enabled_api(plugin_id: str, request: Request):
+     if not isinstance(enabled, bool):
+         return JSONResponse({"ok": False, "error": "enabled must be boolean"}, status_code=400)
+     try:
+-        from agent_extensions import set_plugin_enabled
++        from agent_extensions import plugin_manager, set_plugin_enabled
++        from plugins import normalize_namespace
+ 
++        plugin_id = normalize_namespace(plugin_id)
+         state = await asyncio.to_thread(set_plugin_enabled, plugin_id, enabled)
++        timings["state"] = (time.perf_counter() - started) * 1000
++        # set_enabled has just validated this inventory. Only a plugin owning
++        # MCP declarations needs transport invalidation; unrelated MCP startup
++        # or shutdown must not delay an ordinary plugin toggle.
++        has_mcp = any(plugin.plugin_id == plugin_id and plugin.mcp_servers
++                      for plugin in plugin_manager().last_discovery.plugins)
++        phase = time.perf_counter()
+         await refresh_web_plugin_lifecycle()
+-        await agent_mcp.force_reload()
++        timings["lifecycle"] = (time.perf_counter() - phase) * 1000
++        phase = time.perf_counter()
++        if has_mcp:
++            await agent_mcp.reload_plugin(plugin_id)
++        timings["mcp"] = (time.perf_counter() - phase) * 1000
++        phase = time.perf_counter()
+         session_id = str(data.get("session_id") or "").strip()
+         if session_id:
+             from agent_extensions import audit_plugin_inventory
+@@ -9314,8 +9384,14 @@ async def set_plugin_enabled_api(plugin_id: str, request: Request):
+                 session_manager,
+                 session_id,
+                 "",
++                reuse_catalog=True,
+             )
+-        return JSONResponse({"ok": True, "plugin_id": plugin_id, "state": dict(state)})
++        timings["audit"] = (time.perf_counter() - phase) * 1000
++        timings["total"] = (time.perf_counter() - started) * 1000
++        logger.info("Plugin toggle id=%s enabled=%s timings_ms=%s", plugin_id, enabled,
++                    {key: round(value, 1) for key, value in timings.items()})
++        return JSONResponse({"ok": True, "plugin_id": plugin_id, "state": dict(state)}, headers={
++            "Server-Timing": ", ".join(f"plugin-{key};dur={value:.1f}" for key, value in timings.items())})
+     except Exception as exc:
+         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+ 
+@@ -10299,14 +10375,14 @@ async def refresh_web_plugin_lifecycle() -> None:
+         start_bundled_host_extensions,
+     )
+ 
+-    loaded = load_plugins(force=True).plugins
++    loaded = await asyncio.to_thread(load_plugins, force=True)
+     context = {"session_manager": session_manager, "project_root": PROJECT_ROOT}
+-    install_bundled_host_extensions(fastapi_app, loaded, context)
++    install_bundled_host_extensions(fastapi_app, loaded.plugins, context)
+     from workflow_extensions import activate_bundled_workflow_callbacks
+ 
+-    activate_bundled_workflow_callbacks(sys.modules["agent_loop"], force=True)
+-    await start_plugin_background_services()
+-    await start_bundled_host_extensions(loaded, context)
++    await asyncio.to_thread(activate_bundled_workflow_callbacks, sys.modules["agent_loop"], force=True)
++    await start_plugin_background_services(loaded=loaded)
++    await start_bundled_host_extensions(loaded.plugins, context)
+ 
+ 
+ async def stop_webui_lifecycle() -> None:
+diff --git a/packaging/README.md b/packaging/README.md
+index ef4c948..fc03ed6 100644
+--- a/packaging/README.md
++++ b/packaging/README.md
+@@ -140,7 +140,8 @@ resources/runtime/
+ | 托盘 | 关闭窗口＝最小化到托盘；托盘菜单：打开主界面 / 浏览器打开 / 重启内置服务 / 打开后台日志 / 打开工作目录 / 退出；后台日志复用源码版实时彩色终端查看器 |
+ | 重启内置服务 | 重启内置 Python Agent 后端，保持 Electron 窗口、托盘及当前端口；重启期间禁用重复重启，就绪后重载界面并处理通知跳转。主动停止不弹崩溃框；启动失败与真正的等待超时分别提示。已安装桌面版需重新打包并覆盖安装才能更新外壳代码 |
+ | 通知跳转 | 使用独立的 `sugaragent-desktop://open-ui` 协议唤起桌面窗口；会话通知保留会话定位，使用当前后端端口 |
+-| 通知启动器 | 即使协议仍指向 `SugarAgent.exe`，有效通知链接也走静默转交路径，不显示原生启动小窗、不追加启动管道或请求忙碌光标；普通双击保留完整启动反馈。启动时仅清理指向本安装的旧 `Electron.lnk`，其它 Electron 应用快捷方式保留 |
++| 通知启动器 | 有效通知链接走静默转交路径，挂起创建 Electron 子进程、定向传递前台激活权限后再恢复执行，再由 Electron 单实例机制转交已有窗口；不显示原生启动小窗、不请求忙碌光标。普通双击保留完整启动反馈。启动时仅清理指向本安装的旧 `Electron.lnk`，其它 Electron 应用快捷方式保留 |
++| 系统文件与目录 | 页面经 preload IPC 交给主进程，使用当前后端端口的 probe 接口保留路径与会话校验，再调用 `shell.openPath` 或 `shell.showItemInFolder`；不从后台 Python 唤起。打开失败返回界面，浏览器版保留原有后端入口。详见 `docs/desktop-foreground-activation.md` |
+ | 通知发送 | 后端通过带每次启动随机凭据的本机通道交给 Electron 主进程发送原生通知；窗口隐藏到托盘后仍可发送，失败记录在 `desktop.log` 并回退到系统通知助手 |
+ | 关闭窗口提示 | 主进程将窗口隐藏/显示状态同步到后端；关闭到托盘后提示后台运行，重新打开窗口取消待发提示，任务完成/待处理通知优先于通用提示 |
+ | 原生主题 | 页面浅色 / 深色 / 紫色同步到 Electron 原生主题，窗口边框和菜单随页面主题切换 |
+diff --git a/packaging/electron/local-paths.js b/packaging/electron/local-paths.js
+new file mode 100644
+index 0000000..d3fb58d
+--- /dev/null
++++ b/packaging/electron/local-paths.js
+@@ -0,0 +1,59 @@
++'use strict'
++
++const http = require('node:http')
++const path = require('node:path')
++
++/** 路径仍由后端校验；系统交互由拥有前台窗口的 Electron 进程执行。 */
++async function openWorkspacePath({ baseUrl, shell, log }, payload) {
++  try {
++    if (!payload || typeof payload.rel !== 'string' || !payload.rel.trim()
++        || payload.rel.length > 32768 || typeof payload.directory !== 'boolean'
++        || ['session_id', 'work_dir'].some(key => payload[key] !== undefined
++          && (typeof payload[key] !== 'string' || payload[key].length > 32768))) {
++      return { ok: false, error: '无效的路径打开请求' }
++    }
++    const url = new URL('/api/open-workspace-dir', baseUrl)
++    for (const key of ['rel', 'session_id', 'work_dir']) {
++      if (payload[key]) url.searchParams.set(key, payload[key])
++    }
++    url.searchParams.set('probe', '1')
++    const validated = await new Promise((resolve, reject) => {
++      const request = http.get(url, { timeout: 6500 }, response => {
++        let body = ''
++        response.setEncoding('utf8')
++        response.on('data', chunk => {
++          body += chunk
++          if (body.length > 65536) response.destroy(new Error('路径校验响应过大'))
++        })
++        response.on('error', reject)
++        response.on('end', () => {
++          try {
++            const result = JSON.parse(body)
++            if (response.statusCode !== 200 || result.ok !== true) {
++              reject(new Error(result.error || result.detail || '路径校验失败'))
++            } else if (typeof result.path !== 'string' || !path.isAbsolute(result.path)
++                || typeof result.is_dir !== 'boolean') {
++              reject(new Error('路径校验响应异常'))
++            } else resolve(result)
++          } catch (error) { reject(error) }
++        })
++      })
++      request.on('timeout', () => request.destroy(new Error('路径校验超时')))
++      request.on('error', reject)
++    })
++    // 后台 Python 的 os.startfile 不拥有用户点击所在进程的前台资格。
++    // 文件定位使用系统 API，避免 explorer /select 的参数解析与重复窗口问题。
++    if (payload.directory && !validated.is_dir) {
++      shell.showItemInFolder(validated.path)
++    } else {
++      const error = await shell.openPath(validated.path)
++      if (error) throw new Error(error)
++    }
++    return { ok: true, path: validated.path }
++  } catch (error) {
++    log(`系统路径打开失败：${error.message}`)
++    return { ok: false, error: error.message }
++  }
++}
++
++module.exports = { openWorkspacePath }
+diff --git a/packaging/electron/main.js b/packaging/electron/main.js
+index dec8e84..dd03fa2 100644
+--- a/packaging/electron/main.js
++++ b/packaging/electron/main.js
+@@ -18,6 +18,7 @@ const net = require('node:net')
+ const path = require('node:path')
+ const { createNotificationBridge } = require('./notifications')
+ const { removeLegacyElectronShortcuts } = require('./desktop-shortcuts')
++const { openWorkspacePath } = require('./local-paths')
+ 
+ const HOST = '127.0.0.1'
+ const BASE_PORT = Number(process.env.SUGARAGENT_PORT || 8192)
+@@ -600,8 +601,10 @@ function createWindow() {
+ function showWindow() {
+   if (!mainWindow) createWindow()
+   if (mainWindow.isMinimized()) mainWindow.restore()
+-  mainWindow.show()
++  if (!mainWindow.isVisible()) mainWindow.show()
+   mainWindow.focus()
++  // focus() 没有成功返回值；记录真实状态，避免把任务栏闪烁误判为前置成功。
++  if (!mainWindow.isFocused()) log('窗口激活未获得前台焦点')
+ }
+ 
+ // -------------------------------------------------------- desktop activation ---
+@@ -733,6 +736,14 @@ function registerIpc() {
+     event.sender.sugarAgentLanguage = language === 'en' ? 'en' : 'zh-CN'
+   })
+   ipcMain.handle('sugaragent:open-workdir', () => shell.openPath(resolveLayout().workDir))
++  ipcMain.handle('sugaragent:open-local-path', (event, payload) => {
++    if (!mainWindow || event.sender !== mainWindow.webContents
++        || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '无效的页面来源' }
++    try {
++      if (new URL(event.senderFrame.url).origin !== baseUrl()) return { ok: false, error: '无效的页面来源' }
++    } catch { return { ok: false, error: '无效的页面来源' } }
++    return openWorkspacePath({ baseUrl: baseUrl(), shell, log }, payload)
++  })
+   ipcMain.handle('sugaragent:open-external', (_event, url) => {
+     if (typeof url === 'string' && /^https?:\/\//i.test(url)) return shell.openExternal(url)
+     return false
+diff --git a/packaging/electron/preload.js b/packaging/electron/preload.js
+index b9b585e..f7f13d1 100644
+--- a/packaging/electron/preload.js
++++ b/packaging/electron/preload.js
+@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('sugarAgentDesktop', {
+   restartBackend: () => ipcRenderer.invoke('sugaragent:restart-backend'),
+   openLogs: () => ipcRenderer.invoke('sugaragent:open-logs'),
+   openWorkDir: () => ipcRenderer.invoke('sugaragent:open-workdir'),
++  openLocalPath: request => ipcRenderer.invoke('sugaragent:open-local-path', request),
+   openExternal: url => ipcRenderer.invoke('sugaragent:open-external', url),
+ })
+ 
+diff --git a/packaging/native/StartupLauncher.cs b/packaging/native/StartupLauncher.cs
+index 2b6b9a1..e720022 100644
+--- a/packaging/native/StartupLauncher.cs
++++ b/packaging/native/StartupLauncher.cs
+@@ -34,6 +34,9 @@ internal static class StartupLauncher
+     [DllImport("kernel32.dll")] internal static extern bool CloseHandle(IntPtr handle);
+     [DllImport("kernel32.dll")] internal static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
+     [DllImport("kernel32.dll")] internal static extern bool GetExitCodeProcess(IntPtr handle, out uint code);
++    [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint ResumeThread(IntPtr thread);
++    [DllImport("kernel32.dll")] internal static extern bool TerminateProcess(IntPtr process, uint code);
++    [DllImport("user32.dll", SetLastError = true)] internal static extern bool AllowSetForegroundWindow(uint pid);
+     [DllImport("user32.dll")] internal static extern bool GetCursorInfo(ref CursorInfo info);
+     [DllImport("user32.dll")] internal static extern IntPtr LoadCursor(IntPtr instance, IntPtr name);
+ 
+@@ -71,6 +74,7 @@ internal static class StartupLauncher
+ 
+     private static int ForwardProtocol(string[] args) {
+         ProcessInfo child = new ProcessInfo();
++        bool resumed = false;
+         string reportPath = null;
+         try {
+             string target;
+@@ -82,15 +86,25 @@ internal static class StartupLauncher
+                 command.Append(' ').Append(Quote(arg));
+             }
+             var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) };
+-            if (!CreateProcess(target, command, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
++            // 通知点击赋予启动器的前台资格不会自动沿多层进程转交。
++            // 先挂起创建、定向授权，再恢复 Electron；其单实例机制再授权已有主进程。
++            // 必须在子进程运行前完成，避免它先发送 second-instance 后才拿到授权。
++            const uint CREATE_SUSPENDED = 0x00000004;
++            if (!CreateProcess(target, command, IntPtr.Zero, IntPtr.Zero, false, CREATE_SUSPENDED, IntPtr.Zero,
+                 Path.GetDirectoryName(target), ref startup, out child)) throw new Win32Exception(Marshal.GetLastWin32Error());
++            bool foregroundGranted = AllowSetForegroundWindow(child.pid);
++            if (ResumeThread(child.thread) == UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
++            resumed = true;
+             if (reportPath != null) File.WriteAllText(reportPath, new JavaScriptSerializer().Serialize(
+-                new { nativeSplashShown = false, startupFlags = startup.flags, protocolForwarded = true }), Encoding.UTF8);
++                new { nativeSplashShown = false, startupFlags = startup.flags, protocolForwarded = true,
++                    foregroundGranted = foregroundGranted, childResumed = resumed }), Encoding.UTF8);
+             return 0;
+         } catch (Exception error) {
+             MessageBox.Show(error.Message, "SugarAgent 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error);
+             return 1;
+         } finally {
++            // 只清理本次创建且尚未恢复的子进程，防止异常遗留挂起进程。
++            if (!resumed && child.process != IntPtr.Zero) TerminateProcess(child.process, 1);
+             if (child.process != IntPtr.Zero) CloseHandle(child.process);
+             if (child.thread != IntPtr.Zero) CloseHandle(child.thread);
+         }
+diff --git a/plugins/execution-tools/host.py b/plugins/execution-tools/host.py
+index c6a61f4..1b1f854 100644
+--- a/plugins/execution-tools/host.py
++++ b/plugins/execution-tools/host.py
+@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
+ from fastapi.responses import StreamingResponse
+ 
+ from execution_services import execution_service
++from execution_services.jobs import ACTIVE
+ from execution_services.terminals import terminal_manager
+ from tool_result_status import legacy_tool_outcome
+ 
+@@ -262,9 +263,7 @@ async def start(context, plugin):
+     from execution_services.notifications import start_runner
+     service = execution_service(context["session_manager"])
+     service.start()
+-    async def enabled():
+-        service.closed_owners.clear()
+-    await service.call(enabled)
++    await service.call(service.resume_owners, reason="execution_tools_disabled")
+     await start_runner(service)
+ 
+ 
+@@ -273,9 +272,10 @@ async def stop(context, plugin):
+     await stop_runner()
+     service = execution_service(context["session_manager"])
+     async def clean():
+-        owners = {j.owner for j in service.jobs.values()}
++        owners = {j.owner for j in service.jobs.values() if j.status in ACTIVE}
+         if service.terminals:
+-            owners.update(s.owner for s in service.terminals.sessions.values())
++            owners.update(s.owner for s in service.terminals.sessions.values() if s.status == "running")
++            owners.update(owner for owner, _ in service.terminals.openings.values())
+         for owner in owners:
+             await service.stop_owner(owner, close_terminals=True, reason="execution_tools_disabled")
+     await service.call(clean)

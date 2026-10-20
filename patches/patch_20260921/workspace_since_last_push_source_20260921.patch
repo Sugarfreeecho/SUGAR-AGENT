@@ -1,0 +1,1139 @@
+diff --git a/app/tray_launcher.py b/app/tray_launcher.py
+index 18f55dd..8cf45f2 100644
+--- a/app/tray_launcher.py
++++ b/app/tray_launcher.py
+@@ -15,8 +15,10 @@ import win32api
+ import win32con
+ import win32event
+ import win32gui
++import win32process
+ import winerror
+ import dotenv
++import psutil
+ 
+ from python_runtime import configure_agent_python_environment, preferred_python
+ from desktop_notify import show_desktop_notification
+@@ -201,29 +203,6 @@ def _session_from_protocol_uri(raw_uri: str) -> str:
+     return _re.sub(r"[^A-Za-z0-9\-]", "", candidate)[:64]
+ 
+ 
+-def _visible_webui_windows() -> list[int]:
+-    """Top-level visible windows whose active tab shows the WebUI."""
+-
+-    matches: list[int] = []
+-
+-    def collect(hwnd, _extra):
+-        try:
+-            title = str(win32gui.GetWindowText(hwnd) or "")
+-            if win32gui.IsWindowVisible(hwnd) and (
+-                "General Agent" in title or "SugarAgent" in title
+-            ):
+-                matches.append(int(hwnd))
+-        except win32gui.error:
+-            return True
+-        return True
+-
+-    try:
+-        win32gui.EnumWindows(collect, None)
+-    except win32gui.error:
+-        pass
+-    return matches
+-
+-
+ def _bring_window_to_foreground(hwnd: int) -> bool:
+     """Raise ``hwnd`` to the foreground, verifying the system actually did it.
+ 
+@@ -272,39 +251,24 @@ def _bring_window_to_foreground(hwnd: int) -> bool:
+     return int(win32gui.GetForegroundWindow() or 0) == int(hwnd)
+ 
+ 
+-def _focus_existing_webui_window() -> bool:
+-    """Foreground a visible browser window whose active tab is the WebUI.
+-
+-    Returns True only when the window is verifiably in the foreground.
+-    Heartbeat pages hosted inside other applications (e.g. an embedded
+-    automation browser pane) can match the title check but cannot be raised
+-    for the user — reporting False for those lets callers fall back to
+-    opening a real browser window instead of doing nothing.
+-    """
+-
+-    try:
+-        for hwnd in _visible_webui_windows():
+-            if _bring_window_to_foreground(hwnd):
+-                return True
+-        return False
+-    except win32gui.error:
+-        return False
+-
+-
+ _BROWSER_WINDOW_CLASSES = {"Chrome_WidgetWin_1", "MozillaWindowClass"}
++_BROWSER_PROCESS_NAMES = {"msedge.exe", "chrome.exe", "firefox.exe"}
+ 
+ 
+ def _visible_browser_windows() -> list[int]:
+-    """Visible top-level browser windows regardless of the active tab title."""
++    """Visible browser windows, excluding similarly-classed desktop apps."""
+ 
+     matches: list[int] = []
+ 
+     def collect(hwnd, _extra):
+         try:
+             class_name = str(win32gui.GetClassName(hwnd) or "")
+-            if win32gui.IsWindowVisible(hwnd) and class_name in _BROWSER_WINDOW_CLASSES:
++            if not win32gui.IsWindowVisible(hwnd) or class_name not in _BROWSER_WINDOW_CLASSES:
++                return True
++            _, pid = win32process.GetWindowThreadProcessId(hwnd)
++            if psutil.Process(pid).name().lower() in _BROWSER_PROCESS_NAMES:
+                 matches.append(int(hwnd))
+-        except win32gui.error:
++        except (win32gui.error, psutil.Error, OSError):
+             return True
+         return True
+ 
+@@ -315,18 +279,34 @@ def _visible_browser_windows() -> list[int]:
+     return matches
+ 
+ 
+-def _select_webui_browser_tab() -> int:
+-    """Select a background WebUI tab through Windows UI Automation.
++def _visible_webui_windows() -> list[int]:
++    """Browser windows whose selected tab title contains a WebUI keyword."""
+ 
+-    Top-level browser window titles only expose the active tab. Consequently a
+-    healthy WebUI in a background tab used to be invisible to the launcher: it
+-    either opened a duplicate, or focused an arbitrary browser window and
+-    falsely reported success. Chromium and Firefox expose their tab strips to
+-    the built-in Windows UI Automation API, so use that to select the matching
+-    tab and return its owning HWND.
++    matches: list[int] = []
++    for hwnd in _visible_browser_windows():
++        try:
++            title = str(win32gui.GetWindowText(hwnd) or "")
++            if "General Agent" in title or "SugarAgent" in title:
++                matches.append(hwnd)
++        except win32gui.error:
++            continue
++    return matches
+ 
+-    This helper is best-effort. Accessibility can be disabled by browser or
+-    enterprise policy; callers must still retain the normal open-page fallback.
++
++def _focus_existing_webui_window() -> bool:
++    """Foreground a browser already showing a keyword-matched WebUI tab."""
++
++    for hwnd in _visible_webui_windows():
++        if _bring_window_to_foreground(hwnd):
++            return True
++    return False
++
++
++def _select_webui_browser_tab() -> int:
++    """Select the first keyword-matched browser tab, without scanning URLs.
++
++    Only matching tabs are selected. Other tabs are never cycled through just
++    to inspect their addresses.
+     """
+ 
+     handles = _visible_browser_windows()
+@@ -397,7 +377,7 @@ exit 1
+ 
+ 
+ def _focus_existing_webui_tab() -> bool:
+-    """Focus the WebUI whether it is the active or a background browser tab."""
++    """Focus a keyword-matched tab in a verified browser window."""
+ 
+     if _focus_existing_webui_window():
+         return True
+@@ -450,14 +430,10 @@ def _activate_webui_from_external(session: str = "") -> bool:
+     _request_webui_activation_with_retry("/", session=session)
+     if _focus_existing_webui_tab():
+         return True
+-    if _visible_webui_windows():
+-        # The exact page exists but Windows refused every foreground strategy.
+-        # Do not report success while the user still sees nothing; opening the
+-        # URL is the last-resort way to let the browser surface it.
+-        _append_log(
+-            "WebUI window found but could not be foregrounded; opening a browser page"
+-        )
+-    _append_log(f"UI activation: opening a new browser page (session={session or '-'})")
++    _append_log(
++        f"UI activation: no keyword-matched, focusable browser tab; "
++        f"opening a browser page (session={session or '-'})"
++    )
+     _open_url_in_browser(
+         f"/?session={session}" if session else "/",
+         refresh=False,
+@@ -963,20 +939,12 @@ class TrayLauncher:
+         )
+         if activation_reused and _focus_existing_webui_tab():
+             return
+-        if _visible_webui_windows():
+-            # The exact page exists but could not be surfaced. Falling through
+-            # is deliberate: a duplicate is preferable to a tray action that
+-            # claims success while showing no UI.
+-            _append_log(
+-                "WebUI window found but could not be foregrounded; opening a browser page"
+-            )
+         if activation_reused:
+-            # The backend sees a live page heartbeat, but no visible browser
+-            # tab could be selected (e.g. a stale heartbeat or an embedded
+-            # automation pane). Never focus an arbitrary browser window and
+-            # call that success; opening a real page is the truthful fallback.
++            # A heartbeat is not proof that a keyword-matched browser tab
++            # can be selected and foregrounded (it may be stale or embedded).
+             _append_log(
+-                "WebUI heartbeat found but no selectable browser tab; opening a new browser page"
++                "WebUI heartbeat found but no keyword-matched, focusable browser tab; "
++                "opening a new browser page"
+             )
+         url = f"{BASE_URL}{path}"
+         if session:
+diff --git a/docs/Agent 设计（用户方案）/00-总览与导航.md b/docs/Agent 设计（用户方案）/00-总览与导航.md
+index 55b8879..db3d519 100644
+--- a/docs/Agent 设计（用户方案）/00-总览与导航.md	
++++ b/docs/Agent 设计（用户方案）/00-总览与导航.md	
+@@ -1,6 +1,6 @@
+ # Agent 设计（用户方案） · 总览与导航
+ 
+-- 版本：2026-09-21 v19（覆盖至：当前工作区；含工作区双侧面板共享视觉系统）
++- 版本：2026-09-21 v20（覆盖至：当前工作区；含顶部通知与权限警示视觉系统）
+ - 用途：**整个 Agent 的审查入口**。本目录采用「一个模块一个文件夹；每个文件夹含 1 份整体设计 + N 份功能专项设计」的结构。每份功能专项设计均按统一格式逐条给出「触发 → 预期现象 → 规则与边界 → 依据」，**审查时按编号逐条勾选；如有不符，反馈编号即可**。
+ - 参考范式：`06-能力扩展加载/08-内置插件-改动审查方案设计-UseCase清单.md`（单功能完备样例，已归档至对应模块文件夹）。
+ 
+@@ -15,7 +15,7 @@ Agent 设计（用户方案）/
+ ├── 02-ReAct运行时/      00-整体设计 + 10 份功能设计 + 《ReAct循环能力清单》
+ ├── 03-工具系统/         00-整体设计 + 6 份功能设计 + 《工具系统能力清单》
+ ├── 04-工作区/           00-整体设计 + 6 份功能设计 + 《工作区能力清单》
+-├── 05-WebUI对话界面/    00-整体设计 + 11 份功能设计 + 《WebUI能力清单》
++├── 05-WebUI对话界面/    00-整体设计 + 12 份功能设计 + 《WebUI能力清单》
+ ├── 06-能力扩展加载/     00-整体设计 + 8 份功能设计 + 《能力扩展加载能力清单》
+ ├── 07-权限审批/         00-整体设计 + 6 份功能设计 + 《权限审批能力清单》
+ ├── 08-会话存储RuntimeV2/ 00-整体设计 + 6 份功能设计 + 《会话存储RuntimeV2能力清单》
+@@ -31,13 +31,13 @@ Agent 设计（用户方案）/
+ | 02 | ReAct 运行时 | [02-ReAct运行时/00-ReAct运行时整体设计.md](02-ReAct运行时/00-ReAct运行时整体设计.md) | 10 |
+ | 03 | 工具系统 | [03-工具系统/00-工具系统整体设计.md](03-工具系统/00-工具系统整体设计.md) | 6 |
+ | 04 | 工作区 | [04-工作区/00-工作区整体设计.md](04-工作区/00-工作区整体设计.md) | 6 |
+-| 05 | WebUI 对话界面 | [05-WebUI对话界面/00-WebUI对话界面整体设计.md](05-WebUI对话界面/00-WebUI对话界面整体设计.md) | 11 |
++| 05 | WebUI 对话界面 | [05-WebUI对话界面/00-WebUI对话界面整体设计.md](05-WebUI对话界面/00-WebUI对话界面整体设计.md) | 12 |
+ | 06 | 能力扩展加载 | [06-能力扩展加载/00-能力扩展加载整体设计.md](06-能力扩展加载/00-能力扩展加载整体设计.md) | 8 |
+ | 07 | 权限审批 | [07-权限审批/00-权限审批整体设计.md](07-权限审批/00-权限审批整体设计.md) | 6 |
+ | 08 | 会话存储 Runtime V2 | [08-会话存储RuntimeV2/00-会话存储RuntimeV2整体设计.md](08-会话存储RuntimeV2/00-会话存储RuntimeV2整体设计.md) | 6 |
+ | 09 | 横切能力 | [09-横切能力/00-横切能力整体设计.md](09-横切能力/00-横切能力整体设计.md) | 5 |
+ 
+-**合计：9 个模块文件夹 · 9 份整体设计 · 67 份功能专项设计。**
++**合计：9 个模块文件夹 · 9 份整体设计 · 68 份功能专项设计。**
+ 
+ > 注：01–08 各文件夹另含 1 份《XX能力清单.md》（代码证据台账）；拆分前的旧版总文件已移至 `99-历史归档/`。
+ 
+@@ -66,6 +66,7 @@ API 识图的用户方案入口为 [09-横切能力/02-识图与多模态投影
+ 
+ ## 5. 版本记录
+ 
++- 2026-09-21 v20：05 新增 12《顶部通知与权限警示视觉系统》（UC-5L1~5L5）——待办条两态化（展开条 ⇄ 品牌铃铛徽章、6s 自动收起、悬停/聚焦暂停、数量变化再展开）；红色警示条统一表面（玻璃单行条 + 单一"确认"、自动消失不进入徽章、多来源复用同一节点）；警示在上、待办让位的堆叠规则；「完全访问」控件克制强调与三档盾牌图标家族（盾 / 盾+勾 / 盾+警示）。同步 05 整体设计与 WebUI 能力清单。专项总数 67→68。
+ - 2026-09-21 v19：05 新增 11《工作区双侧面板视觉系统》（UC-5K1~5K7）——统一历史、Todo、Goal 与声明式插件面板的主题令牌、外壳、字体层级、间距、列表密度和交互反馈，并明确插件只保留业务语义差异；同步 05/06 整体设计与两份能力清单。专项总数 66→67。
+ - 2026-09-20 v18：02 新增 10《子代理任务生命周期与事件循环隔离》（UC-2J1~2J6）——修复“主 Agent 结束（父轮临时循环/聊天 worker 循环关闭）导致后台子代理被中断”：后台任务改由进程级持久事件循环托管（创建/注册原子交接），跨事件循环等待/取消桥接；前台语义与显式停止级联不变，后台实时转发收口为持久事件 + pending 结果。同步 02 整体设计、ReAct 能力清单与 05/04 交叉引用。专项总数 65→66。
+ - 2026-09-20 v17：05 新增 10《会话列表状态一致性与快照版本》（UC-5J1~5J6）——修复"侧栏改名/归档/置顶/待办后被轮询快照回滚、随后又自行恢复"：`/sessions/state` 快照改为硬失效 + 单飞重建并打 `state_revision`，会话摘要写入全路径广播失效，客户端加请求序号与版本双下界、写入在途拒收快照、仅失败才回滚；05 整体设计、05/06 与 WebUI 能力清单同步。专项总数 64→65。
+diff --git a/docs/Agent 设计（用户方案）/05-WebUI对话界面/00-WebUI对话界面整体设计.md b/docs/Agent 设计（用户方案）/05-WebUI对话界面/00-WebUI对话界面整体设计.md
+index 7651bcb..a481251 100644
+--- a/docs/Agent 设计（用户方案）/05-WebUI对话界面/00-WebUI对话界面整体设计.md	
++++ b/docs/Agent 设计（用户方案）/05-WebUI对话界面/00-WebUI对话界面整体设计.md	
+@@ -1,6 +1,6 @@
+ # WebUI 对话界面 · 模块整体设计
+ 
+-- 版本：2026-09-21 v11（覆盖至：当前工作区；含工作区双侧面板共享视觉系统）
++- 版本：2026-09-21 v12（覆盖至：当前工作区；含顶部通知与权限警示视觉系统）
+ - 用途：本模块总入口；各功能专项设计按四字段逐条审查。
+ - 适用实现：`frontend/src/**`（26 功能模块 + 20 状态模块；含 `modules/dock/**` 详情栏：engine 8 / renderer 5 / embedder 3；子代理模块 4 + 3 状态）、`styles/dock.css`、`app/webui.py`（60+ 路由，含 `GET /api/workspace-file-text`）、`app/tray_launcher.py`、`app/platform_lifecycle.py`、`app/templates/dist`（构建产物）。
+ - 配套：架构图 `workspace/archify_study/webui/webui.architecture.html`（7 节点骨架版）；能力清单 `WebUI能力清单.md`（本文件夹）。
+@@ -36,6 +36,7 @@
+ | 09 | [审批卡片锚点与流恢复稳定性](09-审批卡片锚点与流恢复稳定性方案设计-UseCase清单.md) | ✅ |
+ | 10 | [会话列表状态一致性与快照版本](10-会话列表状态一致性与快照版本方案设计-UseCase清单.md) | ✅ |
+ | 11 | [工作区双侧面板视觉系统](11-工作区双侧面板视觉系统方案设计-UseCase清单.md) | ✅ |
++| 12 | [顶部通知与权限警示视觉系统](12-顶部通知与权限警示视觉系统方案设计-UseCase清单.md) | ✅ |
+ 
+ ## 4. 跨功能不变式
+ 
+@@ -47,6 +48,7 @@
+ 6. **激活必须可见**：托盘/通知的"复用成功"必须落到可验证的 WebUI 标签页和前台窗口；页面心跳、任意浏览器窗口或短时去重锁不能制造"看似成功但页面未出现"。
+ 7. **快照不得回滚已提交写入**：服务端快照带 `state_revision`（进程内单调）；客户端只接受不早于已提交写入的快照（请求序号下界 + 版本下界），写入在途期间不应用任何快照。
+ 8. **同级侧栏共享视觉骨架**：历史、Todo、Goal 与声明式插件面板复用同一套主题令牌、外壳、标题和条目规格；插件只扩展业务语义，不另造基础皮肤。
++9. **顶部提示分层**：待办提示是常驻状态（两态互切、随数量消失），权限警示是瞬时事件（唯一"确认"、自动消失、不沉淀为徽章）；两者共用玻璃底 + 内环描边语法，同现时警示在上、待办让位。
+ 
+ ## 5. 边界总览
+ 
+@@ -56,6 +58,7 @@
+ 
+ ## 6. 版本记录
+ 
++- 2026-09-21 v12：新增 12《顶部通知与权限警示视觉系统》（UC-5L1~5L5）——待办条两态化（展开条 ⇄ 品牌铃铛徽章、6s 自动收起、悬停/聚焦暂停）；红色警示条统一表面（玻璃单行条 + 单一"确认"、自动消失不进入徽章、多来源复用同一节点）；警示在上、待办让位的堆叠规则；「完全访问」控件克制强调与三档盾牌图标家族。跨功能不变式补第 9 条。
+ - 2026-09-21 v11：新增 11《工作区双侧面板视觉系统》（UC-5K1~5K7）——历史、Todo、Goal 与声明式插件面板统一主题令牌、外壳、字体层级、间距、列表条目和交互反馈；插件保留完成态、Goal 状态与操作控件等语义差异。
+ - 2026-09-20 v10：新增 10《会话列表状态一致性与快照版本》（UC-5J1~5J6）——修复"侧栏改名/归档/置顶/待办后被轮询快照回滚、随后又自行恢复"：`/sessions/state` 改为硬失效 + 单飞重建并给快照打 `state_revision`；SessionManager 摘要写入全路径广播失效；客户端加请求序号与版本双下界、写入在途拒收快照、仅失败才回滚。
+ - 2026-09-20 v9：07《通知、存在性与恢复》新增 UC-5G5~5G7——Windows UI Automation 精确选择后台/节能标签页；启动浏览器改为托盘单一所有者；激活超时适配忙碌后端，并以"精确聚焦成功，否则真实打开"替代任意浏览器窗口兜底。
+diff --git a/docs/Agent 设计（用户方案）/05-WebUI对话界面/07-通知存在性与恢复方案设计-UseCase清单.md b/docs/Agent 设计（用户方案）/05-WebUI对话界面/07-通知存在性与恢复方案设计-UseCase清单.md
+index 8ede21f..7d1f466 100644
+--- a/docs/Agent 设计（用户方案）/05-WebUI对话界面/07-通知存在性与恢复方案设计-UseCase清单.md	
++++ b/docs/Agent 设计（用户方案）/05-WebUI对话界面/07-通知存在性与恢复方案设计-UseCase清单.md	
+@@ -1,6 +1,6 @@
+ # 通知、存在性与恢复 · 功能方案设计（UseCase 清单）
+ 
+-- 版本：2026-09-20 v3（覆盖至：HEAD `6cd82d7` + Windows WebUI 启动复用修复）
++- 版本：2026-09-21 v6（覆盖至：仅浏览器窗口的标题关键词复用）
+ - 用途：逐条审查（四字段格式）。
+ - 适用实现：`app/tray_launcher.py`、`app/platform_lifecycle.py`、`app/webui.py`（ui-presence / ui-activation / 通知段）、`modules/message-rendering.js`、`modules/session-management.js`、恢复 runner（`start_react_recovery_runner`）。
+ - 上级：`00-WebUI对话界面整体设计.md`
+@@ -34,11 +34,11 @@
+ - **预期现象**：前端性能数据回传到后端日志（排查用处）；对用户不可见。
+ - **依据**：`client_timing`。
+ 
+-### UC-5G5 已打开 WebUI 精确复用（含节能标签页）
++### UC-5G5 已打开 WebUI 关键词复用（含节能标签页）
+ - **触发**：双击托盘、托盘菜单打开 Agent、运行 `RUN.bat` 后自动打开，或点击 `sugaragent://` 桌面通知。
+-- **预期现象**：已打开的 WebUI 被切到前台，不新增重复标签页；WebUI 位于 Edge/Chrome/Firefox 后台标签或处于节能/睡眠状态时，Windows 会选中该标签并唤醒；已关闭或无法可靠选中的页面才走新开页面回退。
+-- **规则与边界**：先按顶层窗口标题复用当前标签；找不到时通过 Windows UI Automation 在可见浏览器窗口的 TabItem 中精确匹配 `General Agent` / `SugarAgent`，执行 SelectionItem 选择后再校验前台窗口。禁止仅因存在页面心跳就随便聚焦任意浏览器窗口并宣告成功。UI Automation 被浏览器策略禁用、标签页标题被改写或运行在嵌入式宿主中时，允许回退为新开页面，以"用户确实看到 WebUI"优先。
+-- **依据**：`tray_launcher._visible_webui_windows`、`_select_webui_browser_tab`、`_focus_existing_webui_tab`、`_bring_window_to_foreground`。
++- **预期现象**：浏览器中当前标签的标题含 `General Agent` 或 `SugarAgent` 时前置该窗口；若匹配标签在后台，则只选中这个匹配标签并前置，不为检查地址轮换其它标签。未匹配时按需新开 WebUI。
++- **规则与边界**：仅枚举可见的 Edge/Chrome/Firefox 浏览器进程窗口，不把同窗口类的桌面应用当作浏览器；当前标签用窗口标题匹配，后台标签通过 Windows UI Automation 按相同关键词匹配。这里不核对标签实际 URL，因为逐标签核对曾造成明显的浏览器轮换。关键词可能误命中标题同样含有这些字词的其它网页；匹配后仍需校验所属窗口确实成为前台。
++- **依据**：`tray_launcher._visible_browser_windows`、`_visible_webui_windows`、`_select_webui_browser_tab`、`_focus_existing_webui_tab`、`_bring_window_to_foreground`。
+ 
+ ### UC-5G6 启动单一打开者与重复抑制
+ - **触发**：冷启动、已有托盘下再次运行 `RUN.bat`、陈旧端口监听器被替换，或浏览器冷启动尚未出现窗口。
+@@ -49,14 +49,14 @@
+ ### UC-5G7 忙碌后端激活与可信失败回退
+ - **触发**：打开/通知激活恰逢后端启动、会话索引或其它同步工作短暂占用事件循环。
+ - **预期现象**：短暂繁忙不会因为 0.8 秒过早超时而误开重复页面；确实无法复用时不会只聚焦无关浏览器或静默无响应，而会打开目标 URL（通知深链保留 `session`）。
+-- **规则与边界**：Windows 托盘激活单次 HTTP 超时为 2.5 秒，失败后间隔 0.15 秒再试一次；HTTP `reused=true` 仍必须配合精确标签页选择/前台校验。页面心跳残留、嵌入式页面或 Windows 拒绝前台切换时，记录决策日志并走真实浏览器打开。
++- **规则与边界**：Windows 托盘激活单次 HTTP 超时为 2.5 秒，失败后间隔 0.15 秒再试一次；HTTP `reused=true` 仍必须配合浏览器标签关键词匹配/前台校验。页面心跳残留、嵌入式页面或 Windows 拒绝前台切换时，记录决策日志并走真实浏览器打开。
+ - **依据**：`tray_launcher.UI_ACTIVATION_TIMEOUT_SECONDS`、`_request_webui_activation_with_retry`、`_activate_webui_from_external`、`TrayLauncher._open_url`、`platform_lifecycle.request_webui_activation`。
+ 
+ ## 3. 边界
+ 
+ - 通知与流观察者重连（UC-5C3）独立：前者管"提醒"，后者管"数据"。
+ - 页面节能/睡眠影响前端心跳及时性，但不影响后端会话和运行；Windows 复用以 UI Automation 作为独立于页面 JavaScript 的第二信号。
+-- UI Automation 精确选标签仅适用于 Windows 托盘链；非 Windows 平台继续使用 `platform_lifecycle.open_webui` 的页面心跳复用与默认浏览器回退。
++- UI Automation 按关键词选标签仅适用于 Windows 托盘链；非 Windows 平台继续使用 `platform_lifecycle.open_webui` 的页面心跳复用与默认浏览器回退。
+ - 修改 `tray_launcher.py` 后，托盘菜单里的"重启"只重启后端子进程，不会重载托盘代码；需先"退出 Agent"再运行 `RUN.bat` 才能让启动器改动生效。
+ - 恢复的存储侧依赖见 ../08/06。
+ 
+@@ -67,12 +67,15 @@
+ | UC-5G1/5G2 | `webui.py::ui_presence/_ui_presence_has_active/_ui_presence_has_reusable`、`message-rendering.js::registerUiPresence`、通知段 |
+ | UC-5G3 | `recover_interrupted_react_sessions` L938+ |
+ | UC-5G4 | `client_timing` L4305 |
+-| UC-5G5 | `tray_launcher.py::_select_webui_browser_tab/_focus_existing_webui_tab/_bring_window_to_foreground` |
++| UC-5G5 | `tray_launcher.py::_visible_browser_windows/_visible_webui_windows/_select_webui_browser_tab/_focus_existing_webui_tab/_bring_window_to_foreground` |
+ | UC-5G6 | `tray_launcher.py::run_starter/TrayLauncher._start_agent/_auto_open_webui_when_ready/_claim_ui_open_slot` |
+ | UC-5G7 | `tray_launcher.py::_request_webui_activation_with_retry/_activate_webui_from_external/TrayLauncher._open_url`、`platform_lifecycle.py::request_webui_activation`、`webui.py::request_ui_activation` |
+ 
+ ## 5. 版本记录
+ 
++- 2026-09-21 v6：恢复浏览器窗口及后台标签的 `General Agent` / `SugarAgent` 关键词匹配；仅保留浏览器进程过滤，不再逐标签核对地址。
++- 2026-09-21 v5：撤销逐标签选中与地址核验扫描；浏览器地址检查改为只读当前标签，避免高频切换和唤醒其它页面。后台标签不再强求复用。
++- 2026-09-21 v4：UC-5G5 改为浏览器进程与实际标签地址双重核验，不再依据窗口或标签标题；扫描失败恢复原标签，避免误认标题含 `SugarAgent` 的其它网页或非浏览器窗口。
+ - 2026-09-20 v3：新增 UC-5G5~5G7——Windows 精确复用后台/节能 WebUI 标签页（UI Automation）、启动浏览器单一所有者、激活超时放宽与可信失败回退；明确 presence 在浏览器睡眠时只是辅助信号，以及托盘代码需完整退出后重载。
+ - 2026-09-14 v2：修正 presence/client_timing 行号并更新版本线至 `d022831`（另：服务端自主运行的自动接管见 05-03 UC-5C5）。
+ - 2026-09-13 v1：拆分首版（承接 UC-512/514）。
+diff --git a/docs/Agent 设计（用户方案）/05-WebUI对话界面/12-顶部通知与权限警示视觉系统方案设计-UseCase清单.md b/docs/Agent 设计（用户方案）/05-WebUI对话界面/12-顶部通知与权限警示视觉系统方案设计-UseCase清单.md
+new file mode 100644
+index 0000000..278b681
+--- /dev/null
++++ b/docs/Agent 设计（用户方案）/05-WebUI对话界面/12-顶部通知与权限警示视觉系统方案设计-UseCase清单.md	
+@@ -0,0 +1,68 @@
++# 顶部通知与权限警示视觉系统 · 功能方案设计（UseCase 清单）
++
++- 版本：2026-09-21 v1（覆盖至：当前工作区）
++- 用途：逐条审查（四字段格式）；核对顶部待办提示与权限警示是否共享同一套玻璃视觉语法，且"常驻待办"与"瞬时警示"两类语义不互相混淆。
++- 适用实现：`frontend/src/app/modules/human-interactions.js`、`frontend/src/app/modules/permissions.js`、`frontend/src/styles/app.css`、`frontend/src/shell-body.html`、`frontend/index.html`。
++- 上级：`00-WebUI对话界面整体设计.md`
++
++---
++
++## 1. 功能定位
++
++页面内顶部区域的两种提示：
++
++- **待办条**（常驻状态）：有未处理的审批/问答时出现，两态互切——展开为单行条（计数与"立即处理"），超时收起为品牌图标右上角的小铃铛徽章；数量归零即消失。
++- **红色警示条**（瞬时事件）：完全访问开启、出站防护降级/部分、MCP 注册失败等系统级警示；单行展示、只有一个"确认"操作、自动消失，不沉淀为徽章。
++
++两者共用同一玻璃底与内环描边语法；同时出现时"警示在上、待办让位"。
++
++## 2. UseCase
++
++### UC-5L1 待办条两态切换
++- **触发**：待处理数量（审批 + 问答）发生变化；或用户点击品牌图标右上角的铃铛徽章。
++- **预期现象**：数量由 0 变正 → 顶部展开单行条（图标 + "待处理事项" + 全局/当前会话计数 chip + "立即处理" + 关闭按钮）；展开 6 秒后自动收起为小铃铛徽章（不显示数字，带未读点）；点击铃铛可在展开/收起间切换；悬停或键盘聚焦期间不自动收起；数量归 0 时展开条与徽章同时隐藏。
++- **规则与边界**：数量只出现在展开条的 chip 与读屏标签里，徽章不显示数字；只有数量指纹（总数:问答:审批）变化才触发重新展开；会话/全局明细保留为读屏文本，不占用单行条版面；关闭按钮只收起，不改变待办数据。
++- **依据**：`human-interactions.js::updateHumanInteractionBanner / setHumanInteractionBannerExpanded / updateSidebarBrandNotice`；`app.css` 的 `.human-interaction-banner`、`.sidebar-brand-notice`；`shell-body.html` 与 `frontend/index.html` 的对应标记。
++
++### UC-5L2 红色警示条统一表面
++- **触发**：完全访问模式开启提示、出站防护降级/部分提示、MCP 注册未完成/失败等系统级警示。
++- **预期现象**：所有来源复用同一条玻璃单行条——红色警示图标 + 红色内环描边 + 单行文案（超长省略、悬停显示全文）+ 唯一"确认"按钮；约 9 秒自动消失，悬停/聚焦暂停计时；点击"确认"立即消失；消失后不进入品牌徽章。
++- **规则与边界**：所有来源共享同一 DOM 节点（复用节点、替换文案、重置计时），不叠出多条；文案表达的是"瞬时事件"，不做常驻状态；与待办条不同，警示条不参与数量体系。
++- **依据**：`permissions.js::showGlobalWarningBanner`（`maybeShowGlobalFullAccessNotice` / `maybeShowEgressDegradedNotice` / `maybeShowEgressPartialNotice` 均收口至此）；`skill-picker.js` 的 MCP 注册失败路径；`app.css` 的 `.permission-global-warning-toast`。
++
++### UC-5L3 警示在上、待办让位
++- **触发**：红色警示条与待办条同时可见。
++- **预期现象**：警示条固定在顶部（标题栏下沿 0.65rem），待办条自动让位到其下方（+48px），两者保持 8px 间距、互不叠压；警示消失后待办条平滑弹回原位。
++- **规则与边界**：堆叠由 `.main-center:has(.permission-global-warning-toast)` 一条规则驱动，不依赖 JS 排序；警示层级高于待办条；弹回动画走 `top` 过渡（0.18s）。
++- **依据**：`app.css` 的 `:has()` 堆叠规则、`.human-interaction-banner { transition: top ... }`。
++
++### UC-5L4 「完全访问」控件克制强调
++- **触发**：全局权限模式为完全访问（触发器带 `is-global-full-access`）。
++- **预期现象**：触发器不再有整块强调（无描边 / 底色 / 光晕），与另外两档同形；风险只通过图标与文字的琥珀色表达；悬停时图标与文字保持琥珀色不被中性化。
++- **规则与边界**：`is-global-full-access` 类保留供 JS 同步状态，但不再承载任何样式；浅色主题下使用深琥珀（`#b45309`）保证对比度；"完全访问开启"的事件提示由 UC-5L2 的红色警示条承担。
++- **依据**：`app.css`（原 `.composer-permission-trigger.is-global-full-access` 规则移除，留注释说明）；`permissions.js::renderPermissionMode` 的 `trigger.classList.toggle('is-global-full-access', ...)`。
++
++### UC-5L5 三档盾牌图标家族
++- **触发**：查看权限触发器（随模式切换）或下拉菜单中的三档图标。
++- **预期现象**：三档为同一盾牌家族——盾（请求批准）、盾 + 勾（替我审批）、盾 + 警示（完全访问）；完全访问盾牌内的感叹号方向标准（竖线在上、圆点在下），圆点与竖线同宽，15px 真实尺寸下清晰可辨。
++- **规则与边界**：触发器图标由 `PERMISSION_MODE_ICONS` 注入，菜单图标需 `shell-body.html` 与 `frontend/index.html` 双份同步；圆点必须 `stroke="none"`（否则继承父级 1.8 描边被撑到 3.8 单位）。
++- **依据**：`permissions.js::PERMISSION_MODE_ICONS`；两份 HTML 中 `.permission-mode-ico` 的完全访问选项。
++
++## 3. 视觉规格速查
++
++| 部件 | 尺寸 | 描边 | 颜色语义 | 动效 |
++|---|---|---|---|---|
++| 待办条（展开） | 高 40px · 宽 min(560px, 100%−2rem) | 内环 1px 琥珀 34% | 琥珀 = 常驻待办 | 6s 自动收起；悬停/聚焦暂停；`top` 让位 0.18s |
++| 铃铛徽章（收起） | 19×19 圆形，钉在品牌图标右上角 | 1px floating 描边 | 琥珀 + 未读点 | 点击切换展开态 |
++| 红色警示条 | 高 40px · 同宽 | 内环 1px 红色 42% | 红色 = 瞬时事件 | 9s 自动消失；悬停/聚焦暂停；确认即关闭 |
++| 权限触发器 | 高 30px（几何未变） | 默认描边不变 | 仅图标/文字按档着色 | 完全访问不再有整块强调 |
++
++## 4. 边界
++
++- 审批卡片本体、权限设置面板联动见 [05-审批与交互卡片](05-审批与交互卡片方案设计-UseCase清单.md)；权限策略语义见 ../07-权限审批/。
++- 桌面通知、UI 存在性与窗口复用见 [07-通知、存在性与恢复](07-通知存在性与恢复方案设计-UseCase清单.md)——本设计只管页面内顶部提示，不涉及系统通知。
++- 侧栏/工作区面板视觉见 [11-工作区双侧面板视觉系统](11-工作区双侧面板视觉系统方案设计-UseCase清单.md)。
++
++## 5. 版本记录
++
++- 2026-09-21 v1：建立顶部提示视觉体系——待办条两态化（展开条 ⇄ 品牌铃铛徽章、6s 自动收起、悬停/聚焦暂停、数量变化再展开）；红色警示条统一表面（玻璃单行条 + 单一"确认"、自动消失不进入徽章、多来源复用同一节点）；警示在上/待办让位的堆叠规则；「完全访问」控件克制强调与三档盾牌图标家族。
+diff --git a/docs/Agent 设计（用户方案）/05-WebUI对话界面/WebUI能力清单.md b/docs/Agent 设计（用户方案）/05-WebUI对话界面/WebUI能力清单.md
+index fbbbcdf..03076c1 100644
+--- a/docs/Agent 设计（用户方案）/05-WebUI对话界面/WebUI能力清单.md	
++++ b/docs/Agent 设计（用户方案）/05-WebUI对话界面/WebUI能力清单.md	
+@@ -1,7 +1,7 @@
+ # WebUI 对话界面 · 能力清单（代码证据版）
+ 
+ > 对象：MyAgent WebUI（前端 SPA + FastAPI Web 服务）
+-> 代码版本：当前工作区（2026-09-21；补充工作区双侧面板共享视觉系统）
++> 代码版本：当前工作区（2026-09-21；补充顶部通知与权限警示视觉系统）
+ > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
+ 
+ ## 1. 前端架构与状态
+@@ -57,11 +57,14 @@
+ | 审批与 ask_user 交互卡片（含分析、取消、恢复） | `modules/human-interactions.js`、后端 interactions/approvals API | 【图】 |
+ | 审批卡片锚点恢复（`tool_pending` 为 ephemeral；恢复时按 `tool_call_id` 重建占位工具行，重连历史恢复后刷新持久卡片） | `modules/human-interactions.js::ensurePendingHumanInteractionToolRow`、`modules/sse-handling.js::attachSessionEventStream` | 【单】 |
+ | 权限与安全设置（会话级/全局权限、规则、预批准域名） | `modules/permissions.js`、后端 security API | 【图】 |
++| 顶部待办条两态（展开条 ⇄ 品牌铃铛徽章；6s 自动收起、悬停/聚焦暂停、数量变化再展开；徽章不显示数字） | `modules/human-interactions.js::updateHumanInteractionBanner/setHumanInteractionBannerExpanded/updateSidebarBrandNotice`、`styles/app.css` | 【单】 |
++| 红色警示条统一表面（完全访问开启 / 出站降级·部分 / MCP 注册等来源复用同一玻璃单行条；唯一"确认"、自动消失、不进徽章；警示在上、待办让位） | `modules/permissions.js::showGlobalWarningBanner`、`styles/app.css` | 【单】 |
++| 三档权限图标家族（盾 / 盾+勾 / 盾+警示；触发器由 `PERMISSION_MODE_ICONS` 注入，菜单图标双份 HTML 同步） | `modules/permissions.js::PERMISSION_MODE_ICONS`、`src/shell-body.html`、`index.html` | 【单】 |
+ | 模型档案管理（增删改、排序、启用、发现、探测；高级设置含 system prompt `auto/merge/preserve`） | `modules/model-profiles.js`、`app/templates/advance_config.html`、后端 model-profile API | 【图】 |
+ | 对话区模型选择器（跟随当前会话/寻址的子代理会话；主会话→清熔断即时重试、下一次调用生效；子代理会话→数据动作切换、不打断） | `modules/model-profiles.js`、`modules/session-management.js`、`webui.set_session_model_profile` | 【图】 |
+ | 工作区文件与媒体（目录浏览、图片元数据/预览、上传） | `modules/workspace-media.js`、后端 workspace API | 【卡】 |
+ | 通知与 UI 存在性（10 秒 presence 上报驱动桌面提醒；节能/睡眠时为辅助信号） | `message-rendering.js::registerUiPresence`、后端 `ui_presence/_ui_presence_has_active` | 【卡】 |
+-| 已开页面复用（前台标题匹配；Windows UI Automation 精确选中后台/睡眠标签；拒绝任意浏览器窗口假成功） | `tray_launcher._focus_existing_webui_tab/_select_webui_browser_tab` | 【单】 |
++| 已开页面复用（仅浏览器进程；按 `General Agent` / `SugarAgent` 关键词匹配当前或后台标签；不逐标签核对地址） | `tray_launcher._visible_browser_windows/_visible_webui_windows/_select_webui_browser_tab/_focus_existing_webui_tab` | 【单】 |
+ | 启动与激活韧性（托盘唯一首开、1.5 秒并发抑制、2.5 秒激活超时+一次重试、不可见则真实打开） | `tray_launcher.run_starter/_auto_open_webui_when_ready/_request_webui_activation_with_retry` | 【单】 |
+ | 右侧详情栏（dockkit 三层：引擎/渲染/嵌入；dsh 式第三列 + 开始/文件/内容/修改历史四类页；角落按钮与条尾控件图形同 dsh 源码） | `frontend/src/app/modules/dock/**`（engine 8 / renderer 5 / embedder 3）、`styles/dock.css`、`app/index.js` 登记 | 【单】 |
+ | 统一开文件策略（文本→详情栏，其余→系统应用；`MyAgentDock.openPathSmart` / `isTextPath`，会话文件链接与文件树共用） | `modules/dock/embedder/right-column.js`、`modules/session-scroll-history.js`（链接委托） | 【单】 |
+@@ -98,6 +101,10 @@
+ 
+ ## 9. 版本记录
+ 
++- 2026-09-21（v16）：恢复浏览器窗口内按标题关键词复用当前/后台标签；不再做引发页面轮换的逐标签地址核对。
++- 2026-09-21（v15）：撤销遍历并选中全部标签的识别方式；只读浏览器当前标签地址，不唤醒后台标签。后台 WebUI 无法无扰动核验时允许新开。
++- 2026-09-21（v14）：WebUI 复用识别改为浏览器进程 + 标签实际地址核验；标题仅作显示，不再作为身份依据；无匹配时恢复原标签。
++- 2026-09-21（v13）：补录顶部通知与权限警示视觉系统——待办条两态化（展开条 ⇄ 铃铛徽章、自动收起与悬停暂停）、红色警示条统一表面与"警示在上、待办让位"堆叠、完全访问控件克制强调与三档盾牌图标家族；说明见 05/12·UC-5L1~5L5。
+ - 2026-09-21（v12）：补录工作区双侧面板共享视觉系统——历史、Todo、Goal 与声明式插件面板统一主题令牌、外壳、字体层级、间距、列表条目和交互反馈；说明见 05/11·UC-5K1~5K7。
+ - 2026-09-20（v11）：补录会话列表状态一致性——`/sessions/state` 改为硬失效 + 单飞重建并引入 `state_revision`；`SessionManager` 摘要写入全路径广播失效；客户端加"写入在途拒收 + 请求序号下界 + 版本下界"，仅写入失败才回滚；说明见 05/10·UC-5J1~5J6。
+ - 2026-09-20（v10）：补录 run 终态单调契约与跨进程恢复租约；明确假终态后同 run 继续写入会触发前端终结/重挂振荡，刷新不能修复耐久矛盾历史。
+diff --git a/frontend/src/app/modules/i18n.js b/frontend/src/app/modules/i18n.js
+index a52c4d9..cace3ce 100644
+--- a/frontend/src/app/modules/i18n.js
++++ b/frontend/src/app/modules/i18n.js
+@@ -437,6 +437,8 @@ function translateUiString(value) {
+         .replace(/^已清除本会话规则（(\d+) 条）。$/, 'Session rules cleared ($1).')
+         .replace(/^已选择 (\d+) 个 Skill$/, '$1 skills selected')
+         .replace(/^已选择 (\d+) 项$/, '$1 items selected')
++        .replace(/^展开全部$/, 'Expand all')
++        .replace(/^展开全部 · 还有 (\d+) 行$/, 'Expand all · $1 more lines')
+         .replace(/^正在上传 (\d+) 个文件… (\d+)%$/, 'Uploading $1 files… $2%')
+         .replace(/预估上下文 token：选择会话并加载或发送消息后显示。分母为压缩摘要阈值。/g, 'Estimated context tokens; shown after selecting a session and loading or sending a message. The denominator is the compression-summary threshold.')
+         .replace(/tokens（约 ([\d.]+)%，超出门限 ([\d.]+)%）。预估进入模型的上下文规模，含历史与系统提示；分母为当前 model profile 中触发压缩摘要的上下文门限。/g, 'tokens (about $1%; $2% over the limit). Estimated context size sent to the model, including history and system prompts; the denominator is the compression threshold for the current model profile.')
+diff --git a/frontend/src/app/modules/message-rendering.js b/frontend/src/app/modules/message-rendering.js
+index fc50c00..d410b89 100644
+--- a/frontend/src/app/modules/message-rendering.js
++++ b/frontend/src/app/modules/message-rendering.js
+@@ -4881,15 +4881,7 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
+         if (userMessageShouldCollapse(rawStr)) {
+             wrap.classList.add('has-turn-process');
+             div.classList.add('is-collapsible');
+-            // 摘要
+-            var sum = document.createElement('div');
+-            sum.className = 'user-msg-summary';
+-            if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), linkifyAssistantTextNodes);
+-            else {
+-                sum.textContent = buildUserMessageSummary(rawStr);
+-                linkifyAssistantTextNodes(sum);
+-            }
+-            // 完整
++            // 方案 C：内容始终是原文，折叠只是裁剪 + 渐隐
+             var ful = document.createElement('div');
+             ful.className = 'user-msg-full';
+             if (typeof renderSelectedSkillsUiMessage === 'function') renderSelectedSkillsUiMessage(ful, rawStr, linkifyAssistantTextNodes);
+@@ -4897,19 +4889,10 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
+                 ful.textContent = rawStr;
+                 linkifyAssistantTextNodes(ful);
+             }
+-            // chevron
+-            var ch = document.createElement('div');
+-            ch.className = 'user-msg-chevron';
+-            var arrow = document.createElement('span');
+-            arrow.className = 'chevron-arrow';
+-            ch.appendChild(arrow);
+-            ch.addEventListener('click', function(e) {
+-                e.stopPropagation();
+-                wrap.classList.toggle('user-msg-expanded');
+-            });
+-            div.appendChild(sum);
+             div.appendChild(ful);
+-            div.appendChild(ch);
++            if (typeof buildUserMessageCollapseToggle === 'function') {
++                div.appendChild(buildUserMessageCollapseToggle(wrap));
++            }
+         } else {
+             div.textContent = rawStr;
+             linkifyAssistantTextNodes(div);
+diff --git a/frontend/src/app/modules/shared-state-and-dialogs.js b/frontend/src/app/modules/shared-state-and-dialogs.js
+index 4f86375..2af05b0 100644
+--- a/frontend/src/app/modules/shared-state-and-dialogs.js
++++ b/frontend/src/app/modules/shared-state-and-dialogs.js
+@@ -246,6 +246,71 @@ function renderSelectedSkillsUiMessage(container, text, linkifier) {
+     if (typeof linkifier === 'function') linkifier(container);
+ }
+ 
++// 折叠切换控件（方案 C）：半胶囊 = chevron + 文案（含隐藏行数）。
++// `.message` 在 i18n 内容选择器内，不会被 UI 翻译扫描，所以文案走 runtime 文本，
++// aria/title 主动翻译，并在语言切换时统一重刷。
++var userCollapseToggleI18nBound = false;
++function bindUserCollapseToggleI18nOnce() {
++    if (userCollapseToggleI18nBound) return;
++    userCollapseToggleI18nBound = true;
++    document.addEventListener('myagent:language-change', function () {
++        Array.prototype.forEach.call(document.querySelectorAll('.user-msg-chevron'), function (el) {
++            if (typeof el.syncUserMessageCollapse === 'function') el.syncUserMessageCollapse();
++        });
++    });
++}
++
++function buildUserMessageCollapseToggle(wrap) {
++    var ch = document.createElement('div');
++    ch.setAttribute('role', 'button');
++    ch.tabIndex = 0;
++    ch.className = 'user-msg-chevron';
++    var arrow = document.createElement('span');
++    arrow.className = 'chevron-arrow';
++    var label = document.createElement('span');
++    label.className = 'user-msg-chevron-label';
++    ch.appendChild(arrow);
++    ch.appendChild(label);
++
++    function sourceText(open, hidden) {
++        if (open) return '收起';
++        return hidden > 0 ? '展开全部 · 还有 ' + hidden + ' 行' : '展开全部';
++    }
++    function localized(text) {
++        return typeof translateUiString === 'function' ? translateUiString(text) : text;
++    }
++    ch.syncUserMessageCollapse = function (hiddenLines) {
++        if (hiddenLines != null) {
++            ch.setAttribute('data-hidden-lines', String(Math.max(0, Math.floor(Number(hiddenLines) || 0))));
++        }
++        var open = wrap.classList.contains('user-msg-expanded');
++        var source = sourceText(open, Number(ch.getAttribute('data-hidden-lines')) || 0);
++        if (typeof setUiRuntimeText === 'function') setUiRuntimeText(label, source);
++        else label.textContent = source;
++        ch.setAttribute('aria-expanded', open ? 'true' : 'false');
++        ch.setAttribute('aria-label', localized(source));
++        ch.title = localized(source);
++    };
++    ch.addEventListener('click', function (e) {
++        e.stopPropagation();
++        var open = !wrap.classList.contains('user-msg-expanded');
++        var full = wrap.querySelector('.user-msg-full');
++        // max-height 过渡需要真实目标值：展开前写入实测内容高度
++        if (open && full) wrap.style.setProperty('--user-msg-full-h', (full.scrollHeight + 2) + 'px');
++        wrap.classList.toggle('user-msg-expanded', open);
++        ch.syncUserMessageCollapse();
++    });
++    ch.addEventListener('keydown', function (e) {
++        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
++        e.preventDefault();
++        e.stopPropagation();
++        ch.click();
++    });
++    bindUserCollapseToggleI18nOnce();
++    ch.syncUserMessageCollapse(0);
++    return ch;
++}
++
+ function renderUserMessageContent(wrap, div, rawStr, linkifier) {
+     var applyLinks = typeof linkifier === 'function' ? linkifier : null;
+ 
+@@ -258,24 +323,21 @@ function renderUserMessageContent(wrap, div, rawStr, linkifier) {
+         wrap.classList.add('has-turn-process');
+         div.classList.add('is-collapsible');
+         div.textContent = '';
+-        var sum = document.createElement('div');
+-        sum.className = 'user-msg-summary';
+-        renderSelectedSkillsUiMessage(sum, buildUserMessageSummary(rawStr), applyLinks);
+         var ful = document.createElement('div');
+         ful.className = 'user-msg-full';
+         renderSelectedSkillsUiMessage(ful, rawStr, applyLinks);
+-        var ch = document.createElement('div');
+-        ch.className = 'user-msg-chevron';
+-        var arrow = document.createElement('span');
+-        arrow.className = 'chevron-arrow';
+-        ch.appendChild(arrow);
+-        ch.addEventListener('click', function(e) {
+-            e.stopPropagation();
+-            wrap.classList.toggle('user-msg-expanded');
+-        });
+-        div.appendChild(sum);
+         div.appendChild(ful);
++        var ch = buildUserMessageCollapseToggle(wrap);
+         div.appendChild(ch);
++        // 隐藏行数按实测内容高度算（此时 ful 尚未被裁剪）
++        var fcs = window.getComputedStyle ? window.getComputedStyle(ful) : null;
++        var lineHeight = fcs ? parseFloat(fcs.lineHeight) : NaN;
++        if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
++            var fontSize = fcs ? parseFloat(fcs.fontSize) : NaN;
++            lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.65 : 18;
++        }
++        var hidden = Math.max(0, Math.round(ful.scrollHeight / lineHeight) - USER_MESSAGE_COLLAPSE_LINES);
++        ch.syncUserMessageCollapse(hidden);
+     }
+ 
+     setPlain();
+diff --git a/frontend/src/app/modules/subagent-frames.js b/frontend/src/app/modules/subagent-frames.js
+index 04ccdc5..0c4af3a 100644
+--- a/frontend/src/app/modules/subagent-frames.js
++++ b/frontend/src/app/modules/subagent-frames.js
+@@ -13,6 +13,7 @@ var subagentFrames = (function () {
+     var lastActivityAt = Object.create(null);   // childId → 上次写入时间戳
+     var lastActivityValue = Object.create(null); // childId → 上次写入的 activity
+     var unknownStarts = Object.create(null);     // parentId → 目录尚未覆盖的 start 帧数
++    var unknownActivityAt = Object.create(null); // parentId → 上次未知成员活动帧时间戳（节流用）
+ 
+     function store() {
+         return (typeof subagentCatalogStore !== 'undefined' && subagentCatalogStore) ? subagentCatalogStore : null;
+@@ -30,7 +31,21 @@ var subagentFrames = (function () {
+         if (!cid) return false;
+         var storeRef = store();
+         if (!storeRef) return false;
+-        if (!storeRef.getAddress(cid)) return false;   // 尚未在目录中登记：等目录刷新
++        if (!storeRef.getAddress(cid)) {
++            // 目录尚未登记（首帧早到/目录拉取滞后）：活动帧本身也是「有子代理在执行」的证据，
++            // 不能静默丢弃——否则长任务执行期间没有任何信号，胶囊要等切会话才出现。
++            var parentId = currentParentSessionId();
++            if (!parentId) return false;
++            var tsUnknown = now();
++            if ((tsUnknown - (unknownActivityAt[parentId] || 0)) < ACTIVITY_THROTTLE_MS) return false;
++            unknownActivityAt[parentId] = tsUnknown;
++            if (!unknownStarts[parentId]) unknownStarts[parentId] = 1;
++            if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi
++                && typeof subagentCatalogUi.noteUnknownChildEvidence === 'function') {
++                subagentCatalogUi.noteUnknownChildEvidence(parentId);
++            }
++            return true;
++        }
+         var next = running !== false ? 'running' : 'inactive';
+         var ts = now();
+         if (lastActivityValue[cid] === next && (ts - (lastActivityAt[cid] || 0)) < ACTIVITY_THROTTLE_MS) return false;
+@@ -106,6 +121,7 @@ var subagentFrames = (function () {
+         lastActivityAt = Object.create(null);
+         lastActivityValue = Object.create(null);
+         unknownStarts = Object.create(null);
++        unknownActivityAt = Object.create(null);
+     }
+ 
+     /** 某父会话是否存在"目录尚未覆盖的子代理"证据（供触发器显示与刷新）。 */
+diff --git a/frontend/src/app/state/subagent-catalog-store.js b/frontend/src/app/state/subagent-catalog-store.js
+index 0f65f6c..c649b0a 100644
+--- a/frontend/src/app/state/subagent-catalog-store.js
++++ b/frontend/src/app/state/subagent-catalog-store.js
+@@ -548,12 +548,19 @@ var subagentCatalogStore = (function () {
+         if (!addr) return false;
+         return patchCatalog(addr.parentSessionId, function (entries) {
+             var changed = false;
++            var present = false;
+             entries.forEach(function (entry) {
+-                if (!entry.diagnostic && entry.childId === childId && entry.activity !== nextActivity) {
++                if (entry.diagnostic || entry.childId !== childId) return;
++                present = true;
++                if (entry.activity !== nextActivity) {
+                     entry.activity = nextActivity;
+                     changed = true;
+                 }
+             });
++            if (!present) {
++                // 目录里还没有这一行（拉取滞后/先前失败）：状态帧不能白跑，尽快补齐（去抖，幂等）。
++                void refreshCatalogs(addr.parentSessionId, { debounce: true });
++            }
+             return changed;
+         });
+     }
+@@ -576,9 +583,15 @@ var subagentCatalogStore = (function () {
+         var catalog = getCatalog(pid);
+         if (!catalog) {
+             if (opts && opts.addresses) {
++                // 目录尚未建立也要先把地址登记上（此前 mutate 从未执行 → 整帧被吞：
++                // 地址缺失、无证据、无刷新，胶囊只能等下一次目录刷新才出现）。
++                mutate([]);
+                 rebuildSnapshot({ addresses: addressesObject() });
++                void refreshCatalogs(pid, { debounce: true });
+                 return true;
+             }
++            // 目录尚未建立：状态/移除帧不能白跑，尽快去抖拉一次目录（幂等）。
++            void refreshCatalogs(pid, { debounce: true });
+             return false;
+         }
+         var entries = (catalog.entries || []).map(function (entry) { return Object.assign({}, entry); });
+diff --git a/frontend/src/styles/app.css b/frontend/src/styles/app.css
+index 19b35ec..75345a3 100644
+--- a/frontend/src/styles/app.css
++++ b/frontend/src/styles/app.css
+@@ -5382,16 +5382,24 @@ textarea.plugin-setting-control { resize: vertical; }
+     display: block;
+ }
+ 
+-/* ═══════════════ 用户消息折叠 ═══════════════ */
+-.message.user.is-collapsible {
+-    position: relative;
+-    padding-bottom: 0;
+-}
+-.user-msg-summary {
++/* ═══════════ 用户消息折叠（方案 C：10 行定高 + 底部渐隐 + 半胶囊）═══════════ */
++/* 折叠态不再用「摘要/全文」两份文本：内容始终是原文，折叠只是裁剪 + 渐隐。 */
++.user-msg-summary { display: none; }
++.user-msg-full {
++    display: block;
+     white-space: pre-wrap; word-break: break-word; line-height: 1.65;
++    transition: max-height 0.32s var(--ease-out-expo);
+ }
+-.user-msg-full {
+-    display: none; white-space: pre-wrap; word-break: break-word; line-height: 1.65;
++.msg-wrap--user:not(.user-msg-expanded) .message.user.is-collapsible .user-msg-full {
++    max-height: calc(10 * 1.65em);
++    overflow: hidden;
++    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.9em), rgba(0, 0, 0, 0.3) 100%);
++            mask-image: linear-gradient(to bottom, #000 calc(100% - 1.9em), rgba(0, 0, 0, 0.3) 100%);
++}
++.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-full {
++    max-height: var(--user-msg-full-h, 300em);
++    overflow: hidden;
++    -webkit-mask-image: none; mask-image: none;
+ }
+ 
+ /* System-owned skill decoration: keep it visually separate from the user's message. */
+@@ -5405,106 +5413,49 @@ textarea.plugin-setting-control { resize: vertical; }
+     opacity: 0.78;
+ }
+ 
+-/* 旧实现（:after 渐变线条箭头）已移除，由下方 .chevron-arrow 三角形箭头替代 */
+-
+-/* ═══════════════ 用户消息折叠 ═══════════════ */
+-.message.user.is-collapsible {
+-    position: relative;
+-    padding-bottom: 0;
+-}
+-.user-msg-summary {
+-    white-space: pre-wrap; word-break: break-word; line-height: 1.65;
+-}
+-.user-msg-full {
+-    display: none; white-space: pre-wrap; word-break: break-word; line-height: 1.65;
+-}
+-.user-msg-chevron:hover { color: var(--text-primary); }
+-.user-msg-chevron::before {
+-    content: '';
+-    position: absolute; inset: 0;
+-    z-index: -1; pointer-events: none;
+-    border-radius: 0 0 var(--radius-md) var(--radius-md);
+-    background: linear-gradient(
+-        to bottom,
+-        transparent 0%,
+-        rgba(0, 0, 0, 0.1) 42%,
+-        rgba(0, 0, 0, 0.28) 100%
+-    );
+-    transition: background 0.18s var(--ease-out-expo);
++/* 折叠切换：28px 半胶囊（chevron + 文案），折叠态居中、展开态贴右。 */
++.user-msg-chevron {
++    display: flex; width: max-content; align-items: center; gap: 0.32rem;
++    height: 1.75rem; min-height: 1.75rem;
++    margin: 0.5rem auto 0.05rem; padding: 0 0.75rem 0 0.6rem;
++    border: 1px solid rgba(var(--text-primary-rgb), 0.14);
++    border-radius: 999px;
++    background: linear-gradient(180deg, rgba(var(--text-primary-rgb), 0.07), rgba(var(--text-primary-rgb), 0.04));
++    color: var(--text-secondary);
++    font-family: var(--sans); font-size: 0.72rem; font-weight: 500; line-height: 1;
++    cursor: pointer;
++    transition: color 0.16s var(--ease-out-expo), border-color 0.16s var(--ease-out-expo),
++                background 0.16s var(--ease-out-expo), transform 0.16s var(--ease-out-expo);
+ }
+-.user-msg-chevron:hover::before {
+-    background: linear-gradient(
+-        to bottom,
+-        transparent 0%,
+-        rgba(0, 0, 0, 0.14) 30%,
+-        rgba(0, 0, 0, 0.34) 100%
+-    );
+-}
+-:root.theme-light .user-msg-chevron::before {
+-    background: linear-gradient(
+-        to bottom,
+-        transparent 0%,
+-        rgba(0, 0, 0, 0.05) 42%,
+-        rgba(0, 0, 0, 0.14) 100%
+-    );
+-}
+-:root.theme-light .user-msg-chevron:hover::before {
+-    background: linear-gradient(
+-        to bottom,
+-        transparent 0%,
+-        rgba(0, 0, 0, 0.08) 30%,
+-        rgba(0, 0, 0, 0.18) 100%
+-    );
+-}
+-.user-msg-chevron .chevron-arrow::before,
+-.user-msg-chevron .chevron-arrow::after {
+-    content: '';
+-    position: absolute;
+-    top: 50%; left: 50%;
+-    width: 7px; height: 2px;
+-    margin: 0;
+-    background: currentColor;
+-    border-radius: 0;
+-    backface-visibility: hidden;
++.user-msg-chevron:hover {
++    color: var(--text-primary);
++    border-color: var(--border-accent);
++    background: linear-gradient(180deg, rgba(var(--text-primary-rgb), 0.12), rgba(var(--text-primary-rgb), 0.07));
++    transform: translateY(-1px);
+ }
+-.user-msg-chevron .chevron-arrow::before {
+-    transform-origin: 7px 1px;
+-    transform: translate(-6.5px, -1px) rotate(-30deg);
++.user-msg-chevron:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
++.user-msg-chevron .chevron-arrow {
++    width: 0.46rem; height: 0.46rem; flex-shrink: 0;
++    border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor;
++    transform: rotate(45deg) translateY(-1px);
++    transition: transform 0.2s var(--ease-out-expo);
+ }
+-.user-msg-chevron .chevron-arrow::after {
+-    transform-origin: 0 1px;
+-    transform: translate(-0.5px, -1px) rotate(30deg);
++.msg-wrap--user.user-msg-expanded .user-msg-chevron { margin-left: auto; margin-right: 0; }
++.msg-wrap--user.user-msg-expanded .user-msg-chevron .chevron-arrow { transform: rotate(225deg) translateY(-1px); }
++:root.theme-light .user-msg-chevron {
++    border-color: rgba(15, 23, 42, 0.12);
++    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.74));
++    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+ }
+-.user-msg-chevron:hover .chevron-arrow { transform: rotate(180deg) scale(1.12); }
+-
+-/* 展开态 */
+-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-summary {
+-    display: none;
++:root.theme-light .user-msg-chevron:hover {
++    background: linear-gradient(180deg, #ffffff, rgba(255, 255, 255, 0.88));
++    border-color: rgba(var(--brand-accent-rgb), 0.45);
+ }
+-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-full {
+-    display: block;
++@media (prefers-reduced-motion: reduce) {
++    .user-msg-chevron,
++    .user-msg-chevron .chevron-arrow,
++    .msg-wrap--user .message.user.is-collapsible .user-msg-full { transition: none; }
+ }
+-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible {
+-    padding-bottom: 0.5rem;
+-}
+-.msg-wrap--user.user-msg-expanded .user-msg-chevron::before {
+-    background: linear-gradient(
+-        to bottom,
+-        transparent 0%,
+-        rgba(0, 0, 0, 0.05) 55%,
+-        rgba(0, 0, 0, 0.12) 100%
+-    );
+-}
+-:root.theme-light .msg-wrap--user.user-msg-expanded .user-msg-chevron::before {
+-    background: linear-gradient(
+-        to bottom,
+-        transparent 0%,
+-        rgba(0, 0, 0, 0.03) 55%,
+-        rgba(0, 0, 0, 0.08) 100%
+-    );
+-}
+-.msg-wrap--user.user-msg-expanded .user-msg-chevron .chevron-arrow { transform: rotate(0deg); }
+-.msg-wrap--user.user-msg-expanded .user-msg-chevron:hover .chevron-arrow { transform: rotate(0deg) scale(1.12); }
+ #breadcrumb-text[data-addressing="child"] { display: flex; align-items: center; gap: 0.32rem; }
+ .breadcrumb-back-chip {
+     flex: 0 1 auto; min-width: 0; max-width: 12rem;
+diff --git a/frontend/tests/subagent-ui-foundation.test.mjs b/frontend/tests/subagent-ui-foundation.test.mjs
+index ba67401..12918d1 100644
+--- a/frontend/tests/subagent-ui-foundation.test.mjs
++++ b/frontend/tests/subagent-ui-foundation.test.mjs
+@@ -841,7 +841,32 @@ await testAsync('subagent_start frame registers a new child row; subagent_finish
+     }
+ });
+ 
+-await testAsync('activity frames are throttled and only apply to known children', async () => {
++await testAsync('start frame with no catalog yet still registers the child and refreshes the directory', async () => {
++    subagentCatalogStore.resetForTests();
++    subagentFrames.resetForTests();
++    const calls = [];
++    subagentCatalogStore.setImplementation({
++        fetchJson: (url) => {
++            calls.push(String(url));
++            return Promise.resolve({ subagents: [node({ id: 'child-9', running: true, status: 'running' })] });
++        },
++    });
++    context.currentSessionId = 'parent-1';
++    try {
++        assert.equal(subagentCatalogStore.getCatalog('parent-1'), null, 'no catalog yet');
++        assert.equal(subagentFrames.noteSubagentLifecycleFrame({
++            type: 'subagent_start', agent_id: 'child-9', subagent_type: 'explore', description: 'scan',
++        }), true);
++        assert.ok(subagentCatalogStore.getAddress('child-9'), 'address registered even before the catalog exists');
++        await new Promise((resolve) => setTimeout(resolve, 150));   // 去抖 50ms + 一次 fetch 结算
++        assert.ok(calls.length >= 1, 'a debounced directory refresh was requested');
++        assert.equal(subagentCatalogStore.entriesOf('parent-1').length, 1, 'directory now covers the child');
++    } finally {
++        context.currentSessionId = undefined;
++    }
++});
++
++await testAsync('activity frames are throttled; unknown children record evidence and request a refresh', async () => {
+     subagentCatalogStore.resetForTests();
+     subagentFrames.resetForTests();
+     subagentCatalogStore.setImplementation({
+@@ -851,10 +876,15 @@ await testAsync('activity frames are throttled and only apply to known children'
+         }], []),
+     });
+     await subagentCatalogStore.refreshCatalogs('parent-1');
+-    assert.equal(subagentFrames.noteSubagentActivity('unknown-child', true), false, 'unknown child ignored');
++    context.currentSessionId = 'parent-1';
++    assert.equal(subagentFrames.noteSubagentActivity('unknown-child', true), true, 'unknown child records evidence + asks the directory to refresh');
++    assert.equal(subagentFrames.hasUnknownChildEvidence('parent-1'), true, 'evidence lets the capsule appear immediately');
++    subagentFrames.clearUnknownChildEvidence('parent-1');
+     assert.equal(subagentFrames.noteSubagentActivity('child-1', true), true, 'first activity frame flips to running');
+     assert.equal(subagentFrames.noteSubagentActivity('child-1', true), false, 'repeat frame within throttle window is a no-op');
+     assert.equal(subagentCatalogStore.entriesOf('parent-1')[0].activity, 'running');
++    context.currentSessionId = undefined;
++    await new Promise((resolve) => setTimeout(resolve, 80));   // 冲掉去抖刷新，避免跨用例定时器
+ });
+ 
+ // ── subagent-catalog-ui（触发器 + 目录树） ──────────────────────────────────
+diff --git a/plugins/change-review/web/change-review.js b/plugins/change-review/web/change-review.js
+index 661ee98..a0af42c 100644
+--- a/plugins/change-review/web/change-review.js
++++ b/plugins/change-review/web/change-review.js
+@@ -293,6 +293,8 @@ function setSummary(container, active, reverted) {
+         container.append(document.createTextNode(` · ${reverted.length} ${t('已撤销', 'reverted')}`));
+     }
+ }
++const pendingBadgeTimers = new WeakMap();
++
+ function updateBadge(aggregate) {
+     if (!aggregate || !aggregate.querySelector) return;
+     const rows = displayTurnRows(aggregate);
+@@ -316,9 +318,35 @@ function updateBadge(aggregate) {
+         else if (wrap) wrap.insertBefore(badge, wrap.querySelector('.process-aggregate-stats'));
+     }
+     const parts = splitReviewRows(rows);
++    const value = stats(parts.active);
++    const lineStatsReady = parts.active.length
++        ? (value.added > 0 || value.removed > 0
++            || parts.active.some(function (row) { return hasLineStats(row); }))
++        : true;
++    if (parts.active.length && !lineStatsReady) {
++        // 行数统计尚未就绪（历史回放 / 统计后到）：先静默隐藏，等真实数字一次到位，
++        // 避免 badge 先渲染 +0 −0（灰白）再跳变成 +N −M（红绿）的闪烁。
++        if (!pendingBadgeTimers.has(badge)) {
++            pendingBadgeTimers.set(badge, globalThis.setTimeout(function () {
++                pendingBadgeTimers.delete(badge);
++                if (!badge.isConnected || !badge.hidden) return;
++                badge.hidden = false;
++                badge.replaceChildren(document.createTextNode(
++                    `${parts.active.length} ${t('个文件', 'files')}`));
++                if (value.omitted) badge.title = statsTitle(value);
++            }, 1500));
++        }
++        badge.hidden = true;
++        return;
++    }
++    if (pendingBadgeTimers.has(badge)) {
++        globalThis.clearTimeout(pendingBadgeTimers.get(badge));
++        pendingBadgeTimers.delete(badge);
++    }
++    badge.hidden = false;
+     badge.replaceChildren();
+     if (parts.active.length) {
+-        appendColoredStats(badge, stats(parts.active), true);
++        appendColoredStats(badge, value, true);
+         if (parts.reverted.length) {
+             badge.append(document.createTextNode(` · ${parts.reverted.length} ${t('已撤销', 'reverted')}`));
+         }
+diff --git a/tests/test_tray_launcher.py b/tests/test_tray_launcher.py
+index 5b81862..8a36e2c 100644
+--- a/tests/test_tray_launcher.py
++++ b/tests/test_tray_launcher.py
+@@ -199,7 +199,6 @@ def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
+     launcher = make_launcher()
+     launcher._is_listening = lambda: True
+     opened = []
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+     launcher._open_named_browser_window = lambda url: opened.append(url)
+     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+@@ -209,12 +208,11 @@ def test_open_main_ui_falls_back_to_browser_without_live_page(monkeypatch):
+     assert opened == [tray_launcher.BASE_URL + "/"]
+ 
+ 
+-def test_open_main_ui_falls_back_when_detected_window_cannot_be_focused(monkeypatch):
++def test_open_main_ui_falls_back_when_heartbeat_has_no_focusable_tab(monkeypatch):
+     launcher = make_launcher()
+     launcher._is_listening = lambda: True
+     opened = []
+     launcher._open_named_browser_window = lambda url: opened.append(url)
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [4321])
+     monkeypatch.setattr(
+         tray_launcher,
+         "_request_existing_ui_activation",
+@@ -232,7 +230,6 @@ def test_open_main_ui_reuses_visible_window_before_presence_recovers(monkeypatch
+     launcher = make_launcher()
+     launcher._is_listening = lambda: True
+     opened = []
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+     launcher._open_named_browser_window = lambda url: opened.append(url)
+     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: True)
+@@ -248,7 +245,6 @@ def test_open_main_ui_collapses_duplicate_startup_triggers(monkeypatch):
+     launcher = make_launcher()
+     launcher._is_listening = lambda: True
+     opened = []
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+     launcher._open_named_browser_window = lambda url: opened.append(url)
+     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+@@ -269,7 +265,6 @@ def test_open_main_ui_retries_after_failed_browser_launch(monkeypatch):
+         if len(attempts) == 1:
+             raise OSError("no browser handler")
+ 
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+     launcher._open_named_browser_window = launch
+     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+@@ -285,7 +280,6 @@ def test_open_main_ui_allows_launch_after_dedupe_window(monkeypatch):
+     launcher = make_launcher()
+     launcher._is_listening = lambda: True
+     opened = []
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+     launcher._open_named_browser_window = lambda url: opened.append(url)
+     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+@@ -342,7 +336,6 @@ def test_external_ui_activation_reuses_page_without_tray(monkeypatch):
+ 
+ def test_external_ui_activation_opens_page_only_when_none_is_reusable(monkeypatch):
+     opened = []
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
+     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": False)
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+@@ -377,7 +370,6 @@ def test_external_ui_activation_opens_when_heartbeat_has_no_selectable_tab(monke
+     monkeypatch.setattr(tray_launcher, "_notify_existing_instance", lambda **_kwargs: False)
+     monkeypatch.setattr(tray_launcher, "_request_existing_ui_activation", lambda _path, session="": True)
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_tab", lambda: False)
+-    monkeypatch.setattr(tray_launcher, "_visible_webui_windows", lambda: [])
+     monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
+     monkeypatch.setattr(
+         tray_launcher,
+@@ -389,7 +381,17 @@ def test_external_ui_activation_opens_when_heartbeat_has_no_selectable_tab(monke
+     assert opened == [("/?session=abc123", False)]
+ 
+ 
+-def test_background_webui_tab_is_selected_and_its_window_is_focused(monkeypatch):
++def test_keyword_matched_browser_window_is_focused(monkeypatch):
++    monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: True)
++    monkeypatch.setattr(
++        tray_launcher,
++        "_select_webui_browser_tab",
++        lambda: pytest.fail("active browser tab should not require selection"),
++    )
++    assert tray_launcher._focus_existing_webui_tab() is True
++
++
++def test_background_keyword_matched_browser_tab_is_selected_and_focused(monkeypatch):
+     monkeypatch.setattr(tray_launcher, "_focus_existing_webui_window", lambda: False)
+     monkeypatch.setattr(tray_launcher, "_select_webui_browser_tab", lambda: 4321)
+     monkeypatch.setattr(tray_launcher, "_bring_window_to_foreground", lambda hwnd: hwnd == 4321)
+@@ -398,7 +400,7 @@ def test_background_webui_tab_is_selected_and_its_window_is_focused(monkeypatch)
+     assert tray_launcher._focus_existing_webui_tab() is True
+ 
+ 
+-def test_tab_selector_returns_uia_selected_browser_handle(monkeypatch):
++def test_tab_selector_only_selects_keyword_matched_browser_tabs(monkeypatch):
+     captured = {}
+ 
+     class Completed:
+@@ -416,10 +418,51 @@ def test_tab_selector_returns_uia_selected_browser_handle(monkeypatch):
+ 
+     assert tray_launcher._select_webui_browser_tab() == 4321
+     assert "1234,4321" in captured["command"][-1]
++    assert "General Agent|SugarAgent" in captured["command"][-1]
+     assert "SelectionItemPattern" in captured["command"][-1]
++    assert "if ($name -notmatch 'General Agent|SugarAgent') { continue }" in captured["command"][-1]
++    assert "Get-BrowserAddress" not in captured["command"][-1]
++    assert "Start-Sleep" not in captured["command"][-1]
+     assert captured["kwargs"]["timeout"] == tray_launcher.UI_TAB_SELECT_TIMEOUT_SECONDS
+ 
+ 
++def test_active_keyword_match_is_limited_to_browser_windows(monkeypatch):
++    monkeypatch.setattr(tray_launcher, "_visible_browser_windows", lambda: [2, 3])
++    monkeypatch.setattr(
++        tray_launcher.win32gui,
++        "GetWindowText",
++        lambda hwnd: {2: "General Agent - Microsoft Edge", 3: "Other - Chrome"}[hwnd],
++    )
++
++    assert tray_launcher._visible_webui_windows() == [2]
++
++
++def test_browser_window_filter_excludes_chromium_desktop_apps(monkeypatch):
++    monkeypatch.setattr(
++        tray_launcher.win32gui,
++        "EnumWindows",
++        lambda callback, _: [callback(hwnd, None) for hwnd in (1, 2, 3)],
++    )
++    monkeypatch.setattr(tray_launcher.win32gui, "IsWindowVisible", lambda hwnd: True)
++    monkeypatch.setattr(tray_launcher.win32gui, "GetClassName", lambda hwnd: "Chrome_WidgetWin_1")
++    monkeypatch.setattr(
++        tray_launcher.win32process,
++        "GetWindowThreadProcessId",
++        lambda hwnd: (0, hwnd),
++    )
++
++    class FakeProcess:
++        def __init__(self, pid):
++            self.pid = pid
++
++        def name(self):
++            return {1: "ChatGPT.exe", 2: "msedge.exe", 3: "chrome.exe"}[self.pid]
++
++    monkeypatch.setattr(tray_launcher.psutil, "Process", FakeProcess)
++
++    assert tray_launcher._visible_browser_windows() == [2, 3]
++
++
+ def test_activation_request_uses_stall_tolerant_timeout(monkeypatch):
+     captured = {}
+ 

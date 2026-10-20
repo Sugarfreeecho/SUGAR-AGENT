@@ -90,3 +90,6 @@ model_profiles.json
 
 # Local skeleton-width audit screenshots
 skeleton-width-audit/
+
+# Local downloaded toolchains (ffmpeg essentials build etc.)
+tools/

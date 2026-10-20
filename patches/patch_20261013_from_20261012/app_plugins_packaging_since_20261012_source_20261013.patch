@@ -1,0 +1,374 @@
+diff --git a/app/agent_loop.py b/app/agent_loop.py
+index 30d88f1..f9e4f6f 100644
+--- a/app/agent_loop.py
++++ b/app/agent_loop.py
+@@ -2562,6 +2562,8 @@ def _runtime_v2_commit_user_turn(
+             model_payload=data,
+         )
+         state["_last_user_turn_was_deduplicated"] = committed_event is None and bool(operation_id)
++        if ui_type == "user" and committed_event is not None:
++            state["_runtime_v2_user_turn_seq"] = int(getattr(committed_event, "seq", 0) or 0)
+         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
+         side_effect_event = {
+             "type": ui_type,
+@@ -3128,6 +3130,13 @@ async def _push_stream_event(
+         return
+     if context_probe:
+         fence_ms = int((time.perf_counter() - probe_started) * 1000)
++    if event.get("type") == "user" and event.get("_runtime_v2_committed"):
++        user_turn_seq = int(state.get("_runtime_v2_user_turn_seq") or 0)
++        if user_turn_seq > 0:
++            # Queued follow-ups are emitted directly as live UI events. Use the
++            # same durable boundary as their later execution records.
++            event["runtime_seq"] = user_turn_seq
++            event["process_group_id"] = f"turn:{user_turn_seq}"
+     state["stream_events"].append(event)
+     if emit:
+         try:
+diff --git "a/packaging/HOWTO-\345\217\246\344\270\200\345\217\260\347\224\265\350\204\221\346\211\223\345\214\205.md" "b/packaging/HOWTO-\345\217\246\344\270\200\345\217\260\347\224\265\350\204\221\346\211\223\345\214\205.md"
+index aa866f7..54fddf6 100644
+--- "a/packaging/HOWTO-\345\217\246\344\270\200\345\217\260\347\224\265\350\204\221\346\211\223\345\214\205.md"
++++ "b/packaging/HOWTO-\345\217\246\344\270\200\345\217\260\347\224\265\350\204\221\346\211\223\345\214\205.md"
+@@ -56,7 +56,7 @@ node scripts\build.mjs
+ node scripts\smoke-payload.mjs --port 8399
+ ```
+ 
+-产物：`packaging\build\dist\SugarAgent-Setup-1.5.3-x64.exe`（当前版本以 `packaging/package.json` 为准）。
++产物：`packaging\build\dist\SugarAgent-Setup-1.5.4-x64.exe`（当前版本以 `packaging/package.json` 为准）。
+ 
+ **离线/加速捷径（推荐给低网速机器）**：
+ 1. 拷 `packaging\build\payload\`（≈365MB）→ 目标机后，用 `node scripts\build.mjs --skip-payload` 跳过 pip；
+@@ -81,7 +81,7 @@ node scripts\smoke-payload.mjs --port 8399     # ③ 冒烟（≈0.5min）
+ 
+ ## 4. 版本号与发布
+ 
+-- 版本号 = `packaging/package.json` 的 `version`（当前 **1.5.3**），连带 `package-lock.json` 里**自身 2 处**（顶层 + `packages[""]`；**不要**动依赖条目）。
++- 版本号 = `packaging/package.json` 的 `version`（当前 **1.5.4**），连带 `package-lock.json` 里**自身 2 处**（顶层 + `packages[""]`；**不要**动依赖条目）。
+ - 改后安装包文件名、卸载项显示名、窗口标题自动跟随。
+ - 发布物：`build\dist\SugarAgent-Setup-<版本>-x64.exe` + `.blockmap`。
+ 
+diff --git a/packaging/README.md b/packaging/README.md
+index 86f9375..aa5add1 100644
+--- a/packaging/README.md
++++ b/packaging/README.md
+@@ -114,6 +114,7 @@ resources/runtime/
+ | 窗口尺寸 | 初始 1440×920；支持自由缩放和半屏停靠，不设应用级最小宽高 |
+ | 启动反馈 | `SugarAgent.exe` 是轻量 Windows 启动入口：先显示品牌 Logo 与原生等待提示，再以 `STARTF_FORCEONFEEDBACK` 拉起 `SugarAgentRuntime.exe` 请求系统启动光标；Electron 第一帧可见后通过当前用户专用命名管道收起原生提示。后端等待页同样使用 Logo、旋转动画和忙碌光标，任务栏显示等待进度；准备完成后自动进入主界面或首启向导 |
+ | 托盘 | 关闭窗口＝最小化到托盘；托盘菜单：打开主界面 / 浏览器打开 / 重启内置服务 / 打开后台日志 / 打开工作目录 / 退出；后台日志复用源码版实时彩色终端查看器 |
++| 重启内置服务 | 重启内置 Python Agent 后端，保持 Electron 窗口、托盘及当前端口；重启期间禁用重复重启，就绪后重载界面并处理通知跳转。主动停止不弹崩溃框；启动失败与真正的等待超时分别提示。已安装桌面版需重新打包并覆盖安装才能更新外壳代码 |
+ | 通知跳转 | 使用独立的 `sugaragent-desktop://open-ui` 协议唤起桌面窗口；会话通知保留会话定位，使用当前后端端口 |
+ | 通知发送 | 后端通过带每次启动随机凭据的本机通道交给 Electron 主进程发送原生通知；窗口隐藏到托盘后仍可发送，失败记录在 `desktop.log` 并回退到系统通知助手 |
+ | 原生主题 | 页面浅色 / 深色 / 紫色同步到 Electron 原生主题，窗口边框和菜单随页面主题切换 |
+@@ -141,4 +142,4 @@ resources/runtime/
+ 
+ ## 版本号
+ 
+-版本号在 `packaging/package.json` 的 `version`（当前 `1.5.3`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里（连带 `package-lock.json` 中自身 2 处）并重新构建。
++版本号在 `packaging/package.json` 的 `version`（当前 `1.5.4`），会体现在安装包文件名、卸载项显示名与窗口标题中；发新版时改这里（连带 `package-lock.json` 中自身 2 处）并重新构建。
+diff --git a/packaging/electron/main.js b/packaging/electron/main.js
+index b7a3e66..1604ef9 100644
+--- a/packaging/electron/main.js
++++ b/packaging/electron/main.js
+@@ -43,6 +43,8 @@ let backendLogStream = null
+ let backendLogFile = null
+ let quitting = false
+ let restartTimer = null
++let backendRestarting = false
++const expectedBackendExits = new WeakSet()
+ let uiReady = false
+ let pendingActivation = parseDesktopActivation(process.argv)
+ let notificationBridge = null
+@@ -182,6 +184,7 @@ function openBackendLog() {
+   const name = `backend-${new Date().toISOString().slice(0, 10)}.log`
+   backendLogFile = path.join(LOG_DIR, name)
+   backendLogStream = fs.createWriteStream(backendLogFile, { flags: 'a' })
++  backendLogStream.on('error', error => log(`后端日志写入失败：${error.message}`))
+   return backendLogStream
+ }
+ 
+@@ -213,7 +216,8 @@ function openBackendLogs() {
+ }
+ 
+ function startBackend() {
+-  if (backend) return
++  if (quitting) return null
++  if (backend) return backend
+   if (!fs.existsSync(PYTHON_EXE)) {
+     fatal(`缺少内置 Python 运行时：${PYTHON_EXE}`)
+     return
+@@ -225,68 +229,144 @@ function startBackend() {
+   seedWorkspace()
+   const stream = openBackendLog()
+   stream.write(`\n===== 启动后端 ${new Date().toISOString()} =====\n`)
+-  backend = spawn(PYTHON_EXE, [APP_ENTRY], {
+-    cwd: resolveLayout().cwd,
+-    env: backendEnv(),
+-    stdio: ['ignore', 'pipe', 'pipe'],
+-    windowsHide: true,
+-  })
+-  log(`后端已启动 pid=${backend.pid}`)
++  let child
++  try {
++    child = spawn(PYTHON_EXE, [APP_ENTRY], {
++      cwd: resolveLayout().cwd,
++      env: backendEnv(),
++      stdio: ['ignore', 'pipe', 'pipe'],
++      windowsHide: true,
++    })
++  } catch (error) {
++    stream.end()
++    if (backendLogStream === stream) backendLogStream = null
++    throw error
++  }
++  backend = child
++  log(`后端已启动 pid=${child.pid}`)
+   writeStatus({ backendState: 'started' })
+-  backend.stdout.pipe(stream, { end: false })
+-  backend.stderr.pipe(stream, { end: false })
+-  backend.on('error', error => log(`后端启动失败：${error.message}`))
+-  backend.on('exit', (code, signal) => {
+-    const pid = backend && backend.pid
+-    backend = null
+-    log(`后端退出 pid=${pid} code=${code} signal=${signal} quitting=${quitting}`)
+-    writeStatus({ backendState: 'exited', backendExitCode: code })
+-    if (backendLogStream) {
+-      backendLogStream.write(`===== 后端退出 code=${code} signal=${signal} =====\n`)
+-    }
+-    if (quitting) return
++  child.stdout.pipe(stream, { end: false })
++  child.stderr.pipe(stream, { end: false })
++  // close follows exit/error and the end of stdout/stderr. Keep the stream
++  // alive until then so buffered output cannot write into a closed log.
++  child.once('close', () => {
++    stream.end()
++    if (backendLogStream === stream) backendLogStream = null
++  })
++  let failureReported = false
++  const reportFailure = (code, signal, error = null) => {
++    const expected = expectedBackendExits.delete(child)
++    const current = backend === child
++    if (current) backend = null
++    log(`后端退出 pid=${child.pid} code=${code} signal=${signal} quitting=${quitting} expected=${expected}${error ? ` error=${error.message}` : ''}`)
++    stream.write(`===== 后端退出 code=${code} signal=${signal}${error ? ` error=${error.message}` : ''} =====\n`)
++    if (quitting || expected || !current || failureReported) return
++    failureReported = true
++    writeStatus({ backendState: 'exited', backendExitCode: code, ...(error ? { backendError: error.message } : {}) })
++    // Startup and restart own their failure UI; a running service owns its
++    // crash dialog. Never report one failure again as a startup timeout.
++    if (!uiReady || backendRestarting) return
+     dialog.showMessageBox({
+       type: 'error',
+       title: 'SugarAgent 后端已停止',
+-      message: `内置服务意外退出（code=${code ?? 'null'}）。`,
+-      detail: `日志目录：${LOG_DIR}\n可点击“重启”重新拉起服务；本机 8192 端口被占用也会导致启动失败。`,
++      message: error ? `内置服务启动失败：${error.message}` : `内置服务意外退出（code=${code ?? 'null'}）。`,
++      detail: `日志目录：${LOG_DIR}\n可点击“重启”重新拉起服务；本机 ${activePort} 端口被占用也会导致启动失败。`,
+       buttons: ['重启', '打开日志目录', '退出'],
+       defaultId: 0,
+       cancelId: 2,
+     }).then(result => {
++      if (quitting || backend) return
+       if (result.response === 0) restartBackend()
+       else if (result.response === 1) shell.openPath(LOG_DIR)
+       else app.quit()
+-    })
+-  })
++    }).catch(error => log(`后端恢复对话框失败：${error.message}`))
++  }
++  child.on('error', error => reportFailure(null, null, error))
++  child.on('exit', (code, signal) => reportFailure(code, signal))
++  return child
+ }
+ 
+ function stopBackend() {
+-  if (!backend || !backend.pid) return
+-  const pid = backend.pid
++  const child = backend
++  if (!child) return true
++  if (!child.pid) return false
++  const pid = child.pid
++  // Register before sending the signal: the exit callback may run either
++  // before or after a replacement process has started.
++  expectedBackendExits.add(child)
+   log(`停止后端 pid=${pid}`)
+   try {
+     if (IS_WINDOWS) {
+-      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
++      const result = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
++      if (result.error) throw result.error
++      if (result.status !== 0) throw new Error(`taskkill 退出码 ${result.status}`)
+     } else {
+       process.kill(-pid, 'SIGTERM')
+     }
+   } catch (error) {
++    expectedBackendExits.delete(child)
+     log(`停止后端失败：${error && error.message}`)
++    return false
+   }
+-  backend = null
++  if (backend === child) backend = null
++  return true
+ }
+ 
+ function restartBackend() {
++  if (quitting || !uiReady || backendRestarting) return false
++  backendRestarting = true
++  createTray()
++  if (mainWindow) mainWindow.setProgressBar(2)
++  if (!stopBackend()) {
++    backendRestarting = false
++    if (mainWindow) mainWindow.setProgressBar(-1)
++    createTray()
++    dialog.showErrorBox('无法重启内置服务', `旧服务未能停止，请查看日志后重试。\n日志目录：${LOG_DIR}`)
++    return false
++  }
+   layout = null
+-  stopBackend()
+-  if (restartTimer) clearTimeout(restartTimer)
++  writeStatus({ backendState: 'restarting' })
+   restartTimer = setTimeout(async () => {
+-    startBackend()
+-    const ready = await waitForBackend(180000)
+-    if (ready) await loadApp()
+-    else dialog.showErrorBox('启动超时', `等待内置服务超过 180 秒仍未就绪。\n日志目录：${LOG_DIR}`)
++    restartTimer = null
++    let reloaded = false
++    try {
++      if (quitting) return
++      const child = startBackend()
++      const ready = await waitForBackend(180000, child)
++      if (quitting) return
++      if (!ready) {
++        const message = child && backend === child
++          ? '等待内置服务超过 180 秒仍未就绪。'
++          : '内置服务启动失败或已退出。'
++        dialog.showErrorBox('重启内置服务失败', `${message}\n日志目录：${LOG_DIR}`)
++        return
++      }
++      const activation = pendingActivation
++      pendingActivation = null
++      await loadApp(activation ? activation.session : '')
++      if (quitting) return
++      if (backend !== child) throw new Error('内置服务在加载界面时退出。')
++      reloaded = true
++    } catch (error) {
++      log(`后端重启失败：${error.message}`)
++      if (!quitting) {
++        if (!backend) writeStatus({ backendState: 'exited', backendError: error.message })
++        dialog.showErrorBox('重启内置服务失败', `${error.message}\n日志目录：${LOG_DIR}`)
++      }
++    } finally {
++      backendRestarting = false
++      if (!quitting) {
++        if (mainWindow) mainWindow.setProgressBar(-1)
++        createTray()
++        if (reloaded && pendingActivation) {
++          const activation = pendingActivation
++          pendingActivation = null
++          void activateDesktop(activation).catch(error => log(`桌面通知激活失败：${error.message}`))
++        }
++      }
++    }
+   }, 800)
++  return true
+ }
+ 
+ // ------------------------------------------------------------- healthcheck ---
+@@ -320,11 +400,13 @@ async function findFreePort(start, span) {
+   return start
+ }
+ 
+-async function waitForBackend(timeoutMs = 180000) {
++async function waitForBackend(timeoutMs = 180000, child = backend) {
+   const deadline = Date.now() + timeoutMs
+   while (Date.now() < deadline) {
+-    if (!backend) return false
+-    if (await probeOnce()) return true
++    if (quitting || !child || backend !== child) return false
++    const ready = await probeOnce()
++    if (quitting || backend !== child) return false
++    if (ready) return true
+     await new Promise(resolve => setTimeout(resolve, 400))
+   }
+   return false
+@@ -543,7 +625,7 @@ function requestSessionActivation(session) {
+ 
+ async function activateDesktop(activation) {
+   // 启动期间复用已有的启动页，保留会话请求直到应用界面就绪。
+-  if (!uiReady) {
++  if (!uiReady || backendRestarting) {
+     pendingActivation = activation
+     if (mainWindow) showWindow()
+     return
+@@ -583,9 +665,9 @@ function createTray() {
+   }
+   tray.setContextMenu(Menu.buildFromTemplate([
+     { label: '打开主界面', click: () => showWindow() },
+-    { label: '在浏览器中打开', enabled: uiReady, click: () => shell.openExternal(`${baseUrl()}/`) },
++    { label: '在浏览器中打开', enabled: uiReady && !backendRestarting, click: () => shell.openExternal(`${baseUrl()}/`) },
+     { type: 'separator' },
+-    { label: '重启内置服务', enabled: uiReady, click: () => restartBackend() },
++    { label: '重启内置服务', enabled: uiReady && !backendRestarting, click: () => restartBackend() },
+     { label: '打开后台日志', click: () => openBackendLogs() },
+     { label: '打开工作目录', click: () => shell.openPath(resolveLayout().workDir) },
+     { type: 'separator' },
+@@ -611,7 +693,7 @@ function registerIpc() {
+     logsDir: LOG_DIR,
+     workDir: resolveLayout().workDir,
+   }))
+-  ipcMain.handle('sugaragent:restart-backend', () => { restartBackend(); return true })
++  ipcMain.handle('sugaragent:restart-backend', () => restartBackend())
+   ipcMain.handle('sugaragent:open-logs', () => openBackendLogs())
+   ipcMain.on('sugaragent:theme', applyNativeTheme)
+   ipcMain.on('sugaragent:language', (event, language) => {
+@@ -672,7 +754,8 @@ if (!gotLock) {
+     const ready = await waitForBackend(180000)
+     if (quitting) return
+     if (!ready) {
+-      fatal(`内置服务在 180 秒内未就绪。\n日志：${path.join(LOG_DIR, `backend-${new Date().toISOString().slice(0, 10)}.log`)}`)
++      const message = backend ? '内置服务在 180 秒内未就绪。' : '内置服务启动失败或已退出。'
++      fatal(`${message}\n日志：${path.join(LOG_DIR, `backend-${new Date().toISOString().slice(0, 10)}.log`)}`)
+       return
+     }
+     const initialActivation = pendingActivation
+@@ -697,6 +780,8 @@ if (!gotLock) {
+ 
+   app.on('before-quit', () => {
+     quitting = true
++    if (restartTimer !== null) clearTimeout(restartTimer)
++    restartTimer = null
+   })
+ 
+   app.on('will-quit', () => {
+diff --git a/packaging/package-lock.json b/packaging/package-lock.json
+index e2b432c..32b8378 100644
+--- a/packaging/package-lock.json
++++ b/packaging/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "sugaragent-desktop",
+-  "version": "1.5.3",
++  "version": "1.5.4",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "sugaragent-desktop",
+-      "version": "1.5.3",
++      "version": "1.5.4",
+       "license": "UNLICENSED",
+       "devDependencies": {
+         "electron": "44.5.1",
+diff --git a/packaging/package.json b/packaging/package.json
+index 169acde..13646c7 100644
+--- a/packaging/package.json
++++ b/packaging/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "sugaragent",
+   "productName": "SugarAgent",
+-  "version": "1.5.3",
++  "version": "1.5.4",
+   "private": true,
+   "description": "SugarAgent 桌面版：Electron 外壳 + 便携 Python 运行时 + NSIS 一键安装包",
+   "author": "SugarAgent",

@@ -1,0 +1,9 @@
+9	0	app/agent_loop.py
+0	35655	app/templates/dist/assets/main-BSOxwZBJ.js
+35821	0	app/templates/dist/assets/main-Blak_Lvl.js
+2	2	app/templates/dist/index.html
+2	2	"packaging/HOWTO-\345\217\246\344\270\200\345\217\260\347\224\265\350\204\221\346\211\223\345\214\205.md"
+2	1	packaging/README.md
+127	42	packaging/electron/main.js
+2	2	packaging/package-lock.json
+1	1	packaging/package.json

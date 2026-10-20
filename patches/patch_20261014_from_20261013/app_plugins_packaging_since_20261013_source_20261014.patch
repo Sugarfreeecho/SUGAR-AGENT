@@ -1,0 +1,2146 @@
+diff --git a/app/agent_harness.py b/app/agent_harness.py
+index 12e1a03..18cf91f 100644
+--- a/app/agent_harness.py
++++ b/app/agent_harness.py
+@@ -1006,11 +1006,11 @@ PREFER_DIRECT_ENV = "LLM_STREAM_PREFER_DIRECT"
+ def _prefer_direct_stream() -> bool:
+     """Whether the preferred candidate streams over the shared httpx client.
+ 
+-    Defaults to enabled: reading the response to EOF returns the connection to
+-    the pool, which measured ~850 ms faster per step, and the adapter inside the
+-    candidate loop keeps fallback, circuits, modality routing and the request
+-    budget intact. Set ``LLM_STREAM_PREFER_DIRECT=0`` to fall back to the in-house
+-    transports.
++    Defaults to enabled for Chat Completions candidates: reading the response to
++    EOF returns the connection to the pool, which measured ~850 ms faster per
++    step, and the adapter inside the candidate loop keeps fallback, circuits,
++    modality routing and the request budget intact. Set
++    ``LLM_STREAM_PREFER_DIRECT=0`` to fall back to the in-house transports.
+     """
+     raw = str(os.getenv(PREFER_DIRECT_ENV) or "").strip().lower()
+     if raw in {"0", "false", "no", "off"}:
+@@ -2287,12 +2287,16 @@ class ExecutorLLMClient:
+     def _direct_transport(item: Dict[str, Any]) -> Optional["_DirectStreamTransport"]:
+         """A transport that streams candidate ``item`` over the shared httpx client.
+ 
+-        Used only when ``LLM_STREAM_PREFER_DIRECT`` is set and only for the first
+-        candidate: the facade keeps owning fallback, circuits, modality routing
+-        and budget, so replacing just the stream source cannot remove any of it.
++        Enabled by default for the first candidate only if its resolved protocol
++        is Chat Completions. The facade keeps owning fallback, circuits, modality
++        routing and budget, so replacing just the stream source preserves them.
+         """
+         if not _prefer_direct_stream():
+             return None
++        # The raw adapter always posts to /chat/completions. Messages and
++        # Responses candidates must retain their native protocol transports.
++        if item.get("provider") != "openai-compatible":
++            return None
+         target = item.get("client")
+         if target is None:
+             return None
+@@ -7391,6 +7395,38 @@ class SessionManager:
+                 return self._session_entry_with_activity(dict(s))
+         return None
+ 
++    def register_imported_session(self, session_id: str) -> None:
++        """Publish one completed import to memory and disk before returning it."""
++        sid = self._normalize_session_id(session_id)
++        metadata = self._load_metadata(sid)
++        if not metadata or self._is_deleted_session(sid):
++            raise ValueError("Cannot register an unavailable imported session")
++        now = datetime.now(timezone.utc).isoformat()
++        created_at = metadata.get("created_at") or now
++        entry = {
++            "id": sid,
++            "name": metadata.get("name") or "导入的会话",
++            "created_at": created_at,
++            "updated_at": metadata.get("updated_at") or created_at,
++            "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
++            "work_dir": session_work_dir_override(metadata) or None,
++            "last_user_preview": str(metadata.get("last_user_preview") or ""),
++            "unread_result_at": metadata.get("unread_result_at"),
++            "unread_result_status": str(metadata.get("unread_result_status") or "success"),
++        }
++        for field in ("archived", "pinned", "todo", "goal_review_pending", "draft", "unread_result"):
++            entry[field] = bool(metadata.get(field, False))
++        with self._lock:
++            previous = self.index
++            self.index = [row for row in previous if row.get("id") != sid] + [entry]
++            try:
++                self.repository.save_index(self.index_file, self.index)
++            except Exception:
++                self.index = previous
++                raise
++        self._known_root_session_ids.add(sid)
++        self._notify_session_state_changed(sid, {"imported"})
++
+     def set_session_archived(self, session_id: str, archived: bool) -> None:
+         meta_path = self._get_metadata_path(session_id)
+         if not meta_path.exists():
+diff --git a/app/agent_loop.py b/app/agent_loop.py
+index f9e4f6f..a9c57ae 100644
+--- a/app/agent_loop.py
++++ b/app/agent_loop.py
+@@ -2564,6 +2564,7 @@ def _runtime_v2_commit_user_turn(
+         state["_last_user_turn_was_deduplicated"] = committed_event is None and bool(operation_id)
+         if ui_type == "user" and committed_event is not None:
+             state["_runtime_v2_user_turn_seq"] = int(getattr(committed_event, "seq", 0) or 0)
++            state["_runtime_v2_user_turn_started_at"] = str(getattr(committed_event, "timestamp", "") or "")
+         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
+         side_effect_event = {
+             "type": ui_type,
+@@ -3137,6 +3138,9 @@ async def _push_stream_event(
+             # same durable boundary as their later execution records.
+             event["runtime_seq"] = user_turn_seq
+             event["process_group_id"] = f"turn:{user_turn_seq}"
++            user_turn_started_at = state.get("_runtime_v2_user_turn_started_at")
++            if user_turn_started_at:
++                event["created_at"] = user_turn_started_at
+     state["stream_events"].append(event)
+     if emit:
+         try:
+diff --git a/app/attachments/lifecycle.py b/app/attachments/lifecycle.py
+index 6ed84f0..4ba583e 100644
+--- a/app/attachments/lifecycle.py
++++ b/app/attachments/lifecycle.py
+@@ -33,6 +33,42 @@ def collect_references(roots):
+     return identities
+ 
+ 
++def collect_image_references(roots):
++    """Collect stored image refs for export, excluding hashes quoted in text.
++
++    GC deliberately keeps its broader text scan: a false positive there only
++    retains an object, whereas exporting it would require a nonexistent image.
++    """
++    identities = set()
++
++    def visit(value):
++        if isinstance(value, dict):
++            identity = value.get("attachmentId")
++            media_type = value.get("mediaType")
++            if (isinstance(identity, str) and IDENTITY_RE.fullmatch(identity)
++                    and isinstance(media_type, str) and media_type.startswith("image/")):
++                identities.add(identity)
++            for item in value.values():
++                visit(item)
++        elif isinstance(value, list):
++            for item in value:
++                visit(item)
++
++    for root in roots:
++        for path in Path(root).rglob("*"):
++            if path.is_symlink() or not path.is_file() or path.suffix not in {".json", ".jsonl"}:
++                continue
++            with path.open(encoding="utf-8", errors="replace") as source:
++                records = source if path.suffix == ".jsonl" else [source.read()]
++                for record in records:
++                    try:
++                        value = json.loads(record)
++                    except ValueError:
++                        continue
++                    visit(value)
++    return identities
++
++
+ def garbage_collect(store, reference_roots, *, dry_run=True, grace_seconds=7 * 86400):
+     if grace_seconds < 0:
+         raise ValueError("GC grace period must be nonnegative")
+@@ -73,8 +109,40 @@ def add_bundle(archive, store, identities, *, prefix="attachments"):
+     return manifest
+ 
+ 
++class _DirectoryBundle:
++    """Read an extracted bundle through the same validation as a ZIP bundle."""
++
++    def __init__(self, root):
++        self.root = Path(root).resolve()
++
++    def _path(self, name):
++        if isinstance(name, zipfile.ZipInfo):
++            name = name.filename
++        path = self.root / name
++        if path.is_symlink() or not path.resolve().is_relative_to(self.root):
++            raise AttachmentError("Invalid attachment bundle path", "INVALID_ATTACHMENT_REF")
++        return path
++
++    def getinfo(self, name):
++        info = zipfile.ZipInfo(name)
++        info.file_size = self._path(name).stat().st_size
++        return info
++
++    def read(self, name):
++        return self._path(name).read_bytes()
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, *_args):
++        pass
++
++
+ def import_bundle(store, source, *, prefix="attachments"):
+-    with zipfile.ZipFile(source) as archive, tempfile.TemporaryDirectory(prefix="myagent-image-restore-") as staging:
++    bundle = (_DirectoryBundle(source)
++              if isinstance(source, (str, os.PathLike)) and Path(source).is_dir()
++              else zipfile.ZipFile(source))
++    with bundle as archive, tempfile.TemporaryDirectory(prefix="myagent-image-restore-") as staging:
+         info = archive.getinfo(f"{prefix}/manifest.json")
+         if info.file_size > 4 * 1024 * 1024:
+             raise AttachmentError("Attachment manifest too large", "IMAGES_TOO_LARGE")
+diff --git a/app/llm/__init__.py b/app/llm/__init__.py
+index 1b4bca4..fa78e56 100644
+--- a/app/llm/__init__.py
++++ b/app/llm/__init__.py
+@@ -15,11 +15,9 @@ from .transport import (
+     canonical_llm_type,
+     chat_messages_to_anthropic,
+     chat_messages_to_responses_input,
+-    detect_provider,
+     merge_streamed_tool_name,
+     normalize_provider,
+     normalize_responses_state_mode,
+-    resolve_provider,
+     resolve_profile_provider,
+ )
+ from .provider_registry import ProviderDescriptor, ProviderRegistry, provider_registry
+@@ -37,11 +35,9 @@ __all__ = [
+     "canonical_llm_type",
+     "chat_messages_to_anthropic",
+     "chat_messages_to_responses_input",
+-    "detect_provider",
+     "merge_streamed_tool_name",
+     "normalize_provider",
+     "normalize_responses_state_mode",
+-    "resolve_provider",
+     "resolve_profile_provider",
+     "ProviderDescriptor",
+     "ProviderRegistry",
+diff --git a/app/llm/transport.py b/app/llm/transport.py
+index 85b8729..1b54e4e 100644
+--- a/app/llm/transport.py
++++ b/app/llm/transport.py
+@@ -8,11 +8,8 @@ wire formats stay in this module:
+ * ``anthropic`` / ``@ai-sdk/anthropic`` -> Anthropic Messages API
+ 
+ This module lives under :mod:`llm` so provider wire protocols do not leak back
+-into the harness or orchestration modules. ``auto`` is deliberately
+-conservative: only official OpenAI and Anthropic
+-hosts select their native protocols; every other endpoint is treated as an
+-OpenAI-compatible service.  A custom Responses proxy can be selected
+-explicitly with ``EXECUTOR_LLM_TYPE=openai``.
++into the harness or orchestration modules. Profiles select their protocol
++explicitly; an omitted selector defaults to Chat Completions.
+ """
+ from __future__ import annotations
+ 
+@@ -49,7 +46,6 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ class LLMProvider(str, Enum):
+-    AUTO = "auto"
+     OPENAI = "openai"
+     OPENAI_COMPATIBLE = "openai-compatible"
+     ANTHROPIC = "anthropic"
+@@ -64,8 +60,7 @@ class ResponsesStateMode(str, Enum):
+ 
+ 
+ _PROVIDER_ALIASES = {
+-    "": LLMProvider.AUTO,
+-    "auto": LLMProvider.AUTO,
++    "": LLMProvider.OPENAI_COMPATIBLE,
+     "openai": LLMProvider.OPENAI,
+     "responses": LLMProvider.OPENAI,
+     "openai-responses": LLMProvider.OPENAI,
+@@ -141,50 +136,27 @@ def normalize_responses_state_mode(value: Any) -> ResponsesStateMode:
+ 
+ def normalize_provider(value: Any) -> LLMProvider:
+     """Normalize a manual provider selector and reject silent typos."""
++    if isinstance(value, LLMProvider):
++        return value
+     key = str(value or "").strip().lower()
+     try:
+         return _PROVIDER_ALIASES[key]
+     except KeyError as exc:
+-        allowed = "auto, openai, openai-compatible, anthropic"
++        allowed = "openai-responses, openai-compatible, anthropic"
+         raise ValueError(f"unsupported LLM provider {value!r}; expected {allowed}") from exc
+ 
+ 
+-def detect_provider(base_url: Any, model: Any = "") -> LLMProvider:
+-    """Infer the wire protocol from an endpoint without making a paid call."""
+-    raw_url = str(base_url or "").strip()
+-    host = (urlsplit(raw_url).hostname or "").lower()
+-    model_id = str(model or "").strip().lower()
+-    if host == "api.openai.com" or host.endswith(".openai.com"):
+-        return LLMProvider.OPENAI
+-    if host == "api.anthropic.com" or host.endswith(".anthropic.com"):
+-        return LLMProvider.ANTHROPIC
+-    # A model-only hint is useful for a blank/official-looking Anthropic URL,
+-    # but must not override OpenRouter, local gateways, or other proxy hosts.
+-    if not host and model_id.startswith("claude-"):
+-        return LLMProvider.ANTHROPIC
+-    return LLMProvider.OPENAI_COMPATIBLE
+-
+-
+-def resolve_provider(value: Any, base_url: Any, model: Any = "") -> LLMProvider:
+-    selected = normalize_provider(value)
+-    return detect_provider(base_url, model) if selected is LLMProvider.AUTO else selected
+-
+-
+ def resolve_profile_provider(profile: Dict[str, Any]) -> LLMProvider:
+     """Resolve a saved profile while preserving an explicit provider choice.
+ 
+     Provider semantics v2: ``openai`` means chat-completions (openai-compatible)
+     even on a custom proxy; ``openai-responses`` opts into the Responses wire
+-    protocol.  Only ``auto``/empty may infer a protocol from the endpoint.
++    protocol. An omitted choice defaults to Chat Completions regardless of URL.
+     """
+     raw = str(profile.get("llm_type") or "").strip().lower()
+     if raw == "openai":
+         return LLMProvider.OPENAI_COMPATIBLE
+-    return resolve_provider(
+-        profile.get("llm_type"),
+-        profile.get("base_url"),
+-        profile.get("model"),
+-    )
++    return normalize_provider(profile.get("llm_type"))
+ 
+ 
+ def canonical_llm_type(provider: LLMProvider) -> str:
+diff --git a/app/model_profiles.py b/app/model_profiles.py
+index 78c2ec1..880d25e 100644
+--- a/app/model_profiles.py
++++ b/app/model_profiles.py
+@@ -22,7 +22,6 @@ from llm import (
+     normalize_provider,
+     normalize_responses_state_mode,
+     resolve_profile_provider,
+-    resolve_provider,
+ )
+ 
+ 
+@@ -721,123 +720,6 @@ def anthropic_messages_url_for_base(base_url: str) -> str:
+     return base + "/v1/messages"
+ 
+ 
+-_WIRE_PROTOCOL_TIMEOUT = 12.0
+-
+-
+-def _wire_probe_payload(provider_value: str, model_id: str) -> dict:
+-    if provider_value == "openai-responses":
+-        return {
+-            "model": model_id,
+-            "input": [{"role": "user", "content": "ping"}],
+-            "max_output_tokens": 1,
+-            "stream": False,
+-        }
+-    if provider_value == "anthropic":
+-        return {
+-            "model": model_id,
+-            "messages": [{"role": "user", "content": "ping"}],
+-            "max_tokens": 1,
+-            "stream": False,
+-        }
+-    return {
+-        "model": model_id,
+-        "messages": [{"role": "user", "content": "ping"}],
+-        "max_tokens": 1,
+-        "stream": False,
+-    }
+-
+-
+-def _wire_probe_headers(provider_value: str, api_key: str) -> dict:
+-    headers: dict[str, str] = {"Content-Type": "application/json"}
+-    key = str(api_key or "").strip()
+-    if not key:
+-        return headers
+-    if provider_value == "anthropic":
+-        headers["x-api-key"] = key
+-        headers["anthropic-version"] = "2023-06-01"
+-    else:
+-        headers["Authorization"] = "Bearer " + key
+-    return headers
+-
+-
+-def _wire_route_missing(provider_value: str, status: int, body: Any) -> bool:
+-    """Whether the endpoint says this wire route does not exist at all."""
+-    if status in (404, 405):
+-        return True
+-    if isinstance(body, (dict, list)):
+-        text = json.dumps(body, ensure_ascii=False)
+-    else:
+-        text = str(body or "")
+-    lowered = text.lower()
+-    if status == 400 and ("not found" in lowered or "unknown route" in lowered):
+-        return True
+-    return False
+-
+-
+-def detect_wire_protocol(
+-    base_url: str,
+-    api_key: str,
+-    model_id: str,
+-    timeout: float = _WIRE_PROTOCOL_TIMEOUT,
+-) -> Optional[str]:
+-    """Probe which wire protocol an endpoint actually serves for this model.
+-
+-    Sends a minimal request over each candidate route and judges by the
+-    response: 2xx means supported; 4xx that argues about request fields
+-    (auth, context, unknown parameter) means the route exists and speaks
+-    that protocol; 404/405-style answers mean the route is absent.
+-    Returns one of ``openai-responses`` / ``openai-compatible`` / ``anthropic``
+-    or None when nothing could be determined (offline, quota walls, etc).
+-    """
+-    base = _normalize_base_url(base_url)
+-    mid = str(model_id or "").strip()
+-    if not base or not mid:
+-        return None
+-    candidates: list[tuple[str, str]] = [
+-        ("openai-compatible", chat_completions_url_for_base(base)),
+-        ("openai-responses", responses_url_for_base(base)),
+-    ]
+-    if mid.lower().startswith("claude"):
+-        candidates.insert(0, ("anthropic", anthropic_messages_url_for_base(base)))
+-    supported: list[str] = []
+-    with httpx.Client(timeout=timeout) as client:
+-        for provider_value, url in candidates:
+-            if not url:
+-                continue
+-            try:
+-                response = client.post(
+-                    url,
+-                    headers=_wire_probe_headers(provider_value, api_key),
+-                    json=_wire_probe_payload(provider_value, mid),
+-                )
+-            except Exception:
+-                continue
+-            if 200 <= response.status_code < 300:
+-                supported.append(provider_value)
+-                continue
+-            body: Any = None
+-            try:
+-                body = response.json()
+-            except Exception:
+-                body = response.text[:500]
+-            if _wire_route_missing(provider_value, response.status_code, body):
+-                continue
+-            if 400 <= response.status_code < 500:
+-                # The route answered with a request-level complaint (auth,
+-                # quota, unknown field, context window) so it exists and
+-                # parses this wire protocol.
+-                supported.append(provider_value)
+-    if len(supported) == 1:
+-        return supported[0]
+-    if len(supported) > 1:
+-        # Chat Completions is the most widely shared dialect across
+-        # aggregators; prefer it when a gateway mirrors multiple routes.
+-        if "openai-compatible" in supported:
+-            return "openai-compatible"
+-        return supported[0]
+-    return None
+-
+-
+ def extract_context_window_from_error(error_body: Any) -> int:
+     if isinstance(error_body, (dict, list)):
+         text = json.dumps(error_body, ensure_ascii=False)
+@@ -894,7 +776,7 @@ def probe_context_window_from_error_detail(
+     success; otherwise it carries the transport exception or the raw HTTP
+     status and body so callers can surface the real reason to the UI/logs.
+     """
+-    provider = resolve_provider(llm_type, base_url, model_id)
++    provider = normalize_provider(llm_type)
+     if provider is LLMProvider.OPENAI:
+         url = responses_url_for_base(base_url)
+     elif provider is LLMProvider.ANTHROPIC:
+@@ -955,9 +837,9 @@ def probe_model_context(
+         raise ValueError("missing model")
+     fallback = fallback if isinstance(fallback, dict) else {}
+     requested_provider = str(
+-        llm_type or fallback.get("llm_type") or "auto"
+-    ).strip().lower() or "auto"
+-    provider = resolve_provider(requested_provider, base, mid)
++        llm_type or fallback.get("llm_type") or "openai-compatible"
++    ).strip().lower()
++    provider = resolve_profile_provider({"llm_type": requested_provider})
+     limits = infer_model_limits(mid, fallback, base_url=base)
+     headers = {}
+     if str(api_key or "").strip():
+@@ -1052,6 +934,12 @@ def load_store(project_root: Path) -> dict:
+     profiles = data.get("profiles")
+     if not isinstance(profiles, list):
+         data["profiles"] = []
++    migrated = False
++    for profile in data["profiles"]:
++        if isinstance(profile, dict) and _migrate_legacy_auto_protocol(profile):
++            migrated = True
++    if migrated:
++        save_store(project_root, data)
+     return {"profiles": data["profiles"]}
+ 
+ 
+@@ -1173,15 +1061,28 @@ def is_usable_profile(profile: object) -> bool:
+     return True
+ 
+ 
++def _migrate_legacy_auto_protocol(profile: dict) -> bool:
++    """Freeze a retired selector's previous URL mapping once, when importing it."""
++    if str(profile.get("llm_type") or "").strip().lower() != "auto":
++        return False
++    host = (urlsplit(str(profile.get("base_url") or "")).hostname or "").lower()
++    if host == "api.openai.com" or host.endswith(".openai.com"):
++        profile["llm_type"] = "openai-responses"
++    elif host == "api.anthropic.com" or host.endswith(".anthropic.com"):
++        profile["llm_type"] = "anthropic"
++    else:
++        profile["llm_type"] = "openai-compatible"
++    return True
++
++
+ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
+     """Translate a complete legacy .env model configuration into a profile payload."""
+-    llm_type = str(env.get("EXECUTOR_LLM_TYPE") or "auto").strip().lower() or "auto"
++    llm_type = str(env.get("EXECUTOR_LLM_TYPE") or "openai-compatible").strip().lower()
+     # This importer only handles the legacy .env schema, where `openai`
+     # historically meant "use the OpenAI SDK against any compatible endpoint".
+-    # Preserve that behavior while allowing the profile UI's explicit `openai`
+-    # value to retain its new Responses API meaning.
++    # Preserve that behavior using an explicit Chat Completions selector.
+     if llm_type in {"openai", "@ai-sdk/openai"}:
+-        llm_type = "auto"
++        llm_type = "openai-compatible"
+     if llm_type == "local":
+         model = str(env.get("LOCAL_LLM") or env.get("EXECUTOR_LLM") or "").strip()
+         local_host = str(env.get("LOCAL_LLM_HOST") or "").strip()
+@@ -1194,7 +1095,10 @@ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
+     api_key = str(env.get("OPENAI_API_KEY") or "").strip()
+     if not model or not base_url:
+         return None
+-    provider = resolve_provider(llm_type, base_url, model)
++    legacy_profile = {"llm_type": llm_type, "base_url": base_url}
++    _migrate_legacy_auto_protocol(legacy_profile)
++    provider = resolve_profile_provider(legacy_profile)
++    llm_type = canonical_llm_type(provider)
+     if provider is not LLMProvider.OPENAI_COMPATIBLE and (
+         not api_key or "YOUR_API_KEY" in api_key.upper()
+     ):
+@@ -1228,7 +1132,7 @@ def _legacy_env_profile_payload(env: dict[str, Any]) -> Optional[dict]:
+ def _legacy_env_profile_identity(profile: dict) -> tuple[str, ...]:
+     return (
+         str(profile.get("model") or "").strip(),
+-        str(profile.get("llm_type") or "auto").strip().lower(),
++        str(profile.get("llm_type") or "openai-compatible").strip().lower(),
+         _normalize_base_url(str(profile.get("base_url") or "")),
+         str(profile.get("api_key") or "").strip(),
+         str(_safe_int(profile.get("context_window"), 0)),
+@@ -1320,33 +1224,9 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
+         raise ValueError("missing model")
+     if not base_url:
+         raise ValueError("missing base_url")
+-    # Persist the provider semantics v2 canonical value so the stored
+-    # ``llm_type`` cannot be re-interpreted differently by resolve time:
+-    # explicit chat stays ``openai-compatible``; explicit Responses stays
+-    # ``openai-responses``.  ``auto`` is kept as-is so the endpoint inference
+-    # still applies on every load.  The raw string is mapped directly (not
+-    # through LLMProvider, whose ``openai`` member predates the v2 split).
+-    raw_llm_type = str(payload.get("llm_type") or "auto").strip().lower() or "auto"
+-    provider = resolve_provider(raw_llm_type, base_url, model)
+-    if raw_llm_type == "auto":
+-        # A real probe beats hostname guessing: ask the endpoint which wire
+-        # protocol it actually serves for this model.  Fall back to endpoint
+-        # inference only when the probe cannot tell (offline, quota walls).
+-        detected = detect_wire_protocol(base_url, incoming_api_key or existing_api_key, model)
+-        if detected:
+-            llm_type = detected
+-            provider = resolve_provider(detected, base_url, model)
+-        else:
+-            llm_type = "auto"
+-    elif raw_llm_type in {"openai-responses", "responses", "@ai-sdk/openai"}:
+-        llm_type = "openai-responses"
+-    elif raw_llm_type in {"openai-compatible", "openai_compatible", "compatible", "chat-completions", "local", "@ai-sdk/openai-compatible"}:
+-        llm_type = "openai-compatible"
+-    elif raw_llm_type == "openai":
+-        # v2 UI semantics: a bare explicit ``openai`` selects chat-completions.
+-        llm_type = "openai-compatible"
+-    else:
+-        llm_type = canonical_llm_type(normalize_provider(raw_llm_type))
++    raw_llm_type = payload.get("llm_type", (old or {}).get("llm_type"))
++    provider = resolve_profile_provider({"llm_type": raw_llm_type})
++    llm_type = canonical_llm_type(provider)
+     if (
+         provider is not LLMProvider.OPENAI_COMPATIBLE
+         and not incoming_api_key
+diff --git a/app/templates/first_time_config.html b/app/templates/first_time_config.html
+index 1d0af39..f772b26 100644
+--- a/app/templates/first_time_config.html
++++ b/app/templates/first_time_config.html
+@@ -248,12 +248,6 @@
+     margin-bottom: 1.1rem;
+     align-items: start;
+   }
+-  .form-row-2:has(#llmProvider) {
+-    grid-template-columns: 1fr;
+-  }
+-  .form-group:has(#llmProvider) {
+-    display: none;
+-  }
+   .form-row-2 .form-group { margin-bottom: 0; }
+   .model-hint-below {
+     margin-bottom: 1.1rem;
+@@ -710,9 +704,13 @@
+ 
+       <div class="form-row-2">
+         <div class="form-group">
+-          <label>LLM 供应商（自动识别协议） <span class="required">*</span></label>
++          <label for="llmProvider">API 类型 <span class="required">*</span></label>
+           <div class="select-wrap">
+-          <input type="hidden" id="llmProvider" value="auto">
++            <select id="llmProvider">
++              <option value="openai-compatible">OpenAI Chat Completions</option>
++              <option value="openai-responses">OpenAI Responses</option>
++              <option value="anthropic">Anthropic Messages</option>
++            </select>
+           </div>
+         </div>
+         <div class="form-group">
+@@ -748,33 +746,29 @@
+ 
+ <script>
+   const providerMap = {
+-    deepseek: {
+-      baseUrl: 'https://api.deepseek.com',
++    'openai-compatible': {
++      baseUrl: 'http://models.ascend.huawei.com/v1',
+       keyPlaceholder: 'sk-...',
+-      keyHint: 'DeepSeek',
+       defaultModel: 'deepseek-v4-flash',
+-      modelHint: 'DeepSeek 常用：deepseek-v4-flash、deepseek-v4-pro',
++      modelHint: '使用 OpenAI Chat Completions 协议，请填写服务商提供的模型名称。',
+     },
+-    auto: {
+-      baseUrl: 'http://models.ascend.huawei.com/v1',
++    'openai-responses': {
++      baseUrl: 'https://api.openai.com/v1',
+       keyPlaceholder: 'sk-...',
+-      keyHint: '自动识别',
+-      defaultModel: 'deepseek-v4-flash',
+-      modelHint: '根据地址自动选择 Responses、Anthropic Messages 或 OpenAI 兼容协议',
++      defaultModel: '',
++      modelHint: '使用 OpenAI Responses 协议，请确认服务商支持此接口。',
+     },
+-    local: {
+-      baseUrl: 'http://localhost:11434/v1',
+-      keyPlaceholder: 'not-needed',
+-      keyHint: '本地模型',
+-      defaultModel: 'llama3.2',
+-      modelHint: '填写 Ollama 已拉取的模型名，如 llama3.2、qwen3.5',
++    anthropic: {
++      baseUrl: 'https://api.anthropic.com',
++      keyPlaceholder: 'sk-ant-...',
++      defaultModel: '',
++      modelHint: '使用 Anthropic Messages 协议，支持原生接口和兼容网关。',
+     },
+   };
+ 
+   const llmProvider = document.getElementById('llmProvider');
+   const baseUrl = document.getElementById('baseUrl');
+   const apiKey = document.getElementById('apiKey');
+-  const apiKeyGroup = document.getElementById('apiKeyGroup');
+   const modelName = document.getElementById('modelName');
+   const modelHintEl = document.getElementById('modelHint');
+   const status = document.getElementById('status');
+@@ -786,12 +780,10 @@
+   const modelDiscoveryStatus = document.getElementById('modelDiscoveryStatus');
+   const modelDiscoveryList = document.getElementById('modelDiscoveryList');
+ 
+-  let lastProvider = llmProvider.value;
+   let modelFetchTimer = null;
+   let lastModelFetchKey = '';
+   let selectedDiscoveredModelId = '';
+   let discoveredModelIds = [];
+-  let setupReady = false;
+ 
+   function wizardEsc(value) {
+     return String(value == null ? '' : value)
+@@ -963,7 +955,7 @@
+           base_url: baseUrl.value.trim(),
+           api_key: apiKey.value.trim(),
+           model: modelId,
+-          llm_type: llmProvider.value || 'auto',
++          llm_type: llmProvider.value,
+           metadata: model,
+         }),
+       });
+@@ -1066,50 +1058,28 @@
+     apiKey.placeholder = p.keyPlaceholder;
+     modelHintEl.textContent = p.modelHint;
+     modelName.placeholder = p.defaultModel;
+-    apiKeyGroup.style.display = provider === 'local' ? 'none' : 'block';
+-  }
+-
+-  function applyProvider(provider, forceModel) {
+-    const p = providerMap[provider];
+-    if (!p) return;
+-    syncProviderUi(provider);
+-    const prevDef = providerMap[lastProvider] ? providerMap[lastProvider].defaultModel : '';
+-    const cur = modelName.value.trim();
+-    if (forceModel || !cur || (prevDef && cur === prevDef)) {
+-      baseUrl.value = p.baseUrl;
+-      modelName.value = p.defaultModel;
+-      if (setupReady) scheduleModelDiscovery();
+-    }
+-    lastProvider = provider;
+   }
+ 
+   var prefill = window.__WIZARD_PREFILL__;
+   var hasPrefill = prefill && typeof prefill === 'object' && Object.keys(prefill).length > 0;
+ 
+   if (hasPrefill) {
+-    llmProvider.value = 'auto';
+-    syncProviderUi(llmProvider.value);
+-    lastProvider = llmProvider.value;
++    if (providerMap[prefill.llm_provider]) llmProvider.value = prefill.llm_provider;
+     if (prefill.model_name) modelName.value = prefill.model_name;
+     if (prefill.llm_base_url) baseUrl.value = prefill.llm_base_url;
+     if (prefill.api_key !== undefined && prefill.api_key !== null) apiKey.value = prefill.api_key;
+     if (prefill.context_window && contextWindowEl) contextWindowEl.value = prefill.context_window;
+     if (prefill.max_output_tokens && maxOutputTokensEl) maxOutputTokensEl.value = prefill.max_output_tokens;
+-    var pSel = llmProvider.value;
+-    var pm = providerMap[pSel];
+-    if (pm) {
+-      if (!modelName.value.trim()) modelName.value = pm.defaultModel;
+-      if (!baseUrl.value.trim()) baseUrl.value = pm.baseUrl;
+-    }
+-  } else {
+-    applyProvider(llmProvider.value, true);
+   }
++  syncProviderUi(llmProvider.value);
++  const initialProvider = providerMap[llmProvider.value];
++  if (!baseUrl.value.trim()) baseUrl.value = initialProvider.baseUrl;
++  if (!modelName.value.trim()) modelName.value = initialProvider.defaultModel;
+ 
+   if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '119808';
+   if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
+-  setupReady = true;
+ 
+-  llmProvider.value = 'auto';
++  llmProvider.addEventListener('change', () => syncProviderUi(llmProvider.value));
+   baseUrl.addEventListener('input', scheduleModelDiscovery);
+   baseUrl.addEventListener('change', scheduleModelDiscovery);
+   apiKey.addEventListener('input', scheduleModelDiscovery);
+@@ -1149,7 +1119,7 @@
+       return;
+     }
+ 
+-    if (provider !== 'local' && !key) {
++    if (!key) {
+       showStatus('请填写 API Key', 'error');
+       return;
+     }
+diff --git a/app/templates/static/settings/sections_basic.js b/app/templates/static/settings/sections_basic.js
+index 9b2d5d0..0beee89 100644
+--- a/app/templates/static/settings/sections_basic.js
++++ b/app/templates/static/settings/sections_basic.js
+@@ -148,7 +148,7 @@
+   });
+ 
+   /* ── 模型 ───────────────────────────────────────────────────────────── */
+-  const LLM_TYPES = ['auto', 'openai-compatible', 'openai-responses', 'anthropic'];
++  const LLM_TYPES = ['openai-compatible', 'openai-responses', 'anthropic'];
+   const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+ 
+   function modelField(label, hint, control, required) {
+@@ -182,6 +182,10 @@
+         : t('API 地址和模型名称必填；已配置的密钥可留空保留。其他字段按标识填写。', 'Endpoint and model name are required; leave a configured key empty to keep it.'),
+       okText: t('保存', 'Save'),
+       body:
++        modelField(t('API 类型', 'API type'), t('按服务商要求选择协议', 'Select the protocol required by your provider'),
++          '<select class="st-input" data-field="llm_type">' +
++          LLM_TYPES.map((v) => '<option value="' + v + '"' + ((p.llm_type || 'openai-compatible') === v ? ' selected' : '') + '>' + v + '</option>').join('') +
++          '</select>', true) +
+         modelField(t('API 地址', 'API base URL'), t('模型服务的接口地址', 'Model service endpoint'),
+           '<input class="st-input" data-field="base_url" value="' + esc(p.base_url || '') + '" placeholder="https://api.openai.com/v1">', true) +
+         modelField('API Key', p.api_key_set ? t('已配置，留空表示不修改', 'Configured — leave empty to keep') : t('密钥只写，保存后不再回显', 'Write-only'),
+@@ -191,9 +195,6 @@
+           W.btn(t('从接口获取', 'Fetch'), 'model-fetch'), true) +
+         W.adv(t('高级设置', 'Advanced'),
+           modelField(t('方案名称', 'Profile name'), t('留空使用模型名称', 'Defaults to model name'), '<input class="st-input" data-field="name" value="' + esc(p.name || '') + '">') +
+-          modelField(t('API 类型', 'API type'), '', '<select class="st-input" data-field="llm_type">' +
+-            LLM_TYPES.map((v) => '<option value="' + v + '"' + ((p.llm_type || 'auto') === v ? ' selected' : '') + '>' + v + '</option>').join('') +
+-            '</select>') +
+           modelField(t('模型总窗口', 'Model window limit'), '', '<input class="st-input" data-field="model_context_window" value="' + esc(p.model_context_window || '') + '">' +
+             W.btn(t('探测窗口', 'Probe limit'), 'model-probe')) +
+           modelField(t('上下文长度（压缩阈值）', 'Context length (compaction threshold)'), t('达到此长度时压缩上下文；留空保留现有值或使用默认值', 'Compact at this length; keep existing value or default when empty'), '<input class="st-input" data-field="context_window" value="' + esc(p.context_window || '') + '" placeholder="400000">') +
+@@ -226,7 +227,7 @@
+         const baseUrl = dialogValue('base_url');
+         if (!model) { toast(t('请填写模型名称', 'Model name is required'), true); return true; }
+         if (!baseUrl) { toast(t('请填写 API 地址', 'API base URL is required'), true); return true; }
+-        const payload = { model, base_url: baseUrl, id: p.id, name: dialogValue('name') || model, llm_type: dialogValue('llm_type') || 'auto' };
++        const payload = { model, base_url: baseUrl, id: p.id, name: dialogValue('name') || model, llm_type: dialogValue('llm_type') || 'openai-compatible' };
+         const key = dialogValue('api_key');
+         if (!key && !p.api_key_set) { toast(t('请填写 API Key', 'API key is required'), true); return true; }
+         if (key) payload.api_key = key;
+diff --git a/app/templates/static/setup_i18n.js b/app/templates/static/setup_i18n.js
+index bc18a37..467c6ea 100644
+--- a/app/templates/static/setup_i18n.js
++++ b/app/templates/static/setup_i18n.js
+@@ -15,6 +15,7 @@ var D={
+ Object.assign(D,{'安全与权限':'Security & permissions','工作区范围许可':'Workspace scope permission','工作区外处理与工具执行分开审批：选择“始终允许”会持续放行工作区外处理，选择“本次允许”仅对当前请求生效；两者之后仍需单独审批工具操作。':'Outside-workspace handling and tool execution are approved separately. Always allow keeps outside-workspace handling enabled; Allow this time applies only to the current request. Tool execution still requires a separate approval.','撤销许可':'Revoke permission','已开启：写入、删除和 Shell 的工作区外操作自动放行。':'Enabled: outside-workspace write, delete, and shell operations run automatically.','已关闭：工作区外操作会逐次请求审批。':'Disabled: outside-workspace operations ask for approval each time.','正在读取…':'Loading…','权限规则（始终允许 / 必问 / 拒绝）':'Permission rules (Always allow / Always ask / Deny)','插件信任与 MCP 注册':'Plugin trust & MCP registration','网页抓取预批准域名（web_fetch 免审批）':'Pre-approved web_fetch domains','清除本会话规则':'Clear session rules','规则类型':'Rule type','规则行为':'Rule behavior','规则内容':'Rule pattern','Shell 命令':'Shell command','读取':'Read','写入':'Write','网络':'Network','允许':'Allow','必问':'Always ask','拒绝':'Deny','添加规则':'Add rule','刷新':'Refresh'});
+ Object.assign(D,{'审批卡片只显示一个“始终允许”：能生成长期规则时保存规则；无法生成时，仅在当前任务内允许请求摘要完全相同的操作。':'The approval card shows one Always allow action. It saves a persistent rule when possible; otherwise it allows only an identical request in the current task.','暂无长期规则。审批时选择“始终允许”可自动添加可生成的长期规则。':'No persistent rules yet. Choosing Always allow adds a persistent rule when one can be generated.'});
+ Object.assign(D,{'输入模态':'Input modalities','按 models_table.md 自动识别':'Auto-detect from models_table.md','手动指定':'Specify manually','图片':'Image','音频':'Audio','视频':'Video','文件':'File','自动模式读取模型表；手动模式按所选类型发送。某一类型被接口拒绝时只停用该类型。':'Auto mode reads the models table; manual mode sends only selected types. A provider rejection disables only that input type.'});
++Object.assign(D,{'API 类型':'API type','使用 OpenAI Chat Completions 协议，请填写服务商提供的模型名称。':'Uses OpenAI Chat Completions; enter the model name supplied by your provider.','使用 OpenAI Responses 协议，请确认服务商支持此接口。':'Uses OpenAI Responses; confirm that your provider supports this API.','使用 Anthropic Messages 协议，支持原生接口和兼容网关。':'Uses Anthropic Messages with native endpoints and compatible gateways.'});
+ var A=['aria-label','title','placeholder'];function baseTr(s){return D[s]||String(s).replace(/^(.+)（或使用 \.\/workspace）$/,'$1 (or use ./workspace)').replace(/^正在探测 (.+) 的真实上下文窗口(?:…|\.\.\.)?$/,'Detecting the actual context window for $1…').replace(/^获取模型上下文失败：(.+)$/,'Failed to get model context: $1').replace(/^上下文探测失败，已使用列表\/默认窗口：(.+)$/,'Context probe failed; using listed/default window: $1').replace(/^已获取 (\d+) 个模型。$/,'Fetched $1 models.').replace(/^获取失败：(.+)$/,'Fetch failed: $1').replace(/^保存失败：(.+)$/,'Save failed: $1').replace(/^删除失败：(.+)$/,'Deletion failed: $1').replace(/^排序失败：(.+)$/,'Reordering failed: $1').replace(/^模型配置启停失败：(.+)$/,'Failed to change model profile status: $1').replace(/^配置文件：(.+)$/,'Configuration file: $1').replace(/^路径：(.+)$/,'Path: $1').replace(/^请填写必填项：(.+)。$/,'Complete required fields: $1.').replace(/^(\d+) 个已发现$/,'$1 discovered').replace(/^(\d+) 个已注册$/,'$1 registered').replace(/^(.+) 次 LLM 请求$/,'$1 LLM requests').replace(/^平均 (.+)$/,'Average $1').replace(/^累计 (.+)$/,'Total $1').replace(/^占本阶段 (.+)$/,'Share of phase $1').replace(/^已填入模型和窗口参数；理论最大可配上下文门限为 (.+) tokens，默认填入 (.+) tokens。$/,'Model and window parameters filled; the theoretical maximum context threshold is $1 tokens, with a default of $2 tokens.').replace(/^已填入模型和窗口参数。$/,'Model and window parameters filled.').replace(/^当前模型理论最大可配上下文门限为 (.+) tokens；界面默认填入 (.+) tokens。$/,'The theoretical maximum context threshold for this model is $1 tokens; the interface defaults to $2 tokens.').replace(/^CONTEXT_WINDOW \+ MAX_OUTPUT_TOKENS 不能超过模型最大上下文 (.+)。当前合计 (.+)。$/,'CONTEXT_WINDOW + MAX_OUTPUT_TOKENS cannot exceed the model maximum context of $1. Current total: $2.').replace(/^模型名称必须与已获取模型列表中的模型 ID 完全一致。?$/,'The model name must exactly match an ID in the fetched list.').replace(/当前约占上下文窗口 ([^）]+)/g,'currently about $1 of the context window').replace(/工具调用生成中\.\.\./g,'Preparing tool call...').replace(/执行中\.\.\./g,'Running...').replace(/执行结果/g,'Result').replace(/生成中\.\.\./g,'Generating...');}
+ function tr(s){var v=baseTr(s);return v.replace(/^DeepSeek 常用：(.+)$/,'Common DeepSeek models: $1').replace(/^OpenAI SDK 兼容接口，默认 (.+)$/,'OpenAI SDK-compatible interface; default: $1').replace(/^填写 Ollama 已拉取的模型名，如 (.+)$/,'Enter an Ollama model already pulled, such as $1').replace(/^正在编辑已有模型配置；点击“保存修改”会覆盖这条配置。$/,'Editing an existing model profile; click “Save changes” to overwrite it.').replace(/^删除后该模型配置将从对话页下拉菜单中移除。确认删除「(.+)」？$/,'This model profile will be removed from the chat dropdown. Delete “$1”?').replace(/^确定删除模型配置「(.+)」吗？$/,'Delete model profile “$1”?').replace(/^能力：无自动描述$/,'Capabilities: No automatic description').replace(/^能力：(.+)$/,'Capabilities: $1').replace(/^模型ID /,'Model ID ').replace(/^已配置模型（越靠上优先级越高，新会话默认使用第一项）$/,'Configured models (higher entries have higher priority; new sessions use the first)');}
+ function walk(r){var e=[];if(r.nodeType===1)e.push(r);if(r.querySelectorAll)e=e.concat([].slice.call(r.querySelectorAll('*')));e.forEach(function(x){if(x.matches('script,style,code,pre'))return;A.forEach(function(a){if(x.hasAttribute(a))x.setAttribute(a,tr(x.getAttribute(a)));});[].slice.call(x.childNodes).forEach(function(n){if(n.nodeType===3&&n.nodeValue.trim()){var s=n.nodeValue.trim(),t=tr(s);if(t!==s)n.nodeValue=n.nodeValue.replace(s,t);}});});}
+diff --git a/app/webui.py b/app/webui.py
+index a46836a..e623917 100644
+--- a/app/webui.py
++++ b/app/webui.py
+@@ -7,6 +7,7 @@
+ import asyncio
+ import functools
+ import hashlib
++import hmac
+ import json
+ import logging
+ import mimetypes
+@@ -250,6 +251,7 @@ _hook_pipeline_warmup_task: Optional[asyncio.Task] = None
+ _prompt_build_warmup_task: Optional[asyncio.Task] = None
+ _tokenizer_warmup_task: Optional[asyncio.Task] = None
+ _ui_presence_tokens: dict[str, dict[str, Any]] = {}
++_desktop_ui_hidden: Optional[bool] = None
+ _ui_activation_seq = 0
+ _ui_activation_path = "/"
+ _ui_activation_session = ""
+@@ -5670,7 +5672,21 @@ def _ui_presence_has_active() -> bool:
+     """Return True when at least one WebUI tab is visible and focused."""
+ 
+     _ui_presence_prune(time.time())
+-    return any(bool(entry.get("active")) for entry in _ui_presence_tokens.values())
++    return any(
++        bool(entry.get("active")) and _ui_presence_page_is_open(entry)
++        for entry in _ui_presence_tokens.values()
++    )
++
++
++def _ui_presence_page_is_open(entry: dict) -> bool:
++    """A resident Electron renderer is not an open window after close-to-tray."""
++
++    return not (entry.get("desktop") and _desktop_ui_hidden is True)
++
++
++def _ui_presence_has_open_pages() -> bool:
++    _ui_presence_prune(time.time())
++    return any(_ui_presence_page_is_open(entry) for entry in _ui_presence_tokens.values())
+ 
+ 
+ def _ui_presence_has_reusable(now: Optional[float] = None) -> bool:
+@@ -6000,12 +6016,14 @@ async def _schedule_ui_closed_notify() -> None:
+         try:
+             await asyncio.sleep(_UI_CLOSED_NOTIFY_GRACE_SEC)
+             with _ui_presence_lock:
+-                if _ui_presence_tokens:
++                if _ui_presence_has_open_pages():
+                     return
+             # Page-closed notice is session-agnostic: restore the original
+             # "still running in the background" copy instead of a
+             # status/session/question summary.
+-            await notify_user()
++            failures = await notify_user()
++            if failures:
++                logger.warning("UI closed notification failed: %s", "; ".join(failures))
+         except asyncio.CancelledError:
+             return
+         finally:
+@@ -6016,6 +6034,34 @@ async def _schedule_ui_closed_notify() -> None:
+     _ui_closed_notify_task = asyncio.create_task(delayed_notify())
+ 
+ 
++@fastapi_app.post("/api/ui-desktop-window")
++async def ui_desktop_window(request: Request):
++    """Accept native show/hide state from the owning Electron main process."""
++
++    token = os.getenv("SUGARAGENT_NOTIFY_TOKEN", "")
++    authorization = request.headers.get("authorization", "")
++    if (os.getenv("SUGARAGENT_DESKTOP") != "1" or not token
++            or not hmac.compare_digest(authorization.encode("utf-8"), f"Bearer {token}".encode("utf-8"))):
++        return JSONResponse(content={"ok": False}, status_code=403)
++    try:
++        data = await request.json()
++    except Exception:
++        data = None
++    if not isinstance(data, dict) or not isinstance(data.get("visible"), bool):
++        return JSONResponse(content={"ok": False}, status_code=400)
++    global _desktop_ui_hidden
++    hidden = not data["visible"]
++    with _ui_presence_lock:
++        changed = _desktop_ui_hidden != hidden
++        _desktop_ui_hidden = hidden
++    if hidden:
++        if changed:
++            await _schedule_ui_closed_notify()
++    else:
++        _cancel_pending_ui_closed_notify()
++    return JSONResponse(content={"ok": True})
++
++
+ @fastapi_app.post("/api/ui-presence")
+ async def ui_presence(request: Request):
+     """Track open WebUI tabs so the backend can notify after the last one closes."""
+@@ -6046,12 +6092,15 @@ async def ui_presence(request: Request):
+                 "seen_at": now,
+                 "active": active,
+                 "session_id": session_id,
++                "desktop": data.get("desktop") is True,
+             }
+         elif action == "update":
+             entry = _ui_presence_tokens.get(token)
+             if entry is not None:
+                 entry["seen_at"] = now
+                 entry["active"] = active
++                if "desktop" in data:
++                    entry["desktop"] = data["desktop"] is True
+                 if session_id:
+                     entry["session_id"] = session_id
+         else:
+@@ -6060,9 +6109,9 @@ async def ui_presence(request: Request):
+ 
+     with _ui_presence_lock:
+         has_active_ui = _ui_presence_has_active()
+-        has_open_pages = bool(_ui_presence_tokens)
++        has_open_pages = _ui_presence_has_open_pages()
+ 
+-    if action == "register":
++    if action == "register" and has_open_pages:
+         _cancel_pending_ui_closed_notify()
+     if action in {"register", "update"} and has_active_ui:
+         _cancel_pending_ui_attention_notify()
+@@ -7524,12 +7573,18 @@ async def repair_sessions_index():
+     import time as _time
+ 
+     t0 = _time.perf_counter()
+-    await run_in_threadpool(session_manager.refresh_sessions_index_from_disk)
++    try:
++        await run_in_threadpool(session_manager.refresh_sessions_index_from_disk)
++    except Exception:
++        logger.exception("Failed to rebuild the session index")
++        return JSONResponse(content={"ok": False, "error": "重建会话索引失败，请检查会话目录及索引文件的读写权限。"}, status_code=500)
++    state_revision = _invalidate_sessions_state_cache()
+     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
+     return JSONResponse(content={
+         "ok": True,
+         "session_count": len(session_manager.index),
+         "elapsed_ms": elapsed_ms,
++        "state_revision": state_revision,
+     })
+ 
+ 
+@@ -7778,11 +7833,11 @@ def _build_session_export_archive(session_id: str) -> tuple[Path, str]:
+                     raise PermissionError("session export entry is outside the session directory") from exc
+                 archive_name = (Path(archive_root) / relative).as_posix()
+                 output.write(resolved, archive_name)
+-            from attachments.lifecycle import add_bundle, collect_references
++            from attachments.lifecycle import add_bundle, collect_image_references
+             from attachments.locking import attachment_lock
+             store = get_attachment_store(WORK_DIR)
+             with attachment_lock(store.root.parent, "catalog"):
+-                add_bundle(output, store, collect_references([session_path]))
++                add_bundle(output, store, collect_image_references([session_path]))
+         return archive_path, download_name
+     except Exception:
+         archive_path.unlink(missing_ok=True)
+@@ -7820,22 +7875,28 @@ _SESSION_IMPORT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
+ 
+ def _find_session_root(root: Path) -> Optional[Path]:
+     """在目录 / 解包结果里定位含 events.jsonl 的那一层会话目录。"""
+-    if not root.is_dir():
+-        return None
+-    if (root / "events.jsonl").is_file():
+-        return root
+-    candidates = [
+-        child for child in sorted(root.iterdir())
+-        if child.is_dir() and (child / "events.jsonl").is_file()
+-    ]
+-    return candidates[0] if len(candidates) == 1 else None
++    for _ in range(40):
++        if not root.is_dir():
++            return None
++        if (root / "events.jsonl").is_file():
++            return root
++        children = [child for child in sorted(root.iterdir()) if child.is_dir() and not child.is_symlink()]
++        candidates = [child for child in children if (child / "events.jsonl").is_file()]
++        if candidates:
++            return candidates[0] if len(candidates) == 1 else None
++        if len(children) != 1:
++            return None
++        root = children[0]
++    return None
+ 
+ 
+ def _session_origin_id(session_dir: Path) -> str:
+     """会话原始 id：优先目录名（导出 zip 的根目录就是会话目录），回退 events.jsonl 的 session_id。"""
+     name = session_dir.name.strip()
+-    if _SESSION_IMPORT_ID_RE.fullmatch(name):
+-        return name
++    try:
++        return str(uuid.UUID(name))
++    except ValueError:
++        pass
+     try:
+         with (session_dir / "events.jsonl").open(encoding="utf-8", errors="replace") as source:
+             for line in source:
+@@ -7888,6 +7949,14 @@ def _sanitize_imported_session(session_dir: Path, *, name_suffix: str = "") -> d
+     meta["unread_result"] = False
+     meta["goal_review_pending"] = False
+     meta["archived"] = False
++    # Import is a new local activity; an old export must not immediately be
++    # auto-archived or retain flags that hide drafts/children from the sidebar.
++    now = datetime.now(timezone.utc).isoformat()
++    meta["imported_at"] = now
++    meta["updated_at"] = now
++    meta.setdefault("created_at", now)
++    for field in ("draft", "deleted", "is_subagent", "parent_session_id", "auto_archived", "auto_archived_at"):
++        meta.pop(field, None)
+     name = str(meta.get("name") or "").strip()
+     if name_suffix:
+         name = (name + name_suffix)[:160]
+@@ -7906,35 +7975,63 @@ def _import_session_tree(session_root: Path, *, move: bool, archive_path: Option
+     sessions_dir = Path(session_manager.repository.sessions_dir).resolve()
+     sessions_dir.mkdir(parents=True, exist_ok=True)
+     origin = _session_origin_id(session_root)
+-    target = origin if (origin and not (sessions_dir / origin).exists()) else str(uuid.uuid4())
++    from session_lifecycle import is_session_deleted
++    try:
++        canonical_origin = str(uuid.UUID(origin))
++    except ValueError:
++        canonical_origin = ""
++    target = (canonical_origin if (canonical_origin and not (sessions_dir / canonical_origin).exists()
++                                  and not is_session_deleted(canonical_origin)) else str(uuid.uuid4()))
+     remapped = bool(origin) and target != origin
+     destination = sessions_dir / target
+     if destination.exists():
+         raise ValueError("目标会话目录已存在，请重试")
+-    if move:
+-        shutil.move(str(session_root), str(destination))
+-    else:
+-        shutil.copytree(session_root, destination, symlinks=False)
+-    rewritten = _remap_session_id(destination, origin, target) if remapped else 0
+-    meta = _sanitize_imported_session(destination, name_suffix="（导入）" if remapped else "")
++    from attachments.lifecycle import collect_image_references, import_bundle
++    from attachments.locking import attachment_lock
++    store = get_attachment_store(WORK_DIR)
+     restored = 0
+-    if archive_path is not None:
+-        try:
++    # Resolve the bundle before moving its session directory. Both ZIP uploads
++    # and extracted directory imports retain this attachments/ sibling.
++    bundle_root = next((root for root in (session_root.parent, session_root)
++                        if (root / "attachments" / "manifest.json").is_file()), None)
++    try:
++        if bundle_root is not None:
++            restored = len(import_bundle(store, bundle_root))
++        elif archive_path is not None:
+             with zipfile.ZipFile(archive_path) as bundle:
+-                has_bundle = any(name.startswith("attachments/") for name in bundle.namelist())
++                has_bundle = "attachments/manifest.json" in bundle.namelist()
+             if has_bundle:
+-                from attachments.lifecycle import import_bundle
+-
+-                restored = len(import_bundle(get_attachment_store(WORK_DIR), archive_path) or [])
+-        except Exception as exc:  # 附件包坏了不该毁掉整次导入
+-            logger.warning("session import: attachment bundle restore failed: %s", exc)
+-    _invalidate_sessions_state_cache()
++                restored = len(import_bundle(store, archive_path))
++        with attachment_lock(store.root.parent, "catalog"):
++            for identity in collect_image_references([session_root]):
++                store.ref_by_id(identity)
++    except Exception as exc:
++        raise ValueError("图片附件恢复失败，导入未完成。请使用包含完整图片附件的原始 ZIP 或导出目录：%s" % exc) from exc
++
++    # Keep incomplete copies out of startup scans. Publish the complete tree
++    # and its index entry together; never report success before registration.
++    with tempfile.TemporaryDirectory(prefix=".session-import-", dir=sessions_dir) as staging:
++        staged = Path(staging) / target
++        if move:
++            shutil.move(str(session_root), str(staged))
++        else:
++            shutil.copytree(session_root, staged, symlinks=False)
++        rewritten = _remap_session_id(staged, origin, target) if remapped else 0
++        meta = _sanitize_imported_session(staged, name_suffix="（导入）" if remapped else "")
++        staged.rename(destination)
++        try:
++            session_manager.register_imported_session(target)
++        except Exception:
++            destination.rename(staged)
++            raise
++    state_revision = _invalidate_sessions_state_cache()
+     return {
+         "id": target,
+         "name": str(meta.get("name") or ""),
+         "remapped": remapped,
+         "idRewriteFiles": rewritten,
+         "attachments": restored,
++        "state_revision": state_revision,
+     }
+ 
+ 
+@@ -9643,9 +9740,10 @@ async def save_config(req: _Request):
+             "compatible": "openai-compatible",
+             "anthropic": "anthropic",
+             "@ai-sdk/anthropic": "anthropic",
+-            "auto": "auto",
+         }
+-        exec_type = provider_aliases.get(prov, "auto")
++        exec_type = provider_aliases.get(prov or "openai-compatible")
++        if exec_type is None:
++            raise ValueError("unsupported LLM provider; choose openai-compatible, openai-responses, or anthropic")
+ 
+         if not mn:
+             raise ValueError("missing model")
+diff --git a/packaging/README.md b/packaging/README.md
+index aa5add1..ef4c948 100644
+--- a/packaging/README.md
++++ b/packaging/README.md
+@@ -8,8 +8,10 @@
+ |---|---|---|
+ | 安装包（向导式，默认） | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe` | ≈ 251 MB |
+ | 安装包差分块 | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe.blockmap` | ≈ 200 KB |
+-| 未打包目录版 | `packaging/build/dist/win-unpacked/`（45898 文件 / ≈ 682 MB） | 调试用 |
+-| 运行时载荷 | `packaging/build/payload/`（45877 文件 / ≈ 365 MB） | 中间产物 |
++| 未打包目录版 | `packaging/build/dist/win-unpacked/` | 调试用；现有产物尚未应用资源归档优化 |
++| 运行时载荷 | `packaging/build/payload/` | 中间产物；下次准备时自动合并飞书 SDK 与 PPT 图标 |
++
++2026-10-14 的 1.5.4 优化包位于 `build/dist-1.5.4/SugarAgent-Setup-1.5.4-x64.exe`（224.5 MiB）；载荷 8,130 个文件、应用 8,152 个文件、松散字节码为 0。构建与验证记录见 `docs/desktop-release-1.5.4-2026-10-14.md`。
+ 
+ 安装后：程序在 `%LOCALAPPDATA%\Programs\SugarAgent`（**按用户安装，不需要管理员权限**），默认工作目录在安装目录的 `resources/runtime/workspace`，与 `app/`、`python/` 保持源码版的相对位置。安装目录不可写时使用 `%APPDATA%\SugarAgent\workspace`。桌面/开始菜单都有 `SugarAgent` 快捷方式，并注册标准卸载项。卸载只保留工作目录与 `runtime` 内的用户数据，程序文件、Electron userData（`%APPDATA%\SugarAgent`）、应用状态（`%LOCALAPPDATA%\SugarAgent`）与临时目录都会被清掉。
+ 
+@@ -38,6 +40,8 @@ packaging/
+ │  └─ preload.js                 # 最小渲染进程桥接
+ ├─ scripts/
+ │  ├─ prepare-payload.mjs        # 组装运行时载荷（拷贝 + 裁剪 + pip 安装 + 自检 + 清单）
++│  ├─ archive-runtime.py         # 合并飞书 SDK / PPT 图标，并适配载荷中的图标读取脚本
++│  ├─ runtime-archives.cjs       # 拒绝未优化或已展开图标的旧载荷
+ │  ├─ make-icons.py              # PNG → 多尺寸 ICO（应用图标 / 托盘图标）
+ │  ├─ build.mjs                  # 一键构建：图标 → 载荷 → electron-builder
+ │  ├─ smoke-payload.mjs          # 载荷自检：用内置 Python 真启动后端并探活
+@@ -67,6 +71,22 @@ $env:SUGARAGENT_MAX_COMPRESSION='1'; node scripts\build.mjs   # 极限压缩（
+ $env:SUGARAGENT_PIP_INDEX='https://pypi.tuna.tsinghua.edu.cn/simple'  # 国内镜像装依赖
+ ```
+ 
++### SDK 与 PPT 图标归档
++
++载荷准备默认执行资源合并，以减少安装和首次启动时的文件创建与复制：
++
++- 飞书 SDK 的代码与预编译字节码放入 `python/Lib/site-packages/lark_oapi.zip`，通过随载荷写入的 `.pth` 文件直接导入；SDK 的 `.dist-info` 元数据与其它原生依赖保留在磁盘上，`RECORD` 同步记录归档和加载文件以兼容 pip 卸载/升级。归档使用同一便携 Python 生成字节码，载荷自检验证归档导入及消息、长连接入口。
++- PPT 图标放入 `workspace-template/skills/ppt-master/templates/icons/icons.zip`，另有完整名称索引 `icon-archive.json`。源工作区技能不变；只适配载荷副本的图标同步、SVG 解析和预览读取，使用哪个 SVG 才提取哪个。首次启动复制的是归档，完整图标库保持离线可用。
++- 搜索尚未使用的图标：在 `ppt-master` 技能目录运行 `python scripts/sugaragent_icon_archive.py list --library tabler-outline --query home`。文件夹列表只显示已经提取的图标。项目自定义图标优先保留。
++- `runtime-archives.json` 与 `runtime-manifest.json` 记录归档路径、校验摘要和条目数。技能来源读取入口变化时，准备流程会明确失败，要求复核适配。
++- 两处 pip 安装都使用 `--no-compile`，构建期 Python 子进程使用 `-B` / `PYTHONDONTWRITEBYTECODE=1`。所有依赖和版本探针结束后统一清理载荷中的松散字节码；复用依赖时也会清理历史缓存。SDK 和标准库 ZIP 内的字节码保留，运行期仍允许创建缓存。
++
++归档不会在安装结束或首次启动时全量展开。安装器继续使用原有 7z 格式，用户数据保留规则不变。
++
++旧载荷不能直接通过 `--skip-payload` 构建；构建前后都有归档布局校验。需要构建新版本时先执行 `npm run payload:fast`（复用依赖）或 `npm run payload`（重新安装依赖），再执行正常的构建命令。仅修改打包工程时无需执行载荷准备或构建命令。
++
++需要保留已有目录版中的调试数据时，可设置 `SUGARAGENT_BUILD_OUTPUT=build/dist-<版本>`，将新产物构建到独立目录；默认仍为 `build/dist`。
++
+ 自检：
+ 
+ ```powershell
+@@ -82,8 +102,11 @@ resources/runtime/
+ ├─ app/                  # 应用代码（含 templates/dist 前端产物、tools、native 的 egress helper）
+ ├─ plugins/              # 10 个内置插件
+ ├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（85 个依赖）
+-│  └─ Scripts/rg.exe     # 文件搜索用的 ripgrep
++│  ├─ Scripts/rg.exe     # 文件搜索用的 ripgrep
++│  └─ Lib/site-packages/lark_oapi.zip # 飞书 SDK，Python 直接从归档加载
+ ├─ workspace-template/   # 首次启动铺到工作目录的技能模板（18 个技能，含 docx/pdf/pptx/xlsx）
++│  └─ skills/ppt-master/templates/icons/{icons.zip,icon-archive.json}
++├─ runtime-archives.json # 资源归档布局 / 摘要 / 条目数
+ └─ runtime-manifest.json # 版本、依赖清单、体积、排除项
+ ```
+ 
+@@ -113,10 +136,13 @@ resources/runtime/
+ | 技能模板 | 首次启动把 `workspace-template/skills` 铺到默认 `workspace/skills`（已存在则不动） |
+ | 窗口尺寸 | 初始 1440×920；支持自由缩放和半屏停靠，不设应用级最小宽高 |
+ | 启动反馈 | `SugarAgent.exe` 是轻量 Windows 启动入口：先显示品牌 Logo 与原生等待提示，再以 `STARTF_FORCEONFEEDBACK` 拉起 `SugarAgentRuntime.exe` 请求系统启动光标；Electron 第一帧可见后通过当前用户专用命名管道收起原生提示。后端等待页同样使用 Logo、旋转动画和忙碌光标，任务栏显示等待进度；准备完成后自动进入主界面或首启向导 |
++| 运行时品牌 | `afterPack` 替换启动入口后显式编辑 `SugarAgentRuntime.exe` 的图标、产品名、版本与版权资源，随后由构建器编辑启动器；两个 exe 都使用 SugarAgent 品牌。Electron 通知初始化按运行时产品名创建开始菜单快捷方式，不能只修改安装器的 `shortcutName` |
+ | 托盘 | 关闭窗口＝最小化到托盘；托盘菜单：打开主界面 / 浏览器打开 / 重启内置服务 / 打开后台日志 / 打开工作目录 / 退出；后台日志复用源码版实时彩色终端查看器 |
+ | 重启内置服务 | 重启内置 Python Agent 后端，保持 Electron 窗口、托盘及当前端口；重启期间禁用重复重启，就绪后重载界面并处理通知跳转。主动停止不弹崩溃框；启动失败与真正的等待超时分别提示。已安装桌面版需重新打包并覆盖安装才能更新外壳代码 |
+ | 通知跳转 | 使用独立的 `sugaragent-desktop://open-ui` 协议唤起桌面窗口；会话通知保留会话定位，使用当前后端端口 |
++| 通知启动器 | 即使协议仍指向 `SugarAgent.exe`，有效通知链接也走静默转交路径，不显示原生启动小窗、不追加启动管道或请求忙碌光标；普通双击保留完整启动反馈。启动时仅清理指向本安装的旧 `Electron.lnk`，其它 Electron 应用快捷方式保留 |
+ | 通知发送 | 后端通过带每次启动随机凭据的本机通道交给 Electron 主进程发送原生通知；窗口隐藏到托盘后仍可发送，失败记录在 `desktop.log` 并回退到系统通知助手 |
++| 关闭窗口提示 | 主进程将窗口隐藏/显示状态同步到后端；关闭到托盘后提示后台运行，重新打开窗口取消待发提示，任务完成/待处理通知优先于通用提示 |
+ | 原生主题 | 页面浅色 / 深色 / 紫色同步到 Electron 原生主题，窗口边框和菜单随页面主题切换 |
+ | 退出 | 退出时按进程树结束内置 Python（`taskkill /T /F`）；后端异常退出会弹恢复对话框 |
+ | 配置目录 | 模型档案、MCP 与启停状态保存在 `resources/runtime/.config`；工作区内的附件、缓存也使用 `.config`，启动时自动迁移旧 `.sugaragent`，已有新配置优先，冲突旧文件保留；打包时排除载荷内的用户配置和工作区 |
+diff --git a/packaging/electron-builder.config.cjs b/packaging/electron-builder.config.cjs
+index 9dd000e..d1b4ca6 100644
+--- a/packaging/electron-builder.config.cjs
++++ b/packaging/electron-builder.config.cjs
+@@ -22,6 +22,7 @@
+ const { existsSync } = require('node:fs')
+ const path = require('node:path')
+ const { installStartupLauncher } = require('./scripts/startup-launcher.cjs')
++const { assertRuntimeArchives } = require('./scripts/runtime-archives.cjs')
+ 
+ // 安装器形态：assisted（默认，带向导页面）/ oneclick（双击即装，仅进度条）
+ const INSTALLER_STYLE = process.env.SUGARAGENT_INSTALLER_STYLE === 'oneclick' ? 'oneclick' : 'assisted'
+@@ -34,7 +35,7 @@ module.exports = {
+   copyright: `Copyright © ${new Date().getFullYear()} SugarAgent`,
+   // 直接用 node_modules 里已下载好的 Electron 发行版，避免每次构建重复联网拉取
+   electronDist: path.join(__dirname, 'node_modules', 'electron', 'dist'),
+-  directories: { output: 'build/dist', buildResources: 'assets' },
++  directories: { output: process.env.SUGARAGENT_BUILD_OUTPUT || 'build/dist', buildResources: 'assets' },
+   files: ['electron/**/*', 'package.json'],
+   asar: true,
+   protocols: [{ name: 'SugarAgent Desktop', schemes: ['sugaragent-desktop'] }],
+@@ -73,6 +74,9 @@ module.exports = {
+     artifactName: SETUP_NAME,
+   },
+   compression: process.env.SUGARAGENT_MAX_COMPRESSION === '1' ? 'maximum' : 'normal',
++  beforePack: async () => {
++    assertRuntimeArchives(path.join(__dirname, 'build', 'payload'))
++  },
+   afterPack: async context => {
+     const payload = path.join(context.appOutDir, 'resources', 'runtime')
+     const python = path.join(payload, 'python', 'python.exe')
+@@ -80,7 +84,8 @@ module.exports = {
+     if (!existsSync(python) || !existsSync(entry)) {
+       throw new Error(`载荷不完整：缺少 ${python} 或 ${entry}；请先运行 npm run payload`)
+     }
++    assertRuntimeArchives(payload)
+     context.packager.appInfo.buildNumber = undefined
+-    installStartupLauncher(context)
++    await installStartupLauncher(context)
+   },
+ }
+diff --git a/packaging/electron/desktop-shortcuts.js b/packaging/electron/desktop-shortcuts.js
+new file mode 100644
+index 0000000..461e5d0
+--- /dev/null
++++ b/packaging/electron/desktop-shortcuts.js
+@@ -0,0 +1,26 @@
++'use strict'
++
++const fs = require('node:fs')
++const path = require('node:path').win32
++
++/** Remove only legacy Electron shortcuts owned by this packaged installation. */
++function removeLegacyElectronShortcuts({ app, shell, execPath, log }) {
++  if (process.platform !== 'win32' || !app.isPackaged) return
++  const root = path.dirname(execPath)
++  const owned = new Set([execPath, path.join(root, 'SugarAgent.exe'), path.join(root, 'SugarAgentRuntime.exe')]
++    .map(value => path.normalize(value).toLowerCase()))
++  for (const directory of [app.getPath('desktop'), path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs')]) {
++    const shortcut = path.join(directory, 'Electron.lnk')
++    if (!fs.existsSync(shortcut)) continue
++    try {
++      const { target } = shell.readShortcutLink(shortcut)
++      if (!path.isAbsolute(target) || !owned.has(path.normalize(target).toLowerCase())) continue
++      fs.unlinkSync(shortcut)
++      log(`已移除本应用的旧 Electron 快捷方式：${shortcut}`)
++    } catch (error) {
++      log(`旧 Electron 快捷方式检查失败：${error.message}`)
++    }
++  }
++}
++
++module.exports = { removeLegacyElectronShortcuts }
+diff --git a/packaging/electron/main.js b/packaging/electron/main.js
+index 1604ef9..dec8e84 100644
+--- a/packaging/electron/main.js
++++ b/packaging/electron/main.js
+@@ -17,6 +17,7 @@ const http = require('node:http')
+ const net = require('node:net')
+ const path = require('node:path')
+ const { createNotificationBridge } = require('./notifications')
++const { removeLegacyElectronShortcuts } = require('./desktop-shortcuts')
+ 
+ const HOST = '127.0.0.1'
+ const BASE_PORT = Number(process.env.SUGARAGENT_PORT || 8192)
+@@ -48,6 +49,7 @@ const expectedBackendExits = new WeakSet()
+ let uiReady = false
+ let pendingActivation = parseDesktopActivation(process.argv)
+ let notificationBridge = null
++let desktopWindowReport = Promise.resolve()
+ 
+ // ---------------------------------------------------------------- logging ---
+ 
+@@ -347,6 +349,7 @@ function restartBackend() {
+       if (quitting) return
+       if (backend !== child) throw new Error('内置服务在加载界面时退出。')
+       reloaded = true
++      if (mainWindow) void reportDesktopWindowVisibility(mainWindow.isVisible())
+     } catch (error) {
+       log(`后端重启失败：${error.message}`)
+       if (!quitting) {
+@@ -445,6 +448,32 @@ function isConfigured() {
+ 
+ // ------------------------------------------------------------------ window ---
+ 
++function reportDesktopWindowVisibility(visible) {
++  if (!notificationBridge || !uiReady || quitting) return Promise.resolve(false)
++  const body = JSON.stringify({ visible })
++  const authorization = `Bearer ${notificationBridge.token}`
++  // Serialize fast close/reopen transitions so a late hide cannot override a
++  // newer show at the backend and produce a notification over the open app.
++  const send = () => new Promise(resolve => {
++    const request = http.request({
++      host: HOST, port: activePort, path: '/api/ui-desktop-window', method: 'POST', timeout: 1500,
++      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Authorization: authorization },
++    }, response => {
++      response.on('end', () => resolve(response.statusCode === 200))
++      response.on('error', () => resolve(false))
++      response.resume()
++    })
++    request.on('timeout', () => { request.destroy(); resolve(false) })
++    request.on('error', () => resolve(false))
++    request.end(body)
++  })
++  desktopWindowReport = desktopWindowReport.then(send, send).then(ok => {
++    if (!ok && !quitting) log('桌面窗口显示状态同步失败')
++    return ok
++  })
++  return desktopWindowReport
++}
++
+ /** Native fallback for editing and embedded pages. Renderer menus prevent the
+  * DOM contextmenu default, so only unhandled targets reach this event. */
+ function installNativeContextMenu(contents) {
+@@ -538,6 +567,8 @@ function createWindow() {
+     event.preventDefault()
+     mainWindow.hide()
+   })
++  mainWindow.on('hide', () => { void reportDesktopWindowVisibility(false) })
++  mainWindow.on('show', () => { void reportDesktopWindowVisibility(true) })
+   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+     if (url.startsWith(baseUrl())) return { action: 'allow' }
+     shell.openExternal(url).catch(() => {})
+@@ -721,6 +752,7 @@ if (!gotLock) {
+ 
+   app.whenReady().then(async () => {
+     app.setAppUserModelId('com.sugaragent.desktop')
++    removeLegacyElectronShortcuts({ app, shell, execPath: process.execPath, log })
+     // 前端默认浅色；载入后 preload 会按实际页面主题同步原生边框和菜单。
+     nativeTheme.themeSource = 'light'
+     ensureLogDir()
+@@ -762,6 +794,7 @@ if (!gotLock) {
+     pendingActivation = null
+     await loadApp(initialActivation ? initialActivation.session : '')
+     uiReady = true
++    void reportDesktopWindowVisibility(mainWindow.isVisible())
+     createTray()
+     if (pendingActivation) {
+       const activation = pendingActivation
+diff --git a/packaging/native/StartupLauncher.cs b/packaging/native/StartupLauncher.cs
+index 892ad3e..2b6b9a1 100644
+--- a/packaging/native/StartupLauncher.cs
++++ b/packaging/native/StartupLauncher.cs
+@@ -52,11 +52,50 @@ internal static class StartupLauncher
+     }
+     [STAThread]
+     private static int Main(string[] args) {
++        bool protocol = false, forceSplash = false;
++        foreach (string arg in args) {
++            if (arg == "--launcher-smoke") forceSplash = true;
++            Uri uri;
++            if (Uri.TryCreate(arg, UriKind.Absolute, out uri)
++                && String.Equals(uri.Scheme, "sugaragent-desktop", StringComparison.OrdinalIgnoreCase)
++                && String.Equals(uri.Host, "open-ui", StringComparison.OrdinalIgnoreCase)
++                && (uri.AbsolutePath == "" || uri.AbsolutePath == "/")) protocol = true;
++        }
++        // Notifications must forward to Electron's single-instance handler
++        // before creating a Form, a startup pipe, or OS startup feedback.
++        if (protocol && !forceSplash) return ForwardProtocol(args);
+         Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
+         using (var splash = new StartupSplash(args)) Application.Run(splash);
+         return Environment.ExitCode;
+     }
+ 
++    private static int ForwardProtocol(string[] args) {
++        ProcessInfo child = new ProcessInfo();
++        string reportPath = null;
++        try {
++            string target;
++            using (var reader = new StreamReader(Resource("LauncherTarget"), Encoding.UTF8)) target = reader.ReadToEnd().Trim();
++            target = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, target);
++            var command = new StringBuilder(Quote(target));
++            foreach (string arg in args) {
++                if (arg.StartsWith("--launcher-report=")) { reportPath = arg.Substring("--launcher-report=".Length); continue; }
++                command.Append(' ').Append(Quote(arg));
++            }
++            var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) };
++            if (!CreateProcess(target, command, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
++                Path.GetDirectoryName(target), ref startup, out child)) throw new Win32Exception(Marshal.GetLastWin32Error());
++            if (reportPath != null) File.WriteAllText(reportPath, new JavaScriptSerializer().Serialize(
++                new { nativeSplashShown = false, startupFlags = startup.flags, protocolForwarded = true }), Encoding.UTF8);
++            return 0;
++        } catch (Exception error) {
++            MessageBox.Show(error.Message, "SugarAgent 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error);
++            return 1;
++        } finally {
++            if (child.process != IntPtr.Zero) CloseHandle(child.process);
++            if (child.thread != IntPtr.Zero) CloseHandle(child.thread);
++        }
++    }
++
+     private sealed class StartupSplash : Form
+     {
+         private readonly string[] args;
+diff --git a/packaging/nsis/installer.nsh b/packaging/nsis/installer.nsh
+index a8fb7de..2796c47 100644
+--- a/packaging/nsis/installer.nsh
++++ b/packaging/nsis/installer.nsh
+@@ -87,6 +87,9 @@ Var sugarUpgradeMode
+ Var sugarDeleteAppData
+ 
+ !macro customInstall
++  ; Stable system-notification identity, independent of legacy exe metadata.
++  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "DisplayName" "SugarAgent"
++  WriteRegStr HKCU "Software\Classes\AppUserModelId\${APP_ID}" "IconUri" "$INSTDIR\resources\tray.ico"
+   ; 覆盖安装时清掉历史包名（sugaragent-desktop）留下的 installer store
+   RMDir /r "$LOCALAPPDATA\sugaragent-desktop-updater"
+ 
+@@ -113,6 +116,7 @@ Var sugarDeleteAppData
+     RMDir /r "$LOCALAPPDATA\SugarAgent"                    ; 应用状态：安全库（审批/MCP）、用户插件
+     Call un.SugarAgentRemoveTempDirs                       ; %TEMP%\sugaragent-*
+     DeleteRegKey HKCU "Software\Classes\sugaragent-desktop"
++    DeleteRegKey HKCU "Software\Classes\AppUserModelId\${APP_ID}"
+     DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\${APP_ID}"
+     Goto sugar_uninstall_done
+ 
+diff --git a/packaging/package-lock.json b/packaging/package-lock.json
+index 32b8378..ae21825 100644
+--- a/packaging/package-lock.json
++++ b/packaging/package-lock.json
+@@ -1,11 +1,11 @@
+ {
+-  "name": "sugaragent-desktop",
++  "name": "sugaragent",
+   "version": "1.5.4",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+-      "name": "sugaragent-desktop",
++      "name": "sugaragent",
+       "version": "1.5.4",
+       "license": "UNLICENSED",
+       "devDependencies": {
+diff --git a/packaging/package.json b/packaging/package.json
+index 13646c7..8f1647d 100644
+--- a/packaging/package.json
++++ b/packaging/package.json
+@@ -9,7 +9,7 @@
+   "main": "electron/main.js",
+   "scripts": {
+     "payload": "node scripts/prepare-payload.mjs",
+-    "payload:fast": "node scripts/prepare-payload.mjs --skip-deps --skip-frontend",
++    "payload:fast": "node scripts/prepare-payload.mjs --skip-deps",
+     "icons": "python ../python/python.exe scripts/make-icons.py",
+     "dist:dir": "node scripts/build.mjs --dir",
+     "dist": "node scripts/build.mjs",
+diff --git a/packaging/runtime/sugaragent_icon_archive.py b/packaging/runtime/sugaragent_icon_archive.py
+new file mode 100644
+index 0000000..659985e
+--- /dev/null
++++ b/packaging/runtime/sugaragent_icon_archive.py
+@@ -0,0 +1,100 @@
++"""Read the desktop PPT icon library without expanding it at startup."""
++from __future__ import annotations
++
++import argparse
++from functools import lru_cache
++import json
++import os
++from pathlib import Path, PurePosixPath
++import tempfile
++import zipfile
++
++
++INDEX_NAME = "icon-archive.json"
++ARCHIVE_NAME = "icons.zip"
++
++
++@lru_cache(maxsize=16)
++def _index(root: str, modified: int) -> dict:
++    return json.loads((Path(root) / INDEX_NAME).read_text(encoding="utf-8"))
++
++
++def _load_index(root: Path) -> dict:
++    index = root / INDEX_NAME
++    return _index(str(root), index.stat().st_mtime_ns)
++
++
++def _write_icon(destination: Path, data: bytes) -> Path:
++    destination.parent.mkdir(parents=True, exist_ok=True)
++    # An existing icon may be a user customization. Never overwrite it.
++    if destination.is_file():
++        return destination
++    temporary = None
++    try:
++        with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
++            temporary = Path(stream.name)
++            stream.write(data)
++        if destination.is_file():
++            return destination
++        os.replace(temporary, destination)
++    finally:
++        if temporary is not None:
++            temporary.unlink(missing_ok=True)
++    return destination
++
++
++def materialize_icon(path: Path) -> Path:
++    """Return a real path for one icon, honoring loose/project-local icons first."""
++    path = Path(path)
++    if path.is_file():
++        return path
++    for root in path.parents:
++        if not (root / INDEX_NAME).is_file():
++            continue
++        entry = path.relative_to(root).as_posix()
++        parts = PurePosixPath(entry).parts
++        if ".." in parts or "\\" in entry or ":" in entry or not entry.endswith(".svg"):
++            return path
++        index = _load_index(root)
++        if index.get("schemaVersion") != 1 or entry not in index["entries"]:
++            return path
++        digest = index["sha256"]
++        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
++            raise ValueError("Invalid icon archive identity")
++        with zipfile.ZipFile(root / ARCHIVE_NAME) as archive:
++            data = archive.read(entry)
++        try:
++            return _write_icon(path, data)
++        except OSError:
++            # Direct use of a read-only runtime still works, without expanding
++            # the complete library or relying on network downloads.
++            cache = Path(tempfile.gettempdir()) / "sugaragent-icons" / digest
++            return _write_icon(cache.joinpath(*parts), data)
++    return path
++
++
++def list_icons(root: Path, library: str = "", query: str = "") -> list[str]:
++    """Search all bundled names, including icons that have never been extracted."""
++    if (root / INDEX_NAME).is_file():
++        entries = _load_index(root)["entries"]
++    else:
++        entries = [path.relative_to(root).as_posix() for path in root.rglob("*.svg")]
++    return sorted(entry[:-4] for entry in entries
++                  if (not library or entry.startswith(library + "/"))
++                  and query.casefold() in entry.casefold())
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description="Search the complete bundled PPT icon library")
++    parser.add_argument("command", choices=["list"])
++    parser.add_argument("--library", default="")
++    parser.add_argument("--query", default="")
++    parser.add_argument("--icons-dir", type=Path,
++                        default=Path(__file__).resolve().parent.parent / "templates" / "icons")
++    args = parser.parse_args()
++    for name in list_icons(args.icons_dir, args.library, args.query):
++        print(name)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/packaging/scripts/archive-runtime.py b/packaging/scripts/archive-runtime.py
+new file mode 100644
+index 0000000..4e63d22
+--- /dev/null
++++ b/packaging/scripts/archive-runtime.py
+@@ -0,0 +1,250 @@
++"""Compact desktop runtime resources after dependency installation, before NSIS."""
++from __future__ import annotations
++
++import argparse
++import base64
++import csv
++import hashlib
++import importlib.util
++import json
++import marshal
++import os
++from pathlib import Path
++import shutil
++import struct
++import sys
++import tempfile
++import zipfile
++
++
++PACKAGING = Path(__file__).resolve().parents[1]
++PTH_NAME = "sugaragent-runtime-archives.pth"
++PPT_PATCH_MARKER = "# SugarAgent desktop: archive-backed icons"
++
++
++def _write_json(path: Path, value: dict) -> None:
++    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
++
++
++def _owned(payload: Path, path: Path) -> None:
++    if not path.resolve().is_relative_to(payload.resolve()):
++        raise RuntimeError(f"Resource path escapes the isolated payload: {path}")
++
++
++def _sha256(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for block in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(block)
++    return digest.hexdigest()
++
++
++def _files(root: Path) -> list[Path]:
++    # Windows' embedded Python can lack the long-path-aware executable flag.
++    root = Path("\\\\?\\" + str(root.resolve())) if os.name == "nt" else root
++    return sorted((path for path in root.rglob("*") if path.is_file()), key=str)
++
++
++def _entry(archive: zipfile.ZipFile, name: str, data: bytes) -> None:
++    info = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
++    info.compress_type = zipfile.ZIP_STORED
++    archive.writestr(info, data)
++
++
++def _update_sdk_records(site: Path, target: Path, pth: Path) -> None:
++    # pip must uninstall/upgrade the archive, rather than keep loading an old
++    # SDK whose original loose files were already removed during preparation.
++    for metadata in site.glob("lark_oapi-*.dist-info"):
++        record = metadata / "RECORD"
++        if not record.is_file():
++            continue
++        with record.open(newline="", encoding="utf-8") as stream:
++            rows = [row for row in csv.reader(stream) if row and
++                    not row[0].startswith("lark_oapi/") and row[0] not in (target.name, pth.name)]
++        for path in (target, pth):
++            digest = base64.urlsafe_b64encode(bytes.fromhex(_sha256(path))).rstrip(b"=").decode("ascii")
++            rows.append([path.name, "sha256=" + digest, str(path.stat().st_size)])
++        with record.open("w", newline="", encoding="utf-8") as stream:
++            csv.writer(stream, lineterminator="\n").writerows(rows)
++
++
++def archive_sdk(payload: Path) -> dict:
++    site = payload / "python" / "Lib" / "site-packages"
++    package = site / "lark_oapi"
++    _owned(payload, site)
++    _owned(payload, package)
++    target = site / "lark_oapi.zip"
++    if package.is_dir():
++        files = _files(package)
++        package_root = Path("\\\\?\\" + str(package.resolve())) if os.name == "nt" else package
++        # Validate before replacing anything. Native extension modules must
++        # remain on disk and cannot be loaded by zipimport.
++        if any(path.suffix.lower() in {".pyd", ".dll", ".so"} for path in files):
++            raise RuntimeError("lark_oapi now contains native modules; review the desktop archive layout")
++        with tempfile.NamedTemporaryFile(dir=site, suffix=".zip", delete=False) as stream:
++            temporary = Path(stream.name)
++        try:
++            with zipfile.ZipFile(temporary, "w", allowZip64=True) as archive:
++                for path in files:
++                    relative = path.relative_to(package_root)
++                    if "__pycache__" in relative.parts or path.suffix in {".pyc", ".pyo"}:
++                        continue
++                    name = "lark_oapi/" + relative.as_posix()
++                    data = path.read_bytes()
++                    _entry(archive, name, data)
++                    if path.suffix == ".py":
++                        code = compile(data, name, "exec", dont_inherit=True, optimize=0)
++                        # PEP 552 unchecked hash bytecode, at zipimport's legacy
++                        # module.pyc location. No 10,000-file compilation temp tree.
++                        bytecode = (importlib.util.MAGIC_NUMBER + struct.pack("<I", 1)
++                                    + importlib.util.source_hash(data) + marshal.dumps(code))
++                        _entry(archive, name[:-3] + ".pyc", bytecode)
++            with zipfile.ZipFile(temporary) as archive:
++                if archive.testzip() is not None:
++                    raise RuntimeError("SDK archive checksum verification failed")
++            os.replace(temporary, target)
++        finally:
++            temporary.unlink(missing_ok=True)
++        # The caller passes an isolated payload, never the developer's Python.
++        shutil.rmtree(package_root)
++        replaced = len(files)
++    elif target.is_file():
++        replaced = None
++    else:
++        raise RuntimeError("Missing lark_oapi dependency in desktop payload")
++    with zipfile.ZipFile(target) as archive:
++        names = archive.namelist()
++        if ("lark_oapi/__init__.pyc" not in names or archive.testzip() is not None
++                or archive.read("lark_oapi/__init__.pyc")[:4] != importlib.util.MAGIC_NUMBER):
++            raise RuntimeError("Invalid or incompatible SDK archive; rebuild the payload dependencies")
++    pth = site / PTH_NAME
++    pth.write_text("lark_oapi.zip\n", encoding="utf-8")
++    _update_sdk_records(site, target, pth)
++    return {"path": target.relative_to(payload).as_posix(), "sha256": _sha256(target),
++            "entries": len(names), "replacedFiles": replaced,
++            "pythonCacheTag": sys.implementation.cache_tag}
++
++
++def patch_ppt_readers(skill: Path) -> None:
++    patches = {
++        "scripts/icon_sync.py": [
++            ('configure_utf8_stdio()\n', 'configure_utf8_stdio()\n\nfrom sugaragent_icon_archive import materialize_icon\n'),
++            ('        src = global_dir / lib / f"{name}.svg"\n'
++             '        dst = project_icons / lib / f"{name}.svg"\n',
++             '        dst = project_icons / lib / f"{name}.svg"\n'
++             '        if dst.is_file():\n'
++             '            copied.append(f"{lib}/{name} (already in project)")\n'
++             '            continue\n'
++             '        src = materialize_icon(global_dir / lib / f"{name}.svg")\n'),
++            ('(search: ls {_GLOBAL_ICONS_DIR}/{lib}/ | grep <keyword>)',
++             '(search: python scripts/sugaragent_icon_archive.py list --library {lib} --query <keyword>)'),
++        ],
++        "scripts/svg_finalize/embed_icons.py": [
++            ('configure_utf8_stdio()\n', 'configure_utf8_stdio()\n\nfrom sugaragent_icon_archive import materialize_icon\n'),
++            ("icon_path = icons_dir / lib / f'{name}.svg'", "icon_path = materialize_icon(icons_dir / lib / f'{name}.svg')"),
++            ("icon_path = icons_dir / 'chunk-filled' / f'{icon_name}.svg'", "icon_path = materialize_icon(icons_dir / 'chunk-filled' / f'{icon_name}.svg')"),
++            ("icon_path = icons_dir / f'{icon_name}.svg'", "icon_path = materialize_icon(icons_dir / f'{icon_name}.svg')"),
++        ],
++        "scripts/confirm_ui/server.py": [
++            ('configure_utf8_stdio()\n', 'configure_utf8_stdio()\n\nfrom sugaragent_icon_archive import materialize_icon\n'),
++            ("icon_path = _ICON_LIBRARY_DIR / library / f'{name}.svg'", "icon_path = materialize_icon(_ICON_LIBRARY_DIR / library / f'{name}.svg')"),
++        ],
++    }
++    # Check all source hooks before modifying any of them. Fail loudly when an
++    # upstream skill changes rather than shipping an unusable icon library.
++    pending = []
++    for relative, replacements in patches.items():
++        path = skill / relative
++        source = path.read_text(encoding="utf-8")
++        if PPT_PATCH_MARKER in source:
++            if any(new not in source for _, new in replacements):
++                raise RuntimeError(f"Incomplete archived-icon patch: {relative}")
++            continue
++        for old, new in replacements:
++            if source.count(old) != 1:
++                raise RuntimeError(f"PPT icon reader changed; review archive adaptation: {relative}: {old}")
++            source = source.replace(old, new, 1)
++        source += "\n" + PPT_PATCH_MARKER + "\n"
++        pending.append((path, source))
++    for path, source in pending:
++        path.write_text(source, encoding="utf-8")
++    shutil.copyfile(PACKAGING / "runtime" / "sugaragent_icon_archive.py",
++                    skill / "scripts" / "sugaragent_icon_archive.py")
++    guidance = ("\n" + PPT_PATCH_MARKER + "\n"
++                "Desktop icon SVGs are bundled in templates/icons/icons.zip and extracted only when used.\n"
++                "Search the complete offline library with `python scripts/sugaragent_icon_archive.py list "
++                "--library tabler-outline --query home`; use icon_sync.py and the normal SVG/PPTX tools "
++                "to load selected icons. Directory listings contain only previously used SVGs.\n")
++    for relative in ("SKILL.md", "templates/icons/README.md"):
++        path = skill / relative
++        if path.is_file() and PPT_PATCH_MARKER not in path.read_text(encoding="utf-8"):
++            with path.open("a", encoding="utf-8") as stream:
++                stream.write(guidance)
++
++
++def archive_ppt_icons(payload: Path) -> dict | None:
++    skill = payload / "workspace-template" / "skills" / "ppt-master"
++    if not skill.exists():
++        return None
++    _owned(payload, skill)
++    root = skill / "templates" / "icons"
++    _owned(payload, root)
++    target = root / "icons.zip"
++    index = root / "icon-archive.json"
++    files = [path for path in _files(root) if path.suffix.lower() == ".svg"]
++    root_long = Path("\\\\?\\" + str(root.resolve())) if os.name == "nt" else root
++    patch_ppt_readers(skill)
++    if files:
++        entries = {}
++        # Include already archived icons if this is a repeat adaptation after a
++        # selected icon was materialized. Loose customizations take precedence.
++        if target.is_file():
++            with zipfile.ZipFile(target) as archive:
++                entries.update((name, archive.read(name)) for name in archive.namelist())
++        entries.update((path.relative_to(root_long).as_posix(), path.read_bytes()) for path in files)
++        with tempfile.NamedTemporaryFile(dir=root, suffix=".zip", delete=False) as stream:
++            temporary = Path(stream.name)
++        try:
++            with zipfile.ZipFile(temporary, "w", allowZip64=True) as archive:
++                for name, data in sorted(entries.items()):
++                    _entry(archive, name, data)
++            with zipfile.ZipFile(temporary) as archive:
++                if archive.testzip() is not None:
++                    raise RuntimeError("PPT icon archive checksum verification failed")
++            os.replace(temporary, target)
++        finally:
++            temporary.unlink(missing_ok=True)
++        _write_json(index, {"schemaVersion": 1, "sha256": _sha256(target), "entries": sorted(entries)})
++        for path in files:
++            path.unlink()
++    elif not target.is_file() or not index.is_file():
++        raise RuntimeError("Missing PPT icon SVG files or archive")
++    data = json.loads(index.read_text(encoding="utf-8"))
++    if data["sha256"] != _sha256(target):
++        raise RuntimeError("PPT icon archive does not match its index")
++    return {"path": target.relative_to(payload).as_posix(), "sha256": data["sha256"],
++            "entries": len(data["entries"])}
++
++
++def optimize_payload(payload: Path) -> dict:
++    payload = payload.resolve()
++    if not (payload / "python" / "python.exe").is_file() or not (payload / "app" / "main.py").is_file():
++        raise RuntimeError("Expected an isolated desktop payload with python/python.exe and app/main.py")
++    # Do not let this script compact the source checkout or an installed runtime.
++    if (payload.name != "payload" or payload.parent.name != "build" or payload == PACKAGING.parent
++            or any((payload / name).exists() for name in ("workspace", ".config", ".sugaragent"))):
++        raise RuntimeError("Refusing to optimize a source checkout or a runtime containing user data")
++    result = {"schemaVersion": 1, "sdk": archive_sdk(payload), "pptIcons": archive_ppt_icons(payload)}
++    _write_json(payload / "runtime-archives.json", result)
++    return result
++
++
++def main() -> None:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--payload", type=Path, required=True)
++    args = parser.parse_args()
++    print(json.dumps(optimize_payload(args.payload), ensure_ascii=False))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/packaging/scripts/build.mjs b/packaging/scripts/build.mjs
+index 8a6d377..916ec35 100644
+--- a/packaging/scripts/build.mjs
++++ b/packaging/scripts/build.mjs
+@@ -40,7 +40,10 @@ function human(bytes) {
+ 
+ function main() {
+   if (!SKIP_ICONS) {
+-    run(REPO_PYTHON, [path.join(HERE, 'make-icons.py')], { cwd: PACKAGING })
++    run(REPO_PYTHON, ['-B', path.join(HERE, 'make-icons.py')], {
++      cwd: PACKAGING, windowsHide: true,
++      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
++    })
+   }
+ 
+   if (!SKIP_PAYLOAD) {
+@@ -63,7 +66,7 @@ function main() {
+     env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: 'false' },
+   })
+ 
+-  const dist = path.join(PACKAGING, 'build', 'dist')
++  const dist = path.resolve(PACKAGING, process.env.SUGARAGENT_BUILD_OUTPUT || 'build/dist')
+   const unpacked = path.join(dist, 'win-unpacked')
+   console.log('\n构建产物：')
+   if (fs.existsSync(unpacked)) {
+diff --git a/packaging/scripts/payload-bytecode.cjs b/packaging/scripts/payload-bytecode.cjs
+new file mode 100644
+index 0000000..07f8582
+--- /dev/null
++++ b/packaging/scripts/payload-bytecode.cjs
+@@ -0,0 +1,72 @@
++'use strict'
++
++const fs = require('node:fs')
++const path = require('node:path')
++
++function scanBytecode(root) {
++  const base = fs.realpathSync(root)
++  if (!['payload', 'runtime'].includes(path.basename(base))) throw new Error('字节码检查仅用于桌面载荷目录')
++  for (const name of ['workspace', '.config', '.sugaragent']) {
++    if (fs.existsSync(path.join(base, name))) throw new Error(`拒绝处理含用户数据的载荷：${name}`)
++  }
++  const files = []
++  const directories = []
++  const stack = [base]
++  while (stack.length) {
++    const directory = stack.pop()
++    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
++      const full = path.join(directory, entry.name)
++      if (entry.isSymbolicLink()) {
++        if (entry.name === '__pycache__' || /\.py[co]$/i.test(entry.name)) throw new Error(`缓存路径含符号链接：${full}`)
++        continue
++      }
++      if (entry.isDirectory()) {
++        stack.push(full)
++        if (entry.name === '__pycache__') directories.push(full)
++      } else if (entry.isFile() && /\.py[co]$/i.test(entry.name)) {
++        files.push(full)
++      }
++    }
++  }
++  return { base, files, directories }
++}
++
++function assertNoLooseBytecode(root) {
++  const { files, directories } = scanBytecode(root)
++  if (files.length || directories.length) {
++    throw new Error(`载荷含 ${files.length} 个松散字节码文件、${directories.length} 个缓存目录；请重新准备载荷`)
++  }
++}
++
++function cleanupPyc(root) {
++  const { base, files, directories } = scanBytecode(root)
++  const owned = target => {
++    const relative = path.relative(base, fs.realpathSync(target))
++    if (!relative || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
++      throw new Error(`缓存清理目标超出载荷：${target}`)
++    }
++  }
++  // Check all candidates before deleting anything. Bytecode-only modules are
++  // code, not disposable caches; keep them for an explicit layout review.
++  for (const file of files) {
++    owned(file)
++    const cache = path.basename(path.dirname(file)) === '__pycache__'
++    const stem = path.basename(file).replace(/\.py[co]$/i, '').replace(/\.cpython-\d+(?:\.opt-\d+)?$/, '')
++    const source = path.join(cache ? path.dirname(path.dirname(file)) : path.dirname(file), stem + '.py')
++    if (!fs.existsSync(source)) throw new Error(`发现没有源码的字节码模块，不能作为缓存删除：${file}`)
++  }
++  for (const directory of directories) owned(directory)
++  let bytes = 0
++  for (const file of files) {
++    bytes += fs.statSync(file).size
++    fs.unlinkSync(file)
++  }
++  for (const directory of directories.sort((a, b) => b.length - a.length)) {
++    // Non-recursive removal also protects unexpected non-cache contents.
++    fs.rmdirSync(directory)
++  }
++  assertNoLooseBytecode(root)
++  return { files: files.length, directories: directories.length, bytes }
++}
++
++module.exports = { cleanupPyc, assertNoLooseBytecode }
+diff --git a/packaging/scripts/prepare-payload.mjs b/packaging/scripts/prepare-payload.mjs
+index 816fa81..1eee146 100644
+--- a/packaging/scripts/prepare-payload.mjs
++++ b/packaging/scripts/prepare-payload.mjs
+@@ -21,6 +21,10 @@ import fs from 'node:fs'
+ import path from 'node:path'
+ import { spawnSync } from 'node:child_process'
+ import { fileURLToPath } from 'node:url'
++import { createRequire } from 'node:module'
++
++const { assertRuntimeArchives } = createRequire(import.meta.url)('./runtime-archives.cjs')
++const { cleanupPyc } = createRequire(import.meta.url)('./payload-bytecode.cjs')
+ 
+ const HERE = path.dirname(fileURLToPath(import.meta.url))
+ const PACKAGING = path.resolve(HERE, '..')
+@@ -32,6 +36,8 @@ const REPO_PYTHON = path.join(REPO, 'python', 'python.exe')
+ const PAYLOAD_PYTHON = path.join(PAYLOAD, 'python', 'python.exe')
+ const REQUIREMENTS = path.join(PACKAGING, 'requirements.desktop.txt')
+ const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(PACKAGING, 'package.json'), 'utf8'))
++// Build-only policy: installed applications may still create/reuse caches.
++const PYTHON_BUILD_ENV = { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' }
+ 
+ const flags = new Set(process.argv.slice(2))
+ const SKIP_DEPS = flags.has('--skip-deps')
+@@ -154,7 +160,8 @@ function installDependencies() {
+   if (!fs.existsSync(REPO_PYTHON)) throw new Error(`缺少仓库内置解释器：${REPO_PYTHON}`)
+   fs.mkdirSync(SITE_PACKAGES, { recursive: true })
+   const args = [
+-    '-m', 'pip', 'install',
++    '-B', '-m', 'pip', 'install',
++    '--no-compile',
+     '--disable-pip-version-check',
+     '--no-warn-script-location',
+     '--no-input',
+@@ -163,14 +170,15 @@ function installDependencies() {
+   ]
+   if (process.env.SUGARAGENT_PIP_INDEX) args.push('--index-url', process.env.SUGARAGENT_PIP_INDEX)
+   log('· 安装精简依赖到载荷（首次约 2–5 分钟）…')
+-  run(REPO_PYTHON, args, { cwd: REPO })
++  run(REPO_PYTHON, args, { cwd: REPO, windowsHide: true, env: PYTHON_BUILD_ENV })
+ }
+ 
+ /** 让打包后的运行时自带 pip，用户可随时补装 pandas / playwright 等可选依赖。 */
+ function bootstrapPip() {
+   if (SKIP_DEPS) return
+   const args = [
+-    '-m', 'pip', 'install',
++    '-B', '-m', 'pip', 'install',
++    '--no-compile',
+     '--disable-pip-version-check',
+     '--no-warn-script-location',
+     '--no-input',
+@@ -180,7 +188,17 @@ function bootstrapPip() {
+   ]
+   if (process.env.SUGARAGENT_PIP_INDEX) args.push('--index-url', process.env.SUGARAGENT_PIP_INDEX)
+   log('· 为载荷内置 pip/setuptools/wheel（支持后续补装依赖）…')
+-  run(REPO_PYTHON, args, { cwd: REPO })
++  run(REPO_PYTHON, args, { cwd: REPO, windowsHide: true, env: PYTHON_BUILD_ENV })
++}
++
++function optimizeRuntimeArchives() {
++  log('· 合并飞书 SDK / PPT 图标，保留离线资源并减少安装落盘文件…')
++  run(PAYLOAD_PYTHON, ['-B', path.join(HERE, 'archive-runtime.py'), '--payload', PAYLOAD], {
++    cwd: PAYLOAD, windowsHide: true,
++    env: PYTHON_BUILD_ENV,
++  })
++  // Loose caches in a reused dependency tree are cleaned after all probes.
++  return assertRuntimeArchives(PAYLOAD, { checkBytecode: false })
+ }
+ 
+ function verifyImports() {
+@@ -193,9 +211,16 @@ function verifyImports() {
+     'for name in mods:',
+     '    try: importlib.import_module(name)',
+     '    except Exception as exc: missing.append(f"{name}: {exc}")',
++    'if not missing:',
++    '    import lark_oapi',
++    '    if ".zip" not in lark_oapi.__file__: missing.append("lark_oapi was not loaded from its archive")',
++    '    from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody',
++    '    from lark_oapi.ws import Client',
+     'print("IMPORT_CLEAN" if not missing else "IMPORT_FAIL " + "; ".join(missing))',
+   ].join('\n')
+-  const result = spawnSync(PAYLOAD_PYTHON, ['-c', probe], { cwd: PAYLOAD, encoding: 'utf8' })
++  const result = spawnSync(PAYLOAD_PYTHON, ['-B', '-c', probe], {
++    cwd: PAYLOAD, encoding: 'utf8', windowsHide: true, env: PYTHON_BUILD_ENV,
++  })
+   const output = `${result.stdout || ''}${result.stderr || ''}`.trim()
+   log(`· 依赖自检：${output.split(/\r?\n/).pop()}`)
+   if (!output.includes('IMPORT_CLEAN')) {
+@@ -233,8 +258,8 @@ function ensureRipgrep() {
+ }
+ 
+ function dependenciesList() {
+-  const result = spawnSync(PAYLOAD_PYTHON, ['-m', 'pip', 'list', '--format=freeze'], {
+-    cwd: PAYLOAD, encoding: 'utf8',
++  const result = spawnSync(PAYLOAD_PYTHON, ['-B', '-m', 'pip', 'list', '--format=freeze'], {
++    cwd: PAYLOAD, encoding: 'utf8', windowsHide: true, env: PYTHON_BUILD_ENV,
+   })
+   const stdout = String(result.stdout || '')
+   if (result.status === 0 && stdout.trim()) {
+@@ -305,8 +330,8 @@ function main() {
+   fs.mkdirSync(path.join(PAYLOAD, 'python', 'Scripts'), { recursive: true })
+ 
+   if (!SKIP_SKILLS) {
+-    const pathsProbe = spawnSync(REPO_PYTHON, [path.join(REPO, 'app', 'workspace_paths.py'), '--project-root', REPO], {
+-      encoding: 'utf8', windowsHide: true, timeout: 10000,
++    const pathsProbe = spawnSync(REPO_PYTHON, ['-B', path.join(REPO, 'app', 'workspace_paths.py'), '--project-root', REPO], {
++      encoding: 'utf8', windowsHide: true, timeout: 10000, env: PYTHON_BUILD_ENV,
+     })
+     if (pathsProbe.status !== 0) throw new Error('无法读取技能模板目录配置：' + (pathsProbe.stderr || 'path probe failed'))
+     const skills = JSON.parse(pathsProbe.stdout).skills_dir
+@@ -324,21 +349,29 @@ function main() {
+   installDependencies()
+   bootstrapPip()
+   const rg = ensureRipgrep()
++  const runtimeArchives = optimizeRuntimeArchives()
+   verifyImports()
+ 
++  const pythonProbe = spawnSync(PAYLOAD_PYTHON, ['-B', '-c', 'import platform;print(platform.python_version())'], {
++    encoding: 'utf8', windowsHide: true, env: PYTHON_BUILD_ENV,
++  })
++  const pythonVersion = String(pythonProbe.stdout || '').trim() || 'unknown'
++  const dependencies = dependenciesList()
++  const bytecodeCleanup = cleanupPyc(PAYLOAD)
++  assertRuntimeArchives(PAYLOAD)
++  log(`· 清理松散字节码：${bytecodeCleanup.files} 文件 / ${human(bytecodeCleanup.bytes)}`)
+   const stats = inventory(PAYLOAD)
+   const manifest = {
+     schemaVersion: 1,
+     product: PACKAGE_JSON.productName || 'SugarAgent',
+     version: PACKAGE_JSON.version,
+     builtAt: new Date().toISOString(),
+-    python: (() => {
+-      const probe = spawnSync(PAYLOAD_PYTHON, ['-c', 'import platform;print(platform.python_version())'], { encoding: 'utf8' })
+-      return String(probe.stdout || '').trim() || 'unknown'
+-    })(),
+-    dependencies: dependenciesList(),
++    python: pythonVersion,
++    dependencies,
+     excludedDependencies: EXCLUDED_PACKAGES,
+     ripgrep: rg ? path.relative(PAYLOAD, rg).replace(/\\/g, '/') : null,
++    runtimeArchives,
++    bytecodeCleanup,
+     stats,
+   }
+   fs.writeFileSync(path.join(PAYLOAD, 'runtime-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+diff --git a/packaging/scripts/runtime-archives.cjs b/packaging/scripts/runtime-archives.cjs
+new file mode 100644
+index 0000000..99cd441
+--- /dev/null
++++ b/packaging/scripts/runtime-archives.cjs
+@@ -0,0 +1,40 @@
++'use strict'
++
++const fs = require('node:fs')
++const path = require('node:path')
++const { assertNoLooseBytecode } = require('./payload-bytecode.cjs')
++
++/** Reject a reused payload whose loose files would undo the install optimization. */
++function assertRuntimeArchives(payload, { checkBytecode = true } = {}) {
++  const report = path.join(payload, 'runtime-archives.json')
++  const fail = message => { throw new Error(`${message}；请先重新准备载荷（npm run payload:fast 或 npm run payload）`) }
++  if (!fs.existsSync(report)) fail('载荷尚未进行 SDK / PPT 图标归档优化')
++  const info = JSON.parse(fs.readFileSync(report, 'utf8'))
++  if (info.schemaVersion !== 1 || !info.sdk) fail('运行时归档清单不完整')
++  const sdk = path.join(payload, 'python', 'Lib', 'site-packages')
++  const zip = path.join(sdk, 'lark_oapi.zip')
++  const pth = path.join(sdk, 'sugaragent-runtime-archives.pth')
++  if (!fs.existsSync(zip) || !fs.existsSync(pth) ||
++      !fs.readFileSync(pth, 'utf8').split(/\r?\n/).includes('lark_oapi.zip') ||
++      fs.existsSync(path.join(sdk, 'lark_oapi'))) fail('飞书 SDK 归档或加载路径不正确')
++  const skill = path.join(payload, 'workspace-template', 'skills', 'ppt-master')
++  if (fs.existsSync(skill)) {
++    const icons = path.join(skill, 'templates', 'icons')
++    if (!info.pptIcons || !fs.existsSync(path.join(icons, 'icons.zip')) ||
++        !fs.existsSync(path.join(icons, 'icon-archive.json')) ||
++        !fs.existsSync(path.join(skill, 'scripts', 'sugaragent_icon_archive.py'))) fail('PPT 图标归档或读取适配缺失')
++    const stack = [icons]
++    while (stack.length) {
++      const directory = stack.pop()
++      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
++        const full = path.join(directory, entry.name)
++        if (entry.isDirectory()) stack.push(full)
++        else if (entry.name.toLowerCase().endsWith('.svg')) fail('载荷混入了已展开的 PPT 图标')
++      }
++    }
++  }
++  if (checkBytecode) assertNoLooseBytecode(payload)
++  return info
++}
++
++module.exports = { assertRuntimeArchives }
+diff --git a/packaging/scripts/smoke-payload.mjs b/packaging/scripts/smoke-payload.mjs
+index 77c76b8..142d89f 100644
+--- a/packaging/scripts/smoke-payload.mjs
++++ b/packaging/scripts/smoke-payload.mjs
+@@ -66,6 +66,7 @@ async function main() {
+       PYTHONIOENCODING: 'utf-8',
+       PYTHONUTF8: '1',
+       MYAGENT_SERVER_PORT: String(PORT),
++      MYAGENT_SECURITY_HOME: path.join(WORK, 'security'),
+       WORK_DIR: path.join(WORK, 'workspace'),
+       LOG_DIR: path.join(WORK, 'logs'),
+       SKILLS_DIR: path.join(WORK, 'workspace', 'skills'),
+diff --git a/packaging/scripts/startup-launcher.cjs b/packaging/scripts/startup-launcher.cjs
+index 865d27a..5dbbd85 100644
+--- a/packaging/scripts/startup-launcher.cjs
++++ b/packaging/scripts/startup-launcher.cjs
+@@ -23,13 +23,22 @@ function buildStartupLauncher({ output, target, payload, workDir }) {
+   if (result.error || result.status !== 0) throw new Error(result.error ? result.error.message : result.stdout + result.stderr)
+ }
+ 
+-function installStartupLauncher(context) {
++async function brandRuntimeExe(context, runtime) {
++  // afterPack runs before electron-builder edits its primary exe. Swapping in
++  // the launcher makes the runtime a secondary exe, which is otherwise only
++  // signed. Explicitly apply the same icon/version/ProductName/LegalCopyright.
++  await context.packager.signAndEditResources(runtime, context.arch, context.outDir,
++    path.basename(runtime, '.exe'), context.packager.platformSpecificBuildOptions.requestedExecutionLevel)
++}
++
++async function installStartupLauncher(context) {
+   const name = context.packager.appInfo.productFilename
+   const entry = path.join(context.appOutDir, `${name}.exe`)
+   const runtimeName = `${name}Runtime.exe`
+   const runtime = path.join(context.appOutDir, runtimeName)
+   fs.renameSync(entry, runtime)
+   try {
++    await brandRuntimeExe(context, runtime)
+     buildStartupLauncher({ output: entry, target: runtimeName,
+       workDir: path.join(packaging, 'build', 'native-launcher') })
+   } catch (error) {
+@@ -39,4 +48,4 @@ function installStartupLauncher(context) {
+   }
+ }
+ 
+-module.exports = { buildStartupLauncher, installStartupLauncher }
++module.exports = { buildStartupLauncher, installStartupLauncher, brandRuntimeExe }
