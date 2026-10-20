@@ -90,6 +90,19 @@ export function workspaceApiUrl(endpoint, params = {}, context) {
   return endpoint + (query.toString() ? '?' + query : '');
 }
 
+/** 桌面系统打开统一交给主进程；浏览器版保留后端打开方式。 */
+export function openWorkspaceLocalPath(rel, directory = false, options = {}) {
+  const context = options.context || getWorkspaceRequestContext();
+  const desktop = globalThis.sugarAgentDesktop;
+  if (desktop && typeof desktop.openLocalPath === 'function') {
+    return desktop.openLocalPath(Object.assign({}, context, { rel: String(rel || ''), directory: !!directory }));
+  }
+  const endpoint = directory ? '/api/open-workspace-dir' : '/api/open-workspace-file';
+  return fetch(workspaceApiUrl(endpoint, { rel }, context), options.signal ? { signal: options.signal } : undefined)
+    .then(response => response.json().catch(() => ({ ok: false, error: '响应异常' }))
+      .then(result => response.ok ? result : Object.assign({}, result, { ok: false })));
+}
+
 export function workspaceAbsolutePath(path, context) {
   const raw = String(path || '').replace(/\\/g, '/');
   if (/^[A-Za-z]:\//.test(raw) || raw.startsWith('//')) return raw;

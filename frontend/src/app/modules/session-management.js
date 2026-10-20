@@ -189,23 +189,23 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     var sess = sessionStore.get(sessionId);
     var localUnreadResult = sessionUnreadComplete.has(sessionId);
     var isSelectedSession = String(sessionId) === String(currentSessionId || '');
-    var hasUnreadResult = !isSelectedSession && (sess ? !!sess.unread_result : localUnreadResult);
     var failed = !!(sess && sess.unread_result_status === 'failed');
+    var hasUnreadResult = failed || (!isSelectedSession && (sess ? !!sess.unread_result : localUnreadResult));
     var running = isSessionRunning(sessionId);
     var finalizing = running && sessionStore.isRunFinalizing(sessionId);
     if (running) {
         itemDiv.classList.add(finalizing ? 'is-finalizing' : 'is-generating');
-        if (hasUnreadResult) {
-            // A completed queued turn is still unread while the next pending
-            // turn is running. Combining the classes keeps the pulse animation
-            // but changes the dot to the result color.
-            itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
+        // A retry shows the current running state while retaining the failure
+        // record. Successful queued results can still show a pulsing green dot.
+        var hasUnreadSuccess = hasUnreadResult && !failed;
+        if (hasUnreadSuccess) {
+            itemDiv.classList.add('is-unread-result');
         }
         if (nameEl) {
             nameEl.setAttribute(
                 'data-ui-tip',
-                hasUnreadResult
-                    ? (failed ? '已有任务失败，当前任务仍在处理' : '已有任务完成，当前任务仍在处理')
+                hasUnreadSuccess
+                    ? '已有任务完成，当前任务仍在处理'
                     : (finalizing ? '回复已生成，正在收尾' : '生成中')
             );
         }
@@ -2593,11 +2593,14 @@ async function createNewSession(targetWorkDir) {
    （服务端 work_dir 建会话时指定、之后不可改），已有会话则等下次点新建时生效。 */
 
 /** 目录选择器不可用（无原生对话框 / 无该 API）时的手填兜底；返回绝对路径或 null。 */
-function promptNewSessionWorkDirFallback(initial) {
+function promptNewSessionWorkDirFallback(initial, reason) {
     if (typeof openUiModal !== 'function') return Promise.resolve(null);
+    const detail = String(reason || '').trim();
     return openUiModal({
         title: '选择工作目录',
-        message: '无法打开系统目录选择器，请直接填写新会话的工作目录绝对路径。',
+        message: detail
+            ? ('系统目录选择器没能返回目录（' + detail + '）。请直接填写新会话的工作目录绝对路径。')
+            : '无法打开系统目录选择器，请直接填写新会话的工作目录绝对路径。',
         inputLabel: '工作目录绝对路径',
         inputValue: String(initial || ''),
         inputPlaceholder: 'D:\\work\\my-project',
@@ -2615,24 +2618,168 @@ async function pickNewSessionWorkDir() {
     const picker = (typeof window !== 'undefined' && window.MyAgentPathPicker)
         ? window.MyAgentPathPicker
         : null;
+    let failure = '';
     if (picker && typeof picker.pickPath === 'function') {
         try {
             const picked = await picker.pickPath('directory', initial, false);
             if (picked) return String(picked);
             return null; // 用户取消
         } catch (error) {
+            failure = String((error && error.message) || error || '');
             console.warn('目录选择器不可用，改为手填路径:', error);
         }
     }
-    return promptNewSessionWorkDirFallback(initial);
+    return promptNewSessionWorkDirFallback(initial, failure);
 }
 
-(function bindWelcomeSessionDirectoryPickerOnce() {
+/** 路径末级名字：`D:\work\proj` → `proj`（目录名优先于完整路径）。 */
+function workDirDisplayName(path) {
+    const parts = String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : String(path || '');
+}
+
+/** 路径比较用的规范形式（Windows 不区分大小写，去掉结尾分隔符）。 */
+function normalizeWorkDirIdentity(path) {
+    return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+/**
+ * 「已经创建过的工作目录」：默认工作目录 + 各会话自己的工作目录。
+ * 默认目录固定排第一（可以随时切回去），其余按最近活动倒序。
+ */
+function listCreatedSessionWorkDirs() {
+    const defaultPath = String(
+        ((typeof window !== 'undefined' && window.__WORK_DIR__) || '')
+    ).trim();
+    const defaultEntry = {
+        key: '__default__',
+        label: '默认工作目录',
+        path: '',
+        absolutePath: defaultPath,
+        isDefault: true,
+        count: 0,
+        activityMs: 0,
+    };
+    const byKey = Object.create(null);
+    byKey[defaultEntry.key] = defaultEntry;
+    const out = [defaultEntry];
+    let sessions = [];
+    try { sessions = sessionStore.list(); } catch (error) { sessions = []; }
+    sessions.forEach(function (session) {
+        if (!session) return;
+        const path = String(session.work_dir || '').trim();
+        const isDefault = !!session.work_dir_is_default || !path;
+        const key = isDefault
+            ? '__default__'
+            : ('path:' + normalizeWorkDirIdentity(path));
+        let entry = byKey[key];
+        if (!entry) {
+            entry = {
+                key: key,
+                label: String(session.work_dir_label || '').trim() || workDirDisplayName(path),
+                path: path,
+                absolutePath: path,
+                isDefault: false,
+                count: 0,
+                activityMs: 0,
+            };
+            byKey[key] = entry;
+            out.push(entry);
+        }
+        entry.count += 1;
+        if (isDefault && !entry.absolutePath) entry.absolutePath = path;
+        const stamp = Date.parse(session.last_activity_at || session.updated_at || '');
+        if (Number.isFinite(stamp) && stamp > entry.activityMs) entry.activityMs = stamp;
+    });
+    const rest = out.slice(1).sort(function (a, b) {
+        if (b.activityMs !== a.activityMs) return b.activityMs - a.activityMs;
+        return 0;
+    });
+    return [out[0]].concat(rest);
+}
+
+/** 重新填充欢迎页「选择」下拉：当前生效的目录打勾。 */
+function renderWelcomeSessionDirectoryMenu(menu) {
+    if (!menu) return;
+    const selected = String(newSessionWorkDirTarget() || '');
+    const selectedId = normalizeWorkDirIdentity(selected);
+    menu.innerHTML = '';
+    listCreatedSessionWorkDirs().forEach(function (entry) {
+        const active = entry.isDefault
+            ? (!selectedId
+                || (!!entry.absolutePath
+                    && selectedId === normalizeWorkDirIdentity(entry.absolutePath)))
+            : (!!selectedId && selectedId === normalizeWorkDirIdentity(entry.path));
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'welcome-session-dir-item' + (active ? ' is-active' : '');
+        item.setAttribute('role', 'menuitemradio');
+        item.setAttribute('aria-checked', active ? 'true' : 'false');
+        // 空串 = 服务端全局默认目录。
+        item.setAttribute('data-welcome-session-workdir', entry.path || '');
+        const head = document.createElement('span');
+        head.className = 'welcome-session-dir-item-head';
+        const name = document.createElement('span');
+        name.className = 'welcome-session-dir-item-name';
+        name.textContent = entry.label;
+        const check = document.createElement('span');
+        check.className = 'welcome-session-dir-item-check';
+        check.innerHTML = SIDEBAR_ICON_SVG.check;
+        head.appendChild(name);
+        head.appendChild(check);
+        item.appendChild(head);
+        const pathNode = document.createElement('span');
+        pathNode.className = 'welcome-session-dir-item-path';
+        pathNode.textContent = entry.absolutePath || '';
+        pathNode.title = entry.absolutePath || '';
+        item.appendChild(pathNode);
+        menu.appendChild(item);
+    });
+    if (typeof translateUiNode === 'function') translateUiNode(menu);
+}
+
+/** 欢迎页卡片每次重建都要重新接线（按元素去重，不会重复绑定）。 */
+function bindWelcomeSessionDirectoryCard(card) {
+    if (!card) return;
+    const popup = card.querySelector('[data-welcome-session-directory-menu-wrap]');
+    if (!popup || popup.dataset.popupBound === '1') return;
+    bindSidebarPopup(popup);
+    const trigger = popup.querySelector('[data-popup-trigger]');
+    const menu = popup.querySelector('[data-welcome-session-directory-menu]');
+    if (trigger) {
+        // 展开前按当前会话列表重算条目（目录可能刚被新建 / 删除 / 改名）。
+        trigger.addEventListener('click', function () {
+            renderWelcomeSessionDirectoryMenu(menu);
+        });
+    }
+}
+
+(function bindWelcomeSessionDirectoryActionsOnce() {
     if (typeof window === 'undefined' || window.__myAgentWelcomeSessionDirectoryBound) return;
     window.__myAgentWelcomeSessionDirectoryBound = true;
+
+    // 「选择」下拉里挑一个已创建的工作目录。
+    document.addEventListener('click', async function (event) {
+        const item = event.target && event.target.closest
+            ? event.target.closest('[data-welcome-session-workdir]')
+            : null;
+        if (!item || currentSessionId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const popup = item.closest('.sidebar-popup');
+        if (popup) setSidebarPopupOpen(popup, false);
+        const workDir = String(item.getAttribute('data-welcome-session-workdir') || '').trim();
+        try {
+            await applyNewSessionWorkDir(workDir);
+        } catch (error) {
+            console.error('切换会话工作目录失败:', error);
+        }
+    });
+
+    // 文件夹图标：系统「选择文件夹」对话框（原「选择 >」的行为）。
     document.addEventListener('click', async function (event) {
         const target = event.target && event.target.closest
-            ? event.target.closest('[data-welcome-session-directory-picker]')
+            ? event.target.closest('[data-welcome-session-directory-browse]')
             : null;
         if (!target || target.disabled || currentSessionId) return;
         event.preventDefault();
@@ -2714,6 +2861,11 @@ async function startNewSessionInCurrentDir() {
     return startNewSessionInDir(activeSessionWorkDir());
 }
 
+/** 菜单「在默认工作目录新建对话」：回到服务端全局默认目录，创建逻辑与主按钮一致。 */
+async function startNewSessionInDefaultDir() {
+    return startNewSessionInDir('');
+}
+
 // 刷新后重新进入草稿态时，草稿自身的工作目录来自服务端；把待用目录恢复成它，
 // 避免下一次 ensurePrefetchedNewSession 把仍然有效的草稿当成「目录不符」丢弃。
 (function restorePendingNewSessionWorkDirOnce() {
@@ -2723,7 +2875,7 @@ async function startNewSessionInCurrentDir() {
     }
 })();
 
-/** 「新会话」右侧 ▾：当前目录 / 新目录两条入口（开关与键盘行为走通用弹出层）。 */
+/** 「新会话」右侧 ▾：当前目录 / 默认目录 / 新目录三条入口（开关与键盘走通用弹出层）。 */
 (function bindNewSessionMenuOnce() {
     const menu = document.getElementById('new-session-menu');
     const popup = document.getElementById('new-session-options');
@@ -2736,7 +2888,10 @@ async function startNewSessionInCurrentDir() {
             e.stopPropagation();
             setSidebarPopupOpen(popup, false);
             const scope = String(item.getAttribute('data-new-session-scope') || '');
-            const task = scope === 'new' ? startNewSessionInFolder() : startNewSessionInCurrentDir();
+            let task;
+            if (scope === 'new') task = startNewSessionInFolder();
+            else if (scope === 'default') task = startNewSessionInDefaultDir();
+            else task = startNewSessionInCurrentDir();
             Promise.resolve(task).catch(function (error) {
                 console.error('新建会话失败:', error);
             });
@@ -2776,12 +2931,11 @@ function copyWorkDirPath(path) {
     }
 }
 
-/** 在系统文件管理器中打开工作目录（复用后端已有的 open-workspace-dir）。 */
+/** 打开分组目录时不借用当前会话的相对路径上下文。 */
 function revealWorkDirInExplorer(path) {
     var rel = String(path || '');
     if (!rel) return;
-    fetch('/api/open-workspace-dir?' + new URLSearchParams({ rel: rel }))
-        .then(function (response) { return response.json().catch(function () { return { ok: false }; }); })
+    openWorkspaceLocalPath(rel, true, { context: {} })
         .then(function (data) {
             if (typeof showOpenFileFeedback !== 'function') return;
             if (data && data.ok) showOpenFileFeedback('已请求打开');

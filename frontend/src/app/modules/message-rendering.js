@@ -843,10 +843,11 @@ var processAggregateStateByElement = new WeakMap();
 
 function emptyProcessAggregateState() {
     return {
-        rows: new WeakSet(),
+        rows: new WeakMap(),
         maxReactIter: 0,
         llmResponses: 0,
         toolCalls: 0,
+        toolFailures: 0,
     };
 }
 
@@ -863,12 +864,19 @@ function ensureProcessAggregateState(agg) {
 function registerProcessAggregateRow(agg, row) {
     var state = ensureProcessAggregateState(agg);
     if (!state || !row || state.rows.has(row)) return;
-    state.rows.add(row);
     var reactIter = parseInt(row.getAttribute('data-react-iter'), 10);
     if (Number.isFinite(reactIter) && reactIter > state.maxReactIter) state.maxReactIter = reactIter;
     var type = row.getAttribute('data-log-type');
+    var event = row._toolCallEvent || {};
+    var status = row.dataset.executionStatus || event.execution_status
+        || (event.status && (event.status.timed_out ? 'timed_out' : event.status.ok === false ? 'failed' : ''));
+    var failed = type === 'tool-call' && (status === 'failed' || status === 'timed_out');
+    // Retain the counted values: an existing row may already have new status
+    // when it is unregistered before its next registration.
+    state.rows.set(row, {type:type, failed:failed});
     if (type === 'llm-response') state.llmResponses += 1;
     else if (type === 'tool-call') state.toolCalls += 1;
+    if (failed) state.toolFailures += 1;
 }
 
 function unregisterProcessAggregateRow(row) {
@@ -876,10 +884,12 @@ function unregisterProcessAggregateRow(row) {
     var agg = row.closest('.process-aggregate');
     var state = agg && processAggregateStateByElement.get(agg);
     if (!state || !state.rows.has(row)) return;
+    var counted = state.rows.get(row);
     state.rows.delete(row);
-    var type = row.getAttribute('data-log-type');
+    var type = counted.type;
     if (type === 'llm-response') state.llmResponses = Math.max(0, state.llmResponses - 1);
     else if (type === 'tool-call') state.toolCalls = Math.max(0, state.toolCalls - 1);
+    if (counted.failed) state.toolFailures = Math.max(0, state.toolFailures - 1);
 }
 
 function hydrateProcessAggregateState(agg) {
@@ -1336,9 +1346,11 @@ function refreshProcessAggregateStats(agg) {
     }
     if (Number.isFinite(pLoops) && pLoops >= 0) reactLoops = pLoops;
     var toolN = aggregateState ? aggregateState.toolCalls : 0;
-    if (Number.isFinite(pTools) && pTools >= 0) toolN = pTools;
-    var failN = 0;
-    if (Number.isFinite(pFails) && pFails >= 0) failN = pFails;
+    // Run metrics can lag parallel results or cover a partly loaded history.
+    // They must never hide tools or failures already in this process group.
+    if (Number.isFinite(pTools) && pTools >= 0) toolN = Math.max(toolN, pTools);
+    var failN = aggregateState ? aggregateState.toolFailures : 0;
+    if (Number.isFinite(pFails) && pFails >= 0) failN = Math.max(failN, pFails);
     var t0s = agg.dataset.procStartedAt;
     var t0 = (t0s != null && t0s !== '') ? Number(t0s) : NaN;
     var parts = [];
@@ -1352,7 +1364,7 @@ function refreshProcessAggregateStats(agg) {
     if (durStr) parts.push(durStr);
     parts.push(String(reactLoops) + ' 步');
     parts.push('工具 ' + String(toolN) + ' 次');
-        parts.push('失败 ' + String(failN) + ' 次');
+    parts.push('失败 ' + String(failN) + ' 次');
     var ch = agg.dataset.procCacheHit != null && agg.dataset.procCacheHit !== '' ? parseInt(agg.dataset.procCacheHit, 10) : 0;
     var cm = agg.dataset.procCacheMiss != null && agg.dataset.procCacheMiss !== '' ? parseInt(agg.dataset.procCacheMiss, 10) : 0;
     var cr = agg.dataset.procCacheRate != null && agg.dataset.procCacheRate !== '' ? parseFloat(agg.dataset.procCacheRate) : 0;
@@ -2139,7 +2151,9 @@ window.addEventListener('blur', function () {
     updateUiPresenceActive();
 });
 
-const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p><div class="welcome-session-directory" role="group" aria-label="本会话工作目录" hidden>${window.MyAgentIcons.svg('folder', 'welcome-session-directory-icon')}<div class="welcome-session-directory-copy"><span class="welcome-session-directory-caption">会话工作目录</span><span class="welcome-session-directory-name" data-welcome-session-directory-name>默认工作目录</span><span class="welcome-session-directory-path" data-welcome-session-directory-path data-i18n-skip="1"></span></div><button type="button" class="welcome-session-directory-picker" data-welcome-session-directory-picker aria-label="选择会话目录"><span>选择</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button></div></div>`;
+// 「选择」= 已创建的工作目录下拉（session-management.js::renderWelcomeSessionDirectoryMenu），
+// 右侧文件夹图标 = 系统「选择文件夹」对话框（原「选择 >」的行为）。
+const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p><div class="welcome-session-directory" role="group" aria-label="本会话工作目录" hidden>${window.MyAgentIcons.svg('folder', 'welcome-session-directory-icon')}<div class="welcome-session-directory-copy"><span class="welcome-session-directory-caption">会话工作目录</span><span class="welcome-session-directory-name" data-welcome-session-directory-name>默认工作目录</span><span class="welcome-session-directory-path" data-welcome-session-directory-path data-i18n-skip="1"></span></div><div class="welcome-session-directory-actions"><div class="sidebar-popup welcome-session-directory-popup" data-welcome-session-directory-menu-wrap><button type="button" class="welcome-session-directory-picker" data-popup-trigger aria-haspopup="menu" aria-expanded="false" aria-label="选择已创建的工作目录" data-ui-tip="选择已创建的工作目录"><span>选择</span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg></button><div class="sidebar-popup-menu welcome-session-directory-menu" role="menu" aria-label="选择已创建的工作目录" data-welcome-session-directory-menu></div></div><button type="button" class="welcome-session-directory-browse" data-welcome-session-directory-browse aria-label="选择文件夹" data-ui-tip="选择文件夹">${window.MyAgentIcons.svg('folder')}</button></div></div></div>`;
 
 function historyLoadScrollsToBottom(sessionId, mode) {
     if (mode === 'bottom') return true;
@@ -2371,6 +2385,10 @@ function syncWelcomeSessionDirectory(root, workDirOverride) {
     if (pathNode) {
         pathNode.textContent = path;
         pathNode.title = path;
+    }
+    // 卡片每次重建都要重新接线：下拉开关 / 键盘与「选择文件夹」按钮。
+    if (typeof bindWelcomeSessionDirectoryCard === 'function') {
+        bindWelcomeSessionDirectoryCard(card);
     }
     if (typeof translateUiNode === 'function') translateUiNode(card);
 }
@@ -4825,6 +4843,8 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         var ch = row.querySelector('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
         var agg = body.closest('.process-aggregate');
+        unregisterProcessAggregateRow(row);
+        registerProcessAggregateRow(agg, row);
         refreshAggregateStatsSmart(agg);
         if (!replayingMessages) scrollContentAreaIfFollow(ctx, runSessionId, 'text');
         if (typeof attachHumanInteractionCardsForToolCall === 'function') {
@@ -4853,6 +4873,10 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     if (newRow) {
         rememberToolStreamRow(ctx, newRow, '', tid);
         newRow._toolCallEvent = parsed;
+        var newAgg = newRow.closest('.process-aggregate');
+        unregisterProcessAggregateRow(newRow);
+        registerProcessAggregateRow(newAgg, newRow);
+        refreshAggregateStatsSmart(newAgg);
         renderDurableAttachmentImages(newRow, parsed.attachments || []);
         autoCollapseToolRowAfterResult(newRow);
         document.dispatchEvent(new CustomEvent('myagent:tool-call-rendered', {
@@ -5730,24 +5754,42 @@ function scheduleProgressDeltaFlush(ctx, runSessionId, logType) {
     });
 }
 
-/** 每个压缩阶段（裁剪/压缩/要点）共用一条 feed，状态行与正文在同一 scroller */
+/** Reuse progress rows only while this compaction remains at the feed tail. */
+function prepareContextProgressRows(ctx) {
+    if (!ctx) return;
+    var tail = ctx.contextProgressTailRow;
+    if (!tail) return;
+    var next = tail.nextElementSibling;
+    // An append-mode follow-up stays after the active execution until it is
+    // consumed. It does not split a compression into one row per delta.
+    var onlyPendingSteer = next && !next.nextElementSibling && next.matches(
+        '.feed-item[data-log-type="user-steer"][data-steer-mode="append"][data-steer-pending="1"]'
+    );
+    if (tail.isConnected && tail.parentNode === getProcessBody(ctx) && (!next || onlyPendingSteer)) return;
+    finalizeProgressStreamChunks(ctx);
+    ctx.progressScrollers = {};
+    ctx.contextProgressTailRow = null;
+    resetKeyContextStreamFilter(ctx);
+}
+
+/** 每次压缩的各阶段共用各自一条 feed，后续压缩在执行过程末尾新建。 */
 function ensureProgressScroller(ctx, logType, runSessionId) {
     if (!ctx) return null;
+    prepareContextProgressRows(ctx);
     if (!ctx.progressScrollers) ctx.progressScrollers = {};
     var sc = ctx.progressScrollers[logType];
     if (sc && sc.isConnected) return sc;
     sc = appendLog(ctx, '', logType, runSessionId);
-    if (sc) ctx.progressScrollers[logType] = sc;
+    if (sc) {
+        ctx.progressScrollers[logType] = sc;
+        ctx.contextProgressTailRow = sc.closest('.feed-item');
+    }
     return sc;
 }
 
 /** 思考和摘要共用一条压缩行，重试的思考使用各自可折叠的区块。 */
 function createCompressionReasoningScroller(ctx, runSessionId) {
-    var summary = ctx.progressScrollers && ctx.progressScrollers['context-summary'];
-    if (!summary || !summary.isConnected) {
-        summary = createProcessFeedRow(ctx, 'context-summary', '', { streaming: true }, runSessionId);
-        if (summary) ctx.progressScrollers['context-summary'] = summary;
-    }
+    var summary = ensureProgressScroller(ctx, 'context-summary', runSessionId);
     if (!summary) return null;
     var row = summary.closest('.feed-item');
     var content = row.querySelector('.context-summary-content');
@@ -5778,6 +5820,7 @@ function createCompressionReasoningScroller(ctx, runSessionId) {
 /** 压缩推理只在当前执行过程的压缩行内显示，与主模型思考状态独立。 */
 function appendCompressionReasoningDelta(ctx, event, runSessionId) {
     if (!ctx || !event || !event.delta) return;
+    prepareContextProgressRows(ctx);
     var logType = 'context-summary-reasoning';
     if (!ctx.progressScrollers) ctx.progressScrollers = {};
     if (!ctx.progressStream) ctx.progressStream = {};
@@ -5826,6 +5869,7 @@ function finishCompressionReasoning(ctx, requestEnded) {
 /** 落盘正文：替换流式段或追加到状态行后，与刷新后 ui_events 回放一致 */
 function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
     if (!ctx) return;
+    prepareContextProgressRows(ctx);
     var text = String(content || '').trim();
     if (!text) return;
     var st = ctx.progressStream && ctx.progressStream[logType];
@@ -5854,6 +5898,7 @@ function applyProgressPersistedBody(ctx, content, logType, runSessionId) {
 /** 压缩/要点执行端输出：在同一 feed 内流式追加正文（不另起 feed 块） */
 function appendProgressStreamDelta(ctx, delta, logType, runSessionId, opts) {
     if (!ctx || !delta) return;
+    prepareContextProgressRows(ctx);
     if (!ctx.progressStream) ctx.progressStream = {};
     var piece = String(delta);
     if (!piece) return;

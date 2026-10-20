@@ -40,7 +40,10 @@ function runtime({enabled = true, reduced = false} = {}) {
     getFeedItemText: row => row.sc.textContent,
     queryFeedChunksInCtx: () => rows.map(row => row.chunk).filter(ch => ch.classList.contains('is-streaming')),
     createProcessFeedRow(_ctx, type, text) {
-      const row = {dataset: {}, isConnected: true, classList: classes('feed-item', type === 'tool-call' ? 'feed--tool' : 'feed--llm'),
+      const row = {dataset: {logType:type}, isConnected: true, parentNode:body,
+        get nextElementSibling() {return rows[rows.indexOf(this) + 1] || null;},
+        matches: () => false,
+        classList: classes('feed-item', type === 'tool-call' ? 'feed--tool' : 'feed--llm'),
         hasAttribute: () => false, getAttribute(name) {return this.dataset[name.replace(/^data-/, '').replace(/-([a-z])/g, (_, x) => x.toUpperCase())];},
         setAttribute(name, value) {this.dataset[name.replace(/^data-/, '').replace(/-([a-z])/g, (_, x) => x.toUpperCase())] = value;},
         removeAttribute(name) {delete this.dataset[name.replace(/^data-/, '').replace(/-([a-z])/g, (_, x) => x.toUpperCase())];},
@@ -73,7 +76,7 @@ function runtime({enabled = true, reduced = false} = {}) {
   vm.runInContext(['formatToolDraftLine', 'writeToolCallLlmText', 'formatToolPendingLine',
     'ensureToolStreamRenderState', 'rememberToolStreamRow', 'discardPendingToolRowRender',
     'scheduleToolRowRender', 'setToolRowText', 'removeAbortedToolDraftRows',
-    'flushProgressDeltaText', 'scheduleProgressDeltaFlush', 'ensureProgressScroller',
+    'flushProgressDeltaText', 'scheduleProgressDeltaFlush', 'prepareContextProgressRows', 'ensureProgressScroller',
     'appendProgressStreamDelta', 'appendProgressLog', 'applyProgressPersistedBody',
     'appendCompressionReasoningDelta', 'finishCompressionReasoning', 'finalizeProgressStreamForType',
     'finalizeProgressStreamChunks', 'discardProgressStreamChunks'].map(name => fn(rendering, name)).join('\n'), c);

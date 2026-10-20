@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable, Literal, Optional, Tuple
 
@@ -16,6 +17,26 @@ except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
 PathPickKind = Literal["file", "directory"]
 
 HRESULT_CANCELLED = 0x800704C7
+RPC_E_CHANGED_MODE = 0x80010106
+
+# 一次只允许一个原生选择框：两个请求同时弹框时用户会看到样式不同的两个窗口，
+# 而且第二个窗口的返回值会盖掉第一个。并发请求直接拒绝并提示先处理已打开的窗口。
+_pick_lock = threading.Lock()
+
+
+class PathPickerUnavailable(RuntimeError):
+    """该后端无法弹出对话框（未安装 / COM 不可用 / 程序缺失）。
+
+    报这个错时用户还没看到任何窗口，兜底链可以继续尝试下一个后端。
+    """
+
+
+class PathPickerDialogError(RuntimeError):
+    """对话框已经弹出、用户已经选过，但没能拿到可用结果。
+
+    此时绝对不能再弹下一个后端的选择框：那会让用户在同一件事上先后面对
+    两种/三种样式的"选择文件夹"窗口，并且第一次的选择看起来"无效"。
+    """
 
 
 def _hresult_unsigned(hr: int) -> int:
@@ -28,6 +49,22 @@ def _hresult_succeeded(hr: int) -> bool:
 
 def _is_cancelled_hr(hr: int) -> bool:
     return _hresult_unsigned(hr) == HRESULT_CANCELLED
+
+
+def _is_com_mode_conflict(exc: BaseException) -> bool:
+    """异常是否为 CoInitializeEx 的 RPC_E_CHANGED_MODE（线程已属于别的套间）。
+
+    ctypes 的 OleDLL 把失败的 HRESULT 抛成 OSError：真实的 Windows 错误码在
+    `winerror` 上，手工构造的 OSError 只留 `errno` / `args[0]`，两者都要看。
+    """
+    candidates = [getattr(exc, "winerror", None), getattr(exc, "errno", None)]
+    if exc.args:
+        candidates.append(exc.args[0])
+    for value in candidates:
+        if isinstance(value, int) and _hresult_unsigned(value) == RPC_E_CHANGED_MODE:
+            return True
+    text = str(exc).lower()
+    return "80010106" in text or "2147549446" in text
 
 
 def _is_user_cancelled_exc(exc: BaseException) -> bool:
@@ -182,12 +219,85 @@ def _dialog_owner_hwnd() -> int:
     return _hidden_owner_hwnd
 
 
+def _release_dialog_owner() -> None:
+    """销毁本线程创建的隐藏宿主窗口（STA 选择线程收尾时调用）。"""
+    global _hidden_owner_hwnd
+    hwnd, _hidden_owner_hwnd = _hidden_owner_hwnd, None
+    if not hwnd:
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.DestroyWindow(hwnd)
+    except Exception:
+        pass
+
+
+def _pick_dialog_timeout() -> float:
+    """用户在新版选择框里停留的最长等待时间（秒）。"""
+    try:
+        value = float(os.getenv("MYAGENT_PATH_DIALOG_TIMEOUT", "1800"))
+    except ValueError:
+        value = 1800.0
+    return value if value > 0 else 1800.0
+
+
+def _run_in_sta_thread(callback: Callable[[], object]) -> object:
+    """在一条独立的 STA 线程里执行 callback，并原样回传结果或异常。
+
+    IFileDialog 必须在单线程套间（STA）里创建。Web 侧是 `run_in_threadpool`
+    调用本模块，而线程池线程可能已被别的库初始化为 MTA（此时 CoInitializeEx
+    返回 RPC_E_CHANGED_MODE，ctypes 的 OleDLL 会直接抛 OSError）——旧实现在
+    这种情况下会放弃新版对话框、继续走 tkinter / PowerShell 兜底，于是用户
+    先看到新版窗口、再被要求到另一种样式的旧窗口里重选一次。固定用一条新的
+    STA 线程执行，选择框的样式就不再取决于请求恰好落在哪条线程池线程上。
+    """
+    box: dict[str, object] = {}
+    done = threading.Event()
+
+    def _runner() -> None:
+        ole32 = None
+        initialized = False
+        try:
+            import ctypes
+
+            ole32 = ctypes.OleDLL("ole32")
+            try:
+                ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
+                initialized = True
+            except OSError as exc:
+                if _is_com_mode_conflict(exc):
+                    raise PathPickerUnavailable("线程已初始化为 MTA，无法使用系统文件夹对话框")
+                raise PathPickerUnavailable(f"COM 初始化失败（{exc}）")
+            box["value"] = callback()
+        except BaseException as exc:  # noqa: BLE001 - 原样转交给调用线程
+            box["error"] = exc
+        finally:
+            _release_dialog_owner()
+            if initialized and ole32 is not None:
+                try:
+                    ole32.CoUninitialize()
+                except Exception:
+                    pass
+            done.set()
+
+    thread = threading.Thread(target=_runner, name="myagent-path-picker", daemon=True)
+    thread.start()
+    if not done.wait(_pick_dialog_timeout()):
+        raise PathPickerDialogError("系统文件夹对话框长时间没有返回，请重试")
+    if "error" in box:
+        raise box["error"]  # type: ignore[misc]
+    return box.get("value")
+
+
 def _pick_windows_ifiledialog(kind: PathPickKind, initial: str) -> Optional[str]:
-    path, cancelled = _pick_windows_ifiledialog_impl(kind, initial)
+    path, cancelled = _run_in_sta_thread(
+        lambda: _pick_windows_ifiledialog_impl(kind, initial)
+    )  # type: ignore[misc]
     if cancelled:
         return None
     if not path:
-        raise RuntimeError("Windows IFileDialog 未返回有效路径")
+        raise PathPickerDialogError("系统文件夹对话框已关闭，但没有返回所选目录")
     return path
 
 
@@ -226,6 +336,10 @@ def _pick_windows_ifiledialog_impl(
     FOS_PATHMUSTEXIST = 0x800
     FOS_FILEMUSTEXIST = 0x1000
     SIGDN_FILESYSPATH = 0x80058000
+    # 不是所有 shell 项都能给出文件系统路径（例如"此电脑"、网络位置、库、
+    # 压缩包内的目录），但都能给出解析名。解析名同样指向用户确认的那一项，
+    # 读不到文件系统路径时用它兜住，避免"选完却拿不到结果"。
+    SIGDN_DESKTOPABSOLUTEPARSING = 0x80028000
 
     ole32 = ctypes.OleDLL("ole32")
     shell32 = ctypes.OleDLL("shell32")
@@ -239,16 +353,27 @@ def _pick_windows_ifiledialog_impl(
         get_display_name = ctypes.WINFUNCTYPE(
             ctypes.c_long, ctypes.c_void_p, wt.DWORD, ctypes.POINTER(wt.LPWSTR)
         )(item_vtbl[5])
-        psz = wt.LPWSTR()
-        hr = get_display_name(item, SIGDN_FILESYSPATH, ctypes.byref(psz))
-        if hr < 0:
-            return None
-        try:
-            return _norm_result(psz.value)
-        finally:
-            ole32.CoTaskMemFree(psz)
+        for display_form in (SIGDN_FILESYSPATH, SIGDN_DESKTOPABSOLUTEPARSING):
+            psz = wt.LPWSTR()
+            hr = get_display_name(item, display_form, ctypes.byref(psz))
+            if hr < 0 or not psz.value:
+                continue
+            try:
+                resolved = _norm_result(psz.value)
+            finally:
+                ole32.CoTaskMemFree(psz)
+            if resolved:
+                return resolved
+        return None
 
-    ole32.CoInitializeEx(None, 0x2)
+    try:
+        ole32.CoInitializeEx(None, 0x2)
+    except OSError as exc:
+        # 线程已被其它库初始化为 MTA 时 ctypes 会直接抛 HRESULT：这里属于
+        # "还没弹窗"，交给上层换一条 STA 线程（_run_in_sta_thread）或兜底链。
+        if _is_com_mode_conflict(exc):
+            raise PathPickerUnavailable("线程已初始化为 MTA，无法使用系统文件夹对话框") from exc
+        raise PathPickerUnavailable(f"COM 初始化失败（{exc}）") from exc
     dialog = ctypes.c_void_p()
     hr = ole32.CoCreateInstance(
         ctypes.byref(CLSID_FileOpenDialog),
@@ -259,7 +384,7 @@ def _pick_windows_ifiledialog_impl(
     )
     if hr < 0:
         ole32.CoUninitialize()
-        raise OSError(f"CoCreateInstance 失败: {hr:#010x}")
+        raise PathPickerUnavailable(f"CoCreateInstance 失败: {hr:#010x}")
 
     try:
         vtbl = ctypes.cast(dialog, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
@@ -285,7 +410,7 @@ def _pick_windows_ifiledialog_impl(
 
         hr = set_options(dialog, options)
         if hr < 0:
-            raise OSError(f"SetOptions 失败: {hr:#010x}")
+            raise PathPickerUnavailable(f"SetOptions 失败: {hr:#010x}")
 
         set_title(dialog, dlg_title)
 
@@ -306,7 +431,10 @@ def _pick_windows_ifiledialog_impl(
         if _is_cancelled_hr(hr):
             return None, True
         if not _hresult_succeeded(hr):
-            raise OSError(hr, f"Show 失败: {_hresult_unsigned(hr):#010x}")
+            # 对话框已经弹出过：换成另一种样式的选择器会让用户重选一遍。
+            raise PathPickerDialogError(
+                f"系统文件夹对话框异常结束（HRESULT {_hresult_unsigned(hr):#010x}）"
+            )
 
         # GetResult is the user's confirmed selection for both files and
         # FOS_PICKFOLDERS. GetFolder reports the browsing location (or the
@@ -318,17 +446,23 @@ def _pick_windows_ifiledialog_impl(
             path = _shell_item_path(result)
             if path:
                 return path, False
-        return None, False
+        raise PathPickerDialogError("系统文件夹对话框没有返回可用的目录路径")
     finally:
         ole32.CoUninitialize()
 
 
 def _pick_tkinter(kind: PathPickKind, initial: str) -> Optional[str]:
-    import tkinter as tk
-    from tkinter import filedialog
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        raise PathPickerUnavailable(f"未安装 tkinter（{exc}）") from exc
 
     init_dir = _safe_initial_dir(initial)
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except Exception as exc:  # TclError 等：还没有任何窗口
+        raise PathPickerUnavailable(f"tkinter 无法创建窗口（{exc}）") from exc
     root.withdraw()
     try:
         root.attributes("-topmost", True)
@@ -346,6 +480,8 @@ def _pick_tkinter(kind: PathPickKind, initial: str) -> Optional[str]:
                 initialdir=init_dir,
                 parent=root,
             )
+    except Exception as exc:  # 窗口已弹出，不再换第二种样式
+        raise PathPickerDialogError(f"tkinter 选择框出错（{exc}）") from exc
     finally:
         try:
             root.destroy()
@@ -355,11 +491,17 @@ def _pick_tkinter(kind: PathPickKind, initial: str) -> Optional[str]:
 
 
 def _pick_tkinter_multi_files(initial: str) -> list[str]:
-    import tkinter as tk
-    from tkinter import filedialog
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        raise PathPickerUnavailable(f"未安装 tkinter（{exc}）") from exc
 
     init_dir = _safe_initial_dir(initial)
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except Exception as exc:
+        raise PathPickerUnavailable(f"tkinter 无法创建窗口（{exc}）") from exc
     root.withdraw()
     try:
         root.attributes("-topmost", True)
@@ -370,6 +512,8 @@ def _pick_tkinter_multi_files(initial: str) -> list[str]:
             initialdir=init_dir,
             parent=root,
         )
+    except Exception as exc:
+        raise PathPickerDialogError(f"tkinter 选择框出错（{exc}）") from exc
     finally:
         try:
             root.destroy()
@@ -420,26 +564,38 @@ def _pick_windows_powershell(
             "if($d.Multiselect){$d.FileNames | ForEach-Object {[Console]::WriteLine($_)}}"
             "else{[Console]::WriteLine($d.FileName)}}"
         )
-    proc = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-STA",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=float(os.getenv("MYAGENT_PATH_PICKER_TIMEOUT", "45")),
-        creationflags=hidden_flags(),
-    )
+    try:
+        timeout = float(os.getenv("MYAGENT_PATH_PICKER_TIMEOUT", "600"))
+    except ValueError:
+        timeout = 600.0
+    if timeout <= 0:
+        timeout = 600.0
+    try:
+        proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-STA",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            creationflags=hidden_flags(),
+        )
+    except FileNotFoundError as exc:
+        raise PathPickerUnavailable(f"找不到 powershell（{exc}）") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise PathPickerDialogError("PowerShell 选择框长时间没有返回") from exc
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "PowerShell 文件选择器失败").strip()
-        raise RuntimeError(err)
+        # 脚本本身失败（通常是窗口没能创建）→ 按"还没弹窗"处理，允许继续兜底。
+        raise PathPickerUnavailable(err)
     lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
     if multiple:
         return [_norm_result(line) for line in lines if _norm_result(line)]
@@ -456,11 +612,16 @@ def _pick_zenity(kind: PathPickKind, initial: str) -> Optional[str]:
         cmd.append("--file-selection")
     if init:
         cmd.append(f"--filename={init}{os.sep}")
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except FileNotFoundError as exc:
+        raise PathPickerUnavailable(f"找不到 zenity（{exc}）") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise PathPickerDialogError("zenity 选择框长时间没有返回") from exc
     if proc.returncode == 1:
         return None
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "zenity 失败").strip())
+        raise PathPickerUnavailable((proc.stderr or proc.stdout or "zenity 失败").strip())
     return _norm_result((proc.stdout or "").strip())
 
 
@@ -469,17 +630,22 @@ def _pick_macos(kind: PathPickKind, initial: str) -> Optional[str]:
         script = 'POSIX path of (choose folder with prompt "选择文件夹")'
     else:
         script = 'POSIX path of (choose file with prompt "选择文件")'
-    proc = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except FileNotFoundError as exc:
+        raise PathPickerUnavailable(f"找不到 osascript（{exc}）") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise PathPickerDialogError("osascript 选择框长时间没有返回") from exc
     if proc.returncode != 0:
         err = (proc.stderr or "").strip()
         if "User canceled" in err or proc.returncode == 1:
             return None
-        raise RuntimeError(err or "osascript 失败")
+        raise PathPickerUnavailable(err or "osascript 失败")
     return _norm_result((proc.stdout or "").strip())
 
 
@@ -501,10 +667,51 @@ def _backends() -> list[tuple[str, Callable[[PathPickKind, str], Optional[str]]]
     return order
 
 
+# 已经成功弹出过对话框的后端：同一进程内固定用它，避免"这次是系统新样式、
+# 下次是 Tk/旧版样式"的窗口在同一个入口上交替出现。
+_preferred_backend: Optional[str] = None
+
+
+def _remember_backend(name: str) -> None:
+    global _preferred_backend
+    if name:
+        _preferred_backend = name
+
+
+def _ordered_backends() -> list[tuple[str, Callable[[PathPickKind, str], Optional[str]]]]:
+    """优先用已经证明可用的后端，其余按平台默认顺序排在后面。"""
+    order = _backends()
+    if _preferred_backend:
+        head = [item for item in order if item[0] == _preferred_backend]
+        if head:
+            return head + [item for item in order if item[0] != _preferred_backend]
+    return order
+
+
+def _picker_platform_hint() -> str:
+    sysname = platform.system()
+    if sysname == "Linux":
+        return " Linux：请安装 zenity 并从图形桌面会话启动 SugarAgent。"
+    if sysname == "Darwin":
+        return " macOS：请允许 Terminal/Python 使用系统自动化与文件选择功能。"
+    return " Windows：请从桌面正常启动 SugarAgent；或确认系统文件对话框可用。"
+
+
+def _picker_unavailable_error(failures: list[str]) -> RuntimeError:
+    detail = (" 详情：" + " | ".join(failures)) if failures else ""
+    return RuntimeError("无法打开本机文件选择对话框。" + _picker_platform_hint() + detail)
+
+
 def pick_native_path(
     kind: PathPickKind, initial: str = "", multiple: bool = False
 ) -> Optional[str] | list[str]:
-    """弹出系统文件/目录选择框。用户取消时返回 None。"""
+    """弹出系统文件/目录选择框。用户取消时返回 None。
+
+    兜底规则（2026-10-17）：只有"窗口根本没弹出来"（PathPickerUnavailable /
+    ImportError / FileNotFoundError）才换下一个后端。对话框一旦弹出过——成功、
+    取消或 PathPickerDialogError——本次选择就到此为止，绝不再弹第二种样式的
+    窗口让用户重选一次。
+    """
     if kind not in ("file", "directory"):
         raise ValueError("kind 须为 file 或 directory")
     if multiple and kind != "file":
@@ -516,44 +723,63 @@ def pick_native_path(
             "Native file picker is unavailable in headless Linux mode. "
             "Enter a path manually or connect through a desktop session."
         )
+    if not _pick_lock.acquire(blocking=False):
+        raise PathPickerDialogError("已有一个文件选择窗口正在等待操作，请先完成或取消它。")
+    try:
+        return _pick_native_path_locked(kind, initial, multiple)
+    finally:
+        _pick_lock.release()
+
+
+def _pick_native_path_locked(
+    kind: PathPickKind, initial: str, multiple: bool
+) -> Optional[str] | list[str]:
     if multiple:
         failures: list[str] = []
         try:
             return _pick_tkinter_multi_files(initial)
+        except PathPickerDialogError:
+            raise
+        except (ImportError, FileNotFoundError, PathPickerUnavailable) as e:
+            failures.append(f"tkinter: {e}")
         except Exception as e:
             if _is_user_cancelled_exc(e):
                 return []
-            failures.append(f"tkinter: {e}")
+            raise PathPickerDialogError(f"多选文件对话框出错：{e}") from e
         if platform.system() == "Windows":
             try:
                 result = _pick_windows_powershell("file", initial, True)
                 return result if isinstance(result, list) else ([result] if result else [])
+            except PathPickerDialogError:
+                raise
+            except (ImportError, FileNotFoundError, PathPickerUnavailable) as e:
+                failures.append(f"windows-powershell: {e}")
             except Exception as e:
                 if _is_user_cancelled_exc(e):
                     return []
-                failures.append(f"windows-powershell: {e}")
-        single = pick_native_path("file", initial, multiple=False)
+                raise PathPickerDialogError(f"多选文件对话框出错：{e}") from e
+        single = _pick_native_path_locked("file", initial, False)
         return [single] if single else []
 
     failures: list[str] = []
-    for name, fn in _backends():
+    for name, fn in _ordered_backends():
         try:
-            return fn(kind, initial)
-        except ImportError as e:
-            failures.append(f"{name}: 未安装（{e}）")
-        except FileNotFoundError as e:
-            failures.append(f"{name}: 找不到程序（{e}）")
+            result = fn(kind, initial)
+        except PathPickerDialogError:
+            _remember_backend(name)
+            raise
+        except (ImportError, FileNotFoundError, PathPickerUnavailable) as e:
+            failures.append(f"{name}: {e}")
+            continue
         except Exception as e:
             if _is_user_cancelled_exc(e):
+                _remember_backend(name)
                 return None
             failures.append(f"{name}: {e}")
+            # 未知异常时无法确认窗口是否已经弹出：按"已弹出"处理，不再级联。
+            raise PathPickerDialogError(str(_picker_unavailable_error(failures))) from e
+        _remember_backend(name)
+        return result
 
-    if platform.system() == "Linux":
-        platform_hint = " Linux：请安装 zenity 并从图形桌面会话启动 SugarAgent。"
-    elif platform.system() == "Darwin":
-        platform_hint = " macOS：请允许 Terminal/Python 使用系统自动化与文件选择功能。"
-    else:
-        platform_hint = " Windows：请从桌面正常启动 SugarAgent；或重装 Python 时勾选 tcl/tk。"
-    hint = "无法打开本机文件选择对话框。" + platform_hint + f" 详情：{' | '.join(failures)}"
-    raise RuntimeError(hint)
+    raise _picker_unavailable_error(failures)
 

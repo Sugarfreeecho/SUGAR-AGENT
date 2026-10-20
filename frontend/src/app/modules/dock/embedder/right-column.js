@@ -292,7 +292,7 @@ function dockRightSystemCard(rel) {
     open.className = 'dock-link-button';
     open.textContent = dockRightText('openSystem');
     open.addEventListener('click', () => {
-        void fetch(workspaceApiUrl('/api/open-workspace-file', { rel: rel }));
+        void dockRightOpenSystemPath(rel);
     });
     wrap.appendChild(note);
     wrap.appendChild(open);
@@ -324,7 +324,15 @@ function dockRightOpenPathSmart(pathValue) {
         dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(rel));
         return;
     }
-    void fetch(workspaceApiUrl('/api/open-workspace-file', { rel: rel }));
+    void dockRightOpenSystemPath(rel);
+}
+
+function dockRightOpenSystemPath(rel) {
+    return openWorkspaceLocalPath(rel, false).then(data => {
+        if (!data || !data.ok) throw new Error((data && data.error) || '无法打开文件');
+    }).catch(error => {
+        if (typeof showOpenFileFeedback === 'function') showOpenFileFeedback('无法打开：' + error.message);
+    });
 }
 
 /** The seed thunk for this column: an emptied pane is backfilled with its "start" page. */
@@ -1083,8 +1091,7 @@ function dockRightDocumentBody(tab) {
     reveal.title = dockRightText('reveal');
     reveal.innerHTML = DOCK_ICON_REVEAL;
     reveal.addEventListener('click', () => {
-        void fetch(workspaceApiUrl('/api/open-workspace-dir', { rel: rel }))
-            .then((response) => response.json().catch(() => null))
+        void openWorkspaceLocalPath(rel, true)
             .then((data) => {
                 if (typeof showOpenFileFeedback === 'function') {
                     if (data && data.ok) showOpenFileFeedback('已打开文件目录');
@@ -1100,7 +1107,7 @@ function dockRightDocumentBody(tab) {
     openSystem.className = 'dock-link-button';
     openSystem.textContent = dockRightText('openSystem');
     openSystem.addEventListener('click', () => {
-        void fetch(workspaceApiUrl('/api/open-workspace-file', { rel: rel }));
+        void dockRightOpenSystemPath(rel);
     });
     // The refresh control keeps the head's far right corner on every page;
     // the system-open action sits beside the title instead (it ran between

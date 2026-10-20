@@ -86,9 +86,17 @@
     document.head.appendChild(st);
   }
 
+  // 原生选择框是"人在浏览目录"的等待，不能用短超时：请求一旦被前端提前 abort，
+  // 用户在系统窗口里选完也没有任何反应（看起来就是"选择无效"），紧接着又会弹
+  // 出填写路径的兜底框——同一件事变成第二、第三种样式的窗口。这里只保留一个
+  // 很长的安全网，真正的取消由用户关闭系统窗口表达。
+  var PATH_PICK_CLIENT_TIMEOUT_MS = 15 * 60 * 1000;
+
   async function pickPath(kind, initial, multiple) {
     var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    var timer = controller ? setTimeout(function () { controller.abort(); }, 50000) : null;
+    var timer = controller
+      ? setTimeout(function () { controller.abort(); }, PATH_PICK_CLIENT_TIMEOUT_MS)
+      : null;
     var r;
     try {
       r = await fetch('/api/pick-path', {

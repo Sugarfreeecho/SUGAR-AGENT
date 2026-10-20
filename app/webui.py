@@ -22,6 +22,7 @@ import zipfile
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from itertools import islice
 from typing import Any, Dict, Optional
 
 from pathlib import Path
@@ -32,6 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from agent_local_timing import LocalOperationTrace
 
 from agent import (
     astream_events,
@@ -192,12 +194,13 @@ UI_LOG_TRUNCATE_KEEP_LINES = max(10, int(os.getenv("UI_LOG_TRUNCATE_KEEP_LINES",
 
 # 正在向前端推流的 /chat 连接数（按 session）。刷新页面后仍可根据此项显示「生成中」黄点。
 _active_chat_by_session: dict[str, int] = {}
+_active_chat_tasks_by_session: dict[str, set[asyncio.Task]] = {}
 # Short-lived protection for uploaded files already handed to an accepted chat
 # request. A browser cleanup beacon racing the response must not remove a file
 # while the agent is still reading it.
 _accepted_chat_upload_paths: dict[str, float] = {}
 _accepted_chat_upload_paths_lock = threading.RLock()
-# 上次活跃时间戳（按 session），用于清理僵尸计数器（浏览器非正常关闭导致未递减）
+# Stale timestamps trigger a task-liveness check, never expiration of a live SSE.
 _active_chat_last_seen: dict[str, float] = {}
 # Read-only reconnect/observer streams are deliberately separate from run
 # producers. An observer must never keep an orphaned run "active" or cause 409.
@@ -600,19 +603,57 @@ def _read_text_cached(path: Path, fallback: str = "") -> str:
         _STATIC_TEXT_CACHE[key] = (sig, text)
         return text
 
+def _register_active_chat_connection(sid: str) -> asyncio.Task:
+    task = asyncio.current_task()
+    assert task is not None
+    with _chat_start_lock:
+        tasks = _active_chat_tasks_by_session.setdefault(sid, set())
+        tasks.add(task)
+        _active_chat_by_session[sid] = len(tasks)
+        _active_chat_last_seen[sid] = time.time()
+    return task
+
+
+def _unregister_active_chat_connection(sid: str, task: asyncio.Task) -> None:
+    with _chat_start_lock:
+        tasks = _active_chat_tasks_by_session.get(sid)
+        if not tasks or task not in tasks:
+            return  # A stop/reset may already have removed this connection.
+        tasks.discard(task)
+        if tasks:
+            _active_chat_by_session[sid] = len(tasks)
+        else:
+            _clear_active_chat_connections(sid)
+
+
+def _clear_active_chat_connections(sid: str) -> None:
+    with _chat_start_lock:
+        _active_chat_tasks_by_session.pop(sid, None)
+        _active_chat_by_session.pop(sid, None)
+        _active_chat_last_seen.pop(sid, None)
+
+
 def _cleanup_stale_active_chat():
     import time as _t
     now = _t.time()
-    stale = [sid for sid, ts in list(_active_chat_last_seen.items()) if now - ts > _CHAT_ACTIVE_TIMEOUT_SEC]
-    for sid in stale:
-        _active_chat_by_session.pop(sid, None)
-        _active_chat_last_seen.pop(sid, None)
     with _chat_start_lock:
+        stale = [sid for sid, ts in list(_active_chat_last_seen.items()) if now - ts > _CHAT_ACTIVE_TIMEOUT_SEC]
+        for sid in stale:
+            tasks = {task for task in _active_chat_tasks_by_session.get(sid, ()) if not task.done()}
+            if tasks:
+                _active_chat_tasks_by_session[sid] = tasks
+                _active_chat_by_session[sid] = len(tasks)
+                _active_chat_last_seen[sid] = now
+            else:
+                _clear_active_chat_connections(sid)
         stale_starting = []
         for sid, entry in list(_chat_starting_by_session.items()):
             ts = entry[0] if isinstance(entry, tuple) else entry
             if now - float(ts or 0.0) > _CHAT_ACTIVE_TIMEOUT_SEC:
-                stale_starting.append(sid)
+                if not is_run_active(sid) and not any(
+                    not task.done() for task in _active_chat_tasks_by_session.get(sid, ())
+                ):
+                    stale_starting.append(sid)
         for sid in stale_starting:
             _chat_starting_by_session.pop(sid, None)
 
@@ -682,6 +723,34 @@ def _release_session_chat_start(sid: str, token: str = "") -> None:
     if popped:
         # run 边界变化：让下一次 /sessions/state 读取重建快照而不是继续服旧值。
         _invalidate_sessions_state_cache()
+
+
+async def _reserve_session_chat_start_off_loop(sid: str, run_id: str = "") -> Optional[str]:
+    # A durable busy check may rebuild a snapshot or wait for a session lock.
+    def reserve():
+        trace = LocalOperationTrace("chat_admission", session_id=sid, run_id=run_id)
+        try:
+            with trace.bind(), trace.step("reserve_chat_start"):
+                return _reserve_session_chat_start(sid, run_id)
+        finally:
+            if time.perf_counter() - trace.started >= 0.05:
+                trace.log()
+
+    reservation = asyncio.create_task(asyncio.to_thread(reserve))
+    try:
+        return await asyncio.shield(reservation)
+    except asyncio.CancelledError:
+        # The thread can finish after its HTTP caller disconnects. Release only
+        # its own token so it cannot leave a phantom busy session behind.
+        def release_late_result(task):
+            try:
+                token = task.result()
+                if token:
+                    _release_session_chat_start(sid, token)
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Cancelled chat reservation cleanup failed: %s", sid, exc_info=True)
+        reservation.add_done_callback(release_late_result)
+        raise
 
 
 def _runtime_v2_active_run_info(sid: str) -> dict:
@@ -851,7 +920,7 @@ async def _run_human_interaction_recovery_background(session_id: str) -> None:
     if not sid:
         return
     recovery_run_id = "interaction-recovery-" + uuid.uuid4().hex
-    start_token = _reserve_session_chat_start(sid, recovery_run_id) or ""
+    start_token = await _reserve_session_chat_start_off_loop(sid, recovery_run_id) or ""
     if not start_token:
         return
     try:
@@ -963,18 +1032,18 @@ async def _run_react_recovery_background(session_id: str) -> None:
         return
     started_at = time.perf_counter()
     recovery_run_id = "react-recovery-" + uuid.uuid4().hex
-    start_token = _reserve_session_chat_start(sid, recovery_run_id) or ""
+    start_token = await _reserve_session_chat_start_off_loop(sid, recovery_run_id) or ""
     if not start_token:
         logger.info("ReAct recovery reservation unavailable: session=%s", sid)
         return
     event_count = 0
     outcome = "skipped"
     try:
-        if _session_pending_human_count(sid) > 0:
+        if await asyncio.to_thread(_session_pending_human_count, sid) > 0:
             return
-        if not _runtime_v2_auto_resume_pending(sid):
+        if not await asyncio.to_thread(_runtime_v2_auto_resume_pending, sid):
             return
-        if not session_manager.can_continue_react_session(sid):
+        if not await asyncio.to_thread(session_manager.can_continue_react_session, sid):
             return
 
         def should_stop(sid_: str) -> bool:
@@ -1221,7 +1290,7 @@ def _has_running_subagent_activity(sid: str) -> bool:
 
         flat = session_manager.list_subagents_flat(
             sid,
-            running_checker=subagent_registry.is_running,
+            running_checker=lambda child_id: subagent_registry.is_running(child_id) or is_run_active(child_id),
             include_dialogue_turns=False,
         )
         return any(bool(n.get("running")) for n in flat if isinstance(n, dict))
@@ -1430,6 +1499,54 @@ def _runtime_v2_auto_resume_pending(sid: str) -> bool:
     )
 
 
+def _queued_followup_start_state(sid: str, *, allow_paused: bool = False) -> str:
+    """Require a completed turn before the idle /chat queue fallback may start.
+
+    Liveness can disappear before orphan reconciliation or recovery registration.
+    Read the durable run boundary as well; an absent worker is not completion.
+    """
+    try:
+        if _session_pending_human_count(sid):
+            return "paused"
+        paused = _session_was_manually_stopped(sid)
+        for workers in (_react_recovery_workers, _human_interaction_recovery_workers):
+            worker = workers.get(sid)
+            if worker is not None and not worker.done():
+                return "recovering"
+        if _has_local_worker_activity(sid):
+            return "busy"
+        unfinished = session_manager.can_continue_react_session(sid)
+        from runtime_v2 import runtime_v2_primary
+
+        if runtime_v2_primary():
+            snapshot = _runtime_v2_snapshot(sid, fail_closed=True)
+            runs = snapshot.get("runs") or {}
+            rows = [run for run in runs.values() if isinstance(run, dict)]
+            if rows:
+                latest = max(rows, key=lambda run: int(
+                    run.get("started_seq") or run.get("finished_seq") or run.get("heartbeat_seq") or 0
+                ))
+                status = str(latest.get("status") or "")
+                if status not in {"finished", "failed", "interrupted"}:
+                    return "paused" if paused else "recovering"
+                if status != "finished":
+                    if status == "interrupted" and not paused and _runtime_v2_auto_resume_pending(sid):
+                        # The final may have committed just before the process
+                        # died. In that case no original answer remains to resume.
+                        return "recovering" if unfinished else "ready"
+                    paused = True
+        if paused:
+            # An explicit Send now may start a stopped/failed queue entry;
+            # automatic drains must keep that intentional pause intact.
+            return "ready" if allow_paused else "paused"
+        if unfinished:
+            return "recovering"
+        return "ready"
+    except Exception:
+        logger.warning("Queued follow-up start state unavailable: session=%s", sid, exc_info=True)
+        return "unknown"
+
+
 def _empty_todo_plan_snapshot(source: str) -> dict:
     return {
         "has_plan": False,
@@ -1471,7 +1588,7 @@ def _runtime_v2_event_dicts(session_id: str, *, after_seq: int = 0, before_seq: 
     if before_seq is not None:
         events = log.read_before_seq(session_id, int(before_seq), lim)
     elif int(after_seq or 0) > 0:
-        events = log.read_after_seq(session_id, int(after_seq or 0))[:lim]
+        events = list(islice(log.iter_after_seq(session_id, int(after_seq or 0)), lim))
     else:
         events = log.read_latest(session_id, lim)
     return [ev.to_dict() for ev in events]
@@ -1786,10 +1903,24 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         logger.exception("Failed to initialize pending human-interaction state for /sessions/state")
         human_interaction_service = None
     pending_counts_by_session = {}
+    # Children are absent from the sidebar; attribute their human requests to
+    # their visible ancestors while keeping the request owned by the child.
+    descendants_by_session = {}
+    load_subagent_index = getattr(session_manager, "_load_subagent_index", None)
+    subagent_index = load_subagent_index() if callable(load_subagent_index) else {}
+    for child_id in subagent_index:
+        cursor, visited = child_id, {child_id}
+        while cursor in subagent_index:
+            parent_id = subagent_index[cursor]
+            if parent_id in visited:
+                break
+            visited.add(parent_id)
+            descendants_by_session.setdefault(parent_id, []).append(child_id)
+            cursor = parent_id
     if human_interaction_service is not None:
         try:
             pending_counts_by_session = human_interaction_service.pending_counts_many(
-                str(item.get("id") or "") for item in sessions if item.get("id")
+                {str(item.get("id")) for item in sessions if item.get("id")} | set(subagent_index)
             )
         except Exception:
             logger.exception("Failed to batch pending human-interaction state for /sessions/state")
@@ -1821,6 +1952,10 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             "approvals": int(pending_counts.get("approvals") or 0),
             "total": int(pending_counts.get("total") or 0),
         }
+        for child_id in descendants_by_session.get(sid, []):
+            child_counts = pending_counts_by_session.get(child_id) or {}
+            for key in ("questions", "approvals", "total"):
+                s["pending_human_interactions"][key] += int(child_counts.get(key) or 0)
         if run_state.get("active_run"):
             active_runs.append(run_state["active_run"])
     # Child sessions live under their parent and are absent from list_sessions.
@@ -1830,7 +1965,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         from agent_subagent import subagent_registry
 
         root_ids = {str(s.get("id") or "") for s in sessions}
-        for child_id in subagent_registry.running_runs():
+        for child_id in set(subagent_registry.running_runs()) | set(subagent_index):
             if child_id not in root_ids:
                 child_state = _session_run_state_fields_light(child_id)
                 if child_state.get("active_run"):
@@ -2169,9 +2304,10 @@ async def open_workspace_dir(
 ):
     """Reveal a file's folder in the system file manager (or open the folder).
 
-    Windows uses `explorer /select,<file>` so the file itself is highlighted;
-    macOS uses `open -R`; Linux opens the containing directory. The path goes
-    through the same allowed-root gate as `/api/open-workspace-file`.
+    Browser requests open the containing directory through the platform opener.
+    Desktop probe requests only resolve the path and type; Electron performs
+    the native open or file selection. Both use the same path validation as
+    `/api/open-workspace-file`.
     """
     import os
     import platform
@@ -2215,7 +2351,8 @@ async def open_workspace_dir(
             logger.warning("open-workspace-dir failed: %s", exc)
 
     if int(probe or 0) == 1:
-        return JSONResponse({"ok": True, "path": str(safe_path), "probe": True})
+        # 桌面主进程复用此校验结果执行系统打开，避免后台线程丢失前台激活资格。
+        return JSONResponse({"ok": True, "path": str(safe_path), "is_dir": safe_path.is_dir(), "probe": True})
     threading.Thread(target=_reveal_detached, name="open-workspace-dir", daemon=True).start()
     return JSONResponse({"ok": True, "path": str(safe_path)})
 
@@ -3475,7 +3612,7 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
 
         flat = session_manager.list_subagents_flat(
             str(session_id),
-            running_checker=subagent_registry.is_running,
+            running_checker=lambda child_id: subagent_registry.is_running(child_id) or is_run_active(child_id),
             include_dialogue_turns=False,
         )
         s["subagent_count"] = len(flat)
@@ -3675,7 +3812,7 @@ async def runtime_v2_session_stream(
             if await request.is_disconnected():
                 break
             try:
-                events = _runtime_v2_event_dicts(sid, after_seq=cursor, limit=100)
+                events = await asyncio.to_thread(_runtime_v2_event_dicts, sid, after_seq=cursor, limit=100)
             except Exception as exc:
                 payload = {
                     "type": "runtime_v2_stream_error",
@@ -3752,6 +3889,7 @@ async def get_session_detail(
             s["active_run"] = run_state.get("active_run")
             s["title_generation_pending"] = is_session_title_generation_pending(str(sid))
             s["pending_human_interactions"] = _session_pending_human_counts(str(sid))
+            s["queued_followup_state"] = "paused" if is_child else _queued_followup_start_state(str(sid))
             if is_child:
                 s["react_can_continue"] = False
                 s["react_auto_resume"] = False
@@ -3780,6 +3918,7 @@ async def get_session_detail(
             s["pending_human_interactions"] = {"questions": 0, "approvals": 0, "total": 0}
             s["react_can_continue"] = False
             s["react_auto_resume"] = False
+            s["queued_followup_state"] = "paused"
         return JSONResponse(content=s)
 
     return await asyncio.to_thread(_build_detail_response)
@@ -3818,7 +3957,7 @@ def _build_session_subagents_response(session_id: str, lite: bool) -> JSONRespon
 
         nodes = session_manager.list_subagents_flat(
             session_id,
-            running_checker=subagent_registry.is_running,
+            running_checker=lambda child_id: subagent_registry.is_running(child_id) or is_run_active(child_id),
             include_dialogue_turns=not lite,
         )
         task_rows = session_manager.list_subagent_tasks(session_id)
@@ -4837,8 +4976,7 @@ async def delete_session(session_id: str):
         await stop_session_tree(sid, session_manager, subagent_registry)
     except Exception as e:
         logger.exception("stop session before delete failed: %s", e)
-    _active_chat_by_session.pop(sid, None)
-    _active_chat_last_seen.pop(sid, None)
+    _clear_active_chat_connections(sid)
     try:
         await run_in_threadpool(_run_history_op_locked, sid, session_manager.delete_session, sid)
     except Exception as e:
@@ -4870,8 +5008,7 @@ async def interrupt_session(session_id: str, request: Request):
     session_manager.request_interrupt(sid, run_id, reason=reason)
     if reason != "followup":
         session_manager.mark_session_unread_result(sid, status="failed", run_id=run_id)
-    _active_chat_by_session.pop(sid, None)
-    _active_chat_last_seen.pop(sid, None)
+    _clear_active_chat_connections(sid)
     interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, run_id, reason=reason)
     try:
         from session_event_bus import publish_session_event
@@ -4973,19 +5110,32 @@ def _human_interaction_error_response(exc: Exception) -> JSONResponse:
     return JSONResponse(content={"ok": False, "error": "human interaction request failed"}, status_code=500)
 
 
-@fastapi_app.get("/sessions/{session_id}/interactions")
-async def get_session_interactions(session_id: str, status: str = Query(default="pending")):
-    try:
-        from human_interaction import get_human_interaction_service
+def _list_session_human_interactions(session_id: str, kind: str, status: str, include_descendants: bool) -> list[dict]:
+    from human_interaction import get_human_interaction_service
 
+    service = get_human_interaction_service()
+    ids = [session_id]
+    if include_descendants:
+        ids.extend(session_manager.list_subagent_descendants(session_id))
+    rows = []
+    for sid in dict.fromkeys(ids):
+        for record in service.list(sid, kind=kind, status=status):
+            rows.append(dict(record, session_id=sid))
+    return rows
+
+
+@fastapi_app.get("/sessions/{session_id}/interactions")
+async def get_session_interactions(
+    session_id: str,
+    status: str = Query(default="pending"),
+    include_descendants: bool = Query(False),
+):
+    try:
         normalized = str(status or "").strip().lower()
         if normalized not in {"", "pending", "resolved", "cancelled", "expired"}:
             return JSONResponse(content={"ok": False, "error": "invalid status"}, status_code=422)
         rows = await asyncio.to_thread(
-            get_human_interaction_service().list,
-            session_id,
-            kind="question",
-            status=normalized,
+            _list_session_human_interactions, session_id, "question", normalized, include_descendants is True
         )
         return JSONResponse(content={"ok": True, "interactions": rows})
     except Exception as exc:
@@ -5058,18 +5208,17 @@ async def cancel_session_interaction(session_id: str, interaction_id: str, reque
 
 
 @fastapi_app.get("/sessions/{session_id}/approvals")
-async def get_session_approvals(session_id: str, status: str = Query(default="pending")):
+async def get_session_approvals(
+    session_id: str,
+    status: str = Query(default="pending"),
+    include_descendants: bool = Query(False),
+):
     try:
-        from human_interaction import get_human_interaction_service
-
         normalized = str(status or "").strip().lower()
         if normalized not in {"", "pending", "resolved", "cancelled", "expired"}:
             return JSONResponse(content={"ok": False, "error": "invalid status"}, status_code=422)
         rows = await asyncio.to_thread(
-            get_human_interaction_service().list,
-            session_id,
-            kind="approval",
-            status=normalized,
+            _list_session_human_interactions, session_id, "approval", normalized, include_descendants is True
         )
         return JSONResponse(content={"ok": True, "approvals": rows})
     except Exception as exc:
@@ -5483,8 +5632,7 @@ async def post_session_steer(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
     aborted = abort_session_steer_run(sid, reason="steer")
     session_manager.request_interrupt(sid, reason="followup")
-    _active_chat_by_session.pop(sid, None)
-    _active_chat_last_seen.pop(sid, None)
+    _clear_active_chat_connections(sid)
     with _chat_start_lock:
         _chat_starting_by_session.pop(sid, None)
     interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, reason="followup")
@@ -6182,6 +6330,7 @@ async def chat(
     stream_protocol: str = Form("runtime_v2"),
     followup_steer: bool = Form(False),
     queued_followup: bool = Form(False),
+    queued_followup_manual: bool = Form(False),
     steer_id: str = Form(""),
     selected_skills: str = Form(""),
     ui_message: str = Form(""),
@@ -6217,7 +6366,7 @@ async def chat(
             from runtime_v2 import runtime_v2_primary
 
             migration_gate = (
-                _runtime_v2_legacy_only_migration_pending(sid)
+                await asyncio.to_thread(_runtime_v2_legacy_only_migration_pending, sid)
                 if runtime_v2_primary()
                 else {"pending": False}
             )
@@ -6233,8 +6382,24 @@ async def chat(
                 },
                 status_code=425,
             )
+        if queued_followup:
+            queue_start_state = await asyncio.to_thread(
+                _queued_followup_start_state, sid, allow_paused=queued_followup_manual is True
+            )
+            if queue_start_state != "ready":
+                if queue_start_state == "recovering":
+                    await recover_react_session(sid)
+                return JSONResponse(
+                    content={
+                        "ok": False,
+                        "reason": "queued_followup_blocked",
+                        "session_id": sid,
+                        "queued_followup_state": queue_start_state,
+                    },
+                    status_code=409,
+                )
         if (followup_steer or queued_followup) and steer_operation_id:
-            steer_status = get_session_steer(sid, steer_id=steer_operation_id)
+            steer_status = await asyncio.to_thread(get_session_steer, sid, steer_id=steer_operation_id)
             steer_item = steer_status.get("item") if isinstance(steer_status.get("item"), dict) else {}
             if not steer_status.get("ok"):
                 return JSONResponse(content={"ok": False, "reason": "unknown_steer"}, status_code=409)
@@ -6251,7 +6416,8 @@ async def chat(
             expected_run_id = str(steer_item.get("replacement_run_id") or "").strip()
             if expected_run_id and run_id and expected_run_id != run_id:
                 return JSONResponse(content={"ok": False, "reason": "replacement_run_mismatch"}, status_code=409)
-            claimed = transition_session_steer(
+            claimed = await asyncio.to_thread(
+                transition_session_steer,
                 sid,
                 steer_operation_id,
                 claimable,
@@ -6261,13 +6427,13 @@ async def chat(
             )
             if not claimed.get("ok"):
                 return JSONResponse(content={"ok": False, "reason": "steer_already_claimed"}, status_code=409)
-        start_token = _reserve_session_chat_start(sid, run_id) or ""
+        start_token = await _reserve_session_chat_start_off_loop(sid, run_id) or ""
         if not start_token:
             if (followup_steer or queued_followup) and steer_operation_id:
-                transition_session_steer(
-                    sid, steer_operation_id, {"claimed"}, "queued" if queued_followup else "restarting", claimed_by="", claimed_at=0
+                await asyncio.to_thread(
+                    transition_session_steer, sid, steer_operation_id, {"claimed"}, "queued" if queued_followup else "restarting", claimed_by="", claimed_at=0
                 )
-            run_state = _session_run_state_fields(sid)
+            run_state = await asyncio.to_thread(_session_run_state_fields, sid)
             return JSONResponse(
                 content={
                     "ok": False,
@@ -6279,7 +6445,7 @@ async def chat(
                 },
                 status_code=409,
             )
-        session_manager.clear_interrupt(sid, run_id)
+        await asyncio.to_thread(session_manager.clear_interrupt, sid, run_id)
 
     def should_stop(sid_: str) -> bool:
         return session_manager.is_interrupt_requested(sid_, run_id)
@@ -6316,7 +6482,7 @@ async def chat(
         lines.append("</selected_skills_for_this_conversation>")
         return "\n".join(lines)
 
-    valid_selected_skills = selected_skill_names(selected_skills)
+    valid_selected_skills = await asyncio.to_thread(selected_skill_names, selected_skills)
     agent_message = build_agent_message(message, valid_selected_skills)
     structured_attachments: list[dict[str, Any]] = []
     try:
@@ -6377,8 +6543,7 @@ async def chat(
 
     async def event_generator():
         if sid:
-            _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
-            import time as _time_stamp; _active_chat_last_seen[sid] = _time_stamp.time()
+            connection_task = _register_active_chat_connection(sid)
         main_loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue = asyncio.Queue()
         stop_event = threading.Event()
@@ -6501,11 +6666,7 @@ async def chat(
             if sid:
                 _release_session_chat_start(sid, start_token)
             if sid:
-                n = _active_chat_by_session.get(sid, 1) - 1
-                if n <= 0:
-                    _active_chat_by_session.pop(sid, None)
-                else:
-                    _active_chat_by_session[sid] = n
+                _unregister_active_chat_connection(sid, connection_task)
 
     return StreamingResponse(
         event_generator(),
@@ -6773,7 +6934,7 @@ async def continue_react_session(
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
-    pending_human = _session_pending_human_counts(sid)
+    pending_human = await asyncio.to_thread(_session_pending_human_counts, sid)
     if int(pending_human.get("total") or 0) > 0:
         return JSONResponse(
             content={
@@ -6783,17 +6944,17 @@ async def continue_react_session(
             },
             status_code=409,
         )
-    if recovery and _session_was_manually_stopped(sid):
+    if recovery and await asyncio.to_thread(_session_was_manually_stopped, sid):
         return JSONResponse(
             content={"ok": False, "reason": "manually_stopped"},
             status_code=409,
         )
     from workflow_extensions import session_workflows
-    workflow_source = session_workflows.continuation_source(sid)
-    if not session_manager.can_continue_react_session(sid) and not workflow_source:
+    workflow_source = await asyncio.to_thread(session_workflows.continuation_source, sid)
+    if not await asyncio.to_thread(session_manager.can_continue_react_session, sid) and not workflow_source:
         return Response(status_code=204)
     continuation_run_id = "react-continue-" + uuid.uuid4().hex
-    start_token = _reserve_session_chat_start(sid, continuation_run_id) or ""
+    start_token = await _reserve_session_chat_start_off_loop(sid, continuation_run_id) or ""
     if not start_token:
         return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
 
@@ -6801,9 +6962,7 @@ async def continue_react_session(
         return session_manager.is_interrupt_requested(sid_, continuation_run_id)
 
     async def event_generator():
-        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
-        import time as _time_stamp
-        _active_chat_last_seen[sid] = _time_stamp.time()
+        connection_task = _register_active_chat_connection(sid)
         try:
             try:
                 async for event in astream_events_continuation(
@@ -6825,11 +6984,7 @@ async def continue_react_session(
             except asyncio.CancelledError:
                 return
         finally:
-            n = _active_chat_by_session.get(sid, 1) - 1
-            if n <= 0:
-                _active_chat_by_session.pop(sid, None)
-            else:
-                _active_chat_by_session[sid] = n
+            _unregister_active_chat_connection(sid, connection_task)
             _release_session_chat_start(sid, start_token)
 
     return StreamingResponse(
@@ -6845,20 +7000,18 @@ async def continue_after_subagents(session_id: str, request: Request):
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse(content={"error": "missing session_id"}, status_code=400)
-    if not session_manager.has_pending_subagent_notifications(sid):
+    if not await asyncio.to_thread(session_manager.has_pending_subagent_notifications, sid):
         return Response(status_code=204)
-    if not session_manager.can_continue_after_subagents(sid):
+    if not await asyncio.to_thread(session_manager.can_continue_after_subagents, sid):
         return Response(status_code=204)
-    if _is_session_stream_active(sid):
+    if await asyncio.to_thread(_is_session_stream_active, sid):
         return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
 
     def should_stop(sid_: str) -> bool:
         return session_manager.is_interrupt_requested(sid_)
 
     async def event_generator():
-        _active_chat_by_session[sid] = _active_chat_by_session.get(sid, 0) + 1
-        import time as _time_stamp
-        _active_chat_last_seen[sid] = _time_stamp.time()
+        connection_task = _register_active_chat_connection(sid)
         try:
             try:
                 async for event in astream_events_continuation(
@@ -6874,11 +7027,7 @@ async def continue_after_subagents(session_id: str, request: Request):
             except asyncio.CancelledError:
                 return
         finally:
-            n = _active_chat_by_session.get(sid, 1) - 1
-            if n <= 0:
-                _active_chat_by_session.pop(sid, None)
-            else:
-                _active_chat_by_session[sid] = n
+            _unregister_active_chat_connection(sid, connection_task)
 
     return StreamingResponse(
         event_generator(),
@@ -8718,7 +8867,7 @@ _ENV_HINTS: dict[str, str] = {
     "CONTEXT_COMPRESS_ROUND3_MAX_REACT": "第 3 轮摘要：除最后 1 条 user 外，完整保留的 ReAct assistant 步数上限。",
     "CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES": "整包仍超 CONTEXT_WINDOW 时应急截尾重试次数。",
     "CONTEXT_COMPRESS_PROMPT_TOKEN_RATIO": "压缩执行器请求相对 CONTEXT_WINDOW 的比例上限（约 ≤1.1），用于 token 预算裁剪。",
-    "CONTEXT_COMPRESS_TARGET_RATIO": "压缩后 work 相对 CONTEXT_WINDOW 的目标比例（默认 0.6）。",
+    "CONTEXT_COMPRESS_TARGET_RATIO": "压缩后整包输入相对当前会话上下文窗口的目标比例（默认 0.6）。",
     "REPEAT_DETECTION_THRESHOLD_SUMMARY": "重复多少次输出后插入系统提示。",
     "REPEAT_DETECTION_THRESHOLD_ERROR": "重复多少次后中止并报错。",
     "LOG_TRUNCATE_KEEP_CHARS": "日志/终端单行展示时每端保留字符数。",
@@ -9197,6 +9346,8 @@ async def invoke_plugin_session_action(request: Request):
 
 @fastapi_app.post("/api/plugins/{plugin_id}/enabled")
 async def set_plugin_enabled_api(plugin_id: str, request: Request):
+    started = time.perf_counter()
+    timings = {}
     try:
         data = await request.json()
     except Exception:
@@ -9205,11 +9356,25 @@ async def set_plugin_enabled_api(plugin_id: str, request: Request):
     if not isinstance(enabled, bool):
         return JSONResponse({"ok": False, "error": "enabled must be boolean"}, status_code=400)
     try:
-        from agent_extensions import set_plugin_enabled
+        from agent_extensions import plugin_manager, set_plugin_enabled
+        from plugins import normalize_namespace
 
+        plugin_id = normalize_namespace(plugin_id)
         state = await asyncio.to_thread(set_plugin_enabled, plugin_id, enabled)
+        timings["state"] = (time.perf_counter() - started) * 1000
+        # set_enabled has just validated this inventory. Only a plugin owning
+        # MCP declarations needs transport invalidation; unrelated MCP startup
+        # or shutdown must not delay an ordinary plugin toggle.
+        has_mcp = any(plugin.plugin_id == plugin_id and plugin.mcp_servers
+                      for plugin in plugin_manager().last_discovery.plugins)
+        phase = time.perf_counter()
         await refresh_web_plugin_lifecycle()
-        await agent_mcp.force_reload()
+        timings["lifecycle"] = (time.perf_counter() - phase) * 1000
+        phase = time.perf_counter()
+        if has_mcp:
+            await agent_mcp.reload_plugin(plugin_id)
+        timings["mcp"] = (time.perf_counter() - phase) * 1000
+        phase = time.perf_counter()
         session_id = str(data.get("session_id") or "").strip()
         if session_id:
             from agent_extensions import audit_plugin_inventory
@@ -9219,8 +9384,14 @@ async def set_plugin_enabled_api(plugin_id: str, request: Request):
                 session_manager,
                 session_id,
                 "",
+                reuse_catalog=True,
             )
-        return JSONResponse({"ok": True, "plugin_id": plugin_id, "state": dict(state)})
+        timings["audit"] = (time.perf_counter() - phase) * 1000
+        timings["total"] = (time.perf_counter() - started) * 1000
+        logger.info("Plugin toggle id=%s enabled=%s timings_ms=%s", plugin_id, enabled,
+                    {key: round(value, 1) for key, value in timings.items()})
+        return JSONResponse({"ok": True, "plugin_id": plugin_id, "state": dict(state)}, headers={
+            "Server-Timing": ", ".join(f"plugin-{key};dur={value:.1f}" for key, value in timings.items())})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
@@ -10106,10 +10277,22 @@ def initialize_ui_attention_notifications() -> None:
     _UI_ATTENTION_MAIN_LOOP = asyncio.get_running_loop()
 
 
+async def _warm_runtime_checkpoint_workers() -> None:
+    """Move one-time thread startup out of durable session transactions."""
+    try:
+        from runtime_v2.snapshot_store import SnapshotStore
+
+        workers = await asyncio.to_thread(SnapshotStore.start_checkpoint_workers)
+        logger.info("runtime_v2_snapshot_workers_warmed workers=%s", workers)
+    except Exception:
+        logger.warning("Runtime V2 snapshot worker warmup failed", exc_info=True)
+
+
 async def start_webui_lifecycle() -> None:
     """Start Web UI services shared by the default and production lifespans."""
     _warm_ui_caches()
     initialize_ui_attention_notifications()
+    await _warm_runtime_checkpoint_workers()
     await start_react_recovery_runner()
     # Tokenizer JSON loading cost 621 ms on the first request in production.
     # Start it immediately in a worker thread; the loader lock makes racing with
@@ -10136,6 +10319,8 @@ async def start_webui_lifecycle() -> None:
         )
     except Exception:
         logger.warning("Plugin background service startup failed", exc_info=True)
+    # Connections start after host ownership is installed, before user requests.
+    agent_mcp.schedule_mcp_startup_refresh()
     # Warm the hook pipeline off the critical path: the first user message
     # must not pay the plugin scan + hook manager build (observed 11s on a
     # busy disk inside the request).
@@ -10190,14 +10375,14 @@ async def refresh_web_plugin_lifecycle() -> None:
         start_bundled_host_extensions,
     )
 
-    loaded = load_plugins(force=True).plugins
+    loaded = await asyncio.to_thread(load_plugins, force=True)
     context = {"session_manager": session_manager, "project_root": PROJECT_ROOT}
-    install_bundled_host_extensions(fastapi_app, loaded, context)
+    install_bundled_host_extensions(fastapi_app, loaded.plugins, context)
     from workflow_extensions import activate_bundled_workflow_callbacks
 
-    activate_bundled_workflow_callbacks(sys.modules["agent_loop"], force=True)
-    await start_plugin_background_services()
-    await start_bundled_host_extensions(loaded, context)
+    await asyncio.to_thread(activate_bundled_workflow_callbacks, sys.modules["agent_loop"], force=True)
+    await start_plugin_background_services(loaded=loaded)
+    await start_bundled_host_extensions(loaded.plugins, context)
 
 
 async def stop_webui_lifecycle() -> None:
@@ -10211,7 +10396,11 @@ async def stop_webui_lifecycle() -> None:
         )
         await stop_plugin_runtime()
     finally:
-        await stop_react_recovery_runner()
-        from execution_services.jobs import _SERVICE
-        if _SERVICE is not None:
-            await _SERVICE.shutdown()
+        try:
+            await stop_react_recovery_runner()
+            from execution_services.jobs import _SERVICE
+            if _SERVICE is not None:
+                await _SERVICE.shutdown()
+        finally:
+            from agent_request_executor import shutdown_request_executor
+            shutdown_request_executor()

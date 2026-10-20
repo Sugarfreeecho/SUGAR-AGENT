@@ -103,6 +103,41 @@ def test_session_context_does_not_select_background_session(page):
     assert page.evaluate("copied") == ["background"]
 
 
+@pytest.mark.parametrize("theme", ["light", "dark", "purple"])
+def test_open_sidebar_menu_children_remain_clickable_outside_row_hover(page, theme):
+    populate(page, '''
+      <div class="session-item" style="position:absolute;left:30px;top:60px;width:280px;height:50px">
+        Session<div class="session-item-actions"><div class="session-more-wrap is-open">
+          <button class="session-more-btn">More</button><div class="session-more-menu">
+            <button id="legacy"><span>Legacy action</span></button></div></div></div></div>
+      <div class="session-item" style="position:absolute;left:30px;top:260px;width:280px;height:50px">
+        Session<div class="session-item-actions"><div class="sidebar-popup is-open">
+          <button class="session-row-icon">More</button><div class="sidebar-popup-menu">
+            <button id="popup"><span>Popup action</span></button></div></div></div></div>
+      <div class="session-group" style="position:absolute;left:30px;top:460px;width:280px">
+        <div class="session-group-head">Group<div class="session-group-actions">
+          <div class="sidebar-popup session-group-popup is-open"><button class="session-row-icon">More</button>
+            <div class="sidebar-popup-menu session-group-menu">
+              <button id="group"><span>Group action</span></button></div></div></div></div></div>''')
+    page.evaluate("""theme => {
+      document.documentElement.className='theme-'+theme;
+      for(const id of ['legacy','popup','group'])document.getElementById(id).addEventListener('click',()=>actions.push(id));
+    }""", theme)
+    page.mouse.move(900, 700)
+    for name in ("legacy", "popup", "group"):
+        target = page.locator(f"#{name} span")
+        assert target.evaluate("e=>getComputedStyle(e).pointerEvents") == "auto"
+        target.click()  # Normal browser hit testing, including the nested text node.
+    assert page.evaluate("actions") == ["legacy", "popup", "group"]
+    page.evaluate("""() => {
+      document.activeElement.blur();
+      document.querySelectorAll('.is-open').forEach(e=>e.classList.remove('is-open'));
+    }""")
+    page.mouse.move(900, 700)
+    for name in ("legacy", "popup", "group"):
+        page.locator(f"#{name} span").wait_for(state="hidden")
+
+
 def test_answer_copy_uses_markdown_and_generation_disables_history_mutation(page):
     message(page)
     page.evaluate("running=true")
@@ -141,6 +176,28 @@ def test_file_actions_use_relative_endpoint_and_exact_path(page):
     choose(page, "打开文件目录")
     page.wait_for_function("feedback.includes('已打开文件目录')")
     assert requests == ["http://context.test/api/open-workspace-dir?session_id=active&rel=folder%2Fa.txt"]
+
+
+def test_desktop_file_actions_use_native_bridge_without_background_open(page):
+    populate(page, '<button class="dock-files-row" data-rel="folder/a.txt">a.txt</button>')
+    requests = []
+    page.route("**/api/open-workspace-*", lambda route: (requests.append(route.request.url),
+               route.fulfill(status=500, content_type="application/json", body='{"ok":false}')))
+    page.evaluate("""() => {
+      window.nativeOpens = [];
+      window.sugarAgentDesktop = {openLocalPath: async request => {
+        nativeOpens.push(request); return {ok:true};
+      }};
+    }""")
+    page.locator(".dock-files-row").click(button="right")
+    choose(page, "打开文件目录")
+    page.wait_for_function("feedback.includes('已打开文件目录')")
+    assert page.evaluate("nativeOpens") == [{"session_id": "active", "rel": "folder/a.txt", "directory": True}]
+    page.locator(".dock-files-row").click(button="right")
+    choose(page, "在系统应用中打开")
+    page.wait_for_function("nativeOpens.length===2")
+    assert page.evaluate("nativeOpens[1].directory") is False
+    assert requests == []
 
 
 def test_document_and_change_actions_reuse_existing_buttons(page):
@@ -204,7 +261,48 @@ def test_menu_clamps_to_viewport_and_scrolls_when_tall(page, theme, size, width,
         assert result["scroll"]
 
 
-def test_menu_dismisses_when_owner_detaches_or_page_scrolls(page):
+@pytest.mark.parametrize("owner", ["message", "sidebar"])
+def test_streaming_auto_scroll_keeps_menu_open_and_actions_work(page, owner):
+    populate(page, '''<div class="session-item" data-session-id="background"
+      style="position:fixed;left:0;top:0;width:220px">Background session</div>
+      <div class="chat-container" id="chat-container"
+      style="position:fixed;left:250px;top:180px;width:500px;height:160px;overflow:auto">
+        <div style="height:600px">Earlier messages</div>
+        <div class="msg-wrap msg-wrap--assistant"><div class="message assistant" style="white-space:pre-wrap">Streaming answer</div></div>
+      </div>
+      <div id="stream-log" style="position:fixed;left:250px;top:380px;width:500px;height:40px;overflow:auto">
+        <pre id="stream-log-content" style="white-space:pre-wrap">Execution output</pre>
+      </div>''')
+    page.evaluate("""() => {
+      running=true;
+      document.querySelector('#chat-container').scrollTop=10000;
+    }""")
+    page.locator(".message" if owner == "message" else ".session-item").click(button="right")
+    initial_scroll = page.locator("#chat-container").evaluate("e=>e.scrollTop")
+    page.evaluate("""async () => {
+      const chat=document.querySelector('#chat-container');
+      const message=document.querySelector('.message');
+      const log=document.querySelector('#stream-log');
+      for (let i=0;i<25;i++) {
+        message.textContent+='\\n流式输出 '+i;
+        messageRawMarkdown.set(message.closest('.msg-wrap'),message.textContent);
+        document.querySelector('#stream-log-content').textContent+='\\n执行输出 '+i;
+        chat.scrollTop=chat.scrollHeight;
+        log.scrollTop=log.scrollHeight;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        if (!document.querySelector('.ui-context-menu')) throw new Error('Streaming dismissed menu at token '+i);
+      }
+    }""")
+    assert page.locator("#chat-container").evaluate("e=>e.scrollTop") > initial_scroll
+    assert menu(page).is_visible()
+    choose(page, "复制消息" if owner == "message" else "复制会话 ID")
+    if owner == "message":
+        assert "流式输出 24" in page.evaluate("copied[0]")
+    else:
+        assert page.evaluate("copied[0]") == "background"
+
+
+def test_menu_dismisses_when_owner_detaches_or_user_scrolls(page):
     message(page)
     page.locator(".message").click(button="right")
     page.evaluate("document.querySelector('.msg-wrap').remove()")
@@ -213,9 +311,37 @@ def test_menu_dismisses_when_owner_detaches_or_page_scrolls(page):
     page.evaluate("""() => {const wrap=document.querySelector('.msg-wrap');wrap.style.cssText='height:40px;overflow:auto';
       wrap.querySelector('.message').style.height='200px';}""")
     page.locator(".message").click(button="right")
-    page.evaluate("document.querySelector('.msg-wrap').scrollTop+=20")
+    bounds = page.locator(".message").bounding_box()
+    page.mouse.move(bounds["x"] + 8, bounds["y"] + 8)
+    page.mouse.wheel(0, 40)
     page.wait_for_function("!document.querySelector('.ui-context-menu')")
     assert menu(page).count() == 0
+
+
+@pytest.mark.parametrize("input_type", ["touch", "keyboard", "pointer"])
+def test_user_scroll_input_outside_menu_still_dismisses_it(page, input_type):
+    message(page)
+    page.locator(".message").click(button="right")
+    if input_type == "touch":
+        page.locator(".message").dispatch_event("touchmove")
+    elif input_type == "keyboard":
+        page.locator('.msg-tb[data-act="branch"]').focus()
+        page.keyboard.press("PageDown")
+    else:
+        page.mouse.click(900, 700)  # Also covers the pointer press used to drag a scrollbar.
+    assert menu(page).count() == 0
+
+
+def test_scrolling_inside_menu_keeps_it_open(page):
+    page.evaluate("""() => {
+      MyAgentContextMenu.open({type:'contextmenu',clientX:20,clientY:20,preventDefault(){},stopPropagation(){}},
+        Array.from({length:60},(_,i)=>({label:'Action '+i,action(){}})),document.body);
+    }""")
+    bounds = menu(page).bounding_box()
+    page.mouse.move(bounds["x"] + 40, bounds["y"] + 50)
+    page.mouse.wheel(0, 200)
+    page.wait_for_function("document.querySelector('.ui-context-menu').scrollTop > 0")
+    assert menu(page).is_visible()
 
 
 def test_editable_fields_keep_native_menu_and_provider_can_override_xterm_textarea(page):

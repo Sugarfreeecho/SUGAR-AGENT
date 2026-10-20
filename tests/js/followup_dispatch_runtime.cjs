@@ -253,6 +253,8 @@ async function testRunStartSignalAndFallbacks() {
     sleepMs: async () => {},
     markSessionRunInactive() {},
     waitForSendPipelineIdle: async () => waitForLock,
+    fetch: async () => ({ok: true, json: async () => ({queued_followup_state: 'ready'})}),
+    scheduleFollowupQueueDrain() {},
     appendLogVisible() {},
     sendMessage: async (options) => {
       sendCalls += 1;
@@ -297,7 +299,7 @@ async function testRunStartSignalAndFallbacks() {
   await ctx.sendFollowupNowImpl('auto', 's', { autoAfterRun: true });
   assert.strictEqual(sendCalls, 1);
   assert.strictEqual(lastSendOptions.fromQueue, true);
-  assert.strictEqual(lastSendOptions.forceStart, true);
+  assert.strictEqual(lastSendOptions.forceStart, false);
   assert.strictEqual(queue.length, 0, 'automatic continuation must become an ordinary accepted /chat turn');
 
   let releaseAutoLock;
@@ -477,6 +479,7 @@ async function testAutoDrainDefersBehindSessionAutoResume() {
       ok: true,
       json: async () => ({
         react_auto_resume: resumePending,
+        queued_followup_state: resumePending ? 'recovering' : 'ready',
         run_active: false,
         stream_active: false,
       }),
@@ -513,6 +516,125 @@ async function testAutoDrainDefersBehindSessionAutoResume() {
   assert.strictEqual(sent, true, 'once auto-resume is no longer pending the queued follow-up may send');
   assert.strictEqual(sendCalls, 1);
   assert.strictEqual(queue.length, 0);
+}
+
+async function testRecoveryGatesEveryQueuedSendPath() {
+  function fixture(options = {}) {
+    const item = {id: 'queued', text: 'next', status: '', awaitingRunEnd: true,
+      serverQueued: true, steerId: 'stable-operation', clientId: 'stable-client'};
+    const queue = [item];
+    const scheduled = [], requests = [], starts = [], recoveries = [];
+    const state = {detail: {queued_followup_state: 'ready'}, local: false, server: false};
+    const ctx = context({
+      currentSessionId: options.background ? 'other' : 's',
+      suppressTocDuringSessionLoad: !!options.loading,
+      followupManualDispatchEpochBySession: {},
+      isSessionRunning: () => state.local,
+      isServerStreamActive: () => state.server,
+      isSendPipelineLocked: () => false,
+      persistFollowupQueue() {}, renderFollowupQueue() {},
+      getFollowupQueue: () => queue,
+      scheduleFollowupQueueDrain: (sid, delay) => scheduled.push([sid, delay]),
+      requestServerOwnedReactRecovery: sid => recoveries.push(sid),
+      waitForSendPipelineIdle: async () => {
+        if (options.duringLock) options.duringLock(state);
+        return true;
+      },
+      ensureQueuedFollowupRegistered: async () => {
+        if (options.duringRegistration) await options.duringRegistration(state);
+        return true;
+      },
+      fetch: async url => {
+        requests.push(url);
+        if (options.readError) throw new Error('connection lost');
+        if (options.duringRead) options.duringRead(state, requests.length);
+        return {ok: !options.httpError, json: async () => state.detail};
+      },
+      startFollowupChat: async opts => {
+        starts.push(opts);
+        if (options.rejectStart) {
+          state.detail = {queued_followup_state: 'recovering'};
+          return false;
+        }
+        return true;
+      },
+      takeFollowupItem: () => queue.pop(),
+      encodeURIComponent,
+    });
+    vm.runInContext(between('function isFollowupAutoDispatchSuperseded', 'async function sendFollowupNowImpl'), ctx);
+    return {ctx, item, queue, state, scheduled, requests, starts, recoveries,
+      send: manual => ctx.sendQueuedFollowupAsChat('s', item, item.id, 0, manual)};
+  }
+
+  for (const background of [false, true]) {
+    const f = fixture({background, loading: background});
+    f.state.detail = {queued_followup_state: 'recovering', react_auto_resume: false};
+    assert.strictEqual(await f.send(), false);
+    assert.strictEqual(f.starts.length, 0);
+    assert.deepStrictEqual(f.requests, ['/sessions/s'], 'background queues must query their own session even while another page loads');
+    assert.deepStrictEqual(f.recoveries, ['s'], 'unreconciled orphans must wake server recovery');
+    assert.strictEqual(f.item.awaitingRunEnd, true);
+    f.state.detail = {queued_followup_state: 'ready'};
+    assert.strictEqual(await f.send(), true, 'a completed recovery must release the original queued operation');
+    assert.strictEqual(f.starts.length, 1);
+    assert.strictEqual(f.starts[0].steerId, 'stable-operation');
+    assert.strictEqual(f.starts[0].forceStart, false, 'an automatic queue send must never take over a recovered run');
+    assert.strictEqual(f.queue.length, 0);
+  }
+
+  for (const options of [{readError: true}, {httpError: true}, {duringRead: s => {s.detail = {};}}]) {
+    const f = fixture(options);
+    assert.strictEqual(await f.send(), false, 'unknown state must not grant a new chat turn');
+    assert.strictEqual(f.starts.length, 0);
+    assert.strictEqual(f.queue.length, 1);
+    assert.strictEqual(f.item.status, '');
+    assert.deepStrictEqual(f.scheduled, [['s', 1000]]);
+  }
+
+  for (const detail of [
+    {queued_followup_state: 'busy'},
+    {queued_followup_state: 'ready', run_active: true, stream_active: true},
+  ]) {
+    const f = fixture(); f.state.detail = detail;
+    assert.strictEqual(await f.send(), false, 'fresh server activity must override stale local idle state');
+    assert.strictEqual(f.starts.length, 0);
+  }
+
+  for (const options of [
+    {duringLock: s => {s.detail = {queued_followup_state: 'recovering'};}},
+    {duringRegistration: s => {s.detail = {queued_followup_state: 'recovering'};}},
+    {duringRead: (s, count) => {if (count === 2) s.local = true;}},
+  ]) {
+    const f = fixture(options);
+    assert.strictEqual(await f.send(), false, 'recovery that starts during an await must win over the queue');
+    assert.strictEqual(f.starts.length, 0);
+    assert.strictEqual(f.item.status, '');
+    assert.strictEqual(f.item.awaitingRunEnd, true);
+    assert.strictEqual(f.queue.length, 1);
+  }
+
+  const rejected = fixture({rejectStart: true});
+  assert.strictEqual(await rejected.send(), false);
+  assert.strictEqual(rejected.queue.length, 1, 'a server-side recovery rejection must preserve the operation');
+  assert.strictEqual(rejected.item.status, '');
+  assert.deepStrictEqual(rejected.scheduled, [['s', 1000]]);
+
+  const failedRegistration = fixture({duringRegistration: async () => {throw new Error('connection lost');}});
+  await assert.rejects(failedRegistration.send(), /connection lost/);
+  assert.strictEqual(failedRegistration.item.status, '', 'a failed registration must not strand a sending row');
+  assert.strictEqual(failedRegistration.queue.length, 1);
+
+  const paused = fixture(); paused.state.detail = {queued_followup_state: 'paused'};
+  assert.strictEqual(await paused.send(), false);
+  assert.strictEqual(paused.scheduled.length, 0, 'intentional pauses must not leave an automatic retry loop');
+  paused.state.detail.pending_human_interactions = {total: 0};
+  assert.strictEqual(await paused.send(true), true, 'an explicit Send now must still work after a user stop');
+  assert.strictEqual(paused.starts[0].manualQueuedFollowup, true);
+  const pendingHuman = fixture();
+  pendingHuman.state.detail = {queued_followup_state: 'paused', pending_human_interactions: {total: 1}};
+  assert.strictEqual(await pendingHuman.send(true), false, 'Send now must not bypass a pending interaction');
+  const manualRecovery = fixture(); manualRecovery.state.detail = {queued_followup_state: 'recovering'};
+  assert.strictEqual(await manualRecovery.send(true), false, 'manual queue sends still wait for an interrupted turn to recover');
 }
 
 function testAppendOptimisticRowCommitsInPlace() {
@@ -902,6 +1024,7 @@ async function testLateQueueAcknowledgementCannotResendAConsumedTurn() {
   await testManualSendPrioritizesTheClickedRow();
   await testManualSendSupersedesAnAlreadyQueuedAutoHead();
   await testAutoDrainDefersBehindSessionAutoResume();
+  await testRecoveryGatesEveryQueuedSendPath();
   testAppendOptimisticRowCommitsInPlace();
   testStreamingFramesKeepFollowupRenderSignatureStable();
   testReattachRestoresReactGenerationFromHistory();

@@ -857,6 +857,28 @@ test('reset clears the stack and marks subscribers', () => {
 });
 
 // ── subagent-frames（成员帧桥接） ───────────────────────────────────────────
+await testAsync('manual resume clears stale failure and the global SSE bridge applies the new outcome', async () => {
+    subagentCatalogStore.resetForTests();
+    subagentFrames.resetForTests();
+    subagentCatalogStore.setImplementation({
+        fetchJson: fixtureFetch([{match: '/sessions/parent-1/subagents', body: {
+            subagents: [node({id: 'resumed-child', running: false, status: 'interrupted', ok: false, error: 'interrupted'})],
+        }}], []),
+    });
+    context.currentSessionId = 'unrelated-visible-session';
+    await subagentCatalogStore.refreshCatalogs('parent-1');
+    context.noteSubagentLifecycleFrame({type: 'subagent_start', agent_id: 'resumed-child', parent_session_id: 'parent-1'});
+    let entry = subagentCatalogStore.entriesOf('parent-1')[0];
+    assert.equal(entry.activity, 'running');
+    assert.equal(entry.outcome, 'running');
+    assert.equal(entry.raw.error, '');
+    context.noteSubagentLifecycleFrame({type: 'subagent_finish', agent_id: 'resumed-child', parent_session_id: 'parent-1', ok: true});
+    entry = subagentCatalogStore.entriesOf('parent-1')[0];
+    assert.equal(entry.activity, 'inactive');
+    assert.equal(entry.outcome, 'ok');
+    delete context.currentSessionId;
+});
+
 await testAsync('subagent_created registers a pending child before start; finish flips it inactive', async () => {
     subagentCatalogStore.resetForTests();
     subagentFrames.resetForTests();

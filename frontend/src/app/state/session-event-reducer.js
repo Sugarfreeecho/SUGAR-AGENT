@@ -79,20 +79,22 @@ function applySessionEvent(event, opts) {
         }
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
-        const goalContinues = type === 'run_finished'
+        const resultStatus = (type === 'run_interrupted' || type === 'run_failed')
+            ? 'failed' : event.result_status;
+        const goalContinues = !resultStatus && type === 'run_finished'
             && typeof isGoalActiveForSession === 'function'
             && isGoalActiveForSession(sessionId);
-        if (goalContinues && typeof clearSessionUnreadState === 'function') {
+        if (resultStatus === 'failed') {
+            markSessionResultComplete(sessionId, 'failed', runId);
+        } else if ((goalContinues || resultStatus === 'pending') && typeof clearSessionUnreadState === 'function') {
             clearSessionUnreadState(sessionId, { server: false });
-        } else if (sessionId === String(currentSessionId || '')
-            && typeof clearSessionUnreadState === 'function') {
-            clearSessionUnreadState(sessionId, { expectedRunId: runId });
         } else {
-            markSessionResultComplete(
-                sessionId,
-                (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success',
-                runId
-            );
+            // A successful new terminal resolves the previous failed result.
+            markSessionResultComplete(sessionId, 'success', runId);
+            if (sessionId === String(currentSessionId || '')
+                && typeof clearSessionUnreadState === 'function') {
+                clearSessionUnreadState(sessionId, { expectedRunId: runId });
+            }
         }
         return {
             handled: true,

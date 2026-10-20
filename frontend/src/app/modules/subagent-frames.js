@@ -66,7 +66,7 @@ var subagentFrames = (function () {
         if (!cid) return false;
         var storeRef = store();
         if (!storeRef) return false;
-        var parentId = currentParentSessionId();
+        var parentId = String(event.parent_session_id || currentParentSessionId());
         if (type === 'subagent_created' || type === 'subagent_start' || type === 'subagent_started') {
             if (!parentId) return false;
             if (storeRef.getAddress(cid)) {
@@ -95,7 +95,12 @@ var subagentFrames = (function () {
         if (type === 'subagent_finish' || type === 'subagent_finished') {
             lastActivityValue[cid] = 'inactive';
             lastActivityAt[cid] = now();
-            return storeRef.handleSessionStatus(cid, false);
+            return storeRef.handleSessionStatus({
+                id: cid, running: false,
+                status: event.status || (event.ok === false ? 'failed' : 'completed'),
+                ok: event.ok !== false, error: event.error || '',
+                result_preview: event.result_preview || '',
+            }, false);
         }
         return false;
     }
@@ -144,3 +149,11 @@ var subagentFrames = (function () {
         resetForTests: resetForTests,
     };
 })();
+
+function noteSubagentLifecycleFrame(event) {
+    if (!event) return false;
+    if (subagentFrames.noteSubagentLifecycleFrame(event)) return true;
+    // Forwarded child terminal events are not evidence of a new running turn.
+    if (/^run_(finished|failed|interrupted)$/.test(String(event.type || ''))) return false;
+    return subagentFrames.noteSubagentActivity(event.agent_id, true);
+}

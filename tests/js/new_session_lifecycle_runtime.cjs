@@ -68,7 +68,13 @@ const ctx = vm.createContext({
   performance: { now: () => 1 },
   document: {
     dispatchEvent() {},
-    addEventListener(type, handler) { if (type === 'click') welcomeDirectoryClickHandler = handler; },
+    clickHandlers: [],
+    addEventListener(type, handler) {
+      if (type === 'click') {
+        this.clickHandlers.push(handler);
+        welcomeDirectoryClickHandler = handler;
+      }
+    },
     getElementById() { return null; },
   },
   window: {
@@ -185,6 +191,27 @@ vm.runInContext(
   ctx,
 );
 
+// 欢迎页卡片上的点击都由 document 级委托处理：把一次点击发给所有已注册的
+// click 处理器，只有 selector 命中的那个会继续执行（其余处理器直接返回）。
+async function clickWelcomeAction(attribute, value) {
+  const handlers = ctx.document.clickHandlers.slice();
+  for (const handler of handlers) {
+    await handler({
+      target: {
+        closest(selector) {
+          return selector === `[${attribute}]` ? this : null;
+        },
+        getAttribute(name) {
+          return name === attribute ? value : null;
+        },
+        disabled: false,
+      },
+      preventDefault() {},
+      stopPropagation() {},
+    });
+  }
+}
+
 (async () => {
   await ctx.__createNewSession();
   await Promise.resolve();
@@ -264,24 +291,27 @@ vm.runInContext(
     'the selected directory remains attached to the pending draft',
   );
 
-  // The welcome-card picker follows the same path and updates the visible path
-  // before the asynchronous draft prefetch finishes.
+  // The welcome-card folder button follows the same path and updates the visible
+  // path before the asynchronous draft prefetch finishes.
   const cardWorkDir = 'D:\\card-workspace';
   ctx.window.MyAgentPathPicker.pickPath = async () => cardWorkDir;
-  const clickEvent = {
-    target: {
-      closest(selector) {
-        return selector === '[data-welcome-session-directory-picker]' ? this : null;
-      },
-      disabled: false,
-    },
-    preventDefault() {},
-    stopPropagation() {},
-  };
-  await welcomeDirectoryClickHandler(clickEvent);
+  await clickWelcomeAction('data-welcome-session-directory-browse', '');
   assert.strictEqual(directoryPath.textContent, cardWorkDir);
   assert.strictEqual(directoryName.textContent, 'card-workspace');
   assert.strictEqual(JSON.parse(createRequestOptions.body).work_dir, cardWorkDir);
+
+  // Picking an already-created directory from the「选择」dropdown applies it too
+  // (empty value = the server-side default workspace).
+  const menuWorkDir = 'E:\\menu-workspace';
+  await clickWelcomeAction('data-welcome-session-workdir', menuWorkDir);
+  assert.strictEqual(directoryPath.textContent, menuWorkDir);
+  assert.strictEqual(JSON.parse(createRequestOptions.body).work_dir, menuWorkDir);
+
+  await clickWelcomeAction('data-welcome-session-workdir', '');
+  assert.strictEqual(directoryName.textContent, '默认工作目录');
+  assert.strictEqual(JSON.parse(createRequestOptions.body).work_dir, undefined);
+
+  assert.ok(welcomeDirectoryClickHandler, 'welcome card handlers must be registered');
 
   process.stdout.write('new session lifecycle runtime checks passed\n');
 })().catch((error) => {

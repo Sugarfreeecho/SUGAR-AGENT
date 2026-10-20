@@ -39,6 +39,18 @@ function applySessionSnapshot(snapshot) {
             recoverFollowupQueueDrainsFromSessionSnapshot(previousActive, new Set(Object.keys(active)));
         }
     }
+    // Parent streams may be idle while background children wait for a person.
+    // The sidebar snapshot carries descendant counts; restore their cards too.
+    if (typeof refreshHumanInteractions === 'function' && typeof humanInteractionPendingCounts === 'function') {
+        var visibleSid = String(typeof currentSessionId !== 'undefined' ? currentSessionId || '' : '');
+        var visible = sessions.find(function (row) { return String(row.id || '') === visibleSid; });
+        var pending = visible && visible.pending_human_interactions;
+        var localPending = humanInteractionPendingCounts(visibleSid);
+        if (pending && (Number(pending.total || 0) > 0 || Number(pending.questions || 0) !== localPending.questions
+            || Number(pending.approvals || 0) !== localPending.approvals)) {
+            void refreshHumanInteractions(visibleSid);
+        }
+    }
     return true;
 }
 

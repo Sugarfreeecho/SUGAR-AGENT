@@ -544,6 +544,7 @@ var subagentCatalogStore = (function () {
         var nextActivity = (typeof running === 'boolean')
             ? (running ? 'running' : 'inactive')
             : ((nodeOrId && nodeOrId.running) ? 'running' : 'inactive');
+        var patch = nodeOrId && typeof nodeOrId === 'object' ? nodeOrId : {};
         var addr = ADDRESSES.get(childId);
         if (!addr) return false;
         return patchCatalog(addr.parentSessionId, function (entries) {
@@ -552,8 +553,20 @@ var subagentCatalogStore = (function () {
             entries.forEach(function (entry) {
                 if (entry.diagnostic || entry.childId !== childId) return;
                 present = true;
-                if (entry.activity !== nextActivity) {
-                    entry.activity = nextActivity;
+                var raw = Object.assign({}, entry.raw, patch, { running: nextActivity === 'running' });
+                if (nextActivity === 'running') {
+                    raw.status = 'running';
+                    raw.task_status = 'running';
+                    raw.ok = null;
+                    raw.error = '';
+                } else if (!patch.status && raw.status === 'running') {
+                    raw.status = '';
+                    raw.task_status = '';
+                }
+                var normalized = normalizeEntry(raw);
+                if (entry.activity !== normalized.activity || entry.outcome !== normalized.outcome
+                    || Object.keys(patch).length > 1) {
+                    Object.assign(entry, normalized);
                     changed = true;
                 }
             });

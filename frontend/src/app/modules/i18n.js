@@ -224,12 +224,16 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '选择会话目录': 'Choose session directory',
     '选择': 'Choose',
     '在当前工作目录新建会话': 'New session in the current workspace',
+    '在默认工作目录新建对话': 'New chat in the default workspace',
     '在新工作目录新建会话': 'New session in a new workspace',
+    '选择已创建的工作目录': 'Choose an existing workspace folder',
+    '选择文件夹': 'Choose folder',
     '选择工作目录': 'Choose a workspace folder',
     '无法打开系统目录选择器，请直接填写新会话的工作目录绝对路径。': 'The system folder picker is unavailable. Type the absolute path of the workspace for the new session.',
     '工作目录绝对路径': 'Absolute workspace path', '在此目录新建': 'Create here',
     // 侧栏静态头（搜索 / 视图选项 / 刷新）与工作目录分组动作（DSH 式布局）
     '新建会话（在当前工作目录中）': 'New session (in the current workspace)',
+    '新建会话选项：当前工作目录 / 默认工作目录 / 新工作目录': 'New session options: current workspace / default workspace / new workspace',
     '新建会话选项：当前工作目录 / 新工作目录': 'New session options: current workspace / new workspace',
     '刷新会话列表和页面': 'Refresh the session list and the page',
     '折叠或展开列表': 'Collapse or expand the list',
@@ -744,6 +748,10 @@ function translateUiString(value) {
         .replace(/^占本阶段 (.+)$/, 'Share of phase $1')
         .replace(/^(.+) 次 LLM 请求$/, '$1 LLM requests')
         .replace(/^(.+) 个模型。$/, '$1 models.')
+        .replace(
+            /^系统目录选择器没能返回目录（(.+)）。请直接填写新会话的工作目录绝对路径。$/,
+            'The system folder picker returned no folder ($1). Type the absolute path of the workspace for the new session.'
+        )
         .replace(/^\.\.\. \[中间省略 (\d+) 行\] \.\.\.$/, '... [$1 lines omitted] ...')
         .replace(/^\.\.\. \[中间省略约 (\d+) 字符\] \.\.\.$/, '... [about $1 characters omitted] ...');
 }

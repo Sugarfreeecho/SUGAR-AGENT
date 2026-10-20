@@ -116,11 +116,7 @@ function uiContextMenuOpen(event, items, owner) {
         if (owner && !owner.isConnected) uiContextMenuClose(false);
     });
     observer.observe(document.body, { childList: true, subtree: true });
-    const scrollPositions = new Map();
-    for (let node = owner; node; node = node.parentElement) scrollPositions.set(node, [node.scrollLeft, node.scrollTop]);
-    const scrollingElement = document.scrollingElement;
-    if (scrollingElement) scrollPositions.set(document, [scrollingElement.scrollLeft, scrollingElement.scrollTop]);
-    uiContextMenuActive = { menu, owner, focus, observer, scrollPositions, width: window.innerWidth, height: window.innerHeight };
+    uiContextMenuActive = { menu, owner, focus, observer, width: window.innerWidth, height: window.innerHeight };
     (menu.querySelector('button:not(:disabled)') || menu).focus({ preventScroll: true });
     return true;
 }
@@ -144,9 +140,8 @@ function uiContextMenuButtons(root, selector) {
 }
 
 async function uiContextMenuOpenFile(rel, directory) {
-    const response = await fetch(workspaceApiUrl(directory ? '/api/open-workspace-dir' : '/api/open-workspace-file', { rel }));
-    const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(result.error || '无法打开文件');
+    const result = await openWorkspaceLocalPath(rel, directory);
+    if (!result.ok) throw new Error(result.error || '无法打开文件');
     showOpenFileFeedback(directory ? '已打开文件目录' : '已打开文件');
 }
 
@@ -374,17 +369,20 @@ document.addEventListener('keydown', event => {
         event.preventDefault(); event.stopImmediatePropagation(); uiContextMenuClose(true);
     } else if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
         uiContextMenuResolve(event);
+    } else if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+        uiContextMenuDismissForScrollInput(event);
     }
 }, true);
-document.addEventListener('scroll', event => {
+function uiContextMenuDismissForScrollInput(event) {
     const active = uiContextMenuActive;
     if (!active || active.menu.contains(event.target)) return;
-    const node = event.target === document ? document.scrollingElement : event.target;
-    const initial = active.scrollPositions.get(event.target);
-    // Focus/right-click can queue a scroll event before the menu opens.
-    if (initial && node && node.scrollLeft === initial[0] && node.scrollTop === initial[1]) return;
     uiContextMenuClose(false);
-}, true);
+}
+// Scroll events cannot distinguish streaming auto-follow/scroll anchoring from
+// user scrolling. Dismiss on user input instead; scrollbar drags are already
+// covered by the outside-pointerdown handler.
+document.addEventListener('wheel', uiContextMenuDismissForScrollInput, { capture: true, passive: true });
+document.addEventListener('touchmove', uiContextMenuDismissForScrollInput, { capture: true, passive: true });
 window.addEventListener('resize', () => {
     if (uiContextMenuActive && (uiContextMenuActive.width !== window.innerWidth || uiContextMenuActive.height !== window.innerHeight)) uiContextMenuClose(false);
 });

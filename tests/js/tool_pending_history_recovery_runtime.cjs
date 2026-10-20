@@ -82,6 +82,7 @@ async function testHistoryRebuildAcceptsPendingToolReplay() {
   };
   const context = vm.createContext({
     console, Date, Number, String, Promise, AbortController,
+    SSE_CONNECT_TIMEOUT_MS: 20000, clearTimeout() {},
     currentSessionId: 's', streamHistoryRecoveryBySession: new Set(['s']),
     executionRecordsBySession: new Map(),
     appendLog: () => null,
@@ -110,7 +111,7 @@ async function testHistoryRebuildAcceptsPendingToolReplay() {
   });
   const findGroup = renderingSource.match(/^function findExecutionProcessGroup\([^]*?^}/m);
   assert(findGroup, 'missing findExecutionProcessGroup');
-  vm.runInContext(findGroup[0] + '\n' + fn('attachSessionEventStream') + '\n' + fn('seedEphemeralRecoveryScope'), context);
+  vm.runInContext(findGroup[0] + '\n' + fn('fetchSessionEventStream') + '\n' + fn('attachSessionEventStream') + '\n' + fn('seedEphemeralRecoveryScope'), context);
   await context.attachSessionEventStream('s', {skipInitialLoad: true});
   assert.equal(historyLoads, 1);
   assert.equal(replayedPending, true,

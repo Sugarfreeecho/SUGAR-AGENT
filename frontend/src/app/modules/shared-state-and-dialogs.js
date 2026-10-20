@@ -93,6 +93,8 @@ function clearSessionUnreadState(sessionId, opts) {
     if (!sid) return Promise.resolve(false);
     opts = opts || {};
     var sessBeforeClear = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
+    // Failed results remain actionable after reading and throughout retries.
+    if (sessBeforeClear && sessBeforeClear.unread_result_status === 'failed') return Promise.resolve(false);
     var expectedRunId = String(
         opts.expectedRunId
         || (sessBeforeClear && sessBeforeClear.unread_result_run_id)
@@ -156,6 +158,10 @@ function clearSessionUnreadState(sessionId, opts) {
 function shouldSuppressSessionUnreadSnapshot(session) {
     if (!session || !session.id || !session.unread_result) return false;
     var sid = String(session.id);
+    if (session.unread_result_status === 'failed') {
+        delete sessionUnreadClearInFlight[sid];
+        return false;
+    }
     var state = sessionUnreadClearInFlight[sid];
     if (!state) return false;
     var incomingRunId = String(session.unread_result_run_id || '').trim();
@@ -176,6 +182,10 @@ function markSessionResultComplete(sessionId, status, runId) {
     if (typeof sessionStore !== 'undefined') {
         var sess = sessionStore.get(sid);
         if (sess) {
+            if (normalizedStatus === 'success' && sess.unread_result_status === 'failed'
+                && (!resultRunId || sess.unread_result_run_id === resultRunId)) {
+                normalizedStatus = 'failed';
+            }
             sess.unread_result = true;
             sess.unread_result_status = normalizedStatus;
             sess.unread_result_at = new Date().toISOString();

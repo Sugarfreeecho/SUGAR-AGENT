@@ -1723,16 +1723,16 @@ function showOpenFileFeedback(msg) {
         }
         var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
-        fetch(workspaceApiUrl('/api/open-workspace-file', { rel: rel }), controller ? { signal: controller.signal } : undefined)
-            .then(function (r) {
-                if (timer) clearTimeout(timer);
-                return r.json().catch(function () { return { ok: false, error: '响应异常' }; });
-            })
+        openWorkspaceLocalPath(rel, false, controller ? { signal: controller.signal } : {})
             .then(function (j) {
+                if (timer) clearTimeout(timer);
                 if (j && j.ok) showOpenFileFeedback('已调用系统打开文件');
                 else showOpenFileFeedback((j && j.error) ? ('无法打开：' + j.error) : '无法打开文件');
             })
-            .catch(function () { showOpenFileFeedback('无法连接服务'); });
+            .catch(function () {
+                if (timer) clearTimeout(timer);
+                showOpenFileFeedback('无法连接服务');
+            });
     });
 })();
 

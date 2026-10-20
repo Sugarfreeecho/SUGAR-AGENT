@@ -62,9 +62,21 @@ function applyHumanInteractionEvent(sessionId, event) {
     var record = Object.assign({}, previous, event, {
         kind: kind,
         status: incomingStatus,
+        session_id: event.session_id || previous.session_id || sid,
     });
     collection[id] = record;
     state.loaded = true;
+    // A child-owned card can also be displayed in its parent's pending inbox.
+    // Keep those copies current when the child is answered from either page.
+    Object.keys(humanInteractionStoreBySession).forEach(function (otherSid) {
+        if (otherSid === sid) return;
+        var other = humanInteractionStoreBySession[otherSid];
+        var target = kind === 'approval' ? other.approvals : other.interactions;
+        if (!target[id] || String(target[id].session_id || otherSid) !== String(record.session_id)) return;
+        target[id] = record;
+        other.refreshEpoch += 1;
+        syncHumanInteractionSessionSummary(otherSid);
+    });
     syncHumanInteractionSessionSummary(sid);
     updateHumanInteractionBanner(currentSessionId);
     return record;
@@ -165,7 +177,9 @@ function sessionPendingHumanCounts(sessionId) {
 
 function sessionListForPendingCounts() {
     if (typeof sessionStore !== 'undefined' && sessionStore && typeof sessionStore.list === 'function') {
-        return sessionStore.list();
+        return sessionStore.list().filter(function (session) {
+            return session && !session.is_subagent && !session.parent_session_id && !session.parent_id;
+        });
     }
     return [];
 }
@@ -416,6 +430,7 @@ function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
     var cards = Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id="' + escaped + '"]'));
     var attached = false;
     cards.forEach(function (card) {
+        if (card.dataset.displaySessionId && card.dataset.sessionId !== card.dataset.displaySessionId) return;
         var slot = humanInteractionToolSlot(stream, tid, card.dataset);
         if (!slot) return;
         if (card.parentNode !== slot) slot.appendChild(card);
@@ -428,6 +443,7 @@ function attachHumanInteractionCardsForToolCall(stream, toolCallId) {
 function attachAllHumanInteractionCards(stream) {
     if (!stream || !stream.querySelectorAll) return;
     Array.from(stream.querySelectorAll('.human-interaction-card[data-tool-call-id]')).forEach(function (card) {
+        if (card.dataset.displaySessionId && card.dataset.sessionId !== card.dataset.displaySessionId) return;
         var tid = card.getAttribute('data-tool-call-id') || '';
         if (!tid) return;
         var slot = humanInteractionToolSlot(stream, tid, card.dataset);
@@ -1555,7 +1571,7 @@ function createHumanTerminalCard(record, sessionId) {
 
 function renderHumanInteractionRecord(record, sessionId, stream) {
     if (!record) return null;
-    var sid = String(sessionId || record.session_id || '');
+    var sid = String(record.session_id || sessionId || '');
     var kind = record.kind === 'approval' ? 'approval' : 'question';
     var id = String(kind === 'approval' ? (record.approval_id || '') : (record.interaction_id || ''));
     if (!id) return null;
@@ -1564,22 +1580,39 @@ function renderHumanInteractionRecord(record, sessionId, stream) {
     var existing = Array.from(stream.querySelectorAll('.human-interaction-card')).find(function (card) {
         return card.dataset.kind === kind && card.dataset.interactionId === id;
     });
+    // Sidebar polling and duplicate SSE events must not replace a live editor:
+    // restoring its draft cannot restore focus, selection or an IME composition.
+    var requestKey = JSON.stringify([sid, String(record.request_version || 1),
+        record.request_digest || (kind === 'question' ? (record.questions || []) : null)]);
+    var reusePending = !!(existing && existing.dataset.status === 'pending' && record.status === 'pending'
+        && existing._humanInteractionRequestKey === requestKey);
     var restoreFocus = !!(existing && existing.contains(document.activeElement));
-    var card = record.status === 'pending'
+    var card = reusePending ? existing : record.status === 'pending'
         ? (kind === 'approval' ? createHumanApprovalCard(record, sid) : createHumanQuestionCard(record, sid))
         : createHumanTerminalCard(record, sid);
+    card._humanInteractionRequestKey = requestKey;
+    if (reusePending && kind === 'approval') renderHumanApprovalAnalysis(card, record.analysis);
     card.dataset.status = record.status || 'pending';
+    card.dataset.displaySessionId = String((existing && existing.dataset.displaySessionId) || sessionId || sid);
+    var childOwned = sid !== card.dataset.displaySessionId;
+    if (childOwned && !reusePending && card.querySelector('.human-card-title')) {
+        var source = document.createElement('span');
+        source.className = 'human-interaction-source';
+        source.textContent = ' · 子代理 ' + sid.slice(0, 8);
+        card.querySelector('.human-card-title').appendChild(source);
+    }
     var toolCallId = String(record.tool_call_id || '');
     if (toolCallId) card.dataset.toolCallId = toolCallId;
     if (record.execution_id) card.dataset.executionId = String(record.execution_id);
     if (record.process_group_id) card.dataset.processGroupId = String(record.process_group_id);
-    if (existing && existing.parentNode) existing.parentNode.replaceChild(card, existing);
-    else {
-        var slot = humanInteractionToolSlot(stream, toolCallId, record);
+    if (existing && existing.parentNode) {
+        if (!reusePending) existing.parentNode.replaceChild(card, existing);
+    } else {
+        var slot = childOwned ? null : humanInteractionToolSlot(stream, toolCallId, record);
         if (slot) slot.appendChild(card);
         else placeHumanInteractionCardFallback(stream, card, record);
     }
-    if (toolCallId) {
+    if (toolCallId && !childOwned) {
         attachHumanInteractionCardsForToolCall(stream, toolCallId);
     }
     if (restoreFocus && record.status !== 'pending') {
@@ -1609,7 +1642,7 @@ function renderHumanInteractionEvent(ctx, event, runSessionId) {
     var sid = String(runSessionId || event.session_id || currentSessionId || '');
     var record = applyHumanInteractionEvent(sid, event);
     var stream = ctx && ctx.stream ? ctx.stream : null;
-    ensurePendingHumanInteractionToolRow(ctx, record, sid);
+    if (!record || String(record.session_id) === sid) ensurePendingHumanInteractionToolRow(ctx, record, sid);
     var card = renderHumanInteractionRecord(record, sid, stream);
     // Live SSE only: bring a freshly-inserted pending card into view.
     if (card && record.status === 'pending' && event.type !== 'approval_analyzed'
@@ -1619,13 +1652,28 @@ function renderHumanInteractionEvent(ctx, event, runSessionId) {
     return card;
 }
 
+function renderForwardedSubagentHumanInteractionEvent(ctx, event, parentSessionId) {
+    if (!event || !isHumanInteractionEventType(event.type)) return false;
+    renderHumanInteractionEvent(ctx, event, parentSessionId);
+    return true;
+}
+
 function renderPendingHumanInteractions(sessionId) {
     var sid = String(sessionId || '');
     if (!sid || sid !== String(currentSessionId || '')) return;
     var stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : document.getElementById('chat-stream');
     var ctx = stream && typeof newDomContext === 'function' ? newDomContext(stream) : null;
+    if (stream && humanInteractionSessionState(sid).loaded) {
+        var pendingKeys = new Set(pendingHumanInteractionRecords(sid).map(function (record) {
+            return String(record.session_id || sid) + ':' + String(record.interaction_id || record.approval_id || '');
+        }));
+        Array.from(stream.querySelectorAll('.human-interaction-card[data-status="pending"]')).forEach(function (card) {
+            var key = String(card.dataset.sessionId || sid) + ':' + String(card.dataset.interactionId || '');
+            if (!pendingKeys.has(key)) card.remove();
+        });
+    }
     pendingHumanInteractionRecords(sid).forEach(function (record) {
-        ensurePendingHumanInteractionToolRow(ctx, record, sid);
+        if (String(record.session_id || sid) === sid) ensurePendingHumanInteractionToolRow(ctx, record, sid);
         renderHumanInteractionRecord(record, sid, stream);
     });
     if (typeof attachAllHumanInteractionCards === 'function') attachAllHumanInteractionCards(stream);
@@ -1640,8 +1688,8 @@ async function refreshHumanInteractions(sessionId, options) {
     var refreshEpoch = ++state.refreshEpoch;
     try {
         var responses = await Promise.all([
-            fetch('/sessions/' + encodeURIComponent(sid) + '/interactions?status=pending'),
-            fetch('/sessions/' + encodeURIComponent(sid) + '/approvals?status=pending'),
+            fetch('/sessions/' + encodeURIComponent(sid) + '/interactions?status=pending&include_descendants=1'),
+            fetch('/sessions/' + encodeURIComponent(sid) + '/approvals?status=pending&include_descendants=1'),
         ]);
         if (!responses[0].ok || !responses[1].ok) throw new Error('HTTP ' + responses[0].status + '/' + responses[1].status);
         var payloads = await Promise.all([responses[0].json(), responses[1].json()]);

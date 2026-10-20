@@ -11,6 +11,7 @@ let extensionsCache = null;
 let extensionsRefreshPromise = null;
 let extensionsLoading = false;
 let extensionsError = null;
+let extensionsLoadGeneration = 0;
 const skillPickerToggleBusy = Object.create(null);
 const mcpToolToggleBusy = Object.create(null);
 const mcpServerRegisterBusy = Object.create(null);
@@ -328,6 +329,12 @@ function skillPickerPluginPageHref(plugin) {
     return hasPage ? '/plugins/' + encodeURIComponent(id) : '';
 }
 
+function skillPickerPluginToggleStatus(operation) {
+    if (!operation) return '';
+    if (operation.phase === 'refreshing') return operation.slow ? '正在刷新列表，请稍候…' : '正在刷新列表…';
+    return (operation.enabled ? '正在启用' : '正在禁用') + (operation.slow ? '，请稍候…' : '…');
+}
+
 function renderSkillPickerPluginsHtml() {
     if (extensionsLoading && !extensionsCache) {
         return '<div class="skill-picker-empty">正在加载扩展</div>';
@@ -358,17 +365,19 @@ function renderSkillPickerPluginsHtml() {
             var type = String(plugin && (plugin.source_format || plugin.format) || 'native');
             var compatibility = plugin && plugin.compatibility && plugin.compatibility.status || 'unknown';
             var pageHref = skillPickerPluginPageHref(plugin);
-            var busy = !!pluginToggleBusy[id];
-            var detail = ['插件：' + name, 'ID：' + id, '版本：' + version, '格式：' + type, '兼容性：' + compatibility, '状态：' + (enabled ? '已启用' : '已禁用')].join('\n');
-            return '<div class="skill-picker-option ext-option plugin-option' + (enabled ? '' : ' is-disabled') + (pageHref ? ' has-page' : '') + '" data-ui-tip="' + skillPickerEscape(detail) + '">'
+            var operation = pluginToggleBusy[id];
+            var busy = !!operation;
+            var status = busy ? skillPickerPluginToggleStatus(operation) : (enabled ? '已启用' : '已禁用');
+            var detail = ['插件：' + name, 'ID：' + id, '版本：' + version, '格式：' + type, '兼容性：' + compatibility, '状态：' + status].join('\n');
+            return '<div class="skill-picker-option ext-option plugin-option' + (enabled ? '' : ' is-disabled') + (pageHref ? ' has-page' : '') + (busy ? ' is-busy' : '') + '" aria-busy="' + (busy ? 'true' : 'false') + '" data-ui-tip="' + skillPickerEscape(detail) + '">'
                 + '<span class="plugin-type-badge">' + skillPickerEscape(type) + '</span>'
                 + '<span class="skill-picker-option-body">'
-                + '<span class="skill-picker-option-name">' + skillPickerEscape(id || name) + ' <span class="plugin-state' + (enabled ? '' : ' is-off') + '">' + (enabled ? '已启用' : '已禁用') + '</span></span>'
+                + '<span class="skill-picker-option-name">' + skillPickerEscape(id || name) + ' <span class="plugin-state' + (busy ? ' is-pending' : (enabled ? '' : ' is-off')) + '" role="status" aria-live="polite">' + status + '</span></span>'
                 + '<span class="skill-picker-option-desc">' + skillPickerEscape((version ? 'v' + version + ' · ' : '') + type + ' · ' + compatibility) + '</span>'
                 + '<span class="ext-pills">' + skillPickerComponentPills(plugin) + '</span>'
                 + '</span>'
                 + '<span class="plugin-option-actions">'
-                + '<button type="button" class="skill-picker-toggle plugin-toggle-action" data-plugin-id="' + skillPickerEscape(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (busy ? '处理中…' : (enabled ? '停用' : '启用')) + '" aria-label="' + (busy ? '处理中…' : (enabled ? '停用' : '启用')) + '"' + ((busy || !globalOn) ? ' disabled' : '') + (!globalOn ? ' title="PLUGINS_ENABLED is disabled"' : '') + '>' + skillPickerToggleHtml(enabled) + '</button>'
+                + '<button type="button" class="skill-picker-toggle plugin-toggle-action' + (busy ? ' is-loading' : '') + '" data-plugin-id="' + skillPickerEscape(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (busy ? status : (enabled ? '停用' : '启用')) + '" aria-label="' + (busy ? status : (enabled ? '停用' : '启用')) + '"' + ((busy || !globalOn) ? ' disabled' : '') + (!globalOn ? ' title="PLUGINS_ENABLED is disabled"' : '') + '>' + (busy ? '<span class="plugin-toggle-spinner" aria-hidden="true"></span>' : skillPickerToggleHtml(enabled)) + '</button>'
                 + (pageHref ? '<a class="skill-picker-toggle plugin-open-action" href="' + skillPickerEscape(pageHref) + '" target="_blank" rel="noopener noreferrer" data-ui-tip="打开页面" aria-label="打开页面">' + skillPickerOpenPageHtml() + '</a>' : '')
                 + '</span>'
                 + '</div>';
@@ -659,11 +668,14 @@ function refreshSkillPickerMcpTools() {
 }
 
 async function loadSkillPickerExtensions() {
+    const generation = ++extensionsLoadGeneration;
     const response = await fetch('/api/extensions', { credentials: 'same-origin' });
     const data = await response.json();
     if (!data || !data.ok) throw new Error((data && data.error) || '扩展加载失败');
-    extensionsCache = data;
-    extensionsError = null;
+    if (generation === extensionsLoadGeneration) {
+        extensionsCache = data;
+        extensionsError = null;
+    }
     return data;
 }
 
@@ -671,28 +683,49 @@ async function toggleSkillPickerPlugin(button) {
     var id = String(button && button.getAttribute('data-plugin-id') || '').trim();
     if (!id || pluginToggleBusy[id]) return;
     var enabled = button.getAttribute('data-enabled') !== 'true';
-    pluginToggleBusy[id] = true;
+    var sessionId = currentSessionId || '';
+    var operation = { enabled: enabled, phase: 'switching', slow: false };
+    var applied = false;
+    pluginToggleBusy[id] = operation;
+    button.disabled = true;
     renderSkillPicker();
+    var slowTimer = setTimeout(function () {
+        if (pluginToggleBusy[id] !== operation) return;
+        operation.slow = true;
+        renderSkillPicker();
+    }, 8000);
     try {
         var response = await fetch('/api/plugins/' + encodeURIComponent(id) + '/enabled', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ enabled: enabled, session_id: currentSessionId || '' }),
+            body: JSON.stringify({ enabled: enabled, session_id: sessionId }),
         });
         var data = await response.json();
-        if (!data || !data.ok) throw new Error((data && data.error) || '插件状态更新失败');
-        await loadSkillPickerExtensions();
+        if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '插件状态更新失败');
+        applied = true;
+        if (extensionsCache) {
+            (extensionsCache.plugins || []).forEach(function (plugin) {
+                if (String(plugin.id || '') !== id) return;
+                plugin.configured_enabled = enabled;
+                plugin.enabled = enabled && !!(extensionsCache.enabled && extensionsCache.enabled.plugins);
+            });
+        }
+        operation.phase = 'refreshing';
+        renderSkillPicker();
         document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: currentSessionId || '', pluginId: id },
+            detail: { sessionId: sessionId, pluginId: id },
         }));
+        await loadSkillPickerExtensions();
     } catch (err) {
+        var message = (applied ? '插件已' + (enabled ? '启用' : '禁用') + '，但列表刷新失败：' : '插件状态更新失败：') + String(err.message || err);
         if (typeof showGlobalWarningBanner === 'function') {
-            showGlobalWarningBanner('插件状态更新失败：' + String(err.message || err));
+            showGlobalWarningBanner(message);
         } else if (typeof appendLogVisible === 'function') {
-            appendLogVisible('插件状态更新失败：' + String(err.message || err), 'error-log');
+            appendLogVisible(message, 'error-log');
         }
     } finally {
+        clearTimeout(slowTimer);
         delete pluginToggleBusy[id];
         renderSkillPicker();
     }

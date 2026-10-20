@@ -176,3 +176,52 @@ def test_execution_updates_reuse_rows_across_history_and_context_changes(page):
     assert result == {"hotScans": 1, "afterPrependScans": 3, "totalScans": 4,
                       "reused": True, "detached": True, "recreated": True,
                       "isolated": True, "merged": True, "reloaded": True}
+
+
+def test_streamed_stats_do_not_restyle_unrelated_history(page):
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    shell = (ROOT / "frontend/src/shell-body.html").read_text(encoding="utf-8")
+    page.set_content(f"<style>{styles}\n*,:before,:after{{animation:none!important;transition:none!important}}</style>{shell}")
+    page.evaluate("""() => {
+      document.getElementById('chat-stream').innerHTML=
+        '<div class="feed-item"><div class="feed-chunk-scroller">history</div></div>'.repeat(1000)
+        + '<div id="stats"></div>';
+    }""")
+    page.add_script_tag(content=rendering[
+        rendering.index("function renderProcessAggregateStats("):
+        rendering.index("function refreshProcessAggregateStats(")
+    ])
+    page.evaluate("renderProcessAggregateStats(document.getElementById('stats'),'1 步','input=1')")
+    page.evaluate("() => new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))")
+    # Inspect actual style work rather than a machine-dependent duration/FPS limit.
+    # Broad :has(...) descendant rules previously invalidated both chat ancestors
+    # whenever streaming rebuilt the stats spans, revisiting all history nodes.
+    cdp = page.context.new_cdp_session(page)
+    events = []
+    complete = []
+    cdp.on("Tracing.dataCollected", lambda data: events.extend(data["value"]))
+    cdp.on("Tracing.tracingComplete", lambda data: complete.append(True))
+    cdp.send("Tracing.start", {
+        "categories": "devtools.timeline,disabled-by-default-devtools.timeline.invalidationTracking",
+        "transferMode": "ReportEvents",
+    })
+    try:
+        page.evaluate("""async () => {
+          for(let i=0;i<3;i++) {
+            renderProcessAggregateStats(document.getElementById('stats'),(i+2)+' 步','input='+i);
+            document.getElementById('stats').offsetHeight;
+            await new Promise(resolve=>requestAnimationFrame(resolve));
+          }
+        }""")
+    finally:
+        cdp.send("Tracing.end")
+        for _ in range(100):
+            if complete:
+                break
+            page.wait_for_timeout(20)
+        cdp.detach()
+    assert complete, "Browser did not finish the style-work trace"
+    resolved = [event for event in events if event["name"] == "StyleResolver::ResolveStyle"]
+    assert resolved, "Browser did not report style resolution work"
+    assert len(resolved) < 100, f"Stats updates resolved {len(resolved)} styles across unrelated history"

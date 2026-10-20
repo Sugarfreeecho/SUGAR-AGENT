@@ -234,6 +234,7 @@ function runPanelAutoCollapseCheck() {
     var stage = document.querySelector('.chat-stage');
     var composer = document.querySelector('.panel-inner');
     if (!stage || !composer) return;
+    var mainCenterEl = document.querySelector('.main-center');
     var todo = document.getElementById('chat-todo-plan');
     var toc = document.getElementById('chat-toc');
     var tocList = document.getElementById('chat-toc-list');
@@ -245,19 +246,28 @@ function runPanelAutoCollapseCheck() {
         stageStyle.getPropertyValue('--panel-edge-slide-width'),
         Math.max(todo ? todo.offsetWidth : 0, toc ? toc.offsetWidth : 0)
     );
+    var minPanelWidth = composerCssLengthPx(
+        stageStyle.getPropertyValue('--side-panel-min-width'),
+        8.5 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16)
+    );
+    /* 宽/窄与输入区同源：`.main-center.content-column-expanded` 由 syncComposerSideControlLayout
+       写入（输入区两侧控件挤不下 → 侧控件折叠、消息列拉满）。窄态直接收起两侧卡；
+       宽态再按「消息列 68% 两侧还剩多少」逐侧判断放不放得下。
+       判据与输入区完全一致（preferredPanelWidth + 同一个 8px 间距、且不计 dock 偏移），
+       所以卡片不会再比输入区更早收起——此前多算了 dock + 12px，宽窗下也会提前折叠。 */
+    var narrowLayout = !!(mainCenterEl && mainCenterEl.classList.contains('content-column-expanded'));
     var COLLISION_GAP = 8;
     var RECOVERY_GAP = 12;
     var leftAvailable = Math.max(0, contentRect.left - stageRect.left);
     var rightAvailable = Math.max(0, stageRect.right - contentRect.right);
     var todoDockOffset = todo ? Math.max(0, todo.getBoundingClientRect().left - stageRect.left) : 0;
     var tocDockOffset = toc ? Math.max(0, stageRect.right - toc.getBoundingClientRect().right) : 0;
-    var todoHasRecoveryRoom = leftAvailable >= todoDockOffset + preferredPanelWidth + RECOVERY_GAP;
-    var tocHasRecoveryRoom = rightAvailable >= tocDockOffset + preferredPanelWidth + RECOVERY_GAP;
-    /* Fill each gutter independently, keeping the original width as the minimum.
-       Update max-width before measuring overlap so shrinking panes cannot be
-       collapsed merely because their width transition is still in progress. */
-    var todoWidth = Math.max(preferredPanelWidth, Math.floor(leftAvailable - todoDockOffset - RECOVERY_GAP)) + 'px';
-    var tocWidth = Math.max(preferredPanelWidth, Math.floor(rightAvailable - tocDockOffset - RECOVERY_GAP)) + 'px';
+    var todoFits = !narrowLayout && leftAvailable >= preferredPanelWidth + COLLISION_GAP;
+    var tocFits = !narrowLayout && rightAvailable >= preferredPanelWidth + COLLISION_GAP;
+    /* 有空间时向内填满（原宽为期望值）；余量紧张时先缩到 --side-panel-min-width（8.5rem）再谈收起，
+       这样 160~175px 的临界带里卡片只是变窄，不会整块消失。 */
+    var todoWidth = Math.max(minPanelWidth, Math.floor(leftAvailable - todoDockOffset - RECOVERY_GAP)) + 'px';
+    var tocWidth = Math.max(minPanelWidth, Math.floor(rightAvailable - tocDockOffset - RECOVERY_GAP)) + 'px';
     if (stage.style.getPropertyValue('--todo-panel-width') !== todoWidth) {
         stage.style.setProperty('--todo-panel-width', todoWidth);
     }
@@ -266,43 +276,43 @@ function runPanelAutoCollapseCheck() {
     }
     var todoOpen = !!(todo && todo.classList.contains('is-open'));
     var tocOpen = !!(toc && toc.classList.contains('is-open'));
-    var todoRect = todoOpen ? todo.getBoundingClientRect() : null;
-    var tocRect = tocOpen ? toc.getBoundingClientRect() : null;
-    var todoOverlaps = !!(todoRect && todoRect.width > 0 && todoRect.right + COLLISION_GAP > contentRect.left);
-    var tocOverlaps = !!(tocRect && tocRect.width > 0 && tocRect.left - COLLISION_GAP < contentRect.right);
+    /* 只用几何余量判定，不用过渡中的实测宽度：宽度有 0.35s 动画，动画期间量到的仍是旧宽度，
+       会把“正在变窄”误判成重叠。 */
+    var todoOverlaps = !todoFits;
+    var tocOverlaps = !tocFits;
     var changed = false;
 
-    if (panelManualOverlapTodo && (!todoPanelHasVisibleContent() || todoHasRecoveryRoom)) {
+    if (panelManualOverlapTodo && (!todoPanelHasVisibleContent() || todoFits)) {
         panelManualOverlapTodo = false;
     }
-    if (panelManualOverlapToc && (!(tocList && tocList.children.length) || tocHasRecoveryRoom)) {
+    if (panelManualOverlapToc && (!(tocList && tocList.children.length) || tocFits)) {
         panelManualOverlapToc = false;
     }
 
-    if (todoOverlaps && todo && !panelManualOverlapTodo) {
+    if (todoOpen && !todoFits && !panelManualOverlapTodo) {
         todo.classList.remove('is-open');
         panelAutoCollapsedTodo = true;
         changed = true;
     }
-    if (tocOverlaps && toc && !panelManualOverlapToc) {
+    if (tocOpen && !tocFits && !panelManualOverlapToc) {
         toc.classList.remove('is-open');
         panelAutoCollapsedToc = true;
         changed = true;
     }
-    if (changed && (todoOverlaps || tocOverlaps)) {
+    if (changed) {
         panelAutoCollapseCooldownUntil = now + 420;
         schedulePanelRecoveryCheck(440);
     }
 
     if (now >= panelAutoCollapseCooldownUntil) {
         if (panelAutoCollapsedTodo && !panelUserCollapsedTodo && todo && todoPanelHasVisibleContent()
-                && todoHasRecoveryRoom) {
+                && todoFits) {
             todo.classList.add('is-open');
             panelAutoCollapsedTodo = false;
             changed = true;
         }
         if (panelAutoCollapsedToc && toc && tocList && tocList.children.length
-                && tocHasRecoveryRoom) {
+                && tocFits) {
             toc.classList.add('is-open');
             panelAutoCollapsedToc = false;
             changed = true;
@@ -413,6 +423,9 @@ function syncComposerSideControlLayout() {
     panel.dataset.composerControlsOverlap = overlaps ? 'true' : 'false';
     panel.dataset.composerLeftOverlap = leftOverlap ? 'true' : 'false';
     panel.dataset.composerRightOverlap = rightOverlap ? 'true' : 'false';
+    /* 宽/窄（输入区侧控件是否折叠）刚发生变化：同帧把两侧卡跟上，
+       避免“输入区已折叠但卡片还开着”或“输入区仍宽但卡片已收起”的错位。 */
+    runPanelAutoCollapseCheck();
 }
 
 function scheduleComposerSideControlLayout() {

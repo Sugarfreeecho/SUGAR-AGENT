@@ -1,4 +1,5 @@
 const SSE_IDLE_TIMEOUT_MS = 120000;
+const SSE_CONNECT_TIMEOUT_MS = 20000;
 const SSE_RESUME_PROBE_TIMEOUT_MS = 20000;
 const STREAM_RECONNECT_MAX_ATTEMPTS = 10;
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;
@@ -244,6 +245,27 @@ function endRunForClient(sessionId, ctx, opts) {
     }
 }
 
+async function fetchSessionEventStream(url, controller) {
+    var timer = null;
+    try {
+        return await Promise.race([
+            fetch(url, { signal: controller.signal }),
+            new Promise(function (_resolve, reject) {
+                timer = setTimeout(function () {
+                    var error = new Error('SSE connection timeout after ' + SSE_CONNECT_TIMEOUT_MS + 'ms');
+                    error.name = 'SseConnectTimeout';
+                    reject(error);
+                    controller.abort();
+                }, SSE_CONNECT_TIMEOUT_MS);
+            }),
+        ]);
+    } finally {
+        // Keep the run's own controller attached after the handshake: stop and
+        // session switching must still be able to abort the live response body.
+        if (timer !== null) clearTimeout(timer);
+    }
+}
+
 async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
     var timer = null;
     var activeTimeoutMs = timeoutMs;
@@ -445,6 +467,9 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 if (forwarded && (forwarded._subagent_forward || (forwarded.agent_id
                     && (forwarded.ephemeral || forwarded.type === 'execution_update'
                         || (forwarded.session_id || forwarded.sessionId || runSessionId) !== runSessionId)))) {
+                    if (typeof renderForwardedSubagentHumanInteractionEvent === 'function') {
+                        renderForwardedSubagentHumanInteractionEvent(runCtx, forwarded, runSessionId);
+                    }
                     if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(forwarded);
                     continue;
                 }
@@ -471,6 +496,9 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 // accounting, including forwarded child terminal events.
                 if (parsed._subagent_forward || (parsed.agent_id && (parsed.ephemeral
                     || parsed.type === 'execution_update' || eventSessionId !== runSessionId))) {
+                    if (typeof renderForwardedSubagentHumanInteractionEvent === 'function') {
+                        renderForwardedSubagentHumanInteractionEvent(runCtx, parsed, runSessionId);
+                    }
                     if (typeof noteSubagentLifecycleFrame === 'function') noteSubagentLifecycleFrame(parsed);
                     continue;
                 }
@@ -1352,7 +1380,7 @@ async function attachSessionEventStream(sessionId, opts) {
             + '/stream?after_index=' + encodeURIComponent(String(preCount - 1))
             + (runCtx.lastRuntimeSeq ? '&after_runtime_seq=' + encodeURIComponent(String(runCtx.lastRuntimeSeq)) : '')
             + (savedRecovery && savedRecovery.projectionVersion ? '&projection_version=' + encodeURIComponent(String(savedRecovery.projectionVersion)) : '');
-        const response = await fetch(streamUrl, { signal: ac.signal });
+        const response = await fetchSessionEventStream(streamUrl, ac);
         if (response.ok && typeof publishFollowupQueueToRun === 'function') void publishFollowupQueueToRun(runSessionId);
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {
@@ -3275,33 +3303,51 @@ function isFollowupAutoDispatchSuperseded(sessionId, dispatchEpoch) {
     return Number(followupManualDispatchEpochBySession[sid] || 0) !== Number(dispatchEpoch);
 }
 
-async function isSessionAutoResumePending(sessionId) {
+async function isSessionAutoResumePending(sessionId, allowPaused) {
     var sid = String(sessionId || '');
-    // Auto-resume only applies to the currently open session. Background
-    // sessions keep their previous pending auto-drain behavior.
-    if (!sid || sid !== String(currentSessionId || '')) return false;
-    if (typeof subagentContinueSessionId !== 'undefined' && subagentContinueSessionId === sid) return true;
-    // During an initial session load the normal switch/refresh path will wake
-    // auto-resume; do not start /continue while history is still hydrating.
-    if (typeof suppressTocDuringSessionLoad !== 'undefined' && suppressTocDuringSessionLoad) return true;
+    if (!sid) return true;
+    if ((typeof subagentContinueSessionId !== 'undefined' && subagentContinueSessionId === sid)
+        || (sid === String(currentSessionId || '')
+            && typeof suppressTocDuringSessionLoad !== 'undefined' && suppressTocDuringSessionLoad)) {
+        scheduleFollowupQueueDrain(sid, 1000);
+        return true;
+    }
     try {
         var response = await fetch('/sessions/' + encodeURIComponent(sid), { cache: 'no-store' });
-        if (!response.ok) return false;
+        if (!response.ok) throw new Error('session state unavailable');
         var detail = await response.json();
-        if (!detail
-            || !detail.react_auto_resume
-            || detail.run_active
-            || detail.stream_active) return false;
-        if (typeof maybeAutoResumeInterruptedReact === 'function') {
+        if (!detail || !detail.queued_followup_state) throw new Error('queue start state unavailable');
+        if (detail.react_auto_resume && typeof maybeAutoResumeInterruptedReact === 'function') {
             maybeAutoResumeInterruptedReact(sid, detail);
         }
-        return true;
-    } catch (e) {
+        if (detail.queued_followup_state === 'recovering') {
+            // Recovery belongs to the server for every session, including
+            // background sessions and orphans not reconciled into interrupted yet.
+            if (typeof requestServerOwnedReactRecovery === 'function') requestServerOwnedReactRecovery(sid);
+            if (sid === String(currentSessionId || '') && typeof observeServerOwnedReactRecovery === 'function') {
+                observeServerOwnedReactRecovery(sid);
+            }
+        }
+        if (allowPaused && detail.queued_followup_state === 'paused'
+            && detail.pending_human_interactions && Number(detail.pending_human_interactions.total) === 0
+            && !detail.run_active && !detail.stream_active && !detail.react_auto_resume) return false;
+        if (detail.run_active || detail.stream_active || detail.react_auto_resume
+            || detail.queued_followup_state !== 'ready') {
+            if (detail.run_active || detail.stream_active
+                || ['busy', 'recovering', 'unknown'].includes(detail.queued_followup_state)) {
+                scheduleFollowupQueueDrain(sid, 1000);
+            }
+            return true;
+        }
         return false;
+    } catch (e) {
+        // A failed read proves neither completion nor permission to send.
+        scheduleFollowupQueueDrain(sid, 1000);
+        return true;
     }
 }
 
-async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) {
+async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch, manualStart) {
     var sid = String(sessionId || '');
     if (!sid || !item) return false;
     if (isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) return false;
@@ -3311,13 +3357,12 @@ async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) 
         renderFollowupQueue(sid);
         return false;
     }
-    if (await isSessionAutoResumePending(sid)) {
+    if (await isSessionAutoResumePending(sid, manualStart)) {
         // A process-restarted session must resume its previous run before any
         // queued follow-up may start a new ordinary /chat turn.
         item.awaitingRunEnd = true;
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
-        scheduleFollowupQueueDrain(sid, 1000);
         return false;
     }
     var previousAwaitingRunEnd = item.awaitingRunEnd;
@@ -3325,47 +3370,68 @@ async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch) 
     item.status = 'sending';
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
-    var lockReady = await waitForSendPipelineIdle(sid, 4000);
-    if (isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) {
-        item.status = '';
-        item.awaitingRunEnd = previousAwaitingRunEnd;
-        persistFollowupQueue(sid);
-        renderFollowupQueue(sid);
+    var started = false;
+    try {
+        var lockReady = await waitForSendPipelineIdle(sid, 4000);
+        if (isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) {
+            item.status = '';
+            item.awaitingRunEnd = previousAwaitingRunEnd;
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            return false;
+        }
+        if (!lockReady || isSendPipelineLocked(sid)) {
+            item.status = '';
+            item.awaitingRunEnd = true;
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+            scheduleFollowupQueueDrain(sid, 120);
+            return false;
+        }
+        if (typeof ensureQueuedFollowupRegistered === 'function' && !await ensureQueuedFollowupRegistered(sid, item)) {
+            item.status = '';
+            persistFollowupQueue(sid);
+            return false;
+        }
+        // Registration and lock waits can overlap recovery. Revalidate after
+        // those awaits, then let /chat enforce the same durable boundary.
+        if (await isSessionAutoResumePending(sid, manualStart)
+            || isSessionRunning(sid) || isServerStreamActive(sid)
+            || (typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
+            || (!manualStart && typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid))
+            || isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) {
+            item.awaitingRunEnd = true;
+            return false;
+        }
+        started = await startFollowupChat({
+            message: item.text,
+            displayMessage: item.display || item.text,
+            selectedSkills: item.skills || [],
+            attachments: item.attachments || [],
+            fromQueue: true,
+            sessionId: sid,
+            forceStart: false,
+            queuedFollowup: !!item.serverQueued,
+            manualQueuedFollowup: !!manualStart,
+            steerId: item.serverQueued ? item.steerId : '',
+        });
+        if (started) {
+            takeFollowupItem(sid, itemId);
+            renderFollowupQueue(sid);
+            return true;
+        }
+        // If recovery won the final race at /chat, keep the operation pending
+        // and wait for its completed turn rather than dropping the queue entry.
+        await isSessionAutoResumePending(sid, manualStart);
         return false;
+    } finally {
+        if (!started) {
+            item.status = '';
+            if (!isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) item.awaitingRunEnd = true;
+            persistFollowupQueue(sid);
+            renderFollowupQueue(sid);
+        }
     }
-    if (!lockReady || isSendPipelineLocked(sid)) {
-        item.status = '';
-        item.awaitingRunEnd = true;
-        persistFollowupQueue(sid);
-        renderFollowupQueue(sid);
-        scheduleFollowupQueueDrain(sid, 120);
-        return false;
-    }
-    if (typeof ensureQueuedFollowupRegistered === 'function' && !await ensureQueuedFollowupRegistered(sid, item)) {
-        item.status = '';
-        persistFollowupQueue(sid);
-        return false;
-    }
-    var started = await startFollowupChat({
-        message: item.text,
-        displayMessage: item.display || item.text,
-        selectedSkills: item.skills || [],
-        attachments: item.attachments || [],
-        fromQueue: true,
-        sessionId: sid,
-        forceStart: true,
-        queuedFollowup: !!item.serverQueued,
-        steerId: item.serverQueued ? item.steerId : '',
-    });
-    if (started) {
-        takeFollowupItem(sid, itemId);
-        renderFollowupQueue(sid);
-        return true;
-    }
-    item.status = '';
-    persistFollowupQueue(sid);
-    renderFollowupQueue(sid);
-    return false;
 }
 
 async function sendFollowupNowImpl(itemId, sessionId, options) {
@@ -3410,7 +3476,7 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
         return sendQueuedFollowupAsChat(sid, item, itemId, options.autoDispatchEpoch);
     }
     if (item.serverQueued && !isSessionRunning(sid) && !isServerStreamActive(sid)) {
-        return sendQueuedFollowupAsChat(sid, item, itemId);
+        return sendQueuedFollowupAsChat(sid, item, itemId, options.autoDispatchEpoch, options.manual === true);
     }
     item.awaitingRunEnd = false;
     item.clientId = item.clientId || ('followup-' + item.id + '-' + Date.now());
@@ -3603,7 +3669,6 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
         item.awaitingRunEnd = true;
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
-        scheduleFollowupQueueDrain(sid, 1000);
         return;
     }
     item.status = 'sending';
@@ -3684,7 +3749,8 @@ async function sendMessage(options) {
        否则改写编辑器里沿用的 @基名 会被原样发出（路径被吞）。 */
     const rawMessage = options.fromQueue ? visibleMessage : expandInputPathTokens(visibleMessage);
     if (!hasSendableText(rawMessage)) return;
-    if (isSessionRunning(submitSessionIdInitial) && !options.forceStart) return;
+    if ((isSessionRunning(submitSessionIdInitial)
+        || (options.queuedFollowup && isServerStreamActive(submitSessionIdInitial))) && !options.forceStart) return;
     /* 在任何异步检查和可消费 UI 状态之前上锁，所有发送入口共享同一会话互斥。 */
     _clientStepStart = nowPipelineMs();
     const sendPipelineLock = acquireSendPipelineLock(submitSessionIdInitial);
@@ -3942,6 +4008,7 @@ async function sendMessage(options) {
     if (renderAsSteer && options.steerId) formData.append('steer_id', String(options.steerId));
     if (options.queuedFollowup && options.steerId) {
         formData.append('queued_followup', 'true');
+        if (options.manualQueuedFollowup) formData.append('queued_followup_manual', 'true');
         formData.append('steer_id', String(options.steerId));
     }
     /* 发送后优先使用本轮 API usage/cache_stats 刷新 token；缺少 usage 时仍保留上一快照。 */

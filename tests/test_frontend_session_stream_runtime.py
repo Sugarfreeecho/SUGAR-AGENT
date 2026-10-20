@@ -8,19 +8,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("script", [
+    "subagent_parent_sync_runtime.cjs",
     "frontend_session_stream_runtime.cjs",
     "stream_recovery_runtime.cjs",
+    "stream_connect_timeout_runtime.cjs",
     "execution_recovery_runtime.cjs",
     "execution_display_compat_runtime.cjs",
     "execution_smooth_stream_runtime.cjs",
     "execution_restart_order_runtime.cjs",
     "ui_performance_runtime.cjs",
     "session_store_runtime.cjs",
+    "session_result_attention_runtime.cjs",
     "new_session_lifecycle_runtime.cjs",
     "new_session_legacy_options_runtime.cjs",
     "runtime_status_takeover.cjs",
     "restart_recovery_order_runtime.cjs",
     "tool_pending_history_recovery_runtime.cjs",
+    "process_aggregate_stats_runtime.cjs",
     "model_profile_bound_refresh_runtime.cjs",
     "model_profile_refresh_races_runtime.cjs",
     "model_profile_refresh_requests_runtime.cjs",
