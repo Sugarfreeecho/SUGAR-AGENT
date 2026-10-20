@@ -1613,6 +1613,9 @@ def _powershell_encoded_command_b64(script: str) -> str:
 _RUN_SHELL_PS_UTF8_PRELUDE = (
     "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
     "$OutputEncoding=[Text.Encoding]::UTF8;"
+    "$PSDefaultParameterValues['Get-Content:Encoding']='utf8';"
+    "$PSDefaultParameterValues['Set-Content:Encoding']='utf8';"
+    "$PSDefaultParameterValues['Add-Content:Encoding']='utf8';"
     "$ProgressPreference='SilentlyContinue';"
 )
 
@@ -1626,6 +1629,9 @@ def _powershell_script_with_utf8_prelude(script: str) -> str:
       经 GBK 读入后会被替换符损伤（如 ``✓`` 变 ``�?``），PS 中文按 GBK 写出也会在捕获侧变成
       ``���ٻع飨…``；
     - ``$OutputEncoding``：统一 PS 文本管道写入原生命令的编码（PS 5.1 默认为 ASCII）；
+    - ``$PSDefaultParameterValues`` 文件读写默认 UTF-8（``Get-Content / Set-Content / Add-Content``）：
+      PS 5.1 默认按 ANSI(GBK) 读无 BOM 文件，会把 UTF-8 文本读成 ``鐩綍绱㈠紩…`` 类误码（2026-10-11 实测）；
+      BOM 文件仍按 BOM 优先（UTF-16 / UTF-8-BOM 读回正常），无 BOM 的 GBK/ANSI 文件需显式 ``-Encoding Default``；
     - ``$ProgressPreference``：顺带消除 CLIXML 进度记录噪音。实测设置后 ``chcp`` 仍为 936
       （仅改 .NET 侧编码，不动控制台代码页）。
 

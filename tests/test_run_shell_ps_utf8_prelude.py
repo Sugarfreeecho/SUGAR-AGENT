@@ -19,6 +19,9 @@ def test_ps_utf8_prelude_prepended_by_default(monkeypatch):
     assert script.endswith("Write-Output 1")
     assert "[Console]::OutputEncoding=[Text.Encoding]::UTF8;" in script
     assert "$OutputEncoding=[Text.Encoding]::UTF8;" in script
+    assert "$PSDefaultParameterValues['Get-Content:Encoding']='utf8';" in script
+    assert "$PSDefaultParameterValues['Set-Content:Encoding']='utf8';" in script
+    assert "$PSDefaultParameterValues['Add-Content:Encoding']='utf8';" in script
     assert "$ProgressPreference='SilentlyContinue';" in script
 
 
