@@ -25,6 +25,7 @@ function applySessionEvent(event, opts) {
     const source = opts.source || 'event';
     const type = String(event.type || '');
     const runId = String(event.run_id || event.runId || '').trim();
+    const phaseSeq = Number(event.runtime_seq || event.runtimeSeq || 0);
     let messageRecord = null;
     const ephemeral = !!event.ephemeral;
     const isLiveOnlyDelta = ephemeral && (
@@ -104,7 +105,7 @@ function applySessionEvent(event, opts) {
         };
     }
     if (type === 'user' && event.queued_followup) {
-        sessionStore.clearRunFinalizing(sessionId, runId);
+        sessionStore.clearRunFinalizing(sessionId, runId, phaseSeq);
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'final' && source === 'sse') {
@@ -115,7 +116,7 @@ function applySessionEvent(event, opts) {
         const knownCurrentRunId = localRunId || activeRunId;
         const finalizingRunId = runId || knownCurrentRunId;
         if (finalizingRunId && (!runId || !knownCurrentRunId || runId === knownCurrentRunId)) {
-            sessionStore.markRunFinalizing(sessionId, finalizingRunId);
+            sessionStore.markRunFinalizing(sessionId, finalizingRunId, phaseSeq);
         }
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }

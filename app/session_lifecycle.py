@@ -141,7 +141,7 @@ def mark_run_terminal(session_id: str, run_id: str) -> None:
             info["phase"] = "terminal"
 
 
-def mark_run_finalizing(session_id: str, run_id: str) -> None:
+def mark_run_finalizing(session_id: str, run_id: str, *, phase_seq: int = 0) -> None:
     """Expose that output is committed while the run completes critical work."""
 
     sid = (session_id or "").strip()
@@ -154,17 +154,23 @@ def mark_run_finalizing(session_id: str, run_id: str) -> None:
             if not isinstance(info, dict):
                 continue
             if str(info.get("run_id") or "").strip() == rid and info.get("run_active", True):
+                if phase_seq and int(phase_seq) < int(info.get("phase_seq") or 0):
+                    continue
                 info["phase"] = "finalizing"
+                info["phase_seq"] = max(int(info.get("phase_seq") or 0), int(phase_seq or 0))
 
 
-def mark_run_running(session_id: str, run_id: str) -> None:
+def mark_run_running(session_id: str, run_id: str, *, phase_seq: int = 0) -> None:
     """A queued input resumes work within the existing active task."""
     with _lock:
         for task in list(_run_tasks.get(session_id, ())):
             info = _run_info_by_task.get(task)
             if (isinstance(info, dict) and info.get("run_id") == run_id
                     and info.get("run_active", True)):
+                if phase_seq and int(phase_seq) < int(info.get("phase_seq") or 0):
+                    continue
                 info["phase"] = "running"
+                info["phase_seq"] = max(int(info.get("phase_seq") or 0), int(phase_seq or 0))
 
 
 async def _cancel_tasks(tasks: List[asyncio.Task], timeout: float = 8.0) -> None:

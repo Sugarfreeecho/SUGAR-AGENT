@@ -2924,27 +2924,43 @@ const sessionStore = {
         }
     },
 
-    markRunFinalizing(sessionId, runId) {
+    markRunFinalizing(sessionId, runId, phaseSeq) {
         const sid = String(sessionId || '');
         const rid = String(runId || '').trim();
         if (!sid || !rid || this.isTerminalRun(sid, rid)) return;
-        this.finalizingRunIdsBySession.set(sid, rid);
+        const seq = Number(phaseSeq) || 0;
         const info = this.activeRunInfoBySession.get(sid);
+        if (info && String(info.run_id || info.runId || '').trim() === rid
+            && seq > 0 && seq < Number(info.phase_seq || 0)) return;
+        this.finalizingRunIdsBySession.set(sid, rid);
         if (info && String(info.run_id || info.runId || '').trim() === rid) {
             info.phase = 'finalizing';
+            info.phase_seq = Math.max(Number(info.phase_seq || 0), seq);
+        } else if (!info && seq > 0) {
+            this.activeRunInfoBySession.set(sid, {
+                session_id: sid, run_id: rid, run_active: true, phase: 'finalizing', phase_seq: seq,
+            });
         }
     },
 
-    clearRunFinalizing(sessionId, runId) {
+    clearRunFinalizing(sessionId, runId, phaseSeq) {
         const sid = String(sessionId || '');
         const rid = String(runId || '').trim();
         if (!sid) return;
+        const seq = Number(phaseSeq) || 0;
+        const info = this.activeRunInfoBySession.get(sid);
+        if (info && String(info.run_id || info.runId || '').trim() === rid
+            && seq > 0 && seq < Number(info.phase_seq || 0)) return;
         if (!rid || String(this.finalizingRunIdsBySession.get(sid) || '') === rid) {
             this.finalizingRunIdsBySession.delete(sid);
         }
-        const info = this.activeRunInfoBySession.get(sid);
-        if (info && info.phase === 'finalizing' && (!rid || String(info.run_id || info.runId || '') === rid)) {
+        if (info && (!rid || String(info.run_id || info.runId || '') === rid)) {
             info.phase = 'running';
+            info.phase_seq = Math.max(Number(info.phase_seq || 0), seq);
+        } else if (!info && rid && seq > 0 && !this.isTerminalRun(sid, rid)) {
+            this.activeRunInfoBySession.set(sid, {
+                session_id: sid, run_id: rid, run_active: true, phase: 'running', phase_seq: seq,
+            });
         }
     },
 
@@ -2952,7 +2968,7 @@ const sessionStore = {
         const sid = String(sessionId || '');
         if (!sid) return false;
         const info = this.activeRunInfoBySession.get(sid);
-        if (info && info.phase === 'finalizing') return true;
+        if (info && (info.phase === 'running' || info.phase === 'finalizing')) return info.phase === 'finalizing';
         return this.finalizingRunIdsBySession.has(sid);
     },
 \r
@@ -2964,6 +2980,21 @@ const sessionStore = {
         return !!(bucket && bucket.has(rid));\r
     },\r
 \r
+    resolveRunPhase(sessionId, run) {
+        const info = Object.assign({}, run);
+        const current = this.activeRunInfoBySession.get(String(sessionId));
+        // A cached HTTP response can arrive after a newer queued-turn SSE
+        // event. Compare durable event positions within the same run, since
+        // all queued turns share that run id.
+        if (current && String(current.run_id || current.runId || '') === String(info.run_id || info.runId || '')
+            && Number(current.phase_seq || 0) > 0
+            && Number(current.phase_seq || 0) >= Number(info.phase_seq || 0)) {
+            info.phase = current.phase;
+            info.phase_seq = current.phase_seq;
+        }
+        return info;
+    },
+
     applyActiveRuns(activeRuns) {
         const next = new Map();\r
         const list = Array.isArray(activeRuns) ? activeRuns : [];\r
@@ -2974,9 +3005,12 @@ const sessionStore = {
             if (run && run.runtime_v2 && !runId) return;
             if (runId && this.isTerminalRun(sid, runId)) return;
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;\r
-            next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
-            if (runId && run && run.phase === 'finalizing') {
+            const info = this.resolveRunPhase(sid, typeof run === 'string' ? { session_id: String(sid) } : run);
+            next.set(String(sid), info);
+            if (runId && info.phase === 'finalizing') {
                 this.finalizingRunIdsBySession.set(String(sid), runId);
+            } else if (info.phase === 'running') {
+                this.finalizingRunIdsBySession.delete(String(sid));
             }
         }, this);\r
         this.activeRunInfoBySession = next;
@@ -2986,7 +3020,7 @@ const sessionStore = {
         const sid = String(sessionId || '');
         if (!sid) return false;
         const info = activeRun && typeof activeRun === 'object'
-            ? Object.assign({}, activeRun)
+            ? this.resolveRunPhase(sid, activeRun)
             : null;
         const runId = String((info && (info.run_id || info.runId)) || '').trim();
         const active = !!(info && info.run_active !== false);
@@ -3001,6 +3035,8 @@ const sessionStore = {
             }
             if (runId && info.phase === 'finalizing') {
                 this.finalizingRunIdsBySession.set(sid, runId);
+            } else if (info.phase === 'running') {
+                this.finalizingRunIdsBySession.delete(sid);
             }
             return true;
         }
@@ -6309,6 +6345,7 @@ function applySessionEvent(event, opts) {
     const source = opts.source || 'event';
     const type = String(event.type || '');
     const runId = String(event.run_id || event.runId || '').trim();
+    const phaseSeq = Number(event.runtime_seq || event.runtimeSeq || 0);
     let messageRecord = null;
     const ephemeral = !!event.ephemeral;
     const isLiveOnlyDelta = ephemeral && (
@@ -6388,7 +6425,7 @@ function applySessionEvent(event, opts) {
         };
     }
     if (type === 'user' && event.queued_followup) {
-        sessionStore.clearRunFinalizing(sessionId, runId);
+        sessionStore.clearRunFinalizing(sessionId, runId, phaseSeq);
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'final' && source === 'sse') {
@@ -6399,7 +6436,7 @@ function applySessionEvent(event, opts) {
         const knownCurrentRunId = localRunId || activeRunId;
         const finalizingRunId = runId || knownCurrentRunId;
         if (finalizingRunId && (!runId || !knownCurrentRunId || runId === knownCurrentRunId)) {
-            sessionStore.markRunFinalizing(sessionId, finalizingRunId);
+            sessionStore.markRunFinalizing(sessionId, finalizingRunId, phaseSeq);
         }
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }

@@ -102,6 +102,9 @@ def test_three_answers_keep_one_run_and_distinct_durable_turns(queued_runtime, m
         assert get_active_run_info(sid)["phase"] == "running"
         snapshot = RuntimeProjector().project(SessionEventLog(directory).read_all(sid))
         assert snapshot["runs"]["same-run"]["phase"] == "running"
+        if prompts:
+            assert get_active_run_info(sid)["phase_seq"] == state["_runtime_v2_user_turn_seq"]
+            assert snapshot["runs"]["same-run"]["phase_seq"] == state["_runtime_v2_user_turn_seq"]
         assert not agent._has_session_steers(sid), "ordinary queued inputs must not steer the current answer"
         prompts.append(state["user_input"])
         state["_current_react_iter"] = state.get("_queued_react_iter_offset", 0) + 1
@@ -119,6 +122,9 @@ def test_three_answers_keep_one_run_and_distinct_durable_turns(queued_runtime, m
             if event.get("type") == "final":
                 snapshot = RuntimeProjector().project(SessionEventLog(directory).read_all(sid))
                 assert snapshot["active_runs"], "a complete answer must not terminate a run that has queued inputs"
+                from session_lifecycle import get_active_run_info
+                assert event["runtime_seq"] == snapshot["runs"]["same-run"]["phase_seq"]
+                assert get_active_run_info(sid)["phase_seq"] == event["runtime_seq"]
             seen.append(event)
 
     asyncio.run(collect())

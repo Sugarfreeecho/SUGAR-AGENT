@@ -345,6 +345,7 @@ class RuntimeProjector:
                 run = snapshot.get("runs", {}).get(self._event_run_id(event))
                 if isinstance(run, dict) and run.get("status") == "running":
                     run["phase"] = "running"
+                    run["phase_seq"] = event.seq
         elif event_type == "assistant_final_committed":
             self._append_message(snapshot, event, "assistant")
             self._commit_assistant_final_model(snapshot, event)
@@ -1091,6 +1092,7 @@ class RuntimeProjector:
                 "error": None,
                 "started_seq": event.seq,
                 "phase": "running",
+                "phase_seq": event.seq,
             }
             runs[run_id] = run
         if run.get("status") in terminal_statuses and status not in terminal_statuses:
@@ -1101,6 +1103,7 @@ class RuntimeProjector:
             run["status"] = status
         if status in terminal_statuses:
             run["phase"] = "terminal"
+            run["phase_seq"] = event.seq
             run["finished_at"] = event.timestamp
             run["finished_seq"] = event.seq
             reason = str((event.payload or {}).get("reason") or "").strip()
@@ -1117,6 +1120,7 @@ class RuntimeProjector:
         if run.get("status") in {"finished", "failed", "interrupted"}:
             return
         run["phase"] = "finalizing"
+        run["phase_seq"] = event.seq
         run["response_committed_at"] = event.timestamp
         run["response_committed_seq"] = event.seq
 

@@ -465,6 +465,35 @@ def test_registered_run_identity_becomes_inactive_at_durable_terminal():
     asyncio.run(scenario())
 
 
+def test_live_run_phases_keep_their_durable_event_order():
+    import session_lifecycle
+
+    async def scenario():
+        sid, rid = "queued-phase-order", "shared-run"
+        task = asyncio.create_task(asyncio.Event().wait())
+        session_lifecycle.register_run_task(sid, task, run_id=rid, mode="chat")
+        try:
+            session_lifecycle.mark_run_finalizing(sid, rid, phase_seq=10)
+            session_lifecycle.mark_run_running(sid, rid, phase_seq=20)
+            info = session_lifecycle.get_active_run_info(sid)
+            assert (info["phase"], info["phase_seq"]) == ("running", 20)
+            session_lifecycle.mark_run_finalizing(sid, rid, phase_seq=10)
+            assert session_lifecycle.get_active_run_info(sid)["phase"] == "running"
+            session_lifecycle.mark_run_finalizing(sid, rid, phase_seq=30)
+            session_lifecycle.mark_run_running(sid, rid, phase_seq=20)
+            info = session_lifecycle.get_active_run_info(sid)
+            assert (info["phase"], info["phase_seq"]) == ("finalizing", 30)
+            session_lifecycle.mark_run_terminal(sid, rid)
+            session_lifecycle.mark_run_running(sid, rid, phase_seq=40)
+            assert session_lifecycle.get_active_run_info(sid)["phase"] == "terminal"
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())
+
+
 def test_runtime_lifecycle_retries_before_exposing_terminal(monkeypatch):
     import agent_loop
 
@@ -793,7 +822,7 @@ def test_frontend_final_waits_for_authoritative_terminal_event():
     assert "endRunForClient" not in final_handler
     assert "runCtx.terminalSeen = true;" in sse_source
     assert "Transport completion is not a run outcome" in sse_source
-    assert "sessionStore.markRunFinalizing(sessionId, finalizingRunId)" in reducer_source
+    assert "sessionStore.markRunFinalizing(sessionId, finalizingRunId, phaseSeq)" in reducer_source
     assert "markSessionResultComplete(" in reducer_source
     assert "if (!options.fromQueue) clearSessionUnreadState(submitSessionIdInitial);" in send_setup
     assert "clearSessionUnreadState(runSessionId)" not in foreground_finalizer

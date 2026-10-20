@@ -2713,7 +2713,7 @@ def _runtime_v2_commit_assistant_final(
     try:
         run_id = str(state.get("_runtime_v2_run_id") or "").strip()
         turn_id = str(state.get("_runtime_v2_turn_id") or run_id)
-        _runtime_v2_react_history_ops().commit_assistant_final(
+        committed_event = _runtime_v2_react_history_ops().commit_assistant_final(
             sid,
             str(content or ""),
             ui_content=ui_content,
@@ -2723,7 +2723,9 @@ def _runtime_v2_commit_assistant_final(
         )
         from session_lifecycle import mark_run_finalizing
 
-        mark_run_finalizing(sid, run_id)
+        phase_seq = int(getattr(committed_event, "seq", 0) or 0)
+        state["_runtime_v2_final_seq"] = phase_seq
+        mark_run_finalizing(sid, run_id, phase_seq=phase_seq)
         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
         event = {
             "type": "final",
@@ -4366,7 +4368,7 @@ async def _consume_steer_messages(
             if after_turn:
                 state["_queued_turn_committed"] = True
                 from session_lifecycle import mark_run_running
-                mark_run_running(sid, run_id)
+                mark_run_running(sid, run_id, phase_seq=int(state.get("_runtime_v2_user_turn_seq") or 0))
         except Exception:
             transition_session_steer(sid, steer_id, {"claimed"}, "failed", error="user turn commit failed")
             raise
@@ -10884,6 +10886,8 @@ async def astream_events(
                 runtime_committed = _runtime_v2_commit_assistant_final(
                     state, model_content, ui_content=ui_content
                 )
+            if state.get("_runtime_v2_final_seq"):
+                ev.setdefault("runtime_seq", state["_runtime_v2_final_seq"])
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":
@@ -11402,6 +11406,8 @@ async def astream_events_continuation(
                 runtime_committed = _runtime_v2_commit_assistant_final(
                     state, model_content, ui_content=ui_content
                 )
+            if state.get("_runtime_v2_final_seq"):
+                ev.setdefault("runtime_seq", state["_runtime_v2_final_seq"])
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":

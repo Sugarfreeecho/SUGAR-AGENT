@@ -96,5 +96,55 @@ function terminal(type, run, extra = {}) {
     assert(indicator().has('is-unread-failed'), 'a read barrier cannot hide a later failure for the same run');
     context.store.applySnapshot([{id: 's1', unread_result: true, unread_result_status: 'failed', unread_result_run_id: 'run-8'}]);
     assert(indicator().has('is-unread-failed'), 'a refreshed failed snapshot stays red');
+
+    // Interleave SSE turn boundaries with cached and fresh HTTP snapshots.
+    // The queued answers deliberately share one run identity.
+    context.currentSessionId = 's1';
+    context.store.upsert({id: 's1', stream_active: true});
+    const snapshot = (phase, seq, run = 'queued-run') => ({
+        session_id: 's1', run_id: run, run_active: true, runtime_v2: true,
+        phase, phase_seq: seq,
+    });
+    context.store.applyActiveRuns([snapshot('running', 5)]);
+    terminal('final', 'queued-run', {runtime_seq: 10});
+    assert(indicator().has('is-finalizing'), 'the first answer can show its blue finalization stage');
+    terminal('user', 'queued-run', {queued_followup: true, runtime_seq: 20});
+    assert(indicator().has('is-generating'), 'the second queued answer returns to yellow');
+    context.store.applyActiveRuns([snapshot('finalizing', 10)]);
+    assert(indicator().has('is-generating'), 'a cached first-answer snapshot must not turn the second answer blue');
+    context.store.applyActiveRuns([snapshot('running', 20)]);
+    assert(indicator().has('is-generating'), 'fresh running snapshots keep the second answer yellow');
+    assert(!context.store.finalizingRunIdsBySession.has('s1'), 'running snapshots clear the old finalization marker');
+    context.store.applyActiveRunForSession('s1', snapshot('finalizing', 10));
+    assert(indicator().has('is-generating'), 'a stale detail refresh cannot undo the second turn boundary');
+    context.store.applyActiveRuns([snapshot('finalizing', undefined)]);
+    assert(indicator().has('is-generating'), 'unversioned cached snapshots cannot override a sequenced live boundary');
+    terminal('final', 'queued-run', {runtime_seq: 10});
+    assert(indicator().has('is-generating'), 'replayed old final events must not finalize the new answer');
+    terminal('final', 'queued-run', {runtime_seq: 30});
+    assert(indicator().has('is-finalizing'), 'a genuinely newer final event still turns blue');
+    context.store.applyActiveRuns([snapshot('running', 20)]);
+    assert(indicator().has('is-finalizing'), 'an older running snapshot cannot erase a newer final');
+    terminal('user', 'queued-run', {queued_followup: true, runtime_seq: 20});
+    assert(indicator().has('is-finalizing'), 'replayed older user boundaries cannot undo a newer final');
+    context.store.applyActiveRunForSession('s1', snapshot('running', 40));
+    assert(indicator().has('is-generating'), 'a newer server-side turn can resume even before its SSE arrives');
+    context.store.applyActiveRuns([snapshot('finalizing', 50)]);
+    assert(indicator().has('is-finalizing'), 'newer server finalization snapshots remain visible');
+    terminal('run_finished', 'queued-run', {runtime_seq: 60});
+    assert(!indicator().has('is-finalizing'), 'the durable terminal clears blue');
+    context.store.applyActiveRuns([snapshot('finalizing', 50)]);
+    assert(!indicator().has('is-finalizing'), 'an old active snapshot cannot reopen the terminal run');
+
+    // Existing unversioned snapshots also need to clear a stale marker when
+    // they explicitly report running, for both bulk and single-row refreshes.
+    context.store.applyActiveRunForSession('s1', snapshot('finalizing', 0, 'legacy-run'));
+    context.store.applyActiveRuns([snapshot('running', 0, 'legacy-run')]);
+    assert(!context.store.isRunFinalizing('s1'));
+    assert(!context.store.finalizingRunIdsBySession.has('s1'));
+    context.store.applyActiveRuns([snapshot('finalizing', 0, 'legacy-run')]);
+    context.store.applyActiveRunForSession('s1', snapshot('running', 0, 'legacy-run'));
+    assert(!context.store.isRunFinalizing('s1'));
+    assert(!context.store.finalizingRunIdsBySession.has('s1'));
     console.log('session result attention runtime checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
