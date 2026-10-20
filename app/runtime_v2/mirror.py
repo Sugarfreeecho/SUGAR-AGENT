@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
+from agent_local_timing import local_timed, mark_local
 
 from .blob_store import BlobStore
 from .event_log import RuntimeEventLogBusyError, SessionEventLog
@@ -77,6 +78,7 @@ class RuntimeMirror:
     def mirror_run_interrupted(self, session_id: str, run_id: Optional[str] = None, payload: Optional[dict] = None) -> Optional[RuntimeEvent]:
         return self.append(session_id, "run_interrupted", payload or {}, run_id=run_id)
 
+    @local_timed("ui_mirror")
     def append(
         self,
         session_id: str,
@@ -91,6 +93,7 @@ class RuntimeMirror:
                 session_id,
                 timeout_seconds=self._transaction_timeout_seconds,
             ):
+                mark_local("mirror_transaction_acquired")
                 event = self.event_log._append_unlocked(session_id, event_type, payload=payload or {}, run_id=run_id)
                 self._apply_snapshot_event(session_id, event)
             return event
@@ -126,7 +129,8 @@ class RuntimeMirror:
         ):
             events = self.event_log._append_many_unlocked(session_id, clean)
             snapshot = self.snapshots.read(session_id)
-            if events and int(snapshot.get("last_seq") or 0) == int(events[0].seq) - 1:
+            if (events and self.snapshots._projection_version_matches(snapshot)
+                    and int(snapshot.get("last_seq") or 0) == int(events[0].seq) - 1):
                 for event in events:
                     snapshot = self.projector.project_incremental(snapshot, event)
             else:
@@ -175,10 +179,12 @@ class RuntimeMirror:
                 rows.append({"type": "legacy_ui_event", "payload": dict(event)})
         return self.append_batch(session_id, rows)
 
+    @local_timed("ui_projection")
     def _apply_snapshot_event(self, session_id: str, event: RuntimeEvent) -> None:
         try:
             snapshot = self.snapshots.read_for_update(session_id)
-            if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+            if (not self.snapshots._projection_version_matches(snapshot)
+                    or int(snapshot.get("last_seq") or 0) != int(event.seq) - 1):
                 snapshot = self.snapshots.project_after_append(
                     session_id, snapshot, self.event_log, self.projector, event.seq)
             else:

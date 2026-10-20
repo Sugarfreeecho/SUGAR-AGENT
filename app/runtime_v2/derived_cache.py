@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+from typing import NamedTuple
 from pathlib import Path
+from .read_probe import open_probe_reader
 
 
 def estimate_bytes(value) -> int:
@@ -41,7 +43,23 @@ def prefix_digest(path: Path, offset: int) -> str:
     return digest.hexdigest()
 
 
-def source_boundary(path: Path, offset: int) -> dict:
+class SourceWindow(NamedTuple):
+    """At most 8 KiB of validated boundary bytes for our next owned append."""
+    identity: tuple[int, int]
+    offset: int
+    mtime_ns: int
+    size: int
+    head: bytes
+    tail: bytes
+
+    def boundary(self) -> dict:
+        return {"identity": list(self.identity), "offset": self.offset,
+                "mtime_ns": self.mtime_ns, "size": self.size,
+                "head": hashlib.sha256(self.head).hexdigest(),
+                "tail": hashlib.sha256(self.tail).hexdigest()}
+
+
+def source_boundary_window(path: Path, offset: int) -> tuple[dict, SourceWindow]:
     """Capture cheap append guards; callers capture under their state lock.
 
     Event writers append or atomically replace logs. The complete prefix hash
@@ -51,7 +69,7 @@ def source_boundary(path: Path, offset: int) -> dict:
     offset = int(offset)
     if offset < 0 or offset > stat.st_size:
         raise ValueError("invalid event boundary")
-    with path.open("rb") as fh:
+    with open_probe_reader(path) as fh:
         opened_stat = os.fstat(fh.fileno())
         if file_identity(opened_stat) != file_identity(stat):
             raise ValueError("event source changed while opening its boundary")
@@ -60,10 +78,45 @@ def source_boundary(path: Path, offset: int) -> dict:
         tail = fh.read(min(4096, offset))
     if offset and not tail.endswith(b"\n"):
         raise ValueError("event boundary is not a complete fact")
-    return {"identity": file_identity(stat), "offset": offset,
-            "mtime_ns": int(stat.st_mtime_ns), "size": int(stat.st_size),
-            "head": hashlib.sha256(head).hexdigest(),
-            "tail": hashlib.sha256(tail).hexdigest()}
+    window = SourceWindow(tuple(file_identity(stat)), offset, int(stat.st_mtime_ns),
+                          int(stat.st_size), head, tail)
+    return window.boundary(), window
+
+
+def source_boundary(path: Path, offset: int) -> dict:
+    return source_boundary_window(path, offset)[0]
+
+
+def extend_source_window(source, window, receipt, current_stat):
+    """Derive the same guard from bytes the locked writer actually appended.
+
+    No read-validation verdict is reused for an external append. Any mismatch
+    in the prior guard, writer identity, length or final named file falls back
+    to the normal disk boundary read at the caller. Checkpoints still validate
+    and hash the real prefix independently before publication and on load.
+    """
+    if not isinstance(window, SourceWindow) or not isinstance(source, dict):
+        return None
+    if window.boundary() != {key: source.get(key) for key in
+                             ("identity", "offset", "mtime_ns", "size", "head", "tail")}:
+        return None
+    before, after, encoded = receipt.get("before"), receipt.get("after"), receipt.get("encoded")
+    if before is None or after is None or not isinstance(encoded, bytes) or not encoded.endswith(b"\n"):
+        return None
+    if (not before.st_ino or window.identity != tuple(file_identity(before))
+            or window.identity != tuple(file_identity(after))
+            or window.identity != tuple(file_identity(current_stat))
+            or window.offset != window.size or window.size != before.st_size
+            or window.mtime_ns != before.st_mtime_ns
+            or before.st_size + len(encoded) != after.st_size
+            or after.st_size != current_stat.st_size
+            or after.st_mtime_ns != current_stat.st_mtime_ns):
+        return None
+    head = window.head if len(window.head) == 4096 else window.head + encoded[:4096 - len(window.head)]
+    tail = encoded[-4096:] if len(encoded) >= 4096 else (window.tail + encoded)[-4096:]
+    updated = SourceWindow(window.identity, current_stat.st_size, current_stat.st_mtime_ns,
+                           current_stat.st_size, head, tail)
+    return updated.boundary(), updated
 
 
 def source_matches(path: Path, source: dict, *, full: bool = False) -> bool:

@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
+from agent_local_timing import local_timed
 
 from .event_log import SessionEventLog
 from .projector import RuntimeProjector
@@ -86,13 +87,31 @@ class SessionExtensionStateStore:
             raise ExtensionStateNotFound(f"Session does not exist: {sid}")
         return sid
 
+    @local_timed("extension_snapshot")
     def _snapshot_for_update(self, session_id: str) -> dict:
+        """Read a current COW projection while the caller owns the transaction."""
         snapshot = self.snapshots.read_for_update(session_id)
-        events = self.event_log.read_all(session_id)
-        last_seq = max((int(event.seq) for event in events), default=0)
-        if int(snapshot.get("last_seq") or 0) != last_seq:
-            snapshot = self.projector.project(events)
-        return snapshot
+        through = max(0, self.event_log.next_seq(session_id) - 1)
+        last = max(0, int(snapshot.get("last_seq") or 0))
+        source = snapshot.get("_event_log") or {}
+        try:
+            info = self.event_log.event_path(session_id).stat()
+        except FileNotFoundError:
+            info = None
+        same_source = (isinstance(source, dict) and info is not None
+                       and bool(info.st_ino)
+                       and source.get("identity") == [int(info.st_dev), int(info.st_ino)])
+        compatible = self.snapshots._projection_version_matches(snapshot)
+        if (compatible and same_source and last == through
+                and source.get("size") == info.st_size
+                and source.get("mtime_ns") == info.st_mtime_ns):
+            return snapshot
+        if (compatible and same_source and 0 < last < through
+                and type(source.get("size")) is int and 0 < source["size"] < info.st_size):
+            return self.snapshots.project_after_append(
+                session_id, snapshot, self.event_log, self.projector, through)
+        # Cold/old/replaced/truncated sources retain recovery from actual facts.
+        return self.projector.project(self.event_log.read_all(session_id))
 
     @staticmethod
     def _row(snapshot: dict, plugin_id: str, namespace: str) -> dict:
@@ -131,12 +150,10 @@ class SessionExtensionStateStore:
         sid = self._ensure_session(session_id)
         owner = self._identifier(plugin_id, "plugin_id")
         space = self._identifier(namespace, "namespace")
-        snapshot = self.snapshots.read(sid)
-        if not snapshot or int(snapshot.get("last_seq") or 0) != max(
-            0, self.event_log.next_seq(sid) - 1
-        ):
-            snapshot = self.projector.project(self.event_log.read_all(sid))
-        return self._row(snapshot, owner, space)
+        # Only the requested namespace is copied. Projectors publish COW roots;
+        # the short transaction keeps source validation and the selected row coherent.
+        with self.event_log.session_transaction(sid):
+            return self._row(self._snapshot_for_update(sid), owner, space)
 
     def read_all_lightweight(self, session_id: str) -> dict:
         """Return only extension namespaces without copying the full runtime snapshot."""

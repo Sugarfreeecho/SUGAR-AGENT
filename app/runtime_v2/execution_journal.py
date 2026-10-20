@@ -6,14 +6,18 @@ a snapshot for every token, and UI indexes never include these update events.
 from __future__ import annotations
 
 import copy
+import io
 import json
 import threading
 import time
 from typing import Any
+from agent_local_timing import local_timed, local_step, mark_local
 
 from .event_log import SessionEventLog
 from .event_schema import now_iso
-from .derived_cache import estimate_bytes, file_identity, source_boundary, source_matches
+from .attachment_migration import event_from_record
+from .derived_cache import (estimate_bytes, file_identity, source_boundary_window,
+                            extend_source_window, source_matches)
 from .recovery_checkpoint import RecoveryCheckpoint
 
 
@@ -120,6 +124,7 @@ class ExecutionJournal:
                 state.setdefault("_closed_runs", set()).update(finished)
                 RecoveryCheckpoint.schedule(journal, session_id, state, force=True)
 
+    @local_timed("journal_state")
     def _state(self, session_id: str, diagnostics: dict | None = None, *, allow_checkpoint=True) -> dict:
         key = str(self.log.event_path(session_id).resolve())
         with self._guard:
@@ -135,11 +140,23 @@ class ExecutionJournal:
             signature = (stat.st_mtime_ns, stat.st_size)
         except FileNotFoundError:
             signature = None
+        owned = extended = None
+        if (state is not None and state.get("_valid", True) and signature is not None
+                and state["seq"] < latest and state.get("source")
+                and state.get("signature") != signature):
+            with local_step("journal_owned_suffix"):
+                owned = self.log.recent_owned_append(session_id, state["source"], stat)
+                if owned is not None:
+                    extended = extend_source_window(
+                        state["source"], state.get("_source_window"), owned, stat)
+                if extended is None:
+                    owned = None
         mode = "memory"
         if (state is None or not state.get("_valid", True) or state["seq"] > latest
                 or (state.get("source") and signature is not None
                     and (state["source"].get("identity") != file_identity(stat)
                          or (state.get("signature") != signature
+                             and owned is None
                              and not source_matches(self.log.event_path(session_id), state["source"]))))
                 or (state["seq"] == latest and state.get("signature") != signature)):
             started = time.perf_counter()
@@ -167,9 +184,15 @@ class ExecutionJournal:
         state["_valid"] = False
         replay_events = 0
         force_checkpoint = mode == "facts"
-        events = self.log.iter_from_offset(session_id, start_offset,
-                                           end_offset=signature[1] if signature else 0,
-                                           read_metadata=metadata)
+        if mode == "memory" and owned is not None:
+            events = (event_from_record(json.loads(line.decode("utf-8")))
+                      for line in io.BytesIO(owned["encoded"]))
+            metadata["byte_offset"] = stat.st_size
+        else:
+            owned = extended = None
+            events = self.log.iter_from_offset(session_id, start_offset,
+                                               end_offset=signature[1] if signature else 0,
+                                               read_metadata=metadata, buffer_suffix=True)
         for event in _timed_replay(events, diagnostics):
             if event.seq <= state["seq"]:
                 raise ValueError("execution journal event boundary is not monotonic")
@@ -244,7 +267,8 @@ class ExecutionJournal:
         state["signature"] = signature
         state["offset"] = metadata["byte_offset"]
         if signature is not None:
-            state["source"] = source_boundary(self.log.event_path(session_id), state["offset"])
+            state["source"], state["_source_window"] = extended or source_boundary_window(
+                self.log.event_path(session_id), state["offset"])
             if state["source"]["identity"] != file_identity(stat):
                 # Replacement during a read must not publish a mixed generation.
                 with self._guard:
@@ -294,13 +318,16 @@ class ExecutionJournal:
                     "process_group_id": state["group"],
                     "execution_records": copied}
 
+    @local_timed("journal_record")
     def record(self, session_id: str, event: dict) -> dict:
+        mark_local("journal_worker_entered")
         if event.get("_subagent_forward"):
             return event
         kind = str(event.get("type") or "")
         if kind not in STREAM_TYPES and kind not in {"llm_stream_aborted", "run_interrupted", "run_failed"}:
             return event
         with self.log.session_transaction(session_id), self._session_lock(session_id):
+            mark_local("journal_transaction_acquired")
             state = self._state(session_id)
             run = str(event.get("run_id") or "legacy")
             attempt = str(event.get("stream_seq") or event.get("react_iter") or "0")
@@ -385,6 +412,7 @@ class ExecutionJournal:
                     update.update(status=status, tool=event.get("tool"), args=event.get("args", event.get("tool_args")),
                                   result=result, ui_committed=True, command_preview=event.get("command_preview"),
                                   attachments=event.get("attachments", []),
+                                  tool_status=event.get("status") or {},
                                   duration_ms=(event.get("status") or {}).get("duration_ms"))
                     # Plugin-owned UI metadata (change-review rows) belongs to the
                     # result, not to the provider payload. Keep it on the record so
@@ -425,13 +453,18 @@ class ExecutionJournal:
     def _append(self, session_id, state, update, run):
         state["_valid"] = False
         state["_recent_write"] = time.monotonic()
-        event = self.log._append_unlocked(session_id, EVENT_TYPE, update, run_id=run)
+        receipt = {}
+        event = self.log._append_unlocked(session_id, EVENT_TYPE, update, run_id=run, append_receipt=receipt)
         apply_execution_update(state["records"], update, event.seq)
         state["seq"] = event.seq
         stat = self.log.event_path(session_id).stat()
         state["signature"] = (stat.st_mtime_ns, stat.st_size)
         state["offset"] = stat.st_size
-        state["source"] = source_boundary(self.log.event_path(session_id), state["offset"])
+        with local_step("journal_source_boundary"):
+            extended = extend_source_window(state.get("source"), state.get("_source_window"), receipt, stat)
+            if extended is None:
+                extended = source_boundary_window(self.log.event_path(session_id), state["offset"])
+            state["source"], state["_source_window"] = extended
         state["_valid"] = True
         RecoveryCheckpoint.schedule(self, session_id, state)
         return event

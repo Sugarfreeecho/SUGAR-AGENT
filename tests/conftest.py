@@ -29,3 +29,30 @@ def isolated_tool_disclosure_config(monkeypatch, tmp_path):
     monkeypatch.setattr(tool_search, "CONFIG_PATH", tmp_path / "tool_search.json")
     monkeypatch.setattr(tool_search, "_config_cache", None)
     monkeypatch.delenv("MYAGENT_TOOL_SEARCH", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolated_agent_loop_metrics(request, monkeypatch, tmp_path):
+    """Fake loop managers must not leave metrics in the user's workspace."""
+    if request.node.path.name not in {"test_agent_loop_runtime_v2.py", "test_queued_followup_continuation.py"}:
+        yield
+        return
+    import execution_metrics as metrics
+    import runtime_observability as obs
+
+    metrics.flush()
+    old_obs_root, old_obs_resolver = obs._sessions_root, obs._path_resolver
+    root = tmp_path / "isolated-metrics"
+    monkeypatch.setattr(metrics, "_root", root)
+    monkeypatch.setattr(metrics, "_path_resolver", None)
+    monkeypatch.setattr(metrics, "_sessions", {})
+    monkeypatch.setattr(metrics, "_flush_deadlines", {})
+    monkeypatch.setattr(metrics, "_heartbeat_controls", set())
+    obs.configure(root)
+    try:
+        yield
+    finally:
+        metrics.flush()
+        obs.flush()
+        if old_obs_root is not None:
+            obs.configure(old_obs_root, path_resolver=old_obs_resolver)

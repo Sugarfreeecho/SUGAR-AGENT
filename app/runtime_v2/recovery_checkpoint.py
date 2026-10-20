@@ -153,14 +153,17 @@ class RecoveryCheckpoint:
     def _write(cls, journal, session_id, state):
         event_path = journal.log.event_path(session_id)
         path = cls.path(journal, session_id)
+        if cls._is_cancelled(path):
+            return
         with journal._session_lock(session_id):
-            if (cls._is_cancelled(path) or not state.get("_valid")
-                    or not source_matches(event_path, state.get("source") or {})):
+            if not state.get("_valid"):
                 return
             frozen = copy.deepcopy({key: state[key] for key in STATE_FIELDS})
-            source = dict(state["source"])
+            source = dict(state.get("source") or {})
         # Hashing, encoding, flush and filesystem locks never hold the journal
         # or event transaction lock used by a generating session.
+        if cls._is_cancelled(path) or not source_matches(event_path, source):
+            return
         source = seal_source(event_path, source)
         encoded = json.dumps(frozen, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         estimated_bytes = estimate_bytes(frozen)

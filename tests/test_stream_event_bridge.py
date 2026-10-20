@@ -9,6 +9,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 from stream_event_bridge import StreamEventBridge
 
 
+def test_result_batch_preserves_delta_and_terminal_barriers_and_private_envelope():
+    async def scenario():
+        seen = []
+        async def emit(event):
+            seen.append(event)
+        async def batch(events):
+            seen.extend(events)
+        emit.tool_batch = batch
+        bridge = StreamEventBridge(asyncio.get_running_loop(), emit)
+        await bridge.send({"type": "llm_reasoning_delta", "ephemeral": True, "delta": "first"})
+        await bridge.send_tool_batch([{"type": "tool_call", "tool_call_id": "a"},
+                                     {"type": "tool_call", "tool_call_id": "b"}])
+        # A payload cannot manufacture the bridge's private envelope token.
+        await bridge.send({"type": "status", "_bridge_tool_batch": [{"type": "bad"}]})
+        await bridge.send({"type": "run_finished"})
+        await bridge.flush()
+        assert [row["type"] for row in seen] == ["llm_reasoning_delta", "tool_call", "tool_call", "status", "run_finished"]
+        assert [seen[i]["tool_call_id"] for i in (1, 2)] == ["a", "b"]
+    asyncio.run(scenario())
+
+
+def test_result_batch_failure_is_acknowledged_and_drain_recovers():
+    async def scenario():
+        seen = []
+        async def emit(event):
+            seen.append(event)
+        async def batch(events):
+            raise OSError("batch failed")
+        emit.tool_batch = batch
+        bridge = StreamEventBridge(asyncio.get_running_loop(), emit)
+        with pytest.raises(OSError, match="batch failed"):
+            await bridge.send_tool_batch([{"type": "tool_call"}])
+        await bridge.send({"type": "run_finished"})
+        assert seen == [{"type": "run_finished"}]
+    asyncio.run(scenario())
+
+
 def test_blocked_ui_does_not_block_deltas_but_completed_tool_is_a_barrier():
     async def scenario():
         release = asyncio.Event()

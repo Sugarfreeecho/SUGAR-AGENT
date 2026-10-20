@@ -1,6 +1,10 @@
 import json
 import threading
 import time
+import math
+import os
+
+import pytest
 
 from app.runtime_v2 import RuntimeHistoryOps, SessionEventLog, SnapshotStore
 
@@ -172,3 +176,73 @@ def test_checkpoint_pool_is_bounded_and_cancel_drops_queued_session(tmp_path, mo
     assert store.wait_for_checkpoint("busy-2", timeout_seconds=2)
     assert not store.path("cancel-me").exists()
     assert store.checkpoint_status("busy-1")["workers"] == 2
+
+
+@pytest.mark.parametrize("fast", [False, True])
+def test_snapshot_encoding_preserves_values_and_fsync_before_replace(tmp_path, monkeypatch, fast):
+    import json_encoding
+    if fast and json_encoding._orjson is None:
+        pytest.skip("Optional fast JSON encoder unavailable")
+    if not fast:
+        monkeypatch.setattr(json_encoding, "_orjson", None)
+    store = SnapshotStore(tmp_path)
+    snapshot = {"last_seq": 1, "messages": [{"content": "中文 🐈"}], "n": [1, -0.0, 1e-200], "flag": True}
+    order = []
+    fsync, replace = os.fsync, os.replace
+    def observed_fsync(fd):
+        order.append("fsync")
+        return fsync(fd)
+    def observed_replace(source, target):
+        assert order == ["fsync"]
+        order.append("replace")
+        return replace(source, target)
+    monkeypatch.setattr(os, "fsync", observed_fsync)
+    monkeypatch.setattr(os, "replace", observed_replace)
+
+    store.write("s1", snapshot)
+
+    assert order == ["fsync", "replace"]
+    assert json.loads(store.path("s1").read_text(encoding="utf8")) == snapshot
+
+
+def test_snapshot_uncommon_values_preserve_legacy_encoding_and_failed_write_is_atomic(tmp_path):
+    store = SnapshotStore(tmp_path)
+    snapshot = {"last_seq": 1, "n": float("nan"), "tuple": (1, 2), 7: "integer key"}
+    store.write("s1", snapshot)
+    path = store.path("s1")
+    loaded = json.loads(path.read_text(encoding="utf8"))
+    assert math.isnan(loaded["n"])
+    assert loaded["tuple"] == [1, 2]
+    assert loaded["7"] == "integer key"
+    before = path.read_bytes()
+    with pytest.raises(TypeError):
+        store.write("s1", {"last_seq": 2, "invalid": object()})
+    assert path.read_bytes() == before
+    assert not list(path.parent.glob(".s-*"))
+
+
+@pytest.mark.parametrize("value", [0, 73, -(1 << 10), 1 << 80, "84", 1.5, None, True])
+def test_disk_seq_fast_decode_keeps_original_integer_coercion(tmp_path, value):
+    path = tmp_path / "snapshot.json"
+    path.write_text(json.dumps({"last_seq": value, "messages": [{"content": "中文"}]}), encoding="utf8")
+    assert SnapshotStore._read_disk_snapshot_seq(path) == max(0, int(value or 0))
+
+
+def test_disk_seq_falls_back_for_legacy_nan_and_always_observes_external_changes(tmp_path, monkeypatch):
+    import json_encoding
+    path = tmp_path / "snapshot.json"
+    path.write_text('{"last_seq": 5, "legacy": NaN}', encoding="utf8")
+    assert SnapshotStore._read_disk_snapshot_seq(path) == 5
+    path.write_text('{"last_seq": 9}', encoding="utf8")
+    assert SnapshotStore._read_disk_snapshot_seq(path) == 9
+    monkeypatch.setattr(json_encoding, "_orjson", None)
+    path.write_text('{"last_seq": 17}', encoding="utf8")
+    assert SnapshotStore._read_disk_snapshot_seq(path) == 17
+
+
+@pytest.mark.parametrize("raw", [b'\xef\xbb\xbf{"last_seq": 3}', b'{"last_seq": 3} trailing',
+                                   b'{"last_seq": 3, "bad": invalid}', b'[]', b'{"last_seq": NaN}'])
+def test_disk_seq_does_not_trust_a_header_of_invalid_json(tmp_path, raw):
+    path = tmp_path / "snapshot.json"
+    path.write_bytes(raw)
+    assert SnapshotStore._read_disk_snapshot_seq(path) == 0

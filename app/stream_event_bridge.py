@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from typing import Any, Callable
+from agent_local_timing import LocalOperationTrace
 
 
 _DELTA_FIELDS = {
@@ -21,6 +22,7 @@ _IDENTITY_FIELDS = (
     "index", "tool_call_index", "id", "tool_call_id",
 )
 _logger = logging.getLogger(__name__)
+_TOOL_BATCH = object()  # Private queue envelope; cannot be supplied by a tool payload.
 
 
 class StreamEventBridge:
@@ -31,13 +33,15 @@ class StreamEventBridge:
     wait for all preceding deltas, preventing late drafts after a terminal row.
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, emit: Callable):
+    def __init__(self, loop: asyncio.AbstractEventLoop, emit: Callable, *, session_id="", run_id=""):
         self._loop = loop
         self._emit = emit
         self._lock = threading.Lock()
         self._pending = deque()
         self._draining = False
         self._timings = {}
+        self._session_id = session_id
+        self._run_id = run_id
 
     @staticmethod
     def is_queued_delta(event: dict) -> bool:
@@ -93,9 +97,23 @@ class StreamEventBridge:
                 cpu_started = time.thread_time()
                 try:
                     if event is not None:
-                        result = self._emit(event)
-                        if inspect.isawaitable(result):
-                            await result
+                        trace = LocalOperationTrace(
+                            "event_delivery", session_id=event.get("session_id") or self._session_id,
+                            run_id=event.get("run_id") or self._run_id,
+                            react_iter=event.get("react_iter") or 0,
+                            event_type=event.get("type") or "", queued_at=enqueued_at)
+                        with trace.bind():
+                            batch = event.get(_TOOL_BATCH)
+                            batch_emit = getattr(self._emit, "tool_batch", None)
+                            if batch is not None and callable(batch_emit):
+                                result = batch_emit(batch)
+                                if inspect.isawaitable(result):
+                                    await result
+                            else:
+                                for row in batch if batch is not None else [event]:
+                                    result = self._emit(row)
+                                    if inspect.isawaitable(result):
+                                        await result
                 except asyncio.CancelledError as exc:
                     if acknowledgement is not None and not acknowledgement.done():
                         acknowledgement.set_exception(exc)
@@ -126,6 +144,7 @@ class StreamEventBridge:
                             timing["queue_age_max_ms"] = max(timing["queue_age_max_ms"], queue_age_ms)
                             timing["main_emit_calls"] += 1
                         if max(elapsed_ms, queue_age_ms) >= 100:
+                            trace.log()
                             _logger.info(
                                 "stream_event_delivery_detail session=%s react_iter=%d type=%s queue_age_ms=%d emit_ms=%d thread_cpu_ms=%d",
                                 event.get("session_id", ""), iteration, event.get("type"),
@@ -148,6 +167,12 @@ class StreamEventBridge:
     async def flush(self) -> None:
         acknowledgement = concurrent.futures.Future()
         self._enqueue(None, acknowledgement)
+        await asyncio.wrap_future(acknowledgement)
+
+    async def send_tool_batch(self, events: list[dict]) -> None:
+        acknowledgement = concurrent.futures.Future()
+        self._enqueue({"type": "tool_result_batch", _TOOL_BATCH: [dict(event) for event in events],
+                       "react_iter": events[0].get("react_iter", 0) if events else 0}, acknowledgement)
         await asyncio.wrap_future(acknowledgement)
 
     def snapshot(self, iteration: int) -> dict:

@@ -5,6 +5,7 @@ import threading
 import uuid
 from collections import defaultdict, deque
 from typing import Any, AsyncGenerator, Deque, Dict, Set, Tuple
+from agent_local_timing import local_timed
 
 
 _subscribers: Dict[str, Set[Tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = defaultdict(set)
@@ -52,6 +53,7 @@ def _sid(session_id: str) -> str:
     return str(session_id or "").strip()
 
 
+@local_timed("event_publish")
 async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
     sid = _sid(session_id)
     if not sid or not isinstance(event, dict):
@@ -161,6 +163,15 @@ async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
             pass
     for q, loop in subscribers:
         _deliver_to_subscriber(loop, q, event)
+    if not event.get("_subagent_forward") and event_type.startswith(("interaction_", "approval_")):
+        try:
+            from agent_harness import session_manager
+            from agent_subagent_sync import publish_to_ancestors
+
+            await publish_to_ancestors(session_manager, sid, event)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("child interaction forwarding failed: %s", sid, exc_info=True)
 
 
 def _deliver_to_subscriber(

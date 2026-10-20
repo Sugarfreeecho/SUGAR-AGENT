@@ -12,8 +12,10 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+from agent_local_timing import local_timed, local_step
 
-from .event_log import RuntimeEventLogBusyError, SessionEventLog, _active_uptime_seconds
+from .event_log import (RuntimeEventLogBusyError, RuntimeEventLogCorruptionError,
+                        SessionEventLog, _active_uptime_seconds)
 from .versions import EVENT_SCHEMA_VERSION, PROJECTOR_VERSION
 
 
@@ -114,11 +116,18 @@ class SnapshotStore:
         # per-directory collision resistance and ``x`` preserves exclusivity.
         tmp = path.with_name(f".s-{uuid.uuid4().hex[:6]}")
         try:
-            with tmp.open("x", encoding="utf-8") as fh:
+            from json_encoding import encode_plain_json
+
+            encoded = encode_plain_json(snapshot)
+            open_kwargs = {"mode": "xb"} if encoded is not None else {"mode": "x", "encoding": "utf-8"}
+            with tmp.open(**open_kwargs) as fh:
                 # Snapshots are machine-owned, rebuildable caches. Compact JSON
                 # materially reduces hot-path serialization and atomic-replace I/O
                 # for large sessions without changing their semantics.
-                json.dump(snapshot, fh, ensure_ascii=False, separators=(",", ":"))
+                if encoded is not None:
+                    fh.write(encoded)
+                else:
+                    json.dump(snapshot, fh, ensure_ascii=False, separators=(",", ":"))
                 fh.flush()
                 os.fsync(fh.fileno())
             # Windows can transiently reject replacement while another thread
@@ -139,6 +148,7 @@ class SnapshotStore:
             except OSError:
                 pass
 
+    @local_timed("snapshot_publish")
     def write_checkpointed(self, session_id: str, snapshot: Dict[str, Any]) -> bool:
         """Publish in memory and schedule rebuildable disk checkpoints.
 
@@ -148,28 +158,34 @@ class SnapshotStore:
         ``fsync`` run on a per-session daemon worker so they cannot suspend the
         ReAct hot path.
         """
-        path = self.path(session_id)
-        key = self._cache_key(path)
-        with self._checkpoint_condition:
-            if key in self._checkpoint_cancelled:
-                return False
-        signature = self._file_signature(path)
-        with self._memory_cache_lock:
-            self._memory_cache[key] = (signature, snapshot)
+        with local_step("snapshot_publish_path", min_ms=5):
+            path = self.path(session_id)
+            key = self._cache_key(path)
+        with local_step("snapshot_cancel_guard", min_ms=5):
+            with self._checkpoint_condition:
+                if key in self._checkpoint_cancelled:
+                    return False
+        with local_step("snapshot_file_signature", min_ms=5):
+            signature = self._file_signature(path)
+        with local_step("snapshot_memory_publish", min_ms=5):
+            with self._memory_cache_lock:
+                self._memory_cache[key] = (signature, snapshot)
         interval = max(1, int(os.getenv("RUNTIME_V2_SNAPSHOT_CHECKPOINT_EVENTS", "32")))
         last_seq = max(0, int(snapshot.get("last_seq") or 0))
         async_enabled = str(
             os.getenv("RUNTIME_V2_ASYNC_SNAPSHOT_CHECKPOINTS", "true")
         ).strip().lower() not in {"0", "false", "no", "off"}
-        with self._checkpoint_condition:
-            checkpoint_in_flight = key in self._checkpoint_active or key in self._checkpoint_pending
-        checkpoint_due = (
-            (not path.exists() and not checkpoint_in_flight)
-            or last_seq <= 1
-            or last_seq % interval == 0
-        )
+        with local_step("snapshot_due_check", min_ms=5):
+            with self._checkpoint_condition:
+                checkpoint_in_flight = key in self._checkpoint_active or key in self._checkpoint_pending
+            checkpoint_due = (
+                (not path.exists() and not checkpoint_in_flight)
+                or last_seq <= 1
+                or last_seq % interval == 0
+            )
         if checkpoint_due and async_enabled:
-            self._schedule_checkpoint(session_id, snapshot)
+            with local_step("snapshot_schedule", min_ms=5):
+                self._schedule_checkpoint(session_id, snapshot)
             # Fast checkpoints normally finish within a few milliseconds. A
             # short grace avoids leaving open temp files behind when a request
             # immediately deletes a session, while a slow or wedged fsync is
@@ -182,7 +198,8 @@ class SnapshotStore:
             except (TypeError, ValueError):
                 grace_ms = 10.0
             if grace_ms:
-                self.wait_for_checkpoint(session_id, timeout_seconds=grace_ms / 1000.0)
+                with local_step("snapshot_inline_wait", min_ms=5):
+                    self.wait_for_checkpoint(session_id, timeout_seconds=grace_ms / 1000.0)
             return True
         if checkpoint_due:
             self.write(session_id, snapshot)
@@ -212,6 +229,13 @@ class SnapshotStore:
                 self._checkpoint_pending[key] = (self, str(session_id), snapshot)
             self._ensure_checkpoint_workers_locked()
             self._checkpoint_condition.notify_all()
+
+    @classmethod
+    def start_checkpoint_workers(cls) -> int:
+        """Initialize bounded workers before requests, without creating files."""
+        with cls._checkpoint_condition:
+            cls._ensure_checkpoint_workers_locked()
+            return cls._checkpoint_workers_started
 
     @classmethod
     def _ensure_checkpoint_workers_locked(cls) -> None:
@@ -416,8 +440,20 @@ class SnapshotStore:
         if not path.is_file():
             return 0
         try:
-            with path.open("r", encoding="utf-8") as fh:
-                data = json.load(fh)
+            from json_encoding import _orjson
+
+            raw = path.read_bytes()
+            if _orjson is not None:
+                try:
+                    fast_data = _orjson.loads(raw)
+                    value = fast_data.get("last_seq") if isinstance(fast_data, dict) else None
+                    if type(value) is int:
+                        return max(0, value)
+                except (TypeError, ValueError):
+                    pass
+            # Preserve legacy parsing/coercion for oversized integers, special
+            # values or a missing optional decoder. No seq cache can hide edits.
+            data = json.loads(raw.decode("utf-8"))
             return SnapshotStore._snapshot_seq(data if isinstance(data, dict) else {})
         except Exception:
             return 0
@@ -476,6 +512,7 @@ class SnapshotStore:
             snapshot["_event_log"] = {
                 "size": int(stat.st_size),
                 "mtime_ns": int(stat.st_mtime_ns),
+                "identity": [int(stat.st_dev), int(stat.st_ino)],
             }
         except OSError:
             snapshot.pop("_event_log", None)
@@ -489,12 +526,60 @@ class SnapshotStore:
         """
         last_seq = self._snapshot_seq(snapshot)
         if self._projection_version_matches(snapshot) and 0 < last_seq < int(through_seq):
-            pending = event_log.read_after_seq(session_id, last_seq)
-            if pending and int(pending[-1].seq) == int(through_seq):
+            # A stamped snapshot already knows its complete-fact byte boundary.
+            # Read that suffix directly instead of reopening the sparse index,
+            # validating an anchor and parsing the preceding stride again.
+            # Older snapshots and inconsistent cursors retain the indexed path.
+            with local_step("snapshot_suffix_read"):
+                pending = self._read_stamped_suffix(session_id, snapshot, event_log, through_seq)
+            if pending is None:
+                pending = event_log.read_after_seq(session_id, last_seq)
+            if (
+                pending
+                and int(pending[-1].seq) == int(through_seq)
+                and all(int(event.seq) == last_seq + index for index, event in enumerate(pending, 1))
+            ):
                 for event in pending:
                     snapshot = projector.project_incremental(snapshot, event)
                 return snapshot
         return projector.project(event_log.read_all(session_id))
+
+    def _read_stamped_suffix(self, session_id, snapshot, event_log, through_seq):
+        source = snapshot.get("_event_log") or {}
+        if not isinstance(source, dict):
+            return None
+        identity, offset = source.get("identity"), source.get("size")
+        if not (isinstance(identity, list) and len(identity) == 2 and identity[1]
+                and type(offset) is int and offset > 0):
+            return None
+        path = event_log.event_path(session_id)
+        stat = path.stat()
+        if identity != [int(stat.st_dev), int(stat.st_ino)] or offset >= stat.st_size:
+            return []  # Known replacement/truncation requires a full projection.
+        metadata = {"byte_offset": offset}
+        try:
+            receipt = event_log.recent_owned_append(session_id, source, stat)
+            if receipt is not None:
+                from .attachment_migration import event_from_record
+                pending = [event_from_record(json.loads(line.decode("utf8")))
+                           for line in receipt["encoded"].splitlines()]
+                metadata.update(identity=identity, byte_offset=stat.st_size)
+            else:
+                pending = list(event_log.iter_from_offset(
+                    session_id, offset, end_offset=stat.st_size,
+                    read_metadata=metadata, buffer_suffix=True))
+        except (RuntimeEventLogCorruptionError, ValueError):
+            # The derivative cursor itself may be stale/corrupt. The original
+            # indexed read still diagnoses corruption of the actual facts.
+            return None
+        last_seq = self._snapshot_seq(snapshot)
+        if (metadata.get("identity") != identity
+                or metadata.get("byte_offset") != stat.st_size
+                or not pending or int(pending[-1].seq) != int(through_seq)
+                or any(int(event.seq) != last_seq + index
+                       for index, event in enumerate(pending, 1))):
+            return None
+        return pending
 
     def read_consistent(self, session_id: str, event_log=None, projector=None) -> Dict[str, Any]:
         """Read the fast cache, rebuilding only when its log signature is stale.

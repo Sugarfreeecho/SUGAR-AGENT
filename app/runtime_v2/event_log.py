@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 from bisect import bisect_right
 import errno
+import io
 import json
 import logging
 import os
@@ -10,14 +11,20 @@ import re
 import threading
 import time
 import uuid
-from contextlib import contextmanager
-from collections import deque
+from contextlib import ExitStack, contextmanager, nullcontext
+from contextvars import ContextVar
+from collections import deque, OrderedDict
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
+from agent_local_timing import local_step, local_timed
 
 from .event_schema import RuntimeEvent
 from .attachment_migration import event_from_record, migrate_payload
 from .versions import SEQ_OFFSET_INDEX_VERSION
+from .read_probe import open_probe_reader, probe_owner
+from .write_probe import open_append_writer
+
+_owned_transactions = ContextVar("runtime_owned_transactions", default=None)
 
 
 _SEQ_OFFSET_STRIDE = 32
@@ -99,8 +106,16 @@ class SessionEventLog:
 
     _global_locks: Dict[str, threading.RLock] = {}
     _global_locks_guard = threading.Lock()
-    _seq_cache: Dict[str, tuple[int, int, int]] = {}
+    _seq_cache: Dict[str, tuple[int, int, int, int, int]] = {}
     _seq_cache_guard = threading.Lock()
+    # Exact bytes from successful writes only. This bounded process-local tail
+    # can bridge adjacent owned commits; it is never an integrity verdict for
+    # externally written facts or a replacement for independent recovery reads.
+    _owned_appends = OrderedDict()
+    _owned_appends_guard = threading.Lock()
+    _OWNED_APPEND_PATHS = 64
+    _OWNED_APPEND_BYTES = 256 * 1024
+    _OWNED_APPEND_ROWS = 32
 
     def __init__(self, root: os.PathLike[str] | str, path_resolver: Optional[Callable[[str], os.PathLike[str] | str]] = None):
         self.root = Path(root)
@@ -137,7 +152,8 @@ class SessionEventLog:
         clean = [row for row in rows if isinstance(row, dict) and str(row.get("type") or "").strip()]
         if not clean:
             return []
-        next_seq = self.next_seq(session_id)
+        path = self.event_path(session_id)
+        next_seq = self.next_seq(session_id, _event_path=path)
         events: List[RuntimeEvent] = []
         for offset, row in enumerate(clean):
             events.append(RuntimeEvent(
@@ -147,23 +163,32 @@ class SessionEventLog:
                 run_id=str(row.get("run_id") or "").strip() or None,
                 payload=migrate_payload(row.get("type"), dict(row.get("payload") or {})) if isinstance(row.get("payload"), dict) else {},
             ))
-        path = self.event_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         encoded = [
             json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
             for event in events
         ]
         start_offset = path.stat().st_size if path.exists() else 0
-        with path.open("a", encoding="utf-8", newline="\n") as fh:
+        with open_append_writer(path) as fh:
+            writer_before = os.fstat(fh.fileno())
             fh.writelines(encoded)
             fh.flush()
-        self._update_seq_cache(session_id, events[-1].seq)
+            receipt = {"before": writer_before, "after": os.fstat(fh.fileno()),
+                       "encoded": ("".join(encoded).encode("utf-8")
+                                   if sum(map(len, encoded)) <= self._OWNED_APPEND_BYTES else None)}
+        self._update_seq_cache(session_id, events[-1].seq, _event_path=path,
+                               _source_stat=receipt["after"])
         self._update_seq_offset_index_after_append(session_id, events, encoded, start_offset)
         self._checkpoint_recovery_on_finish(session_id, events)
+        self._remember_owned_append(path, receipt)
         return events
 
-    def _append_unlocked(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> RuntimeEvent:
-        seq = self.next_seq(session_id)
+    @local_timed("fact_append")
+    def _append_unlocked(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None, *, append_receipt=None) -> RuntimeEvent:
+        if append_receipt is not None:
+            append_receipt.clear()
+        path = self.event_path(session_id)
+        seq = self.next_seq(session_id, _event_path=path)
         event = RuntimeEvent(
             seq=seq,
             type=event_type,
@@ -171,23 +196,85 @@ class SessionEventLog:
             run_id=run_id,
             payload=migrate_payload(event_type, payload or {}),
         )
-        path = self.event_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         start_offset = path.stat().st_size if path.exists() else 0
         encoded = json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
-        with path.open("a", encoding="utf-8", newline="\n") as fh:
+        with open_append_writer(path) as fh:
+            writer_before = os.fstat(fh.fileno())
             fh.write(encoded)
             fh.flush()
-        self._update_seq_cache(session_id, event.seq)
+            receipt = {"before": writer_before, "after": os.fstat(fh.fileno()),
+                       "encoded": encoded.encode("utf-8")}
+            if append_receipt is not None:
+                # An internal receipt is published only after the ordinary fact
+                # write/flush succeeded. It never enters the event payload.
+                append_receipt.update(receipt)
+        self._update_seq_cache(session_id, event.seq, _event_path=path,
+                               _source_stat=receipt["after"])
         self._update_seq_offset_index_after_append(session_id, [event], [encoded], start_offset)
         self._checkpoint_recovery_on_finish(session_id, [event])
+        self._remember_owned_append(path, receipt)
         return event
+
+    @staticmethod
+    def _append_stat(stat):
+        return int(stat.st_dev), int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns)
+
+    @classmethod
+    def _remember_owned_append(cls, path, receipt):
+        key = os.path.normcase(os.path.abspath(path))
+        before, after, encoded = receipt["before"], receipt["after"], receipt["encoded"]
+        row = (before, after, encoded)
+        with cls._owned_appends_guard:
+            rows, size = cls._owned_appends.pop(key, (deque(), 0))
+            if (not isinstance(encoded, bytes) or len(encoded) > cls._OWNED_APPEND_BYTES or not before.st_ino
+                    or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+                    or after.st_size != before.st_size + len(encoded)):
+                return
+            if rows and cls._append_stat(rows[-1][1]) != cls._append_stat(before):
+                rows, size = deque(), 0
+            rows.append(row)
+            size += len(encoded)
+            while len(rows) > cls._OWNED_APPEND_ROWS or size > cls._OWNED_APPEND_BYTES:
+                size -= len(rows.popleft()[2])
+            cls._owned_appends[key] = (rows, size)
+            while len(cls._owned_appends) > cls._OWNED_APPEND_PATHS:
+                cls._owned_appends.popitem(last=False)
+
+    def recent_owned_append(self, session_id, source, current_stat):
+        """Return an exact contiguous writer receipt, or require a disk read.
+
+        Both the old boundary and the current named file must match the writer
+        handles' identity, size and mtime. Missing/evicted writes, another
+        process, repair, truncation and replacement all take the normal path.
+        Returned bytes are immutable and were captured after successful flush.
+        """
+        if not isinstance(source, dict):
+            return None
+        identity = source.get("identity")
+        size, mtime = source.get("size"), source.get("mtime_ns")
+        if not (isinstance(identity, list) and len(identity) == 2 and identity[1]
+                and type(size) is int and type(mtime) is int):
+            return None
+        key = os.path.normcase(os.path.abspath(self.event_path(session_id)))
+        with self._owned_appends_guard:
+            cached = self._owned_appends.get(key)
+            rows = tuple(cached[0]) if cached else ()
+        if not rows or self._append_stat(rows[-1][1]) != self._append_stat(current_stat):
+            return None
+        expected = (*identity, size, mtime)
+        for index, row in enumerate(rows):
+            if self._append_stat(row[0]) == expected:
+                return {"before": row[0], "after": rows[-1][1],
+                        "encoded": b"".join(item[2] for item in rows[index:])}
+        return None
 
     def append_event(self, event: RuntimeEvent) -> RuntimeEvent:
         from dataclasses import replace
         event = replace(event, payload=migrate_payload(event.type, event.payload))
         with self.session_transaction(event.session_id):
-            expected = self.next_seq(event.session_id)
+            path = self.event_path(event.session_id)
+            expected = self.next_seq(event.session_id, _event_path=path)
             if event.seq != expected:
                 event = RuntimeEvent(
                     seq=expected,
@@ -197,14 +284,15 @@ class SessionEventLog:
                     run_id=event.run_id,
                     payload=event.payload,
                 )
-            path = self.event_path(event.session_id)
             path.parent.mkdir(parents=True, exist_ok=True)
             start_offset = path.stat().st_size if path.exists() else 0
             encoded = json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n"
             with path.open("a", encoding="utf-8", newline="\n") as fh:
                 fh.write(encoded)
                 fh.flush()
-            self._update_seq_cache(event.session_id, event.seq)
+                writer_after = os.fstat(fh.fileno())
+            self._update_seq_cache(event.session_id, event.seq, _event_path=path,
+                                   _source_stat=writer_after)
             self._update_seq_offset_index_after_append(
                 event.session_id, [event], [encoded], start_offset
             )
@@ -227,15 +315,15 @@ class SessionEventLog:
         return list(self.iter_events(session_id))
 
     def read_after_seq(self, session_id: str, after_seq: int, *, end_offset: Optional[int] = None) -> List[RuntimeEvent]:
-        return list(self.iter_after_seq(session_id, after_seq, end_offset=end_offset))
+        return list(self.iter_after_seq(session_id, after_seq, end_offset=end_offset, _buffer_suffix=True))
 
     def iter_after_seq(self, session_id: str, after_seq: int, *, end_offset: Optional[int] = None,
-                       read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
+                       read_metadata: Optional[dict] = None, _buffer_suffix: bool = False) -> Iterable[RuntimeEvent]:
         after = int(after_seq)
         entries = self._read_or_build_seq_offset_index(session_id)
         offset = self._offset_at_or_before_seq(entries, after + 1)
         for event in self._iter_events_from_offset(session_id, offset, end_offset=end_offset,
-                                                   read_metadata=read_metadata):
+                                                   read_metadata=read_metadata, buffer_suffix=_buffer_suffix):
             if event.seq > after:
                 yield event
 
@@ -377,24 +465,22 @@ class SessionEventLog:
                                                 read_metadata=read_metadata)
 
     def iter_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None,
-                         read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
+                         read_metadata: Optional[dict] = None, buffer_suffix: bool = False) -> Iterable[RuntimeEvent]:
         """Replay a previously validated complete-fact byte boundary."""
         yield from self._iter_events_from_offset(session_id, offset, end_offset=end_offset,
-                                                read_metadata=read_metadata)
+                                                 read_metadata=read_metadata, buffer_suffix=buffer_suffix)
 
     def _iter_events_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None,
-                                 read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
+                                 read_metadata: Optional[dict] = None, buffer_suffix: bool = False) -> Iterable[RuntimeEvent]:
         path = self.event_path(session_id)
         if not path.exists():
             return
-        with path.open("rb") as fh:
-            fh.seek(max(0, int(offset)))
+        with self._event_read_stream(path, max(0, int(offset)), end_offset, buffer_suffix) as (fh, base, opened_stat):
             if read_metadata is not None:
-                opened_stat = os.fstat(fh.fileno())
                 read_metadata["identity"] = [int(opened_stat.st_dev), int(opened_stat.st_ino)]
             line_number = 0
             while True:
-                remaining = None if end_offset is None else int(end_offset) - fh.tell()
+                remaining = None if end_offset is None else int(end_offset) - (base + fh.tell())
                 if remaining is not None and remaining <= 0:
                     break
                 raw_line = fh.readline() if remaining is None else fh.readline(remaining)
@@ -411,7 +497,7 @@ class SessionEventLog:
                 try:
                     event = event_from_record(json.loads(line.decode("utf-8")))
                     if read_metadata is not None:
-                        read_metadata.update(byte_offset=fh.tell(), last_runtime_seq=int(event.seq))
+                        read_metadata.update(byte_offset=base + fh.tell(), last_runtime_seq=int(event.seq))
                     yield event
                 except Exception as exc:
                     raise RuntimeEventLogCorruptionError(
@@ -420,6 +506,31 @@ class SessionEventLog:
                         line_number=line_number,
                         detail=str(exc),
                     ) from exc
+
+    @staticmethod
+    @contextmanager
+    def _event_read_stream(path, offset, end_offset, buffer_suffix):
+        # Materialized suffix reads can release the shared handle before any
+        # event is yielded. Ordinary streaming iterators retain private handles.
+        limit = 256 * 1024
+        if buffer_suffix and os.name == "nt":
+            size = path.stat().st_size
+            stop = size if end_offset is None else min(size, int(end_offset))
+            if 0 <= stop - offset <= limit:
+                data = None
+                with open_probe_reader(path) as source:
+                    stat = os.fstat(source.fileno())
+                    stop = stat.st_size if end_offset is None else min(stat.st_size, int(end_offset))
+                    if 0 <= stop - offset <= limit:
+                        source.seek(offset)
+                        data = source.read(stop - offset)
+                if data is not None:
+                    with io.BytesIO(data) as stream:
+                        yield stream, offset, stat
+                    return
+        with path.open("rb") as stream:
+            stream.seek(offset)
+            yield stream, 0, os.fstat(stream.fileno())
 
     @staticmethod
     def _offset_at_or_before_seq(entries: List[List[int]], target_seq: int) -> int:
@@ -466,7 +577,7 @@ class SessionEventLog:
                 last_seq, last_offset = seq, offset
             if last_offset >= event_path.stat().st_size:
                 return False
-            with event_path.open("rb") as fh:
+            with open_probe_reader(event_path) as fh:
                 fh.seek(last_offset)
                 row = event_from_record(json.loads(fh.readline().decode("utf-8")))
             return int(row.seq) == last_seq
@@ -574,15 +685,19 @@ class SessionEventLog:
                     session_id, elapsed_ms, entry_count,
                 )
 
-    def next_seq(self, session_id: str) -> int:
-        cached = self._cached_last_seq(session_id)
+    def next_seq(self, session_id: str, *, _event_path: Optional[Path] = None) -> int:
+        path = self.event_path(session_id) if _event_path is None else _event_path
+        cached = self._cached_last_seq(session_id, _event_path=path)
         if cached is not None:
             return cached + 1
-        path = self.event_path(session_id)
-        if not path.exists():
+        try:
+            before = path.stat()
+        except FileNotFoundError:
             return 1
         last = self._read_last_seq_from_tail(path)
-        self._update_seq_cache(session_id, last)
+        # A nontransactional reader may race a writer. Do not attach an older
+        # observed cursor to metadata obtained after that writer's append.
+        self._update_seq_cache(session_id, last, _event_path=path, _source_stat=before)
         return last + 1
 
     @staticmethod
@@ -666,33 +781,41 @@ class SessionEventLog:
     def _cache_scope_for(self, session_id: str) -> str:
         return os.path.normcase(os.path.abspath(str(self.event_path(session_id))))
 
-    def _cached_last_seq(self, session_id: str) -> Optional[int]:
-        path = self.event_path(session_id)
-        if not path.exists():
-            return None
+    def _cached_last_seq(self, session_id: str, *, _event_path: Optional[Path] = None) -> Optional[int]:
+        path = self.event_path(session_id) if _event_path is None else _event_path
         try:
             stat = path.stat()
         except OSError:
             return None
-        scope = self._cache_scope_for(session_id)
+        if not stat.st_ino:
+            return None
+        scope = os.path.normcase(os.path.abspath(str(path)))
         with self._seq_cache_guard:
             cached = self._seq_cache.get(scope)
-        if not cached:
+        if not cached or len(cached) != 5:
             return None
-        mtime_ns, size, last = cached
-        if mtime_ns == stat.st_mtime_ns and size == stat.st_size:
+        mtime_ns, size, last, device, inode = cached
+        if (mtime_ns, size, device, inode) == (stat.st_mtime_ns, stat.st_size, stat.st_dev, stat.st_ino):
             return int(last)
         return None
 
-    def _update_seq_cache(self, session_id: str, last_seq: int) -> None:
-        path = self.event_path(session_id)
+    def _update_seq_cache(self, session_id: str, last_seq: int, *,
+                          _event_path: Optional[Path] = None, _source_stat=None) -> None:
+        path = self.event_path(session_id) if _event_path is None else _event_path
+        scope = os.path.normcase(os.path.abspath(str(path)))
         try:
             stat = path.stat()
         except OSError:
+            with self._seq_cache_guard:
+                self._seq_cache.pop(scope, None)
             return
-        scope = self._cache_scope_for(session_id)
         with self._seq_cache_guard:
-            self._seq_cache[scope] = (int(stat.st_mtime_ns), int(stat.st_size), int(last_seq))
+            if (not stat.st_ino or (_source_stat is not None
+                                   and self._append_stat(stat) != self._append_stat(_source_stat))):
+                self._seq_cache.pop(scope, None)
+            else:
+                self._seq_cache[scope] = (int(stat.st_mtime_ns), int(stat.st_size), int(last_seq),
+                                         int(stat.st_dev), int(stat.st_ino))
 
     def _lock_for(self, session_id: str) -> threading.RLock:
         safe_id = self._validate_session_id(session_id)
@@ -717,16 +840,18 @@ class SessionEventLog:
         migration, and repair callers remain unbounded by default.
         """
         safe_id = self._validate_session_id(session_id)
-        lock = self._lock_for(safe_id)
+        with local_step("transaction_lock_lookup", min_ms=5):
+            lock = self._lock_for(safe_id)
         timeout = self._transaction_timeout_seconds(timeout_seconds)
         started = _active_uptime_seconds()
         deadline = None if timeout is None else started + timeout
-        acquired = self._acquire_thread_lock(
-            lock,
-            session_id=safe_id,
-            deadline=deadline,
-            started=started,
-        )
+        with local_step("transaction_thread_lock", min_ms=5):
+            acquired = self._acquire_thread_lock(
+                lock,
+                session_id=safe_id,
+                deadline=deadline,
+                started=started,
+            )
         thread_lock_ms = int(max(0.0, (_active_uptime_seconds() - started) * 1000.0))
         if not acquired:
             logger.warning(
@@ -737,17 +862,32 @@ class SessionEventLog:
             raise RuntimeEventLogBusyError(safe_id, "in-process session lock", timeout or 0.0)
         try:
             file_lock_started = _active_uptime_seconds()
-            session_dir = self.session_dir(safe_id)
-            session_dir.mkdir(parents=True, exist_ok=True)
-            lock_path = session_dir / ".events.lock"
-            with lock_path.open("a+b") as fh:
-                self._lock_file(
-                    fh,
-                    session_id=safe_id,
-                    deadline=deadline,
-                    timeout_seconds=timeout,
-                    started=started,
-                )
+            with local_step("transaction_directory", min_ms=5):
+                session_dir = self.session_dir(safe_id)
+                session_dir.mkdir(parents=True, exist_ok=True)
+                lock_path = session_dir / ".events.lock"
+                directory_stat = session_dir.stat()
+            identity = (os.path.normcase(os.path.abspath(lock_path)),
+                        directory_stat.st_dev, directory_stat.st_ino)
+            owned = _owned_transactions.get() or {}
+            owner_id = probe_owner()
+            active = owned.get(identity)
+            if active and active[0] == owner_id and active[1][0]:
+                # Same logical task and thread already own the OS file lock.
+                # A copied context in another thread/task must acquire its own.
+                yield
+                return
+            with ExitStack() as files:
+                with local_step("transaction_file_open", min_ms=5):
+                    fh = files.enter_context(lock_path.open("a+b"))
+                with local_step("transaction_os_lock", min_ms=5):
+                    self._lock_file(
+                        fh,
+                        session_id=safe_id,
+                        deadline=deadline,
+                        timeout_seconds=timeout,
+                        started=started,
+                    )
                 file_open_and_lock_ms = int(max(0.0, (_active_uptime_seconds() - file_lock_started) * 1000.0))
                 if max(thread_lock_ms, file_open_and_lock_ms) >= 50:
                     logger.info(
@@ -755,7 +895,16 @@ class SessionEventLog:
                         safe_id, thread_lock_ms, file_open_and_lock_ms,
                     )
                 try:
-                    yield
+                    owner = getattr(self._path_resolver, "__self__", None)
+                    scope = getattr(owner, "_session_path_resolution_scope", None)
+                    lease = [True]
+                    token = _owned_transactions.set({**owned, identity: (owner_id, lease)})
+                    try:
+                        with scope() if callable(scope) else nullcontext():
+                            yield
+                    finally:
+                        lease[0] = False
+                        _owned_transactions.reset(token)
                 finally:
                     self._unlock_file(fh)
         finally:
