@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from agent_local_timing import LocalOperationTrace
 
 log = logging.getLogger(__name__)
 ACTIVE = {"running", "stopping"}
@@ -116,6 +117,8 @@ class ExecutionService:
         self._log_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self.suppressed: set[str] = set()
         self.closed_owners: set[str] = set()
+        self._stop_reasons: dict[str, set[str]] = {}
+        self._close_reasons: dict[str, set[str]] = {}
         self.boot_id = uuid.uuid4().hex
         self.terminals = None
 
@@ -125,6 +128,12 @@ class ExecutionService:
                 return
             self._ready.clear()
             self._closing = False
+            # A new service loop starts a fresh lifetime. An idempotent start
+            # above must retain stop state while the existing loop is alive.
+            self.suppressed.clear()
+            self.closed_owners.clear()
+            self._stop_reasons.clear()
+            self._close_reasons.clear()
             def run():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -174,7 +183,14 @@ class ExecutionService:
     async def persist(self, owner, namespace, value):
         store = self._store()
         if store:
-            await asyncio.to_thread(store.set_latest, owner, "execution-tools", namespace, value=value)
+            trace = LocalOperationTrace("extension_write", session_id=owner,
+                                        event_type="execution-tools")
+            with trace.bind():
+                try:
+                    await asyncio.to_thread(store.set_latest, owner, "execution-tools", namespace, value=value)
+                finally:
+                    if (time.perf_counter() - trace.started) * 1000 >= 50:
+                        trace.log()
 
     async def _persist_job(self, job):
         import psutil
@@ -388,8 +404,10 @@ class ExecutionService:
         return {"outcome": "cancellation-requested", "job": job.public()}
 
     async def stop_owner(self, owner, *, close_terminals=False, reason="user_stop"):
+        self._stop_reasons.setdefault(owner, set()).add(reason)
         self.suppressed.add(owner)
         if close_terminals:
+            self._close_reasons.setdefault(owner, set()).add(reason)
             self.closed_owners.add(owner)
         for job in tuple(self.jobs.values()):
             if job.owner != owner:
@@ -416,9 +434,22 @@ class ExecutionService:
             if pending:
                 raise RuntimeError("execution cleanup timed out; resources may still be stopping")
 
-    async def resume_owner(self, owner):
-        self.suppressed.discard(owner)
-        self.closed_owners.discard(owner)
+    async def resume_owner(self, owner, *, reason=None):
+        for blocked, reasons in ((self.suppressed, self._stop_reasons),
+                                 (self.closed_owners, self._close_reasons)):
+            if reason is None:
+                reasons.pop(owner, None)
+                blocked.discard(owner)
+            elif owner in reasons:
+                reasons[owner].discard(reason)
+                if not reasons[owner]:
+                    reasons.pop(owner)
+                    blocked.discard(owner)
+
+    async def resume_owners(self, *, reason):
+        """Release one lifecycle cause while retaining explicit session stops."""
+        for owner in tuple(self.suppressed | self.closed_owners):
+            await self.resume_owner(owner, reason=reason)
 
     async def pending_owners(self):
         return sorted({j.owner for j in self.jobs.values()

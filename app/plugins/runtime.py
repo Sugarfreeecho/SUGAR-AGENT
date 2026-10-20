@@ -606,14 +606,17 @@ class PluginRuntimeRegistry:
         )
         os.replace(temporary, self._deferred_state_path)
 
-    def invalidate(self, *, preserve_deferred: bool = False) -> None:
+    def invalidate(self, *, preserve_deferred: bool = False, plugin_id: str | None = None) -> None:
         with self._lock:
-            workers = tuple(self._workers.values())
+            affected = {key for key in self._workers if plugin_id is None or key[0] == plugin_id}
+            workers = tuple(self._workers[key] for key in affected)
             deferred_cancellations = []
             if not preserve_deferred:
-                for (plugin_id, token), lease in self._deferred_leases.items():
+                for (lease_plugin_id, token), lease in self._deferred_leases.items():
+                    if (lease_plugin_id, lease.plugin_signature) not in affected:
+                        continue
                     worker = self._workers.get(
-                        (plugin_id, lease.plugin_signature)
+                        (lease_plugin_id, lease.plugin_signature)
                     )
                     if worker is None:
                         continue
@@ -625,13 +628,24 @@ class PluginRuntimeRegistry:
                     }
                     _merge_supplied_context(context, worker.plugin, supplied)
                     deferred_cancellations.append((worker, token, context))
-            self._describe_cache.clear()
-            self._workers.clear()
-            self._tool_bindings.clear()
+            for key in affected:
+                self._describe_cache.pop(key, None)
+                self._workers.pop(key, None)
+            self._tool_bindings = {
+                name: binding for name, binding in self._tool_bindings.items()
+                if plugin_id is not None and binding.plugin_id != plugin_id
+            }
             if not preserve_deferred:
-                self._deferred_leases.clear()
+                self._deferred_leases = {
+                    key: lease for key, lease in self._deferred_leases.items()
+                    if plugin_id is not None and lease.plugin_id != plugin_id
+                }
             self._persist_deferred_leases_locked()
-            self._errors_by_plugin.clear()
+            if plugin_id is None:
+                self._describe_cache.clear()
+                self._errors_by_plugin.clear()
+            else:
+                self._errors_by_plugin.pop(plugin_id, None)
         for worker, token, context in deferred_cancellations:
             try:
                 worker.request(
@@ -772,11 +786,13 @@ class PluginRuntimeRegistry:
                                 f"Plugin tool {plugin_id}:{local_name} has an invalid input schema"
                             )
                         seen.add(local_name)
-                        function_name = runtime_tool_name(plugin_id, local_name)
-                        if function_name in bindings:
-                            raise PluginRuntimeError(
-                                f"Runtime tool name collision: {function_name}"
-                            )
+                        base_name = runtime_tool_name(plugin_id, local_name)
+                        function_name = base_name
+                        attempt = 0
+                        while function_name in bindings:
+                            digest = hashlib.sha256(json.dumps([plugin_id, local_name, attempt]).encode("utf-8")).hexdigest()[:10]
+                            function_name = f"{base_name[:_MAX_FUNCTION_NAME - 11]}_{digest}"
+                            attempt += 1
                         effect = str(raw.get("effect") or "").strip().lower()
                         if effect not in {
                             "",
@@ -798,6 +814,7 @@ class PluginRuntimeRegistry:
                         ).strip()
                         contract = {
                             "plugin_id": plugin_id,
+                            "local_name": local_name,
                             "declared": bool(effect),
                             "effect": effect,
                             "permissions": dict(plugin.permissions),
@@ -837,12 +854,12 @@ class PluginRuntimeRegistry:
                         )
                 except PluginRuntimeError as exc:
                     self._errors_by_plugin[plugin_id] = str(exc)
+                    failed_names = {name for name, binding in bindings.items()
+                                    if binding.plugin_id == plugin_id}
                     definitions = [
                         item
                         for item in definitions
-                        if not str(item["function"]["name"]).startswith(
-                            f"plugin_{_FUNCTION_SAFE_RE.sub('_', plugin_id)}__"
-                        )
+                        if item["function"]["name"] not in failed_names
                     ]
                     bindings = {
                         key: value

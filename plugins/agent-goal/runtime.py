@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
-from agent_goal import GoalError, goal_enabled, manager_for as goal_manager_for
+from agent_goal import GoalError, goal_enabled, goal_result_status, manager_for as goal_manager_for
 
 def _goal_continuation_message(session_id: str) -> Optional[SystemMessage]:
     if not goal_enabled():
@@ -105,18 +105,23 @@ def _record_goal_run_usage(
         return None
 
 
-def _sync_goal_unread_result(session_id: str, goal: Optional[Dict[str, Any]], outcome: str) -> None:
+def _sync_goal_unread_result(
+    session_id: str, goal: Optional[Dict[str, Any]], outcome: str, *, run_id: str = "",
+) -> Optional[str]:
     """Keep round-level Goal finals from masquerading as task completion."""
-    if not isinstance(goal, dict):
-        return
+    result_status = goal_result_status(goal)
+    if result_status is None:
+        return None
+    if str(outcome or "") in {"failed", "error", "interrupted"}:
+        result_status = "failed"
     try:
-        if str(goal.get("status") or "") == "active":
+        if result_status == "pending":
             session_manager.clear_session_unread_result(session_id)
-            return
-        result_status = "failed" if str(outcome or "") in {"failed", "interrupted"} else "success"
-        session_manager.mark_session_unread_result(session_id, status=result_status)
+        else:
+            session_manager.mark_session_unread_result(session_id, status=result_status, run_id=run_id)
     except Exception as exc:
         logger.debug("Goal unread-result sync failed: %s", exc)
+    return result_status
 
 
 def _goal_judge_text(value: Any) -> str:

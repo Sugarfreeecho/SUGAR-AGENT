@@ -11,8 +11,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from execution_services import execution_service
+from execution_services.jobs import ACTIVE
 from execution_services.terminals import terminal_manager
-from tool_registry import ToolOutcome
+from tool_result_status import legacy_tool_outcome
 
 _SCHEMAS = {}
 
@@ -81,7 +82,7 @@ async def _invoke(context, arguments):
                 result = await service.call(terminals.list, owner)
             else:
                 raise ValueError("unknown execution tool")
-    return ToolOutcome.completed(json.dumps(result, ensure_ascii=False))
+    return legacy_tool_outcome(name, json.dumps(result, ensure_ascii=False))
 
 
 def tool_definitions(context, plugin):
@@ -262,9 +263,7 @@ async def start(context, plugin):
     from execution_services.notifications import start_runner
     service = execution_service(context["session_manager"])
     service.start()
-    async def enabled():
-        service.closed_owners.clear()
-    await service.call(enabled)
+    await service.call(service.resume_owners, reason="execution_tools_disabled")
     await start_runner(service)
 
 
@@ -273,9 +272,10 @@ async def stop(context, plugin):
     await stop_runner()
     service = execution_service(context["session_manager"])
     async def clean():
-        owners = {j.owner for j in service.jobs.values()}
+        owners = {j.owner for j in service.jobs.values() if j.status in ACTIVE}
         if service.terminals:
-            owners.update(s.owner for s in service.terminals.sessions.values())
+            owners.update(s.owner for s in service.terminals.sessions.values() if s.status == "running")
+            owners.update(owner for owner, _ in service.terminals.openings.values())
         for owner in owners:
             await service.stop_owner(owner, close_terminals=True, reason="execution_tools_disabled")
     await service.call(clean)

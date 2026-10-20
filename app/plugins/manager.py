@@ -5,10 +5,13 @@ import copy
 import logging
 import os
 import shutil
+import stat
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional
 from config_paths import config_path
+from agent_local_timing import local_step
 
 from .loader import discover_plugins, path_resources, skill_resources
 from .models import (
@@ -379,23 +382,76 @@ class PluginManager:
 _default_manager: Optional[PluginManager] = None
 _default_manager_config: Optional[tuple[tuple[str, ...], str]] = None
 _default_manager_lock = threading.Lock()
+_canonical_manager_paths: OrderedDict = OrderedDict()
+_CANONICAL_MANAGER_PATH_LIMIT = 32
+
+
+def _manager_path_identity(path: Path):
+    """Guard a canonical spelling without opening the file for name resolution."""
+    try:
+        try:
+            source = path.lstat()
+        except FileNotFoundError:
+            source_identity = ("missing",)
+        else:
+            if (not source.st_ino or stat.S_ISLNK(source.st_mode)
+                    or getattr(source, "st_file_attributes", 0) & 0x400):
+                return None
+            source_identity = (source.st_dev, source.st_ino, source.st_ctime_ns,
+                               stat.S_IFMT(source.st_mode))
+        parent = path.parent.stat()
+        if not parent.st_ino or not stat.S_ISDIR(parent.st_mode):
+            return None
+        return (source_identity, parent.st_dev, parent.st_ino, parent.st_ctime_ns)
+    except OSError:
+        return None
+
+
+def _canonical_manager_path(path: Path) -> str:
+    """Reuse only an unchanged, already canonical name; caller holds manager lock.
+
+    Aliases, reparse points, unknown identities and missing parents keep live
+    resolution. Only names are reused: plugin state and trust remain live.
+    """
+    absolute = Path(os.path.abspath(path.expanduser()))
+    key = os.path.normcase(str(absolute))
+    identity = _manager_path_identity(absolute)
+    cached = _canonical_manager_paths.get(key)
+    if identity is not None and cached and cached[0] == identity:
+        _canonical_manager_paths.move_to_end(key)
+        return cached[1]
+    _canonical_manager_paths.pop(key, None)
+    resolved = str(absolute.resolve())
+    if (identity is not None and os.path.normcase(resolved) == key
+            and _manager_path_identity(absolute) == identity):
+        _canonical_manager_paths[key] = (identity, resolved)
+        while len(_canonical_manager_paths) > _CANONICAL_MANAGER_PATH_LIMIT:
+            _canonical_manager_paths.popitem(last=False)
+    return resolved
 
 
 def get_plugin_manager() -> PluginManager:
     """Return the lazy process-wide manager used by host integrations."""
 
     global _default_manager, _default_manager_config
-    with _default_manager_lock:
-        dirs = default_discovery_dirs()
-        state_path = default_state_path()
-        config = (
-            tuple(str(path.expanduser().resolve()) for path in dirs),
-            str(state_path.expanduser().resolve()),
-        )
+    with local_step("plugin_manager_lock", min_ms=5):
+        _default_manager_lock.acquire()
+    try:
+        with local_step("plugin_manager_paths", min_ms=5):
+            dirs = default_discovery_dirs()
+            state_path = default_state_path()
+        with local_step("plugin_manager_canonical", min_ms=5):
+            config = (
+                tuple(_canonical_manager_path(path) for path in dirs),
+                _canonical_manager_path(state_path),
+            )
         if _default_manager is None or _default_manager_config != config:
-            _default_manager = PluginManager(dirs, state_path)
-            _default_manager_config = config
+            with local_step("plugin_manager_construct", min_ms=5):
+                _default_manager = PluginManager(dirs, state_path)
+                _default_manager_config = config
         return _default_manager
+    finally:
+        _default_manager_lock.release()
 
 
 def load_enabled_plugins() -> PluginLoadResult:

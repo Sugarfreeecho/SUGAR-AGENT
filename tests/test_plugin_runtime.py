@@ -147,6 +147,25 @@ def test_python_worker_describes_and_invokes_registered_tool(tmp_path):
     assert not (plugin.root / "__pycache__").exists()
 
 
+def test_normalized_plugin_names_keep_both_tools_and_invoke_the_correct_worker(tmp_path):
+    from plugins import PluginRuntimeRegistry, load_plugin
+
+    plugins = [load_plugin(_make_python_plugin(tmp_path, plugin_id=plugin_id))
+               for plugin_id in ("demo.one", "demo_one")]
+    registry = PluginRuntimeRegistry()
+    try:
+        definitions = registry.tool_definitions(plugins)
+        contracts = registry.current_tool_contracts()
+        assert len(definitions) == 2
+        assert {row["plugin_id"] for row in contracts.values()} == {"demo.one", "demo_one"}
+        assert all(row["local_name"] == "greet" for row in contracts.values())
+        for definition in definitions:
+            assert registry.invoke(definition["function"]["name"], {"name": "Ada"}, plugins)["message"] == "hello Ada"
+        assert registry.errors == ()
+    finally:
+        registry.close()
+
+
 def test_setup_function_and_async_handler_are_supported(tmp_path):
     from plugins import PluginRuntimeRegistry, load_plugin
 

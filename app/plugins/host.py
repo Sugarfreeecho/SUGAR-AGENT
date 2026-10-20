@@ -8,6 +8,9 @@ grant this trust level.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+import asyncio
 import hashlib
 import importlib.util
 import inspect
@@ -24,6 +27,18 @@ _BUNDLED_ROOT = Path(__file__).resolve().parents[2] / "plugins"
 _MODULES: dict[tuple[str, str], ModuleType] = {}
 _INSTALLED: set[tuple[int, str, str]] = set()
 _STARTED: list[tuple[PluginDefinition, ModuleType]] = []
+_LIFECYCLE_LOCK = asyncio.Lock()
+_AVAILABILITY_SNAPSHOT: ContextVar[dict | None] = ContextVar("bundled_host_availability_snapshot", default=None)
+
+
+@contextmanager
+def bundled_host_availability_scope():
+    """Use one live plugin-state read per catalog pass, never across requests."""
+    token = _AVAILABILITY_SNAPSHOT.set({})
+    try:
+        yield
+    finally:
+        _AVAILABILITY_SNAPSHOT.reset(token)
 
 
 def is_bundled_trusted_host_plugin(plugin: PluginDefinition) -> bool:
@@ -103,6 +118,18 @@ def bundled_host_plugin_enabled(plugin_id: str) -> bool:
     try:
         from .manager import get_plugin_manager, plugins_enabled
 
+        snapshot = _AVAILABILITY_SNAPSHOT.get()
+        if snapshot is not None:
+            if "plugins" not in snapshot:
+                snapshot["enabled"] = False
+                snapshot["plugins"] = {}
+                manager = get_plugin_manager()
+                enabled = plugins_enabled()
+                plugins = manager.state.read()["plugins"]
+                snapshot["plugins"] = plugins
+                snapshot["enabled"] = enabled
+            entry = snapshot["plugins"].get(str(plugin_id or ""))
+            return bool(snapshot["enabled"] and (entry is None or entry["enabled"]))
         manager = get_plugin_manager()
         return bool(plugins_enabled() and manager.is_enabled(str(plugin_id or "")))
     except Exception:
@@ -178,29 +205,45 @@ async def start_bundled_host_extensions(
     plugins: Sequence[PluginDefinition],
     context: Mapping[str, Any],
 ) -> None:
-    global _STARTED
-    await stop_bundled_host_extensions(context)
-    started: list[tuple[PluginDefinition, ModuleType]] = []
-    for plugin in plugins:
-        module = _module(plugin)
-        start = getattr(module, "start", None) if module is not None else None
-        if callable(start):
-            value = start(dict(context), plugin)
+    """Reconcile changed extensions without interrupting unchanged services."""
+
+    async with _LIFECYCLE_LOCK:
+        desired = []
+        for plugin in plugins:
+            module = _module(plugin)
+            if callable(getattr(module, "start", None)):
+                desired.append((plugin, module))
+        desired_keys = {(plugin.plugin_id, plugin.content_signature) for plugin, _ in desired}
+        for plugin, module in reversed(_STARTED):
+            if (plugin.plugin_id, plugin.content_signature) not in desired_keys:
+                await _stop_bundled_host_extension(plugin, module, context)
+        started_keys = {(plugin.plugin_id, plugin.content_signature) for plugin, _ in _STARTED}
+        for plugin, module in desired:
+            key = (plugin.plugin_id, plugin.content_signature)
+            if key in started_keys:
+                continue
+            value = module.start(dict(context), plugin)
             if inspect.isawaitable(value):
                 await value
-            started.append((plugin, module))
-    _STARTED = started
+            # Track each successful start immediately so a later failure does
+            # not orphan services or start them twice on the next refresh.
+            _STARTED.append((plugin, module))
+            started_keys.add(key)
+
+
+async def _stop_bundled_host_extension(plugin, module, context) -> None:
+    stop = getattr(module, "stop", None)
+    if callable(stop):
+        value = stop(dict(context), plugin)
+        if inspect.isawaitable(value):
+            await value
+    _STARTED.remove((plugin, module))
 
 
 async def stop_bundled_host_extensions(context: Mapping[str, Any]) -> None:
-    global _STARTED
-    started, _STARTED = list(reversed(_STARTED)), []
-    for plugin, module in started:
-        stop = getattr(module, "stop", None)
-        if callable(stop):
-            value = stop(dict(context), plugin)
-            if inspect.isawaitable(value):
-                await value
+    async with _LIFECYCLE_LOCK:
+        for plugin, module in reversed(_STARTED):
+            await _stop_bundled_host_extension(plugin, module, context)
 
 
 __all__ = [

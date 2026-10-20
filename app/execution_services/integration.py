@@ -1,5 +1,6 @@
 """Small loop/lifecycle seams; feature implementation stays outside ReAct."""
 from . import jobs
+from agent_local_timing import local_step
 
 
 def prompt_guidance():
@@ -25,7 +26,8 @@ async def consume_notices(state, persist_append):
     if service is None or service._closing:
         return False
     owner = state["session_id"]
-    notices = await service.call(service.notices, owner)
+    with local_step("job_notice_poll"):
+        notices = await service.call(service.notices, owner)
     if not notices:
         return False
     from agent_harness import SystemMessage
@@ -39,9 +41,11 @@ async def consume_notices(state, persist_append):
             message = SystemMessage(content=notice["text"])
             state["llm_history"].append(message)
             state["work_messages"].append(message)
-            persist_append(state, message)
+            with local_step("job_notice_model_commit"):
+                persist_append(state, message)
             added = True
-    await service.call(service.acknowledge, owner, [n["id"] for n in notices])
+    with local_step("job_notice_ack"):
+        await service.call(service.acknowledge, owner, [n["id"] for n in notices])
     return added
 
 
