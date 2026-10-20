@@ -19,6 +19,8 @@ def test_electron_shell_runtime():
     result = subprocess.run(
         [node, "--test", str(ROOT / "tests/js/desktop_shell_runtime.cjs"),
          str(ROOT / "tests/js/desktop_notifications.cjs"),
+         str(ROOT / "tests/js/desktop_local_paths.cjs"),
+         str(ROOT / "tests/js/desktop_path_delegation.cjs"),
          str(ROOT / "tests/js/desktop_shortcuts.cjs")],
         capture_output=True, text=True, encoding="utf-8", timeout=30,
         creationflags=hidden_flags(),

@@ -18,6 +18,7 @@ const net = require('node:net')
 const path = require('node:path')
 const { createNotificationBridge } = require('./notifications')
 const { removeLegacyElectronShortcuts } = require('./desktop-shortcuts')
+const { openWorkspacePath } = require('./local-paths')
 
 const HOST = '127.0.0.1'
 const BASE_PORT = Number(process.env.SUGARAGENT_PORT || 8192)
@@ -600,8 +601,10 @@ function createWindow() {
 function showWindow() {
   if (!mainWindow) createWindow()
   if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
+  if (!mainWindow.isVisible()) mainWindow.show()
   mainWindow.focus()
+  // focus() 没有成功返回值；记录真实状态，避免把任务栏闪烁误判为前置成功。
+  if (!mainWindow.isFocused()) log('窗口激活未获得前台焦点')
 }
 
 // -------------------------------------------------------- desktop activation ---
@@ -733,6 +736,14 @@ function registerIpc() {
     event.sender.sugarAgentLanguage = language === 'en' ? 'en' : 'zh-CN'
   })
   ipcMain.handle('sugaragent:open-workdir', () => shell.openPath(resolveLayout().workDir))
+  ipcMain.handle('sugaragent:open-local-path', (event, payload) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents
+        || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '无效的页面来源' }
+    try {
+      if (new URL(event.senderFrame.url).origin !== baseUrl()) return { ok: false, error: '无效的页面来源' }
+    } catch { return { ok: false, error: '无效的页面来源' } }
+    return openWorkspacePath({ baseUrl: baseUrl(), shell, log }, payload)
+  })
   ipcMain.handle('sugaragent:open-external', (_event, url) => {
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) return shell.openExternal(url)
     return false

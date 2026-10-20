@@ -115,6 +115,8 @@ require('./packaging/scripts/startup-launcher.cjs').buildStartupLauncher({
     probe = json.loads(probe_report.read_text(encoding="utf-8-sig"))
     assert quiet["nativeSplashShown"] is False
     assert quiet["protocolForwarded"] is True
+    assert isinstance(quiet["foregroundGranted"], bool)
+    assert quiet["childResumed"] is True
     assert quiet["startupFlags"] == 0 and probe["startupFlags"] & 0x40 == 0
     assert probe["args"] == [f"--probe-report={probe_report}", protocol, '中文 参数']
     assert not Path(str(protocol_report).replace('.json', '.png')).exists()

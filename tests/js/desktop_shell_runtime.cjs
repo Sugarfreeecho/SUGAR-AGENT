@@ -44,6 +44,7 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
     hide() { calls.hidden = true; this.emit('hide') }
     isVisible() { return !!calls.shown && !calls.hidden }
     focus() { calls.focused = true }
+    isFocused() { return !!calls.focused }
     setBackgroundColor(color) { calls.background = color }
     setProgressBar(value) { calls.progress.push(value) }
     async loadURL(url) { calls.loads.push(url); this.webContents.mainFrame.url = url }
@@ -152,6 +153,10 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
         },
       },
       './notifications': { createNotificationBridge: async () => ({ port: 12345, token: 'test', close() {} }) },
+      './local-paths': { openWorkspacePath: (options, payload) => {
+        calls.pathOpen = { options, payload }
+        return Promise.resolve({ ok: true, path: 'D:\\validated.txt' })
+      } },
       './desktop-shortcuts': { removeLegacyElectronShortcuts() {} } })[name],
     process: { argv, env: {}, resourcesPath: 'D:\\SugarAgent Runtime', platform: 'win32', execPath },
     __dirname: path.join(ROOT, 'packaging/electron'), URL, Buffer,
@@ -653,6 +658,35 @@ test('notification restores desktop window and uses its active backend port with
   assert.equal(calls.requests[0].body.session, 'abc-123')
   assert.equal(calls.loads.length, 0)
   assert.equal(calls.external, undefined)
+})
+
+test('local path IPC only accepts the main local frame and uses the active backend port', async () => {
+  const { api, calls } = shellHarness()
+  api.createWindow()
+  api.port(8195)
+  api.registerIpc()
+  const open = calls.ipc.get('sugaragent:open-local-path')
+  const sender = calls.window.webContents
+  sender.mainFrame.url = 'http://127.0.0.1:8195/'
+  const payload = { rel: 'file.txt', directory: true, session_id: 'session-1' }
+  assert.equal((await open({ sender, senderFrame: sender.mainFrame }, payload)).ok, true)
+  assert.equal(calls.pathOpen.options.baseUrl, 'http://127.0.0.1:8195')
+  assert.equal(calls.pathOpen.payload, payload)
+  calls.pathOpen = null
+  assert.equal(open({ sender, senderFrame: { url: sender.mainFrame.url } }, payload).ok, false)
+  assert.equal(open({ sender: {}, senderFrame: sender.mainFrame }, payload).ok, false)
+  sender.mainFrame.url = 'https://example.com/'
+  assert.equal(open({ sender, senderFrame: sender.mainFrame }, payload).ok, false)
+  assert.equal(calls.pathOpen, null)
+})
+
+test('activation records a rejected native focus request', async () => {
+  const { api, calls } = shellHarness()
+  api.createWindow()
+  calls.window.isFocused = () => false
+  api.ready()
+  await api.activateDesktop({ session: '' })
+  assert.ok(calls.writes.some(([, value]) => String(value).includes('窗口激活未获得前台焦点')))
 })
 
 test('missing page heartbeat falls back to a session URL inside the desktop window', async () => {

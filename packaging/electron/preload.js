@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('sugarAgentDesktop', {
   restartBackend: () => ipcRenderer.invoke('sugaragent:restart-backend'),
   openLogs: () => ipcRenderer.invoke('sugaragent:open-logs'),
   openWorkDir: () => ipcRenderer.invoke('sugaragent:open-workdir'),
+  openLocalPath: request => ipcRenderer.invoke('sugaragent:open-local-path', request),
   openExternal: url => ipcRenderer.invoke('sugaragent:open-external', url),
 })
 

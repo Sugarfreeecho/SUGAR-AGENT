@@ -34,6 +34,9 @@ internal static class StartupLauncher
     [DllImport("kernel32.dll")] internal static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll")] internal static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
     [DllImport("kernel32.dll")] internal static extern bool GetExitCodeProcess(IntPtr handle, out uint code);
+    [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint ResumeThread(IntPtr thread);
+    [DllImport("kernel32.dll")] internal static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("user32.dll", SetLastError = true)] internal static extern bool AllowSetForegroundWindow(uint pid);
     [DllImport("user32.dll")] internal static extern bool GetCursorInfo(ref CursorInfo info);
     [DllImport("user32.dll")] internal static extern IntPtr LoadCursor(IntPtr instance, IntPtr name);
 
@@ -71,6 +74,7 @@ internal static class StartupLauncher
 
     private static int ForwardProtocol(string[] args) {
         ProcessInfo child = new ProcessInfo();
+        bool resumed = false;
         string reportPath = null;
         try {
             string target;
@@ -82,15 +86,25 @@ internal static class StartupLauncher
                 command.Append(' ').Append(Quote(arg));
             }
             var startup = new StartupInfo { cb = Marshal.SizeOf(typeof(StartupInfo)) };
-            if (!CreateProcess(target, command, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
+            // 通知点击赋予启动器的前台资格不会自动沿多层进程转交。
+            // 先挂起创建、定向授权，再恢复 Electron；其单实例机制再授权已有主进程。
+            // 必须在子进程运行前完成，避免它先发送 second-instance 后才拿到授权。
+            const uint CREATE_SUSPENDED = 0x00000004;
+            if (!CreateProcess(target, command, IntPtr.Zero, IntPtr.Zero, false, CREATE_SUSPENDED, IntPtr.Zero,
                 Path.GetDirectoryName(target), ref startup, out child)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            bool foregroundGranted = AllowSetForegroundWindow(child.pid);
+            if (ResumeThread(child.thread) == UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
+            resumed = true;
             if (reportPath != null) File.WriteAllText(reportPath, new JavaScriptSerializer().Serialize(
-                new { nativeSplashShown = false, startupFlags = startup.flags, protocolForwarded = true }), Encoding.UTF8);
+                new { nativeSplashShown = false, startupFlags = startup.flags, protocolForwarded = true,
+                    foregroundGranted = foregroundGranted, childResumed = resumed }), Encoding.UTF8);
             return 0;
         } catch (Exception error) {
             MessageBox.Show(error.Message, "SugarAgent 无法打开", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         } finally {
+            // 只清理本次创建且尚未恢复的子进程，防止异常遗留挂起进程。
+            if (!resumed && child.process != IntPtr.Zero) TerminateProcess(child.process, 1);
             if (child.process != IntPtr.Zero) CloseHandle(child.process);
             if (child.thread != IntPtr.Zero) CloseHandle(child.thread);
         }
