@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from .config import SourceLike, load_hook_sources
 from .executor import CommandHookExecutor
 from .matcher import hook_matches
+from .naming import name_hook_definitions
 from .models import (
     SUPPORTED_HOOK_EVENT_SET,
     HookDefinition,
@@ -112,7 +113,7 @@ class HookManager:
                 raise ValueError(f"Unsupported hook event: {definition.event}")
             checked.append(definition)
         checked.sort(key=lambda item: (item.priority, item.order, item.source_id, item.id))
-        self._definitions = tuple(checked)
+        self._definitions = name_hook_definitions(checked)
         self._config_errors = ()
         self._loaded_sources = tuple(dict.fromkeys(item.source_id for item in checked))
 
@@ -214,7 +215,7 @@ class HookManager:
         seen: set = set()
         definitions = self.hooks_for(event)
         for definition in definitions:
-            unique_key = (definition.source_id, definition.plugin_id, definition.id)
+            unique_key = (definition.source_id, definition.plugin_id, definition.execution_id)
             if unique_key in seen:
                 warnings.append(f"Duplicate hook registration skipped: {definition.source_id}/{definition.id}")
                 continue
@@ -246,7 +247,8 @@ class HookManager:
             matched += 1
             call_payload = dict(current_payload)
             call_payload["hook"] = {
-                "id": definition.id,
+                "id": definition.execution_id,
+                "name": definition.id,
                 "source_id": definition.source_id,
                 "plugin_id": definition.plugin_id,
             }

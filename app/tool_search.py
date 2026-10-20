@@ -228,6 +228,7 @@ def assemble(registry: ToolRegistry, *, context_window: int | None, pinned_names
         logger.warning("Tool search bridge name conflict; retaining full catalog")
         return
     pinned = frozenset(pinned_names) | frozenset(config.pinned_tools)
+    pinned |= frozenset(d.name for d in registry.descriptors() if d.execution_name in pinned)
     # Built-in whitelist disclosure: only the resident whitelist (plus
     # explicit pins) stays in the model-facing catalog.  Everything else
     # executable is deferred — including tools that did not exist when this

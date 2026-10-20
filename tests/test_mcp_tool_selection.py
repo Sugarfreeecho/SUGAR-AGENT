@@ -56,6 +56,17 @@ def test_invalid_selection_is_rejected(mcp, raw):
         mcp._parse_tool_selection(raw)
 
 
+def test_normalized_name_collisions_keep_every_tool_and_refresh_stable_bindings(mcp):
+    assert mcp._register_tools_globally("demo.one", [tool("Read"), tool("read"), tool("read")]) == 2
+    assert mcp._register_tools_globally("demo_one", [tool("Read")]) == 1
+    before = dict(mcp._fname_to_tool)
+    assert set(before.values()) == {("demo.one", "Read"), ("demo.one", "read"), ("demo_one", "Read")}
+    mcp._tool_contracts.update({name: {"effect": "read"} for name in before})
+    assert mcp._register_tools_globally("demo.one", [tool("read"), tool("Read")]) == 2
+    assert mcp._fname_to_tool == before
+    assert all(mcp._tool_contracts[name]["effect"] == "read" for name in before)
+
+
 def test_bulk_toggle_is_atomic_persisted_and_does_not_touch_other_servers(mcp, monkeypatch):
     mcp._register_tools_globally("demo", [tool("read"), tool("write")])
     mcp._register_tools_globally("other", [tool("read")])

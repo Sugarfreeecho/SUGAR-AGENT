@@ -122,7 +122,7 @@ class PluginAwareHookExecutor:
                 str(definition.plugin_id or ""),
                 definition.plugin_signature,
                 definition.event,
-                definition.handler_ref or definition.id,
+                definition.handler_ref or definition.execution_id,
                 dict(payload),
                 tuple(self.plugins_provider()),
             )

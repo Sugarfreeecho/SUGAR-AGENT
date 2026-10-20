@@ -153,14 +153,17 @@ class HostToolInvokerRegistry:
         slowest_name = ""
         slowest_ms = 0
         callback_ms = 0
-        for name in names:
-            callback_started = time.perf_counter()
-            enabled = self.is_enabled(name)
-            elapsed_ms = int((time.perf_counter() - callback_started) * 1000)
-            callback_ms += elapsed_ms
-            if elapsed_ms > slowest_ms:
-                slowest_name, slowest_ms = name, elapsed_ms
-            availability.append((name, enabled))
+        from plugins.host import bundled_host_availability_scope
+
+        with bundled_host_availability_scope():
+            for name in names:
+                callback_started = time.perf_counter()
+                enabled = self.is_enabled(name)
+                elapsed_ms = int((time.perf_counter() - callback_started) * 1000)
+                callback_ms += elapsed_ms
+                if elapsed_ms > slowest_ms:
+                    slowest_name, slowest_ms = name, elapsed_ms
+                availability.append((name, enabled))
         total_ms = int((time.perf_counter() - started) * 1000)
         if total_ms >= 50:
             logging.getLogger(__name__).info(

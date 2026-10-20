@@ -193,7 +193,7 @@ def test_builder_discloses_only_filtered_scope_and_preserves_fork_targets(monkey
     monkeypatch.setattr(agent_loop, "OPENAI_TOOL_DEFINITIONS", [definition("read_file")])
     monkeypatch.setattr(agent_extensions, "bundled_host_tool_definitions", lambda **kwargs: [])
     monkeypatch.setattr(agent_extensions, "plugin_tool_definitions", empty)
-    monkeypatch.setattr(agent_mcp, "get_tool_definitions", remote)
+    monkeypatch.setattr(agent_mcp, "get_published_tool_definitions", remote)
     monkeypatch.setattr(agent_loop, "resolve_executor_config_for_session", lambda sid: (None, "test", 100, 512_000))
     registry = asyncio.run(agent_loop.build_combined_tool_registry_for_session("main", session_meta={}))
     assert registry.disclosure.names == {"mcp_demo_read", "mcp_demo_write"}
@@ -347,6 +347,18 @@ def test_mcp_bridge_uses_production_approval_and_invocation_pipeline(monkeypatch
     assert original["name"] == "tool_call" and original["args"]["name"] == "mcp_browser_action_0"
 
     if approved:
+        from tool_registry import ToolOutcome
+
+        async def explicit_failure(*args, **kwargs):
+            assert kwargs["return_outcome"] is True
+            return ToolOutcome.failed("mcp_tool_error", "server refused", content="provider diagnostic",
+                metadata={"tool_status": {"source": "mcp_protocol"}})
+
+        monkeypatch.setattr(agent_mcp, "invoke_tool_by_fname", explicit_failure)
+        failed = asyncio.run(execute(original))
+        assert failed["tool_failed"] and failed["tool_status"]["code"] == "mcp_tool_error"
+        assert failed["tool_status"]["source"] == "mcp_protocol"
+
         async def cancelled(*args, **kwargs):
             raise asyncio.CancelledError()
         monkeypatch.setattr(agent_mcp, "invoke_tool_by_fname", cancelled)

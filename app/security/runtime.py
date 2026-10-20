@@ -595,7 +595,7 @@ def classify_hook(
     else:
         cwd = canonical_path(raw_cwd, source_root) if raw_cwd else source_root
     config_payload = {
-        "hook_id": str(getattr(definition, "id", "")),
+        "hook_id": str(getattr(definition, "execution_id", getattr(definition, "id", ""))),
         "event": str(getattr(definition, "event", "")),
         "source_id": str(getattr(definition, "source_id", "")),
         "plugin_id": str(getattr(definition, "plugin_id", "") or ""),
@@ -617,7 +617,7 @@ def classify_hook(
     ).hexdigest()
     return CapabilityRequest.create(
         action="hook.exec",
-        resource=command or str(getattr(definition, "id", "hook")),
+        resource=command or str(getattr(definition, "execution_id", getattr(definition, "id", "hook"))),
         effect="unknown",
         principal=(
             f"plugin:{getattr(definition, 'plugin_id', '')}"

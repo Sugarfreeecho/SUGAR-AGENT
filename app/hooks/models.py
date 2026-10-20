@@ -95,6 +95,12 @@ class HookDefinition:
     order: int = 0
     handler_ref: str = ""
     plugin_signature: str = ""
+    local_id: str = ""
+    source_hook_id: str = ""
+
+    @property
+    def execution_id(self) -> str:
+        return self.source_hook_id or self.local_id or self.id
 
 
 @dataclass(frozen=True)

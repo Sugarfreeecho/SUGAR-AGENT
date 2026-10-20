@@ -7,7 +7,7 @@ resolve a tool by descriptor instead of inferring its owner from name prefixes.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -67,6 +67,12 @@ class ToolDescriptor:
     interactive: bool = False
     early_stream_safe: bool = True
     interruptibility: str = "non_interruptible"
+    source_name: str = ""
+
+    @property
+    def execution_name(self) -> str:
+        """Stable source identifier used for authorization and invocation."""
+        return self.source_name or self.name
 
     @classmethod
     def from_openai_definition(
@@ -207,6 +213,23 @@ class ToolRegistry:
 
     def resolve(self, name: str) -> Optional[ToolDescriptor]:
         return self._descriptors.get(str(name or "").strip())
+
+    def rename_tools(self, names: Mapping[str, str]) -> None:
+        """Atomically change presentation names without changing their binding."""
+        renamed: dict[str, ToolDescriptor] = {}
+        for descriptor in self._descriptors.values():
+            name = names.get(descriptor.name, descriptor.name)
+            if name in renamed:
+                raise DuplicateToolError(f"Duplicate model tool name: {name!r}")
+            if name != descriptor.name:
+                definition = descriptor.openai_definition()
+                definition["function"]["name"] = name
+                descriptor = replace(
+                    descriptor, name=name, source_name=descriptor.execution_name,
+                    _definition_json=json.dumps(definition, ensure_ascii=False, separators=(",", ":")),
+                )
+            renamed[name] = descriptor
+        self._descriptors = renamed
 
     def require(self, name: str) -> ToolDescriptor:
         descriptor = self.resolve(name)

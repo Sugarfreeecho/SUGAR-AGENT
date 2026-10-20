@@ -964,7 +964,7 @@ def build_env_static(session_id: Optional[str] = None) -> str:
 - **Calendar month (host local time)**: **{current_year_month}**
 - **OS**: {platform.system()} | **Python**: {platform.python_version()}
 {run_shell_executor_hint}
-- **MCP extensions** (optional): With `.config/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects and exposes tools as `mcp_<server_alias>_<tool_name>`. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
+- **MCP extensions** (optional): With `.config/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects. Tools use their local names by default; plugin and server prefixes are added only to resolve name collisions. Use the exact names in the current tool catalog. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
 - **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
   - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `.config/mcp_servers.json`.
   - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.

@@ -285,6 +285,9 @@ def test_agent_catalog_records_tool_sources_without_name_prefixes(monkeypatch):
     async def mcp_definitions():
         return [mcp]
 
+    async def lifecycle_definitions():
+        raise AssertionError("catalog construction must not wait for MCP startup")
+
     async def plugin_definitions():
         return [plugin]
 
@@ -294,7 +297,8 @@ def test_agent_catalog_records_tool_sources_without_name_prefixes(monkeypatch):
     monkeypatch.setattr(agent_loop, "OPENAI_TOOL_DEFINITIONS", [host])
     monkeypatch.setattr(agent_loop, "tools_dict", {"local_action": lambda: None})
     monkeypatch.setattr(agent_extensions, "bundled_host_tool_definitions", lambda **_kwargs: [])
-    monkeypatch.setattr(agent_mcp, "get_tool_definitions", mcp_definitions)
+    monkeypatch.setattr(agent_mcp, "get_published_tool_definitions", mcp_definitions)
+    monkeypatch.setattr(agent_mcp, "get_tool_definitions", lifecycle_definitions)
     monkeypatch.setattr(
         agent_extensions, "plugin_tool_definitions", plugin_definitions
     )

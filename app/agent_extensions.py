@@ -134,6 +134,8 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
         tuple(str(path) for path in manager.discovery_dirs),
         str(manager.state.path),
     )
+    with _lock:
+        generation = _extension_catalog_generation
     if not force:
         with _lock:
             if (
@@ -160,7 +162,8 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
                     return _plugin_cache[2]
         loaded = manager.load_enabled()
         with _lock:
-            _plugin_cache = (time.monotonic(), cache_key, loaded)
+            if generation == _extension_catalog_generation:
+                _plugin_cache = (time.monotonic(), cache_key, loaded)
         return loaded
 
 
@@ -183,6 +186,7 @@ def _schedule_plugin_cache_refresh(
     if _swr_refresh_in_flight:
         return True
     _swr_refresh_in_flight = True
+    generation = _extension_catalog_generation
     _swr_work_begin()
 
     def _refresh() -> None:
@@ -191,7 +195,8 @@ def _schedule_plugin_cache_refresh(
             with _scan_lock:
                 loaded = manager.load_enabled()
             with _lock:
-                _plugin_cache = (time.monotonic(), cache_key, loaded)
+                if generation == _extension_catalog_generation:
+                    _plugin_cache = (time.monotonic(), cache_key, loaded)
         except Exception:
             logger.warning("Background plugin cache refresh failed", exc_info=True)
         finally:
@@ -246,13 +251,15 @@ async def plugin_tool_definitions() -> list[Dict[str, Any]]:
 
 
 def bundled_host_tool_definitions(
-    *, session_meta: Optional[Mapping[str, Any]] = None
+    *, session_meta: Optional[Mapping[str, Any]] = None,
+    loaded_plugins: Optional[Tuple[Any, ...]] = None,
 ) -> list[Dict[str, Any]]:
     """Describe trusted bundled tools without exposing host trust to manifests."""
 
     from plugins.host import bundled_host_tool_definitions as describe
 
-    return describe(load_plugins().plugins, session_meta=session_meta)
+    return describe(load_plugins().plugins if loaded_plugins is None else loaded_plugins,
+                    session_meta=session_meta)
 
 
 def activate_bundled_provider_extensions(registry: Any) -> None:
@@ -607,10 +614,11 @@ async def plugin_command_descriptions() -> list[Dict[str, Any]]:
     return _plugin_command_catalog(loaded, runtime_rows)
 
 
-async def start_plugin_background_services() -> list[Dict[str, Any]]:
+async def start_plugin_background_services(*, loaded: PluginLoadResult | None = None) -> list[Dict[str, Any]]:
     """Start manifest-declared services by activating their isolated workers."""
 
-    loaded = load_plugins(force=True)
+    if loaded is None:
+        loaded = await asyncio.to_thread(load_plugins, force=True)
     return await asyncio.to_thread(
         get_plugin_runtime_registry().background_status,
         loaded.plugins,
@@ -860,6 +868,7 @@ def hook_manager_for_current_loop(
     *,
     force: bool = False,
     runtime_definitions: Optional[tuple[Any, ...]] = None,
+    loaded: Optional[PluginLoadResult] = None,
 ) -> HookManager:
     """Return a manager whose asyncio locks belong to the current loop.
 
@@ -872,7 +881,11 @@ def hook_manager_for_current_loop(
     """
 
     loop = asyncio.get_running_loop()
-    loaded = load_plugins(force=force)
+    # dispatch_hook has already obtained this same catalog to derive runtime
+    # hooks. Reuse it for the manager signature instead of resolving the plugin
+    # manager and its directories a second time in the same dispatch.
+    if loaded is None or force:
+        loaded = load_plugins(force=force)
     if runtime_definitions is None:
         runtime_definitions = _runtime_hook_definitions(loaded)
     signature = _hook_signature(loaded, runtime_definitions)
@@ -917,6 +930,7 @@ def _schedule_hook_manager_rebuild(
     if _hook_manager_rebuild_in_flight:
         return
     _hook_manager_rebuild_in_flight = True
+    generation = _extension_catalog_generation
     _swr_work_begin()
 
     def _rebuild() -> None:
@@ -924,7 +938,8 @@ def _schedule_hook_manager_rebuild(
         try:
             manager = _build_hook_manager(loaded, runtime_definitions)
             with _lock:
-                _hook_managers[loop] = (signature, manager)
+                if generation == _extension_catalog_generation:
+                    _hook_managers[loop] = (signature, manager)
         except Exception:
             logger.warning("Background hook manager rebuild failed", exc_info=True)
         finally:
@@ -1006,20 +1021,23 @@ def hook_snapshot() -> Dict[str, Any]:
     }
 
 
-def invalidate_extension_caches() -> None:
+def invalidate_extension_caches(*, plugin_id: str | None = None) -> None:
     global _plugin_cache
     with _lock:
         _plugin_cache = None
         _hook_managers.clear()
         _bump_extension_catalog_generation()
-    # A stale-while-revalidate scan may be in flight with pre-invalidation
-    # data; wait it out (bounded by the scan itself) so its result cannot
-    # repopulate the cache after this point.
-    _drain_background_refreshes()
+    # Background refreshes publish only into their original generation. A
+    # targeted toggle must not wait up to 60 seconds for unrelated rebuilds.
+    if plugin_id is None:
+        _drain_background_refreshes()
     try:
-        from plugin_host_services import release_all_plugin_leases
+        from plugin_host_services import release_all_plugin_leases, release_plugin_leases
 
-        release_all_plugin_leases()
+        if plugin_id is None:
+            release_all_plugin_leases()
+        else:
+            release_plugin_leases(plugin_id)
     except Exception:
         logger.debug("Plugin host-service lease cleanup failed", exc_info=True)
     try:
@@ -1028,7 +1046,11 @@ def invalidate_extension_caches() -> None:
         invalidate_bundled_workflow_callbacks()
     except Exception:
         logger.debug("Workflow callback cache cleanup failed", exc_info=True)
-    get_plugin_runtime_registry().invalidate()
+    registry = get_plugin_runtime_registry()
+    if plugin_id is None:
+        registry.invalidate()
+    else:
+        registry.invalidate(plugin_id=plugin_id)
 
 
 def _drain_background_refreshes() -> None:
@@ -1094,8 +1116,11 @@ def reload_extensions() -> PluginReloadResult:
 
 
 def set_plugin_enabled(plugin_id: str, enabled: bool) -> Mapping[str, object]:
+    from plugins import normalize_namespace
+
+    plugin_id = normalize_namespace(plugin_id)
     state = plugin_manager().set_enabled(plugin_id, enabled)
-    invalidate_extension_caches()
+    invalidate_extension_caches(plugin_id=plugin_id)
     try:
         from agent_tools import invalidate_skills_cache
 
@@ -1335,7 +1360,7 @@ async def warm_hook_pipeline() -> None:
     """
     loaded = load_plugins()
     runtime_definitions = await asyncio.to_thread(_runtime_hook_definitions, loaded)
-    hook_manager_for_current_loop(runtime_definitions=runtime_definitions)
+    hook_manager_for_current_loop(runtime_definitions=runtime_definitions, loaded=loaded)
 
 
 async def dispatch_hook(
@@ -1346,17 +1371,22 @@ async def dispatch_hook(
     session_id: str = "",
     run_id: str = "",
 ) -> HookDispatchResult:
+    from agent_local_timing import local_step
     _t0 = time.perf_counter()
-    loaded = load_plugins()
+    with local_step("hook_load_plugins"):
+        loaded = load_plugins()
     _t_loaded = time.perf_counter()
-    runtime_definitions = await asyncio.to_thread(
-        _runtime_hook_definitions,
-        loaded,
-    )
+    with local_step("hook_runtime_definitions"):
+        runtime_definitions = await asyncio.to_thread(
+            _runtime_hook_definitions,
+            loaded,
+        )
     _t_defs = time.perf_counter()
-    manager = hook_manager_for_current_loop(
-        runtime_definitions=runtime_definitions,
-    )
+    with local_step("hook_manager"):
+        manager = hook_manager_for_current_loop(
+            runtime_definitions=runtime_definitions,
+            loaded=loaded,
+        )
     _t_manager = time.perf_counter()
     event_hooks = tuple(manager.hooks_for(event) or ()) if manager.enabled else ()
     audit_enabled = bool(manager.enabled and event_hooks)
@@ -1369,7 +1399,8 @@ async def dispatch_hook(
             event,
         )
     try:
-        result = await manager.dispatch(event, payload or {})
+        with local_step("hook_execute"):
+            result = await manager.dispatch(event, payload or {})
     except Exception as exc:
         if session_manager is not None and audit_enabled:
             await asyncio.to_thread(
@@ -1412,14 +1443,17 @@ def audit_plugin_inventory(
     run_id: str = "",
     *,
     event_type: str = "plugin_state_changed",
+    reuse_catalog: bool = False,
 ) -> None:
     if not _runtime_v2_enabled() or not session_id:
         return
     try:
         ops = _history_ops(session_manager)
         manager = plugin_manager()
-        report = manager.discover_report()
-        loaded_ids = {plugin.plugin_id for plugin in load_plugins(force=True).plugins}
+        report = manager.last_discovery if reuse_catalog else manager.discover_report()
+        loaded = manager.last_load if reuse_catalog else load_plugins(force=True)
+        loaded_ids = {plugin.plugin_id for plugin in loaded.plugins}
+        states = manager.state.read().get("plugins", {})
         snapshot = ops.snapshots.read(session_id)
         previous_plugins = snapshot.get("plugins") if isinstance(snapshot, dict) else {}
         if not isinstance(previous_plugins, dict):
@@ -1429,7 +1463,7 @@ def audit_plugin_inventory(
             seen_ids.add(plugin.plugin_id)
             state = {
                 "installed": True,
-                "enabled": manager.is_enabled(plugin.plugin_id) and plugins_enabled(),
+                "enabled": bool(states.get(plugin.plugin_id, {}).get("enabled", True)) and plugins_enabled(),
                 "loaded": plugin.plugin_id in loaded_ids,
                 "name": plugin.name,
                 "version": plugin.version,

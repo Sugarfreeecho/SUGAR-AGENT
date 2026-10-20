@@ -217,12 +217,31 @@ def set_skill_enabled(skill_name: str, enabled: bool) -> bool:
     name = str(skill_name or "").strip()
     if not name:
         return False
+    skills = discover_skills(include_disabled=True)
+    matches = [skill for skill in skills if skill["name"] == name]
+    if not matches:
+        matches = [skill for skill in skills
+                   if name in {skill.get("source_name"), skill.get("qualified_name")}]
+    if len(matches) > 1:
+        return False
+    skill = matches[0] if matches else {}
+    state_name = str(skill.get("source_name") or name)
+    legacy_name = str(skill.get("qualified_name") or state_name)
     with _skill_state_lock:
         states = _load_skill_enabled_states()
+        for other in skills:
+            other_source = str(other.get("source_name") or other["name"])
+            other_legacy = str(other.get("qualified_name") or other_source)
+            if other_source != other_legacy and other_legacy == state_name:
+                # A legacy alias can be shared by a skill and an Agent/Prompt.
+                # Preserve the other entry before changing that old state key.
+                states.setdefault(other_source, other.get("enabled") is not False)
         if enabled:
-            states.pop(name, None)  # enabled is the backward-compatible default
+            states.pop(state_name, None)  # enabled is the backward-compatible default
+            if legacy_name != state_name and states.get(legacy_name) is False:
+                states[state_name] = True
         else:
-            states[name] = False
+            states[state_name] = False
         out = {
             "version": 1,
             "skills": {key: {"enabled": value} for key, value in sorted(states.items())},
@@ -4644,6 +4663,9 @@ def _plugin_instruction_entries() -> List[Dict[str, Any]]:
         entries.append(
             {
                 "name": qualified_name,
+                "source_name": f"{plugin_id}:{kind}:{qualified_name.split(':', 1)[-1]}",
+                "qualified_name": qualified_name,
+                "local_name": qualified_name.split(":", 1)[-1],
                 "description": f"Plugin {kind} definition: {summary[:240]}",
                 "path": str(root),
                 "base_dir": str(root.parent if root.is_file() else root),
@@ -4655,6 +4677,37 @@ def _plugin_instruction_entries() -> List[Dict[str, Any]]:
             }
         )
     return entries
+
+
+def _simplify_skill_names(skills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    from collections import Counter
+    from resource_naming import allocate_resource_names
+
+    entries = {}
+    for skill in skills:
+        key = json.dumps([skill.get("source"), skill.get("plugin_id"), skill["path"]])
+        entries.setdefault(key, skill)
+    project_counts = Counter(skill["name"] for skill in entries.values() if not skill.get("plugin_id"))
+    reserved = {name for name, count in project_counts.items() if count == 1}
+    candidates = {}
+    for key, skill in entries.items():
+        original = str(skill["name"])
+        local_name = str(skill.get("local_name") or original)
+        skill.setdefault("source_name", original)
+        skill.setdefault("qualified_name", original)
+        directory = Path(skill["base_dir"]).name
+        if not skill.get("plugin_id") and directory != original:
+            skill["source_name"] = f"project:{directory}:{local_name}"
+        if not skill.get("plugin_id") and original in reserved:
+            continue
+        kind = str(skill.get("resource_kind") or "skill")
+        owner = str(skill.get("plugin_id") or "project")
+        candidates[key] = (local_name, f"{owner}:{local_name}",
+                           f"{owner}:{kind}:{local_name}", f"{owner}:{kind}:{directory}:{local_name}")
+    names = allocate_resource_names(candidates, reserved=reserved)
+    for key, name in names.items():
+        entries[key]["name"] = name
+    return list(entries.values())
 
 
 def discover_skills(
@@ -4729,6 +4782,9 @@ def discover_skills(
 
                 skills.append({
                     "name": name,
+                    "source_name": name,
+                    "qualified_name": name,
+                    "local_name": name.split(":", 1)[-1] if plugin_id else name,
                     "description": description,
                     "path": str(skill_file),
                     "base_dir": str(skill_dir),
@@ -4744,16 +4800,11 @@ def discover_skills(
 
         skills.extend(_plugin_instruction_entries())
 
-        name_map = {}
-        for skill in skills:
-            name = skill["name"]
-            if name in name_map:
-                logger.warning(f"Skill name conflict: {name}, already from {name_map[name]['base_dir']}, overwritten by {skill['base_dir']}")
-            name_map[name] = skill
-        out = list(name_map.values())
+        out = _simplify_skill_names(skills)
         enabled_states = _load_skill_enabled_states()
         for skill in out:
-            skill["enabled"] = enabled_states.get(str(skill.get("name") or ""), True)
+            skill["enabled"] = enabled_states.get(skill["source_name"],
+                enabled_states.get(skill["qualified_name"], True))
         cache["sig"] = sig
         cache["skills"] = out
         return list(out) if include_disabled else [s for s in out if s.get("enabled") is not False]
@@ -4792,8 +4843,13 @@ def get_skills_catalog() -> str:
 
 
 def activate_skill(skill_name: str) -> str:
-    skills = discover_skills()
+    all_skills = discover_skills(include_disabled=True)
+    skills = [s for s in all_skills if s.get("enabled") is not False]
     skill = next((s for s in skills if s['name'] == skill_name), None)
+    if skill is None:
+        matches = [s for s in all_skills if skill_name in {s.get("source_name"), s.get("qualified_name")}]
+        if len(matches) == 1 and matches[0].get("enabled") is not False:
+            skill = matches[0]
     if not skill:
         return f"Error: skill '{skill_name}' not found. Available: {[s['name'] for s in skills]}"
 

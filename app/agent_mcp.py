@@ -26,6 +26,7 @@ import httpx
 
 from agent_harness import PROJECT_ROOT
 from config_paths import config_path
+from tool_registry import ToolOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,10 @@ _defs_snapshot: List[Dict[str, Any]] = []
 _tool_contracts: Dict[str, Dict[str, Any]] = {}
 _tool_selections: Dict[str, Dict[str, frozenset[str]]] = {}
 _server_start_errors: Dict[str, str] = {}
+_server_config_signatures: Dict[str, str] = {}
+_server_retry_state: Dict[str, Tuple[int, float]] = {}
+_server_registration_descriptors: Dict[str, dict] = {}
+_plugin_mcp_content_signatures: Dict[str, str] = {}
 _start_lock = asyncio.Lock()
 _host_reserved_servers: set[str] = set()
 _host_server_views: Dict[str, Callable[[], Dict[str, Any]]] = {}
@@ -313,34 +318,41 @@ def _bump_tool_catalog_generation() -> None:
 
 def _register_tools_globally(alias: str, tools: List[Any]) -> int:
     """Register a server's latest tools in the global OpenAI tool snapshots."""
+    with _mcp_tool_state_lock:
+        return _register_tools_unlocked(alias, tools)
+
+
+def _register_tools_unlocked(alias: str, tools: List[Any]) -> int:
     global _defs_snapshot
-    seen_fname: set[str] = set()
+    seen_original: set[str] = set()
     registered = 0
     selection = _tool_selections.get(alias, {})
     include = selection.get("include", frozenset())
     exclude = selection.get("exclude", frozenset())
     previous_contracts = dict(_tool_contracts)
     previous_mapping = dict(_fname_to_tool)
+    previous_names = {pair: name for name, pair in previous_mapping.items()}
     # A refreshed tools/list is a replacement, including when it is empty.
     _remove_server_tools_unlocked(alias)
     for t in tools or []:
         orig_name = getattr(t, "name", "") or ""
-        if not orig_name:
+        if not orig_name or orig_name in seen_original:
             continue
+        seen_original.add(orig_name)
         desc = getattr(t, "description", "") or ""
         schema = getattr(t, "inputSchema", None)
         od = _openai_tool_def(alias, orig_name, desc, schema)
-        fname = od["function"]["name"]
-        keys = {orig_name, fname}
+        legacy_name = od["function"]["name"]
+        fname = previous_names.get((alias, orig_name), legacy_name)
+        keys = {orig_name, legacy_name, fname}
         if (include and not keys & include) or keys & exclude:
             continue
-        if fname in seen_fname:
-            continue
-        seen_fname.add(fname)
-        existing = _fname_to_tool.get(fname)
-        if existing and existing != (alias, orig_name):
-            logger.warning("MCP: duplicate tool key `%s`, skip `%s.%s`", fname, alias, orig_name)
-            continue
+        attempt = 0
+        while fname in _fname_to_tool and _fname_to_tool[fname] != (alias, orig_name):
+            digest = hashlib.sha256(json.dumps([alias, orig_name, attempt]).encode("utf-8")).hexdigest()[:10]
+            fname = f"{legacy_name[:109]}_{digest}"
+            attempt += 1
+        od["function"]["name"] = fname
         _fname_to_tool[fname] = (alias, orig_name)
         if fname in previous_contracts and previous_mapping.get(fname) == (alias, orig_name):
             _tool_contracts[fname] = previous_contracts[fname]
@@ -416,17 +428,21 @@ def _compute_config_signature_cached() -> str:
 
 def _load_servers_dict_from_config() -> Tuple[Optional[dict], Optional[str]]:
     """返回 (servers dict | None, error reason | None)。"""
-    global _last_config_error
+    global _last_config_error, _plugin_mcp_content_signatures
     _last_config_error = None
     if not _enabled_flag():
         return None, None
     try:
-        from agent_extensions import plugin_mcp_servers
+        from agent_extensions import load_plugins, plugin_mcp_servers
 
         plugin_servers = dict(plugin_mcp_servers())
+        _plugin_mcp_content_signatures = {
+            plugin.plugin_id: plugin.content_signature for plugin in load_plugins().plugins
+        }
     except Exception as exc:
         logger.debug("MCP plugin resources unavailable: %s", exc)
         plugin_servers = {}
+        _plugin_mcp_content_signatures = {}
 
     inline = (os.getenv("MCP_SERVERS_JSON") or "").strip()
     raw_obj: Any = None
@@ -488,6 +504,12 @@ def _resolve_transport(cfg: dict) -> str:
     if url:
         return "streamable-http"
     return ""
+
+
+def get_tool_identity(function_name: str) -> Optional[Tuple[str, str]]:
+    """Return the owning server and original name without parsing prefixes."""
+    with _mcp_tool_state_lock:
+        return _fname_to_tool.get(function_name)
 
 
 def _safe_function_key(alias: str, tool_name: str) -> str:
@@ -938,6 +960,9 @@ async def _shutdown_servers_unlocked() -> None:
     _defs_snapshot.clear()
     _tool_contracts.clear()
     _tool_selections.clear()
+    _server_config_signatures.clear()
+    _server_retry_state.clear()
+    _server_registration_descriptors.clear()
     if had_tools:
         _bump_tool_catalog_generation()
 
@@ -970,7 +995,8 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
         return
     selection = _parse_tool_selection(cfg)
 
-    if not mcp_registration_is_approved(mcp_descriptor(alias, cfg)):
+    registration_descriptor = mcp_descriptor(alias, cfg)
+    if not mcp_registration_is_approved(registration_descriptor):
         raise PermissionError("registration approval is required")
 
     transport = _resolve_transport(cfg)
@@ -990,6 +1016,10 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
         raise ValueError("unknown transport")
 
     _tool_selections[alias] = selection
+    # Publish the connection, definitions and contracts together after discovery.
+    # A reader on another thread must not observe tools without their connection.
+    if hasattr(srv, "register_tools"):
+        srv.register_tools = False
     try:
         await srv.start()
     except BaseException:
@@ -998,10 +1028,16 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
         await srv.stop()
         raise
 
-    _servers[alias] = srv
-    for function_name, pair in list(_fname_to_tool.items()):
-        if pair[0] == alias:
-            _tool_contracts[function_name] = _tool_contract_from_config(cfg, pair[1])
+    with _mcp_tool_state_lock:
+        _servers[alias] = srv
+        _server_registration_descriptors[alias] = registration_descriptor
+        if hasattr(srv, "_tools"):
+            _register_tools_globally(alias, srv._tools)
+        if hasattr(srv, "register_tools"):
+            srv.register_tools = True
+        for function_name, pair in list(_fname_to_tool.items()):
+            if pair[0] == alias:
+                _tool_contracts[function_name] = _tool_contract_from_config(cfg, pair[1])
     logger.info(
         "MCP: server `%s` OK transport=%s mapped_tools=%s",
         alias,
@@ -1025,6 +1061,7 @@ async def reserve_server_for_host(
                 if previous is not None:
                     await previous.stop()
                 _remove_server_tools_unlocked(alias)
+                _server_registration_descriptors.pop(alias, None)
             else:
                 _host_reserved_servers.discard(alias)
                 _host_server_views.pop(alias, None)
@@ -1046,20 +1083,89 @@ async def force_reload() -> None:
     await _run_on_mcp_loop(_force_reload_impl())
 
 
+async def _reload_plugin_impl(plugin_id: str) -> None:
+    """Invalidate one plugin's transports while retaining unrelated connections."""
+    global _loaded_signature, _signature_cache
+    prefix = plugin_id + "/"
+    async with _start_lock:
+        aliases = {alias for alias in (
+            set(_servers) | set(_server_config_signatures) | set(_server_start_errors)
+            | {pair[0] for pair in _fname_to_tool.values()}
+        ) if alias.startswith(prefix)}
+        stopped = []
+        for alias in aliases:
+            previous = _servers.pop(alias, None)
+            with _mcp_tool_state_lock:
+                _remove_server_tools_unlocked(alias)
+            _server_config_signatures.pop(alias, None)
+            _server_retry_state.pop(alias, None)
+            _server_registration_descriptors.pop(alias, None)
+            _server_start_errors.pop(alias, None)
+            if previous is not None:
+                stopped.append(previous.stop())
+        _loaded_signature = None
+        _signature_cache = None
+        if stopped:
+            results = await asyncio.gather(*stopped, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    logger.warning("Plugin MCP stop failed id=%s: %s", plugin_id, result)
+
+
+async def reload_plugin(plugin_id: str) -> None:
+    await _run_on_mcp_loop(_reload_plugin_impl(plugin_id))
+
+
+def _server_configuration_signature(alias: str, cfg: Any) -> str:
+    owner_signature = _plugin_mcp_content_signatures.get(alias.split("/", 1)[0], "") if "/" in alias else ""
+    return hashlib.sha256(json.dumps(
+        {"config": cfg, "owner_content": owner_signature}, sort_keys=True, default=str,
+    ).encode("utf-8")).hexdigest()
+
+
 async def _ensure_started_impl() -> None:
     global _loaded_signature
     if not _MCP_IMPORT_OK:
         return
     async with _start_lock:
+        if _loaded_signature is None and not _servers:
+            _server_retry_state.clear()
+            _server_config_signatures.clear()
         sig = _compute_config_signature_cached()
-        if sig == _loaded_signature:
+        now = time.monotonic()
+        retry_due = any(now >= retry_at for _attempts, retry_at in _server_retry_state.values())
+        disconnected = any(
+            callable(getattr(server, "connection_status", None))
+            and not server.connection_status().get("connected")
+            and alias not in _server_retry_state
+            for alias, server in tuple(_servers.items())
+        )
+        if sig == _loaded_signature and not retry_due and not disconnected:
             return
-
-        await _shutdown_servers_unlocked()
-        _server_start_errors.clear()
-
         servers_cfg, err = _load_servers_dict_from_config()
-        if not servers_cfg:
+        configured = {str(alias): cfg for alias, cfg in (servers_cfg or {}).items()}
+        fingerprints = {
+            alias: _server_configuration_signature(alias, cfg)
+            for alias, cfg in configured.items()
+        }
+        # Plugin code changes can change the aggregate signature without changing
+        # any MCP transport. Retain each unchanged connection and tool generation.
+        stop = []
+        for alias in set(_servers) | set(_server_config_signatures):
+            if (alias not in configured or alias in _host_reserved_servers
+                    or _server_config_signatures.get(alias) != fingerprints.get(alias)):
+                previous = _servers.pop(alias, None)
+                with _mcp_tool_state_lock:
+                    _remove_server_tools_unlocked(alias)
+                _server_start_errors.pop(alias, None)
+                _server_config_signatures.pop(alias, None)
+                _server_retry_state.pop(alias, None)
+                _server_registration_descriptors.pop(alias, None)
+                if previous is not None:
+                    stop.append(previous.stop())
+        if stop:
+            await asyncio.gather(*stop, return_exceptions=True)
+        if not configured:
             _loaded_signature = sig
             if err:
                 logger.info("MCP: skipped (%s)", err)
@@ -1069,19 +1175,43 @@ async def _ensure_started_impl() -> None:
                 logger.info("MCP: no config (`mcp_servers.json` / MCP_SERVERS_JSON)")
             return
 
-        for alias, cfg in servers_cfg.items():
+        async def start_one(alias: str, cfg: Any) -> None:
+            if alias in _host_reserved_servers:
+                return
+            fingerprint = fingerprints[alias]
+            server = _servers.get(alias)
+            status = getattr(server, "connection_status", None)
+            if (server is not None and _server_config_signatures.get(alias) == fingerprint
+                    and (not callable(status) or status().get("connected"))):
+                return
+            attempts, retry_at = _server_retry_state.get(alias, (0, 0.0))
+            if _server_config_signatures.get(alias) == fingerprint and time.monotonic() < retry_at:
+                return
+            _server_config_signatures[alias] = fingerprint
             if not isinstance(cfg, dict):
                 error = "server configuration must be an object"
                 _server_start_errors[str(alias)] = error
                 logger.warning("MCP: skip server `%s` (%s)", alias, error)
-                continue
+                return
+            previous = _servers.pop(alias, None)
+            if previous is not None:
+                with _mcp_tool_state_lock:
+                    _remove_server_tools_unlocked(alias)
+                await previous.stop()
             try:
                 await _start_configured_server_unlocked(str(alias), cfg)
+                _server_start_errors.pop(alias, None)
+                _server_retry_state.pop(alias, None)
             except Exception as e:
                 _server_start_errors[str(alias)] = str(e)
+                attempts += 1
+                initial = max(0.1, float(os.getenv("MCP_RETRY_INITIAL_SECONDS", "1")))
+                maximum = max(initial, float(os.getenv("MCP_RETRY_MAX_SECONDS", "60")))
+                delay = min(maximum, initial * 2 ** min(attempts - 1, 16))
+                _server_retry_state[alias] = (attempts, time.monotonic() + delay)
                 logger.warning("MCP: failed to start `%s`: %s", alias, e)
-                continue
-
+        # A slow server does not delay discovery/publication of healthy siblings.
+        await asyncio.gather(*(start_one(alias, cfg) for alias, cfg in configured.items()))
         _loaded_signature = sig
 
 
@@ -1119,6 +1249,8 @@ async def _register_server_impl(alias: str) -> Dict[str, Any]:
         _server_start_errors.pop(alias, None)
         try:
             await _start_configured_server_unlocked(alias, cfg)
+            _server_config_signatures[alias] = _server_configuration_signature(alias, cfg)
+            _server_retry_state.pop(alias, None)
         except Exception as exc:
             _server_start_errors[alias] = str(exc)
             logger.warning("MCP: manual registration failed `%s`: %s", alias, exc)
@@ -1145,6 +1277,31 @@ async def get_tool_definitions() -> List[Dict[str, Any]]:
     ]
 
 
+async def get_published_tool_definitions() -> List[Dict[str, Any]]:
+    """Read a published catalog without waiting for startup or rediscovery."""
+    if not _MCP_IMPORT_OK or not _enabled_flag():
+        return []
+    schedule_mcp_startup_refresh()
+    unapproved = _unapproved_published_servers()
+    with _mcp_tool_state_lock:
+        disabled = _load_disabled_mcp_tools()
+        if not _disabled_mcp_tools_loaded:
+            return []
+        return [d for d in _defs_snapshot
+                if str((d.get("function") or {}).get("name") or "") not in disabled
+                and _fname_to_tool.get(str((d.get("function") or {}).get("name") or ""), ("", ""))[0] not in unapproved]
+
+
+def _unapproved_published_servers() -> frozenset[str]:
+    """Check current trust decisions using already-hashed registration descriptors."""
+    from security.extensions import extension_registration_approval_enabled, mcp_registration_is_approved
+
+    if not extension_registration_approval_enabled():
+        return frozenset()
+    return frozenset(alias for alias, descriptor in tuple(_server_registration_descriptors.items())
+                     if not mcp_registration_is_approved(descriptor))
+
+
 async def get_tool_catalog_revision() -> tuple[int, str, tuple[str, ...]]:
     """Return the cheap revision used by the per-run combined registry cache.
 
@@ -1159,29 +1316,44 @@ async def get_tool_catalog_revision() -> tuple[int, str, tuple[str, ...]]:
         with _mcp_tool_state_lock:
             disabled = tuple(sorted(_load_disabled_mcp_tools()))
         return (0, "", disabled)
-    if _loaded_signature is None:
-        schedule_mcp_startup_refresh()
+    schedule_mcp_startup_refresh()
     with _mcp_tool_state_lock:
         disabled = tuple(sorted(_load_disabled_mcp_tools()))
-    signature = str(_loaded_signature or "") or ("starting" if _startup_refresh_scheduled else "")
+        state_available = _disabled_mcp_tools_loaded
+    signature = (str(_loaded_signature or "") or ("starting" if _startup_refresh_scheduled else "")) if _enabled_flag() else "disabled"
+    if not state_available:
+        signature += "|tool-state-unavailable"
+    unapproved = _unapproved_published_servers()
+    if unapproved:
+        signature += "|unapproved:" + hashlib.sha256("\n".join(sorted(unapproved)).encode("utf-8")).hexdigest()
     return int(_tool_catalog_generation), signature, disabled
 
 
 _startup_refresh_scheduled = False
+_startup_refresh_last_scheduled = float("-inf")
 
 
 def schedule_mcp_startup_refresh() -> None:
     """Fire-and-forget ensure_started on the MCP loop (never blocks callers)."""
-    global _startup_refresh_scheduled
+    global _startup_refresh_scheduled, _startup_refresh_last_scheduled
     with _mcp_tool_state_lock:
         if _startup_refresh_scheduled:
             return
+        now = time.monotonic()
+        if _loaded_signature is not None and now - _startup_refresh_last_scheduled < _SIGNATURE_CACHE_TTL_SEC:
+            return
+        _startup_refresh_last_scheduled = now
         _startup_refresh_scheduled = True
 
     def _release(_future: Any = None) -> None:
         global _startup_refresh_scheduled
         with _mcp_tool_state_lock:
             _startup_refresh_scheduled = False
+        if _future is not None and not _future.cancelled():
+            try:
+                _future.result()
+            except Exception:
+                logger.warning("MCP background catalog refresh failed", exc_info=True)
 
     try:
         loop = _get_mcp_loop()
@@ -1338,8 +1510,10 @@ async def invoke_tool_by_fname(
     require_worktree_isolation: bool = False,
     image_enabled: bool = False,
     model: str = "",
+    return_outcome: bool = False,
 ) -> Any:
-    await ensure_started()
+    if function_name not in _fname_to_tool:
+        await ensure_started()
     return await _run_on_mcp_loop(
         _invoke_tool_by_fname_impl(
             function_name,
@@ -1348,6 +1522,7 @@ async def invoke_tool_by_fname(
             require_worktree_isolation=require_worktree_isolation,
             image_enabled=image_enabled,
             model=model,
+            return_outcome=return_outcome,
         )
     )
 
@@ -1360,37 +1535,46 @@ async def _invoke_tool_by_fname_impl(
     require_worktree_isolation: bool = False,
     image_enabled: bool = False,
     model: str = "",
+    return_outcome: bool = False,
 ) -> Any:
+    def failure(code, message, *, content=None, timed_out=False):
+        return ToolOutcome.failed(code, message, content=message if content is None else content,
+            metadata={"tool_status": {"source": "mcp_protocol", "timed_out": timed_out}}) if return_outcome else message
+
+    if not _enabled_flag():
+        return failure("mcp_disabled", "Error: MCP is disabled.")
     pair = _fname_to_tool.get(function_name)
     if not pair:
-        return f"Error: unknown MCP tool `{function_name}`."
-    if function_name in _load_disabled_mcp_tools():
-        return f"Error: MCP tool `{function_name}` is disabled."
+        return failure("mcp_unknown_tool", f"Error: unknown MCP tool `{function_name}`.")
+    if not is_mcp_tool_enabled(function_name):
+        return failure("mcp_tool_disabled", f"Error: MCP tool `{function_name}` is disabled.")
     alias, orig = pair
+    if alias in _unapproved_published_servers():
+        return failure("mcp_registration_unapproved", f"Error: MCP server `{alias}` registration approval is required.")
     contract = get_tool_contract(function_name)
     call_arguments = dict(arguments or {})
     if require_worktree_isolation:
         if not contract.get("declared") or not contract.get("effect"):
-            return (
+            return failure("mcp_isolation_contract_missing",
                 f"Error: MCP tool `{function_name}` is blocked in a managed worktree "
                 "because it does not declare an effect/resource isolation contract."
             )
         effect = str(contract.get("effect") or "")
         if effect == "workspace_write":
             if not contract.get("worktree_compatible"):
-                return (
+                return failure("mcp_worktree_incompatible",
                     f"Error: MCP tool `{function_name}` declares workspace writes but "
                     "does not declare worktree compatibility."
                 )
             root_argument = str(contract.get("workspace_root_argument") or "")
             if not root_argument:
-                return (
+                return failure("mcp_workspace_argument_missing",
                     f"Error: MCP tool `{function_name}` requires a "
                     "workspace_root_argument for worktree isolation."
                 )
             call_arguments[root_argument] = str(Path(work_dir).resolve())
         elif effect not in {"read", "external_write"}:
-            return (
+            return failure("mcp_unsupported_effect",
                 f"Error: MCP tool `{function_name}` has unsupported effect "
                 f"{effect!r} for worktree isolation."
             )
@@ -1409,26 +1593,28 @@ async def _invoke_tool_by_fname_impl(
                 try:
                     candidate.relative_to(root)
                 except ValueError:
-                    return (
+                    return failure("mcp_path_outside_worktree",
                         f"Error: MCP argument `{argument_name}` escapes the managed "
                         "worktree."
                     )
             call_arguments[argument_name] = str(candidate)
     srv = _servers.get(alias)
     if srv is None:
-        return f"Error: MCP server `{alias}` is not running."
+        return failure("mcp_server_unavailable", f"Error: MCP server `{alias}` is not running.")
     if getattr(srv, "_task", None) is None or srv._task.done():
         try:
             await srv._restart()
         except Exception as e:
-            return f"Error: MCP server `{alias}` reconnect failed: {e}"
+            return failure("mcp_reconnect_error", f"Error: MCP server `{alias}` reconnect failed: {e}")
     t0 = time.perf_counter()
     try:
         raw = await srv.call_tool(orig, call_arguments)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         raw_dump = _serialize_call_tool_result_for_log(raw)
+        is_error = raw.get("isError", False) if isinstance(raw, dict) else getattr(raw, "isError", False)
         logger.info(
-            "MCP call_ok server=%s transport=%s tool=%s fname=%s elapsed_ms=%.2f raw=%s",
+            "MCP call_%s server=%s transport=%s tool=%s fname=%s elapsed_ms=%.2f raw=%s",
+            "tool_error" if is_error else "ok",
             alias,
             getattr(srv, "transport_label", "?"),
             orig,
@@ -1436,7 +1622,12 @@ async def _invoke_tool_by_fname_impl(
             elapsed_ms,
             raw_dump,
         )
-        return format_call_tool_result(raw, image_enabled=image_enabled, model=model)
+        content = format_call_tool_result(raw, image_enabled=image_enabled, model=model)
+        if not return_outcome:
+            return content
+        if is_error:
+            return failure("mcp_tool_error", "MCP server reported isError=true", content=content)
+        return ToolOutcome.completed(content, metadata={"tool_status": {"source": "mcp_protocol"}})
     except Exception as e:
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         logger.warning(
@@ -1447,4 +1638,6 @@ async def _invoke_tool_by_fname_impl(
             elapsed_ms,
             e,
         )
-        return f"MCP tool error ({function_name}): {e}"
+        timed_out = isinstance(e, TimeoutError)
+        return failure("mcp_call_timed_out" if timed_out else "mcp_invocation_error",
+            f"MCP tool error ({function_name}): {e}", timed_out=timed_out)

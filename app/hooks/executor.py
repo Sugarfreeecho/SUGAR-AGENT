@@ -90,7 +90,7 @@ def build_hook_environment(
             "PYTHONUTF8": "1",
             "MYAGENT_PROJECT_ROOT": str(project_root),
             "MYAGENT_HOOK_EVENT": definition.event,
-            "MYAGENT_HOOK_ID": definition.id,
+            "MYAGENT_HOOK_ID": definition.execution_id,
             "MYAGENT_HOOK_SOURCE": definition.source_id,
             "MYAGENT_PLUGIN_ROOT": str(definition.source_root),
             # Compatibility aliases let imported declarative hook packages use

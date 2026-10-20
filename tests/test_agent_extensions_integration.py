@@ -71,9 +71,10 @@ def test_plugin_components_merge_into_host_registries(tmp_path, monkeypatch):
     assert len(loaded.hook_sources) == 1
 
     discovered = {item["name"]: item for item in agent_tools.discover_skills()}
-    assert discovered["demo.bundle:review"]["source"] == "plugin"
-    assert discovered["demo.bundle:reviewer"]["source"] == "plugin_agent"
-    assert discovered["demo.bundle:finish"]["source"] == "plugin_prompt"
+    assert discovered["review"]["source"] == "plugin"
+    assert discovered["reviewer"]["source"] == "plugin_agent"
+    assert discovered["finish"]["source"] == "plugin_prompt"
+    assert "Review as an agent" in agent_tools.activate_skill("reviewer")
     assert "Review as an agent" in agent_tools.activate_skill("demo.bundle:reviewer")
 
     servers, error = agent_mcp._load_servers_dict_from_config()

@@ -15,6 +15,7 @@ from .models import (
     HookLoadResult,
     HookSource,
 )
+from .naming import name_hook_definitions
 
 
 SourceLike = Union[HookSource, str, Path, Mapping[str, Any]]
@@ -226,13 +227,15 @@ def _parse_document(source: HookSource, document: Mapping[str, Any], order_start
                     raise HookConfigurationError("priority must be an integer.") from exc
                 hook_id = str(
                     raw_handler.get("id")
-                    or f"{source.source_id}:{event}:{group_index}:{handler_index}"
+                    or f"{event}:{group_index}:{handler_index}"
                 ).strip()
                 if not hook_id:
                     raise HookConfigurationError("Hook id cannot be empty.")
                 definitions.append(
                     HookDefinition(
                         id=hook_id,
+                        local_id=hook_id,
+                        source_hook_id=str(raw_handler.get("id") or f"{source.source_id}:{event}:{group_index}:{handler_index}").strip(),
                         event=event,
                         command=_parse_command(raw_handler, inherited),
                         matcher=matcher,
@@ -293,7 +296,7 @@ def load_hook_sources(
                 raise
             errors.append(str(exc))
     definitions.sort(key=lambda item: (item.priority, item.order, item.source_id, item.id))
-    return HookLoadResult(tuple(definitions), tuple(errors), tuple(loaded))
+    return HookLoadResult(name_hook_definitions(definitions), tuple(errors), tuple(loaded))
 
 
 def load_hook_definitions(
