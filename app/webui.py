@@ -8849,7 +8849,7 @@ _ENV_HINTS: dict[str, str] = {
     "RUN_SHELL_USE_BASH": "Windows 下是否优先用 Git Bash 执行 shell（0=跳过 Git Bash，使用 PowerShell）。",
     "RUN_CLI_BASH_LOGIN": "是否使用 bash -l 登录 shell；默认 0 以减少每次命令的启动开销。",
     "RUN_SHELL_BASH": "bash.exe 路径（可选）。",
-    "MAX_REACT_ITER": "ReAct 主循环最大迭代轮数。",
+    "MAX_REACT_ITER": "ReAct 主循环最大迭代轮数；0 或不限表示不设上限（默认不限）。",
     "VERBOSE_LOGGING": "是否输出更详细的运行日志。",
     "TODO_MAX_ITEMS": "Todo 列表展示/跟踪条数上限。",
     "MAX_PARALLEL_TOOLS": "允许的并行工具调用数量上限。",

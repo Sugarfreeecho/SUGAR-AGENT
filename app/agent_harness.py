@@ -316,9 +316,25 @@ def resolve_prompt_md_path() -> Path:
 AGENT_DEFAULT_WRITE_FILENAME = os.getenv("AGENT_DEFAULT_WRITE_FILENAME", "output.txt")
 SKILLS_DIR = _env_path("SKILLS_DIR", WORK_DIR / "skills")
 LOG_DIR = _env_path("LOG_DIR", PROJECT_ROOT / "logs")
-MAX_REACT_ITER = int(os.getenv("MAX_REACT_ITER", "200"))
+# ReAct 轮次上限的「不限」哨兵值：0/负数配置会解析成它。
+# 用有限大整数而非 inf，保证 int() 转换、metadata JSON 落盘与 iter_offset 叠加都安全。
+REACT_ITER_UNLIMITED = 1_000_000_000
+
+
+def _react_iter_limit(name: str, default: str = "0") -> int:
+    """读取 ReAct 轮次上限；0 或负数表示不设上限，返回 REACT_ITER_UNLIMITED。"""
+    raw = os.getenv(name)
+    text = str(raw).strip() if raw is not None else ""
+    try:
+        value = int(text) if text else int(default)
+    except (TypeError, ValueError):
+        value = int(default)
+    return value if value > 0 else REACT_ITER_UNLIMITED
+
+
+MAX_REACT_ITER = _react_iter_limit("MAX_REACT_ITER")
 SUBAGENT_MAX_DEPTH = max(1, int(os.getenv("SUBAGENT_MAX_DEPTH", "1")))
-SUBAGENT_MAX_REACT_ITER = max(1, int(os.getenv("SUBAGENT_MAX_REACT_ITER", "200")))
+SUBAGENT_MAX_REACT_ITER = _react_iter_limit("SUBAGENT_MAX_REACT_ITER")
 SUBAGENT_BEST_OF_N = max(2, min(8, int(os.getenv("SUBAGENT_BEST_OF_N", "3"))))
 SUBAGENT_INDEX_FILE = "subagent_index.json"
 SUBAGENT_PENDING_RESULTS_FILE = "pending_subagent_results.json"
@@ -2660,8 +2676,8 @@ def refresh_executor_client_from_env() -> None:
     CONTEXT_KEEP_RECENT_TURNS = _context_env_int("CONTEXT_KEEP_RECENT_TURNS", "3")
     TOOL_RESULT_TRUNCATE_KEEP_CHARS = _tool_result_truncate_keep_chars_from_env()
     LLM_CONTEXT_TRUNCATE_KEEP_CHARS = TOOL_RESULT_TRUNCATE_KEEP_CHARS
-    MAX_REACT_ITER = int(os.getenv("MAX_REACT_ITER", "200"))
-    SUBAGENT_MAX_REACT_ITER = max(1, int(os.getenv("SUBAGENT_MAX_REACT_ITER", "200")))
+    MAX_REACT_ITER = _react_iter_limit("MAX_REACT_ITER")
+    SUBAGENT_MAX_REACT_ITER = _react_iter_limit("SUBAGENT_MAX_REACT_ITER")
     _failure_cap_raw = os.getenv("CONTEXT_COMPRESS_FAILURE_MAX_TOKENS")
     CONTEXT_COMPRESS_FAILURE_MAX_TOKENS = (
         int(_failure_cap_raw)
