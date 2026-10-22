@@ -19,7 +19,7 @@ import time
 import uuid
 import zipfile
 import stat
-from collections import Counter
+from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -30,8 +30,14 @@ from typing import Any, Dict, Iterable, List, Optional
 
 MAX_DIFF_BYTES = 1024 * 1024
 MAX_DIFF_LINES = 20_000
-STORE_VERSION = 1
+INLINE_DIFF_BYTES = 512
+STORE_VERSION = 2
 REVIEW_DIR_NAME = "change_reviews"
+
+
+def _runtime_output(path: Path | str) -> bool:
+    from agent_tools import WORK_DIR
+    return Path(path).resolve().is_relative_to(WORK_DIR.resolve() / "TempOutput")
 
 
 class _ReviewOpcodes(difflib.SequenceMatcher):
@@ -144,6 +150,7 @@ class ChangeConflictError(ChangeReviewError):
 @dataclass(frozen=True)
 class Capture:
     capture_id: str
+    coverage: str = 'declared_paths'
 
 
 _locks_guard = threading.Lock()
@@ -151,6 +158,33 @@ _locks: Dict[str, threading.RLock] = {}
 # Metadata/state only, never retain a workspace's file contents in memory.
 # Access is serialized by the corresponding session store lock.
 _workspace_scans: dict[tuple[str, str], dict[str, dict]] = {}
+_baseline_manifests: OrderedDict = OrderedDict()
+
+
+@lru_cache(maxsize=1)
+def _process_owner() -> dict:
+    # A PID alone is unsafe after process reuse. Unknown identity stays unknown;
+    # recovery must then rely on an explicit execution lifecycle decision.
+    try:
+        import psutil
+        return {"pid": os.getpid(), "started_at": psutil.Process().create_time()}
+    except (ImportError, OSError):
+        return {}
+
+
+def _owner_alive(owner: dict) -> Optional[bool]:
+    if not owner.get("pid") or not owner.get("started_at"):
+        return None
+    try:
+        import psutil
+        return psutil.Process(int(owner["pid"])).create_time() == owner["started_at"]
+    except ImportError:
+        return None
+    except Exception as exc:
+        # AccessDenied must not be interpreted as an abandoned capture.
+        if type(exc).__name__ in {"NoSuchProcess", "ZombieProcess"}:
+            return False
+        return None
 
 
 def _setting(name: str, default: int, maximum: int) -> int:
@@ -358,6 +392,7 @@ class FileChangeReviewStore:
         self.blob_dir = self.root / "blobs"
         self.lock = _store_lock(self.root)
         self.timings: dict[str, Any] = {}
+        self._diff_cache: dict[str, str] = {}
 
     @contextmanager
     def _measure(self, stage: str):
@@ -403,20 +438,124 @@ class FileChangeReviewStore:
 
     def _load(self) -> dict:
         with self._measure('index_read_ms'):
-            return self._load_index()
+            # Migration is lazy, per session, and shares the ordinary writer
+            # lock. Blob commits precede the atomic index/version commit.
+            with self.lock:
+                return self._load_index()
 
     def _load_index(self) -> dict:
-        if not self.index_path.is_file():
-            return self._empty()
         try:
             data = json.loads(self.index_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return self._empty()
         except Exception as exc:
             raise SnapshotGoneError("change review metadata is unreadable") from exc
-        if not isinstance(data, dict) or int(data.get("version") or 0) != STORE_VERSION:
+        if not isinstance(data, dict) or data.get("version") not in (1, STORE_VERSION):
             raise SnapshotGoneError("change review metadata has an unsupported version")
         for key in ("pending", "records", "active", "groups", "operations", "baselines", "temporaries", "deferred_sweeps", "review_events"):
             data.setdefault(key, {})
+        if data["version"] == 1:
+            self._migrate_index(data)
+            self._save(data)
         return data
+
+    def _compact_change(self, record: dict) -> dict:
+        compact = dict(record)
+        if "diff" in compact:
+            value = compact['diff']
+            # Tiny diffs are bounded metadata: externalizing a one-line edit
+            # adds a durable file/fsync and regresses otherwise small sessions.
+            if value is None or len(value.encode('utf-8')) <= INLINE_DIFF_BYTES:
+                compact.pop('diff_blob', None)
+                compact.pop('diff_empty', None)
+                return compact
+            compact.pop('diff')
+            compact["diff_blob"] = self._put_blob(value.encode("utf-8")) if value else None
+            compact["diff_empty"] = value == ""
+            if value:
+                if len(self._diff_cache) >= 16:
+                    self._diff_cache.clear()
+                self._diff_cache[compact["diff_blob"]] = value
+        return compact
+
+    def _diff_text(self, record: dict) -> Optional[str]:
+        if "diff" in record:  # Legacy public payloads remain readable.
+            return record["diff"]
+        digest = record.get("diff_blob")
+        if digest:
+            value = self._diff_cache.get(digest)
+            if value is None:
+                value = self._get_blob(digest).decode("utf-8")
+            return value
+        return "" if record.get("diff_empty") else None
+
+    def _compact_result(self, result: dict) -> dict:
+        return dict(result, changes=[self._compact_change(row) for row in result.get("changes") or []])
+
+    def _public_result(self, result: dict) -> dict:
+        changes = []
+        for row in result.get('changes') or []:
+            public = dict(row, diff=self._diff_text(row))
+            public.pop('diff_blob', None)
+            public.pop('diff_empty', None)
+            changes.append(public)
+        return dict(result, changes=changes)
+
+    def _remember_manifest(self, digest: str, entries: dict) -> None:
+        with _locks_guard:
+            key = (str(self.root), digest)
+            _baseline_manifests[key] = entries
+            _baseline_manifests.move_to_end(key)
+            while len(_baseline_manifests) > 8:
+                _baseline_manifests.popitem(last=False)
+
+    def _externalize_baseline(self, baseline: dict) -> None:
+        entries = baseline.get("entries")
+        if isinstance(entries, dict):
+            digest = self._put_blob(json.dumps(entries, ensure_ascii=False,
+                                               separators=(",", ":")).encode("utf-8"))
+            baseline["entries_blob"] = digest
+            baseline.pop("entries", None)
+            self._remember_manifest(digest, entries)
+
+    def _baseline_entries(self, baseline: Optional[dict]) -> dict:
+        if not baseline:
+            return {}
+        if "entries" in baseline:
+            return baseline["entries"] or {}
+        digest = baseline.get("entries_blob") or baseline.get('entries_sha256')
+        if not digest:
+            raise SnapshotGoneError("workspace baseline manifest is missing")
+        with _locks_guard:
+            entries = _baseline_manifests.get((str(self.root), digest))
+        if entries is None:
+            try:
+                if baseline.get('entries_archive'):
+                    with zipfile.ZipFile(self._baseline_archive_path(baseline['baseline_id'])) as archive:
+                        content = archive.read(baseline['entries_archive'])
+                    if _sha256(content) != digest:
+                        raise SnapshotGoneError('workspace baseline manifest checksum mismatch')
+                else:
+                    content = self._get_blob(digest)
+                entries = json.loads(content)
+            except (OSError, KeyError, zipfile.BadZipFile, ValueError, UnicodeError) as exc:
+                raise SnapshotGoneError("workspace baseline manifest is damaged") from exc
+            if not isinstance(entries, dict):
+                raise SnapshotGoneError("workspace baseline manifest is damaged")
+            self._remember_manifest(digest, entries)
+        return entries
+
+    def _migrate_index(self, index: dict) -> None:
+        for snapshot_id, record in index["records"].items():
+            index["records"][snapshot_id] = self._compact_change(record)
+        for baseline in index["baselines"].values():
+            self._externalize_baseline(baseline)
+        for operation in index["operations"].values():
+            if isinstance(operation.get("result"), dict):
+                operation["result"] = self._compact_result(operation["result"])
+        for key, event in index["review_events"].items():
+            index["review_events"][key] = self._compact_result(event)
+        index["version"] = STORE_VERSION
 
     def _save(self, data: dict) -> None:
         with self._measure('index_write_ms'):
@@ -523,7 +662,7 @@ class FileChangeReviewStore:
             operations = _parse_apply_patch(str(args.get("patch") or ""))
             return [
                 {"path": safe_work_path(str(item["path"])), "requested_operation": item["kind"]}
-                for item in operations
+                for item in operations if not _runtime_output(safe_work_path(str(item["path"])))
             ], None
         raw = args.get("path") or args.get("target_directory") or args.get("file_path")
         if name == "write_file" and not raw:
@@ -531,6 +670,12 @@ class FileChangeReviewStore:
         if not raw:
             return [], None
         path = safe_work_path(str(raw))
+        if name == "write_file" and args.get("temporary"):
+            from agent_tools import WORK_DIR
+            from runtime_files import current_run
+            path = current_run(WORK_DIR).temporary_path(str(raw))
+        if _runtime_output(path):
+            return [], None
         if name == "delete_file" and path.is_dir() and not path.is_symlink():
             files: List[dict] = []
             dirs: List[str] = []
@@ -572,8 +717,8 @@ class FileChangeReviewStore:
                 # 缺这个标志时 Windows 会为 git 新建一个可见控制台窗口。
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-        except (OSError, subprocess.SubprocessError, ValueError):
-            return None
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            raise ChangeReviewError('workspace inventory failed') from exc
 
         paths: List[Path] = []
         seen: set[str] = set()
@@ -582,6 +727,8 @@ class FileChangeReviewStore:
                 continue
             relative = raw.decode("utf-8", errors="surrogateescape")
             path = work_root / relative
+            if _runtime_output(path):
+                continue
             try:
                 path.relative_to(work_root)
             except ValueError:
@@ -600,12 +747,20 @@ class FileChangeReviewStore:
         if not baseline_id:
             return
         _workspace_scans.pop((str(self.root), baseline_id), None)
+        with _locks_guard:
+            digest = baseline.get('entries_blob') or baseline.get('entries_sha256')
+            _baseline_manifests.pop((str(self.root), digest), None)
         try:
             self._baseline_archive_path(baseline_id).unlink()
         except FileNotFoundError:
             pass
         except OSError:
             pass
+
+    @staticmethod
+    def _baseline_in_use(index: dict, key: str) -> bool:
+        return key in index['deferred_sweeps'] or any(
+            item.get('baseline_key') == key for item in index['pending'].values())
 
     def _ensure_workspace_baseline(
         self,
@@ -632,7 +787,7 @@ class FileChangeReviewStore:
         # its baseline, older full-workspace archives are no longer needed;
         # changed files have already been promoted into durable content blobs.
         for key, baseline in list(index["baselines"].items()):
-            if key != baseline_key and key not in index['deferred_sweeps'] and isinstance(baseline, dict):
+            if key != baseline_key and not self._baseline_in_use(index, key) and isinstance(baseline, dict):
                 self._remove_baseline(baseline)
                 index["baselines"].pop(key, None)
 
@@ -677,6 +832,10 @@ class FileChangeReviewStore:
                         "signature": signature,
                         "archive_name": archive_name,
                     }
+                # Reuse the checkpoint's existing atomic commit. A separate
+                # manifest file/fsync would regress small first-tool captures.
+                manifest = json.dumps(entries, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                archive.writestr('__manifest__.json', manifest)
             os.replace(tmp_name, target)
         finally:
             try:
@@ -689,8 +848,10 @@ class FileChangeReviewStore:
             "baseline_key": baseline_key,
             "run_id": str(run_id or ""),
             "work_root": str(work_root),
-            "entries": entries,
+            "entries_archive": '__manifest__.json',
+            "entries_sha256": _sha256(manifest),
         }
+        self._remember_manifest(baseline['entries_sha256'], entries)
         index["baselines"][baseline_key] = baseline
         _workspace_scans[(str(self.root), baseline_id)] = entries
         return baseline
@@ -730,7 +891,9 @@ class FileChangeReviewStore:
         entries: Dict[str, dict] = {}
         contents: Dict[str, bytes] = {}
         cache_key = (str(self.root), str((baseline or {}).get("baseline_id") or ""))
-        previous = _workspace_scans.get(cache_key, (baseline or {}).get("entries") or {})
+        previous = _workspace_scans.get(cache_key)
+        if previous is None:
+            previous = self._baseline_entries(baseline)
         workers = max(1, _setting('MYAGENT_CHANGE_REVIEW_SIGNATURE_WORKERS', 1, 8))
         threshold = _setting('MYAGENT_CHANGE_REVIEW_SIGNATURE_PARALLEL_MIN_FILES', 1024, 10_000_000)
         workers = workers if len(inventory) >= threshold else 1
@@ -859,9 +1022,11 @@ class FileChangeReviewStore:
                 "group_id": group_id,
                 "baseline_key": baseline.get("baseline_key") if baseline else None,
                 "work_root": str(root),
+                "created_at": time.time(),
+                "owner": _process_owner(),
             }
             self._save(index)
-        return Capture(capture_id)
+        return Capture(capture_id, 'workspace' if baseline else 'declared_paths')
 
     def _diff(self, path: str, before_data: bytes, after_data: bytes) -> dict:
         with self._measure('diff_ms'):
@@ -961,6 +1126,7 @@ class FileChangeReviewStore:
                 "before": entry["before"],
                 "before_blob": entry.get("before_blob"),
                 "revision": 0,
+                "created_at": pending.get('created_at'),
                 "reverted": False,
                 "group_id": entry.get("group_id"),
             }
@@ -1013,6 +1179,8 @@ class FileChangeReviewStore:
             })
         else:
             record.update(self._diff(record["path"], record_before_data or b"", after_data or b""))
+        record = self._compact_change(record)
+        index["records"][snapshot_id] = record
         record["effective"] = effective
         if not effective:
             record["neutralized"] = True
@@ -1025,13 +1193,14 @@ class FileChangeReviewStore:
         output: List[dict] = []
         baseline = index["baselines"].get(str(pending.get("baseline_key") or ""))
         work_root = Path(pending.get("work_root") or ".").resolve()
+        # Reject a damaged checkpoint before an expensive workspace scan.
+        baseline_entries = self._baseline_entries(baseline)
         current = (
             self._workspace_entries(work_root, baseline)
             if isinstance(baseline, dict) else None
         )
         if isinstance(baseline, dict) and current is not None:
             current_entries, current_contents = current
-            baseline_entries = baseline.get("entries") or {}
             run_prefix = str(pending.get("run_id") or "") + "\0"
             active_entries: Dict[str, dict] = {}
             for active_key, snapshot_id in index["active"].items():
@@ -1044,6 +1213,8 @@ class FileChangeReviewStore:
             for path_key in sorted(
                 set(baseline_entries) | set(current_entries) | set(active_entries)
             ):
+                if _runtime_output(str(path_key).replace("\\", "/")):
+                    continue
                 if str(path_key) in temporary_paths:
                     # A shadowed path stays invisible to the workspace sweep
                     # (creation, modification and deletion alike) until a
@@ -1127,7 +1298,7 @@ class FileChangeReviewStore:
         return output
 
     def finish_capture(self, capture: Optional[Capture], *, successful: bool = True,
-                       defer_workspace_sweep: bool = False) -> List[dict]:
+                       defer_workspace_sweep: bool = False, recovered: bool = False) -> List[dict]:
         """Promote the execution process's cumulative, byte-accurate changes."""
         self.timings = {}
         if capture is None:
@@ -1158,9 +1329,14 @@ class FileChangeReviewStore:
                     entry["before_blob"] = shadowed.get("before_blob")
                     index["temporaries"].pop(str(entry.get("path_key") or ""), None)
                 authoritative = False
+                if recovered and pending.get('created_at'):
+                    active_key = str(pending.get('run_id') or '') + '\0' + str(entry['path_key'])
+                    active = index['records'].get(index['active'].get(active_key)) or {}
+                    authoritative = bool(active.get('created_at') and
+                                         active['created_at'] > pending['created_at'])
                 if defer_workspace_sweep and shadowed is None:
                     baseline = index['baselines'].get(str(pending.get('baseline_key') or '')) or {}
-                    origin = (baseline.get('entries') or {}).get(entry['path_key'])
+                    origin = self._baseline_entries(baseline).get(entry['path_key'])
                     if origin is not None:
                         # Immediate declared rows must already carry the same
                         # turn origin that the deferred workspace sweep uses.
@@ -1194,20 +1370,39 @@ class FileChangeReviewStore:
                 if key not in latest:
                     order.append(key)
                 latest[key] = row
+            changes = [latest[key] for key in order]
+            if recovered:
+                event_id = uuid.uuid4().hex
+                covered = bool(pending.get('entries') or baseline_key in index['baselines'])
+                index['review_events'][event_id] = self._compact_result({
+                    **dict(pending.get('execution_scope') or {}),
+                    'type': 'file_changes_updated', 'operation_id': event_id,
+                    'tool_call_id': str(pending.get('tool_call_id') or ''),
+                    'turn_id': str(pending.get('run_id') or ''), 'changes': changes,
+                    'change_review_status': {
+                        'session_id': self.session_dir.name,
+                        'run_id': str((pending.get('execution_scope') or {}).get('run_id') or ''),
+                        'turn_id': str(pending.get('run_id') or ''),
+                        'tool_call_id': str(pending.get('tool_call_id') or ''),
+                        'stage': 'recovery', 'status': 'checked' if covered else 'failed',
+                        'coverage': 'workspace' if baseline_key in index['baselines'] else 'declared_paths',
+                        'reason': '' if covered else '旧执行已结束，但事前快照缺失，无法恢复改动记录',
+                        'at': time.time(),
+                    },
+                })
             self._save(index)
             # Superseded blobs are reclaimed at run completion/undo/prune,
             # not by scanning the blob directory after every tool invocation.
-            return [latest[key] for key in order]
+            return changes
 
-    @staticmethod
-    def public_record(record: dict) -> dict:
+    def public_record(self, record: dict) -> dict:
         return {
             "path": record.get("path") or "",
             "operation": record.get("operation") or "modify",
             "snapshot_id": record.get("snapshot_id") or "",
             "turn_id": record.get("run_id") or "",
             "revision": int(record.get("revision") or 0),
-            "diff": record.get("diff"),
+            "diff": self._diff_text(record),
             "added": record.get("added"),
             "removed": record.get("removed"),
             "before": dict(record.get("before") or {}),
@@ -1234,19 +1429,53 @@ class FileChangeReviewStore:
                 changes = self._sweep_workspace(index, pending)
                 if changes:
                     event_id = uuid.uuid4().hex
-                    index['review_events'][event_id] = {
+                    index['review_events'][event_id] = self._compact_result({
                         **dict(pending.get('execution_scope') or {}),
                         'type': 'file_changes_updated',
                         'operation_id': event_id,
                         'tool_call_id': str(pending.get('tool_call_id') or ''),
                         'turn_id': str(pending.get('run_id') or ''),
                         'changes': changes,
-                    }
+                    })
                 index['deferred_sweeps'].pop(key, None)
-            events = list(index['review_events'].values())
+            events = [self._public_result(event) for event in index['review_events'].values()]
             if dirty:
                 self._save(index)
             return events
+
+    def recover_pending(self, *, current_run_id: str, current_turn_id: str,
+                        execution_active=None, completed_capture_ids=()) -> int:
+        """Finish only captures whose executor is confirmed gone, never by age.
+
+        A foreign live/unknown process is protected. Legacy captures are only
+        retired at a superseding official turn with a negative lifecycle check.
+        Recovered rows and diagnostic failures enter the same durable outbox as
+        deferred sweeps before pending metadata is removed.
+        """
+        with self.lock:
+            if not self.index_path.is_file():
+                return 0
+            index = self._load()
+            completed = set(completed_capture_ids)
+            recovered = 0
+            for capture_id, pending in list(index['pending'].items()):
+                execution = str((pending.get('execution_scope') or {}).get('run_id') or '')
+                owner = pending.get('owner') or {}
+                alive = _owner_alive(owner)
+                own_process = owner == _process_owner() and bool(owner)
+                tool_finished = own_process and capture_id in completed
+                if execution and execution == current_run_id and alive is not False and not tool_finished:
+                    continue
+                inactive = None
+                if execution_active is not None:
+                    inactive = execution_active(execution or str(pending.get('run_id') or '')) is False
+                legacy_superseded = not owner and str(pending.get('run_id') or '') != current_turn_id
+                abandoned = tool_finished or alive is False or (inactive is True and (own_process or legacy_superseded))
+                if not abandoned:
+                    continue
+                self.finish_capture(Capture(capture_id), successful=False, recovered=True)
+                recovered += 1
+            return recovered
 
     def acknowledge_review_event(self, operation_id: str) -> None:
         with self.lock:
@@ -1281,7 +1510,7 @@ class FileChangeReviewStore:
             if isinstance(cached, dict):
                 if cached.get("snapshot_ids") != ids:
                     raise InvalidSnapshotError("operation_id was already used for another request")
-                replay = dict(cached.get("result") or {})
+                replay = self._public_result(cached.get("result") or {})
                 replay["idempotent_replay"] = True
                 return replay
             records: List[dict] = []
@@ -1300,6 +1529,7 @@ class FileChangeReviewStore:
             if conflicts:
                 raise ChangeConflictError("one or more files were modified again", paths=conflicts)
             # Ensure every required blob is valid before touching the filesystem.
+            public_before = {record['snapshot_id']: self.public_record(record) for record in records}
             for record in records:
                 if (record.get("before") or {}).get("exists") and str((record.get("before") or {}).get("kind") or "file") == "file":
                     self._get_blob(record.get("before_blob"))
@@ -1328,11 +1558,11 @@ class FileChangeReviewStore:
                 record["reverted"] = True
                 record["effective"] = False
                 index["active"].pop(str(record.get("run_id") or "") + "\0" + str(record.get("path_key") or ""), None)
-                public.append(self.public_record(record))
+                public.append(dict(public_before[record['snapshot_id']], reverted=True, effective=False))
             result = {"ok": True, "operation_id": operation_id, "snapshot_ids": ids, "changes": public}
             index["operations"][operation_id] = {
                 "snapshot_ids": ids,
-                "result": result,
+                "result": self._compact_result(result),
                 "phase": "restored",
             }
             self._save(index)
@@ -1396,7 +1626,7 @@ class FileChangeReviewStore:
             if isinstance(cached, dict):
                 if cached.get("snapshot_ids") != ids:
                     raise InvalidSnapshotError("operation_id was already used for another request")
-                replay = dict(cached.get("result") or {})
+                replay = self._public_result(cached.get("result") or {})
                 replay["idempotent_replay"] = True
                 return replay
             records: List[dict] = []
@@ -1415,6 +1645,7 @@ class FileChangeReviewStore:
             if conflicts:
                 raise ChangeConflictError("one or more files were modified again", paths=conflicts)
             # Ensure every required blob is valid before touching the filesystem.
+            public_before = {record['snapshot_id']: self.public_record(record) for record in records}
             for record in records:
                 if (record.get("before") or {}).get("exists") and str((record.get("before") or {}).get("kind") or "file") == "file":
                     self._get_blob(record.get("before_blob"))
@@ -1452,11 +1683,11 @@ class FileChangeReviewStore:
                 record["effective"] = True
                 active_key = str(record.get("run_id") or "") + "\0" + str(record.get("path_key") or "")
                 index["active"][active_key] = record["snapshot_id"]
-                public.append(self.public_record(record))
+                public.append(dict(public_before[record['snapshot_id']], reverted=False, effective=True))
             result = {"ok": True, "operation_id": operation_id, "snapshot_ids": ids, "changes": public}
             index["operations"][journal_key] = {
                 "snapshot_ids": ids,
-                "result": result,
+                "result": self._compact_result(result),
                 "phase": "restored",
             }
             self._save(index)
@@ -1546,7 +1777,7 @@ class FileChangeReviewStore:
             index = self._load()
             changed = False
             for key, baseline in list(index["baselines"].items()):
-                if key not in index['deferred_sweeps'] and isinstance(baseline, dict) and str(baseline.get("run_id") or "") == wanted:
+                if not self._baseline_in_use(index, key) and isinstance(baseline, dict) and str(baseline.get("run_id") or "") == wanted:
                     self._remove_baseline(baseline)
                     index["baselines"].pop(key, None)
                     changed = True
@@ -1563,7 +1794,7 @@ class FileChangeReviewStore:
             index = self._load()
             changed = False
             for key, baseline in list(index["baselines"].items()):
-                if key in index['deferred_sweeps'] or not isinstance(baseline, dict) or str(baseline.get("run_id") or "") == keep:
+                if self._baseline_in_use(index, key) or not isinstance(baseline, dict) or str(baseline.get("run_id") or "") == keep:
                     continue
                 self._remove_baseline(baseline)
                 index["baselines"].pop(key, None)
@@ -1594,7 +1825,7 @@ class FileChangeReviewStore:
                 if not cloned.get("reverted"):
                     active_key = str(cloned.get("run_id") or "") + "\0" + str(cloned.get("path_key") or "")
                     target_index["active"][active_key] = snapshot_id
-                for blob_key in ("before_blob", "after_blob"):
+                for blob_key in ("before_blob", "after_blob", "diff_blob"):
                     digest = cloned.get(blob_key)
                     if digest:
                         target._put_blob(self._get_blob(digest))
@@ -1620,6 +1851,17 @@ class FileChangeReviewStore:
             return
         index = index or self._load()
         keep: set[str] = set()
+        for baseline in index.get('baselines', {}).values():
+            if baseline.get('entries_blob'):
+                keep.add(baseline['entries_blob'])
+        # An outbox/operation can retain an older revision after records moved
+        # on. Its diff must remain replayable until delivery/history retires it.
+        results = list(index.get('review_events', {}).values())
+        results.extend(item.get('result') or {} for item in index.get('operations', {}).values())
+        for result in results:
+            for row in result.get('changes') or []:
+                if row.get('diff_blob'):
+                    keep.add(row['diff_blob'])
         for pending in list(index.get('pending', {}).values()) + list(index.get('deferred_sweeps', {}).values()):
             for entry in pending.get("entries") or []:
                 if entry.get("before_blob"):
@@ -1634,7 +1876,7 @@ class FileChangeReviewStore:
             # net-zero) can never be undone again, so their bytes are freed.
             if record.get("dropped") or record.get("neutralized"):
                 continue
-            for key in ("before_blob", "after_blob"):
+            for key in ("before_blob", "after_blob", "diff_blob"):
                 if record.get(key):
                     keep.add(record[key])
         for path in self.blob_dir.glob("*.gz"):

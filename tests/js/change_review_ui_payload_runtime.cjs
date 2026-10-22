@@ -93,6 +93,20 @@ async function main() {
   const plain = rows[rows.length - 1]._toolCallEvent;
   assert(plain && !plain.ui, 'no ui payload is invented for ordinary tool results');
 
+  // 4. Diagnostics survive even when no change row exists (capture failure).
+  const status = {session_id:'s', run_id:'run-1', turn_id:'turn-1',
+    tool_call_id:'failed-call', stage:'before', status:'failed', reason:'probe', at:1};
+  c.renderExecutionEvent(ctx, {type:'tool_call', execution_id:'exec-4', process_group_id:'turn:1',
+    tool_call_id:'failed-call', tool:'run_shell', args:{}, result:'ok',
+    execution_status:'completed', execution_runtime_seq:12, run_id:'run-1', react_iter:5,
+    ui:{change_review_status:status}}, 's');
+  assert.equal(rows[rows.length - 1]._toolCallEvent.ui.change_review_status.reason, 'probe');
+  c.renderExecutionRecord(ctx, {execution_id:'exec-5', kind:'tool', process_group_id:'turn:1',
+    tool_call_id:'failed-live', tool:'write_file', args:{}, result:'ok', status:'completed',
+    ui_committed:true, last_runtime_seq:13, run_id:'run-1', react_iter:6,
+    ui:{change_review_status:{...status, tool_call_id:'failed-live'}}}, 's');
+  assert.equal(rows[rows.length - 1]._toolCallEvent.ui.change_review_status.tool_call_id, 'failed-live');
+
   console.log('change review ui payload runtime checks passed');
 }
 

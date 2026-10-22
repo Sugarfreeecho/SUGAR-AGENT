@@ -15,7 +15,68 @@ let viewportFrame = null;
 let mountedSessionId = '';
 const aggregateOwners = new WeakMap();
 const workspaceReviewUpdates = new Map();
+const reviewStatuses = new Map();
+const reviewStatusesByTurn = new Map();
+let currentReviewState = { state: 'unloaded' };
+let currentViewedTurnKey = '';
+let renderedTurnKey = '';
 let clippingAncestors = new WeakMap();
+
+export function reviewStatusKey(status) {
+    return [status.session_id || '', status.run_id || '', status.tool_call_id || '',
+        status.stage === 'batch_flush' ? 'batch_flush' : 'tool'].join('\u0000');
+}
+export function acceptReviewStatus(previous, incoming) {
+    return !previous || Number(incoming.at || 0) >= Number(previous.at || 0);
+}
+export function reviewStatusState(statuses) {
+    const rows = Array.from(statuses || []);
+    const failure = rows.find(status => status.status === 'failed');
+    if (failure) return { state: 'failed', reason: String(failure.reason || '') };
+    if (rows.some(status => status.coverage === 'unavailable')) return { state: 'unavailable' };
+    if (rows.some(status => status.coverage === 'declared_paths')) return { state: 'partial' };
+    return { state: rows.length ? 'checked' : 'unloaded' };
+}
+function rememberReviewStatus(status, detail) {
+    if (!status || !['checked', 'failed'].includes(status.status)) return false;
+    const key = reviewStatusKey(status);
+    const previous = reviewStatuses.get(key);
+    if (!acceptReviewStatus(previous && previous.status, status)) return false;
+    const aggregate = detail && detail.aggregate;
+    let uiTurnKey = aggregate ? inferredAggregateTurnId(aggregate) : (previous && previous.uiTurnKey) || '';
+    if (!uiTurnKey) {
+        const stream = document.getElementById('chat-stream');
+        const users = stream ? stream.querySelectorAll('.msg-wrap--user[data-event-index]') : [];
+        const eventIndex = detail && detail.eventIndex;
+        users.forEach(function (user) {
+            const index = String(user.getAttribute('data-event-index') || '');
+            if (eventIndex == null || Number(index) <= Number(eventIndex)) uiTurnKey = index;
+        });
+    }
+    if (previous && previous.uiTurnKey !== uiTurnKey) {
+        reviewStatusesByTurn.get(previous.uiTurnKey)?.delete(key);
+    }
+    if (!reviewStatusesByTurn.has(uiTurnKey)) reviewStatusesByTurn.set(uiTurnKey, new Map());
+    reviewStatusesByTurn.get(uiTurnKey).set(key, status);
+    reviewStatuses.set(key, { status, uiTurnKey });
+    return true;
+}
+function statusForViewedTurn() {
+    const range = viewedTurnRange();
+    const key = range ? range.key : latestRootTurnId();
+    renderedTurnKey = key;
+    return reviewStatusState(reviewStatusesByTurn.get(key)?.values() || []);
+}
+function reviewStateText(state) {
+    if (state.state === 'failed') return t('改动审查未记录：', 'Change review failed: ') + state.reason;
+    if (state.state === 'unavailable') return t('当前目录未纳入审查范围，无法判断是否有改动', 'This directory is outside review coverage; changes are unknown');
+    if (state.state === 'partial') return t('仅检查声明路径；Shell 等外部改动可能未记录', 'Declared paths checked; shell and external changes may be unrecorded');
+    if (state.state === 'checked') return t('审查范围内暂无改动', 'No changes within review coverage');
+    return t('本轮尚未检查文件改动', 'File changes have not been checked for this turn');
+}
+function reviewStateHtml(state) {
+    return reviewStateText(state).replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
+}
 
 function zh() {
     return String(document.documentElement.lang || 'zh').toLowerCase().startsWith('zh');
@@ -287,6 +348,7 @@ function viewportAggregate() {
     const latest = latestTurnRange(stream, users);
     const latestKey = latest ? String(latest.start.getAttribute('data-event-index') || '') : '';
     const reviewedKey = pickReviewedTurnKey(viewed && viewed.key, latestKey);
+    currentViewedTurnKey = reviewedKey;
     const candidates = [];
     const metrics = [];
     aggregateChanges.forEach(function (_rows, aggregate) {
@@ -311,7 +373,7 @@ function viewportAggregate() {
 }
 function syncActiveAggregateToViewport(options) {
     const next = viewportAggregate();
-    const changed = next !== activeAggregate;
+    const changed = next !== activeAggregate || currentViewedTurnKey !== renderedTurnKey;
     activeAggregate = next;
     if (changed && !(options && options.deferRender)) scheduleRender();
     return changed;
@@ -570,12 +632,20 @@ function renderReviewHost(host, rows, options) {
             onOpen: options.onOpen,
         }));
     });
+    const state = options.reviewState || { state: 'unloaded' };
+    if (!rows.length || ['failed', 'partial', 'unavailable'].includes(state.state)) {
+        const message = document.createElement('div');
+        message.className = 'change-review-status' + (state.state === 'failed' ? ' is-error' : '');
+        message.setAttribute('role', state.state === 'failed' ? 'alert' : 'status');
+        message.textContent = reviewStateText(state);
+        list.appendChild(message);
+    }
     const parts = splitReviewRows(rows);
     const summary = host.querySelector('.change-review-summary');
     setSummary(summary, parts.active, parts.reverted, host.classList.contains('change-review-card'));
     const view = host.querySelector('.change-review-view');
     if (view) {
-        view.hidden = !options.showView;
+        view.hidden = !options.showView || !rows.length;
         view.onclick = function () { openDetails(); };
     }
 }
@@ -630,9 +700,10 @@ function updatePlacement(visible) {
             pubarHandle.setNarrow({
                 icon: 'diff',
                 label: t('改动审查', 'Change review'),
-                summaryHtml: narrowSummaryHtml(parts),
-                summaryTip: statsTitle(stats(parts.active)),
-                actions: [{ label: t('查看', 'View'), tip: t('查看本轮改动', 'View changes for this turn'), onClick: function () { openDetails(); } }],
+                summaryHtml: rows.length && currentReviewState.state !== 'failed'
+                    ? narrowSummaryHtml(parts) : reviewStateHtml(currentReviewState),
+                summaryTip: rows.length ? statsTitle(stats(parts.active)) : reviewStateText(currentReviewState),
+                actions: rows.length ? [{ label: t('查看', 'View'), tip: t('查看本轮改动', 'View changes for this turn'), onClick: function () { openDetails(); } }] : [],
             });
         }
         bar.hidden = true;
@@ -641,18 +712,24 @@ function updatePlacement(visible) {
     const wide = visible && hasRoom();
     drawer.hidden = !wide; bar.hidden = !visible || wide;
     if (visible && !wide) {
-        const parts = splitReviewRows(displayTurnRows(activeAggregate));
-        setSummary(bar.querySelector('.change-review-bar-summary'), parts.active, parts.reverted);
+        const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
+        const summary = bar.querySelector('.change-review-bar-summary');
+        const parts = splitReviewRows(rows);
+        if (rows.length && currentReviewState.state !== 'failed') setSummary(summary, parts.active, parts.reverted);
+        else summary.textContent = reviewStateText(currentReviewState);
+        bar.querySelector('.change-review-view').hidden = !rows.length;
     }
 }
 function render() {
     const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
     /* 关联区域 = 当前轮（用户问题 → 对应 final 卡片）：过程框展开与否不再影响
        “这一轮的改动”是否关联显示。 */
-    const visible = Boolean(activeAggregate && aggregateIsCurrent(activeAggregate) && rows.length);
+    currentReviewState = statusForViewedTurn();
+    const visible = Boolean(mountedSessionId && (rows.length || currentReviewState.state === 'failed'));
     if (visible && cardHost) renderReviewHost(cardHost, rows, {
         showView: true,
         onOpen: openDetails,
+        reviewState: currentReviewState,
     });
     updatePlacement(visible);
 }
@@ -725,9 +802,13 @@ export function reviewUpdatesForTool(event, row, updates) {
 function applyTool(detail, options) {
     options = options || {};
     const event = detail && detail.event; let aggregate = detail && detail.aggregate;
+    const owner = String((detail && detail.rootSessionId) || (detail && detail.sessionId) || '');
+    if (owner && owner !== mountedSessionId) return false;
+    const hasStatus = rememberReviewStatus(event && event.ui && event.ui.change_review_status, detail);
+    if (hasStatus && !options.deferRender) scheduleRender();
     const updates = event && reviewUpdatesForTool(event, detail.row, workspaceReviewUpdates);
     const incoming = mergeReviewChanges(event && event.ui && event.ui.changes, updates);
-    if (!incoming.length) return false;
+    if (!incoming.length) return hasStatus;
     if (!aggregate && detail && detail.row) {
         /* 关联区域 = 当前轮（用户问题 → 对应 final 卡片）：行即便不在任何执行过程框内，
            只要落在当前轮区间内，也归属该轮。 */
@@ -785,6 +866,9 @@ function onUiEvent(detail) {
     const event = detail && detail.event;
     const ownerSessionId = String((detail && detail.rootSessionId) || (detail && detail.sessionId) || '');
     if (ownerSessionId && ownerSessionId !== mountedSessionId) return;
+    const status = event && (event.change_review_status || (event.ui && event.ui.change_review_status));
+    if (status && (event.change_review_status || status.status === 'failed'
+        || reviewStatuses.has(reviewStatusKey(status))) && rememberReviewStatus(status, detail)) scheduleRender();
     if (event && event.type === 'file_changes_updated') {
         const key = workspaceReviewKey(event);
         const changes = (event.changes || []).map(function (row) {
@@ -825,6 +909,9 @@ function scanExisting() {
 }
 function resetForSession(nextSessionId) {
     workspaceReviewUpdates.clear();
+    reviewStatuses.clear();
+    reviewStatusesByTurn.clear();
+    renderedTurnKey = currentViewedTurnKey = '';
     if (scanTimer !== null) {
         globalThis.clearTimeout(scanTimer);
         scanTimer = null;
@@ -859,6 +946,7 @@ function mount() {
             order: 90,
         });
         if (pubarHandle && pubarHandle.host) {
+            pubarHandle.setVisible(false);
             cardHost = buildCard();
             pubarHandle.host.appendChild(cardHost);
         } else {
@@ -878,9 +966,8 @@ function mount() {
     // file list on every geometry notification caused ResizeObserver feedback
     // and long main-thread stalls on large histories.
     resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(function () {
-        const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
-        updatePlacement(Boolean(activeAggregate && aggregateIsCurrent(activeAggregate)
-            && rows.length));
+        const rows = activeAggregate && aggregateIsCurrent(activeAggregate) ? displayTurnRows(activeAggregate) : [];
+        updatePlacement(Boolean(mountedSessionId && (rows.length || currentReviewState.state === 'failed')));
         scheduleViewportSync();
     }) : null;
     if (resizeObserver) { resizeObserver.observe(stage); resizeObserver.observe(inner); }
@@ -936,6 +1023,7 @@ function mount() {
         // their tool rows so persisted ui.changes become visible immediately.
         if (hasInsertedRows) scheduleScanExisting();
         if (shouldSync || hasUserTurnBoundary) syncActiveAggregateToViewport();
+        if (hasUserTurnBoundary) scheduleRender();
     }) : null;
     if (processObserver) processObserver.observe(stage, {
         subtree: true, attributes: true, childList: true, attributeFilter: ['class'],
@@ -990,6 +1078,7 @@ export async function installChatExtension(context) {
     // Installing a chat extension is awaited by the page bootstrap. Defer the
     // historical scan so plugin discovery never blocks first paint.
     scheduleScanExisting();
+    scheduleRender();
     return function () {
         document.removeEventListener('myagent:tool-call-rendered', toolListener);
         document.removeEventListener('myagent:process-aggregate-toggle', toggleListener);
@@ -1032,6 +1121,8 @@ export async function installChatExtension(context) {
             delete node.dataset.changeReviewSessionId;
         });
         activeAggregate = null; aggregateChanges.clear(); aggregateRecency.splice(0);
+        reviewStatuses.clear();
+        reviewStatusesByTurn.clear();
         clippingAncestors = new WeakMap();
         [drawer, bar].forEach(function (node) { if (node) node.remove(); });
         drawer = bar = null;

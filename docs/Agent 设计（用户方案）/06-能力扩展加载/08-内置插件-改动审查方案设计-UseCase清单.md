@@ -1,6 +1,6 @@
 # 改动审查 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-07（覆盖至：当前工作区；执行记录携带 ui、插件样式先于上屏、性能基准范围）
+- 版本：2026-10-22（覆盖至：当前工作区；执行记录携带 ui、插件样式先于上屏、性能基准范围、存储 v2 与四态诊断、pending 恢复）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/change-review`（store.py / host.py / runtime.py / web/change-review.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 08；配套通则见 01–07）
@@ -445,6 +445,7 @@
 | UC-601/608 | `tests/js/change_review_ui_payload_runtime.cjs`（`ui` 负载两条渲染路径）、`tests/js/plugin_ui_slots_runtime.mjs`（样式就绪门）、`test_plugin_ui_frontend.py::test_plugin_renderers_wait_for_their_stylesheet_before_mounting` / 数据链路契约、`tests/test_execution_recovery.py`（执行记录保留 `ui` 且不进模型历史） |
 | UC-601~610 | `tests/js/change_review_stats_runtime.mjs`、`change_review_visibility_runtime.mjs`、`test_plugin_ui_frontend.py`；含晚展开、源会话、重复交付、范围冲突与会话切换 |
 
+- 2026-10-22：**失败可见与存储 v2**。① 每次工具调用独立持有诊断（`app/change_review_capture.py::ChangeReviewCapture`），`before`/`after`/批量 flush 失败都写 `response.ui.change_review_status`，并发工具不再互相覆盖错误槽；面板在 `failed` / `unavailable` / `partial` 或零行时渲染状态卡而非整体隐藏——「框莫名消失」不再可复现（UC-601/608）。② `store.py` 升 `STORE_VERSION=2`：超 512 UTF-8 字节的 diff 外置为 gzip blob（`diff_blob`），小 diff 仍内联；baseline 清单外置进既有 ZIP 的 manifest entry；实测索引 24.07→0.55 MiB、读 p95 339.9→27.3ms（详见 `../../CHANGELOG-2026-10-22-改动审查存储与恢复.md`）。③ pending 恢复按「执行器已退出 / 非活动 / 已过 finally 边界」判定，不按年龄盲杀；恢复失败也写持久事件（UC-116~119/506）。④ `run_shell` 纳入工作区审查边界，运行时 scratch 经 `runtime_files` 排除，临时写入不产生审查行。回归：`tests/test_change_review_plugin.py`、`test_change_review_compact_store.py`、`test_change_review_diagnostics.py`、`test_change_review_status_browser.py`、`tests/js/change_review_ui_payload_runtime.cjs`（76 passed）。
 - 2026-10-04：文件条目上下留白与单行计划条目对齐（`font: inherit` + `line-height: normal`，移除旧折叠箭头样式）；条目悬停说明改走统一 `setUiHoverTip`（配合 05/13·UC-5M15）。
 - 2026-10-07：**插件样式先于上屏**——宿主挂载插件渲染器（聊天扩展 / 会话面板同一加载器）前等待其样式表就绪（`link.sheet` 已有→立即通过；否则等 `load`；`error` / 8s 超时兜底），消除"± 数字先灰白、1–2 秒后才变红绿"的一帧未样式化现象。依据 `plugin-ui-slots.js::pluginStyleReady / ensurePluginStyleLink`；A/B 探针（样式插入人为延后 4s）：旧行为 243 帧 ≈ 4.0s 未着色 vs 修复后 0 帧，首次可见即 `rgb(21,128,61)`。回归 `tests/js/plugin_ui_slots_runtime.mjs`（新增样式就绪用例）、`tests/test_plugin_ui_frontend.py`；见 `../../CHANGELOG-2026-10-07-插件样式上屏时序修复.md`（UC-601 / UC-6D2 / 05-13·UC-5M9）。
 - 2026-10-07：新增 UC-120，明确 `benchmark_change_review.py` 只衡量 change-review store 合成路径及其 A/B/批次/签名对照；记载其排除项、500ms 参考阈值语义和不得外推到 Agent 整体性能的限制。实测数据仍以 09/05 §4.6 为准。

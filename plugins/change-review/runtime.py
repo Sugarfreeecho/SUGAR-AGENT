@@ -10,6 +10,12 @@ import time
 from pathlib import Path
 
 
+class ReviewChanges(list):
+    def __init__(self, changes, coverage):
+        super().__init__(changes)
+        self.coverage = coverage
+
+
 def _store_module():
     path = Path(__file__).with_name("store.py").resolve()
     try:
@@ -101,20 +107,26 @@ def initialize(host_module):
 
             work_root = active_tool_work_dir()
         store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
+        turn_id = str(state.get('_change_review_turn_id') or state.get('_runtime_v2_run_id') or '')
         # Recover durable batch obligations before retiring an older baseline.
         # External tools also form a boundary: never defer their workspace audit.
-        if not state.get('_change_review_recovery_checked') or observe_workspace or tool_name == 'run_shell':
-            if not state.get('_change_review_recovery_checked'):
+        if not state.get('_change_review_recovery_checked') or state.get('_change_review_completed_captures') or observe_workspace or tool_name == 'run_shell':
+            if not state.get('_change_review_recovery_checked') or state.get('_change_review_completed_captures'):
+                from session_lifecycle import is_run_active
+                completed = dict(state.get('_change_review_completed_captures') or {})
+                store.recover_pending(
+                    current_run_id=str(state.get('_runtime_v2_run_id') or ''),
+                    current_turn_id=turn_id,
+                    execution_active=lambda run: is_run_active(session_id, run),
+                    completed_capture_ids=completed,
+                )
+                for capture_id in completed:
+                    state.get('_change_review_completed_captures', {}).pop(capture_id, None)
                 state['_change_review_dirty'] = True
             events = flush_file_tool_reviews(state)
             state.setdefault('_change_review_pending_events', []).extend(events)
             state['_change_review_recovery_checked'] = True
         started = time.perf_counter()
-        turn_id = str(
-            (state or {}).get("_change_review_turn_id")
-            or (state or {}).get("_runtime_v2_run_id")
-            or ""
-        )
         # The arrival of work in a different official turn is the durable end
         # boundary for the previous turn. Keep the current baseline across idle
         # gaps and automatic continuations.
@@ -145,22 +157,33 @@ def initialize(host_module):
         # observer may complete concurrently with a native file operation.
         if capture is not None and not observe_workspace and tool_name in {'write_file', 'edit_file', 'apply_patch', 'delete_file'} and state.get('_change_review_batch_active'):
             state.setdefault('_change_review_deferred_captures', {})[capture.capture_id] = True
+        if capture is None and not (tool_name == 'write_file' and (tool_args or {}).get('temporary')):
+            # No scan/declared path was possible. Keep this distinct from a
+            # successful check that found zero changes, without an extra write.
+            return store_module.Capture('', 'unavailable')
         return capture
 
     def after_native_file_tool(state, capture, successful=True):
         session_id = str((state or {}).get("session_id") or "")
-        if not session_id or capture is None:
+        if not session_id or capture is None or not capture.capture_id:
             return []
         store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
         started = time.perf_counter()
         deferred = state.setdefault('_change_review_deferred_captures', {})
         defer = bool(deferred.pop(capture.capture_id, False))
-        changes = store.finish_capture(capture, successful=bool(successful), defer_workspace_sweep=defer)
+        try:
+            changes = store.finish_capture(capture, successful=bool(successful), defer_workspace_sweep=defer)
+        except Exception:
+            # The tool's finally boundary is proof that this capture's writer
+            # stopped, even if other tools in the same run remain active.
+            state.setdefault('_change_review_completed_captures', {})[capture.capture_id] = True
+            state['_change_review_recovery_checked'] = False
+            raise
         if defer:
             state['_change_review_dirty'] = True
         coverage_notice(state, store)
         log_timing(state, store, 'after', started, changes=len(changes))
-        return changes
+        return ReviewChanges(changes, store.timings.get('coverage', capture.coverage))
 
     def after_run(state):
         session_id = str((state or {}).get("session_id") or "")

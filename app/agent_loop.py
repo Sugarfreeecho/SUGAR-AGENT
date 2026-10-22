@@ -6880,51 +6880,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         response["_control_result"] = dict(control_result)
                     return response
 
-                def _begin_change_review_capture(
-                    worktree_root: str = "", *, observe_workspace: bool = False
-                ):
-                    try:
-                        return _workflow_callbacks().call(
-                            "before_native_file_tool",
-                            state,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            worktree_root,
-                            observe_workspace,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "change review pre-tool snapshot failed for %s",
-                            tool_name,
-                            exc_info=True,
-                        )
-                        return None
+                from change_review_capture import ChangeReviewCapture
 
-                def _finish_change_review_capture(capture, successful: bool):
-                    if capture is None:
-                        return []
-                    try:
-                        return _workflow_callbacks().call(
-                            "after_native_file_tool",
-                            state,
-                            capture,
-                            successful,
-                        ) or []
-                    except Exception:
-                        logger.warning(
-                            "change review post-tool snapshot failed for %s",
-                            tool_name,
-                            exc_info=True,
-                        )
-                        return []
-
-                def _attach_change_review(response: Dict[str, Any], changes):
-                    if changes:
-                        # UI-only metadata: model history reads the original
-                        # result fields and never consumes this plugin value.
-                        response["ui"] = {"changes": changes}
-                    return response
+                review_capture = ChangeReviewCapture(
+                    _workflow_callbacks, state, tool_name, tool_args, tool_id)
+                _begin_change_review_capture = review_capture.before
+                _finish_change_review_capture = review_capture.after
+                _attach_change_review = review_capture.attach
 
                 if tool_descriptor is not None and tool_descriptor.invoker_id:
                     started = time.perf_counter()
@@ -7247,21 +7209,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 decision=sec_decision,
                                 workspace=security_workspace,
                             ):
-                                try:
-                                    change_review_capture = _workflow_callbacks().call(
-                                        "before_native_file_tool",
-                                        state,
-                                        tool_name,
-                                        tool_args,
-                                        tool_id,
-                                        worktree_root,
-                                    )
-                                except Exception:
-                                    logger.warning(
-                                        "change review pre-tool snapshot failed for %s",
-                                        tool_name,
-                                        exc_info=True,
-                                    )
+                                change_review_capture = _begin_change_review_capture(worktree_root)
                                 try:
                                     if hasattr(tool_func, "ainvoke"):
                                         result = await _await_steerable(
@@ -7294,20 +7242,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     change_review_tool_failed = True
                                     raise
                                 finally:
-                                    if change_review_capture is not None:
-                                        try:
-                                            change_review_changes = _workflow_callbacks().call(
-                                                "after_native_file_tool",
-                                                state,
-                                                change_review_capture,
-                                                not change_review_tool_failed,
-                                            ) or []
-                                        except Exception:
-                                            logger.warning(
-                                                "change review post-tool snapshot failed for %s",
-                                                tool_name,
-                                                exc_info=True,
-                                            )
+                                    change_review_changes = _finish_change_review_capture(
+                                        change_review_capture, not change_review_tool_failed)
                     except _SteerRestartRequested:
                         raise
                     except Exception as e:
@@ -7344,11 +7280,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 )
                 response["tool_status"]["duration_ms"] = tool_invoke_ms
                 response["_temporary_write_path"] = temporary_write_path
-                if change_review_changes:
-                    # UI-only metadata: model history reads the original result
-                    # fields and never consumes this plugin-owned value.
-                    response["ui"] = {"changes": change_review_changes}
-                return response
+                return _attach_change_review(response, change_review_changes)
 
 
             async def execute_one(tool_call):
@@ -10086,8 +10018,27 @@ async def _flush_file_tool_reviews(state: State, emit=None) -> None:
         events = _workflow_callbacks().call('flush_file_tool_reviews', state) or []
         for event in events:
             await _push_stream_event(state, event, emit=emit)
-    except Exception:
+        if state.pop('_change_review_flush_failure', None):
+            from change_review_capture import review_status
+            await _push_stream_event(state, {
+                'type': 'file_changes_updated', 'changes': [],
+                'change_review_status': review_status(state, status='checked', stage='batch_flush'),
+            }, emit=emit)
+    except Exception as exc:
         logger.warning('change review batch flush failed session=%s', state.get('session_id'), exc_info=True)
+        from change_review_capture import review_status
+        status = review_status(state, status='failed', stage='batch_flush', reason=exc)
+        previous = state.get('_change_review_flush_failure') or {}
+        if any(previous.get(key) != status.get(key) for key in ('run_id', 'turn_id', 'reason', 'stage')):
+            # Repeated failures do not append the same warning every iteration.
+            # The dirty flag/outbox remains retryable, independently of display.
+            try:
+                await _push_stream_event(state, {
+                    'type': 'file_changes_updated', 'changes': [], 'change_review_status': status,
+                }, emit=emit)
+                state['_change_review_flush_failure'] = status
+            except Exception:
+                logger.warning('change review failure notification could not be committed', exc_info=True)
 
 
 async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:

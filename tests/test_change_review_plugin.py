@@ -1330,39 +1330,41 @@ def test_restore_api_reapplies_and_persists_ui_event(review, tmp_path, monkeypat
     assert published[-1][1]["agent_id"] == "child"
 
 
-def test_temporary_write_and_delete_stay_invisible_even_in_git(tmp_path):
-    """A temporary write is shadowed in the store: no row on write or delete."""
+def test_temporary_write_and_delete_stay_invisible_even_in_git(tmp_path, monkeypatch):
+    """Runtime scratch never creates a project file or a review row."""
     module = _load_store()
     workspace = tmp_path / "repo"
     workspace.mkdir()
     init_git_workspace(workspace)
     sys.path.insert(0, str(ROOT / "app"))
     import agent_tools
+    from runtime_files import run_scope
+    monkeypatch.setattr(agent_tools, "WORK_DIR", workspace)
 
     store = module.FileChangeReviewStore(tmp_path / "session")
-    target = workspace / "scratch_probe.py"
-    with agent_tools.tool_work_dir_override(workspace):
+    with run_scope(workspace, "session", "run") as owner, agent_tools.tool_work_dir_override(workspace):
+        target = owner.temporary_path("scratch_probe.py")
         rows = capture(
             store, workspace, "write_file",
             {"path": "scratch_probe.py", "contents": "print(1)\n", "temporary": True},
-            lambda: target.write_text("print(1)\n", encoding="utf-8"),
+            lambda: agent_tools.write_file("scratch_probe.py", content="print(1)\n", temporary=True),
         )
         assert rows == []
-        index = json.loads(store.index_path.read_text(encoding="utf-8"))
-        assert len(index["temporaries"]) == 1
+        index = store._load()
+        assert index["temporaries"] == {}
         assert index["records"] == {}
 
         rows = capture(
-            store, workspace, "delete_file", {"path": "scratch_probe.py"},
+            store, workspace, "delete_file", {"path": str(target)},
             lambda: target.unlink(), call="call-2",
         )
     assert rows == []
-    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    index = store._load()
     assert index["temporaries"] == {}
     assert index["records"] == {}
 
 
-def test_temporary_write_shell_delete_stays_invisible(tmp_path):
+def test_temporary_write_shell_delete_stays_invisible(tmp_path, monkeypatch):
     """A Git sweep must not surface a temporary creation (the old +1 row)."""
     module = _load_store()
     workspace = tmp_path / "repo"
@@ -1370,30 +1372,33 @@ def test_temporary_write_shell_delete_stays_invisible(tmp_path):
     init_git_workspace(workspace)
     sys.path.insert(0, str(ROOT / "app"))
     import agent_tools
+    from runtime_files import run_scope
+    monkeypatch.setattr(agent_tools, "WORK_DIR", workspace)
 
     store = module.FileChangeReviewStore(tmp_path / "session")
-    target = workspace / "scratch_probe.py"
-    with agent_tools.tool_work_dir_override(workspace):
+    with run_scope(workspace, "session", "run") as owner, agent_tools.tool_work_dir_override(workspace):
+        target = owner.temporary_path("scratch_probe.py")
         assert capture(
             store, workspace, "write_file",
             {"path": "scratch_probe.py", "contents": "print(1)\n", "temporary": True},
-            lambda: target.write_text("print(1)\n", encoding="utf-8"),
+            lambda: agent_tools.write_file("scratch_probe.py", content="print(1)\n", temporary=True),
         ) == []
         assert capture(
             store, workspace, "run_shell", {"command": "rm scratch_probe.py"},
             lambda: target.unlink(), call="call-2",
         ) == []
-    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    index = store._load()
     assert index["records"] == {}
 
 
 def test_temporary_then_normal_write_graduates_with_original_origin(review):
+    import agent_tools
     store, workspace = review
     path = workspace / "graduate.txt"
     assert capture(
         store, workspace, "write_file",
         {"path": "graduate.txt", "contents": "v1\n", "temporary": True},
-        lambda: path.write_text("v1\n", encoding="utf-8"),
+        lambda: agent_tools.write_file("graduate.txt", content="v1\n", temporary=True),
     ) == []
     rows = capture(
         store, workspace, "write_file", {"path": "graduate.txt", "contents": "v1\nv2\n"},
@@ -1408,13 +1413,14 @@ def test_temporary_then_normal_write_graduates_with_original_origin(review):
 
 
 def test_temporary_graduation_keeps_preexisting_origin(review):
+    import agent_tools
     store, workspace = review
     path = workspace / "graduate2.txt"
     path.write_text("base\n", encoding="utf-8")
     assert capture(
         store, workspace, "write_file",
         {"path": "graduate2.txt", "contents": "temp\n", "temporary": True},
-        lambda: path.write_text("temp\n", encoding="utf-8"),
+        lambda: agent_tools.write_file("graduate2.txt", content="temp\n", temporary=True),
     ) == []
     rows = capture(
         store, workspace, "edit_file", {"path": "graduate2.txt"},

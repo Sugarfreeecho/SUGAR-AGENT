@@ -114,3 +114,11 @@
 @media (max-width: 520px) {
     .change-review-bar { margin-inline: .15rem; }
 }
+.change-review-status {
+    padding: .38rem .4rem;
+    color: var(--text-secondary);
+    font-size: .68rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.change-review-status.is-error { color: var(--danger, #dc5353); }

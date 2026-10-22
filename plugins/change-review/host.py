@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import hashlib
 import os
 import sys
 import threading
@@ -18,11 +19,15 @@ _workspace_locks = {}
 
 
 def _store_module():
-    name = "myagent_change_review_store"
+    # Use the same module/locks as runtime captures, including lazy migration.
+    path = Path(__file__).with_name("store.py").resolve()
+    info = path.stat()
+    signature = f"{info.st_mtime_ns}:{info.st_size}"
+    digest = hashlib.sha256(f"{path}:{signature}".encode()).hexdigest()[:16]
+    name = f"myagent_change_review_store_{digest}"
     cached = sys.modules.get(name)
     if cached is not None:
         return cached
-    path = Path(__file__).with_name("store.py")
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load change-review store")
