@@ -30,6 +30,7 @@ SugarAgent 是一个**本地运行**的 AI Agent 开发与使用平台。它通�
 | ⚡ **稳定性自适应** | CPU 压力监测下自动降级为非流式输出；首 token 超时自动发起并行重试；可观测性防抖写盘 |
 | 🛡️ **安全边界** | 工作区路径限制、Shell 危险命令拦截、SSRF 防护、敏感信息脱敏、工具审批、**网络出口控制（egress）** |
 | 🖥️ **前端体验** | 深色/紫色主题、执行过程面板（可折叠/展开高度）、工作区媒体渲染（GIF/图片/视频/音频）、会话自动恢复 |
+| 🎙️ **语音插件** | 通过兼容 API 或小米 MiMo 识别语音、朗读 Final 卡片；话筒浮窗、草稿保护与可选本地 SenseVoice；在 Agent 高级设置中配置，见 [使用说明](docs/speech_input.md) |
 | 💾 **会话持久化** | 完整会话状态落盘（元数据、事件流、LLM 历史、对话历史、Todo 计划） |
 | 🖥️ **常驻图标** | Windows 任务栏右下角 / macOS 顶部菜单栏 / Ubuntu 顶部栏图标，集成开关菜单与更新/重启 |
 
@@ -63,6 +64,8 @@ MyAgent 全局统一使用一套持久权限模式，主界面提供三档固定
 会话侧栏的「执行」页提供任务输出、取消按钮和用户终端。`run_shell(run_in_background=true)` 返回 job ID，后续用 `job_output`、`job_list`、`job_kill` 管理；已授权会话中的前台命令等待超时会转为后台任务。一次性脚本优先用 `run_shell`；需要保存目录、环境变量或交互式 stdin 时用 `terminal_open/send/read/signal/close/list`。
 
 后台任务完成后会通知 Agent，空闲会话由服务端续跑，不要求浏览器在线。点击会话「停止」取消该会话及其子 Agent 的后台任务并抑制这次取消的唤醒，用户终端保持独立。应用重启保留记录和有界输出，但不会恢复进程、shell 或重放命令。`terminal_send` 的 `inferred_idle` / `timeout` 仅表示等待结束，不能证明命令退出。
+
+临时脚本和中间文件统一分配到全局默认 `WORK_DIR/TempOutput/scratch/<session>/<run>-<随机后缀>/`，不随会话项目目录变化。`write_file(temporary=true)` 返回实际绝对路径；Shell 保留项目 cwd，`TEMP/TMP/TMPDIR` 指向运行时 scratch。完成、取消或失败后回收 scratch，后台进程和持久终端仍使用时延后清理；启动时回收已失效的运行目录。完整工具结果保存在 `TempOutput/tool-results/<session>/<toolCallId>/result.txt`，继续供历史读取。默认搜索和变更审查排除 `TempOutput`。详见 [运行产物规格](docs/temp_output_layout.md)。
 
 在「执行 → Computer Use」中显式启用 Native 或选择已配置的 Cua Driver stdio MCP。依赖为 `cua-driver==0.28.0`；原生工具名为 `cua_driver_native__<tool>`，MCP 工具名为 `mcp__cua-driver-mcp__<tool>`。截图需要模型声明图像输入；缺少系统权限或平台能力时返回诊断，不自动换模型或切换 provider。详见 [执行功能说明](docs/execution_services.md)。
 
@@ -611,6 +614,14 @@ Chat Completions 将工具图片抽取到连续工具结果之后的 user 消息
 📄 **[SPEC.md](SPEC.md)**
 
 ---
+
+## 开发与发布流程
+
+改完代码固定按三步走（细则见 [docs/release-workflow.md](docs/release-workflow.md)）：
+
+1. **提交**：先改设计稿 → 写 `docs/CHANGELOG-<日期>-<主题>.md` → 按主题分组提交；动到前端时 `cd frontend` 后 `npm run build`，源码与 `app/templates/dist` 必须同一个提交（钩子会刷 `v5.YYYYMMDD` 运行戳，并在临时目录做一次全新构建逐字节比对，不一致直接拒绝）。
+2. **推送**：`git push origin master`；`pre-push` 会对 HEAD 提交再跑一次前端一致性检查；推送后核验 `git ls-remote origin master`、`git log --oneline origin/master..HEAD` 为空、`git status` 为空。
+3. **打包**：桌面安装包在 `packaging\` 下执行 `node scripts\build.mjs`（变体 `--dir` / `--skip-payload`；版本号只改 `packaging/package.json` 与 `package-lock.json` 自身 2 处）；迁移包钉 `HEAD` 的 `git ls-tree` + `git cat-file` 生成 `YYYYMMDD.zip`；增量补丁放 `patches/<名>/`（full + source + numstat + 应用说明，重放差异须为 0）。
 
 ## 更新日志
 
