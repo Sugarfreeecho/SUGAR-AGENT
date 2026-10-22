@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 import uuid
+import runtime_files
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -1253,6 +1254,8 @@ def _subprocess_env_for_shell() -> Dict[str, str]:
         if os.getenv("RUN_SHELL_FORCE_UTF8", "1").strip().lower() not in ("0", "false", "no"):
             env["PYTHONUTF8"] = "1"
             env["PYTHONIOENCODING"] = "utf-8"
+    scratch = str(runtime_files.current_run(WORK_DIR).scratch_dir)
+    env.update(TEMP=scratch, TMP=scratch, TMPDIR=scratch)
     return env
 
 
@@ -1655,8 +1658,7 @@ def _compose_shell_command(command: str, args: Optional[List[str]]) -> str:
     return f"{c} {tail}"
 
 
-# ``python -c`` 自动落盘目录（工作区内；执行完即删）
-_RUN_SHELL_TEMP_DIR = ".trash"
+# ``python -c`` 入口由运行时分配到全局 TempOutput；进程结束后删除。
 
 _RE_PYTHON_MINUS_C_HEAD = re.compile(
     r"(?is)^(?P<exe>\s*(?:py|pythonw?|python\d*(?:\.\d+)?))\s+-c\s+"
@@ -1766,7 +1768,7 @@ def _python_c_body_should_materialize(script: str) -> bool:
 
 def _maybe_materialize_python_c_script(full_cmd: str, workspace: Path) -> Tuple[str, List[Path]]:
     """
-    For risky ``py/python ... -c "<payload>"``, write payload to a workspace temp ``.py`` and run ``python <path>``
+    For risky ``py/python ... -c "<payload>"``, write payload to runtime scratch and run ``python <path>``
     to avoid nested quoting / PowerShell ``$`` expansion. Caller must ``unlink`` returned paths in ``finally``.
     """
     if (os.getenv("RUN_SHELL_MATERIALIZE_PYTHON_C") or "1").strip().lower() in (
@@ -1796,8 +1798,7 @@ def _maybe_materialize_python_c_script(full_cmd: str, workspace: Path) -> Tuple[
         return full_cmd, []
 
     try:
-        ep_dir = (workspace / _RUN_SHELL_TEMP_DIR).resolve()
-        ep_dir.mkdir(parents=True, exist_ok=True)
+        ep_dir = runtime_files.current_run(WORK_DIR).scratch_dir
         path = ep_dir / f"_rs_{uuid.uuid4().hex}.py"
         path.write_text(script, encoding="utf-8", newline="\n")
     except OSError as e:
@@ -2537,8 +2538,8 @@ async def run_shell(
     ``RUN_SHELL_POWERSHELL``, ``RUN_SHELL_PS_UTF8`` (``0`` 关闭 PowerShell UTF-8 前置),
     ``RUN_CLI_PREPEND_AGENT_PYTHON_DIR`` — see code / harness docs.
 
-    **Nested quoting / long ``python -c``**: when thresholds match, ``-c`` body is written under workspace
-    ``.run_shell_temp/`` as a temp ``.py``, executed as ``python <path>``, then deleted (disable with
+    **Nested quoting / long ``python -c``**: when thresholds match, ``-c`` body is written under global
+    ``WORK_DIR/TempOutput/scratch`` as a temp ``.py``, executed as ``python <path>``, then deleted (disable with
     ``RUN_SHELL_MATERIALIZE_PYTHON_C=0``). Edge cases may still fail—prefer writing scripts explicitly.
     Decoded PowerShell scripts still follow PowerShell semantics.
     """
@@ -2600,6 +2601,7 @@ async def run_shell(
 
     ephemeral_py: List[Path] = []
     process_job = None
+    scratch_lease = runtime_files.current_run(WORK_DIR).hold()
     try:
         wroot = active_tool_work_dir()
         full_cmd, ephemeral_py = _maybe_materialize_python_c_script(full_cmd, wroot)
@@ -2742,6 +2744,7 @@ async def run_shell(
                     env=prepared.env,
                     **spawn_kw,
                 )
+            scratch_lease.track_process(process.pid)
             process_job = _assign_windows_run_shell_job(int(process.pid or 0))
             try:
                 progress_publisher = _RunShellProgressPublisher(
@@ -2864,6 +2867,7 @@ async def run_shell(
     finally:
         _close_windows_run_shell_job(process_job)
         _unlink_run_shell_temp(ephemeral_py)
+        await asyncio.to_thread(scratch_lease.release)
 
 
 TRASH_DIR = ".trash"
@@ -3153,6 +3157,7 @@ def write_file(
     body = contents if contents is not None else content
     if body is None:
         return "Error: write_file requires `contents` (or legacy `content`)."
+    scratch_lease = None
     try:
         if not raw:
             outp = safe_work_path(AGENT_DEFAULT_WRITE_FILENAME)
@@ -3161,11 +3166,18 @@ def write_file(
         enforce_leaf("fs.write", outp)
         if _path_is_sensitive_tool_resource(outp):
             return _sensitive_tool_resource_error("write")
+        if temporary:
+            owner = runtime_files.current_run(WORK_DIR)
+            scratch_lease = owner.hold()
+            outp = owner.temporary_path(raw or AGENT_DEFAULT_WRITE_FILENAME)
         _atomic_write_text(outp, body, encoding='utf-8')
-        suffix = " (temporary; registered for end-of-turn cleanup)" if temporary else ""
+        suffix = " (temporary; runtime-owned scratch, removed after execution)" if temporary else ""
         return f"Successfully wrote file: {_format_path_for_tool_output(outp)}{suffix}"
     except Exception as e:
         return f"Failed to write file: {e}"
+    finally:
+        if scratch_lease:
+            scratch_lease.release()
 
 
 
@@ -3895,6 +3907,7 @@ def glob(
         raw_matches = indexed_matches if indexed_matches is not None else [
             m for m in root_path.glob(use_pattern) if not _path_is_sensitive_tool_resource(m)
         ]
+        raw_matches = [m for m in raw_matches if "tempoutput" not in {part.lower() for part in m.relative_to(root_path).parts}]
         truncated_ct = max(0, len(raw_matches) - max_m)
         matches = raw_matches[:max_m]
         if not matches:
@@ -3998,6 +4011,8 @@ def _grep_with_ripgrep(
             "--glob", "!logs/**",
             "--glob", "!.trash/**",
             "--glob", "!.tool_results/**",
+            "--glob", "!TempOutput/**",
+            "--glob", "!**/TempOutput/**",
             "--glob", "!truncate_backups/**",
         ])
         if not recursive:
@@ -4166,6 +4181,7 @@ def grep(
                     "logs",              # 运行日志，通常不需要 grep
                     ".trash",            # 回收站
                     ".tool_results",     # 工具结果落盘目录
+                    "TempOutput",       # 运行时 scratch 与历史工具结果
                     "truncate_backups",  # 会话截断备份
                 }
                 for root, dirs, files in os.walk(target):
@@ -5083,7 +5099,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "Write UTF-8 text under WORK_DIR (virtual `/` maps to workspace root). "
         "Omit path to write AGENT_DEFAULT_WRITE_FILENAME (default output.txt). "
         "Otherwise use a relative path or `/segment` under WORK_DIR, or an absolute path already under WORK_DIR. "
-        "Set temporary=true for throwaway scripts or intermediate files; the agent will soft-delete them to .trash at end of turn.",
+        "Set temporary=true for throwaway scripts or intermediate files: the host redirects the name to the current run's scratch under global WORK_DIR/TempOutput, returns its actual absolute path, and removes it after execution. Use that returned path in subsequent commands.",
         {
             "path": {
                 "type": "string",
@@ -5094,7 +5110,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "content": {"type": "string", "description": "Legacy alias for contents."},
             "temporary": {
                 "type": "boolean",
-                "description": "Mark this file as a temporary/intermediate artifact to be soft-deleted to .trash at end of turn.",
+                "description": "Allocate in runtime scratch instead of the requested project path; returns the real absolute path. Removed after execution; never moved to .trash.",
                 "default": False,
             },
         },
@@ -5223,7 +5239,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "Agent backend/tray PIDs and lifecycle scripts are protected: broad Python process termination is rejected, "
         "while terminating an explicitly selected unrelated PID remains allowed. Restart Agent only through the external platform tray or agentctl/RUN script. "
         "Virtual `/folder` under restriction means under the workspace root, not the OS root; avoid `cd /` expecting the workspace on Windows. "
-        "Prefer write_file(temporary=true) + `python script.py` over huge `python -c` for throwaway scripts; long `-c` payloads may auto-materialize under `.run_shell_temp/`. "
+        "Use write_file(temporary=true) and then execute its returned absolute path for throwaway scripts; long `python -c` payloads also use runtime scratch under global WORK_DIR/TempOutput. TEMP, TMP and TMPDIR point to that scratch; keep intermediate outputs there and requested deliverables in the project. "
         "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized. "
         "Set run_in_background=true to return a job_id immediately; use job_output/job_list/job_kill afterward. "
         "With execution-tools enabled, an authorized session command still running at timeout_ms is promoted to a background job. "

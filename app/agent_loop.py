@@ -19,6 +19,7 @@ import time
 import asyncio
 import gc
 import uuid
+import runtime_files
 import threading
 from datetime import datetime
 import inspect
@@ -4817,8 +4818,7 @@ def _record_temporary_write_file(state: Dict[str, Any], tool_name: str, tool_arg
         if resolved_path:
             p = Path(resolved_path).resolve()
         else:
-            with tool_work_dir_override(session_work_dir(state.get("session_id"))):
-                p = safe_work_path(str(raw)) if str(raw).strip() else safe_work_path(AGENT_DEFAULT_WRITE_FILENAME)
+            p = runtime_files.current_run(WORK_DIR, str(state.get("session_id") or "")).temporary_path(str(raw) or AGENT_DEFAULT_WRITE_FILENAME)
     except Exception as e:
         logger.warning("temporary write_file path cannot be registered: %s", e)
         return
@@ -4834,28 +4834,18 @@ def _save_result_to_tempfile(
     tool_name: str,
     state: Dict[str, Any],
     preview_chars: Optional[int] = None,
+    call_id: str = "",
 ) -> str:
     """
     工具结果超过 LLM 上下文阈值时：
-    1. 完整内容写入 .tool_results/tool_result_{ts}_{tool}.txt
-    2. 注册到 _temporary_write_files 跟踪列表
+    1. 完整内容写入全局 TempOutput/tool-results/<session>/<call>/result.txt
+    2. 保留历史引用，不加入 scratch 清理列表
     3. 返回替换后的 result_for_llm（预览 + 路径 + 提示）
     """
     try:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", tool_name)
-        filename = f"tool_result_{ts}_{safe_name}_{uuid.uuid4().hex[:8]}.txt"
-        with tool_work_dir_override(WORK_DIR):
-            temp_path = safe_work_path(f".tool_results/{filename}")
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.write_text(result_str, encoding="utf-8")
-
-        # 注册到临时文件跟踪列表，session 结束时自动清理
-        bucket = list(state.get("_temporary_write_files") or [])
-        sp = str(temp_path)
-        if sp not in bucket:
-            bucket.append(sp)
-        state["_temporary_write_files"] = bucket
+        temp_path = runtime_files.save_tool_result(
+            WORK_DIR, str(state.get("session_id") or ""), call_id, result_str,
+        )
 
         # Shared tool output storage is independent of the session's work root.
         virtual_path = str(temp_path.resolve())
@@ -4885,6 +4875,7 @@ def _tool_result_details_for_views(
     result_str: str,
     tool_name: str,
     state: Dict[str, Any],
+    call_id: str = "",
 ) -> Tuple[str, str, str]:
     """Return (log, llm, ui) views for a tool result with one shared UI/LLM cap."""
     if isinstance(result_str, list):
@@ -4894,7 +4885,7 @@ def _tool_result_details_for_views(
         projected = []
         for block in blocks:
             if block.get("type") == "text":
-                _, text, _ = _tool_result_details_for_views(redact_sensitive_tool_text(block.get("text") or ""), tool_name, state)
+                _, text, _ = _tool_result_details_for_views(redact_sensitive_tool_text(block.get("text") or ""), tool_name, state, call_id)
                 projected.append({**block, "text": text})
             else:
                 projected.append(block)
@@ -4908,6 +4899,7 @@ def _tool_result_details_for_views(
             tool_name,
             state,
             preview_chars=preview_chars,
+            call_id=call_id,
         )
     else:
         result_for_display = result_str
@@ -4920,25 +4912,14 @@ def _cleanup_temporary_write_files(state: Dict[str, Any]) -> List[str]:
         return []
     cleaned: List[str] = []
     remaining: List[str] = []
+    # 根因：普通软删除改变历史结果路径并把临时垃圾留在 .trash；仅由分配者回收 scratch。
+    owner = runtime_files.current_run(WORK_DIR, str(state.get("session_id") or ""))
+    owner.finish()
     for p in files:
-        try:
-            cleanup_root = session_work_dir(state.get("session_id"))
-            if Path(p).resolve().parent == (WORK_DIR / ".tool_results").resolve():
-                cleanup_root = WORK_DIR
-            elif Path(p).is_file() and not Path(p).resolve().is_relative_to(cleanup_root):
-                # Only exact files registered by a successful temporary write
-                # are eligible, including explicitly approved external writes.
-                cleanup_root = Path(p).resolve().parent
-            with tool_work_dir_override(cleanup_root):
-                result = delete_file(path=p)
-            if str(result).lower().startswith("error:") or str(result).lower().startswith("failed"):
-                remaining.append(p)
-                logger.warning("temporary write_file cleanup failed for %s: %s", p, result)
-            else:
-                cleaned.append(p)
-        except Exception as e:
+        if Path(p).exists():
             remaining.append(p)
-            logger.warning("temporary write_file cleanup exception for %s: %s", p, e)
+        else:
+            cleaned.append(p)
     state["_temporary_write_files"] = remaining
     return cleaned
 
@@ -6874,7 +6855,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         isinstance(block, dict) and block.get("type") == "image" for block in raw_result
                     )
                     result_for_log, result_for_llm, result_for_ui = _tool_result_details_for_views(
-                        raw_result if structured_result else result_str, tool_name, state
+                        raw_result if structured_result else result_str, tool_name, state, str(tool_id or "")
                     )
                     if structured_result:
                         from agent_openai import normalize_content_text
@@ -7306,7 +7287,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     if tool_name == "write_file" and isinstance(tool_args, dict) and tool_args.get("temporary"):
                                         try:
                                             raw_temp = tool_args.get("path") or tool_args.get("target_directory") or tool_args.get("file_path") or AGENT_DEFAULT_WRITE_FILENAME
-                                            temporary_write_path = str(safe_work_path(str(raw_temp)))
+                                            temporary_write_path = str(runtime_files.current_run(WORK_DIR).temporary_path(str(raw_temp)))
                                         except (ValueError, OSError):
                                             logger.warning("Could not capture temporary write path", exc_info=True)
                                 except BaseException:
@@ -10110,6 +10091,18 @@ async def _flush_file_tool_reviews(state: State, emit=None) -> None:
 
 
 async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
+    """Own scratch through successful, cancelled and failed ReAct execution."""
+    with runtime_files.run_scope(WORK_DIR, str(state.get("session_id") or ""), str(state.get("_runtime_v2_run_id") or ""), cleanup=False) as owner:
+        try:
+            return await _react_node_replanning(state, emit=emit)
+        finally:
+            try:
+                await asyncio.to_thread(owner.finish)
+            except OSError:
+                logger.warning("Run scratch cleanup deferred", exc_info=True)
+
+
+async def _react_node_replanning(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
     """Run ReAct with non-recursive steer replanning.
 
     A steer restarts the logical planning pass without stacking coroutine frames.
@@ -10144,7 +10137,7 @@ def validate_final(state: State) -> State:
         state["stream_events"].append(
             {
                 "type": "status",
-                "content": f"已清理临时文件 {len(cleaned)} 个（已移入 .trash）",
+                "content": f"已清理临时文件 {len(cleaned)} 个（运行时 scratch）",
             }
         )
     state["stream_events"].append({"type": "validate_final", "result": "PASS", "reason": ""})
