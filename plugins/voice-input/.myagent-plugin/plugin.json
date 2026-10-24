@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "voice-input",
+  "name": "语音输入与朗读",
+  "version": "1.2.0",
+  "system_builtin": true,
+  "description": "API 语音识别、可选本地 SenseVoice 和 Final 卡片朗读。",
+  "capabilities": {
+    "trusted_host": {"entry": "host.py"},
+    "web": {"assets": "web"},
+    "ui": {
+      "chat.extension": [{"id": "voice", "renderer": {"module": "chat.js", "style": "voice.css"}}],
+      "settings.section": [{"id": "voice", "title": "语音输入与朗读", "target": "renderer", "renderer": {"module": "settings.js", "style": "voice.css"}}]
+    }
+  }
+}

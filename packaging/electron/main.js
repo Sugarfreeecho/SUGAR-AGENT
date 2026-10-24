@@ -563,6 +563,7 @@ function createWindow() {
     mainWindow.show()
     notifyStartupLauncher()
   })
+  require('./speech-permissions').installSpeechPermissions(mainWindow.webContents, baseUrl)
   mainWindow.on('close', event => {
     if (quitting) return
     event.preventDefault()
