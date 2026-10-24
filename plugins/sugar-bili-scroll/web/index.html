@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>刷B站 · 值班</title>
+  <link rel="icon" type="image/png" href="/assets/sugar-logo.png">
+  <style>
+    :root{--sans:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei','PingFang SC','Hiragino Sans GB','Helvetica Neue',Helvetica,Arial,sans-serif;--mono:'SF Mono','JetBrains Mono','Fira Code',Consolas,'Liberation Mono',Menlo,Courier,'Microsoft YaHei',monospace}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:var(--sans);color:#1f2937;background:#f8fafc;overflow-x:hidden}
+    button,input,select,textarea{font-family:var(--sans)}
+    .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:#fff;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:10}
+    .topbar h1{font-size:18px;font-weight:700;display:flex;gap:10px;align-items:center}
+    .topbar h1 span{font-size:12px;font-weight:600;background:#111;color:#fff;padding:2px 8px;border-radius:999px}
+    .topbar a{color:#2563eb;text-decoration:none;font-size:14px}
+    .wrap{width:100%;max-width:1180px;min-width:0;margin:0 auto;padding:18px;display:grid;gap:16px}
+    .card{min-width:0;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+    .card h2{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+    .stat{background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;padding:10px 12px}
+    .stat .k{font-size:12px;color:#6b7280;font-weight:600}
+    .stat .v{font-size:20px;font-weight:800;margin-top:4px;font-family:var(--mono)}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:end}
+    .field{display:flex;flex:1 1 220px;min-width:0;flex-direction:column;gap:6px}
+    .field label{font-size:12px;color:#6b7280;font-weight:600}
+    .field input,.field select,.field textarea{width:100%;min-width:0;border:1px solid #d1d5db;border-radius:8px;padding:9px 10px;font-size:14px;background:#fff}
+    .field textarea{min-height:64px;resize:vertical;font-family:var(--mono);font-size:13px}
+    .field .hint{font-size:11px;color:#9ca3af;line-height:1.4}
+    .btn{border:0;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer}
+    .btn-primary{background:#111;color:#fff}
+    .btn-ghost{background:#f3f4f6;color:#111}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .pill{font-size:12px;padding:3px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-weight:700}
+    .pill.ok{background:#dcfce7;color:#166534}
+    .pill.warn{background:#fef3c7;color:#92400e}
+    .pill.err{background:#fee2e2;color:#991b1b}
+    .muted{color:#6b7280;font-size:12px}
+    pre{background:#0b1020;color:#d1e0ff;padding:12px;border-radius:10px;overflow:auto;max-height:460px;font-family:var(--mono);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+    .toast{position:fixed;right:18px;bottom:18px;background:#111;color:#fff;padding:10px 14px;border-radius:10px;font-size:13px;opacity:0;transform:translateY(8px);transition:.2s}
+    .toast.show{opacity:1;transform:none}
+    .qr{display:none;flex-direction:column;align-items:center;gap:8px;padding-top:12px}
+    .qr.show{display:flex}
+    .qr img{width:220px;height:220px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}
+    .split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .emo-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+    .emo-bar input,.emo-bar select{border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;font-size:13px;min-width:0;background:#fff}
+    .emo-bar input{flex:1 1 180px}
+    .emo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+    .emo{position:relative;border:1px solid #eef2f7;border-radius:10px;padding:8px;background:#f8fafc;display:flex;flex-direction:column;gap:6px;min-width:0}
+    .emo img{width:100%;height:72px;object-fit:contain;background:#fff;border-radius:8px}
+    .emo .nm{font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .emo .cd{font-size:11px;color:#6b7280;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .emo .ops{display:flex;gap:6px}
+    .emo .ops button{flex:1;border:0;border-radius:6px;padding:4px 0;font-size:11px;cursor:pointer;background:#e5e7eb;font-weight:700}
+    .emo .ops button.del{background:#fee2e2;color:#991b1b}
+    .emo .owned{position:absolute;top:6px;right:6px;font-size:10px;background:#dcfce7;color:#166534;border-radius:999px;padding:1px 6px;font-weight:700}
+    dialog{margin:auto;width:min(720px,94vw);max-height:88vh;overflow:auto;border:1px solid #d1d5db;border-radius:14px;padding:22px;color:#1f2937}
+    dialog::backdrop{background:#11182770}
+    dialog h2{margin-bottom:18px;font-size:18px}
+    dialog .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .task-table{border-collapse:collapse;font-size:13px;min-width:660px}
+    .task-table th,.task-table td{text-align:left;padding:12px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top}
+    .task-table td:first-child{max-width:280px;overflow-wrap:anywhere}
+    .task-table button{margin:2px;padding:6px 9px}
+    @media (max-width:900px){.split{grid-template-columns:1fr}}
+    @media (max-width:500px){dialog .grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>刷B站 <span>值班</span></h1>
+    <a href="/" target="_top">返回 SugarAgent</a>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>状态 <span id="state-pill" class="pill">读取中…</span></h2>
+      <div class="grid">
+        <div class="stat"><div class="k">现在是否谷时</div><div class="v" id="s-window">—</div></div>
+        <div class="stat"><div class="k">今日已挑 / 额度</div><div class="v" id="s-picked">—</div></div>
+        <div class="stat"><div class="k">今日轮次</div><div class="v" id="s-rounds">—</div></div>
+        <div class="stat"><div class="k">登录状态</div><div class="v" id="s-login">—</div></div>
+      </div>
+      <p class="muted" style="margin-top:10px" id="s-extra"></p>
+      <div class="row" style="margin-top:12px">
+        <button class="btn btn-primary" id="btn-run">立即跑一轮</button>
+        <button class="btn btn-ghost" id="btn-login">添加账号（扫码）</button>
+        <button class="btn btn-ghost" id="btn-logout" disabled>退出当前账号</button>
+        <button class="btn btn-ghost" id="btn-report">看今天的日报</button>
+        <button class="btn btn-ghost" id="btn-fav">收藏今天挑中的</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label for="account-select">已保存账号</label>
+        <select id="account-select" style="width:min(100%,320px)" aria-label="已保存 B站账号"></select>
+        <button class="btn btn-ghost" id="btn-account-use" disabled>使用所选账号</button>
+        <button class="btn btn-ghost" id="btn-account-remove" disabled>移除所选账号登录态</button>
+      </div>
+      <p class="muted" style="margin-top:8px" id="account-meta">正在读取已保存账号…</p>
+      <div class="qr" id="qr-box">
+        <img id="qr-img" alt="B站 登录二维码">
+        <p class="muted" id="qr-msg">请用 B站 App 扫码</p>
+        <button class="btn btn-ghost" id="btn-login-cancel">取消扫码</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>设置</h2>
+      <div class="grid" id="settings-form"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-primary" id="btn-save">保存设置</button>
+        <span class="muted" id="save-hint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>插件会话系统提示词 <span class="pill">完整替换</span></h2>
+      <p class="muted" style="margin-bottom:12px">分别配置值班、私聊、评论回复的完整系统提示词，替换普通会话的基础提示词。保留精简环境信息，工具权限仍由宿主执行校验。保存后已有会话在下一轮生效，聊天记录保留。每份最多 240 KiB；留空或“恢复默认”使用插件默认提示词。</p>
+      <div id="system-prompts-form" style="display:grid;gap:14px"></div>
+      <p id="system-prompts-status" class="muted" style="margin-top:8px"></p>
+    </div>
+
+    <div class="card">
+      <h2>表情包 <span class="muted" id="emo-count">—</span></h2>
+      <div class="emo-bar">
+        <input id="emo-q" placeholder="搜名字 / 表情码 / 标签（空格分词）">
+        <select id="emo-scope">
+          <option value="local">我的收藏</option>
+          <option value="panel">B站 面板（411 个码）</option>
+        </select>
+        <button class="btn btn-ghost" id="btn-emo-search">搜索</button>
+      </div>
+      <div class="emo-bar">
+        <input id="emo-code" placeholder="B站 表情码，如 [doge]">
+        <button class="btn btn-ghost" id="btn-emo-import">收藏这个码</button>
+        <input id="emo-url" placeholder="图片 URL（https://…）">
+        <button class="btn btn-ghost" id="btn-emo-url">按链接收藏</button>
+        <input type="file" id="emo-file" accept="image/*" style="display:none">
+        <button class="btn btn-ghost" id="btn-emo-file">上传本地图片</button>
+      </div>
+      <p class="muted" style="margin-bottom:10px">
+        收藏 = 把图落到插件数据目录（按内容哈希去重，单张 ≤6MB）。发评论时模型用 id 引用这里的图（<b>上传上限 2MB</b>）；
+        只在 text 里写 <code>[doge]</code> 这种码则不需要收藏。模型自己也会在评论区收表情，
+        收的图带标签出现在这里。
+      </p>
+      <div class="emo-grid" id="emo-grid"></div>
+    </div>
+
+    <div class="card">
+      <h2>入站消息 <span class="pill" id="in-pill">—</span></h2>
+      <p class="muted">
+        有人<b>私信 / @我 / 回复我</b>时，写一条回复直接发出去。
+        <b>私聊</b>按用户保留会话，完整回复直接投递；<b>评论和 @</b>按视频楼层保留会话并排队处理。
+        白名单可用已启用的 B站能力，其他人只回话；所有入站会话都不能使用本机命令和文件工具。
+      </p>
+      <div class="row" style="margin:10px 0;align-items:center;gap:12px">
+        <button class="btn btn-ghost" id="btn-in-check">检查一次（只看不回）</button>
+        <span class="muted" id="in-meta">—</span>
+      </div>
+      <div id="in-events" class="grid" style="grid-template-columns:1fr"></div>
+      <p class="muted" id="in-wl" style="margin-top:8px"></p>
+      <h2 style="margin-top:16px">处理记录</h2>
+      <p class="muted">“待核对”表示发送结果不明，请先在 B站查看实际消息，再选择处理方式。</p>
+      <div id="in-jobs" class="grid" style="margin-top:10px;grid-template-columns:1fr"></div>
+    </div>
+
+    <div class="card">
+      <h2>日报内容</h2>
+      <pre id="report-box">点上面「看今天的日报」加载。</pre>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+const PLUGIN_ID = 'sugar-bili-scroll';
+const API = '/api/' + PLUGIN_ID;
+const SETTINGS_API = '/api/plugins/' + PLUGIN_ID + '/settings';
+
+const $ = (id) => document.getElementById(id);
+function toast(msg){
+  const el = $('toast');
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('show'), 2600);
+}
+async function jfetch(url, options){
+  const opts = { credentials: 'same-origin', ...(options||{}) };
+  // 字符串 body 一律当 JSON 送 —— 少了这个头，后端读 request.json() 虽然也能读，
+  // 但任何中间层（代理/网关）会按 text/plain 处理。
+  if(typeof opts.body === 'string' && !opts.headers) opts.headers = { 'Content-Type': 'application/json' };
+  const res = await fetch(url, opts);
+  const type = res.headers.get('content-type') || '';
+  const data = type.includes('json') ? await res.json() : { raw: await res.text() };
+  if(!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+let fieldsCache = [];
+
+function renderField(field, value){
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  const label = document.createElement('label');
+  label.textContent = field.title || field.id;
+  wrap.appendChild(label);
+
+  let input;
+  if(field.type === 'boolean'){
+    input = document.createElement('select');
+    input.innerHTML = '<option value="true">开启</option><option value="false">关闭</option>';
+    input.value = String(value === true);
+  } else if(field.enum && field.enum.length){
+    input = document.createElement('select');
+    for(const opt of field.enum){
+      const o = document.createElement('option');
+      o.value = String(opt); o.textContent = field.labels?.[opt] || String(opt);
+      input.appendChild(o);
+    }
+    input.value = String(value ?? field.default ?? field.enum[0]);
+  } else if(field.format === 'multiline'){
+    input = document.createElement('textarea');
+    input.value = value ?? field.default ?? '';
+  } else {
+    input = document.createElement('input');
+    input.type = field.type === 'integer' || field.type === 'number' ? 'number' : 'text';
+    if(field.minimum !== undefined) input.min = field.minimum;
+    if(field.maximum !== undefined) input.max = field.maximum;
+    input.value = value ?? field.default ?? '';
+  }
+  input.dataset.fieldId = field.id;
+  input.dataset.fieldType = field.type;
+  wrap.appendChild(input);
+  if(field.description){
+    const hint = document.createElement('div');
+    hint.className = 'hint'; hint.textContent = field.description;
+    wrap.appendChild(hint);
+  }
+  return wrap;
+}
+
+async function loadSettings(){
+  const data = await jfetch(SETTINGS_API);
+  const settings = data.settings || data;
+  fieldsCache = (settings.fields || []).filter(f => f.format !== 'secret' && !TASK_FIELDS.some(t => t.id === f.id) && f.id !== 'duty_session_id');
+  const form = $('settings-form');
+  form.innerHTML = '';
+  for(const field of fieldsCache){
+    form.appendChild(renderField(field, field.value));
+  }
+}
+
+async function saveSettings(){
+  const values = {};
+  for(const input of $('settings-form').querySelectorAll('[data-field-id]')){
+    const id = input.dataset.fieldId;
+    const type = input.dataset.fieldType;
+    let raw = input.value;
+    if(type === 'boolean') values[id] = raw === 'true';
+    else if(type === 'integer') values[id] = raw === '' ? null : parseInt(raw, 10);
+    else if(type === 'number') values[id] = raw === '' ? null : Number(raw);
+    else values[id] = raw;
+  }
+  await jfetch(SETTINGS_API, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values })
+  });
+  $('save-hint').textContent = '已保存 · ' + new Date().toLocaleTimeString();
+  toast('设置已保存');
+  refreshStatus();
+}
+
+function fmtTime(iso){
+  if(!iso) return '—';
+  try { return new Date(iso).toLocaleString('zh-CN'); } catch(e){ return iso; }
+}
+
+function renderSystemPrompts(data){
+  const host=$('system-prompts-form'); host.replaceChildren();
+  const labels={duty:'值班任务',dm:'私聊回复',reply:'评论和 @ 回复'};
+  const hints={duty:'可用占位符：{{task_home}}、{{seen_file}}。任务名称、关键词和额度仍由本轮参数提供。',dm:'可用占位符：{{uid}}。',reply:'可用占位符：{{bvid}}、{{rpid}}、{{root}}。'};
+  for(const kind of ['duty','dm','reply']){
+    const row=data.prompts[kind];
+    const box=document.createElement('div'); box.className='field';
+    const label=document.createElement('label');
+    const updateLabel=value=>{label.textContent=labels[kind]+' · '+(value.custom?'自定义':'插件默认');};
+    updateLabel(row);
+    const text=document.createElement('textarea'); text.rows=10; text.style.minHeight='180px';
+    text.dataset.promptKind=kind; text.value=row.text;
+    const hint=document.createElement('div');hint.className='hint';hint.textContent=hints[kind];
+    const actions=document.createElement('div');actions.className='row';
+    const save=document.createElement('button');save.className='btn btn-primary';save.textContent='保存'+labels[kind];save.dataset.promptSave=kind;
+    const reset=document.createElement('button');reset.className='btn btn-ghost';reset.textContent='恢复默认';reset.dataset.promptReset=kind;
+    const submit=async value=>{
+      save.disabled=reset.disabled=true;
+      try{
+        const result=await jfetch(API+'/system-prompts',{method:'PUT',body:JSON.stringify({prompts:{[kind]:value}})});
+        text.value=result.prompts[kind].text;updateLabel(result.prompts[kind]);
+        $('system-prompts-status').textContent='已保存，下一轮运行生效；当前运行保留原提示词。';toast('系统提示词已保存');
+      }catch(e){toast('保存失败：'+e.message);}finally{save.disabled=reset.disabled=false;}
+    };
+    save.onclick=()=>submit(text.value);reset.onclick=()=>submit('');
+    actions.append(save,reset);box.append(label,text,hint,actions);host.appendChild(box);
+  }
+}
+
+async function loadSystemPrompts(){
+  try{renderSystemPrompts(await jfetch(API+'/system-prompts'));}
+  catch(e){$('system-prompts-status').textContent='系统提示词读取失败：'+e.message+'。若宿主尚未加载新版，请重启后刷新。';}
+}
+
+async function refreshStatus(){
+  try{
+    const s = await jfetch(API + '/status');
+    $('s-window').textContent = s.in_window ? '谷时' : '峰时';
+    $('s-picked').textContent = s.picked_today + ' / ' + s.daily_quota;
+    $('s-rounds').textContent = String(s.rounds_today);
+    $('s-login').textContent = (s.auth_expired ? '凭证失效，请扫码' : s.logged_in ? '已登录' : (s.broken_credential ? '凭证损坏' : '未登录')) + (s.account_uid ? '（UID ' + s.account_uid + '）' : '');
+    $('btn-login').textContent = '添加账号（扫码）';
+    $('btn-login').disabled = loginAction || !!s.busy;
+    $('btn-logout').disabled = loginAction || !!s.busy || !(s.has_credential || s.logged_in || s.broken_credential);
+    accountUiBusy = !!s.busy;
+    updateAccountButtons();
+
+    const pill = $('state-pill');
+    if(s.account_changing){ pill.className = 'pill warn'; pill.textContent = '切换账号中…'; }
+    else if(s.busy){ pill.className = 'pill warn'; pill.textContent = '正在跑一轮…'; }
+    else if(s.auth_expired){ pill.className = 'pill err'; pill.textContent = '登录失效'; }
+    else if(s.last_error){ pill.className = 'pill err'; pill.textContent = '上一轮失败'; }
+    else { pill.className = 'pill ok'; pill.textContent = '待命'; }
+
+    const bits = ['谷时窗口：' + (s.windows || '—'),
+                  '上一轮：' + fmtTime(s.last_round_at)];
+    if(s.broken_credential) bits.push('⚠️ 凭证文件存在但内容为空，请重新扫码');
+    if(s.auth_expired) bits.push('B站接口返回账号未登录，请重新扫码登录');
+    bits.push('本地转写：' + (s.transcribe
+      ? (s.asr_ready ? '开（' + (s.asr_model || 'base') + '）' : '开但缺依赖')
+      : '关'));
+    bits.push('自动收藏：' + (s.fav_folder_id > 0 ? '收藏夹 ' + s.fav_folder_id : '关'));
+    if(s.last_error) bits.push('错误：' + s.last_error);
+    $('s-extra').textContent = bits.join(' · ');
+    $('btn-run').disabled = !!s.busy;
+    $('btn-fav').disabled = !!s.busy || !s.fav_folder_id || !s.must_favorite;
+  }catch(e){
+    const pill = $('state-pill');
+    pill.className = 'pill err'; pill.textContent = '读取失败';
+    $('s-extra').textContent = String(e.message || e);
+  }
+}
+
+async function runNow(){
+  $('btn-run').disabled = true;
+  toast('已开始，一轮可能要几分钟…');
+  try{
+    const r = await jfetch(API + '/run-now', { method: 'POST' });
+    toast('完成：今日已挑 ' + r.picked_today + ' 条，用时 ' + r.elapsed_seconds + 's');
+  }catch(e){
+    toast('失败：' + (e.message || e));
+  }finally{
+    refreshStatus();
+  }
+}
+
+async function showReport(){
+  try{
+    const r = await jfetch(API + '/report');
+    $('report-box').textContent = r.exists ? r.text : ('今天还没写报告。\n路径：' + r.path);
+  }catch(e){
+    $('report-box').textContent = '读取失败：' + (e.message || e);
+  }
+}
+
+async function favoriteNow(){
+  $('btn-fav').disabled = true;
+  toast('正在收藏…');
+  try{
+    const r = await jfetch(API + '/favorite-now', { method: 'POST' });
+    const failed = (r.failures || []).length;
+    toast('已收藏 ' + r.added + '/' + r.total + ' 条' + (failed ? '，失败 ' + failed + ' 条' : ''));
+    if(failed) $('s-extra').textContent = '收藏失败：' + r.failures.join(' | ');
+  }catch(e){
+    toast('收藏失败：' + (e.message || e));
+  }finally{
+    refreshStatus();
+  }
+}
+
+// ── 表情库 ──────────────────────────────────────────────────────────
+function emoCard(item, scope){
+  const el = document.createElement('div');
+  el.className = 'emo';
+
+  const img = document.createElement('img');
+  img.loading = 'lazy';
+  img.referrerPolicy = 'no-referrer';   // B站 图床对跨站 Referer 敏感，别带
+  img.src = item.url || (API + '/emotes/' + encodeURIComponent(item.id) + '/raw');
+  img.alt = item.name || item.code || '表情';
+  el.appendChild(img);
+
+  if(scope === 'panel' && item.owned){
+    const badge = document.createElement('span');
+    badge.className = 'owned'; badge.textContent = '已收藏';
+    el.appendChild(badge);
+  }
+
+  const nm = document.createElement('div');
+  nm.className = 'nm';
+  nm.textContent = item.name || item.alias || item.code || '—';
+  nm.title = nm.textContent;
+  el.appendChild(nm);
+
+  const cd = document.createElement('div');
+  cd.className = 'cd';
+  cd.textContent = item.code || item.package || '';
+  cd.title = cd.textContent;
+  el.appendChild(cd);
+
+  const ops = document.createElement('div');
+  ops.className = 'ops';
+  if(scope === 'local'){
+    const tagBtn = document.createElement('button');
+    tagBtn.textContent = '标签';
+    tagBtn.addEventListener('click', async () => {
+      const next = window.prompt('标签（逗号分隔）', (item.tags || []).join(','));
+      if(next === null) return;
+      try{
+        await jfetch(API + '/emotes/' + encodeURIComponent(item.id), {
+          method: 'PATCH', body: JSON.stringify({ tags: next }),
+        });
+        toast('标签已更新'); emoSearch();
+      }catch(e){ toast('改标签失败：' + (e.message || e)); }
+    });
+    ops.appendChild(tagBtn);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '复制码';
+    copyBtn.addEventListener('click', () => {
+      const text = item.code || item.id;
+      navigator.clipboard?.writeText(text).then(() => toast('已复制 ' + text), () => toast(text));
+    });
+    ops.appendChild(copyBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'del'; delBtn.textContent = '删除';
+    delBtn.addEventListener('click', async () => {
+      if(!window.confirm('把「' + (item.name || item.id) + '」从本地表情库删掉？')) return;
+      try{
+        await jfetch(API + '/emotes/' + encodeURIComponent(item.id), { method: 'DELETE' });
+        toast('已删除'); emoSearch();
+      }catch(e){ toast('删除失败：' + (e.message || e)); }
+    });
+    ops.appendChild(delBtn);
+  } else {
+    const addBtn = document.createElement('button');
+    addBtn.textContent = item.owned ? '已收藏' : '收藏';
+    addBtn.disabled = !!item.owned;
+    addBtn.addEventListener('click', async () => {
+      try{
+        await jfetch(API + '/emotes/import', {
+          method: 'POST', body: JSON.stringify({ code: item.code }),
+        });
+        toast('已收藏 ' + item.code); emoSearch();
+      }catch(e){ toast('收藏失败：' + (e.message || e)); }
+    });
+    ops.appendChild(addBtn);
+  }
+  el.appendChild(ops);
+  return el;
+}
+
+async function emoSearch(){
+  const grid = $('emo-grid');
+  const query = $('emo-q').value.trim();
+  const scope = $('emo-scope').value;
+  grid.innerHTML = '';
+  try{
+    if(scope === 'panel'){
+      const r = await jfetch(API + '/emotes/panel?q=' + encodeURIComponent(query));
+      if(!r.ok){
+        $('emo-count').textContent = '';
+        grid.innerHTML = '<p class="muted">' + (r.error || '拿不到表情面板') + '</p>';
+        return;
+      }
+      $('emo-count').textContent = '面板共 ' + r.total + ' 个码，命中 ' + r.count;
+      if(!r.items.length){ grid.innerHTML = '<p class="muted">没有匹配的码</p>'; return; }
+      for(const item of r.items) grid.appendChild(emoCard(item, 'panel'));
+    }else{
+      const r = await jfetch(API + '/emotes?q=' + encodeURIComponent(query));
+      $('emo-count').textContent = '收藏 ' + r.count + ' 个 · ' + Math.round((r.bytes || 0) / 1024) + ' KB';
+      if(!r.items.length){
+        grid.innerHTML = '<p class="muted">还没有收藏。可以按表情码收藏，或上传本地图片。</p>';
+        return;
+      }
+      for(const item of r.items) grid.appendChild(emoCard(item, 'local'));
+    }
+  }catch(e){
+    grid.innerHTML = '';
+    $('emo-count').textContent = '读取失败：' + (e.message || e);
+  }
+}
+
+async function emoImport(){
+  const input = $('emo-code');
+  const code = input.value.trim();
+  if(!code){ toast('先填一个表情码，比如 [doge]'); return; }
+  try{
+    const r = await jfetch(API + '/emotes/import', { method: 'POST', body: JSON.stringify({ code }) });
+    toast((r.duplicate ? '已经在库里：' : '已收藏：') + (r.item?.code || code));
+    input.value = '';
+    emoSearch();
+  }catch(e){ toast('收藏失败：' + (e.message || e)); }
+}
+
+async function emoAddUrl(){
+  const input = $('emo-url');
+  const url = input.value.trim();
+  if(!url){ toast('先填一个图片链接'); return; }
+  try{
+    const r = await jfetch(API + '/emotes/url', { method: 'POST', body: JSON.stringify({ url }) });
+    toast('已收藏 ' + (r.item?.name || ''));
+    input.value = '';
+    emoSearch();
+  }catch(e){ toast('收藏失败：' + (e.message || e)); }
+}
+
+async function emoUpload(file){
+  if(!file) return;
+  if(file.size > 6 * 1024 * 1024){ toast('图太大了（收藏上限 6MB，评论上传上限 2MB）'); return; }
+  const data = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+  if(!data) return;
+  try{
+    const r = await jfetch(API + '/emotes/upload', {
+      method: 'POST',
+      body: JSON.stringify({ data, name: file.name.replace(/\.[^.]+$/, '') }),
+    });
+    toast((r.duplicate ? '已经在库里：' : '已上传：') + (r.item?.name || ''));
+    emoSearch();
+  }catch(e){ toast('上传失败：' + (e.message || e)); }
+}
+
+// ── 入站消息 ────────────────────────────────────────────────────────
+function inboundRow(ev){
+  const box = document.createElement('div');
+  box.className = 'stat';
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+  const chan = document.createElement('span');
+  chan.className = 'pill';
+  chan.textContent = { dm: '私信', at: '@我', reply: '回复我' }[ev.channel] || ev.channel;
+  head.appendChild(chan);
+  const who = document.createElement('b');
+  who.textContent = ev.nickname || ev.uid;
+  head.appendChild(who);
+  const wl = document.createElement('span');
+  wl.className = 'pill ' + (ev.whitelisted ? 'ok' : 'warn');
+  wl.textContent = ev.whitelisted ? '白名单 · 可用工具' : '陌生人 · 只回话';
+  head.appendChild(wl);
+  box.appendChild(head);
+  const text = document.createElement('div');
+  text.className = 'muted';
+  text.style.marginTop = '6px';
+  text.textContent = ev.text || '（空）';
+  box.appendChild(text);
+  const tgt = ev.target || {};
+  if(tgt.bvid){
+    const t = document.createElement('div');
+    t.className = 'muted';
+    t.textContent = '回复目标：' + tgt.bvid + ' · rpid ' + (tgt.rpid || 0);
+    box.appendChild(t);
+  }
+  return box;
+}
+
+async function refreshInbound(){
+  try{
+    const r = await jfetch(API + '/inbound');
+    const pill = $('in-pill');
+    pill.textContent = r.enabled ? '监听中' : '关着';
+    pill.className = 'pill ' + (r.enabled ? 'ok' : '');
+    const bits = [
+      '渠道 ' + (r.channels || '—'),
+      '同人冷却 ' + r.cooldown_minutes + ' 分钟',
+      '每小时上限 ' + r.max_per_hour,
+      '本小时已回 ' + r.replied_last_hour,
+      '上次检查 ' + (r.last_poll_at || '从未'),
+    ];
+    if(!r.bootstrapped) bits.push('还没建游标（第一次运行只记位置，不回历史）');
+    if(r.last_errors?.length) bits.push('检查错误：'+r.last_errors.join('；'));
+    if(r.auth_expired){$('in-pill').className='pill err';$('in-pill').textContent='凭证失效，请扫码';}
+    $('in-meta').textContent = bits.join(' · ');
+    const list = r.whitelist || [];
+    $('in-wl').textContent = list.length
+      ? '白名单 ' + list.length + ' 个：' + list.map(w => (w.label || '') + '(' + w.uid + ')').join('、')
+      : '白名单是空的：所有入站会话都只回复，不调用模型工具。';
+    renderInboundJobs(r.jobs || []);
+  }catch(e){
+    $('in-pill').textContent = '读取失败';
+    $('in-meta').textContent = e.message || String(e);
+  }
+}
+
+async function checkInbound(){
+  const box = $('in-events');
+  box.innerHTML = '<p class="muted">在拉 B站 消息…</p>';
+  try{
+    const r = await jfetch(API + '/inbound/poll', { method: 'POST', body: JSON.stringify({}) });
+    box.innerHTML = '';
+    const events = r.events || [];
+    if(!events.length){
+      box.innerHTML = '<p class="muted">没有新消息' + (r.first_run ? '（首次运行，积压的历史不会回）' : '') + '</p>';
+    }else{
+      for(const ev of events) box.appendChild(inboundRow(ev));
+    }
+    if(r.errors && r.errors.length){
+      const err = document.createElement('p');
+      err.className = 'muted';
+      err.textContent = '部分渠道失败：' + r.errors.join('；');
+      box.appendChild(err);
+    }
+    refreshInbound();
+  }catch(e){
+    box.innerHTML = '';
+    $('in-meta').textContent = '检查失败：' + (e.message || e);
+  }
+}
+
+let pollTimer = null, loginAttempt = 0, loginAction = false;
+let savedAccountRows = [], accountUiBusy = false;
+function updateAccountButtons(){
+  const row = savedAccountRows.find(item => item.uid === $('account-select').value);
+  $('account-select').disabled = loginAction || accountUiBusy || !savedAccountRows.length;
+  $('btn-account-use').disabled = loginAction || accountUiBusy || !row || row.active;
+  $('btn-account-remove').disabled = loginAction || accountUiBusy || !row;
+}
+async function refreshAccounts(){
+  try{
+    const result = await jfetch(API + '/accounts');
+    const previous = $('account-select').value;
+    savedAccountRows = result.items || [];
+    $('account-select').replaceChildren();
+    for(const row of savedAccountRows){
+      const option = document.createElement('option');
+      option.value = row.uid;
+      option.textContent = 'UID ' + row.uid + (row.active ? ' · 当前账号' : '') + (row.error ? ' · '+row.error : ' · 已保存');
+      $('account-select').appendChild(option);
+    }
+    $('account-select').value = savedAccountRows.some(row => row.uid === previous) ? previous : (savedAccountRows.find(row => row.active)?.uid || savedAccountRows[0]?.uid || '');
+    $('account-meta').textContent = savedAccountRows.length
+      ? '已保存 '+savedAccountRows.length+' 个账号，同一时间只运行一个。退出保留登录态，移除会删除所选账号凭证；失效时需重新扫码。'
+      : '暂无保存的账号，点击“添加账号（扫码）”。同一时间只运行一个账号。';
+  }catch(e){$('account-meta').textContent='读取账号列表失败：'+e.message;}
+  updateAccountButtons();
+}
+async function accountSelect(remove){
+  const uid = $('account-select').value;
+  if(!uid) return;
+  loginAction = true;
+  $('btn-login').disabled = $('btn-logout').disabled = true;
+  updateAccountButtons();clearLoginUi();
+  try{
+    const result = await jfetch(API+'/accounts/'+encodeURIComponent(uid)+(remove ? '' : '/activate'), {method:remove ? 'DELETE' : 'POST'});
+    toast(remove ? '已移除 UID '+uid+' 的保存登录态' : result.message+'（UID '+uid+'）');
+  }catch(e){toast(e.message);}
+  finally{loginAction=false;await Promise.all([refreshStatus(),refreshAccounts(),refreshInbound()]);}
+}
+function clearLoginUi(){
+  loginAttempt++;
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+  $('qr-img').removeAttribute('src');
+  $('qr-box').classList.remove('show');
+}
+async function loginEnd(logout){
+  loginAction = true;
+  $('btn-login').disabled = $('btn-logout').disabled = true;
+  clearLoginUi();
+  try{
+    const r = await jfetch(API + (logout ? '/logout' : '/login/cancel'), {method:'POST'});
+    toast(r.message || (logout ? '已退出 B站登录' : '已取消扫码'));
+  }catch(e){toast('操作失败：'+e.message);}
+  finally{loginAction=false;await Promise.all([refreshStatus(),refreshAccounts()]);}
+}
+async function loginStart(){
+  clearLoginUi();
+  const attempt = loginAttempt;
+  loginAction = true;
+  $('btn-login').disabled = $('btn-logout').disabled = true;
+  const box = $('qr-box');
+  box.classList.add('show');
+  $('qr-msg').textContent = '正在生成二维码…';
+  try{
+    const r = await jfetch(API + '/login/start?force=true', { method: 'POST' });
+    if(attempt !== loginAttempt) return;
+    if(r.status === 'already_logged_in'){ toast('已登录，无需重复扫码'); box.classList.remove('show'); return; }
+    if(r.status !== 'qrcode_ready'){ $('qr-msg').textContent = r.message || ('无法生成二维码：' + r.status); return; }
+    $('qr-img').src = r.qrcode_image;
+    $('qr-msg').textContent = r.message || '请用 B站 App 扫码';
+    if(pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try{
+        const p = await jfetch(API + '/login/poll', { method: 'POST' });
+        if(attempt !== loginAttempt) return;
+        $('qr-msg').textContent = p.message || p.status;
+        if(p.status === 'done'){
+          clearInterval(pollTimer); pollTimer = null;
+          box.classList.remove('show');
+          toast('登录成功' + (p.uid ? '（UID ' + p.uid + '）' : '')); refreshStatus();refreshAccounts();
+        } else if(p.status === 'timeout' || p.status === 'no_session'){
+          clearInterval(pollTimer); pollTimer = null;
+          $('qr-msg').textContent = p.message || '登录没成功，请重新扫码';
+        } else if(p.status === 'poll_error' || p.status === 'unknown'){
+          // 别再静默吞掉了：出问题时必须让人看见，不然就变成"扫了半天还是未登录"
+          clearInterval(pollTimer); pollTimer = null;
+          $('qr-msg').textContent = p.message || '登录出错，请重新扫码';
+        }
+      }catch(e){
+        // 单次网络抖动可以继续试，但连续失败要让人看见
+        $('qr-msg').textContent = '轮询失败：' + (e.message || e);
+      }
+    }, 3000);
+  }catch(e){
+    if(attempt === loginAttempt) $('qr-msg').textContent = '生成失败：' + (e.message || e);
+  }finally{if(attempt === loginAttempt){loginAction=false;refreshStatus();refreshAccounts();}}
+}
+
+$('btn-run').addEventListener('click', runNow);
+$('btn-report').addEventListener('click', showReport);
+$('btn-login').addEventListener('click', loginStart);
+$('btn-logout').addEventListener('click', () => loginEnd(true));
+$('btn-login-cancel').addEventListener('click', () => loginEnd(false));
+$('account-select').addEventListener('change', updateAccountButtons);
+$('btn-account-use').addEventListener('click', () => accountSelect(false));
+$('btn-account-remove').addEventListener('click', () => accountSelect(true));
+$('btn-fav').addEventListener('click', favoriteNow);
+$('btn-emo-search').addEventListener('click', () => emoSearch().catch(e => toast('搜索失败：' + e.message)));
+$('emo-q').addEventListener('keydown', (e) => { if(e.key === 'Enter') emoSearch(); });
+$('emo-scope').addEventListener('change', () => emoSearch());
+$('btn-emo-import').addEventListener('click', emoImport);
+$('emo-code').addEventListener('keydown', (e) => { if(e.key === 'Enter') emoImport(); });
+$('btn-emo-url').addEventListener('click', emoAddUrl);
+$('btn-emo-file').addEventListener('click', () => $('emo-file').click());
+$('btn-in-check').addEventListener('click', checkInbound);
+$('emo-file').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  emoUpload(file).finally(() => { e.target.value = ''; });
+});
+$('btn-save').addEventListener('click', () => saveSettings().catch(e => toast('保存失败：' + e.message)));
+
+(async function boot(){
+  await loadSettings().catch(e => toast('设置读取失败：' + e.message));
+  await loadSystemPrompts();
+  await refreshStatus();
+  await refreshAccounts();
+  await refreshInbound();
+  await emoSearch().catch(() => {});
+  setInterval(() => { refreshStatus(); refreshAccounts(); refreshInbound(); taskLoad(); }, 15000);
+})();
+
+/* 值班任务与处理记录 */
+const TASK_API = API + '/tasks';
+const TASK_FIELDS = [
+  {id:'name',title:'任务名称',type:'string',default:'新任务'},
+  {id:'enabled',title:'启用任务',type:'boolean',default:true},
+  {id:'keywords',title:'关键词（逗号分隔）',type:'string',default:''},
+  {id:'daily_quota',title:'每天最多挑几条',type:'integer',minimum:0,maximum:100,default:3},
+  {id:'valley_windows',title:'谷时窗口',type:'string',default:'12:00-14:00,18:00-09:00'},
+  {id:'min_interval_minutes',title:'两轮最小间隔（分钟）',type:'integer',minimum:0,maximum:1440,default:45},
+  {id:'round_budget_minutes',title:'每轮时间上限（分钟，0 自动）',type:'integer',minimum:0,maximum:60,default:0},
+  {id:'report_level',title:'日报详细程度',type:'string',enum:['brief','full','off'],labels:{brief:'简要',full:'完整',off:'不生成日报'},default:'brief'},
+  {id:'auto_comment',title:'挑中后发表评论并 @',type:'boolean',default:false},
+  {id:'mention_name',title:'要 @ 的名字',type:'string',default:''},
+  {id:'comment_per_round',title:'每轮评论上限',type:'integer',minimum:0,maximum:5,default:1},
+  {id:'image_comment',title:'评论允许附表情图',type:'boolean',default:false},
+  {id:'dm_mode',title:'私信投递模式',type:'string',enum:['off','only','both'],labels:{off:'不投递私信',only:'仅私信',both:'评论与私信'},default:'off'},
+  {id:'dm_uid',title:'投递收件人 UID',type:'integer',minimum:0,default:0},
+  {id:'reply_to_comments',title:'值班时查看自己评论下的回复',type:'boolean',default:false}
+];
+let taskRows = [];
+const taskEsc = value => String(value ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function taskCall(url, options){
+  const result = await jfetch(url, options);
+  if(result.ok === false) throw new Error(result.error || '操作失败');
+  return result;
+}
+function taskCard(){
+  let host = $('task-card');
+  if(!host){
+    host = document.createElement('section'); host.id='task-card'; host.className='card';
+    document.querySelector('.wrap').insertBefore(host, document.querySelector('.wrap').children[1]);
+  }
+  return host;
+}
+function taskRender(rows){
+  taskRows = rows;
+  taskCard().innerHTML = `<h2>值班任务 <button class="btn btn-ghost" id="task-add">新增任务</button></h2>
+    <p class="muted">每条任务独立设置关键词、额度、窗口和投递方式。所有任务共用判重记录。</p>
+    <div style="overflow-x:auto"><table class="task-table" style="width:100%"><thead><tr>
+    <th>任务 / 关键词</th><th>今日已挑 / 额度</th><th>窗口 / 上次运行</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody>${rows.map(r => `<tr data-id="${taskEsc(r.id)}">
+      <td><b>${taskEsc(r.name)}</b><br><span class="muted">${taskEsc(r.keywords || '使用默认关键词')}</span></td>
+      <td>${Number(r.picked_today)||0} / ${Number(r.daily_quota)||0}<br><span class="muted">今日 ${Number(r.rounds_today)||0} 轮</span></td>
+      <td>${taskEsc(r.valley_windows)}<br><span class="muted">${taskEsc(fmtTime(r.last_round_at))}</span></td>
+      <td><span class="pill ${r.busy?'warn':r.last_error?'err':''}">${r.busy?'运行中':!r.enabled?'已停用':r.last_error?'上轮失败':r.remaining===0?'今日额度已用完':'等待调度'}</span>
+      ${r.last_error?`<p class="muted">${taskEsc(r.last_error)}</p>`:''}</td>
+      <td><button class="btn btn-ghost" data-act="run" data-id="${taskEsc(r.id)}" ${r.busy||!r.enabled||r.remaining===0?'disabled':''}>立即跑</button>
+      <button class="btn btn-ghost" data-act="report" data-id="${taskEsc(r.id)}">看日报</button>
+      <button class="btn btn-ghost" data-act="edit" data-id="${taskEsc(r.id)}">编辑</button>
+      <button class="btn btn-ghost" data-act="del" data-id="${taskEsc(r.id)}">删除</button></td></tr>`).join('') || '<tr><td colspan="5">还没有任务，点击“新增任务”开始。</td></tr>'}</tbody></table></div>`;
+}
+async function taskLoad(){
+  try{ taskRender((await taskCall(TASK_API)).items || []); }
+  catch(e){ toast('任务读取失败：'+e.message); }
+}
+function taskEdit(id){
+  const row = taskRows.find(r => r.id===id) || {};
+  let dialog = $('task-editor');
+  if(dialog) dialog.remove();
+  dialog=document.createElement('dialog'); dialog.id='task-editor';
+  const heading=document.createElement('h2'); heading.textContent=id?'编辑值班任务':'新增值班任务';
+  const form=document.createElement('form'); const grid=document.createElement('div'); grid.className='grid';
+  for(const field of TASK_FIELDS) grid.appendChild(renderField(field, row[field.id] ?? field.default));
+  form.appendChild(grid);
+  const actions=document.createElement('div'); actions.className='row'; actions.style.marginTop='20px';
+  const save=document.createElement('button'); save.className='btn btn-primary'; save.textContent='保存任务'; save.type='submit';
+  const cancel=document.createElement('button'); cancel.className='btn btn-ghost'; cancel.textContent='取消'; cancel.type='button'; cancel.onclick=()=>dialog.close();
+  const error=document.createElement('p'); error.className='muted'; error.setAttribute('role','alert');
+  actions.append(save,cancel); form.append(actions,error); dialog.append(heading,form); document.body.appendChild(dialog);
+  form.onsubmit=async event=>{
+    event.preventDefault(); const values={};
+    for(const input of form.querySelectorAll('[data-field-id]')){
+      const type=input.dataset.fieldType;
+      values[input.dataset.fieldId]=type==='boolean'?input.value==='true':type==='integer'?Number(input.value):input.value;
+    }
+    save.disabled=true;
+    try{
+      await taskCall(TASK_API+(id?'/'+encodeURIComponent(id):''),{method:id?'PATCH':'POST',body:JSON.stringify(values)});
+      dialog.close(); await taskLoad(); await refreshStatus(); toast('任务已保存');
+    }catch(e){error.textContent=e.message;}finally{save.disabled=false;}
+  };
+  dialog.showModal();
+}
+function taskAdd(){ taskEdit(''); }
+async function taskReport(id){
+  const r=await taskCall(API+'/report?task_id='+encodeURIComponent(id));
+  $('report-box').textContent=r.exists?r.text:'这条任务今天还没有日报。';
+  $('report-box').scrollIntoView({behavior:'smooth',block:'center'});
+}
+document.addEventListener('click',async event=>{
+  const button=event.target.closest('button[data-act],#task-add'); if(!button) return;
+  if(button.id==='task-add'){taskAdd();return;}
+  const {act,id}=button.dataset;
+  if(act==='edit'){taskEdit(id);return;}
+  if(act==='report'){await taskReport(id).catch(e=>toast(e.message));return;}
+  button.disabled=true;
+  try{
+    if(act==='run'){
+      toast('任务已开始…'); await taskCall(TASK_API+'/'+encodeURIComponent(id)+'/run',{method:'POST'});
+    }else if(act==='del'){
+      if(!confirm('删除这条任务？已保存的会话与日报会保留。')) return;
+      await taskCall(TASK_API+'/'+encodeURIComponent(id),{method:'DELETE'});
+    }
+    await taskLoad(); await refreshStatus();
+  }catch(e){toast(e.message);}finally{button.disabled=false;}
+});
+function renderInboundJobs(jobs){
+  const host=$('in-jobs'); host.replaceChildren();
+  const labels={pending:'等待处理或发送',processing:'正在回复',linked:'已合并到同一回复',sent:'已发送',partial:'部分已发送',failed:'失败',unknown:'待核对',skipped:'未回复'};
+  for(const job of jobs.slice(0,20)){
+    const box=document.createElement('div'); box.className='stat';
+    const line=document.createElement('b'); line.textContent=(labels[job.status]||job.status)+' · '+({dm:'私聊',at:'@我',reply:'回复我'}[job.event.channel]||'消息')+' · '+(job.event.nickname||job.event.uid);
+    const text=document.createElement('p'); text.className='muted'; text.textContent=job.event.text;
+    const note=document.createElement('p'); note.className='muted'; note.textContent=job.error||'';
+    box.append(line,text,note);
+    const action=(label,path,body)=>{
+      const button=document.createElement('button'); button.className='btn btn-ghost'; button.textContent=label;
+      button.onclick=async()=>{
+        if(body?.outcome==='not_sent'&&!confirm('已在 B站核对，确认没有发送成功，并重新投递？')) return;
+        button.disabled=true;
+        try{await taskCall(API+'/inbound/jobs/'+encodeURIComponent(job.key)+'/'+path,{method:'POST',body:JSON.stringify(body||{})});await refreshInbound();}
+        catch(e){toast(e.message);}finally{button.disabled=false;}
+      };box.appendChild(button);
+    };
+    if(['failed','skipped'].includes(job.status)) action('重新处理','retry');
+    if(job.status==='unknown'){action('确认已发送','resolve',{outcome:'sent'});action('确认未发，重新处理','resolve',{outcome:'not_sent'});}
+    host.appendChild(box);
+  }
+  if(!jobs.length) host.textContent='暂无处理记录。';
+}
+taskLoad();
+</script>
+</body>
+</html>

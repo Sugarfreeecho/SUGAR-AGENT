@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "id": "sugar-bili-scroll",
+  "name": "刷B站（值班）",
+  "version": "0.4.0",
+  "description": "多任务值班、表情库和入站回复；插件会话使用独立完整系统提示词，支持编辑、持久保存和恢复默认。",
+  "settings_schema": {
+    "type": "object",
+    "schema_version": 1,
+    "title": "刷B站 值班设置",
+    "description": "谷时窗口内自动跑一轮；每天的量按日报里的 ### BV号 标题行对账。",
+    "properties": {
+      "keywords": {
+        "type": "string",
+        "title": "旧单任务迁移：关键词",
+        "description": "逗号分隔，留空则用章程里的默认词组。",
+        "format": "multiline",
+        "default": "DeepSeek Harness,DSH 插件,dsh 教程"
+      },
+      "daily_quota": {
+        "type": "integer",
+        "title": "旧单任务迁移：每天额度",
+        "description": "全天总量，不是每轮；宿主按日报里的标题行数对账。",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 3
+      },
+      "valley_windows": {
+        "type": "string",
+        "title": "旧单任务迁移：谷时窗口",
+        "description": "多个用逗号分隔，支持跨零点。默认 12:00-14:00 与 18:00-09:00。",
+        "default": "12:00-14:00,18:00-09:00"
+      },
+      "min_interval_minutes": {
+        "type": "integer",
+        "title": "两轮之间至少间隔（分钟）",
+        "description": "防止在窗口里连轴转把额度烧光。",
+        "minimum": 10,
+        "maximum": 720,
+        "default": 45
+      },
+      "round_budget_minutes": {
+        "type": "integer",
+        "title": "一轮最多跑多久（分钟）",
+        "description": "到点直接掐断（没报告）。0 = 按额度自适应（每条约 3.5 分钟，10~60 分钟之间）。",
+        "minimum": 0,
+        "maximum": 60,
+        "default": 0
+      },
+      "report_level": {
+        "type": "string",
+        "title": "日报详细程度",
+        "description": "full=标题/UP/理由；brief=每条一两行；off=不写日报。",
+        "enum": [
+          "full",
+          "brief",
+          "off"
+        ],
+        "default": "full"
+      },
+      "auto_comment": {
+        "type": "boolean",
+        "title": "自动评论并 @ 我",
+        "description": "关着时模型手里根本没有 bili_reply 这只工具。",
+        "default": false
+      },
+      "mention_name": {
+        "type": "string",
+        "title": "要 @ 的名字",
+        "description": "和上一项同时满足才会发评论。",
+        "default": ""
+      },
+      "comment_per_round": {
+        "type": "integer",
+        "title": "每轮最多发几条评论",
+        "minimum": 0,
+        "maximum": 5,
+        "default": 1
+      },
+      "dm_mode": {
+        "type": "string",
+        "title": "私信投递",
+        "description": "off=只发公开评论；only=只发私信；both=两者都发。",
+        "enum": [
+          "off",
+          "only",
+          "both"
+        ],
+        "default": "off"
+      },
+      "dm_uid": {
+        "type": "integer",
+        "title": "私信收件人 UID",
+        "description": "0 表示不填；填了且 dm_mode 不是 off 才会开放私信工具。",
+        "minimum": 0,
+        "default": 0
+      },
+      "reply_to_comments": {
+        "type": "boolean",
+        "title": "回复评论",
+        "description": "只回到「直接回复到我那条评论下面」的人。",
+        "default": false
+      },
+      "image_comment": {
+        "type": "boolean",
+        "title": "允许图片评论",
+        "description": "开了之后模型才能把本地表情库里的图发进评论（会先传到账号图床）。默认关。",
+        "default": false
+      },
+      "inbound_reply": {
+        "type": "boolean",
+        "title": "入站自动回复",
+        "description": "有人私信 / @我 / 回复我时，起会话写一条回复。默认关；第一次运行只记游标不回历史。",
+        "default": false
+      },
+      "inbound_channels": {
+        "type": "string",
+        "title": "监听哪些渠道",
+        "description": "逗号分隔：dm（私信）/ at（@我）/ reply（回复我）。默认 dm,at。",
+        "default": "dm,at"
+      },
+      "inbound_whitelist": {
+        "type": "string",
+        "format": "multiline",
+        "title": "白名单 UID",
+        "description": "一行一个：`uid 备注`。白名单账号回信时可用工具；其他账号只回话、不碰工具。",
+        "default": ""
+      },
+      "inbound_cooldown_minutes": {
+        "type": "integer",
+        "title": "同人冷却（分钟）",
+        "description": "同一个人两次回复之间至少隔多久。默认 1 分钟；想更克制就填 10、30。",
+        "default": 1
+      },
+      "inbound_max_per_hour": {
+        "type": "integer",
+        "title": "每小时上限",
+        "description": "一小时内最多回几条（所有人加起来）。默认 6，防止被刷。",
+        "default": 6
+      },
+      "transcribe": {
+        "type": "boolean",
+        "title": "本地转写（没字幕的视频）",
+        "description": "开了才给模型 bili_transcribe。默认复用宿主「语音输入」那套，不用再下模型。",
+        "default": false
+      },
+      "asr_engine": {
+        "type": "string",
+        "title": "转写引擎",
+        "description": "host = 用语音输入那套（ffmpeg 切片，零额外依赖）；local = 插件内 Whisper（要下模型，慢但整段连贯）。",
+        "enum": [
+          "host",
+          "local"
+        ],
+        "default": "host"
+      },
+      "asr_model": {
+        "type": "string",
+        "title": "Whisper 模型（仅 local 引擎）",
+        "description": "tiny 最快最糙 / base 平衡 / small 更准但 CPU 上慢好几倍。",
+        "enum": [
+          "tiny",
+          "base",
+          "small",
+          "medium"
+        ],
+        "default": "base"
+      },
+      "asr_max_minutes": {
+        "type": "integer",
+        "title": "转写时长上限（分钟）",
+        "description": "超过这个时长的视频不转、直接跳过。0 表示不限制。",
+        "minimum": 0,
+        "maximum": 120,
+        "default": 20
+      },
+      "fav_folder_id": {
+        "type": "integer",
+        "title": "自动收藏到（收藏夹 id）",
+        "description": "0 = 关闭。填了之后，每轮挑中的视频由宿主收进这个收藏夹 —— 模型手里没有这只工具。",
+        "minimum": 0,
+        "default": 0
+      },
+      "workspace": {
+        "type": "string",
+        "title": "人设来源目录",
+        "description": "填了就读取该目录的 AGENTS.md 当人设；留空按中性说话。",
+        "format": "directory",
+        "default": ""
+      },
+      "duty_model_profile": {
+        "type": "string",
+        "title": "钉住值班模型（档案 id）",
+        "description": "填会话可用的模型档案 id，固定值班和入站会话的模型；留空采用会话或全局默认。",
+        "default": ""
+      },
+      "duty_session_id": {
+        "type": "string",
+        "title": "值班会话 ID",
+        "description": "留空则首次触发时自动建一个叫「B站值班」的会话并回填。",
+        "default": ""
+      },
+      "inbound_public_reply": {
+        "type": "boolean",
+        "title": "回复评论和 @",
+        "description": "独立控制所有视频下的评论回复和 @，不受刷视频任务的自动评论开关影响。",
+        "default": true
+      },
+      "inbound_dm_public_comment": {
+        "type": "boolean",
+        "title": "白名单可在私聊中要求发公开评论",
+        "description": "只对白名单生效；私聊回复仍由完整回复条目发送，不开放转发到其他私信对象的工具。",
+        "default": true
+      },
+      "inbound_image_comment": {
+        "type": "boolean",
+        "title": "入站回复允许图片评论",
+        "description": "白名单回复和私聊指定的公开评论可使用本地表情图；每轮最多一张。",
+        "default": false
+      }
+    }
+  },
+  "capabilities": {
+    "trusted_host": {
+      "entry": "host.py"
+    },
+    "web": {
+      "entry": "web/index.html",
+      "assets": "web"
+    },
+    "ui": {
+      "navigation": [
+        {
+          "id": "main",
+          "label": "刷B站",
+          "description": "谷时自动刷一轮 B站，看日报与登录状态。",
+          "order": 60
+        }
+      ],
+      "details.tab": [
+        {
+          "id": "main",
+          "title": "刷B站",
+          "description": "谷时自动刷一轮 B站，看日报与登录状态。",
+          "scope": "app",
+          "order": 60
+        }
+      ]
+    }
+  },
+  "permissions": {
+    "context": [],
+    "services": []
+  }
+}
