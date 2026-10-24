@@ -203,6 +203,7 @@ async def _handle(registry: Plugin, request: Mapping[str, Any]) -> Any:
             "tools": registry.describe_tools(),
             "hooks": registry.describe_hooks(),
             "commands": registry.describe_commands(),
+            "context_providers": registry.describe_context_providers(),
             "deferred_results": registry.supports_deferred_results,
             "http": registry.supports_http,
             "background_services": registry.describe_background_services(),
@@ -233,6 +234,12 @@ async def _handle(registry: Plugin, request: Mapping[str, Any]) -> Any:
                 arguments,
                 context,
             )
+    if method == "context.collect":
+        params = request.get("params")
+        if not isinstance(params, Mapping) or not isinstance(params.get("context"), Mapping):
+            raise ValueError("context.collect requires an object context")
+        with contextlib.redirect_stdout(sys.stderr):
+            return await registry.collect_context(str(params.get("id") or ""), params["context"])
     if method == "hook.call":
         params = request.get("params")
         if not isinstance(params, Mapping):

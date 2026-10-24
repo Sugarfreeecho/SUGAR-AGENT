@@ -36,6 +36,7 @@ class PluginRegistry {
     this.tools = new Map();
     this.hooks = new Map();
     this.commands = new Map();
+    this.contextProviders = new Map();
     this.activateHandlers = [];
     this.deactivateHandlers = [];
     this.deferredPollHandler = null;
@@ -128,6 +129,49 @@ class PluginRegistry {
         workspace_root_argument,
         worktree_compatible,
       }));
+  }
+
+  registerContext(spec, handler) {
+    if (!spec || typeof spec !== 'object') throw new Error('Context specification must be an object');
+    const options = new Set(['id','title','order','max_tokens','maxTokens','timeout_seconds','timeoutSeconds','trigger','mode']);
+    if (Object.keys(spec).some(key => !options.has(key))) throw new Error('Unknown context provider option');
+    const id = String(spec.id || '').trim();
+    const title = String(spec.title || id).trim();
+    const order = spec.order ?? 100;
+    const maxTokens = spec.max_tokens ?? spec.maxTokens ?? 800;
+    const timeout = spec.timeout_seconds ?? spec.timeoutSeconds ?? 2;
+    if (!TOOL_NAME.test(id) || !title || [...title].length > 128) throw new Error('Invalid context id or title');
+    if ((spec.trigger ?? 'step') !== 'step' || (spec.mode ?? 'snapshot') !== 'snapshot') throw new Error('Context providers support trigger=step and mode=snapshot');
+    if (!Number.isInteger(order) || order < -10000 || order > 10000) throw new Error('Invalid context order');
+    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4096) throw new Error('Invalid context max_tokens');
+    if (!Number.isFinite(timeout) || timeout < .05 || timeout > 10) throw new Error('Invalid context timeout_seconds');
+    if (typeof handler !== 'function' || this.contextProviders.has(id) || this.contextProviders.size >= 16) throw new Error('Invalid or duplicate context provider');
+    this.contextProviders.set(id, { spec: { id, title, order, max_tokens: maxTokens, timeout_seconds: timeout,
+      trigger: 'step', mode: 'snapshot' }, handler });
+    return handler;
+  }
+
+  context(spec, handler) { return this.registerContext(spec, handler); }
+
+  describeContextProviders() {
+    return [...this.contextProviders.values()].map(value => ({ ...value.spec }));
+  }
+
+  async collectContext(id, context) {
+    const registration = this.contextProviders.get(id);
+    if (!registration) throw new Error(`Unknown context provider: ${id}`);
+    let value = await registration.handler(JSON.parse(JSON.stringify(context)));
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string') value = { text: value };
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).some(key => !['text', 'revision'].includes(key)) || typeof value.text !== 'string') {
+      throw new Error('Context result must be text, null, or an object with text and optional revision');
+    }
+    const text = value.text.trim();
+    const revision = value.revision ?? '';
+    if (Buffer.byteLength(text, 'utf8') > 262144) throw new Error('Context result exceeds 256 KiB');
+    if (!(typeof revision === 'string' || Number.isSafeInteger(revision)) || [...String(revision)].length > 256) throw new Error('Invalid context revision');
+    return text ? { text, revision: String(revision) } : null;
   }
 
   registerHook(spec, handler) {
@@ -667,6 +711,7 @@ async function handle(registry, request) {
       api_version: API_VERSION,
       tools: registry.describeTools(),
       hooks: registry.describeHooks(),
+      context_providers: registry.describeContextProviders(),
       commands: registry.describeCommands(),
       deferred_results: Boolean(registry.deferredPollHandler),
       http: Boolean(registry.httpHandler),
@@ -696,6 +741,13 @@ async function handle(registry, request) {
       throw new Error("tool.call context must be an object");
     }
     return await registry.invokeTool(params.name, args, context);
+  }
+  if (method === "context.collect") {
+    const params = request.params;
+    if (!params || typeof params !== 'object' || !params.context || typeof params.context !== 'object' || Array.isArray(params.context)) {
+      throw new Error('context.collect requires an object context');
+    }
+    return registry.collectContext(String(params.id || ''), params.context);
   }
   if (method === "hook.call") {
     const params = request.params;

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "example.workspace-context",
+  "name": "Workspace Context",
+  "version": "1.0.0",
+  "description": "Inject AGENT_CONTEXT.md from the current session workspace when its contents change.",
+  "capabilities": {"context": true},
+  "runtime": {"type": "python", "entrypoint": "./plugin.py", "api_version": "1", "timeout_seconds": 3}
+}

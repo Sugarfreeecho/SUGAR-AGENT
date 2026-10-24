@@ -3026,7 +3026,7 @@ def _counts_toward_session_user_turns_dict(d: dict) -> bool:
     """计入与 ui_events 用户数对齐裁剪的真人 user。"""
     return isinstance(d, dict) and d.get("type") == "user" and not _is_compress_recap_user_dict(
         d
-    ) and not _is_micro_shrink_user_dict(d)
+    ) and not _is_micro_shrink_user_dict(d) and not (d.get("metadata") or {}).get("plugin_context")
 
 
 def _normalize_user_plain_for_rewrite_match(text: str) -> str:
@@ -8966,7 +8966,8 @@ def derive_dialogue_from_assistant_history(llm_history: List) -> List:
     has_final = False
     for message in llm_history:
         if isinstance(message, UserMessage):
-            if is_compress_recap_user_message(message) or is_micro_shrink_user_message(message):
+            if (is_compress_recap_user_message(message) or is_micro_shrink_user_message(message)
+                    or (getattr(message, "metadata", None) or {}).get("plugin_context")):
                 continue
             out.append(message)
             has_user, has_final = True, False

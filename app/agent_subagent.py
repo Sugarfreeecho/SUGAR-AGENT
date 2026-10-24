@@ -1011,6 +1011,32 @@ def filter_tools_for_session(
         depth = max(1, int(meta.get("subagent_depth") or 1))
     stype = str(meta.get("subagent_type") or "generalPurpose").strip()
     readonly_strict = bool(meta.get("readonly_strict"))
+    # 会话/单轮级的工具白名单与黑名单（agent_loop 可以在 session_meta 里临时塞
+    # `tool_allowlist` / `tool_deny` 来给"这一次 run"收窄工具，不必改会话本身）。
+    # 例：B站插件入站回复的独立会话，需要禁掉 run_shell / 写文件。
+    raw_allow = meta.get("tool_allowlist")
+    raw_deny = meta.get("tool_deny")
+    allow_set = (
+        {str(item).strip() for item in raw_allow if str(item).strip()}
+        if isinstance(raw_allow, (list, tuple, set))
+        else set()
+    )
+    deny_set = (
+        {str(item).strip() for item in raw_deny if str(item).strip()}
+        if isinstance(raw_deny, (list, tuple, set))
+        else set()
+    )
+    allow_active = bool(meta.get("tool_allowlist_active")) or bool(allow_set)
+    # 非空白名单保留延迟工具桥：插件工具在这个宿主里以 deferred 形式暴露，
+    # 模型要靠 tool_search / tool_describe / tool_call 才能发现并调到它们。
+    # 白名单写的是"业务工具名"，桥一被剔掉，白名单里那些反而永远调不到
+    # （实测：allow=["bili_search"] 只剩 3 只桥，bili_search 自身也不见了）。
+    if allow_set:
+        allow_set = allow_set | {
+            "tool_search",
+            "tool_describe",
+            "tool_call",
+        }
 
     # Built-in and MCP definition dictionaries are immutable snapshots in the
     # agent loop.  Object identity therefore gives us a cheap, exact revision
@@ -1022,6 +1048,9 @@ def filter_tools_for_session(
         depth,
         stype,
         readonly_strict,
+        allow_active,
+        tuple(sorted(allow_set)),
+        tuple(sorted(deny_set)),
         tuple(id(item) for item in source_definitions),
     )
     with _tool_filter_cache_lock:
@@ -1044,6 +1073,10 @@ def filter_tools_for_session(
     for defn in tool_definitions or []:
         name = _tool_name(defn)
         if not name:
+            continue
+        if allow_active and name not in allow_set:
+            continue
+        if name in deny_set:
             continue
         if name.startswith("mcp_"):
             if meta.get("is_subagent") and exclude_mcp:

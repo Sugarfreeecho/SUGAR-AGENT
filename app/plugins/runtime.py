@@ -17,11 +17,12 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
-from myagent_plugin_sdk import PluginApiError, parse_deferred_result
+from myagent_plugin_sdk import PluginApiError, parse_deferred_result, context_provider_spec, context_provider_result
 
 try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
     from proc_flags import hidden_flags
@@ -387,13 +388,27 @@ class _PersistentPluginWorker:
             self._stdout_thread.start()
             self._stderr_thread.start()
 
-    def request(self, method: str, params: Optional[Mapping[str, Any]] = None) -> Any:
+    @contextmanager
+    def _request_gate(self, timeout_seconds):
+        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+        acquired = self._request_lock.acquire() if deadline is None else self._request_lock.acquire(timeout=timeout_seconds)
+        if not acquired:
+            raise PluginRuntimeError(f"Plugin {self.plugin.plugin_id!r} worker is busy")
+        try:
+            yield deadline
+        finally:
+            self._request_lock.release()
+
+    def request(self, method: str, params: Optional[Mapping[str, Any]] = None,
+                *, timeout_seconds: Optional[float] = None) -> Any:
         runtime = self.plugin.runtime
         if runtime is None:
             raise PluginRuntimeError(
                 f"Plugin {self.plugin.plugin_id!r} has no executable runtime"
             )
-        with self._request_lock:
+        if timeout_seconds is not None:
+            timeout_seconds = min(float(timeout_seconds), runtime.timeout_seconds)
+        with self._request_gate(timeout_seconds) as deadline:
             self.start()
             process = self._process
             if process is None or process.stdin is None or process.poll() is not None:
@@ -415,12 +430,12 @@ class _PersistentPluginWorker:
                     f"Plugin {self.plugin.plugin_id!r} worker pipe failed"
                 ) from exc
             try:
-                response = self._responses.get(timeout=runtime.timeout_seconds)
+                response = self._responses.get(timeout=runtime.timeout_seconds if deadline is None else max(.001, deadline - time.monotonic()))
             except queue.Empty as exc:
                 self.terminate()
                 raise PluginRuntimeError(
                     f"Plugin {self.plugin.plugin_id!r} worker timed out after "
-                    f"{runtime.timeout_seconds:g}s"
+                    f"{(timeout_seconds or runtime.timeout_seconds):g}s"
                 ) from exc
             if isinstance(response, Exception):
                 detail = "\n".join(self._stderr_tail)[-4096:]
@@ -723,15 +738,32 @@ class PluginRuntimeRegistry:
                 f"Plugin {plugin.plugin_id!r} registered background services without "
                 "declaring the capability"
             )
+        providers = result.get("context_providers", [])
+        if not isinstance(providers, list) or len(providers) > 16:
+            raise PluginRuntimeError("context_providers must contain at most 16 entries")
+        capabilities = plugin.raw_manifest.get("capabilities") or {}
+        if providers and (not isinstance(capabilities, Mapping) or capabilities.get("context") is not True):
+            raise PluginRuntimeError("Context providers require capabilities.context=true")
+        try:
+            definitions = [context_provider_spec(row) for row in providers if isinstance(row, Mapping)]
+            if len(definitions) != len(providers) or len({row['id'] for row in definitions}) != len(definitions):
+                raise PluginApiError("Invalid or duplicate context provider")
+        except (PluginApiError, TypeError, ValueError) as exc:
+            raise PluginRuntimeError(str(exc)) from exc
+        result = {**result, "context_providers": definitions}
         return copy.deepcopy(result)
 
     def _capabilities(
-        self, plugins: Sequence[PluginDefinition]
+        self, plugins: Sequence[PluginDefinition], *, context_only: bool = False, only_plugin_id: str = ""
     ) -> Dict[str, tuple[PluginDefinition, Mapping[str, Any]]]:
+        from plugin_context import declared
         workers = self._synchronise_workers(plugins)
         result: Dict[str, tuple[PluginDefinition, Mapping[str, Any]]] = {}
+        deadline = time.monotonic() + 8 if context_only else None
         for plugin in sorted(plugins, key=lambda item: item.plugin_id):
             if plugin.runtime is None:
+                continue
+            if context_only and (not declared(plugin) or (only_plugin_id and plugin.plugin_id != only_plugin_id)):
                 continue
             key = (plugin.plugin_id, plugin.content_signature)
             try:
@@ -749,9 +781,16 @@ class PluginRuntimeRegistry:
                         continue
                 description = self._describe_cache.get(key)
                 if description is None:
+                    if context_only:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise PluginRuntimeError("Context catalog exceeded its collection budget")
+                        response = workers[key].request("plugin.describe", {}, timeout_seconds=min(2, remaining))
+                    else:
+                        response = workers[key].request("plugin.describe", {})
                     description = self._validate_description(
                         plugin,
-                        workers[key].request("plugin.describe", {}),
+                        response,
                     )
                     self._describe_cache[key] = description
                 result[plugin.plugin_id] = (plugin, description)
@@ -888,6 +927,45 @@ class PluginRuntimeRegistry:
                 name: copy.deepcopy(dict(binding.contract))
                 for name, binding in self._tool_bindings.items()
             }
+
+    def context_descriptions(self, plugins: Iterable[PluginDefinition]) -> list[Dict[str, Any]]:
+        """Describe declared providers without starting unrelated plugin workers."""
+        from plugin_context import declared
+        plugin_rows = tuple(plugins)
+        if not any(declared(item) for item in plugin_rows):
+            with self._lock:
+                self._synchronise_workers(plugin_rows)
+            return []
+        with self._lock:
+            return sorted([
+                {**row, "plugin_id": plugin.plugin_id, "plugin_name": str(plugin.name)[:128], "plugin_signature": plugin.content_signature}
+                for plugin, description in self._capabilities(plugin_rows, context_only=True).values()
+                for row in description.get("context_providers", [])
+            ], key=lambda row: (row['order'], row['plugin_id'], row['id']))
+
+    def context_errors(self) -> Dict[str, str]:
+        """Return catalog failures so collection can distinguish failure from removal."""
+        with self._lock:
+            return dict(self._errors_by_plugin)
+
+    def collect_context(self, definition: Mapping[str, Any], context: Mapping[str, Any],
+                        plugins: Sequence[PluginDefinition]) -> Optional[Dict[str, str]]:
+        """Invoke a current authorized provider with host-owned session identity."""
+        with self._lock:
+            available = self._capabilities(plugins, context_only=True, only_plugin_id=str(definition['plugin_id'])).get(str(definition['plugin_id']))
+            if available is None or available[0].content_signature != definition['plugin_signature']:
+                raise PluginRuntimeError("Context provider changed, was disabled, or is unapproved")
+            plugin, description = available
+            worker = self._workers[(plugin.plugin_id, plugin.content_signature)]
+            registered = next((row for row in description.get('context_providers', []) if row['id'] == definition['id']), None)
+            if registered is None:
+                raise PluginRuntimeError("Context provider is unavailable or unapproved")
+            trusted = worker.trusted_context()
+            trusted.update({key: copy.deepcopy(context[key]) for key in
+                            ('session_id', 'run_id', 'step', 'workspace_root', 'session_state') if key in context})
+            trusted['plugin_id'] = plugin.plugin_id
+        return context_provider_result(worker.request('context.collect', {'id': registered['id'], 'context': trusted},
+                                                     timeout_seconds=registered['timeout_seconds']))
 
     def hook_descriptions(
         self, plugins: Iterable[PluginDefinition]

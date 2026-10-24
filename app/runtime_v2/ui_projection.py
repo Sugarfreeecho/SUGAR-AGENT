@@ -1516,6 +1516,11 @@ class RuntimeUiProjection:
     @staticmethod
     def event_to_ui(event: RuntimeEvent) -> Optional[dict]:
         payload = dict(event.payload or {})
+        if event.type == "model_user":
+            from plugin_context import message_snapshot, snapshot_ui
+            context = message_snapshot(payload)
+            if context:
+                return snapshot_ui(payload.get("content"), context)
         if payload.get("ephemeral") and payload.get("type") in {
             "llm_reasoning_delta",
             "llm_response_delta",

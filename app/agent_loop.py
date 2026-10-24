@@ -25,6 +25,7 @@ from agent_fact_commit import run_fact_commit
 from datetime import datetime
 import inspect
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Mapping, Optional, Tuple
 from agent_local_timing import local_operation, local_step, mark_local
@@ -3924,6 +3925,65 @@ def _simplify_external_tool_names(
     registry.rename_tools(names | inherited_names)
 
 
+_RUN_TOOL_SCOPE: ContextVar = ContextVar("run_tool_scope", default=None)
+
+
+def run_tool_scope_for(session_id: str) -> Dict[str, Any]:
+    """当前这一轮该会话的工具范围覆盖（没有就返回空 dict）。"""
+    scope = (_RUN_TOOL_SCOPE.get() or {}).get(str(session_id or "").strip())
+    return {k: v for k, v in scope.items() if k != "previous"} if isinstance(scope, dict) else {}
+
+
+def set_run_tool_scope(
+    session_id: str,
+    *,
+    allow: Optional[Iterable[str]] = None,
+    deny: Optional[Iterable[str]] = None,
+    run_id: str = "",
+    context: Optional[Dict[str, Any]] = None,
+) -> str:
+    """给**这一次 run** 收窄工具（不写会话 metadata）。
+
+    返回 token，跑完用 `clear_run_tool_scope(session_id, token)` 还原。
+    只影响 `build_combined_tool_registry_for_session` 组装出的目录，
+    也就是"模型看得到哪些工具"；没有该会话的其它轮次不受影响。
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return ""
+    token = uuid.uuid4().hex
+    scopes = dict(_RUN_TOOL_SCOPE.get() or {})
+    scope = {
+        "token": token,
+        "run_id": str(run_id or ""),
+        "deny": [str(x).strip() for x in (deny or []) if str(x).strip()],
+        "context": dict(context or {}),
+        "previous": scopes.get(sid),
+    }
+    if allow is not None:
+        scope["allow"] = [str(x).strip() for x in allow if str(x).strip()]
+    scopes[sid] = scope
+    _RUN_TOOL_SCOPE.set(scopes)
+    return token
+
+
+def clear_run_tool_scope(session_id: str, token: str = "") -> None:
+    """撤掉覆盖；token 对不上就不动（避免清掉别人设的那一层）。"""
+    sid = str(session_id or "").strip()
+    scopes = dict(_RUN_TOOL_SCOPE.get() or {})
+    current = scopes.get(sid)
+    if not isinstance(current, dict):
+        return
+    if token and str(current.get("token") or "") != str(token):
+        return
+    previous = current.get("previous")
+    if previous:
+        scopes[sid] = previous
+    else:
+        scopes.pop(sid, None)
+    _RUN_TOOL_SCOPE.set(scopes)
+
+
 async def build_combined_tool_registry_for_session(
     session_id: str,
     *,
@@ -3950,6 +4010,19 @@ async def build_combined_tool_registry_for_session(
             session_meta = {}
     if not isinstance(session_meta, dict):
         session_meta = {}
+    # ⭐ 单轮工具范围覆盖（run-scoped）：插件可以在这一轮跑之前调
+    #    `set_run_tool_scope(sid, allow=[...])`，只影响这一次工具目录组装，
+    #    不写会话 metadata —— 同一条会话的其它轮仍是全量工具。
+    #    用例：B站插件借值班会话回私信，但那一轮只准用 bili_*，碰不到 shell/文件。
+    _scope = run_tool_scope_for(sid)
+    if _scope:
+        session_meta = dict(session_meta)
+        if "allow" in _scope:
+            session_meta["tool_allowlist"] = list(_scope["allow"])
+            session_meta["tool_allowlist_active"] = True
+        if _scope.get("deny"):
+            session_meta["tool_deny"] = list(_scope["deny"])
+        session_meta["_plugin_run_policy"] = dict(_scope.get("context") or {})
 
     started = time.perf_counter()
     try:
@@ -4042,7 +4115,7 @@ async def build_combined_tool_registry_for_session(
         combined_tools = filter_tools_for_session(combined_tools, session_meta)
         combined_tools = inject_task_model_profiles(combined_tools)
     except Exception as exc:
-        if tool_search.load_config().enabled != "off":
+        if session_meta.get("tool_allowlist_active") or session_meta.get("tool_allowlist") or session_meta.get("tool_deny") or tool_search.load_config().enabled != "off":
             raise RuntimeError("Cannot assemble deferred tools without session profile filtering") from exc
         logger.warning("subagent tool filtering failed and was skipped: %s", exc)
     finally:
@@ -5415,6 +5488,37 @@ async def _prepare_react_iteration(state: State, emit, inject_pending_notes) -> 
     return "", changed
 
 
+async def _inject_plugin_context_step(state, history, work, outgoing, emit, *, context_window, workspace_root=None):
+    from plugin_context import prepare_for_step, snapshot_ui, message_snapshot
+    if workspace_root is None:
+        workspace_root = await asyncio.to_thread(
+            lambda: session_work_root(session_manager._load_metadata(state['session_id']) or {}))
+    planned = await _await_steerable(state, prepare_for_step(
+        state, session_manager, history, step=int(state.get('_current_react_iter') or 1),
+        workspace_root=workspace_root,
+        context_window=int(context_window)), emit, 'plugin_context')
+    if not planned:
+        return
+    if not _state_run_has_write_fence(state) or _state_interrupt_requested(state):
+        raise asyncio.CancelledError()
+    message = _dict_to_message(planned)
+    committed = await run_fact_commit(_runtime_v2_append_model_message, state, message)
+    if _runtime_v2_is_primary() and committed is None:
+        raise asyncio.CancelledError()
+    history.append(message)
+    work.append(message)
+    outgoing.append(message)
+    state['llm_history'], state['work_messages'] = history, work
+    state.pop('_prompt_turn_cache', None)
+    ui = snapshot_ui(message.content, message_snapshot(message))
+    if committed:
+        ui.update(runtime_seq=committed.seq, runtime_event_type=committed.type,
+                  _runtime_v2_committed=True, _skip_persist=True)
+    else:
+        await run_fact_commit(_persist_session_messages, state)
+    await _push_stream_event(state, ui, emit=emit)
+
+
 async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
     """ReAct 循环执行，集成 todo、技能、压缩、重复检测，支持并行工具调用。"""
     # ========== 1. 初始化状态 ==========
@@ -5504,8 +5608,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
     ).strip()
 
     def _inject_pending_subagent_notes(*, current_run_only: bool = False) -> bool:
-        if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
-            return False
         claim_id = "%s:%s" % (
             str(state.get("_runtime_v2_run_id") or "continuation"), uuid.uuid4().hex
         )
@@ -5859,6 +5961,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 0, pre_api_timings["tool_registry_total"]
                 - (_pre_api_timing_total(pre_api_timings) - _registry_accounted_before),
             )
+            _t_pre_api = time.perf_counter()
+
+            _t_plugin_context = time.perf_counter()
+            await _inject_plugin_context_step(
+                state, llm_history, work_messages, llm_messages, emit,
+                workspace_root=session_work_root(session_meta),
+                context_window=(last_prompt_runtime_config.get('model_runtime') or {}).get('context_window') or CONTEXT_WINDOW)
+            _pre_api_timing_mark(pre_api_timings, 'plugin_context', _t_plugin_context)
             _t_pre_api = time.perf_counter()
 
             # 调试：仅记录多轮消息数量与首段截断（避免整段 XML 日志）

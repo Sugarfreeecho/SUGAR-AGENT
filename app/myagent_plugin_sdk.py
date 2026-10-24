@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
+import math
 import re
 import time
 from contextvars import ContextVar
@@ -43,6 +44,48 @@ _HOOK_EVENTS = frozenset(
 )
 _FAILURE_POLICIES = frozenset({"ignore", "warn", "block", "pause"})
 _TOOL_EFFECTS = frozenset({"", "read", "workspace_write", "external_write"})
+
+
+def context_provider_spec(spec: Mapping[str, Any]) -> Dict[str, Any]:
+    """Validate the bounded text-provider protocol in workers and the host."""
+    if set(spec) - {"id", "title", "trigger", "mode", "order", "max_tokens", "timeout_seconds"}:
+        raise PluginApiError("Unknown context provider option")
+    identifier = str(spec.get("id") or "").strip()
+    if not _TOOL_NAME_RE.fullmatch(identifier):
+        raise PluginApiError("Context id must use 1-64 ASCII letters, digits, underscores, or hyphens")
+    title = str(spec.get("title") or identifier).strip()
+    if not title or len(title) > 128:
+        raise PluginApiError("Context title must contain 1-128 characters")
+    if spec.get("trigger", "step") != "step" or spec.get("mode", "snapshot") != "snapshot":
+        raise PluginApiError("Context providers support trigger=step and mode=snapshot")
+    order = spec.get("order", 100)
+    budget = spec.get("max_tokens", 800)
+    timeout = spec.get("timeout_seconds", 2.0)
+    if isinstance(order, bool) or not isinstance(order, int) or not -10000 <= order <= 10000:
+        raise PluginApiError("Context order must be an integer between -10000 and 10000")
+    if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 4096:
+        raise PluginApiError("Context max_tokens must be an integer between 1 and 4096")
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not .05 <= timeout <= 10:
+        raise PluginApiError("Context timeout_seconds must be between 0.05 and 10")
+    return dict(id=identifier, title=title, trigger="step", mode="snapshot", order=order,
+                max_tokens=budget, timeout_seconds=float(timeout))
+
+
+def context_provider_result(value: Any) -> Optional[Dict[str, str]]:
+    """None clears a contribution; invalid or oversized results fail collection."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = {"text": value}
+    if not isinstance(value, Mapping) or set(value) - {"text", "revision"} or not isinstance(value.get("text"), str):
+        raise PluginApiError("Context result must be text, None, or an object with text and optional revision")
+    text = value["text"].strip()
+    if len(text.encode("utf-8")) > 262144:
+        raise PluginApiError("Context result exceeds 256 KiB")
+    revision = value.get("revision", "")
+    if not isinstance(revision, (str, int)) or isinstance(revision, bool) or len(str(revision)) > 256:
+        raise PluginApiError("Context revision must be a string or integer of at most 256 characters")
+    return {"text": text, "revision": str(revision)} if text else None
 
 
 class PluginApiError(ValueError):
@@ -307,6 +350,7 @@ class Plugin:
         self._tools: Dict[str, ToolRegistration] = {}
         self._hooks: Dict[str, HookRegistration] = {}
         self._commands: Dict[str, CommandRegistration] = {}
+        self._context_providers: Dict[str, tuple[Dict[str, Any], Callable[..., Any]]] = {}
         self._activate_handlers: list[Callable[..., Any]] = []
         self._deactivate_handlers: list[Callable[..., Any]] = []
         self._deferred_poll_handler: Optional[Callable[..., Any]] = None
@@ -421,6 +465,30 @@ class Plugin:
             registration.describe()
             for _name, registration in sorted(self._tools.items())
         ]
+
+    def register_context(self, handler: Callable[..., Any], **spec: Any) -> Callable[..., Any]:
+        """Register one session-scoped snapshot provider; requires capabilities.context."""
+        definition = context_provider_spec(spec)
+        identifier = definition["id"]
+        if identifier in self._context_providers or len(self._context_providers) >= 16:
+            raise PluginApiError("Duplicate context id or more than 16 context providers")
+        if not callable(handler):
+            raise PluginApiError("Context handler must be callable")
+        self._context_providers[identifier] = (definition, handler)
+        return handler
+
+    def context(self, **spec: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Decorator for a text provider called before main-agent model steps."""
+        return lambda handler: self.register_context(handler, **spec)
+
+    def describe_context_providers(self) -> list[Dict[str, Any]]:
+        return [dict(spec) for _key, (spec, _handler) in sorted(self._context_providers.items())]
+
+    async def collect_context(self, identifier: str, context: Mapping[str, Any]) -> Optional[Dict[str, str]]:
+        registration = self._context_providers.get(identifier)
+        if registration is None:
+            raise PluginApiError(f"Unknown context provider: {identifier}")
+        return context_provider_result(await self._await_result(registration[1](copy.deepcopy(dict(context)))))
 
     def register_hook(
         self,

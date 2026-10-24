@@ -258,25 +258,32 @@ class SessionExtensionStateStore:
         run_id: str = "",
         max_attempts: int = 8,
     ) -> dict:
-        """Replace a namespace while safely retrying concurrent CAS conflicts."""
+        """Replace the latest namespace value under one session transaction.
 
-        attempts = max(1, int(max_attempts))
-        last_conflict: Optional[ExtensionStateConflict] = None
-        for _ in range(attempts):
-            current = self.get(session_id, plugin_id, namespace)
-            try:
-                return self.compare_and_set(
-                    session_id,
-                    plugin_id,
-                    namespace,
-                    expected_revision=int(current.get("revision") or 0),
-                    value=value,
-                    run_id=run_id,
-                )
-            except ExtensionStateConflict as exc:
-                last_conflict = exc
-        assert last_conflict is not None
-        raise last_conflict
+        This is an unconditional replacement; reading a revision in a separate
+        transaction and then retrying CAS only duplicated source validation.
+        Explicit compare_and_set retains its conflict semantics. max_attempts
+        remains accepted for compatibility; there is no CAS retry window here.
+        """
+        _ = int(max_attempts)  # Keep validation of the legacy retry argument.
+        sid = self._ensure_session(session_id)
+        owner = self._identifier(plugin_id, "plugin_id")
+        space = self._identifier(namespace, "namespace")
+        clean_value = self._json_value(value, max_bytes=self.max_state_bytes, field="extension state")
+        with self.event_log.session_transaction(sid):
+            snapshot = self._snapshot_for_update(sid)
+            current = self._row(snapshot, owner, space)
+            event = self.event_log._append_unlocked(
+                sid, "extension_state_changed", payload={
+                    "plugin_id": owner, "namespace": space,
+                    "revision": int(current.get("revision") or 0) + 1,
+                    "value": clean_value,
+                }, run_id=str(run_id or "").strip() or None,
+            )
+            snapshot = self.projector.project_incremental(snapshot, event)
+            self.snapshots.stamp_event_log(sid, snapshot, self.event_log.event_path(sid))
+            self.snapshots.write_checkpointed(sid, snapshot)
+            return self._row(snapshot, owner, space)
 
     def mutate(
         self,

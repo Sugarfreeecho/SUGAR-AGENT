@@ -685,6 +685,11 @@ class RuntimeProjector:
         }
         row["payload"]["role"] = role
         snapshot["raw_model_messages"].append(row)
+        if role == "user":
+            from plugin_context import message_snapshot
+            context = message_snapshot(payload)
+            if context:
+                snapshot["context"]["plugin_context"] = copy.deepcopy(context)
 
     def _append_model_messages(self, snapshot: dict, event: RuntimeEvent) -> None:
         messages = (event.payload or {}).get("messages")

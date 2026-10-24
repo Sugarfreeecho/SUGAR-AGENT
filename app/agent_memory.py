@@ -337,6 +337,7 @@ def _counts_toward_session_user_turns_message(m) -> bool:
         isinstance(m, UserMessage)
         and not is_compress_recap_user_message(m)
         and not is_micro_shrink_user_message(m)
+        and not (getattr(m, "metadata", None) or {}).get("plugin_context")
     )
 
 
@@ -477,7 +478,7 @@ def _normalize_incomplete_turns(work: List) -> List:
     i = 0
     while i < n:
         m = work[i]
-        if not isinstance(m, UserMessage):
+        if not isinstance(m, UserMessage) or (getattr(m, "metadata", None) or {}).get("plugin_context"):
             if pending:
                 pending.append(deepcopy(m))
             else:
@@ -496,7 +497,7 @@ def _normalize_incomplete_turns(work: List) -> List:
             i = j
             continue
         j = s + 1
-        while j < n and not isinstance(work[j], UserMessage):
+        while j < n and (not isinstance(work[j], UserMessage) or (getattr(work[j], "metadata", None) or {}).get("plugin_context")):
             j += 1
         e = j - 1
         segment = deepcopy(work[s:j])
@@ -872,7 +873,8 @@ def _format_conversation_excerpt(
         if isinstance(m, SystemMessage):
             continue
         if isinstance(m, UserMessage):
-            lines.append("用户: " + str(m.content or ""))
+            label = "插件上下文: " if (getattr(m, "metadata", None) or {}).get("plugin_context") else "用户: "
+            lines.append(label + m.text())
         elif isinstance(m, AssistantMessage):
             ak = getattr(m, "additional_kwargs", None) or {}
             rc = ak.get("reasoning_content")
@@ -915,7 +917,7 @@ def _dialogue_work_to_chat_messages(
                 continue
             continue
         if isinstance(m, UserMessage):
-            out.append(UserMessage(content=deepcopy(m.content)))
+            out.append(UserMessage(content=deepcopy(m.content), metadata=deepcopy(getattr(m, "metadata", None) or {})))
         elif isinstance(m, AssistantMessage):
             mm = deepcopy(m)
             mm.content = content_with_think_excerpt(str(mm.content or ""), keep_each_side=reasoning_max)
