@@ -30,7 +30,9 @@ import sys
 import threading
 import time
 import uuid
+import tempfile
 import runtime_files
+import grep_runtime
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -2221,14 +2223,25 @@ def describe_run_shell_executor_for_prompt() -> str:
 def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
     """原子写入：先写临时文件，再原子替换目标文件。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        original_mode = path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        original_mode = None
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp_path = Path(temporary)
     # Keep the string's line endings byte-for-byte.  Python's default
     # ``newline=None`` performs platform translation on Windows (LF -> CRLF),
     # which turns a small apply_patch edit into a whole-file review diff and
     # needlessly changes files that were stored with LF endings.
-    with open(temp_path, "w", encoding=encoding, newline="") as f:
-        f.write(content)
-    os.replace(temp_path, path)
+    # 根因：固定 .tmp 会相互覆盖，replace 失败也会残留；仅清理本次独占创建的 staging。
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
+            f.write(content)
+        if original_mode is not None and os.name != "nt":
+            os.chmod(temp_path, original_mode)
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _read_file_range_max_bytes() -> int:
@@ -3135,25 +3148,13 @@ def read_file(
     if requested_end < s:
         return f"(invalid range: end_line {requested_end} < start_line {s})\n"
     cache_key = str(path.resolve())
-    with _read_file_line_count_cache_lock:
-        cached = _read_file_line_count_cache.get(cache_key)
-    cached_n = cached[2] if cached and cached[:2] == (int(st.st_mtime_ns), int(st.st_size)) else None
-    selected: List[str] = []
-    n = 0
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for physical in f:
-                virtual = _virtualize_text_lines([physical])
-                for line in virtual:
-                    n += 1
-                    if s <= n <= requested_end:
-                        selected.append(line)
-                if cached_n is not None and n >= requested_end:
-                    n = int(cached_n)
-                    break
+        from tool_text_range import read_range
+
+        n, selected, stable = read_range(path, s, requested_end, width=_READ_FILE_VIRTUAL_LINE_CHARS)
     except Exception as e:
         return f"Failed to read file: {e}"
-    if cached_n is None:
+    if stable:
         with _read_file_line_count_cache_lock:
             if len(_read_file_line_count_cache) >= 512:
                 _read_file_line_count_cache.pop(next(iter(_read_file_line_count_cache)), None)
@@ -3926,9 +3927,15 @@ def glob(
 
         max_m = _glob_max_matches()
         indexed_matches = _glob_with_windows_index(root_path, use_pattern, max_m)
-        raw_matches = indexed_matches if indexed_matches is not None else [
-            m for m in root_path.glob(use_pattern) if not _path_is_sensitive_tool_resource(m)
-        ]
+        if indexed_matches is not None:
+            raw_matches = indexed_matches
+        else:
+            from tool_glob import recursive_glob
+
+            candidates = recursive_glob(root_path, use_pattern)
+            if candidates is None:
+                candidates = root_path.glob(use_pattern)
+            raw_matches = [m for m in candidates if not _path_is_sensitive_tool_resource(m)]
         raw_matches = [m for m in raw_matches if "tempoutput" not in {part.lower() for part in m.relative_to(root_path).parts}]
         truncated_ct = max(0, len(raw_matches) - max_m)
         matches = raw_matches[:max_m]
@@ -3980,336 +3987,238 @@ def _resolve_ripgrep_path() -> Optional[str]:
     return shutil.which("rg")
 
 
+@grep_runtime.search_entry
 def _grep_with_ripgrep(
-    *,
-    regex: re.Pattern,
-    target: Path,
-    recursive: bool,
-    max_results: int,
-    line_cap: int,
-    output_cap: int,
-    file_cap: int,
-    include: Optional[List[str]] = None,
-    exclude: Optional[List[str]] = None,
-    include_hidden: bool = False,
-    include_ignored: bool = False,
+    *, regex: re.Pattern, target: Path, recursive: bool, max_results: int,
+    line_cap: int, output_cap: int, file_cap: int,
+    include: Optional[List[str]] = None, exclude: Optional[List[str]] = None,
+    include_hidden: bool = False, include_ignored: bool = False,
 ) -> Optional[str]:
-    """Fast grep path. Return None when ripgrep cannot handle the request."""
+    """Return None only when rg is unavailable or the regex needs Python."""
+    run = grep_runtime.current()
     rg = _resolve_ripgrep_path()
     if not rg or os.getenv("GREP_USE_RIPGREP", "1").strip().lower() in {"0", "false", "no", "off"}:
+        run.fallback_reason = "ripgrep_unavailable_or_disabled"
         return None
-    args = [
-        rg,
-        "--line-number",
-        "--no-heading",
-        "--color",
-        "never",
-        "--max-filesize",
-        str(file_cap),
-        "--max-columns",
-        str(max(200, line_cap)),
-        "--max-columns-preview",
-    ]
-    if include_hidden:
-        args.append("--hidden")
-    if include_ignored:
-        args.append("--no-ignore")
+    run.backend = "ripgrep"
+    args = [rg, "--line-buffered", "--line-number", "--no-heading", "--color", "never",
+            "--max-filesize", str(file_cap), "--max-columns", str(max(200, line_cap)),
+            "--max-columns-preview"]
+    args += _grep_scope_args(recursive=recursive, include=include or [], exclude=exclude or [],
+                             include_hidden=include_hidden, include_ignored=include_ignored)
     if regex.flags & re.IGNORECASE:
         args.append("--ignore-case")
-    for pattern in include or []:
-        if str(pattern).strip():
-            args.extend(["--glob", str(pattern).strip()])
-    for pattern in exclude or []:
-        if str(pattern).strip():
-            args.extend(["--glob", "!" + str(pattern).strip().lstrip("!")])
-    if target.is_dir():
-        args.extend([
-            "--glob", "!venv/**",
-            "--glob", "!.venv/**",
-            "--glob", "!__pycache__/**",
-            "--glob", "!.git/**",
-            "--glob", "!node_modules/**",
-            "--glob", "!sessions/**",
-            "--glob", "!logs/**",
-            "--glob", "!.trash/**",
-            "--glob", "!.tool_results/**",
-            "--glob", "!TempOutput/**",
-            "--glob", "!**/TempOutput/**",
-            "--glob", "!truncate_backups/**",
-        ])
-        if not recursive:
-            args.extend(["--max-depth", "1"])
-    args.extend(["--regexp", regex.pattern, "--", str(target)])
-    results: List[str] = []
-    total_bytes = 0
-    truncated = False
-    timeout = max(1.0, float(os.getenv("GREP_TIMEOUT_SEC", "30")))
-    timed_out = threading.Event()
-    process: Optional[subprocess.Popen] = None
+    args += ["--regexp", regex.pattern, "--", str(target)]
+    collector = _GrepOutput(max_results, output_cap)
 
-    def _stop_for_timeout() -> None:
-        if process is not None and process.poll() is None:
-            timed_out.set()
-            try:
-                process.kill()
-            except OSError:
-                pass
+    def consume(raw):
+        entry = redact_sensitive_tool_text(raw.rstrip())
+        if len(entry) > line_cap:
+            entry = entry[:line_cap] + f"... [truncated, {len(entry)} chars total]"
+        return collector.add(entry)
 
     try:
-        process = subprocess.Popen(
-            args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            **_run_cli_subprocess_stdio_kwargs("rg"),
-        )
-        timer = threading.Timer(timeout, _stop_for_timeout)
-        timer.daemon = True
-        timer.start()
-        try:
-            assert process.stdout is not None
-            for raw_line in process.stdout:
-                entry = redact_sensitive_tool_text(raw_line.rstrip())
-                if len(entry) > line_cap:
-                    entry = entry[:line_cap] + f"... [truncated, {len(entry)} chars total]"
-                entry_size = len(entry.encode("utf-8", errors="replace")) + 1
-                if len(results) >= max_results or total_bytes + entry_size > output_cap:
-                    truncated = True
-                    try:
-                        process.terminate()
-                    except OSError:
-                        pass
-                    break
-                results.append(entry)
-                total_bytes += entry_size
-                # Do not wait for ripgrep to scan the rest of the tree merely to
-                # discover whether an additional line exists. At the requested
-                # cap the caller already has all the results it asked for.
-                if len(results) >= max_results or total_bytes >= output_cap:
-                    truncated = True
-                    try:
-                        process.terminate()
-                    except OSError:
-                        pass
-                    break
-            try:
-                returncode = process.wait(timeout=1.0 if truncated else None)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                returncode = process.wait()
-            stderr_text = process.stderr.read() if process.stderr is not None else ""
-        finally:
-            timer.cancel()
-            if process.stdout is not None:
-                process.stdout.close()
-            if process.stderr is not None:
-                process.stderr.close()
-    except (OSError, subprocess.SubprocessError, ValueError):
+        outcome = grep_runtime.run_process(args, popen=subprocess.Popen, subprocess_module=subprocess,
+                    stdio=_run_cli_subprocess_stdio_kwargs("rg"), consume=consume, backend="ripgrep")
+        run.check()
+    except grep_runtime.SearchStopped:
+        return collector.finish(run.error("ripgrep"))
+    except OSError as exc:
+        run.fallback_reason = "ripgrep_spawn_error"
+        logger.debug("ripgrep could not start: %s", type(exc).__name__)
         return None
+    if outcome.stopped:
+        return collector.finish()
+    if outcome.returncode not in (0, 1):
+        diagnostic = outcome.stderr.strip()
+        if "regex parse error" in diagnostic or "regex error" in diagnostic:
+            run.fallback_reason = "regex_unsupported_by_ripgrep"
+            return None
+        return collector.finish("Error: ripgrep search incomplete: " +
+                                redact_sensitive_tool_text(diagnostic[:1000] or f"exit {outcome.returncode}"))
+    return collector.finish()
 
-    if timed_out.is_set():
-        return (
-            f"Error: ripgrep timed out after {timeout:g} seconds "
-            "(GREP_TIMEOUT_SEC); Python fallback was not started."
-        )
-    if truncated:
-        output = "\n".join(results)
-        output += (
-            f"\n... output truncated ({len(results)} lines shown; "
-            f"GREP_MAX_MATCH_LINES={max_results}; GREP_OUTPUT_MAX_BYTES={output_cap})"
-        )
+
+class _GrepOutput:
+    def __init__(self, max_results, output_cap):
+        self.limit, self.cap = max_results, output_cap
+        self.results = []
+        self.size = 0
+        self.truncated = False
+        self.skipped = 0
+        self.read_error = False
+
+    def add(self, entry):
+        size = len(entry.encode("utf-8", errors="replace")) + 1
+        if self.size + size > self.cap:
+            self.truncated = True
+            return True
+        self.results.append(entry)
+        self.size += size
+        run = grep_runtime.current()
+        if run is not None:
+            if run.first_hit_ms is None:
+                run.first_hit_ms = round((time.perf_counter() - run.started) * 1000, 3)
+            run.result_count = len(self.results)
+        self.truncated = len(self.results) >= self.limit or self.size >= self.cap
+        return self.truncated
+
+    def finish(self, error=""):
+        output = "\n".join(self.results)
+        if self.read_error and not error:
+            error = "Error: Python grep could not read all candidate files; search incomplete."
+        if error:
+            # The host legacy status adapter recognizes a leading Error:.
+            # Keep partial hits while making the durable tool outcome failed.
+            return error + ("\nPartial results (search incomplete):\n" + output if output else "")
+        if self.truncated:
+            output += (f"\n... output truncated ({len(self.results)} lines shown; "
+                       f"GREP_MAX_MATCH_LINES={self.limit}; GREP_OUTPUT_MAX_BYTES={self.cap})")
+        elif not output:
+            output = "No matches found"
+        if self.skipped:
+            output += f"\n... skipped {self.skipped} large files (GREP_FILE_MAX_BYTES)"
         return output
-    if returncode == 1:
-        return "No matches found"
-    if returncode != 0:
-        logger.debug("ripgrep failed returncode=%s stderr=%s", returncode, stderr_text.strip()[:500])
-        return None
-    if not results:
-        return "No matches found"
-    output = "\n".join(results)
-    if truncated:
-        output += (
-            f"\n... output truncated ({len(results)} lines shown; "
-            f"GREP_MAX_MATCH_LINES={max_results}; GREP_OUTPUT_MAX_BYTES={output_cap})"
-        )
-    return output
 
 
+def _grep_scope_args(**kwargs):
+    args = grep_runtime.scope_args(**kwargs)
+    active = active_security_context()
+    if not active or active["context"].mode != PermissionMode.FULL_ACCESS:
+        for name in SENSITIVE_TOOL_RESOURCE_NAMES:
+            args += ["--iglob", "!" + name]
+    return args
+
+
+def _grep_python(regex, target, scope, collector, file_cap, line_cap):
+    from grep_worker import requires_isolation, scan_file
+    run = grep_runtime.current()
+    files = [str(target)] if target.is_file() else None
+    rg = _resolve_ripgrep_path()
+    rg_enabled = rg and os.getenv("GREP_USE_RIPGREP", "1").strip().lower() not in {"0", "false", "no", "off"}
+    if files is None and rg_enabled:
+        run.backend = "ripgrep_files"
+        files = []
+        def collect(raw):
+            file = Path(raw)
+            if not _path_is_sensitive_tool_resource(file):
+                files.append(str(file))
+            return False
+        try:
+            outcome = grep_runtime.run_process(
+                [rg, "--files", "--null", "--max-filesize", str(file_cap),
+                 *_grep_scope_args(**scope), "--", str(target)],
+                popen=subprocess.Popen, subprocess_module=subprocess,
+                stdio=_run_cli_subprocess_stdio_kwargs("rg"), consume=collect,
+                backend="ripgrep_files", separator="\0")
+            run.check()
+        except OSError:
+            return "Error: ripgrep candidate enumeration failed; search incomplete."
+        if outcome.returncode not in (0, 1):
+            return "Error: ripgrep candidate enumeration incomplete: " + redact_sensitive_tool_text(outcome.stderr[:1000])
+    elif files is None and not scope["include_ignored"]:
+        return ("Error: ripgrep is required to preserve directory ignore rules. "
+                "Use an explicit file, restore ripgrep, or explicitly set include_ignored=true.")
+
+    def consume_match(row):
+        if "skipped_large_files" in row:
+            collector.skipped += row["skipped_large_files"]
+            return False
+        if "error" in row:
+            collector.read_error = True
+            return collector.add(redact_sensitive_tool_text(row["error"]))
+        file = Path(row["file"])
+        if _path_is_sensitive_tool_resource(file):
+            return False
+        return collector.add(redact_sensitive_tool_text(
+            f"{_format_path_for_tool_output(file)}:{row['line']}: {row['text']}"))
+
+    # A conservative regex parser keeps simple single-file calls inexpensive.
+    # Every directory fallback and every potentially backtracking regex runs
+    # in a killable process, never in an uninterruptible executor thread.
+    run.candidate_count = len(files) if files is not None else None
+    if (target.is_file() and target.stat().st_size <= 64 * 1024
+            and len(regex.pattern) <= 128 and not requires_isolation(regex.pattern)):
+        run.backend = "python_file"
+        collector.skipped += scan_file(target, regex, file_cap, line_cap, consume_match, run.check,
+                                      skip_binary=False, decode_errors="ignore")
+        run.check()
+        return collector.finish()
+    run.backend = "python_worker"
+    request = dict(pattern=regex.pattern, flags=regex.flags, target=str(target), files=files,
+                   file_cap=file_cap, line_cap=line_cap, max_results=collector.limit,
+                   excluded_dirs=list(grep_runtime.EXCLUDED_DIRS), skip_binary=target.is_dir(),
+                   decode_errors="ignore" if target.is_file() else "replace", **scope)
+    active = active_security_context()
+    request["protected_names"] = (list(SENSITIVE_TOOL_RESOURCE_NAMES)
+        if not active or active["context"].mode != PermissionMode.FULL_ACCESS else [])
+    def consume(raw):
+        return consume_match(json.loads(raw))
+    outcome = grep_runtime.run_process(
+        [sys.executable, "-I", str(Path(__file__).with_name("grep_worker.py"))],
+        popen=subprocess.Popen, subprocess_module=subprocess,
+        stdio=_run_cli_subprocess_stdio_kwargs("grep-worker"),
+        input_text=json.dumps(request, ensure_ascii=True) + "\n",
+        consume=consume, backend="python_worker")
+    run.check()
+    if outcome.returncode != 0 and not outcome.stopped:
+        return collector.finish("Error: Python grep search incomplete: " + redact_sensitive_tool_text(outcome.stderr[:1000]))
+    return collector.finish()
+
+
+@grep_runtime.search_entry
 def grep(
-    pattern: str,
-    path: Optional[str] = None,
-    target_directory: Optional[str] = None,
-    recursive: bool = True,
-    use_regex: Optional[bool] = None,
-    mode: Optional[str] = None,
-    case_sensitive: Optional[bool] = None,
-    include: Optional[List[str]] = None,
-    exclude: Optional[List[str]] = None,
-    max_results: Optional[int] = None,
-    include_hidden: bool = False,
-    include_ignored: bool = False,
+    pattern: str, path: Optional[str] = None, target_directory: Optional[str] = None,
+    recursive: bool = True, use_regex: Optional[bool] = None, mode: Optional[str] = None,
+    case_sensitive: Optional[bool] = None, include: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None, max_results: Optional[int] = None,
+    include_hidden: bool = False, include_ignored: bool = False,
 ) -> str:
     raw_path = _coalesce_str(path, target_directory) or "/"
+    run = grep_runtime.current()
+    collector = None
     try:
+        # Validate filters before launching any search or widening its scope.
+        include_patterns = grep_runtime.normalize_globs(include, "include")
+        exclude_patterns = [p.lstrip("!") for p in grep_runtime.normalize_globs(exclude, "exclude")]
         target = resolve_unrestricted_path(raw_path)
         enforce_leaf("fs.read", target)
+        run.check()
         if not target.exists():
             return f"Error: path '{raw_path}' does not exist.{_missing_path_hint(target)}".rstrip()
         if _path_is_sensitive_tool_resource(target):
             return _sensitive_tool_resource_error("grep")
-
-        selected_mode = str(mode or ("regex" if use_regex is True else ("fixed" if use_regex is False else "regex"))).strip().lower()
+        selected_mode = str(mode or ("regex" if use_regex is not False else "fixed")).strip().lower()
         if selected_mode not in {"regex", "fixed"}:
             return "Error: grep mode must be 'fixed' or 'regex'."
-        if case_sensitive is None:
-            case_sensitive = False
-
-        # build regex
-        if selected_mode == "regex":
-            try:
-                regex = re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
-            except re.error as e:
-                return f"Regex error: {e}"
-        else:
-            regex = re.compile(re.escape(pattern), 0 if case_sensitive else re.IGNORECASE)
-
-        include_patterns = [str(x).strip() for x in (include or []) if str(x).strip()]
-        exclude_patterns = [str(x).strip().lstrip("!") for x in (exclude or []) if str(x).strip()]
-
-        def _path_allowed(file: Path) -> bool:
-            try:
-                rel = file.relative_to(target).as_posix() if target.is_dir() else file.name
-            except ValueError:
-                rel = file.name
-            if include_patterns and not any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(file.name, p) for p in include_patterns):
-                return False
-            if any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(file.name, p) for p in exclude_patterns):
-                return False
-            return True
-
-        def iter_files():
-            if target.is_file():
-                if _path_allowed(target):
-                    yield target
-                return
-            if not target.is_dir():
-                return
-            if recursive:
-                exclude_dirs = {
-                    "venv", ".venv", "__pycache__", ".git", "node_modules",
-                    "sessions",          # 历史会话 JSON，单行可达 9+ MiB
-                    "logs",              # 运行日志，通常不需要 grep
-                    ".trash",            # 回收站
-                    ".tool_results",     # 工具结果落盘目录
-                    "TempOutput",       # 运行时 scratch 与历史工具结果
-                    "truncate_backups",  # 会话截断备份
-                }
-                for root, dirs, files in os.walk(target):
-                    dirs[:] = [d for d in dirs if d not in exclude_dirs]
-                    for file in files:
-                        p = Path(root) / file
-                        if not _path_is_sensitive_tool_resource(p) and _path_allowed(p):
-                            yield p
-            else:
-                for entry in target.iterdir():
-                    if entry.is_file() and not _path_is_sensitive_tool_resource(entry) and _path_allowed(entry):
-                        yield entry
-
-        results = []
-        total_bytes = 0
+        try:
+            regex = re.compile(pattern if selected_mode == "regex" else re.escape(pattern),
+                               0 if case_sensitive else re.IGNORECASE)
+        except re.error as exc:
+            return f"Regex error: {exc}"
         max_results = _grep_max_match_lines() if max_results is None else max(1, min(10_000, int(max_results)))
-        line_cap = _grep_line_max_chars()
-        output_cap = _grep_output_max_bytes()
-        file_cap = _grep_file_max_bytes()
-        files_skipped = 0
-
+        line_cap, output_cap, file_cap = _grep_line_max_chars(), _grep_output_max_bytes(), _grep_file_max_bytes()
+        collector = _GrepOutput(max_results, output_cap)
+        scope = dict(recursive=recursive, include=include_patterns, exclude=exclude_patterns,
+                     include_hidden=bool(include_hidden), include_ignored=bool(include_ignored))
         if target.is_dir():
-            rg_result = _grep_with_ripgrep(
-                regex=regex,
-                target=target,
-                recursive=recursive,
-                max_results=max_results,
-                line_cap=line_cap,
-                output_cap=output_cap,
-                file_cap=file_cap,
-                include=include_patterns,
-                exclude=exclude_patterns,
-                include_hidden=bool(include_hidden),
-                include_ignored=bool(include_ignored),
-            )
-            if rg_result is not None:
-                return rg_result
-
-        def _truncate_line(text: str, cap: int) -> str:
-            if len(text) <= cap:
-                return text
-            return text[:cap] + f"... [truncated, {len(text)} chars total]"
-
-        for file in iter_files():
-            # 跳过超大文件
-            try:
-                if file.stat().st_size > file_cap:
-                    files_skipped += 1
-                    continue
-            except OSError:
-                continue
-
-            try:
-                _cap_hit = False
-                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line_num, line in enumerate(f, 1):
-                        if not regex.search(line):
-                            continue
-                        rel_path = _format_path_for_tool_output(file)
-                        line_text = _truncate_line(line.rstrip(), line_cap)
-                        entry = redact_sensitive_tool_text(f"{rel_path}:{line_num}: {line_text}")
-                        entry_size = len(entry.encode('utf-8', errors='replace')) + 1
-
-                        # 总输出大小限制
-                        if total_bytes + entry_size > output_cap:
-                            results.append(
-                                f"... output truncated at {total_bytes // 1024} KiB "
-                                f"({len(results)} lines shown; GREP_OUTPUT_MAX_BYTES={output_cap})"
-                            )
-                            _cap_hit = True
-                            break
-
-                        results.append(entry)
-                        total_bytes += entry_size
-
-                        if len(results) >= max_results:
-                            break
-                if len(results) >= max_results or _cap_hit:
-                    break
-            except Exception as e:
-                results.append(f"Error reading {file}: {e}")
-                if len(results) >= max_results:
-                    break
-
-        if not target.is_file() and not target.is_dir():
+            result = _grep_with_ripgrep(regex=regex, target=target, max_results=max_results,
+                                       line_cap=line_cap, output_cap=output_cap, file_cap=file_cap, **scope)
+            if result is not None:
+                return result
+        elif target.is_file():
+            matches = lambda p: fnmatch.fnmatch(target.name, p)
+            if (include_patterns and not any(map(matches, include_patterns))) or any(map(matches, exclude_patterns)):
+                return "No matches found"
+        else:
             return f"Error: {raw_path} is neither file nor directory"
+        return _grep_python(regex, target, scope, collector, file_cap, line_cap)
+    except grep_runtime.SearchStopped:
+        error = run.error(run.backend)
+        return collector.finish(error) if collector else error
+    except Exception as exc:
+        return f"Grep search failed: {exc}"
 
-        if not results:
-            return "No matches found"
-        output = "\n".join(results[:max_results])
-
-        trailing_notes = []
-        if len(results) >= max_results:
-            trailing_notes.append(f"reached max {max_results} matching lines (GREP_MAX_MATCH_LINES)")
-        if total_bytes >= output_cap:
-            trailing_notes.append(f"total output {total_bytes // 1024} KiB >= cap ({output_cap // 1024} KiB)")
-        if files_skipped:
-            trailing_notes.append(
-                f"skipped {files_skipped} large files (> {file_cap // 1024} KiB; GREP_FILE_MAX_BYTES)"
-            )
-        if trailing_notes:
-            output += "\n... " + "; ".join(trailing_notes)
-
-        return output
-    except Exception as e:
-        return f"Grep search failed: {e}"
 
 
 # ==================== 联网搜索与网页抓取 ====================
@@ -5116,7 +5025,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "recursive": {"type": "boolean", "default": True},
             "mode": {"type": "string", "enum": ["fixed", "regex"], "default": "regex"},
             "case_sensitive": {"type": "boolean", "default": False},
-            "include": {"type": "array", "items": {"type": "string"}, "description": "Optional file globs, e.g. ['*.py', 'src/**']."},
+            "include": {"type": "array", "items": {"type": "string"}, "description": "Optional complete file globs, e.g. ['*.py', 'src/**']. Each array item is one pattern."},
             "exclude": {"type": "array", "items": {"type": "string"}, "description": "Optional exclusion globs, e.g. ['dist/**']."},
             "max_results": {"type": "integer", "minimum": 1, "maximum": 10000},
             "include_hidden": {"type": "boolean", "default": False, "description": "Include hidden files/directories. Enable only when the target is expected there."},

@@ -1580,7 +1580,7 @@ async def _thinking_timer(emit, state, delay=8):
         await asyncio.sleep(0)
 
 
-async def _invoke_plain_tool(tool_func: Callable[..., Any], tool_args: Any) -> Any:
+async def _invoke_plain_tool(tool_func: Callable[..., Any], tool_args: Any, *, grep_metadata=None) -> Any:
     """
     使用 OpenAI 返回的参数字典调用纯 Python 工具。
     必须 ** 解包，不能用 func(tool_args) 把整包 dict 当作第一个位置参数（否则会引发各类 'dict' has no attribute ...）。
@@ -1590,6 +1590,9 @@ async def _invoke_plain_tool(tool_func: Callable[..., Any], tool_args: Any) -> A
     ka = _filter_kwargs_for_callable(tool_func, tool_args)
     if inspect.iscoroutinefunction(tool_func):
         return await tool_func(**ka)
+    if tool_func is tools.get("grep"):
+        from grep_runtime import invoke
+        return await invoke(tool_func, ka, grep_metadata or {})
     return await asyncio.to_thread(lambda: tool_func(**ka))
 
 
@@ -3673,10 +3676,11 @@ async def _await_steerable(
     stage: str,
     poll_sec: float = 0.05,
     defer_steer: bool = False,
+    cancel_on_parent: bool = False,
 ):
     try:
         await _raise_if_steer_requested(state, emit, stage)
-    except _SteerRestartRequested:
+    except (asyncio.CancelledError, _SteerRestartRequested):
         close_fn = getattr(awaitable, "close", None)
         if callable(close_fn):
             close_fn()
@@ -3704,7 +3708,9 @@ async def _await_steerable(
             if task in done:
                 return task.result()
             await _raise_if_steer_requested(state, emit, stage)
-    except _SteerRestartRequested:
+    except (asyncio.CancelledError, _SteerRestartRequested) as exc:
+        if isinstance(exc, asyncio.CancelledError) and not cancel_on_parent:
+            raise
         if not task.done():
             task.add_done_callback(_discard_task_result)
             task.cancel()
@@ -7275,9 +7281,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     else:
                                         result = await _await_steerable(
                                             state,
-                                            _invoke_plain_tool(tool_func, tool_args),
+                                            _invoke_plain_tool(tool_func, tool_args, grep_metadata={
+                                                "session_id": str(_sid or ""),
+                                                "run_id": str(state.get("_runtime_v2_run_id") or ""),
+                                                "react_iter": int(iter_count),
+                                                "tool_call_id": str(tool_id or ""),
+                                            } if tool_name == "grep" else None),
                                             emit,
                                             "tool",
+                                            cancel_on_parent=tool_name == "grep",
                                         )
                                     if tool_name == "write_file" and isinstance(tool_args, dict) and tool_args.get("temporary"):
                                         try:

@@ -261,7 +261,8 @@ def active_excerpt(archive: Mapping[str, Any], *, max_chars: int = 8_000) -> str
         ref = str(row.get("ref") or "")
         content = _content_text(row.get("content"))
         if role == "user":
-            entries.append({"text": f"用户: {content}", "verbatim": True, "ref": ref, "chars": len(content), "label": "用户正文"})
+            label = "插件上下文" if (row.get("metadata") or {}).get("plugin_context") else "用户"
+            entries.append({"text": f"{label}: {content}", "verbatim": True, "ref": ref, "chars": len(content), "label": label + "正文"})
             continue
         if role == "assistant":
             if row.get("reasoning"):
@@ -398,6 +399,23 @@ def _matching_jsonl(path: Path, terms: list[str]) -> Iterable[tuple[dict[str, An
         return
 
 
+def _search_candidates(path, terms, render, remaining, seen, precompute):
+    from history_search_index import search
+
+    cached = search(path, terms, render, limit=remaining, seen=seen)
+    if cached is not None:
+        yield from cached
+        return
+    try:
+        for row, _raw in _matching_jsonl(path, terms):
+            yield render(row)
+    finally:
+        # Defer all precomputation until the complete foreground query is done,
+        # including global queries that continue scanning other source files.
+        if precompute is not None and len(precompute) < 8:
+            precompute.append((path, render))
+
+
 def _search_session(
     session_id: str,
     session_dir: Path,
@@ -406,15 +424,19 @@ def _search_session(
     *,
     global_scope: bool,
     include_source: bool,
+    precompute: Optional[list] = None,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     seen_content: set[str] = set()
     for path in _iter_archive_paths(session_dir):
         archive_id = path.stem
-        for row, _raw_line in _matching_jsonl(path, terms):
-            if row.get("kind") != "message":
-                continue
-            clean_text = _clean_message_text(row)
+
+        def render_archive(row):
+            text = _clean_message_text(row) if row.get("kind") == "message" else ""
+            return str(row.get("item_id") or ""), text
+
+        candidates = _search_candidates(path, terms, render_archive, remaining - len(results), seen_content, precompute)
+        for item_id, clean_text in candidates:
             if not clean_text or not all(term in clean_text.casefold() for term in terms):
                 continue
             content_key = " ".join(clean_text.split()).casefold()
@@ -422,7 +444,7 @@ def _search_session(
                 continue
             seen_content.add(content_key)
             result = {
-                "ref": archive_item_ref(session_id, archive_id, str(row.get("item_id") or "")),
+                "ref": archive_item_ref(session_id, archive_id, item_id),
                 "content": _search_snippet(clean_text, terms),
             }
             if global_scope:
@@ -431,19 +453,23 @@ def _search_session(
                 result["source_file"] = str(path)
             results.append(result)
             if len(results) >= remaining:
+                candidates.close()
                 return results
     event_path = session_dir / "events.jsonl"
-    for event, _raw_line in _matching_jsonl(event_path, terms):
-        clean_text = _clean_event_text(event)
+
+    def render_event(event):
+        return str(int(event.get("seq") or 0)), _clean_event_text(event)
+
+    candidates = _search_candidates(event_path, terms, render_event, remaining - len(results), seen_content, precompute)
+    for seq, clean_text in candidates:
         if not clean_text or not all(term in clean_text.casefold() for term in terms):
             continue
         content_key = " ".join(clean_text.split()).casefold()
         if content_key in seen_content:
             continue
         seen_content.add(content_key)
-        seq = int(event.get("seq") or 0)
         result = {
-            "ref": event_ref(session_id, seq),
+            "ref": event_ref(session_id, int(seq)),
             "content": _search_snippet(clean_text, terms),
         }
         if global_scope:
@@ -452,6 +478,7 @@ def _search_session(
             result["source_file"] = str(event_path)
         results.append(result)
         if len(results) >= remaining:
+            candidates.close()
             return results
     return results
 
@@ -479,7 +506,19 @@ def _read_ref(
         wanted = int(match.group("seq"))
         path = session_dir / "events.jsonl"
         source_file = str(path)
-        value = next((row for row in _read_jsonl(path) if int(row.get("seq") or 0) == wanted), None)
+        value = None
+        try:
+            from runtime_v2 import SessionEventLog
+
+            log = SessionEventLog(session_dir.parent, path_resolver=lambda _sid: session_dir)
+            events = log.read_by_seqs(session_id, [wanted])
+            if events:
+                value = events[0].to_dict()
+        except Exception:
+            # Legacy/non-runtime rows remain readable through the original path.
+            pass
+        if value is None:
+            value = next((row for row in _read_jsonl(path) if int(row.get("seq") or 0) == wanted), None)
         if value is not None:
             rendered = _clean_event_text(value)
     else:
@@ -549,6 +588,7 @@ def history_context(
     terms = [term.casefold() for term in normalized_query.split() if term]
     result_limit = min(50, max(1, int(limit or 10)))
     results: list[dict[str, Any]] = []
+    precompute: list = []
     session_dirs = _session_dirs(session_manager, current_session_id, scope_name)
     for session_id, session_dir in session_dirs:
         results.extend(
@@ -559,6 +599,7 @@ def history_context(
                 result_limit - len(results),
                 global_scope=scope_name == "global",
                 include_source=bool(include_source),
+                precompute=precompute,
             )
         )
         if len(results) >= result_limit:
@@ -576,6 +617,10 @@ def history_context(
             if len(source_files) >= 20:
                 break
         response["source_files"] = source_files[:20]
+    from history_search_index import schedule
+
+    for path, render in precompute:
+        schedule(path, render)
     return response
 
 
