@@ -27527,7 +27527,8 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     if (steerOpId && typeof appendSteerProcessMessage === 'function') {
                         var committedSteerRow = appendSteerProcessMessage(
                             eventSessionId, runCtx, parsed.content || '', steerOpId,
-                            String(parsed.steer_mode || 'interrupt'), false
+                            String(parsed.steer_mode || 'interrupt'), false,
+                            parsed.attachments || []
                         );
                         if (committedSteerRow) {
                             if (parsed.client_id) committedSteerRow.dataset.steerClientId = String(parsed.client_id);
@@ -29563,7 +29564,8 @@ function commitPendingSteerProcessRow(sessionId, item, serverItem) {
     if (!row && ctx) {
         row = appendSteerProcessMessage(
             sid, ctx, content, item.clientId || item.steerId || '',
-            item.steerMode || (serverItem && serverItem.mode) || 'interrupt', false
+            item.steerMode || (serverItem && serverItem.mode) || 'interrupt', false,
+            item.attachments || []
         );
     }
     if (!row) return null;
@@ -30780,8 +30782,24 @@ async function sendMessage(options) {
     reportClientPipelineStep(clientTimingCtx, 'prepare_run_context', _clientStepStart, { switchedAway: !!switchedAway });
     _clientStepStart = nowPipelineMs();
     const renderAsSteer = !!options.asSteer;
+    /* 乐观气泡必须与刷新后的历史事件同源：先收集本轮附件，再把耐久图片引用
+       同时交给事件存储和消息渲染。否则图片卡片要等历史回放（刷新/重连）才出现。 */
+    const rememberedAttachments = Array.isArray(options.attachments)
+        ? options.attachments
+        : (window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.chatAttachments === 'function'
+            ? window.MyAgentPathPicker.chatAttachments(messageInput)
+            : []);
+    const attachmentsForRun = rememberedAttachments.filter(function (item) {
+        return item && item.path && rawMessage.indexOf(String(item.path)) >= 0;
+    });
+    const optimisticAttachments = attachmentsForRun
+        .map(function (item) { return item && item.attachment; })
+        .filter(function (ref) {
+            return !!(ref && /^sha256:[a-f0-9]{64}$/.test(ref.attachmentId || ''));
+        });
     if (!renderAsSteer) {
-        applySessionEvent({ type: 'user', content: displayMessage, created_at: userSentAt }, {
+        applySessionEvent({ type: 'user', content: displayMessage, created_at: userSentAt, attachments: optimisticAttachments }, {
             sessionId: runSessionId,
             eventIndex: preCount,
             source: 'local-send',
@@ -30800,7 +30818,7 @@ async function sendMessage(options) {
             prepareSteerProcessBoundary(runCtx, optimisticSteerMode, optimisticSteerOpId);
             var optimisticSteerRow = appendSteerProcessMessage(
                 runSessionId, runCtx, displayMessage, optimisticSteerOpId,
-                optimisticSteerMode, true
+                optimisticSteerMode, true, optimisticAttachments
             );
             if (optimisticSteerRow) {
                 optimisticSteerRow.dataset.steerEventReserved = '1';
@@ -30808,7 +30826,12 @@ async function sendMessage(options) {
                 if (optimisticSteerId) optimisticSteerRow.dataset.steerId = optimisticSteerId;
             }
         } else {
-            appendMessage(runCtx, 'user', displayMessage, { eventIndex: preCount, turnTruncateIdx: preCount, createdAt: userSentAt }, runSessionId);
+            appendMessage(runCtx, 'user', displayMessage, {
+                eventIndex: preCount,
+                turnTruncateIdx: preCount,
+                createdAt: userSentAt,
+                attachments: optimisticAttachments,
+            }, runSessionId);
         }
         if (!options.fromQueue && !options.preserveInput) {
             messageInput.value = '';
@@ -30826,15 +30849,6 @@ async function sendMessage(options) {
     _clientStepStart = nowPipelineMs();
     const formData = new FormData();
     formData.append('message', rawMessage);
-    const rememberedAttachments = Array.isArray(options.attachments)
-        ? options.attachments
-        : (window.MyAgentPathPicker
-            && typeof window.MyAgentPathPicker.chatAttachments === 'function'
-            ? window.MyAgentPathPicker.chatAttachments(messageInput)
-            : []);
-    const attachmentsForRun = rememberedAttachments.filter(function (item) {
-        return item && item.path && rawMessage.indexOf(String(item.path)) >= 0;
-    });
     var omittedAttachments = rememberedAttachments.filter(function (item) {
         return item && item.path && !attachmentsForRun.some(function (attached) {
             return String(attached.path) === String(item.path);
