@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
@@ -983,3 +984,304 @@ def test_reorder_profiles_persists_dragged_priority(tmp_path):
     assert [item["id"] for item in reordered] == [second["id"], first["id"]]
     assert [item["id"] for item in reloaded] == [second["id"], first["id"]]
     assert [item["priority"] for item in reloaded] == [1, 2]
+
+
+# ── 连通性探测 ────────────────────────────────────────────────────────────
+
+SSE_OK = (
+    b'data: {"choices":[{"delta":{"content":"p"}}]}\n\n'
+    b'data: {"choices":[{"delta":{"content":"ong"}}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+def _mock_http(monkeypatch, handler):
+    class MockClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
+
+
+def test_connectivity_probe_reports_available_with_first_frame_latency(monkeypatch):
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=SSE_OK
+        ),
+    )
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert result["state"] == "available"
+    assert result["label"] == "可用"
+    assert result["http_status"] == 200
+    assert result["streamed"] is True
+    assert result["frames"] == 2
+    assert result["ttft_ms"] >= 1
+    assert result["latency_ms"] >= result["ttft_ms"]
+    assert result["detail"] == ""
+
+
+def test_connectivity_probe_sends_one_minimal_streaming_ping(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content.decode("utf-8"))
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=SSE_OK
+        )
+
+    _mock_http(monkeypatch, handler)
+
+    model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert seen["path"] == "/v1/chat/completions"
+    assert seen["auth"] == "Bearer test-key"
+    assert seen["body"]["model"] == "demo-model"
+    assert seen["body"]["stream"] is True
+    assert seen["body"]["max_tokens"] == model_profiles.CONNECTIVITY_MAX_TOKENS
+    assert seen["body"]["messages"] == [{"role": "user", "content": "ping"}]
+
+
+def test_connectivity_probe_keeps_retry_after_on_rate_limit(monkeypatch):
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            429,
+            headers={"retry-after": "7"},
+            json={"error": {"message": "Rate limit reached for this model"}},
+        ),
+    )
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert result["state"] == "throttled"
+    assert result["retry_after"] == "7"
+    assert "HTTP 429" in result["detail"]
+    assert "Rate limit reached" in result["detail"]
+
+
+@pytest.mark.parametrize(
+    "status,body,expected",
+    [
+        (401, {"error": {"message": "Invalid API key provided"}}, "auth"),
+        (403, {"error": {"message": "Country not supported in your region"}}, "region"),
+        (403, {"error": {"message": "Forbidden"}}, "unavailable"),
+        (404, {"error": {"message": "The model `demo` does not exist"}}, "unavailable"),
+        (404, {"error": {"message": "Not Found"}}, "rejected"),
+        (500, {"error": {"message": "upstream exploded"}}, "unavailable"),
+        (400, {"error": {"message": "unsupported parameter"}}, "rejected"),
+    ],
+)
+def test_connectivity_probe_maps_http_failures_to_actionable_states(
+    monkeypatch, status, body, expected
+):
+    _mock_http(monkeypatch, lambda request: httpx.Response(status, json=body))
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert result["state"] == expected
+    assert result["label"] == model_profiles.CONNECTIVITY_STATES[expected]
+
+
+def test_connectivity_probe_treats_in_band_error_frame_as_unavailable(monkeypatch):
+    """200 不代表答话：流里夹着 error 帧时不能记成可用。"""
+    frames = (
+        b'data: {"choices":[{"delta":{"content":"p"}}]}\n\n'
+        b'data: {"error":{"message":"model is unavailable"}}\n\n'
+    )
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=frames
+        ),
+    )
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert result["state"] == "unavailable"
+    assert "model is unavailable" in result["detail"]
+
+
+def test_connectivity_probe_names_the_model_that_actually_answered(monkeypatch):
+    """网关类服务会替人换模型：请求 A、实际由 B 答，必须写出来。"""
+    frames = (
+        b'data: {"model":"fallback-model","choices":[{"delta":{"content":"p"}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=frames
+        ),
+    )
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "requested-model"
+    )
+
+    assert result["state"] == "available"
+    assert result["served_model"] == "fallback-model"
+    assert "fallback-model" in result["detail"]
+    assert "requested-model" in result["detail"]
+
+
+def test_connectivity_probe_stays_quiet_when_the_requested_model_answers(monkeypatch):
+    frames = (
+        b'data: {"model":"demo-model","choices":[{"delta":{"content":"p"}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=frames
+        ),
+    )
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert result["state"] == "available"
+    assert result["served_model"] == "demo-model"
+    assert result["detail"] == ""
+
+
+def test_connectivity_probe_flags_a_stream_that_never_speaks(monkeypatch):
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=b""
+        ),
+    )
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert result["state"] == "unknown"
+    assert "数据帧" in result["detail"]
+    assert result["frames"] == 0
+
+
+def test_connectivity_probe_keeps_transport_error_text(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _mock_http(monkeypatch, handler)
+
+    result = model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model"
+    )
+
+    assert result["state"] == "unknown"
+    assert "ConnectError" in result["detail"]
+    assert "connection refused" in result["detail"]
+
+
+@pytest.mark.parametrize(
+    "llm_type,path,header_name,header_value",
+    [
+        ("openai-responses", "/v1/responses", "authorization", "Bearer test-key"),
+        ("anthropic", "/v1/messages", "x-api-key", "test-key"),
+    ],
+)
+def test_connectivity_probe_uses_the_profile_protocol(
+    monkeypatch, llm_type, path, header_name, header_value
+):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["header"] = request.headers.get(header_name)
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=SSE_OK
+        )
+
+    _mock_http(monkeypatch, handler)
+
+    model_profiles.probe_model_connectivity(
+        "https://api.example.com/v1", "test-key", "demo-model", llm_type
+    )
+
+    assert seen["path"] == path
+    assert seen["header"] == header_value
+
+
+def test_discover_reuses_the_saved_key_of_an_existing_profile(tmp_path, monkeypatch):
+    """编辑已有档案时密钥只写不回显：前端只传 profile_id，后端回落到存档里的那份。
+
+    否则空 Key 让 discover_models 不带 Authorization，已配好的接口直接 401 —— 就是
+    「编辑模型时不重新填一次 Key 就报错」的来源。
+    """
+    from fastapi.testclient import TestClient
+
+    import webui
+
+    monkeypatch.setattr(webui, "PROJECT_ROOT", tmp_path)
+    saved = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "demo-model",
+            "base_url": "http://127.0.0.1:8787/v1",
+            "api_key": "stored-key",
+        },
+    )
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": [{"id": "demo-model"}]})
+
+    _mock_http(monkeypatch, handler)
+
+    response = TestClient(webui.fastapi_app).post(
+        "/api/model_profiles/discover",
+        json={
+            "base_url": "http://127.0.0.1:8787/v1",
+            "api_key": "",
+            "profile_id": saved["id"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert [model["id"] for model in response.json()["models"]] == ["demo-model"]
+    assert seen["auth"] == "Bearer stored-key"
+
+
+def test_discover_keeps_a_typed_key_and_explains_401_in_plain_words(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import webui
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(401, json={"error": {"message": "Invalid API key"}})
+
+    _mock_http(monkeypatch, handler)
+
+    response = TestClient(webui.fastapi_app).post(
+        "/api/model_profiles/discover",
+        json={"base_url": "http://127.0.0.1:8787/v1", "api_key": "typed-key", "profile_id": ""},
+    )
+
+    assert seen["auth"] == "Bearer typed-key"
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert "401" in error
+    assert "Client error" not in error

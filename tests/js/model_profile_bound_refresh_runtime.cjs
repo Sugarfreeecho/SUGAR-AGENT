@@ -72,7 +72,7 @@ function fixture() {
     markRunAbortReason() {},
     setInterval: () => 1,
     clearInterval: () => {},
-    setTimeout: () => 1,
+    setTimeout: (fn, delay) => delay === 0 ? setTimeout(fn, 0) : 1,
     clearTimeout: () => {},
     CustomEvent: class {
       constructor(type, options) {

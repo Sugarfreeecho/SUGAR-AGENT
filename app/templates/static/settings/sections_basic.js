@@ -151,6 +151,40 @@
   const LLM_TYPES = ['openai-compatible', 'openai-responses', 'anthropic'];
   const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+  /* 连通性探测的判定词表与着色。后端只回 state，中英文案留在前端，
+     免得改一个字也要跑一趟 Python。 */
+  const CONNECT_STATE_ZH = {
+    available: '可用', throttled: '暂时限流', region: '地区受限',
+    auth: '认证失败', unavailable: '不可用', rejected: '请求被拒', unknown: '未知',
+  };
+  const CONNECT_STATE_EN = {
+    available: 'Reachable', throttled: 'Rate-limited', region: 'Region-blocked',
+    auth: 'Auth failed', unavailable: 'Unavailable', rejected: 'Request rejected', unknown: 'Unknown',
+  };
+  function connectStateText(state) {
+    return t(CONNECT_STATE_ZH[state] || '未知', CONNECT_STATE_EN[state] || 'Unknown');
+  }
+  function connectKind(state) {
+    if (state === 'available') return 'ok';
+    if (state === 'throttled' || state === 'region') return 'warn';
+    return 'err';
+  }
+  function describeConnectivity(probe) {
+    // 总耗时用不换行空格绑住数字：220px 的控件列放不下一整行时，
+    // 折行应该发生在「·」后面，而不是把「总」和「1180ms」拆成两行。
+    const total = t('总', 'total') + '\u00a0' + (probe.latency_ms || 0) + 'ms';
+    const timing = probe.state === 'available'
+      ? ' · ' + t('首字 ', 'first token ') + (probe.ttft_ms || 0) + 'ms · ' + total
+      : ' · ' + (probe.http_status ? 'HTTP ' + probe.http_status + ' · ' : '') + total;
+    return connectStateText(probe.state) + timing;
+  }
+  function renderConnectivity(host, probe) {
+    if (!host) return;
+    const detail = String(probe.detail || '').trim();
+    host.innerHTML = W.status(connectKind(probe.state), esc(describeConnectivity(probe))) +
+      (detail ? '<div class="st-hint" style="margin-top:2px">' + esc(detail) + '</div>' : '');
+  }
+
   function modelField(label, hint, control, required) {
     const status = required ? 'required' : 'optional';
     return W.row(esc(label) + ' <span class="st-field-status ' + status + '" data-field-status="' + status + '">' +
@@ -191,8 +225,14 @@
         modelField('API Key', p.api_key_set ? t('已配置，留空表示不修改', 'Configured — leave empty to keep') : t('密钥只写，保存后不再回显', 'Write-only'),
           '<input class="st-input" type="password" data-field="api_key" placeholder="' + (p.api_key_set ? '••••••' : 'sk-…') + '">', !p.api_key_set) +
         modelField(t('模型名称', 'Model name'), t('实际发送给接口的 model', 'Sent as the "model" field'),
-          '<input class="st-input" data-field="model" value="' + esc(p.model || '') + '" placeholder="gpt-5-codex">' +
-          W.btn(t('从接口获取', 'Fetch'), 'model-fetch'), true) +
+          '<div class="st-model-field-stack">' +
+            '<input class="st-input" data-field="model" value="' + esc(p.model || '') + '" placeholder="gpt-5-codex">' +
+            '<div class="st-model-connect-row">' +
+              W.btn(t('从接口获取', 'Fetch'), 'model-fetch') +
+              W.btn(t('测试连通', 'Test'), 'model-connect') +
+            '</div>' +
+            '<div class="st-hint" data-model-test-status role="status"></div>' +
+          '</div>', true) +
         W.adv(t('高级设置', 'Advanced'),
           modelField(t('方案名称', 'Profile name'), t('留空使用模型名称', 'Defaults to model name'), '<input class="st-input" data-field="name" value="' + esc(p.name || '') + '">') +
           modelField(t('模型总窗口', 'Model window limit'), '', '<input class="st-input" data-field="model_context_window" value="' + esc(p.model_context_window || '') + '">' +
@@ -297,6 +337,7 @@
       status.textContent = t('正在探测…', 'Probing…');
       try {
         const response = await api('/api/model_profiles/probe', { method: 'POST', body: {
+          profile_id: p.id || '',
           base_url: dialogValue('base_url'), api_key: dialogValue('api_key'), model: dialogValue('model'),
           llm_type: dialogValue('llm_type'), model_context_window: dialogValue('model_context_window'),
         } });
@@ -313,31 +354,153 @@
       } catch (error) { status.textContent = String(error.message || error); }
       finally { probeBtn.disabled = false; }
     });
+    const connectBtn = body && body.querySelector('[data-act="model-connect"]');
+    if (connectBtn) connectBtn.addEventListener('click', async () => {
+      const status = body.querySelector('[data-model-test-status]');
+      const model = dialogValue('model');
+      const baseUrl = dialogValue('base_url');
+      if (!model) { toast(t('请填写模型名称', 'Model name is required'), true); return; }
+      if (!baseUrl) { toast(t('请填写 API 地址', 'API base URL is required'), true); return; }
+      let headers = {};
+      let extraBody = {};
+      try {
+        headers = modelJson('headers_json', t('额外请求头', 'Extra headers'));
+        extraBody = modelJson('extra_body_json', t('额外请求体', 'Extra body'));
+      } catch (error) { toast(String(error.message || error), true); return; }
+      connectBtn.disabled = true;
+      if (status) status.innerHTML = W.status('warn', esc(t('正在测试…', 'Testing…')));
+      try {
+        const response = await api('/api/model_profiles/connectivity', { method: 'POST', body: {
+          id: p.id, base_url: baseUrl, api_key: dialogValue('api_key'), model: model,
+          llm_type: dialogValue('llm_type'), headers: headers, extra_body: extraBody,
+        } });
+        renderConnectivity(status, response.probe || {});
+      } catch (error) {
+        if (status) status.innerHTML = W.status('err', esc(String(error.message || error)));
+      } finally { connectBtn.disabled = false; }
+    });
     const fetchBtn = body && body.querySelector('[data-act="model-fetch"]');
+    /* ── 「从接口获取」：模型列表放进自绘菜单，筛选框属于菜单本身 ─────────────
+       旧做法是给「模型名称」输入框挂 <datalist>：浏览器会拿框里已有的文字去筛
+       选项，编辑已有档案时框里本来就填着模型名，列表几乎被筛空；而且真正能筛
+       的地方是模型名称框，用户没法在列表里搜。现在筛选框独立在菜单里，模型名
+       称框只负责最终取值。 */
+    const modelInput = body.querySelector('[data-field="model"]');
+    let modelMenu = null;
+    let discoveredModels = [];
+
+    function closeModelMenu() {
+      if (!modelMenu) return;
+      document.removeEventListener('pointerdown', onModelMenuOutside, true);
+      window.removeEventListener('resize', placeModelMenu);
+      body.removeEventListener('scroll', placeModelMenu);
+      modelMenu.remove();
+      modelMenu = null;
+    }
+    function placeModelMenu() {
+      if (!modelMenu || !modelInput) return;
+      const rect = modelInput.getBoundingClientRect();
+      const width = Math.max(rect.width, 300);
+      modelMenu.style.width = width + 'px';
+      modelMenu.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)) + 'px';
+      const height = modelMenu.offsetHeight || 288;
+      const roomBelow = window.innerHeight - rect.bottom - 12;
+      modelMenu.style.top = (roomBelow < Math.min(height, 180) && rect.top > height + 8
+        ? rect.top - height - 6 : rect.bottom + 6) + 'px';
+    }
+    function onModelMenuOutside(event) {
+      if (!modelMenu) return;
+      if (modelMenu.contains(event.target)) return;
+      if (modelInput && modelInput.contains(event.target)) return;
+      if (fetchBtn && fetchBtn.contains(event.target)) return;
+      closeModelMenu();
+    }
+    function pickDiscoveredModel(id) {
+      if (!modelInput) return;
+      modelInput.value = id;
+      /* 走一遍 input 事件，能力说明等联动逻辑照常刷新 */
+      modelInput.dispatchEvent(new Event('input', { bubbles: true }));
+      closeModelMenu();
+      modelInput.focus();
+    }
+    function renderDiscoveredModels(keyword) {
+      if (!modelMenu) return;
+      const host = modelMenu.querySelector('[data-model-list]');
+      const needle = String(keyword || '').trim().toLowerCase();
+      const rows = discoveredModels.filter((m) => !needle || String(m.id || '').toLowerCase().indexOf(needle) >= 0);
+      host.innerHTML = rows.length
+        ? rows.map((m) => '<button type="button" class="st-model-option" role="option" data-model-id="' + esc(m.id) + '">' +
+            '<span class="st-model-option-name">' + esc(m.id) + '</span>' +
+            (m.context_window ? '<span class="st-model-option-meta">' + esc(String(m.context_window)) + ' ctx</span>' : '') +
+          '</button>').join('')
+        : '<div class="st-model-menu-empty">' + esc(t('没有匹配的模型', 'No matching models')) + '</div>';
+      const count = modelMenu.querySelector('[data-model-count]');
+      if (count) count.textContent = rows.length + ' / ' + discoveredModels.length;
+    }
+    function openModelMenu(models) {
+      discoveredModels = models;
+      if (!modelMenu) {
+        modelMenu = document.createElement('div');
+        modelMenu.className = 'st-model-menu';
+        modelMenu.innerHTML =
+          '<div class="st-model-menu-search">' + icon('search', 13) +
+            '<input type="text" data-model-filter autocomplete="off" spellcheck="false" placeholder="' +
+            esc(t('筛选模型…', 'Filter models…')) + '" aria-label="' + esc(t('筛选模型', 'Filter models')) + '">' +
+          '</div>' +
+          '<div class="st-model-menu-list" data-model-list role="listbox"></div>' +
+          '<div class="st-model-menu-foot"><span data-model-hint></span><span data-model-count></span></div>';
+        body.appendChild(modelMenu);
+        modelMenu.querySelector('[data-model-filter]').addEventListener('input', (event) => renderDiscoveredModels(event.target.value));
+        modelMenu.addEventListener('click', (event) => {
+          const option = event.target.closest('[data-model-id]');
+          if (option) pickDiscoveredModel(option.dataset.modelId);
+        });
+        modelMenu.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            closeModelMenu();
+            if (modelInput) modelInput.focus();
+            return;
+          }
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const first = modelMenu.querySelector('[data-model-id]');
+            if (first) pickDiscoveredModel(first.dataset.modelId);
+          }
+        });
+        document.addEventListener('pointerdown', onModelMenuOutside, true);
+        window.addEventListener('resize', placeModelMenu);
+        body.addEventListener('scroll', placeModelMenu);
+      }
+      const hint = modelMenu.querySelector('[data-model-hint]');
+      if (hint) {
+        hint.textContent = p.api_key_set && !dialogValue('api_key')
+          ? t('使用已保存的密钥', 'Using the saved key') : '';
+      }
+      const filter = modelMenu.querySelector('[data-model-filter]');
+      if (filter) filter.value = '';
+      renderDiscoveredModels('');
+      modelMenu.hidden = false;
+      placeModelMenu();
+      requestAnimationFrame(() => { if (filter) filter.focus(); });
+    }
+
     if (fetchBtn) {
       fetchBtn.addEventListener('click', async () => {
         const baseUrl = dialogValue('base_url');
-        const keyInput = body.querySelector('[data-field="api_key"]');
-        const key = keyInput ? keyInput.value.trim() : '';
         if (!baseUrl) { toast(t('请先填写 API 地址', 'Fill the API base URL first'), true); return; }
         fetchBtn.disabled = true;
         fetchBtn.textContent = t('获取中…', 'Fetching…');
         try {
-          const res = await api('/api/model_profiles/discover', { method: 'POST', body: { base_url: baseUrl, api_key: key } });
+          /* 编辑已有档案且没重新填密钥时带上 profile_id：后端用存档里的那份，
+             不必为了列一次模型再敲一遍 Key（留空发请求就是那个 401 的来源）。 */
+          const res = await api('/api/model_profiles/discover', {
+            method: 'POST',
+            body: { base_url: baseUrl, api_key: dialogValue('api_key'), profile_id: p.id || '' },
+          });
           const models = res.models || [];
           if (!models.length) { toast(t('接口没有返回模型', 'No models returned'), true); return; }
-          const listId = 'model-datalist';
-          let list = document.getElementById(listId);
-          if (!list) {
-            list = document.createElement('datalist');
-            list.id = listId;
-            body.appendChild(list);
-          }
-          list.innerHTML = models.map((m) => '<option value="' + esc(m.id) + '">' + esc(m.id) +
-            (m.context_window ? ' · ' + m.context_window + ' ctx' : '') + '</option>').join('');
-          const input = body.querySelector('[data-field="model"]');
-          if (input) { input.setAttribute('list', listId); input.focus(); }
-          toast(t('已获取 ', 'Fetched ') + models.length + t(' 个模型，点模型名可自动补全', ' models — pick one from the list'));
+          openModelMenu(models);
         } catch (err) { reportError(err); } finally {
           fetchBtn.disabled = false;
           fetchBtn.textContent = t('从接口获取', 'Fetch');
@@ -519,6 +682,7 @@
           '</div>' +
           '<div class="st-li-act">' +
             W.sw('profile:' + p.id, p.enabled !== false) +
+            '<button type="button" class="st-btn sm text" data-act="model-connect-row" data-id="' + esc(p.id) + '">' + t('测试', 'Test') + '</button>' +
             '<button type="button" class="st-btn sm text" data-act="model-edit" data-id="' + esc(p.id) + '">' + t('编辑', 'Edit') + '</button>' +
             '<button type="button" class="st-btn sm text danger" data-act="model-del" data-id="' + esc(p.id) + '" data-name="' + esc(p.name || p.model) + '">' + t('删除', 'Delete') + '</button>' +
           '</div>' +
@@ -545,6 +709,20 @@
         const profiles = window.__lastProfiles || [];
         const target = profiles.filter((p) => p.id === el.dataset.id)[0];
         modelDialog(target || { id: el.dataset.id });
+        return;
+      }
+      if (act === 'model-connect-row') {
+        const label = el.textContent;
+        el.disabled = true;
+        el.textContent = t('测试中…', 'Testing…');
+        api('/api/model_profiles/connectivity', { method: 'POST', body: { id: el.dataset.id } })
+          .then((res) => {
+            const probe = (res && res.probe) || {};
+            const detail = String(probe.detail || '').trim();
+            toast(describeConnectivity(probe) + (detail ? ' · ' + detail : ''), connectKind(probe.state) !== 'ok');
+          })
+          .catch(reportError)
+          .finally(() => { el.disabled = false; el.textContent = label; });
         return;
       }
       if (act === 'model-del') {

@@ -879,6 +879,297 @@ def probe_model_context(
     }
 
 
+# ── 连通性探测 ────────────────────────────────────────────────────────────
+#
+# probe_model_context 问的是「这个模型能装多少 token」：故意发一个超大请求，让上游
+# 在报错里把窗口吐出来。这里问的是另一个问题——「它此刻能不能答话」：发一次最小
+# 流式请求，量首字延迟，再把失败归到几个可行动的类别上。前者决定压缩阈值，后者
+# 决定这个档案还值不值得留着，以及该重试、该换 key 还是该换服务商。
+
+CONNECTIVITY_TIMEOUT = 20.0
+CONNECTIVITY_PROMPT = "ping"
+CONNECTIVITY_MAX_TOKENS = 16
+CONNECTIVITY_MAX_FRAMES = 80
+
+CONNECTIVITY_STATES = {
+    "available": "可用",
+    "throttled": "暂时限流",
+    "region": "地区受限",
+    "auth": "认证失败",
+    "unavailable": "不可用",
+    "rejected": "请求被拒",
+    "unknown": "未知",
+}
+
+_CONNECTIVITY_REGION_RE = re.compile(
+    r"(?i)unsupported[ _-]?(?:country|region)|not available in your|"
+    r"country.{0,24}(?:not supported|restricted)|地区|地域|国家"
+)
+_CONNECTIVITY_QUOTA_RE = re.compile(
+    r"(?i)rate[ _-]?limit|too many requests|quota|"
+    r"insufficient[ _-]?(?:quota|balance|credit|funds)|额度|限流|余额"
+)
+_CONNECTIVITY_AUTH_RE = re.compile(
+    r"(?i)invalid[ _-]?api[ _-]?key|incorrect api key|unauthorized|"
+    r"authentication|permission denied|鉴权|密钥|未授权"
+)
+_CONNECTIVITY_MODEL_RE = re.compile(
+    r"(?i)no such model|unknown model|invalid model|"
+    r"model.{0,30}(?:not[ _-]?(?:found|exist|supported)|does not exist)|"
+    r"模型.{0,10}(?:不存在|不支持)"
+)
+
+
+def _connectivity_body(raw: bytes, limit: int = 8192) -> str:
+    return _probe_failure_snippet(raw[:limit].decode("utf-8", errors="replace"), limit=2000)
+
+
+def _connectivity_error_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("message", "msg", "detail", "type", "code"):
+            text = str(value.get(key) or "").strip()
+            if text:
+                return text[:400]
+        return json.dumps(value, ensure_ascii=False)[:400]
+    return str(value or "").strip()[:400]
+
+
+def classify_connectivity(status: int, text: str = "") -> str:
+    """把一次探测归到 CONNECTIVITY_STATES 的某一类。
+
+    ``status == 0`` 表示请求根本没走完（传输层失败），具体原因交给调用方写进
+    detail。判定可以保守，但必须可行动：限流要能等、认证要能换 key、地区受限
+    要能换服务商，三者混成一个「失败」就没法处置了。
+    """
+    if status == 0:
+        return "unknown"
+    if 200 <= status < 300:
+        return "available"
+    if status == 401:
+        return "auth"
+    if status in (402, 429):
+        return "throttled"
+    if status == 403:
+        if _CONNECTIVITY_REGION_RE.search(text):
+            return "region"
+        if _CONNECTIVITY_AUTH_RE.search(text):
+            return "auth"
+        return "unavailable"
+    if status == 404:
+        # 模型不在清单里，和 base_url 写错指向了不存在的路径，是两回事。
+        return "unavailable" if _CONNECTIVITY_MODEL_RE.search(text) else "rejected"
+    if status == 400:
+        if _CONNECTIVITY_QUOTA_RE.search(text):
+            return "throttled"
+        return "rejected"
+    if status == 408 or status >= 500:
+        return "unavailable"
+    return "unknown"
+
+
+def classify_connectivity_message(text: str) -> str:
+    """只看措辞就下判定。
+
+    有些上游用 200 回一个错误帧（或者干脆忽略 ``stream`` 回一段错误 JSON），
+    这时候状态码没有信息量，只能读原话。读不懂一律算不可用——它确实没答话。
+    """
+    text = str(text or "")
+    if _CONNECTIVITY_QUOTA_RE.search(text):
+        return "throttled"
+    if _CONNECTIVITY_REGION_RE.search(text):
+        return "region"
+    if _CONNECTIVITY_AUTH_RE.search(text):
+        return "auth"
+    if _CONNECTIVITY_MODEL_RE.search(text):
+        return "unavailable"
+    return "unavailable"
+
+
+def probe_model_connectivity(
+    base_url: str,
+    api_key: str,
+    model_id: str,
+    llm_type: str = "openai-compatible",
+    headers: Optional[dict] = None,
+    extra_body: Optional[dict] = None,
+    timeout: float = CONNECTIVITY_TIMEOUT,
+) -> Dict[str, Any]:
+    """发一次最小流式请求，回答「这个档案现在能不能答话」。
+
+    ``state`` 是给程序看的判定，``label`` 是给人看的短语，``detail`` 保留上游
+    原话——判定可能不准，原话不能丢。`ttft_ms` 取第一个数据帧到达的时刻，不是
+    响应头到达的时刻：连接通了但排队十分钟，账要算在队列上，不能算成可用。
+    """
+    base = _normalize_base_url(base_url)
+    mid = str(model_id or "").strip()
+    if not base:
+        raise ValueError("missing base_url")
+    if not mid:
+        raise ValueError("missing model")
+
+    provider = resolve_profile_provider({"llm_type": str(llm_type or "openai-compatible")})
+    if provider is LLMProvider.OPENAI:
+        url = responses_url_for_base(base)
+    elif provider is LLMProvider.ANTHROPIC:
+        url = anthropic_messages_url_for_base(base)
+    else:
+        url = chat_completions_url_for_base(base)
+
+    request_headers: Dict[str, str] = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    key = str(api_key or "").strip()
+    if key:
+        if provider is LLMProvider.ANTHROPIC:
+            request_headers["x-api-key"] = key
+            request_headers["anthropic-version"] = "2023-06-01"
+        else:
+            request_headers["Authorization"] = "Bearer " + key
+    if isinstance(headers, dict):
+        for name, value in headers.items():
+            name = str(name or "").strip()
+            if name:
+                request_headers[name] = str(value)
+
+    payload: Dict[str, Any] = dict(extra_body) if isinstance(extra_body, dict) else {}
+    if provider is LLMProvider.OPENAI:
+        payload.pop("max_tokens", None)
+        payload.update(
+            {
+                "model": mid,
+                "input": [{"role": "user", "content": CONNECTIVITY_PROMPT}],
+                "max_output_tokens": CONNECTIVITY_MAX_TOKENS,
+                "stream": True,
+            }
+        )
+    else:
+        payload.update(
+            {
+                "model": mid,
+                "messages": [{"role": "user", "content": CONNECTIVITY_PROMPT}],
+                "max_tokens": CONNECTIVITY_MAX_TOKENS,
+                "stream": True,
+            }
+        )
+
+    result: Dict[str, Any] = {
+        "state": "unknown",
+        "label": CONNECTIVITY_STATES["unknown"],
+        "model": mid,
+        "endpoint": url,
+        "ttft_ms": 0,
+        "latency_ms": 0,
+        "http_status": 0,
+        "streamed": False,
+        "frames": 0,
+        "served_model": "",
+        "detail": "",
+        "retry_after": "",
+        "at": int(time.time() * 1000),
+    }
+
+    started = time.monotonic()
+    first_frame_at = 0.0
+    frames = 0
+
+    def finish(state: str, detail: str = "") -> Dict[str, Any]:
+        result["state"] = state
+        result["label"] = CONNECTIVITY_STATES.get(state, CONNECTIVITY_STATES["unknown"])
+        result["detail"] = detail
+        result["frames"] = frames
+        result["latency_ms"] = max(1, int((time.monotonic() - started) * 1000))
+        if first_frame_at:
+            # 本机回环比 1ms 还快；0 会让人以为没测到首字。
+            result["ttft_ms"] = max(1, int((first_frame_at - started) * 1000))
+        return result
+
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            with client.stream("POST", url, headers=request_headers, json=payload) as resp:
+                result["http_status"] = resp.status_code
+                retry_after = str(resp.headers.get("retry-after") or "").strip()
+                if retry_after:
+                    result["retry_after"] = retry_after
+
+                if resp.status_code >= 400:
+                    text = _connectivity_body(resp.read())
+                    detail = _probe_status_line(resp)
+                    if text:
+                        detail += ": " + text
+                    return finish(classify_connectivity(resp.status_code, text), detail)
+
+                content_type = str(resp.headers.get("content-type") or "").lower()
+                result["streamed"] = "event-stream" in content_type
+                if not result["streamed"]:
+                    # 上游忽略了 stream=true，直接给了完整响应：照样算答话了。
+                    text = _connectivity_body(resp.read())
+                    if '"error"' in text or "'error'" in text:
+                        return finish(classify_connectivity_message(text), text[:400])
+                    return finish("available", "")
+
+                inband_error = ""
+                for line in resp.iter_lines():
+                    stripped = str(line or "").strip()
+                    if not stripped:
+                        continue
+                    if not stripped.startswith("data:"):
+                        if stripped.startswith("event:") and "error" in stripped.lower():
+                            inband_error = inband_error or "上游发出了 error 事件"
+                        continue
+                    data = stripped[5:].strip()
+                    if not data:
+                        continue
+                    if data == "[DONE]":
+                        break
+                    if frames == 0:
+                        # 网关类服务会替你换模型：请求 A、实际由 B 回答。记下 B，
+                        # 否则「模型不存在」也会显示成可用，测了等于没测。
+                        try:
+                            first_frame = json.loads(data)
+                        except ValueError:
+                            first_frame = None
+                        if isinstance(first_frame, dict):
+                            served = str(first_frame.get("model") or "").strip()
+                            if served:
+                                result["served_model"] = served
+                    if not first_frame_at:
+                        first_frame_at = time.monotonic()
+                    frames += 1
+                    if "error" in data.lower():
+                        try:
+                            frame = json.loads(data)
+                        except ValueError:
+                            frame = None
+                        if isinstance(frame, dict):
+                            candidate = frame.get("error")
+                            if candidate is None and str(frame.get("type") or "").lower() == "error":
+                                candidate = frame
+                            if candidate is not None and not inband_error:
+                                inband_error = _connectivity_error_text(candidate)
+                    if frames >= CONNECTIVITY_MAX_FRAMES:
+                        break
+
+                if inband_error:
+                    # 200 + 流里夹着拒绝帧：连接是通的，模型不可用，别记成可用。
+                    return finish(classify_connectivity_message(inband_error), inband_error)
+                if frames == 0:
+                    return finish(
+                        "unknown",
+                        _probe_status_line(resp) + ": 200 但流里没有收到任何数据帧",
+                    )
+                served = str(result.get("served_model") or "")
+                if served and served != mid:
+                    return finish(
+                        "available", "上游实际由 %s 回答（请求的是 %s）" % (served, mid)
+                    )
+                return finish("available", "")
+    except httpx.TimeoutException as exc:
+        return finish("unknown", "超时：%gs 内没有拿到完整响应（%s）" % (timeout, type(exc).__name__))
+    except httpx.HTTPError as exc:
+        return finish("unknown", "%s: %s" % (type(exc).__name__, str(exc)[:400]))
+
+
 def profile_store_path(project_root: Path) -> Path:
     return config_path(project_root, "model_profiles.json")
 

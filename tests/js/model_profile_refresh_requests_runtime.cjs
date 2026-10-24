@@ -12,7 +12,7 @@ function fixture() {
   const context=vm.createContext({
     console, Promise, Date:{now:()=>time}, currentSessionId:'A',
     modelProfilesCache:profiles,modelProfilesLoadedAt:time,modelProfilesLoadPromise:null,
-    MODEL_PROFILES_CACHE_TTL_MS:30000,modelProfileIdBySession:{A:'p1'},
+    MODEL_PROFILES_CACHE_TTL_MS:30000,modelProfileIdBySession:{A:'p1'},modelReasoningEffortBySession:{},
     modelProfileSelectionEpoch:0,modelProfilesRefreshPromises:{},activeModelProfileId:'p1',
     els:()=>({control:{}}),newSessionModelProfileId:()=>'',h:s=>s,
     renderModelProfileControl:()=>rendered.push(context.activeModelProfileId),

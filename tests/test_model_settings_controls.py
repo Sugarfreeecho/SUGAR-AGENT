@@ -93,3 +93,52 @@ def test_session_effort_applies_after_frozen_snapshot_and_to_fallbacks(monkeypat
         assert all("thinking" not in (item.get("extra_body") or {}) for item in candidates)
     client, _, _, _ = agent_harness._build_executor_config_for_session("fixture")
     assert client.candidates[0]["reasoning_effort"] == "max", "fork snapshots must not overwrite the session's newer choice"
+
+
+def test_connectivity_endpoint_reuses_the_saved_key_for_an_existing_profile(tmp_path, monkeypatch):
+    import httpx
+    import model_profiles
+    import webui
+
+    monkeypatch.setattr(webui, "PROJECT_ROOT", tmp_path)
+    profile = model_profiles.upsert_profile(tmp_path, {
+        "model": "demo-model", "base_url": "https://api.example.com/v1", "api_key": "saved-key",
+    })
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b'data: {"choices":[{"delta":{"content":"p"}}]}\n\ndata: [DONE]\n\n',
+        )
+
+    class MockClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(model_profiles.httpx, "Client", MockClient)
+
+    response = TestClient(webui.fastapi_app).post(
+        "/api/model_profiles/connectivity", json={"id": profile["id"]}
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["probe"]["state"] == "available"
+    assert payload["probe"]["ttft_ms"] >= 1
+    assert seen["auth"] == "Bearer saved-key", "编辑已有档案时密钥留空也要能测"
+
+
+def test_connectivity_endpoint_rejects_a_request_without_an_endpoint(tmp_path, monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "PROJECT_ROOT", tmp_path)
+    response = TestClient(webui.fastapi_app).post(
+        "/api/model_profiles/connectivity", json={"model": "demo-model"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False

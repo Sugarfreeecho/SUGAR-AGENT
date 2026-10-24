@@ -4550,7 +4550,7 @@ def _validate_model_name_in_discovered_list(data: dict, model_name: str) -> None
 
 @fastapi_app.get("/api/model_profiles")
 async def get_model_profiles():
-    return JSONResponse(_model_profiles_response())
+    return JSONResponse(await asyncio.to_thread(_model_profiles_response))
 
 
 @fastapi_app.post("/api/model_profiles")
@@ -4624,18 +4624,49 @@ async def delete_model_profile(profile_id: str):
     return JSONResponse({"ok": ok})
 
 
+def _profile_api_key_for(profile_id, api_key) -> str:
+    """档案密钥只写不回显：编辑态留空时回落到存档里的那份。
+
+    不这样做的话，前端只能发一个空 Key，`discover_models` 就不带 Authorization，
+    已经配好的接口会直接回 401 —— 这正是「编辑模型时不重新填一次 Key 就报错」
+    的来源。前端把 profile_id 一起传来即可复用。
+    """
+    key = str(api_key or "").strip()
+    if key:
+        return key
+    pid = str(profile_id or "").strip()
+    if not pid:
+        return ""
+    saved = model_profiles.get_profile(PROJECT_ROOT, pid) or {}
+    return str(saved.get("api_key") or "").strip()
+
+
+def _model_endpoint_error(exc: Exception) -> str:
+    """把 httpx 的 "Client error '401 Unauthorized' for url ..." 换成人话。"""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status == 401:
+        return "接口返回 401：API Key 缺失或无效。编辑已有模型时可留空，直接用已保存的密钥。"
+    if status == 403:
+        return "接口返回 403：当前密钥没有访问该接口的权限。"
+    if status is not None:
+        return "接口返回 HTTP " + str(status) + "：" + str(exc)
+    return str(exc)
+
+
 @fastapi_app.post("/api/model_profiles/discover")
 async def discover_model_profiles(req: Request):
     try:
         data = await req.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
-    base_url = str((data or {}).get("base_url") or "").strip()
-    api_key = str((data or {}).get("api_key") or "").strip()
+    payload = data if isinstance(data, dict) else {}
+    base_url = str(payload.get("base_url") or "").strip()
+    api_key = _profile_api_key_for(payload.get("profile_id"), payload.get("api_key"))
     try:
         models = await run_in_threadpool(model_profiles.discover_models, base_url, api_key)
     except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": False, "error": _model_endpoint_error(e)}, status_code=400)
     return JSONResponse({"ok": True, "models": models})
 
 
@@ -4648,7 +4679,7 @@ async def probe_model_profile(req: Request):
     if not isinstance(data, dict):
         return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
     base_url = str(data.get("base_url") or "").strip()
-    api_key = str(data.get("api_key") or "").strip()
+    api_key = _profile_api_key_for(data.get("profile_id"), data.get("api_key"))
     model_id = str(data.get("model") or data.get("id") or "").strip()
     fallback = dict(data.get("metadata")) if isinstance(data.get("metadata"), dict) else dict(data)
     if data.get("llm_type"):
@@ -4661,6 +4692,68 @@ async def probe_model_profile(req: Request):
     if probe_error:
         logger.warning("model context probe failed: model=%s detail=%s", model_id, probe_error)
     return JSONResponse({"ok": True, "model": model})
+
+
+@fastapi_app.post("/api/model_profiles/connectivity")
+async def model_profile_connectivity(req: Request):
+    """单模型连通性探测：发一次最小请求，量首字延迟并给出状态判定。
+
+    与 /api/model_profiles/probe 的分工：那个探「窗口多大」，这个探「能不能答话」。
+    """
+    try:
+        data = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+
+    profile_id = str(data.get("id") or "").strip()
+    base_url = str(data.get("base_url") or "").strip()
+    api_key = str(data.get("api_key") or "").strip()
+    model_id = str(data.get("model") or "").strip()
+    llm_type = str(data.get("llm_type") or "").strip()
+    headers = data.get("headers") if isinstance(data.get("headers"), dict) else None
+    extra_body = data.get("extra_body") if isinstance(data.get("extra_body"), dict) else None
+
+    # 编辑已有档案时密钥留空是常态：拿存档里的那份补齐，不必为了测一次连通性再敲一遍。
+    if profile_id and (not api_key or not base_url or not model_id or not llm_type):
+        saved = model_profiles.get_profile(PROJECT_ROOT, profile_id) or {}
+        api_key = api_key or str(saved.get("api_key") or "")
+        base_url = base_url or str(saved.get("base_url") or "")
+        model_id = model_id or str(saved.get("model") or "")
+        llm_type = llm_type or str(saved.get("llm_type") or "")
+        if headers is None and isinstance(saved.get("headers"), dict):
+            headers = saved.get("headers")
+
+    if not base_url or not model_id:
+        return JSONResponse({"ok": False, "error": "missing base_url or model"}, status_code=400)
+
+    try:
+        probe = await run_in_threadpool(
+            model_profiles.probe_model_connectivity,
+            base_url,
+            api_key,
+            model_id,
+            llm_type or "openai-compatible",
+            headers,
+            extra_body,
+        )
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:  # 探测不该让设置页报 500，但真崩了要留痕
+        logger.warning("model connectivity probe crashed: model=%s error=%s", model_id, e)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    logger.info(
+        "model connectivity probe: model=%s state=%s ttft=%sms latency=%sms status=%s detail=%s",
+        probe.get("model"),
+        probe.get("state"),
+        probe.get("ttft_ms"),
+        probe.get("latency_ms"),
+        probe.get("http_status"),
+        str(probe.get("detail") or "")[:200],
+    )
+    return JSONResponse({"ok": True, "probe": probe})
 
 
 @fastapi_app.post("/api/model_profiles/capabilities")
@@ -4960,15 +5053,18 @@ async def get_session_model_profile(session_id: str):
     sid = (session_id or "").strip()
     if not sid:
         return JSONResponse({"ok": False, "error": "missing session_id"}, status_code=400)
-    try:
-        meta = session_manager._load_metadata(sid)
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
-    pid = str((meta or {}).get("model_profile_id") or "").strip()
-    if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, pid)):
-        top = model_profiles.top_profile(PROJECT_ROOT)
-        pid = str((top or {}).get("id") or "")
-    return JSONResponse({"ok": True, "profile_id": pid, "reasoning_effort": str((meta or {}).get("reasoning_effort") or "")})
+    def _read_profile():
+        try:
+            meta = session_manager._load_metadata(sid)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+        pid = str((meta or {}).get("model_profile_id") or "").strip()
+        if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, pid)):
+            top = model_profiles.top_profile(PROJECT_ROOT)
+            pid = str((top or {}).get("id") or "")
+        return JSONResponse({"ok": True, "profile_id": pid, "reasoning_effort": str((meta or {}).get("reasoning_effort") or "")})
+
+    return await run_in_threadpool(_read_profile)
 
 
 def _persist_session_reasoning_effort(sid: str, effort: str) -> dict:
