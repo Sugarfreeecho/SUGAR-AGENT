@@ -121,15 +121,15 @@ def bundled_host_plugin_enabled(plugin_id: str) -> bool:
         snapshot = _AVAILABILITY_SNAPSHOT.get()
         if snapshot is not None:
             if "plugins" not in snapshot:
-                snapshot["enabled"] = False
+                snapshot["enabled"] = plugins_enabled()
                 snapshot["plugins"] = {}
-                manager = get_plugin_manager()
-                enabled = plugins_enabled()
-                plugins = manager.state.read()["plugins"]
-                snapshot["plugins"] = plugins
-                snapshot["enabled"] = enabled
-            entry = snapshot["plugins"].get(str(plugin_id or ""))
-            return bool(snapshot["enabled"] and (entry is None or entry["enabled"]))
+            key = str(plugin_id or "")
+            cached = snapshot["plugins"].get(key)
+            if cached is None:
+                # tier default + per-plugin environment override + persisted state
+                cached = get_plugin_manager().is_enabled(key)
+                snapshot["plugins"][key] = bool(cached)
+            return bool(snapshot["enabled"] and cached)
         manager = get_plugin_manager()
         return bool(plugins_enabled() and manager.is_enabled(str(plugin_id or "")))
     except Exception:

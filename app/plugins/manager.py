@@ -14,6 +14,7 @@ from config_paths import config_path
 from agent_local_timing import local_step
 
 from .loader import discover_plugins, path_resources, skill_resources
+from . import tiers
 from .models import (
     PluginChangeSet,
     PluginDefinition,
@@ -175,7 +176,14 @@ class PluginManager:
         return self.discover_report().plugins
 
     def is_enabled(self, plugin_id: str) -> bool:
-        return self.state.is_enabled(plugin_id, default=True)
+        namespace = normalize_namespace(plugin_id)
+        override = tiers.env_override(namespace)
+        if override is not None:
+            return override
+        return self.state.is_enabled(namespace, default=tiers.default_enabled(namespace))
+
+    def is_hidden_in_settings(self, plugin_id: str) -> bool:
+        return tiers.hidden_in_settings(plugin_id)
 
     def set_enabled(self, plugin_id: str, enabled: bool) -> Mapping[str, object]:
         namespace = normalize_namespace(plugin_id)

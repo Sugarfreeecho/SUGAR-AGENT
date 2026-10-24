@@ -1,6 +1,6 @@
 # 插件加载与清单 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-21 v7（Hook worker保留目录后台刷新）
+- 版本：2026-10-25 v8（插件四级分层与逐插件环境开关）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/manager.py`、`plugins/loader.py`、`agent_extensions.load_plugins`、`plugins/models.py`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -74,6 +74,13 @@
 - **规则与边界**：排队回调和刷新发布均核对catalog generation，失效后旧回调不能扫描/回填；排队期间目录已更新或切换键时，旧请求不再扫描。force、冷缓存、无可用或已关闭loop仍等待真实加载，不放宽实际调用时的实时信任/启停检查。executor提交失败清理in-flight和活动计数，后续仍可刷新。
 - **依据**：`load_plugins(refresh_loop=...) / _schedule_plugin_cache_refresh / _prepare_hook_dispatch`；最初6项目录新增用例所在39项组合通过；补同键/新鲜度2例后，最终冻结定向27项通过、源码无漂移，包含当前8项目录例及相关Hook/失效/取消。23:22自然运行暴露了线程化初版的同步扫描回退，补修与未加载限制见[报告§14](../../performance/agent-subagent-interround-2026-10-21.md#14-2322自然重启与hook目录刷新回退补修)。
 
+### UC-6A10 插件四级分层与逐插件环境开关
+
+- **触发**：插件发现、设置页目录、工具目录构建、桌面打包。
+- **预期现象**：`app/plugins/tiers.json` 把插件分为 `system`（设置页隐藏、工具常驻）、`system-external`（可见可开关、工具常驻）、`extension`（可见可开关、工具延迟）、`standalone`（不随包分发、默认停用、工具延迟）。每插件可用 `PLUGIN_<ID>_ENABLED` 强制开关，优先级高于界面状态与分级默认值；环境变量生效时设置页开关置灰并显示变量名。
+- **规则与边界**：分级表是运行期与桌面打包的唯一口径；`system_builtin` 只保留“原生渲染/信任”语义，不再决定设置页可见性。未登记插件沿用“可见、默认启用、不打包”，未登记的老式内置插件仍隐藏。环境变量不落盘，界面开关仍写 `.config/plugins-state.json`；`standalone` 仅影响打包与默认值，用户手动启用后照常加载。
+- **依据**：`plugins/tiers.json`、`plugins/tiers.py`、`plugins/manager.is_enabled`、`plugins/host.bundled_host_plugin_enabled`、`agent_extensions._plugin_catalog_data`、`packaging/scripts/prepare-payload.mjs`。
+
 ## 3. 边界
 
 - 加载失败≠崩溃：失败信息进入运行错误列表（`plugin_runtime_errors`）。
@@ -91,8 +98,11 @@
 | UC-6A7 | `_canonical_manager_path`、`_manager_path_identity`、`get_plugin_manager` |
 | UC-6A8 | `_manager_configuration_token`、`get_plugin_manager`、`_migrate_legacy_path`、`_user_plugins_dir` |
 | UC-6A9 | `load_plugins(refresh_loop=...)`、`_schedule_plugin_cache_refresh`、`tests/test_hook_worker_plugin_cache.py` |
+| UC-6A10 | `plugins/tiers.py`、`plugins/manager.py`、`agent_extensions.py`、`packaging/scripts/prepare-payload.mjs` |
 
 ## 5. 版本记录
+
+- 2026-10-25 v8：新增四级分层（system / system-external / extension / standalone）、逐插件 `PLUGIN_<ID>_ENABLED` 与环境变量优先级；打包范围改由同一张分级表派生。
 
 - 2026-10-21 v7：修复Hook目录读取移到worker后丢失陈旧命中后台刷新的回退；显式回原loop调度并保留generation、force、冷缓存和失败清理。
 

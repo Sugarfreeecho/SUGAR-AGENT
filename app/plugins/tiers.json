@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "note": "插件分级表：运行期默认状态、设置页可见性、工具常驻/延迟，以及打包是否收录都以这张表为准。新增插件务必登记；未登记的插件按 standalone 处理（不打包、默认停用）。",
+  "tiers": {
+    "system": [
+      "agent-goal",
+      "agent-team",
+      "session-todo"
+    ],
+    "system-external": [
+      "web-search-providers",
+      "execution-tools"
+    ],
+    "extension": [
+      "desktop-notifications",
+      "computer-use",
+      "thread-monitor",
+      "change-review"
+    ],
+    "standalone": [
+      "voice-input",
+      "chatgpt-subscription",
+      "feishu-transport",
+      "game-arena",
+      "repo-engineering",
+      "sugar-bili-scroll"
+    ]
+  }
+}

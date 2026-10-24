@@ -48,6 +48,11 @@ except ImportError:  # pragma: no cover - import style depends on the launcher
 
 logger = logging.getLogger(__name__)
 
+try:  # Plugin product tiers are shared by runtime and desktop packaging.
+    from plugins import tiers as plugin_tiers
+except ImportError:  # pragma: no cover - package import style
+    from .plugins import tiers as plugin_tiers
+
 # The TTL is deliberately long because every supported mutation path (enable/
 # disable, install, uninstall, settings change, extension env update) calls
 # invalidate_extension_caches(); ambient drift is bounded by the TTL itself.
@@ -1634,6 +1639,14 @@ def _plugin_catalog_data(manager, loaded) -> Dict[str, Any]:
     ui_contributions = []
     for plugin in report.plugins:
         row = plugin.to_dict()
+        bundled_system = _is_bundled_system_plugin(plugin)
+        tier = plugin_tiers.tier_of(plugin.plugin_id)
+        # 分级表是唯一口径：system 隐藏；未登记的老式内置插件沿用“隐藏”以保持兼容；
+        # system-external / extension 一律可见（可在设置页开关）。
+        hidden = bundled_system and tier in {"system", plugin_tiers.UNCLASSIFIED_TIER}
+        row["tier"] = tier
+        row["env_var"] = plugin_tiers.env_var_name(plugin.plugin_id)
+        row["env_override"] = plugin_tiers.env_override(plugin.plugin_id)
         row["configured_enabled"] = manager.is_enabled(plugin.plugin_id)
         row["enabled"] = row["configured_enabled"] and plugins_enabled()
         row["loaded"] = plugin.plugin_id in loaded_ids
@@ -1641,12 +1654,12 @@ def _plugin_catalog_data(manager, loaded) -> Dict[str, Any]:
         if row["loaded"]:
             row["ui"] = list(plugin_ui_contributions(plugin))
             ui_contributions.extend(row["ui"])
-        elif _is_bundled_system_plugin(plugin):
+        elif hidden:
             # Trusted settings remain available so a disabled bundled capability can be enabled again.
             row["ui"] = [item for item in plugin_ui_contributions(plugin)
                          if item.get("slot") == "settings.section" and item.get("target") == "renderer"]
             ui_contributions.extend(row["ui"])
-        if not _is_bundled_system_plugin(plugin):
+        if not hidden:
             plugin_rows.append(row)
     ui_contributions.sort(
         key=lambda item: (

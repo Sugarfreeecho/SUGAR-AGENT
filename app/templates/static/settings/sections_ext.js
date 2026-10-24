@@ -55,18 +55,21 @@
       return snapshot;
     },
     render(d) {
-      const plugins = (d.plugins || []).filter((p) => !p.system_builtin);
+      const plugins = (d.plugins || []).filter((p) => (p.tier ? p.tier !== 'system' : !p.system_builtin));
       const rows = plugins.map((p) => {
         const compat = p.compatibility || {};
         const bad = compat.status === 'incompatible' || compat.compatible === false;
         const loaded = p.loaded !== false && p.enabled !== false;
+        const envLocked = p.env_override === true || p.env_override === false;
         return W.lrow(
           tipIf(esc(pluginName(p)) + (p.version ? ' <span class="st-muted">v' + esc(p.version) + '</span>' : ''),
             p.description || ''),
           esc(componentsSummary(p) || p.namespace || ''),
           (bad ? W.status('warn', t('不兼容', 'Incompatible'))
             : loaded ? W.status('ok', t('正常', 'OK')) : W.status('warn', t('已停用', 'Disabled'))) +
-          W.sw('plugin:' + pluginId(p), p.enabled !== false) +
+          W.sw('plugin:' + pluginId(p), p.enabled !== false,
+            envLocked ? 'disabled aria-disabled="true" title="' + t('由环境变量控制', 'Controlled by environment variable') + '"' : '') +
+          (envLocked ? W.chip('ENV ' + esc(p.env_var || '')) : '') +
           '<button type="button" class="st-btn sm text" data-act="plugin-settings" data-id="' + esc(pluginId(p)) + '">' + t('设置', 'Settings') + '</button>' +
           '<button type="button" class="st-btn sm text danger" data-act="plugin-del" data-id="' + esc(pluginId(p)) + '" data-name="' + esc(pluginName(p)) + '">' + t('移除', 'Remove') + '</button>'
         );
