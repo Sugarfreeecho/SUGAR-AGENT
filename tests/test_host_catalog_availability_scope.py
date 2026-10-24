@@ -57,6 +57,7 @@ def test_host_builder_uses_one_snapshot_and_execution_checks_live_disable(monkey
     import agent_loop
     import plugins.host as host
     import plugins.manager as manager
+    import session_workspace
     from host_tool_registry import HostToolInvokerRegistry
 
     state = {"plugins": {"example": {"enabled": True}}}
@@ -76,6 +77,7 @@ def test_host_builder_uses_one_snapshot_and_execution_checks_live_disable(monkey
         definitions.append({"type":"function", "function":{"name":name,"parameters":{"type":"object","properties":{}}}})
     monkeypatch.setattr(agent_loop, "host_tool_invokers", registry)
     monkeypatch.setattr(agent_loop, "OPENAI_TOOL_DEFINITIONS", definitions)
+    monkeypatch.setattr(session_workspace, "workspace_tool_definitions", lambda: [])
     monkeypatch.setattr(agent_extensions, "bundled_host_tool_definitions", lambda **kwargs: [])
     rows, _ = agent_loop._build_host_tool_catalog({})
     assert len(rows) == 4 and read.call_count == get_manager.call_count == 1

@@ -34,23 +34,29 @@ from .state import PluginStateStore
 
 logger = logging.getLogger(__name__)
 _FALSE_VALUES = {"0", "false", "no", "off"}
+_plugin_migration_lock = threading.Lock()
 
 
 def _migrate_legacy_path(new: Path, legacy: Path) -> Path:
     """Move a legacy ``.myagent`` state path to ``.config`` once."""
-    if legacy.exists() and not new.exists():
-        try:
-            new.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(legacy), str(new))
-            logger.info("Migrated %s -> %s", legacy, new)
-        except OSError:
-            logger.warning(
-                "Could not migrate %s to %s; keeping the legacy path",
-                legacy,
-                new,
-                exc_info=True,
-            )
-            return legacy
+    if not legacy.exists():
+        return new
+    # Migration may move data. Serialize only this rare side effect, with a
+    # second check for another caller that completed it while we waited.
+    with _plugin_migration_lock:
+        if legacy.exists() and not new.exists():
+            try:
+                new.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(legacy), str(new))
+                logger.info("Migrated %s -> %s", legacy, new)
+            except OSError:
+                logger.warning(
+                    "Could not migrate %s to %s; keeping the legacy path",
+                    legacy,
+                    new,
+                    exc_info=True,
+                )
+                return legacy
     return new
 
 
@@ -73,20 +79,9 @@ def _user_plugins_dir() -> Path:
         Path.home() / ".myagent" / "plugins",
         Path.home() / ".sugaragent" / "plugins",
     ):
-        if not legacy.exists() or target.exists():
-            continue
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(legacy), str(target))
-            logger.info("Migrated %s -> %s", legacy, target)
-        except OSError:
-            logger.warning(
-                "Could not migrate %s to %s; keeping the legacy path",
-                legacy,
-                target,
-                exc_info=True,
-            )
-            return legacy
+        selected = _migrate_legacy_path(target, legacy)
+        if selected != target:
+            return selected
     return target
 
 
@@ -121,9 +116,10 @@ def default_state_path() -> Path:
     if configured:
         path = Path(configured).expanduser()
         return (path if path.is_absolute() else Path(__file__).resolve().parents[2] / path).resolve()
+    project_root = Path(__file__).resolve().parents[2]
     return _migrate_legacy_path(
-        config_path(Path(__file__).resolve().parents[2], "plugins-state.json"),
-        Path(__file__).resolve().parents[2] / ".myagent" / "plugins-state.json",
+        config_path(project_root, "plugins-state.json"),
+        project_root / ".myagent" / "plugins-state.json",
     )
 
 
@@ -383,6 +379,7 @@ _default_manager: Optional[PluginManager] = None
 _default_manager_config: Optional[tuple[tuple[str, ...], str]] = None
 _default_manager_lock = threading.Lock()
 _canonical_manager_paths: OrderedDict = OrderedDict()
+_canonical_manager_paths_lock = threading.Lock()
 _CANONICAL_MANAGER_PATH_LIMIT = 32
 
 
@@ -408,7 +405,7 @@ def _manager_path_identity(path: Path):
 
 
 def _canonical_manager_path(path: Path) -> str:
-    """Reuse only an unchanged, already canonical name; caller holds manager lock.
+    """Reuse only an unchanged, already canonical name.
 
     Aliases, reparse points, unknown identities and missing parents keep live
     resolution. Only names are reused: plugin state and trust remain live.
@@ -416,27 +413,40 @@ def _canonical_manager_path(path: Path) -> str:
     absolute = Path(os.path.abspath(path.expanduser()))
     key = os.path.normcase(str(absolute))
     identity = _manager_path_identity(absolute)
-    cached = _canonical_manager_paths.get(key)
-    if identity is not None and cached and cached[0] == identity:
-        _canonical_manager_paths.move_to_end(key)
-        return cached[1]
-    _canonical_manager_paths.pop(key, None)
+    with _canonical_manager_paths_lock:
+        cached = _canonical_manager_paths.get(key)
+        if identity is not None and cached and cached[0] == identity:
+            _canonical_manager_paths.move_to_end(key)
+            return cached[1]
+        _canonical_manager_paths.pop(key, None)
     resolved = str(absolute.resolve())
     if (identity is not None and os.path.normcase(resolved) == key
             and _manager_path_identity(absolute) == identity):
-        _canonical_manager_paths[key] = (identity, resolved)
-        while len(_canonical_manager_paths) > _CANONICAL_MANAGER_PATH_LIMIT:
-            _canonical_manager_paths.popitem(last=False)
+        with _canonical_manager_paths_lock:
+            _canonical_manager_paths[key] = (identity, resolved)
+            while len(_canonical_manager_paths) > _CANONICAL_MANAGER_PATH_LIMIT:
+                _canonical_manager_paths.popitem(last=False)
     return resolved
+
+
+def _manager_configuration_token() -> tuple:
+    """Memory-only guard against publishing a lookup from an older config."""
+    return (
+        default_discovery_dirs, default_state_path, PluginManager,
+        tuple(os.environ.get(name) for name in (
+            "PLUGINS_DIRS", "PLUGINS_DIR", "PLUGINS_STATE_PATH",
+            "LOCALAPPDATA", "XDG_STATE_HOME", "HOME", "USERPROFILE",
+            "HOMEDRIVE", "HOMEPATH",
+        )),
+    )
 
 
 def get_plugin_manager() -> PluginManager:
     """Return the lazy process-wide manager used by host integrations."""
 
     global _default_manager, _default_manager_config
-    with local_step("plugin_manager_lock", min_ms=5):
-        _default_manager_lock.acquire()
-    try:
+    while True:
+        token = _manager_configuration_token()
         with local_step("plugin_manager_paths", min_ms=5):
             dirs = default_discovery_dirs()
             state_path = default_state_path()
@@ -445,13 +455,31 @@ def get_plugin_manager() -> PluginManager:
                 tuple(_canonical_manager_path(path) for path in dirs),
                 _canonical_manager_path(state_path),
             )
-        if _default_manager is None or _default_manager_config != config:
-            with local_step("plugin_manager_construct", min_ms=5):
-                _default_manager = PluginManager(dirs, state_path)
+        with local_step("plugin_manager_lock", min_ms=5):
+            _default_manager_lock.acquire()
+        try:
+            if token != _manager_configuration_token():
+                continue
+            if _default_manager is not None and _default_manager_config == config:
+                return _default_manager
+        finally:
+            _default_manager_lock.release()
+
+        # Construction with explicit paths has no discovery/state writes. Allow
+        # duplicate private candidates rather than blocking all other lookups.
+        with local_step("plugin_manager_construct", min_ms=5):
+            candidate = PluginManager(dirs, state_path)
+        with local_step("plugin_manager_lock", min_ms=5):
+            _default_manager_lock.acquire()
+        try:
+            if token != _manager_configuration_token():
+                continue
+            if _default_manager is None or _default_manager_config != config:
+                _default_manager = candidate
                 _default_manager_config = config
-        return _default_manager
-    finally:
-        _default_manager_lock.release()
+            return _default_manager
+        finally:
+            _default_manager_lock.release()
 
 
 def load_enabled_plugins() -> PluginLoadResult:

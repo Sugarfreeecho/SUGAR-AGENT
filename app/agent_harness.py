@@ -3868,25 +3868,25 @@ class SessionManager:
     def refresh_sessions_index_from_disk(self) -> None:
         """根据 sessions 目录内存在的会话文件夹重建索引（sessions.json），磁盘与 metadata 为准。"""
         by_id: Dict[str, dict] = {}
+        activity_cache = getattr(self, "_index_activity_cache", {})
+        next_activity_cache = {}
         sub_idx = self._load_subagent_index()
         runtime_v2_primary = self._runtime_v2_primary()
         try:
             for p in self.sessions_dir.iterdir():
-                if not p.is_dir():
-                    continue
                 try:
                     sid = self._normalize_session_id(p.name)
                 except ValueError:
-                    logger.warning("Skipping invalid session directory name: %s", p.name)
+                    logger.debug("Skipping non-session entry: %s", p.name)
                     continue
                 if p.name != sid:
-                    logger.warning("Skipping non-canonical session directory name: %s", p.name)
+                    logger.debug("Skipping non-canonical session directory name: %s", p.name)
+                    continue
+                if not p.is_dir():
                     continue
                 if sid in sub_idx:
                     continue
                 meta_path = p / "metadata.json"
-                if not meta_path.exists():
-                    continue
                 try:
                     meta_raw = meta_path.read_text(encoding="utf-8")
                     meta = _parse_metadata_json_raw(meta_raw)
@@ -3935,14 +3935,26 @@ class SessionManager:
                 # instead of stat'ing every event log on every request.
                 activity_path = p / ("events.jsonl" if runtime_v2_primary else "ui_events.json")
                 try:
-                    activity_ts: Optional[float] = activity_path.stat().st_mtime
+                    activity_stat = activity_path.stat()
+                    activity_ts: Optional[float] = activity_stat.st_mtime
+                    activity_signature = (activity_stat.st_dev, activity_stat.st_ino,
+                                          activity_stat.st_size, activity_stat.st_mtime_ns,
+                                          activity_stat.st_ctime_ns)
                 except OSError:
                     activity_ts = None
                 if activity_ts is not None and activity_ts > self._iso_ts(updated_at):
                     # 追加不等于活动：控制类事实（例如执行面板状态同步）要把时间让给
                     # 日志里最后一条对话活动事件，否则每次启动都会刷新全部会话。
                     if runtime_v2_primary:
-                        activity_ts = _session_log_activity_timestamp(activity_path, activity_ts)
+                        cached_activity = activity_cache.get(sid)
+                        if cached_activity and cached_activity[0] == activity_signature:
+                            activity_ts = cached_activity[1]
+                        else:
+                            activity_ts = _session_log_activity_timestamp(activity_path, activity_ts)
+                        # A fallback to mtime can mean a transient read failure;
+                        # recheck it next time rather than caching that failure.
+                        if activity_ts is None or activity_ts != activity_stat.st_mtime:
+                            next_activity_cache[sid] = (activity_signature, activity_ts)
                 if activity_ts is not None and activity_ts > self._iso_ts(updated_at):
                     updated_at = datetime.fromtimestamp(
                         activity_ts,
@@ -3978,6 +3990,7 @@ class SessionManager:
                 by_id[sid] = entry
         except FileNotFoundError:
             pass
+        self._index_activity_cache = next_activity_cache
         self.index = sorted(
             by_id.values(),
             key=lambda e: str(e.get("updated_at") or e.get("created_at") or ""),
@@ -4122,21 +4135,41 @@ class SessionManager:
     def _scan_nested_subagent_path(self, session_id: str) -> Optional[Path]:
         sid = self._normalize_session_id(session_id)
         root = self.sessions_dir.resolve()
+        # Session discovery follows the session namespace, never the contents
+        # of snapshots, worktrees or repair backups. rglob used to walk those
+        # trees for every legacy parent without metadata, blocking sidebar polls
+        # for minutes even when its pending-count index already existed.
+        pending = []
         try:
-            for candidate in root.rglob(sid):
-                if not candidate.is_dir() or candidate.parent.name != "subagents":
+            for candidate in root.iterdir():
+                if not self._is_valid_session_id(candidate.name) or not candidate.is_dir():
                     continue
+                pending.append(candidate)
+            visited = set()
+            while pending:
+                parent = pending.pop()
                 try:
-                    relative = candidate.resolve().relative_to(root)
-                    # Ignore archive/backup trees whose first component is not
-                    # an actual root session id.
-                    self._normalize_session_id(relative.parts[0])
-                    parent_id = self._normalize_session_id(candidate.parent.parent.name)
-                except ValueError:
+                    canonical = parent.resolve()
+                    canonical.relative_to(root)
+                    if canonical in visited:
+                        continue
+                    visited.add(canonical)
+                    children = list((parent / "subagents").iterdir())
+                except (OSError, ValueError):
                     continue
-                self._register_subagent(sid, parent_id)
-                return candidate.resolve()
-        except FileNotFoundError:
+                for candidate in children:
+                    if not self._is_valid_session_id(candidate.name) or not candidate.is_dir():
+                        continue
+                    if candidate.name == sid:
+                        try:
+                            resolved = candidate.resolve()
+                            resolved.relative_to(root)
+                        except (OSError, ValueError):
+                            continue
+                        self._register_subagent(sid, self._normalize_session_id(parent.name))
+                        return resolved
+                    pending.append(candidate)
+        except OSError:
             pass
         return None
 
@@ -8076,17 +8109,22 @@ class SessionManager:
             # resolve it. Only a successful subsequent run replaces the error.
             if metadata.get("unread_result_status") == "failed":
                 return False
-            metadata["unread_result"] = False
-            metadata.pop("unread_result_at", None)
-            metadata.pop("unread_result_status", None)
-            metadata.pop("unread_result_run_id", None)
-            self._save_metadata_unlocked(sid, metadata)
+            metadata_changed = bool(metadata.get("unread_result") or metadata.get("unread_result_at")
+                                    or metadata.get("unread_result_run_id"))
+            if metadata_changed:
+                metadata["unread_result"] = False
+                metadata.pop("unread_result_at", None)
+                metadata.pop("unread_result_status", None)
+                metadata.pop("unread_result_run_id", None)
+                self._save_metadata_unlocked(sid, metadata)
         changed = False
         with self._lock:
             for sess in self.index:
                 if sess.get("id") == sid:
                     current_run_id = str(sess.get("unread_result_run_id") or "").strip()
                     if expected and current_run_id and current_run_id != expected:
+                        break
+                    if not (sess.get("unread_result") or sess.get("unread_result_at") or current_run_id):
                         break
                     sess["unread_result"] = False
                     sess.pop("unread_result_at", None)
@@ -8096,6 +8134,8 @@ class SessionManager:
                     break
         if changed:
             self._save_index()
+        if metadata_changed or changed:
+            self._notify_session_state_changed(sid, {"unread_result"})
         return True
 
     def request_interrupt(self, session_id: str, run_id: str = "", reason: str = "user"):

@@ -13,6 +13,7 @@
   }
   const EMBEDDED = !!BOOT.embedded || isFramed();
   const SECTIONS = [];
+  let sectionCleanup = null;
   const LS_LANG = 'myagent-language';
   const LS_THEME = 'myagent-theme';
   const LS_FONT = 'myagent-font-level';
@@ -79,6 +80,9 @@
   /* ── API ─────────────────────────────────────────────────────────────── */
   async function api(path, options) {
     const opts = Object.assign({ credentials: 'same-origin', headers: {} }, options || {});
+    const cache = window.MyAgentResourceCache;
+    const reading = !opts.method || opts.method.toUpperCase() === 'GET';
+    if (reading && cache && cache.supports(path)) return cache.get(path);
     if (opts.body !== undefined && typeof opts.body !== 'string') {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.body);
@@ -95,6 +99,10 @@
       throw error;
     }
     if (data && data.ok === false) throw new Error(data.error || t('请求失败', 'Request failed'));
+    if (!reading && cache) cache.invalidate();
+    if (!reading && (path.endsWith('/enabled') && path.startsWith('/api/plugins/') || path === '/api/extensions/reload')) {
+      window.parent.postMessage({ type: 'myagent:plugins-changed' }, window.location.origin);
+    }
     return data || {};
   }
 
@@ -205,10 +213,37 @@
     if (cfg.after) cfg.after($('#st-dlg-body'));
     enhancePaths($('#st-dlg-body'));
   }
-  function closeDialog() { state.dialog = null; $('#st-dialog').hidden = true; }
+  function closeDialog() {
+    state.dialog = null;
+    /* 弹窗里可能挂着自绘浮层（模型列表菜单），关窗时一并收掉 */
+    const floating = $('#st-dlg-body .st-model-menu');
+    if (floating) floating.remove();
+    $('#st-dialog').hidden = true;
+  }
   function dialogValue(field) {
     const el = $('[data-field="' + field + '"]', $('#st-dlg-body'));
     return el ? el.value.trim() : '';
+  }
+
+  /* ── 遮罩点击关闭：按下点落在遮罩内部的内容上时不算数 ──────────────────
+     浏览器把 click 派发给「按下目标」和「松开目标」的最近公共祖先：在窗口里
+     按住鼠标、拖到遮罩上再松开时，这个祖先恰好就是遮罩，只判断 event.target
+     就会把一次拖拽误判成「点了遮罩」而关掉窗口。
+     所以这里记下按下起点：只要它落在遮罩的子元素（窗口内容）上，随后落到遮罩
+     上的 click 一律忽略。真正从遮罩上按下又松开的点击照旧关闭；没有 pointerdown
+     的程序化 click（脚本 / 无障碍入口）保持原行为。 */
+  function bindBackdropDismiss(backdrop, onDismiss) {
+    if (!backdrop) return;
+    let pressOnContent = false;
+    backdrop.addEventListener('pointerdown', (event) => {
+      pressOnContent = event.button === 0 && event.target !== backdrop;
+    });
+    backdrop.addEventListener('pointercancel', () => { pressOnContent = false; });
+    backdrop.addEventListener('click', (event) => {
+      const dismissed = event.target === backdrop && !pressOnContent;
+      pressOnContent = false;
+      if (dismissed) onDismiss(event);
+    });
   }
 
   /* ── 脏值 / 保存条 ───────────────────────────────────────────────────── */
@@ -261,10 +296,19 @@
     $('#st-nav-list').innerHTML = SECTIONS.map((s) => '<button type="button" class="st-cell' +
       (s.id === state.section ? ' is-on' : '') + '" data-act="nav" data-id="' + esc(s.id) + '">' +
       icon(s.icon) + '<span class="st-lbl">' + esc(t(s.zh, s.en)) + '</span></button>').join('');
+    if (window.MyAgentUiTasks && window.MyAgentResourceCache) {
+      const catalogs = { models: '/api/model_profiles', skills: '/api/skills',
+        hooks: '/api/extensions', plugins: '/api/plugins/catalog', mcp: '/api/mcp/tools' };
+      $('#st-nav-list').querySelectorAll('[data-id]').forEach(button => {
+        const path = catalogs[button.dataset.id];
+        if (path) window.MyAgentUiTasks.bindIntent(button, path, () => window.MyAgentResourceCache.get(path));
+      });
+    }
   }
 
   let searchTimer = null;
   let sectionLoadEpoch = 0;
+  let sectionInteractionRevision = 0;
 
   function filterSearchRows() {
     const body = $('#st-body');
@@ -292,6 +336,17 @@
     }
     const previousSection = state.section;
     const loadEpoch = ++sectionLoadEpoch;
+    const body = $('#st-body');
+    // Retain a complete instant section on reopen. Explicit forms still reload
+    // after the close/discard guard so unsaved values cannot reappear.
+    const retained = !!(options && options.optimistic && previousSection === id &&
+      ['general', 'models', 'skills', 'hooks', 'plugins'].includes(id) &&
+      section.mode === 'instant' && !section.pluginOwned && state.data[id] &&
+      !state.data[id].__error && body.querySelector('.st-card'));
+    const previousData = state.data[id];
+    const interactionRevision = sectionInteractionRevision;
+    if (options && options.force && !options.reuseCache && window.MyAgentResourceCache) window.MyAgentResourceCache.invalidate(null, false);
+    if (!retained && sectionCleanup) { sectionCleanup(); sectionCleanup = null; }
     clearTimeout(searchTimer);
     hideTip();
     state.section = id;
@@ -302,19 +357,34 @@
     if (location.hash !== '#' + id) {
       try { history.replaceState(null, '', '#' + id); } catch (e) { location.hash = id; }
     }
-    renderNav();
+    if (!retained) renderNav();
     $('#st-title').textContent = t(section.zh, section.en);
     $('#st-sub').textContent = t(section.zhSub || '', section.enSub || '');
     updateFooter();
-    const body = $('#st-body');
-    body.innerHTML = '<div class="st-empty">' + t('加载中…', 'Loading…') + '</div>';
+    if (!retained) body.innerHTML = '<div class="st-empty">' + t('加载中…', 'Loading…') + '</div>';
+    body.setAttribute('aria-busy', 'true');
+    let data = state.data[id];
     try {
-      if (section.load) state.data[id] = await section.load();
+      if (section.load) {
+        const load = () => loadEpoch === sectionLoadEpoch ? section.load() : previousData;
+        data = await (retained && window.MyAgentUiTasks ? window.MyAgentUiTasks.afterPaint(load) : load());
+      }
     } catch (err) {
-      state.data[id] = { __error: err };
+      data = { __error: err };
     }
     if (loadEpoch !== sectionLoadEpoch || state.section !== id) return;
-    const data = state.data[id];
+    body.removeAttribute('aria-busy');
+    if (retained) {
+      if (data && data.__error) {
+        toast(t('刷新失败，暂时显示上次内容', 'Refresh failed; showing previous content'), true);
+        return;
+      }
+      // A background reply must not destroy a new edit, search focus or dialog.
+      if (state.dirty || state.dialog || interactionRevision !== sectionInteractionRevision) return;
+      if (JSON.stringify(data) === JSON.stringify(previousData)) return;
+      if (sectionCleanup) { sectionCleanup(); sectionCleanup = null; }
+    }
+    state.data[id] = data;
     if (data && data.__error) {
       body.innerHTML = W.note('<b>' + t('加载失败', 'Failed to load') + '：</b>' + esc(data.__error.message || data.__error) +
         '<br>' + t('若这是首次使用，请先完成配置向导。', 'If this is a fresh install, finish the setup wizard first.'));
@@ -329,22 +399,34 @@
       return;
     }
     body.scrollTop = 0;
-    if (section.after) section.after(body, data);
+    if (section.after) {
+      const cleanup = await section.after(body, data);
+      if (typeof cleanup === 'function') {
+        if (loadEpoch === sectionLoadEpoch) sectionCleanup = cleanup;
+        else cleanup();
+      }
+    }
+    if (loadEpoch !== sectionLoadEpoch || state.section !== id) return;
     enhancePaths(body);
     if (section.onSearch) section.onSearch(state.search || '');
   }
 
-  function reload() { return showSection(state.section, { force: true }); }
+  function reload() {
+    return showSection(state.section, { force: true });
+  }
 
   /* ── 全局事件 ───────────────────────────────────────────────────────── */
   function bindShell() {
+    $('#st-body').addEventListener('pointerdown', () => { sectionInteractionRevision++; }, true);
+    $('#st-body').addEventListener('input', () => { sectionInteractionRevision++; }, true);
+    $('#st-body').addEventListener('keydown', () => { sectionInteractionRevision++; }, true);
+    /* 遮罩关闭只认「从遮罩上按下」的点击，拖拽误关在这里根治 */
+    bindBackdropDismiss($('#st-confirm'), askConfirmHide);
+    bindBackdropDismiss($('#st-dialog'), closeDialog);
+
     document.addEventListener('click', (event) => {
       const el = event.target.closest('[data-act]');
-      if (!el) {
-        if (!$('#st-confirm').hidden && event.target.id === 'st-confirm') askConfirmHide();
-        else if (!$('#st-dialog').hidden && event.target.id === 'st-dialog') closeDialog();
-        return;
-      }
+      if (!el) return;
       const act = el.dataset.act;
       if (act === 'nav') { showSection(el.dataset.id); return; }
       if (act === 'cf-cancel') { askConfirmHide(); return; }
@@ -431,9 +513,7 @@
     if (EMBEDDED) {
       document.documentElement.classList.add('st-embedded');
       const stage = document.querySelector('.st-stage');
-      if (stage) {
-        stage.addEventListener('click', (event) => { if (event.target === stage) leaveSettings(); });
-      }
+      if (stage) bindBackdropDismiss(stage, leaveSettings);
     }
     $('#st-lang').addEventListener('click', () => {
       if (!canLeaveSettings()) return;
@@ -441,7 +521,7 @@
       localStorage.setItem(LS_LANG, state.lang === 'en' ? 'en' : 'zh-CN');
       document.documentElement.lang = state.lang === 'en' ? 'en' : 'zh-CN';
       renderNav();
-      showSection(state.section, { force: true });
+      showSection(state.section, { force: true, reuseCache: true });
     });
     $('#st-footer').addEventListener('click', (event) => {
       const el = event.target.closest('[data-act]');
@@ -463,15 +543,37 @@
   }
   function askConfirmHide() { state.confirm = null; $('#st-confirm').hidden = true; }
 
-  function leaveSettings() {
-    if (!canLeaveSettings()) return;
+  function leaveSettings(options) {
+    if (!canLeaveSettings()) return false;
+    sectionLoadEpoch++;
+    if (sectionCleanup) { sectionCleanup(); sectionCleanup = null; }
+    closeDialog();
+    askConfirmHide();
     setDirty(false);
     if (EMBEDDED) {
-      try { window.parent.postMessage({ type: 'myagent:settings-close' }, window.location.origin); } catch (e) { /* ignore */ }
-      return;
+      if (!options || options.notifyHost !== false) {
+        try { window.parent.postMessage({ type: 'myagent:settings-close' }, window.location.origin); } catch (e) { /* ignore */ }
+      }
+      return true;
     }
     window.location.href = '/';
   }
+
+  document.addEventListener('click', event => {
+    const link = event.target.closest?.('a[href]');
+    if (!link) return;
+    const url = new URL(link.href, location.href);
+    const match = url.origin === location.origin && /^\/plugins\/([a-z0-9][a-z0-9._-]{0,127})$/.exec(url.pathname);
+    if (!match) return;
+    event.preventDefault();
+    const embedded = SECTIONS.find(section => section.pluginOwned && section.embeddedPage
+      && section.id.startsWith('plugin:' + match[1] + ':'));
+    if (embedded) { showSection(embedded.id); return; }
+    if (EMBEDDED) {
+      if (!leaveSettings({ notifyHost: false })) return;
+      window.parent.postMessage({ type: 'myagent:settings-open-plugin', pluginId: match[1] }, location.origin);
+    } else if (canLeaveSettings()) window.location.href = '/?open_plugin=' + encodeURIComponent(match[1]);
+  });
 
   /* 偏好（主题 / 字号 / 会话列表 / 语言）实时回推给宿主聊天页，边改边变 */
   function notifyHostPrefs() {
@@ -534,6 +636,7 @@
     storedFontPx, applyStFontSize, clampFont, FONT_MIN, FONT_MAX, FONT_DEFAULT, FONT_LEVEL_PX,
     get lang() { return state.lang; },
     get search() { return state.search || ''; },
+    get currentSection() { return state.section; },
     boot() {
       applyThemeFromStorage();
       document.documentElement.lang = state.lang === 'en' ? 'en' : 'zh-CN';
@@ -545,11 +648,11 @@
       bindShell();
       const hash = location.hash.replace('#', '').split('?')[0];
       const initial = SECTIONS.some((s) => s.id === hash) ? hash : hash.startsWith('plugin:') ? 'plugins' : state.section;
-      showSection(SECTIONS.some((s) => s.id === initial) ? initial : SECTIONS[0].id, { force: true });
+      showSection(SECTIONS.some((s) => s.id === initial) ? initial : SECTIONS[0].id, { force: true, reuseCache: true });
       if (this.loadPluginSections) {
         const epoch = sectionLoadEpoch;
         this.loadPluginSections().then(() => {
-          if (epoch === sectionLoadEpoch && hash.startsWith('plugin:') && SECTIONS.some((s) => s.id === hash)) showSection(hash, { force: true });
+          if (epoch === sectionLoadEpoch && hash.startsWith('plugin:') && SECTIONS.some((s) => s.id === hash)) showSection(hash, { force: true, reuseCache: true });
         }).catch((error) => console.warn('Plugin settings unavailable', error));
       }
     },

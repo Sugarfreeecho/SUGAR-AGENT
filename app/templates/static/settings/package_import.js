@@ -106,6 +106,7 @@
       const label = (pack.files[0] && pack.files[0].path) || '';
       return { ok: false, name: label, error: result.error || A.t('安装失败', 'Installation failed') };
     }
+    if (window.MyAgentResourceCache) window.MyAgentResourceCache.invalidate();
     return { ok: true, name: result.name || '' };
   }
 

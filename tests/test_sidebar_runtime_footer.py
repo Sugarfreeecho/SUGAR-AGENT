@@ -12,7 +12,9 @@ def test_sidebar_runtime_footer_is_present_in_source_markup() -> None:
         assert 'href="/execution-dashboard"' not in markup
         assert 'id="sidebar-runtime-status"' in markup
         assert 'id="sidebar-runtime-version"' in markup
-    assert (ROOT / "plugins/execution-dashboard/web/index.html").is_file()
+    # 执行看板页面已并入设置中心，独立插件页不再存在。
+    assert not (ROOT / "plugins/execution-dashboard").exists()
+    assert (ROOT / "app/templates/static/settings/sections_usage.js").is_file()
 
 
 def test_sidebar_runtime_status_tracks_session_connectivity() -> None:

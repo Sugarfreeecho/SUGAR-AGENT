@@ -102,6 +102,9 @@ def build_hook_environment(
     )
     if definition.plugin_id:
         env["MYAGENT_PLUGIN_ID"] = definition.plugin_id
+    for key in list(env):
+        if key.upper().startswith("MYAGENT_LIFECYCLE_"):
+            env.pop(key, None)
     return env
 
 

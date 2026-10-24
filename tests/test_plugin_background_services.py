@@ -87,12 +87,19 @@ def test_python_background_service_starts_reports_health_and_stops(tmp_path):
     deactivated = storage_root / "background.demo" / "data" / "deactivated.txt"
 
     statuses = registry.background_status([plugin])
-    assert _wait_until(
-        lambda: heartbeat.is_file()
-        and json.loads(heartbeat.read_text(encoding="utf-8"))["count"] >= 2
-    )
-    statuses = registry.background_status([plugin])
-    registry.close()
+    def has_two_heartbeats():
+        # The fixture service uses write_text, which briefly exposes an empty
+        # file. Poll a complete observation; a service that never advances still
+        # fails the original timeout and count assertion.
+        try:
+            return json.loads(heartbeat.read_text(encoding="utf-8"))["count"] >= 2
+        except (FileNotFoundError, json.JSONDecodeError):
+            return False
+    try:
+        assert _wait_until(has_two_heartbeats)
+        statuses = registry.background_status([plugin])
+    finally:
+        registry.close()
     count_after_close = json.loads(heartbeat.read_text(encoding="utf-8"))["count"]
     time.sleep(0.15)
 

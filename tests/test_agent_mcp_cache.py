@@ -163,6 +163,8 @@ def test_mcp_async_work_stays_on_one_loop_across_temporary_caller_loops(monkeypa
 
     calls = []
     signature = {"value": "first"}
+    # This scenario exercises an enabled fake connection even in offline test runners.
+    monkeypatch.setattr(agent_mcp, "_enabled_flag", lambda: True)
 
     class RunningTask:
         @staticmethod
@@ -348,7 +350,7 @@ def test_mcp_tools_endpoint_returns_registered_tools(monkeypatch):
     def list_configured_servers():
         return [{"server": "demo", "connected": True, "discovered": True, "tool_count": 1}]
 
-    monkeypatch.setattr(webui.agent_mcp, "ensure_started", ensure_started)
+    monkeypatch.setattr(webui.agent_mcp, "schedule_mcp_startup_refresh", lambda: None)
     monkeypatch.setattr(webui.agent_mcp, "list_registered_tools", list_registered_tools)
     monkeypatch.setattr(webui.agent_mcp, "list_configured_servers", list_configured_servers)
 

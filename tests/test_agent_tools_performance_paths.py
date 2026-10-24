@@ -276,7 +276,9 @@ def test_ripgrep_unavailable_still_falls_back_to_python(monkeypatch, tmp_path):
     (tmp_path / "sample.txt").write_text("needle\n", encoding="utf-8")
     monkeypatch.setattr(agent_tools, "_resolve_ripgrep_path", lambda: None)
 
-    result = agent_tools.grep("needle", path=str(tmp_path))
+    # Without rg, explicitly opt out of ignore-file semantics. The default
+    # must fail clearly rather than silently scan ignored user data.
+    result = agent_tools.grep("needle", path=str(tmp_path), include_ignored=True)
 
     assert "sample.txt:1" in result
 

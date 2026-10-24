@@ -176,7 +176,7 @@ try:
     install_bundled_host_extensions(
         fastapi_app,
         load_plugins(force=True).plugins,
-        {"session_manager": session_manager, "project_root": PROJECT_ROOT},
+        {"session_manager": session_manager, "project_root": PROJECT_ROOT, "work_dir": WORK_DIR, "app": fastapi_app},
     )
     from workflow_extensions import activate_bundled_workflow_callbacks
 
@@ -1306,6 +1306,12 @@ def _has_running_subagent_activity(sid: str) -> bool:
 
 
 def _runtime_v2_snapshot(sid: str, *, fail_closed: bool = False) -> dict:
+    """Return isolated UI metadata without copying conversation payloads.
+
+    Recovery/status/auxiliary panels only inspect these fields. Deep-copying
+    the full published projection during each scan held the GIL for seconds
+    as message, tool and execution arrays accumulated in long-running chats.
+    """
     sid = str(sid or "").strip()
     if not sid:
         return {}
@@ -1316,11 +1322,15 @@ def _runtime_v2_snapshot(sid: str, *, fail_closed: bool = False) -> dict:
 
         root = session_manager.repository.sessions_dir
         resolver = session_manager._resolve_session_path
-        return SnapshotStore(root, path_resolver=resolver).read_consistent(
+        snapshot = SnapshotStore(root, path_resolver=resolver).read_consistent_view(
             sid,
             SessionEventLog(root, path_resolver=resolver),
             RuntimeProjector(),
         )
+        import copy
+        return copy.deepcopy({key: snapshot[key] for key in (
+            "last_seq", "updated_at", "active_runs", "runs", "context", "extensions", "subagents",
+        ) if key in snapshot})
     except Exception as exc:
         logger.debug("Runtime V2 snapshot read failed for %s: %s", sid, exc)
         if fail_closed:
@@ -1925,8 +1935,10 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             cursor = parent_id
     if human_interaction_service is not None:
         try:
+            visible_ids = {str(item.get("id")) for item in sessions if item.get("id")}
+            visible_children = {child for sid in visible_ids for child in descendants_by_session.get(sid, ())}
             pending_counts_by_session = human_interaction_service.pending_counts_many(
-                {str(item.get("id")) for item in sessions if item.get("id")} | set(subagent_index)
+                visible_ids | visible_children
             )
         except Exception:
             logger.exception("Failed to batch pending human-interaction state for /sessions/state")
@@ -2014,6 +2026,29 @@ _sessions_state_build_locks = {False: threading.Lock(), True: threading.Lock()}
 _sessions_state_refreshing: set[bool] = set()
 _sessions_state_refresh_generation: dict[bool, int] = {}
 _sessions_state_cache_generation = int(time.time() * 1000)
+_sessions_state_async_requests: dict = {}
+from session_state_signal import SessionStateSignal
+
+_sessions_state_signal = SessionStateSignal(_sessions_state_cache_generation)
+
+
+async def _sessions_state_payload_async(include_archived: bool = False) -> dict:
+    # Coalesce before dispatching to the executor: queued readers must not each
+    # occupy a worker waiting on the cold-build lock during a refresh burst.
+    key = (asyncio.get_running_loop(), bool(include_archived))
+    task = _sessions_state_async_requests.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(asyncio.to_thread(
+            _build_sessions_state_snapshot_cached, include_archived=bool(include_archived)
+        ))
+        _sessions_state_async_requests[key] = task
+        def finished(completed):
+            if _sessions_state_async_requests.get(key) is completed:
+                _sessions_state_async_requests.pop(key, None)
+            if not completed.cancelled():
+                completed.exception()  # Consume errors even if every browser left.
+        task.add_done_callback(finished)
+    return await asyncio.shield(task)
 
 
 def _invalidate_sessions_state_cache() -> int:
@@ -2035,7 +2070,9 @@ def _invalidate_sessions_state_cache() -> int:
                 "ts": 0.0,
                 "payload": None,
             }
-        return _sessions_state_cache_generation
+        revision = _sessions_state_cache_generation
+    _sessions_state_signal.publish(revision)
+    return revision
 
 
 def _on_session_manager_state_changed(
@@ -3688,11 +3725,15 @@ async def list_sessions(
     return await asyncio.to_thread(_build_response)
 
 
+@fastapi_app.get("/sessions/changes")
+async def sessions_changes(after_revision: int = Query(0, ge=0)):
+    revision = await _sessions_state_signal.wait(after_revision)
+    return JSONResponse(content={"state_revision": revision}, headers={"Cache-Control": "no-store"})
+
+
 @fastapi_app.get("/sessions/state")
 async def sessions_state(include_archived: bool = Query(False)):
-    payload = await asyncio.to_thread(
-        _build_sessions_state_snapshot_cached, include_archived=include_archived
-    )
+    payload = await _sessions_state_payload_async(include_archived)
     return JSONResponse(content=payload)
 
 
@@ -3709,9 +3750,7 @@ async def recover_sessions(session_id: Optional[str] = None):
 
 @fastapi_app.get("/state")
 async def app_state(include_archived: bool = Query(False)):
-    payload = await asyncio.to_thread(
-        _build_sessions_state_snapshot_cached, include_archived=include_archived
-    )
+    payload = await _sessions_state_payload_async(include_archived)
     return JSONResponse(content=payload)
 
 
@@ -3879,7 +3918,7 @@ async def get_session_detail(
             s["title_generation_pending"] = is_session_title_generation_pending(str(sid))
             s["pending_human_interactions"] = _session_pending_human_counts(str(sid))
             s["queued_followup_state"] = "paused" if is_child else _queued_followup_start_state(str(sid))
-            if is_child:
+            if is_child or run_state.get("run_active"):
                 s["react_can_continue"] = False
                 s["react_auto_resume"] = False
             else:
@@ -5809,13 +5848,13 @@ async def post_session_steer(session_id: str, request: Request):
 
 @fastapi_app.get("/sessions/{session_id}/steer/{steer_id}")
 async def get_session_steer_status(session_id: str, steer_id: str):
-    result = get_session_steer(session_id, steer_id=steer_id)
+    result = await run_in_threadpool(get_session_steer, session_id, steer_id=steer_id)
     return JSONResponse(content=result, status_code=200 if result.get("ok") else 404)
 
 
 @fastapi_app.get("/sessions/{session_id}/steer")
 async def list_session_steer_status(session_id: str, include_terminal: bool = False):
-    result = list_session_steers(session_id, include_terminal=include_terminal)
+    result = await run_in_threadpool(list_session_steers, session_id, include_terminal=include_terminal)
     return JSONResponse(content=result, status_code=200 if result.get("ok") else 400)
 
 
@@ -7297,14 +7336,20 @@ async def get_session_history_snapshot(
     event_budget: Optional[int] = Query(None, ge=50, le=5000),
     include_aux: bool = Query(True),
     prefer_active_turn: bool = Query(False),
+    tail_limit: Optional[int] = Query(None, ge=50, le=500),
+    request: Request = None,
 ):
     """Return the initial V2 history page plus TOC/count in one request."""
     import time as _time
 
     t0 = _time.perf_counter()
+    loading_trace = request.scope.get("state", {}).get("ui_loading_trace", {}) if request is not None else {}
+    request_id = loading_trace.get("request_id") or uuid.uuid4().hex
+    load_id = loading_trace.get("load_id", "")
 
     def _build_snapshot_response() -> Response:
         worker_started_at = _time.perf_counter()
+        _mark_loading_phase(request, "setup")
         try:
             from runtime_v2 import runtime_v2_primary
 
@@ -7347,6 +7392,11 @@ async def get_session_history_snapshot(
             )
             if active_turn_only:
                 tv = 1
+            # Explicit initial-screen window. Turn paging remains unchanged
+            # for callers that need complete conversations, including TOC jumps.
+            tail_limit_value = tail_limit if isinstance(tail_limit, int) else None
+            if tail_limit_value is not None and before_index is None and after_index is None:
+                lim, tv = tail_limit_value, None
             # Capture BEFORE reading the page. Any concurrent commit is replayed
             # on reconnect; non-UI history edits already projected in this page
             # are acknowledged too, avoiding repeated invalidation loops.
@@ -7358,8 +7408,10 @@ async def get_session_history_snapshot(
                 "queue": int((worker_started_at - t0) * 1000),
                 "setup": int((_time.perf_counter() - worker_started_at) * 1000),
             }
+            loading_trace["backend_timing"] = timings
             t_phase = _time.perf_counter()
             page_diagnostics = {}
+            _mark_loading_phase(request, "read_page")
             page = projection.read_ui_page(
                 session_id,
                 limit=lim,
@@ -7369,15 +7421,19 @@ async def get_session_history_snapshot(
                 event_budget=event_budget_value,
                 diagnostics=page_diagnostics,
             )
+            if tail_limit_value is not None:
+                page["event_limited_tail"] = bool(page.get("has_older"))
             timings["read_page"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
             page_total = page.get("total") if isinstance(page, dict) else None
+            _mark_loading_phase(request, "count")
             if isinstance(page_total, int):
                 count, count_source = page_total, "runtime_v2_page"
             else:
                 count, count_source = projection.count_ui_events_light(session_id)
             timings["count"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
+            _mark_loading_phase(request, "user_turns")
             user_turns = projection.read_user_turns_light(session_id)
             timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
             include_aux_value = include_aux if isinstance(include_aux, bool) else True
@@ -7385,6 +7441,7 @@ async def get_session_history_snapshot(
             todo_plan = None
             if include_aux_value:
                 t_phase = _time.perf_counter()
+                _mark_loading_phase(request, "context_tokens")
                 runtime_snapshot = _runtime_v2_snapshot(session_id, fail_closed=True)
                 runtime_context = runtime_snapshot.get("context") if isinstance(runtime_snapshot, dict) else None
                 if not isinstance(runtime_context, dict):
@@ -7398,6 +7455,7 @@ async def get_session_history_snapshot(
                     context_tokens["source"] = "runtime_v2_snapshot_stale"
                 timings["context_tokens"] = int((_time.perf_counter() - t_phase) * 1000)
                 t_phase = _time.perf_counter()
+                _mark_loading_phase(request, "todo_plan")
                 todo_plan = _runtime_v2_todo_plan_snapshot(session_id)
                 timings["todo_plan"] = int((_time.perf_counter() - t_phase) * 1000)
             else:
@@ -7409,8 +7467,12 @@ async def get_session_history_snapshot(
             t_phase = _time.perf_counter()
             page_seqs = [int(event.get("runtime_seq") or 0) for event in page.get("events") or []]
             recovery_diagnostics = {}
-            recovery = execution_journal.read(session_id,
-                min_runtime_seq=min(page_seqs) if page_seqs else None, diagnostics=recovery_diagnostics)
+            recovery_options = dict(min_runtime_seq=min(page_seqs) if page_seqs else None,
+                                    diagnostics=recovery_diagnostics)
+            if tail_limit_value is not None:
+                recovery_options["active_run_id"] = str((run_state.get("active_run") or {}).get("run_id") or "")
+            _mark_loading_phase(request, "execution_recovery")
+            recovery = execution_journal.read(session_id, **recovery_options)
             timings["execution_recovery"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
             try:
@@ -7431,6 +7493,8 @@ async def get_session_history_snapshot(
                 "ok": True,
                 "source": "runtime_v2_snapshot",
                 "session_id": session_id,
+                "request_id": request_id,
+                "load_id": load_id,
                 "messages": page,
                 "count": count,
                 "count_source": count_source,
@@ -7449,6 +7513,7 @@ async def get_session_history_snapshot(
             t_phase = _time.perf_counter()
             # Serialize the large payload once, then append the small timing
             # fields. This reports encoding cost without encoding it twice.
+            _mark_loading_phase(request, "serialize")
             body = json.dumps(content, ensure_ascii=False, allow_nan=False,
                               separators=(",", ":")).encode("utf-8")
             timings["serialize"] = int((_time.perf_counter() - t_phase) * 1000)
@@ -7459,28 +7524,34 @@ async def get_session_history_snapshot(
             response = Response(content=body, media_type="application/json", headers={
                 "Server-Timing": ", ".join(f"{phase};dur={duration}" for phase, duration in timings.items())
             })
-            logger.info("open_session_timing session=%s page_source=%s messages=%s bytes=%s timing=%s",
-                        session_id, page.get("source"), len(page.get("events") or []), len(body), timings)
+            loading_trace["backend_timing"] = timings
+            _mark_loading_phase(request, "complete")
+            logger.info("open_session_timing session=%s page_source=%s messages=%s bytes=%s timing=%s request_id=%s load_id=%s",
+                        session_id, page.get("source"), len(page.get("events") or []), len(body), timings, request_id, load_id)
             logger.info("open_session_loading_details session=%s page=%s execution=%s",
                         session_id, page_diagnostics, recovery_diagnostics)
             if elapsed_ms >= 500:
                 logger.warning("/history_snapshot slow runtime=2 session=%s turns=%s limit=%s before=%s "
                                "elapsed_ms=%s bytes=%s queue=%sms setup=%sms read_page=%sms user_turns=%sms "
-                               "execution_recovery=%sms prepare_response=%sms serialize=%sms page_details=%s execution_details=%s",
+                               "execution_recovery=%sms prepare_response=%sms serialize=%sms page_details=%s execution_details=%s request_id=%s load_id=%s",
                                session_id, tv, lim, before_index, elapsed_ms, len(body), timings["queue"],
                                timings["setup"], timings["read_page"], timings["user_turns"],
                                timings["execution_recovery"], timings["prepare_response"], timings["serialize"],
-                               page_diagnostics, recovery_diagnostics)
+                               page_diagnostics, recovery_diagnostics, request_id, load_id)
             return response
         except Exception as exc:
             logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)
+            loading_trace["error_name"] = type(exc).__name__
             return JSONResponse(content={
                 "ok": False,
                 "source": "runtime_v2_projection_error",
                 "session_id": session_id,
+                "request_id": request_id,
+                "load_id": load_id,
                 "error": str(exc),
             }, status_code=500)
 
+    _mark_loading_phase(request, "worker_queue")
     return await asyncio.to_thread(_build_snapshot_response)
 
 
@@ -8456,11 +8527,13 @@ async def clear_session_unread_result(
     session_id: str,
     expected_run_id: str = Query(""),
 ):
-    cleared = session_manager.clear_session_unread_result(
+    cleared = await run_in_threadpool(
+        session_manager.clear_session_unread_result,
         session_id,
         expected_run_id=expected_run_id,
     )
-    _invalidate_sessions_state_cache()
+    # The manager publishes an invalidation only when unread state changed.
+    # Opening an already-read chat must not discard the warm sidebar snapshot.
     return JSONResponse(content={"status": "ok", "cleared": bool(cleared)})
 
 
@@ -9124,7 +9197,7 @@ def _remove_env_keys(text: str, keys: list[str]) -> str:
 # 这样托盘、书签与既有链接不断链。
 _SETTINGS_CENTER_PATH = _Path(__file__).resolve().parent / "templates" / "settings_center.html"
 _SETTINGS_STATIC_DIR = _Path(__file__).resolve().parent / "templates" / "static" / "settings"
-_SETTINGS_ASSET_FILES = ("settings.css", "core.js", "package_import.js", "plugin_sections.js", "sections_basic.js", "sections_ext.js", "sections_ops.js")
+_SETTINGS_ASSET_FILES = ("settings.css", "resource_cache.js", "core.js", "package_import.js", "plugin_sections.js", "sections_basic.js", "sections_usage.js", "usage_detail.js", "sections_ext.js", "sections_ops.js")
 
 
 def _settings_asset_version() -> int:
@@ -9189,6 +9262,8 @@ async def serve_settings_asset(asset_name: str, request: Request):
     content = _read_text_cached(path, "")
     etag = '"' + hashlib.sha256(content.encode("utf-8")).hexdigest() + '"'
     headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if request.query_params.get("v") == str(_settings_asset_version()):
+        headers["Cache-Control"] = "public, max-age=31536000, immutable"
     candidates = request.headers.get("if-none-match", "").split(",")
     if any(value.strip().removeprefix("W/") in (etag, "*") for value in candidates):
         return Response(status_code=304, headers=headers)
@@ -9226,6 +9301,34 @@ async def get_extensions_snapshot():
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+@fastapi_app.get("/api/plugins/catalog")
+async def get_plugin_catalog():
+    """Settings inventory does not depend on executable worker discovery."""
+    import time as _catalog_time
+    started = _catalog_time.perf_counter()
+    loop = asyncio.get_running_loop()
+    timing = {}
+    def read():
+        from agent_extensions import plugin_catalog_snapshot
+        worker_started = _catalog_time.perf_counter()
+        timing["queue_ms"] = round((worker_started - started) * 1000, 3)
+        try:
+            return plugin_catalog_snapshot(refresh_loop=loop)
+        finally:
+            timing["catalog_ms"] = round((_catalog_time.perf_counter() - worker_started) * 1000, 3)
+    try:
+        data = await asyncio.to_thread(read)
+        return JSONResponse(content=data, headers={
+            "Server-Timing": f"queue;dur={timing['queue_ms']}, catalog;dur={timing['catalog_ms']}",
+        })
+    except Exception:
+        logger.exception("Plugin catalog failed")
+        return JSONResponse({"ok": False, "error": "plugin_catalog_failed"}, status_code=500)
+    finally:
+        logger.info("plugin_catalog_timing total_ms=%.3f timing=%s",
+                    (_catalog_time.perf_counter() - started) * 1000, timing)
+
+
 @fastapi_app.post("/api/extensions/session-ui")
 async def get_plugin_session_ui(request: Request):
     """Batch-project only manifest-whitelisted plugin session state fields."""
@@ -9246,21 +9349,22 @@ async def get_plugin_session_ui(request: Request):
         if not session_id or len(session_id) > 256 or session_id in requested:
             continue
         requested.append(session_id)
-    get_summary = getattr(session_manager, "get_session_summary", None)
-    if callable(get_summary):
-        session_ids = [
-            session_id for session_id in requested if get_summary(session_id) is not None
-        ]
-    else:
-        known = {
-            str(item.get("id") or "")
-            for item in await asyncio.to_thread(
-                session_manager.list_sessions,
-                include_archived=True,
-            )
-            if isinstance(item, dict) and item.get("id")
-        }
-        session_ids = [session_id for session_id in requested if session_id in known]
+    def validate_session_ids():
+        # The root index is the same membership check used by get_summary.
+        # Validation must not decorate 200 summaries (stats/history previews)
+        # synchronously on the ASGI event loop just to test their existence.
+        index = getattr(session_manager, "index", None)
+        if isinstance(index, (list, tuple)):
+            known = {str(item.get("id") or "") for item in index if isinstance(item, dict)}
+        else:
+            get_summary = getattr(session_manager, "get_session_summary", None)
+            if callable(get_summary):
+                return [sid for sid in requested if get_summary(sid) is not None]
+            known = {str(item.get("id") or "") for item in session_manager.list_sessions(include_archived=True)
+                     if isinstance(item, dict)}
+        return [sid for sid in requested if sid in known]
+
+    session_ids = await asyncio.to_thread(validate_session_ids)
     try:
         from agent_extensions import plugin_session_ui_snapshot
 
@@ -9616,10 +9720,13 @@ async def install_plugin_dependencies_api(plugin_id: str):
 @fastapi_app.get("/api/mcp/tools")
 async def list_mcp_tools():
     try:
-        await agent_mcp.ensure_started()
-        tools = await asyncio.to_thread(agent_mcp.list_registered_tools)
-        servers = await asyncio.to_thread(agent_mcp.list_configured_servers)
-        return JSONResponse({"ok": True, "tools": tools, "servers": servers})
+        def snapshot():
+            agent_mcp.schedule_mcp_startup_refresh()
+            return {"ok": True, "tools": agent_mcp.list_registered_tools(),
+                    "servers": agent_mcp.list_configured_servers(),
+                    "initializing": agent_mcp.catalog_refresh_pending()}
+
+        return JSONResponse(await asyncio.to_thread(snapshot))
     except Exception as exc:
         logger.warning("MCP tools snapshot failed: %s", exc)
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
@@ -10153,9 +10260,13 @@ async def _config_check(req: _Request, call_next):
         "/api/workspace-info",
     ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/extensions/") or p.startswith("/api/skills/") or p.startswith("/api/security/") or p.startswith("/api/mcp/tools/") or p.startswith("/api/mcp/servers/") or p.startswith("/api/features/") or p.startswith("/api/remote/v1/"):
         return await call_next(req)
-    if not _is_configured():
+    if not await asyncio.to_thread(_is_configured):
         return _RedirectResponse(url="/setup")
     return await call_next(req)
+
+
+from ui_loading_diagnostics import register_loading_diagnostics, mark_phase as _mark_loading_phase
+register_loading_diagnostics(fastapi_app)
 
 
 def _plugin_web_error_response(exc: Exception) -> JSONResponse:
@@ -10302,12 +10413,11 @@ async def legacy_plugin_web_page(legacy_plugin_id: str):
 
 
 def _warm_ui_caches() -> None:
-    """Prime slow first-hit caches in the background.
+    """Prime catalog caches without opening or rebuilding session histories.
 
-    Skills discovery walks a large project skill tree, the extensions snapshot
-    loads the plugin/hook registry, and the Runtime V2 history projection
-    builds per-session UI pages. Warming them a few seconds after startup moves
-    that cost out of the first page/skill-popover open.
+    Historical page warm-up held a session's index lock during a full rebuild,
+    making the first real request wait behind speculative work at startup.
+    History is loaded on demand; catalog discovery remains independent.
     """
     import time as _warm_time
 
@@ -10331,28 +10441,6 @@ def _warm_ui_caches() -> None:
             extensions_snapshot()
         except Exception:
             logger.debug("Extensions snapshot warm-up failed", exc_info=True)
-        try:
-            from runtime_v2 import runtime_v2_primary
-
-            if not runtime_v2_primary():
-                return
-            from runtime_v2.ui_projection import RuntimeUiProjection
-
-            projection = RuntimeUiProjection(
-                session_manager.repository.sessions_dir,
-                path_resolver=session_manager._resolve_session_path,
-            )
-            for row in session_manager.list_sessions(include_archived=False)[:12]:
-                sid = str((row or {}).get("id") or "").strip()
-                if not sid:
-                    continue
-                try:
-                    projection.read_ui_page(sid, turns=5)
-                except Exception:
-                    logger.debug("History warm-up skipped session=%s", sid, exc_info=True)
-        except Exception:
-            logger.debug("History cache warm-up failed", exc_info=True)
-
     threading.Thread(target=_run, name="ui-cache-warmup", daemon=True).start()
 
 
@@ -10417,7 +10505,7 @@ async def start_webui_lifecycle() -> None:
         await start_plugin_background_services()
         await start_bundled_host_extensions(
             load_plugins(force=True).plugins,
-            {"session_manager": session_manager, "project_root": PROJECT_ROOT},
+            {"session_manager": session_manager, "project_root": PROJECT_ROOT, "work_dir": WORK_DIR, "app": fastapi_app},
         )
     except Exception:
         logger.warning("Plugin background service startup failed", exc_info=True)
@@ -10479,7 +10567,7 @@ async def refresh_web_plugin_lifecycle() -> None:
     )
 
     loaded = await asyncio.to_thread(load_plugins, force=True)
-    context = {"session_manager": session_manager, "project_root": PROJECT_ROOT}
+    context = {"session_manager": session_manager, "project_root": PROJECT_ROOT, "work_dir": WORK_DIR, "app": fastapi_app}
     install_bundled_host_extensions(fastapi_app, loaded.plugins, context)
     from workflow_extensions import activate_bundled_workflow_callbacks
 

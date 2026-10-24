@@ -1344,6 +1344,11 @@ _startup_refresh_scheduled = False
 _startup_refresh_last_scheduled = float("-inf")
 
 
+def catalog_refresh_pending() -> bool:
+    with _mcp_tool_state_lock:
+        return _startup_refresh_scheduled
+
+
 def schedule_mcp_startup_refresh() -> None:
     """Fire-and-forget ensure_started on the MCP loop (never blocks callers)."""
     global _startup_refresh_scheduled, _startup_refresh_last_scheduled
@@ -1399,6 +1404,8 @@ def list_registered_tools() -> List[Dict[str, Any]]:
         for d in _defs_snapshot
     }
     pinned = get_pinned_tool_names()
+    with _mcp_tool_state_lock:
+        registered = tuple(_fname_to_tool.items())
     tools = [
         {
             "function_name": fname,
@@ -1408,7 +1415,7 @@ def list_registered_tools() -> List[Dict[str, Any]]:
             "enabled": fname not in disabled,
             "pinned": fname in pinned,
         }
-        for fname, (alias, orig_name) in _fname_to_tool.items()
+        for fname, (alias, orig_name) in registered
         if alias not in _host_reserved_servers
     ]
     for alias, view in _host_mcp_views().items():
@@ -1423,7 +1430,9 @@ def list_configured_servers() -> List[Dict[str, Any]]:
     servers_cfg, _ = _load_servers_dict_from_config()
     configured = servers_cfg if isinstance(servers_cfg, dict) else {}
     tool_counts: Dict[str, int] = {}
-    for alias, _tool_name in _fname_to_tool.values():
+    with _mcp_tool_state_lock:
+        registered = tuple(_fname_to_tool.values())
+    for alias, _tool_name in registered:
         tool_counts[alias] = tool_counts.get(alias, 0) + 1
 
     aliases = set(str(alias) for alias in configured)

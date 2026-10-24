@@ -20,9 +20,10 @@ function loader(fetcher) {
     resetSessionHistoryPaging() {}, hideLoading() {}, getVisibleChatStream: () => null,
     document: { getElementById: () => null }, beforeSessionMessageSnapshotAvailable: () => true,
     appendLogVisible: message => errors.push(message), markVisibleSessionStreamLoadState() {}, showSessionLoadRetry() {},
-    fetchWithTimeout: async (url, options, timeout) => {
+    fetchWithTimeout: async (url, options, timeout, consume) => {
       requests.push({ url, signal: options.signal, timeout });
-      return fetcher(url, options, timeout);
+      const response = await fetcher(url, options, timeout);
+      return consume ? consume(response) : response;
     },
   });
   vm.runInContext(section(management, 'var sessionHistoryLoadController', 'function chatStreamHasConversationContent'), context);
@@ -81,15 +82,24 @@ async function main() {
   paging.sessionHasLiveHistoryOwner = () => false;
   paging.maybeAutoLoadOlderHistory();
   assert.equal(olderCalls, 2, 'a cached current-turn flag must not disable pagination after stopping');
+  paging.getSessionHistoryPaging = () => ({ event_limited_tail: true });
+  paging.maybeAutoLoadOlderHistory();
+  assert.equal(olderCalls, 2, 'a short bounded first window must not immediately download the rest of a dense turn');
+  paging.enableHistoryAutoLoadForReader();
+  paging.maybeAutoLoadOlderHistory();
+  assert.equal(olderCalls, 3, 'explicit reading enables pagination for a bounded window');
 
   let resolveOlder;
   const olderStream = {};
   const olderContext = vm.createContext({
     console, currentSessionId: 's', historyOlderLoading: false, replayingMessages: false,
-    sessionHistoryPaging: { sessionId: 's', has_older: true, range_start: 5 },
+    sessionHistoryPaging: { sessionId: 's', has_older: true, range_start: 5, event_limited_tail: true },
     HISTORY_DIALOGUES_PER_PAGE: 5, HISTORY_EVENT_BUDGET: 500, chatContainer: null,
     getVisibleChatStream: () => olderStream, updateHistorySentinelVisibility() {},
-    fetchWithTimeout: () => new Promise(resolve => { resolveOlder = resolve; }),
+    fetchWithTimeout: url => {
+      assert(url.includes('/messages?limit=200&before_index=5'), 'dense turns continue in bounded event windows');
+      return new Promise(resolve => { resolveOlder = resolve; });
+    },
   });
   vm.runInContext(section(history, 'function cancelHistoryPrependViewport', 'async function loadOlderHistoryChunk'), olderContext);
   vm.runInContext(section(history, 'async function loadOlderHistoryChunk', 'function insertNewEmptyChatStream'), olderContext);

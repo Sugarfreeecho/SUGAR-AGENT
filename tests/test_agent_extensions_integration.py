@@ -58,6 +58,7 @@ def test_plugin_components_merge_into_host_registries(tmp_path, monkeypatch):
     manager = PluginManager([discovery], tmp_path / "plugin-state.json")
     monkeypatch.setenv("PLUGINS_ENABLED", "1")
     monkeypatch.setenv("HOOKS_ENABLED", "1")
+    monkeypatch.setenv("MCP_ENABLED", "1")
     monkeypatch.setattr(agent_extensions, "plugin_manager", lambda: manager)
     monkeypatch.setattr(agent_extensions, "_project_root", lambda: tmp_path)
     monkeypatch.setattr(agent_tools, "SKILLS_DIR", tmp_path / "project-skills")
@@ -196,10 +197,19 @@ def test_bundled_plugin_catalog_visibility_matches_product_surfaces():
     }
     visible_plugin_ids = {
         "desktop-notifications",
-        "execution-dashboard",
         "feishu-transport",
         "web-search-providers",
     }
+    retired_plugin_ids = {
+        # 执行看板已并入设置中心「用量统计」，不再作为独立插件出现。
+        "execution-dashboard",
+    }
+
+    for plugin_id in retired_plugin_ids:
+        assert not (ROOT / "plugins" / plugin_id).exists()
+
+    for plugin_id in visible_plugin_ids:
+        assert (ROOT / "plugins" / plugin_id / ".myagent-plugin" / "plugin.json").is_file()
 
     for plugin_id in system_plugin_ids:
         manifest = json.loads(

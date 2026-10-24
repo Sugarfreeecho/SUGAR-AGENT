@@ -10,6 +10,68 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_valid_metadata_does_not_probe_every_possible_history_file(monkeypatch, tmp_path):
+    from agent_harness import SessionManager
+
+    def unexpected_probe(*_args):
+        pytest.fail('normal indexed metadata must not scan history files to rule out an empty deletion remnant')
+
+    manager = SessionManager.__new__(SessionManager)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(manager, '_has_session_payload_files', unexpected_probe)
+        assert manager._is_metadata_only_delete_remnant(tmp_path, {'name': 'valid'}) is False
+        assert manager._is_metadata_only_delete_remnant(tmp_path, {'created_at': '2026-10-22'}) is False
+    assert manager._is_metadata_only_delete_remnant(tmp_path, {}) is True
+    (tmp_path/'events.jsonl').write_text('', encoding='utf8')
+    assert manager._is_metadata_only_delete_remnant(tmp_path, {}) is False
+
+
+def test_repair_reuses_unchanged_activity_scan_and_invalidates_on_log_changes(monkeypatch, tmp_path):
+    import agent_harness
+    monkeypatch.setattr(agent_harness.SessionManager, '_runtime_v2_primary', lambda _: True)
+    sid = str(uuid.uuid4())
+    directory = tmp_path/'sessions'/sid
+    directory.mkdir(parents=True)
+    (directory/'metadata.json').write_text(json.dumps({'name': 'valid', 'created_at': '2025-01-01T00:00:00Z'}), encoding='utf8')
+    log = directory/'events.jsonl'
+    log.write_text(json.dumps({'seq': 1, 'type': 'message_user', 'timestamp': '2026-01-01T00:00:00Z'})+'\n', encoding='utf8')
+    manager = agent_harness.SessionManager(directory.parent, tmp_path/'sessions.json')
+    original = agent_harness._session_log_activity_timestamp
+    scans = []
+
+    def scan(*args):
+        scans.append(True)
+        return original(*args)
+
+    monkeypatch.setattr(agent_harness, '_session_log_activity_timestamp', scan)
+    manager.refresh_sessions_index_from_disk()
+    assert scans == [], 'an unchanged event log must not be decoded again on every refresh'
+    log.write_text(json.dumps({'seq': 2, 'type': 'message_user', 'timestamp': '2027-01-01T00:00:00Z'})+'\n', encoding='utf8')
+    manager.refresh_sessions_index_from_disk()
+    assert scans == [True]
+    assert manager.index[0]['updated_at'].startswith('2027-01-01')
+
+
+def test_activity_scan_read_failure_is_not_cached(monkeypatch, tmp_path):
+    import agent_harness
+    monkeypatch.setattr(agent_harness.SessionManager, '_runtime_v2_primary', lambda _: True)
+    directory = tmp_path/'sessions'/str(uuid.uuid4())
+    directory.mkdir(parents=True)
+    (directory/'metadata.json').write_text(json.dumps({'name': 'valid', 'created_at': '2025-01-01T00:00:00Z'}), encoding='utf8')
+    (directory/'events.jsonl').write_text('{}\n', encoding='utf8')
+    scans = []
+
+    def failed_scan(_path, fallback):
+        scans.append(True)
+        return fallback
+
+    monkeypatch.setattr(agent_harness, '_session_log_activity_timestamp', failed_scan)
+    manager = agent_harness.SessionManager(directory.parent, tmp_path/'sessions.json')
+    manager.refresh_sessions_index_from_disk()
+    assert len(scans) == 2, 'a transient read failure must be rechecked on the next refresh'
+    assert manager._index_activity_cache == {}
+
+
 def test_refresh_button_waits_for_index_rebuild():
     result = subprocess.run(
         ["node", "--test", str(ROOT / "tests/js/session_refresh_runtime.cjs")],

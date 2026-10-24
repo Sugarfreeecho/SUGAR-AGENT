@@ -216,6 +216,43 @@ def test_bounded_log_reader_defers_partial_trailing_fact(tmp_path):
     assert [row.seq for row in log.read_after_seq("s", 1)] == [2]
 
 
+def test_initial_tail_caps_a_single_dense_turn_without_losing_older_cursors(tmp_path, monkeypatch):
+    import runtime_v2
+    import webui
+    from tests.test_webui_messages import _NoLegacyUiSessionManager
+    events = [{'type': 'user', 'content': 'long work'}]
+    events += [{'type': 'status', 'content': str(i)} for i in range(1200)]
+    events += [{'type': 'final', 'content': 'done'}]
+    SessionEventLog(tmp_path).append('s', 'runtime_snapshot_compacted', {'ui_events': events})
+    monkeypatch.setattr(runtime_v2, 'runtime_v2_primary', lambda: True)
+    monkeypatch.setattr(webui, 'session_manager', _NoLegacyUiSessionManager(tmp_path, []))
+    monkeypatch.setattr(webui, '_session_run_state_fields_light', lambda _: {'run_active': False, 'stream_active': False})
+    response = asyncio.run(webui.get_session_history_snapshot(
+        's', limit=200, before_index=None, after_index=None, turns=5, event_budget=500,
+        include_aux=False, prefer_active_turn=True, tail_limit=200,
+    ))
+    assert response.status_code == 200
+    page = json.loads(response.body)['messages']
+    assert len(page['events']) == 200 and page['events'][-1]['type'] == 'final'
+    assert page['event_limited_tail'] and page['has_older']
+    projection = RuntimeUiProjection(tmp_path)
+    older = projection.read_ui_page('s', limit=200, before_index=page['range_start'])
+    assert older['range_end'] == page['range_start'] and len(older['events']) == 200
+    assert older['range_start'] < page['range_start']
+    # Explicit whole-turn callers retain their original complete-conversation contract.
+    assert len(projection.read_ui_page('s', turns=1, event_budget=500)['events']) == len(events)
+
+
+def test_bounded_tail_keeps_current_uncommitted_execution_started_before_window(tmp_path):
+    journal = ExecutionJournal(tmp_path)
+    journal.log.append('s', 'message_user', {'content': 'work'}, run_id='current')
+    journal.record('s', {'type': 'llm_response_delta', 'run_id': 'current', 'delta': 'still streaming'})
+    boundary = journal.log.append('s', 'ui_event', {'type': 'status', 'content': 'later'}).seq
+    assert journal.read('s', min_runtime_seq=boundary)['execution_records'] == []
+    recovered = journal.read('s', min_runtime_seq=boundary, active_run_id='current')['execution_records']
+    assert len(recovered) == 1 and recovered[0]['content'] == 'still streaming'
+
+
 @pytest.mark.parametrize("writer_kind", ["mirror", "batch", "gateway"])
 def test_visible_commit_catches_up_execution_gap_without_full_replay(tmp_path, monkeypatch, writer_kind):
     from runtime_v2.gateway import RuntimeGateway

@@ -16,6 +16,8 @@ import shlex
 import threading
 import time
 import weakref
+from ui_metadata_cache import MetadataCache
+from agent_local_timing import local_timed, local_step, mark_local
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
@@ -56,6 +58,8 @@ _lock = threading.RLock()
 _scan_lock = threading.Lock()
 _plugin_cache: Optional[Tuple[float, tuple[Any, ...], PluginLoadResult]] = None
 _extension_catalog_generation = 0
+_management_snapshot_cache = MetadataCache(ttl=10.0, stale_while_revalidate=True)
+_plugin_catalog_snapshot_cache = MetadataCache(ttl=10.0, stale_while_revalidate=True)
 _hook_managers: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[str, HookManager]]" = (
     weakref.WeakKeyDictionary()
 )
@@ -117,7 +121,9 @@ def plugin_manager() -> PluginManager:
     return get_plugin_manager()
 
 
-def load_plugins(*, force: bool = False) -> PluginLoadResult:
+def load_plugins(
+    *, force: bool = False, refresh_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> PluginLoadResult:
     """Return enabled plugin resources with a hot-path cache.
 
     Cache readers never block on a directory scan: a stale entry is served
@@ -147,7 +153,7 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
             cached_entry = _plugin_cache if _plugin_cache and _plugin_cache[1] == cache_key else None
             if cached_entry is not None:
                 # Stale serve: don't block the caller on a rescan; schedule it.
-                if _schedule_plugin_cache_refresh(manager, cache_key):
+                if _schedule_plugin_cache_refresh(manager, cache_key, loop=refresh_loop):
                     return cached_entry[2]
     with _scan_lock:
         # Re-check under the scan lock: another thread's refresh may have
@@ -160,7 +166,8 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
                     and time.monotonic() - _plugin_cache[0] <= _CACHE_TTL_SECONDS
                 ):
                     return _plugin_cache[2]
-        loaded = manager.load_enabled()
+        with local_step("plugin_catalog_sync_load"):
+            loaded = manager.load_enabled()
         with _lock:
             if generation == _extension_catalog_generation:
                 _plugin_cache = (time.monotonic(), cache_key, loaded)
@@ -170,23 +177,47 @@ def load_plugins(*, force: bool = False) -> PluginLoadResult:
 def _schedule_plugin_cache_refresh(
     manager: PluginManager,
     cache_key: tuple[Any, ...],
+    *, loop: Optional[asyncio.AbstractEventLoop] = None,
 ) -> bool:
     """Kick off one background plugin rescan; returns False if impossible.
 
-    Must be called with _lock held and a stale cache entry present.  Off-loop
-    callers (sync contexts) fall back to False so the caller rescans inline.
+    Must be called with _lock held and a stale cache entry present. Workers
+    with an explicit owner loop hand scheduling back to it. Sync callers with
+    no usable loop fall back to False so the caller rescans inline.
     Only one background refresh is in flight at a time (process-wide).
     """
 
     global _swr_refresh_in_flight
     try:
-        loop = asyncio.get_running_loop()
+        current_loop = asyncio.get_running_loop()
     except RuntimeError:
+        current_loop = None
+    if loop is None:
+        loop = current_loop
+    if loop is None or loop.is_closed():
         return False
+    generation = _extension_catalog_generation
+    if current_loop is not loop:
+        def submit_on_owner_loop() -> None:
+            with _lock:
+                # A settings/inventory invalidation may have superseded the
+                # entry, or another refresh may have completed while this
+                # callback waited. Do not rescan a different or now-fresh key.
+                cached = _plugin_cache
+                if (generation == _extension_catalog_generation and cached
+                        and cached[1] == cache_key
+                        and time.monotonic() - cached[0] > _CACHE_TTL_SECONDS):
+                    _schedule_plugin_cache_refresh(manager, cache_key, loop=loop)
+        try:
+            loop.call_soon_threadsafe(submit_on_owner_loop)
+        except RuntimeError:
+            if not loop.is_closed():
+                raise
+            return False
+        return True
     if _swr_refresh_in_flight:
         return True
     _swr_refresh_in_flight = True
-    generation = _extension_catalog_generation
     _swr_work_begin()
 
     def _refresh() -> None:
@@ -200,10 +231,16 @@ def _schedule_plugin_cache_refresh(
         except Exception:
             logger.warning("Background plugin cache refresh failed", exc_info=True)
         finally:
-            _swr_refresh_in_flight = False
+            with _lock:
+                _swr_refresh_in_flight = False
             _swr_work_end()
 
-    task = loop.run_in_executor(None, _refresh)
+    try:
+        task = loop.run_in_executor(None, _refresh)
+    except BaseException:
+        _swr_refresh_in_flight = False
+        _swr_work_end()
+        raise
     # Keep a reference so the task is not garbage-collected mid-scan.
     _SWR_REFRESH_TASKS.add(task)
     task.add_done_callback(_SWR_REFRESH_TASKS.discard)
@@ -852,6 +889,7 @@ def _hook_signature(
     )
 
 
+@local_timed("hook_runtime_definitions_worker")
 def _runtime_hook_definitions(loaded: PluginLoadResult) -> tuple[Any, ...]:
     try:
         from plugins.host_hooks import runtime_hook_definitions
@@ -880,7 +918,18 @@ def hook_manager_for_current_loop(
     lazily against whatever loop dispatches next.
     """
 
-    loop = asyncio.get_running_loop()
+    return _hook_manager_for_loop(
+        asyncio.get_running_loop(), force=force,
+        runtime_definitions=runtime_definitions, loaded=loaded,
+    )
+
+
+def _hook_manager_for_loop(
+    loop: asyncio.AbstractEventLoop, *, force: bool = False,
+    runtime_definitions: Optional[tuple[Any, ...]] = None,
+    loaded: Optional[PluginLoadResult] = None,
+) -> HookManager:
+    """Prepare against the caller's loop; config I/O may run in a worker."""
     # dispatch_hook has already obtained this same catalog to derive runtime
     # hooks. Reuse it for the manager signature instead of resolving the plugin
     # manager and its directories a second time in the same dispatch.
@@ -925,6 +974,23 @@ def _schedule_hook_manager_rebuild(
     runtime_definitions: tuple[Any, ...],
 ) -> None:
     """Rebuild this loop's hook manager off the critical path (deduplicated)."""
+
+    try:
+        on_owner_loop = asyncio.get_running_loop() is loop
+    except RuntimeError:
+        on_owner_loop = False
+    if not on_owner_loop:
+        # Preparation may now run in a thread. Task/future bookkeeping belongs
+        # to the original loop, including the in-flight deduplication check.
+        if not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(
+                    _schedule_hook_manager_rebuild, loop, signature, loaded, runtime_definitions,
+                )
+            except RuntimeError:
+                if not loop.is_closed():
+                    raise
+        return
 
     global _hook_manager_rebuild_in_flight
     if _hook_manager_rebuild_in_flight:
@@ -1358,9 +1424,38 @@ async def warm_hook_pipeline() -> None:
     work; doing it at startup (background) keeps the first user message
     from paying it inside its request.
     """
-    loaded = load_plugins()
-    runtime_definitions = await asyncio.to_thread(_runtime_hook_definitions, loaded)
-    hook_manager_for_current_loop(runtime_definitions=runtime_definitions, loaded=loaded)
+    await _prepare_hook_dispatch_async()
+
+
+def _prepare_hook_dispatch(loop: asyncio.AbstractEventLoop):
+    """One awaited worker for catalog, definitions and manager path/config I/O."""
+    mark_local("hook_prepare_worker_entered")
+    try:
+        with local_step("hook_load_plugins"):
+            loaded = load_plugins(refresh_loop=loop)
+        loaded_at = time.perf_counter()
+        with local_step("hook_runtime_definitions"):
+            runtime_definitions = _runtime_hook_definitions(loaded)
+        definitions_at = time.perf_counter()
+        with local_step("hook_manager"):
+            manager = _hook_manager_for_loop(
+                loop, runtime_definitions=runtime_definitions, loaded=loaded,
+            )
+        return manager, loaded_at, definitions_at, time.perf_counter()
+    finally:
+        mark_local("hook_prepare_worker_finished")
+
+
+async def _prepare_hook_dispatch_async():
+    loop = asyncio.get_running_loop()
+    mark_local("hook_prepare_submitted")
+    try:
+        with local_step("hook_prepare_await"):
+            return await asyncio.to_thread(_prepare_hook_dispatch, loop)
+    finally:
+        # This records resumption/cancellation on the owner loop. It is not a
+        # claim that the worker future was ready at exactly the same instant.
+        mark_local("hook_prepare_resumed")
 
 
 async def dispatch_hook(
@@ -1371,23 +1466,8 @@ async def dispatch_hook(
     session_id: str = "",
     run_id: str = "",
 ) -> HookDispatchResult:
-    from agent_local_timing import local_step
     _t0 = time.perf_counter()
-    with local_step("hook_load_plugins"):
-        loaded = load_plugins()
-    _t_loaded = time.perf_counter()
-    with local_step("hook_runtime_definitions"):
-        runtime_definitions = await asyncio.to_thread(
-            _runtime_hook_definitions,
-            loaded,
-        )
-    _t_defs = time.perf_counter()
-    with local_step("hook_manager"):
-        manager = hook_manager_for_current_loop(
-            runtime_definitions=runtime_definitions,
-            loaded=loaded,
-        )
-    _t_manager = time.perf_counter()
+    manager, _t_loaded, _t_defs, _t_manager = await _prepare_hook_dispatch_async()
     event_hooks = tuple(manager.hooks_for(event) or ()) if manager.enabled else ()
     audit_enabled = bool(manager.enabled and event_hooks)
     if session_manager is not None and audit_enabled:
@@ -1506,20 +1586,50 @@ def audit_plugin_inventory(
 
 
 def extensions_snapshot() -> Dict[str, Any]:
+    manager = plugin_manager()
+
+    def stamp(path: Path) -> tuple:
+        try:
+            stat = path.stat()
+            return (str(path), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return (str(path), None, None)
+
+    key = (id(manager), extension_catalog_generation(), plugins_enabled(), hooks_enabled(),
+           stamp(Path(manager.state.path)), stamp(hooks_config_path()))
+    return _management_snapshot_cache.get(key, _build_extensions_snapshot)
+
+
+def plugin_catalog_snapshot(*, refresh_loop=None) -> Dict[str, Any]:
+    """Display inventory and validated UI declarations without worker RPCs.
+
+    Settings navigation must not wait for command discovery, an executing
+    worker's registry lock, or Hook configuration. Execution still resolves
+    current enablement and trust through its normal authoritative paths.
+    """
+    manager = plugin_manager()
+    try:
+        stat = manager.state.path.stat()
+        state_stamp = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        state_stamp = (None, None)
+    key = (id(manager), extension_catalog_generation(), plugins_enabled(), state_stamp)
+    return _plugin_catalog_snapshot_cache.get(
+        key, lambda: _plugin_catalog_data(manager, load_plugins(refresh_loop=refresh_loop)))
+
+
+def _plugin_catalog_data(manager, loaded) -> Dict[str, Any]:
     try:
         from plugins.ui import plugin_ui_contributions
     except ImportError:  # pragma: no cover - package import style
         from .plugins.ui import plugin_ui_contributions
 
-    manager = plugin_manager()
-    report = manager.discover_report()
-    # Use the short hot-path cache instead of forcing a full plugin reload on
-    # every settings/skill-popover snapshot; explicit reloads call force=True.
-    loaded = load_plugins()
+    # load_enabled already discovers all plugins, including disabled ones.
+    with _lock:
+        reuse_report = bool(_plugin_cache and _plugin_cache[1][0] == id(manager)
+                            and _plugin_cache[2] is loaded and plugins_enabled())
+    report = manager.last_discovery if reuse_report else manager.discover_report()
     loaded_ids = {plugin.plugin_id for plugin in loaded.plugins}
-    runtime_registry = get_plugin_runtime_registry()
-    runtime_command_rows = runtime_registry.command_descriptions(loaded.plugins)
-    command_rows = _plugin_command_catalog(loaded, runtime_command_rows)
     plugin_rows = []
     ui_contributions = []
     for plugin in report.plugins:
@@ -1530,6 +1640,11 @@ def extensions_snapshot() -> Dict[str, Any]:
         row["ui"] = []
         if row["loaded"]:
             row["ui"] = list(plugin_ui_contributions(plugin))
+            ui_contributions.extend(row["ui"])
+        elif _is_bundled_system_plugin(plugin):
+            # Trusted settings remain available so a disabled bundled capability can be enabled again.
+            row["ui"] = [item for item in plugin_ui_contributions(plugin)
+                         if item.get("slot") == "settings.section" and item.get("target") == "renderer"]
             ui_contributions.extend(row["ui"])
         if not _is_bundled_system_plugin(plugin):
             plugin_rows.append(row)
@@ -1542,19 +1657,31 @@ def extensions_snapshot() -> Dict[str, Any]:
             str(item.get("id") or ""),
         )
     )
-    hook_data = hook_snapshot()
     return {
         "ok": True,
+        "enabled": {"plugins": plugins_enabled()},
+        "plugins": plugin_rows,
+        "ui_contributions": ui_contributions,
+        "plugin_errors": list(report.errors) + list(loaded.errors),
+        "plugin_warnings": list(report.warnings) + list(loaded.warnings),
+    }
+
+
+def _build_extensions_snapshot() -> Dict[str, Any]:
+    manager = plugin_manager()
+    loaded = load_plugins()
+    catalog = _plugin_catalog_data(manager, loaded)
+    runtime_registry = get_plugin_runtime_registry()
+    command_rows = _plugin_command_catalog(loaded, runtime_registry.command_descriptions(loaded.plugins))
+    hook_data = hook_snapshot()
+    return {
+        **catalog,
         "enabled": {"hooks": hooks_enabled(), "plugins": plugins_enabled()},
         "paths": {
             "hooks": hook_data["path"],
             "plugins": [str(path.resolve()) for path in manager.discovery_dirs],
             "plugin_state": str(manager.state.path.resolve()),
         },
-        "plugins": plugin_rows,
-        "ui_contributions": ui_contributions,
-        "plugin_errors": list(report.errors) + list(loaded.errors),
-        "plugin_warnings": list(report.warnings) + list(loaded.warnings),
         "plugin_runtime_errors": list(plugin_runtime_errors()),
         "plugin_runtime": runtime_registry.snapshot(),
         "plugin_commands": command_rows,

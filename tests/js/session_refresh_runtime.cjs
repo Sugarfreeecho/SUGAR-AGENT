@@ -4,7 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 const source = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/app/modules/session-management.js'), 'utf8');
-const start = source.indexOf('var SESSION_REFRESH_LIST_WAIT_MS');
+const start = source.indexOf('var sessionRefreshInFlight');
 const end = source.indexOf('var SESSION_IMPORT_ARCHIVE_EXT', start);
 
 function deferred() {
@@ -24,7 +24,11 @@ function setup(repair, load = async () => {}) {
     let timerId = 0;
     const context = vm.createContext({
         console: { error() {} },
-        fetchWithTimeout: (...args) => { calls.requests.push(args); return repair(...args); },
+        fetchWithTimeout: async (...args) => {
+            calls.requests.push(args);
+            const response = await repair(...args);
+            return args[3] ? args[3](response) : response;
+        },
         loadSessions: options => { calls.loads.push(options); return load(options); },
         showUiAlert: options => calls.alerts.push(options),
         window: {
@@ -40,7 +44,7 @@ function setup(repair, load = async () => {}) {
 const success = () => ({ ok: true, status: 200, json: async () => ({ ok: true, state_revision: 123 }) });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-test('waits for index reconstruction before the list request or reload, including slow repairs', async () => {
+test('waits for index reconstruction then reloads without a duplicate list render', async () => {
     const repair = deferred(), list = deferred();
     const ui = setup(() => repair.promise, () => list.promise);
     const pending = ui.run();
@@ -59,10 +63,7 @@ test('waits for index reconstruction before the list request or reload, includin
     assert.equal(ui.calls.requests.length, 1, 'repeat clicks must not start concurrent rebuilds');
     repair.resolve(success());
     await flush();
-    assert.equal(ui.calls.loads.length, 1);
-    assert.equal(ui.calls.loads[0].force, true);
-    assert.equal(ui.calls.reloads, 0);
-    list.resolve();
+    assert.equal(ui.calls.loads.length, 0);
     await pending;
     assert.equal(ui.calls.reloads, 1);
     assert.equal(ui.calls.timers.size, 0);
@@ -70,14 +71,11 @@ test('waits for index reconstruction before the list request or reload, includin
     assert.equal(ui.context.sessionRefreshInFlight, false);
 });
 
-test('a hung list request cannot block page reload after a successful reconstruction', async () => {
+test('a slow list cannot delay reload because only the new page requests it', async () => {
     const ui = setup(async () => success(), () => new Promise(() => {}));
-    const pending = ui.run();
-    await flush();
-    const deadline = [...ui.calls.timers.values()][0];
-    assert.equal(deadline.delay, 1200);
-    deadline.callback();
-    await pending;
+    await ui.run();
+    assert.equal(ui.calls.loads.length, 0);
+    assert.equal(ui.calls.timers.size, 0);
     assert.equal(ui.calls.reloads, 1);
     assert.equal(ui.calls.alerts.length, 0);
 });
@@ -106,9 +104,10 @@ test('server and network failures keep the page open and release the button for 
     }
 });
 
-test('list refresh failure still reloads after the successful backend repair', async () => {
+test('the abandoned page never starts its own list refresh', async () => {
     const ui = setup(async () => success(), () => { throw new Error('List request failed'); });
     await ui.run();
     assert.equal(ui.calls.reloads, 1);
+    assert.equal(ui.calls.loads.length, 0);
     assert.equal(ui.calls.alerts.length, 0);
 });

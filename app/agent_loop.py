@@ -6524,10 +6524,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     arguments=tool_args if isinstance(tool_args, dict) else {},
                     workspace=security_workspace,
                 )
-                tool_review_context = _build_tool_review_context(
-                    state,
-                    tool_args,
-                )
                 hook_approval_spec = tool_call.get("_hook_approval_spec")
                 if sec_context.mode == PermissionMode.FULL_ACCESS:
                     hook_approval_spec = None
@@ -6535,6 +6531,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     return _blocked_tool_result(
                         tool_name, tool_args, tool_id, sec_decision.reason
                     )
+                # Reconstruct/freeze the conversation only for an actual
+                # approval. Allowed tools have no consumer for this disk read.
+                tool_review_context = (
+                    _build_tool_review_context(state, tool_args)
+                    if sec_decision.outcome == DecisionOutcome.ASK or hook_approval_spec
+                    else None
+                )
 
                 # Announce the tool row before any approval dialog. The approval
                 # card anchors to this row, so it never renders at the bottom of

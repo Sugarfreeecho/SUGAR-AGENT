@@ -30,7 +30,7 @@
       const rows = A.pluginSettingsMarkup(settings);
       const missing = settings.missing_required || [];
       openDialog({
-        title: t('插件设置', 'Plugin settings') + ' · ' + esc(settings.title || id),
+        title: t('插件设置', 'Plugin settings') + ' · ' + (settings.title || id),
         sub: missing.length ? t('还缺少必填项：', 'Missing required: ') + missing.join(', ')
           : t('改动会立即写入该插件的配置文件。', 'Changes are written to the plugin config immediately.'),
         okText: t('保存', 'Save'),
@@ -51,7 +51,7 @@
     id: 'plugins', icon: 'plugins', zh: '插件', en: 'Plugins', mode: 'instant',
     zhSub: '插件可带工具、技能和 Hooks，启停后即时生效。', enSub: 'Plugins may bundle tools, skills and hooks.',
     async load() {
-      const snapshot = await api('/api/extensions');
+      const snapshot = await api('/api/plugins/catalog');
       return snapshot;
     },
     render(d) {
@@ -74,7 +74,13 @@
       const errors = d.plugin_errors || [];
       const warnings = d.plugin_warnings || [];
       /* 插件贡献的设置入口（原聊天页「界面设置」弹窗里的槽位，已迁到本页） */
-      const contributed = (d.ui_contributions || []).filter((c) => ['settings.section', 'navigation'].includes(String(c.slot || '')));
+      const pageKeys = new Set();
+      const contributed = (d.ui_contributions || []).filter((c) => {
+        if (!['settings.section', 'navigation', 'details.tab'].includes(String(c.slot || ''))) return false;
+        const key = c.plugin_id + ':' + c.id;
+        if (pageKeys.has(key)) return false;
+        pageKeys.add(key); return true;
+      });
       const contributedCard = contributed.length ? W.card(
         t('插件页面与设置', 'Plugin pages and settings'), t('由插件贡献，随插件启用状态出现', 'Contributed by plugins'),
         contributed.map((c) => W.lrow(
@@ -142,9 +148,9 @@
     id: 'hooks', icon: 'hooks', zh: 'Hooks', en: 'Hooks', mode: 'instant',
     zhSub: '在工具执行前后插入自定义动作；不懂就保持默认。', enSub: 'Run custom actions around tool calls.',
     async load() {
-      const snapshot = await api('/api/extensions');
-      let env = { groups: [] };
-      try { env = await api('/api/env'); } catch (e) { /* 未配置时可能不可用 */ }
+      const [snapshot, env] = await Promise.all([
+        api('/api/extensions'), api('/api/env').catch(() => ({ groups: [] })),
+      ]);
       const flat = {};
       (env.groups || []).forEach((g) => (g.vars || []).forEach((v) => { flat[v.key] = v; }));
       return { snapshot, env: flat };
@@ -238,17 +244,7 @@
     return { command: parts[0], args: parts.slice(1) };
   }
 
-  A.registerSection({
-    id: 'mcp', icon: 'mcp', zh: 'MCP', en: 'MCP', mode: 'instant',
-    zhSub: 'MCP 服务器为 Agent 提供额外工具（浏览器、文档库等）。', enSub: 'MCP servers give the agent extra tools.',
-    async load() {
-      const tools = await api('/api/mcp/tools');
-      const search = await api('/api/tool_search/config');
-      let config = { text: '', path: '' };
-      try { config = await api('/api/mcp_config'); } catch (e) { /* ignore */ }
-      return { tools: tools.tools || [], servers: tools.servers || [], config, search };
-    },
-    render(d) {
+  function mcpServerRows(d) {
       const byServer = Object.create(null);
       (d.tools || []).forEach((tool) => { (byServer[tool.server] = byServer[tool.server] || []).push(tool); });
       const servers = (d.servers || []).slice();
@@ -292,6 +288,21 @@
           '<div class="st-mcp-tools">' + (toolRows || W.empty(managed
             ? managedLabel : t('该服务器尚未注册工具', 'No tools registered for this server'))) + '</div></section>';
       }).join('');
+    return serverRows;
+  }
+
+  A.registerSection({
+    id: 'mcp', icon: 'mcp', zh: 'MCP', en: 'MCP', mode: 'instant',
+    zhSub: 'MCP 服务器为 Agent 提供额外工具（浏览器、文档库等）。', enSub: 'MCP servers give the agent extra tools.',
+    async load() {
+      const [tools, search, config] = await Promise.all([
+        api('/api/mcp/tools'), api('/api/tool_search/config'),
+        api('/api/mcp_config').catch(() => ({ text: '', path: '' })),
+      ]);
+      return { tools: tools.tools || [], servers: tools.servers || [], initializing: !!tools.initializing, config, search };
+    },
+    render(d) {
+      const serverRows = mcpServerRows(d);
       const config = parseConfig(d.config.text);
       const advanced = '<textarea class="st-input" data-field="mcp-json" spellcheck="false">' +
         esc(JSON.stringify(config || {}, null, 2)) + '</textarea>' +
@@ -319,7 +330,8 @@
             W.btn(t('添加', 'Add'), 'mcp-add-url', 'primary')) +
           W.adv(t('高级：直接编辑 .config/mcp_servers.json', 'Advanced: edit .config/mcp_servers.json'), advanced)) +
         W.card(t('已添加服务器', 'Added servers'), t('按服务器分组 · 悬停工具名看说明', 'Grouped by server — hover tools for descriptions'),
-          serverRows || W.empty(t('还没有 MCP 服务器', 'No MCP servers yet'))) +
+          '<div data-mcp-servers>' + (d.initializing ? W.note(t('正在发现工具，列表会自动更新…', 'Discovering tools…')) : '') +
+          (serverRows || W.empty(t('还没有 MCP 服务器', 'No MCP servers yet'))) + '</div>') +
         W.note(t('配置文件：<span class="st-mono">' + esc(d.config.path || '.config/mcp_servers.json') + '</span>。保存后会自动重载连接。',
           'Config file: <span class="st-mono">' + esc(d.config.path || '.config/mcp_servers.json') + '</span>. Connections reload on save.'));
     },
@@ -412,6 +424,33 @@
       A.__mcpText = (d && d.config && d.config.text) || '';
       A.__mcpTools = d.tools || [];
       A.__toolSearchConfig = d.search.config;
+      let cancelled = false, timer = null;
+      async function refreshDiscovery() {
+        if (cancelled || A.currentSection !== 'mcp' || document.hidden) return;
+        try {
+          const latest = await api('/api/mcp/tools');
+          if (cancelled || A.currentSection !== 'mcp') return;
+          d.tools = latest.tools || []; d.servers = latest.servers || [];
+          d.initializing = !!latest.initializing;
+          A.__mcpTools = d.tools;
+          const target = root.querySelector('[data-mcp-servers]');
+          if (target) target.innerHTML = (d.initializing ? W.note(t('正在发现工具，列表会自动更新…', 'Discovering tools…')) : '') +
+            (mcpServerRows(d) || W.empty(t('还没有 MCP 服务器', 'No MCP servers yet')));
+          if (d.initializing) timer = setTimeout(refreshDiscovery, 1100);
+        } catch (error) { if (!cancelled) reportError(error); }
+      }
+      if (d.initializing) timer = setTimeout(refreshDiscovery, 1100);
+      function resumeDiscovery() {
+        if (!document.hidden && d.initializing && !cancelled) {
+          clearTimeout(timer);
+          timer = setTimeout(refreshDiscovery, 0);
+        }
+      }
+      document.addEventListener('visibilitychange', resumeDiscovery);
+      return () => {
+        cancelled = true; clearTimeout(timer);
+        document.removeEventListener('visibilitychange', resumeDiscovery);
+      };
     },
   });
 })();
