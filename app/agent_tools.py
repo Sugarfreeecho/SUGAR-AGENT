@@ -4298,44 +4298,6 @@ def _web_redirect_cap() -> int:
         return 5
 
 
-def _web_search_max_results_cap() -> int:
-    """Default and maximum result count for web_search; from WEB_SEARCH_MAX_RESULTS (≥1, invalid → 20)."""
-    raw = (os.environ.get("WEB_SEARCH_MAX_RESULTS", "20") or "20").strip()
-    try:
-        v = int(raw)
-    except (TypeError, ValueError):
-        v = 20
-    return max(1, v)
-
-
-async def web_search(
-    query: str,
-    count: Optional[int] = None,
-) -> str:
-    """
-    联网搜索。
-
-    - **搜索服务**：由 ``WEB_SEARCH_PROVIDER`` 选择当前启用插件注册的 Provider；厂商协议和回退策略由插件实现。
-    - **条数**：默认与上限均为环境变量 ``WEB_SEARCH_MAX_RESULTS``（默认 20，非法值回退 20，至少为 1）；显式 ``count`` 会再夹在该范围内。
-    """
-    provider = (os.environ.get("WEB_SEARCH_PROVIDER", "default") or "default").strip().lower()
-    max_results = _web_search_max_results_cap()
-    requested = count if count is not None else max_results
-    n = min(max(requested, 1), max_results)
-
-    try:
-        from agent_extensions import activate_bundled_search_provider_extensions
-        from search_provider_registry import search_provider_registry
-
-        # Rebuild from the currently enabled bundled set so disabling the
-        # provider plugin removes all of its capabilities immediately.
-        search_provider_registry.clear()
-        activate_bundled_search_provider_extensions(search_provider_registry)
-        return await search_provider_registry.search(provider, query, n)
-    except Exception as exc:
-        return f"Error: web search provider unavailable: {exc}"
-
-
 def _html_title(html_text: str) -> str:
     m = re.search(r"<title[^>]*>([\s\S]*?)</title>", html_text, re.I)
     if not m:
@@ -4896,8 +4858,6 @@ def task(
 
 # ==================== OpenAI tools 定义（Chat Completions）====================
 # Keep a stable order for tool schemas sent to the model.
-# web_search `count` maximum follows WEB_SEARCH_MAX_RESULTS at process start (restart to refresh schema).
-_WEB_SEARCH_COUNT_SCHEMA_MAX = _web_search_max_results_cap()
 
 OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     _openai_function_schema(
@@ -5154,23 +5114,6 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
         },
         ["path"],
-    ),
-    _openai_function_schema(
-        "web_search",
-        "Search the public web through the selected WEB_SEARCH_PROVIDER plugin. Provider-specific configuration and fallback behavior are owned by that plugin.",
-        {
-            "query": {"type": "string", "description": "Search query"},
-            "count": {
-                "type": "integer",
-                "description": (
-                    f"Number of results (1–{_WEB_SEARCH_COUNT_SCHEMA_MAX}). "
-                    "Omit to use WEB_SEARCH_MAX_RESULTS (same upper bound)."
-                ),
-                "minimum": 1,
-                "maximum": _WEB_SEARCH_COUNT_SCHEMA_MAX,
-            },
-        },
-        ["query"],
     ),
     _openai_function_schema(
         "web_fetch",
@@ -5525,7 +5468,6 @@ tools = {
     "delete_file": delete_file,
     "glob": glob,
     "grep": grep,
-    "web_search": web_search,
     "web_fetch": web_fetch,
     "web_download": web_download,
     "activate_skill": activate_skill,

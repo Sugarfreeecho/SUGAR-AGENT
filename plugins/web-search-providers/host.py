@@ -211,3 +211,89 @@ def register_search_providers(registry, plugin):
         "jina": _jina,
     }.items():
         registry.register(name, callback, source=plugin.plugin_id, replace=True)
+
+
+def _max_results_cap() -> int:
+    raw = (os.getenv("WEB_SEARCH_MAX_RESULTS", "20") or "20").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 20
+    return max(1, value)
+
+
+def _definition() -> dict[str, Any]:
+    cap = _max_results_cap()
+    return {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the public web through the selected WEB_SEARCH_PROVIDER plugin. "
+                "Provider-specific configuration and fallback behavior are owned by that plugin; "
+                "disabling the plugin removes this tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "count": {
+                        "type": "integer",
+                        "description": (
+                            f"Number of results (1–{cap}). "
+                            "Omit to use WEB_SEARCH_MAX_RESULTS (same upper bound)."
+                        ),
+                        "minimum": 1,
+                        "maximum": cap,
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def tool_definitions(context, plugin):
+    """Expose web_search only while this plugin is enabled."""
+    from host_tool_registry import host_tool_invokers
+    from tool_execution_policy import ToolExecutionPolicy
+
+    async def invoke(_context, arguments):
+        from tool_result_status import legacy_tool_outcome
+
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            raise ValueError("query is required")
+        cap = _max_results_cap()
+        try:
+            requested = int(arguments.get("count") or cap)
+        except (TypeError, ValueError):
+            requested = cap
+        count = min(max(requested, 1), cap)
+        provider = (os.getenv("WEB_SEARCH_PROVIDER", "default") or "default").strip().lower()
+        from search_provider_registry import search_provider_registry
+
+        # Idempotent: registering again simply refreshes this plugin's providers.
+        register_search_providers(search_provider_registry, plugin)
+        try:
+            text = await search_provider_registry.search(provider, query, count)
+        except Exception as exc:
+            return legacy_tool_outcome("web_search", f"Error: web search provider unavailable: {exc}")
+        return legacy_tool_outcome("web_search", text)
+
+    host_tool_invokers.register(
+        "web_search",
+        invoke,
+        replace=True,
+        owner=plugin.plugin_id,
+        effect="read",
+        enabled=lambda: context["is_enabled"](plugin.plugin_id),
+        policy=ToolExecutionPolicy(
+            effect="read",
+            parallel_safe=True,
+            early_stream_safe=True,
+            interruptibility="safe",
+        ),
+    )
+    return [_definition()]

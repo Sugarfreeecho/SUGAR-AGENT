@@ -1,6 +1,6 @@
 # 检索提速、会话历史与 Web 工具 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-23 v4（历史检索派生索引与 seq 定位）
+- 版本：2026-10-25 v5（web_search 改由插件注入）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_tools.py`（工具定义）、`app/history_context.py`（会话历史搜索/读取）、`app/history_search_index.py`、`app/builtin_host_tools.py`（只读宿主调用）、搜索提供方注册表。
 - 上级：`00-工具系统整体设计.md`
@@ -15,9 +15,9 @@
 
 ### UC-3E1 web_search
 - **触发**：搜索请求。
-- **预期现象**：按提供方返回结构化结果（标题/链接/摘要）；结果数有上限；提供方不可用时明确报错（不编造结果）。
-- **规则与边界**：搜索提供方可插拔（provider registry / 插件扩展）；预批准域名策略不适用（搜索是出站查询）。
-- **依据**：`web_search / search_provider_registry`、`_web_search_max_results_cap`。
+- **预期现象**：按提供方返回结构化结果（标题/链接/摘要）；结果数有上限；提供方不可用时明确报错（不编造结果）。工具本身由 `web-search-providers` 插件注入：停用该插件后 `web_search` 不再出现在模型工具目录，而不是保留一个必然报错的入口。
+- **规则与边界**：搜索提供方可插拔（provider registry / 插件扩展）；`system-external` 档，工具常驻但可被插件开关撤销；预批准域名策略不适用（搜索是出站查询）。
+- **依据**：`plugins/web-search-providers/host.py`（`tool_definitions` 注入 + `PLUGIN_WEB_SEARCH_PROVIDERS_ENABLED`）、`search_provider_registry.py`。
 
 ### UC-3E2 web_fetch（含 SSRF 防护）
 - **触发**：抓取 URL 内容。
@@ -58,7 +58,7 @@
 
 | 用例 | 代码 |
 |---|---|
-| UC-3E1 | `agent_tools.py` L3724–3762 |
+| UC-3E1 | `plugins/web-search-providers/host.py`、`search_provider_registry.py` |
 | UC-3E2 | L3652–3866 |
 | UC-3E3 | L3866–3997 |
 | UC-3E4 | `history_context.py`、`builtin_host_tools.py` |
@@ -66,6 +66,8 @@
 | UC-3E6 | `history_search_index.py`、`file_read_signature.py`、`history_context.py`、`SessionEventLog.read_by_seqs` |
 
 ## 5. 版本记录
+
+- 2026-10-25 v5：`web_search` 从 `agent_tools.py` 静态工具改为插件注入（schema、实现与分发表项一并移出）；插件停用即从工具目录消失，常驻名单保留同名占位。
 
 - 2026-10-23 v4：增加后台派生语义索引、完整前缀哈希和 NTFS ChangeTime 守卫、原始行复核及 seq 引用定位；明确冷查询、全局枚举与归档分页剩余成本。
 
