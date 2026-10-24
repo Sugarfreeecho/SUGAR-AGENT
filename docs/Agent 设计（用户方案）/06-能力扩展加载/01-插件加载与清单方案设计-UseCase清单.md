@@ -1,6 +1,6 @@
 # 插件加载与清单 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-19 v4（受身份守卫的manager名称缓存）
+- 版本：2026-10-21 v7（Hook worker保留目录后台刷新）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/manager.py`、`plugins/loader.py`、`agent_extensions.load_plugins`、`plugins/models.py`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -51,9 +51,28 @@
 ### UC-6A7 默认manager配置名称的有界缓存
 
 - **触发**：同一进程反复取得默认插件manager；真实95b的PostToolUse中canonical子段963.780ms，另一次186.716ms。
-- **预期现象**：仅已是canonical拼写的路径可以复用规范化名称。持有原manager锁，每次先以lstat的device/inode/ctime/type及父目录身份校验；最多32项LRU，未变化时减少Path.resolve调用。
+- **预期现象**：仅已是canonical拼写的路径可以复用规范化名称。每次以lstat的device/inode/ctime/type及父目录身份校验；最多32项LRU，未变化时减少Path.resolve调用。10-21起文件检查与resolve位于锁外，独立短锁仅保护LRU读取/更新/淘汰，避免一个慢路径阻塞其他路径的检查。
 - **规则与边界**：创建、替换、父目录替换或环境配置变化重新解析；别名、reparse、未知身份、缺父目录、访问错误保持实时解析。默认路径发现与迁移检查仍执行，启停状态/信任/实际调用授权保持实时；不缓存跨请求授权，不延长UC-6A5的状态scope。名称缓存失败不能隐藏原解析错误。首次构造与失效有额外守卫成本，不能承诺所有配置均获收益。
 - **依据**：`plugins.manager._canonical_manager_path / _manager_path_identity / get_plugin_manager`、`tests/test_plugin_manager_path_cache.py`；局部正常配置60次resolve由180降至0，原P50 1.378ms、新0.811ms；Windows 8.3别名按设计不命中，真实收益尚待自然重启后的样本，见[多会话复核](../../performance/agent-current-sessions-2026-10-19.md)。
+
+### UC-6A8 默认manager路径准备与并发发布
+
+- **触发**：ReAct目录版本检查、Hook或WebUI等线程并发取得默认manager；10-21真实3bf iter2观察到manager锁1066.775ms，另一次默认路径包络749.407ms。
+- **预期现象**：默认路径/迁移检查及canonical守卫在manager发布锁外执行；已有同配置manager立即返回。首次私有构造也在锁外，可以重复构造无发现/写盘副作用的候选，锁内双重检查后只发布一个，同配置并发调用取得同一已发布实例。一个慢调用不再把自己的路径I/O作为其他调用的全局屏障。
+- **规则与边界**：准备前取得仅含环境配置与实现入口的内存token；进入发布锁及候选发布前复核。插件目录/状态路径或home/data-root环境变化时重做准备，慢旧配置请求不能覆盖新配置。旧配置调用可在线性化检查后正常返回，未承诺锁外环境永不变化。文件/父目录替换、alias/reparse与访问错误仍依UC-6A7实时守卫；路径读取失败不替换已有实例。启停状态、信任及实际调用授权仍实时，未缓存跨请求授权。
+- **迁移边界**：发现legacy源时用独立迁移锁再次检查并执行原move，正常不存在legacy源时不取得该锁；复制期间目标已出现但源尚在的第二个调用必须等迁移完成。迁移失败仍选旧路径，不在manager发布锁或LRU锁里移动文件。该互斥只覆盖本进程，不新增跨进程迁移协议。
+- **依据**：`get_plugin_manager / _manager_configuration_token / _canonical_manager_path / _migrate_legacy_path / _user_plugins_dir`；新增9项定向用例，共20项通过；原代码对照的6项并发场景按预期失败。相关插件、状态、host目录及主/前后台子入口组合214 passed、1系统符号链接跳过，源码前后无漂移。350ms受控阻塞下第二调用P50约355–360→0.5–0.6ms，仅证明消除锁放大，不等价于完整轮间收益。持续负载及生产加载状态见[10-21报告§10](../../performance/agent-subagent-interround-2026-10-21.md#10-插件manager发布锁隔离补修)。
+
+#### UC-6A8 补充：同次默认路径复用源根
+
+`default_state_path`未显式配置状态路径时只解析一次本模块所属项目根，再用于新配置和legacy迁移路径；受控检查两条结果路径相同，源文件resolve调用从2次变1次。不增加跨调用缓存，不免除每次配置/目录/源身份检查或迁移互斥。显式路径分支和实时信任语义保持；不能将减少一次解析称为目录revision全部免I/O。完整关联实现、回归与待生产加载范围见[报告§13](../../performance/agent-subagent-interround-2026-10-21.md#13-事实提交与hook准备的事件循环隔离补修)。
+
+### UC-6A9 后台Hook准备保留目录陈旧命中
+
+- **触发**：Hook准备已在线程执行，同键插件目录超过原30秒TTL。
+- **预期现象**：返回已有目录，显式使用原owner loop安排一次后台刷新。future注册和去重在该loop，扫描在worker并沿用原扫描锁；目录准备线程不因缺少running loop退回同步扫描。
+- **规则与边界**：排队回调和刷新发布均核对catalog generation，失效后旧回调不能扫描/回填；排队期间目录已更新或切换键时，旧请求不再扫描。force、冷缓存、无可用或已关闭loop仍等待真实加载，不放宽实际调用时的实时信任/启停检查。executor提交失败清理in-flight和活动计数，后续仍可刷新。
+- **依据**：`load_plugins(refresh_loop=...) / _schedule_plugin_cache_refresh / _prepare_hook_dispatch`；最初6项目录新增用例所在39项组合通过；补同键/新鲜度2例后，最终冻结定向27项通过、源码无漂移，包含当前8项目录例及相关Hook/失效/取消。23:22自然运行暴露了线程化初版的同步扫描回退，补修与未加载限制见[报告§14](../../performance/agent-subagent-interround-2026-10-21.md#14-2322自然重启与hook目录刷新回退补修)。
 
 ## 3. 边界
 
@@ -70,8 +89,16 @@
 | UC-6A5 | `plugins.host.bundled_host_availability_scope`、`HostToolInvokerRegistry.catalog_revision` |
 | UC-6A6 | `_build_host_tool_catalog`、`build_combined_tool_registry_for_session`、`bundled_host_plugin_enabled` |
 | UC-6A7 | `_canonical_manager_path`、`_manager_path_identity`、`get_plugin_manager` |
+| UC-6A8 | `_manager_configuration_token`、`get_plugin_manager`、`_migrate_legacy_path`、`_user_plugins_dir` |
+| UC-6A9 | `load_plugins(refresh_loop=...)`、`_schedule_plugin_cache_refresh`、`tests/test_hook_worker_plugin_cache.py` |
 
 ## 5. 版本记录
+
+- 2026-10-21 v7：修复Hook目录读取移到worker后丢失陈旧命中后台刷新的回退；显式回原loop调度并保留generation、force、冷缓存和失败清理。
+
+- 2026-10-21 v6：默认状态路径在同次调用复用一次源根解析，新旧目标一致；没有扩大名称缓存或省略身份、迁移和权限守卫。
+
+- 2026-10-21 v5：默认路径I/O与候选构造移出manager发布锁，LRU只锁内存；新增配置token双重校验与独立迁移互斥，保留实时权限及失效检查，记录214项组合与受控机制对照，完整收益另验。
 
 - 2026-10-19 v4：按当前多会话963.780ms直接子段证据，增加仅名称的有界缓存、逐次身份守卫与别名降级；状态和权限不跨请求缓存。
 

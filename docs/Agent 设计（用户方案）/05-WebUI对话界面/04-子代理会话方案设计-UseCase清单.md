@@ -66,10 +66,11 @@
 - **规则与边界**：接管走**插槽链选举**（`conversation.composer` 座位，priority -10，select 按只读决策投票）；返回父会话后编辑器还原，不覆盖其它原因造成的禁用。
 - **依据**：`subagent-ui-decisions.js::decideEditorState`、`subagent-composer-ui.js::registerComposerSeat / electComposerSeat / syncComposer`、`ui-slot-registry.js`。
 
-#### UC-5D10 续接提示
-- **触发**：父会话存在已结束且结果未纳入父回答的子代理（且无子代理运行中）。
-- **预期现象**：输入区上方出现提示"**N 个子任务结果尚未纳入上方回答，点击补充综合**"；点击走既有 `/continue-subagents` 流程。
-- **依据**：`subagent-composer-ui.js::syncContinueHint`、`subagent-ui-decisions.js`（续接条件纯函数）。
+#### UC-5D10 服务端自动续接
+- **触发**：后台子代理结果返回，父会话本轮已结束且结果尚未被消费。
+- **预期现象**：服务端在原会话启动新的 continuation run 综合结果，无需浏览器在线或用户点击。父会话忙碌时延后重试；前端通过现有事件流观察运行，不再显示手动续接提示。
+- **规则与边界**：复用 job 的会话单写者预约；停止、归档和待处理人工交互阻止自动生成；结果只在所属用户轮次内投递，失败或无消费进展时不反复续跑。
+- **依据**：`agent_subagent_notifications.py`、`SessionManager.prepare_pending_subagent_continuation`、`agent_loop.py::astream_events_continuation`。
 
 #### UC-5D11 输入门控
 - **触发**：只读/锁定态下尝试输入或发送。

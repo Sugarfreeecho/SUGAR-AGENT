@@ -1,7 +1,7 @@
 # 会话存储 Runtime V2 · 能力清单（代码证据版）
 
 > 对象：SugarAgent 会话存储 Runtime V2（事件日志真源 + 投影/快照/迁移/修复）
-> 代码版本：当前工作区（2026-09-20；补充运行终态、exact run 看门狗、孤儿对账与摘要提交去重）
+> 代码版本：当前工作区（2026-10-21；补充主/子代理完成事件一次追加与投影）
 > 图例：【图】见 `runtime-v2.architecture.html`（10 节点）；【卡】图中卡片；【单】仅本清单
 
 ## 1. 事件日志（真源）
@@ -17,6 +17,7 @@
 |---|---|---|
 | RuntimeHistoryOps：事务提交、模型历史替换、步骤计时 | `history_ops.py`（1282 行） | 【图】 |
 | 恢复事务与回滚保护（配合 ReAct 的写栅栏） | `history_ops.py` + `agent_loop` | 【卡】 |
+| 默认manager完成execution/UI事件私有预演后一次追加/flush/投影；源守卫、失败恢复及取消收敛；主/子共用 | `execution_ui_batch.py`、`SessionManager.commit_execution_ui_events`；[UC-8C9](03-写路径与摘要持久化方案设计-UseCase清单.md#uc-8c9-主子代理完成事件一次追加与投影) | 【单】 |
 | context summary 未变化时以进程内已提交缓存跳过磁盘快照；冷未命中仍查权威状态 | `agent_loop._runtime_v2_commit_context_summary`、`_RUNTIME_V2_COMMITTED_SUMMARY` | 【单】 |
 | 附件懒迁移：事件仓库边界把旧图片载荷准入为耐久引用；值对象只脱敏 | `attachment_migration.py`、`event_schema.py`、`event_log.py` | 【单】 |
 
@@ -82,6 +83,8 @@
 - v1 遗留文件（llm_history.json 等）明确不作为上下文权威（会话存储约定）。
 
 ## 11. 版本记录
+
+- 2026-10-21：主/子代理完成事件合并实际追加和投影（UC-8C9），保留每条事实与执行seq，不将减少flush误称为减少fsync。
 
 - 2026-10-05：补充超大会话压缩实操与事务预算调整实践（对应 08/05·UC-8E7、08/01·UC-8A3/8A5）；压缩脚本入口与安全门槛入账。
 

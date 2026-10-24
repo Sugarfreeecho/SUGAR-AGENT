@@ -57,6 +57,8 @@ WebUI 必须继续只监听 `127.0.0.1:8192`。Ubuntu Server 的远程访问通�
 
 ### 2.2 工具安全运行形态
 
+后端重启使用宿主持久生命周期协议：Agent 通过 `request_restart` 申请，用户在全局确认卡一次允许/拒绝；完全访问与自动审批均不能代替该确认。请求者工具结果和运行中断终态保存后，外部监督器才可接管。监督器先登记预期退出，再请求后端有界清理和主动退出，确认旧实例停止后启动指定的新实例；`/api/ready` 必须验证协议与实例 ID，不能只检查端口或任意 HTTP 响应。前端保留页面和草稿，显示确认、保存、等待连接及结果；失败后的再次重启需新确认。源码托盘、Electron 与新生成的 Unix 服务配置均接入，直接运行 main.py 时明确返回不可自动重启。详见 [重启实现记录](docs/agent-restart-implementation-2026-10-24.md)。
+
 - 权限模式是工作区外持久化的单一全局状态；新任务、子 Agent、后台任务、切换工作区和应用重启都使用当前全局模式，且不得自动降级。初次安装默认 `ask_for_approval = (app_restricted, on_request, user)`。
 - `approve_for_me = (app_restricted, on_request, auto_review)`，只替换审批者，不改变文件、网络或进程边界。
 - `full_access = (no_restriction, never, none)`，普通文件、工作区内删除、Shell 与网络操作不执行应用层审批；格式化、磁盘写入、关机等非删除高危命令的一次性人工审批以及 Agent 自保/控制器完整性硬拒绝不受该档位影响。
@@ -135,7 +137,7 @@ npm run build
 | `frontend/` | Vite 前端源码 |
 | `frontend/src/app/modules/` | 前端会话、SSE、消息渲染、子 Agent、设置、TOC/Todo 等功能模块 |
 | `python/` | 内置 Python 运行时与依赖 |
-| `workspace/` | 默认工作区、会话数据、技能目录、用户产物和临时分析文件 |
+| `workspace/` | 默认工作区、会话数据、技能目录、用户产物；运行产物集中于 `TempOutput/`（见 `docs/temp_output_layout.md`） |
 | `logs/` | 运行/对话日志 |
 
 ## 5. 核心后端模块
@@ -207,6 +209,7 @@ ReAct 执行循环，负责：
 - 文件工具：`read_file`、`write_file`、`edit_file`、`delete_file`
 - 目录和搜索：`ls`、`glob`、`grep`
 - 命令执行：`run_shell`
+- 用户交互组：`show_user` 在生成过程中展示网页、文本/Markdown、图片、工作区文件及已启用插件页面，也可显示顶部提示、打开指定设置页签或请求系统通知，展示后继续执行；`ask_user` 收集必须由用户回答的结构化选择。展示记录先持久化再推送，历史/重复事件不重复触发展示动作，后台会话不抢占当前页面。设置导航保护未保存内容；系统通知仅调用已启用的桌面通知提供者，在后端持久化去重，即使网页关闭仍可发送。详见 `docs/show-user.md`。
 - 网络工具：`web_search`、`web_fetch`、`web_download`
 - 技能系统：`discover_skills`、`get_skills_catalog`、`activate_skill`
 - 任务管理：`update_todo`
@@ -695,7 +698,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 ### 17.1 后端
 
 - SSE 事件推送不得因长工具调用完全静默，应有 keepalive 或进度事件。
-- 大工具输出必须截断或写临时文件后摘要返回。
+- 大工具输出按阈值保存到全局 `WORK_DIR/TempOutput/tool-results/<session>/<call>/result.txt` 后返回预览；历史结果不进入一次性 scratch 清理列表。临时脚本及中间文件统一进入 `TempOutput/scratch`，详见 `docs/temp_output_layout.md`。
 - 上下文 token 估算和压缩应避免阻塞 UI 主流程过久。
 - 会话删除、中断和子 Agent 停止必须及时释放运行任务。
 
@@ -804,6 +807,7 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 - Runtime V2 UI projection 的 `ui_index`、`runtime_seq` 映射必须基于最终可见 UI 投影，而不是原始 runtime seq 列表；删除、改写、截断、visible range 等历史操作必须先作用到投影后再生成 count/user_turns/index。
 - Runtime V2 recent-turn tail 快路径遇到删除、改写、截断等 history ops 时必须回退到完整 projection，不能用原始尾窗绕过可见历史规则。
 - `user_steer` 只表示 UI 展示类型差异：模型上下文仍按普通 user message 处理，UI projection 必须恢复为执行过程块中的“追问”，且不得进入 TOC 用户轮次。
+- 带图片或文件附件的追问与纯文本追问一样允许手动“立即发送”；`/steer` 与普通追问队列共用附件准入，运行中追加/打断、持久化恢复、模型上下文和 UI 事件都保留结构化附件引用。仅由待回答问题创建的条目继续等待所属运行结束；旧版本因附件而设置的延后标记在恢复时迁移。
 - 运行中输入的追问先进入本地待发送队列；入队、刷新及普通服务端同步本身均不得发送 `pending` 条目。用户可点击任意 pending 条目的“立即发送”；若未点击，则上一轮对话正常结束后必须先完成服务端对账，并仅在本地 run、服务端 stream、发送管线锁和会话 dispatcher 全部空闲时按 FIFO 自动续发队首一条；用户主动停止及其抑制窗口不得自动续发。`consumed` 事件只能唤醒同一套空闲门禁，不得绕过活跃 run 直接续发。新 run 启动后其余条目继续等待该 run 的终止边界。手动与自动发送共用同一 per-session dispatcher，重复终止事件必须合并为一个 drain；每个终止边界最多尝试一条，失败时保留队列项且不得形成自动重试环。
 - `interrupt` 追问必须用 `client_id/steer_id` 原位提交同一乐观行，并在追问处封口旧 process group；新运行即使从 `react_iter=1` 重新计数，也只能在新 process group 内查找/upsert reasoning 与 response 行，不得覆盖旧运行中编号相同的行。
 - “立即发送”steer 返回 409（服务端认为旧 run 已结束）后降级 `/chat`，降级前必须等待发送锁释放；若锁迟迟未释放或 `/chat` 未真正开跑，必须将队列项恢复为 `pending` 保留，不得静默返回或定时无条件删除。

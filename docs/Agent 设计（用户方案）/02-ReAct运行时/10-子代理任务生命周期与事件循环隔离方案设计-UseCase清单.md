@@ -1,6 +1,6 @@
 # 子代理任务生命周期与事件循环隔离 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-19 v5（核对共享性能优化与子代理交付缺口）
+- 版本：2026-10-21 v7（继承等待式模型事实与Hook准备隔离）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_subagent.py`（`_BackgroundSubagentLoop`、`SubagentTaskRegistry`、`_execute_subagent_run`）、`app/agent_subagent_events.py`、`app/agent_loop.py`（`_run_react_node_off_loop`）、`app/webui.py`（取消入口）、`tests/test_agent_subagent_runtime_v2.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -80,12 +80,27 @@
 - **规则与边界**：未提供 parent run ID 的旧调用仍按 final index 与 UI 历史判定；claim/ack/release 及结果耐久性保持。空队列早返回仍要先读取 pending 行，不等于完全没有文件检查。存储落点见 [08/04 · UC-8D8](../08-会话存储RuntimeV2/04-扩展子代理与运行注册方案设计-UseCase清单.md)。
 - **依据**：`agent_harness.py::_load_pending_subagent_results / consume_pending_subagent_notifications / claim_pending_subagent_notifications`；`tests/test_agent_harness_reconcile.py`；`subagent_note_claim_timing`。
 
-### UC-2J12 共享性能路径及当前接线范围（实现核对）
+### UC-2J12 共享性能路径及接线范围（2026-10-19核对）
 
 - **触发**：确认主Agent轮间优化是否覆盖`task`创建/续跑的前后台子代理。
 - **预期现象**：`_execute_subagent_run._run_core`直接调用共同`react_node`。子代理复用独立于文件I/O池的进程级LLM请求池、流式/非流式及重试trace、同一轮工具模型事实合批、静态段/请求整理/计数缓存、工具目录后台重验、插件manager名称缓存，以及底层EventLog/快照/增量投影优化。静态段键包含session及is_subagent；共用实现不表示复用父会话的提示或权限。WebUI启动预热的快照worker为进程级，对同进程子代理也适用。
-- **规则与边界**：当前并非全部接通。①`child_emit`没有`tool_batch`，共同循环的UI结果批次入口会回退逐条交付；模型事实合批本身仍可用。②子回调调用`persist_execution_event`未传`commit_ui=True`，随后同步`append_ui_event`，没有复用主入口journal/UI单事务交付；心跳metadata也在回调所在循环同步调用。后台子任务共用持久loop，单次同步阻塞可能影响其他子任务，尚无本次性能因果量化。③`task`构建state只有`_subagent_run_id`，未设置供共同计时使用的`_runtime_v2_run_id`，也不经过主入口`execution_metrics.start_run/finish_run`和`run_finalize`；实际子指标出现run_id空串，同子会话多次运行可能合入同一指标行，不能直接拿它计算每次运行的达标率。子代理预约/取消注册表仍有自己的非空run ID，不能把观测缺口误称作所有权完全缺失。
+- **规则与边界**：10-19审查时三处未接通：UI结果没有tool_batch；journal/UI分两次交付且UI/心跳同步执行；task入口计时使用空run ID。后台共享loop上的同步阻塞可能影响其他子任务，旧空ID可能混合同一子会话多次运行。子代理预约/取消注册表原已有真实run ID。该历史结论保留；10-21按UC-2J13接通，不再把三项记作当前缺口，也不删除历史空ID数据。
 - **依据**：`agent_subagent.py::_execute_subagent_run / child_emit / _run_core`、`agent_loop.py::_emit_tool_call_sse_batch / _persist_completed_tool_batch / _run_react_node_off_loop`、`agent_subagent_events.py::persist_execution_event`、`execution_metrics.py::_run / record_request`。本次仅核对并记录差异，没有将未接通项标记为已完成；子代理三组既有回归40 passed，17.85秒，不能证明子代理轮间<500ms。完整核对见[多会话报告§5](../../performance/agent-current-sessions-2026-10-19.md#5-子agent优化覆盖复核补充)。
+
+### UC-2J13 子代理交付复用主循环的耐久优化
+
+- **触发**：`task`创建或续跑子代理，前台独立Task或后台持久loop接收执行结果。
+- **预期现象**：`child_emit`启用`commit_ui=True`，以现有journal/UI单事务提交后再发布；已完成工具结果通过`emit.tool_batch`在同一短事务提交，保持逐条公开事件及原顺序。子页与父级均不接收私有提交回执。每个子代理的交付锁串行化自己的事件；心跳及非组合UI写在线程中执行，但仍等待完成。真实子run ID同时用于共同ReAct state、请求trace、模型事实和指标，新run有独立start/finish；收尾另记`subagent_finalize_before_metrics_ms`与`subagent_metrics_finish`，不冒用主入口完整run_finalize包络。
+- **规则与边界**：只合并已经完成的结果，不等未完成工具凑批。严格模式下整批成功才公开，部分失败不公开成功批次，取消守卫阻止后续行。已开始的心跳、普通UI写及指标注册/结束必须收敛后再完成取消，避免线程晚到覆盖终态或遗留心跳。Legacy/非严格模式、非工具事件及不支持组合提交的manager保留逐条路径。仍在下一API前完成事实提交；状态ID复用既有预约身份，没有另建所有权或跨loop搬迁MCP。后台不调用已关闭父loop的emit。ReAct返回`_run_error`即失败，即使有展示文案也不能标成成功。
+- **依据**：`agent_subagent._execute_subagent_run / deliver_child_events / _await_subagent_write / _finish_subagent_metrics`；新增`tests/test_subagent_performance_paths.py`覆盖独立run、真实前后台HTTP、组合提交、部分失败/取消、心跳让出loop与终态顺序。最终定向组合114 passed（含本批15项及原子代理/指标/MCP/权限UI等），扩大组合与修正的测试夹具分开记录；完整负载、严格端点和达标限制见[10-21子代理补修报告](../../performance/agent-subagent-interround-2026-10-21.md)。
+
+#### UC-2J13 补充：共用底层一次追加
+
+默认manager的子代理完成事件与主代理同样进入08/03 UC-8C9：每条execution/UI事实和关联seq保留，批次一次flush与投影，成功后逐项发布。单条reasoning/response终稿也适用。子代理仍直接调用react_node，尚未接入主入口StreamEventBridge的流式delta队列与合并；历史载入、部分终态整理也有独立同步段。因此“共用轮间优化”不能表述为全部入口、出口实现一致。
+
+#### UC-2J13 补充：继承事实线程提交和Hook准备
+
+task子代理继续调用共享ReAct，因此普通助手中间消息、已完成工具单条/批次检查点继承08/03 UC-8C10的等待式线程提交和取消回执，Hook继承06/07的整组后台准备；请求线程也继承有界send_paths。没有按主/子另写一套事实规则。675项组合包含实际前后台非流式loopback、子run身份、取消、工具事实和恢复验证；这不是新生产子任务的500ms验收。子入口delta队列、初始历史和部分终态依然不同，不能说全生命周期性能完全一致。实现和待真实加载结果见[报告§13](../../performance/agent-subagent-interround-2026-10-21.md#13-事实提交与hook准备的事件循环隔离补修)。
 
 ## 3. 事件与状态不变式
 
@@ -105,6 +120,10 @@
 3. 本批通知查询回归 `tests/test_agent_harness_reconcile.py`：**40 passed**；验证精确 run 过滤、旧调用回退及空队列提前返回。该组与上方子代理生命周期组分别记录，不混作一次全量测试。
 
 ## 5. 版本记录
+
+- 2026-10-21 v7：补录task通过共享ReAct继承等待式普通模型事实、成功回执/取消收敛、Hook整组准备和发送细分；保持独立delta/历史/终态及未生产验收边界。
+
+- 2026-10-21 v6：按UC-2J13接入子代理journal/UI组合提交、已完成结果批次、线程写入取消收敛及真实run ID的指标开始/结束；保留历史审查和主/子性能验收差异。
 
 - 2026-10-19 v5：核实共享ReAct与底层性能优化覆盖子代理；明确专用child_emit缺少UI批次/组合提交、同步回调及task入口计时run ID缺口，未将主会话性能数据外推给子代理。
 

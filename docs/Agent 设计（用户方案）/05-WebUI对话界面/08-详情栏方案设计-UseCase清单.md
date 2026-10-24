@@ -1,8 +1,8 @@
 # 详情栏 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-07 v18（覆盖至：当前工作区；统一折叠动效与详情栏过渡）
+- 版本：2026-10-22 v21（独立插件类型与 DSH 浏览器样式；保留宽度拖拽与窗口模式修复）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`frontend/src/app/modules/dock/**`（engine 8 件 / renderer 5 件：icons、gesture、measure、dock-surface、float-layer / embedder 3 件：surface-store、tab-registry、right-column）、`frontend/src/styles/dock.css`、`frontend/src/app/index.js`（`?raw` 登记）、后端 `GET /api/workspace-file-text`、测试 `frontend/tests/dock-engine.test.mjs`（24 项）、冒烟 `workspace/分屏功能需求/dock_verify/dock_smoke.py`（30 项）。
+- 适用实现：`frontend/src/app/modules/dock/**`（engine 8 件 / renderer 5 件：icons、gesture、measure、dock-surface、float-layer / embedder 5 件：surface-store、tab-registry、right-column、page-host、browser-page）、`frontend/src/styles/dock.css`、`frontend/src/app/index.js`（`?raw` 登记）、后端 `GET /api/workspace-file-text`、测试 `frontend/tests/dock-engine.test.mjs`（24 项）、冒烟 `workspace/分屏功能需求/dock_verify/dock_smoke.py`（30 项）。
 - 上级：`00-WebUI对话界面整体设计.md`；技术细节与序列化格式见 [`../../frontend-dock.md`](../../frontend-dock.md)；诊断脚本 `dock_verify/turn_scope_probe.py`、`dock_verify/scope_probe_browser.py`。
 - 参照实现：dsh 新版 `packages/client/ui-dockkit`（引擎/组件/契约、`SplitGlyph`）、`ui-sidebar-right`（右栏产品化、`ExpandButton` 角落按钮、`PanelChrome` 条尾控件）、`ui-sidebar-files` / `ui-sidebar-documentpreview`（文件树与文件预览类型）。
 
@@ -10,7 +10,9 @@
 
 ## 1. 功能定位
 
-按 dsh 的三段式布局，WebUI 从"会话栏 + 工作区"扩为：最左会话列表、中间会话、右侧一个**可开合的详情栏**（dockkit 的唯一挂载点）。详情栏推挤工作区、按会话记忆状态，内含「开始（guide）/ 工作区文件 / 文件内容 / 修改历史」四类页面；打开入口是会话标题右上角（header corner）的图标按钮，与 dsh 的 `ExpandButton` 相同——28px 圆形按钮、15px 面板图标（左侧栏图标镜像，分隔线在右），图标路径逐字取自 dsh 源码，**仅在收起时显示**（展开后隐去，[hidden] 带 `display:none` 兜底）。
+2026-10-22 扩展：右栏已接入插件完整页面和浏览器，详见 [17《右栏插件页面与浏览器》](17-右栏插件页面与浏览器方案设计-UseCase清单.md)。`registerTabType` 已接通注册表正文分发；声明式插件页面统一经过打开、上下文绑定、保活与注销。
+
+按 dsh 的三段式布局，WebUI 从"会话栏 + 工作区"扩为：最左会话列表、中间会话、右侧一个**可开合的详情栏**（dockkit 的唯一挂载点）。详情栏推挤工作区、按会话记忆状态，内含「开始（guide）/ 工作区文件 / 文件内容 / 修改历史 / 浏览器 / 插件 / 插件页面」等页面类型；打开入口是会话标题右上角（header corner）的图标按钮，与 dsh 的 `ExpandButton` 相同——28px 圆形按钮、15px 面板图标（左侧栏图标镜像，分隔线在右），图标路径逐字取自 dsh 源码，**仅在收起时显示**（展开后隐去，[hidden] 带 `display:none` 兜底）。
 
 > 历史说明：早期版本曾同时在主内容区挂一套"会话分屏 + conversation 标签 + 只读镜像"。v2 按用户要求**整体移除**（分屏按钮、conversation 类型、镜像管线全部删除），主内容区回到应用原有形态；引擎、渲染器与注册表只保留详情栏实际使用的部分，引擎层保留了全方向/4 面板等能力（产品层收紧为水平两面板）。
 
@@ -22,9 +24,11 @@
 - **规则与边界**：角标**只在收起时显示**（展开后隐去）；开合为滑动过渡，右栏专属时长 280ms，共用同一缓动；系统启用减少动态效果时过渡缩短；统一动效细节见 [15《展开/收起统一过渡动效》](15-展开收起统一过渡动效方案设计-UseCase清单.md)；同一列自身的 tab 条右端也有全屏/收起控件（`PanelChrome`）；每会话各自保留开合状态与布局，且**同会话的子代理寻址视图沿用父会话的栏状态**（`dockRightSurfaceKey`：子会话 id 归一到父 id，进入/返回子代理都不收起详情栏）；⚪ 默认不落盘（与 dsh memory-only 一致）。
 - **依据**：`dock/embedder/right-column.js`（`dockRightToggle` / `dockRightEnsureButton` / `dockRightStartResize` / `dockRightRender` / `dockRightBuildChrome`）、`dock.css`（`.dock-rightbar` / `.dock-expand-btn[hidden]` / `.dock-rightbar-sash`）、`surface-store.js`（区域 `right`）。
 
+2026-10-22 宽度补充：拖拽期间外层宽度立即同步内容，停止收展过渡；捕获当前指针，跨 iframe 松手、取消、丢失捕获、窗口失焦、收起及切换模式均清理手势。push 模式在拖拽、恢复、窗口/左侧栏变化时统一为聊天区保留至少 560px；无法容纳最小 320px 详情栏时采用全屏，保留窗口缩小时自动收起的行为。用户偏好宽度与当前可显示宽度分离，不因临时小窗覆盖偏好；手动全屏按会话保留，普通 resize 不会撤销。
+
 ### UC-5H8 详情栏 · 开始页（guide，默认页与兜底页）
 - **触发**：详情栏首次打开；`+` 新建窗口；关闭页签后由 settle 回填；`MyAgentDock.openDetailsTab('guide')`。
-- **预期现象**：居中展示指南针图示与两张引导卡（工作区文件 / 修改历史），点卡片即打开对应页。
+- **预期现象**：居中展示指南针图示及工作区文件/修改历史/浏览器/插件四个引导卡；点「插件」进入独立 `plugins` 类型页，再选择插件贡献的具体页面，开始页不随插件数量增加卡片。浏览器工具栏及 SVG 图标参照 DSH，详见 17《右栏插件页面与浏览器》。
 - **规则与边界**：关闭**最后一个页签**时由 settle 自动重播种开始页（栏不随之收起）；**当栏内只剩这一个开始页时，关闭它 = 收起详情栏**（用户口径）；`+` 在目标面板新建一个开始页（"空窗口"），一个面板至多一个；分栏产生的新面板也以开始页落座（不再复制同一窗口）。
 - **依据**：`right-column.js`（`dockRightGuideBody` / `dockRightSeed` / `dockRightOpenPageKind`）、`surface-store.js`（`dockActionCloseTab` 的"孤零开始页=收栏"分支）。
 
@@ -76,6 +80,7 @@
 
 ## 5. 版本记录
 
+- 2026-10-22 v21：开始页固定为文件、修改历史、浏览器、插件四类入口；插件页面集中到 `plugins` 类型页中选择。浏览器采用 DSH 的紧凑工具栏、地址输入框和 regular SVG 图标，浮动标题同步显示地球图标。
 - 2026-10-07 v18：同步 15《展开/收起统一过渡动效》——详情栏自身开合统一为 280ms 面板时长，文件树目录复用 220ms 内容折叠时长，缓动一致并遵循减少动态效果偏好。
 - 2026-09-27 v17：**窄屏旧兜底移除**——删除 `@media (max-width: 767px) { .dock-rightbar { width: 100% !important; } }`：窄屏全屏由 v16 的模式系统统一接管（<768px 自动进入 `fullscreen` 模式，`.is-fullscreen > .dock-surface` 自身 100% 宽），旧 `!important` 规则会与模式化宽度冲突。
 - 2026-09-20 v16：**全屏判定改为"仅按页面总宽"**——废弃"工作区挤压（主区宽−记忆列宽<560）"作为全屏依据：`window.innerWidth < 768` → 全屏模式；`≥ 768` → 一律 push 模式，且当前为全屏时自动切回 push（修复"只进不退"）。打开文件、顶栏按钮、切换会话、窗口 resize 四条路径统一走同一判定。保留一条窗口行为：窗口**变窄**且打开着的详情栏会挤压工作区时自动收起（半屏默认收起，不变）；窗口变宽不收起、也不再误判全屏。冒烟 57 项全绿（更新 2 条旧断言 + 新增 4 条：≥768 重开为 push、全屏可覆盖、变宽自动回 push、≥768 文件链接保持 push）。

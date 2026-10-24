@@ -1,5 +1,13 @@
 # 右侧详情栏（dsh dockkit 单挂载点）
 
+2026-10-22 宽度修复：拖拽期间停止宽度动画并捕获单个指针，所有结束/取消路径清理监听；统一按实际布局为聊天区保留 560px，空间不足时使用全屏。偏好宽度与当前显示宽度分离，手动全屏不受普通窗口 resize 影响。回归见 `tests/test_details_resize_browser.py`。
+
+2026-10-22 修改历史修复：文件标题单行显示路径，空间不足时省略前面的目录、保留末尾，悬停显示完整路径；实时事件原位更新轮次和文件节点，运行状态切换、其他文件新增和当前文件修订均保留差分滚动位置。差分仍按每帧最多 240 行更新，未展开的文件不拆分/渲染差分。回归见 `tests/test_change_review_history_browser.py`。
+
+2026-10-24：修改历史的文件路径、增删数字、撤销/恢复按钮统一排在同一行；数字和按钮保留所需宽度，只压缩路径列并从前面省略。
+
+2026-10-24 撤销按钮修复：SSE 的终态处理可能直接结束执行框而不经过普通 UI 事件，修改历史现在同步观察执行框的运行状态变化，及时解锁单项和批量撤销/恢复。运行期间仍禁用；只在运行状态变化时重绘，关闭页面时解除观察，不增加轮询或请求。
+
 > 更新日期：2026-09-14 ｜ 参照：`deepseek-harness/packages/client/ui-dockkit`（引擎/组件契约）、
 > `ui-sidebar-right`（右栏产品化与 `ExpandButton`）、`ui-sidebar-files` /
 > `ui-sidebar-documentpreview`（文件树与预览类型）。
@@ -83,14 +91,17 @@ WebUI 按 dsh 的三段式布局：最左会话列表、中间会话、右侧一
 
 四枚路径都由脚本从 dsh 源码直接抽取（不手抄），28px 圆形按钮内 15px 图形，间距 4px，与 dsh `iconButton` 一致。
 
-## 4. 三个内置页
+## 4. 内置页面类型
 
 | 页 | 数据源 | 说明 |
 |---|---|---|
-| 开始（guide） | 无 | 栏的首页与兜底页：关闭栏内最后一个页签时由 settle 重新播种它（栏不会随之收起）；`+` = 在该面板新建一个开始页（"空窗口"）；引导卡进入文件树/修改历史 |
+| 开始（guide） | 无 | 栏的首页与兜底页：关闭栏内最后一个页签时由 settle 重新播种它（栏不会随之收起）；`+` = 在该面板新建一个开始页（"空窗口"）；四个引导卡进入文件树/修改历史/浏览器/插件 |
 | 工作区文件 | `GET /api/workspace-files?dir=` | 逐层展开的树；目录优先、显示大小、可刷新；点文件打开文件内容页 |
 | 文件内容 | 图片 `/api/workspace-image`；音视频 `/api/workspace-media`；文本 `GET /api/workspace-file-text`（新增） | 文本 UTF-8、按 200 KB 截断并提示；二进制提示"在系统应用中打开"；工具栏常备系统打开入口 |
 | 修改历史 | 会话历史中的 `ui.changes`（`/sessions/{id}/history_snapshot`） | 按路径取最新 revision；± 着色 diff 可展开；撤销/恢复走 `change-reviews/undo\|restore`（工作区运行中时服务端 409）；监听 `myagent:ui-event` 实时追加 |
+| 插件（plugins） | 已校验的 UI 页面贡献 | 独立目录页，按顺序列出可用页面；内嵌设置项不列入；启停时更新，空列表显示空态 |
+| 插件页面（plugin-page） | 插件声明的 `web.entry` | 从目录或其他业务入口打开，按页面和绑定会话去重，iframe 保活 |
+| 浏览器（browser） | HTTP(S) 地址 | DSH 式 38px 工具栏与 regular SVG 图标；Web iframe / Desktop webview，支持地址、历史、刷新及系统打开 |
 
 补充（2026-09-14 第二轮反馈）：
 
@@ -150,6 +161,9 @@ WebUI 按 dsh 的三段式布局：最左会话列表、中间会话、右侧一
 ```js
 MyAgentDock.registerTabType({ id, kind, patterns?, priority?, canOpen?, title, body })
 MyAgentDock.openResource('myagent-resource://<type>/…')   // 解析后落座详情栏
+MyAgentDock.openPluginPage(pluginId, { pageId?, sessionId? }) // 已校验的插件完整页面
+MyAgentDock.openBrowser(url?)                              // HTTP(S) 浏览器页
+MyAgentDock.openTab(kind, options?)                        // 注册类型的页面
 MyAgentDock.openDetails() / toggleDetails() / closeDetails()
 MyAgentDock.openDetailsTab('files' | 'changes')            // 页面按 kind
 MyAgentDock.openDetailsFile(workspaceRelPath)              // 文本/图片/媒体页
@@ -162,12 +176,21 @@ MyAgentDock.sessionId()
 一票否决；页面地址 `myagent-page://<kind>`，资源地址 `myagent-resource://<type>/…`。
 内置类型 id：`myagent.details.files` / `.document` / `.changes`。
 
+2026-10-22：新增 `plugins`（插件目录）、`plugin-page`（具体页面）与 `browser` 类型，正文通过注册表 `bodyFor(kind)` 分发。插件声明 `ui.details.tab`，旧导航贡献兼容；开始页固定为文件、修改历史、浏览器、插件四个入口，具体贡献收进插件目录，启停时更新列表，不预加载页面。`page-host.js` 将轻量占位元素交给 Dock，在保持页面 DOM 连接的独立容器中展示 iframe/webview，从而覆盖切标签、切会话、分栏和浮动的保活；关闭、停用和内容签名变化回收实例。真实业务 session 与父子会话共用的 surface key 分开保存，无当前会话时应用页面使用内部应用 surface。
+
+`browser-page.js` 提供地址、历史、刷新和系统浏览器打开。Web iframe 使用不含 `allow-same-origin` 的 sandbox，输入拒绝应用地址；受站点防嵌入限制，无法保证观察到跨域导航的最终地址。Desktop 通过 `browser-guests.js` 的租约和独立工作区分区挂载 webview，主进程还阻止 guest 对应用 Host 的请求，拒绝权限与下载，popup 转为右栏页面。浏览页面不自动进入模型上下文。页面与布局仍为 memory-only；没有跨刷新或应用重启的自动恢复。
+
 ## 7. 每会话状态与序列化
 
 每会话一份 `{ layout, history, minted }`（区域 `right`），切会话切换栏状态、切回
 保留、刷新回收起默认（memory-only，与 dsh 一致）。`SurfaceState` 是纯数据，可序列
 化后 `dockReplay` 还原出逐 id 相同的树；接入方式为把 JSON 写入 `localStorage`
 并在初始化时 replay。
+
+会话身份提交后同步发送 `myagent:session-change`，详情栏直接跟随该事件，草稿态进入
+独立的应用 surface；不依赖会话列表高亮或等待消息历史加载。较早会话切换的异步回调
+不得覆盖当前会话。切换 surface 时释放旧正文的监听器、文件树和历史请求，避免各会话
+重复生成的 tab id 共用旧状态；同一父会话与其子会话仍共用布局，插件/浏览器页面保活。
 
 ## 8. 验证
 

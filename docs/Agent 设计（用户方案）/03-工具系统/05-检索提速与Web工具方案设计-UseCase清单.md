@@ -1,8 +1,8 @@
 # 检索提速、会话历史与 Web 工具 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-20 v3（覆盖至：当前工作区）
+- 版本：2026-10-23 v4（历史检索派生索引与 seq 定位）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`app/agent_tools.py`（工具定义）、`app/history_context.py`（会话历史搜索/读取）、`app/builtin_host_tools.py`（只读宿主调用）、搜索提供方注册表。
+- 适用实现：`app/agent_tools.py`（工具定义）、`app/history_context.py`（会话历史搜索/读取）、`app/history_search_index.py`、`app/builtin_host_tools.py`（只读宿主调用）、搜索提供方注册表。
 - 上级：`00-工具系统整体设计.md`
 
 ---
@@ -42,6 +42,12 @@
 - **规则与边界**：默认必须先用 current，不能因当前会话未命中就擅自扩大到 global；JSONL 先做原始行预筛，再以清洗后的语义文本复核，避免内部元数据造成假命中；结果达到上限即停止；全局模式只扩大读取范围，不改变只读权限。
 - **依据**：`history_context._session_dirs / _matching_jsonl / history_context`、`prompt.md / prompt.en.md`。
 
+### UC-3E6 历史检索预计算与严格来源复核
+- **触发**：首次搜索某个 JSONL 来源，或已有索引来源发生变化。
+- **预期现象**：冷查询保留原流式搜索和提前命中行为；完整查询结束后，最多调度 8 个来源给单个后台线程建立 SQLite 语义索引。索引记录来源字节位置、引用标识及清洗正文，后续不同关键词查询可复用。事件引用优先复用 Runtime V2 的稀疏 seq 定位，旧格式回退流式读取。
+- **规则与边界**：缓存位于来源目录的 `.history-search/<文件名>.sqlite3`，可删除重建，权威 JSONL 不变。未变化时校验文件身份/大小/时间及 NTFS ChangeTime；任何变化后复用旧索引前都完整哈希校验旧前缀，确认仅追加后只投影后缀，改写或替换则重建。候选还须通过原始 JSONL 行关键词复核，保留 casefold、去重、排序、上限和作用域语义；损坏、锁忙、未完成末行或未知身份回退原扫描。SQLite 连接及时关闭，派生缓存不承担事实耐久性；后台队列有界，daemon 线程不阻止进程退出。全局会话发现仍递归枚举，整份归档分页仍先清洗完整归档；这两项未在本批优化。
+- **依据**：`app/history_search_index.py`、`history_context._search_candidates / _read_ref`、`file_read_signature`；回归 `tests/test_history_context.py`、`tests/test_tool_efficiency.py`；[对照与首次建索引成本](../../performance/tool-efficiency-implementation-2026-10-23.md)。
+
 ## 3. 边界
 
 - 出口域名审批（预批准清单）见 ../07-权限审批/06-出口守卫与Shell沙箱方案设计-UseCase清单.md；
@@ -57,8 +63,11 @@
 | UC-3E3 | L3866–3997 |
 | UC-3E4 | `history_context.py`、`builtin_host_tools.py` |
 | UC-3E5 | `history_context.py`、`prompt.md`、`prompt.en.md` |
+| UC-3E6 | `history_search_index.py`、`file_read_signature.py`、`history_context.py`、`SessionEventLog.read_by_seqs` |
 
 ## 5. 版本记录
+
+- 2026-10-23 v4：增加后台派生语义索引、完整前缀哈希和 NTFS ChangeTime 守卫、原始行复核及 seq 引用定位；明确冷查询、全局枚举与归档分页剩余成本。
 
 - 2026-09-20 v3：新增 `history_context` 当前/全局会话检索、稳定引用分页读取、默认干净语义结果、同会话去重、显式原文件路径和只读范围边界。
 - 2026-09-14 v2：修正出口审批交叉引用（07/06）并更新版本线至 `d022831`。

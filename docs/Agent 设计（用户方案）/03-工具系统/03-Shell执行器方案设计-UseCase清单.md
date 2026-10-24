@@ -1,8 +1,8 @@
 # Shell 执行器 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-20 v5（覆盖至：当前工作区；UC-3C5 追加 PowerShell 文件读写默认 UTF-8）
+- 版本：2026-10-23 v6（后台作业输出空轮询免写）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`app/agent_tools.py`（L574–2331：shell 选择/进程管理/物化/环境）。
+- 适用实现：`app/agent_tools.py`（shell 选择/进程管理/物化/环境）、`app/execution_services/jobs.py`（作业输出与消费确认）。
 - 上级：`00-工具系统整体设计.md`
 
 ---
@@ -42,6 +42,12 @@
 - **规则与边界**：不以“结果含 U+FFFD”作为整套回退 GBK 的信号——合法 UTF-8 文本可自带 U+FFFD（历史误例：`B2 \"�\" ENDB` 曾被改写为 `B2 \"锟絓" ENDB`）；逐行 GBK 阈值（2026-10-11 放宽）：非 ASCII 字节中替换符 ≥2 且 ≥约 1/3 时启用（实测 PS 中文行 11/24 曾被漏判为 `���ٻع飨…`），仍高于“UTF-8 行个别坏字节”比例（如 1/13）不误改写；PowerShell UTF-8 前置可由 `RUN_SHELL_PS_UTF8=0` 关闭，代价是 GBK 工具（如 cmd 内建）输出“经管道”时会被按 UTF-8 误读（直连输出走字节透传不受影响）；文件编码默认值（`Get-Content / Set-Content / Add-Content` = UTF-8）随前置一并设置——BOM 文件仍按 BOM 优先（UTF-16 / UTF-8-BOM 读回正常），无 BOM 的 GBK/ANSI 文本需显式 `-Encoding Default`；`Out-File` / `>` 默认仍为 UTF-16（带 BOM，读回正常）；流式输出的切片安全见 09/07 UC-9F7。
 - **依据**：`_decode_byte_line / _decode_cli_subprocess_bytes / _powershell_script_with_utf8_prelude / _summarize_shell_stream_if_binary_like / _run_shell_env_with_prepended_agent_python_dir / _run_cli_stderr_hints`；回归 `tests/test_decode_cli_subprocess_bytes.py`、`tests/test_run_shell_ps_utf8_prelude.py`。
 
+### UC-3C6 作业输出只对实际消费变化提交
+- **触发**：模型重复调用 `job_output` 查询已消费完或暂时无新输出的作业。
+- **预期现象**：无新输出且消费/通知状态均未变化时直接返回，避免每次空轮询都提交扩展状态；产生新消费时仍等待持久化。
+- **规则与边界**：比较消费游标、待交付结果、通知标记和保留缓冲起点；结束时缩小缓冲也计入变化。显式 offset 的观察读取仍不消费；wait=true 的主动等待、所有权、重启恢复与输出截断语义保持。
+- **依据**：`app/execution_services/jobs.py:ExecutionService.output`；`tests/test_tool_efficiency.py`、`tests/test_execution_services.py`；[本批报告](../../performance/tool-efficiency-implementation-2026-10-23.md)。
+
 ## 3. 边界
 
 - 中断检查回调（外部取消）由循环注入（`set_run_shell_interrupt_check`）。
@@ -56,8 +62,11 @@
 | UC-3C3 | L1478–1627 |
 | UC-3C4 | L670–1454（路径收窄段，含 9-14 基准修复） |
 | UC-3C5 | L1212–1373（解码链/环境）、L1623–1641（UTF-8 前置）、L2685–2695（EncodedCommand 组装）（2026-10-20 复核） |
+| UC-3C6 | `execution_services/jobs.py:ExecutionService.output` |
 
 ## 5. 版本记录
+
+- 2026-10-23 v6：job_output 无输出且消费状态不变时免写；保留真实消费确认、通知和缓冲边界提交。
 
 - 2026-09-13 v1：拆分首版（承接 UC-306/307）。
 - 2026-09-14 v2：UC-3C4 补充"相对路径按生效工作目录（workdir）解析"与只读 git/歧义输入边界（配合当日路径基准修复）。

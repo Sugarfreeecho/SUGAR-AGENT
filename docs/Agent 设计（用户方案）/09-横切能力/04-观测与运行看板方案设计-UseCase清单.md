@@ -1,6 +1,6 @@
 # 观测与运行看板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-19 v18（保留外层重试首次发送与多会话复核）
+- 版本：2026-10-23 v30（grep 准入和放弃队列口径）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/runtime_observability.py`（record_usage L269 等）、`app/execution_metrics.py`（运行看板/心跳）、`agent_loop.py`（埋点调用）。
 - 上级：`00-横切能力整体设计.md`
@@ -69,6 +69,13 @@
 - `observability_scan_timing`记录扫描总时间、枚举时间和候选数；`tool_metrics_timing`拆分工具指标及观测心跳的等待。对被其他并发更新淘汰的候选，下次扫描重查，不依据旧扫描去中断新状态。
 - 10-18补充：周期巡检与启动孤儿对账只枚举会话根的一级会话容器，以及递归的`subagents/<id>`容器；不进入任务文件/checkout/node_modules树，不跟随符号链接或Windows reparse容器。枚举仍在全局锁外；全扫描周期和活跃会话快速扫描不变。真实工作区定向枚举与旧rglob均发现276个观测文件，没有遗漏；当次比较约63/233ms，历史真实run中旧枚举最高14767ms，不能把这些不同环境的数字当作严格A/B倍率。
 - 扫描中的目录、读盘和所有权检查被阻塞时，心跳仍可继续；并发测试及受控800ms阻塞A/B见[8533复核](../../performance/agent-session-8533-2026-10-17.md)。该机制已验证，不等于历史10秒空档已有完整因果归属。
+
+#### UC-9D8 补充：观测刷盘失败保留与去抖重试
+
+- 触发：后台Timer原子替换被Windows读句柄暂时拒绝，或Timer启动及同步降级写失败。最新内存状态保持为待刷债务，扫描将其视为本进程新状态，不能以旧盘数据覆盖。
+- Timer回调仅消费自身仍为当前timer的记录；取消的旧回调或旧配置不得消费新回调。WinError5/32/33及EINTR/EAGAIN/EBUSY按已有去抖周期重试，永久I/O错误保留债务且不循环重试。显式flush/终态强制刷盘仍报错，全局flush覆盖未完成timer及失败债务。
+- 本次仅修复失败恢复；`runtime_observability._write`仍在原全局锁内，不冒充下述执行指标的锁外写盘方案。重试不在锁内sleep，不吞掉显式边界错误，不保证进程崩溃后保留尚未刷盘的内存。
+- 依据：`runtime_observability._flush_locked / _flush_timer_fired / _arm_flush_timer_locked / _scan_states`，新增4项失败、旧回调及扫描竞态测试；最终相关组合219 passed、1系统符号链接跳过。真实重启后采集未复现刷盘异常，不等价于生产注入失败已验证。详见[10-21报告§8.4](../../performance/agent-subagent-interround-2026-10-21.md#84-后台刷盘错误与失败证据保留)。
 
 ### UC-9D9 指标序列化和写盘移出全局锁
 
@@ -155,6 +162,7 @@
 - 事务叶子区分锁查找、线程锁、目录/身份准备、锁文件open及OS锁；快照发布区分路径、取消守卫、文件签名、内存发布、due检查、安排及inline wait。锁查找、目录、路径仍是复合包络，不能全部称作纯锁等待。
 - 插件manager区分lock、默认路径/迁移检查、canonical解析和构造；registry_revision只有session身份时按session和时间关联，不伪造run ID。检查、读取及错误语义保持原样。
 - 新叶子仅≥5ms保留，原span计量保持，上限仍64条且保留dropped；未出现不等价于耗时0或未执行。父包络与嵌套子段不能重复相加。e046的834ms发布和407ms模型提交需要这些子段继续核验，未将其预设为fsync或锁竞争。
+- 10-21 UC-6A8将manager路径检查/构造移到发布锁外、LRU只锁内存；同名`plugin_manager_lock`现在计发布锁获取，冷构造/配置重试可能获取多次，不能把新旧子段数量当同一锁范围。路径检查仍在调用线程同步执行，受控第二调用变快不证明首次检查免除。细节见06/01及[本批报告§10](../../performance/agent-subagent-interround-2026-10-21.md#10-插件manager发布锁隔离补修)。
 - **依据**：`agent_local_timing.local_operation/local_step`、`SessionEventLog.session_transaction`、`SnapshotStore.write_checkpointed`、`plugins.manager.get_plugin_manager`；专项注入慢签名/OS锁并验证耐久事实，完整证据见[e046报告](../../performance/agent-session-8533-run-e046-2026-10-18.md)。
 
 #### UC-9D13 补充：外层重试保持首次实际发送
@@ -163,6 +171,26 @@
 - ReAct调用栈仅保留一个trace引用；session/run/iter/上一工具返回端点相同才复用。换轮、换run或工具端点变化即新建；最早准备/发送端点保留，无发送端点仍缺失。引用不进入State或持久化，不增加发送路径日志写盘，重试策略和事实提交语义保持。
 - 多会话按已核验进程/版本分组，运行中样本标明采集截面。只有session身份的span按session+时间关联，不伪造run ID；失败工具没有core端点时不以0ms补齐。
 - **依据**：`agent_request_timing.new_request_trace(previous_trace=...)`、`agent_loop._react_node_once`、`tests/test_agent_request_timing.py`；本次194配对17超标，首次发送P50 178.057ms/P95 591.584ms，原计时与还原证据见[2026-10-19报告](../../performance/agent-current-sessions-2026-10-19.md)。
+
+#### UC-9D13 补充：task子代理的真实运行身份
+
+- `task`入口将已预约的`_subagent_run_id`同时设置为共同循环使用的`_runtime_v2_run_id`，指标start/finish按该真实ID区分新建/续跑；不生成另一个观测ID，也不以父run ID代替。旧空ID记录保留，不能据它统计独立历史运行的达标率。
+- 前后台实际执行Task各自管理指标注册/清理，结束在输出/pending协议之后；注册部分失败及取消也要清理心跳。旧同步心跳和普通UI写改为线程中执行后仍等待，并在取消时收敛已开始的写，避免晚到的running覆盖中断终态。
+- `event_delivery`记录子agent本地交付及child_heartbeat子段，UI批次仍分别公开原事件；`subagent_finalize_before_metrics_ms`是ReAct退出到指标结束开始前的收尾包络，另有`subagent_metrics_finish`。这些不是主入口的完整run_finalize；startup失败、没有发送等情况不造0ms端点。
+- 依据：02/10 UC-2J13、`agent_subagent._finish_subagent_metrics`、[10-21报告](../../performance/agent-subagent-interround-2026-10-21.md)。前台/后台实际loopback请求已验证非空ID、完整工具事实和终态；功能回归不代替轻/重负载性能验收。
+
+### UC-9D14 grep 逐调用阶段与队列关联
+
+队列补修新增 `admission_ms`（开始至获准进入有界池）和 `queue_outcome`（waiting_capacity / started / finished / abandoned_before_start / direct）。未进入worker的搜索 `worker_queue_ms=null`，不能填零；其等待包含在 `elapsed_ms`。`admission_ms` 是包含于worker队列包络的锚点，不能相加。放弃后的占位项排空不再进入搜索或修改已交付的该次计时。停止原因首次确定后保留，超时唤醒清理线程不能改记取消；见[队列补修](../../performance/grep-queue-and-tool-preparation-2026-10-23.md)。
+
+- **触发**：内置 grep 调用完成、失败、超时或取消。
+- **预期现象**：`grep_timing` 包含 session/run/iteration/tool_call_id、worker_queue_ms、backend、fallback_reason、first_hit_ms、结果和候选数量；每个自有进程单列 spawn、首个输出、read、cleanup、stderr 总字节、cap 和停止原因。主代理与子代理使用同一实现，ContextVar 隔离并发身份；直接函数调用缺少身份时留空，不伪造关联。
+- **规则与边界**：read_ms 从启动计时，包含前面的 spawn 与首输出等待；first_hit_ms 是相对调用提交的锚点，不能再当独立区间累加。原宽口径工具计时和 invoke 不变；线程排队之外的授权、pending 交付及结果提交须按原计时另核对，不能用 grep 内层分位数相减推算。日志不含查询文本、路径、正文或 stderr 诊断内容，计时日志失败不改变搜索结果。默认预算未改成 500ms；小夹具首输出测试和热缓存回放不能作为全工作区冷扫描或完整轮间验收。
+- **依据**：`grep_runtime.SearchRun / run_process / invoke`、`_GrepOutput`、`agent_loop._invoke_plain_tool`；[报告](../../performance/grep-optimization-2026-10-23.md)。
+
+#### UC-9D14 历史分析兼容口径
+
+回读历史时须同时识别 `payload.duration_ms`、`tool_status.duration_ms` 和旧 `status.duration_ms`，并核对 producer 的计时起止。旧导入记录可在 `tool_started` 下保存完整结果与最终时长，不能只按事件名筛终态；无时长草稿也不能填0或视为长执行。按 session/run/call_id 合并重复事件和备份，递归覆盖子代理；日志起始日期仅表示日志保留边界。宽口径以请求开始日、执行事实以完成日分组，分别统计；仅一对一调用或明确ID可作差，不用最近时间强行配对。现存251个长执行段逐条原事件校验及CSV见[历史复核](../../performance/grep-history-review-2026-10-23.md)。这描述分析方法，不新增生产计时字段。
 
 ## 3. 历史生产基线（2026-09-19 会话 `8278fdd4`）
 
@@ -192,7 +220,66 @@
 
 见上表。
 
+### 完成事件合批内部计时（UC-9D13补充）
+
+`execution_ui_batch`记录同步操作包络；内部`ui_batch_prepare / ui_batch_append / ui_batch_project / ui_batch_journal_refresh`区分私有预演、事实追加、投影发布和journal增量刷新。主/子代理共用该操作，按既有session/run及单调时钟关联。子段属于父包络，不重复累加；显式flush计数只能证明减少写调用，不能推断纯锁等待、os.fsync或磁盘物理耐久时长。正式基准默认关闭额外diagnostics；诊断span与验收数据分开。
+
+### 发送前尾段和线程内叶子（UC-9D13补充）
+
+- 先前ad iter8尾段1107ms未细分。请求指标保留`pre_api_tail_ms`，新增`pre_api_tail_events`七个互斥墙钟子段：timing_log、metrics_prepare、thinking_status_emit、strip_reasoning、runtime_policy、pressure_emit_and_metrics、request_scope_and_setup。流式、纯非流式及task子入口共用；不加入pre_api原分项总和，不新增公开SSE或请求body字段。
+- 两个时间戳间含当前线程的其他任务/调度，状态投递包含await；整数取整会留下少量差额。尾段指标自身最后一次record_request不计入自身包络，严格tool→HTTP端点仍覆盖它；不通过自测自写的循环造“完全归因”。未发送/取消不补造HTTP端点。
+- `journal_lock_key / journal_cache_key / journal_seq_cursor / journal_source_stat`分别包住原共享锁名解析、缓存键解析、seq游标与源stat，仅≥5ms保留，仍受原64条span上限影响。文件检查和异常语义不改；未记录不表示没有执行。
+- `hook_runtime_definitions_worker`与原await包络嵌套，正常to_thread入口可区分执行线程工作与外部等待；仅靠差额不能区分executor队列与事件循环延迟。受控单线程占位验证传播、开始顺序及原返回值；完整519项门禁和实际前后台非流式请求验证尾段字段完整。详见[本批报告§11](../../performance/agent-subagent-interround-2026-10-21.md#11-完成事件预演及发送前尾段补修)。
+
+### 真实运行配对的补充口径（UC-9D13补充）
+
+- 严格工具core返回→下一轮首次HTTP send若遇到早启动工具，可能包括上一模型worker的剩余时间。保留严格值，并另外使用已有`local_ready=max(tool_returned, previous_model_worker_done)`端点；worker结束不等于全部本地流消费完成。14:42重启后的508配对有7个此类重叠，严格355次超标，ready口径仍352次；不能以删掉7个样本处理。
+- Hook新增worker叶子的开始/结束可将外层await拆成开始前、worker函数及结束后恢复三个窗口。本次81个成对样本最大worker2.020ms，最大结束后恢复3077.557ms；差额可以定位返回/恢复窗口，但缺future-ready与loop线程标识时，不能证明具体是谁占用了loop，或把它全部称为executor队列。
+- `request_conversion_completed→http_send_entered`只代表转换后的本地区间，包含provider/SDK构建和调度等未细分路径；本批最大8062.877ms，转换本身18.652ms。不得将该间隔命名成纯JSON编码，也不得用此次请求的服务器响应解释发送前等待。
+- `change_review_timing`以墙钟时间+payload去重，而非文件名归属；全局logger多handler和跨会话文件不能使同一条数据计数两次。缺run/单调锚点的review文本只作旁证，不能直接累加到严格轮间。源版本须分别记录启动时刻、加载字段证据和磁盘mtime/哈希；未采到子run指标不能写成已验收。
+- 本次生产数据、运行中范围、父子span/阈值限制、首请求和收尾独立口径见[报告§12](../../performance/agent-subagent-interround-2026-10-21.md#12-1442重启后的新增真实会话1742只读截面)。本段是分析口径与结果补充，没有追加生产计时代码。
+
+### 等待式事实提交与发送线程细分（UC-9D13补充）
+
+- 新`fact_commit_await`根操作关联session/run/iter，≥50ms保留。submitted→worker_entered→worker_finished→resumed及线程标识定位排队、同步工作及回到loop的等待；内存回执单独计时。cancel_requested记录首次取消请求；已选定的已完成事实即使还在排队，也先等待原写函数和成功内存回执再传播取消，写函数仍可按实时所有权拒绝。异常/不完整端点不补零。原model_commit/model_commit_batch是内层，不重复相加。
+- Hook改为一次整组后台准备后，新增hook_prepare_await及四个同类端点。旧hook_runtime_definitions已是同一worker内的定义区间，不能继续与修改前“await to_thread往返”直接同比。`LocalOperationTrace.mark_threads`保留标记所在的线程身份；async包络的thread CPU仍不等于worker CPU。
+- 同步目录加载本体增加`plugin_catalog_sync_load`，与外层`hook_load_plugins`嵌套；后者还含manager准备、缓存和扫描锁等待，不能把两者相加。23:22初版样本只有外层11.195秒，不能据此分别分配锁/扫描成本；目录SWR补修后的样本需另按加载时间分组，见报告§14。
+- 第二次重启出现model_commit根8554.134ms、旧内层追加日志365ms，差额定位到前置检查范围，不能直接命名为8.189秒锁等待。新增`write_fence_local_lock / write_fence_session_path / write_fence_disk_read`及`steer_fence_register_io`；保留原≥5ms/有界规则，分清本session检查与其他session注册的锁放大。捕获期间发现再次重启时按run/请求时间重新分组，保留错误current_process标签的原文件并更正，不能把累积13配对归入新进程。见报告§15。
+- 请求新增send_paths：request_worker以及primary/hedge分别记录线程调度/进入、流路由、流对象和迭代、facade候选准备、provider入口、raw请求准备、快速JSON分支、HTTP构造、send调用和实际transport委托等有序端点。一次逻辑请求最多16条路径，每条96点，超限显式计数；只记固定阶段名/单调时钟/线程ID，不记录请求body或凭据。
+- 一条路径可经过多个provider，重复点保留顺序，不用不同物理尝试的最早起止拼成假分段；路径数不是物理请求计数。原逻辑trace首次HTTP send端点保留，未发送的失败没有伪造发送；stream路径、SDK和direct分支及普通非流式HTTP均有覆盖。snapshot按时间排序并复制点，读侧不能修改原记录。
+- HTTP客户端接受`headers=None`，与httpx可选header语义一致；请求/响应和body不因计时改变。测试验证两个真实SDK/direct流分支、非流式HTTP、并发关联、上下文、失败边界和有界快照。见[报告§13](../../performance/agent-subagent-interround-2026-10-21.md#13-事实提交与hook准备的事件循环隔离补修)。
+
+### ask_user卡片准备计时（UC-9D13补充）
+
+`ask_user_card_prepare`关联session/run/iter，仅覆盖问题创建、waiter登记、状态重查和emit确认，日志在等答案前结束。`ask_question_create_await / ask_question_status_recheck / ask_question_card_emit`拆三个等待；线程内`interaction_snapshot_prepare / interaction_fact_append / interaction_projection / interaction_checkpoint / interaction_pending_counts`另列，原`fact_commit_await`记录线程往返。没有emit不标记`ask_question_card_emitted`，emit完成不等于客户端收到或绘制。日志仅记录标识和时间，不存问题、选项或答案；嵌套包络不相加。
+
+实际样本通过35个不重复arguments片段复原完整JSON，以seq27429为参数完成边界，至卡片journal锚点约3545ms；这是服务端关联证据。不能把工具总时长中的用户回答等待算进出卡耗时。真实前缀对照仅衡量后端准备，生产SSE/绘制仍需另测，见[专项报告](../../performance/ask-user-card-latency-2026-10-23.md)。
+
 ## 6. 版本记录
+
+- 2026-10-23 v30：grep新增准入锚点、队列结局和未进入worker的空值语义；明确包含关系、放弃后不可迟到更新及超时/取消原因保持。
+
+- 2026-10-23 v29：补录旧status耗时、旧tool_started终态、子代理与备份去重；明确保留边界、缺失值、不同时间锚点和严格配对规则。
+
+- 2026-10-23 v28：补充 grep 逐调用 ID、worker 排队和后端进程分段；明确嵌套时长与锚点不可相加、日志不存正文及冷扫描验收边界。
+
+- 2026-10-23 v27：补齐ask_user创建、状态重查、emit确认及线程内投影计时，区分参数完整、服务端交付和屏幕绘制，排除用户回答等待。
+
+- 2026-10-21 v26：增加写栅栏锁/路径/磁盘及注册分段，修正第二次自然重启的分组，不把旧内层计时之外的差额全部当锁等待。
+
+- 2026-10-21 v25：增加同步目录加载本体计时，按自然重启和SWR补修前后分组，保留外层与锁/扫描未分解限制。
+
+- 2026-10-21 v24：补齐事实提交与整组Hook的线程往返端点，新增有界send_paths及线程身份；保持首次发送/重试关联，明确旧定义计时口径变化及未发送样本规则。
+
+- 2026-10-21 v23：以522个新增请求验证计时加载；补充早启动工具重叠、worker完成后恢复、转换后发送及重复review文本的解释规则，保留未定位等待和源码并发边界。
+
+- 2026-10-21 v22：新增七段pre_api_tail_events，覆盖流式/非流式/子入口；补充Hook执行线程与journal键/游标/stat叶子计时，保留包络、阈值和未覆盖部分，519项回归通过。
+
+- 2026-10-21 v21：说明manager发布锁隔离后的同名计时范围和可能多次获取，区分同步路径I/O与锁连带等待，完整持续负载失败保留于专项报告。
+
+- 2026-10-21 v20：补录观测Timer失败债务、瞬态去抖重试与永久错误边界；重启后3个真实run、50配对27次超标，包络/锁/span及未覆盖尾段分别保留，目标未完成。
+
+- 2026-10-21 v19：task子代理接入真实run指标及交付/收尾观测，保留旧空ID数据和主/子包络差异，补齐取消时线程写与指标注册的收敛。
 
 - 2026-10-19 v18：修复外层同轮重试覆盖最早请求trace；保留原记录/首次发送还原及未配对失败，区分当前进程和更早会话，既有500ms目标未达成。
 

@@ -1,5 +1,7 @@
 # WebUI 对话界面 · 能力清单（代码证据版）
 
+> 2026-10-22 已实现：右栏插件页面注册、统一打开、上下文桥接与页面保活；Web iframe / Desktop webview 浏览器。详见 [05/17](17-右栏插件页面与浏览器方案设计-UseCase清单.md)，定向 Web/Electron 实测通过。
+
 > 对象：SugarAgent WebUI（前端 SPA + FastAPI Web 服务）
 > 代码版本：当前工作区（2026-10-11；平滑跟随为固定刚度软弹簧（DS 同款）；含会话侧栏宽度首帧恢复、侧栏会话列表改版（视觉/字号自适应、刷新节拍与增量渲染、目录组配额·拖拽·重命名、时间分桶与自动归档 30 天）、会话行尾状态胶囊与插件角标（规格入档 + 浅色档配色修正）、顶部通知与权限警示视觉系统、右侧历史纳入同款外壳（标题栏风格一致 + 描边）、子代理执行活跃性、follow-up 队列拖拽/键盘排序、公共左侧栏页签、设置中心、系统字体与排版令牌、模型两级菜单、统一悬停说明、执行工具会话面板与终端（xterm）、执行恢复渲染、上下文拆解浮窗、工具按需披露与 MCP 服务器级筛选、排队消息连续运行、执行回执证据链、插件界面样式就绪再上屏；新建会话与草稿目录、目录图标；压缩 reasoning 即时透传与活动流续接、静默心跳和单条阶段状态；输入附件卡片及未发送副本清理、全区域图片居中预览；桌面右键菜单与原生菜单仲裁）
 > 图例：【图·7节点骨架】见 `webui.architecture.html`；【卡】图中卡片；【单】仅本清单
@@ -23,6 +25,7 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 消息渲染（Markdown、工具执行轨迹、附件图片） | `modules/message-rendering.js`、`state/message-renderers.js` | 【图】 |
+| 插件上下文注入：具名快照来源、折叠展示、过期/截断/省略标记；模型消息与回放共用同一持久事实 | `plugin_context.py`、Runtime UI projection、`modules/event-dispatch.js`；[05/18](18-插件上下文注入方案设计-UseCase清单.md) | 【单】 |
 | 本地压缩 reasoning 与摘要共用一条压缩记录（行内思考区实时展开、正文到达后收起且可手动展开，重试在记录内分区；安全纯文本，仅运行态） | `modules/message-rendering.js`、`modules/event-dispatch.js`、`state/session-event-reducer.js`；05/02·UC-5B10 | 【单】 |
 | 压缩阶段状态覆盖更新（每轨迹只保留最新状态，重复等待提示去重，状态更新保留流式/最终正文） | `message-rendering.js::appendProgressLog / applyProgressPersistedBody`、`agent_loop._await_thread_with_sse_keepalive`；05/02·UC-5B13 | 【单】 |
 | 耐久图片卡片与全区域预览：用户气泡/执行过程使用紧凑图片附件卡，输入框和最终回答图片也可打开共享居中浮窗；滚轮居中缩放按帧合并，图片行不额外增加底部间距，最终回答原排版与非图片执行条目不变 | modules/workspace-media.js、styles/app.css；05/02·UC-5B5/5B12 | 【单】 |
@@ -64,7 +67,7 @@
 | 子代理会话（标题栏谱系目录 + 主区寻址；四色状态点=进行中/完成未读/完成已读/错误；打开即已读，localStorage 持久化） | `modules/subagent-catalog-ui.js`、`state/subagent-catalog-store.js`、`state/subagent-addressing.js` | 【图】 |
 | 子代理成员帧桥接（SSE `agent_id` → 目录增量；无专属事件流，后端零改动） | `modules/subagent-frames.js`、`modules/sse-handling.js` | 【单】 |
 | 子代理执行活跃性（运行中=活跃子会话；子会话 steer 顺序消费、不换聊天管线；`subagent_created` 先注册 pending、finish 翻转） | `app/webui.py`、`modules/sse-handling.js`、`modules/subagent-frames.js` | 【单】 |
-| 子代理编辑器三态（可写/锁定-保留 Stop/只读占位；slot chain 选举接管）与续接提示（结果未纳入父回答 → `/continue-subagents`） | `modules/subagent-composer-ui.js`、`state/subagent-ui-decisions.js` | 【单】 |
+| 子代理编辑器三态（可写/锁定-保留 Stop/只读占位；slot chain 选举接管）；未消费结果由服务端自动续跑父会话 | `modules/subagent-composer-ui.js`、`state/subagent-ui-decisions.js`、`agent_subagent_notifications.py` | 【单】 |
 | 审批与 ask_user 交互卡片（含分析、取消、恢复） | `modules/human-interactions.js`、后端 interactions/approvals API | 【图】 |
 | 审批卡片锚点恢复（`tool_pending` 为 ephemeral；恢复时按 `tool_call_id` 重建占位工具行，重连历史恢复后刷新持久卡片） | `modules/human-interactions.js::ensurePendingHumanInteractionToolRow`、`modules/sse-handling.js::attachSessionEventStream` | 【单】 |
 | 权限与安全设置（会话级/全局权限、规则、预批准域名） | `modules/permissions.js`、后端 security API | 【图】 |

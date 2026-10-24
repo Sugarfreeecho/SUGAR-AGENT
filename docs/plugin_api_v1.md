@@ -1,5 +1,126 @@
 # SugarAgent Plugin API v1
 
+## 会话固定系统上下文（2026-10-23）
+
+固定章程、角色与长期任务规则可保存在会话 metadata 的 `system_context`，不再周期性复制到 user 消息。它是单个会话的附加系统指令，每次主任务请求装配时进入 `SystemMessage`；重启及历史压缩后仍保留。未设置的会话沿用原来的系统提示。
+
+宿主 HTTP 接口：
+
+```http
+POST /sessions
+Content-Type: application/json
+
+{"system_context":"该会话的固定章程"}
+```
+
+已有会话使用 `PUT /sessions/{session_id}/system-context`，请求体同上；空字符串清空。必须是字符串，最多 256 KiB UTF-8 文本，不静默截断。非法参数返回 422，会话不存在返回 404；更新接口与聊天启动共用锁，正在执行时返回 409。创建时省略该字段与旧调用兼容。
+
+进程内可信宿主插件可以调用：
+
+```python
+from agent_harness import session_manager
+
+sid, *_ = session_manager.get_or_create_session(system_context=charter)
+session_manager.set_session_system_context(sid, updated_charter)  # 相同内容不重复写盘
+session_manager.set_session_system_context(sid, "")               # 清空
+```
+
+`get_or_create_session` 的该参数只用于新建；更新使用独立 setter。运行开始时固定本轮的 metadata 快照，setter 的变化在下一轮运行生效。子会话创建时继承一份章程快照，后续修改互不影响；fork 的冻结请求快照记录 `system_context`，装配时替换原段，更新或清空不会叠加旧章程。普通会话分支沿用复制的 metadata。静态提示缓存及本地整包 token 缓存识别章程内容变化，token 预览把它归入系统部分。
+
+此入口承载宿主或用户明确设置的系统指令。普通 Worker 的 `@plugin.context` 继续提供带来源的 user 资料，不通过返回 `role` 自动升级为系统指令，也不会获得修改任意会话的能力。
+
+`sugar-bili-scroll` 已接入：新值班会话创建时写入章程，已有值班会话在下一轮开始前补入；用户修改家目录 `duty.md` 后，下一轮更新该字段。每轮 user 消息只保留当轮参数，移除每隔 8 轮重发章程的账本逻辑；已有历史不做删除。
+
+系统上下文仍随每次模型请求上送并占用输入 token。它减少重复历史，避免章程被摘要压缩，并提供稳定前缀；缓存命中与计费取决于提供方，不承诺省掉章程本身的全部 token。
+
+## 插件模型上下文（2026-10-23）
+
+原生 Python / Node 插件可注册文本上下文提供器。宿主在主任务每个 ReAct 步骤准备时采集，按真实会话隔离，并将变化后的完整快照作为带来源的 user 消息持久记录；聊天中显示可展开的“上下文注入”行。标题生成、摘要压缩等独立后台请求不主动采集这些提供器。
+
+manifest 需要显式声明能力和可执行 runtime：
+
+```json
+{
+  "schema_version": 1,
+  "id": "org.example.context",
+  "name": "Context Example",
+  "version": "1.0.0",
+  "capabilities": {"context": true},
+  "runtime": {"type": "python", "entrypoint": "./plugin.py", "api_version": "1"}
+}
+```
+
+Python 注册：
+
+```python
+from myagent_plugin_sdk import Plugin
+plugin = Plugin()
+
+@plugin.context(id="selection", title="选中的资料", max_tokens=800, timeout_seconds=2)
+def selected_material(context):
+    selection = context["session_state"].get("selection")
+    if not selection:
+        return None
+    return {"text": selection["text"], "revision": selection.get("revision", "")}
+```
+
+`session_state` 只包含该插件在当前会话中的命名空间，不是整个宿主状态。handler 还接收宿主提供的 `plugin_id/session_id/run_id/step/workspace_root` 和本插件数据、缓存、临时目录。已有的 `permissions.context` 继续控制 `settings/secrets` 等可选上下文。handler 不获得其他插件或其他会话的状态，也不接收整份聊天历史。
+
+Node 注册使用同一协议，manifest runtime 改为 `type:node`：
+
+```javascript
+module.exports.setup = plugin => {
+  plugin.context({id: 'selection', title: '选中的资料', maxTokens: 800, timeoutSeconds: 2}, context => {
+    const selection = context.session_state.selection;
+    return selection ? {text: selection.text, revision: selection.revision ?? ''} : null;
+  });
+};
+```
+
+| 注册参数 | 规则 |
+|---|---|
+| `id` | 插件内唯一；1–64 位 ASCII 字母、数字、下划线、连字符 |
+| `title` | 1–128 字符；省略时使用 id |
+| `order` | 默认 100，范围 -10000 至 10000；同顺序按插件 id 与提供器 id 排序 |
+| `max_tokens` / Node `maxTokens` | 默认 800，范围 1–4096；按宿主现有 tokenizer 估算裁剪 |
+| `timeout_seconds` / Node `timeoutSeconds` | 默认 2 秒，范围 0.05–10 秒；不超过插件 runtime 超时 |
+| `trigger` / `mode` | 本版仅支持 `step` / `snapshot` |
+
+每插件最多 16 个提供器；每次最多调度 64 个、并发 4 个，描述与采集共用 8 秒调度预算。整体文本预算不超过 4096 个估算 token，且不超过当前配置模型上下文窗口的 5%；包含快照说明与来源标题。超限内容有截断标记，无法容纳的提供器列入省略信息。tokenizer 不可用时沿用应用的近似估算。
+
+返回非空字符串或 `{text: string, revision?: string|int}`；空文本、Python `None`、Node `null/undefined` 表示明确撤销。额外角色或权限字段无效，提供器不能自行指定 system role。结果最多 256 KiB。相同实际内容不因采样时间或 revision 单独变化而重复追加；内容或来源签名变化后形成新快照。
+
+采集失败不当作清空：同签名的旧资料会标为“上次状态，可能过期”；恢复后更新。禁用、注销、签名变化或授权撤销会移除旧贡献，整个活动集合为空时追加清除说明。压缩移除快照后按需要重新注入；停止后的迟到结果受运行写入围栏约束。模型重试复用已进入步骤的消息，不重新采集。
+
+实际文本保存在 `model_user` 事实的 `content` 中，来源等元数据位于 `metadata.plugin_context`；UI 从同一事实投影内容，实时显示不另写一份 UI 事实。这类消息不计为真人用户轮次。既有 Hook 的 `additional_context` 保持兼容；右栏 `MyAgentPluginPage.context` 仍是界面上下文。
+
+完整可安装示例见 [`examples/plugins/context-provider`](../examples/plugins/context-provider/README.md)，功能方案与验收见 [05/18](Agent%20设计（用户方案）/05-WebUI对话界面/18-插件上下文注入方案设计-UseCase清单.md)。当前提供器面向自动文本快照；页面“加入上下文”、任意浏览器 DOM 提取及图片注入未在此接口中开放。
+
+## 右侧详情栏页面（2026-10-22）
+
+插件可用 `capabilities.ui["details.tab"]` 注册完整界面；宿主使用已有 `web.entry`，自动生成 `/plugins/{plugin_id}`，不接受声明传入任意页面 URL 或宿主脚本。旧 `navigation` 页面贡献仍可打开，并自动进入右栏。示例：
+
+```json
+{
+  "capabilities": {
+    "web": { "entry": "web/index.html", "assets": "web" },
+    "ui": {
+      "details.tab": [{ "id": "main", "title": "示例页面", "scope": "session", "order": 60 }]
+    }
+  }
+}
+```
+
+`scope` 为 `session`（默认，绑定当前会话）或 `app`（应用数据，无会话也可打开）。页面 ID、标题长度、scope 和顺序经宿主校验；标题作为文本显示。只提供 Web 资源目录但没有 `web.entry` 的插件不会生成页面。右栏开始页只有一个「插件」类型入口，进入 `plugins` 页面后集中列出已启用插件的页面贡献，内嵌设置项继续保留在设置中。插件选择器、设置入口、输入框页面动作与该列表使用同一打开链路；重复打开相同绑定页面聚焦已有标签。
+
+主页面脚本可调用 `MyAgentDock.openPluginPage(pluginId, {pageId?, sessionId?})`；可信脚本注册 `registerTabType({id,kind,title,body,keepMounted?})` 后可通过 `openTab(kind)` 展示正文，注册返回注销函数。页面默认保活，正文元素可提供 `__dockVisibility(visible)` 与 `__dockDispose()` 钩子。普通插件使用声明式 iframe，不会因此获得导入宿主 JS 的权限。
+
+宿主自动在插件 HTML 中装入 `/static/plugin-page-bridge.js`；仅在 `surface=details` 的嵌入模式启用。页面可读 `window.MyAgentPluginPage.context`，包括 `pluginId/pageId/tabId/sessionId/workDir/theme/lang/fontPx/visible`。上下文更新派发 `myagent:plugin-page-context`，可见性变化派发 `myagent:plugin-page-visibility`。公共桥在隐藏时跳过 interval 回调，关闭时清理 interval 并取消通过页面 fetch 发出的请求；插件自己的其他后台工作应订阅可见性和清理事件。
+
+页面可调用 `MyAgentPluginPage.close()`、`openUrl(url)`，或 `request('open-plugin', {pluginId, pageId})` 打开本插件的其他声明页面。消息带 `version:1`，双方验证 origin 与 source；隐藏页面不能发起宿主导航。资源使用 `/plugin-assets/{plugin_id}/…` 绝对路径。同源 iframe 沿用原有插件网页信任模型，不是第三方权限隔离。
+
+禁用插件会关闭页面，声明内容签名或 scope 变化也会回收旧页面。标签切换、会话切换、收起、分栏与浮动保留页面浏览上下文；布局及页面内存仅在当前应用页面生命周期中保留，不跨刷新恢复。完整方案与验收见 [05/17](Agent%20设计（用户方案）/05-WebUI对话界面/17-右栏插件页面与浏览器方案设计-UseCase清单.md)。
+
 Plugin API v1 让原生 SugarAgent 插件在独立的持久 Worker 进程中注册并执行 Tool、
 Hook 和 Slash Command。声明式 Skill、Hook、Command、MCP、Agent、Prompt 与
 代码型 Runtime 可以放在同一个插件包内。

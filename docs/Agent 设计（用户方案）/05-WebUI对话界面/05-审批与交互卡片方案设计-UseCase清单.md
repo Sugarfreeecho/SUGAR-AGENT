@@ -1,6 +1,6 @@
 # 审批与交互卡片 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-05 v4（覆盖至：当前工作区；审批分析广播与历史回放）
+- 版本：2026-10-23 v5（ask_user准备补尾、线程等待与出卡计时）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`modules/human-interactions.js`、`modules/permissions.js`、后端 approvals/interactions API。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -39,6 +39,13 @@
 - **预期现象**：模式变更**即时广播**（permission_mode_changed），后续行为立即变化；面板状态同步。
 - **依据**：`permissions.js`、`set_session_permissions`。
 
+### UC-5E6 ask_user准备延迟与取消边界
+
+- **触发**：模型完成独占的ask_user调用，经原工具检查进入问题创建。
+- **预期现象**：请求事实提交完成后才推送卡片；正常执行日志尾部落后仅补尾，不因两条执行状态变化重放整个日志两次。状态重查只深复制交互记录，返回的嵌套内容仍隔离。前端收到事件直接渲染，不依赖下一次侧栏轮询。
+- **规则与边界**：创建在线程运行，原loop仍等待并登记waiter。创建期间取消先收敛，再取消问题、清除waiter；提前回答由重查恢复。版本、源身份/字节边界和seq守卫保持，异常源/冷缓存可全量重建；审批摘要、pending计数和独占工具批次规则保持。emit确认不等于浏览器绘制，未收到emit不能记成已发卡。
+- **依据**：`HumanInteractionService._snapshot_locked/_append_locked/get/list`、`wait_for_user_answers`、`builtin_host_tools._invoke_ask_user`；新增13项边界用例及相关200项通过。真实样本参数完整到服务端卡片关联约3545ms；同一真实前缀首轮隔离对照约5.15–5.98秒变100–104ms，最终源码独立对照10.478秒变169.745ms，全量读取2→0。两批不合并、不外推P95，尚未生产加载验收，见[专项报告](../../performance/ask-user-card-latency-2026-10-23.md)。
+
 ## 3. 边界
 
 - 策略与模式语义见 ../07-权限审批/01–03；
@@ -53,8 +60,11 @@
 | UC-5E3 | `analyze_session_approval` |
 | UC-5E4 | interaction 恢复段（webui L789–938） |
 | UC-5E5 | `set_session_permissions` L3517 |
+| UC-5E6 | `human_interaction/service.py`、`agent_fact_commit.py`、`tests/test_ask_card_latency.py` |
 
 ## 5. 版本记录
+
+- 2026-10-23 v5：补录ask_user准备的严格补尾/单条复制、线程创建和取消收敛、关联计时，记录200项回归及真实前缀对照，服务端准备与屏幕出卡分开验收。
 
 - 2026-10-05 v4：审批"替我分析"经 `approval_analyzed` 事件保存并广播；重载/回放/重建卡片恢复建议；完成时校验原请求摘要，不改审批决定、晚到结果不重开已处理审批。
 - 2026-09-17 v3：卡片锚点恢复单独成篇（09，UC-5I1~5I5）；本文保留卡片自身的呈现与决议流程用例。
