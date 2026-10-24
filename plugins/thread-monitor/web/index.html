@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>线程监控</title>
+  <link rel="icon" type="image/png" href="/assets/sugar-logo.png">
+  <link rel="apple-touch-icon" href="/assets/sugar-logo.png">
+  <link rel="stylesheet" href="/plugin-assets/thread-monitor/style.css?v=1">
+</head>
+<body>
+  <header class="tm-topbar">
+    <div class="tm-title">
+      <h1>线程监控</h1>
+      <p>进程真实 OS 线程 · Agent 运行态并发 · 只读采样</p>
+    </div>
+    <div class="tm-controls">
+      <label class="tm-field">刷新
+        <select id="interval" aria-label="刷新间隔">
+          <option value="1000">1 秒</option>
+          <option value="2000" selected>2 秒</option>
+          <option value="5000">5 秒</option>
+          <option value="10000">10 秒</option>
+        </select>
+      </label>
+      <button id="pause" type="button">暂停</button>
+      <button id="refresh" type="button">立即刷新</button>
+      <button id="reset" type="button">重置峰值</button>
+      <button id="back" class="tm-back" type="button">返回聊天</button>
+    </div>
+  </header>
+
+  <main class="tm-main">
+    <div id="notice" class="tm-notice" hidden></div>
+    <section class="tm-kpis" id="kpis" aria-live="polite"></section>
+
+    <section class="tm-grid">
+      <article class="tm-panel">
+        <header><h2>线程总数趋势</h2><span id="trend-note">—</span></header>
+        <div class="tm-chart" id="trend"></div>
+        <div class="tm-legend">
+          <span><i class="tm-dot tm-dot--threads"></i>OS 线程总数</span>
+          <span><i class="tm-dot tm-dot--runs"></i>业务并发（会话 + 子代理 + 任务 + 终端 + 团队）</span>
+        </div>
+      </article>
+      <article class="tm-panel">
+        <header><h2>线程分组</h2><span>同池线程按名称折叠</span></header>
+        <div class="tm-bars" id="groups"></div>
+      </article>
+    </section>
+
+    <section class="tm-grid">
+      <article class="tm-panel">
+        <header>
+          <h2>线程明细</h2>
+          <input id="filter" class="tm-filter" type="search" placeholder="按名称 / 分组过滤" aria-label="过滤线程">
+        </header>
+        <div class="tm-table-wrap">
+          <table class="tm-table">
+            <thead>
+              <tr><th>TID</th><th>名称</th><th>分组</th><th>daemon</th><th class="tm-num">累计 CPU（秒）</th></tr>
+            </thead>
+            <tbody id="threads"></tbody>
+          </table>
+        </div>
+      </article>
+      <article class="tm-panel">
+        <header><h2>疑似长存活线程</h2><span id="leak-note">—</span></header>
+        <div class="tm-list" id="leaks"></div>
+        <header class="tm-sub"><h2>进程信息</h2></header>
+        <dl class="tm-facts" id="process"></dl>
+      </article>
+    </section>
+
+    <p class="tm-foot">
+      数据来源：<code>psutil</code> 读取本进程线程表，并与 <code>threading.Thread.native_id</code> 关联出线程名；
+      并发量读取会话运行时、子代理注册表、后台任务、PTY 终端、Agent Team 与待处理交互的现有注册表。
+      页面只读，不改变 Agent 状态；“重置峰值”只清空本面板的基线与峰值。
+    </p>
+  </main>
+
+  <script src="/plugin-assets/thread-monitor/app.js?v=1"></script>
+</body>
+</html>

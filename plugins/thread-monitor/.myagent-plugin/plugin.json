@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "thread-monitor",
+  "name": "Thread Monitor",
+  "version": "1.0.0",
+  "description": "只读采样：Agent 进程的真实 OS 线程数与运行态并发量，用于发现线程池泄漏。",
+  "capabilities": {
+    "trusted_host": {
+      "entry": "host.py"
+    },
+    "web": {
+      "entry": "web/index.html",
+      "assets": "web"
+    },
+    "ui": {
+      "navigation": [
+        {
+          "id": "main",
+          "label": "线程监控",
+          "description": "进程真实线程数、Agent 并发量、线程分组与疑似长存活线程。",
+          "order": 85
+        }
+      ],
+      "details.tab": [
+        {
+          "id": "main",
+          "title": "线程监控",
+          "description": "进程真实线程数、Agent 并发量、线程分组与疑似长存活线程。",
+          "scope": "app",
+          "order": 85
+        }
+      ]
+    }
+  },
+  "permissions": {
+    "context": [],
+    "services": []
+  }
+}
