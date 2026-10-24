@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>ChatGPT 订阅 · SugarAgent</title>
+  <script src="/plugin-assets/chatgpt-subscription/theme.js?v=1.1.0"></script>
+  <link rel="stylesheet" href="/static/settings/settings.css">
+  <link rel="stylesheet" href="/plugin-assets/chatgpt-subscription/app.css?v=1.1.0">
+  <script src="/plugin-assets/chatgpt-subscription/app.js?v=1.1.0" defer></script>
+</head>
+<body>
+  <main class="subscription-view">
+    <header class="standalone-header">
+      <a href="/settings#plugin:chatgpt-subscription:accounts" data-en="← Back to settings">← 返回设置</a>
+      <h1 data-en="ChatGPT subscription">ChatGPT 订阅</h1>
+      <p data-en="Connect your ChatGPT account and add its models to SugarAgent.">连接 ChatGPT 账号，将可用模型添加到 SugarAgent。</p>
+    </header>
+    <div id="message" class="notice" role="status" aria-live="polite" hidden></div>
+    <section class="st-card" aria-labelledby="accounts-heading">
+      <div class="card-heading">
+        <h2 id="accounts-heading" data-en="Account connection">账号连接</h2>
+        <div class="header-actions"><span id="connection-status" class="status-chip" data-kind="idle">未连接</span>
+          <button id="refresh" class="st-btn text sm" data-en="Refresh status">刷新状态</button></div>
+      </div>
+      <div class="section-body">
+        <label for="account" data-en="ChatGPT account / workspace">ChatGPT 账号 / 工作区</label>
+        <select id="account" class="st-input"><option value="">添加新账号或工作区</option></select>
+        <p id="account-description" class="hint"></p>
+        <div class="actions">
+          <button id="login" class="st-btn primary">Continue with ChatGPT</button>
+          <button id="new-account" class="st-btn" data-en="Add account" hidden>添加账号</button>
+          <button id="logout" class="st-btn text" data-en="Sign out" hidden>退出连接</button>
+          <button id="cancel" class="st-btn" data-en="Cancel sign-in" hidden>取消登录</button>
+        </div>
+        <div id="login-progress" class="notice" role="status" aria-live="polite" hidden>
+          <span id="login-state"></span>
+          <a id="authorize" hidden target="_blank" rel="noreferrer noopener" data-en="Open authorization page">打开授权页面</a>
+        </div>
+        <div class="usage-row">
+          <span data-en="Usage is included in your ChatGPT plan or credits.">调用计入此账号的 ChatGPT 套餐或可用额度。</span>
+          <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer noopener" data-en="Manage usage ↗">管理用量 ↗</a>
+        </div>
+      </div>
+    </section>
+    <section class="st-card" aria-labelledby="models-heading">
+      <div class="card-heading">
+        <h2 id="models-heading" data-en="Subscription models">订阅模型</h2>
+        <button id="models" class="st-btn text sm" disabled data-en="Refresh models">刷新模型</button>
+      </div>
+      <div class="section-body">
+        <div id="model-empty" class="empty-state" data-en="Connect an account to load its models automatically.">连接账号后，自动读取该账号的可用模型。</div>
+        <div id="model-fields" hidden>
+          <label for="model-filter" data-en="Find a model">查找模型</label>
+          <input id="model-filter" class="st-input" type="search" autocomplete="off" placeholder="按名称或模型 ID 筛选" data-en-placeholder="Filter by name or model ID">
+          <label for="model" data-en="Model">模型</label>
+          <select id="model" class="st-input" disabled></select>
+          <p id="model-hint" class="hint"></p>
+          <label for="profile-name" data-en="Configuration name">配置名称</label>
+          <input id="profile-name" class="st-input" maxlength="80" autocomplete="off" placeholder="显示在聊天页模型菜单中的名称" data-en-placeholder="Name shown in the chat model menu">
+          <div class="actions">
+            <button id="add-profile" class="st-btn primary" disabled data-en="Add model">添加模型</button>
+            <button id="test-model" class="st-btn" disabled data-en="Test request">测试调用</button>
+          </div>
+          <p class="hint" data-en="A test sends one short request and uses a small amount of your plan allowance.">测试会发送一条简短请求，使用少量套餐额度。</p>
+        </div>
+        <p id="model-status" class="inline-status" role="status" aria-live="polite" hidden></p>
+        <a id="model-error-usage" class="st-btn primary sm" href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer noopener" data-en="Manage usage" hidden>管理用量</a>
+      </div>
+    </section>
+    <section class="st-card" aria-labelledby="profiles-heading">
+      <div class="card-heading">
+        <h2 id="profiles-heading" data-en="Added configurations">已添加的配置</h2>
+        <a id="manage-models" class="st-btn text sm" href="/settings#models" data-en="Manage models">管理模型</a>
+      </div>
+      <div id="profile-list" class="section-body"></div>
+    </section>
+    <details class="help-details">
+      <summary data-en="Connection and usage notes">连接与用量说明</summary>
+      <p data-en="Credentials stay on this computer and renew automatically. Each model configuration is tied to one account connection.">凭据保存在本机并自动续期。每个模型配置绑定一个账号连接，切换此处账号不会改动已有配置。</p>
+      <p data-en="Eligibility depends on your account and workspace policies. A successful test confirms access to the selected model.">可用性取决于账号及工作区政策。测试调用成功后，可确认当前模型的实际访问权限。</p>
+      <p data-en="The subscription endpoint controls output limits; temperature and maximum output token settings are not sent.">订阅接口控制输出上限；温度与最大输出 token 设置不传给该接口。</p>
+    </details>
+  </main>
+  <dialog id="plan-notice" aria-labelledby="notice-title">
+    <h2 id="notice-title" data-en="You're using your ChatGPT plan">已连接你的 ChatGPT 套餐</h2>
+    <p data-en="Eligible requests through these models use your ChatGPT plan or credits. You can manage this app's usage in ChatGPT settings.">通过这些模型发起的适用请求会使用你的 ChatGPT 套餐或可用额度。你可以在 ChatGPT 设置中管理此应用的用量。</p>
+    <div class="actions"><button id="notice-dismiss" class="st-btn primary" data-en="Got it">知道了</button></div>
+    <p id="notice-error" class="hint" role="status"></p>
+  </dialog>
+</body>
+</html>

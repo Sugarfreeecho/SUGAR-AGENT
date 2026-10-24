@@ -1,0 +1,57 @@
+html, body { height: auto; min-height: 0; overflow: visible; background: var(--st-panel, #fff); }
+body { margin: 0; color: var(--st-text); font: var(--st-fs, 14px)/1.55 var(--st-sans, sans-serif); }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.subscription-view { max-width: 760px; margin: auto; padding: 24px; }
+html[data-embedded="true"] .subscription-view { max-width: none; padding: 0 0 4px; }
+html[data-embedded="true"] .standalone-header { display: none; }
+.standalone-header { margin-bottom: 20px; }
+h1 { font-size: 24px; margin: 12px 0; }
+h2 { font-size: var(--st-fs, 14px); font-weight: 600; margin: 0; }
+p { margin: 0; }
+a { color: var(--st-accent, #6366f1); text-underline-offset: 3px; }
+.standalone-header p { color: var(--st-text-2); }
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.st-card { margin: 0 0 14px; overflow: visible; }
+.card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--st-border-soft); min-height: 47px; }
+.section-body { padding: 14px 16px; }
+label { display: block; font-size: var(--st-fs-sm, 13px); font-weight: 500; margin: 14px 0 6px; }
+.section-body > label:first-child { margin-top: 0; }
+.st-input { display: block; width: 100%; max-width: none; min-width: 0; }
+select.st-input { min-height: 36px; }
+.hint { color: var(--st-text-3); font-size: var(--st-fs-sm, 13px); margin-top: 8px; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.st-btn { white-space: nowrap; font-family: inherit; }
+.st-btn:disabled, .st-input:disabled { opacity: .45; cursor: default; }
+.usage-row { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 4px 14px; border-top: 1px solid var(--st-border-soft); margin-top: 16px; padding-top: 12px; color: var(--st-text-3); font-size: var(--st-fs-xs, 12px); }
+.usage-row a { flex-shrink: 0; }
+.status-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--st-text-3); font-size: var(--st-fs-xs, 12px); white-space: nowrap; }
+.status-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.status-chip[data-kind="ok"] { color: var(--st-ok); }
+.status-chip[data-kind="warning"] { color: var(--st-warn); }
+.status-chip[data-kind="error"] { color: var(--st-danger); }
+.notice { border: 1px solid var(--st-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; background: var(--st-surface); overflow-wrap: anywhere; }
+.notice[data-kind="error"], .inline-status[data-kind="error"] { color: var(--st-danger); }
+.notice[data-kind="success"], .inline-status[data-kind="success"] { color: var(--st-ok); }
+#login-progress { margin: 12px 0 0; }
+#authorize { display: inline-block; margin-left: 6px; }
+.empty-state { color: var(--st-text-3); padding: 8px 0; }
+.inline-status { margin-top: 12px; color: var(--st-text-2); overflow-wrap: anywhere; }
+.profile-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.profile-row + .profile-row { border-top: 1px solid var(--st-border-soft); }
+.profile-name { font-weight: 500; overflow-wrap: anywhere; }
+.profile-meta { color: var(--st-text-3); font-size: var(--st-fs-xs, 12px); overflow-wrap: anywhere; margin-top: 3px; }
+.profile-pill { background: var(--st-surface); color: var(--st-text-2); border-radius: 5px; padding: 2px 6px; font-size: var(--st-fs-xs, 12px); white-space: nowrap; }
+.help-details { font-size: var(--st-fs-sm, 13px); color: var(--st-text-3); margin: 16px 0 0; }
+.help-details summary { cursor: pointer; color: var(--st-text-2); }
+.help-details p { margin: 10px 0; }
+dialog { background: var(--st-panel); color: var(--st-text); border: 1px solid var(--st-border); border-radius: 12px; padding: 22px; width: min(420px, calc(100% - 24px)); box-shadow: var(--st-shadow-panel); }
+dialog::backdrop { background: var(--st-mask, rgba(0,0,0,.25)); }
+dialog h2 { font-size: var(--st-fs-lg, 16px); margin-bottom: 12px; }
+dialog p { color: var(--st-text-2); }
+:focus-visible { outline: 2px solid var(--st-accent); outline-offset: 2px; }
+@media (max-width: 420px) {
+  .subscription-view { padding: 16px; }
+  .card-heading, .section-body { padding-left: 12px; padding-right: 12px; }
+  .actions { gap: 8px 6px; }
+}

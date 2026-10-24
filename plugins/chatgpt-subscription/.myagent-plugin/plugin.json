@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "chatgpt-subscription",
+  "name": "ChatGPT Subscription",
+  "version": "1.1.1",
+  "description": "Sign in with ChatGPT and use an eligible plan through a local Responses adapter.",
+  "capabilities": {
+    "trusted_host": {"entry": "host.py"},
+    "web": {"entry": "web/index.html", "assets": "web/assets"},
+    "ui": {
+      "settings.section": [{
+        "id": "accounts", "title": "ChatGPT 订阅", "description": "连接账号，将订阅模型添加到 SugarAgent", "target": "plugin-page", "embedded": true, "order": 20
+      }]
+    }
+  }
+}
