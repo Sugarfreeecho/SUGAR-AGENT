@@ -328,9 +328,16 @@ function upgradeWorkspaceMedia(root) {
 // Blob previews share a fetch and URL while any visible node uses the image.
 var durableImagePreviews = new Map();
 var durableImageObserver = null;
+var durableImageVisibilityObserver = null;
+var durableImageDownloadQueue = [];
+var durableImageDownloads = 0;
 function sweepDurableImagePreviews() {
     durableImagePreviews.forEach(function (entry, key) {
-        entry.nodes = entry.nodes.filter(function (node) { return node.isConnected; });
+        entry.nodes = entry.nodes.filter(function (node) {
+            if (node.isConnected) return true;
+            if (durableImageVisibilityObserver) durableImageVisibilityObserver.unobserve(node);
+            return false;
+        });
         if (entry.nodes.length) return;
         if (entry.controller) entry.controller.abort();
         if (entry.url) URL.revokeObjectURL(entry.url);
@@ -340,6 +347,81 @@ function sweepDurableImagePreviews() {
         durableImageObserver.disconnect();
         durableImageObserver = null;
     }
+    durableImageDownloadQueue = durableImageDownloadQueue.filter(function (entry) {
+        return durableImagePreviews.get(entry.id) === entry;
+    });
+    if (!durableImagePreviews.size && durableImageVisibilityObserver) {
+        durableImageVisibilityObserver.disconnect();
+        durableImageVisibilityObserver = null;
+    }
+}
+
+function queueDurableImagePreview(entry, node) {
+    if (entry.url) { node.src = entry.url; return; }
+    node.dataset.attachmentDeferred = '1';
+    if (entry.started || entry.queued) return;
+    if (typeof IntersectionObserver === 'function') {
+        if (!durableImageVisibilityObserver) {
+            durableImageVisibilityObserver = new IntersectionObserver(function (changes) {
+                changes.forEach(function (change) {
+                    if (!change.isIntersecting) return;
+                    var pending = durableImagePreviews.get(change.target.dataset.attachmentId);
+                    durableImageVisibilityObserver.unobserve(change.target);
+                    if (pending) enqueue(pending);
+                });
+            }, { rootMargin: '300px' });
+        }
+        durableImageVisibilityObserver.observe(node);
+    } else enqueue(entry);
+    function enqueue(pending) {
+        if (pending.started || pending.queued) return;
+        pending.queued = true;
+        durableImageDownloadQueue.push(pending);
+        drainDurableImagePreviews();
+    }
+}
+
+function drainDurableImagePreviews() {
+    // Originals can be large. Keep metadata, navigation and Stop usable while
+    // rendering a long history containing many collapsed image/tool rows.
+    while (durableImageDownloads < 2 && durableImageDownloadQueue.length) {
+        var entry = durableImageDownloadQueue.shift();
+        if (durableImagePreviews.get(entry.id) !== entry) continue;
+        startDurableImagePreview(entry);
+    }
+}
+
+function startDurableImagePreview(entry) {
+    entry.started = true;
+    durableImageDownloads++;
+    var options = { credentials: 'same-origin' };
+    if (entry.controller) options.signal = entry.controller.signal;
+    var timeout = typeof setTimeout === 'function' ? setTimeout(function () {
+        if (entry.controller) entry.controller.abort();
+    }, 30000) : 0;
+    fetch('/api/attachments/' + encodeURIComponent(entry.id), options)
+        .then(function (response) { if (!response.ok) throw new Error('Attachment unavailable'); return response.blob(); })
+        .then(function (blob) {
+            sweepDurableImagePreviews();
+            if (durableImagePreviews.get(entry.id) !== entry) return;
+            entry.url = URL.createObjectURL(blob);
+            entry.nodes.forEach(function (node) {
+                delete node.dataset.attachmentDeferred;
+                node.src = entry.url;
+            });
+        }).catch(function () {
+            entry.nodes.forEach(function (node) {
+                node.alt = '图片暂不可用';
+                var card = node.closest && node.closest('.msg-attachment-card, .feed-attachment-card');
+                if (card) card.classList.add('is-unavailable');
+            });
+            if (durableImagePreviews.get(entry.id) === entry) durableImagePreviews.delete(entry.id);
+            sweepDurableImagePreviews();
+        }).finally(function () {
+            if (timeout) clearTimeout(timeout);
+            durableImageDownloads--;
+            drainDurableImagePreviews();
+        });
 }
 
 function durableAttachmentImageHost(container) {
@@ -487,8 +569,18 @@ function ensureDurableAttachmentPreviewDialog() {
     panel.appendChild(stage);
     panel.appendChild(footer);
     dialog.appendChild(panel);
+    /* 点遮罩关闭：按下点落在图片面板上时不算数。浏览器把 click 派发给按下/松开
+       目标的最近公共祖先——在面板里按住、拖到遮罩上松开时祖先就是 dialog 本身，
+       只看 event.target 会把拖拽误判成「点了遮罩」而关窗。 */
+    var pressOnContent = false;
+    dialog.addEventListener('pointerdown', function (event) {
+        pressOnContent = event.target !== dialog;
+    });
+    dialog.addEventListener('pointercancel', function () { pressOnContent = false; });
     dialog.addEventListener('click', function (event) {
-        if (event.target === dialog) dialog.close();
+        var dismiss = event.target === dialog && !pressOnContent;
+        pressOnContent = false;
+        if (dismiss) dialog.close();
     });
     stage.addEventListener('wheel', function (event) {
         if (!dialog.open || !dialog._previewFitSize || !event.deltaY) return;
@@ -819,32 +911,15 @@ function renderDurableAttachmentImages(container, references) {
         var entry = durableImagePreviews.get(ref.attachmentId);
         if (entry) {
             entry.nodes.push(previewImage);
-            if (entry.url) previewImage.src = entry.url;
+            queueDurableImagePreview(entry, previewImage);
             return;
         }
-        entry = { nodes: [previewImage], url: '', controller: typeof AbortController === 'function' ? new AbortController() : null };
+        entry = { id: ref.attachmentId, nodes: [previewImage], url: '', controller: typeof AbortController === 'function' ? new AbortController() : null };
         durableImagePreviews.set(ref.attachmentId, entry);
         if (!durableImageObserver) {
             durableImageObserver = new MutationObserver(sweepDurableImagePreviews);
             durableImageObserver.observe(document.body, { childList: true, subtree: true });
         }
-        var options = { credentials: 'same-origin' };
-        if (entry.controller) options.signal = entry.controller.signal;
-        fetch('/api/attachments/' + encodeURIComponent(ref.attachmentId), options)
-            .then(function (response) { if (!response.ok) throw new Error('Attachment unavailable'); return response.blob(); })
-            .then(function (blob) {
-                sweepDurableImagePreviews();
-                if (durableImagePreviews.get(ref.attachmentId) !== entry) return;
-                entry.url = URL.createObjectURL(blob);
-                entry.nodes.forEach(function (node) { node.src = entry.url; });
-            }).catch(function () {
-                entry.nodes.forEach(function (node) {
-                    node.alt = '图片暂不可用';
-                    var card = node.closest('.msg-attachment-card, .feed-attachment-card');
-                    if (card) card.classList.add('is-unavailable');
-                });
-                if (durableImagePreviews.get(ref.attachmentId) === entry) durableImagePreviews.delete(ref.attachmentId);
-                sweepDurableImagePreviews();
-            });
+        queueDurableImagePreview(entry, previewImage);
     });
 }

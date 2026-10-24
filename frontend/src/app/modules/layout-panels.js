@@ -39,20 +39,32 @@ async function init() {
     initSidebarSash();
     if (typeof startRuntimeStatusHeartbeat === 'function') startRuntimeStatusHeartbeat();
     showLoading();
-    const sessionsLoaded = await loadSessions();
-    const sessions = sessionStore.list();
     let lastSessionId = localStorage.getItem('lastSessionId');
+    // A deep link is the initial target too. Do not start a second large
+    // history read for the previously selected conversation first.
+    if (typeof pendingQuerySession !== 'undefined' && pendingQuerySession) {
+        lastSessionId = pendingQuerySession;
+        pendingQuerySession = '';
+    }
+    // Give saved history a connection before auxiliary selectors and panels.
+    // The loader consumes this same request, including any failure.
+    if (lastSessionId && lastSessionId !== NEW_SESSION_DRAFT_KEY) prefetchInitialSessionHistory(lastSessionId);
+    const sessionsRequest = loadSessions();
+    // Restore the saved conversation while the sidebar is reading its status
+    // and interaction counts. A slow catalog must not hide ready messages.
+    const restoringHistory = lastSessionId && lastSessionId !== NEW_SESSION_DRAFT_KEY
+        ? switchSession(lastSessionId, { initialLoad: true }) : null;
+    if (restoringHistory) void restoringHistory.catch(function () {});
+    const sessionsLoaded = await sessionsRequest;
+    const sessions = sessionStore.list();
     let targetSession = null;
     const restoreNewSessionDraft = lastSessionId === NEW_SESSION_DRAFT_KEY;
     if (!restoreNewSessionDraft && lastSessionId && sessions.some(s => s.id === lastSessionId)) targetSession = lastSessionId;
     else if (!restoreNewSessionDraft && !sessionsLoaded && lastSessionId) targetSession = lastSessionId;
     else if (!restoreNewSessionDraft && sessions.length > 0) targetSession = sessions[0].id;
-    // Restore durable approvals/questions before switchSession decides whether
-    // the global pending banner should be hidden for the selected session.
-    if (targetSession && typeof refreshHumanInteractions === 'function') {
-        await refreshHumanInteractions(targetSession, { render: false });
-    }
-    if (targetSession) await switchSession(targetSession);
+    // switchSession restores pending interactions alongside the history request.
+    if (restoringHistory && (targetSession === lastSessionId || currentSessionId !== lastSessionId)) await restoringHistory;
+    else if (targetSession) await switchSession(targetSession, { initialLoad: true });
     else await createNewSession();
     // Startup already scans background sessions. Prioritize the visible one
     // independently, without waiting for that entire scan or its HTTP reply.
@@ -66,6 +78,7 @@ async function init() {
         }
     }
     bindExistingLogs();
+    if (typeof startSessionListChangeWatcher === 'function') startSessionListChangeWatcher();
 }
 init();
 function toggleTocPanel() {

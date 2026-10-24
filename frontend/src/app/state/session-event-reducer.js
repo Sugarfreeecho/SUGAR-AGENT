@@ -24,6 +24,10 @@ function applySessionEvent(event, opts) {
     const eventIndex = opts.eventIndex;
     const source = opts.source || 'event';
     const type = String(event.type || '');
+    if (type === 'session_work_dir_changed') {
+        applySessionWorkspaceChange(sessionId, event.session);
+        return { handled: true };
+    }
     const runId = String(event.run_id || event.runId || '').trim();
     const phaseSeq = Number(event.runtime_seq || event.runtimeSeq || 0);
     let messageRecord = null;
@@ -121,15 +125,19 @@ function applySessionEvent(event, opts) {
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {
+        // A historical observation is not the current request's context.
+        if (source.indexOf('history') === 0) {
+            return { handled: true, messageRecord: messageRecord };
+        }
         setContextTokensForSession(sessionId, event.estimated, event.threshold, event.breakdown);
         return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_summary_delta') {
-        appendContextProgressForSession(sessionId, 'context-summary', event.delta);
+        if (source.indexOf('history') !== 0) appendContextProgressForSession(sessionId, 'context-summary', event.delta);
         return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'key_context_delta') {
-        appendContextProgressForSession(sessionId, 'key-context', event.delta);
+        if (source.indexOf('history') !== 0) appendContextProgressForSession(sessionId, 'key-context', event.delta);
         return { handled: false, contextStateChanged: true, messageRecord: messageRecord };
     }
     return { handled: false, messageRecord: messageRecord };

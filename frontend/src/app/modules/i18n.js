@@ -758,6 +758,9 @@ function translateUiString(value) {
 
 function translateUiNode(root) {
     if (!root) return;
+    // Streaming/history payloads can contain thousands of descendants. The
+    // entire excluded subtree has the same outcome as testing every element.
+    if (root.nodeType === Node.ELEMENT_NODE && root.closest && root.closest(UI_I18N_CONTENT_SELECTOR)) return;
     var elements = [];
     if (root.nodeType === Node.ELEMENT_NODE) elements.push(root);
     if (root.querySelectorAll) elements = elements.concat(Array.from(root.querySelectorAll('*')));
@@ -772,7 +775,8 @@ function translateUiNode(root) {
         UI_I18N_ATTRS.forEach(function (attr) {
             if (!el.hasAttribute(attr)) return;
             if (!(attr in originals)) originals[attr] = el.getAttribute(attr);
-            el.setAttribute(attr, uiLanguage === 'en' ? translateUiString(originals[attr]) : originals[attr]);
+            var next = uiLanguage === 'en' ? translateUiString(originals[attr]) : originals[attr];
+            if (el.getAttribute(attr) !== next) el.setAttribute(attr, next);
         });
         uiI18nAttrOriginal.set(el, originals);
         Array.from(el.childNodes).forEach(function (node) {
@@ -781,7 +785,8 @@ function translateUiNode(root) {
             var original = uiI18nTextOriginal.get(node);
             var trimmed = original.trim();
             var translated = uiLanguage === 'en' ? translateUiString(trimmed) : trimmed;
-            node.nodeValue = original.replace(trimmed, translated);
+            var nextText = original.replace(trimmed, translated);
+            if (node.nodeValue !== nextText) node.nodeValue = nextText;
         });
     });
 }
@@ -866,6 +871,10 @@ function applyUiLanguage(language, persist) {
 
 function initUiI18n() {
     uiI18nObserver = new MutationObserver(function (mutations) {
+        // New UI is authored in Chinese. Capture/translate it when switching
+        // to English; scanning every inserted SVG/row in Chinese produces no
+        // translated text. Explicit language changes still visit all UI.
+        if (uiLanguage !== 'en') return;
         mutations.forEach(function (mutation) {
             mutation.addedNodes.forEach(function (node) {
                 if (node.nodeType === Node.ELEMENT_NODE) translateUiNode(node);

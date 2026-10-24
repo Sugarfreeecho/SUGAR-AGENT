@@ -19,6 +19,7 @@ const sessionStore = {
     snapshotProtectedSessions: new Map(),
     snapshotRequestSeq: 0,
     lastAppliedSnapshotRequestSeq: 0,
+    lastAppliedStateRevision: 0,
     committedSnapshotRequestFloor: 0,
     committedStateRevisionFloor: 0,
     metadataMutationSeq: 0,

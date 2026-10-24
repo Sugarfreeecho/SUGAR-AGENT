@@ -211,8 +211,9 @@ async function loadModelProfilesForSwitcher(force) {
         return loadModelProfilesForSwitcher(true);
     }
     const promise = (async function () {
-        const response = await fetch('/api/model_profiles', { credentials: 'same-origin' });
-        const data = await response.json();
+        const data = typeof window !== 'undefined' && window.MyAgentResourceCache
+            ? await window.MyAgentResourceCache.get('/api/model_profiles', { force: !!force })
+            : await (await fetch('/api/model_profiles', { credentials: 'same-origin' })).json();
         if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');
         modelProfilesCache = data;
         modelProfilesLoadedAt = Date.now();
@@ -434,15 +435,18 @@ async function refreshModelProfileSelector(sessionId, opts) {
     var e = els();
     opts = opts || {};
     if (!e.control) return;
-    if (!opts.silent && e.current) e.current.textContent = '正在加载模型配置';
+    if (!opts.silent && !modelProfilesCache && e.current) e.current.textContent = '正在加载模型配置';
     try {
-        await loadModelProfilesForSwitcher(opts.forceProfiles || !opts.silent);
+        const profilesRequest = loadModelProfilesForSwitcher(opts.forceProfiles);
+        const bindingRequest = sid
+            ? fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' }).then(function (r) { return r.json(); })
+            : Promise.resolve(null);
+        var results = await Promise.all([profilesRequest, bindingRequest]);
+        var j = results[1];
         var selectedProfileId = (sid ? modelProfileIdBySession[sid] : newSessionModelProfileId())
             || modelProfilesCache.new_session_default_profile_id
             || '';
         if (sid) {
-            var r = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' });
-            var j = await r.json();
             if (!j || !j.ok) throw new Error((j && j.error) || '会话模型绑定加载失败');
             if (j && j.ok && j.profile_id) {
                 selectedProfileId = String(j.profile_id);
@@ -647,11 +651,19 @@ function initModelProfileSwitcher() {
             return;
         }
         modelMenuPane = activeProfile() ? 'root' : 'model';
-        if (modelProfilesCache) renderModelProfileControl();
-        else renderModelProfileLoadingMenu();
+        if (!e.menu.firstElementChild) renderModelProfileLoadingMenu();
         openModelMenu();
-        refreshModelProfileSelectorInBackground(currentSessionId, { silent: true, invalidate: true, forceProfiles: true });
+        const sid = String(currentSessionId || '');
+        const load = function () {
+            if (!e.menu.classList.contains('is-open') || sid !== String(currentSessionId || '')) return;
+            if (modelProfilesCache) renderModelProfileControl();
+            return refreshModelProfileSelectorInBackground(sid, { silent: true });
+        };
+        if (window.MyAgentUiTasks) window.MyAgentUiTasks.afterPaint(load).catch(console.warn);
+        else load();
     });
+    if (window.MyAgentUiTasks) window.MyAgentUiTasks.bindIntent(e.trigger,
+        'model-profiles', function () { return loadModelProfilesForSwitcher(false); });
     document.addEventListener('click', (ev) => {
         // Pane rendering replaces the clicked row before this listener runs.
         if (!ev.composedPath().includes(e.control)) closeModelMenu();
@@ -700,3 +712,7 @@ document.addEventListener('myagent:language-change', function () {
 window.refreshModelProfileSelector = refreshModelProfileSelector;
 window.refreshModelProfileSelectorInBackground = refreshModelProfileSelectorInBackground;
 window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;
+window.addEventListener('myagent:catalog-invalidated', function () { modelProfilesLoadedAt = 0; });
+document.addEventListener('myagent:settings-closed', function () {
+    refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });
+});

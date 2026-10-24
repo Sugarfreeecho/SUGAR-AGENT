@@ -144,43 +144,72 @@ function settingsCenterUrl(section) {
     return '/settings?' + query.toString() + hash;
 }
 
-function openSettingsCenter(section) {
+function openSettingsCenter(section, options) {
     var overlay = document.getElementById('settings-center-overlay');
     var frame = document.getElementById('settings-center-frame');
-    if (!overlay || !frame) return;
-    if (window.__settingsCenterReady === true) {
-        mountSettingsCenter(section);
-        return;
-    }
-    /* 首次点击先探活：进程还没挂 /settings 路由时给出重启提示，避免空白浮层 */
-    fetch('/settings', { method: 'GET', credentials: 'same-origin', cache: 'no-store' })
-        .then(function (res) {
-            /* 该服务不允许 HEAD，405 也算路由存在 */
-            if (!res.ok && res.status !== 405) throw new Error('settings center unavailable');
-            window.__settingsCenterReady = true;
-            mountSettingsCenter(section);
-        })
-        .catch(function () {
-            window.__settingsCenterReady = false;
-            if (typeof showUiAlert === 'function') {
-                showUiAlert({
-                    title: '设置中心',
-                    message: '设置中心需要重启 Agent 后可用：请用托盘菜单「重启」，然后重新打开本页。',
-                    variant: 'error',
-                });
-            }
-        });
+    if (!overlay || !frame) return false;
+    mountSettingsCenter(section, options);
+    return true;
 }
 
-function mountSettingsCenter(section) {
+function watchSettingsFrame(frame) {
+    if (frame._settingsLoadWatched) return;
+    frame._settingsLoadWatched = true;
+    frame.addEventListener('load', function () {
+        try {
+            const loaded = new URL(frame.contentWindow.location.href);
+            frame._settingsLoadedBase = loaded.pathname + loaded.search;
+        } catch (e) { return; }
+        if (frame._settingsLoadedBase !== frame.getAttribute('data-settings-base')) return;
+        frame.style.visibility = '';
+        const loading = document.getElementById('settings-center-loading');
+        if (loading) loading.hidden = true;
+    });
+}
+
+function mountSettingsCenter(section, options) {
     var overlay = document.getElementById('settings-center-overlay');
     var frame = document.getElementById('settings-center-frame');
     if (!overlay || !frame) return;
-    frame.src = settingsCenterUrl(section);
+    var wasOpen = !!window.__settingsCenterOpen;
     overlay.hidden = false;
     overlay.setAttribute('aria-hidden', 'false');
     document.body.style.overflow = 'hidden';
     window.__settingsCenterOpen = true;
+    const openEpoch = overlay._settingsOpenEpoch = (overlay._settingsOpenEpoch || 0) + 1;
+    var url = settingsCenterUrl(section);
+    var base = url.split('#')[0];
+    watchSettingsFrame(frame);
+    var ready = frame._settingsLoadedBase === base;
+    var loadedSettings = frame.contentWindow && frame.contentWindow.MyAgentSettings;
+    var settings = ready && loadedSettings;
+    frame.style.visibility = ready ? '' : 'hidden';
+    const loading = document.getElementById('settings-center-loading');
+    if (loading) loading.hidden = ready;
+    const load = function () {
+        if (!window.__settingsCenterOpen || overlay._settingsOpenEpoch !== openEpoch
+            || base !== settingsCenterUrl(section).split('#')[0]) return;
+        if (frame.getAttribute('data-settings-base') === base && settings) {
+            // Agent navigation must preserve a form already being edited, even
+            // when it points at the same tab. Other tabs use the usual guard.
+            var target = section || settings.currentSection;
+            if (options?.preserveUnsaved && wasOpen && target === settings.currentSection) return;
+            return settings.showSection(target, { force: !options?.preserveUnsaved, reuseCache: true, optimistic: true });
+        } else if (frame.getAttribute('src') !== url) {
+            // A new session/workspace changes the iframe base too. Ask the
+            // existing settings page before replacing its unsaved form.
+            if (options?.preserveUnsaved && loadedSettings && typeof loadedSettings.requestClose === 'function'
+                && loadedSettings.requestClose({ notifyHost: false }) !== true) {
+                frame.style.visibility = '';
+                if (loading) loading.hidden = true;
+                return;
+            }
+            frame.setAttribute('data-settings-base', base);
+            frame.src = url;
+        }
+    };
+    if (window.MyAgentUiTasks) window.MyAgentUiTasks.afterPaint(load).catch(console.warn);
+    else load();
     try { if (!window.__settingsCenterKeyHandler) {
         window.__settingsCenterKeyHandler = function (ev) {
             if (ev.key === 'Escape' && window.__settingsCenterOpen) {
@@ -196,7 +225,7 @@ function closeSettingsCenter() {
     var frame = document.getElementById('settings-center-frame');
     var settings = frame && frame.contentWindow && frame.contentWindow.MyAgentSettings;
     if (settings && typeof settings.requestClose === 'function') {
-        settings.requestClose();
+        if (settings.requestClose({ notifyHost: false }) === true) finishClosingSettingsCenter();
         return;
     }
     finishClosingSettingsCenter();
@@ -205,19 +234,32 @@ function closeSettingsCenter() {
 function finishClosingSettingsCenter() {
     var overlay = document.getElementById('settings-center-overlay');
     var frame = document.getElementById('settings-center-frame');
-    if (!overlay) return;
+    if (!overlay || overlay.hidden) return;
     overlay.hidden = true;
     overlay.setAttribute('aria-hidden', 'true');
     document.body.style.overflow = '';
     window.__settingsCenterOpen = false;
-    if (frame) frame.src = 'about:blank';
     if (window.__settingsCenterKeyHandler) {
         document.removeEventListener('keydown', window.__settingsCenterKeyHandler);
         window.__settingsCenterKeyHandler = null;
     }
     /* 回到聊天页时按最新的主题/字号/会话列表偏好重绘一次 */
-    try { restoreUiPreferences(); } catch (e) {}
-    try { document.dispatchEvent(new CustomEvent('myagent:settings-closed')); } catch (e) {}
+    const reconcile = function () {
+        if (window.__settingsCenterOpen) return;
+        try { restoreUiPreferences(); } catch (e) {}
+        try { document.dispatchEvent(new CustomEvent('myagent:settings-closed')); } catch (e) {}
+    };
+    if (window.MyAgentUiTasks) window.MyAgentUiTasks.afterPaint(reconcile).catch(console.warn);
+    else setTimeout(reconcile, 0);
+}
+
+function prewarmSettingsCenter(base) {
+    var frame = document.getElementById('settings-center-frame');
+    if (!frame || window.__settingsCenterOpen || base !== settingsCenterUrl().split('#')[0]) return;
+    if (frame.getAttribute('data-settings-base') === base) return;
+    watchSettingsFrame(frame);
+    frame.setAttribute('data-settings-base', base);
+    frame.src = base;
 }
 
 window.addEventListener('message', function (event) {
@@ -225,7 +267,18 @@ window.addEventListener('message', function (event) {
     var frame = document.getElementById('settings-center-frame');
     if (!frame || event.source !== frame.contentWindow) return;
     var data = event.data || {};
+    if (data.type === 'myagent:settings-open-plugin' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(data.pluginId)) {
+        if (globalThis.MyAgentDock?.openPluginPage) {
+            finishClosingSettingsCenter();
+            globalThis.MyAgentDock.openPluginPage(data.pluginId);
+        }
+        return;
+    }
     if (data.type === 'myagent:settings-close') { finishClosingSettingsCenter(); return; }
+    if (data.type === 'myagent:plugins-changed') {
+        document.dispatchEvent(new CustomEvent('myagent:plugins-changed'));
+        return;
+    }
     /* 设置中心里改主题/字号/会话列表/语言 → 聊天页当场跟着变（浮层不用关） */
     if (data.type === 'myagent:settings-prefs') applyHostPrefs(data.prefs);
 });
@@ -272,6 +325,8 @@ function initUiSettingsControls() {
     var gear = document.getElementById('sidebar-settings-btn');
     var overlay = document.getElementById('settings-center-overlay');
     if (gear) {
+        if (window.MyAgentUiTasks) window.MyAgentUiTasks.bindIntent(gear,
+            function () { return settingsCenterUrl().split('#')[0]; }, prewarmSettingsCenter);
         gear.addEventListener('click', function (e) {
             e.preventDefault();
             e.stopPropagation();
@@ -279,8 +334,18 @@ function initUiSettingsControls() {
         });
     }
     if (overlay) {
+        /* 点遮罩关闭：按下点落在浮层内容上时不算数。浏览器把 click 派发给
+           按下/松开目标的最近公共祖先——在浮层里按住、拖到遮罩上松开时祖先就是
+           遮罩，只看 event.target 会误关浮层。 */
+        var pressOnContent = false;
+        overlay.addEventListener('pointerdown', function (e) {
+            pressOnContent = e.target !== overlay;
+        });
+        overlay.addEventListener('pointercancel', function () { pressOnContent = false; });
         overlay.addEventListener('click', function (e) {
-            if (e.target === overlay) closeSettingsCenter();
+            var dismiss = e.target === overlay && !pressOnContent;
+            pressOnContent = false;
+            if (dismiss) closeSettingsCenter();
         });
     }
     var languageBtn = document.getElementById('sidebar-language-btn');

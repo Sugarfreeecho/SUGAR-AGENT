@@ -1,25 +1,34 @@
 const contextStore = {
     tokensBySession: new Map(),
+    tokenVersionsBySession: new Map(),
     progressBySession: new Map(),
 
-    setTokens(sessionId, estimated, threshold, breakdown) {
+    setTokens(sessionId, estimated, threshold, breakdown, options) {
         const sid = String(sessionId || '');
-        if (!sid) return;
-        if (estimated != null && Number(estimated) >= 0) {
-            // Setters race (the snapshot on open, then the session endpoint): an
-            // update that carries no composition must not erase the lanes an
-            // earlier one already stored, or the panel would lose its rows.
+        if (!sid) return false;
+        options = options || {};
+        if (options.expectedVersion != null && options.expectedVersion !== this.tokenVersion(sid)) return false;
+        if (estimated != null && Number.isFinite(Number(estimated)) && Number(estimated) >= 0) {
             const previous = this.tokensBySession.get(sid);
+            const nextThreshold = Number(threshold) > 0 ? Number(threshold) : previous && previous.threshold;
+            const sameReading = previous && previous.estimated === Number(estimated)
+                && previous.threshold === nextThreshold;
+            this.tokenVersionsBySession.set(sid, this.tokenVersion(sid) + 1);
             this.tokensBySession.set(sid, {
                 estimated: Number(estimated),
-                threshold: threshold,
-                // 三段构成由调用方透传（后端 breakdown）；渲染层再校验，缺字段就退回单色条。
-                breakdown: breakdown != null ? breakdown : ((previous && previous.breakdown) || null),
-                updatedAt: Date.now(),
+                threshold: nextThreshold,
+                // Composition is reusable only for the same reading.
+                breakdown: breakdown != null ? breakdown : (sameReading ? previous.breakdown : null),
+                updatedAt: options.stale ? 0 : Date.now(),
             });
         } else {
-            this.tokensBySession.delete(sid);
+            this.clearTokens(sid);
         }
+        return true;
+    },
+
+    tokenVersion(sessionId) {
+        return this.tokenVersionsBySession.get(String(sessionId || '')) || 0;
     },
 
     getTokens(sessionId) {
@@ -27,7 +36,9 @@ const contextStore = {
     },
 
     clearTokens(sessionId) {
-        this.tokensBySession.delete(String(sessionId || ''));
+        const sid = String(sessionId || '');
+        this.tokenVersionsBySession.set(sid, this.tokenVersion(sid) + 1);
+        this.tokensBySession.delete(sid);
     },
 
     appendProgress(sessionId, kind, delta) {
@@ -63,8 +74,12 @@ const contextStore = {
     },
 };
 
-function setContextTokensForSession(sessionId, estimated, threshold, breakdown) {
-    contextStore.setTokens(sessionId, estimated, threshold, breakdown);
+function setContextTokensForSession(sessionId, estimated, threshold, breakdown, options) {
+    return contextStore.setTokens(sessionId, estimated, threshold, breakdown, options);
+}
+
+function getContextTokenVersion(sessionId) {
+    return contextStore.tokenVersion(sessionId);
 }
 
 function selectContextTokens(sessionId) {

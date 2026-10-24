@@ -465,6 +465,7 @@ function buildSessionMoreMenuMarkup() {
         + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
         + '<button type="button" class="session-menu-todo" role="menuitem"></button>'
         + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
+        + '<button type="button" class="session-menu-workdir" role="menuitem">切换工作区</button>'
         + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
         + '<div class="session-menu-separator" role="separator"></div>'
         + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'
@@ -614,6 +615,29 @@ async function toggleSessionArchivedFromMenu(sess) {
             if (previous) applyOptimisticSessionUpdate(sess.id, previous);
         }
         console.error('归档失败', err);
+    }
+}
+
+async function changeSessionWorkDirFromMenu(sess) {
+    const picked = await pickNewSessionWorkDir(sess.effective_work_dir || sess.work_dir || '');
+    if (!picked) return;
+    const token = beginSidebarMetadataMutation();
+    let committed = false;
+    try {
+        const response = await fetchWithTimeout('/sessions/' + encodeURIComponent(sess.id) + '/work-dir', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ work_dir: String(picked).trim() }),
+        }, 12000);
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) throw new Error(payload.error || ('HTTP ' + response.status));
+        commitSidebarMetadataMutation(token, payload);
+        committed = true;
+        applyOptimisticSessionUpdate(sess.id, payload.session);
+        syncSessionWorkspaceUi(sess.id);
+    } catch (error) {
+        if (!committed) cancelSidebarMetadataMutation(token);
+        await openUiModal({ title: '工作区未切换', message: String(error.message || error),
+            confirmText: '知道了', cancelText: '' });
     }
 }
 
@@ -851,6 +875,7 @@ function bindSessionActionMenu(wrap, getSession, rowDiv) {
         var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
             : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
                 : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
+                    : target.classList.contains('session-menu-workdir') ? changeSessionWorkDirFromMenu
                     : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
                         : target.classList.contains('session-menu-export') ? exportSessionFromMenu
                             : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu
@@ -1166,7 +1191,16 @@ function scheduleSessionNameRecheck(sessionId, opts) {
     state.timer = setTimeout(tick, delayMs);
 }
 
+var sessionRowRefreshPromises = new Map();
 async function refreshSingleSessionRow(sessionId) {
+    if (sessionRowRefreshPromises.has(sessionId)) return sessionRowRefreshPromises.get(sessionId);
+    var promise = refreshSingleSessionRowInner(sessionId);
+    sessionRowRefreshPromises.set(sessionId, promise);
+    try { return await promise; }
+    finally { if (sessionRowRefreshPromises.get(sessionId) === promise) sessionRowRefreshPromises.delete(sessionId); }
+}
+
+async function refreshSingleSessionRowInner(sessionId) {
     if (!sessionId || !sessionsList) return;
     try {
         const response = await fetch('/sessions/' + encodeURIComponent(sessionId));
@@ -1206,13 +1240,11 @@ async function refreshSingleSessionRow(sessionId) {
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
         }
-        if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
-            subagentComposerUi.syncFromSessionSummary(sess.id, sess);
-        }
         renderSessionListIfChanged(false);
         if (!sess.is_subagent && typeof maybeAutoResumeInterruptedReact === 'function') {
             maybeAutoResumeInterruptedReact(sessionId, sess);
         }
+        return sess;
     } catch (e) {
         console.error('刷新会话摘要失败:', e);
     }
@@ -1419,6 +1451,15 @@ function renderSessionListError(message) {
     row.className = 'session-list-error';
     row.setAttribute('role', 'status');
     row.textContent = message || '加载会话列表失败';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn-small';
+    retry.textContent = '重试';
+    retry.addEventListener('click', function () {
+        resetSessionListRetry();
+        void loadSessions();
+    });
+    row.appendChild(retry);
     sessionsList.appendChild(row);
 }
 
@@ -1516,15 +1557,34 @@ async function fetchSessionsStateSnapshot(opts) {
     opts = opts || {};
     const requestSeq = ++sessionStore.snapshotRequestSeq;
     const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
-    const response = await fetchWithTimeout(url, {}, 12000);
-    if (!response.ok) throw new Error('sessions state failed: ' + response.status);
-    const snapshot = await response.json();
-    if (!snapshot || !Array.isArray(snapshot.sessions)) {
-        throw new Error('invalid sessions state response');
+    if (typeof sessionLoadingDiagnostics !== 'undefined') {
+        const ownsTrace = !opts.loadingTrace;
+        const trace = opts.loadingTrace || sessionLoadingDiagnostics.start('', 'session_list');
+        let outcome = 'failed', failure = null;
+        try {
+            const result = await sessionLoadingDiagnostics.fetchJSON(trace, url, {}, 12000);
+            if (!result.response.ok || !result.data || !Array.isArray(result.data.sessions)) {
+                const error = new Error('invalid sessions state: ' + result.response.status);
+                error.uiLoadReason = result.response.ok ? 'invalid_payload' : 'http';
+                throw error;
+            }
+            outcome = 'success';
+            return Object.assign(result.data, {include_archived:!!opts.includeArchived, client_request_seq:requestSeq});
+        } catch (error) {
+            failure = error;
+            throw error;
+        } finally {
+            if (ownsTrace) sessionLoadingDiagnostics.end(trace, outcome, failure);
+        }
     }
-    snapshot.include_archived = !!opts.includeArchived;
-    snapshot.client_request_seq = requestSeq;
-    return snapshot;
+    return fetchWithTimeout(url, {}, 12000, async function (response) {
+        if (!response.ok) throw new Error('sessions state failed: ' + response.status);
+        const snapshot = await response.json();
+        if (!snapshot || !Array.isArray(snapshot.sessions)) throw new Error('invalid sessions state response');
+        snapshot.include_archived = !!opts.includeArchived;
+        snapshot.client_request_seq = requestSeq;
+        return snapshot;
+    });
 }
 
 function deriveSidebarRuntimeStatus() {
@@ -1657,20 +1717,29 @@ function startRuntimeStatusHeartbeat() {
     }, { runWhenHidden: true });
 }
 
-async function fetchWithTimeout(url, options, timeoutMs) {
+async function fetchWithTimeout(url, options, timeoutMs, consume) {
     options = options || {};
     const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
     const controller = new AbortController();
     const outerSignal = options.signal;
-    const abortFromOuter = function () { controller.abort(); };
+    let abortReason = '';
+    const abortFromOuter = function () { if (!abortReason) abortReason = 'cancelled'; controller.abort(); };
     if (outerSignal) {
-        if (outerSignal.aborted) controller.abort();
+        if (outerSignal.aborted) abortFromOuter();
         else outerSignal.addEventListener('abort', abortFromOuter, { once: true });
     }
-    const timer = setTimeout(function () { controller.abort(); }, ms);
+    const timer = setTimeout(function () { if (!abortReason) abortReason = 'timeout'; controller.abort(); }, ms);
     const nextOptions = Object.assign({}, options, { signal: controller.signal });
     try {
-        return await fetch(url, nextOptions);
+        const response = await fetch(url, nextOptions);
+        // Keep cancellation and the deadline alive while a JSON body is read.
+        return typeof consume === 'function' ? await consume(response) : response;
+    } catch (error) {
+        if (error && typeof error === 'object' && abortReason) {
+            error.uiLoadReason = abortReason;
+            error.uiLoadTimeoutMs = ms;
+        }
+        throw error;
     } finally {
         clearTimeout(timer);
         if (outerSignal) outerSignal.removeEventListener('abort', abortFromOuter);
@@ -1773,18 +1842,95 @@ async function loadArchivedSessions(opts) {
     }
 }
 
+var sessionListChangeWatcherStarted = false;
+var sessionListChangeWatcherEpoch = 0;
+var sessionListChangeController = null;
+var sessionListChangeTimer = null;
+
+function startSessionListChangeWatcher() {
+    if (sessionListChangeWatcherStarted) return;
+    sessionListChangeWatcherStarted = true;
+    const epoch = ++sessionListChangeWatcherEpoch;
+    let revision = Number(sessionStore.lastAppliedStateRevision) || 0;
+    const poll = async function () {
+        let delay = 0;
+        const controller = new AbortController();
+        sessionListChangeController = controller;
+        try {
+            const payload = await fetchWithTimeout('/sessions/changes?after_revision=' + revision,
+                { cache: 'no-store', signal: controller.signal }, 35000, async function (response) {
+                    if (!response.ok) throw new Error('session changes failed: ' + response.status);
+                    return response.json();
+                });
+            const next = Number(payload && payload.state_revision);
+            if (epoch !== sessionListChangeWatcherEpoch) return;
+            if (!Number.isFinite(next) || next <= 0) throw new Error('invalid session changes response');
+            if (next !== Number(sessionStore.lastAppliedStateRevision)) {
+                // A request already in flight can predate this notification.
+                // Start a fresh one; its epoch prevents older results winning.
+                const loaded = await loadSessions({ background: true, force: true });
+                if (!loaded || Number(sessionStore.lastAppliedStateRevision) < next) {
+                    throw new Error('session changes snapshot not yet applied');
+                }
+            }
+            revision = Number(sessionStore.lastAppliedStateRevision) || next;
+        } catch (error) {
+            delay = 2000;
+        } finally {
+            if (sessionListChangeController === controller) sessionListChangeController = null;
+            if (sessionListChangeWatcherStarted && epoch === sessionListChangeWatcherEpoch) {
+                sessionListChangeTimer = setTimeout(poll, delay);
+            }
+        }
+    };
+    void poll();
+}
+
+function stopSessionListChangeWatcher() {
+    sessionListChangeWatcherStarted = false;
+    sessionListChangeWatcherEpoch += 1;
+    if (sessionListChangeController) sessionListChangeController.abort();
+    if (sessionListChangeTimer) clearTimeout(sessionListChangeTimer);
+    sessionListChangeTimer = null;
+}
+
+window.addEventListener('pagehide', stopSessionListChangeWatcher);
+window.addEventListener('pageshow', function (event) {
+    if (event.persisted) startSessionListChangeWatcher();
+});
+
 async function loadSessions(opts) {
     opts = opts || {};
     if (sessionListLoadPromise && !opts.force) return sessionListLoadPromise;
-    sessionListLoadPromise = loadSessionsInner(opts);
+    const pending = loadSessionsInner(opts);
+    sessionListLoadPromise = pending;
     try {
-        return await sessionListLoadPromise;
+        return await pending;
     } finally {
-        sessionListLoadPromise = null;
+        if (sessionListLoadPromise === pending) sessionListLoadPromise = null;
     }
 }
 
+var sessionListRetryTimer = null;
+var sessionListRetryAttempts = 0;
+function resetSessionListRetry() {
+    if (sessionListRetryTimer) clearTimeout(sessionListRetryTimer);
+    sessionListRetryTimer = null;
+    sessionListRetryAttempts = 0;
+}
+
+function scheduleSessionListRetry() {
+    if (sessionListRetryTimer || sessionListRetryAttempts >= 3) return;
+    const delay = 1000 * Math.pow(2, sessionListRetryAttempts++);
+    sessionListRetryTimer = setTimeout(function () {
+        sessionListRetryTimer = null;
+        void loadSessions({ background: true });
+    }, delay);
+}
+
 async function loadSessionsInner(opts) {
+    const loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined' ? sessionLoadingDiagnostics.start('', 'session_list') : null;
+    let loadingOutcome = 'cancelled', loadingError = null;
     const loadEpoch = ++sessionListLoadEpoch;
     sessionStore.ui.loadingSessions = true;
     try {
@@ -1792,14 +1938,29 @@ async function loadSessionsInner(opts) {
         let snapshot = null;
 
         try {
-            snapshot = await fetchSessionsStateSnapshot();
+            snapshot = await fetchSessionsStateSnapshot({loadingTrace:loadingTrace});
             if (loadEpoch !== sessionListLoadEpoch) return;
             updateSidebarRuntimeStatus(true);
             allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
         } catch (stateErr) {
+            if (loadEpoch !== sessionListLoadEpoch) return false;
             console.error('加载会话状态快照失败，回退至旧接口', stateErr);
             const fallbackRequestSeq = ++sessionStore.snapshotRequestSeq;
-            const response = await fetchWithTimeout('/sessions', {}, 12000);
+            if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'fallback');
+            const result = loadingTrace
+                ? await sessionLoadingDiagnostics.fetchJSON(loadingTrace, '/sessions', {}, 12000)
+                : await fetchWithTimeout('/sessions', {}, 12000, async function (response) {
+                if (!response.ok) throw new Error('sessions fallback failed: ' + response.status);
+                const sessions = await response.json();
+                if (!Array.isArray(sessions)) throw new Error('invalid sessions fallback response');
+                return { response: response, sessions: sessions };
+            });
+            const response = result.response;
+            if (!response.ok || !Array.isArray(result.data || result.sessions)) {
+                const error = new Error('invalid sessions fallback: ' + response.status);
+                error.uiLoadReason = response.ok ? 'invalid_payload' : 'http';
+                throw error;
+            }
             const archivedCountHeader = response.headers.get('X-Archived-Count');
             if (archivedCountHeader != null && archivedCountHeader !== '') {
                 const parsedArchivedCount = Number(archivedCountHeader);
@@ -1808,7 +1969,7 @@ async function loadSessionsInner(opts) {
                     syncArchivedSessionStateFromStore();
                 }
             }
-            const sessions = await response.json();
+            const sessions = result.data || result.sessions;
             if (loadEpoch !== sessionListLoadEpoch) return;
             updateSidebarRuntimeStatus(true);
             allSessions = Array.isArray(sessions) ? sessions : [];
@@ -1818,6 +1979,7 @@ async function loadSessionsInner(opts) {
                 client_request_seq: fallbackRequestSeq,
             };
         }
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'layout');
         applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
@@ -1842,12 +2004,18 @@ async function loadSessionsInner(opts) {
 
         renderSessionListIfChanged(!!opts.forceRender);
         clearSessionListError();
+        resetSessionListRetry();
+        if (typeof sessionsList !== 'undefined' && sessionsList && sessionsList.dataset) sessionsList.dataset.snapshotReady = '1';
         sessionStore.ui.loadingSessions = false;
         if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
             void loadArchivedSessions({ background: true });
         }
+        loadingOutcome = 'success';
         return true;
     } catch (error) {
+        loadingError = error;
+        if (loadEpoch !== sessionListLoadEpoch) return false;
+        loadingOutcome = 'failed';
         sessionStore.ui.loadingSessions = false;
         updateSidebarRuntimeStatus(false);
         console.error('加载会话列表失败:', error);
@@ -1857,7 +2025,10 @@ async function loadSessionsInner(opts) {
         } else {
             renderSessionListError('加载会话列表失败');
         }
+        scheduleSessionListRetry();
         return false;
+    } finally {
+        if (loadingTrace) sessionLoadingDiagnostics.end(loadingTrace, loadingOutcome, loadingError);
     }
 }
 
@@ -1971,8 +2142,94 @@ function showSessionLoadRetry(sessionId) {
 }
 
 var sessionHistoryLoadController = null;
+var initialSessionHistoryPrefetch = null;
+
+function initialSessionHistoryUrl(sessionId) {
+    return '/sessions/' + encodeURIComponent(sessionId)
+        + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
+        + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
+        + '&include_aux=false&prefer_active_turn=true&tail_limit=200';
+}
+
+function prefetchInitialSessionHistory(sessionId) {
+    if (!sessionId || initialSessionHistoryPrefetch) return;
+    var controller = new AbortController();
+    var url = initialSessionHistoryUrl(sessionId);
+    var loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined' ? sessionLoadingDiagnostics.start(sessionId, 'history') : null;
+    if (loadingTrace) controller.signal.addEventListener('abort', function () {
+        sessionLoadingDiagnostics.end(loadingTrace, 'cancelled');
+    }, {once:true});
+    initialSessionHistoryPrefetch = {
+        sessionId: sessionId, url: url, controller: controller, startedAt: Date.now(),
+        loadingTrace: loadingTrace,
+        contextTokenVersion: typeof getContextTokenVersion === 'function' ? getContextTokenVersion(sessionId) : null,
+        // Store failures for the consumer too: do not turn one timeout into
+        // another full projection. Catch now to avoid an unhandled rejection.
+        promise: fetchSessionHistoryJSON(url, controller.signal, loadingTrace).catch(function (error) { return { error: error }; }),
+    };
+}
+
+async function fetchInitialSessionHistorySnapshot(sessionId, url, signal, loadingTrace) {
+    var entry = initialSessionHistoryPrefetch;
+    initialSessionHistoryPrefetch = null;
+    if (entry && entry.sessionId === sessionId && entry.url === url) {
+        var abort = function () { entry.controller.abort(); };
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+        try {
+            var response = await entry.promise;
+            if (response && response.error) throw response.error;
+            return response;
+        } finally { signal.removeEventListener('abort', abort); }
+    } else if (entry) {
+        entry.controller.abort();
+        if (typeof sessionLoadingDiagnostics !== 'undefined') sessionLoadingDiagnostics.end(entry.loadingTrace, 'cancelled');
+    }
+    return fetchSessionHistoryJSON(url, signal, loadingTrace);
+}
+
+// Retry brief cold-server failures once. A timeout must not launch another
+// expensive projection, and switching sessions cancels the backoff as well.
+async function fetchSessionHistoryJSON(url, signal, loadingTrace) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const result = typeof sessionLoadingDiagnostics !== 'undefined'
+                ? await sessionLoadingDiagnostics.fetchJSON(loadingTrace, url, {signal:signal}, 30000, attempt + 1)
+                : await fetchWithTimeout(url, { signal: signal }, 30000, async function (response) {
+                return { response: response, data: await response.json().catch(function () { return null; }) };
+            });
+            if (attempt || [502, 503, 504].indexOf(result.response.status) < 0) return result;
+        } catch (error) {
+            if (attempt || (signal && signal.aborted) || error.name !== 'TypeError') throw error;
+        }
+        await new Promise(function (resolve, reject) {
+            const abort = function () {
+                clearTimeout(timer);
+                if (signal) signal.removeEventListener('abort', abort);
+                const error = new Error('History request cancelled');
+                error.name = 'AbortError';
+                reject(error);
+            };
+            const timer = setTimeout(function () {
+                if (signal) signal.removeEventListener('abort', abort);
+                resolve();
+            }, 400);
+            if (signal) {
+                if (signal.aborted) abort();
+                else signal.addEventListener('abort', abort, { once: true });
+            }
+        });
+    }
+}
 
 async function loadSessionMessages(sessionId, scrollBehavior, opts) {
+    const loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined'
+        ? (initialSessionHistoryPrefetch && initialSessionHistoryPrefetch.sessionId === sessionId
+            ? initialSessionHistoryPrefetch.loadingTrace : sessionLoadingDiagnostics.start(sessionId, 'history')) : null;
+    let loadingOutcome = 'cancelled', loadingError = null;
+    const contextTokenVersion = typeof getContextTokenVersion === 'function'
+        ? (initialSessionHistoryPrefetch && initialSessionHistoryPrefetch.sessionId === sessionId
+            ? initialSessionHistoryPrefetch.contextTokenVersion : getContextTokenVersion(sessionId)) : null;
     const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)
         ? performance.now()
         : Date.now();
@@ -2011,13 +2268,13 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         let manualHistory = false;
         const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
         if (canUseSnapshot) {
-            const snapshotUrl = '/sessions/' + encodeURIComponent(sessionId)
-                + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
-                + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
-                + '&include_aux=false&prefer_active_turn=true';
+            const snapshotUrl = initialSessionHistoryUrl(sessionId);
             for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
-                const snapshotResp = await fetchWithTimeout(snapshotUrl, { signal: loadController.signal }, 30000);
-                const snapshot = await snapshotResp.json().catch(function () { return null; });
+                const result = migrationAttempt === 0
+                    ? await fetchInitialSessionHistorySnapshot(sessionId, snapshotUrl, loadController.signal, loadingTrace)
+                    : await fetchSessionHistoryJSON(snapshotUrl, loadController.signal, loadingTrace);
+                const snapshotResp = result.response;
+                const snapshot = result.data;
                 if (snapshot && snapshot.migration_pending) {
                     if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
                     if (migrationAttempt === 119) throw new Error('历史迁移尚未完成，请稍后重新加载');
@@ -2029,7 +2286,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 // Retrying the same projection on timeout doubles its work.
                 if ([404, 405, 409].indexOf(snapshotResp.status) >= 0) break;
                 if (!snapshotResp.ok || !snapshot || !snapshot.ok || !snapshot.messages) {
-                    throw new Error('history snapshot failed: ' + snapshotResp.status);
+                    const error = new Error('history snapshot failed: ' + snapshotResp.status);
+                    error.uiLoadReason = snapshotResp.ok ? 'invalid_payload' : 'http';
+                    throw error;
                 }
                 raw = snapshot.messages;
                 manualHistory = snapshot.history_mode === 'current_turn';
@@ -2057,7 +2316,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                         sessionId,
                         snapshot.context_tokens.estimated,
                         snapshot.context_tokens.threshold,
-                        snapshot.context_tokens.breakdown
+                        snapshot.context_tokens.breakdown,
+                        { expectedVersion: contextTokenVersion, stale: !!(snapshot.context_tokens.stale || snapshot.context_tokens.pending_recalculation) }
                     );
                 }
                 if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
@@ -2082,13 +2342,23 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 url += '?turns=' + (manualHistory ? 1 : HISTORY_DIALOGUES_PER_PAGE)
                     + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
             }
-            const response = await fetchWithTimeout(url, { signal: loadController.signal }, 30000);
-            if (!response.ok) throw new Error('messages failed: ' + response.status);
-            raw = await response.json();
+            const result = await fetchSessionHistoryJSON(url, loadController.signal, loadingTrace);
+            if (!result.response.ok) {
+                const error = new Error('messages failed: ' + result.response.status);
+                error.uiLoadReason = 'http';
+                throw error;
+            }
+            raw = result.data;
+        }
+        if (!Array.isArray(raw) && !(raw && typeof raw === 'object' && Array.isArray(raw.events))) {
+            const error = new Error('Invalid history response');
+            error.uiLoadReason = 'invalid_payload';
+            throw error;
         }
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
         replayingMessages = true;
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'hydrate');
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.fetch', elapsedSince(openSessionStartedAt));
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         const vis = getVisibleChatStream();
@@ -2121,6 +2391,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 has_older: !!raw.has_older,
                 has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,
                 manual_history: manualHistory,
+                event_limited_tail: !!raw.event_limited_tail,
             };
             uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
         } else {
@@ -2140,6 +2411,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 has_older: !!pageMeta.has_older,
                 has_newer: !!pageMeta.has_newer,
                 manual_history: !!pageMeta.manual_history,
+                event_limited_tail: !!pageMeta.event_limited_tail,
             });
             ensureHistorySentinel(getVisibleChatStream());
         }
@@ -2151,6 +2423,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
             markVisibleSessionStreamLoadState(sessionId, 'ok');
+            loadingOutcome = 'success';
             logOpenSessionTiming(sessionId, {
                 source: historySource,
                 events: 0,
@@ -2166,7 +2439,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         const hydrationStartedAt = performance.now();
         loadCtx.lastUserEventIndex = -1;
         const indexBase = pageMeta ? pageMeta.range_start : 0;
-        const batchSize = opts.full ? 64 : 512;
+        let replaySliceStartedAt = performance.now();
+        let replayYieldCount = 0, replayYieldWaitMs = 0, replayMaxSliceMs = 0;
         for (let evi = 0; evi < events.length; evi += 1) {
             const ev = events[evi];
             if (ev && typeof ev === 'object' && ev.type) {
@@ -2176,9 +2450,15 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                     source: 'history',
                 });
             }
-            if (evi > 0 && evi % batchSize === 0) {
-                await new Promise(function (resolve) { setTimeout(resolve, 0); });
+            if (evi + 1 < events.length && performance.now() - replaySliceStartedAt >= 12) {
+                replayMaxSliceMs = Math.max(replayMaxSliceMs, performance.now() - replaySliceStartedAt);
+                const yieldStartedAt = performance.now();
+                if (typeof MyAgentUiTasks !== 'undefined' && MyAgentUiTasks.yieldToMain) await MyAgentUiTasks.yieldToMain();
+                else await new Promise(function (resolve) { setTimeout(resolve, 0); });
+                replayYieldCount += 1;
+                replayYieldWaitMs += performance.now() - yieldStartedAt;
                 if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
+                replaySliceStartedAt = performance.now();
             }
         }
         savedExecutions.forEach(function (record) {
@@ -2187,10 +2467,14 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         });
         mergeAdjacentExecutionGroups(loadCtx.stream);
         if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(sessionId, 'history.maxReplaySlice', Math.max(replayMaxSliceMs, performance.now() - replaySliceStartedAt));
+            uiPerformance.sample(sessionId, 'history.yieldWait', replayYieldWaitMs);
+            uiPerformance.count(sessionId, 'history.yields', replayYieldCount);
             uiPerformance.sample(sessionId, 'history.hydrate', performance.now() - hydrationStartedAt);
             uiPerformance.count(sessionId, 'history.events', events.length);
         }
         var imageLayoutStartedAt = performance.now();
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'images');
         var historyScrollBehavior = scrollBehavior;
         if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'bottom') && typeof prepareWorkspaceImageLayout === 'function') {
             await prepareWorkspaceImageLayout(getVisibleChatStream());
@@ -2217,6 +2501,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             scheduleContextTokensAfterPaint(sessionId);
             applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
             markVisibleSessionStreamLoadState(sessionId, 'ok');
+            loadingOutcome = 'success';
             logOpenSessionTiming(sessionId, {
                 source: historySource,
                 events: events.length,
@@ -2232,6 +2517,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         if (historyLoadScrollsToBottom(sessionId, historyScrollBehavior)) {
             tocScrollBottomOnNextBuild = true;
         }
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'layout');
         suppressTocDuringSessionLoad = false;
         if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });
         else if (!opts.tocAlreadyStarted) rebuildToc();
@@ -2239,6 +2525,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         updateHistorySentinelVisibility();
         bindExistingLogInteractions();
         var historyScrollStartedAt = performance.now();
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'scroll');
         // Completed unread results have no animation phase. Settle the log
         // layout before placing the viewport, including queued overflow work.
         if (historyScrollBehavior === 'bottom') finalizeExistingLogLayout();
@@ -2259,6 +2546,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         scheduleTocActiveUpdate();
         scheduleContextTokensAfterPaint(sessionId);
         markVisibleSessionStreamLoadState(sessionId, 'ok');
+        loadingOutcome = 'success';
         logOpenSessionTiming(sessionId, {
             source: historySource,
             events: events.length,
@@ -2267,7 +2555,9 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         });
         return true;
     } catch (error) {
+        loadingError = error;
         if (loadController.signal.aborted || loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;
+        loadingOutcome = 'failed';
         console.error('加载会话消息失败:', error);
         document.getElementById('chat-loading')?.remove();
         appendLogVisible('加载历史消息失败', 'error-log');
@@ -2275,6 +2565,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         showSessionLoadRetry(sessionId);
         return false;
     } finally {
+        if (loadingTrace) sessionLoadingDiagnostics.end(loadingTrace, loadingOutcome, loadingError);
         if (sessionHistoryLoadController === loadController) sessionHistoryLoadController = null;
         finishHistoryHydration();
         if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
@@ -2329,7 +2620,6 @@ function beforeSessionMessageSnapshotAvailable() {
 async function switchSession(sessionId, opts) {
     if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);
     opts = opts || {};
-    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();
     if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
     // 子代理寻址：任何不是"由寻址栈驱动"的会话切换都退出寻址态
     // （返回父会话时栈已先弹出，此处同样得到正确结果）。
@@ -2340,9 +2630,14 @@ async function switchSession(sessionId, opts) {
         }
     }
     if (currentSessionId === sessionId && !opts.forceReload) {
-        clearSessionUnreadState(sessionId);
-        return true;
+        const stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : null;
+        if (!(stream && stream.dataset && stream.dataset.sessionLoadFailed === '1')) {
+            clearSessionUnreadState(sessionId);
+            return true;
+        }
+        opts.forceReload = true;
     }
+    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();
     const switchStartedAt = performance.now();
     if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
     const switchToken = ++switchSessionEpoch;
@@ -2373,6 +2668,10 @@ async function switchSession(sessionId, opts) {
         (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)
         || sessionUnreadComplete.has(sessionId)
     );
+    if ((sessionHadUnreadResult || opts.forceReload) && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch) {
+        initialSessionHistoryPrefetch.controller.abort();
+        initialSessionHistoryPrefetch = null;
+    }
     clearSessionUnreadState(sessionId);
     const leaving = currentSessionId;
     recentComposerQueuedFollowup = null;
@@ -2397,6 +2696,7 @@ async function switchSession(sessionId, opts) {
     if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
     if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
     if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
+    if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
     syncSessionListIndicatorClasses();
     // Refresh extension panels only after the new row owns the active marker;
     // otherwise the projection request can render the session we just left.
@@ -2404,24 +2704,17 @@ async function switchSession(sessionId, opts) {
         detail: { sessionId: sessionId },
     }));
     setSendButtonState();
-    if (!isSessionRunning(sessionId) && !(typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))) {
-        let __shouldPreflight = true;
-        try {
-            const __sess = sessionStore.get(sessionId);
-            const __last = __sess ? Date.parse(__sess.last_activity_at || __sess.updated_at || __sess.created_at || "") : 0;
-            if (Number.isFinite(__last) && Date.now() - __last > 12 * 60 * 1000) __shouldPreflight = false;
-        } catch (e) {}
-        if (__shouldPreflight) {
-            try {
-                await Promise.race([
-                    (async () => {
-                        if (typeof refreshSingleSessionRow === 'function') await refreshSingleSessionRow(sessionId);
-                    })(),
-                    new Promise(resolve => setTimeout(resolve, 450))
-                ]);
-            } catch (e) { /* preflight best-effort */ }
+    // Restore/render immediately; authoritative runtime discovery runs alongside
+    // history instead of adding a fixed preflight delay to every recent session.
+    var sessionStateRefresh = refreshSingleSessionRow(sessionId);
+    void sessionStateRefresh.then(function (latest) {
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId || !latest) return;
+        if (restoredFromCache && latest.unread_result) {
+            void switchSession(sessionId, { forceReload: true });
+        } else if (latest.stream_active || latest.run_active) {
+            maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         }
-    }
+    });
     if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) {
         if (typeof uiPerformance !== 'undefined') uiPerformance.count(sessionId, 'switch.cancelled');
         return false;
@@ -2464,9 +2757,7 @@ async function switchSession(sessionId, opts) {
                 scrollCurrentRunningProcessToBottom(sessionId);
             }
         }
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        void refreshSingleSessionRow(sessionId);
         document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
             detail: { sessionId: sessionId, phase: 'loaded' },
         }));
@@ -2490,9 +2781,10 @@ async function switchSession(sessionId, opts) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         try {
-            // Capture unread intent before clearing the badge and preserve it
-            // through the async load: completed results open without a glide.
-            var loadedOk = await loadSessionMessages(sessionId, sessionHadUnreadResult ? 'bottom' : 'smooth-bottom', {
+            // A newly materialized stream has no previous viewport to animate
+            // from. Cached streams restore their reading position above.
+            var initialScrollMode = 'bottom';
+            var loadedOk = await loadSessionMessages(sessionId, initialScrollMode, {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: addressingChildSwitch || isServerStreamActive(sessionId),
                 tocAlreadyStarted: tocAlreadyStarted,
@@ -2511,13 +2803,11 @@ async function switchSession(sessionId, opts) {
             }
         }
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
-        void refreshSingleSessionRow(sessionId);
         document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
             detail: { sessionId: sessionId, phase: 'loaded' },
         }));
         setSendButtonState();
         maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.loaded', performance.now() - switchStartedAt);
         resolve(true);
         }, 20);
@@ -2528,6 +2818,7 @@ async function createNewSession(targetWorkDir) {
     if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);
     if (typeof targetWorkDir === 'string') {
         const requestedWorkDir = targetWorkDir.trim();
+        rememberNewSessionWorkDir(requestedWorkDir);
         if (requestedWorkDir !== newSessionWorkDir) {
             newSessionWorkDir = requestedWorkDir;
             newSessionWorkDirRevision += 1;
@@ -2589,8 +2880,8 @@ async function createNewSession(targetWorkDir) {
 
 /* ── 新建会话：可选工作目录 ────────────────────────────────────────────────
    菜单两项：在当前工作目录新建 / 在新工作目录新建（复用 MyAgentPathPicker 的原生目录
-   选择器）。选定的目录只作用于「下一个新会话」：草稿态会立刻按新目录重开隐藏草稿
-   （服务端 work_dir 建会话时指定、之后不可改），已有会话则等下次点新建时生效。 */
+   选择器）。选定的目录只作用于「下一个新会话」：草稿态会立刻按新目录重开隐藏草稿。
+   已有会话通过会话菜单的「切换工作区」直接修改。 */
 
 /** 目录选择器不可用（无原生对话框 / 无该 API）时的手填兜底；返回绝对路径或 null。 */
 function promptNewSessionWorkDirFallback(initial, reason) {
@@ -2599,20 +2890,20 @@ function promptNewSessionWorkDirFallback(initial, reason) {
     return openUiModal({
         title: '选择工作目录',
         message: detail
-            ? ('系统目录选择器没能返回目录（' + detail + '）。请直接填写新会话的工作目录绝对路径。')
-            : '无法打开系统目录选择器，请直接填写新会话的工作目录绝对路径。',
+            ? ('系统目录选择器没能返回目录（' + detail + '）。请直接填写目标工作目录的绝对路径。')
+            : '无法打开系统目录选择器，请直接填写目标工作目录的绝对路径。',
         inputLabel: '工作目录绝对路径',
         inputValue: String(initial || ''),
         inputPlaceholder: 'D:\\work\\my-project',
-        confirmText: '在此目录新建',
+        confirmText: '选择此目录',
         cancelText: '取消',
     }).then(function (value) {
         return typeof value === 'string' ? value : null;
     });
 }
 
-async function pickNewSessionWorkDir() {
-    const initial = activeSessionWorkDir()
+async function pickNewSessionWorkDir(initialDir) {
+    const initial = initialDir || activeSessionWorkDir()
         || newSessionWorkDirTarget()
         || ((typeof getActiveWorkDir === 'function') ? getActiveWorkDir() : '');
     const picker = (typeof window !== 'undefined' && window.MyAgentPathPicker)
@@ -2805,9 +3096,10 @@ function bindWelcomeSessionDirectoryCard(card) {
     });
 })();
 
-/** 记下目标目录；草稿态下立刻按新目录重开隐藏草稿（旧草稿的 work_dir 不可改）。 */
+/** 记下目标目录；草稿态下按新目录预取隐藏草稿，保持创建请求的版本隔离。 */
 function applyNewSessionWorkDir(workDir) {
     const next = String(workDir || '').trim();
+    rememberNewSessionWorkDir(next);
     if (next === newSessionWorkDir) return Promise.resolve(null);
     newSessionWorkDir = next;
     newSessionWorkDirRevision += 1;
@@ -2856,8 +3148,12 @@ function activeSessionWorkDir() {
 
 /** 主按钮与菜单「当前工作目录」：在当前会话的目录里新建（DSH 的当前工作区语义）。 */
 async function startNewSessionInCurrentDir() {
-    // 已在草稿态：只回到草稿，不改变已选定的目标目录（否则会把刚建好的草稿丢掉）。
-    if (!currentSessionId) return createNewSession();
+    // Return to the unfinished draft, including its selected folder, after
+    // visiting a real session. Explicit folder/default menu choices still win.
+    if (!currentSessionId || pendingNewSession || prefetchNewSessionPromise
+            || readStoredPendingNewSession() || readStoredNewSessionWorkDir() !== null) {
+        return createNewSession();
+    }
     return startNewSessionInDir(activeSessionWorkDir());
 }
 
@@ -2869,6 +3165,11 @@ async function startNewSessionInDefaultDir() {
 // 刷新后重新进入草稿态时，草稿自身的工作目录来自服务端；把待用目录恢复成它，
 // 避免下一次 ensurePrefetchedNewSession 把仍然有效的草稿当成「目录不符」丢弃。
 (function restorePendingNewSessionWorkDirOnce() {
+    const selected = readStoredNewSessionWorkDir();
+    if (selected !== null) {
+        newSessionWorkDir = selected;
+        return;
+    }
     const stored = readStoredPendingNewSession();
     if (stored && typeof stored.work_dir === 'string' && stored.work_dir) {
         newSessionWorkDir = stored.work_dir;
@@ -2891,7 +3192,7 @@ async function startNewSessionInDefaultDir() {
             let task;
             if (scope === 'new') task = startNewSessionInFolder();
             else if (scope === 'default') task = startNewSessionInDefaultDir();
-            else task = startNewSessionInCurrentDir();
+            else task = startNewSessionInDir(activeSessionWorkDir() || newSessionWorkDirTarget());
             Promise.resolve(task).catch(function (error) {
                 console.error('新建会话失败:', error);
             });
@@ -3244,12 +3545,11 @@ function syncSessionListHead(sections, opts) {
     syncSessionViewMenu();
 }
 
-/* 索引重建必须完成后才能重载。后续列表请求最多等 1.2s，页面重载会再次拉取。 */
-var SESSION_REFRESH_LIST_WAIT_MS = 1200;
+/* 索引重建完成后直接重载；新页面会读取权威列表，无需在旧页面重复构建。 */
 var sessionRefreshInFlight = false;
 
 /**
- * 侧栏刷新：按会话目录重建内存索引和 sessions.json，拉新列表，再重载页面。
+ * 侧栏刷新：按会话目录重建内存索引和 sessions.json，再重载页面读取列表。
  * 桌面端也通过此入口完成整页刷新；重建失败时保留当前页面并允许重试。
  */
 async function refreshSessionListAndPage(btn) {
@@ -3261,27 +3561,16 @@ async function refreshSessionListAndPage(btn) {
         btn.setAttribute('aria-busy', 'true');
     }
     try {
-        var response = await fetchWithTimeout('/sessions/index/repair', {
+        var repair = await fetchWithTimeout('/sessions/index/repair', {
             method: 'POST',
             credentials: 'same-origin',
-        }, 120000);
-        var result = await response.json().catch(function () { return {}; });
+        }, 120000, async function (response) {
+            return { response: response, data: await response.json().catch(function () { return {}; }) };
+        });
+        var response = repair.response;
+        var result = repair.data;
         if (!response.ok || result.ok !== true) {
             throw new Error(result.error || '重建会话索引失败（HTTP ' + response.status + '）');
-        }
-        var deadlineTimer;
-        try {
-            var listSettled = Promise.resolve().then(function () {
-                return (typeof loadSessions === 'function') ? loadSessions({ force: true }) : null;
-            }).catch(function (err) {
-                console.error('刷新会话列表失败:', err);
-            });
-            var deadline = new Promise(function (resolve) {
-                deadlineTimer = window.setTimeout(resolve, SESSION_REFRESH_LIST_WAIT_MS);
-            });
-            await Promise.race([listSettled, deadline]);
-        } finally {
-            window.clearTimeout(deadlineTimer);
         }
         window.location.reload();
     } catch (err) {
@@ -3760,7 +4049,7 @@ function collectNewSessionCreateOptions(targetWorkDir) {
         const permissionMode = selectedNewSessionPermissionMode();
         if (permissionMode) createOptions.permission_mode = permissionMode;
     }
-    // 会话创建时指定工作目录，之后不可改（服务端契约：POST /sessions 的可选 work_dir）。
+    // 创建时指定初始工作目录（POST /sessions 的可选 work_dir）。
     const workDir = (typeof targetWorkDir === 'string')
         ? targetWorkDir.trim()
         : newSessionWorkDirTarget();
@@ -3771,6 +4060,14 @@ function collectNewSessionCreateOptions(targetWorkDir) {
 /** 当前待用的新会话工作目录；空串表示用服务端全局默认目录。 */
 function newSessionWorkDirTarget() {
     return String(newSessionWorkDir || '').trim();
+}
+
+function rememberNewSessionWorkDir(workDir) {
+    try { sessionStorage.setItem('myagent-new-session-work-dir', String(workDir || '').trim()); } catch (error) { /* unavailable */ }
+}
+
+function readStoredNewSessionWorkDir() {
+    try { return sessionStorage.getItem('myagent-new-session-work-dir'); } catch (error) { return null; }
 }
 
 function readStoredPendingNewSession() {
@@ -3876,8 +4173,7 @@ async function prefetchNewSessionInner(targetWorkDir, targetRevision) {
             && targetWorkDir === newSessionWorkDirTarget();
     };
     let stored = readStoredPendingNewSession();
-    // 用户刚换了目标工作目录：旧草稿是在别的目录（或默认目录）建的，且 work_dir 不可改，
-    // 只能丢弃重开，否则新会话会落在错误目录里。
+    // 用户刚换了目标工作目录：丢弃旧目标的预取引用，避免复用过期的创建请求。
     if (stored && String(stored.work_dir || '') !== targetWorkDir) {
         writeStoredPendingNewSession('');
         stored = null;
@@ -4000,6 +4296,7 @@ async function materializeNewSessionInner() {
         clearPendingNewSession();
         // 这次选定的工作目录已被本会话消费；下一次「新建对话」回到全局默认目录。
         newSessionWorkDir = '';
+        try { sessionStorage.removeItem('myagent-new-session-work-dir'); } catch (error) { /* unavailable */ }
         createdSessionId = sessionId;
         const session = (data && data.session)
             || (prefetched && prefetched.session)

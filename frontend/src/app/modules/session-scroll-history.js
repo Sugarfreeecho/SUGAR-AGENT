@@ -220,11 +220,13 @@ async function refreshContextTokensFromServer(sid, seq, force) {
     }
     if (contextTokenInFlightBySession[sid]) return;
     contextTokenInFlightBySession[sid] = true;
+    const tokenVersion = typeof getContextTokenVersion === 'function' ? getContextTokenVersion(sid) : null;
     // 补取机会在这里消费：只有真的发出去了才算用过，被在途请求挡下的那次不算。
     if (force) contextBreakdownRefetchTried[sid] = true;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
+        if (tokenVersion != null && tokenVersion !== getContextTokenVersion(sid)) return;
         if (r.ok && j && j.ok && j.estimated != null && j.estimated >= 0) {
             // Clear the in-flight mark BEFORE recording: applying a value without
             // the three lanes is what schedules the one-shot lane refetch, and an
@@ -234,11 +236,13 @@ async function refreshContextTokensFromServer(sid, seq, force) {
             // A session switch invalidates the paint, not the session's data.
             // Keep successful refetches so returning within the cache TTL has lanes.
             if (sid !== currentSessionId || (seq != null && seq !== contextTokenRequestSeq)) {
-                setContextTokensForSession(sid, j.estimated, j.threshold, j.breakdown);
+                setContextTokensForSession(sid, j.estimated, j.threshold, j.breakdown,
+                    { stale: !!(j.stale || j.pending_recalculation) });
                 if (contextBreakdownOrNull(j.breakdown)) delete contextBreakdownRefetchTried[sid];
                 return;
             }
-            recordContextTokens(sid, j.estimated, j.threshold, j.breakdown);
+            if (j.stale || j.pending_recalculation) recordContextTokens(sid, j.estimated, j.threshold, j.breakdown, { stale: true });
+            else recordContextTokens(sid, j.estimated, j.threshold, j.breakdown);
             return;
         }
     } catch (e) { /* ignore */ }
@@ -260,10 +264,10 @@ function scheduleContextTokensAfterPaint(sid) {
     });
 }
 
-function recordContextTokens(sessionId, estimated, threshold, breakdown) {
+function recordContextTokens(sessionId, estimated, threshold, breakdown, options) {
     if (!sessionId) return;
-    setContextTokensForSession(sessionId, estimated, threshold, breakdown);
-    if (sessionId === currentSessionId) setContextTokenLabel(estimated, threshold, breakdown);
+    if (setContextTokensForSession(sessionId, estimated, threshold, breakdown, options) === false) return;
+    if (sessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
 }
 
 function applyContextTokenLabelForCurrentSession() {
@@ -565,6 +569,7 @@ function persistHistoryPagingToStream(streamEl, paging) {
         has_older: !!paging.has_older,
         has_newer: !!paging.has_newer,
         manual_history: !!paging.manual_history,
+        event_limited_tail: !!paging.event_limited_tail,
     });
 }
 
@@ -581,6 +586,7 @@ function restoreHistoryPagingFromStream(streamEl) {
             has_older: !!raw.has_older,
             has_newer: !!raw.has_newer,
             manual_history: !!raw.manual_history,
+            event_limited_tail: !!raw.event_limited_tail,
         };
     } catch (_e) {
         delete streamEl.dataset.historyPaging;
@@ -686,6 +692,7 @@ function maybeAutoLoadOlderHistory() {
     var stream = getVisibleChatStream();
     if (!stream || stream.hidden) return;
     var paging = getSessionHistoryPaging(currentSessionId);
+    if (paging && paging.event_limited_tail && !stream._historyAutoLoadEnabled) return;
     if (paging && paging.manual_history && !stream._historyAutoLoadEnabled
         && sessionHasLiveHistoryOwner(currentSessionId)) return;
     if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
@@ -834,8 +841,9 @@ async function loadOlderHistoryChunk(opts) {
     var loadedOlder = false;
     try {
         var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));
+        var boundedTail = ph.event_limited_tail && !opts.turns;
         var url = '/sessions/' + encodeURIComponent(sid)
-            + '/messages?turns=' + encodeURIComponent(String(pageTurns))
+            + (boundedTail ? '/messages?limit=200' : '/messages?turns=' + encodeURIComponent(String(pageTurns)))
             + '&before_index=' + ph.range_start
             + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
         var response = await fetchWithTimeout(url, {}, 30000);
@@ -885,6 +893,7 @@ async function loadOlderHistoryChunk(opts) {
             has_older: !!data.has_older,
             has_newer: !!ph.has_newer,
             manual_history: false,
+            event_limited_tail: !!boundedTail && !!data.has_older,
         });
     } catch (e) {
         console.error('加载更早消息失败:', e);

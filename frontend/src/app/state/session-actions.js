@@ -13,7 +13,11 @@ function applySessionSnapshot(snapshot) {
     if (Number.isFinite(Number(snapshot.seq)) && Number(snapshot.seq) > sessionStore.seq) {
         sessionStore.seq = Number(snapshot.seq);
     }
+    const previousWorkDir = typeof getActiveWorkDir === 'function' ? getActiveWorkDir() : '';
     sessionStore.applySnapshot(sessions, archivedCount);
+    if (typeof getActiveWorkDir === 'function' && getActiveWorkDir() !== previousWorkDir) {
+        syncSessionWorkspaceUi(currentSessionId);
+    }
     if (sessionStore.archivedLoaded && (snapshot.include_archived || snapshot.includeArchived)) {
         const loadedCount = Array.isArray(sessionStore.archivedSessions)
             ? sessionStore.archivedSessions.length
@@ -51,7 +55,24 @@ function applySessionSnapshot(snapshot) {
             void refreshHumanInteractions(visibleSid);
         }
     }
+    if (snapshot.state_revision != null) sessionStore.lastAppliedStateRevision = Number(snapshot.state_revision) || 0;
     return true;
+}
+
+function syncSessionWorkspaceUi(sessionId) {
+    if (String(sessionId || '') !== String(currentSessionId || '')) return;
+    if (typeof updateSessionTitle === 'function') updateSessionTitle();
+    if (typeof dockRightHandleSessionSwitch === 'function') dockRightHandleSessionSwitch(sessionId);
+    if (typeof refreshPermissionModeSelector === 'function') void refreshPermissionModeSelector(sessionId);
+    if (typeof document !== 'undefined') document.dispatchEvent(new CustomEvent('myagent:workspace-change', {
+        detail: { sessionId: sessionId, workDir: typeof getActiveWorkDir === 'function' ? getActiveWorkDir() : '' },
+    }));
+}
+
+function applySessionWorkspaceChange(sessionId, session) {
+    if (!session || !sessionId) return;
+    applyOptimisticSessionUpdate(sessionId, session);
+    syncSessionWorkspaceUi(sessionId);
 }
 
 function applySessionPatch(patch) {
@@ -74,8 +95,13 @@ function applySessionPatch(patch) {
 }
 
 function setCurrentSessionState(sessionId) {
+    const changed = currentSessionId !== (sessionId || null);
+    if (changed) composerDraftRevision++;
     currentSessionId = sessionId || null;
     sessionStore.setCurrentSession(currentSessionId);
+    if (changed) {
+        document.dispatchEvent(new CustomEvent('myagent:session-change', { detail: { sessionId: currentSessionId } }));
+    }
     if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);
 }
 
@@ -83,7 +109,37 @@ function setSessionRunState(sessionId, run) {
     const sid = String(sessionId || '');
     if (!sid) return;
     sessionStore.setRun(sid, run || null);
+    if (run) limitBackgroundSessionStreams();
     if (typeof updateSidebarRuntimeStatus === 'function') updateSidebarRuntimeStatus(true);
+}
+
+function limitBackgroundSessionStreams() {
+    // HTTP/1 browsers have a small per-origin connection pool. Long-lived
+    // background observers must leave room for navigation, metadata and Stop.
+    // The server owns generation; aborting this reader never sends /interrupt.
+    const maximum = 3;
+    const streams = [];
+    sessionStore.runsBySession.forEach(function (run, sid) {
+        if (run && run.controller && run.ctx && !(run.controller.signal && run.controller.signal.aborted)) {
+            streams.push({ sid, run });
+        }
+    });
+    let excess = streams.length - maximum;
+    streams.forEach(function (entry) {
+        if (excess <= 0 || String(entry.sid) === String(currentSessionId || '')) return;
+        const run = entry.run;
+        if (!run.ctx.streamConsuming || run.submitted === false) return;
+        // A detached projection cannot be restored as a complete live stream.
+        // Switching back reloads durable history before acquiring a new reader.
+        if (run.ctx.stream && run.ctx.stream.dataset) {
+            run.ctx.stream.dataset.partialBackgroundRun = '1';
+            delete run.ctx.stream.dataset.sessionLoadOk;
+        }
+        setSessionServerStreamActive(entry.sid, true);
+        abortSessionRun(entry.sid, 'background-stream-budget');
+        if (typeof resetStreamReconnectState === 'function') resetStreamReconnectState(entry.sid);
+        excess--;
+    });
 }
 
 function getSessionRunState(sessionId) {

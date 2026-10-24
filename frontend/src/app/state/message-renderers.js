@@ -2,7 +2,7 @@ function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     if (typeof renderExecutionEvent === 'function' && renderExecutionEvent(ctx, record.event, sid)) return record;
-    renderEvent(ctx, record.event, record.index, sid);
+    renderEvent(ctx, record.event, record.index, sid, { source: record.source || 'render' });
     var runtimeSeq = Number(record.event.runtime_seq || record.event.runtimeSeq || 0);
     if (record.event.type === 'user') {
         // renderEvent seals the previous turn first. A UI message index is not

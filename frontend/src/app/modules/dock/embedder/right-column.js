@@ -89,6 +89,8 @@ const dockRightState = {
     button: null,
     sessionId: null,
     width: DOCK_RIGHT_WIDTH_DEFAULT,
+    preferredWidth: DOCK_RIGHT_WIDTH_DEFAULT,
+    manualFullscreen: new Set(),
     lastWidth: 0,
     tabState: Object.create(null),
     dragging: false,
@@ -235,11 +237,18 @@ function dockRightTrackScroll(tabId, el) {
     el.addEventListener('scroll', () => {
         state.scroll = { x: el.scrollLeft, y: el.scrollTop };
     }, { passive: true });
+    return state;
 }
 
 /** A JSON fetch with its own deadline, so a stalled request cannot wedge a scan. */
-async function dockRightFetchJSON(url, timeoutMs) {
+async function dockRightFetchJSON(url, timeoutMs, options) {
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const outerSignal = options && options.signal;
+    const abort = () => { if (controller) controller.abort(); };
+    if (outerSignal) {
+        if (outerSignal.aborted) abort();
+        else outerSignal.addEventListener('abort', abort, { once: true });
+    }
     const timer = setTimeout(() => {
         if (controller) {
             try { controller.abort(); } catch (error) { /* ignore */ }
@@ -252,6 +261,7 @@ async function dockRightFetchJSON(url, timeoutMs) {
         return { response: response, data: data };
     } finally {
         clearTimeout(timer);
+        if (outerSignal) outerSignal.removeEventListener('abort', abort);
     }
 }
 
@@ -364,7 +374,8 @@ function dockRightEnsureMounted() {
     sash.setAttribute('aria-label', '拖动调整详情栏宽度');
     sash.addEventListener('pointerdown', (event) => dockRightStartResize(event));
     sash.addEventListener('dblclick', () => {
-        dockRightState.width = DOCK_RIGHT_WIDTH_DEFAULT;
+        dockRightState.preferredWidth = DOCK_RIGHT_WIDTH_DEFAULT;
+        dockRightState.width = dockRightClampWidth(DOCK_RIGHT_WIDTH_DEFAULT);
         dockRightApplyWidth();
         try { localStorage.setItem(DOCK_RIGHT_WIDTH_KEY, String(DOCK_RIGHT_WIDTH_DEFAULT)); } catch (error) { /* ignore */ }
     });
@@ -383,6 +394,7 @@ function dockRightEnsureMounted() {
         root: host,
         labels: labels,
         renderTab: (tab) => dockRightRenderTabBody(tab),
+        renderTabTitle: dockRightRenderTabTitle,
         // `+` opens a fresh "start" page in that pane, exactly like dsh: a
         // pane may hold one start page, so the control hides once it has one.
         canAddTab: (paneId) => {
@@ -412,15 +424,29 @@ function dockRightEnsureMounted() {
         labels: labels,
         intents: dockRightIntents(),
         renderTab: (tab) => dockRightRenderTabBody(tab),
+        renderTabTitle: dockRightRenderTabTitle,
         canCloseTab: () => true,
     });
     dockRightState.floats.mount();
+
+    dockRightPageHost = new DockRetainedPages(host);
+
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar && typeof ResizeObserver === 'function') {
+        dockRightState.sidebarObserver = new ResizeObserver(() => {
+            dockRightState.finishResize?.();
+            dockRightEnsureWidthMode(dockRightState.sessionId);
+            dockRightRender();
+        });
+        dockRightState.sidebarObserver.observe(sidebar);
+    }
 
     dockRightEnsureButton();
     dockRightRegisterTabs();
     if (!dockRightState.viewportHooked) {
         dockRightState.viewportHooked = true;
         window.addEventListener('resize', () => {
+            dockRightState.finishResize?.();
             const width = window.innerWidth;
             const narrowed = width < Number(dockRightState.lastWidth || width);
             dockRightState.lastWidth = width;
@@ -436,9 +462,7 @@ function dockRightEnsureMounted() {
                     return;
                 }
             }
-            // Otherwise the mode follows the page width alone: below 768px the
-            // column covers; at 768px and up it is push, and a fullscreen
-            // column comes back to push once the window is wide again.
+            // Restore a usable push width, preserving a user's explicit fullscreen.
             dockRightEnsureWidthMode(dockRightState.sessionId);
             dockRightRender();
         }, { passive: true });
@@ -463,8 +487,11 @@ function dockRightBuildChrome() {
         // viewport (and straight back). The push-mode open/close animation is
         // untouched.
         const host = dockRightState.host;
+        dockRightState.finishResize?.();
         if (host) host.classList.add('is-instant');
-        dockActionSetMode(sessionId, surface.layout.mode === 'fullscreen' ? 'push' : 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
+        if (surface.layout.mode === 'fullscreen') dockRightState.manualFullscreen.delete(sessionId);
+        else dockRightState.manualFullscreen.add(sessionId);
+        dockRightEnsureWidthMode(sessionId);
         dockRightRender();
         if (host) {
             requestAnimationFrame(() => requestAnimationFrame(() => host.classList.remove('is-instant')));
@@ -517,12 +544,13 @@ function dockRightLoadWidth() {
         const saved = parseInt(localStorage.getItem(DOCK_RIGHT_WIDTH_KEY), 10);
         if (Number.isFinite(saved)) width = saved;
     } catch (error) { /* ignore */ }
-    dockRightState.width = dockRightClampWidth(width);
+    dockRightState.preferredWidth = Math.max(DOCK_RIGHT_WIDTH_MIN, Math.min(DOCK_RIGHT_WIDTH_MAX, width));
+    dockRightState.width = dockRightClampWidth(dockRightState.preferredWidth);
     dockRightApplyWidth();
 }
 
 /** Would an expanded column leave the workspace below its usable floor? */
-function dockRightWouldCrushWorkspace() {
+function dockRightWorkspaceWidth() {
     const app = document.querySelector('.app');
     const appWidth = app ? app.clientWidth : (window.innerWidth || 0);
     let reserved = 0;
@@ -536,56 +564,88 @@ function dockRightWouldCrushWorkspace() {
         const rect = sash.getBoundingClientRect();
         if (rect.width > 0) reserved += rect.width;
     }
-    const frame = Math.max(0, appWidth - reserved);
-    return frame - dockRightState.width < DOCK_RIGHT_WORKSPACE_FLOOR;
+    return Math.max(0, appWidth - reserved);
 }
 
-/** The column's mode follows the page width alone — below 768px it covers the
-    viewport, at 768px and up it is push, and a fullscreen column returns to
-    push once the window is wide again. Every open path and the resize handler
-    share this hook, so the four paths cannot drift apart. */
+function dockRightWouldCrushWorkspace() {
+    return dockRightWorkspaceWidth() - dockRightState.width < DOCK_RIGHT_WORKSPACE_FLOOR;
+}
+
+function dockRightCanPush() {
+    return window.innerWidth >= 768
+        && dockRightWorkspaceWidth() >= DOCK_RIGHT_WORKSPACE_FLOOR + DOCK_RIGHT_WIDTH_MIN;
+}
+
+/** Every open/restore path uses the same available-space and mode constraints. */
 function dockRightEnsureWidthMode(sessionId) {
+    dockRightState.width = dockRightClampWidth(dockRightState.preferredWidth);
+    dockRightApplyWidth();
     if (!sessionId) return;
     const surface = dockSurfaceOf(sessionId, DOCK_RIGHT_AREA);
     if (!surface || !surface.layout.expanded) return;
-    const narrow = window.innerWidth < 768;
-    if (narrow && surface.layout.mode !== 'fullscreen') {
-        dockActionSetMode(sessionId, 'fullscreen', dockRightSeed(), DOCK_RIGHT_AREA);
-    } else if (!narrow && surface.layout.mode === 'fullscreen') {
-        dockActionSetMode(sessionId, 'push', dockRightSeed(), DOCK_RIGHT_AREA);
+    const mode = !dockRightCanPush() || dockRightState.manualFullscreen.has(sessionId) ? 'fullscreen' : 'push';
+    if (surface.layout.mode !== mode) {
+        dockActionSetMode(sessionId, mode, dockRightSeed(), DOCK_RIGHT_AREA);
     }
 }
 
 /** Clamp a width to the column's bounds and the viewport. */
 function dockRightClampWidth(width) {
     const viewport = Math.max(0, window.innerWidth || DOCK_RIGHT_WIDTH_MAX);
-    const max = Math.max(DOCK_RIGHT_WIDTH_MIN, Math.min(DOCK_RIGHT_WIDTH_MAX, Math.floor(viewport * 0.72)));
+    const max = Math.max(DOCK_RIGHT_WIDTH_MIN, Math.min(DOCK_RIGHT_WIDTH_MAX,
+        Math.floor(viewport * 0.72), Math.floor(dockRightWorkspaceWidth() - DOCK_RIGHT_WORKSPACE_FLOOR)));
     return Math.max(DOCK_RIGHT_WIDTH_MIN, Math.min(max, Math.round(Number(width) || DOCK_RIGHT_WIDTH_DEFAULT)));
 }
 
 /** Write the width onto the element. */
 function dockRightApplyWidth() {
-    if (dockRightState.host) dockRightState.host.style.setProperty('--dock-rightbar-width', dockRightState.width + 'px');
+    const host = dockRightState.host;
+    const width = dockRightState.width + 'px';
+    if (host && host.style.getPropertyValue('--dock-rightbar-width') !== width) {
+        host.style.setProperty('--dock-rightbar-width', width);
+    }
 }
 
 /** Drag the sash to resize the column. */
 function dockRightStartResize(event) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || !dockRightExpanded() || !dockRightCanPush()
+        || dockRightState.host.classList.contains('is-fullscreen')) return;
     event.preventDefault();
+    dockRightState.finishResize?.();
+    const sash = dockRightState.sash;
+    const pointerId = event.pointerId;
     const startX = event.clientX;
-    const startWidth = dockRightState.host ? dockRightState.host.getBoundingClientRect().width : dockRightState.width;
+    const startWidth = dockRightState.width;
+    dockRightState.dragging = true;
+    dockRightState.host.classList.add('is-resizing');
+    document.body.classList.add('dock-right-resizing');
+    let active = true;
+    let stop = () => {};
     const onMove = (moved) => {
+        if (moved.pointerType === 'mouse' && moved.buttons === 0) { finish(); return; }
         dockRightState.width = dockRightClampWidth(startWidth - (moved.clientX - startX));
+        dockRightState.preferredWidth = dockRightState.width;
         dockRightApplyWidth();
     };
-    const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        try { localStorage.setItem(DOCK_RIGHT_WIDTH_KEY, String(dockRightState.width)); } catch (error) { /* ignore */ }
+    const onLost = (lost) => { if (lost.pointerId === pointerId) finish(); };
+    function finish() {
+        if (!active) return;
+        active = false;
+        stop();
+        sash.removeEventListener('lostpointercapture', onLost);
+        window.removeEventListener('blur', finish);
+        dockRightState.finishResize = null;
+        dockRightState.dragging = false;
+        dockRightState.host.classList.remove('is-resizing');
+        document.body.classList.remove('dock-right-resizing');
+        if (sash.hasPointerCapture?.(pointerId)) sash.releasePointerCapture(pointerId);
+        try { localStorage.setItem(DOCK_RIGHT_WIDTH_KEY, String(dockRightState.preferredWidth)); } catch (error) { /* ignore */ }
         if (dockRightState.surface) dockRightState.surface.remeasure();
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+    }
+    dockRightState.finishResize = finish;
+    stop = dockFollowPointer(sash, pointerId, { move: onMove, up: finish, cancel: finish });
+    sash.addEventListener('lostpointercapture', onLost);
+    window.addEventListener('blur', finish);
 }
 
 // ── intents and rendering ────────────────────────────────────────────────────
@@ -626,7 +686,7 @@ function dockRightExpanded() {
  */
 function dockRightToggle() {
     // A subagent view toggles the parent session's column (see the key above).
-    const sessionId = dockRightSurfaceKey(currentSessionId);
+    const sessionId = dockRightSurfaceKey(currentSessionId) || DOCK_APP_SURFACE_KEY;
     if (!sessionId) return;
     dockRightEnsureMounted();
     if (!dockRightState.host) return;
@@ -658,9 +718,24 @@ function dockRightRender() {
     const host = dockRightState.host;
     if (!host) return;
     const sessionId = dockRightState.sessionId;
+    dockRightEnsureWidthMode(sessionId);
     const surface = sessionId ? dockSurfaceOf(sessionId, DOCK_RIGHT_AREA) : null;
+    dockRightPageHost?.schedule();
+    if (dockRightState.renderedSurfaceId !== sessionId) {
+        // Tab ids are minted independently in each surface. Release the old
+        // bodies before a new session reuses those ids and their state slots.
+        dockRightState.finishResize?.();
+        Object.keys(dockRightState.tabState).forEach(dockRightDisposeTab);
+        dockRightState.renderedSurfaceId = sessionId;
+        if (dockRightState.surface) dockRightState.surface.tabBodies = Object.create(null);
+        if (dockRightState.floats) {
+            Object.values(dockRightState.floats.entries).forEach(entry => entry.el.remove());
+            dockRightState.floats.entries = Object.create(null);
+        }
+    }
     const expanded = !!(surface && surface.layout.expanded);
     const fullscreen = !!(expanded && surface.layout.mode === 'fullscreen');
+    if (!expanded || fullscreen) dockRightState.finishResize?.();
     host.classList.toggle('is-fullscreen', fullscreen);
     host.setAttribute('aria-hidden', expanded ? 'false' : 'true');
     host.inert = !expanded;
@@ -699,6 +774,7 @@ function dockRightRender() {
     }
     const fullscreenButton = host.querySelector('[data-dock-rightbar-fullscreen]');
     if (fullscreenButton) {
+        fullscreenButton.hidden = fullscreen && !dockRightCanPush();
         fullscreenButton.setAttribute('aria-label', fullscreen ? dockRightText('exitFullscreen') : dockRightText('fullscreen'));
         fullscreenButton.innerHTML = fullscreen ? DOCK_ICON_EXIT_FULLSCREEN : DOCK_ICON_FULLSCREEN;
     }
@@ -734,53 +810,54 @@ function dockRightSurfaceKey(sessionId) {
 /** The session-switch hook: show the entering session's own column surface. */
 function dockRightHandleSessionSwitch(sessionId) {
     if (!dockRightState.host) return;
-    const workSessionId = String(currentSessionId || sessionId || '');
-    if (dockRightState.workSessionId !== workSessionId) {
-        dockRightState.workSessionId = workSessionId;
+    // History loads may finish out of order. Only the active identity owns
+    // this shared column, including the empty identity used by a new draft.
+    const workSessionId = String(currentSessionId || '');
+    if (String(sessionId || '') !== workSessionId) return;
+    const workDir = typeof getActiveWorkDir === 'function' ? getActiveWorkDir() : '';
+    const workspaceChanged = dockRightState.workSessionId !== workSessionId || dockRightState.workDir !== workDir;
+    dockRightState.workSessionId = workSessionId;
+    dockRightState.workDir = workDir;
+    const sid = dockRightSurfaceKey(workSessionId) || DOCK_APP_SURFACE_KEY;
+    if (dockRightState.sessionId !== sid) {
+        dockRightState.sessionId = sid;
+        dockRightRender();
+    } else if (workspaceChanged) {
+        // Reload only the entering/shared surface, never the departing tree
+        // using the next session's workspace context.
         dockRightState.host.querySelectorAll('[data-dock-files]').forEach((page) => {
             if (page.__dockWorkspaceReload) page.__dockWorkspaceReload();
         });
     }
-    const sid = dockRightSurfaceKey(sessionId);
-    if (!sid) return;
-    if (dockRightState.sessionId === sid) return;
-    if (!dockSurfaceExists(sid, DOCK_RIGHT_AREA)) {
-        dockRightState.sessionId = sid;
-        dockRightRender();
-        return;
-    }
-    dockRightState.sessionId = sid;
-        dockRightEnsureWidthMode(sid);
-        dockRightRender();
 }
 
 /**
- * A belt-and-braces session watcher: the list's active marker is the app's
- * authoritative "current session" signal, so watching it keeps the column in
- * step even on a path that reaches `switchSession` without the wrapper.
+ * Follow the committed session identity synchronously, before history loads
+ * or list rendering. A draft has no active list row but still owns a surface.
  */
 function dockRightWatchSessions() {
     if (dockRightState.sessionWatch) return;
-    const list = document.querySelector('#sessions-list');
-    if (!list) return;
-    const sync = () => {
-        const row = list.querySelector('.session-item.active[data-session-id]');
-        const sid = row ? String(row.getAttribute('data-session-id') || '') : '';
-        if (sid) dockRightHandleSessionSwitch(sid);
-    };
-    dockRightState.sessionWatch = new MutationObserver(sync);
-    dockRightState.sessionWatch.observe(list, { subtree: true, attributes: true, attributeFilter: ['class', 'data-session-id'] });
-    sync();
+    dockRightState.sessionWatch = () => dockRightHandleSessionSwitch(
+        typeof currentSessionId === 'undefined' ? null : currentSessionId);
+    document.addEventListener('myagent:session-change', dockRightState.sessionWatch);
+    dockRightState.sessionWatch();
 }
 
 // ── tab bodies ───────────────────────────────────────────────────────────────
 
 /** The body for one tab of this column. */
 function dockRightRenderTabBody(tab) {
-    if (tab.kind === 'guide') return dockRightGuideBody(tab);
-    if (tab.kind === 'files') return dockRightFilesBody(tab);
-    if (tab.kind === 'document') return dockRightDocumentBody(tab);
-    if (tab.kind === 'changes') return dockRightChangesBody(tab);
+    const renderer = dockTabRegistry.bodyFor(tab.kind);
+    if (typeof renderer === 'function') {
+        if (dockTabRegistry.get(tab.kind)?.keepMounted) {
+            return dockRightPageHost.seat(tab, () => {
+                const element = renderer(tab);
+                return { element, dispose: () => element.__dockDispose?.(),
+                    setVisible: visible => element.__dockVisibility?.(visible) };
+            });
+        }
+        return renderer(tab);
+    }
     const fallback = document.createElement('div');
     fallback.className = 'dock-unknown-tab';
     fallback.textContent = tab.title || tab.kind;
@@ -828,6 +905,12 @@ function dockRightRegisterTabs() {
         title: () => dockRightText('changes'),
         body: dockRightChangesBody,
     });
+    register({ id: 'myagent.details.plugin-page', kind: 'plugin-page', priority: 'builtin',
+        patterns: ['myagent-plugin://page/**'], title: () => 'Plugin', body: dockPluginPageBody });
+    register({ id: 'myagent.details.plugins', kind: 'plugins', priority: 'builtin',
+        title: () => dockPageText('插件', 'Plugins'), body: dockPluginCatalogBody });
+    register({ id: 'myagent.details.browser', kind: 'browser', priority: 'builtin',
+        title: () => dockPageText('浏览器', 'Browser'), body: dockBrowserPageBody });
 }
 
 // ── files page ───────────────────────────────────────────────────────────────
@@ -850,6 +933,8 @@ function dockRightGuideBody(tab) {
     const cards = [
         { label: dockRightText('guideFiles'), desc: dockRightText('guideFilesDesc'), icon: DOCK_FOLDER_ICON, kind: 'files' },
         { label: dockRightText('guideChanges'), desc: dockRightText('guideChangesDesc'), icon: dockRightFileIcon('changes.md'), kind: 'changes' },
+        { label: dockPageText('浏览器', 'Browser'), desc: dockPageText('打开网页或本地开发服务', 'Browse websites and local services'), icon: DOCK_BROWSER_ICON, kind: 'browser' },
+        { label: dockPageText('插件', 'Plugins'), desc: dockPageText('查看插件提供的页面', 'Explore pages from your plugins'), icon: DOCK_PLUGIN_ICON, kind: 'plugins' },
     ];
     for (let i = 0; i < cards.length; i += 1) {
         const card = document.createElement('button');
@@ -871,12 +956,31 @@ function dockRightGuideBody(tab) {
         text.appendChild(desc);
         card.appendChild(icon);
         card.appendChild(text);
-        card.addEventListener('click', () => dockRightOpenPageKind(cards[i].kind, tab.id));
+        card.addEventListener('click', () => {
+            if (cards[i].kind === 'browser') dockRightOpenBrowser('', { replaceTab: tab.id });
+            else dockRightOpenPageKind(cards[i].kind, tab.id);
+        });
         entries.appendChild(card);
     }
     el.appendChild(glyph);
     el.appendChild(entries);
     return el;
+}
+
+/** Match DSH's browser title glyph in both docked and floating panels. */
+function dockRightRenderTabTitle(tab) {
+    const text = dockRightPageHost ? dockRightPageHost.title(tab) : tab.title;
+    const icon = tab.kind === 'browser' ? DOCK_BROWSER_ICON
+        : ['plugins', 'plugin-page'].includes(tab.kind) ? DOCK_PLUGIN_ICON : '';
+    if (!icon) return text;
+    const title = document.createElement('span');
+    title.className = 'dock-page-title';
+    const glyph = document.createElement('span');
+    glyph.className = 'dock-page-title-icon'; glyph.innerHTML = icon;
+    const label = document.createElement('span');
+    label.className = 'dock-page-title-label'; label.textContent = text;
+    title.append(glyph, label);
+    return title;
 }
 
 /** Open one of the column's pages (guide entries, `+`, the public API) in a pane. */
@@ -902,6 +1006,7 @@ function dockRightOpenPageKind(kind, replaceTab, paneId, revealIfOpened) {
 /** The workspace tree page. */
 function dockRightFilesBody(tab) {
     let loadId = 0;
+    let loadController = null;
     const el = document.createElement('div');
     el.className = 'dock-files';
     el.setAttribute('data-dock-files', tab.id);
@@ -925,16 +1030,20 @@ function dockRightFilesBody(tab) {
     const tree = document.createElement('div');
     tree.className = 'dock-files-tree';
     const reload = () => {
+        if (loadController) loadController.abort();
+        loadController = new AbortController();
         const version = ++loadId;
         tree.replaceChildren();
         void dockRightLoadDir(tree, '', 0, { context: getWorkspaceRequestContext(),
+            signal: loadController.signal,
             isCurrent: () => version === loadId, onRoot: (root) => { pathLabel.textContent = root; } });
     };
     refresh.addEventListener('click', reload);
     el.__dockWorkspaceReload = reload;
     el.appendChild(pathRow);
     el.appendChild(tree);
-    dockRightTrackScroll(tab.id, tree);
+    const state = dockRightTrackScroll(tab.id, tree);
+    if (state) state.dispose = () => { loadId++; loadController?.abort(); };
     el.__dockRestore = tree.__dockRestore;
     reload();
     return el;
@@ -947,13 +1056,15 @@ async function dockRightLoadDir(container, dir, depth, options) {
     loading.textContent = dockRightText('loading');
     container.appendChild(loading);
     try {
-        const response = await fetch(workspaceApiUrl('/api/workspace-files', { dir: dir || '' }, options && options.context));
-        const data = await response.json();
-        loading.remove();
+        const result = await dockRightFetchJSON(
+            workspaceApiUrl('/api/workspace-files', { dir: dir || '' }, options && options.context), 15000, options);
+        const response = result.response;
+        const data = result.data;
         if (options && options.isCurrent && !options.isCurrent()) return;
         if (!response.ok || !data || data.ok !== true || !Array.isArray(data.files)) {
             throw new Error((data && data.error) || ('HTTP ' + response.status));
         }
+        loading.remove();
         if (options && typeof options.onRoot === 'function' && data.root) options.onRoot(String(data.root));
         const rows = data.files.slice().sort((left, right) => {
             const leftDir = left.kind === 'directory' ? 0 : 1;
@@ -970,7 +1081,17 @@ async function dockRightLoadDir(container, dir, depth, options) {
         }
         for (let i = 0; i < rows.length; i += 1) container.appendChild(dockRightFileRow(rows[i], depth, options));
     } catch (error) {
+        if (options && ((options.signal && options.signal.aborted) || (options.isCurrent && !options.isCurrent()))) return;
         loading.textContent = dockRightText('loadFailed') + ': ' + (error && error.message ? error.message : error);
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'dock-icon-button';
+        retry.textContent = dockRightText('refresh');
+        retry.addEventListener('click', () => {
+            loading.remove();
+            void dockRightLoadDir(container, dir, depth, options);
+        });
+        loading.appendChild(retry);
     }
 }
 
@@ -1329,9 +1450,11 @@ function dockRightChangesBody(tab) {
         focusRequest: dockRightChangeReviewFocus.get(String(sessionId || '')) || null,
         expandedChanges: new Set(),
         renderedChanges: new Map(),
+        renderedTurns: new Map(),
+        reviewRunning: dockRightReviewRunning(),
         released: false,
         listener: null,
-        abort: null,
+        abort: new AbortController(),
         loaded: false,
         status: '',
         statusError: false,
@@ -1436,6 +1559,7 @@ function dockRightChangesBody(tab) {
 
     const render = () => {
         if (state.released) return;
+        state.reviewRunning = dockRightReviewRunning();
         const scrollTop = list.scrollTop;
         resolveFocus();
         const turns = Array.from(state.turns.values()).sort((left, right) => Number(left.id) - Number(right.id));
@@ -1454,7 +1578,6 @@ function dockRightChangesBody(tab) {
         sessionScope.classList.toggle('is-active', state.scope === 'session');
         status.textContent = state.status || '';
         status.classList.toggle('is-error', Boolean(state.statusError));
-        list.replaceChildren();
         list.setAttribute('data-dock-selected-turn', String(state.selectedTurnId || ''));
         list.setAttribute('data-dock-session', String(state.sessionId || ''));
 
@@ -1462,14 +1585,16 @@ function dockRightChangesBody(tab) {
             ? turns.slice().reverse()
             : turns.filter((turn) => turn.id === String(state.selectedTurnId || ''));
         visibleTurns = visibleTurns.filter((turn) => turnRows(turn.id).length > 0);
+        const groups = [];
         if (!visibleTurns.length) {
-            list.appendChild(dockRightNote(state.scope === 'turn' ? dockRightText('emptyTurnChanges') : dockRightText('emptyChanges')));
+            groups.push(dockRightNote(state.scope === 'turn' ? dockRightText('emptyTurnChanges') : dockRightText('emptyChanges')));
         } else {
             for (let i = 0; i < visibleTurns.length; i += 1) {
                 const turnIndex = turns.findIndex((turn) => turn.id === visibleTurns[i].id);
-                list.appendChild(dockRightChangeGroup(visibleTurns[i], turnIndex, turnRows(visibleTurns[i].id), state, render));
+                groups.push(dockRightChangeGroup(visibleTurns[i], turnIndex, turnRows(visibleTurns[i].id), state, render));
             }
         }
+        dockRightSyncChangeChildren(list, groups);
 
         list.scrollTop = scrollTop;
         const focus = state.focusRequest;
@@ -1512,6 +1637,7 @@ function dockRightChangesBody(tab) {
     };
 
     const load = async () => {
+        if (state.released) return;
         try {
             const pages = [];
             let before = null;
@@ -1521,7 +1647,7 @@ function dockRightChangesBody(tab) {
                 });
                 if (before !== null) params.set('before_index', String(before));
                 const scanned = await dockRightFetchJSON('/sessions/' + encodeURIComponent(state.sessionId)
-                    + '/history_snapshot?' + params.toString(), 20000);
+                    + '/history_snapshot?' + params.toString(), 20000, { signal: state.abort.signal });
                 const response = scanned.response;
                 const data = scanned.data;
                 if (state.released) return;
@@ -1622,6 +1748,33 @@ function dockRightChangesBody(tab) {
         if (changes.length) render();
     };
     document.addEventListener('myagent:ui-event', state.listener);
+    // SSE terminal handling seals the process without always going through
+    // renderEvent. Keep action locks in sync with that boundary as well.
+    const reviewStream = document.getElementById('chat-stream');
+    let reviewStateFrame = null;
+    const reviewStateObserver = reviewStream && typeof MutationObserver === 'function'
+        ? new MutationObserver((mutations) => {
+            if (state.released || reviewStateFrame !== null) return;
+            const changed = mutations.some((mutation) => {
+                if (mutation.type === 'attributes') return mutation.target.matches('.process-aggregate');
+                if (mutation.target !== reviewStream) return false;
+                return [...mutation.addedNodes, ...mutation.removedNodes].some((node) => (
+                    node.nodeType === 1 && (node.matches('.process-aggregate') || node.querySelector('.process-aggregate'))
+                ));
+            });
+            if (!changed) return;
+            reviewStateFrame = requestAnimationFrame(() => {
+                reviewStateFrame = null;
+                if (!state.released && dockRightReviewRunning() !== state.reviewRunning) render();
+            });
+        }) : null;
+    if (reviewStateObserver) reviewStateObserver.observe(reviewStream, {
+        attributes: true, attributeFilter: ['class'], childList: true, subtree: true,
+    });
+    state.dispose = () => {
+        if (reviewStateObserver) reviewStateObserver.disconnect();
+        if (reviewStateFrame !== null) cancelAnimationFrame(reviewStateFrame);
+    };
     mergeCachedRows();
     render();
     void load();
@@ -1659,7 +1812,26 @@ function dockRightOmittedReason(row) {
         + dockRightSize(after.bytes || 0) + ' / ' + (after.lines || 0) + ' 行';
 }
 
+/** Keep unchanged review nodes attached, including their nested scroll/selection. */
+function dockRightSyncChangeChildren(parent, children) {
+    let cursor = parent.firstChild;
+    for (const child of children) {
+        if (child === cursor) cursor = cursor.nextSibling;
+        else parent.insertBefore(child, cursor);
+    }
+    while (cursor) {
+        const next = cursor.nextSibling;
+        parent.removeChild(cursor);
+        cursor = next;
+    }
+}
+
 function dockRightChangeGroup(turn, turnIndex, rows, state, rerender) {
+    const cached = state.renderedTurns.get(turn.id);
+    if (cached) {
+        cached.update(turn, turnIndex, rows);
+        return cached.section;
+    }
     const section = document.createElement('section');
     section.className = 'dock-change-turn';
     section.setAttribute('data-dock-turn-id', turn.id);
@@ -1668,32 +1840,36 @@ function dockRightChangeGroup(turn, turnIndex, rows, state, rerender) {
     const copy = document.createElement('div');
     copy.className = 'dock-change-turn-copy';
     const name = document.createElement('strong');
-    name.textContent = '第 ' + (turnIndex + 1) + ' 轮';
     const preview = document.createElement('span');
-    preview.textContent = turn.preview || dockRightText('turnFallback');
-    preview.title = turn.preview || '';
     const summary = document.createElement('span');
     summary.className = 'dock-change-turn-summary';
-    summary.textContent = dockRightReviewSummary(rows);
     copy.append(name, preview, summary);
     const actions = document.createElement('div');
     actions.className = 'dock-change-turn-actions';
-    const active = rows.filter((row) => !row._reverted && row.undoable !== false && row.diff_omitted_reason !== 'snapshot_missing');
-    const reverted = rows.filter((row) => row._reverted && row.undoable !== false && row.diff_omitted_reason !== 'snapshot_missing');
-    const running = dockRightReviewRunning();
+    let active = []; let reverted = [];
     const undoAll = document.createElement('button');
     undoAll.type = 'button'; undoAll.className = 'dock-link-button'; undoAll.textContent = dockRightText('undoAll');
-    undoAll.hidden = active.length === 0; undoAll.disabled = running;
     const restoreAll = document.createElement('button');
     restoreAll.type = 'button'; restoreAll.className = 'dock-link-button'; restoreAll.textContent = dockRightText('restoreAll');
-    restoreAll.hidden = reverted.length === 0; restoreAll.disabled = running;
-    if (running) { undoAll.title = dockRightText('taskRunningReview'); restoreAll.title = dockRightText('taskRunningReview'); }
     undoAll.addEventListener('click', () => { void dockRightBulkChangeAction(active, 'undo', state, rerender); });
     restoreAll.addEventListener('click', () => { void dockRightBulkChangeAction(reverted, 'restore', state, rerender); });
     actions.append(undoAll, restoreAll);
     head.append(copy, actions);
-    section.appendChild(head);
-    for (let i = 0; i < rows.length; i += 1) section.appendChild(dockRightChangeRow(rows[i], state, rerender));
+    const update = (nextTurn, nextIndex, nextRows) => {
+        name.textContent = '第 ' + (nextIndex + 1) + ' 轮';
+        preview.textContent = nextTurn.preview || dockRightText('turnFallback');
+        preview.title = nextTurn.preview || '';
+        summary.textContent = dockRightReviewSummary(nextRows);
+        active = nextRows.filter((row) => !row._reverted && row.undoable !== false && row.diff_omitted_reason !== 'snapshot_missing');
+        reverted = nextRows.filter((row) => row._reverted && row.undoable !== false && row.diff_omitted_reason !== 'snapshot_missing');
+        const running = state.reviewRunning;
+        undoAll.hidden = active.length === 0; undoAll.disabled = running;
+        restoreAll.hidden = reverted.length === 0; restoreAll.disabled = running;
+        undoAll.title = restoreAll.title = running ? dockRightText('taskRunningReview') : '';
+        dockRightSyncChangeChildren(section, [head, ...nextRows.map((row) => dockRightChangeRow(row, state, rerender))]);
+    };
+    state.renderedTurns.set(turn.id, { section, update });
+    update(turn, turnIndex, rows);
     return section;
 }
 
@@ -1701,9 +1877,8 @@ function dockRightChangeGroup(turn, turnIndex, rows, state, rerender) {
 function dockRightChangeRow(row, state, rerender) {
     const expandKey = String(row.snapshot_id || row.path || '');
     const cacheKey = String(row._sessionId || '') + '\0' + expandKey;
-    const signature = JSON.stringify([row, dockRightReviewRunning()]);
     const cached = state && state.renderedChanges && state.renderedChanges.get(cacheKey);
-    if (cached && cached.signature === signature) return cached.item;
+    if (cached) { cached.update(row); return cached.item; }
     const item = document.createElement('article');
     item.className = 'dock-change' + (row._reverted ? ' is-reverted' : '');
     item.setAttribute('data-dock-snapshot-id', String(row.snapshot_id || ''));
@@ -1714,42 +1889,36 @@ function dockRightChangeRow(row, state, rerender) {
     toggle.type = 'button'; toggle.className = 'dock-change-toggle'; toggle.textContent = '›';
     toggle.setAttribute('aria-expanded', 'false');
     const name = document.createElement('span');
-    name.className = 'dock-change-name'; name.textContent = dockRightBasename(row.path); name.title = row.path;
-    const dir = document.createElement('span');
-    dir.className = 'dock-change-dir'; dir.textContent = dockRightRelPath(row.path).replace(/[^/]+$/, '');
+    name.className = 'dock-change-name'; name.title = row.path;
+    // The outer RTL box clips the beginning; isolate the path's normal order.
+    const pathText = document.createElement('bdi'); pathText.dir = 'ltr'; pathText.textContent = String(row.path || '');
+    name.appendChild(pathText);
     const stats = document.createElement('span'); stats.className = 'dock-change-stats';
-    if (Number.isFinite(Number(row.added)) && Number.isFinite(Number(row.removed))) {
-        const added = document.createElement('span'); added.className = 'dock-change-added'; added.textContent = '+' + Number(row.added);
-        const removed = document.createElement('span'); removed.className = 'dock-change-removed'; removed.textContent = '−' + Number(row.removed);
-        stats.append(added, removed);
-    } else {
-        stats.textContent = dockRightText('noLineStats');
-        stats.title = dockRightOmittedReason(row);
-    }
-    if (row._reverted) {
-        const tag = document.createElement('span'); tag.className = 'dock-change-reverted'; tag.textContent = dockRightText('undone');
-        stats.appendChild(tag);
-    }
+    let statsSignature = '';
     const action = document.createElement('button');
     action.type = 'button'; action.className = 'dock-link-button dock-change-action';
     action.textContent = row._reverted ? dockRightText('restore') : dockRightText('undo');
-    action.disabled = dockRightReviewRunning() || row.undoable === false || row.diff_omitted_reason === 'snapshot_missing';
-    if (dockRightReviewRunning()) action.title = dockRightText('taskRunningReview');
     action.addEventListener('click', (event) => {
         event.stopPropagation();
         void dockRightRunChangeAction([row], row._reverted ? 'restore' : 'undo', state, rerender);
     });
-    head.append(toggle, name, dir, stats, action);
+    head.append(toggle, name, stats, action);
     const body = document.createElement('div'); body.className = 'dock-change-body'; body.setAttribute('aria-hidden', 'true');
-    const diffLines = row.diff ? String(row.diff).split('\n') : null;
-    let diffPre = null; let nextDiffLine = 0; let diffFrame = null; let bodyReady = false;
+    let diffText = row.diff ? String(row.diff) : '';
+    let diffLines = null;
+    let diffPre = null; let nextDiffLine = 0; let diffFrame = null;
     const ensureBody = () => {
-        if (bodyReady) return;
-        bodyReady = true;
-        if (diffLines) {
-            diffPre = document.createElement('pre'); diffPre.className = 'dock-change-diff';
-            body.appendChild(diffPre);
-        } else body.appendChild(dockRightNote(dockRightOmittedReason(row)));
+        if (diffText) {
+            if (!diffLines) diffLines = diffText.split('\n');
+            if (!diffPre) {
+                diffPre = document.createElement('pre'); diffPre.className = 'dock-change-diff';
+                body.replaceChildren(diffPre);
+            }
+        } else {
+            if (!body.firstChild || diffPre) body.replaceChildren(dockRightNote(dockRightOmittedReason(row)));
+            else body.firstChild.textContent = dockRightOmittedReason(row);
+            diffPre = null;
+        }
     };
     const renderDiffChunk = () => {
         diffFrame = null;
@@ -1758,14 +1927,25 @@ function dockRightChangeRow(row, state, rerender) {
         const end = Math.min(diffLines.length, nextDiffLine + 240);
         for (; nextDiffLine < end; nextDiffLine += 1) {
             const text = diffLines[nextDiffLine];
-            const line = document.createElement('span');
+            const line = diffPre.children[nextDiffLine] || document.createElement('span');
             const file = text.startsWith('+++') || text.startsWith('---');
             const prefix = text.charAt(0);
-            line.className = 'dock-diff-line' + (file ? ' is-file' : prefix === '+' ? ' is-added' : prefix === '-' ? ' is-removed' : prefix === '@' ? ' is-hunk' : '');
-            line.textContent = text + '\n'; fragment.appendChild(line);
+            const className = 'dock-diff-line' + (file ? ' is-file' : prefix === '+' ? ' is-added' : prefix === '-' ? ' is-removed' : prefix === '@' ? ' is-hunk' : '');
+            if (line.className !== className) line.className = className;
+            if (line.textContent !== text + '\n') line.textContent = text + '\n';
+            if (!line.parentNode) fragment.appendChild(line);
         }
         diffPre.appendChild(fragment);
-        if (nextDiffLine < diffLines.length) diffFrame = requestAnimationFrame(renderDiffChunk);
+        if (nextDiffLine >= diffLines.length) {
+            for (let i = 0; i < 240 && diffPre.children.length > diffLines.length; i += 1) diffPre.lastChild.remove();
+        }
+        scheduleDiffRender();
+    };
+    const scheduleDiffRender = () => {
+        if (diffLines && diffPre && diffFrame === null
+            && (nextDiffLine < diffLines.length || diffPre.children.length > diffLines.length)) {
+            diffFrame = requestAnimationFrame(renderDiffChunk);
+        }
     };
     const setExpanded = (opening) => {
         if (state && state.expandedChanges) {
@@ -1778,9 +1958,7 @@ function dockRightChangeRow(row, state, rerender) {
         toggle.classList.toggle('is-open', opening);
         toggle.setAttribute('aria-expanded', opening ? 'true' : 'false');
         // Restored rows are still detached here; render once the list is mounted.
-        if (opening && diffLines && nextDiffLine < diffLines.length && diffFrame === null) {
-            diffFrame = requestAnimationFrame(renderDiffChunk);
-        }
+        if (opening) scheduleDiffRender();
         if (!opening && diffFrame !== null) { cancelAnimationFrame(diffFrame); diffFrame = null; }
     };
     const toggleBody = () => setExpanded(!body.classList.contains('is-open'));
@@ -1788,9 +1966,46 @@ function dockRightChangeRow(row, state, rerender) {
     head.addEventListener('click', (event) => { if (event.target !== action) toggleBody(); });
     item.append(head, body);
     item.__dockSetExpanded = setExpanded;
-    // 执行期间新改动注册会全量重建列表；恢复用户此前打开的详情，避免"被关掉"。
+    const update = (nextRow) => {
+        row = nextRow; // Actions must use the current revision/reverted state.
+        const running = state && typeof state.reviewRunning === 'boolean' ? state.reviewRunning : dockRightReviewRunning();
+        item.classList.toggle('is-reverted', Boolean(row._reverted));
+        item.setAttribute('data-dock-change-path', String(row.path || ''));
+        if (pathText.textContent !== String(row.path || '')) pathText.textContent = String(row.path || '');
+        name.title = row.path;
+        action.textContent = row._reverted ? dockRightText('restore') : dockRightText('undo');
+        action.disabled = running || row.undoable === false || row.diff_omitted_reason === 'snapshot_missing';
+        action.title = running ? dockRightText('taskRunningReview') : '';
+        const before = row.before || {}; const after = row.after || {};
+        const nextStats = JSON.stringify([row.added, row.removed, Boolean(row._reverted), row.diff_omitted_reason,
+            before.bytes, before.lines, after.bytes, after.lines]);
+        if (nextStats !== statsSignature) {
+            statsSignature = nextStats;
+            stats.replaceChildren();
+            stats.title = '';
+            if (Number.isFinite(Number(row.added)) && Number.isFinite(Number(row.removed))) {
+                const added = document.createElement('span'); added.className = 'dock-change-added'; added.textContent = '+' + Number(row.added);
+                const removed = document.createElement('span'); removed.className = 'dock-change-removed'; removed.textContent = '−' + Number(row.removed);
+                stats.append(added, removed);
+            } else { stats.textContent = dockRightText('noLineStats'); stats.title = dockRightOmittedReason(row); }
+            if (row._reverted) {
+                const tag = document.createElement('span'); tag.className = 'dock-change-reverted'; tag.textContent = dockRightText('undone');
+                stats.appendChild(tag);
+            }
+        }
+        const nextText = row.diff ? String(row.diff) : '';
+        if (nextText !== diffText) {
+            diffText = nextText; diffLines = null; nextDiffLine = 0;
+            item.__myagentContextDiff = nextText;
+        }
+        if (body.classList.contains('is-open')) {
+            ensureBody();
+            scheduleDiffRender();
+        }
+    };
+    update(row);
     if (state && state.expandedChanges && state.expandedChanges.has(expandKey)) setExpanded(true);
-    if (state && state.renderedChanges) state.renderedChanges.set(cacheKey, { signature, item });
+    if (state && state.renderedChanges) state.renderedChanges.set(cacheKey, { item, update });
     return item;
 }
 
@@ -1908,6 +2123,7 @@ function dockRightDisposeTab(tabId) {
     const state = dockRightState.tabState[tabId];
     if (!state) return;
     state.released = true;
+    state.dispose?.();
     if (state.listener) document.removeEventListener('myagent:ui-event', state.listener);
     if (state.abort) {
         try { state.abort.abort(); } catch (error) { /* ignore */ }
@@ -1921,6 +2137,8 @@ function dockRightDisposeTab(tabId) {
 function dockRightInit() {
     if (typeof document === 'undefined') return;
     dockRightEnsureMounted();
+    dockSyncPluginPages(globalThis.__myagentPluginPageContributions || []);
+    dockInitPageNavigation();
     dockRightWatchSessions();
     if (typeof switchSession === 'function' && !dockRightState.switchWrapped) {
         dockRightState.switchWrapped = true;
@@ -1937,17 +2155,35 @@ function dockRightInit() {
     }
     globalThis.MyAgentDock = Object.assign(globalThis.MyAgentDock || {}, {
             /** Register one content type; the column renders tabs it claims. */
-            registerTabType: (definition) => dockTabRegistry.register(definition),
+            registerTabType: (definition) => dockRegisterPageType(definition),
+            /** Validated plugin pages and HTTP(S) browser pages share the column. */
+            syncPluginPages: (rows) => dockSyncPluginPages(rows),
+            openPluginPage: (pluginId, options) => dockRightOpenPluginPage(String(pluginId), options),
+            openBrowser: (url, options) => dockRightOpenBrowser(url, options),
+            /** Host-owned show_user text/image views, scoped to the visible chat. */
+            openPresentation: (request) => {
+                if (!request || typeof request.contentId !== 'string' || !request.contentId.startsWith('myagent-user://presentation/')) return false;
+                dockRightEnsureMounted();
+                const surfaceId = dockRightSurfaceKey(currentSessionId);
+                if (!surfaceId) return false;
+                dockRightState.sessionId = surfaceId;
+                dockActionOpenContent(surfaceId, { kind: 'user-presentation', contentId: request.contentId,
+                    title: String(request.title || '').slice(0, 100), revealIfOpened: true }, dockRightSeed(), null, DOCK_RIGHT_AREA);
+                dockRightEnsureWidthMode(surfaceId); dockRightRender();
+                return true;
+            },
+            openTab: (kind, options = {}) => kind === 'browser'
+                ? dockRightOpenBrowser(options.url || options.params?.url || '', options)
+                : dockRightOpenPageKind(kind, options.replaceTab, options.paneId, true),
             /** Open a resource address (`myagent-resource://<type>/…`) in the column. */
             openResource: (address) => dockRightOpenResource(String(address || '')),
             /** Switch the app to another session; its own column state follows. */
             openSession: (sessionId) => {
                 const sid = String(sessionId || '');
                 if (!sid || typeof switchSession !== 'function') return undefined;
-                // The wrapper above keeps the app's own sidebar clicks in sync;
-                // calling the hook here as well makes this API deterministic
-                // even if some path reaches switchSession before the wrapper
-                // is installed.
+                // Keep the hook as a fallback for callers that provide their
+                // own switchSession implementation. It accepts only the
+                // committed identity, so an older completion is harmless.
                 return Promise.resolve(switchSession(sid)).then((result) => {
                     try {
                         if (result !== false) dockRightHandleSessionSwitch(sid);
@@ -1973,7 +2209,7 @@ function dockRightInit() {
             /** Toggle the details column. */
             toggleDetails: () => dockRightToggle(),
             /** Open one of the column's pages by kind ('guide' | 'files' | 'changes'). */
-            openDetailsTab: (kind) => dockRightOpenPageKind(String(kind)),
+            openDetailsTab: (kind) => kind === 'browser' ? dockRightOpenBrowser() : dockRightOpenPageKind(String(kind)),
             /** Open Modification History at a specific official user turn/file. */
             openChangeReview: (options) => dockRightOpenChangeReview(options),
             /** Feed child-agent review rows into the session-level details page. */

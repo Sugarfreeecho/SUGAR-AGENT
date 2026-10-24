@@ -84,24 +84,46 @@ function renderSessionListFromStore() {
  * 去掉收尾括号并自己补省略号，避免出现 `…）…`（右括号的字形外沿会与省略号挤在一起，
  * 放大后看起来像一个无法辨认的重叠字形）。完整名字仍在 data-original 与整行 tooltip 里。
  */
+var sessionNameNormalizationQueue = new WeakMap();
 function normalizeTruncatedSessionNames(root) {
     if (!root || !root.querySelectorAll) return;
     var names = root.querySelectorAll('.session-name');
-    // 两阶段：先"读"（测量+判断）后"写"（改文本）——避免读 scrollWidth → 写 → 再读造成的强制重排抖动。
-    var fixes = [];
+    var candidates = [];
     for (var i = 0; i < names.length; i += 1) {
         var el = names[i];
         var full = String(el.getAttribute('data-original') || '');
         if (!full) continue;
-        // scrollWidth > clientWidth ⇒ 该行确实被省略号截断
-        if (el.scrollWidth <= el.clientWidth) continue;
         var trimmed = full.replace(/[）)】」』]+$/, '');
         if (trimmed === full || !trimmed) continue;
-        fixes.push([el, trimmed]);
+        candidates.push([el, trimmed]);
     }
-    for (var j = 0; j < fixes.length; j += 1) {
-        fixes[j][0].textContent = fixes[j][1] + '\u2026';
+    var queued = sessionNameNormalizationQueue.has(root);
+    sessionNameNormalizationQueue.set(root, candidates);
+    if (queued) return;
+    if (!candidates.length) {
+        sessionNameNormalizationQueue.delete(root);
+        return;
     }
+    var run = function () {
+        var latest = sessionNameNormalizationQueue.get(root) || [];
+        sessionNameNormalizationQueue.delete(root);
+        var fixes = [];
+        // Cosmetic punctuation cleanup must not force sidebar layout before
+        // its first paint. Read only eligible titles, then batch all writes.
+        for (var j = 0; j < latest.length; j += 1) {
+            var name = latest[j][0];
+            if (name.isConnected === false) continue;
+            if (name.scrollWidth > name.clientWidth) fixes.push(latest[j]);
+        }
+        for (var k = 0; k < fixes.length; k += 1) {
+            fixes[k][0].textContent = fixes[k][1] + '\u2026';
+        }
+    };
+    if (window.MyAgentUiTasks && window.MyAgentUiTasks.afterPaint) {
+        window.MyAgentUiTasks.afterPaint(run);
+    } else if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(function () { setTimeout(run, 0); });
+    } else setTimeout(run, 0);
 }
 
 /**

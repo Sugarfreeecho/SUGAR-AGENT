@@ -1090,18 +1090,6 @@ test('editor state: one-shot history is read-only in every case', () => {
     assert.ok(/只读/.test(subagentUiDecisions.readOnlyReasonText(running)));
 });
 
-test('continuation prompt: only when results are pending and no child is running', () => {
-    assert.deepEqual(subagentUiDecisions.decideContinuationPrompt({ pendingCount: 0, runningCount: 0 }), {
-        show: false, reason: 'nothing-pending',
-    });
-    assert.deepEqual(subagentUiDecisions.decideContinuationPrompt({ pendingCount: 2, runningCount: 1 }), {
-        show: false, reason: 'children-running',
-    });
-    assert.deepEqual(subagentUiDecisions.decideContinuationPrompt({ pendingCount: 2, runningCount: 0 }), {
-        show: true, reason: 'pending-results',
-    });
-});
-
 // ── subagent-composer-ui（呈现层） ─────────────────────────────────────────
 await testAsync('composer UI mounts the read-only placeholder and gates the input', async () => {
     subagentCatalogStore.resetForTests();
@@ -1143,34 +1131,6 @@ await testAsync('editor takeover runs through the slot chain election', async ()
     assert.equal(subagentComposerUi.registerComposerSeat(), false);
     assert.equal(uiSlots.entriesOf(subagentComposerUi.SLOT_NAME).length, 1);
     subagentComposerUi.resetForTests();
-});
-
-await testAsync('composer UI shows the continuation hint only for the addressed parent session', async () => {
-    subagentCatalogStore.resetForTests();
-    subagentAddressing.resetForTests();
-    subagentComposerUi.resetForTests();
-    setupComposerDom();
-    context.currentSessionId = 'parent-1';
-    try {
-        subagentComposerUi.syncFromSessionSummary('parent-1', {
-            subagent_pending_continue: 2,
-            subagent_running: 0,
-            subagent_can_continue: true,
-            subagent_continuation: { state: 'ready', pending_count: 2 },
-        });
-        const hint = findInTree('subagent-continue-hint');
-        assert.ok(hint, 'hint mounted when results are pending');
-        assert.ok(/2 个子任务结果/.test(hint.innerHTML) || /2 个子任务结果/.test(descendantText(hint)), 'count shown');
-        subagentComposerUi.syncFromSessionSummary('parent-1', {
-            subagent_pending_continue: 0,
-            subagent_running: 1,
-            subagent_can_continue: true,
-            subagent_continuation: { state: 'wait_children', pending_count: 0 },
-        });
-        assert.equal(findInTree('subagent-continue-hint'), null, 'hint removed while children run');
-    } finally {
-        context.currentSessionId = undefined;
-    }
 });
 
 function setupComposerDom() {

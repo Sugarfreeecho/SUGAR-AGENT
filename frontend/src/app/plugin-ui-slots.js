@@ -9,12 +9,16 @@ let sessionUiRequest = typeof globalThis.fetch === 'function'
     ? globalThis.fetch.bind(globalThis) : null;
 let sessionUiObserver = null;
 let sessionUiRefreshTimer = null;
+let sessionUiLastRefreshAt = 0;
 let sessionUiRequestGeneration = 0;
+let sessionUiRefreshWork = null;
+let sessionUiQueuedRefresh = null;
 let sessionUiFullRefreshPending = false;
 let sessionUiPendingIds = new Set();
 let sessionUiLatestGeneration = new Map();
 let pluginSessionUiCache = new Map();
 let pluginSessionPanelRenderers = new Map();
+let pluginSessionPanelSnapshot = null;
 let pluginSessionPanelCleanups = [];
 /* 上一轮真正写入过面板的容器（含 pubar 页签 host）。当 payload 里不再出现某个面板时，
    必须显式清空对应容器，否则旧卡片会一直留在 DOM 上（例如计划清空后 session.panel 消失）。 */
@@ -22,6 +26,8 @@ let pluginSessionPanelContainers = new Set();
 /* cleanup 与它所属容器的对应关系：容器被清空时同步摘掉这些 cleanup。 */
 let pluginSessionPanelCleanupContainers = new Map();
 let pluginChatExtensionCleanups = [];
+let pluginChatGeneration = 0;
+let pluginUiInitialization = 0;
 
 export function normalizePluginChatExtensions(rows) {
     if (!Array.isArray(rows)) return [];
@@ -92,6 +98,7 @@ async function ensurePluginStyleLink(definition, datasetProperty, attributeName)
 }
 
 async function loadPluginChatExtensions(rows) {
+    const generation = ++pluginChatGeneration;
     pluginChatExtensionCleanups.splice(0).forEach(function (cleanup) {
         try { cleanup(); } catch (error) { console.warn('Plugin chat extension cleanup failed', error); }
     });
@@ -102,6 +109,7 @@ async function loadPluginChatExtensions(rows) {
                 import(/* @vite-ignore */ definition.moduleUrl),
                 ensurePluginStyleLink(definition, 'pluginChatStyle', 'data-plugin-chat-style'),
             ]);
+            if (generation !== pluginChatGeneration) return;
             if (!module || typeof module.installChatExtension !== 'function') return;
             const cleanup = await module.installChatExtension({
                 pluginId: definition.pluginId,
@@ -112,7 +120,10 @@ async function loadPluginChatExtensions(rows) {
                         ? globalThis.translateUiString(value) : value;
                 },
             });
-            if (typeof cleanup === 'function') pluginChatExtensionCleanups.push(cleanup);
+            if (typeof cleanup === 'function') {
+                if (generation === pluginChatGeneration) pluginChatExtensionCleanups.push(cleanup);
+                else cleanup();
+            }
         } catch (error) {
             console.warn(`Plugin chat extension failed to load (${definition.pluginId})`, error);
         }
@@ -354,6 +365,8 @@ function formatRendererValue(value, format) {
 }
 
 export function installPluginUiContributions(rows) {
+    globalThis.__myagentPluginPageContributions = Array.isArray(rows) ? rows : [];
+    globalThis.MyAgentDock?.syncPluginPages?.(globalThis.__myagentPluginPageContributions);
     const renderers = normalizePluginMessageRenderers(rows);
     pluginMessageRenderers = new Map(renderers.map(function (renderer) {
         return [`${renderer.pluginId}:${renderer.eventName}`, renderer];
@@ -664,9 +677,7 @@ export function renderPluginComposerActions(container, rows) {
                 insertComposerText(document.getElementById('message-input'), item.text);
                 return;
             }
-            if (typeof globalThis.open !== 'function') return;
-            const opened = globalThis.open(item.href, '_blank', 'noopener,noreferrer');
-            if (opened) opened.opener = null;
+            globalThis.MyAgentDock?.openPluginPage?.(item.pluginId);
         });
         fragment.appendChild(button);
     });
@@ -794,7 +805,6 @@ function visibleSessionRows() {
 function renderSessionBadges(rows, sessions) {
     rows.forEach(function (row) {
         const old = row.querySelector('.plugin-session-badges');
-        if (old) old.remove();
         const sessionId = String(row.dataset.sessionId || '');
         const model = sessions[sessionId];
         const activity = Boolean(model && model.badges.some(function (item) {
@@ -804,8 +814,14 @@ function renderSessionBadges(rows, sessions) {
         const badges = model ? model.badges.filter(function (item) {
             return item.display !== 'activity';
         }) : [];
-        if (!badges.length) return;
         const titleRow = row.querySelector('.session-item-title-row');
+        const signature = JSON.stringify(badges);
+        if (row._pluginBadgeSignature === signature && row._pluginBadgeTitleRow === titleRow
+            && (badges.length ? old && old.parentNode === titleRow : !old)) return;
+        if (old) old.remove();
+        row._pluginBadgeSignature = signature;
+        row._pluginBadgeTitleRow = titleRow;
+        if (!badges.length) return;
         if (!titleRow) return;
         const host = document.createElement('span');
         host.className = 'plugin-session-badges';
@@ -833,6 +849,19 @@ function renderSessionPanels(rows, sessions) {
     if (!host) return;
     const active = rows.find(function (row) { return row.classList.contains('active'); });
     const sessionId = active ? String(active.dataset.sessionId || '') : '';
+    const model = sessions[sessionId];
+    const panels = model ? model.panels : [];
+    const pubarApi = globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.paneHostFor === 'function'
+        ? globalThis.MyAgentPubar : null;
+    const signature = JSON.stringify([sessionId, panels]);
+    const previous = pluginSessionPanelSnapshot;
+    if (previous && previous.signature === signature && previous.host === host
+        && previous.pubarApi === pubarApi && previous.renderers === pluginSessionPanelRenderers
+        && previous.containers.every(function (entry) {
+            const children = Array.from(entry.container.children);
+            return entry.container.isConnected !== false && children.length === entry.children.length
+                && children.every(function (child, index) { return child === entry.children[index]; });
+        })) return;
     const retainedCleanups = [];
     pluginSessionPanelCleanups.forEach(function (cleanup) {
         try {
@@ -848,10 +877,6 @@ function renderSessionPanels(rows, sessions) {
         }
     });
     pluginSessionPanelCleanupContainers = retainedOwners;
-    const model = sessions[sessionId];
-    const panels = model ? model.panels : [];
-    const pubarApi = globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.paneHostFor === 'function'
-        ? globalThis.MyAgentPubar : null;
     const fragments = new Map();
     function containerFor(item) {
         let container = host;
@@ -1102,6 +1127,10 @@ function renderSessionPanels(rows, sessions) {
     const usedFallbackHost = fragments.has(host);
     if (pubarApi && !usedFallbackHost) host.hidden = true;
     else host.hidden = visiblePanelCount === 0;
+    pluginSessionPanelSnapshot = { signature, host, pubarApi, renderers: pluginSessionPanelRenderers,
+        containers: Array.from(new Set([host, ...fragments.keys()])).map(function (container) {
+            return { container, children: Array.from(container.children) };
+        }) };
     document.dispatchEvent(new CustomEvent('myagent:plugin-session-ui-rendered', {
         detail: { sessionId, panelCount: visiblePanelCount },
     }));
@@ -1119,6 +1148,31 @@ function cachedPluginSessionUi(rows) {
 }
 
 export async function refreshPluginSessionUi(requestedSessionIds) {
+    if (sessionUiRefreshWork) {
+        let queued = sessionUiQueuedRefresh;
+        if (!queued) {
+            queued = { full: false, ids: new Set(), promise: null };
+            sessionUiQueuedRefresh = queued;
+            const flush = function () {
+                if (sessionUiQueuedRefresh === queued) sessionUiQueuedRefresh = null;
+                return refreshPluginSessionUi(queued.full ? undefined : Array.from(queued.ids));
+            };
+            queued.promise = sessionUiRefreshWork.then(flush, flush);
+        }
+        if (Array.isArray(requestedSessionIds)) {
+            requestedSessionIds.forEach(function (sid) { if (queued.ids.size < 200) queued.ids.add(String(sid)); });
+        } else queued.full = true;
+        return queued.promise;
+    }
+    const work = refreshPluginSessionUiOnce(requestedSessionIds);
+    const tracked = work.finally(function () {
+        if (sessionUiRefreshWork === tracked) sessionUiRefreshWork = null;
+    });
+    sessionUiRefreshWork = tracked;
+    return tracked;
+}
+
+async function refreshPluginSessionUiOnce(requestedSessionIds) {
     const request = sessionUiRequest;
     if (typeof request !== 'function') return;
     const rows = visibleSessionRows();
@@ -1140,11 +1194,14 @@ export async function refreshPluginSessionUi(requestedSessionIds) {
         renderSessionPanels(rows, cachedPluginSessionUi(rows));
         return;
     }
+    const controller = new AbortController();
+    const timeout = setTimeout(function () { controller.abort(); }, 30000);
     try {
         const response = await request('/api/extensions/session-ui', {
             method: 'POST',
             credentials: 'same-origin',
             cache: 'no-store',
+            signal: controller.signal,
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_ids: sessionIds }),
         });
@@ -1165,7 +1222,7 @@ export async function refreshPluginSessionUi(requestedSessionIds) {
             return sessionUiLatestGeneration.get(sessionId) === generation;
         });
         if (isLatest) console.warn('Plugin session UI refresh failed', error);
-    }
+    } finally { clearTimeout(timeout); }
 }
 
 function schedulePluginSessionUiRefresh(source) {
@@ -1185,15 +1242,20 @@ function schedulePluginSessionUiRefresh(source) {
             if (active) sessionUiPendingIds.add(String(active.dataset.sessionId || ''));
         }
     }
-    if (sessionUiRefreshTimer != null) clearTimeout(sessionUiRefreshTimer);
+    if (document.hidden || sessionUiRefreshTimer != null) return;
     sessionUiRefreshTimer = setTimeout(function () {
         sessionUiRefreshTimer = null;
+        sessionUiLastRefreshAt = Date.now();
         const full = sessionUiFullRefreshPending;
         const sessionIds = Array.from(sessionUiPendingIds);
         sessionUiFullRefreshPending = false;
         sessionUiPendingIds.clear();
         void refreshPluginSessionUi(full ? undefined : sessionIds);
-    }, 30);
+    }, Math.max(30, 200 - (Date.now() - sessionUiLastRefreshAt)));
+}
+
+function resumePluginSessionUiRefresh() {
+    if (!document.hidden && (sessionUiFullRefreshPending || sessionUiPendingIds.size)) schedulePluginSessionUiRefresh([]);
 }
 
 function sessionIdsInNode(node) {
@@ -1228,32 +1290,37 @@ function initPluginSessionUi() {
         });
     }
     document.addEventListener('myagent:extension-state-changed', schedulePluginSessionUiRefresh);
+    document.addEventListener('visibilitychange', resumePluginSessionUiRefresh);
     schedulePluginSessionUiRefresh({ full: true });
 }
 
 export async function initPluginUiSlots(options = {}) {
+    const generation = ++pluginUiInitialization;
     const request = typeof options.fetch === 'function'
         ? options.fetch
         : (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : null);
     if (typeof request !== 'function') return;
     sessionUiRequest = request;
     try {
-        const response = await request('/api/extensions', {
+        const response = !options.fetch && globalThis.MyAgentResourceCache ? null : await request('/api/extensions', {
             method: 'GET',
             credentials: 'same-origin',
             cache: 'no-store',
             headers: { Accept: 'application/json' },
         });
-        if (!response.ok) throw new Error(`Extension discovery failed (${response.status})`);
-        const payload = await response.json();
+        if (response && !response.ok) throw new Error(`Extension discovery failed (${response.status})`);
+        const payload = response ? await response.json() : await globalThis.MyAgentResourceCache.get('/api/extensions');
+        if (generation !== pluginUiInitialization) return;
         const contributions = payload && payload.ui_contributions;
         installPluginUiContributions(contributions);
         renderPluginSettingsSections(document.getElementById('plugin-settings-sections'), contributions);
         renderPluginComposerActions(document.getElementById('plugin-composer-actions'), contributions);
         await loadPluginSessionPanelRenderers(contributions);
+        if (generation !== pluginUiInitialization) return;
         await loadPluginChatExtensions(contributions);
         initPluginSessionUi();
     } catch (error) {
+        if (generation !== pluginUiInitialization) return;
         installPluginUiContributions([]);
         renderPluginSettingsSections(document.getElementById('plugin-settings-sections'), []);
         renderPluginComposerActions(document.getElementById('plugin-composer-actions'), []);

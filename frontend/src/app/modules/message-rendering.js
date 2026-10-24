@@ -713,6 +713,7 @@ function pushBriefLine(lines, line, type) {
 
 function measureFeedChunkOverflow(chunk) {
     if (!chunk || !chunk.isConnected) return;
+    if (chunk.closest && chunk.closest('.chat-stream[hidden]')) return;
     const sc = chunk.querySelector('.feed-chunk-scroller');
     if (!sc) return;
     if (chunk.classList.contains('expanded')) {
@@ -910,6 +911,7 @@ function hydrateProcessAggregateState(agg) {
                 || (key[1] === tailKey[1] && key[2] >= tailKey[2])))) tailKey = key;
     });
     if (body) body._reactOrderTailKey = tailKey;
+    if (body) delete body._executionOrderTailSeq;
     return state;
 }
 
@@ -966,6 +968,9 @@ function updateProcessBrief(agg) {
 
 function syncProcessAggregateHeightUi(agg) {
     if (!agg) return;
+    // History hydration yields between batches; observers must not measure
+    // the hidden partial tree on every yield. Final layout runs after reveal.
+    if (agg.closest && agg.closest('.chat-stream[hidden]')) return;
     var btn = agg.querySelector('.process-aggregate-resize');
     if (!btn) return;
     if (!agg.isConnected) {
@@ -1266,12 +1271,8 @@ function applyCacheStatsFromEvent(ctx, event, runSessionId) {
     if (event.input_tokens != null) agg.dataset.procCacheInput = String(Math.max(0, Math.floor(Number(event.input_tokens))));
     if (event.output_tokens != null) agg.dataset.procCacheOutput = String(Math.max(0, Math.floor(Number(event.output_tokens))));
     if (event.tokens_per_sec != null) agg.dataset.procCacheTps = String(Math.max(0, Number(event.tokens_per_sec)));
-    var tokenSessionId = runSessionId || event.session_id || event.sessionId || '';
-    var eventTokenMode = String(event.context_token_mode || event.token_mode || '').toLowerCase();
-    var allowApiTokenStats = eventTokenMode !== 'calculated';
-    if (allowApiTokenStats && tokenSessionId && event.input_tokens != null && Number.isFinite(Number(event.input_tokens))) {
-        recordContextTokens(tokenSessionId, Math.max(0, Math.floor(Number(event.input_tokens))), event.threshold);
-    }
+    // Per-request usage belongs to this process row. Current context comes from
+    // context_tokens/snapshots, including after compression and history paging.
     refreshAggregateStatsSmart(agg);
 }
 
@@ -1477,7 +1478,7 @@ function mergeAdjacentExecutionGroups(stream) {
             if (node.dataset.procToolFails) previous.dataset.procToolFails = String(
                 Number(previous.dataset.procToolFails || 0) + Number(node.dataset.procToolFails));
             if (typeof smoothFollowController !== 'undefined' && from) smoothFollowController.cancel(from);
-            if (target) delete target._reactOrderTailKey;
+            if (target) { delete target._reactOrderTailKey; delete target._executionOrderTailSeq; }
             node.remove();
             refreshProcessAggregateStats(previous);
         } else previous = node;
@@ -1498,6 +1499,7 @@ function updateExecutionRecord(sessionId, update) {
         // from the recovered record instead of replacing them with undefined.
         if (update[key] !== undefined) row[key] = update[key];
     });
+    if (!Number(row.first_runtime_seq) && Number(update.last_runtime_seq) > 0) row.first_runtime_seq = Number(update.last_runtime_seq);
     [['text_delta', 'content'], ['name_delta', 'tool'], ['arguments_delta', 'arguments_raw'], ['output_delta', 'output']].forEach(function (pair) {
         if (Object.prototype.hasOwnProperty.call(update, pair[0])) row[pair[1]] = String(prior[pair[1]] || '') + String(update[pair[0]] || '');
         delete row[pair[0]];
@@ -1571,6 +1573,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
         var type = record.kind === 'tool' ? 'tool-call' : record.kind === 'reasoning' ? 'llm-reasoning' : 'llm-response';
         var sc = createProcessFeedRow(ctx, type, smoothText ? '' : text, {reactIter:record.react_iter,
             reactGeneration:generation, runId:record.run_id, streaming:record.status === 'generating',
+            firstRuntimeSeq:record.first_runtime_seq,
             historyHydrate:historicalRun, suppressFollow:historicalRun}, sessionId, record.tool_call_id || '');
         row = sc && sc.closest ? sc.closest('.feed-item') : null;
     }
@@ -1580,6 +1583,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     executionRowIndexForStream(ctx.stream).set(row.dataset.executionId, row);
     row.dataset.executionStatus = String(record.status || '');
     row.dataset.executionRenderedSeq = String(runtimeSeq);
+    if (Number(record.first_runtime_seq) > 0) row.dataset.executionFirstSeq = String(record.first_runtime_seq);
     if (record.run_id) row.dataset.runId = String(record.run_id);
     if (record.react_iter != null) row.dataset.reactIter = String(record.react_iter);
     if (record.kind === 'response' && !smoothText) row._processBriefRawText = String(record.content || '');
@@ -1594,7 +1598,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     row.dataset.eventCommitted = '1';
     var scroller = row.querySelector('.feed-chunk-scroller');
     // Completed records and recovery snapshots use the same blank-line policy as live reveals.
-    var uiText = record.kind === 'tool' ? truncateLogTextForUi(text) : trimSurroundingBlankLines(text);
+    var uiText = record.kind === 'tool' ? text : trimSurroundingBlankLines(text);
     if (scroller && smoothText) {
         if (record.kind === 'tool') queueToolCallLlmReveal(ctx, scroller, record.tool, record.arguments_raw, sessionId);
         else queueExecutionLlmReveal(ctx, scroller, text, record.kind, sessionId);
@@ -1793,7 +1797,10 @@ function getExistingProcessBody(ctx) {
 
 function autoResizeTextarea() {
     messageInput.style.height = 'auto';
-    messageInput.style.height = Math.min(messageInput.scrollHeight, Math.floor(window.innerHeight * 0.5)) + 'px';
+    // An empty composer uses rows="1"; placeholder layout must not size it.
+    if (messageInput.value) {
+        messageInput.style.height = Math.min(messageInput.scrollHeight, Math.floor(window.innerHeight * 0.5)) + 'px';
+    }
     repinStreamScrollAfterComposerResize();
 }
 
@@ -1807,8 +1814,8 @@ function repinStreamScrollAfterComposerResize() {
     if (pb) pb.scrollTop = pb.scrollHeight;
 }
 function syncComposerInputState() {
-    autoResizeTextarea();
     rewriteInputWorkspacePaths();
+    autoResizeTextarea();
     if (hasSendableText(messageInput.value)) recentComposerQueuedFollowup = null;
     persistInputDraft(currentSessionId, messageInput.value);
     if (typeof setSendButtonState === 'function') setSendButtonState();
@@ -2172,6 +2179,9 @@ function waitForHistoryImageLayout(sessionId, mode, root) {
     }
     var images = Array.prototype.slice.call(root.querySelectorAll('.message img'));
     var pending = images.filter(function (img) {
+        // Durable thumbnails reserve their dimensions without downloading
+        // offscreen originals. Their eventual decode cannot change the layout.
+        if (img.dataset && img.dataset.attachmentDeferred === '1') return false;
         // 冷加载的消息流仍处于隐藏状态，lazy 图片不会可靠地开始请求。
         // 历史置底前先拿到固有尺寸，避免图片迟到后把最新结果挤出视口。
         img.loading = 'eager';
@@ -2907,7 +2917,6 @@ function renderSubagentAddressedTitle(br, sub) {
         subagentCatalogUi.renderTrigger(titleRow, parentId);
     }
     if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
-        subagentComposerUi.removeContinueHint();
         subagentComposerUi.syncComposer();
     }
     sub.textContent = 'subagent ' + childId;
@@ -3057,8 +3066,16 @@ function openMermaidZoom(sourceEl) {
     root.appendChild(panel);
 
     closeBtn.onclick = closeMermaidZoom;
+    /* 点遮罩关闭：按下点落在面板上时不算数。浏览器把 click 派发给按下/松开
+       目标的最近公共祖先——在面板里按住、拖到遮罩上松开时祖先就是遮罩，只看
+       event.target 会把这次拖拽误判成「点了遮罩」而关掉预览。 */
+    var pressOnContent = false;
+    root.onpointerdown = function (e) { pressOnContent = e.target !== root; };
+    root.onpointercancel = function () { pressOnContent = false; };
     root.onclick = function (e) {
-        if (e.target === root) closeMermaidZoom();
+        var dismiss = e.target === root && !pressOnContent;
+        pressOnContent = false;
+        if (dismiss) closeMermaidZoom();
     };
     mermaidZoomKeyHandler = function (e) {
         if (e.key === 'Escape') {
@@ -3468,6 +3485,9 @@ function rewriteInputWorkspacePaths() {
     if (!messageInput || inputPathRewriteGuard) return;
     var raw = String(messageInput.value || '');
     var changed = false;
+    var selectionStart = messageInput.selectionStart;
+    var selectionEnd = messageInput.selectionEnd;
+    var selectionDirection = messageInput.selectionDirection;
     function replacePathToken(match, prefix, path) {
         var rel = pathTokenToWorkspaceOpenRel(path);
         if (!rel) return match;
@@ -3477,24 +3497,38 @@ function rewriteInputWorkspacePaths() {
         changed = true;
         return (prefix || '') + label;
     }
-    var next = raw.replace(inputQuotedWindowsPathRegex(), function (match, q, path) {
-        return replacePathToken(match, '', path);
-    });
-    next = next.replace(inputKnownExtWindowsPathRegex(), function (match, prefix, path) {
-        return replacePathToken(match, prefix, path);
-    });
-    next = next.replace(inputSimpleWindowsPathRegex(), function (match, prefix, path) {
-        return replacePathToken(match, prefix, path);
-    });
+    function replacePaths(text, pattern, quoted) {
+        var delta = 0;
+        return text.replace(pattern, function (match, prefix, path) {
+            var offset = arguments[arguments.length - 2];
+            var replacement = replacePathToken(match, quoted ? '' : prefix, path);
+            if (replacement === match) return match;
+            var start = offset + delta + (quoted ? 0 : prefix.length);
+            var end = offset + delta + match.length;
+            var difference = replacement.length - match.length;
+            function mapPosition(position) {
+                if (position <= start) return position;
+                // A position inside the replaced path lands just after its label.
+                if (position < end) return offset + delta + replacement.length;
+                return position + difference;
+            }
+            selectionStart = mapPosition(selectionStart);
+            selectionEnd = mapPosition(selectionEnd);
+            delta += difference;
+            return replacement;
+        });
+    }
+    var next = replacePaths(raw, inputQuotedWindowsPathRegex(), true);
+    next = replacePaths(next, inputKnownExtWindowsPathRegex(), false);
+    next = replacePaths(next, inputSimpleWindowsPathRegex(), false);
     if (changed && next !== raw) {
-        var wasFocused = document.activeElement === messageInput;
         inputPathRewriteGuard = true;
-        messageInput.value = next;
-        if (wasFocused) {
-            var pos = next.length;
-            try { messageInput.setSelectionRange(pos, pos); } catch (e) {}
+        try {
+            messageInput.value = next;
+            messageInput.setSelectionRange(selectionStart, selectionEnd, selectionDirection);
+        } finally {
+            inputPathRewriteGuard = false;
         }
-        inputPathRewriteGuard = false;
     }
     refreshInputPathChips();
 }
@@ -4252,6 +4286,7 @@ const TRACE_ROW = {
     'context-summary': { label: '压缩', c: 'feed--cmp' },
     'key-context': { label: '要点', c: 'feed--key' },
     'plugin-extension': { label: '扩展', c: 'feed--plugin-extension' },
+    'context-injection': { label: '上下文', c: 'feed--context-injection' },
     'user-steer':  { label: '追问', c: 'feed--answer' },
     'status':      { label: '状态', c: 'feed--st' },
 };
@@ -4406,7 +4441,7 @@ function setToolRowText(row, text, ctx, runSessionId) {
     }
     if (sc) {
         if (ctx && ctx.llm) cancelExecutionLlmReveal(ctx, sc);
-        var nextText = truncateLogTextForUi(text);
+        var nextText = text == null ? '' : String(text);
         if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, nextText);
         else sc.textContent = nextText;
     }
@@ -4647,7 +4682,7 @@ function writeToolCallLlmText(scroller, tool, argumentsRaw) {
         && typeof cancelSmoothTraceLayoutAnimation === 'function') cancelSmoothTraceLayoutAnimation(row);
     scroller._llmToolName = String(tool || '');
     scroller._llmToolArgs = String(argumentsRaw || '');
-    var text = truncateLogTextForUi(formatToolDraftLine(scroller._llmToolName, scroller._llmToolArgs));
+    var text = formatToolDraftLine(scroller._llmToolName, scroller._llmToolArgs);
     if (typeof setUiRuntimeText === 'function') setUiRuntimeText(scroller, text, true);
     else if (scroller.textContent !== text) scroller.textContent = text;
     var chunk = scroller.closest('.feed-chunk');
@@ -4767,9 +4802,8 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
         draft.dataset.commandPreview = commandPreview;
         var draftScroller = draft.querySelector('.feed-chunk-scroller');
         if (draftScroller) {
-            var draftText = truncateLogTextForUi(line);
-            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(draftScroller, draftText);
-            else draftScroller.textContent = draftText;
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(draftScroller, line);
+            else draftScroller.textContent = line;
         }
         var draftChunk = draft.querySelector('.feed-chunk');
         if (draftChunk) {
@@ -4836,9 +4870,8 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
         rememberToolStreamRow(ctx, row, '', tid);
         var sc = row.querySelector('.feed-chunk-scroller');
         if (sc) {
-            var doneText = truncateLogTextForUi(text);
-            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, doneText);
-            else sc.textContent = doneText;
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(sc, text);
+            else sc.textContent = text;
         }
         var ch = row.querySelector('.feed-chunk');
         if (ch) refreshFeedChunkOverflow(ch);
@@ -4976,11 +5009,25 @@ function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) 
     var generation = Math.max(0, Math.floor(Number(reactGeneration) || 0));
     row.setAttribute('data-react-iter', String(iter));
     row.setAttribute('data-react-generation', String(generation));
+    // Page-local generations can differ after an older page is prepended.
+    // Durable execution birth sequences share one order across every page/run.
+    var birthSeq = Number(row.getAttribute('data-execution-first-seq'));
+    var canUseTail = true;
+    if (birthSeq > 0) {
+        if (body._executionOrderTailSeq == null) {
+            var executionRows = body.querySelectorAll('.feed-item[data-execution-first-seq]');
+            body._executionOrderTailSeq = Array.from(executionRows).reduce(function (max, item) {
+                return Math.max(max, Number(item.getAttribute('data-execution-first-seq')) || 0);
+            }, 0);
+        }
+        canUseTail = birthSeq >= body._executionOrderTailSeq;
+        body._executionOrderTailSeq = Math.max(body._executionOrderTailSeq, birthSeq);
+    }
     var orderKey = [generation, iter, phase];
     var tailKey = body._reactOrderTailKey;
-    if (!tailKey || generation > tailKey[0]
+    if (canUseTail && (!tailKey || generation > tailKey[0]
         || (generation === tailKey[0] && (iter > tailKey[1]
-            || (iter === tailKey[1] && phase >= tailKey[2])))) {
+            || (iter === tailKey[1] && phase >= tailKey[2]))))) {
         appendProcessRowBeforePendingAppendSteer(body, row, type);
         body._reactOrderTailKey = orderKey;
         return;
@@ -4992,6 +5039,12 @@ function insertReactOrderedFeedRow(body, row, type, reactIter, reactGeneration) 
         var existingIter = Number(existing.getAttribute('data-react-iter'));
         var existingGeneration = Math.max(0, Number(existing.getAttribute('data-react-generation')) || 0);
         if (existingPhase == null || !Number.isFinite(existingIter)) continue;
+        var existingBirthSeq = Number(existing.getAttribute('data-execution-first-seq'));
+        if (generation !== existingGeneration && birthSeq > 0 && existingBirthSeq > 0
+            && row.getAttribute('data-run-id') === existing.getAttribute('data-run-id')) {
+            if (existingBirthSeq > birthSeq) { body.insertBefore(row, existing); return; }
+            continue;
+        }
         if (existingGeneration > generation
             || (existingGeneration === generation
                 && (existingIter > iter || (existingIter === iter && existingPhase > phase)))) {
@@ -5084,8 +5137,9 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     var txtForUi = initialText;
     if (type === 'llm-reasoning' || type === 'llm-response') txtForUi = trimSurroundingBlankLines(txtForUi);
     if (type === 'llm-response') row._processBriefRawText = String(txtForUi || '');
-    var initialUiText = type === 'llm-reasoning' || type === 'llm-response'
-        ? txtForUi : truncateLogTextForUi(txtForUi);
+    // Folding clips the view; tool arguments and output keep their full body.
+    var initialUiText = type === 'llm-reasoning' || type === 'llm-response' || type === 'tool-call'
+        ? (txtForUi == null ? '' : String(txtForUi)) : truncateLogTextForUi(txtForUi);
     if (type === 'status' || type === 'error-log' || type === 'tool-call'
         || type === 'compact-summary' || type === 'context-trim'
         || type === 'context-summary' || type === 'key-context') {
@@ -5101,6 +5155,7 @@ function createProcessFeedRow(ctx, type, initialText, streamOpts, runSessionId, 
     if (type === 'llm-reasoning' && !streamOpts.streaming) autoCollapseLlmReasoningRow(row);
     bindFeedChunkInteraction(chunk);
     bindFeedChunkScrollChain(sc);
+    if (Number(streamOpts.firstRuntimeSeq) > 0) row.dataset.executionFirstSeq = String(streamOpts.firstRuntimeSeq);
     insertReactOrderedFeedRow(body, row, type, streamOpts.reactIter, rowGeneration);
     if (typeof translateUiNode === 'function') translateUiNode(row);
     var isHistoryHydrate = !!(
@@ -5535,6 +5590,7 @@ function bindFeedChunkInteraction(ch) {
     // collapse affordance; clicking the command text toggles the same fold.
     // Keep the content-height expand for LLM/log/etc. rows.
     var row = ch.closest ? ch.closest('.feed-item') : null;
+    if (row && row.classList.contains('feed--context-injection')) return;
     if (row && row.classList.contains('feed--tool')) {
         ch.addEventListener('click', handleToolRowChunkClick);
         return;

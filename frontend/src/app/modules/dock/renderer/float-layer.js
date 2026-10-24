@@ -159,14 +159,15 @@ class DockFloatLayerView {
             entry.closeButton.hidden = !this.canCloseTab(tab.id);
         }
         const titleValue = this.renderTabTitle ? this.renderTabTitle(tab) : tab.title;
-        entry.titleText.textContent = String(titleValue === undefined || titleValue === null ? tab.title : titleValue);
+        if (titleValue && titleValue.nodeType === 1) entry.titleText.replaceChildren(titleValue);
+        else entry.titleText.textContent = String(titleValue === undefined || titleValue === null ? tab.title : titleValue);
         entry.el.setAttribute('data-dock-float-active', state.activePaneId === paneId ? '1' : '');
         const live = this.preview && this.preview.paneId === paneId ? this.preview.rect : dockFloatRect(pane);
         entry.el.style.left = Math.round(live.x) + 'px';
         entry.el.style.top = Math.round(live.y) + 'px';
         entry.el.style.width = Math.round(live.width) + 'px';
         entry.el.style.height = Math.round(live.height) + 'px';
-        entry.el.style.zIndex = String(this.preview && this.preview.paneId === paneId ? state.floats.length + 1 : depth + 1);
+        entry.el.style.zIndex = String(700 + 2 * (this.preview && this.preview.paneId === paneId ? state.floats.length : depth));
     }
 
     applyPreview() {

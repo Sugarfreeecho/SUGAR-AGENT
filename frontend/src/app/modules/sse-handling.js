@@ -6,11 +6,6 @@ const STREAM_RECONNECT_BASE_DELAY_MS = 500;
 const STREAM_RECONNECT_MAX_DELAY_MS = 15000;
 const streamReconnectStateBySession = Object.create(null);
 
-/* 子代理续接（continue-subagents）运行态。原属子代理前端模块；
-   面板移除后暂存于此，供后续 dsh 式子代理 UI 重新接线。 */
-var subagentContinueInFlight = false;
-var subagentContinueSessionId = null;
-
 function resetStreamReconnectState(sessionId) {
     var sid = String(sessionId || '');
     var state = streamReconnectStateBySession[sid];
@@ -377,6 +372,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
         // A reused context must verify each new stream instead of trusting the previous run.
         runCtx.modelBindingDirty = true;
         runCtx.modelBindingVerified = false;
+        if (typeof limitBackgroundSessionStreams === 'function') limitBackgroundSessionStreams();
     }
     const progressTimer = setInterval(function () {
         void checkSessionStreamProgress(runSessionId, runCtx);
@@ -437,6 +433,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    // All session streams share this deadline: independent budgets can still
+    // accumulate into a long microtask chain when several chunks arrive at once.
+    const streamBudget = consumeAgentSseResponseInner;
+    if (!Number.isFinite(streamBudget.sliceStartedAt)) streamBudget.sliceStartedAt = Date.now();
     while (true) {
         const { done, value } = await readSseChunkWithIdleTimeout(reader, SSE_IDLE_TIMEOUT_MS);
         if (done) break;
@@ -444,6 +444,14 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
         const lines = buffer.split('\n');
         buffer = lines.pop();
         for (const line of lines) {
+            // Catch-up can deliver many sessions' events in a single chunk.
+            // Preserve their order while allowing input and navigation between
+            // short slices, including branches that continue early below.
+            if (Date.now() - streamBudget.sliceStartedAt >= 12) {
+                if (typeof MyAgentUiTasks !== 'undefined' && MyAgentUiTasks.yieldToMain) await MyAgentUiTasks.yieldToMain();
+                else await new Promise(function (resolve) { setTimeout(resolve, 0); });
+                streamBudget.sliceStartedAt = Date.now();
+            }
             if (line.startsWith(':')) continue;
             if (!line.startsWith('data: ')) continue;
             const data = line.slice(6);
@@ -962,129 +970,11 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     finally { finalRecoveryBySession.delete(key); }
 }
 
-async function startContinueAfterSubagents(sessionId) {
-    if (!sessionId || sessionId !== currentSessionId) return;
-    if (isSessionRunning(sessionId) || subagentContinueInFlight) {
-        return;
-    }
-    if (isSendPipelineLocked(sessionId)) {
-        return;
-    }
-    subagentContinueSessionId = sessionId;
-    subagentContinueInFlight = true;
-    var runCtx = null;
-    var runSessionId = sessionId;
-    var continuationFailed = false;
-    try {
-    if (typeof ensureLatestHistoryTailForLiveAppend === 'function') {
-        var continuationTailReady = await ensureLatestHistoryTailForLiveAppend(sessionId);
-        if (!continuationTailReady) {
-            showUiAlert({
-                title: '无法继续任务',
-                message: '当前页面正在查看较早历史，且未能恢复最新历史尾部。请重试。',
-                variant: 'error'
-            });
-            return;
-        }
-    }
-    var continueUrl = '/sessions/' + encodeURIComponent(sessionId) + '/continue-subagents';
-        const response = await fetch(continueUrl, { method: 'POST' });
-        if (response.status === 204) {
-            return;
-        }
-        if (response.status === 409) {
-            return;
-        }
-        var ct = (response.headers.get('content-type') || '').toLowerCase();
-        if (!response.ok || !response.body || ct.indexOf('text/event-stream') < 0) return;
-        const preCount = await getUiEventCount(runSessionId, { preferCache: true });
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        runCtx = newDomContext(getVisibleChatStream());
-        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
-            sessionStore.resetSseSeq(runSessionId);
-        }
-        initRunFinalTracking(runCtx);
-        runCtx.runStartedAt = new Date().toISOString();
-        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
-            runCtx = getSessionRunState(runSessionId).ctx;
-            initRunFinalTracking(runCtx);
-            if (!runCtx.runStartedAt) runCtx.runStartedAt = new Date().toISOString();
-        } else {
-            runCtx.lastUserEventIndex = Math.max(0, preCount - 1);
-            resetLlmState(runCtx);
-            finalizeLlmStreamChunks(runCtx);
-        }
-        const ac = new AbortController();
-        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
-        if (sessionStore && typeof sessionStore.resetSseSeq === 'function') {
-            sessionStore.resetSseSeq(runSessionId);
-        }
-        setSendButtonState();
-        syncSessionListIndicatorClasses();
-        liveAutoFollow = true;
-        streamProcNearBottom = true;
-        scheduleContextTokensAfterPaint(runSessionId);
-        let streamEventIdx = preCount;
-        try {
-            if (typeof publishFollowupQueueToRun === 'function') void publishFollowupQueueToRun(runSessionId);
-            await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
-        } catch (error) {
-            if (error.name === 'AbortError') {
-                if (getRunAbortReason(runSessionId, runCtx) === 'user') appendLog(runCtx, '任务已中断', 'status', runSessionId);
-            }
-            else {
-                continuationFailed = true;
-                console.error('续接 subagent 失败:', error);
-                const msg = (error && error.message) ? String(error.message) : String(error);
-                appendLog(runCtx, '续接失败: ' + msg, 'error-log', runSessionId);
-            }
-        } finally {
-            finalizeLlmStreamChunks(runCtx);
-            finalizeProgressStreamChunks(runCtx);
-            if (runSessionId === currentSessionId
-                && getRunAbortReason(runSessionId, runCtx) !== 'user'
-                && !isServerStreamActive(runSessionId)) {
-                scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
-            }
-            if (liveAutoFollow) {
-                finishStreamScrollIfFollow(runCtx, runSessionId);
-            }
-            if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
-            setSendButtonState();
-            syncSessionListIndicatorClasses();
-            void refreshSingleSessionRow(runSessionId);
-            if (typeof scheduleSessionNameRecheck === 'function') {
-                scheduleSessionNameRecheck(runSessionId, {
-                    baseline: (sessionStore.get(runSessionId) || {}).name || '',
-                });
-            }
-            applyContextTokenLabelForCurrentSession();
-            if (continuationFailed || isServerStreamActive(runSessionId)) {
-                scheduleActiveSessionReconnect(runSessionId, { delayMs: 120, failure: continuationFailed });
-            } else {
-                resetStreamReconnectState(runSessionId);
-            }
-        }
-    } finally {
-        if (subagentContinueSessionId === runSessionId) subagentContinueSessionId = null;
-        subagentContinueInFlight = false;
-        var continuationStoppedByUser = !!runCtx && getRunAbortReason(runSessionId, runCtx) === 'user';
-        if (!continuationStoppedByUser
-            && getFollowupQueue(runSessionId).some(function (entry) { return entry && !entry.status; })) {
-            var followupSync = syncFollowupQueueFromServer(runSessionId);
-            void Promise.resolve(followupSync).then(function () {
-                scheduleFollowupQueueDrain(runSessionId, 0);
-            }).catch(function (error) {
-                console.warn('follow-up reconciliation failed; auto-drain skipped', error);
-            });
-        }
-    }
-}
-
 var serverRecoveryObservationBySession = Object.create(null);
 var serverRecoveryRequestedAtBySession = Object.create(null);
 
 function requestServerOwnedReactRecovery(sessionId) {
+    if (typeof runtimeLifecycleIsBlocked === 'function' && runtimeLifecycleIsBlocked()) return;
     var sid = String(sessionId || '');
     if (!sid) return;
     var now = Date.now();
@@ -1129,6 +1019,7 @@ function observeServerOwnedReactRecovery(sessionId) {
 }
 
 function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
+    if (typeof runtimeLifecycleIsBlocked === 'function' && runtimeLifecycleIsBlocked()) return;
     var sid = String(sessionId || '');
     var detail = sessionDetail || {};
     if (!sid || sid !== currentSessionId) return;
@@ -1138,7 +1029,7 @@ function maybeAutoResumeInterruptedReact(sessionId, sessionDetail) {
     if (typeof pendingHumanInteractionRecords === 'function'
         && pendingHumanInteractionRecords(sid).length > 0) return;
     if (!detail.react_auto_resume || !detail.react_can_continue || detail.run_active || detail.stream_active) return;
-    if (isSessionRunning(sid) || subagentContinueInFlight) return;
+    if (isSessionRunning(sid)) return;
     // Recovery execution is server-owned. The browser only waits for the
     // startup/background worker to publish an active run and then attaches an
     // observer stream; it must never start a competing /continue producer.
@@ -1418,6 +1309,7 @@ async function attachSessionEventStream(sessionId, opts) {
 }
 
 function scheduleActiveSessionReconnect(sessionId, opts) {
+    if (typeof runtimeLifecycleIsBlocked === 'function' && runtimeLifecycleIsBlocked()) return;
     if (!isMyAgentFeatureEnabled('streamReconnect', true)) return;
     opts = opts || {};
     var sid = String(sessionId || '');
@@ -1565,7 +1457,10 @@ function normalizeStoredFollowupItem(item) {
         status: restoredStatus,
         replacementRunId: String(item.replacementRunId || ''),
         awaitingRunEnd: item.awaitingRunEnd !== false,
-        deferUntilRunEnd: !!item.deferUntilRunEnd,
+        // Older clients deferred every attachment. Only Ask-owned entries must
+        // retain that restriction now that steer carries structured content.
+        deferUntilRunEnd: !!item.deferUntilRunEnd && (!attachments.length || !!item.deferForHumanQuestion),
+        deferForHumanQuestion: !!item.deferForHumanQuestion,
     };
 }
 
@@ -1639,6 +1534,7 @@ function persistFollowupQueue(sessionId) {
             replacementRunId: item.replacementRunId || '',
             awaitingRunEnd: item.awaitingRunEnd !== false,
             deferUntilRunEnd: !!item.deferUntilRunEnd,
+            deferForHumanQuestion: !!item.deferForHumanQuestion,
         };
     });
     try {
@@ -2482,9 +2378,10 @@ function enqueueCurrentInputAsFollowup(options) {
         persistFollowupQueue(sid);
     }
     recentComposerQueuedFollowup = { sessionId: sid, itemId: String(item.id) };
-    if (options.pendingQuestion || attachments.length) {
+    if (options.pendingQuestion) {
         item.awaitingRunEnd = true;
         item.deferUntilRunEnd = true;
+        item.deferForHumanQuestion = true;
         persistFollowupQueue(sid);
         renderFollowupQueue(sid);
     }
@@ -2810,7 +2707,8 @@ function removePendingSteerFromProcess(sessionId, item) {
     if (row && row.dataset.steerPending === '1' && row.dataset.steerCommitted !== '1') row.remove();
 }
 
-async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent, steerMode) {
+async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiContent, steerMode, attachments) {
+    if (typeof runtimeLifecycleIsBlocked === 'function' && runtimeLifecycleIsBlocked()) return false;
     var activeRun = getSessionRunState(sessionId);
     var activeInfo = sessionStore.getActiveRunInfo(sessionId);
     var sourceRunId = String((activeInfo && (activeInfo.run_id || activeInfo.runId))
@@ -2822,6 +2720,7 @@ async function sendSteerMessage(sessionId, text, clientId, selectedSkills, uiCon
             message: text,
             client_id: clientId || '',
             selected_skills: selectedSkills || [],
+            attachments: Array.isArray(attachments) ? attachments : [],
             ui_content: uiContent || text,
             source_run_id: sourceRunId,
             mode: steerMode === 'append' ? 'append' : 'interrupt',
@@ -3306,9 +3205,8 @@ function isFollowupAutoDispatchSuperseded(sessionId, dispatchEpoch) {
 async function isSessionAutoResumePending(sessionId, allowPaused) {
     var sid = String(sessionId || '');
     if (!sid) return true;
-    if ((typeof subagentContinueSessionId !== 'undefined' && subagentContinueSessionId === sid)
-        || (sid === String(currentSessionId || '')
-            && typeof suppressTocDuringSessionLoad !== 'undefined' && suppressTocDuringSessionLoad)) {
+    if (sid === String(currentSessionId || '')
+        && typeof suppressTocDuringSessionLoad !== 'undefined' && suppressTocDuringSessionLoad) {
         scheduleFollowupQueueDrain(sid, 1000);
         return true;
     }
@@ -3348,6 +3246,7 @@ async function isSessionAutoResumePending(sessionId, allowPaused) {
 }
 
 async function sendQueuedFollowupAsChat(sessionId, item, itemId, dispatchEpoch, manualStart) {
+    if (typeof runtimeLifecycleIsBlocked === 'function' && runtimeLifecycleIsBlocked()) return false;
     var sid = String(sessionId || '');
     if (!sid || !item) return false;
     if (isFollowupAutoDispatchSuperseded(sid, dispatchEpoch)) return false;
@@ -3496,7 +3395,8 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
             item.clientId,
             item.skills || [],
             item.display || item.text,
-            item.steerMode
+            item.steerMode,
+            item.attachments || []
         );
         item.steerInFlight = false;
         item.steerId = steerResult && steerResult.item && steerResult.item.id ? String(steerResult.item.id) : '';
@@ -3599,7 +3499,8 @@ async function sendFollowupNowImpl(itemId, sessionId, options) {
                         item.clientId,
                         item.skills || [],
                         item.display || item.text,
-                        item.steerMode
+                        item.steerMode,
+                        item.attachments || []
                     );
                     item.steerInFlight = false;
                     item.steerId = retrySteerResult && retrySteerResult.item && retrySteerResult.item.id ? String(retrySteerResult.item.id) : '';
@@ -3729,6 +3630,10 @@ async function sendFollowupNow(itemId, sessionId, options) {
 }
 
 async function sendMessage(options) {
+    if (typeof runtimeLifecycleIsBlocked === 'function' && runtimeLifecycleIsBlocked()) {
+        renderRuntimeLifecycle();
+        return;
+    }
     options = options || {};
     if (!options.fromQueue && !options.fromInlineRewrite && isChatFileUploadBusy()) return;
     const clientPipelineStartedAt = nowPipelineMs();

@@ -1,11 +1,13 @@
 import { marked } from 'marked';
 import { initPluginUiSlots } from './plugin-ui-slots.js';
 import configSource from './config.js?raw';
+import resourceCacheSource from '../../../app/templates/static/settings/resource_cache.js?raw';
 import i18nSource from './modules/i18n.js?raw';
 import settingsSource from './modules/settings.js?raw';
 import inputActionsSource from './modules/input-actions.js?raw';
 import sharedStateAndDialogsSource from './modules/shared-state-and-dialogs.js?raw';
 import uiPerformanceSource from './modules/ui-performance.js?raw';
+import sessionLoadingDiagnosticsSource from './modules/session-loading-diagnostics.js?raw';
 import uiSlotRegistrySource from './modules/ui-slot-registry.js?raw';
 import sessionStoreSource from './state/session-store.js?raw';
 import sessionSelectorsSource from './state/session-selectors.js?raw';
@@ -30,6 +32,8 @@ import publicSidebarSource from './modules/public-sidebar.js?raw';
 import workspaceMediaSource from './modules/workspace-media.js?raw';
 import messageRenderingSource from './modules/message-rendering.js?raw';
 import humanInteractionsSource from './modules/human-interactions.js?raw';
+import userPresentationsSource from './modules/user-presentations.js?raw';
+import runtimeLifecycleSource from './modules/runtime-lifecycle.js?raw';
 import permissionsSource from './modules/permissions.js?raw';
 import eventDispatchSource from './modules/event-dispatch.js?raw';
 import sessionManagementSource from './modules/session-management.js?raw';
@@ -52,6 +56,8 @@ import dockFloatLayerSource from './modules/dock/renderer/float-layer.js?raw';
 import dockSurfaceStoreSource from './modules/dock/embedder/surface-store.js?raw';
 import dockTabRegistrySource from './modules/dock/embedder/tab-registry.js?raw';
 import dockRightColumnSource from './modules/dock/embedder/right-column.js?raw';
+import dockPageHostSource from './modules/dock/embedder/page-host.js?raw';
+import dockBrowserPageSource from './modules/dock/embedder/browser-page.js?raw';
 
 globalThis.marked = marked;
 
@@ -99,6 +105,13 @@ globalThis.loadMyAgentHtml2Canvas = function loadMyAgentHtml2Canvas() {
 // 闭包内的接线代码：必须与模块同一作用域（Function() 体内的 var 是局部绑定，
 // 模块外部看不到），否则 bindStore / subscribe / 探针都会静默失效。
 const uiWiring = `
+initRuntimeLifecycle();
+globalThis.MyAgentComposer = {
+    sessionId: function () { return currentSessionId || null; },
+    capture: function () { return captureComposerInsertion(messageInput, currentSessionId, composerDraftRevision); },
+    insert: function (text, span) { return insertComposerTranscript(messageInput, span, currentSessionId, composerDraftRevision, text); },
+};
+messageInput.addEventListener('input', function () { composerDraftRevision++; });
 // 子代理目录对象层 ↔ 表现层接线
 if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi) {
     subagentCatalogUi.bindStore();
@@ -148,12 +161,14 @@ globalThis.__myagentSubagentProbe = {
 const configSourceForUi = configSource.replace(/^export\s+/gm, '');
 
 const uiSources = [
+    resourceCacheSource,
     configSourceForUi,
     i18nSource,
     settingsSource,
     inputActionsSource,
     sharedStateAndDialogsSource,
     uiPerformanceSource,
+    sessionLoadingDiagnosticsSource,
     uiSlotRegistrySource,
     sessionStoreSource,
     sessionSelectorsSource,
@@ -178,6 +193,8 @@ const uiSources = [
     workspaceMediaSource,
     messageRenderingSource,
     humanInteractionsSource,
+    userPresentationsSource,
+    runtimeLifecycleSource,
     permissionsSource,
     eventDispatchSource,
     sessionManagementSource,
@@ -199,12 +216,19 @@ const uiSources = [
     dockFloatLayerSource,
     dockSurfaceStoreSource,
     dockTabRegistrySource,
+    dockPageHostSource,
+    dockBrowserPageSource,
     dockRightColumnSource,
 ];
 
 Function('"use strict";\n' + uiSources.join('\n\n') + '\n\nreadRuntimeConfig(globalThis);\n' + uiWiring + '\n//# sourceURL=myagent-ui.js')();
 
 void initPluginUiSlots();
+document.addEventListener('myagent:settings-closed', function () { void initPluginUiSlots(); });
+document.addEventListener('myagent:plugins-changed', function () {
+    if (globalThis.MyAgentResourceCache) globalThis.MyAgentResourceCache.invalidate();
+    void initPluginUiSlots();
+});
 
 if (typeof initUiHoverTips === 'function') {
     initUiHoverTips(document);

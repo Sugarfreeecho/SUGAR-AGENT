@@ -1,5 +1,5 @@
 /**
- * 子代理界面决策层（纯函数）——编辑器三态与续接提示的条件判定。
+ * 子代理界面决策层（纯函数）——编辑器三态的条件判定。
  *
  * 学 dsh 的 `selectReadOnlySubagent` 思路：把"该由谁接管编辑器"做成**纯函数**，
  * 与 DOM 无关，便于测试与复用。这里的输入是快照式事实，输出是决策。
@@ -84,25 +84,10 @@ var subagentUiDecisions = (function () {
         return '';
     }
 
-    /**
-     * 续接提示条件：父会话有"已结束但结果未纳入父回答"的子代理。
-     * 输入 facts.pendingCount（服务端口径）与 running 数。
-     * @returns {{show:boolean, reason:string}}
-     */
-    function decideContinuationPrompt(facts) {
-        facts = facts || {};
-        var pending = Number(facts.pendingCount || 0);
-        var running = Number(facts.runningCount || 0);
-        if (pending <= 0) return { show: false, reason: 'nothing-pending' };
-        if (running > 0) return { show: false, reason: 'children-running' };
-        return { show: true, reason: 'pending-results' };
-    }
-
     return {
         decideEditorState: decideEditorState,
         shouldRenderReadOnlyComposer: shouldRenderReadOnlyComposer,
         shouldDisableInput: shouldDisableInput,
         readOnlyReasonText: readOnlyReasonText,
-        decideContinuationPrompt: decideContinuationPrompt,
     };
 })();

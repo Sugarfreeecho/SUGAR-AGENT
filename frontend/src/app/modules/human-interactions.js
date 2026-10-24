@@ -902,6 +902,65 @@ function setHumanQuestionStep(card, index) {
     if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
 }
 
+function appendHumanQuestionImages(pane, question, record, sessionId) {
+    var images = Array.isArray(question.images) ? question.images.slice(0, 4) : [];
+    if (!images.length) return;
+    var gallery = humanElement('div', 'human-question-images');
+    images.forEach(function (item, index) {
+        var ref = item && item.attachment;
+        if (!ref || !/^sha256:[a-f0-9]{64}$/.test(ref.attachmentId || '')
+            || !/^image\/(png|jpeg|webp|gif)$/.test(ref.mediaType || '')) return;
+        var figure = humanElement('figure', 'human-question-image-card');
+        var trigger = humanElement('button', 'human-question-image-trigger msg-attachment-preview-trigger');
+        trigger.type = 'button';
+        trigger.setAttribute('aria-label', '放大查看 ' + String(item.alt || '问题图片'));
+        trigger.title = '点击图片放大查看';
+        var image = document.createElement('img');
+        image.className = 'human-question-image msg-attachment-image';
+        image.alt = String(item.alt || '问题图片');
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        if (Number(ref.width) > 0) image.width = Number(ref.width);
+        if (Number(ref.height) > 0) image.height = Number(ref.height);
+        // Only the authenticated image bound to this persisted question is
+        // served here; model-provided URLs never become an img src.
+        var source = '/sessions/' + encodeURIComponent(String(record.session_id || sessionId))
+            + '/interactions/' + encodeURIComponent(String(record.interaction_id || ''))
+            + '/images/' + encodeURIComponent(String(question.question_id || '')) + '/' + index;
+        var error = humanElement('div', 'human-question-image-error', '图片暂不可用，请重新加载或让 Agent 重新生成。');
+        error.setAttribute('role', 'status');
+        error.hidden = true;
+        var retry = humanElement('button', 'human-secondary-btn human-question-image-retry', '重新加载图片');
+        retry.type = 'button';
+        retry.hidden = true;
+        image.addEventListener('error', function () {
+            trigger.hidden = true;
+            error.hidden = false;
+            retry.hidden = false;
+        });
+        image.addEventListener('load', function () {
+            trigger.hidden = false;
+            error.hidden = true;
+            retry.hidden = true;
+        });
+        retry.addEventListener('click', function () {
+            error.hidden = true;
+            retry.hidden = true;
+            trigger.hidden = false;
+            image.src = source + '?retry=' + Date.now();
+        });
+        image.src = source;
+        trigger.appendChild(image);
+        figure.appendChild(trigger);
+        if (item.caption) figure.appendChild(humanElement('figcaption', 'human-question-image-caption', item.caption));
+        figure.appendChild(error);
+        figure.appendChild(retry);
+        gallery.appendChild(figure);
+    });
+    if (gallery.childNodes.length) pane.appendChild(gallery);
+}
+
 function createHumanQuestionCard(record, sessionId, options) {
     options = options || {};
     var readonly = !!options.readonly;
@@ -955,6 +1014,7 @@ function createHumanQuestionCard(record, sessionId, options) {
         pane.dataset.questionId = String(question.question_id || ('q' + (qIndex + 1)));
         pane.dataset.questionHeader = String(question.header || ('问题 ' + (qIndex + 1)));
         pane.appendChild(humanElement('legend', 'human-question-text', question.question || ''));
+        appendHumanQuestionImages(pane, question, record, sessionId);
         pane.appendChild(humanElement('div', 'human-question-hint', question.multi_select ? '可多选' : '单选'));
         var options = humanElement('div', 'human-options');
         (question.options || []).forEach(function (option, optionIndex) {

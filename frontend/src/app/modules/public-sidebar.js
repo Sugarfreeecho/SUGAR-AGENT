@@ -503,6 +503,19 @@ function pubarConfigureNarrow(id, config) {
     return true;
 }
 
+/* Flow height contributed by this entry, including the gap/margin it introduces.
+   Viewport-following panes can exclude their own layout from their selection rule. */
+function pubarNarrowItemHeight(pane) {
+    var strip = pubarNarrowStripEl;
+    var item = pane && pane.narrowItem;
+    if (!strip || strip.hidden || !item || item.parentNode !== strip) return 0;
+    var height = item.getBoundingClientRect().height;
+    if (height <= 0) return 0;
+    var style = getComputedStyle(strip);
+    return height + (strip.children.length > 1 ? (parseFloat(style.rowGap) || 0)
+        : (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0));
+}
+
 /** Update a live status label while preserving narrow-item buttons and focus. */
 function pubarUpdateNarrowChip(id, text) {
     var pane = pubarFindPane(String(id || '').trim());
@@ -571,6 +584,7 @@ function pubarRegisterPane(options) {
             pane.labelEl.textContent = pane.label;
         },
         setNarrow: function (config) { pubarConfigureNarrow(id, config); },
+        getNarrowHeight: function () { return pubarNarrowItemHeight(pane); },
         remove: function () { pubarRemovePane(id); },
     };
 }

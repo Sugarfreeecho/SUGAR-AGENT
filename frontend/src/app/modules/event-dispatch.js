@@ -1,3 +1,63 @@
+function renderPluginContextInjection(ctx, event, runSessionId) {
+    if (!event || event.type !== 'context_injection') return false;
+    const snapshot = event.context || {};
+    const identity = String(event.runtime_seq || (snapshot.digest + ':' + snapshot.sampled_at));
+    const existing = ctx.stream && [...ctx.stream.querySelectorAll('[data-plugin-context-id]')]
+        .some(row => row.dataset.pluginContextId === identity);
+    if (existing) return true;
+    const scroller = appendLog(ctx, '', 'context-injection', runSessionId);
+    const row = scroller && scroller.closest('.feed-item');
+    if (!row) return true;
+    row.dataset.pluginContextId = identity;
+    const label = row.querySelector('.feed-label');
+    if (label) label.remove();
+    const english = document.documentElement.lang.startsWith('en');
+    const details = document.createElement('details');
+    details.className = 'plugin-context-disclosure';
+    const summary = document.createElement('summary');
+    const icon = document.createElement('span');
+    icon.className = 'plugin-context-icon';
+    // DSH ui-primitives regular context-injection glyph.
+    icon.innerHTML = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" stroke-width="1"><path d="M5 2.5H3.5C3.23478 2.5 2.98043 2.60536 2.79289 2.79289C2.60536 2.98043 2.5 3.23478 2.5 3.5V13.5C2.5 13.7652 2.60536 14.0196 2.79289 14.2071C2.98043 14.3946 3.23478 14.5 3.5 14.5H12.5C12.7652 14.5 13.0196 14.3946 13.2071 14.2071C13.3946 14.0196 13.5 13.7652 13.5 13.5V3.5C13.5 3.23478 13.3946 2.98043 13.2071 2.79289C13.0196 2.60536 12.7652 2.5 12.5 2.5H11M8 .5V7.5M5.5 5L8 7.5L10.5 5M5.5 11H10.5" stroke="currentColor"/></svg>';
+    const title = document.createElement('span');
+    title.textContent = english ? 'Context injection' : '上下文注入';
+    const sources = document.createElement('span');
+    sources.className = 'plugin-context-sources';
+    const sections = Array.isArray(snapshot.sections) ? snapshot.sections : [];
+    sources.textContent = snapshot.cleared ? (english ? 'Cleared' : '已清除')
+        : sections.map(source => (source.plugin_name || source.plugin_id) + ' · ' + source.title).join(' / ');
+    if (!sections.length && !snapshot.cleared && (snapshot.omitted || []).length) {
+        sources.textContent = english ? 'Omitted by context budget' : '已按上下文预算省略';
+    }
+    const budget = document.createElement('span');
+    budget.className = 'plugin-context-tokens';
+    budget.textContent = '≈' + Number(snapshot.estimated_tokens || 0) + ' tokens';
+    summary.append(icon, title, sources, budget);
+    const body = document.createElement('div');
+    body.className = 'plugin-context-body';
+    if ((snapshot.omitted || []).length) {
+        const omitted = document.createElement('div');
+        omitted.className = 'plugin-context-notice';
+        omitted.textContent = english ? 'Some contributions were omitted by the context budget.' : '部分资料已按上下文预算省略。';
+        body.appendChild(omitted);
+    }
+    for (const section of sections) {
+        if (!section.stale && !section.truncated) continue;
+        const notice = document.createElement('div');
+        notice.className = 'plugin-context-notice';
+        notice.textContent = (section.plugin_name || section.plugin_id) + ' · ' + section.title + '：'
+            + (section.stale ? (english ? 'Last known state; collection unavailable. ' : '采集暂不可用，沿用上次状态。') : '')
+            + (section.truncated ? (english ? 'Content truncated.' : '内容已截断。') : '');
+        body.appendChild(notice);
+    }
+    const text = document.createElement('pre');
+    text.textContent = String(event.content || '');
+    body.appendChild(text);
+    details.append(summary, body);
+    scroller.replaceChildren(details);
+    return true;
+}
+
 function applyPluginExtensionEventView(row, event) {
     if (!row || !event || typeof globalThis.resolvePluginExtensionEvent !== 'function') return;
     var view = globalThis.resolvePluginExtensionEvent(event);
@@ -113,8 +173,16 @@ function syncRenderContextRunScope(ctx, event) {
     return eventGeneration;
 }
 
-function renderEvent(ctx, event, eventIndex, runSessionId) {
+function renderEvent(ctx, event, eventIndex, runSessionId, renderOptions) {
+    if (event && event.type === 'show_user' && typeof renderShowUserEvent === 'function') {
+        renderShowUserEvent(ctx, event, runSessionId, renderOptions);
+        return;
+    }
     if (!event || typeof event !== 'object') return;
+    if (event.type === 'lifecycle_changed' && typeof acceptRuntimeLifecycleOperation === 'function') {
+        acceptRuntimeLifecycleOperation(event.operation);
+        return;
+    }
     syncRenderContextRunScope(ctx, event);
     var eventSessionId = runSessionId || currentSessionId || '';
     document.dispatchEvent(new CustomEvent('myagent:ui-event', {
@@ -149,6 +217,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (eventSessionId && !event.__storeApplied) {
         applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
     }
+    if (renderPluginContextInjection(ctx, event, eventSessionId)) return;
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         if (Number.isFinite(Number(event.runtime_seq || event.runtimeSeq))) {

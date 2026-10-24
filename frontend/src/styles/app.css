@@ -1,6 +1,37 @@
 /* ═══════════════════════════════════════
    Catppuccin Mocha · 设计系统 v2
    ═══════════════════════════════════════ */
+.feed--context-injection .feed-chunk-scroller { overflow:visible; max-height:none; white-space:normal; }
+.plugin-context-disclosure { min-width:0; color:var(--text-secondary); font-size:var(--ui-text-xs); }
+.plugin-context-disclosure > summary { display:flex; align-items:center; gap:8px; padding:6px 0; list-style:none; cursor:pointer; }
+.plugin-context-disclosure > summary::-webkit-details-marker { display:none; }
+.plugin-context-disclosure > summary::before { content:'›'; flex:none; font-size:16px; transition:transform 120ms; }
+.plugin-context-disclosure[open] > summary::before { transform:rotate(90deg); }
+.plugin-context-disclosure > summary:focus-visible { outline:1px solid var(--border-accent); border-radius:4px; }
+.plugin-context-icon { display:inline-flex; flex:none; }
+.plugin-context-icon svg { width:14px; height:14px; }
+.plugin-context-sources { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-tertiary); }
+.plugin-context-tokens { flex:none; color:var(--text-tertiary); }
+.plugin-context-body { max-height:320px; overflow:auto; padding:8px 12px; border-left:1px solid var(--border-glass); }
+.plugin-context-body pre { margin:0; color:var(--text-secondary); font:inherit; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
+.plugin-context-notice { margin-bottom:8px; color:var(--amber-accent); }
+
+.runtime-lifecycle-panel { position:fixed; top:18px; right:20px; z-index:10100; width:min(430px,calc(100vw - 32px)); max-height:calc(100vh - 36px); overflow:auto; }
+.runtime-lifecycle-panel[hidden] { display:none; }
+.runtime-lifecycle-card { padding:16px 18px; border:1px solid var(--border-accent); border-radius:12px; background:var(--space-bg); color:var(--text-primary); box-shadow:0 10px 40px #0005; font-size:13px; line-height:1.65; overflow-wrap:anywhere; }
+.runtime-lifecycle-inline { margin-top:10px; box-shadow:none; }
+.runtime-lifecycle-card strong { font-size:14px; }
+.runtime-lifecycle-clock, .runtime-lifecycle-note { color:var(--text-secondary); }
+.runtime-lifecycle-details { margin:9px 0; }
+.runtime-lifecycle-details summary { cursor:pointer; color:var(--text-secondary); }
+.runtime-lifecycle-details p { margin:7px 0; white-space:pre-wrap; }
+.runtime-lifecycle-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; margin-top:12px; }
+.runtime-lifecycle-actions button { border:1px solid var(--border-accent); border-radius:7px; padding:6px 12px; background:var(--surface-glass2); color:var(--text-primary); cursor:pointer; }
+.runtime-lifecycle-actions button.runtime-lifecycle-primary { background:var(--accent-brand-gradient); color:white; }
+.runtime-lifecycle-actions button:disabled { opacity:.5; cursor:wait; }
+.runtime-lifecycle-resume { display:flex; gap:7px; align-items:center; }
+.runtime-restarting #send-btn { opacity:.5; cursor:wait; }
+
 :root {
     color-scheme: dark;
     --accent-rgb: 203, 166, 247;
@@ -1364,6 +1395,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 :root.theme-light .session-more-btn:hover { background: rgba(0,0,0,0.06); }
 .session-more-menu {
+    display: none;
     position: absolute; right: 0; top: calc(100% + 3px);
     min-width: 8rem; padding: 0.28rem 0;
     background: var(--floating-surface-raised);
@@ -1375,7 +1407,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     /* 收起时不可点：命中由 `.session-more-wrap.is-open` 那组规则恢复 */
     pointer-events: none;
 }
-.session-more-wrap.is-open .session-more-menu { visibility: visible; opacity: 1; transform: translateY(0); }
+.session-more-wrap.is-open .session-more-menu { display: block; visibility: visible; opacity: 1; transform: translateY(0); }
 .session-more-menu button {
     display: block; width: 100%; text-align: left;
     padding: 0.5rem 0.85rem; border: none; background: none;
@@ -4462,13 +4494,39 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 :root.theme-light .input-wrapper { box-shadow: none; }
 
 #message-input {
-    flex: 1; background: transparent; border: none;
+    flex: 1; min-width: 0; background: transparent; border: none;
     color: var(--text-primary); font-size: 0.95rem;
     line-height: 1.5; font-family: var(--sans);
     padding: 0.45rem 0; min-height: 1.3rem;
-    max-height: 50vh; resize: none; outline: none;
+    max-height: 50vh; resize: none; outline: none; text-overflow: ellipsis;
 }
-#message-input::placeholder { color: var(--text-placeholder); opacity: 1; }
+#message-input::placeholder {
+    color: var(--text-placeholder); opacity: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 附件（工作区文件）按钮：与语音按钮同尺寸、同高亮。
+   图标从 18px 收到 16px（与左侧 + 号一致），避免回形针在 2rem 方框里显大；
+   高亮背景改用语音按钮那套 rgba(var(--accent-rgb), .1) + --accent-1，
+   并在文件面板打开期间（aria-expanded / .is-open）保持激活高亮。 */
+.input-wrapper .path-browse-btn--ghost {
+    flex: 0 0 auto;
+    width: 2rem; height: 2rem; padding: 0;
+    border: 0; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--text-secondary);
+    transition: color .18s ease, background-color .18s ease;
+}
+.input-wrapper .path-browse-btn--ghost svg { width: 1rem; height: 1rem; display: block; }
+.input-wrapper .path-browse-btn--ghost:hover,
+.input-wrapper .path-browse-btn--ghost:focus-visible,
+.input-wrapper .path-browse-btn--ghost.is-open,
+.input-wrapper .path-browse-btn--ghost[aria-expanded="true"] {
+    color: var(--accent-1);
+    background: rgba(var(--accent-rgb), .1);
+}
+.input-wrapper .path-browse-btn--ghost:active { background: rgba(var(--accent-rgb), .16); }
+.input-wrapper .path-browse-btn--ghost:disabled { opacity: .5; cursor: wait; }
 
 .skill-picker-btn {
     flex-shrink: 0;
@@ -6146,6 +6204,47 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-question-pane { display: none; min-width: 0; margin: 0; padding: 0; border: 0; }
 .human-question-pane.is-active { display: block; }
 .human-question-text { width: 100%; padding: 0; color: var(--text-primary); font-size: var(--ui-text-lg); line-height: 1.55; }
+.show-user-card { display:flex; align-items:center; flex-wrap:wrap; gap:0.7rem; margin:0.6rem 0; padding:0.8rem; border:1px solid var(--border-glass); border-radius:10px; background:rgba(var(--accent-rgb),0.045); }
+.show-user-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:0.3rem; }
+.show-user-title { color:var(--text-primary); font-size:var(--ui-text-md); overflow-wrap:anywhere; }
+.show-user-status { color:var(--text-secondary); font-size:var(--ui-text-xs); }
+.show-user-card-text { margin:0; white-space:pre-wrap; max-height:12rem; overflow:auto; overflow-wrap:anywhere; font-size:var(--ui-text-sm); }
+.show-user-notice { position:fixed; top:max(16px,env(safe-area-inset-top)); left:50%; transform:translateX(-50%); z-index:10120; display:flex; gap:1rem; width:min(560px,calc(100vw - 32px)); max-height:calc(100vh - 32px); padding:1rem; border:1px solid var(--accent-2); border-left:4px solid var(--accent-2); border-radius:12px; background:var(--space-bg); color:var(--text-primary); box-shadow:0 8px 32px rgba(0,0,0,0.22); }
+.show-user-notice[data-level="success"] { border-color:var(--green-accent,#53aa68); }
+.show-user-notice[data-level="warning"] { border-color:var(--yellow-accent,#ba8b19); }
+.show-user-notice[data-level="error"] { border-color:var(--red-accent,#df5365); }
+.show-user-notice-copy { flex:1; min-width:0; max-height:40vh; overflow:auto; }
+.show-user-notice-text { margin:0.4rem 0 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--ui-text-sm); line-height:1.6; }
+.show-user-notice-close { align-self:flex-start; display:grid; place-items:center; flex-shrink:0; width:32px; height:32px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--text-secondary); font-size:24px; cursor:pointer; }
+.show-user-notice-close:hover { background:rgba(var(--accent-rgb),0.1); color:var(--text-primary); }
+.show-user-notice-close:focus-visible { outline:2px solid var(--accent-2); outline-offset:2px; }
+.show-user-view { height:100%; min-width:0; overflow:auto; padding:1rem; color:var(--text-primary); background:var(--space-bg); line-height:1.65; }
+.show-user-view-title { margin:0 0 1rem; font-size:var(--ui-text-lg); overflow-wrap:anywhere; }
+.show-user-document { font-size:var(--ui-text-md); overflow-wrap:anywhere; }
+.show-user-document p { margin:0.6rem 0; }
+.show-user-document h1,.show-user-document h2,.show-user-document h3,.show-user-document h4,.show-user-document h5,.show-user-document h6 { margin:0.9rem 0 0.45rem; }
+.show-user-document > :first-child { margin-top:0; }
+.show-user-document ul,.show-user-document ol { margin:0.6rem 0; padding-left:1.45rem; }
+.show-user-document blockquote { margin:0.7rem 0; padding-left:0.8rem; border-left:3px solid var(--border-accent); color:var(--text-secondary); }
+.show-user-plain { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+.show-user-document pre:not(.show-user-plain) { padding:0.7rem; overflow:auto; background:var(--code-surface-bg); border-radius:8px; }
+.show-user-document table { display:block; max-width:100%; overflow:auto; border-collapse:collapse; }
+.show-user-document th,.show-user-document td { padding:0.4rem 0.7rem; border:1px solid var(--border-glass); }
+.show-user-document a { color:var(--accent-2); }
+.show-user-image { display:block; max-width:100%; height:auto; background:#fff; cursor:zoom-in; }
+.show-user-image-caption,.show-user-image-error { color:var(--text-secondary); font-size:var(--ui-text-sm); overflow-wrap:anywhere; }
+.show-user-view [hidden] { display:none !important; }
+.human-question-images { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.85rem; margin: 0.85rem 0; }
+.human-question-image-card { width: min(280px, 100%); min-width: 0; margin: 0; }
+.human-question-image-trigger.msg-attachment-preview-trigger {
+    display: block; width: 100%; height: auto; padding: 12px; overflow: hidden;
+    border: 1px solid var(--border-glass); border-radius: 10px; background: #fff; cursor: zoom-in;
+}
+.human-question-image { display: block; width: 100%; height: auto; max-height: 320px; object-fit: contain; }
+.human-question-image-caption { margin-top: 0.45rem; color: var(--text-secondary); font-size: var(--ui-text-sm); line-height: 1.5; overflow-wrap: anywhere; }
+.human-question-image-error { color: var(--text-secondary); font-size: var(--ui-text-sm); line-height: 1.5; }
+.human-question-image-retry { margin-top: 0.45rem; }
+.human-question-image-card [hidden] { display: none !important; }
 .human-question-hint { margin-top: 0.24rem; color: var(--text-tertiary); font-size: var(--ui-text-xs); }
 .human-options { display: grid; gap: 0.55rem; margin-top: 0.85rem; }
 .human-option {
@@ -6313,8 +6412,25 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 :root.theme-light .human-approval-review { border-color: rgba(var(--brand-accent-rgb), 0.16); background: rgba(var(--brand-accent-rgb), 0.045); }
 /* 审批正文（工具名/参数/命令等原文）原先继承 body 的 1rem，比卡片内其它字段
    （subtitle/detail/consequence/analysis 都是 --ui-text-sm）大一号，读起来偏散。
-   统一到 --ui-text-sm；执行过程条目的正文是 0.74rem，这里刻意比它略大一点。 */
-.human-approval-message { color: var(--text-primary); font-size: var(--ui-text-sm); line-height: 1.55; white-space: pre-wrap; }
+   统一到 --ui-text-sm；执行过程条目的正文是 0.74rem，这里刻意比它略大一点。
+   高度上限 5 行（约 7.75em ≈ 101px）：bash/参数一长就会把卡片撑到半屏，
+   截断又会让用户看不到要批准的命令，所以超出部分在框内滚动。
+   滚动条恒定预留（scrollbar-gutter: stable），出现时不挤动换行。 */
+.human-approval-message {
+    --human-approval-message-lines: 5;
+    color: var(--text-primary);
+    font-size: var(--ui-text-sm);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: calc(1.55em * var(--human-approval-message-lines));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    /* 静止态也留一条极淡滑块（只在真溢出时出现）：正文被限高时能看出“还没显示完” */
+    --sb-thumb: var(--sb-ink);
+    --sb-thumb-hover: var(--sb-ink-hover);
+}
 .human-approval-detail { display: flex; gap: 0.55rem; margin-top: 0.75rem; color: var(--text-tertiary); font-size: var(--ui-text-sm); }
 .human-approval-detail code { color: var(--text-soft); }
 .human-approval-rule-hint {
@@ -6958,27 +7074,15 @@ textarea.plugin-setting-control { resize: vertical; }
 }
 .subagent-catalog-error { color: rgba(243, 139, 168, 0.9); }
 
-/* ── 子代理只读编辑器占位 + 续接提示（输入区上方轻量条） ── */
-.subagent-readonly-composer,
-.subagent-continue-hint {
+/* ── 子代理只读编辑器占位 ── */
+.subagent-readonly-composer {
     display: flex; align-items: center; gap: 0.5rem;
     margin-bottom: 0.4rem; padding: 0.36rem 0.55rem;
     border: 1px solid var(--border-glass); border-radius: var(--radius-sm);
     background: var(--surface-glass3);
     color: var(--text-secondary); font-size: 0.7rem; line-height: 1.45;
 }
-.subagent-readonly-composer[hidden],
-.subagent-continue-hint[hidden] { display: none; }
-.subagent-continue-hint { border-color: rgba(var(--brand-accent-rgb), 0.32); }
-.subagent-continue-hint-msg { flex: 1 1 auto; min-width: 0; }
-.subagent-continue-hint-btn {
-    flex: 0 0 auto; padding: 0.22rem 0.6rem;
-    border: 1px solid var(--border-brand-accent); border-radius: var(--radius-sm);
-    background: rgba(var(--brand-glow-rgb), 0.16); color: var(--text-primary);
-    font-family: var(--sans); font-size: 0.68rem; font-weight: 600;
-    cursor: pointer; transition: background 0.18s ease;
-}
-.subagent-continue-hint-btn:hover { background: rgba(var(--brand-glow-rgb), 0.26); }
+.subagent-readonly-composer[hidden] { display: none; }
 
 /* ═══════════════ 设置中心浮层（替代旧「界面设置」弹窗） ═══════════════ */
 /* 齿轮按钮 → 应用内浮层打开 /settings（iframe），聊天状态保持不变。 */
@@ -7008,3 +7112,12 @@ textarea.plugin-setting-control { resize: vertical; }
 /* Quiet emphasis and keyboard focus share the settings-page hierarchy. */
 .message strong { font-weight: 600; }
 .pubar-tabs::-webkit-scrollbar { display: none; }
+.settings-center-loading {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+    color: var(--text-muted, #888);
+}
+.settings-center-loading[hidden] { display: none; }
