@@ -1627,7 +1627,7 @@ _RUN_SHELL_PS_UTF8_PRELUDE = (
 )
 
 
-def _powershell_script_with_utf8_prelude(script: str) -> str:
+def _powershell_script_with_utf8_prelude(script: str, *, workdir: Optional[str] = None) -> str:
     """
     为 Windows PowerShell 脚本前置 UTF-8 输出配置，消除混合编码误码（2026-10-11 实测修复）：
 
@@ -1644,9 +1644,27 @@ def _powershell_script_with_utf8_prelude(script: str) -> str:
 
     设为 ``RUN_SHELL_PS_UTF8=0`` 可关闭（恢复旧行为；主要影响“GBK 工具输出经管道”的场景）。
     """
+    location = ""
+    if workdir is not None:
+        location = (
+            "try { Set-Location -LiteralPath '" + str(workdir).replace("'", "''") + "' -ErrorAction Stop } "
+            "catch { try { "
+            # PS 5 normalizes every ancestor of C:\... even when the target
+            # itself is accessible. A provider drive rooted at the authorized
+            # cwd avoids granting access to C:\Users or the disk root.
+            "New-PSDrive -Name SugarAgentWork -PSProvider FileSystem -Root '" + str(workdir).replace("'", "''") +
+            "' -Scope Global -ErrorAction Stop | Out-Null; "
+            "Set-Location -LiteralPath 'SugarAgentWork:\\' -ErrorAction Stop "
+            "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 } }; "
+            "[Environment]::CurrentDirectory = (Get-Location).ProviderPath; "
+            "if ($env:SUGAR_AGENT_EGRESS_SCRATCH) { "
+            "$env:TEMP = $env:SUGAR_AGENT_EGRESS_SCRATCH; "
+            "$env:TMP = $env:SUGAR_AGENT_EGRESS_SCRATCH; "
+            "$env:TMPDIR = $env:SUGAR_AGENT_EGRESS_SCRATCH }; "
+        )
     if os.getenv("RUN_SHELL_PS_UTF8", "1").strip().lower() in ("0", "false", "no"):
-        return script
-    return _RUN_SHELL_PS_UTF8_PRELUDE + script
+        return location + script
+    return _RUN_SHELL_PS_UTF8_PRELUDE + location + script
 
 
 def _compose_shell_command(command: str, args: Optional[List[str]]) -> str:
@@ -2693,7 +2711,7 @@ async def run_shell(
                         )
                 win_env = _run_shell_env_with_prepended_agent_python_dir(child_env)
                 ps_enc = _powershell_encoded_command_b64(
-                    _powershell_script_with_utf8_prelude(full_cmd)
+                    _powershell_script_with_utf8_prelude(full_cmd, workdir=str(cwd))
                 )
                 ps_argv = [
                     ps_exe,

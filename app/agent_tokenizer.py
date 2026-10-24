@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _TOKENIZER: Any = None
 _LOAD_FAILED: bool = False
 _TOKENIZER_LOAD_LOCK = threading.Lock()
-_FULL_INPUT_TOKEN_CACHE: Dict[Tuple[str, int, str, str, str, str], Tuple[float, int]] = {}
+_FULL_INPUT_TOKEN_CACHE: Dict[Tuple[Any, ...], Tuple[float, int]] = {}
 _FULL_INPUT_TOKEN_CACHE_LOCK = threading.Lock()
 _FULL_INPUT_TOKEN_CACHE_TTL_SEC = 30.0
 _FULL_INPUT_TOKEN_CACHE_MAX = 256
@@ -419,18 +419,12 @@ def _flatten_messages_incremental(messages: List[Any]) -> str:
     return text
 
 
-def _seed_flatten_token_cache(messages: List[Any], tokens: Optional[int] = None) -> None:
-    """Register the flattened text of ``messages`` with a known token count.
+def _warm_flatten_text_cache(messages: List[Any]) -> None:
+    """Reuse flattened text without mixing provider usage into local counts.
 
-    Used where the count already comes from a better source (the provider
-    baseline) so no tokenizer pass is warranted, but the *text* still needs to be
-    registered: the next request asks for this history plus its own tail, and only
-    a stored entry lets it tokenize the tail alone.
-
-    Pass ``tokens`` whenever it is known. Seeding without a count leaves an entry
-    that can never satisfy the exact or prefix lookup, so the caller that asks
-    about this same history pays a full tokenize -- measured as ``tok_full=1``
-    every round with ``tok_exact=0``, i.e. the cache never hit.
+    Provider totals include a different tokenizer/framing and tool definitions.
+    Their exact/prefix estimates stay in the session-scoped usage caches. A local
+    count must tokenize locally the first time it is actually requested.
     """
     global _SEED_LAST
     try:
@@ -441,14 +435,7 @@ def _seed_flatten_token_cache(messages: List[Any], tokens: Optional[int] = None)
     except Exception as exc:
         _SEED_LAST = "flatten-failed:%s" % type(exc).__name__
         return
-    if tokens is None or tokens <= 0:
-        _SEED_LAST = "bad-tokens:%r" % (tokens,)
-        return
-    _FLATTEN_TOKEN_CACHE.append((text, int(tokens)))
-    if len(_FLATTEN_TOKEN_EXACT) > 64:
-        _FLATTEN_TOKEN_EXACT.clear()
-    _FLATTEN_TOKEN_EXACT[text] = int(tokens)
-    _SEED_LAST = "ok:len=%d" % len(text)
+    _SEED_LAST = "text-only:len=%d" % len(text)
 
 
 def count_message_tokens_incremental(messages: List[Any]) -> int:
@@ -760,15 +747,9 @@ def estimate_full_input_tokens_for_messages(
                 suffix_tokens = int(estimate_tokens(suffix)) if suffix else 0
                 margin = max(8, len(suffix) * 4) if suffix else 0
                 estimated = base_tokens + suffix_tokens + margin
-                # Seed the flattened-text cache with the provider's own count.
-                # This early return skips the full-history count below, so without
-                # seeding nothing registered the text the next request asks about --
-                # and every later request re-tokenized the whole history (observed
-                # as tok_full=1 on every round with tok_exact=0). ``base_tokens``
-                # covers the baseline part and ``suffix_tokens`` the appended part;
-                # the margin is deliberately excluded, since it is a safety add-on
-                # that would otherwise be re-counted wherever this is reused.
-                _seed_flatten_token_cache(stripped, base_tokens + suffix_tokens)
+                # Warm the text construction only; provider usage must never
+                # become a supposedly local count in another request/session.
+                _warm_flatten_text_cache(stripped)
                 _PROMPT_USAGE_EXACT_CACHE[(sid, fingerprint)] = (now, estimated, "provider_prefix")
                 _evict_prompt_usage_exact_cache_locked(now)
                 result = (int(estimated), "provider_prefix")
@@ -912,7 +893,7 @@ def messages_for_openai_turns(llm_history: List[Any]) -> List[Any]:
     return out
 
 
-def build_env_static(session_id: Optional[str] = None) -> str:
+def build_env_static(session_id: Optional[str] = None, *, minimal: bool = False) -> str:
     """Build the Environment block: calendar month, OS, paths, session storage (no live workspace listing)."""
     from agent_harness import PROJECT_ROOT as AGENT_PROJECT_ROOT, WORK_DIR, session_manager, session_work_dir
     from agent_tools import describe_run_shell_executor_for_prompt
@@ -920,6 +901,13 @@ def build_env_static(session_id: Optional[str] = None) -> str:
     sid = (session_id or "").strip()
 
     work_root = session_work_dir(sid)
+    if minimal:
+        return ("## Environment\n"
+                f"- Calendar month (host local time): {datetime.now():%Y-%m}\n"
+                f"- OS: {platform.system()}\n"
+                f"- Session ID: {sid or '(unsaved)'}\n"
+                f"- Work root: {work_root}\n"
+                "- Only tools in the current tool catalog are available; the host enforces their permissions.")
     wdir = str(work_root)
     proj = str(AGENT_PROJECT_ROOT.resolve())
 
@@ -965,10 +953,12 @@ def build_env_static(session_id: Optional[str] = None) -> str:
 - **OS**: {platform.system()} | **Python**: {platform.python_version()}
 {run_shell_executor_hint}
 - **MCP extensions** (optional): With `.config/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects. Tools use their local names by default; plugin and server prefixes are added only to resolve name collisions. Use the exact names in the current tool catalog. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
+- **Runtime outputs**: `{WORK_DIR / 'TempOutput'}` is shared across sessions and stays independent of the active project. Use `write_file(temporary=true)` for throwaway scripts and then use its returned absolute path. `run_shell` keeps the project cwd; TEMP/TMP/TMPDIR identify its runtime scratch for intermediate outputs. Keep requested deliverables in the project. Complete tool results remain under `TempOutput/tool-results` for history reads.
 - **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
   - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `.config/mcp_servers.json`.
   - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.
 - **Work root** (`WORK_DIR`): {wdir}
+  - Use `switch_work_dir` to change this session's root after user approval. The target must be an existing absolute directory. Subsequent tools use the new root; existing terminals and background jobs keep their original cwd. Shell `cd` only affects that shell operation.
   - Global default and shared data root: {WORK_DIR.resolve()}. Sessions and attachments remain in this shared root.
   - Virtual `/` maps to this directory. Relative paths and virtual paths like `/outputs/a.txt` resolve under `WORK_DIR`.
   - `write_file`, `apply_patch`, `edit_file`, `web_download`, `delete_file` (soft-delete target: `WORK_DIR/.trash/`), and restricted `run_shell` resolve relative paths under this tree; **native absolute paths outside WORK_DIR are permitted** after the user approves the target directory through the approval card in restricted modes (full access allows them directly).
@@ -1015,6 +1005,31 @@ def build_static_system_segments(
     return [p for p in parts if p.strip()]
 
 
+def _session_metadata_for_prompt(session_id: str) -> Dict[str, Any]:
+    from agent_harness import session_manager
+
+    sid = str(session_id or "").strip()
+    try:
+        return (session_manager._load_metadata(sid) or {}) if sid else {}
+    except ValueError:
+        return {}  # An unsaved preview has no persisted session context.
+
+
+def build_session_system_segments(
+    session_id: str, language: str = "zh-CN", *, metadata: Optional[Dict[str, Any]] = None,
+) -> tuple[str, ...]:
+    from agent_tools import get_skills_catalog
+    from session_system_context import assemble_session_system_segments, effective_system_context_mode
+
+    sid = str(session_id or "").strip()
+    if metadata is None:
+        metadata = _session_metadata_for_prompt(sid)
+    replacement = effective_system_context_mode(metadata) == "replace"
+    env_static = build_env_static(sid or None, minimal=True) if replacement else build_env_static(sid or None)
+    base = () if replacement else build_static_system_segments(get_skills_catalog(), env_static, language)
+    return assemble_session_system_segments(base, env_static, metadata)
+
+
 def estimate_full_input_tokens_for_llm_history(
     session_id: str,
     llm_history: List[Any],
@@ -1031,22 +1046,22 @@ def estimate_full_input_tokens_for_llm_history(
         key_context_body_for_system_prompt,
         strip_reasoning_for_api_request,
     )
-    from agent_tools import get_skills_catalog
+    from session_system_context import system_context_revision
 
     sid = str(session_id or "").strip()
+    metadata = _session_metadata_for_prompt(sid)
     cache_key = (
         *_full_input_token_cache_key(sid, llm_history, key_context or "", tools),
         str(language or "zh-CN"),
+        system_context_revision(metadata),
     )
     now = time.monotonic()
     with _FULL_INPUT_TOKEN_CACHE_LOCK:
         cached = _FULL_INPUT_TOKEN_CACHE.get(cache_key)
         if cached and now - cached[0] <= _FULL_INPUT_TOKEN_CACHE_TTL_SEC:
             return int(cached[1])
-    skills_catalog = get_skills_catalog()
-    env_static = build_env_static(sid if sid else None)
+    static_segments = build_session_system_segments(sid, language, metadata=metadata)
     kc_body = key_context_body_for_system_prompt(key_context or "")
-    static_segments = build_static_system_segments(skills_catalog, env_static, language)
     turn_msgs = inject_missing_tool_messages(messages_for_openai_turns(llm_history))
     llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
     if kc_body:
@@ -1076,13 +1091,9 @@ def estimate_hybrid_input_tokens_for_llm_history(
 ) -> Tuple[int, str]:
     """Estimate a persisted session using the same provider-calibrated path as a live request."""
     from agent_harness import key_context_body_for_system_prompt
-    from agent_tools import get_skills_catalog
-
     sid = str(session_id or "").strip()
-    skills_catalog = get_skills_catalog()
-    env_static = build_env_static(sid if sid else None)
     kc_body = key_context_body_for_system_prompt(key_context or "")
-    static_segments = build_static_system_segments(skills_catalog, env_static, language)
+    static_segments = build_session_system_segments(sid, language)
     turn_msgs = inject_missing_tool_messages(messages_for_openai_turns(llm_history))
     llm_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
     if kc_body:

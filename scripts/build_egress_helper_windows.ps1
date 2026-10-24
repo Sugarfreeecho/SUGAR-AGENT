@@ -1,15 +1,29 @@
-param([switch]$InstallAcl, [string[]]$WorkDir)
+param([switch]$InstallAcl, [string[]]$WorkDir, [switch]$IfNeeded)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $Source = Join-Path $Root 'app\native\windows\SugarAgentEgressHelper.cs'
 $Output = Join-Path $Root 'app\native\sugaragent-egress-helper.exe'
-$Compiler = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-if (-not (Test-Path -LiteralPath $Compiler)) { $Compiler = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
-if (-not (Test-Path -LiteralPath $Compiler)) { throw 'Windows C# compiler is unavailable.' }
-& $Compiler /nologo /optimize+ /target:exe "/out:$Output" /reference:System.Web.Extensions.dll $Source
-if ($LASTEXITCODE -ne 0) { throw "Helper compilation failed with exit code $LASTEXITCODE" }
-$Health = & $Output health --json | ConvertFrom-Json
-if ($Health.enforcement -notin @('partial','strong')) { throw "Helper self-check failed: $($Health.reason)" }
+$BuildNeeded = $true
+if ($IfNeeded -and (Test-Path -LiteralPath $Output) -and
+    ((Get-Item -LiteralPath $Output).LastWriteTimeUtc -ge (Get-Item -LiteralPath $Source).LastWriteTimeUtc)) {
+    try {
+        $Health = & $Output health --json | ConvertFrom-Json
+        $BuildNeeded = $LASTEXITCODE -ne 0 -or $Health.enforcement -notin @('partial','strong') -or
+            'filesystem-grants' -notin $Health.capabilities
+    } catch { $BuildNeeded = $true }
+}
+if ($BuildNeeded) {
+    $Compiler = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    if (-not (Test-Path -LiteralPath $Compiler)) { $Compiler = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+    if (-not (Test-Path -LiteralPath $Compiler)) { throw 'Windows C# compiler is unavailable.' }
+    & $Compiler /nologo /optimize+ /target:exe "/out:$Output" /reference:System.Web.Extensions.dll $Source
+    if ($LASTEXITCODE -ne 0) { throw "Helper compilation failed with exit code $LASTEXITCODE" }
+    $Health = & $Output health --json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Helper health check failed.' }
+}
+if ($Health.enforcement -notin @('partial','strong') -or 'filesystem-grants' -notin $Health.capabilities) {
+    throw "Helper self-check failed: $($Health.reason)"
+}
 if ($InstallAcl) {
     if (-not $WorkDir) {
         $PathsJson = & (Join-Path $Root 'python\python.exe') (Join-Path $Root 'app\workspace_paths.py') --project-root $Root
@@ -38,5 +52,5 @@ if ($InstallAcl) {
         if ($LASTEXITCODE -ne 0) { throw "Failed to grant the AppContainer access to $ResolvedWorkDir" }
     }
 }
-Write-Host "Built: $Output"
+Write-Host "Helper ready: $Output"
 Write-Host "Health: $($Health.enforcement) / $($Health.backend)"

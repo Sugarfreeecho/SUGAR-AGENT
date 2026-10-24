@@ -61,6 +61,9 @@ def minimal_extension_environment(
     env.update({str(key): str(value) for key, value in (explicit or {}).items()})
     for key in list(env):
         upper = key.upper()
+        if upper.startswith("MYAGENT_LIFECYCLE_"):
+            env.pop(key, None)
+            continue
         if any(marker in upper for marker in _SECRET_MARKERS) and key not in (explicit or {}):
             env.pop(key, None)
     env.setdefault("PYTHONUTF8", "1")

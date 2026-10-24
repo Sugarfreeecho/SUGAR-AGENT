@@ -529,6 +529,12 @@ class PolicyEngine:
                     "Destructive command requires approval.",
                 )
 
+        if request.action == "session.switch_work_dir":
+            if not request.metadata.get("valid_directory"):
+                return result(DecisionOutcome.DENY, "session.workspace_invalid", "工作目录必须是已存在的绝对路径。")
+            return result(DecisionOutcome.ASK, "session.workspace_switch",
+                          "Agent 切换会话工作目录需要用户许可。", one_time_only=True)
+
         if context.sandbox_profile == SandboxProfile.NO_RESTRICTION:
             return result(
                 DecisionOutcome.ALLOW,

@@ -14,6 +14,236 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "app"))
 
 
+def test_switch_existing_workspace_preserves_storage_history_and_isolation(workspaces):
+    import agent_harness as h
+    from session_authorized_dirs import get_authorized_dirs_for_session
+    roots, manager, sids = workspaces
+    sid = sids[0]
+    before = manager._get_session_path(sid)
+    history = before / "switch-history.txt"
+    history.write_text("existing history", encoding="utf-8")
+    changes = []
+    manager.add_session_state_listener(lambda changed_sid, fields: changes.append((changed_sid, fields)))
+    manager.set_session_work_dir(sid, str(roots[2]))
+    assert h.session_work_dir(sid) == roots[2]
+    assert manager._get_session_path(sid) == before
+    assert history.read_text(encoding="utf-8") == "existing history"
+    assert get_authorized_dirs_for_session(sid) == [roots[2]]
+    assert next(row for row in manager.list_sessions() if row["id"] == sid)["work_dir"] == str(roots[2])
+    assert (sid, frozenset({"work_dir"})) in changes
+    # A fresh manager reads the persisted directory; the other session is untouched.
+    fresh = h.SessionManager(manager.sessions_dir, manager.index_file)
+    assert fresh._load_metadata(sid)["work_dir"] == str(roots[2])
+    assert manager._load_metadata(sids[1])["work_dir"] == str(roots[2])
+    manager.set_session_work_dir(sid, str(roots[0]))
+    assert h.session_work_dir_projection(sid)["work_dir_is_default"] is True
+    assert next(row for row in manager.list_sessions() if row["id"] == sid)["work_dir_is_default"] is True
+
+
+def test_switch_legacy_session_and_keep_explicit_directory_grants(workspaces):
+    import agent_harness as h
+    roots, manager, _ = workspaces
+    sid = manager.get_or_create_session()[0]
+    meta = manager._load_metadata(sid)
+    meta["authorized_dirs"] = [str(roots[0]), str(roots[2])]
+    manager._save_metadata(sid, meta)
+    manager.set_session_work_dir(sid, str(roots[1]))
+    assert h.session_work_dir(sid) == roots[1]
+    assert manager._load_metadata(sid)["authorized_dirs"] == [str(roots[1]), str(roots[2])]
+
+
+@pytest.mark.parametrize("use_default", [False, True])
+def test_workspace_switch_preserves_existing_children_and_new_children_use_new_root(workspaces, use_default):
+    import agent_harness as h
+    roots, manager, sids = workspaces
+    parent = manager.get_or_create_session()[0] if use_default else sids[0]
+    old_root = roots[0] if use_default else roots[1]
+    child = manager.create_subagent_session(parent, "existing", "explore", 1)
+    assert manager._load_metadata(child)["work_dir"] == str(old_root)
+    nested = manager.create_subagent_session(child, "nested", "explore", 2)
+    # Exercise legacy on-disk children that did not pin their inherited root.
+    manager.patch_subagent_metadata(child, {"work_dir": ""})
+    manager.patch_subagent_metadata(nested, {"work_dir": ""})
+    manager.set_session_work_dir(parent, str(roots[2]))
+    assert h.session_work_dir(child) == old_root
+    assert h.session_work_dir(nested) == old_root
+    after = manager.create_subagent_session(parent, "after switch", "explore", 1)
+    assert h.session_work_dir(after) == roots[2]
+
+
+def test_switch_workspace_api_validation_busy_and_real_file_resolution(workspaces, monkeypatch):
+    from fastapi.testclient import TestClient
+    import webui
+    roots, manager, sids = workspaces
+    client = TestClient(webui.fastapi_app)
+    url = f"/sessions/{sids[0]}/work-dir"
+    assert client.put(url, json={"work_dir": "relative"}).status_code == 422
+    assert client.put(url, json={"work_dir": str(roots[1] / "same.txt")}).status_code == 422
+    assert client.put(url, json={"work_dir": str(roots[1] / "missing")}).status_code == 422
+    assert client.put(url, json=[]).status_code == 422
+    assert client.put(url, content="{").status_code == 400
+    unknown = "00000000-0000-0000-0000-000000000000"
+    assert client.put(f"/sessions/{unknown}/work-dir", json={"work_dir": str(roots[2])}).status_code == 404
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: True)
+    assert client.put(url, json={"work_dir": str(roots[2])}).status_code == 409
+    assert manager._load_metadata(sids[0])["work_dir"] == str(roots[1])
+    monkeypatch.setattr(webui, "_is_session_stream_active", lambda sid: False)
+    monkeypatch.setattr(webui, "_has_local_worker_activity", lambda sid: False)
+    response = client.put(url, json={"work_dir": str(roots[2])})
+    assert response.status_code == 200, response.text
+    assert response.json()["session"]["work_dir"] == str(roots[2])
+    assert client.get("/api/workspace-file-text", params={"session_id": sids[0], "rel": "same.txt"}).json()["text"] == "project-C"
+    from agent_tokenizer import build_env_static
+    assert f"(`WORK_DIR`): {roots[2]}" in build_env_static(sids[0])
+
+
+@pytest.mark.parametrize("mode", ["ask_for_approval", "approve_for_me", "full_access"])
+def test_agent_workspace_switch_needs_exact_once_approval_in_all_modes(workspaces, monkeypatch, mode, tmp_path):
+    from security import runtime as security
+    from security.models import DecisionOutcome
+    from security.store import SecurityStore
+    roots, _, sids = workspaces
+    store = SecurityStore(tmp_path / "security.sqlite3")
+    store.set_global_permission_mode(mode)
+    monkeypatch.setattr(security, "_STORE", store)
+    monkeypatch.setenv("SECURITY_ENABLED", "1")
+    args = {"work_dir": str(roots[2]), "reason": "inspect another project"}
+    def check(root=roots[1], arguments=args):
+        return security.authorize_tool(session_id=sids[0], tool_name="switch_work_dir", arguments=arguments, workspace=root)
+    request, decision, _ = check()
+    assert decision.outcome == DecisionOutcome.ASK
+    assert security.always_ask_for(decision)
+    # General directory permissions and reusable grants do not imply consent to switch.
+    store.set_setting("allow_external_workspace_ops", True)
+    security.add_approval_grant(sids[0], decision.request_digest, "allow_session")
+    assert check()[1].outcome == DecisionOutcome.ASK
+    assert check(roots[0])[1].request_digest != decision.request_digest
+    assert check(arguments={**args, "work_dir": str(roots[0])})[1].request_digest != decision.request_digest
+    security.add_approval_grant(sids[0], decision.request_digest, "allow_once")
+    assert check()[1].rule_id == "grant.once"
+    assert check()[1].outcome == DecisionOutcome.ASK
+    assert check(arguments={**args, "work_dir": "relative"})[1].outcome == DecisionOutcome.DENY
+
+
+def test_workspace_approval_card_shows_exact_target_and_only_accepts_once(workspaces, tmp_path):
+    import agent_loop
+    from security.runtime import classify_tool
+    from security.policy import PolicyEngine
+    from security.models import PERMISSION_PRESETS, PermissionMode
+    from human_interaction.service import HumanInteractionService, HumanInteractionValidationError
+    roots, _, sids = workspaces
+    args = {"work_dir": str(roots[2]), "reason": "inspect requested project"}
+    request = classify_tool("switch_work_dir", args, roots[1])
+    decision = PolicyEngine(roots[1]).decide(request, PERMISSION_PRESETS[PermissionMode.FULL_ACCESS])
+    spec = agent_loop._security_approval_spec("switch_work_dir", args, decision, request, roots[1])
+    assert spec["title"] == "切换会话工作目录"
+    assert str(roots[1]) in spec["message"] and str(roots[2]) in spec["message"]
+    assert spec["force_approval"] and spec["approval_level"] == "warning"
+    assert not spec["allow_session_available"] and not spec["allow_always_available"]
+    service = HumanInteractionService(tmp_path / "interactions")
+    service.create_approval(sids[0], approval_id="switch-root", metadata={
+        **spec, "tool": "switch_work_dir", "security_request_digest": decision.request_digest})
+    with pytest.raises(HumanInteractionValidationError):
+        service.resolve_approval(sids[0], "switch-root", "allow_session")
+    assert service.resolve_approval(sids[0], "switch-root", "allow_once")["decision"] == "allow_once"
+
+
+def test_workspace_switch_rejects_approval_without_previous_root(tmp_path):
+    from types import SimpleNamespace
+    from host_tool_registry import HostToolInvocationContext
+    from security.models import DecisionOutcome
+    from session_workspace import switch_work_dir
+    request = SimpleNamespace(action='session.switch_work_dir', resource=str(tmp_path.resolve()), metadata={})
+    decision = SimpleNamespace(outcome=DecisionOutcome.ALLOW, rule_id='grant.once')
+    context = HostToolInvocationContext('fixture', services={
+        'security_request': request, 'security_decision': decision})
+    outcome = asyncio.run(switch_work_dir(context, {'work_dir': str(tmp_path)}))
+    assert outcome.code == 'workspace_approval_required'
+
+
+def test_approved_host_switch_refreshes_same_batch_context_and_refuses_stale_approval(workspaces, monkeypatch, tmp_path):
+    import agent_harness as h
+    import agent_tools
+    import session_workspace as control
+    from host_tool_registry import HostToolInvocationContext
+    from security import runtime as security
+    from security.store import SecurityStore
+    roots, manager, sids = workspaces
+    store = SecurityStore(tmp_path / "security.sqlite3")
+    monkeypatch.setattr(security, "_STORE", store)
+    live_meta = manager._load_metadata(sids[0])
+    args = {"work_dir": str(roots[2]), "reason": "user requested project C"}
+    def context(approved):
+        request, decision, _ = security.authorize_tool(session_id=sids[0], tool_name="switch_work_dir", arguments=args, workspace=roots[1])
+        if approved:
+            security.add_approval_grant(sids[0], decision.request_digest, "allow_once")
+            request, decision, _ = security.authorize_tool(session_id=sids[0], tool_name="switch_work_dir", arguments=args, workspace=roots[1])
+        async def publish(event):
+            events.append(event)
+        return HostToolInvocationContext(sids[0], emit_event=publish, services={
+            "session_manager": manager, "session_meta": live_meta, "security_request": request,
+            "security_decision": decision, "run_interrupt_check": lambda: False})
+    events = []
+    denied = asyncio.run(control.switch_work_dir(context(False), args))
+    assert denied.code == "workspace_approval_required"
+    assert h.session_work_dir(sids[0]) == roots[1]
+    approved_context = context(True)
+    result = asyncio.run(control.switch_work_dir(approved_context, args))
+    assert json.loads(result.content)["work_dir"] == str(roots[2])
+    assert h.session_work_root(live_meta) == roots[2]
+    with agent_tools.tool_work_dir_override(h.session_work_root_raw(live_meta)):
+        assert agent_tools.resolve_unrestricted_path("same.txt").read_text() == "project-C"
+    assert events[0]["session"]["effective_work_dir"] == str(roots[2])
+    stale = asyncio.run(control.switch_work_dir(approved_context, args))
+    assert stale.code == "workspace_switch_failed"
+    assert h.session_work_dir(sids[0]) == roots[2]
+
+
+def test_workspace_switch_does_not_detach_managed_worktrees(workspaces):
+    roots, manager, sids = workspaces
+    meta = manager._load_metadata(sids[0])
+    meta["git_worktree_managed"] = True
+    manager._save_metadata(sids[0], meta)
+    with pytest.raises(ValueError, match="worktree"):
+        manager.set_session_work_dir(sids[0], str(roots[2]))
+
+
+def test_streamed_file_calls_wait_behind_workspace_switch():
+    import agent_loop
+    from session_workspace import workspace_tool_definitions
+    workspace_tool_definitions()
+    assert agent_loop._can_execute_closed_stream_tool("switch_work_dir") is False
+    tree = ast.parse((ROOT / "app/agent_loop.py").read_text(encoding="utf-8-sig"))
+    function = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+                    and node.name == "_maybe_start_closed_tool_call")
+    launched = []
+    preceding = {"name": "switch_work_dir", "args": {"work_dir": "C:/project", "reason": "task"}, "id": "switch"}
+    following = {"name": "read_file", "args": {"path": "same.txt"}, "id": "read"}
+    scope = {"Dict": dict, "Any": object, "early_tool_acc": {}, "early_tool_tasks": {},
+             "_early_tool_call_from_acc": lambda index: preceding if index == 0 else following,
+             "tool_search": SimpleNamespace(BRIDGE_NAMES=set()),
+             "tool_registry": SimpleNamespace(resolve=lambda name: None),
+             "_can_execute_closed_stream_tool": agent_loop._can_execute_closed_stream_tool,
+             "asyncio": SimpleNamespace(create_task=launched.append),
+             "_run_early_tool_call": lambda *args: "launched",
+             "merge_streamed_tool_name": lambda before, after: before + after,
+             "session_work_root": lambda meta: Path.cwd(), "session_meta": {}, "state": {"session_id": "test"},
+             "authorize_tool": lambda **kwargs: (None, SimpleNamespace(outcome="allow"), None),
+             "DecisionOutcome": SimpleNamespace(ALLOW="allow")}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "stream_barrier", "exec"), scope)
+    scope["_maybe_start_closed_tool_call"]({"index": 1, "id": "read", "arguments_delta": '{}'})
+    assert launched == []
+    preceding["name"] = "read_file"
+    scope["_maybe_start_closed_tool_call"]({"index": 1})
+    assert launched == ["launched"]
+
+
+def test_workspace_switch_frontend_runtime():
+    result = subprocess.run(["node", "--test", str(ROOT / "tests/js/session_workspace_switch_runtime.cjs")],
+                            cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.fixture
 def workspaces(tmp_path, monkeypatch):
     import agent_harness as harness
@@ -91,12 +321,15 @@ def test_temporary_cleanup_does_not_touch_default_same_name(workspaces):
     import agent_tools
     roots, manager, sids = workspaces
     state = {"session_id": sids[0]}
-    with agent_tools.tool_work_dir_override(roots[1]):
-        assert not agent_tools.write_file(path="same.txt", content="temporary", temporary=True).startswith("Error:")
-    agent_loop._record_temporary_write_file(state, "write_file", {"path": "same.txt", "temporary": True}, False)
-    assert state["_temporary_write_files"] == [str(roots[1] / "same.txt")]
-    assert agent_loop._cleanup_temporary_write_files(state) == [str(roots[1] / "same.txt")]
-    assert not (roots[1] / "same.txt").exists()
+    from runtime_files import run_scope
+    with run_scope(roots[0], sids[0], "test") as owner, agent_tools.tool_work_dir_override(roots[1]):
+        result = agent_tools.write_file(path="same.txt", content="temporary", temporary=True)
+        saved = owner.temporary_path("same.txt")
+        assert str(saved) in result
+        agent_loop._record_temporary_write_file(state, "write_file", {"path": "same.txt", "temporary": True}, False)
+        assert state["_temporary_write_files"] == [str(saved)]
+        assert agent_loop._cleanup_temporary_write_files(state) == [str(saved)]
+    assert (roots[1] / "same.txt").read_text() == "project-B"
     assert (roots[0] / "same.txt").read_text() == "default"
 
 
@@ -107,13 +340,12 @@ def test_long_result_stays_global_and_can_be_read_from_custom_root(workspaces):
     state = {"session_id": sids[0]}
     content = "tool output\n" * 100
     view = agent_loop._save_result_to_tempfile(content, "test/tool", state, preview_chars=10)
-    saved = Path(state["_temporary_write_files"][0])
-    assert saved.parent == roots[0] / ".tool_results"
+    saved = next((roots[0] / "TempOutput" / "tool-results" / sids[0]).rglob("result.txt"))
     assert str(saved) in view
     with agent_tools.tool_work_dir_override(roots[1]):
         assert agent_tools.resolve_unrestricted_path(str(saved)).read_text() == content
-    assert agent_loop._cleanup_temporary_write_files(state) == [str(saved)]
-    assert not saved.exists()
+    assert agent_loop._cleanup_temporary_write_files(state) == []
+    assert saved.exists()
 
 
 def test_file_list_text_media_and_html_siblings_use_owning_session(workspaces):
@@ -209,6 +441,7 @@ def test_normal_mcp_arguments_receive_custom_root(workspaces, monkeypatch):
     monkeypatch.setattr(mcp, "_fname_to_tool", {"mcp_test_write": ("test", "write")})
     monkeypatch.setattr(mcp, "_servers", {"test": server})
     monkeypatch.setattr(mcp, "_load_disabled_mcp_tools", lambda: set())
+    monkeypatch.setattr(mcp, "_disabled_mcp_tools_loaded", True)
     monkeypatch.setattr(mcp, "get_tool_contract", lambda name: {"declared": True, "effect": "workspace_write", "workspace_root_argument": "root", "path_arguments": ["path"]})
     asyncio.run(mcp._invoke_tool_by_fname_impl("mcp_test_write", {"path": "same.txt", "root": str(roots[0])}, work_dir=str(roots[1])))
     assert server.arguments == {"path": str(roots[1] / "same.txt"), "root": str(roots[1])}

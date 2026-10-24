@@ -1657,6 +1657,26 @@ def test_ordinary_ask_request_still_consumes_grant(tmp_path, monkeypatch):
     assert granted.rule_id == "grant.once"
 
 
+def test_one_tool_directory_scope_allows_write_but_preserves_delete_approval(tmp_path, monkeypatch):
+    import session_authorized_dirs as directories
+    workspace, external = tmp_path / "workspace", tmp_path / "external"
+    workspace.mkdir()
+    external.mkdir()
+    _isolated_security_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(directories, "_get_persisted_authorized_dirs", lambda *_: [workspace])
+    def check(tool):
+        return authorize_tool(session_id="session", tool_name=tool,
+                              arguments={"path": str(external / "output.txt"), "contents": "x"},
+                              workspace=workspace)[1]
+    assert check("write_file").outcome == DecisionOutcome.ASK
+    with directories.tool_directory_authorization_scope("session"):
+        directories.authorize_dir_for_current_tool("session", str(external))
+        assert check("write_file").outcome == DecisionOutcome.ALLOW
+        deleted = check("delete_file")
+        assert deleted.outcome == DecisionOutcome.ASK and deleted.rule_id == "delete.workspace"
+    assert check("write_file").outcome == DecisionOutcome.ASK
+
+
 def test_shell_credential_read_inside_workspace_requires_approval(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

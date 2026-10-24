@@ -165,7 +165,7 @@ configure_attachment_workspace(WORK_DIR)
 #
 # 会话可以在创建时指定自己的工作目录（metadata.work_dir：绝对路径、已存在、是目录）。
 # 未指定的会话——包括全部历史会话——继续使用进程级 WORK_DIR，也就是"默认工作目录"，
-# 因此老数据行为完全不变。与 DeepSeek Harness 一致：创建后不允许再改，想换目录就新建会话。
+# 创建后可通过 set_session_work_dir 切换；会话历史和附件仍留在共享存储。
 # 工具根 / 安全策略根 / 审计根必须都走 session_work_root()，保证三者永远一致。
 # ---------------------------------------------------------------------------
 SESSION_WORK_DIR_KEYS = ("subagent_work_dir", "git_worktree_path", "work_dir")
@@ -3728,6 +3728,8 @@ class SessionManager:
         self._known_root_session_ids: set[str] = set()
         self._auto_archive_check_lock = threading.Lock()
         self._auto_archive_last_check = 0.0
+        self._session_draft_reserve = None
+        self._session_draft_reserve_lock = threading.Lock()
         self._session_state_listener_lock = threading.Lock()
         self._session_state_listeners: List[Callable[[str, frozenset[str]], None]] = []
         self._load_index()
@@ -3806,12 +3808,14 @@ class SessionManager:
         ).exists()
 
     def _is_metadata_only_delete_remnant(self, session_path: Path, metadata: dict) -> bool:
-        if self._has_session_payload_files(session_path):
-            return False
         if not isinstance(metadata, dict):
             return False
         durable_fields = ("name", "created_at", "updated_at", "last_user_preview", "model_profile_id")
-        return not any(str(metadata.get(k) or "").strip() for k in durable_fields)
+        if any(str(metadata.get(k) or "").strip() for k in durable_fields):
+            return False
+        # Valid metadata already rules out an empty deletion remnant. Checking
+        # every possible history file first adds thousands of stats per refresh.
+        return not self._has_session_payload_files(session_path)
 
     def _session_metadata_lock(self, session_id: str) -> threading.Lock:
         sid = str(session_id or "").strip() or "__empty__"
@@ -6786,6 +6790,29 @@ class SessionManager:
             metadata["updated_at"] = datetime.now().isoformat()
             self._save_metadata_unlocked(sid, metadata)
 
+    def set_session_system_context(self, session_id: str, system_context: str, *, mode: Optional[str] = None) -> dict:
+        """Persist session instructions for the next run; an empty string clears.
+
+        A running ReAct loop retains its metadata snapshot. Callers that require
+        an idle session must serialize admission with their run-start lock.
+        """
+        from session_system_context import normalize_system_context, effective_system_context_mode, validate_system_context
+
+        value = normalize_system_context(system_context)
+        sid = self._normalize_session_id(session_id)
+        with self._session_metadata_lock(sid):
+            if not self._get_metadata_path(sid).is_file() or self._is_deleted_session(sid):
+                raise FileNotFoundError("会话不存在")
+            metadata = self._load_metadata_unlocked(sid)
+            value, selected_mode = validate_system_context(value, effective_system_context_mode(metadata) if mode is None else mode)
+            if metadata.get("system_context") == value and effective_system_context_mode(metadata) == selected_mode:
+                return metadata
+            metadata["system_context"] = value
+            metadata["system_context_mode"] = selected_mode
+            metadata["updated_at"] = datetime.now().isoformat()
+            self._save_metadata_unlocked(sid, metadata)
+        return metadata
+
     def _set_interrupt_cache_from_metadata(self, session_id: str, metadata: dict) -> None:
         sid = (session_id or "").strip()
         if not sid:
@@ -6879,11 +6906,16 @@ class SessionManager:
         try:
             parent_metadata = self._load_metadata(parent_id) or {}
             inherited_root = session_work_root_raw(parent_metadata, metadata_loader=self._load_metadata)
-            if inherited_root:
-                metadata["work_dir"] = str(Path(inherited_root).resolve())
+            # Pin the default root too: the parent can switch after creation.
+            metadata["work_dir"] = str(Path(inherited_root or WORK_DIR).resolve())
             parent_prompt_language = parent_metadata.get("prompt_language")
             if parent_prompt_language:
                 metadata["prompt_language"] = normalize_prompt_language(parent_prompt_language)
+            from session_system_context import effective_system_context, effective_system_context_mode
+
+            # Freeze this child's instructions at creation, just like its root.
+            metadata["system_context"] = effective_system_context(parent_metadata)
+            metadata["system_context_mode"] = effective_system_context_mode(parent_metadata)
             parent_auth = parent_metadata.get("authorized_dirs")
             if isinstance(parent_auth, list) and parent_auth:
                 metadata["authorized_dirs"] = [str(x) for x in parent_auth if str(x).strip()]
@@ -7170,6 +7202,153 @@ class SessionManager:
         )
         return True
 
+    def start_session_draft_reserve(self) -> None:
+        from session_draft_reserve import SessionDraftReserve
+
+        with self._session_draft_reserve_lock:
+            if self._session_draft_reserve is None:
+                reserve = SessionDraftReserve(self)
+                self._session_draft_reserve = reserve
+                reserve.start()
+
+    def stop_session_draft_reserve(self) -> None:
+        with self._session_draft_reserve_lock:
+            reserve, self._session_draft_reserve = self._session_draft_reserve, None
+        if reserve is not None:
+            reserve.stop()
+
+    def _create_new_session(
+        self, *, model_profile_id: str = "", draft: bool = False,
+        work_dir: str = "", system_context: str = "", standby: bool = False,
+        system_context_mode: str = "append",
+    ) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
+        from session_system_context import validate_system_context
+
+        requested_system_context, requested_context_mode = validate_system_context(system_context, system_context_mode)
+        requested_work_dir = normalize_session_work_dir(work_dir)
+        if str(work_dir or "").strip() and not requested_work_dir:
+            raise ValueError(
+                f"会话工作目录必须是已存在的绝对路径: {str(work_dir).strip()}"
+            )
+        if requested_work_dir and os.path.normcase(requested_work_dir) == os.path.normcase(str(WORK_DIR)):
+            # 显式选中的就是默认目录：按“未指定”处理，免得同一目录被拆成两个分组。
+            requested_work_dir = ""
+        create_started = time.perf_counter()
+        reserve = self._session_draft_reserve
+        reserved_id = reserve.take() if reserve is not None and not standby else None
+        if reserved_id and not (self.sessions_dir / reserved_id / "metadata.json").is_file():
+            reserved_id = None
+        session_id = reserved_id or str(uuid.uuid4())
+        uuid_ready = time.perf_counter()
+        work_messages: List[dict] = []
+        llm_history = []           # 新会话 llm_history 为空
+        key_context = ""
+        now_iso = datetime.now().isoformat()
+        # 初始会话工作目录（创建后可切换）：不合格直接拒绝，
+        # 避免用户以为切了目录、实际仍落在默认目录。
+        metadata = {
+            "name": "新会话",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "archived": False,
+            "pinned": False,
+            "todo": False,
+            "goal_review_pending": False,
+            # WORK_DIR is already normalized by _env_path() during startup.
+            # Resolving it again on every click adds another filesystem call
+            # to a latency-sensitive path, which can have multi-second tail
+            # latency on Windows when the volume is busy or being scanned.
+            "authorized_dirs": [requested_work_dir or str(WORK_DIR)],
+        }
+        if requested_work_dir:
+            metadata["work_dir"] = requested_work_dir
+        if requested_system_context:
+            metadata["system_context"] = requested_system_context
+        if requested_context_mode != "append":
+            metadata["system_context_mode"] = requested_context_mode
+        requested_profile_id = str(model_profile_id or "").strip()
+        if requested_profile_id:
+            metadata["model_profile_id"] = requested_profile_id
+        if draft:
+            # 预取草稿：目录、元数据与索引照常落盘，但在首条 user 事件之前
+            # 不出现在会话列表里。这样点“新会话”时的后台物化既不污染侧栏，
+            # 也不占用发送首条消息的等待时间。
+            metadata["draft"] = True
+        if standby:
+            metadata["standby_draft"] = True
+        dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
+        metadata_ready = time.perf_counter()
+        # This UUID is a new root session. Create its directory before the
+        # generic path resolver runs: a missing root otherwise falls back
+        # to a recursive search through every nested subagent directory.
+        if not reserved_id:
+            (self.sessions_dir / session_id).mkdir(parents=True, exist_ok=False)
+        self._known_root_session_ids.add(session_id)
+        root_dir_ready = time.perf_counter()
+        # A freshly generated UUID cannot be present in the deleted-session
+        # registry and has no concurrent metadata writer. Avoid the generic
+        # update path's repeated registry checks and per-session lock lookup.
+        self.repository.save_metadata_atomic(session_id, metadata)
+        metadata_file_saved = time.perf_counter()
+        self._set_interrupt_cache_from_metadata(session_id, metadata)
+        metadata_saved = time.perf_counter()
+        runtime_v2_primary = self._runtime_v2_primary()
+        if runtime_v2_primary:
+            from runtime_v2 import RuntimeHistoryOps
+
+            RuntimeHistoryOps(
+                self.repository.sessions_dir,
+                path_resolver=self._resolve_session_path,
+            )._append_and_snapshot(session_id, "session_meta", dict(metadata))
+        elif not reserved_id:
+            self._save_work_messages(session_id, work_messages)
+            self._save_llm_history(session_id, llm_history)
+            self._save_key_context(session_id, key_context)
+            self._save_ui_events(session_id, [])
+            self._save_dialogue_history(session_id, [])
+        history_initialized = time.perf_counter()
+        index_entry = {
+            "id": session_id,
+            "name": metadata["name"],
+            "created_at": metadata["created_at"],
+            "updated_at": metadata.get("updated_at") or metadata["created_at"],
+            "archived": bool(metadata.get("archived", False)),
+            "pinned": bool(metadata.get("pinned", False)),
+            "todo": bool(metadata.get("todo", False)),
+            "goal_review_pending": bool(metadata.get("goal_review_pending", False)),
+            "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
+            "draft": bool(metadata.get("draft", False)),
+        }
+        index_entry["work_dir"] = metadata.get("work_dir") or None
+        # create_session now runs outside the asyncio event loop. Protect
+        # append + persistence as one operation so simultaneous tabs cannot
+        # overwrite each other's newly-created index row.
+        with self._lock:
+            self.index[:] = [row for row in self.index if row.get("id") != session_id]
+            self.index.append(index_entry)
+            self.repository.save_index(self.index_file, self.index)
+        index_saved = time.perf_counter()
+        logger.info(
+            "create_session_timing session=%s total=%sms uuid=%sms metadata_prepare=%sms "
+            "metadata_write=%sms root_dir=%sms metadata_file=%sms "
+            "interrupt_cache=%sms history_init=%sms index_write=%sms runtime_v2=%s",
+            session_id,
+            int((index_saved - create_started) * 1000),
+            int((uuid_ready - create_started) * 1000),
+            int((metadata_ready - uuid_ready) * 1000),
+            int((metadata_saved - metadata_ready) * 1000),
+            int((root_dir_ready - metadata_ready) * 1000),
+            int((metadata_file_saved - root_dir_ready) * 1000),
+            int((metadata_saved - metadata_file_saved) * 1000),
+            int((history_initialized - metadata_saved) * 1000),
+            int((index_saved - history_initialized) * 1000),
+            runtime_v2_primary,
+        )
+        logger.info(f"创建新会话: {session_id}")
+        if not draft:
+            self._notify_session_state_changed(session_id, {"created"})
+        return session_id, dialogue, work_messages, llm_history, key_context, metadata
+
     def get_or_create_session(
         self,
         session_id: Optional[str] = None,
@@ -7177,6 +7356,8 @@ class SessionManager:
         model_profile_id: str = "",
         draft: bool = False,
         work_dir: str = "",
+        system_context: str = "",
+        system_context_mode: str = "append",
     ) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
         """
         获取或创建会话，返回:
@@ -7195,117 +7376,10 @@ class SessionManager:
                 except Exception:
                     pass
         if session_id is None:
-            create_started = time.perf_counter()
-            session_id = str(uuid.uuid4())
-            uuid_ready = time.perf_counter()
-            work_messages: List[dict] = []
-            llm_history = []           # 新会话 llm_history 为空
-            key_context = ""
-            now_iso = datetime.now().isoformat()
-            # 会话工作目录（创建时指定、之后不可改，与 DSH 一致）：不合格直接拒绝，
-            # 避免用户以为切了目录、实际仍落在默认目录。
-            requested_work_dir = normalize_session_work_dir(work_dir)
-            if str(work_dir or "").strip() and not requested_work_dir:
-                raise ValueError(
-                    f"会话工作目录必须是已存在的绝对路径: {str(work_dir).strip()}"
-                )
-            if requested_work_dir and os.path.normcase(requested_work_dir) == os.path.normcase(str(WORK_DIR)):
-                # 显式选中的就是默认目录：按“未指定”处理，免得同一目录被拆成两个分组。
-                requested_work_dir = ""
-            metadata = {
-                "name": "新会话",
-                "created_at": now_iso,
-                "updated_at": now_iso,
-                "archived": False,
-                "pinned": False,
-                "todo": False,
-                "goal_review_pending": False,
-                # WORK_DIR is already normalized by _env_path() during startup.
-                # Resolving it again on every click adds another filesystem call
-                # to a latency-sensitive path, which can have multi-second tail
-                # latency on Windows when the volume is busy or being scanned.
-                "authorized_dirs": [requested_work_dir or str(WORK_DIR)],
-            }
-            if requested_work_dir:
-                metadata["work_dir"] = requested_work_dir
-            requested_profile_id = str(model_profile_id or "").strip()
-            if requested_profile_id:
-                metadata["model_profile_id"] = requested_profile_id
-            if draft:
-                # 预取草稿：目录、元数据与索引照常落盘，但在首条 user 事件之前
-                # 不出现在会话列表里。这样点“新会话”时的后台物化既不污染侧栏，
-                # 也不占用发送首条消息的等待时间。
-                metadata["draft"] = True
-            dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
-            metadata_ready = time.perf_counter()
-            # This UUID is a new root session. Create its directory before the
-            # generic path resolver runs: a missing root otherwise falls back
-            # to a recursive search through every nested subagent directory.
-            (self.sessions_dir / session_id).mkdir(parents=True, exist_ok=False)
-            self._known_root_session_ids.add(session_id)
-            root_dir_ready = time.perf_counter()
-            # A freshly generated UUID cannot be present in the deleted-session
-            # registry and has no concurrent metadata writer. Avoid the generic
-            # update path's repeated registry checks and per-session lock lookup.
-            self.repository.save_metadata_atomic(session_id, metadata)
-            metadata_file_saved = time.perf_counter()
-            self._set_interrupt_cache_from_metadata(session_id, metadata)
-            metadata_saved = time.perf_counter()
-            runtime_v2_primary = self._runtime_v2_primary()
-            if runtime_v2_primary:
-                from runtime_v2 import RuntimeHistoryOps
-
-                RuntimeHistoryOps(
-                    self.repository.sessions_dir,
-                    path_resolver=self._resolve_session_path,
-                )._append_and_snapshot(session_id, "session_meta", dict(metadata))
-            else:
-                self._save_work_messages(session_id, work_messages)
-                self._save_llm_history(session_id, llm_history)
-                self._save_key_context(session_id, key_context)
-                self._save_ui_events(session_id, [])
-                self._save_dialogue_history(session_id, [])
-            history_initialized = time.perf_counter()
-            index_entry = {
-                "id": session_id,
-                "name": metadata["name"],
-                "created_at": metadata["created_at"],
-                "updated_at": metadata.get("updated_at") or metadata["created_at"],
-                "archived": bool(metadata.get("archived", False)),
-                "pinned": bool(metadata.get("pinned", False)),
-                "todo": bool(metadata.get("todo", False)),
-                "goal_review_pending": bool(metadata.get("goal_review_pending", False)),
-                "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
-                "draft": bool(metadata.get("draft", False)),
-            }
-            index_entry["work_dir"] = metadata.get("work_dir") or None
-            # create_session now runs outside the asyncio event loop. Protect
-            # append + persistence as one operation so simultaneous tabs cannot
-            # overwrite each other's newly-created index row.
-            with self._lock:
-                self.index.append(index_entry)
-                self.repository.save_index(self.index_file, self.index)
-            index_saved = time.perf_counter()
-            logger.info(
-                "create_session_timing session=%s total=%sms uuid=%sms metadata_prepare=%sms "
-                "metadata_write=%sms root_dir=%sms metadata_file=%sms "
-                "interrupt_cache=%sms history_init=%sms index_write=%sms runtime_v2=%s",
-                session_id,
-                int((index_saved - create_started) * 1000),
-                int((uuid_ready - create_started) * 1000),
-                int((metadata_ready - uuid_ready) * 1000),
-                int((metadata_saved - metadata_ready) * 1000),
-                int((root_dir_ready - metadata_ready) * 1000),
-                int((metadata_file_saved - root_dir_ready) * 1000),
-                int((metadata_saved - metadata_file_saved) * 1000),
-                int((history_initialized - metadata_saved) * 1000),
-                int((index_saved - history_initialized) * 1000),
-                runtime_v2_primary,
+            return self._create_new_session(
+                model_profile_id=model_profile_id, draft=draft,
+                work_dir=work_dir, system_context=system_context, system_context_mode=system_context_mode,
             )
-            logger.info(f"创建新会话: {session_id}")
-            if not draft:
-                self._notify_session_state_changed(session_id, {"created"})
-            return session_id, dialogue, work_messages, llm_history, key_context, metadata
         else:
             if self._runtime_v2_primary():
                 from runtime_v2 import RuntimeModelProjection, RuntimeUiProjection, SnapshotStore
@@ -7799,6 +7873,79 @@ class SessionManager:
             return
         self._save_index()
         self._notify_session_state_changed(sid, {"goal_review_pending"})
+
+    def set_session_work_dir(self, session_id: str, work_dir: str, *, expected_root: str | None = None) -> dict:
+        """Change one session's root without moving shared storage or process cwd.
+
+        Callers own admission (idle UI request or an approved, serialized host
+        tool). expected_root binds a tool approval to the root it was issued for.
+        """
+        sid = str(session_id or "").strip()
+        target = normalize_session_work_dir(work_dir)
+        if not target:
+            raise ValueError("工作目录必须是已存在的绝对路径")
+        target = str(Path(target).resolve())
+        if not sid or not self._get_metadata_path(sid).is_file() or self._is_deleted_session(sid):
+            raise FileNotFoundError("会话不存在")
+        before = self._load_metadata(sid)
+        previous_root = session_work_root(before)
+        if expected_root is not None and os.path.normcase(str(previous_root)) != os.path.normcase(str(Path(expected_root).resolve())):
+            raise ValueError("工作目录已变化，请重新发起切换")
+        if os.path.normcase(str(previous_root)) != os.path.normcase(target):
+            if before.get("git_worktree_managed"):
+                raise ValueError("托管 worktree 会话请先完成工作树操作，再切换目录")
+            # Freeze legacy children that still inherit the parent dynamically.
+            # Do this before holding the parent lock: legacy child root lookup
+            # takes child -> parent locks, so nesting parent -> child would deadlock.
+            for child_id in before.get("subagent_ids") or []:
+                if not child_id or child_id == sid:
+                    continue
+                with self._session_metadata_lock(child_id):
+                    child = self._load_metadata_unlocked(child_id)
+                    if (child.get("parent_session_id") == sid
+                            and not any(child.get(key) for key in SESSION_WORK_DIR_KEYS)):
+                        child["work_dir"] = str(previous_root)
+                        self._save_metadata_unlocked(child_id, child)
+        with self._session_metadata_lock(sid):
+            if not sid or not self._get_metadata_path(sid).is_file() or self._is_deleted_session(sid):
+                raise FileNotFoundError("会话不存在")
+            metadata = self._load_metadata_unlocked(sid)
+            old_root = session_work_root(metadata)
+            if expected_root is not None and os.path.normcase(str(old_root)) != os.path.normcase(str(Path(expected_root).resolve())):
+                raise ValueError("工作目录已变化，请重新发起切换")
+            if os.path.normcase(str(old_root)) == os.path.normcase(target):
+                return metadata
+            if metadata.get("git_worktree_managed"):
+                raise ValueError("托管 worktree 会话请先完成工作树操作，再切换目录")
+            # Replace the implicit root grant; retain other explicitly approved
+            # directories. A root switch must not silently keep the old grant.
+            authorized = [target]
+            seen = {os.path.normcase(target)}
+            raw_dirs = metadata.get("authorized_dirs")
+            for raw in raw_dirs if isinstance(raw_dirs, list) else []:
+                if not isinstance(raw, str) or not raw.strip():
+                    continue
+                path = str(Path(raw).resolve())
+                key = os.path.normcase(path)
+                if key != os.path.normcase(str(old_root)) and key not in seen:
+                    authorized.append(path)
+                    seen.add(key)
+            metadata["work_dir"] = target
+            # These fields precede work_dir in effective-root resolution.
+            for key in ("subagent_work_dir", "git_worktree_path"):
+                if metadata.get(key):
+                    metadata[key] = ""
+            metadata["authorized_dirs"] = authorized
+            metadata["updated_at"] = datetime.now().isoformat()
+            self._save_metadata_unlocked(sid, metadata)
+            for entry in self.index:
+                if entry.get("id") == sid:
+                    entry["work_dir"] = None if os.path.normcase(target) == os.path.normcase(str(WORK_DIR.resolve())) else target
+                    entry["updated_at"] = metadata["updated_at"]
+                    break
+            self._save_index()
+        self._notify_session_state_changed(sid, {"work_dir"})
+        return metadata
 
     def set_session_name(self, session_id: str, name: str):
         with self._session_metadata_lock(session_id):

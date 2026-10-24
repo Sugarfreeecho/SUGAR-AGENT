@@ -1,7 +1,32 @@
 ﻿from __future__ import annotations
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import List
+
+_tool_directories: ContextVar[tuple[str, list[Path]] | None] = ContextVar("tool_authorized_directories", default=None)
+
+
+@contextmanager
+def tool_directory_authorization_scope(session_id: str):
+    """One tool invocation, including its directory and operation approvals."""
+    scoped = (session_id, [])
+    token = _tool_directories.set(scoped)
+    try:
+        yield
+    finally:
+        scoped[1].clear()  # Also expire contexts copied into child tasks/threads.
+        _tool_directories.reset(token)
+
+
+def authorize_dir_for_current_tool(session_id: str, directory: str) -> None:
+    active = _tool_directories.get()
+    if active is None or active[0] != session_id:
+        raise RuntimeError("One-time directory authorization requires an active tool scope")
+    path = Path(directory).resolve()
+    if path not in active[1]:
+        active[1].append(path)
 
 def _get_work_dir(session_id: str = "", metadata: dict | None = None) -> Path:
     try:
@@ -47,7 +72,7 @@ def _is_path_authorized(canonical: Path, authorized: List[Path]) -> bool:
             return True
     return False
 
-def get_authorized_dirs_for_session(session_id: str, workspace: Path | None = None) -> List[Path]:
+def _get_persisted_authorized_dirs(session_id: str, workspace: Path | None = None) -> List[Path]:
     ws = workspace or _get_work_dir(session_id)
     sid = str(session_id or "").strip()
     if not sid:
@@ -87,6 +112,14 @@ def get_authorized_dirs_for_session(session_id: str, workspace: Path | None = No
     except Exception:
         pass
     return [ws.resolve()]
+
+
+def get_authorized_dirs_for_session(session_id: str, workspace: Path | None = None) -> List[Path]:
+    directories = _get_persisted_authorized_dirs(session_id, workspace)
+    active = _tool_directories.get()
+    if active is not None and active[0] == session_id:
+        directories = list(dict.fromkeys([*directories, *active[1]]))
+    return directories
 
 def is_path_authorized_for_session(canonical: Path, session_id: str, workspace: Path | None = None) -> bool:
     auth = get_authorized_dirs_for_session(session_id, workspace)

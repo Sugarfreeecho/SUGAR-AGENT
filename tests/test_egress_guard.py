@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import subprocess
+import pytest
 
 from security.egress_guard import egress_helper_enabled, prepare_egress_launch, sandbox_health
 from security.models import (
@@ -61,6 +62,52 @@ def test_full_access_bypasses_helper(monkeypatch):
     )
     assert prepared.enforcement_level == "disabled"
     assert prepared.argv == ("echo", "ok")
+
+
+def test_windows_old_helper_requires_upgrade_without_unisolated_fallback(monkeypatch):
+    import security.egress_guard as guard
+    monkeypatch.setenv("EGRESS_HELPER_ENABLED", "1")
+    monkeypatch.setattr(guard, "sandbox_health", lambda: guard.SandboxHealth(
+        "partial", "windows-appcontainer", True, "", ("deny-network",)))
+    with pytest.raises(PermissionError, match="outdated.*rebuild"):
+        guard.prepare_egress_launch(["shell"], {}, command="echo ok", active_context=_active())
+
+
+def test_windows_filesystem_ticket_uses_authorized_roots_not_arbitrary_temp(monkeypatch, tmp_path):
+    import base64
+    import runtime_files
+    import session_authorized_dirs
+    import security.egress_guard as guard
+    monkeypatch.setenv("EGRESS_HELPER_ENABLED", "1")
+    monkeypatch.setattr(guard, "sandbox_health", lambda: guard.SandboxHealth(
+        "partial", "windows-appcontainer", True, "", ("deny-network", "filesystem-grants")))
+    monkeypatch.setattr(guard, "_helper_path", lambda: "helper")
+    workspace, once, arbitrary = (tmp_path / name for name in ("workspace", "once", "arbitrary"))
+    for path in (workspace, once, arbitrary):
+        path.mkdir()
+    monkeypatch.setattr(session_authorized_dirs, "_get_persisted_authorized_dirs", lambda *_: [workspace])
+    active = _active()
+    active["workspace"] = workspace
+    with runtime_files.run_scope(tmp_path / "data", "session", "run") as owner:
+        scratch = owner.scratch_dir
+        with session_authorized_dirs.tool_directory_authorization_scope("session"):
+            session_authorized_dirs.authorize_dir_for_current_tool("session", str(once))
+            launch = guard.prepare_egress_launch(["shell"], {"TEMP": str(arbitrary)}, command="echo ok", active_context=active)
+            ticket = json.loads(base64.urlsafe_b64decode(launch.argv[3]))["payload"]
+            assert set(ticket["filesystem"]["write_dirs"]) == {str(path) for path in (workspace, once, scratch)}
+            assert ticket["filesystem"]["scratch_dirs"] == [str(scratch)]
+    assert str(arbitrary) not in ticket["filesystem"]["write_dirs"]
+
+
+def test_approved_network_launch_does_not_provision_acl(monkeypatch):
+    import security.egress_guard as guard
+    monkeypatch.setenv("EGRESS_HELPER_ENABLED", "1")
+    monkeypatch.setattr(guard, "sandbox_health", lambda: guard.SandboxHealth(
+        "partial", "windows-appcontainer", True, "", ("deny-network",)))
+    monkeypatch.setattr(guard, "_helper_path", lambda: "helper")
+    monkeypatch.setattr(guard, "_filesystem_grants", lambda *_: pytest.fail("network-approved launch requested ACL changes"))
+    launch = guard.prepare_egress_launch(["shell"], {}, command="echo ok", active_context=_active(intent="read"))
+    assert launch.argv[0] == "helper"
 
 
 def test_helper_switch_disables_discovery_and_wrapping(monkeypatch):
@@ -140,7 +187,7 @@ def test_bundled_helper_health_contract_when_available():
     assert isinstance(payload.get("capabilities"), list)
 
 
-def test_bundled_helper_launches_local_command_when_enforcement_available():
+def test_bundled_helper_launches_local_command_when_enforcement_available(tmp_path):
     import os
 
     health = sandbox_health(refresh=True)
@@ -149,8 +196,10 @@ def test_bundled_helper_launches_local_command_when_enforcement_available():
 
         pytest.skip(health.reason)
     command = ["cmd.exe", "/d", "/c", "echo", "helper-launch-ok"] if os.name == "nt" else ["sh", "-c", "printf helper-launch-ok"]
-    prepared = prepare_egress_launch(command, os.environ, command="echo helper-launch-ok", active_context=_active(intent="none"))
-    proc = subprocess.run(prepared.argv, env=prepared.env, capture_output=True, text=True, timeout=15)
+    active = _active(intent="none")
+    active["workspace"] = tmp_path
+    prepared = prepare_egress_launch(command, os.environ, command="echo helper-launch-ok", active_context=active)
+    proc = subprocess.run(prepared.argv, env=prepared.env, cwd=tmp_path, capture_output=True, text=True, timeout=15)
     assert proc.returncode == 0, proc.stderr
     assert "helper-launch-ok" in proc.stdout
 
@@ -174,7 +223,7 @@ def test_bundled_helper_rejects_ticket_reuse_when_enforcement_available(tmp_path
     assert "already used" in second.stderr.decode("utf-8", "replace")
 
 
-def test_windows_bundled_helper_launches_powershell_backend():
+def test_windows_bundled_helper_launches_powershell_backend(tmp_path):
     import os
     if os.name != "nt":
         import pytest
@@ -183,11 +232,13 @@ def test_windows_bundled_helper_launches_powershell_backend():
 
     powershell = _windows_powershell_executable()
     assert powershell
+    active = _active(intent="none")
+    active["workspace"] = tmp_path
     prepared = prepare_egress_launch(
         [powershell, "-NoProfile", "-NonInteractive", "-Command", "Write-Output actual-shell-ok"],
         os.environ,
         command="printf actual-shell-ok",
-        active_context=_active(intent="none"),
+        active_context=active,
     )
     proc = subprocess.run(prepared.argv, env=prepared.env, capture_output=True, timeout=15)
     assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")

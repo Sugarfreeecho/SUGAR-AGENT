@@ -108,7 +108,37 @@ def _canonical(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _ticket_for(command: str, request: Any, decision: Any, session_id: str) -> tuple[str, str]:
+def _filesystem_grants(active_context: Mapping[str, Any], argv: Sequence[str]) -> dict[str, list[str]]:
+    """Carry application-authorized roots, never the process cwd or arbitrary TEMP."""
+    from session_authorized_dirs import get_authorized_dirs_for_session
+    from runtime_files import authorized_scratch_dirs
+
+    workspace = Path(active_context["workspace"]).resolve()
+    session_id = str(active_context.get("session_id") or "")
+    directories = authorized_scratch_dirs(
+        get_authorized_dirs_for_session(session_id, workspace), session_id
+    )
+    scratch = authorized_scratch_dirs([], session_id)
+    writes = list(dict.fromkeys(str(Path(path).resolve()) for path in directories if Path(path).is_dir()))
+    reads = []
+    # The interpreter needs its DLLs, standard library and site-packages. Do not
+    # grant the whole application tree (which also contains security state).
+    for executable in (os.sys.executable, argv[0] if argv else ""):
+        resolved = shutil.which(str(executable)) if executable else None
+        if not resolved:
+            continue
+        directory = Path(resolved).resolve().parent
+        windows = Path(os.environ.get("WINDIR", r"C:\Windows")).resolve()
+        if directory == windows or windows in directory.parents:
+            continue  # Windows supplies its own AppContainer ACLs.
+        if not any(directory == Path(root) or Path(root) in directory.parents for root in writes):
+            reads.append(str(directory))
+    return {"write_dirs": writes, "read_dirs": list(dict.fromkeys(reads)),
+            "scratch_dirs": [str(path.resolve()) for path in scratch]}
+
+
+def _ticket_for(command: str, request: Any, decision: Any, session_id: str,
+                *, filesystem: Mapping[str, Any] | None = None) -> tuple[str, str]:
     metadata = dict(getattr(request, "metadata", {}) or {})
     destinations = list(metadata.get("destinations") or [])
     intent = str(metadata.get("egress_intent") or "none")
@@ -126,6 +156,8 @@ def _ticket_for(command: str, request: Any, decision: Any, session_id: str) -> t
         "expires_at": int(time.time()) + 120,
         "nonce": secrets.token_hex(16),
     }
+    if filesystem is not None:
+        payload["filesystem"] = dict(filesystem)
     envelope = {"payload": payload, "signature": hmac.new(_SESSION_KEY, _canonical(payload), hashlib.sha256).hexdigest()}
     return base64.urlsafe_b64encode(_canonical(envelope)).decode("ascii"), str(payload["ticket_id"])
 
@@ -164,7 +196,16 @@ def prepare_egress_launch(
         except Exception:
             pass
         return PreparedLaunch(tuple(argv), child_env, health, "degraded")
-    ticket, ticket_id = _ticket_for(command, request, active_context.get("decision"), str(active_context.get("session_id") or ""))
+    filesystem = None
+    if health.backend == "windows-appcontainer" and intent == "none":
+        if "filesystem-grants" not in health.capabilities:
+            raise PermissionError(
+                "Windows egress helper is outdated: rebuild it with "
+                "scripts/build_egress_helper_windows.ps1 to enable runtime workspace access."
+            )
+        filesystem = _filesystem_grants(active_context, argv)
+    ticket, ticket_id = _ticket_for(command, request, active_context.get("decision"),
+                                  str(active_context.get("session_id") or ""), filesystem=filesystem)
     child_env["SUGAR_AGENT_EGRESS_SESSION_KEY"] = base64.urlsafe_b64encode(_SESSION_KEY).decode("ascii")
     child_env["SUGAR_AGENT_EGRESS_COMMAND_DIGEST"] = hashlib.sha256(str(command or "").encode("utf-8")).hexdigest()
     helper = _helper_path()

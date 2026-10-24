@@ -2275,7 +2275,7 @@ async def open_workspace_file(
         return JSONResponse({"ok": False, "error": "路径为空"}, status_code=400)
     try:
         safe_path = await asyncio.wait_for(
-            run_in_threadpool(_resolve_allowed_local_path, raw, False, _workspace_request_root(session_id, work_dir)),
+            run_in_threadpool(lambda: _resolve_allowed_local_path(raw, False, _workspace_request_root(session_id, work_dir))),
             timeout=5.0,
         )
     except asyncio.TimeoutError:
@@ -2324,7 +2324,7 @@ async def open_workspace_dir(
         return JSONResponse({"ok": False, "error": "路径为空"}, status_code=400)
     try:
         safe_path = await asyncio.wait_for(
-            run_in_threadpool(_resolve_allowed_local_path, raw, False, _workspace_request_root(session_id, work_dir)),
+            run_in_threadpool(lambda: _resolve_allowed_local_path(raw, False, _workspace_request_root(session_id, work_dir))),
             timeout=5.0,
         )
     except asyncio.TimeoutError:
@@ -2520,7 +2520,7 @@ async def workspace_media(
         rel,
         allowed_suffixes=_VIEWABLE_MEDIA_SUFFIXES,
         kind_label="media",
-        work_root=_workspace_request_root(session_id, work_dir),
+        work_root=await run_in_threadpool(_workspace_request_root, session_id, work_dir),
     )
 
 
@@ -2540,7 +2540,7 @@ async def workspace_image_metadata(request: Request, session_id: str = "", work_
             if isinstance(rel, str) and str(rel).strip()
         )
     )
-    root = _workspace_request_root(session_id or body.get("session_id", ""), work_dir or body.get("work_dir", ""))
+    root = await run_in_threadpool(_workspace_request_root, session_id or body.get("session_id", ""), work_dir or body.get("work_dir", ""))
 
     def _collect() -> list[dict[str, Any]]:
         images: list[dict[str, Any]] = []
@@ -2573,7 +2573,7 @@ async def workspace_image(
         rel,
         allowed_suffixes=_VIEWABLE_IMAGE_SUFFIXES,
         kind_label="image",
-        work_root=_workspace_request_root(session_id, work_dir),
+        work_root=await run_in_threadpool(_workspace_request_root, session_id, work_dir),
     )
 
 
@@ -2590,7 +2590,7 @@ async def workspace_file_text(
     with ``truncated`` reported so the UI can say so. The path resolves through
     the same allowed-root gate as the workspace media endpoints.
     """
-    root = _workspace_request_root(session_id, work_dir)
+    root = await run_in_threadpool(_workspace_request_root, session_id, work_dir)
     try:
         path = await run_in_threadpool(_resolve_workspace_view_path, rel, root)
     except ValueError:
@@ -2644,7 +2644,7 @@ async def workspace_assets(rel: str, session_id: str = "", work_dir: str = ""):
     allowed-root gate as the other workspace readers; the response is no-store
     so a reload always reflects the file on disk.
     """
-    root = _workspace_request_root(session_id, work_dir)
+    root = await run_in_threadpool(_workspace_request_root, session_id, work_dir)
     try:
         path = await run_in_threadpool(_resolve_workspace_view_path, rel, root)
     except ValueError:
@@ -2723,6 +2723,7 @@ class _ChatUploadLimitError(Exception):
 
 
 _WORKSPACE_FILE_SKIP_DIRS = {
+    "TempOutput",
     ".git",
     ".hg",
     ".svn",
@@ -2852,7 +2853,7 @@ async def list_workspace_files(
     session_id: str = "",
     work_dir: str = "",
 ):
-    root = _workspace_request_root(session_id, work_dir)
+    root = await run_in_threadpool(_workspace_request_root, session_id, work_dir)
     try:
         query = (q or "").strip()
         if query:
@@ -3590,7 +3591,7 @@ async def api_pick_path(request: Request):
         )
     initial = str(data.get("initial") or "")
     if not initial:
-        initial = str(_workspace_request_root(data.get("session_id", ""), data.get("work_dir", "")))
+        initial = str(await run_in_threadpool(_workspace_request_root, data.get("session_id", ""), data.get("work_dir", "")))
     multiple = bool(data.get("multiple", False))
     try:
         chosen = await run_in_threadpool(pick_native_path, kind, initial, multiple)
@@ -4323,6 +4324,13 @@ async def create_session(req: Request = None):
         except Exception:
             body = {}
     requested_profile_id = str(body.get("model_profile_id") or "").strip()
+    from session_system_context import validate_system_context
+
+    try:
+        requested_system_context, requested_context_mode = validate_system_context(
+            body.get("system_context", ""), body.get("system_context_mode", "append"))
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
     if "reasoning_effort" in body and not isinstance(body["reasoning_effort"], str):
         return JSONResponse({"ok": False, "error": "reasoning_effort must be a string"}, status_code=422)
     requested_effort = str(body.get("reasoning_effort") or "").strip()
@@ -4336,7 +4344,7 @@ async def create_session(req: Request = None):
             status_code=422,
         )
     requested_permission_mode = str(body.get("permission_mode") or "").strip()
-    # 会话工作目录（可选）：创建时指定、之后不可改；必须是已存在的绝对路径。
+    # 会话工作目录（可选）：也可在创建后切换；必须是已存在的绝对路径。
     requested_work_dir_raw = str(body.get("work_dir") or "").strip()
     requested_work_dir = ""
     if requested_work_dir_raw:
@@ -4365,6 +4373,10 @@ async def create_session(req: Request = None):
     # writes off the asyncio event loop so one slow Windows filesystem call
     # cannot freeze heartbeats, streaming, and every other browser request.
     create_kwargs = {}
+    if requested_system_context:
+        create_kwargs["system_context"] = requested_system_context
+    if requested_context_mode != "append":
+        create_kwargs["system_context_mode"] = requested_context_mode
     if requested_profile_id:
         create_kwargs["model_profile_id"] = requested_profile_id
     if requested_prefetch:
@@ -4428,6 +4440,68 @@ async def create_session(req: Request = None):
         },
         headers={"Server-Timing": f"session-create;dur={elapsed_ms}"},
     )
+
+
+@fastapi_app.put("/sessions/{session_id}/system-context")
+async def change_session_system_context(session_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict) or "system_context" not in body:
+        return JSONResponse({"ok": False, "error": "system_context is required"}, status_code=422)
+
+    def change():
+        with _chat_start_lock:
+            if _is_session_stream_active(session_id) or _has_local_worker_activity(session_id):
+                raise RuntimeError("会话正在执行，请等待执行结束后再修改系统上下文。")
+            kwargs = {"mode": body["system_context_mode"]} if "system_context_mode" in body else {}
+            return session_manager.set_session_system_context(session_id, body["system_context"], **kwargs)
+
+    try:
+        metadata = await asyncio.to_thread(change)
+    except FileNotFoundError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+    except RuntimeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+    return JSONResponse({"ok": True, "session_id": session_id,
+                         "system_context": metadata.get("system_context", ""),
+                         "system_context_mode": metadata.get("system_context_mode", "append")})
+
+
+@fastapi_app.put("/sessions/{session_id}/work-dir")
+async def change_session_work_dir(session_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid json"}, status_code=400)
+    if not isinstance(body, dict) or not isinstance(body.get("work_dir"), str):
+        return JSONResponse({"ok": False, "error": "work_dir must be a string"}, status_code=422)
+
+    def change():
+        # Chat admission uses this same lock. Hold it through the metadata
+        # transaction so a new run cannot start between the idle check and save.
+        with _chat_start_lock:
+            if _is_session_stream_active(session_id) or _has_local_worker_activity(session_id):
+                raise RuntimeError("会话正在执行，请停止或等待执行结束后再切换工作目录。")
+            return session_manager.set_session_work_dir(session_id, body["work_dir"])
+
+    try:
+        metadata = await asyncio.to_thread(change)
+    except FileNotFoundError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+    except RuntimeError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+    from agent_harness import session_work_dir_projection
+    session = {"id": session_id, **session_work_dir_projection(session_id, metadata)}
+    revision = _invalidate_sessions_state_cache()
+    await publish_session_event(session_id, {"type": "session_work_dir_changed", "ephemeral": True,
+                                             "session_id": session_id, "session": session})
+    return JSONResponse({"ok": True, "session": session, "state_revision": revision})
 
 
 def _model_profiles_response() -> dict:
@@ -4620,7 +4694,8 @@ async def get_global_permissions():
     try:
         from security import security_status_for_session
 
-        return JSONResponse({"ok": True, **security_status_for_session("")})
+        status = await asyncio.to_thread(security_status_for_session, "")
+        return JSONResponse({"ok": True, **status})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
@@ -4734,7 +4809,8 @@ async def get_session_permissions(session_id: str):
     try:
         from security import security_status_for_session
 
-        return JSONResponse({"ok": True, **security_status_for_session(sid)})
+        status = await asyncio.to_thread(security_status_for_session, sid)
+        return JSONResponse({"ok": True, **status})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
 
@@ -5378,7 +5454,7 @@ async def resolve_session_approval(session_id: str, approval_id: str, request: R
                         req_dirs = list(record.get("required_dirs") or [])
                 except Exception:
                     req_dirs = list(record.get("required_dirs") or [])
-                if req_dirs:
+                if req_dirs and decision_value == "allow_external_workspace":
                     from session_authorized_dirs import add_authorized_dir
                     for rd in req_dirs:
                         try:

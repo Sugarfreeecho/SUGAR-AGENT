@@ -1796,13 +1796,13 @@ def compute_context_breakdown_for_llm_history(
     (static segments + the key_context body) so the three lanes describe the same
     package the meter's total came from.
     """
-    from agent_tools import get_skills_catalog
-
     sid = str(session_id or "").strip()
-    skills_catalog = get_skills_catalog()
-    env_static = build_env_static(sid if sid else None)
+    try:
+        session_meta = (session_manager._load_metadata(sid) or {}) if sid else {}
+    except ValueError:
+        session_meta = {}  # Token previews also support an unsaved session.
     kc_body = key_context_body_for_system_prompt(key_context or "")
-    static_segments = build_static_system_segments(skills_catalog, env_static, language)
+    static_segments = _build_static_segments_for_session(sid, session_meta, language)
     system_messages: List[Any] = [SystemMessage(content=s) for s in static_segments]
     if kc_body:
         system_messages.append(SystemMessage(content=kc_body))
@@ -2250,29 +2250,32 @@ def _build_static_segments_for_session(
 ) -> tuple[str, ...]:
     """Build static system segments exactly as the inline pre_api path would."""
 
-    skills_catalog = get_skills_catalog()
-    env_static = build_env_static(session_id or None)
-    segments = tuple(build_static_system_segments(
-        skills_catalog,
-        env_static,
-        prompt_language,
-    ))
-    fork_runtime_config = (
-        session_meta.get("fork_runtime_config") if isinstance(session_meta, dict) else None
-    )
-    inherited = (
-        fork_runtime_config.get("system_segments")
-        if isinstance(fork_runtime_config, dict)
-        else None
-    )
-    if isinstance(inherited, list) and inherited and all(isinstance(item, str) for item in inherited):
-        # Preserve inherited instructions while rebuilding session-specific paths.
-        return tuple(env_static if item.lstrip().startswith("## Environment") else item for item in inherited)
-    if isinstance(session_meta, dict) and session_meta.get("is_subagent"):
-        from agent_subagent import SUBAGENT_RUN_INSTRUCTION
+    from session_system_context import assemble_session_system_segments, effective_system_context_mode
 
-        return ("## Subagent 运行约束\n\n" + SUBAGENT_RUN_INSTRUCTION.strip(), *segments)
-    return segments
+    metadata = session_meta if isinstance(session_meta, dict) else {}
+    replacement = effective_system_context_mode(metadata) == "replace"
+    env_static = build_env_static(session_id or None, minimal=True) if replacement else build_env_static(session_id or None)
+    segments = () if replacement else tuple(build_static_system_segments(
+        get_skills_catalog(), env_static, prompt_language,
+    ))
+
+    return assemble_session_system_segments(
+        segments, env_static, session_meta if isinstance(session_meta, dict) else {},
+    )
+
+
+def _session_static_cache_key(session_id: str, session_meta: dict) -> tuple:
+    from session_system_context import system_context_revision
+
+    return (
+        session_id,
+        str(session_work_root(session_meta)),
+        bool(session_meta.get("is_subagent")),
+        isinstance(session_meta.get("fork_runtime_config"), dict)
+        and bool(session_meta["fork_runtime_config"].get("system_segments")),
+        # Explicit edits must bypass stale-while-revalidate immediately.
+        system_context_revision(session_meta),
+    )
 
 
 def warm_prompt_build_path(prompt_language: str = "zh-CN") -> None:
@@ -3840,7 +3843,8 @@ def _build_host_tool_catalog(session_meta, loaded_plugins=None):
     from plugins.host import bundled_host_availability_scope
 
     with bundled_host_availability_scope():
-        combined_tools = list(OPENAI_TOOL_DEFINITIONS)
+        from session_workspace import workspace_tool_definitions
+        combined_tools = [*OPENAI_TOOL_DEFINITIONS, *workspace_tool_definitions()]
         source_by_name = {}
         for definition in combined_tools:
             name = _model_tool_definition_name(definition)
@@ -4706,7 +4710,8 @@ def _security_approval_spec(
     workspace: Path,
 ) -> Dict[str, Any]:
     preview = _tool_command_preview(tool_name, tool_args)
-    danger = forced_approval_for(decision)
+    workspace_switch = request.action == "session.switch_work_dir"
+    danger = forced_approval_for(decision) and not workspace_switch
     force_ask = always_ask_for(decision)
     metadata = dict(getattr(request, "metadata", {}) or {})
     egress_intent = str(metadata.get("egress_intent") or "none")
@@ -4732,7 +4737,11 @@ def _security_approval_spec(
         and not force_ask
         and bool(required_dirs)
     )
-    if egress_intent == "upload":
+    if workspace_switch:
+        approval_title = "切换会话工作目录"
+        preview = (f"当前目录：{metadata.get('previous_root', workspace)}\n"
+                   f"目标目录：{request.resource}\n原因：{tool_args.get('reason', '')}")
+    elif egress_intent == "upload":
         approval_title = "数据发送需要确认"
     elif egress_intent == "read":
         approval_title = "网络读取需要确认"
@@ -4759,7 +4768,7 @@ def _security_approval_spec(
             else approval_title
         ),
         "subtitle": (
-            f"该操作需访问未授权目录 {dir_hint}。授权后，该目录及子目录的读写、删除和 Shell 操作将在本会话中自动放行（分支/子Agent可继承），同级或上层目录仍需单独授权。"
+            f"该操作需访问未授权目录 {dir_hint}。本次允许仅对当前工具调用有效；会话授权可由分支/子Agent继承。授权目录及子目录的普通读写和 Shell 可自动放行，删除、联网等操作仍按权限策略审批；同级或上层目录仍需单独授权。"
             if external_grantable
             else decision.reason
         ),
@@ -5469,6 +5478,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
         state.pop(timing_key, None)
 
     session_meta = dict(session_manager._load_metadata(state["session_id"]) or {})
+    if session_meta.get("is_subagent"):
+        # Legacy children may still inherit from a mutable parent. Freeze this
+        # run's effective root before the parent can switch during execution.
+        session_meta["work_dir"] = str(session_work_root(session_meta))
     logger.info("react_init meta_done session=%s", state.get("session_id"))
     session_meta["_active_session_id"] = str(state.get("session_id") or "")
     max_react_iter = MAX_REACT_ITER
@@ -5643,15 +5656,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # first round of every user turn.  A revision drift serves the
             # last-known-good segments and rebuilds off the critical path, so
             # a skill/plugin change costs one request of staleness at most.
-            _static_key = (
-                str(state.get("session_id") or ""),
-                str(session_work_root(session_meta)),
-                bool(session_meta.get("is_subagent")) if isinstance(session_meta, dict) else False,
-                isinstance(session_meta.get("fork_runtime_config"), dict)
-                and bool((session_meta.get("fork_runtime_config") or {}).get("system_segments"))
-                if isinstance(session_meta, dict)
-                else False,
-            )
+            from session_system_context import effective_system_context, effective_system_context_mode
+
+            _static_key = _session_static_cache_key(str(state.get("session_id") or ""), session_meta)
             static_entry = _STATIC_SEGMENTS_PROCESS_CACHE.get(_static_key)
             static_segments_cached = isinstance(static_entry, tuple)
             static_segments: tuple
@@ -5810,7 +5817,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     "registry": tool_registry,
                     "definitions": combined_tools,
                 }
-            runtime_config_revision = (static_revision, tool_revision)
+            runtime_config_revision = (static_revision, tool_revision, _static_key)
             last_prompt_runtime_config = state.get("_last_prompt_runtime_config")
             if (
                 not isinstance(last_prompt_runtime_config, dict)
@@ -5820,6 +5827,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 last_prompt_runtime_config = {
                     "version": 1,
                     "system_segments": list(static_segments),
+                    "system_context": effective_system_context(session_meta),
+                    "system_context_mode": effective_system_context_mode(session_meta),
                     "tools": combined_tools,
                     "authorized_tools": [
                         descriptor.openai_definition() for descriptor in tool_registry.descriptors()
@@ -6793,12 +6802,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "allow_external_workspace_once",
                             }:
                                 try:
-                                    from session_authorized_dirs import add_authorized_dir
+                                    from session_authorized_dirs import add_authorized_dir, authorize_dir_for_current_tool
                                     req_dirs = list(spec.get("required_dirs") or [])
                                     if not req_dirs:
                                         req_dirs = list(sec_decision.constraints.get("required_dirs") or [])
                                     for rd in req_dirs:
-                                        add_authorized_dir(state["session_id"], rd)
+                                        if approval_decision == "allow_external_workspace":
+                                            add_authorized_dir(state["session_id"], rd)
+                                        else:
+                                            authorize_dir_for_current_tool(state["session_id"], rd)
                                 except Exception as e:
                                     import logging
                                     logging.getLogger(__name__).warning("add_authorized_dir failed: %s", e)
@@ -7496,7 +7508,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     before_workspace = None
                 audit_before_ms = _timing_ms(audit_before_started)
                 observed_tool_started = time.perf_counter()
-                result = await _execute_one_core(call)
+                from session_authorized_dirs import tool_directory_authorization_scope
+                with tool_directory_authorization_scope(state["session_id"]):
+                    result = await _execute_one_core(call)
                 # Every backend (native, plugin, MCP, host) passes this boundary.
                 # Keep the following workspace audit and result commit in the gap.
                 state["_last_tool_returned_perf"] = time.perf_counter()
@@ -7840,6 +7854,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 # preserves interactive-batch validation before side effects.
                 if tc and tc.get("name") in tool_search.BRIDGE_NAMES:
                     return
+                # A deferred control call can change the workspace/history.
+                # Later streamed tools must wait behind it and resolve paths
+                # only after its approval and execution complete.
+                for preceding_index in range(idx):
+                    preceding = _early_tool_call_from_acc(preceding_index)
+                    if not preceding or not _can_execute_closed_stream_tool(
+                        str(preceding.get("name") or ""),
+                        tool_registry.resolve(str(preceding.get("name") or "")),
+                    ):
+                        return
                 if not tc or not _can_execute_closed_stream_tool(
                     str(tc.get("name") or ""),
                     tool_registry.resolve(str(tc.get("name") or "")),

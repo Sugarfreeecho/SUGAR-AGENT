@@ -12,6 +12,7 @@ from typing import Any, Iterator
 from urllib.parse import urlsplit
 
 from trusted_domains import normalize_host
+from runtime_files import authorized_scratch_dirs
 
 from .models import (
     CapabilityRequest,
@@ -219,6 +220,14 @@ def _effective_shell_base(workdir_value: object, workspace: Path) -> Path | None
 def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) -> CapabilityRequest:
     name = str(tool_name or "").strip()
     args = dict(arguments or {})
+    if name == "switch_work_dir":
+        from agent_harness import normalize_session_work_dir
+        target = normalize_session_work_dir(args.get("work_dir"))
+        return CapabilityRequest.create(action="session.switch_work_dir",
+            resource=str(Path(target).resolve()) if target else str(args.get("work_dir") or ""),
+            effect="control", arguments={"arguments": args, "previous_root": str(workspace.resolve())},
+            metadata={"tool": name, "declared": True, "valid_directory": bool(target),
+                      "previous_root": str(workspace.resolve())})
     from execution_services.computer import tool_contract as computer_tool_contract
     computer_contract = computer_tool_contract(name)
     if computer_contract:
@@ -344,6 +353,7 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                     _auth_dirs = [workspace.resolve()]
             else:
                 _auth_dirs = [workspace.resolve()]
+            _auth_dirs = authorized_scratch_dirs(_auth_dirs, _session_id_for_auth or "")
             def _is_authorized_path(p: Path) -> bool:
                 for ad in _auth_dirs:
                     if is_within(p.resolve() if p.exists() else p, ad):
@@ -505,6 +515,7 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 _auth_dirs = get_authorized_dirs_for_session(_sess, workspace)
             else:
                 _auth_dirs = [workspace.resolve()]
+            _auth_dirs = authorized_scratch_dirs(_auth_dirs, _sess or "")
             _required = []
             _seen_req = set()
             for pp_str in paths:
@@ -710,6 +721,7 @@ def authorize_request(
         authorized_dirs = get_authorized_dirs_for_session(session_id, workspace)
     except Exception:
         authorized_dirs = [workspace.resolve()]
+    authorized_dirs = authorized_scratch_dirs(authorized_dirs, session_id)
     engine = PolicyEngine(workspace, store.policy_version(), authorized_dirs=authorized_dirs)
     if request.action.startswith("fs."):
         try:
@@ -837,7 +849,9 @@ def authorize_request(
         )
         rule_decision = engine.rule_decision(request, rules, workspace)
         if rule_decision is not None:
-            if rule_decision.outcome in {DecisionOutcome.DENY, DecisionOutcome.ASK}:
+            if rule_decision.outcome == DecisionOutcome.DENY or (
+                rule_decision.outcome == DecisionOutcome.ASK and not always_ask_for(decision)
+            ):
                 decision = rule_decision
             elif (
                 not always_ask_for(decision)
@@ -854,6 +868,7 @@ def authorize_request(
             try:
                 from session_authorized_dirs import get_authorized_dirs_for_session
                 auth_dirs = get_authorized_dirs_for_session(session_id, workspace)
+                auth_dirs = authorized_scratch_dirs(auth_dirs, session_id)
                 all_authorized = True
                 for rd in required_dirs:
                     try:

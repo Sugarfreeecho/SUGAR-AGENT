@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +31,10 @@ def main() -> int:
     child = [
         sys.executable,
         "-c",
-        "import socket; socket.create_connection(('1.1.1.1', 443), 3); print('UNEXPECTED_CONNECTION')",
+        "import socket, sys; print('EGRESS_CHILD_STARTED', flush=True)\n"
+        "try: socket.create_connection(('1.1.1.1', 443), 3)\n"
+        "except OSError: print('EGRESS_BLOCKED', flush=True); sys.exit(23)\n"
+        "else: print('UNEXPECTED_CONNECTION', flush=True)",
     ]
     request = CapabilityRequest.create(
         action="process.exec",
@@ -47,11 +51,15 @@ def main() -> int:
         "decision": decision,
         "workspace": ROOT,
     }
-    prepared = prepare_egress_launch(child, os.environ, command=command_text, active_context=active)
-    result = subprocess.run(prepared.argv, env=prepared.env, capture_output=True, text=True, timeout=15)
+    with tempfile.TemporaryDirectory(prefix="sugar-egress-selftest-") as directory:
+        active["workspace"] = Path(directory)
+        prepared = prepare_egress_launch(child, os.environ, command=command_text, active_context=active)
+        result = subprocess.run(prepared.argv, env=prepared.env, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", cwd=directory, timeout=15)
     combined = (result.stdout + result.stderr).strip()
-    if "UNEXPECTED_CONNECTION" in combined or result.returncode == 0:
-        print("FAIL: isolated child reached the network")
+    if ("UNEXPECTED_CONNECTION" in combined or result.returncode != 23 or
+            "EGRESS_CHILD_STARTED" not in combined or "EGRESS_BLOCKED" not in combined):
+        print(f"FAIL: isolated network denial was not demonstrated (exit={result.returncode})\n{combined}")
         return 1
     print(f"PASS: isolated child network attempt was blocked (exit={result.returncode})")
     return 0
