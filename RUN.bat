@@ -60,12 +60,9 @@ rem Re-check once; anything still missing is listed again and aborts the launch.
 if errorlevel 1 goto dependency_error
 
 :launch
-if not exist "%ROOT%app\native\sugaragent-egress-helper.exe" (
-  echo Building the Windows egress helper...
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\build_egress_helper_windows.ps1"
-  if errorlevel 1 (
-    echo Egress helper installation failed. SugarAgent will use degraded application-level protection.
-  )
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\build_egress_helper_windows.ps1" -IfNeeded
+if errorlevel 1 (
+  echo Egress helper update failed. Check the error above before running isolated commands.
 )
 "%PYTHON_EXE%" "%LAUNCHER_PY%"
 if errorlevel 1 pause

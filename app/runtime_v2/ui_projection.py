@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 import threading
 import uuid
 import time
@@ -16,6 +17,8 @@ from .ui_row_store import UiRowStore
 from .blob_store import BlobStore
 from .mirror import RuntimeMirror
 from .config import runtime_v2_enabled
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeUiProjection:
@@ -360,10 +363,18 @@ class RuntimeUiProjection:
         latest_truncate_seq = 0
         has_history_ops = False
         active_run_id = ""
-        for event in self.event_log.iter_events(session_id, end_offset=end_offset, read_metadata=read_metadata):
+        for event in self.event_log.iter_events(
+            session_id, end_offset=end_offset, read_metadata=read_metadata,
+            _skip_attachment_types=frozenset({"execution_recorded"}),
+        ):
             active_run_id = self._active_run_after_event(event, active_run_id)
             if read_metadata is not None:
                 read_metadata.update(last_runtime_seq=int(event.seq), last_run_id=active_run_id)
+            # These high-frequency facts feed ExecutionJournal, not chat rows.
+            # Preserve their sequence boundary without scanning their nested
+            # arguments/results for legacy images on a UI index rebuild.
+            if event.type == "execution_recorded":
+                continue
             if event.type == "runtime_snapshot_compacted":
                 baseline_ui = (event.payload or {}).get("ui_events")
                 out = [dict(item) for item in baseline_ui or [] if isinstance(item, dict)]
@@ -529,6 +540,9 @@ class RuntimeUiProjection:
             return self._read_or_build_ui_index_unlocked(session_id, diagnostics)
 
     def _read_or_build_ui_index_unlocked(self, session_id: str, diagnostics: Optional[dict] = None) -> dict:
+        # Recovery/summary prewarming also rebuilds indexes without an HTTP
+        # diagnostics dict. Keep the reason and timing observable there too.
+        diagnostics = {} if diagnostics is None else diagnostics
         signature = self._event_log_signature(session_id)
         path = self._ui_index_path(session_id)
         key = str(path.resolve())
@@ -545,10 +559,20 @@ class RuntimeUiProjection:
                 with path.open("r", encoding="utf-8") as fh:
                     data = json.load(fh)
             if data.get("row_locations") is not None:
-                if (data.get("row_version") != UI_ROW_PROJECTION_VERSION
-                        or len(data["row_locations"]) != int(data.get("total") or 0)
-                        or not source_matches(self.event_log.event_path(session_id), data["source"], full=cached is None)):
-                    raise ValueError("stale derived UI rows")
+                if data.get("row_version") != UI_ROW_PROJECTION_VERSION:
+                    if diagnostics is not None:
+                        diagnostics.update(index_rebuild_reason="row_version",
+                                           stored_row_version=data.get("row_version"),
+                                           expected_row_version=UI_ROW_PROJECTION_VERSION)
+                    raise ValueError("stale UI row version")
+                if len(data["row_locations"]) != int(data.get("total") or 0):
+                    if diagnostics is not None:
+                        diagnostics["index_rebuild_reason"] = "row_count"
+                    raise ValueError("stale UI row count")
+                if not source_matches(self.event_log.event_path(session_id), data["source"], full=cached is None):
+                    if diagnostics is not None:
+                        diagnostics["index_rebuild_reason"] = "source_validation"
+                    raise ValueError("stale UI row source")
             if (
                 isinstance(data, dict)
                 and int(data.get("index_version") or 0) == UI_PROJECTION_INDEX_VERSION
@@ -572,14 +596,32 @@ class RuntimeUiProjection:
                     if diagnostics is not None:
                         diagnostics["index"] = "extended"
                     return extended
-        except Exception:
-            pass
+            if diagnostics is not None:
+                diagnostics["index_rebuild_reason"] = (
+                    "index_version" if int(data.get("index_version") or 0) != UI_PROJECTION_INDEX_VERSION
+                    else "source_signature"
+                )
+        except Exception as exc:
+            if diagnostics is not None:
+                diagnostics.setdefault("index_rebuild_reason", "missing" if isinstance(exc, FileNotFoundError) else "invalid_index")
+                diagnostics["index_read_error"] = type(exc).__name__
+        build_started, build_cpu_started = time.perf_counter(), time.thread_time()
         try:
             if diagnostics is not None:
                 diagnostics["index"] = "rebuilt"
             return self._build_ui_index(session_id, signature)
-        except Exception:
+        except Exception as exc:
+            if diagnostics is not None:
+                diagnostics["index_build_error"] = type(exc).__name__
             return {}
+        finally:
+            if diagnostics is not None:
+                diagnostics["index_rebuild_ms"] = round((time.perf_counter() - build_started) * 1000, 3)
+                diagnostics["index_rebuild_cpu_ms"] = round((time.thread_time() - build_cpu_started) * 1000, 3)
+                logger.info("ui_projection_index_rebuild session=%s reason=%s elapsed_ms=%s thread_cpu_ms=%s error=%s",
+                            session_id, diagnostics.get("index_rebuild_reason", "unknown"),
+                            diagnostics["index_rebuild_ms"], diagnostics["index_rebuild_cpu_ms"],
+                            diagnostics.get("index_build_error", ""))
 
     def _remember_ui_index(self, path: Path, data: dict) -> None:
         key = str(path.resolve())
@@ -598,17 +640,26 @@ class RuntimeUiProjection:
         if signature is None:
             signature = self._event_log_signature(session_id)
         read_metadata = {"last_runtime_seq": 0, "last_run_id": "", "byte_offset": 0}
+        started, cpu_started = time.perf_counter(), time.thread_time()
         projected, latest_truncate_seq, has_history_ops = self._project_visible_ui_entries(
             session_id,
             hydrate=False,
             end_offset=int(signature[2]),
             read_metadata=read_metadata,
         )
-        return self._publish_ui_rows(session_id, projected, signature, read_metadata,
-                                     latest_truncate_seq, has_history_ops)
+        timings = {"project_ms": round((time.perf_counter() - started) * 1000, 3),
+                   "project_cpu_ms": round((time.thread_time() - cpu_started) * 1000, 3)}
+        read_metadata["_build_timings"] = timings
+        try:
+            return self._publish_ui_rows(session_id, projected, signature, read_metadata,
+                                         latest_truncate_seq, has_history_ops)
+        finally:
+            logger.info("ui_projection_index_build_phases session=%s timings=%s", session_id, timings)
 
     def _publish_ui_rows(self, session_id, projected, signature, read_metadata,
                          latest_truncate_seq, has_history_ops):
+        timings = read_metadata.get("_build_timings")
+        started = time.perf_counter()
         entries: List[tuple[int, str, str]] = []
         react_order_tail: Optional[List[int]] = None
         for ui in projected:
@@ -643,17 +694,31 @@ class RuntimeUiProjection:
             "user_turns": user_turns,
         }
         path = self._ui_index_path(session_id)
+        if timings is not None:
+            timings["metadata_ms"] = round((time.perf_counter() - started) * 1000, 3)
         if signature[0]:
+            started = time.perf_counter()
             boundary = source_boundary(self.event_log.event_path(session_id), read_metadata["byte_offset"])
             if read_metadata.get("identity") != boundary["identity"]:
                 raise ValueError("event source changed during UI projection")
             source = seal_source(self.event_log.event_path(session_id), boundary)
+            if timings is not None:
+                timings["source_validation_ms"] = round((time.perf_counter() - started) * 1000, 3)
             store = UiRowStore(path.parent)
+            started = time.perf_counter()
             name, locations = store.write(projected)
+            if timings is not None:
+                timings["row_write_ms"] = round((time.perf_counter() - started) * 1000, 3)
             data.update(row_version=UI_ROW_PROJECTION_VERSION, row_files=[name],
                         row_locations=locations, source=source)
+        started = time.perf_counter()
         self._write_ui_index(path, data)
+        if timings is not None:
+            timings["index_write_ms"] = round((time.perf_counter() - started) * 1000, 3)
+        started = time.perf_counter()
         self._remember_ui_index(path, data)
+        if timings is not None:
+            timings["memory_publish_ms"] = round((time.perf_counter() - started) * 1000, 3)
         if data.get("row_files"):
             store.cleanup(data["row_files"])
         return data
@@ -903,6 +968,36 @@ class RuntimeUiProjection:
 
     def _cache_key(self, session_id: str) -> str:
         return f"{self.sessions_dir.resolve()}::{session_id}"
+
+    def has_unanswered_user(self, session_id: str) -> bool:
+        """Inspect visible turn boundaries without hydrating tools/images.
+
+        Session summaries ask this on every visit. Replaying all runtime facts
+        and loading every historical blob for a boolean starves other readers.
+        The derived index already incorporates edits and compacted baselines.
+        """
+        index = self._read_or_build_ui_index(session_id)
+        if not index:
+            raise RuntimeError("Visible session history is unavailable")
+        users = index.get("user_indices") or []
+        if not users:
+            return False
+        locations = index.get("row_locations")
+        if locations is not None:
+            store = UiRowStore(self._ui_index_path(session_id).parent)
+            start = int(users[-1]) + 1
+            end = int(index.get("total") or 0)
+            while end > start:
+                first = max(start, end - 64)
+                rows = store.read(index["row_files"], locations[first:end])
+                if any(row.get("type") == "final" for row in rows):
+                    return False
+                end = first
+            return True
+        # Pre-row indexes remain readable until their next projection rebuild.
+        events = self.read_ui_events(session_id)
+        last_user = max((i for i, row in enumerate(events) if row.get("type") == "user"), default=-1)
+        return last_user >= 0 and not any(row.get("type") == "final" for row in events[last_user + 1:])
 
     def read_ui_page(
         self,

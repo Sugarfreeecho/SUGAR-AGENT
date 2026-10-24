@@ -51,7 +51,7 @@ function createRow(ctx, type, text) {
   return scroller;
 }
 function runtime() {
-  const c = vm.createContext({console, Date, Number, String, Array, Object, Map, Set, JSON, TextDecoder,
+  const c = vm.createContext({console, Date, Number, String, Array, Object, Map, Set, JSON, TextDecoder, setTimeout,
     replayingMessages: false, currentSessionId: 'parent', SSE_IDLE_TIMEOUT_MS: 1000,
     readSseChunkWithIdleTimeout: reader => reader.read(),
     sessionStore: {shouldAcceptSseEvent: () => true}, consumeExtensionControlEvent: () => false,

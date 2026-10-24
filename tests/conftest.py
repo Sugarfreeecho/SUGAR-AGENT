@@ -20,6 +20,17 @@ os.environ.setdefault("RUNTIME_V2_SNAPSHOT_INLINE_GRACE_MS", "50")
 
 
 @pytest.fixture(autouse=True)
+def isolated_runtime_lifecycle(monkeypatch, tmp_path):
+    app_dir = str(Path(__file__).resolve().parents[1] / "app")
+    if app_dir not in sys.path:
+        sys.path.insert(0, app_dir)
+    import runtime_lifecycle
+    monkeypatch.setattr(runtime_lifecycle, "state_path", lambda: tmp_path / "runtime-lifecycle.sqlite3")
+    monkeypatch.setattr(runtime_lifecycle, "_service", None)
+    monkeypatch.setattr(runtime_lifecycle, "_exit_callback", None)
+
+
+@pytest.fixture(autouse=True)
 def isolated_tool_disclosure_config(monkeypatch, tmp_path):
     """Tests must not inherit or overwrite the user's live disclosure setting."""
     app_dir = str(Path(__file__).resolve().parents[1] / "app")

@@ -563,6 +563,14 @@ class SubagentTaskRegistry:
         await self.unregister(child_id, run_id)
         return True
 
+    async def cancel_for_restart(self) -> None:
+        from session_lifecycle import _cancel_tasks
+        with self._lock:
+            tasks = list(self._tasks.values())
+        # The lifecycle service already persisted process_restart for each run.
+        # Unlike a user stop, do not replace that reason with a manual interrupt.
+        await _cancel_tasks(tasks)
+
     async def cancel_for_parent(
         self,
         parent_session_id: str,

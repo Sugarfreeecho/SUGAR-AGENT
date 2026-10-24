@@ -63,13 +63,13 @@ StartLimitBurst=3
 [Service]
 Type=simple
 WorkingDirectory={_systemd_quote(root)}
-ExecStart={_systemd_quote(python_exe)} {_systemd_quote(root / "app" / "main.py")}
+ExecStart={_systemd_quote(python_exe)} {_systemd_quote(root / "app" / "lifecycle_supervisor.py")} serve
 Environment=PYTHONIOENCODING=utf-8
 Environment=OPEN_BROWSER=0
 Environment=MYAGENT_SERVER_PORT=8192
 Restart=on-failure
 RestartSec=2
-TimeoutStopSec=15
+TimeoutStopSec=25
 KillMode=mixed
 
 [Install]
@@ -139,7 +139,7 @@ def install_macos(
         server_plist,
         {
             "Label": LAUNCHD_SERVER_LABEL,
-            "ProgramArguments": [str(python_exe), str(root / "app" / "main.py")],
+            "ProgramArguments": [str(python_exe), str(root / "app" / "lifecycle_supervisor.py"), "serve"],
             "WorkingDirectory": str(root),
             "EnvironmentVariables": common_env,
             "RunAtLoad": True,

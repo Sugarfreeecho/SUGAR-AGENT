@@ -53,7 +53,7 @@ function runtime() {
   }};
   const ctx = {stream, currentProcessGroup: group, processGroupId: groupId, runId: oldRun, reactGeneration: 0,
     llm: {llmDeltaLastSeq: null, llmStreamReasoningIter: null, llmStreamReasoningScroller: null}};
-  const c = vm.createContext({console, Math, Number, String, Map, Set, Object, Array, JSON, Date, Promise, TextDecoder,
+  const c = vm.createContext({console, Math, Number, String, Map, Set, Object, Array, JSON, Date, Promise, TextDecoder, setTimeout,
     replayingMessages: false, currentSessionId: 's', streamHistoryRecoveryBySession: new Set(),
     document: {dispatchEvent() {}}, CustomEvent: function () {},
     resetLlmState(target) { resets++; target.llm = {llmDeltaLastSeq: null, llmStreamReasoningIter: null, llmStreamReasoningScroller: null}; },

@@ -23,7 +23,7 @@ async function main() {
     return selector === '.process-aggregate' ? [group] : rows;
   }};
   const ctx = {stream, currentProcessGroup:group};
-  const c = vm.createContext({Map, Object, String, Number, Array, JSON, replayingMessages:true,
+  const c = vm.createContext({Map, Object, String, Number, Array, JSON, setTimeout, replayingMessages:true,
     findToolCallRow: (_ctx,id) => rows.find(row => row.dataset.toolCallId === id),
     createProcessFeedRow: (_ctx,_type,text) => {
       const row = node('feed-item');

@@ -38,15 +38,20 @@ def test_completed_tools_keep_separate_contiguous_facts_and_one_append(tmp_path,
 
 
 def test_batch_failure_propagates_and_never_publishes_partial_projection(tmp_path, monkeypatch):
+    # This assertion is about failed batch publication, not the independent
+    # background checkpoint race from the successful initial user append.
+    monkeypatch.setenv("RUNTIME_V2_ASYNC_SNAPSHOT_CHECKPOINTS", "false")
     ops = RuntimeHistoryOps(tmp_path)
     ops.append_model_message("s", "user", "question")
     before = ops.snapshots.read("s")
+    assert before["last_seq"] == 1
     def fail(*a, **k):
         raise OSError("batch write failed")
     monkeypatch.setattr(ops.event_log, "_append_many_unlocked", fail)
     with pytest.raises(OSError, match="batch write failed"):
         ops.append_model_tool_results("s", [{"tool_call_id": "t", "content": "result"}])
     assert ops.snapshots.read("s") == before
+    assert [event.type for event in ops.event_log.read_all("s")] == ["model_user"]
 
 
 def test_large_batch_is_not_retained_as_owned_tail(tmp_path):

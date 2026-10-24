@@ -53,6 +53,15 @@ def _sid(session_id: str) -> str:
     return str(session_id or "").strip()
 
 
+async def publish_lifecycle_event(operation: dict) -> None:
+    """Notify existing observers without opening another per-session stream."""
+    with _lock:
+        session_ids = list(_subscribers)
+    for session_id in session_ids:
+        await publish_session_event(session_id, {"type": "lifecycle_changed", "operation": operation,
+                                                "ephemeral": True, "control_event": True})
+
+
 @local_timed("event_publish")
 async def publish_session_event(session_id: str, event: Dict[str, Any]) -> None:
     sid = _sid(session_id)

@@ -52,6 +52,15 @@ def test_pre_migration_fence_is_distinct_from_corrupt_fence(tmp_path):
     assert run_ownership.inspect_run_fence(path).status == "unknown"
 
 
+@pytest.mark.parametrize("started", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_owner_time_is_unverifiable(monkeypatch, tmp_path, started):
+    import run_ownership
+    path = tmp_path / "active_run_fence.json"
+    path.write_text(json.dumps({"run_id": "r", "owner_pid": 4567, "owner_started_at": started}))
+    monkeypatch.setattr(run_ownership, "_process_start_time", lambda _: ("live", 123.0))
+    assert run_ownership.inspect_run_fence(path).status == "unknown"
+
+
 def test_fence_tracks_a_different_process_until_it_exits(tmp_path):
     import run_ownership
 

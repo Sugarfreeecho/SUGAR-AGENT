@@ -1,4 +1,4 @@
-"""Measure the real Agent loop against a loopback SSE or JSON model, with durable sessions.
+r"""Measure the real Agent loop against a loopback SSE or JSON model, with durable sessions.
 
 Only the model, title generation and remote connection warmup are replaced.
 Runtime history, tools, plugin callbacks, streaming and HTTP send use production code.
@@ -58,6 +58,25 @@ def distribution(values: list[float]) -> dict:
             "over_500ms": sum(value >= 500 for value in values)}
 
 
+def seed_archived_sessions(session_manager, scratch: Path, count: int, task_dirs: int) -> list[str]:
+    """Use real session namespaces and metadata, not rejected dummy directories."""
+    assert session_manager.sessions_dir.resolve().is_relative_to(scratch.resolve())
+    session_ids = []
+    for _ in range(count):
+        session_id, *_ = session_manager.get_or_create_session(work_dir=str(scratch))
+        session_manager.set_session_archived(session_id, True)
+        directory = session_manager.sessions_dir / session_id
+        (directory / "runtime_observability.json").write_text(json.dumps({
+            "version": 1, "session_id": session_id,
+            "runs": [{"run_id": "archived", "status": "finished"}],
+        }), encoding="utf-8")
+        for child in range(task_dirs):
+            (directory / "files/node_modules" / f"package-{child}" / "dist").mkdir(parents=True)
+        assert session_manager._load_metadata(session_id).get("archived") is True
+        session_ids.append(session_id)
+    return session_ids
+
+
 def benchmark(args, scratch: Path) -> dict:
     os.environ.update({
         "MYAGENT_DOTENV_OVERRIDE": "0", "WORK_DIR": str(scratch),
@@ -72,6 +91,7 @@ def benchmark(args, scratch: Path) -> dict:
     import runtime_observability
     from runtime_v2 import RuntimeHistoryOps, RuntimeProjector, SnapshotStore
     from openai import OpenAI
+    assert harness.session_manager.sessions_dir.resolve().is_relative_to(scratch.resolve())
     if args.watchdog_full_scan_ms:
         runtime_observability._FULL_SCAN_INTERVAL_SEC = args.watchdog_full_scan_ms / 1000
 
@@ -84,15 +104,8 @@ def benchmark(args, scratch: Path) -> dict:
         if args.fixture_source:
             fixture = args.fixture_source.read_text(encoding="utf-8")
         (scratch / f"fixture-{index}.txt").write_text(fixture, encoding="utf-8")
-    for index in range(args.archived_sessions):
-        directory = harness.session_manager.sessions_dir / f"benchmark-archive-{index}"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / "runtime_observability.json").write_text(json.dumps({
-            "version": 1, "session_id": directory.name,
-            "runs": [{"run_id": "archived", "status": "finished"}],
-        }), encoding="utf-8")
-        for child in range(args.archived_task_dirs):
-            (directory / "files/node_modules" / f"package-{child}" / "dist").mkdir(parents=True)
+    archived_session_ids = seed_archived_sessions(
+        harness.session_manager, scratch, args.archived_sessions, args.archived_task_dirs)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -186,6 +199,11 @@ def benchmark(args, scratch: Path) -> dict:
 
     async def one_case(name: str, long_history: bool) -> dict:
         sid, *_ = harness.session_manager.get_or_create_session(work_dir=str(scratch))
+        parent_sid = None
+        if args.subagent:
+            parent_sid = sid
+            sid = harness.session_manager.create_subagent_session(
+                parent_sid, "interround benchmark", "generalPurpose", 1)
         ops = RuntimeHistoryOps(harness.session_manager.sessions_dir,
                                 path_resolver=harness.session_manager._resolve_session_path)
         if long_history:
@@ -225,10 +243,25 @@ def benchmark(args, scratch: Path) -> dict:
         if profile is not None:
             profile.enable()
         try:
-            async for event in agent.astream_events("Read each benchmark fixture, then finish.",
-                                                    session_id=sid, context_token_mode=args.token_mode):
-                if event.get("type") == "error":
-                    errors.append(str(event.get("content") or event.get("message")))
+            if args.subagent:
+                from agent_subagent import _execute_subagent_run, subagent_registry
+                async def parent_emit(event):
+                    if event.get("type") == "error":
+                        errors.append(str(event.get("content") or event.get("message")))
+                await _execute_subagent_run(
+                    child_id=sid, parent_session_id=parent_sid, user_text="Read each benchmark fixture, then finish.",
+                    description="interround benchmark", subagent_type="generalPurpose", resumed=False,
+                    parent_emit=parent_emit, run_in_background=args.subagent_background,
+                )
+                if args.subagent_background:
+                    await subagent_registry.wait(sid, timeout=args.timeout)
+                    if subagent_registry.is_running(sid):
+                        raise TimeoutError("background benchmark subagent did not finish")
+            else:
+                async for event in agent.astream_events("Read each benchmark fixture, then finish.",
+                                                        session_id=sid, context_token_mode=args.token_mode):
+                    if event.get("type") == "error":
+                        errors.append(str(event.get("content") or event.get("message")))
         finally:
             watchdog_stop.set()
             if watchdog_task is not None:
@@ -240,6 +273,8 @@ def benchmark(args, scratch: Path) -> dict:
         execution_metrics.flush(sid)
         data = execution_metrics._load(sid)
         run = data["runs"][-1]
+        if args.subagent and (not run.get("run_id") or run.get("status") != "finished"):
+            raise RuntimeError(f"subagent must have a distinct finished run: {run.get('run_id')!r} {run.get('status')}")
         requests = run["requests"]
         if isinstance(requests, dict):
             requests = list(requests.values())
@@ -274,16 +309,37 @@ def benchmark(args, scratch: Path) -> dict:
         # its files; otherwise Windows can race its open/replace with rmtree.
         from runtime_v2.execution_journal import ExecutionJournal
         from runtime_v2.recovery_checkpoint import RecoveryCheckpoint
-        assert RecoveryCheckpoint.wait(ExecutionJournal(
+        recovery_journal = ExecutionJournal(
             harness.session_manager.sessions_dir,
-            path_resolver=harness.session_manager._resolve_session_path), sid, 10)
-        return {"case": name, "session_id": sid, "long_history": long_history,
+            path_resolver=harness.session_manager._resolve_session_path)
+        assert RecoveryCheckpoint.wait(recovery_journal, sid, 10)
+        with recovery_journal._session_lock(sid):
+            recovery_state = recovery_journal._state(sid)
+        RecoveryCheckpoint.schedule(recovery_journal, sid, recovery_state, force=True)
+        assert RecoveryCheckpoint.wait(recovery_journal, sid, 10)
+        recovered = RecoveryCheckpoint.load(recovery_journal, sid)
+        if recovered is None or recovered["seq"] != recovery_state["seq"]:
+            raise RuntimeError("benchmark execution recovery checkpoint was not saved and validated")
+        from runtime_v2 import RuntimeModelProjection
+        durable = RuntimeModelProjection(harness.session_manager.sessions_dir,
+            path_resolver=harness.session_manager._resolve_session_path).read_message_dicts(sid)
+        expected_ids = {f"call-{step}-{slot}" for step in range(args.steps) for slot in range(args.tools_per_round)}
+        durable_tools = [row for row in durable if row.get("type") == "tool"]
+        if (len(durable_tools) != len(expected_ids)
+                or {row.get("tool_call_id") for row in durable_tools} != expected_ids):
+            raise RuntimeError("benchmark durable model history lost or duplicated a tool result")
+        return {"case": name, "session_id": sid, "parent_session_id": parent_sid, "run_id": run["run_id"],
+                "long_history": long_history,
+                "injected_load": {"cpu_workers": args.stress_workers if name.startswith("loaded") else 0,
+                                  "io_workers": 1 if name.startswith("loaded") else 0},
                 "run_elapsed_ms": round((completed - entered) * 1000, 3),
                 "post_run_checkpoint_wait_ms": round((time.perf_counter() - checkpoint_wait_started) * 1000, 3),
                 "initial_log_bytes": initial_log_bytes, "history_messages": args.long_messages if long_history else 0,
                 "http_requests": Handler.counter, "first_request_from_entry_ms": round(
                     (traces[0]["anchors"]["http_headers_started"] - entered) * 1000, 3),
                 "successful_tools": len(tool_rows),
+                "durable_model_tools": len(durable_tools),
+                "recovery_checkpoint_validated": True,
                 "watchdog_scans": watchdog_samples,
                 "cache_counts": cache_counts,
                 "tool_to_headers": distribution([trace["tool_return_to_headers_ms"] for trace in measured]),
@@ -296,6 +352,9 @@ def benchmark(args, scratch: Path) -> dict:
     replay_observations = []
     try:
         with ExitStack() as patches:
+            if args.reference_ui_row_commits:
+                patches.enter_context(patch.object(harness.SessionManager, "_commit_display_batch_if_supported",
+                                                    lambda *a, **k: None))
             if args.reference_disk_reads:
                 from runtime_v2.event_log import SessionEventLog
                 patches.enter_context(patch.object(SessionEventLog, "recent_owned_append", lambda *a, **k: None))
@@ -444,7 +503,9 @@ def benchmark(args, scratch: Path) -> dict:
         client.close()
         execution_metrics.flush()
         gc.collect()
-    return {"scope": "Production astream_events with a loopback SSE model; no paid API calls",
+    return {"scope": ("Production task subagent" if args.subagent else "Production astream_events")
+                     + " with a loopback model; no paid API calls",
+            "subagent": {"enabled": args.subagent, "background": args.subagent_background},
             "scratch": {"parent": str(scratch.parent), "volume": scratch.drive},
             "python": {"executable": sys.executable, "version": sys.version},
             "snapshot_inline_grace_ms": os.environ["RUNTIME_V2_SNAPSHOT_INLINE_GRACE_MS"],
@@ -454,9 +515,12 @@ def benchmark(args, scratch: Path) -> dict:
             "tools_per_round": args.tools_per_round,
             "execution_records": args.execution_records,
             "reference_disk_reads": args.reference_disk_reads,
+            "reference_ui_row_commits": args.reference_ui_row_commits,
             "stream": {"enabled": not args.non_stream, "fragments": args.stream_fragments, "fragment_interval_ms": args.fragment_interval_ms,
                        "usage_included": True, "fixture_source": str(args.fixture_source) if args.fixture_source else None},
             "watchdog": {"archived_sessions": args.archived_sessions,
+                         "archive_session_ids": archived_session_ids,
+                         "archive_metadata_validated": True,
                          "archived_task_dirs": args.archived_task_dirs,
                          "interval_ms": args.watchdog_interval_ms,
                          "full_scan_ms": args.watchdog_full_scan_ms or runtime_observability._FULL_SCAN_INTERVAL_SEC * 1000},
@@ -472,6 +536,7 @@ def main():
     parser.add_argument("--tools-per-round", type=int, default=1, help="Native tool calls in each model response")
     parser.add_argument("--execution-records", type=int, default=0, help="Completed execution records seeded into long cases")
     parser.add_argument("--reference-disk-reads", action="store_true", help="A/B reference using disk reads and recursive enumeration")
+    parser.add_argument("--reference-ui-row-commits", action="store_true", help="Reference using individual journal/UI commits with the same facts")
     parser.add_argument("--tool", choices=("read_file", "write_file", "run_shell"), default="read_file")
     parser.add_argument("--token-mode", choices=("hybrid", "calculated"), default="hybrid")
     parser.add_argument("--long-messages", type=int, default=1000)
@@ -484,6 +549,8 @@ def main():
     parser.add_argument("--stream-fragments", type=int, default=1, help="Reasoning and argument fragments per response")
     parser.add_argument("--fragment-interval-ms", type=float, default=0, help="Loopback stream frame spacing")
     parser.add_argument("--non-stream", action="store_true", help="Exercise the production non-streaming request path with JSON replies")
+    parser.add_argument("--subagent", action="store_true", help="Measure the actual task subagent entry and child delivery")
+    parser.add_argument("--subagent-background", action="store_true", help="Run --subagent on its persistent background loop")
     parser.add_argument("--fixture-source", type=Path, help="Read-only source copied into disposable read fixtures")
     parser.add_argument("--archived-sessions", type=int, default=0, help="Disposable archived observability files")
     parser.add_argument("--archived-task-dirs", type=int, default=0, help="Task package directories under each archived session")
@@ -495,6 +562,10 @@ def main():
     parser.add_argument("--load-path", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--load-ready-path", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.subagent_background and not args.subagent:
+        parser.error("--subagent-background requires --subagent")
+    if args.subagent and args.token_mode != "hybrid":
+        parser.error("task subagent currently uses hybrid counting; --token-mode calculated is main-only")
     if args.load_worker:
         load_worker(args.load_worker, args.load_path, args.load_ready_path)
         return

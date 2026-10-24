@@ -198,4 +198,8 @@ if __name__ == "__main__":
         
     fastapi_app.router.lifespan_context = lifespan
 
-    uvicorn.run(fastapi_app, host=_listen_host, port=_listen_port)
+    server = uvicorn.Server(uvicorn.Config(fastapi_app, host=_listen_host, port=_listen_port,
+                                          timeout_graceful_shutdown=10))
+    from runtime_lifecycle import set_exit_callback
+    set_exit_callback(lambda: setattr(server, "should_exit", True))
+    server.run()

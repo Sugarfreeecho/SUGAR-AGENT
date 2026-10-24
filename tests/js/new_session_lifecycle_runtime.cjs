@@ -307,6 +307,25 @@ async function clickWelcomeAction(attribute, value) {
   assert.strictEqual(directoryPath.textContent, menuWorkDir);
   assert.strictEqual(JSON.parse(createRequestOptions.body).work_dir, menuWorkDir);
 
+  // Visiting an existing conversation must not replace this unfinished draft
+  // with that conversation's workspace when the main New Session button returns.
+  const beforeReturn = postCalls;
+  ctx.setCurrentSessionState('visited-existing');
+  await ctx.startNewSessionInCurrentDir();
+  assert.strictEqual(postCalls, beforeReturn, 'switching away and back reuses the hidden draft');
+  assert.strictEqual(vm.runInContext('newSessionWorkDir', ctx), menuWorkDir);
+  ctx.syncWelcomeSessionDirectory();
+  assert.strictEqual(directoryPath.textContent, menuWorkDir);
+
+  // The chosen folder survives a reload even if no draft POST completed.
+  const restoreStart = source.indexOf('(function restorePendingNewSessionWorkDirOnce()');
+  const restoreEnd = source.indexOf('})();', restoreStart) + 5;
+  pendingStorage.delete('myagent-pending-new-session-id');
+  vm.runInContext('pendingNewSession = null; newSessionWorkDir = "";', ctx);
+  vm.runInContext(source.slice(restoreStart, restoreEnd), ctx);
+  assert.strictEqual(vm.runInContext('newSessionWorkDir', ctx), menuWorkDir);
+  ctx.setCurrentSessionState(null);
+
   await clickWelcomeAction('data-welcome-session-workdir', '');
   assert.strictEqual(directoryName.textContent, '默认工作目录');
   assert.strictEqual(JSON.parse(createRequestOptions.body).work_dir, undefined);

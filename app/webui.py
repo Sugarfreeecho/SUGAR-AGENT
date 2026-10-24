@@ -677,6 +677,10 @@ def _is_subagent_execution_active(sid: str) -> bool:
 
 
 def _reserve_session_chat_start(sid: str, run_id: str = "") -> Optional[str]:
+    from runtime_lifecycle import current, is_draining
+    lifecycle = current()
+    if is_draining() or (lifecycle and lifecycle.blocks_session(str(sid or "").strip())):
+        return None
     x = str(sid or "").strip()
     if not x:
         return ""
@@ -1205,13 +1209,15 @@ async def stop_react_recovery_runner() -> None:
     _react_recovery_scan_task = None
     if scan and not scan.done():
         scan.cancel()
-    workers = [task for task in _react_recovery_workers.values() if task and not task.done()]
+    workers = [task for task in [*_react_recovery_workers.values(), *_human_interaction_recovery_workers.values()]
+               if task and not task.done()]
     for task in workers:
         task.cancel()
     pending = [task for task in [scan, *workers] if task is not None]
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
     _react_recovery_workers.clear()
+    _human_interaction_recovery_workers.clear()
 
 
 def _runtime_v2_timestamp_age_seconds(value: Any) -> Optional[float]:
@@ -10029,7 +10035,13 @@ from fastapi.responses import RedirectResponse as _RedirectResponse
 @fastapi_app.middleware("http")
 async def _config_check(req: _Request, call_next):
     p = req.url.path
-    if p.startswith(("/api/attachments/", "/api/vision/")):
+    if p.startswith("/api/lifecycle/") or p == "/api/ready":
+        return await call_next(req)
+    from runtime_lifecycle import is_draining
+    if is_draining() and req.method not in {"GET", "HEAD", "OPTIONS"}:
+        return JSONResponse({"ok": False, "error": "服务正在保存状态并重启，请稍候"}, status_code=503,
+                            headers={"Retry-After": "2"})
+    if p.startswith(("/api/attachments/", "/api/vision/", "/api/speech/")):
         return await call_next(req)
     if p == "/api/upload-chat-files":
         try:
@@ -10290,6 +10302,16 @@ async def _warm_runtime_checkpoint_workers() -> None:
 
 async def start_webui_lifecycle() -> None:
     """Start Web UI services shared by the default and production lifespans."""
+    from runtime_lifecycle import configure
+    lifecycle = configure(session_manager)
+    # Shared by button, remote-control and plugin get_or_create_session calls.
+    # Refills run on a worker so filesystem latency cannot block event ingress.
+    session_manager.start_session_draft_reserve()
+    from runtime_files import cleanup_stale_scratch
+    try:
+        await asyncio.to_thread(cleanup_stale_scratch, WORK_DIR)
+    except OSError:
+        logger.warning("Startup scratch recovery deferred", exc_info=True)
     _warm_ui_caches()
     initialize_ui_attention_notifications()
     await _warm_runtime_checkpoint_workers()
@@ -10364,6 +10386,7 @@ async def start_webui_lifecycle() -> None:
 
     global _prompt_build_warmup_task
     _prompt_build_warmup_task = asyncio.create_task(_warm_first_request_task())
+    lifecycle.mark_ready()
 
 
 async def refresh_web_plugin_lifecycle() -> None:

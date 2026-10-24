@@ -138,6 +138,32 @@ def _load(session_id: str) -> dict:
     return data
 
 
+def _iter_object_with_chunked_array(value: Any, field: str, encode_item):
+    """Keep C encoding bounded to one request instead of a whole long session."""
+    def encode(item):
+        return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+
+    if not isinstance(value, dict) or not isinstance(value.get(field), list):
+        yield encode(value)
+        return
+    header = {key: item for key, item in value.items() if key != field}
+    yield encode(header)[:-1]
+    yield ("," if header else "") + encode(field) + ":["
+    for index, item in enumerate(value[field]):
+        if index:
+            yield ","
+        yield from encode_item(item)
+    yield "]}"
+
+
+def _iter_request_json(value: Any):
+    yield json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _iter_run_json(value: Any):
+    yield from _iter_object_with_chunked_array(value, "requests", _iter_request_json)
+
+
 def _write_now(session_id: str, data: dict) -> None:
     path = _path(session_id)
     if path is None:
@@ -145,7 +171,12 @@ def _write_now(session_id: str, data: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        # The background worker still shares the interpreter with HTTP and
+        # Agent threads. A single C encoder call on all historical requests can
+        # retain the GIL for hundreds of ms. Encode individual requests while
+        # keeping the same atomic whole-file publication and JSON semantics.
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.writelines(_iter_object_with_chunked_array(data, "runs", _iter_run_json))
         os.replace(tmp, path)
     except Exception:
         pass
@@ -507,7 +538,17 @@ def record_usage(
     with _lock:
         data = _load(session_id)
         req = _request(_run(data, run_id), react_iter)
-        req["usage"] = {str(k): v for k, v in (usage or {}).items() if isinstance(v, (str, int, float, bool)) or v is None}
+        clean = {str(k): v for k, v in (usage or {}).items() if isinstance(v, (str, int, float, bool)) or v is None}
+        # 同一轮里可能发不止一次请求（截断续写、失败重试、换模型重试）；
+        # 直接覆盖会只剩最后一次，token 就算少了。数值累加，非数值取最新。
+        previous = req.get("usage") if isinstance(req.get("usage"), dict) else {}
+        merged = dict(previous)
+        for key, value in clean.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                merged[key] = int(merged.get(key) or 0) + int(value)
+            else:
+                merged[key] = value
+        req["usage"] = merged
         _save(session_id, data)
     try:
         import runtime_observability

@@ -29,7 +29,7 @@ async function testDurableSubagentEventsKeepHistoryCursorCurrent() {
   const ctx = {streamConsuming: true, lastBusinessEventAt: Date.now() - 40000};
   const run = {ctx, controller: {abort() { aborted += 1; }}};
   const context = vm.createContext({
-    console, Date, Number, String, Promise, TextDecoder,
+    console, Date, Number, String, Promise, TextDecoder, setTimeout,
     SSE_IDLE_TIMEOUT_MS: 120000,
     currentSessionId: 's', streamHistoryRecoveryBySession: new Set(),
     sessionStore: {shouldAcceptSseEvent: () => true},

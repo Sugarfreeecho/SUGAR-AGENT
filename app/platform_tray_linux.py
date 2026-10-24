@@ -102,8 +102,12 @@ def run(root: Path) -> int:
         separator()
 
         def restart(_item) -> None:
-            if confirm("重启会中断当前正在运行的任务，是否继续？"):
-                background(backend.restart)
+            def request():
+                from platform_lifecycle import BASE_URL
+                from lifecycle_supervisor import request_manual_restart
+                request_manual_restart(BASE_URL)
+                open_webui()
+            background(request)
 
         def update(_item) -> None:
             if confirm("更新会中断当前任务并执行安全的 Git 快进更新，是否继续？"):

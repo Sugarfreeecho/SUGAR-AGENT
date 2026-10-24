@@ -79,9 +79,15 @@ def run(root: Path) -> int:
                 self._error(str(exc))
 
         def restartAgent_(self, _sender):
-            if not self._confirm("重启会中断当前正在运行的任务，是否继续？"):
-                return
-            threading.Thread(target=backend.restart, daemon=True).start()
+            def request():
+                try:
+                    from platform_lifecycle import BASE_URL
+                    from lifecycle_supervisor import request_manual_restart
+                    request_manual_restart(BASE_URL)
+                    open_webui()
+                except Exception as exc:
+                    self._error(str(exc))
+            threading.Thread(target=request, daemon=True).start()
 
         def updateAgent_(self, _sender):
             if not self._confirm("更新会中断当前任务并执行安全的 Git 快进更新，是否继续？"):

@@ -18,12 +18,13 @@ class UiRowStore:
         path = self.directory / name
         locations = []
         try:
-            with path.open("xb") as fh:
+            with path.open("xb", buffering=256 * 1024) as fh:
+                offset = 0
                 for row in rows:
                     encoded = (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-                    offset = fh.tell()
                     fh.write(encoded)
                     locations.append([file_number, offset, len(encoded), hashlib.sha256(encoded).hexdigest()])
+                    offset += len(encoded)
             return name, locations
         except Exception:
             path.unlink(missing_ok=True)

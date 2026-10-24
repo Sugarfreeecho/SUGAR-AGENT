@@ -46,6 +46,7 @@ class TerminalSession:
     pid: int | None = None
     process_created: float | None = None
     interruption: dict | None = None
+    scratch_lease: object | None = None
 
     def working_directory(self):
         """Read the live shell's directory, never infer it from prior input."""
@@ -97,7 +98,10 @@ class TerminalManager:
         task = asyncio.current_task()
         self.openings[task] = (owner, options.get("actor", "model"))
         try:
-            return await self._open(owner, **options)
+            from agent_tools import WORK_DIR
+            from runtime_files import run_scope
+            with run_scope(WORK_DIR, owner, "terminal-" + uuid.uuid4().hex):
+                return await self._open(owner, **options)
         finally:
             self.openings.pop(task, None)
 
@@ -167,6 +171,9 @@ class TerminalManager:
             from ptyprocess import PtyProcessUnicode
             spawn = lambda: PtyProcessUnicode.spawn(argv, cwd=cwd, env=env, dimensions=(40, 160))
         backend = None
+        from agent_tools import WORK_DIR
+        from runtime_files import current_run
+        scratch_lease = current_run(WORK_DIR).hold()
         try:
             starter = asyncio.create_task(asyncio.to_thread(spawn))
             try:
@@ -184,7 +191,8 @@ class TerminalManager:
             screen = pyte.HistoryScreen(160, 40, history=10000)
             session = TerminalSession(uuid.uuid4().hex, owner, name or "shell", cwd, actor,
                 backend, dialect, screen, pyte.Stream(screen), prompt_marker=prompt_marker, permission_mode=permission_mode,
-                pid=backend.pid)
+                pid=backend.pid, scratch_lease=scratch_lease)
+            scratch_lease.track_process(backend.pid)
             import psutil
             try:
                 session.process_created = psutil.Process(backend.pid).create_time()
@@ -202,6 +210,7 @@ class TerminalManager:
         except BaseException:
             if backend:
                 await asyncio.to_thread(backend.close, True)
+            await asyncio.to_thread(scratch_lease.release)
             raise
 
     async def _pump(self, session):
@@ -265,6 +274,8 @@ class TerminalManager:
                     await asyncio.to_thread(session.backend.close, True)
                 finally:
                     await self._persist(session)
+            if session.scratch_lease:
+                await asyncio.to_thread(session.scratch_lease.release)
 
     @staticmethod
     def viewport(session):
@@ -601,6 +612,8 @@ class TerminalManager:
                 except asyncio.TimeoutError:
                     session.reader.cancel()
             await self._persist(session)
+            if session.scratch_lease:
+                await asyncio.to_thread(session.scratch_lease.release)
         return session.public()
 
     async def list(self, owner, *, actor="model"):

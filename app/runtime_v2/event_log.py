@@ -460,9 +460,11 @@ class SessionEventLog:
         return list(rows)
 
     def iter_events(self, session_id: str, *, end_offset: Optional[int] = None,
-                    read_metadata: Optional[dict] = None) -> Iterable[RuntimeEvent]:
+                    read_metadata: Optional[dict] = None,
+                    _skip_attachment_types: frozenset[str] = frozenset()) -> Iterable[RuntimeEvent]:
         yield from self._iter_events_from_offset(session_id, 0, end_offset=end_offset,
-                                                read_metadata=read_metadata)
+                                                read_metadata=read_metadata,
+                                                _skip_attachment_types=_skip_attachment_types)
 
     def iter_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None,
                          read_metadata: Optional[dict] = None, buffer_suffix: bool = False) -> Iterable[RuntimeEvent]:
@@ -471,21 +473,28 @@ class SessionEventLog:
                                                  read_metadata=read_metadata, buffer_suffix=buffer_suffix)
 
     def _iter_events_from_offset(self, session_id: str, offset: int, *, end_offset: Optional[int] = None,
-                                 read_metadata: Optional[dict] = None, buffer_suffix: bool = False) -> Iterable[RuntimeEvent]:
+                                 read_metadata: Optional[dict] = None, buffer_suffix: bool = False,
+                                 _skip_attachment_types: frozenset[str] = frozenset()) -> Iterable[RuntimeEvent]:
         path = self.event_path(session_id)
         if not path.exists():
             return
         with self._event_read_stream(path, max(0, int(offset)), end_offset, buffer_suffix) as (fh, base, opened_stat):
+            # Track consumed bytes rather than asking BufferedReader.tell() on
+            # every row. On Windows tell() reaches the raw file position and
+            # yields the GIL, turning tens of thousands of short reads into
+            # long scheduling waits while startup workers are busy.
+            position = max(0, int(offset))
             if read_metadata is not None:
                 read_metadata["identity"] = [int(opened_stat.st_dev), int(opened_stat.st_ino)]
             line_number = 0
             while True:
-                remaining = None if end_offset is None else int(end_offset) - (base + fh.tell())
+                remaining = None if end_offset is None else int(end_offset) - position
                 if remaining is not None and remaining <= 0:
                     break
                 raw_line = fh.readline() if remaining is None else fh.readline(remaining)
                 if not raw_line:
                     break
+                position += len(raw_line)
                 # The snapshot may have observed a writer's partial last line.
                 # Leave that fact for the next read instead of decoding half JSON.
                 if end_offset is not None and not raw_line.endswith(b"\n"):
@@ -495,9 +504,17 @@ class SessionEventLog:
                 if not line:
                     continue
                 try:
-                    event = event_from_record(json.loads(line.decode("utf-8")))
+                    record = json.loads(line.decode("utf-8"))
+                    # A UI-only reader can omit image compatibility scans on
+                    # facts it never renders. Every envelope is still decoded
+                    # and schema-validated; ordinary/model readers migrate all.
+                    skip_images = (
+                        _skip_attachment_types and isinstance(record, dict)
+                        and record.get("type") in _skip_attachment_types
+                    )
+                    event = RuntimeEvent.from_dict(record) if skip_images else event_from_record(record)
                     if read_metadata is not None:
-                        read_metadata.update(byte_offset=base + fh.tell(), last_runtime_seq=int(event.seq))
+                        read_metadata.update(byte_offset=position, last_runtime_seq=int(event.seq))
                     yield event
                 except Exception as exc:
                     raise RuntimeEventLogCorruptionError(
@@ -528,7 +545,9 @@ class SessionEventLog:
                     with io.BytesIO(data) as stream:
                         yield stream, offset, stat
                     return
-        with path.open("rb") as stream:
+        # Rebuilds stream large fact logs; a bounded larger buffer reduces
+        # file reads/GIL handoffs without materializing the whole history.
+        with path.open("rb", buffering=256 * 1024) as stream:
             stream.seek(offset)
             yield stream, 0, os.fstat(stream.fileno())
 

@@ -20,6 +20,7 @@ class LocalOperationTrace:
                              react_iter=react_iter, event_type=event_type)
         self.started = time.perf_counter()
         self.anchors = {"started": self.started}
+        self.mark_threads = {}
         if queued_at is not None:
             self.anchors["queued"] = queued_at
         self.spans = []
@@ -37,6 +38,7 @@ class LocalOperationTrace:
     def mark(self, name):
         with self._lock:
             self.anchors.setdefault(name, time.perf_counter())
+            self.mark_threads.setdefault(name, threading.get_ident())
 
     @contextmanager
     def step(self, name, *, min_ms=0):
@@ -61,9 +63,10 @@ class LocalOperationTrace:
             anchors = dict(self.anchors)
             spans = list(self.spans)
             dropped = self.dropped_spans
+            mark_threads = dict(self.mark_threads)
         return {**self.metadata, "clock": "perf_counter", "anchors": anchors,
                 "ended": ended, "elapsed_ms": round((ended - self.started) * 1000, 3),
-                "spans": spans, "dropped_spans": dropped}
+                "spans": spans, "dropped_spans": dropped, "mark_threads": mark_threads}
 
     def log(self):
         try:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import atexit
 import copy
+import errno
 import hashlib
 import json
 import logging
@@ -33,6 +34,7 @@ _cache: Dict[str, dict] = {}
 _versions: Dict[str, int] = {}
 _configuration_epoch = 0
 _flush_timers: Dict[str, threading.Timer] = {}
+_flush_failures: set[str] = set()
 _active_runs: set[tuple[str, str]] = set()
 _FLUSH_DELAY_SEC = max(
     0.05,
@@ -68,6 +70,7 @@ def configure(
         for timer in _flush_timers.values():
             timer.cancel()
         _flush_timers.clear()
+        _flush_failures.clear()
         _cache.clear()
         _versions.clear()
         _configuration_epoch += 1
@@ -126,17 +129,52 @@ def _flush_locked(session_id: str) -> None:
         timer.cancel()
     data = _cache.get(session_id)
     if data is not None:
-        _write(session_id, data)
+        try:
+            _write(session_id, data)
+        except OSError:
+            _flush_failures.add(session_id)
+            raise
+        _flush_failures.discard(session_id)
 
 
 def _flush_all_locked() -> None:
-    for session_id in list(_flush_timers):
+    for session_id in set(_flush_timers) | _flush_failures:
         _flush_locked(session_id)
 
 
 def _flush_timer_fired(session_id: str) -> None:
     with _lock:
-        _flush_locked(session_id)
+        # A cancelled callback must not consume a newer timer/configuration.
+        if _flush_timers.get(session_id) is not threading.current_thread():
+            return
+        try:
+            _flush_locked(session_id)
+        except OSError as exc:
+            # Windows readers can temporarily deny destination replacement.
+            # Retain the latest cached state and retry after the debounce;
+            # do not sleep/retry I/O while holding the shared live-state lock.
+            logging.getLogger(__name__).warning("observability flush deferred session=%s error=%s", session_id, type(exc).__name__)
+            if (getattr(exc, "winerror", None) in {5, 32, 33}
+                    or exc.errno in {errno.EINTR, errno.EAGAIN, errno.EBUSY}):
+                _arm_flush_timer_locked(session_id)
+
+
+def _arm_flush_timer_locked(sid: str) -> None:
+    if sid in _flush_timers:
+        return
+    timer = threading.Timer(_FLUSH_DELAY_SEC, _flush_timer_fired, args=(sid,))
+    timer.daemon = True
+    _flush_timers[sid] = timer
+    try:
+        timer.start()
+    except RuntimeError:
+        _flush_timers.pop(sid, None)
+        try:
+            _flush_locked(sid)
+        except OSError as exc:
+            # Explicit flush/terminal boundaries still surface failure. A
+            # diagnostics update cannot lose its dirty state or crash a run.
+            logging.getLogger(__name__).warning("observability flush retained session=%s error=%s", sid, type(exc).__name__)
 
 
 def _schedule_write(session_id: str, data: dict, *, force: bool = False) -> None:
@@ -146,18 +184,7 @@ def _schedule_write(session_id: str, data: dict, *, force: bool = False) -> None
     if force:
         _flush_locked(sid)
         return
-    if sid in _flush_timers:
-        return
-    timer = threading.Timer(_FLUSH_DELAY_SEC, _flush_timer_fired, args=(sid,))
-    timer.daemon = True
-    _flush_timers[sid] = timer
-    try:
-        timer.start()
-    except RuntimeError:
-        # Diagnostics must never make an agent run fail when the process is
-        # temporarily unable to allocate another native thread.
-        _flush_timers.pop(sid, None)
-        _write(sid, data)
+    _arm_flush_timer_locked(sid)
 
 
 def flush(session_id: Optional[str] = None) -> None:
@@ -425,7 +452,7 @@ def _scan_states(paths, epoch):
         sid = path.parent.name
         with _lock:
             version_before_read = _versions.get(sid, 0)
-            pending_before_read = sid in _flush_timers
+            pending_before_read = sid in _flush_timers or sid in _flush_failures
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -438,7 +465,7 @@ def _scan_states(paths, epoch):
                 return
             if _versions.get(sid, 0) != version_before_read:
                 continue  # A live update overtook this filesystem read.
-            if sid in _cache and (pending_before_read or sid in _flush_timers):
+            if sid in _cache and (pending_before_read or sid in _flush_timers or sid in _flush_failures):
                 data = _cache[sid]
             else:
                 _cache[sid] = data
@@ -706,6 +733,7 @@ def capture_workspace_state(work_dir: str | Path | None) -> dict:
             "__pycache__",
             ".pytest_cache",
             ".trash",
+            "TempOutput",
             "sessions",
         }
         limit = max(1000, int(os.getenv("FILE_AUDIT_MAX_FILES", "100000")))

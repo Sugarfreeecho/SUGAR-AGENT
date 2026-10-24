@@ -53,7 +53,7 @@ EXTERNAL_OPS_GRANTABLE_RULES = frozenset(
 )
 
 _POLICY_TAMPER = re.compile(
-    r"(?i)(?:app[\\/]+security|security\.sqlite3|windows-sandbox\.json|"
+    r"(?i)(?:app[\\/]+security|security\.sqlite3|runtime[-_]lifecycle|lifecycle_supervisor|windows-sandbox\.json|"
     r"hooks\.json|HOOKS_(?:PATH|CONFIG_PATH|ENABLED)|"
     r"permission_mode|full_access_enabled|auto_review_enabled|security_enabled|"
     r"disable[^\r\n]*(?:security|approval|firewall|defender)|"
@@ -139,7 +139,7 @@ def permission_context_for_mode(mode: object) -> PermissionContext:
 
 
 def forced_approval_for(decision: SecurityDecision) -> bool:
-    """Non-delete high-risk commands require a fresh human approval.
+    """High-risk commands and session root changes require fresh user approval.
 
     Rules in ``FORCED_APPROVAL_RULES`` cannot be satisfied by reusable rules,
     session/always grants, or the automatic reviewer. A human-created atomic
@@ -151,7 +151,7 @@ def forced_approval_for(decision: SecurityDecision) -> bool:
 def always_ask_for(decision: SecurityDecision) -> bool:
     """Operations that must surface a fresh human approval every time.
 
-    Covers dangerous commands (red-box, with consequences) only. Credential
+    Covers dangerous commands and session workspace switches. Credential
     reads inside the workspace are ordinary reads; credential reads outside
     the workspace are ordinary approvals and may be covered by rules.
     """

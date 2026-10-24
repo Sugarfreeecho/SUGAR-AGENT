@@ -26,7 +26,7 @@ function runtime({enabled = true, reduced = false} = {}) {
   const c = vm.createContext({console, TextDecoder, Date, Map, Set,
     window: {__MYAGENT_FEATURES__: {smoothStream: enabled}, matchMedia: () => ({matches: reduced})},
     performance: {now: () => now}, requestAnimationFrame(cb) {const id = next++; frames.set(id, cb); return id;},
-    cancelAnimationFrame: id => frames.delete(id), setTimeout: () => 1, clearTimeout() {},
+    cancelAnimationFrame: id => frames.delete(id), setTimeout: (fn, delay) => delay === 0 ? setTimeout(fn, 0) : 1, clearTimeout() {},
     currentSessionId: 's', replayingMessages: false, executionRecordsBySession: new Map(), executionRowsByStream: new WeakMap(),
     reactGenerationForContext: target => target.reactGeneration || 0, selectExecutionProcessGroup() {},
     removeTemporaryStatus() {}, refreshFeedChunkOverflow() {},

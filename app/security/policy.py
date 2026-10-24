@@ -60,14 +60,15 @@ _DANGEROUS_ALLOW_PREFIXES = frozenset(
     }
 )
 
-# Non-delete high-risk command categories that can never be auto-allowed by a
-# grant or the automatic reviewer: they surface a fresh human approval every
-# time. Workspace deletion uses its own ordinary yellow rules.
+# Non-delete high-risk commands and session root changes require fresh human
+# approval. Only an exact once grant may authorize their final execution;
+# reusable grants and automatic review cannot. Workspace deletion uses its own
+# ordinary yellow rules.
 # Dynamic code (`python -c`, `-EncodedCommand`, eval, ...) is an ordinary
 # (yellow) approval: it may be granted once or for the session, but never
 # becomes an "always allow" rule because its command prefixes are in
 # _DANGEROUS_ALLOW_PREFIXES.
-FORCED_APPROVAL_RULES = frozenset({"process.destructive"})
+FORCED_APPROVAL_RULES = frozenset({"process.destructive", "session.workspace_switch"})
 
 
 def canonical_path(raw: object, workspace: Path) -> Path:
@@ -140,6 +141,7 @@ def unsafe_windows_path(path: Path) -> bool:
 def security_control_path(path: Path) -> bool:
     controller_root = Path(__file__).resolve().parent
     app_root = controller_root.parent
+    mailbox = str(os.getenv("MYAGENT_LIFECYCLE_STATE_PATH") or "").strip()
     try:
         from .store import security_state_dir
 
@@ -148,6 +150,8 @@ def security_control_path(path: Path) -> bool:
         state_root = None
     return (
         is_within(path, controller_root)
+        or path in {app_root / "runtime_lifecycle.py", app_root / "lifecycle_supervisor.py"}
+        or bool(mailbox and is_within(path, Path(mailbox).resolve().parent))
         or path == (app_root / ".env")
         or bool(state_root is not None and is_within(path, state_root))
     )

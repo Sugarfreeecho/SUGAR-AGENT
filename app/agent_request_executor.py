@@ -34,7 +34,9 @@ async def run_request_worker(function, /, *args, trace=None, **kwargs):
     def call():
         if trace is not None:
             trace.mark("worker_entered")
-        return function(*args, **kwargs)
+        from agent_request_timing import send_path_scope
+        with send_path_scope("request_worker"):
+            return function(*args, **kwargs)
 
     if trace is not None:
         trace.mark("worker_submitted")

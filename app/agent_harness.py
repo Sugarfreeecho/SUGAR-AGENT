@@ -86,6 +86,10 @@ def dotenv_file_path() -> Path:
 
 
 def load_app_dotenv() -> None:
+    # Supervisor identity and mailbox are launch credentials, never settings.
+    launch_values = {key: value for key, value in os.environ.items()
+                     if key.startswith("MYAGENT_LIFECYCLE_") or key in {
+                         "MYAGENT_SUPERVISOR_PID", "MYAGENT_TRAY_PID", "MYAGENT_SERVER_PORT"}}
     primary = dotenv_file_path()
     # Normal app startup keeps the historical "app/.env wins" behavior.  A
     # child process that deliberately supplies an isolated WORK_DIR (for
@@ -100,6 +104,10 @@ def load_app_dotenv() -> None:
     if primary.is_file():
         dotenv.load_dotenv(primary, override=override_primary)
     dotenv.load_dotenv(override=False)
+    for key in list(os.environ):
+        if key.startswith("MYAGENT_LIFECYCLE_") and key not in launch_values:
+            os.environ.pop(key, None)
+    os.environ.update(launch_values)
 
 
 load_app_dotenv()
@@ -1126,6 +1134,11 @@ class RequestResponseLogger(httpx.Client):
         self._trace_pending: Optional[Dict[str, Any]] = None
         self._last_trace: Optional[Dict[str, Any]] = None
 
+    def build_request(self, *args, **kwargs):
+        from agent_request_timing import send_path_stage
+        with send_path_stage("http_request_build"):
+            return super().build_request(*args, **kwargs)
+
     def start_transport_trace(self) -> None:
         """Arm a trace for the next request issued from this thread.
 
@@ -1206,6 +1219,8 @@ class RequestResponseLogger(httpx.Client):
         return 0
 
     def send(self, request, *args, **kwargs):
+        from agent_request_timing import mark_send_path
+        mark_send_path("http_client_send_called")
         # Bind the armed context to this request so the callbacks keep writing
         # into it regardless of which thread drives the request, and so
         # concurrent requests cannot share one slot.
@@ -1216,6 +1231,8 @@ class RequestResponseLogger(httpx.Client):
         local_request_trace = (current or {}).get("local_request_trace") or current_request_trace()
         if local_request_trace is not None:
             local_request_trace.mark("http_send_entered")
+        mark_send_path("http_send_entered")
+        if local_request_trace is not None:
             if current is None:
                 self.start_transport_trace()
                 current = self._armed_context()
@@ -1281,6 +1298,7 @@ class RequestResponseLogger(httpx.Client):
         request.extensions = extensions
 
         _send_started = time.perf_counter()
+        mark_send_path("http_transport_delegate_entered")
         response = super().send(request, *args, **kwargs)
         _note_llm_connection_use()
         # Wall time of the whole delegate call: request write + server + the
@@ -1296,7 +1314,7 @@ class RequestResponseLogger(httpx.Client):
         return response
 
     def request(self, method, url, **kwargs):
-        headers = dict(kwargs.get("headers", {}))
+        headers = dict(kwargs.get("headers") or {})
         if "Authorization" in headers:
             headers["Authorization"] = "***REDACTED***"
         request_data = {
@@ -2356,6 +2374,8 @@ class ExecutorLLMClient:
         return self._stream_completion_iter(dict(kwargs))
 
     def _stream_completion_iter(self, kwargs: Dict[str, Any]) -> Any:
+        from agent_request_timing import mark_send_path
+        mark_send_path("facade_entered")
         last_error: Optional[BaseException] = None
         last_model = ""
         request_context = LLMRequestContext.from_value(kwargs.get("request_context"))
@@ -2371,6 +2391,7 @@ class ExecutorLLMClient:
         )
         attempted_candidates = 0
         for idx, item in enumerate(self.candidates):
+            mark_send_path("candidate_prepare_started")
             circuit_key = self._candidate_circuit_key(idx, item)
             if circuit_key in failed_candidates:
                 logger.info(
@@ -2438,6 +2459,7 @@ class ExecutorLLMClient:
             direct_transport = self._direct_transport(item) if idx == 0 else None
             if direct_transport is not None:
                 transport = direct_transport
+            mark_send_path("candidate_prepare_completed")
             emitted_output = False
             retry_attempts, retry_backoff = _candidate_retry_policy()
             retry_index = 0
@@ -2459,6 +2481,7 @@ class ExecutorLLMClient:
                     emitted_content = False
                     emitted_reasoning = False
                     _attempt_started = time.perf_counter()
+                    mark_send_path("provider_stream_entered")
                     for event in transport.stream_completion(**call_kwargs):
                         if background_text_request and not emitted_content:
                             if isinstance(event, TransportEvent) and event.kind == "reasoning_delta":
@@ -4116,15 +4139,17 @@ class SessionManager:
     @contextmanager
     def _session_path_resolution_scope(self):
         """Reuse guarded canonical paths for one runtime operation or fact transaction."""
+        from runtime_v2.read_probe import probe_owner
         scope_var = getattr(self, "_session_path_scope", None)
         if scope_var is None:
             scope_var = ContextVar(f"session_paths_{id(self)}", default=None)
             self._session_path_scope = scope_var
         previous = scope_var.get()
-        if previous is not None and previous["active"]:
+        owner = probe_owner()
+        if previous is not None and previous["active"] and previous.get("owner") == owner:
             yield
             return
-        scope = {"active": True, "paths": {}}
+        scope = {"active": True, "paths": {}, "owner": owner}
         token = scope_var.set(scope)
         try:
             yield
@@ -4140,9 +4165,10 @@ class SessionManager:
         parent_hint: Optional[str] = None,
         _seen: Optional[set[str]] = None,
     ) -> Path:
+        from runtime_v2.read_probe import probe_owner
         scope_var = getattr(self, "_session_path_scope", None)
         scope = scope_var.get() if scope_var is not None else None
-        if scope is None or not scope["active"]:
+        if scope is None or not scope["active"] or scope.get("owner") != probe_owner():
             return self._resolve_session_path_uncached(session_id, parent_hint=parent_hint, _seen=_seen)
         index_identity = self._session_subagent_index_identity()
         if scope.get("index_identity") != index_identity:
@@ -5477,6 +5503,13 @@ class SessionManager:
         from runtime_v2.execution_journal import ExecutionJournal
         from runtime_v2.read_probe import read_probe_scope
 
+        combined = (
+            self._commit_display_batch_if_supported(session_id, [event], cancel_event=cancel_event)
+            if hasattr(self, "_commit_display_batch_if_supported") else None
+        )
+        if combined is not None:
+            return combined[0]
+
         journal = ExecutionJournal(self.sessions_dir, self._resolve_session_path)
         def check_cancelled():
             if cancel_event is not None and cancel_event.is_set():
@@ -5493,6 +5526,12 @@ class SessionManager:
 
     def commit_execution_ui_events(self, session_id: str, events: List[Dict[str, Any]], *, cancel_event=None) -> List[Dict[str, Any]]:
         """Commit completed result rows in one synchronous, short transaction."""
+        combined = (
+            self._commit_display_batch_if_supported(session_id, events, cancel_event=cancel_event)
+            if hasattr(self, "_commit_display_batch_if_supported") else None
+        )
+        if combined is not None:
+            return combined
         from runtime_v2 import runtime_v2_react_transaction_timeout_seconds
         from runtime_v2.execution_journal import ExecutionJournal
         from runtime_v2.write_probe import batch_append_scope
@@ -5502,6 +5541,25 @@ class SessionManager:
         ), batch_append_scope(log.event_path(session_id)):
             return [self.commit_execution_ui_event(session_id, event, cancel_event=cancel_event)
                     for event in events]
+
+    def _commit_display_batch_if_supported(self, session_id, events, *, cancel_event=None):
+        # Honor customized/fake managers' append and side-effect protocols.
+        # Native managers share exactly the same preparation/mapping methods.
+        if any(getattr(getattr(self, name, None), "__func__", None) is not getattr(SessionManager, name)
+               for name in ("append_ui_event", "_mirror_ui_event_to_runtime_v2", "_apply_appended_ui_event_side_effects")):
+            return None
+        from runtime_v2 import runtime_v2_react_transaction_timeout_seconds
+        from runtime_v2.execution_ui_batch import commit_display_batch
+        return commit_display_batch(self, session_id, events,
+            prepare_ui_event=SessionManager._prepare_ui_event_for_append,
+            timeout_seconds=runtime_v2_react_transaction_timeout_seconds(), cancel_event=cancel_event)
+
+    @staticmethod
+    def _prepare_ui_event_for_append(event):
+        from attachments.content import redact_image_payloads
+        copied = json.loads(json.dumps(redact_image_payloads(event), ensure_ascii=False))
+        copied.setdefault("created_at", datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"))
+        return copied
 
     @local_timed("ui_append")
     def append_ui_event(self, session_id: str, event: Dict[str, Any], *, require_commit: bool = False) -> None:
@@ -5521,12 +5579,7 @@ class SessionManager:
             if require_commit:
                 raise
         try:
-            from attachments.content import redact_image_payloads
-            event_copy = json.loads(json.dumps(redact_image_payloads(event), ensure_ascii=False))
-            event_copy.setdefault(
-                "created_at",
-                datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-            )
+            event_copy = SessionManager._prepare_ui_event_for_append(event)
             runtime_v2_primary = None
             runtime_v2_strict = None
             try:

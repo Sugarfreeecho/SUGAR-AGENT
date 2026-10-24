@@ -7,6 +7,7 @@ the writer still exists because operating systems reuse PIDs after a crash.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -107,7 +108,7 @@ def inspect_run_fence(path: Path) -> RunFenceOwner:
         return RunFenceOwner("unknown", run_id=run_id)
     try:
         started_at = float(data.get("owner_started_at"))
-        if started_at <= 0:
+        if not math.isfinite(started_at) or started_at <= 0:
             raise ValueError("invalid process start time")
     except (TypeError, ValueError):
         return RunFenceOwner("unknown", pid, run_id)

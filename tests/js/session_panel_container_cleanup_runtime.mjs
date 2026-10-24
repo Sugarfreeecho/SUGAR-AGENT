@@ -167,8 +167,18 @@ let payload = {
     ok: true,
     sessions: { s1: { badges: [], panels: [planPanel] } },
 };
-globalThis.fetch = async function () {
-    return { ok: true, json: async () => payload };
+let gated = false, requestCount = 0, concurrent = 0, peak = 0;
+const gates = [], requestIds = [];
+globalThis.fetch = async function (_url, options) {
+    requestCount++; concurrent++; peak=Math.max(peak,concurrent);
+    requestIds.push(JSON.parse(options.body).session_ids);
+    try {
+        if (gated) await new Promise((resolve,reject) => {
+            gates.push(resolve);
+            options.signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true});
+        });
+        return { ok: true, json: async () => payload };
+    } finally { concurrent--; }
 };
 
 /* 收集警告：刷新失败会打 console.warn，测试末尾据此判定链路未被破坏。 */
@@ -191,8 +201,12 @@ assert.equal(host.children.length, 0, 'pubar 接管时不写回退宿主');
 assert.equal(host.hidden, true);
 
 /* 2) 同一容器重复刷新：只替换、不叠加。 */
+const originalPanel = paneHosts.plan.children[0];
 await mod.refreshPluginSessionUi(['s1']);
 assert.equal(paneHosts.plan.children.length, 1, '重复刷新不应叠加卡片');
+assert.strictEqual(paneHosts.plan.children[0], originalPanel, 'unchanged panels keep their DOM and focus');
+await mod.refreshPluginSessionUi(['s2']);
+assert.strictEqual(paneHosts.plan.children[0], originalPanel, 'background session updates do not remount the active panel');
 
 /* 3) 面板从 payload 消失（计划清空）：旧卡片必须被移除。 */
 payload = { ok: true, sessions: { s1: { badges: [], panels: [] } } };
@@ -216,7 +230,28 @@ payload = { ok: true, sessions: { s1: { badges: [], panels: [planPanel] } } };
 await mod.refreshPluginSessionUi(['s1']);
 assert.equal(host.children.length, 1, '面板重新出现时容器恢复渲染');
 
+// An external host rebuild must still restore unchanged data.
+host.replaceChildren();
+await mod.refreshPluginSessionUi(['s1']);
+assert.equal(host.children.length,1,'a recreated host is not mistaken for a retained panel');
+
+gated=true;requestCount=0;peak=0;requestIds.length=0;
+const first=mod.refreshPluginSessionUi(['s1']);
+const burst=Array.from({length:100},(_,i)=>mod.refreshPluginSessionUi([i%2?'s1':'s2']));
+assert.equal(requestCount,1,'a slow request must not fan out during repeated state events');
+gates.shift()();
+await first;
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(requestCount,2,'all accumulated updates are drained in one follow-up');
+assert.deepEqual(new Set(requestIds[1]),new Set(['s1','s2']),'coalescing preserves updates to every requested session');
+gates.shift()();
+await Promise.all(burst);
+assert.equal(peak,1,'only one plugin UI projection is in flight');
+assert.equal(concurrent,0);
+gated=false;
+
 console.warn = originalWarn;
 assert.deepEqual(warnings, [], '刷新链路不应产生警告');
 
 console.log('session panel container cleanup runtime checks passed');
+console.log('100-update plugin UI burst: 2 requests, peak concurrency 1; retained DOM checks passed');

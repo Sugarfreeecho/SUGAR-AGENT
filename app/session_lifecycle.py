@@ -123,6 +123,13 @@ def get_active_run_info(session_id: str) -> Optional[Dict[str, Any]]:
     return max(candidates, key=lambda row: str(row.get("started_at") or ""))
 
 
+def active_run_rows() -> List[Dict[str, Any]]:
+    """Snapshot locally owned executions for a bounded lifecycle drain."""
+    with _lock:
+        return [dict(info) for task, info in _run_info_by_task.items()
+                if task is not None and not task.done() and info.get("run_active", True)]
+
+
 def mark_run_terminal(session_id: str, run_id: str) -> None:
     """Stop exposing a task as active once its durable terminal has committed."""
 

@@ -452,6 +452,9 @@ def test_team_claim_next_is_priority_and_dependency_aware(tmp_path, monkeypatch)
 
 def test_mcp_worktree_contract_injects_root_and_rejects_escape(monkeypatch, tmp_path):
     import agent_mcp
+    # The offline runner disables real MCP. This test supplies its own server
+    # and exercises the worktree contract, so enable only that fake surface.
+    monkeypatch.setattr(agent_mcp, "_enabled_flag", lambda: True)
 
     calls = []
 

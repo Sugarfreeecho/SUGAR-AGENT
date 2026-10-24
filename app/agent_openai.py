@@ -1214,10 +1214,11 @@ def _http_stream_chat_completion(
             logger.debug("无法结算传输 trace", exc_info=True)
 
     try:
-        from agent_request_timing import current_request_trace
+        from agent_request_timing import current_request_trace, send_path_stage
 
         encode_started = time.perf_counter()
-        encoded = _fast_wire_json(payload)
+        with send_path_stage("wire_json_fastpath"):
+            encoded = _fast_wire_json(payload)
         body_kwargs = {"json": payload}
         if encoded is not None:
             trace = current_request_trace()
@@ -1411,6 +1412,8 @@ def _open_raw_http_stream(
     comparable field for field; ``tools`` / ``messages`` are passed by
     reference, exactly as the SDK path passes them.
     """
+    from agent_request_timing import mark_send_path
+    mark_send_path("raw_request_prepare_started")
     payload: Dict[str, Any] = {}
     for key, value in request_kwargs.items():
         if key in _SDK_ONLY_KWARGS or value is None:
@@ -1426,11 +1429,13 @@ def _open_raw_http_stream(
     url = _openai_base_url(client).rstrip("/")
     if not url.endswith("/chat/completions"):
         url = url + "/chat/completions"
+    headers = _openai_request_headers(client)
+    mark_send_path("raw_request_prepare_completed")
     return _http_stream_chat_completion(
         client,
         url=url,
         payload=payload,
-        headers=_openai_request_headers(client),
+        headers=headers,
         timeout=request_kwargs.get("timeout"),
         should_abort=should_abort,
     )
@@ -2454,14 +2459,18 @@ def run_chat_completion_stream_worker(
             pass
 
     try:
-        from agent_request_timing import current_request_trace
+        from agent_request_timing import (
+            current_request_trace, mark_send_path, new_send_path, send_path_scope,
+        )
 
         local_trace = current_request_trace()
+        mark_send_path("request_conversion_started")
         if local_trace is not None:
             local_trace.mark("request_conversion_started")
         api_messages = _messages_to_params_for_client(client, messages)
         if local_trace is not None:
             local_trace.mark("request_conversion_completed")
+        mark_send_path("request_conversion_completed")
         kwargs: Dict[str, Any] = dict(
             model=model,
             messages=api_messages,
@@ -2560,6 +2569,7 @@ def run_chat_completion_stream_worker(
                 local_iter = None
                 chunks: List[Any] = []
                 try:
+                    mark_send_path("stream_route_started")
                     stream_completion = getattr(client, "stream_completion", None)
                     transport_enabled = bool(getattr(client, "_myagent_transport_enabled", False))
                     raw_ok = _supports_raw_http_stream(client)
@@ -2574,6 +2584,7 @@ def run_chat_completion_stream_worker(
                     # level must not short-circuit the facade -- doing so would
                     # drop candidate fallback, circuits and modality routing.
                     use_direct = direct_available and not facade_available
+                    mark_send_path("stream_route_completed")
                     # Which streamed transport actually served this request. Only
                     # the direct path populates the transport metrics, so a
                     # breakdown full of zeros is explained by this line.
@@ -2621,6 +2632,7 @@ def run_chat_completion_stream_worker(
                             local_stream = client.chat.completions.create(**request_kwargs)
                     with active_lock:
                         active[request_role] = local_stream
+                    mark_send_path("stream_object_created")
                     put_stream_timing(
                         "stream_created",
                         attempt=attempt_number,
@@ -2637,6 +2649,7 @@ def run_chat_completion_stream_worker(
                         # may ignore stream=True and return a complete response.
                         results.put((request_role, "complete", local_stream))
                         return
+                    mark_send_path("stream_iteration_entered")
                     for chunk in local_iter:
                         chunks.append(chunk)
                         if _stream_chunk_has_first_token(chunk):
@@ -2670,9 +2683,17 @@ def run_chat_completion_stream_worker(
                     if not request_budget.claim():
                         return False
                     in_flight_roles.add(request_role)
+                path = new_send_path(request_role)
+                if path is not None:
+                    path.mark("thread_scheduled")
+
+                def run_first_token_request():
+                    with send_path_scope(request_role, path=path):
+                        open_until_first_token(request_role)
+
                 threading.Thread(
                     target=contextvars.copy_context().run,
-                    args=(open_until_first_token, request_role),
+                    args=(run_first_token_request,),
                     name=f"llm-first-token-{request_role}",
                     daemon=True,
                 ).start()

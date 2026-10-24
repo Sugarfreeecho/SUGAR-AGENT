@@ -9,6 +9,34 @@ from typing import Optional
 
 
 _current: ContextVar[Optional["RequestPreparationTrace"]] = ContextVar("request_preparation_trace", default=None)
+_send_path: ContextVar[Optional["RequestSendPath"]] = ContextVar("request_send_path", default=None)
+_UNSET = object()
+
+
+class RequestSendPath:
+    """Bounded ordered points for one worker/first-token path, without payloads.
+
+    A path may try multiple providers. Repeated points remain ordered instead
+    of combining the earliest endpoints from different physical attempts.
+    """
+    def __init__(self, role: str):
+        self.role = str(role)
+        self._points = []
+        self._dropped = 0
+        self._lock = threading.Lock()
+
+    def mark(self, name: str) -> None:
+        point = {"name": name, "at": time.perf_counter(), "thread": threading.get_ident()}
+        with self._lock:
+            if len(self._points) < 96:
+                self._points.append(point)
+            else:
+                self._dropped += 1
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {"role": self.role, "points": sorted((dict(p) for p in self._points), key=lambda p:p["at"]),
+                    "dropped_points": self._dropped}
 
 
 class RequestPreparationTrace:
@@ -22,6 +50,17 @@ class RequestPreparationTrace:
         self.previous_tool_iter = previous_tool_iter
         self._anchors = {str(key): float(value) for key, value in (anchors or {}).items() if value is not None}
         self._lock = threading.Lock()
+        self._send_paths = []
+        self._dropped_send_paths = 0
+
+    def new_send_path(self, role: str) -> Optional[RequestSendPath]:
+        with self._lock:
+            if len(self._send_paths) >= 16:
+                self._dropped_send_paths += 1
+                return None
+            path = RequestSendPath(role)
+            self._send_paths.append(path)
+            return path
 
     def mark(self, name: str, at: Optional[float] = None) -> None:
         value = time.perf_counter() if at is None else float(at)
@@ -33,6 +72,8 @@ class RequestPreparationTrace:
     def snapshot(self) -> dict:
         with self._lock:
             anchors = dict(self._anchors)
+            send_paths = list(self._send_paths)
+            dropped_send_paths = self._dropped_send_paths
         result = {
             "session_id": self.session_id, "run_id": self.run_id,
             "react_iter": self.react_iter, "previous_tool_iter": self.previous_tool_iter,
@@ -59,11 +100,49 @@ class RequestPreparationTrace:
         for key, (start, end) in spans.items():
             if start in anchors and end in anchors and anchors[end] >= anchors[start]:
                 result[key] = round((anchors[end] - anchors[start]) * 1000.0, 3)
+        if send_paths or dropped_send_paths:
+            result["send_paths"] = [path.snapshot() for path in send_paths]
+            result["dropped_send_paths"] = dropped_send_paths
         return result
 
 
 def current_request_trace() -> Optional[RequestPreparationTrace]:
     return _current.get()
+
+
+def new_send_path(role: str) -> Optional[RequestSendPath]:
+    trace = current_request_trace()
+    return trace.new_send_path(role) if trace is not None else None
+
+
+def mark_send_path(name: str) -> None:
+    path = _send_path.get()
+    if path is not None:
+        path.mark(name)
+
+
+@contextmanager
+def send_path_scope(role: str, *, path=_UNSET):
+    path = new_send_path(role) if path is _UNSET else path
+    token = _send_path.set(path)
+    try:
+        mark_send_path("path_entered")
+        yield path
+    finally:
+        mark_send_path("path_exited")
+        _send_path.reset(token)
+
+
+@contextmanager
+def send_path_stage(name: str):
+    mark_send_path(name + "_started")
+    try:
+        yield
+    except BaseException:
+        mark_send_path(name + "_failed")
+        raise
+    else:
+        mark_send_path(name + "_completed")
 
 
 def new_request_trace(state: dict, react_iter: int, preparation_started: float, *,

@@ -372,3 +372,27 @@ def test_global_flush_waits_for_already_active_background_write(tmp_path, monkey
     assert flush_done.is_set()
     data = json.loads((tmp_path / "sessions/drain-active/execution_metrics.json").read_text(encoding="utf-8"))
     assert data["runs"][0]["requests"][0]["latest"] == 42
+
+
+def test_record_usage_accumulates_repeat_calls_in_the_same_round(tmp_path):
+    """同一轮里的重试/续写会各记一次 usage，覆盖写会把前面的 token 吞掉。"""
+    import execution_metrics
+
+    old_root = execution_metrics._root
+    execution_metrics.configure(tmp_path / "sessions")
+    execution_metrics._sessions.clear()
+    try:
+        execution_metrics.start_run("s2", "r2", "chat", "hi")
+        execution_metrics.record_usage(
+            "s2", "r2", 1, {"prompt_tokens": 100, "completion_tokens": 5, "model": "m1"}
+        )
+        execution_metrics.record_usage(
+            "s2", "r2", 1, {"prompt_tokens": 40, "completion_tokens": 3, "model": "m2"}
+        )
+        request = execution_metrics.snapshot("s2")["runs"][0]["requests"][0]
+        assert request["usage"]["prompt_tokens"] == 140
+        assert request["usage"]["completion_tokens"] == 8
+        assert request["usage"]["model"] == "m2", "非数值字段取最新一次"
+    finally:
+        execution_metrics._root = old_root
+        execution_metrics._sessions.clear()

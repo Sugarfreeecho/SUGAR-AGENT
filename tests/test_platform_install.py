@@ -29,6 +29,7 @@ def test_linux_install_writes_user_service_and_desktop_entry(tmp_path):
     unit_text = unit.read_text(encoding="utf-8")
     assert f"WorkingDirectory={platform_install._systemd_quote(root)}" in unit_text
     assert "Restart=on-failure" in unit_text
+    assert "lifecycle_supervisor.py" in unit_text and " serve" in unit_text
     assert "MYAGENT_SERVER_PORT=8192" in unit_text
     assert platform_install._systemd_quote(
         root / "app" / "platform_tray.py"
@@ -71,6 +72,8 @@ def test_macos_install_writes_server_and_aqua_tray_launch_agents(tmp_path):
     tray = plistlib.loads(installed[1].read_bytes())
     assert server["Label"] == "com.sugaragent.server"
     assert server["KeepAlive"] == {"SuccessfulExit": False}
+    assert server["ProgramArguments"][-1] == "serve"
+    assert server["ProgramArguments"][-2].endswith("lifecycle_supervisor.py")
     assert tray["Label"] == "com.sugaragent.tray"
     assert tray["LimitLoadToSessionType"] == "Aqua"
 

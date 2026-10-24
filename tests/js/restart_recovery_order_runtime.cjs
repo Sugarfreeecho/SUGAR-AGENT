@@ -90,6 +90,7 @@ const body = {
   querySelectorAll() { return this.children; },
 };
 inserted.setAttribute = (name, value) => { inserted[name] = value; };
+inserted.getAttribute = name => inserted[name] ?? null;
 context.insertReactOrderedFeedRow(body, inserted, 'llm-reasoning', 1, 1);
 assert.deepEqual(body.children, [oldProcessRow, inserted],
   'replacement run iteration 1 must appear after old run iteration 2');
@@ -98,7 +99,7 @@ async function checkResumedSseTokens() {
   const accepted = new Map([['s::event_bus:old-process', 100]]);
   const deltas = [];
   const sseContext = vm.createContext({
-    console, Date, Number, String, Promise, TextDecoder,
+    console, Date, Number, String, Promise, TextDecoder, setTimeout,
     SSE_IDLE_TIMEOUT_MS: 1000,
     streamHistoryRecoveryBySession: new Set(),
     sessionStore: {

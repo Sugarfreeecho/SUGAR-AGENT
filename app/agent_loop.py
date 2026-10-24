@@ -21,6 +21,7 @@ import gc
 import uuid
 import runtime_files
 import threading
+from agent_fact_commit import run_fact_commit
 from datetime import datetime
 import inspect
 from contextlib import contextmanager
@@ -351,6 +352,7 @@ except Exception:
 _STEER_LOCK = threading.Lock()
 _STEER_QUEUES: Dict[str, List[Dict[str, Any]]] = {}
 _STEER_RUN_LOCK = threading.Lock()
+_STEER_FENCE_REGISTRATION_LOCKS: Dict[str, threading.Lock] = {}
 _ACTIVE_STEER_RUNS: Dict[str, Any] = {}
 _CONTEXT_POLICY_LOCKS_LOCK = threading.Lock()
 _CONTEXT_POLICY_LOCKS: Dict[str, threading.Lock] = {}
@@ -1064,7 +1066,19 @@ class _SteerRunControl:
             self._abort_listeners.discard((loop, event))
 
 
+def _steer_fence_registration_lock(session_id: str) -> threading.Lock:
+    with _STEER_RUN_LOCK:
+        lock = _STEER_FENCE_REGISTRATION_LOCKS.get(session_id)
+        if lock is None:
+            lock = threading.Lock()
+            _STEER_FENCE_REGISTRATION_LOCKS[session_id] = lock
+        return lock
+
+
 def _register_steer_run_control(session_id: str, run_id: str) -> _SteerRunControl:
+    from runtime_lifecycle import is_draining
+    if is_draining():
+        raise RuntimeError("Agent backend is draining for restart")
     control = _SteerRunControl(session_id, run_id)
     sid = control.session_id
     if sid:
@@ -1073,7 +1087,11 @@ def _register_steer_run_control(session_id: str, run_id: str) -> _SteerRunContro
         fence_path = _active_session_path(sid) / "active_run_fence.json"
         owner_pid, owner_started_at = current_process_identity()
         try:
-            with _STEER_RUN_LOCK, _steer_transaction(sid):
+            # The per-session transaction serializes ownership persistence.
+            # Keep its file I/O outside the process-wide in-memory map lock:
+            # another session must still be able to check or cancel its run.
+            with (_steer_fence_registration_lock(sid),
+                  local_step("steer_fence_register_io"), _steer_transaction(sid)):
                 owner = inspect_run_fence(fence_path)
                 if owner.status == "unknown" or (owner.status == "live" and owner.pid != owner_pid):
                     raise RuntimeError(
@@ -1091,7 +1109,8 @@ def _register_steer_run_control(session_id: str, run_id: str) -> _SteerRunContro
                     encoding="utf-8",
                 )
                 tmp.replace(fence_path)
-                _ACTIVE_STEER_RUNS[sid] = control
+                with _STEER_RUN_LOCK:
+                    _ACTIVE_STEER_RUNS[sid] = control
         except Exception:
             logger.warning("failed to persist active run fence for %s", sid, exc_info=True)
             raise
@@ -1107,7 +1126,7 @@ def _clear_steer_run_control(session_id: str, control: _SteerRunControl) -> None
             _ACTIVE_STEER_RUNS.pop(sid, None)
     try:
         fence_path = _active_session_path(sid) / "active_run_fence.json"
-        with _steer_transaction(sid):
+        with _steer_fence_registration_lock(sid), _steer_transaction(sid):
             current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
             if str(current.get("token") or "") == control.fence_token:
                 fence_path.unlink(missing_ok=True)
@@ -1137,13 +1156,16 @@ def _state_run_has_write_fence(state: State) -> bool:
     if control is None:
         return True
     sid = str(state.get("session_id") or "").strip()
-    with _STEER_RUN_LOCK:
-        local_current = _ACTIVE_STEER_RUNS.get(sid)
+    with local_step("write_fence_local_lock"):
+        with _STEER_RUN_LOCK:
+            local_current = _ACTIVE_STEER_RUNS.get(sid)
     if local_current is not control:
         return False
     try:
-        fence_path = _active_session_path(sid) / "active_run_fence.json"
-        current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
+        with local_step("write_fence_session_path"):
+            fence_path = _active_session_path(sid) / "active_run_fence.json"
+        with local_step("write_fence_disk_read"):
+            current = json.loads(fence_path.read_text(encoding="utf-8")) if fence_path.exists() else {}
         token = str(current.get("token") or "")
         return token == control.fence_token
     except Exception:
@@ -2451,7 +2473,7 @@ def _runtime_v2_react_history_ops():
 
 
 @local_operation("model_commit", slow_ms=50)
-def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
+def _runtime_v2_append_model_message(state: State, msg: Any) -> Any:
     sid = str(state.get("session_id") or "").strip()
     if not sid or not _runtime_v2_is_primary():
         return
@@ -2485,7 +2507,7 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
             sid,
             role,
         )
-        _runtime_v2_react_history_ops().append_model_message(
+        committed = _runtime_v2_react_history_ops().append_model_message(
             sid,
             role,
             content,
@@ -2508,6 +2530,7 @@ def _runtime_v2_append_model_message(state: State, msg: Any) -> None:
             step_inner_total_ms,
         )
         state["_runtime_stage"] = "react"
+        return committed
     except Exception as exc:
         state["_runtime_stage"] = "react"
         logger.warning("Runtime V2 model append failed for %s: %s", sid, exc)
@@ -3114,7 +3137,19 @@ async def _finalize_agent_run_lifecycle(
                 exc_info=True,
             )
         if terminal_error is not None:
+            restart_id = state.get("_lifecycle_restart_id")
+            if restart_id:
+                from runtime_lifecycle import current
+                if current() is not None:
+                    await asyncio.to_thread(current().store.transition, restart_id, "failed",
+                                            error="运行终态保存失败，未执行重启")
             raise terminal_error
+        restart_id = state.get("_lifecycle_restart_id")
+        if restart_id and state.get("_lifecycle_tool_checkpointed"):
+            from runtime_lifecycle import current
+            service = current()
+            if service is not None:
+                await asyncio.to_thread(service.checkpoint, restart_id, session_id, run_id)
     finally:
         with local_step("stream_close"):
             await close_session_stream(session_id)
@@ -7595,6 +7630,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 break
             _pre_api_timing_mark(pre_api_timings, "final_interrupt_checks", _t_pre_api)
             _t_pre_api = time.perf_counter()
+            _pre_send_timings: Dict[str, int] = {}
             _pre_api_timing_log(
                 state["session_id"],
                 pre_api_timings,
@@ -7607,6 +7643,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 **(_msg_token_paths or {}),
                 **_gc_probe_extras(state),
             )
+            _pre_api_timing_mark(_pre_send_timings, "timing_log", _t_pre_api)
+            _t_pre_send = time.perf_counter()
             _metrics_run_id = str(state.get("_runtime_v2_run_id") or "")
             _metrics_extra: Dict[str, int] = {}
             if int(iter_count) == 1 and state.get("_run_start_perf") is not None:
@@ -7645,6 +7683,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 "pre_api", pre_api_timings,
                 total_ms=_pre_api_timing_total(pre_api_timings),
             )
+            _pre_api_timing_mark(_pre_send_timings, "metrics_prepare", _t_pre_send)
+            _t_pre_send = time.perf_counter()
             # Preserve the existing lightweight thinking indicator; detailed
             # phase diagnostics stay in backend timing logs only.
             if emit:
@@ -7654,8 +7694,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     emit=emit,
                 )
                 await asyncio.sleep(0)
+            _pre_api_timing_mark(_pre_send_timings, "thinking_status_emit", _t_pre_send)
+            _t_pre_send = time.perf_counter()
             llm_messages_to_send = strip_reasoning_for_api_request(llm_messages)
+            _pre_api_timing_mark(_pre_send_timings, "strip_reasoning", _t_pre_send)
+            _t_pre_send = time.perf_counter()
             llm_runtime_policy = _llm_runtime_policy(emit)
+            _pre_api_timing_mark(_pre_send_timings, "runtime_policy", _t_pre_send)
+            _t_pre_send = time.perf_counter()
             pressure_snapshot = llm_runtime_policy["pressure_snapshot"]
             pressure_mode = str(llm_runtime_policy["cpu_pressure_mode"] or "normal")
             previous_pressure_mode = state.get("_cpu_pressure_mode")
@@ -7687,6 +7733,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     "trigger": llm_runtime_policy["pressure_trigger"],
                 },
             )
+            _pre_api_timing_mark(_pre_send_timings, "pressure_emit_and_metrics", _t_pre_send)
+            _t_pre_send = time.perf_counter()
             llm_stream_seq += 1
             state["_active_stream_seq"] = llm_stream_seq
             llm_delta_seq = 0
@@ -7823,14 +7871,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             from agent_request_timing import new_request_trace, request_timing_scope
             local_request_trace = None
             stream_error: Optional[BaseException] = None
+            _pre_api_timing_mark(_pre_send_timings, "request_scope_and_setup", _t_pre_send)
+            _pre_api_tail_ms = int(max(0.0, (time.perf_counter() - _t_pre_api) * 1000.0))
+            execution_metrics.record_request(
+                state["session_id"],
+                str(state.get("_runtime_v2_run_id") or ""),
+                int(iter_count),
+                pre_api_tail_ms=_pre_api_tail_ms,
+                pre_api_tail_events=_pre_send_timings,
+            )
             if llm_runtime_policy["use_stream"]:
-                _pre_api_tail_ms = int(max(0.0, (time.perf_counter() - _t_pre_api) * 1000.0))
-                execution_metrics.record_request(
-                    state["session_id"],
-                    str(state.get("_runtime_v2_run_id") or ""),
-                    int(iter_count),
-                    pre_api_tail_ms=_pre_api_tail_ms,
-                )
                 t_llm_start = time.monotonic()
                 state["_runtime_stage"] = "waiting_model"
                 logger.info(
@@ -9141,7 +9191,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     reasoning_text,
                     response_text,
                 )
-                _persist_state_with_model_append(state, interim_msg)
+                await run_fact_commit(_persist_state_with_model_append, state, interim_msg)
 
             # Checkpoint every completed tool before another tool is awaited.
             # Otherwise a steer between tool calls cannot distinguish a finished
@@ -9173,10 +9223,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     _persist_state_with_model_replace(
                         state, llm_history, "manual_context_manage"
                     )
+                    checkpointed_tool_result_ids.add(tool_id)
+                    res["_history_persisted"] = True
                 else:
-                    _persist_state_with_model_append(state, tool_msg_llm)
-                checkpointed_tool_result_ids.add(tool_id)
-                res["_history_persisted"] = True
+                    def published(_result):
+                        checkpointed_tool_result_ids.add(tool_id)
+                        res["_history_persisted"] = True
+                    await run_fact_commit(
+                        _persist_state_with_model_append, state, tool_msg_llm,
+                        on_committed=published,
+                    )
                 if not res.get("_sse_emitted"):
                     await _emit_tool_call_sse(emit, res, iter_count, state)
                     res["_sse_emitted"] = True
@@ -9203,19 +9259,26 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         ready.append(result)
                 messages = [ToolMessage(content=result["tool_detail_llm"], tool_call_id=str(result["tool_id"]).strip())
                             for result in ready]
-                if not _persist_completed_tool_batch(state, messages):
+                def publish_batch(committed):
+                    if not committed:
+                        return
+                    # Publish on the owner loop after durability, even when a
+                    # cancel arrived during the worker's append transaction.
+                    llm_history.extend(messages)
+                    work_messages.extend(ToolMessage(content=result["tool_detail_ui"], tool_call_id=result["tool_id"])
+                                         for result in ready)
+                    state["llm_history"], state["work_messages"] = llm_history, work_messages
+                    _persist_state(state)
+                    for result in ready:
+                        checkpointed_tool_result_ids.add(str(result["tool_id"]).strip())
+                        result["_history_persisted"] = True
+
+                if len(messages) < 2 or not await run_fact_commit(
+                    _persist_completed_tool_batch, state, messages, on_committed=publish_batch,
+                ):
                     for result in results:
                         await checkpoint_completed_tool_result(result)
                     return
-                # Publish in-memory state only after all model facts succeeded.
-                llm_history.extend(messages)
-                work_messages.extend(ToolMessage(content=result["tool_detail_ui"], tool_call_id=result["tool_id"])
-                                     for result in ready)
-                state["llm_history"], state["work_messages"] = llm_history, work_messages
-                _persist_state(state)
-                for result in ready:
-                    checkpointed_tool_result_ids.add(str(result["tool_id"]).strip())
-                    result["_history_persisted"] = True
                 await _emit_tool_call_sse_batch(emit, ready, iter_count, state)
                 for result in ready:
                     result["_sse_emitted"] = True
@@ -9603,7 +9666,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         tool_msg_llm = ToolMessage(content=res["tool_detail_llm"], tool_call_id=res["tool_id"])
                         work_messages.append(tool_msg_ui)
                         llm_history.append(tool_msg_llm)
-                        _persist_state_with_model_append(state, tool_msg_llm)
+                        await run_fact_commit(_persist_state_with_model_append, state, tool_msg_llm)
                         state["llm_history"] = llm_history
                         state["work_messages"] = work_messages
                     tool_post_timings["append_model_history"] = _timing_ms(_t_tool_post)
@@ -9677,6 +9740,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 state["_tool_batch_completed_at"] = time.perf_counter()
                 _persist_state(state)
                 persist_after_tools_ms = _timing_ms(_t_tool_post_all)
+                if state.get("_lifecycle_restart_id"):
+                    # Release the outbox only after the tool/model checkpoint
+                    # and the interrupted-run terminal have both committed.
+                    state["_lifecycle_tool_checkpointed"] = True
+                    raise asyncio.CancelledError("lifecycle_restart")
                 _pipeline_step_timing_log("tool_to_next_api_step_timing", state["session_id"], "persist_state", persist_after_tools_ms, react_iter=int(iter_count), tools=len(tool_calls_list or []))
                 completion_judge_requested = any(
                     isinstance(result, dict)
@@ -10835,7 +10903,11 @@ async def astream_events(
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":
-            session_manager.append_ui_event(session_id, ev)
+            # Progress/status writes can stall on the filesystem just like
+            # tool results. Keep the caller's loop free (including HTTP-loop
+            # continuations), but settle this selected write
+            # before publishing or allowing cancellation to unwind the run.
+            await run_fact_commit(lambda _state: session_manager.append_ui_event(session_id, ev), state)
         if persist and ev.get("type") == "tool_call":
             # A completed tool row is a durable UI claim.  Persist it before
             # either the originating response or reconnecting observers can
@@ -11110,7 +11182,8 @@ async def astream_events(
             cancel_reason = (
                 "superseded_by_new_run"
                 if not _state_run_has_write_fence(state)
-                else session_manager.get_interrupt_reason(session_id, runtime_v2_run_id) or "cancelled"
+                else session_manager.get_interrupt_reason(session_id, runtime_v2_run_id)
+                or ("process_restart" if state.get("_lifecycle_tool_checkpointed") else "cancelled")
             )
             terminal_event["reason"] = cancel_reason
             raise
@@ -11157,7 +11230,7 @@ async def astream_events(
         while True:
             if should_stop and should_stop(session_id):
                 reason = session_manager.get_interrupt_reason(session_id) or "unspecified"
-                if reason == "followup":
+                if reason in {"followup", "process_restart"}:
                     await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
                     task.cancel()
                     cancel_requested_by_consumer = True
@@ -11355,7 +11428,7 @@ async def astream_events_continuation(
         public_event = {k: v for k, v in ev.items() if k != "_runtime_v2_committed"}
         persist = should_persist_ui_event(ev) and not runtime_committed
         if persist and ev.get("type") != "tool_call":
-            session_manager.append_ui_event(session_id, ev)
+            await run_fact_commit(lambda _state: session_manager.append_ui_event(session_id, ev), state)
         if persist and ev.get("type") == "tool_call":
             await asyncio.to_thread(session_manager.append_ui_event, session_id, ev)
             await publish_session_event(session_id, public_event)
@@ -11555,7 +11628,8 @@ async def astream_events_continuation(
             cancel_reason = (
                 "superseded_by_new_run"
                 if not _state_run_has_write_fence(state)
-                else session_manager.get_interrupt_reason(session_id, runtime_v2_run_id) or "cancelled"
+                else session_manager.get_interrupt_reason(session_id, runtime_v2_run_id)
+                or ("process_restart" if state.get("_lifecycle_tool_checkpointed") else "cancelled")
             )
             terminal_event["reason"] = cancel_reason
             raise
@@ -11606,7 +11680,7 @@ async def astream_events_continuation(
         while True:
             if should_stop and should_stop(session_id):
                 reason = session_manager.get_interrupt_reason(session_id) or "unspecified"
-                if reason == "followup":
+                if reason in {"followup", "process_restart"}:
                     await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
                     task.cancel()
                     cancel_requested_by_consumer = True

@@ -49,6 +49,25 @@ def test_legacy_failure_without_run_id_can_be_resolved(manager):
     assert store.get_session_summary(sid)["unread_result_status"] == "success"
 
 
+def test_reopening_an_already_read_session_does_not_write_or_invalidate(manager, monkeypatch):
+    store, sid = manager
+    store.mark_session_unread_result(sid, status="success", run_id="done")
+    changes = []
+    store.add_session_state_listener(lambda changed_sid, fields: changes.append((changed_sid, fields)))
+    assert store.clear_session_unread_result(sid, expected_run_id="done") is True
+    assert changes == [(sid, frozenset({"unread_result"}))]
+    changes.clear()
+
+    def unexpected_write(*_args, **_kwargs):
+        pytest.fail("reading an unchanged conversation must not rewrite metadata or the entire index")
+
+    monkeypatch.setattr(store, "_save_metadata_unlocked", unexpected_write)
+    monkeypatch.setattr(store, "_save_index", unexpected_write)
+    for _ in range(3):
+        assert store.clear_session_unread_result(sid) is True
+    assert changes == []
+
+
 @pytest.mark.parametrize("accounting", ["record_usage", "record_run"])
 def test_budget_exhaustion_stays_failed_after_a_successful_round(manager, monkeypatch, accounting):
     import agent_goal

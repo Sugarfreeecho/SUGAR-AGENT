@@ -65,7 +65,7 @@ def test_hook_dispatch_reuses_its_loaded_catalog_and_force_still_reloads(tmp_pat
     monkeypatch.setenv("HOOKS_PATH", str(tmp_path / "hooks.json"))
     async def exercise():
         await extensions.dispatch_hook("PostToolUse", {"tool_name": "read_file"})
-        assert loads == [{}]
+        assert loads == [{"refresh_loop": asyncio.get_running_loop()}]
         extensions.hook_manager_for_current_loop(force=True, runtime_definitions=(), loaded=loaded)
         assert loads[-1] == {"force": True}
     asyncio.run(exercise())

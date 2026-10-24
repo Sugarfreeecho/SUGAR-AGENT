@@ -348,6 +348,19 @@ async function testRunStartSignalAndFallbacks() {
   await ctx.sendFollowupNowImpl('restart', 's');
   assert.strictEqual(sendCalls, 3);
   assert.strictEqual(queue.length, 0, 'restart item is removed only after the replacement stream is accepted');
+
+  const attachment = {path: '/queued/photo.png', attachment: {attachmentId: 'sha256:' + 'b'.repeat(64)}};
+  let steerArguments;
+  ctx.sendSteerMessage = async (...args) => {
+    steerArguments = args;
+    return {item: {id: 'attached-steer', mode: 'append'}};
+  };
+  localRunning = true;
+  queue = [{id: 'attached-now', text: 'inspect photo', attachments: [attachment], status: '', steerMode: 'append'}];
+  await ctx.sendFollowupNowImpl('attached-now', 's', {manual: true});
+  assert.strictEqual(queue[0].status, 'accepted');
+  assert.deepStrictEqual(steerArguments[6], [attachment], 'manual dispatcher must forward structured attachments');
+  assert.strictEqual(sendCalls, 3, 'active attachment followups must not start a competing /chat');
 }
 
 async function testManualSendPrioritizesTheClickedRow() {
@@ -1013,7 +1026,48 @@ async function testLateQueueAcknowledgementCannotResendAConsumedTurn() {
   assert.strictEqual(queue.length, 0);
 }
 
+async function testAttachmentFollowupsCanSendNowAndPreserveAskDeferral() {
+  let queued;
+  let payload;
+  const attachment = {path: '/uploaded/image.png', attachment: {attachmentId: 'sha256:' + 'a'.repeat(64)}};
+  const ctx = context({
+    currentSessionId: 's', messageInput: {value: 'look /uploaded/image.png'},
+    window: {MyAgentPathPicker: {chatAttachments: () => [attachment], clearChatAttachments() {}}},
+    hasSendableText: value => !!value,
+    isMyAgentFeatureEnabled: () => true, isChatFileUploadBusy: () => false,
+    rewriteInputWorkspacePaths() {}, expandInputPathTokens: value => value,
+    appendFollowupQueueItem: (sid, text, display, skills, attachments) =>
+      (queued = {id: 'image', text, display, skills, attachments, awaitingRunEnd: true}),
+    isSubagentComposerSession: () => false,
+    persistFollowupQueue() {}, renderFollowupQueue() {}, persistInputDraft() {},
+    clearInputPathTokens() {}, autoResizeTextarea() {}, setSendButtonState() {},
+    defaultSteerMode: () => 'append',
+    getSessionRunState: () => ({runId: 'run'}),
+    sessionStore: {getActiveRunInfo: () => null},
+    fetch: async (url, options) => {
+      payload = JSON.parse(options.body);
+      return {ok: true, json: async () => ({ok: true, item: {id: 'steer'}})};
+    },
+  });
+  vm.runInContext(between('function enqueueCurrentInputAsFollowup', 'function rollbackOptimisticUserEvent'), ctx);
+  assert.strictEqual(ctx.enqueueCurrentInputAsFollowup(), true);
+  assert.strictEqual(queued.deferUntilRunEnd, undefined, 'attachments must allow Send now during an active run');
+  assert.strictEqual(queued.attachments[0], attachment);
+  ctx.messageInput.value = 'look /uploaded/image.png';
+  ctx.enqueueCurrentInputAsFollowup({pendingQuestion: true});
+  assert.strictEqual(queued.deferUntilRunEnd, true, 'Ask-owned entries must still wait for the owning run');
+  assert.strictEqual(queued.deferForHumanQuestion, true);
+  vm.runInContext(between('function normalizeStoredFollowupItem', 'var attachmentPinUpdates'), ctx);
+  const legacy = {id: 'old', text: 'image', attachments: [attachment], deferUntilRunEnd: true};
+  assert.strictEqual(ctx.normalizeStoredFollowupItem(legacy).deferUntilRunEnd, false);
+  assert.strictEqual(ctx.normalizeStoredFollowupItem({...legacy, deferForHumanQuestion: true}).deferUntilRunEnd, true);
+  vm.runInContext(between('async function sendSteerMessage', 'function sleepMs'), ctx);
+  await ctx.sendSteerMessage('s', 'look', 'client', [], 'look', 'append', [attachment]);
+  assert.deepStrictEqual(payload.attachments, [attachment]);
+}
+
 (async () => {
+  await testAttachmentFollowupsCanSendNowAndPreserveAskDeferral();
   await testQueuedTurnsPublishInOrderWithoutEndingTheRun();
   await testQueuedTurnWithdrawalWaitsForItsRegistration();
   await testLateQueueAcknowledgementCannotResendAConsumedTurn();

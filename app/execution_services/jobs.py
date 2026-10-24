@@ -226,6 +226,8 @@ class ExecutionService:
                 job.result = value.get("result")
                 job.terminal_id = value.get("terminal_id")
                 job.result_pending = bool(value.get("result_pending"))
+                recovery_changed = (job.status in ACTIVE or bool(value.get("notice_pending"))
+                                    or not value.get("notice_suppressed"))
                 if job.status in ACTIVE:
                     job.status, job.detail = "failed", "host_restarted: execution was interrupted; command was not replayed"
                     job.finished_at = time.time()
@@ -250,7 +252,11 @@ class ExecutionService:
                 job.output.cursor = min(job.output.end, max(0, int(value.get("model_cursor") or 0)))
                 job.done.set()
                 self.jobs[job.id] = job
-                await self._persist_job(job)
+                # Rehydrate terminal jobs in memory without appending another
+                # boot-id-only fact on every startup. Changed outcomes and
+                # suppressed old notices still cross the durable boundary.
+                if recovery_changed:
+                    await self._persist_job(job)
             elif namespace.startswith("terminal.") and value.get("status") == "running":
                 value.update(status="closed", detail="host_restarted: shell was not restored")
                 await asyncio.to_thread(self._cleanup_previous_process, value)
@@ -371,6 +377,7 @@ class ExecutionService:
             finally:
                 job.waiters -= 1
         if offset is None:
+            before = (job.output.cursor, job.result_pending, job.notice_pending, job.output.begin)
             raw, gap = job.output.read()
             result = job.result if job.result_pending else None
             job.result_pending = False
@@ -379,7 +386,9 @@ class ExecutionService:
                 job.output.limit = 16 * 1024
                 if len(job.output.data) > job.output.limit:
                     del job.output.data[:-job.output.limit]
-            await self._persist_job(job)
+            after = (job.output.cursor, job.result_pending, job.notice_pending, job.output.begin)
+            if after != before:
+                await self._persist_job(job)
             cursor = job.output.cursor
         else:
             raw, cursor, gap = job.output.read_at(offset)
@@ -477,6 +486,7 @@ class ExecutionService:
                                permission_mode=spec.get("permission_mode", ""))
         job.startup_done = asyncio.Event()
         paths = list(spec.get("cleanup_paths") or ())
+        scratch_lease = spec.get("scratch_lease")
         process = None
         handle = None
         try:
@@ -518,6 +528,8 @@ class ExecutionService:
                 process, handle = await starter
                 raise
             job.pid = process.pid
+            if scratch_lease:
+                scratch_lease.track_process(process.pid)
             import psutil
             try:
                 job.process_created = psutil.Process(process.pid).create_time()
@@ -560,6 +572,8 @@ class ExecutionService:
                     from agent_tools import _close_windows_run_shell_job, _unlink_run_shell_temp
                     _close_windows_run_shell_job(handle)
                     _unlink_run_shell_temp([Path(p) for p in paths])
+                    if scratch_lease:
+                        await asyncio.to_thread(scratch_lease.release)
                     for pipe in (process.stdout, process.stderr):
                         pipe.close()
                     io_pool.shutdown(wait=False, cancel_futures=True)
@@ -573,6 +587,8 @@ class ExecutionService:
             from agent_tools import _close_windows_run_shell_job, _unlink_run_shell_temp
             _close_windows_run_shell_job(handle)
             _unlink_run_shell_temp([Path(p) for p in paths])
+            if scratch_lease:
+                await asyncio.to_thread(scratch_lease.release)
             job.notice_suppressed = True
             await self.settle(job, "failed", str(exc))
             raise

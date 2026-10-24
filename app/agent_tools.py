@@ -680,7 +680,7 @@ _LIFECYCLE_SCRIPT_DIRECT_RE = re.compile(
 )
 _LIFECYCLE_PYTHON_RE = re.compile(
     r"(?i)\b(?:pythonw?|py)(?:\.exe)?\b[^\r\n;&|]*"
-    r"(?:tray_launcher|platform_tray|agent_updater|agentctl)\.py\b"
+    r"(?:tray_launcher|platform_tray|agent_updater|agentctl|lifecycle_supervisor)\.py\b"
 )
 _RUNTIME_DESTRUCTIVE_OPERATION_RE = re.compile(
     r"(?i)(?:"
@@ -724,12 +724,13 @@ def _agent_server_port() -> int:
 
 
 def _agent_lifecycle_guidance() -> str:
+    request_guidance = "需要重启时请使用 request_restart 申请，并等待用户确认。"
     system_name = platform.system()
     if system_name == "Linux":
-        return "请在 Agent 外部运行 `scripts/agentctl restart`，或使用 Ubuntu 顶部栏图标“重启”。"
+        return request_guidance + "也可在 Agent 外部运行 `scripts/agentctl restart`，或使用 Ubuntu 顶部栏图标。"
     if system_name == "Darwin":
-        return "请在 Agent 外部运行 `scripts/agentctl restart`，或使用 macOS 菜单栏“重启”。"
-    return "请在 Agent 外部运行 RUN.bat，或使用 Windows 任务栏右下角图标“重启”。"
+        return request_guidance + "也可在 Agent 外部运行 `scripts/agentctl restart`，或使用 macOS 菜单栏。"
+    return request_guidance + "也可在 Agent 外部运行 RUN.bat，或使用 Windows 任务栏右下角图标。"
 
 
 def _mentions_number_token(text: str, value: int) -> bool:
@@ -1242,6 +1243,9 @@ def _subprocess_env_for_shell() -> Dict[str, str]:
         "MYAGENT_PROTECTED_PIDS",
     ):
         env.pop(key, None)
+    for key in list(env):
+        if key.upper().startswith("MYAGENT_LIFECYCLE_"):
+            env.pop(key, None)
     if not full_access and os.getenv("RUN_SHELL_INHERIT_SECRET_ENV", "0").strip().lower() not in ("1", "true", "yes", "on"):
         secret_markers = ("API_KEY", "SECRET", "PASSWORD", "TOKEN", "PRIVATE", "CREDENTIAL")
         for key in list(env):
@@ -4969,6 +4973,39 @@ def task(
 _WEB_SEARCH_COUNT_SCHEMA_MAX = _web_search_max_results_cap()
 
 OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
+    _openai_function_schema(
+        "request_restart",
+        "Request a user-confirmed restart of this Agent backend after changing backend code or configuration. "
+        "Call this as the only tool in the assistant turn. Explain the reason, changes and what to verify afterwards. "
+        "The host waits for a human decision, saves the run and hands the restart to its external supervisor. "
+        "Never restart or terminate the Agent through shell commands. A request is not a completed restart.",
+        {"reason": {"type": "string", "description": "Why restarting the backend is necessary."},
+         "change_summary": {"type": "string", "description": "Changes and validation already completed."},
+         "resume_hint": {"type": "string", "description": "What to verify or continue after restart."}},
+        ["reason"],
+    ),
+    _openai_function_schema(
+        "show_user",
+        "Present content or notify the user while continuing work. Companion to ask_user: does not wait for an answer; ask_user is for required choices. Kinds webpage, text, image, file and plugin open the details sidebar; notice shows a dismissible top banner; settings opens a specific settings tab without saving changes; notification requests a native system notification, including when the webpage is closed. History/replayed events never repeat these automatic actions. Notification delivery uses only the enabled desktop-notifications provider and returns requested/unavailable/failed/unknown; do not claim the user read it. Do not use it for every progress update.",
+        {
+            "kind": {"type": "string", "enum": ["webpage", "text", "image", "file", "plugin", "notice", "settings", "notification"]},
+            "title": {"type": "string", "maxLength": 100, "description": "Short user-facing title explaining what is being shown."},
+            "url": {"type": "string", "description": "For webpage: absolute HTTP(S) URL, including local development services. Never include URL credentials."},
+            "text": {"type": "string", "maxLength": 65536, "description": "Content for text, notice (max 4000 chars), or notification (max 2000 chars)."},
+            "section": {"type": "string", "description": "For settings: general, models, skills, plugins, hooks, mcp, usage, security, env, paths, or an available plugin:<plugin_id>:<section_id>. Default general. Opens the tab without changing configuration."},
+            "level": {"type": "string", "enum": ["info", "success", "warning", "error"], "description": "For notice: visual level, default info."},
+            "duration_ms": {"type": "integer", "minimum": 0, "maximum": 30000, "description": "For notice: 1000–30000 milliseconds, default 8000; 0 keeps it visible until dismissed."},
+            "format": {"type": "string", "enum": ["text", "markdown"], "description": "For text: default text. Markdown is rendered without executable HTML or remote image loading."},
+            "path": {"type": "string", "description": "For file: an existing file inside the current session workspace, relative or absolute."},
+            "attachment_id": {"type": "string", "description": "For image: attachmentId (sha256:...) returned by read_file or another image tool."},
+            "data_url": {"type": "string", "description": "For image: alternative PNG/JPEG/WebP/GIF base64 data URL actually returned by a tool; at most 2 MiB. Exactly one image source."},
+            "alt": {"type": "string", "maxLength": 200, "description": "Required accessible description for image."},
+            "caption": {"type": "string", "maxLength": 500, "description": "Optional plain-text image caption."},
+            "plugin_id": {"type": "string", "description": "For plugin: enabled plugin ID; omit to open the plugin catalogue."},
+            "page_id": {"type": "string", "description": "Optional declared plugin page ID; omit to open its first available page."},
+        },
+        ["kind", "title"],
+    ),
     _openai_function_schema(
         "ask_user",
         "Pause the current run and ask the user one to four structured questions when an answer is genuinely required to continue. "

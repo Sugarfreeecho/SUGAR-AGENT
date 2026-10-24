@@ -20,20 +20,27 @@ async def execute_prepared(prepared, cwd, spawn_kw, command, timeout, background
         _run_shell_state_sink)
 
     service = execution_service()
+    import runtime_files
+    from agent_tools import WORK_DIR
+    scratch_lease = runtime_files.current_run(WORK_DIR).hold()
     owner = str(active["session_id"])
     spec = {"argv": list(prepared.argv), "env": dict(prepared.env), "cwd": str(cwd),
             "spawn_kw": spawn_kw, "label": command,
             "permission_mode": str(active["context"].mode),
-            "cleanup_paths": [str(p) for p in cleanup_paths]}
+            "cleanup_paths": [str(p) for p in cleanup_paths], "scratch_lease": scratch_lease}
     # The service owns temporary scripts until the process actually settles.
     try:
         identifier = await service.call(service.spawn_process, owner, spec, visible=background)
     except JobLimitReached:
+        await asyncio.to_thread(scratch_lease.release)
         if background:
             raise
         # DSH falls back to ordinary bounded foreground execution when its
         # jobs registry cannot admit another operation. Nothing was spawned.
         return None
+    except BaseException:
+        await asyncio.to_thread(scratch_lease.release)
+        raise
     cleanup_paths.clear()
     began = time.monotonic()
     async def report(status, result, snapshot):

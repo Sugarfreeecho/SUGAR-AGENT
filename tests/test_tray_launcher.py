@@ -534,22 +534,16 @@ def test_starter_spawns_one_daemon_and_does_not_race_its_auto_open(monkeypatch):
     assert calls == ["spawn"]
 
 
-def test_starter_replaces_stale_listener_with_only_one_daemon(monkeypatch):
-    listening = iter([True, False, True])
+def test_starter_refuses_an_unowned_listener(monkeypatch):
     calls = []
-    monkeypatch.setattr(tray_launcher, "_is_port_listening", lambda: next(listening))
+    monkeypatch.setattr(tray_launcher, "_is_port_listening", lambda: True)
     monkeypatch.setattr(tray_launcher, "_request_existing_restart", lambda: False)
-    monkeypatch.setattr(
-        tray_launcher,
-        "_stop_listener_on_port",
-        lambda: calls.append("stop-listener"),
-    )
     monkeypatch.setattr(tray_launcher, "_spawn_daemon", lambda: calls.append("spawn"))
     monkeypatch.setattr(tray_launcher, "_reset_log", lambda: None)
     monkeypatch.setattr(tray_launcher, "_append_log", lambda message="": None)
 
-    assert tray_launcher.run_starter() == 0
-    assert calls == ["stop-listener", "spawn"]
+    assert tray_launcher.run_starter() == 1
+    assert calls == []
 
 
 def test_tray_information_is_delivered_as_system_notification(monkeypatch):
@@ -603,6 +597,10 @@ def test_real_restart_replaces_process_and_restores_listener(tmp_path, monkeypat
     launcher = make_launcher()
     launcher.lifecycle_busy = False
     try:
+        # This fixture exercises owned-process replacement with a TCP-only
+        # server; strict protocol/instance readiness has separate coverage.
+        launcher._backend_ready = launcher._is_listening
+        launcher._auto_open_webui_when_ready = lambda: None
         launcher._start_agent()
         assert launcher._watch_startup() is True
         first_pid = launcher.proc.pid
@@ -618,10 +616,13 @@ def test_real_restart_replaces_process_and_restores_listener(tmp_path, monkeypat
         assert launcher._is_listening() is True
     finally:
         launcher._stop_agent()
+        if getattr(launcher, "_restart_mailbox", None):
+            launcher._restart_mailbox.close()
 
 
 def test_start_agent_marks_tray_as_protected_supervisor(tmp_path, monkeypatch):
     launcher = make_launcher()
+    launcher._auto_open_webui_when_ready = lambda: None
     captured = {}
 
     class FakeProcess:
@@ -644,6 +645,7 @@ def test_start_agent_marks_tray_as_protected_supervisor(tmp_path, monkeypatch):
     assert captured["env"]["MYAGENT_TRAY_PID"] == str(tray_launcher.os.getpid())
     assert captured["env"]["MYAGENT_SUPERVISOR_PID"] == str(tray_launcher.os.getpid())
     assert captured["env"]["MYAGENT_SERVER_PORT"] == str(tray_launcher.PORT)
+    launcher._restart_mailbox.close()
 
 
 def test_process_watchdog_restarts_unexpected_exit_but_stops_crash_loop(monkeypatch):
@@ -677,3 +679,31 @@ def test_process_watchdog_restarts_unexpected_exit_but_stops_crash_loop(monkeypa
     assert len(starts) == tray_launcher.UNEXPECTED_EXIT_RESTART_LIMIT
     assert launcher.proc is None
     assert any(tray_launcher.MSG_CRASH_LOOP_STOPPED in row for row in logs)
+
+
+def test_process_watchdog_retries_spawn_failure_without_a_child(monkeypatch):
+    launcher = make_launcher()
+    launcher.lifecycle_busy = False
+    launcher.proc = type("DeadProcess", (), {"returncode": 1, "poll": lambda self: 1})()
+    launcher._is_listening = lambda: False
+    starts = []
+    def fail_start():
+        starts.append(1)
+        raise OSError("simulated spawn failure")
+    launcher._start_agent = fail_start
+    monkeypatch.setattr(tray_launcher.time, "sleep", lambda _: None)
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda *a: None)
+    launcher._watch_agent_process()
+    assert len(starts) == tray_launcher.UNEXPECTED_EXIT_RESTART_LIMIT
+    assert launcher.proc is None
+
+
+def test_restart_does_not_spawn_when_stopping_is_unconfirmed(monkeypatch):
+    launcher = make_launcher()
+    launcher._is_listening = lambda: True
+    starts = []
+    launcher._start_agent = lambda: starts.append(1)
+    launcher._show_message = lambda *a, **k: None
+    monkeypatch.setattr(tray_launcher, "_append_log", lambda *a: None)
+    launcher._restart_agent_worker()
+    assert starts == []

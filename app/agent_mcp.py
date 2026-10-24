@@ -100,6 +100,8 @@ _mcp_loop_init_lock = threading.Lock()
 
 def _expand_env_references(value: str, *, field: str) -> str:
     """Resolve ${NAME} at connection time without persisting secret values."""
+    if any(match.group(1).upper().startswith("MYAGENT_LIFECYCLE_") for match in _ENV_REFERENCE.finditer(value)):
+        raise ValueError(f"{field} cannot reference protected supervisor credentials")
     missing = sorted(
         {
             match.group(1)
@@ -1083,6 +1085,12 @@ async def force_reload() -> None:
     await _run_on_mcp_loop(_force_reload_impl())
 
 
+async def shutdown_mcp() -> None:
+    """Close transports on their owning loop without starting a cold runtime."""
+    if _mcp_loop is not None and _mcp_loop.is_running():
+        await _run_on_mcp_loop(_force_reload_impl())
+
+
 async def _reload_plugin_impl(plugin_id: str) -> None:
     """Invalidate one plugin's transports while retaining unrelated connections."""
     global _loaded_signature, _signature_cache
@@ -1124,6 +1132,9 @@ def _server_configuration_signature(alias: str, cfg: Any) -> str:
 
 
 async def _ensure_started_impl() -> None:
+    from runtime_lifecycle import is_draining
+    if is_draining():
+        return
     global _loaded_signature
     if not _MCP_IMPORT_OK:
         return

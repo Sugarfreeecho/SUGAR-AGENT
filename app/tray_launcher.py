@@ -478,31 +478,8 @@ def _request_existing_restart() -> bool:
 
 
 def _stop_listener_on_port() -> None:
-    """Stop only the validated local listener so a fresh launcher can take over."""
-    try:
-        output = subprocess.check_output(
-            ["netstat", "-ano", "-p", "tcp"],
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            creationflags=NO_WINDOW,
-        )
-    except Exception as exc:
-        _append_log(f"Unable to inspect port {PORT}: {exc}")
-        return
-    for line in output.splitlines():
-        parts = line.split()
-        if len(parts) < 5 or parts[0].upper() != "TCP":
-            continue
-        if parts[3].upper() != "LISTENING" or not parts[1].endswith(f":{PORT}") or not parts[4].isdigit():
-            continue
-        subprocess.run(
-            ["taskkill", "/PID", parts[4], "/T", "/F"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=NO_WINDOW,
-        )
+    """A port number is not evidence that a process belongs to this launcher."""
+    raise RuntimeError(f"Port {PORT} is occupied without a known tray owner; no process was terminated")
 
 
 def _spawn_daemon() -> None:
@@ -534,17 +511,22 @@ def run_starter() -> int:
         return 1
 
     if _is_port_listening():
-        # RUN.bat is an explicit replacement launch: tell the owning tray to
-        # stop its child and start a fresh Agent process.  A stale listener
-        # without a tray owner is terminated before spawning a new owner.
-        print(MSG_RESTARTING)
-        _append_log(MSG_RESTARTING)
+        # Repeated launches request user confirmation from the owning tray.
+        # An unknown port owner must never be killed as a stale backend.
         if _request_existing_restart():
             # The resident tray owns the restart and its _start_agent() path
             # already auto-opens/reuses the UI. Sending a second restore
             # request here races that worker and creates duplicate windows.
+            notice = "已发送重启请求，请在应用中确认。"
+            print(notice)
+            _append_log(notice)
             return 0
-        _stop_listener_on_port()
+        try:
+            _stop_listener_on_port()
+        except RuntimeError as exc:
+            print(str(exc))
+            _append_log(str(exc))
+            return 1
         stop_deadline = time.monotonic() + 5
         while _is_port_listening() and time.monotonic() < stop_deadline:
             time.sleep(0.1)
@@ -702,6 +684,12 @@ class TrayLauncher:
         )
 
     def _start_agent(self) -> None:
+        if self.exiting:
+            raise RuntimeError("Agent launcher is exiting")
+        from lifecycle_supervisor import RestartMailbox
+        if not getattr(self, "_restart_mailbox", None):
+            self._restart_mailbox = RestartMailbox()
+            self._restart_mailbox.start_heartbeat()
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         log = LOG_FILE.open("a", encoding="utf-8", buffering=1)
         log.write("\n" + "=" * 80 + "\n")
@@ -713,6 +701,9 @@ class TrayLauncher:
         env["MYAGENT_TRAY_PID"] = str(os.getpid())
         env["MYAGENT_SUPERVISOR_PID"] = str(os.getpid())
         env["MYAGENT_SERVER_PORT"] = str(PORT)
+        operation = getattr(self, "_pending_restart_operation", None)
+        env.update(self._restart_mailbox.environment(operation=operation))
+        self._backend_instance_id = env["MYAGENT_LIFECYCLE_INSTANCE_ID"]
         try:
             self.proc = subprocess.Popen(
                 [str(PYTHON_EXE), str(MAIN_PY)],
@@ -742,7 +733,9 @@ class TrayLauncher:
         """
         deadline = time.monotonic() + 120.0
         while time.monotonic() < deadline:
-            if self._is_listening():
+            if self.exiting:
+                return
+            if self._backend_ready():
                 try:
                     self._open_url("/", refresh=True)
                 except Exception as exc:
@@ -764,10 +757,12 @@ class TrayLauncher:
         """Boundedly restart a backend that exits outside a lifecycle action."""
 
         restart_times: list[float] = []
+        recovery_pending = False
         while not self.exiting:
             time.sleep(UNEXPECTED_EXIT_POLL_SECONDS)
+            self._poll_restart_requests()
             proc = self.proc
-            if proc is None or proc.poll() is None:
+            if not recovery_pending and (proc is None or proc.poll() is None):
                 continue
             if not self._claim_lifecycle_action():
                 continue
@@ -782,16 +777,20 @@ class TrayLauncher:
                 ]
                 if len(restart_times) >= UNEXPECTED_EXIT_RESTART_LIMIT:
                     _append_log(
-                        f"{MSG_CRASH_LOOP_STOPPED} last_exit_code={proc.returncode}"
+                        f"{MSG_CRASH_LOOP_STOPPED} last_exit_code={getattr(proc, 'returncode', 'spawn_failed')}"
                     )
+                    if proc is not None and proc.poll() is None:
+                        self._stop_agent()
                     self.proc = None
                     return
                 restart_times.append(now)
                 attempt = len(restart_times)
                 _append_log(
-                    f"{MSG_UNEXPECTED_EXIT} exit_code={proc.returncode} "
+                    f"{MSG_UNEXPECTED_EXIT} exit_code={getattr(proc, 'returncode', 'spawn_failed')} "
                     f"attempt={attempt}/{UNEXPECTED_EXIT_RESTART_LIMIT}"
                 )
+                if proc is not None and proc.poll() is None:
+                    self._stop_agent()
                 self.proc = None
                 if self._is_listening():
                     _append_log(
@@ -803,12 +802,15 @@ class TrayLauncher:
                     return
                 self._start_agent()
                 if self._watch_startup():
+                    recovery_pending = False
                     _append_log(
                         f"Agent auto-recovery succeeded pid={self.proc.pid if self.proc else 'unknown'}"
                     )
                 else:
+                    recovery_pending = True
                     _append_log("Agent auto-recovery start failed.")
             except Exception as exc:
+                recovery_pending = True
                 _append_log(
                     f"Agent auto-recovery failed: {type(exc).__name__}: {exc}"
                 )
@@ -824,7 +826,7 @@ class TrayLauncher:
                 _append_log(f"{MSG_FAILED}: {self.proc.returncode}")
                 _append_log(f"{MSG_CHECK_LOG}: {LOG_FILE}")
                 return False
-            if self._is_listening():
+            if self._backend_ready():
                 _append_log(MSG_READY)
                 return True
             dots = (dots + 1) % 24
@@ -834,6 +836,29 @@ class TrayLauncher:
 
     def _is_listening(self) -> bool:
         return _is_port_listening()
+
+    def _backend_ready(self) -> bool:
+        from lifecycle_supervisor import backend_ready
+        instance_id = getattr(self, "_backend_instance_id", "")
+        return bool(instance_id and backend_ready(BASE_URL, instance_id))
+
+    def _poll_restart_requests(self) -> None:
+        mailbox = getattr(self, "_restart_mailbox", None)
+        if mailbox is None or not self._claim_lifecycle_action():
+            return
+        try:
+            operation = mailbox.tick()
+            if not operation:
+                return
+            operation = mailbox.prepare(operation, BASE_URL)
+            if operation:
+                self._pending_restart_operation = operation
+                self._restart_agent_worker()
+        except Exception as exc:
+            _append_log(f"Restart mailbox failed: {exc}")
+        finally:
+            with self._lifecycle_lock:
+                self.lifecycle_busy = False
 
     def _on_tray(self, hwnd, msg, wparam, lparam):
         try:
@@ -846,8 +871,7 @@ class TrayLauncher:
         return True
 
     def _on_external_restart(self, hwnd, msg, wparam, lparam):
-        if self._claim_lifecycle_action():
-            threading.Thread(target=self._restart_agent_worker, name="agent-external-restart", daemon=True).start()
+        self._request_restart()
         return 0
 
     def _on_restore_tray(self, hwnd, msg, wparam, lparam):
@@ -1053,29 +1077,41 @@ class TrayLauncher:
         if self.lifecycle_busy:
             self._show_message(MSG_OPERATION_BUSY)
             return
-        if not self._confirm(MSG_RESTART_CONFIRM):
-            return
-        if not self._claim_lifecycle_action():
-            self._show_message(MSG_OPERATION_BUSY)
-            return
-        threading.Thread(target=self._restart_agent_worker, name="agent-restart", daemon=True).start()
+        def request():
+            try:
+                from lifecycle_supervisor import request_manual_restart
+                request_manual_restart(BASE_URL)
+                self._open_url("/", refresh=False)
+            except Exception as exc:
+                self._show_message(f"无法提交重启确认：{exc}", error=True)
+        threading.Thread(target=request, name="agent-restart-request", daemon=True).start()
 
     def _restart_agent_worker(self) -> None:
         _append_log(MSG_RESTARTING)
         try:
             previous_pid = self.proc.pid if self.proc and self.proc.poll() is None else None
             self._stop_agent()
+            operation = getattr(self, "_pending_restart_operation", None)
+            if operation:
+                self._restart_mailbox.starting(operation)
             self._start_agent()
             if self._watch_startup():
                 current_pid = self.proc.pid if self.proc and self.proc.poll() is None else None
                 _append_log(f"{MSG_RESTARTED} old_pid={previous_pid} new_pid={current_pid}")
                 self._show_message(MSG_RESTARTED)
             else:
+                operation = getattr(self, "_pending_restart_operation", None)
+                if operation:
+                    self._restart_mailbox.fail(operation, "新服务未能通过实例就绪检查")
                 self._show_message(MSG_RESTART_FAILED, error=True)
         except Exception as exc:
+            operation = getattr(self, "_pending_restart_operation", None)
+            if operation:
+                self._restart_mailbox.fail(operation, exc)
             _append_log(f"{MSG_RESTART_FAILED} {type(exc).__name__}: {exc}")
             self._show_message(MSG_RESTART_FAILED, error=True)
         finally:
+            self._pending_restart_operation = None
             with self._lifecycle_lock:
                 self.lifecycle_busy = False
 
@@ -1120,8 +1156,14 @@ class TrayLauncher:
 
     def _exit_agent(self) -> None:
         self.exiting = True
-        self._stop_agent()
-        win32gui.DestroyWindow(self.hwnd)
+        try:
+            self._stop_agent()
+        except (RuntimeError, OSError) as exc:
+            _append_log(f"Exit cleanup could not stop the listener: {exc}")
+        finally:
+            if getattr(self, "_restart_mailbox", None):
+                self._restart_mailbox.close()
+            win32gui.DestroyWindow(self.hwnd)
 
     def _stop_agent(self) -> None:
         if self.proc and self.proc.poll() is None:
@@ -1138,13 +1180,11 @@ class TrayLauncher:
                         self.proc.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         pass
-        else:
-            self._stop_process_on_port()
+        elif self._is_listening():
+            raise RuntimeError(f"无法确认端口 {PORT} 的进程身份，未终止该监听进程")
         self.proc = None
         if not self._wait_until_port_stops(timeout_seconds=5):
-            self._stop_process_on_port()
-            if not self._wait_until_port_stops(timeout_seconds=5):
-                _append_log(f"Port {PORT} is still listening after stopping Agent.")
+            raise RuntimeError(f"Port {PORT} is still listening after stopping Agent.")
 
     def _wait_until_port_stops(self, timeout_seconds: float) -> bool:
         deadline = time.monotonic() + timeout_seconds
@@ -1155,40 +1195,7 @@ class TrayLauncher:
         return not self._is_listening()
 
     def _stop_process_on_port(self) -> None:
-        try:
-            output = subprocess.check_output(
-                ["netstat", "-ano", "-p", "tcp"],
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-            creationflags=NO_WINDOW,
-            )
-        except Exception as exc:
-            print(f"Unable to inspect port {PORT}: {exc}")
-            return
-
-        pids = set()
-        for line in output.splitlines():
-            parts = line.split()
-            if len(parts) < 5 or parts[0].upper() != "TCP":
-                continue
-            local_addr = parts[1]
-            state = parts[3].upper()
-            pid = parts[4]
-            if state == "LISTENING" and local_addr.endswith(f":{PORT}") and pid.isdigit():
-                pids.add(pid)
-
-        for pid in pids:
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", pid, "/T", "/F"],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=NO_WINDOW,
-                )
-            except Exception as exc:
-                print(f"Unable to stop PID {pid}: {exc}")
+        _stop_listener_on_port()
 
     def _on_destroy(self, hwnd, msg, wparam, lparam):
         try:

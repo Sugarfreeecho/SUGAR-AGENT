@@ -89,7 +89,8 @@ class ExecutionJournal:
         self.log = SessionEventLog(root, path_resolver=path_resolver)
 
     def _session_lock(self, session_id: str):
-        key = str(self.log.event_path(session_id).resolve())
+        with local_step("journal_lock_key", min_ms=5):
+            key = str(self.log.event_path(session_id).resolve())
         with self._guard:
             return self._session_locks.setdefault(key, threading.RLock())
 
@@ -126,17 +127,20 @@ class ExecutionJournal:
 
     @local_timed("journal_state")
     def _state(self, session_id: str, diagnostics: dict | None = None, *, allow_checkpoint=True) -> dict:
-        key = str(self.log.event_path(session_id).resolve())
+        with local_step("journal_cache_key", min_ms=5):
+            key = str(self.log.event_path(session_id).resolve())
         with self._guard:
             state = self._cache.pop(key, None)
             if state is not None:
                 self._cache[key] = state
         started = time.perf_counter()
-        latest = self.log.next_seq(session_id) - 1
+        with local_step("journal_seq_cursor", min_ms=5):
+            latest = self.log.next_seq(session_id) - 1
         if diagnostics is not None:
             diagnostics["seq_cursor_ms"] = round((time.perf_counter() - started) * 1000, 3)
         try:
-            stat = self.log.event_path(session_id).stat()
+            with local_step("journal_source_stat", min_ms=5):
+                stat = self.log.event_path(session_id).stat()
             signature = (stat.st_mtime_ns, stat.st_size)
         except FileNotFoundError:
             signature = None
@@ -285,7 +289,7 @@ class ExecutionJournal:
         return state
 
     def read(self, session_id: str, *, min_runtime_seq: int | None = None,
-             diagnostics: dict | None = None) -> dict:
+             diagnostics: dict | None = None, active_run_id: str = "") -> dict:
         started = time.perf_counter()
         with self._session_lock(session_id):
             if diagnostics is not None:
@@ -308,7 +312,9 @@ class ExecutionJournal:
                 diagnostics["state_ms"] = round((time.perf_counter() - started) * 1000, 3)
             started = time.perf_counter()
             records = [row for row in state["records"].values()
-                       if min_runtime_seq is None or int(row.get("first_runtime_seq") or 0) >= min_runtime_seq]
+                       if min_runtime_seq is None or int(row.get("first_runtime_seq") or 0) >= min_runtime_seq
+                       or (active_run_id and row.get("run_id") == active_run_id
+                           and row.get("status") in {"generating", "running", "waiting_execution"})]
             copied = copy.deepcopy(records)
             if diagnostics is not None:
                 diagnostics.update(copy_ms=round((time.perf_counter() - started) * 1000, 3),

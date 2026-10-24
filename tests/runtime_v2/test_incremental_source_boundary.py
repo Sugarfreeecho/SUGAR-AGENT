@@ -99,6 +99,10 @@ def test_external_source_change_refreshes_window_before_next_owned_append(tmp_pa
     import runtime_v2.execution_journal as module
     journal = ExecutionJournal(tmp_path)
     journal.record("s", event("first", 1))
+    # This case exercises source invalidation after a completed external edit.
+    # Windows readers can briefly deny replacement; settle our own checkpoint
+    # reader before constructing that edit instead of racing its open handle.
+    assert RecoveryCheckpoint.wait(journal, "s", 5)
     path = journal.log.event_path("s")
     if external_change == "append":
         record = journal.log.read_all("s")[-1].to_dict()
