@@ -18,7 +18,7 @@ async function main() {
   const cards = [], posts = [];
   const stream = {querySelectorAll: () => cards};
   const context = vm.createContext({
-    console, Date, TextDecoder, Promise, Set, Map,
+    console, Date, TextDecoder, Promise, Set, Map, setTimeout,
     currentSessionId: 'parent', sessionsList: null,
     document: {getElementById: () => null, createElement: () => ({})},
     requestAnimationFrame: callback => callback(),

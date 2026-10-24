@@ -68,7 +68,7 @@ from agent_openai import (
     refresh_request_recovery_config_from_env,
     run_chat_completion_stream_worker,
 )
-from agent_subagent_results import format_pending_subagent_notification
+from agent_subagent_results import format_pending_subagent_notification, pending_results_transaction
 from agent_tokenizer import count_message_tokens
 
 # 工程所在文件夹（General_Agent 包目录）；必须在 load_dotenv 之前定义
@@ -4483,6 +4483,7 @@ class SessionManager:
         path.write_text(str(text or ""), encoding="utf-8")
         return str(path)
 
+    @pending_results_transaction
     def append_pending_subagent_result(self, parent_session_id: str, entry: Dict[str, Any]) -> None:
         row = dict(entry)
         row.setdefault("result_id", uuid.uuid4().hex)
@@ -4505,6 +4506,8 @@ class SessionManager:
             rows: List[dict] = self.repository.load_json_list(path)
             rows.append(row)
             self.repository.save_json_list(path, rows)
+        from agent_subagent_notifications import notify_pending
+        notify_pending(self, parent_session_id)
 
     def _load_pending_subagent_results(self, session_id: str) -> List[dict]:
         read_started = time.perf_counter()
@@ -4610,8 +4613,9 @@ class SessionManager:
     def count_actionable_pending_subagent_results(self, session_id: str) -> int:
         return len(self._actionable_pending_subagent_rows(session_id))
 
+    @pending_results_transaction
     def anchor_pending_subagent_results_for_run(self, session_id: str, run_id: str) -> int:
-        """Make unconsumed results from a finished parent run manually actionable."""
+        """Make unconsumed results from a finished parent run actionable."""
         rid = str(run_id or "").strip()
         if not rid:
             return 0
@@ -4633,6 +4637,47 @@ class SessionManager:
             self._save_pending_subagent_results(session_id, rows)
         return changed
 
+    @pending_results_transaction
+    def prepare_pending_subagent_continuation(self, session_id: str) -> List[dict]:
+        """Anchor late results to the latest final within their original user turn.
+
+        Multiple children can finish across successive automatic continuations.
+        A new user message must prevent an older result from waking that turn.
+        """
+        rows = self._load_pending_subagent_results(session_id)
+        if not rows:
+            return []
+        events = self._load_ui_events_for_active_runtime(session_id)
+        final_idx = self._latest_final_index_without_later_user(events)
+        if final_idx < 0:
+            return []
+        user_idx = next((i for i in range(final_idx, -1, -1)
+                         if events[i].get("type") == "user"), -1)
+        finished_runs = {str(event.get("run_id") or "") for event in events[user_idx + 1:final_idx + 1]
+                         if event.get("type") == "final" and not event.get("agent_id")}
+        finished_runs.discard("")
+        actionable = []
+        changed = False
+        for row in rows:
+            if (str(row.get("delivery_state") or "pending") != "pending"
+                    or not self._pending_subagent_notification_line(row)):
+                continue
+            try:
+                anchor = int(row.get("after_final_index"))
+            except (TypeError, ValueError):
+                anchor = -1
+            same_turn = (user_idx < anchor <= final_idx and events[anchor].get("type") == "final")
+            if not same_turn and str(row.get("parent_run_id") or "") not in finished_runs:
+                continue
+            if anchor != final_idx:
+                row["after_final_index"] = final_idx
+                row["delivery_scope"] = "after_final"
+                changed = True
+            actionable.append(dict(row))
+        if changed:
+            self._save_pending_subagent_results(session_id, rows)
+        return actionable
+
     def can_continue_after_subagents(self, session_id: str) -> bool:
         """
         是否应续接父 Agent：有待注入结果，且 ui_events 末条 final 与 pending 记录的 after_final_index 一致
@@ -4642,6 +4687,12 @@ class SessionManager:
 
     def can_continue_react_session(self, session_id: str) -> bool:
         """True when a ReAct turn has user input but no final answer yet."""
+        if self._runtime_v2_primary():
+            from runtime_v2.ui_projection import RuntimeUiProjection
+
+            return RuntimeUiProjection(
+                self.repository.sessions_dir, path_resolver=self._resolve_session_path,
+            ).has_unanswered_user(session_id)
         events = self._load_ui_events_for_active_runtime(session_id)
         if not events:
             return False
@@ -4656,6 +4707,7 @@ class SessionManager:
                 return False
         return True
 
+    @pending_results_transaction
     def consume_pending_subagent_notifications(
         self, session_id: str, *, parent_run_id: str = ""
     ) -> List[str]:
@@ -4701,6 +4753,7 @@ class SessionManager:
         self._save_pending_subagent_results(session_id, keep)
         return lines
 
+    @pending_results_transaction
     def claim_pending_subagent_notifications(
         self, session_id: str, claim_id: str, *, parent_run_id: str = ""
     ) -> List[dict]:
@@ -4739,6 +4792,7 @@ class SessionManager:
             self._save_pending_subagent_results(session_id, rows)
         return claimed
 
+    @pending_results_transaction
     def resolve_pending_subagent_claim(
         self, session_id: str, claim_id: str, *, consumed: bool
     ) -> int:
@@ -4760,8 +4814,9 @@ class SessionManager:
             self._save_pending_subagent_results(session_id, keep)
         return changed
 
+    @pending_results_transaction
     def clear_pending_subagent_results_by_agent_ids(self, session_id: str, agent_ids: List[str]) -> int:
-        """清除已被显式读取/注入的 subagent pending 结果，避免续接横幅重复出现。"""
+        """清除已被显式读取/注入的 subagent pending 结果，避免重复续跑。"""
         ids = {str(x or "").strip() for x in (agent_ids or []) if str(x or "").strip()}
         if not ids:
             return 0
@@ -4778,25 +4833,6 @@ class SessionManager:
             keep.append(item)
         if removed:
             self._save_pending_subagent_results(session_id, keep)
-        return removed
-
-    def dismiss_pending_subagent_notifications(self, session_id: str) -> int:
-        """用户关闭续接提示时，清除当前可注入的 pending subagent 通知。"""
-        rows = self._load_pending_subagent_results(session_id)
-        if not rows:
-            return 0
-        actionable = self._actionable_pending_subagent_rows(session_id)
-        def _pending_key(item: Dict[str, Any]) -> tuple:
-            return (
-                str(item.get("agent_id") or ""),
-                str(item.get("status") or ""),
-                str(item.get("finished_at") or ""),
-                str(item.get("output_file") or ""),
-            )
-        actionable_keys = {_pending_key(x) for x in actionable}
-        keep = [x for x in rows if _pending_key(x) not in actionable_keys]
-        removed = len(rows) - len(keep)
-        self._save_pending_subagent_results(session_id, keep)
         return removed
 
     def _extract_subagent_dialogue_turns(

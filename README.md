@@ -65,6 +65,8 @@ MyAgent 全局统一使用一套持久权限模式，主界面提供三档固定
 
 后台任务完成后会通知 Agent，空闲会话由服务端续跑，不要求浏览器在线。点击会话「停止」取消该会话及其子 Agent 的后台任务并抑制这次取消的唤醒，用户终端保持独立。应用重启保留记录和有界输出，但不会恢复进程、shell 或重放命令。`terminal_send` 的 `inferred_idle` / `timeout` 仅表示等待结束，不能证明命令退出。
 
+后台子 Agent 完成后同样由服务端自动续跑父会话，无需点击补充综合或保持浏览器在线。父轮仍在运行时将结果纳入当前轮；父轮结束后在原会话开启新 run。忙碌会话延后重试，用户停止、归档或存在待处理人工交互时不会自动生成；旧用户轮次的结果不会唤醒新的用户轮次。
+
 临时脚本和中间文件统一分配到全局默认 `WORK_DIR/TempOutput/scratch/<session>/<run>-<随机后缀>/`，不随会话项目目录变化。`write_file(temporary=true)` 返回实际绝对路径；Shell 保留项目 cwd，`TEMP/TMP/TMPDIR` 指向运行时 scratch。完成、取消或失败后回收 scratch，后台进程和持久终端仍使用时延后清理；启动时回收已失效的运行目录。完整工具结果保存在 `TempOutput/tool-results/<session>/<toolCallId>/result.txt`，继续供历史读取。默认搜索和变更审查排除 `TempOutput`。详见 [运行产物规格](docs/temp_output_layout.md)。
 
 在「执行 → Computer Use」中显式启用 Native 或选择已配置的 Cua Driver stdio MCP。依赖为 `cua-driver==0.28.0`；原生工具名为 `cua_driver_native__<tool>`，MCP 工具名为 `mcp__cua-driver-mcp__<tool>`。截图需要模型声明图像输入；缺少系统权限或平台能力时返回诊断，不自动换模型或切换 provider。详见 [执行功能说明](docs/execution_services.md)。

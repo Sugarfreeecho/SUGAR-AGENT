@@ -49,6 +49,7 @@ SUBAGENT_PARENT_FORWARD_BLOCKED_TYPES = frozenset(
         # event is routed to the subagent card.
         "todo_plan",
         "context_tokens",
+        "context_injection",
     }
 )
 

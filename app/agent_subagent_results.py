@@ -5,6 +5,20 @@ agent_subagent_results — subagent 结果/通知的共享格式。
 from __future__ import annotations
 
 from typing import Any, Dict
+from functools import wraps
+from threading import RLock
+
+
+_pending_results_lock = RLock()
+
+
+def pending_results_transaction(method):
+    """Serialize pending-result updates from parent and background worker loops."""
+    @wraps(method)
+    def locked(*args, **kwargs):
+        with _pending_results_lock:
+            return method(*args, **kwargs)
+    return locked
 
 
 TERMINAL_SUBAGENT_STATUSES = frozenset({"completed", "failed", "interrupted"})

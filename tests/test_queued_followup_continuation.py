@@ -431,3 +431,71 @@ def test_queued_image_survives_registration_and_turn_commit(queued_runtime, monk
     assert asyncio.run(agent._consume_steer_messages(state, after_turn=True))
     images = list(walk_images(state["llm_history"][-1].content))
     assert images[0]["attachment"]["attachmentId"] == operation["ui_attachments"][0]["attachmentId"]
+
+
+@pytest.mark.parametrize('mode', ['append', 'interrupt'])
+@pytest.mark.parametrize('registered', [False, True])
+@pytest.mark.parametrize('kind', ['image-path', 'image-reference', 'file'])
+def test_immediate_attachment_followup_reaches_model_and_ui(queued_runtime, monkeypatch, mode, registered, kind):
+    agent, directory = queued_runtime
+    import webui
+    from PIL import Image
+    from attachments.request_budget import walk_images
+    from starlette.requests import Request
+
+    path = directory / ('note.txt' if kind == 'file' else 'photo.png')
+    if kind == 'file':
+        path.write_text('attached document', encoding='utf-8')
+    else:
+        Image.new('RGB', (8, 8), 'blue').save(path)
+    monkeypatch.setattr(webui, 'WORK_DIR', directory)
+    monkeypatch.setattr(webui, '_is_session_stream_active', lambda sid: True)
+    monkeypatch.setattr(webui, 'enqueue_session_steer', agent.enqueue_session_steer)
+    monkeypatch.setattr(webui, 'get_session_steer', agent.get_session_steer)
+    monkeypatch.setattr(webui, 'transition_session_steer', agent.transition_session_steer)
+    monkeypatch.setattr(webui, '_is_subagent_execution_active', lambda sid: True)
+    monkeypatch.setattr(webui, 'abort_session_steer_run', lambda *args, **kwargs: True)
+    attachment = {'path': str(path), 'name': path.name}
+    if kind == 'image-reference':
+        attachment['attachment'] = webui.get_attachment_store(directory).save_path(path)
+    body = {'message': 'inspect attachment', 'client_id': 'attached', 'mode': mode, 'attachments': [attachment]}
+
+    async def receive():
+        return {'type': 'http.request', 'body': json.dumps(body).encode(), 'more_body': False}
+
+    request = Request({'type': 'http', 'method': 'POST', 'path': '/',
+                       'headers': [(b'host', b'127.0.0.1')], 'client': ('127.0.0.1', 123)}, receive)
+
+    async def run():
+        if registered:
+            content, ui = await webui._prepare_followup_content(request, body['message'], body['attachments'])
+            agent.sync_session_followup_queue('attached', [{
+                'client_id': body['client_id'], 'content': body['message'], 'user_content': content,
+                'ui_content': body['message'], 'attachments': body['attachments'], 'ui_attachments': ui, 'mode': mode,
+            }])
+        response = await webui.post_session_steer('attached', request)
+        assert response.status_code == 200, response.body
+        operation = json.loads(response.body)['item']
+        assert not operation.get('after_turn')
+        # Prove the structured content survives persisted-queue reload too.
+        agent._STEER_QUEUES.clear()
+        agent._STEER_QUEUE_SIGNATURES.clear()
+        state = {'session_id': 'attached', '_runtime_v2_run_id': 'owner', 'stream_events': [],
+                 'llm_history': [], 'work_messages': []}
+        assert await agent._consume_steer_messages(state, modes={mode})
+        content = state['llm_history'][-1].content
+        if kind == 'file':
+            assert any(block.get('local_file', {}).get('path') == str(path.resolve()) for block in content)
+        else:
+            images = list(walk_images(content))
+            assert len(images) == 1
+            identity = images[0]['attachment']['attachmentId']
+            assert identity == operation['ui_attachments'][0]['attachmentId']
+            events = [event for event in state['stream_events'] if event.get('type') == 'user_steer']
+            assert events[-1]['attachments'][0]['attachmentId'] == identity
+        assert agent.get_session_steer('attached', client_id='attached')['item']['state'] == 'consumed'
+        # A retry after completion returns the same operation without consuming twice.
+        retry = await webui.post_session_steer('attached', request)
+        assert json.loads(retry.body)['item']['id'] == operation['id']
+
+    asyncio.run(run())

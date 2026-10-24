@@ -3613,7 +3613,7 @@ async def api_pick_path(request: Request):
 
 
 def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
-    """为会话摘要附加 subagent 运行/待续接计数（供侧栏状态与续接横幅）。"""
+    """为会话摘要附加 subagent 数量与运行状态。"""
     try:
         from agent_subagent import subagent_registry
 
@@ -3627,24 +3627,6 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
     except Exception:
         s["subagent_count"] = 0
         s["subagent_running"] = 0
-    try:
-        s["subagent_pending_continue"] = session_manager.count_actionable_pending_subagent_results(
-            str(session_id)
-        )
-        s["subagent_can_continue"] = session_manager.can_continue_after_subagents(str(session_id))
-        pending_count = int(s["subagent_pending_continue"] or 0)
-        running_count = int(s.get("subagent_running") or 0)
-        s["subagent_continuation"] = {
-            "state": "ready" if pending_count > 0 and running_count == 0 else (
-                "wait_children" if running_count > 0 else "none"
-            ),
-            "pending_count": pending_count,
-            "reason": "results_not_in_parent_answer" if pending_count > 0 else "",
-        }
-    except Exception:
-        s["subagent_pending_continue"] = 0
-        s["subagent_can_continue"] = False
-        s["subagent_continuation"] = {"state": "none", "pending_count": 0, "reason": ""}
     try:
         s["react_can_continue"] = session_manager.can_continue_react_session(str(session_id))
     except Exception:
@@ -7145,56 +7127,6 @@ async def continue_react_session(
     )
 
 
-@fastapi_app.post("/sessions/{session_id}/continue-subagents")
-async def continue_after_subagents(session_id: str, request: Request):
-    """后台 subagent 完成后自动续接父 Agent（无新用户气泡）。"""
-    sid = (session_id or "").strip()
-    if not sid:
-        return JSONResponse(content={"error": "missing session_id"}, status_code=400)
-    if not await asyncio.to_thread(session_manager.has_pending_subagent_notifications, sid):
-        return Response(status_code=204)
-    if not await asyncio.to_thread(session_manager.can_continue_after_subagents, sid):
-        return Response(status_code=204)
-    if await asyncio.to_thread(_is_session_stream_active, sid):
-        return JSONResponse(content={"ok": False, "reason": "busy"}, status_code=409)
-
-    def should_stop(sid_: str) -> bool:
-        return session_manager.is_interrupt_requested(sid_)
-
-    async def event_generator():
-        connection_task = _register_active_chat_connection(sid)
-        try:
-            try:
-                async for event in astream_events_continuation(
-                    sid,
-                    should_stop=should_stop,
-                ):
-                    if await request.is_disconnected():
-                        break
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    await asyncio.sleep(0)
-                if not await request.is_disconnected():
-                    yield "data: [DONE]\n\n"
-            except asyncio.CancelledError:
-                return
-        finally:
-            _unregister_active_chat_connection(sid, connection_task)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers=_SSE_HEADERS,
-    )
-
-
-@fastapi_app.post("/sessions/{session_id}/continue-subagents/dismiss")
-async def dismiss_continue_after_subagents(session_id: str):
-    sid = (session_id or "").strip()
-    if not sid:
-        return JSONResponse(content={"ok": False, "error": "missing session_id"}, status_code=400)
-    removed = session_manager.dismiss_pending_subagent_notifications(sid)
-    return JSONResponse(content={"ok": True, "removed": removed})
-
 @fastapi_app.get("/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: str,
@@ -10462,6 +10394,8 @@ async def start_webui_lifecycle() -> None:
     initialize_ui_attention_notifications()
     await _warm_runtime_checkpoint_workers()
     await start_react_recovery_runner()
+    from agent_subagent_notifications import start_runner as start_subagent_notification_runner
+    await start_subagent_notification_runner(session_manager)
     # Tokenizer JSON loading cost 621 ms on the first request in production.
     # Start it immediately in a worker thread; the loader lock makes racing with
     # an early user request safe and avoids parsing the vocabulary twice.
@@ -10556,20 +10490,41 @@ async def refresh_web_plugin_lifecycle() -> None:
 
 async def stop_webui_lifecycle() -> None:
     """Stop Web UI services shared by the default and production lifespans."""
+    from agent_extensions import stop_plugin_runtime
+    from plugins.host import stop_bundled_host_extensions
+    from agent_request_executor import shutdown_request_executor
+    from execution_services.jobs import _SERVICE
+    from runtime_lifecycle import current
+    from agent_subagent_notifications import stop_runner as stop_subagent_notification_runner
+    if current() is not None:
+        current().ready = False
+    tasks = [globals().get(name) for name in (
+        "_tokenizer_warmup_task", "_hook_pipeline_warmup_task", "_prompt_build_warmup_task")]
+    from session_lifecycle import _cancel_tasks
+    await _cancel_tasks([task for task in tasks if task is not None and not task.done()], timeout=2)
+    cleanup = [
+        ("subagent notifications", stop_subagent_notification_runner),
+        ("host extensions", lambda: stop_bundled_host_extensions(
+            {"session_manager": session_manager, "project_root": PROJECT_ROOT, "work_dir": WORK_DIR, "app": fastapi_app})),
+        ("plugin runtime", stop_plugin_runtime),
+        ("draft reserve", lambda: asyncio.to_thread(session_manager.stop_session_draft_reserve)),
+        ("recovery workers", stop_react_recovery_runner),
+        ("MCP", agent_mcp.shutdown_mcp),
+    ]
+    if _SERVICE is not None:
+        cleanup.append(("execution service", _SERVICE.shutdown))
+    errors = []
     try:
-        from agent_extensions import stop_plugin_runtime
-        from plugins.host import stop_bundled_host_extensions
-
-        await stop_bundled_host_extensions(
-            {"session_manager": session_manager, "project_root": PROJECT_ROOT}
-        )
-        await stop_plugin_runtime()
+        for name, stop in cleanup:
+            try:
+                await asyncio.wait_for(stop(), timeout=15)
+            except Exception as exc:
+                logger.exception("Lifecycle cleanup failed: %s", name)
+                errors.append(name + ": " + type(exc).__name__)
     finally:
-        try:
-            await stop_react_recovery_runner()
-            from execution_services.jobs import _SERVICE
-            if _SERVICE is not None:
-                await _SERVICE.shutdown()
-        finally:
-            from agent_request_executor import shutdown_request_executor
-            shutdown_request_executor()
+        shutdown_request_executor()
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
+from runtime_lifecycle import register_routes as _register_lifecycle_routes
+_register_lifecycle_routes(fastapi_app, session_manager)

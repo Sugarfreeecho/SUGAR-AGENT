@@ -199,3 +199,25 @@ def test_managed_worktree_can_start_from_dirty_main_checkout(tmp_path, monkeypat
     assert work_dir.is_dir()
     assert base_commit == git("rev-parse", "HEAD").stdout.strip()
     assert (repo / "base.txt").read_text(encoding="utf-8") == "dirty user change\n"
+
+
+def test_orphan_reconciliation_checks_background_child_process_identity(tmp_path, monkeypatch):
+    import agent_subagent
+    import run_ownership
+    task = tmp_path / "parent" / "subagents" / "tasks.json"
+    task.parent.mkdir(parents=True)
+    task.write_text(json.dumps([{"status":"running", "agent_id":"child", "parent_session_id":"parent"}]))
+    class Manager:
+        sessions_dir = tmp_path
+        def _load_metadata(self, sid):
+            return {"subagent_run_instance_id":"foreign", "subagent_run_owner_pid":4567,
+                    "subagent_run_owner_started_at":100.0}
+        def _resolve_session_path(self, sid): return tmp_path / sid
+        def patch_subagent_metadata(self, *a, **k): pass
+        def upsert_subagent_task(self, *a, **k): pass
+    monkeypatch.setattr(agent_subagent, "session_manager", Manager())
+    monkeypatch.setattr(agent_subagent.subagent_registry, "is_running", lambda _: False)
+    for status, started, orphan in [("live",100.0,False),("unknown",None,False),("dead",None,True),("live",200.0,True)]:
+        monkeypatch.setattr(run_ownership,"_process_start_time",lambda _, s=status, t=started:(s,t))
+        result=agent_subagent.reconcile_orphaned_subagent_runs()
+        assert result["reconciled"] == (["child"] if orphan else [])

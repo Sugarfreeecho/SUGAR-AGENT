@@ -11,11 +11,13 @@ import concurrent.futures
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -24,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import model_profiles
 from proc_flags import hidden_flags
+from run_ownership import current_process_identity
 from agent_harness import (
     SUBAGENT_BEST_OF_N,
     SUBAGENT_MAX_DEPTH,
@@ -47,6 +50,7 @@ from agent_subagent_events import (
     should_persist_ui_event,
     tag_subagent_forward_event,
 )
+from agent_local_timing import local_operation, local_step
 
 # 只读（含 web，explore 默认）
 EXPLORE_TOOLS = frozenset(
@@ -80,6 +84,7 @@ _TOOL_FILTER_CACHE_MAX = 64
 _tool_filter_cache: "OrderedDict[tuple, tuple[tuple[Dict[str, Any], ...], tuple[Dict[str, Any], ...]]]" = OrderedDict()
 _tool_filter_cache_lock = threading.Lock()
 _PROCESS_INSTANCE_ID = f"{os.getpid()}-{uuid.uuid4().hex}"
+_PROCESS_OWNER_PID, _PROCESS_OWNER_STARTED_AT = current_process_identity()
 
 SUBAGENT_RUN_INSTRUCTION = (
     "你是隔离运行的 subagent。你只能依赖当前 subagent 的 system/key_context、"
@@ -257,6 +262,48 @@ def _persist_subagent_run_state(child_id: str, state_out: Dict[str, Any]) -> Non
     work_messages = [_message_to_dict(m) for m in state_out.get("work_messages", [])]
     llm_history = [_message_to_dict(m) for m in state_out.get("llm_history", [])]
     session_manager.update_session(child_id, work_messages, llm_history, key_context)
+
+
+@local_operation("subagent_metrics_finish")
+async def _finish_subagent_metrics(*, state, session_id, run_id, status):
+    import execution_metrics
+
+    def finish():
+        started = state.get("_subagent_finalize_started_perf")
+        if started is not None:
+            execution_metrics.record_run_fields(
+                session_id, run_id,
+                subagent_finalize_before_metrics_ms=round((time.perf_counter() - started) * 1000, 3),
+            )
+        execution_metrics.finish_run(session_id, run_id, status)
+
+    await _await_subagent_write(finish)
+
+
+async def _await_subagent_write(function, /, *args, **kwargs):
+    """Settle a started synchronous write before publishing a child terminal.
+
+    Cancellation cannot stop a running thread. Without joining it, a heartbeat
+    could overwrite the interrupted status or an old UI row follow the final.
+    """
+    worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        try:
+            worker.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.warning("cancelled subagent write settled with an error", exc_info=True)
+        raise
 
 
 def _commit_subagent_initial_turn(child_id: str, run_id: str, user_message: Any,
@@ -856,7 +903,8 @@ def _patch_subagent_run_lifecycle(
     patch: Dict[str, Any] = {
         "subagent_run_status": str(status or "unknown"),
         "subagent_run_instance_id": _PROCESS_INSTANCE_ID,
-        "subagent_run_owner_pid": os.getpid(),
+        "subagent_run_owner_pid": _PROCESS_OWNER_PID,
+        "subagent_run_owner_started_at": _PROCESS_OWNER_STARTED_AT,
         "subagent_run_heartbeat_at": now,
     }
     if run_id:
@@ -904,6 +952,23 @@ def reconcile_orphaned_subagent_runs() -> Dict[str, Any]:
                 owner = str(meta.get("subagent_run_instance_id") or "").strip()
                 if owner == _PROCESS_INSTANCE_ID:
                     continue
+                from run_ownership import inspect_run_fence, _process_start_time
+                resolver = getattr(session_manager, "_resolve_session_path", None)
+                child_path = Path(resolver(child_id)) if resolver else Path(session_manager.sessions_dir) / child_id
+                fence_owner = inspect_run_fence(child_path / "active_run_fence.json")
+                if fence_owner.status in {"live", "unknown"}:
+                    continue
+                # Background child runs do not necessarily own a main-run
+                # fence. Their durable process identity is equally important.
+                owner_pid = meta.get("subagent_run_owner_pid")
+                if owner_pid:
+                    owner_status, actual_start = _process_start_time(int(owner_pid))
+                    recorded_start = meta.get("subagent_run_owner_started_at")
+                    if owner_status == "unknown" or (owner_status == "live" and (
+                            not recorded_start or not math.isfinite(float(recorded_start))
+                            or float(recorded_start) <= 0 or actual_start is None
+                            or abs(actual_start - float(recorded_start)) < .01)):
+                        continue
                 reason = (
                     "orphaned after process restart; the previous in-process "
                     "subagent execution cannot be resumed transparently"
@@ -1983,6 +2048,8 @@ async def _execute_subagent_run(
     last_heartbeat_at = 0.0
     files_touched: Set[str] = set()
     run_terminalized = False
+    run_outcome = "failed"
+    delivery_lock = asyncio.Lock()
 
     async def emit_parent(event: Dict[str, Any]) -> None:
         if not parent_emit:
@@ -1995,13 +2062,13 @@ async def _execute_subagent_run(
             logger.warning("subagent parent event delivery failed: %s", child_id,
                            exc_info=True)
 
-    async def child_emit(ev: Dict[str, Any]) -> None:
+    async def refresh_child_heartbeat() -> None:
         nonlocal last_heartbeat_at
         now_monotonic = asyncio.get_running_loop().time()
         if now_monotonic - last_heartbeat_at >= 15.0:
             last_heartbeat_at = now_monotonic
             try:
-                session_manager.patch_subagent_metadata(
+                await _await_subagent_write(session_manager.patch_subagent_metadata,
                     child_id,
                     {"subagent_run_heartbeat_at": datetime.now(timezone.utc).isoformat(),
                      "subagent_run_status": "running"},
@@ -2009,6 +2076,8 @@ async def _execute_subagent_run(
             except OSError:
                 logger.warning("subagent heartbeat metadata refresh failed: %s", child_id,
                                exc_info=True)
+
+    def prepare_child_event(ev: Dict[str, Any]) -> Dict[str, Any]:
         if str(ev.get("type") or "") == "tool_call":
             tool_name = str(ev.get("tool_name") or ev.get("name") or "")
             if tool_name in {
@@ -2035,9 +2104,11 @@ async def _execute_subagent_run(
         ev = dict(ev)
         ev.setdefault("run_id", subagent_run_id)
         ev.setdefault("stream_seq", state.get("_active_stream_seq"))
-        ev = await persist_execution_event(session_manager, child_id, ev)
-        if should_persist_ui_event(ev, session_meta={"is_subagent": True}):
-            session_manager.append_ui_event(child_id, ev)
+        return ev
+
+    async def publish_child_event(ev: Dict[str, Any]) -> None:
+        # The combined-commit receipt is private, including on the parent bus.
+        ev = {key: value for key, value in ev.items() if key != "_runtime_v2_committed"}
         # Child pages subscribe to their own event bus. Persisting a UI event
         # alone updates history, but does not wake their live SSE observer.
         try:
@@ -2053,6 +2124,47 @@ async def _execute_subagent_run(
             tagged = tag_subagent_forward_event(ev, agent_id=child_id)
             await emit_parent(tagged)
 
+    @local_operation("event_delivery")
+    async def deliver_child_events(*, events, state, session_id, run_id, event):
+        async with delivery_lock:
+            with local_step("child_heartbeat"):
+                await refresh_child_heartbeat()
+            rows = [prepare_child_event(row) for row in events]
+            from runtime_v2 import runtime_v2_primary, runtime_v2_strict
+            combined = getattr(session_manager, "commit_execution_ui_events", None)
+            if (len(rows) > 1 and runtime_v2_primary() and runtime_v2_strict() and callable(combined)
+                    and all(row.get("type") == "tool_call" and not row.get("_subagent_forward")
+                            and should_persist_ui_event(row, session_meta={"is_subagent": True})
+                            for row in rows)):
+                cancelled = threading.Event()
+                try:
+                    committed = await asyncio.to_thread(combined, child_id, rows, cancel_event=cancelled)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                if len(committed) != len(rows):
+                    raise RuntimeError("subagent UI batch did not commit all results")
+                # No child/parent observer sees the batch until all facts commit.
+                for row in committed:
+                    await publish_child_event(row)
+                return
+            for row in rows:
+                row = await persist_execution_event(session_manager, child_id, row, commit_ui=True)
+                if (not row.get("_runtime_v2_committed")
+                        and should_persist_ui_event(row, session_meta={"is_subagent": True})):
+                    await _await_subagent_write(session_manager.append_ui_event, child_id, row)
+                await publish_child_event(row)
+
+    async def child_emit(ev: Dict[str, Any]) -> None:
+        await deliver_child_events(events=[ev], state=state, session_id=child_id,
+                                   run_id=subagent_run_id, event=ev.get("type", ""))
+
+    async def child_emit_batch(events: List[Dict[str, Any]]) -> None:
+        await deliver_child_events(events=events, state=state, session_id=child_id,
+                                   run_id=subagent_run_id, event="tool_result_batch")
+
+    child_emit.tool_batch = child_emit_batch
+
     def _append_parent_pending_result(
         *,
         status: str,
@@ -2061,7 +2173,7 @@ async def _execute_subagent_run(
         output_file: str = "",
         write_pending: bool = True,
     ) -> None:
-        nonlocal run_terminalized
+        nonlocal run_terminalized, run_outcome
         body = (result or "").strip()
         err = (error or "").strip()
         if not body and err:
@@ -2088,6 +2200,7 @@ async def _execute_subagent_run(
             error=err,
         )
         run_terminalized = True
+        run_outcome = status
         if write_pending:
             try:
                 session_manager.append_pending_subagent_result(
@@ -2216,6 +2329,7 @@ async def _execute_subagent_run(
             "key_context": key_context,
             "_subagent_parent_session_id": parent_session_id,
             "_subagent_run_id": subagent_run_id,
+            "_runtime_v2_run_id": subagent_run_id,
             "_change_review_turn_id": str(parent_change_review_turn_id or parent_run_id or subagent_run_id),
             **({"_runtime_v2_parent_run_id": parent_run_id} if parent_run_id else {}),
         }
@@ -2265,6 +2379,7 @@ async def _execute_subagent_run(
         try:
             state_out = await react_node(state, emit=child_emit)
         except asyncio.CancelledError:
+            state["_subagent_finalize_started_perf"] = time.perf_counter()
             interrupted_text = "Subagent interrupted."
             session_manager.patch_subagent_metadata(
                 child_id, {"subagent_ok": False, "subagent_error": "interrupted"}
@@ -2291,6 +2406,7 @@ async def _execute_subagent_run(
                 })
             raise
         except Exception as e:
+            state["_subagent_finalize_started_perf"] = time.perf_counter()
             logger.exception("subagent react_node 失败: %s", e)
             session_manager.patch_subagent_metadata(
                 child_id, {"subagent_ok": False, "subagent_error": str(e)}
@@ -2316,6 +2432,7 @@ async def _execute_subagent_run(
                 })
             return result_text
         finally:
+            state.setdefault("_subagent_finalize_started_perf", time.perf_counter())
             try:
                 worktree_meta = session_manager._load_metadata(child_id) or {}
             except Exception:
@@ -2330,8 +2447,9 @@ async def _execute_subagent_run(
         interrupted = _is_subagent_user_interrupt_final(final_response)
         limit_reached = bool(state_out.get("react_limit_reached"))
         missing_final = not bool(final_response)
-        pending_status = "interrupted" if interrupted else ("failed" if (limit_reached or missing_final) else "completed")
-        subagent_error = "max_react_iter" if limit_reached else ("interrupted" if interrupted else ("missing_final" if missing_final else ""))
+        run_error = str(state_out.get("_run_error") or "").strip()
+        pending_status = "interrupted" if interrupted else ("failed" if (run_error or limit_reached or missing_final) else "completed")
+        subagent_error = "max_react_iter" if limit_reached else ("interrupted" if interrupted else (run_error or ("missing_final" if missing_final else "")))
         result_text = _format_subagent_result(
             child_session_id=child_id,
             description=description,
@@ -2351,7 +2469,7 @@ async def _execute_subagent_run(
         try:
             session_manager.patch_subagent_metadata(
                 child_id,
-                {"subagent_ok": not (interrupted or limit_reached or missing_final),
+                {"subagent_ok": pending_status == "completed",
                  "subagent_error": subagent_error},
             )
         except OSError:
@@ -2361,7 +2479,7 @@ async def _execute_subagent_run(
             await emit_parent({
                 "type": "subagent_finish", "agent_id": child_id,
                 "description": description,
-                "ok": not (interrupted or limit_reached or missing_final),
+                "ok": pending_status == "completed",
                 "subagent_type": subagent_type,
                 "result_preview": final_response[:500],
                 **({"error": subagent_error} if subagent_error else {}),
@@ -2369,9 +2487,18 @@ async def _execute_subagent_run(
         return result_text
 
     async def _run_owned(*, background: bool, emit_start: bool) -> str:
+        nonlocal run_outcome
+        import execution_metrics
         try:
+            state["_run_start_perf"] = time.perf_counter()
+            try:
+                await _await_subagent_write(execution_metrics.start_run, child_id, subagent_run_id,
+                                            "subagent", user_text)
+            except Exception:
+                logger.warning("subagent metrics startup failed: %s", child_id, exc_info=True)
             return await _run_core(background=background, emit_start=emit_start)
         except BaseException as exc:
+            run_outcome = "interrupted" if isinstance(exc, asyncio.CancelledError) else "failed"
             await subagent_registry.unregister(child_id, subagent_run_id)
             if isinstance(exc, asyncio.CancelledError):
                 if not run_terminalized:
@@ -2380,7 +2507,15 @@ async def _execute_subagent_run(
             logger.exception("subagent run failed outside react_node: %s", child_id)
             return await _fail_before_execution(str(exc))
         finally:
-            await subagent_registry.unregister(child_id, subagent_run_id)
+            try:
+                await _finish_subagent_metrics(
+                    state=state, session_id=child_id, run_id=subagent_run_id,
+                    status="finished" if run_outcome == "completed" else run_outcome,
+                )
+            except Exception:
+                logger.warning("subagent metrics finalization failed: %s", child_id, exc_info=True)
+            finally:
+                await subagent_registry.unregister(child_id, subagent_run_id)
 
     if run_in_background:
         if parent_emit:
