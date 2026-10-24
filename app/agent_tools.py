@@ -4935,7 +4935,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "ask_user",
-        "Pause the current run and ask the user one to four structured questions when an answer is genuinely required to continue. "
+        "Pause the current run and ask the user one to four structured questions when an answer is genuinely required to continue. Use companion show_user to display content without waiting for an answer. "
         "Use repository and environment evidence first. Call ask_user as the only tool in the assistant turn; do not batch it with any other tool. "
         "Put the recommended option first and mark it in the label. The UI automatically provides an Other free-text choice, so never add an Other option yourself.",
         {
@@ -4954,6 +4954,20 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "question": {
                             "type": "string",
                             "description": "Complete user-facing question.",
+                        },
+                        "images": {
+                            "type": "array", "maxItems": 4,
+                            "description": "Optional images displayed below the question, e.g. a login QR code. At most 8 images per call, 2 MiB each and 8 MiB total. For a local image, first use read_file and reuse its attachmentId as attachment_id. Remote URLs, filesystem paths and raw HTML are not accepted. After the user reports scanning a login QR, verify the actual login state before continuing; offer an expired-code option when useful.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "attachment_id": {"type": "string", "description": "Existing image attachmentId (sha256:...), exactly one source is required."},
+                                    "data_url": {"type": "string", "description": "Alternative source: data:image/png|jpeg|webp|gif;base64,... returned by a tool. Do not invent image bytes."},
+                                    "alt": {"type": "string", "maxLength": 200, "description": "Accessible image description, e.g. Login QR code."},
+                                    "caption": {"type": "string", "maxLength": 500, "description": "Optional plain-text caption or scanning instructions."},
+                                },
+                                "required": ["alt"], "additionalProperties": False,
+                            },
                         },
                         "options": {
                             "type": "array",

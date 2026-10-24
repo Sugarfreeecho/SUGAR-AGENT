@@ -35,7 +35,7 @@ BRIDGE_NAMES = frozenset({"tool_search", "tool_describe", "tool_call"})
 # automatically.  Add a name here deliberately to keep it resident.
 RESIDENT_TOOLS = frozenset({
     # Core built-ins (app/agent_tools.py OPENAI_TOOL_DEFINITIONS)
-    "activate_skill", "apply_patch", "ask_user", "context_manage",
+    "activate_skill", "apply_patch", "ask_user", "show_user", "context_manage", "switch_work_dir",
     "delete_file", "glob", "grep", "history_context", "ls", "read_file",
     "run_shell", "task", "web_download", "web_fetch", "web_search",
     "write_file",

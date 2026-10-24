@@ -29,6 +29,7 @@ async def _invoke_ask_user(
             tool_call_id=context.tool_call_id,
             emit=context.services.get("raw_emit"),
             interrupt_check=context.service("interaction_interrupt_check"),
+            react_iter=int(context.state.get("_current_react_iter") or 0),
         )
         status = str(interaction.get("status") or "resolved")
         payload = {
@@ -236,6 +237,19 @@ def _invoke_tool_call_unresolved(_context, _arguments):
 
 
 def register_builtin_host_tools() -> None:
+    if not host_tool_invokers.has("show_user"):
+        from user_presentations import invoke_show_user
+        host_tool_invokers.register(
+            "show_user", invoke_show_user,
+            policy=ToolExecutionPolicy(effect="control", early_stream_safe=False, interruptibility="safe"),
+        )
+    if not host_tool_invokers.has("request_restart"):
+        from runtime_lifecycle import invoke_restart
+        host_tool_invokers.register(
+            "request_restart", invoke_restart,
+            policy=ToolExecutionPolicy(effect="control", interactive=True,
+                                       early_stream_safe=False, interruptibility="cooperative"),
+        )
     for name in ("tool_search", "tool_describe", "tool_call"):
         if not host_tool_invokers.has(name):
             host_tool_invokers.register(

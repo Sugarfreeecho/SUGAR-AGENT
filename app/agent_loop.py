@@ -1241,6 +1241,9 @@ def enqueue_session_steer(
     *,
     source_run_id: str = "",
     mode: str = "",
+    user_content: Optional[Any] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    ui_attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     sid = str(session_id or "").strip()
     text = str(content or "").strip()
@@ -1264,6 +1267,12 @@ def enqueue_session_steer(
         "replacement_run_id": "",
         "mode": steer_mode,
     }
+    if user_content is not None:
+        item["user_content"] = user_content
+    if attachments is not None:
+        item["attachments"] = attachments
+    if ui_attachments is not None:
+        item["ui_attachments"] = ui_attachments
     with _STEER_LOCK:
         with _steer_transaction(sid):
             q = [_normalize_steer_item(x) for x in _load_steer_queue_locked(sid)]
@@ -4448,6 +4457,7 @@ async def _consume_steer_messages(
         steer_mode = str((item or {}).get("mode") or "interrupt")
         metadata = {"steer_id": steer_id, "client_id": str(item.get("client_id") or ""),
                     "steer_mode": steer_mode}
+        content = item.get("user_content") or text
         if after_turn:
             state["_pending_queued_turn_id"] = steer_id
             state["_queued_turn_committed"] = False
@@ -4470,8 +4480,8 @@ async def _consume_steer_messages(
             content = item.get("user_content") or text
             if isinstance(content, list) and prompt_hook.updated_input is not None:
                 content = [{"type": "text", "text": text}, *[x for x in content if x.get("type") != "text"]]
-        else:
-            content = text
+            elif prompt_hook.updated_input is not None:
+                content = text
         msg = UserMessage(content=content)
         try:
             committed = _runtime_v2_commit_user_turn(
@@ -7081,6 +7091,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             ),
                             "runtime_v2_primary": _runtime_v2_is_primary(),
                             "raw_emit": emit,
+                            "tool_batch_size": len(tool_calls_list or []),
                             "interaction_interrupt_check": lambda: (
                                 not _state_run_has_write_fence(state)
                                 or _state_interrupt_requested(state)

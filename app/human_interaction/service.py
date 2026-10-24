@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import copy
 import hashlib
 import hmac
 import json
@@ -10,11 +11,14 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, Awaitable, Callable, Dict, Iterable, Optional
 
 from agent_harness import session_manager
 from runtime_v2.event_schema import now_iso
 from runtime_v2.mirror import RuntimeMirror
+from agent_local_timing import LocalOperationTrace, local_step, local_timed, mark_local
+from agent_fact_commit import run_fact_commit
 
 
 class HumanInteractionValidationError(ValueError):
@@ -126,6 +130,14 @@ def _normalize_questions(arguments: Any) -> list[dict]:
                 "multi_select": bool(question.get("multi_select", question.get("multiSelect", False))),
             }
         )
+        if question.get("images") is not None:
+            from .images import normalize_images
+            try:
+                images = normalize_images(question["images"], f"questions[{q_index - 1}].images")
+            except ValueError as exc:
+                raise HumanInteractionValidationError(str(exc)) from exc
+            if images:
+                normalized[-1]["images"] = images
     return normalized
 
 
@@ -156,35 +168,60 @@ class HumanInteractionService:
         self._pending_counts_lock = threading.RLock()
 
     def _snapshot(self, session_id: str) -> dict:
-        return self.mirror.snapshots.read_consistent(
+        return self.mirror.snapshots.read_consistent_view(
             session_id, self.mirror.event_log, self.mirror.projector
         )
 
+    @local_timed("interaction_snapshot_prepare")
     def _snapshot_locked(self, session_id: str) -> dict:
         # Execution deltas append without rewriting the snapshot. Rebuild a
         # stale view under our existing transaction rather than acquiring the
         # same Windows file lock again through read_consistent().
         snapshot = self.mirror.snapshots.read_for_update(session_id)
-        from runtime_v2.versions import PROJECTOR_VERSION
-        if (int(snapshot.get("last_seq") or 0) != self.mirror.event_log.next_seq(session_id) - 1
-                or snapshot.get("projector_version") != PROJECTOR_VERSION):
-            snapshot = self.mirror.projector.project(self.mirror.event_log.read_all(session_id))
-        return snapshot
-
-    def _append_locked(self, session_id: str, event_type: str, payload: dict, run_id: str = ""):
-        event = self.mirror.event_log._append_unlocked(
-            session_id, event_type, payload=payload, run_id=run_id or None
-        )
-        snapshot = self.mirror.snapshots.read_for_update(session_id)
-        if int(snapshot.get("last_seq") or 0) != int(event.seq) - 1:
+        through_seq = self.mirror.event_log.next_seq(session_id) - 1
+        if (self.mirror.snapshots._projection_version_matches(snapshot)
+                and int(snapshot.get("last_seq") or 0) == through_seq):
+            source = snapshot.get("_event_log") or {}
+            if not isinstance(source, dict):
+                source = {}
+            path = self.mirror.event_log.event_path(session_id)
+            try:
+                stat = path.stat()
+                if (source.get("identity") == [int(stat.st_dev), int(stat.st_ino)]
+                        and source.get("size") == stat.st_size
+                        and source.get("mtime_ns") == stat.st_mtime_ns):
+                    return snapshot
+            except OSError:
+                pass
+            # Equal seq alone cannot validate a replaced source file.
             snapshot = self.mirror.projector.project(self.mirror.event_log.read_all(session_id))
         else:
-            snapshot = self.mirror.projector.project_incremental(snapshot, event)
+            snapshot = self.mirror.snapshots.project_after_append(
+                session_id, snapshot, self.mirror.event_log, self.mirror.projector, through_seq,
+            )
+        self.mirror.snapshots.stamp_event_log(
+            session_id, snapshot, self.mirror.event_log.event_path(session_id),
+        )
+        return snapshot
+
+    def _append_locked(self, session_id: str, event_type: str, payload: dict, run_id: str = "", *, snapshot=None):
+        if snapshot is None:
+            snapshot = self._snapshot_locked(session_id)
+        with local_step("interaction_fact_append"):
+            event = self.mirror.event_log._append_unlocked(
+                session_id, event_type, payload=payload, run_id=run_id or None
+            )
+        with local_step("interaction_projection"):
+            snapshot = self.mirror.snapshots.project_after_append(
+                session_id, snapshot, self.mirror.event_log, self.mirror.projector, event.seq,
+            )
         self.mirror.snapshots.stamp_event_log(
             session_id, snapshot, self.mirror.event_log.event_path(session_id)
         )
-        self.mirror.snapshots.write_checkpointed(session_id, snapshot)
-        self._publish_pending_counts(session_id, self._counts_from_snapshot(snapshot))
+        with local_step("interaction_checkpoint"):
+            self.mirror.snapshots.write_checkpointed(session_id, snapshot)
+        with local_step("interaction_pending_counts"):
+            self._publish_pending_counts(session_id, self._counts_from_snapshot(snapshot))
         return event, snapshot
 
     @staticmethod
@@ -287,6 +324,11 @@ class HumanInteractionService:
         iid = interaction_id or uuid.uuid4().hex
         questions = _normalize_questions(arguments)
         metadata = _normalize_metadata(arguments)
+        from .images import admit_question_images
+        try:
+            admit_question_images(questions)
+        except ValueError as exc:
+            raise HumanInteractionValidationError(str(exc)) from exc
         created_at = now_iso()
         request_core = {
             "interaction_id": iid,
@@ -310,7 +352,7 @@ class HumanInteractionService:
             snapshot = self._snapshot_locked(sid)
             if iid in dict(snapshot.get("interactions") or {}):
                 raise HumanInteractionConflict("interaction_id already exists")
-            self._append_locked(sid, "interaction_requested", record, str(run_id or ""))
+            self._append_locked(sid, "interaction_requested", record, str(run_id or ""), snapshot=snapshot)
         return record
 
     def create_approval(
@@ -362,7 +404,7 @@ class HumanInteractionService:
                         raise HumanInteractionConflict("approval request digest changed")
                     return existing
                 raise HumanInteractionConflict("approval_id already exists")
-            self._append_locked(sid, "approval_requested", record, str(run_id or ""))
+            self._append_locked(sid, "approval_requested", record, str(run_id or ""), snapshot=snapshot)
         return record
 
     def _execution_anchor(self, session_id: str, tool_call_id: str, run_id: str) -> dict:
@@ -375,7 +417,7 @@ class HumanInteractionService:
     def list(self, session_id: str, *, kind: str = "question", status: str = "") -> list[dict]:
         snapshot = self._snapshot(session_id)
         key = "approvals" if kind == "approval" else "interactions"
-        rows = [dict(row) for row in dict(snapshot.get(key) or {}).values() if isinstance(row, dict)]
+        rows = [copy.deepcopy(row) for row in dict(snapshot.get(key) or {}).values() if isinstance(row, dict)]
         if status:
             rows = [row for row in rows if str(row.get("status") or "") == status]
         return sorted(rows, key=lambda row: (str(row.get("created_at") or ""), str(row.get("interaction_id") or row.get("approval_id") or "")))
@@ -385,7 +427,7 @@ class HumanInteractionService:
         row = dict(self._snapshot(session_id).get(key) or {}).get(request_id)
         if not isinstance(row, dict):
             raise HumanInteractionNotFound(f"{kind} request not found")
-        return dict(row)
+        return copy.deepcopy(row)
 
     @staticmethod
     def _verify_approval_record(record: dict, expected_digest: str = "") -> None:
@@ -420,7 +462,7 @@ class HumanInteractionService:
                 "request_version": record.get("request_version", 1),
                 "status": record.get("status", "pending"),
                 "analysis": dict(analysis),
-            }, str(record.get("run_id") or ""))
+            }, str(record.get("run_id") or ""), snapshot=snapshot)
             return dict(snapshot["approvals"][approval_id])
 
     def pending_counts(self, session_id: str) -> dict:
@@ -486,7 +528,8 @@ class HumanInteractionService:
         sid = str(session_id or "").strip()
         iid = str(interaction_id or "").strip()
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot_locked(sid).get("interactions") or {}).get(iid)
+            snapshot = self._snapshot_locked(sid)
+            record = dict(snapshot.get("interactions") or {}).get(iid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound("interaction not found")
             if record.get("status") in _TERMINAL:
@@ -500,7 +543,7 @@ class HumanInteractionService:
                 "resolver": dict(resolver or {}),
                 "request_digest": record.get("request_digest"),
             }
-            _event, snapshot = self._append_locked(sid, "interaction_resolved", payload, str(record.get("run_id") or ""))
+            _event, snapshot = self._append_locked(sid, "interaction_resolved", payload, str(record.get("run_id") or ""), snapshot=snapshot)
             resolved = dict(snapshot.get("interactions") or {}).get(iid) or payload
         _wake_waiter(sid, "question", iid, dict(resolved))
         return dict(resolved)
@@ -541,7 +584,8 @@ class HumanInteractionService:
                 "rejection_reason is only valid when decision is deny"
             )
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot_locked(sid).get("approvals") or {}).get(aid)
+            snapshot = self._snapshot_locked(sid)
+            record = dict(snapshot.get("approvals") or {}).get(aid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound("approval not found")
             if expected_request_digest:
@@ -583,7 +627,7 @@ class HumanInteractionService:
             }
             if normalized_decision == "deny" and normalized_rejection_reason:
                 payload["rejection_reason"] = normalized_rejection_reason
-            _event, snapshot = self._append_locked(sid, "approval_resolved", payload, str(record.get("run_id") or ""))
+            _event, snapshot = self._append_locked(sid, "approval_resolved", payload, str(record.get("run_id") or ""), snapshot=snapshot)
             resolved = dict(snapshot.get("approvals") or {}).get(aid) or payload
         _wake_waiter(sid, "approval", aid, dict(resolved))
         return dict(resolved)
@@ -595,7 +639,8 @@ class HumanInteractionService:
         id_key = "approval_id" if kind == "approval" else "interaction_id"
         event_type = "approval_cancelled" if kind == "approval" else "interaction_cancelled"
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot_locked(sid).get(collection) or {}).get(rid)
+            snapshot = self._snapshot_locked(sid)
+            record = dict(snapshot.get(collection) or {}).get(rid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound(f"{kind} request not found")
             if record.get("status") in _TERMINAL:
@@ -607,7 +652,7 @@ class HumanInteractionService:
                 "cancelled_at": now_iso(),
                 "request_digest": record.get("request_digest"),
             }
-            _event, snapshot = self._append_locked(sid, event_type, payload, str(record.get("run_id") or ""))
+            _event, snapshot = self._append_locked(sid, event_type, payload, str(record.get("run_id") or ""), snapshot=snapshot)
             resolved = dict(snapshot.get(collection) or {}).get(rid) or payload
         _wake_waiter(sid, kind, rid, dict(resolved))
         return dict(resolved)
@@ -619,7 +664,8 @@ class HumanInteractionService:
         id_key = "approval_id" if kind == "approval" else "interaction_id"
         event_type = "approval_expired" if kind == "approval" else "interaction_expired"
         with self.mirror.event_log.session_transaction(sid):
-            record = dict(self._snapshot_locked(sid).get(collection) or {}).get(rid)
+            snapshot = self._snapshot_locked(sid)
+            record = dict(snapshot.get(collection) or {}).get(rid)
             if not isinstance(record, dict):
                 raise HumanInteractionNotFound(f"{kind} request not found")
             if record.get("status") in _TERMINAL:
@@ -631,7 +677,7 @@ class HumanInteractionService:
                 "expired_at": now_iso(),
                 "request_digest": record.get("request_digest"),
             }
-            _event, snapshot = self._append_locked(sid, event_type, payload, str(record.get("run_id") or ""))
+            _event, snapshot = self._append_locked(sid, event_type, payload, str(record.get("run_id") or ""), snapshot=snapshot)
             resolved = dict(snapshot.get(collection) or {}).get(rid) or payload
         _wake_waiter(sid, kind, rid, dict(resolved))
         return dict(resolved)
@@ -733,32 +779,62 @@ async def wait_for_user_answers(
     tool_call_id: str = "",
     emit: Optional[Callable[[dict], Awaitable[None]]] = None,
     interrupt_check: Optional[Callable[[], bool]] = None,
+    react_iter: int = 0,
 ) -> dict:
     service = get_human_interaction_service()
-    record = service.create_question(
-        session_id, arguments, run_id=run_id, tool_call_id=tool_call_id
-    )
-    iid = str(record["interaction_id"])
-    future = _register_waiter(session_id, "question", iid)
+    record, iid, future = None, "", None
+    trace_state = {"session_id": session_id, "_runtime_v2_run_id": run_id,
+                   "_current_react_iter": react_iter}
+    def created(value):
+        nonlocal record, iid, future
+        record = value
+        iid = str(record["interaction_id"])
+        future = _register_waiter(session_id, "question", iid)
+
+    async def cancel_request(reason):
+        return await run_fact_commit(
+            partial(service.cancel, reason=reason), session_id, iid,
+            trace_state=trace_state,
+        )
+
     try:
-        latest = service.get(session_id, iid)
-        if latest.get("status") != "pending" and not future.done():
-            future.set_result(latest)
-        if emit is not None:
-            await emit({"type": "interaction_requested", **record, "_runtime_v2_committed": True})
+        trace = LocalOperationTrace("ask_user_card_prepare", session_id=session_id,
+                                    run_id=run_id, react_iter=react_iter,
+                                    event_type="interaction_requested")
+        with trace.bind():
+            try:
+                with local_step("ask_question_create_await"):
+                    await run_fact_commit(
+                        partial(service.create_question, run_id=run_id, tool_call_id=tool_call_id),
+                        session_id, arguments, on_committed=created, trace_state=trace_state,
+                    )
+                mark_local("ask_question_waiter_registered")
+                with local_step("ask_question_status_recheck"):
+                    latest = await asyncio.to_thread(service.get, session_id, iid)
+                if latest.get("status") != "pending" and not future.done():
+                    future.set_result(latest)
+                if emit is not None:
+                    with local_step("ask_question_card_emit"):
+                        await emit({"type": "interaction_requested", **record,
+                                    "react_iter": react_iter, "_runtime_v2_committed": True})
+                    mark_local("ask_question_card_emitted")
+            finally:
+                trace.log()
         while not future.done():
             if interrupt_check is not None and interrupt_check():
-                return service.cancel(session_id, iid, reason="run_interrupted")
+                return await cancel_request("run_interrupted")
             try:
                 return await asyncio.wait_for(asyncio.shield(future), timeout=0.25)
             except asyncio.TimeoutError:
                 continue
         return future.result()
     except asyncio.CancelledError:
-        try:
-            service.cancel(session_id, iid, reason="run_cancelled")
-        except Exception:
-            pass
+        if record is not None:
+            try:
+                await cancel_request("run_cancelled")
+            except Exception:
+                pass
         raise
     finally:
-        _remove_waiter(session_id, "question", iid, future)
+        if future is not None:
+            _remove_waiter(session_id, "question", iid, future)

@@ -479,6 +479,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
     effect = "read"
     if name in {"read_file", "ls", "list_dir", "glob", "grep"}:
         action = "fs.read"
+    elif name == "show_user" and args.get("kind") == "file":
+        action = "fs.read"
     elif name in {"write_file", "edit_file", "apply_patch"}:
         action, effect = "fs.write", "workspace_write"
     elif name == "delete_file":
@@ -562,6 +564,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
         )
     if name in {
         "ask_user",
+        "show_user",
+        "request_restart",
         "tool_search",
         "tool_describe",
         "activate_skill",

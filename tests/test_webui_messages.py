@@ -604,17 +604,23 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
         },
     )
 
+    from starlette.requests import Request
+    loading_request = Request({'type':'http','state':{'ui_loading_trace':{'request_id':'history-request','load_id':'history-load'}}})
     response = asyncio.run(webui.get_session_history_snapshot(
         "s1",
         limit=None,
         before_index=None,
         after_index=None,
         turns=5,
+        request=loading_request,
     ))
     payload = _json_response_payload(response)
 
     assert payload["ok"] is True
     assert payload["source"] == "runtime_v2_snapshot"
+    assert payload['request_id'] == 'history-request'
+    assert payload['load_id'] == 'history-load'
+    assert loading_request.scope['state']['ui_loading_trace']['phase'] == 'complete'
     assert payload["count"] == 5
     assert payload["count_source"] == "runtime_v2_page"
     assert payload["elapsed_ms"] >= 0
@@ -1507,7 +1513,7 @@ def test_running_subagent_appears_active_to_history_stream_and_chat_guard(monkey
     assert webui._reserve_session_chat_start("child") is None
 
 
-def test_clear_unread_result_is_run_scoped_and_invalidates_state_cache(monkeypatch):
+def test_clear_unread_result_is_run_scoped_and_delegates_change_notifications(monkeypatch):
     import webui
 
     calls = []
@@ -1531,7 +1537,7 @@ def test_clear_unread_result_is_run_scoped_and_invalidates_state_cache(monkeypat
     payload = _json_response_payload(response)
 
     assert calls == [("s1", "run-current")]
-    assert invalidations == [True]
+    assert invalidations == [], 'the manager invalidates only on a committed change'
     assert payload == {"status": "ok", "cleared": True}
 
 

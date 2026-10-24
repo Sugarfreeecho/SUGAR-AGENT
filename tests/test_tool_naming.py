@@ -85,11 +85,13 @@ def catalog(monkeypatch):
     import agent_loop
     import agent_mcp
     import agent_subagent
+    import session_workspace
 
     monkeypatch.setenv("MYAGENT_TOOL_SEARCH", "off")
     monkeypatch.setattr(agent_extensions, "load_plugins", lambda **_: type("Plugins", (), {"plugins": ()})())
     monkeypatch.setattr(agent_extensions, "bundled_host_tool_definitions", lambda **_: [])
     monkeypatch.setattr(agent_loop, "OPENAI_TOOL_DEFINITIONS", [definition("read_file")])
+    monkeypatch.setattr(session_workspace, "workspace_tool_definitions", lambda: [])
     monkeypatch.setattr(agent_loop, "tools_dict", {"read_file": lambda: None})
     monkeypatch.setattr(agent_subagent, "inject_task_model_profiles", lambda rows: rows)
     identities = {"mcp_docs_pages_search": ("docs/pages", "search"),

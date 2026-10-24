@@ -39,3 +39,13 @@ def test_provider_internal_type_error_is_not_retried_and_other_providers_continu
 
     assert failures == ["broken: provider implementation failed"]
     assert received == ["broken", "session-1"]
+
+
+def test_selecting_native_channel_does_not_send_to_other_providers():
+    received = []
+    notification_providers.register_notification_provider("desktop", lambda title, message: received.append("desktop"))
+    notification_providers.register_notification_provider("other", lambda *args: received.append("other"))
+    failures = asyncio.run(notification_providers.notify_user("Title", "Body", "s1", provider_ids=("desktop",)))
+    assert failures == [] and received == ["desktop"]
+    assert asyncio.run(notification_providers.notify_user("Title", "Body", provider_ids=())) == []
+    assert received == ["desktop"]

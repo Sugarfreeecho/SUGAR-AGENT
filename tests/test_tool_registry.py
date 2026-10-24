@@ -326,6 +326,7 @@ def test_agent_catalog_records_tool_sources_without_name_prefixes(monkeypatch):
         "local_action",
         "remote_action",
         "business_action",
+        "switch_work_dir",
     }
 
 
@@ -338,7 +339,7 @@ def test_builtin_host_services_are_bound_to_registered_invokers(monkeypatch):
     async def no_definitions():
         return []
 
-    definitions = [_definition("ask_user")]
+    definitions = [_definition("ask_user"), _definition("show_user")]
     monkeypatch.setattr(agent_loop, "OPENAI_TOOL_DEFINITIONS", definitions)
     monkeypatch.setattr(agent_mcp, "get_tool_definitions", no_definitions)
     monkeypatch.setattr(agent_extensions, "plugin_tool_definitions", no_definitions)
@@ -349,10 +350,14 @@ def test_builtin_host_services_are_bound_to_registered_invokers(monkeypatch):
         agent_loop.build_combined_tool_registry_for_session("session-1", session_meta={})
     )
 
-    for name in ("create_goal", "update_todo", "ask_user"):
+    for name in ("create_goal", "update_todo", "ask_user", "show_user", "switch_work_dir"):
         descriptor = registry.require(name)
         assert descriptor.invocation_kind is ToolInvocationKind.HOST_SERVICE
         assert descriptor.invoker_id == name
+    workspace = registry.require("switch_work_dir")
+    assert workspace.effect == "control"
+    assert not workspace.parallel_safe
+    assert not workspace.early_stream_safe
 
 
 def test_agent_catalog_marks_unknown_inherited_definition_unavailable(monkeypatch):

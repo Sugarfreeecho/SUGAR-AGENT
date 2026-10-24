@@ -28,14 +28,19 @@ async def notify_user(
     title: str = "",
     message: str = "",
     session_id: str = "",
+    *,
+    provider_ids: tuple[str, ...] | None = None,
 ) -> list[str]:
     """Dispatch a notification; ``session_id`` lets providers deep-link to it.
 
     Providers registered with the legacy two-argument signature keep working:
     the session id is appended only when the callback accepts it.
+    ``provider_ids`` selects specific channels; omitted, all providers receive it.
     """
     failures: list[str] = []
     for provider_id, callback in tuple(_providers.items()):
+        if provider_ids is not None and provider_id not in provider_ids:
+            continue
         try:
             if not (title or message):
                 value = callback()

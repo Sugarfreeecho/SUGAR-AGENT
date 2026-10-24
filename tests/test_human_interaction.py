@@ -818,8 +818,9 @@ def test_approval_analysis_survives_reload_and_replay_without_changing_decision(
         ("allow_external_workspace_once", False),
     ],
 )
+@pytest.mark.parametrize("required_dirs", [[], ["D:/directory-approval-test"]])
 def test_workspace_scope_resolution_reprompts_tool_without_approving_it(
-    monkeypatch, decision, expected_global_grant
+    monkeypatch, decision, expected_global_grant, required_dirs
 ):
     import json
 
@@ -849,10 +850,15 @@ def test_workspace_scope_resolution_reprompts_tool_without_approving_it(
                 "status": "resolved",
                 "decision": decision,
                 "security_request_digest": "sha256:test",
+                "required_dirs": required_dirs,
             }
 
     raw_decisions = []
     global_grants = []
+    directory_grants = []
+    import session_authorized_dirs
+    monkeypatch.setattr(session_authorized_dirs, "add_authorized_dir",
+                        lambda sid, directory: directory_grants.append(directory))
 
     monkeypatch.setattr(
         human_interaction, "get_human_interaction_service", lambda: Service()
@@ -888,7 +894,8 @@ def test_workspace_scope_resolution_reprompts_tool_without_approving_it(
     assert raw_decisions == [
         ("workspace-session", "workspace-approval", decision)
     ]
-    assert bool(global_grants) is expected_global_grant
+    assert bool(global_grants) == (expected_global_grant and not required_dirs)
+    assert directory_grants == (required_dirs if decision == "allow_external_workspace" else [])
     if global_grants:
         assert global_grants == [{"allow_external_workspace_ops": True}]
 
@@ -1066,9 +1073,10 @@ def test_pending_approval_refresh_restores_card_badge_and_banner_contract(tmp_pa
 
     root = Path(__file__).resolve().parents[1]
     layout = (root / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
-    restore_call = "await refreshHumanInteractions(targetSession, { render: false });"
-    switch_call = "if (targetSession) await switchSession(targetSession);"
-    assert layout.index(restore_call) < layout.index(switch_call)
+    assert "await refreshHumanInteractions(targetSession" not in layout
+    sessions = (root / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    switch_body = sessions.split("async function switchSession(sessionId, opts)", 1)[1].split("async function createNewSession", 1)[0]
+    assert switch_body.index("void refreshHumanInteractions(sessionId)") < switch_body.index("await loadSessionMessages(")
 
     interactions = (root / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
     refresh_body = interactions.split("async function refreshHumanInteractions", 1)[1]

@@ -174,3 +174,62 @@ def test_changed_request_rebuilds_card_and_uses_new_version_draft(human_page):
     assert page.evaluate("refreshHumanInteractions('parent')")
     assert page.locator(".human-interaction-card").evaluate("el => el !== originalCard")
     assert page.locator(".human-question-text").inner_text() == "修正后的问题"
+
+
+def test_question_image_loads_in_card_preserves_draft_and_opens_viewer(human_page):
+    from io import BytesIO
+    from PIL import Image
+    output = BytesIO()
+    Image.new("RGB", (200, 200), "white").save(output, "PNG")
+    page = human_page
+    page.route("**/interactions/question-1/images/q1/0", lambda route: route.fulfill(
+        content_type="image/png", body=output.getvalue()))
+    page.add_script_tag(content=(ROOT / "frontend/src/app/modules/workspace-media.js").read_text(encoding="utf-8"))
+    page.evaluate("""() => {
+        record.questions[0].images = [{alt: '登录二维码', caption: '<img src=x onerror=alert(1)>',
+            attachment: {attachmentId: 'sha256:' + 'a'.repeat(64), mediaType: 'image/png', width: 200, height: 200}}];
+        renderHumanInteractionEvent(null, {...record, type: 'interaction_requested'}, 'parent');
+    }""")
+    image = page.locator(".human-question-image")
+    page.wait_for_function("document.querySelector('.human-question-image').naturalWidth === 200")
+    assert image.get_attribute("src") == "/sessions/parent/interactions/question-1/images/q1/0"
+    assert image.get_attribute("alt") == "登录二维码"
+    assert page.locator(".human-question-image-caption").inner_text() == "<img src=x onerror=alert(1)>"
+    assert page.locator(".human-question-image-caption img").count() == 0
+    page.locator(".human-other-input").fill("扫码后请核实登录状态")
+    image.evaluate("el => window.originalImage = el")
+    assert page.evaluate("refreshHumanInteractions('parent')")
+    assert image.evaluate("el => el === originalImage")
+    assert page.locator(".human-other-input").input_value() == "扫码后请核实登录状态"
+    page.locator(".human-question-image-trigger").click()
+    assert page.locator(".attachment-image-viewer").get_attribute("open") is not None
+    assert page.locator(".attachment-image-viewer img").get_attribute("alt") == "登录二维码"
+
+
+def test_question_image_failure_can_retry_and_never_loads_raw_model_url(human_page):
+    from io import BytesIO
+    from PIL import Image
+    output = BytesIO()
+    Image.new("RGB", (60, 60), "white").save(output, "PNG")
+    page = human_page
+    attempts = []
+    def serve(route):
+        attempts.append(route.request.url)
+        if len(attempts) == 1:
+            route.fulfill(status=404, body="not found")
+        else:
+            route.fulfill(content_type="image/png", body=output.getvalue())
+    page.route("**/images/q1/0*", serve)
+    page.evaluate("""() => {
+        record.questions[0].images = [{alt: '二维码', data_url: 'https://untrusted.test/track.png',
+            attachment: {attachmentId: 'sha256:' + 'a'.repeat(64), mediaType: 'image/png'}},
+            {data_url: 'javascript:alert(1)', alt: 'invalid'}];
+        renderHumanInteractionEvent(null, {...record, type: 'interaction_requested'}, 'parent');
+    }""")
+    page.locator(".human-question-image-error").wait_for(state="visible")
+    assert page.locator(".human-question-image").count() == 1
+    assert "untrusted.test" not in page.locator(".human-question-image").get_attribute("src")
+    page.locator(".human-question-image-retry").click()
+    page.wait_for_function("document.querySelector('.human-question-image').naturalWidth === 60")
+    assert page.locator(".human-question-image-error").is_hidden()
+    assert len(attempts) == 2

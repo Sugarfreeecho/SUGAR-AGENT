@@ -5206,6 +5206,27 @@ def _list_session_human_interactions(session_id: str, kind: str, status: str, in
     return rows
 
 
+@fastapi_app.get("/sessions/{session_id}/presentations/{presentation_id}/image")
+async def read_user_presentation_image(session_id: str, presentation_id: str, request: Request = None):
+    from attachments.access import principal_for_request
+    from user_presentations import saved_presentation
+
+    principal_for_request(request, globals().get("_remote_control_gateway"), "read")
+    try:
+        def read():
+            record = saved_presentation(session_manager, session_id, presentation_id)
+            if record.get("kind") != "image":
+                raise LookupError("not an image presentation")
+            return get_attachment_store(WORK_DIR).read_image_sync(record["image"]["attachment"])
+        stored = await asyncio.to_thread(read)
+        return Response(stored.data, media_type=stored.ref["mediaType"], headers={
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+    except (LookupError, AttachmentError, ValueError):
+        return JSONResponse({"ok": False, "error": "presentation image not found"}, status_code=404)
+
+
 @fastapi_app.get("/sessions/{session_id}/interactions")
 async def get_session_interactions(
     session_id: str,
@@ -5222,6 +5243,31 @@ async def get_session_interactions(
         return JSONResponse(content={"ok": True, "interactions": rows})
     except Exception as exc:
         return _human_interaction_error_response(exc)
+
+
+@fastapi_app.get("/sessions/{session_id}/interactions/{interaction_id}/images/{question_id}/{image_index}")
+async def read_session_interaction_image(
+    session_id: str, interaction_id: str, question_id: str, image_index: int, request: Request = None,
+):
+    from attachments.access import principal_for_request
+    from human_interaction import get_human_interaction_service, HumanInteractionNotFound
+
+    principal_for_request(request, globals().get("_remote_control_gateway"), "read")
+    try:
+        def read():
+            record = get_human_interaction_service().get(session_id, interaction_id)
+            question = next((q for q in record.get("questions", []) if q.get("question_id") == question_id), {})
+            images = question.get("images", [])
+            if image_index < 0 or image_index >= len(images):
+                raise HumanInteractionNotFound("question image not found")
+            return get_attachment_store(WORK_DIR).read_image_sync(images[image_index]["attachment"])
+        stored = await asyncio.to_thread(read)
+        return Response(stored.data, media_type=stored.ref["mediaType"], headers={
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+    except (HumanInteractionNotFound, AttachmentError, KeyError, ValueError):
+        return JSONResponse({"ok": False, "error": "question image not found"}, status_code=404)
 
 
 @fastapi_app.post("/sessions/{session_id}/interactions/{interaction_id}/resolve")
@@ -5567,6 +5613,37 @@ def _build_ui_message_with_selected_skills(raw_message: str, valid_names: list[s
     return raw_message if raw_message.endswith(suffix) else raw_message + suffix
 
 
+async def _prepare_followup_content(request: Request, text: str, attachments: Any):
+    """Admit attachments once for both queued turns and in-run follow-ups."""
+    from attachments.admission import AdmissionContext, admit_content, text_requires_admission
+    from attachments.access import principal_for_request, require_attachment
+    from attachments.request_budget import walk_images
+
+    if not isinstance(attachments, list):
+        raise ValueError("attachments must be an array")
+    if not attachments and not text_requires_admission(text, scan_paths=True, scan_remote=True):
+        return text, []
+    store = get_attachment_store(WORK_DIR)
+    blocks = [{"type": "text", "text": text}]
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            raise ValueError("invalid attachment")
+        if isinstance(attachment.get("attachment"), dict):
+            actor = principal_for_request(request, globals().get("_remote_control_gateway"), "write")
+            ref = await run_in_threadpool(require_attachment, store, actor, attachment["attachment"].get("attachmentId"))
+            blocks.append({"type": "image", "attachment": ref})
+        elif attachment.get("path"):
+            blocks.append({"type": "local_file", "local_file": {
+                "path": str(Path(attachment["path"]).expanduser().resolve()),
+                "name": str(attachment.get("name") or ""),
+            }})
+    content = await run_in_threadpool(
+        admit_content, blocks if len(blocks) > 1 else text,
+        AdmissionContext(store), scan_paths=True, scan_remote=True,
+    )
+    return content, [block["attachment"] for block in walk_images(content)]
+
+
 @fastapi_app.post("/sessions/{session_id}/followup_queue")
 async def post_session_followup_queue(session_id: str, request: Request):
     """Durably queue ordinary user turns; never start or stop a run here."""
@@ -5577,10 +5654,6 @@ async def post_session_followup_queue(session_id: str, request: Request):
             raise ValueError("items must be an array")
         prepared = []
         seen = set()
-        from attachments.admission import AdmissionContext, admit_content
-        from attachments.access import principal_for_request, require_attachment
-        from attachments.request_budget import walk_images
-        store = get_attachment_store(WORK_DIR)
         for entry in items:
             if not isinstance(entry, dict):
                 raise ValueError("invalid queue item")
@@ -5591,31 +5664,13 @@ async def post_session_followup_queue(session_id: str, request: Request):
             seen.add(client_id)
             skills = _valid_selected_skill_names(entry.get("selected_skills") or [])
             agent_text = _build_agent_message_with_selected_skills(text, skills)
-            blocks = [{"type": "text", "text": agent_text}]
             attachments = entry.get("attachments") or []
-            if not isinstance(attachments, list):
-                raise ValueError("attachments must be an array")
-            for attachment in attachments:
-                if not isinstance(attachment, dict):
-                    raise ValueError("invalid attachment")
-                if isinstance(attachment.get("attachment"), dict):
-                    actor = principal_for_request(request, globals().get("_remote_control_gateway"), "write")
-                    ref = await run_in_threadpool(require_attachment, store, actor, attachment["attachment"].get("attachmentId"))
-                    blocks.append({"type": "image", "attachment": ref})
-                elif attachment.get("path"):
-                    blocks.append({"type": "local_file", "local_file": {
-                        "path": str(Path(attachment["path"]).expanduser().resolve()),
-                        "name": str(attachment.get("name") or ""),
-                    }})
-            content = await run_in_threadpool(
-                admit_content, blocks if len(blocks) > 1 else agent_text,
-                AdmissionContext(store), scan_paths=True, scan_remote=True,
-            )
+            content, ui_attachments = await _prepare_followup_content(request, agent_text, attachments)
             prepared.append({
                 "content": agent_text, "user_content": content, "client_id": client_id,
                 "raw_content": text, "selected_skills": skills, "attachments": attachments,
                 "ui_content": _build_ui_message_with_selected_skills(str(entry.get("ui_content") or text), skills),
-                "ui_attachments": [block["attachment"] for block in walk_images(content)],
+                "ui_attachments": ui_attachments,
                 "source_run_id": str(data.get("source_run_id") or ""),
                 "mode": "interrupt" if entry.get("mode") == "interrupt" else "append",
             })
@@ -5649,7 +5704,7 @@ async def post_session_steer(session_id: str, request: Request):
         return JSONResponse(content={"ok": False, "error": "missing client_id"}, status_code=400)
     if steer_mode not in {"interrupt", "append"}:
         return JSONResponse(content={"ok": False, "error": "invalid steer mode"}, status_code=400)
-    if not _is_session_stream_active(sid):
+    def inactive_response():
         existing = get_session_steer(sid, client_id=client_id) if client_id else {"ok": False}
         if existing.get("ok"):
             existing_item = existing.get("item") if isinstance(existing.get("item"), dict) else {}
@@ -5663,11 +5718,22 @@ async def post_session_steer(session_id: str, request: Request):
                 "aborted": False,
             })
         return JSONResponse(content={"ok": False, "error": "session is not running"}, status_code=409)
+    if not _is_session_stream_active(sid):
+        return inactive_response()
     if not isinstance(selected_skills, list):
         selected_skills = []
     valid_selected_skills = _valid_selected_skill_names(selected_skills)
     agent_message = _build_agent_message_with_selected_skills(message, valid_selected_skills)
     ui_message = _build_ui_message_with_selected_skills(requested_ui_content or message, valid_selected_skills)
+    attachments = (data or {}).get("attachments") or []
+    try:
+        user_content, ui_attachments = await _prepare_followup_content(request, agent_message, attachments)
+    except (ValueError, TypeError, AttachmentError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    # Image admission may yield while the owner finishes and consumes a queued
+    # copy. Reconcile again before creating/promoting an in-run operation.
+    if not _is_session_stream_active(sid):
+        return inactive_response()
     followup_restart_enabled = os.getenv("MYAGENT_ENABLE_FOLLOWUP_RESTART", "1").strip().lower() in {"1", "true", "yes", "on"}
     result = enqueue_session_steer(
         sid,
@@ -5676,6 +5742,9 @@ async def post_session_steer(session_id: str, request: Request):
         ui_content=ui_message,
         source_run_id=source_run_id,
         mode=steer_mode,
+        user_content=user_content,
+        attachments=attachments,
+        ui_attachments=ui_attachments,
     )
     if not result.get("ok"):
         return JSONResponse(content=result, status_code=400)
@@ -10106,6 +10175,7 @@ _register_vision_api(
 )
 from attachments.api import register_attachment_api as _register_attachment_api
 _register_attachment_api(fastapi_app, WORK_DIR, lambda: _remote_control_gateway)
+fastapi_app.state.remote_control_gateway = _remote_control_gateway
 
 from fastapi.responses import RedirectResponse as _RedirectResponse
 @fastapi_app.middleware("http")
