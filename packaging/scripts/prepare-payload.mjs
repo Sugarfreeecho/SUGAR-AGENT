@@ -15,6 +15,13 @@
  *   node scripts/prepare-payload.mjs                 # 拷贝 + 安装依赖（需要网络）
  *   node scripts/prepare-payload.mjs --skip-deps     # 复用已装好的 site-packages，快速重打包
  *   node scripts/prepare-payload.mjs --build-frontend # 先重新构建前端（vite build）
+ *   node scripts/prepare-payload.mjs --list-skills   # 只打印白名单内/外的技能，不写载荷
+ *   node scripts/prepare-payload.mjs --all-skills    # 忽略 skills.allowlist.txt，打包全部技能
+ *   node scripts/prepare-payload.mjs --all-plugins   # 连独立功能插件一起打包（默认只打非独立功能）
+ *
+ * 技能模板只拷贝 skills.allowlist.txt 里列出的目录；该名单是打包侧的固定契约，
+ * 与运行时界面的技能启停状态无关。
+ * 插件只拷贝 app/plugins/tiers.json 里非 standalone 的目录（system / system-external / extension）。
  */
 
 import fs from 'node:fs'
@@ -43,6 +50,10 @@ const flags = new Set(process.argv.slice(2))
 const SKIP_DEPS = flags.has('--skip-deps')
 const BUILD_FRONTEND = flags.has('--build-frontend')
 const SKIP_SKILLS = flags.has('--skip-skills')
+const ALL_SKILLS = flags.has('--all-skills')
+const LIST_SKILLS = flags.has('--list-skills')
+const ALL_PLUGINS = flags.has('--all-plugins')
+const LIST_PLUGINS = flags.has('--list-plugins')
 
 const APP_EXCLUDE_NAMES = new Set(['__pycache__', '.pytest_cache', '.mypy_cache', 'logs'])
 const APP_EXCLUDE_REL = new Set(['.env', '.env.local', '.env.production', '.requirements.installed'])
@@ -127,6 +138,119 @@ function inventory(root) {
     }
   }
   return { files, bytes }
+}
+
+// 打包白名单：只把这里列出的技能拷进安装包，与运行时的技能启用状态无关。
+const SKILL_ALLOWLIST = path.join(PACKAGING, 'skills.allowlist.txt')
+
+function readSkillAllowlist() {
+  if (!fs.existsSync(SKILL_ALLOWLIST)) {
+    throw new Error(`缺少技能打包白名单：${SKILL_ALLOWLIST}（临时全量请用 --all-skills）`)
+  }
+  const names = []
+  const text = fs.readFileSync(SKILL_ALLOWLIST, 'utf8').replace(/^\uFEFF/, '')
+  for (const line of text.split(/\r?\n/)) {
+    const value = line.split('#')[0].trim()
+    if (!value) continue
+    for (const item of value.split(/[,;]/)) {
+      const name = item.trim()
+      if (name && !names.some(existing => existing.toLowerCase() === name.toLowerCase())) names.push(name)
+    }
+  }
+  if (!names.length) throw new Error(`技能打包白名单为空：${SKILL_ALLOWLIST}`)
+  return { file: SKILL_ALLOWLIST, names }
+}
+
+/** 白名单可以写目录名，也可以写 SKILL.md 里的 name；这里把两者都取到。 */
+function skillFrontmatterName(directory) {
+  try {
+    const text = fs.readFileSync(path.join(directory, 'SKILL.md'), 'utf8')
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+    const name = frontmatter ? /^name:\s*(.+?)\s*$/m.exec(frontmatter[1]) : null
+    const cleaned = name ? name[1].replace(/^["']|["']$/g, '').trim() : ''
+    return cleaned || directory.name
+  } catch {
+    return directory.name
+  }
+}
+
+function selectSkills(skillsRoot, allowlist, { all = false } = {}) {
+  const allowed = all ? null : new Set(allowlist.map(name => name.toLowerCase()))
+  const packaged = []
+  const skipped = []
+  const matched = new Set()
+  for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory()) continue
+    const directory = path.join(skillsRoot, entry.name)
+    // 与 agent_tools.py 一致：只认第一层且必须有 SKILL.md。
+    if (!fs.existsSync(path.join(directory, 'SKILL.md'))) {
+      skipped.push({ name: entry.name, reason: '没有 SKILL.md（运行期同样不扫描）' })
+      continue
+    }
+    const name = skillFrontmatterName(directory)
+    if (allowed && !allowed.has(name.toLowerCase()) && !allowed.has(entry.name.toLowerCase())) {
+      skipped.push({ name, reason: '不在 skills.allowlist.txt' })
+      continue
+    }
+    matched.add(name.toLowerCase())
+    matched.add(entry.name.toLowerCase())
+    packaged.push({ name, directory })
+  }
+  const missing = allowed ? allowlist.filter(name => !matched.has(name.toLowerCase())) : []
+  return { packaged, skipped, missing }
+}
+
+function resolveSkillsDir() {
+  const pathsProbe = spawnSync(REPO_PYTHON, ['-B', path.join(REPO, 'app', 'workspace_paths.py'), '--project-root', REPO], {
+    encoding: 'utf8', windowsHide: true, timeout: 10000, env: PYTHON_BUILD_ENV,
+  })
+  if (pathsProbe.status !== 0) throw new Error('无法读取技能模板目录配置：' + (pathsProbe.stderr || 'path probe failed'))
+  return JSON.parse(pathsProbe.stdout).skills_dir
+}
+
+// 插件分级表：运行期用它决定默认状态与设置页可见性，打包用它决定收录范围。
+const PLUGIN_TIERS = path.join(REPO, 'app', 'plugins', 'tiers.json')
+const PACKAGED_PLUGIN_TIERS = new Set(['system', 'system-external', 'extension'])
+
+function readPluginTiers() {
+  let data
+  try {
+    data = JSON.parse(fs.readFileSync(PLUGIN_TIERS, 'utf8'))
+  } catch (error) {
+    throw new Error(`无法读取插件分级表：${PLUGIN_TIERS}（${error.message}）`)
+  }
+  const tiers = data && typeof data === 'object' ? data.tiers : null
+  if (!tiers || typeof tiers !== 'object') throw new Error(`插件分级表缺少 tiers：${PLUGIN_TIERS}`)
+  const mapping = new Map()
+  for (const [tier, ids] of Object.entries(tiers)) {
+    if (!Array.isArray(ids)) continue
+    for (const id of ids) {
+      const key = String(id || '').trim().toLowerCase()
+      if (key && !mapping.has(key)) mapping.set(key, tier)
+    }
+  }
+  return { file: PLUGIN_TIERS, mapping }
+}
+
+function selectPlugins(pluginsRoot, tiers, { all = false } = {}) {
+  const packaged = []
+  const skipped = []
+  const seen = new Set()
+  if (!fs.existsSync(pluginsRoot)) throw new Error(`缺少插件目录：${pluginsRoot}`)
+  for (const entry of fs.readdirSync(pluginsRoot, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+    const tier = tiers.mapping.get(entry.name.toLowerCase()) || 'standalone'
+    seen.add(entry.name.toLowerCase())
+    if (!all && !PACKAGED_PLUGIN_TIERS.has(tier)) {
+      skipped.push({ name: entry.name, tier, reason: '独立功能不随安装包分发' })
+      continue
+    }
+    packaged.push({ name: entry.name, tier })
+  }
+  const missing = all ? [] : [...tiers.mapping.entries()]
+    .filter(([id, tier]) => PACKAGED_PLUGIN_TIERS.has(tier) && !seen.has(id))
+    .map(([id]) => id)
+  return { packaged, skipped, missing }
 }
 
 // ------------------------------------------------------------------- stages ---
@@ -289,6 +413,27 @@ function dependenciesList() {
 // ---------------------------------------------------------------------- main ---
 
 function main() {
+  if (LIST_PLUGINS) {
+    const selection = selectPlugins(path.join(REPO, 'plugins'), readPluginTiers(), { all: ALL_PLUGINS })
+    log(`插件分级表：${path.relative(REPO, PLUGIN_TIERS)}`)
+    log(`打包（${selection.packaged.length}）：${selection.packaged.map(item => `${item.name}(${item.tier})`).join(', ') || '无'}`)
+    log(`跳过（${selection.skipped.length}）：${selection.skipped.map(item => `${item.name}[${item.reason}]`).join(', ') || '无'}`)
+    if (selection.missing.length) log(`分级表里没找到（构建会失败）：${selection.missing.join(', ')}`)
+    return
+  }
+
+  if (LIST_SKILLS) {
+    const skillsRoot = resolveSkillsDir()
+    const allowlist = readSkillAllowlist()
+    const { packaged, skipped, missing } = selectSkills(skillsRoot, allowlist.names, { all: ALL_SKILLS })
+    log(`技能模板目录：${skillsRoot}`)
+    log(`打包白名单：${path.relative(REPO, allowlist.file)}（${ALL_SKILLS ? '本次忽略，全量打包' : `${allowlist.names.length} 项`}）`)
+    log(`打包（${packaged.length}）：${packaged.map(skill => skill.name).join(', ') || '无'}`)
+    log(`跳过（${skipped.length}）：${skipped.map(item => `${item.name}[${item.reason}]`).join(', ') || '无'}`)
+    if (missing.length) log(`白名单里没找到（构建会失败）：${missing.join(', ')}`)
+    return
+  }
+
   log(`SugarAgent 桌面版载荷准备 v${PACKAGE_JSON.version}`)
   log(`  仓库：${REPO}`)
   log(`  输出：${PAYLOAD}`)
@@ -301,6 +446,8 @@ function main() {
       path.join(REPO, 'scripts', 'build_egress_helper_windows.ps1'), '-IfNeeded'],
     { cwd: REPO, windowsHide: true })
   }
+
+  let skillSummary = { mode: SKIP_SKILLS ? 'skipped' : ALL_SKILLS ? 'all' : 'active', packaged: [], skipped: [] }
 
   const distIndex = path.join(REPO, 'app', 'templates', 'dist', 'index.html')
   if (!fs.existsSync(distIndex)) {
@@ -323,11 +470,32 @@ function main() {
     label: 'app',
   })
 
-  log('· 拷贝 plugins/ ——')
-  copyTree(path.join(REPO, 'plugins'), path.join(PAYLOAD, 'plugins'), {
-    excludeNames: PLUGIN_EXCLUDE_NAMES,
-    label: 'plugins',
-  })
+  const pluginSelection = selectPlugins(path.join(REPO, 'plugins'), readPluginTiers(), { all: ALL_PLUGINS })
+  if (pluginSelection.missing.length) {
+    throw new Error(`分级表里的插件目录不存在：${pluginSelection.missing.join(', ')}（检查 app/plugins/tiers.json）`)
+  }
+  fs.mkdirSync(path.join(PAYLOAD, 'plugins'), { recursive: true })
+  log(`· 拷贝 plugins/（${ALL_PLUGINS ? '全部分级' : '排除独立功能'}）——`)
+  let pluginFiles = 0
+  let pluginBytes = 0
+  for (const plugin of pluginSelection.packaged) {
+    const stats = copyTree(path.join(REPO, 'plugins', plugin.name), path.join(PAYLOAD, 'plugins', plugin.name), {
+      excludeNames: PLUGIN_EXCLUDE_NAMES,
+    })
+    pluginFiles += stats.files
+    pluginBytes += stats.bytes
+  }
+  log(`  · 打包 ${pluginSelection.packaged.length} 个插件：${pluginSelection.packaged.map(item => `${item.name}(${item.tier})`).join(', ')}`)
+  log(`  · 合计 ${pluginFiles} 文件 / ${human(pluginBytes)}`)
+  if (pluginSelection.skipped.length) {
+    log(`  · 跳过 ${pluginSelection.skipped.length} 个：${pluginSelection.skipped.map(item => item.name).join(', ')}`)
+  }
+  const pluginSummary = {
+    mode: ALL_PLUGINS ? 'all' : 'tiers',
+    tiersFile: path.relative(REPO, PLUGIN_TIERS).replace(/\\/g, '/'),
+    packaged: pluginSelection.packaged.map(item => ({ id: item.name, tier: item.tier })),
+    skipped: pluginSelection.skipped,
+  }
 
   log('· 拷贝 Python 基座 ——')
   copyTree(path.join(REPO, 'python'), path.join(PAYLOAD, 'python'), {
@@ -337,19 +505,42 @@ function main() {
   fs.mkdirSync(path.join(PAYLOAD, 'python', 'Scripts'), { recursive: true })
 
   if (!SKIP_SKILLS) {
-    const pathsProbe = spawnSync(REPO_PYTHON, ['-B', path.join(REPO, 'app', 'workspace_paths.py'), '--project-root', REPO], {
-      encoding: 'utf8', windowsHide: true, timeout: 10000, env: PYTHON_BUILD_ENV,
-    })
-    if (pathsProbe.status !== 0) throw new Error('无法读取技能模板目录配置：' + (pathsProbe.stderr || 'path probe failed'))
-    const skills = JSON.parse(pathsProbe.stdout).skills_dir
+    const skills = resolveSkillsDir()
     if (fs.existsSync(skills)) {
-      log('· 拷贝技能模板 ——')
-      copyTree(skills, path.join(PAYLOAD, 'workspace-template', 'skills'), {
-        excludeNames: new Set(['__pycache__', '.pytest_cache']),
-        label: 'skills 模板',
-      })
+      // 只带白名单里的技能：名单是打包侧的固定契约，不随界面上的启停变化。
+      const allowlist = ALL_SKILLS ? null : readSkillAllowlist()
+      const selection = selectSkills(skills, allowlist ? allowlist.names : [], { all: ALL_SKILLS })
+      const destination = path.join(PAYLOAD, 'workspace-template', 'skills')
+      let files = 0
+      let bytes = 0
+      log(`· 拷贝技能模板（${ALL_SKILLS ? '全部技能（忽略白名单）' : '仅白名单技能'}）——`)
+      log(`  打包白名单：${allowlist ? path.relative(REPO, allowlist.file) : '（本次忽略）'}`)
+      for (const skill of selection.packaged) {
+        const stats = copyTree(skill.directory, path.join(destination, path.basename(skill.directory)), {
+          excludeNames: new Set(['__pycache__', '.pytest_cache']),
+        })
+        files += stats.files
+        bytes += stats.bytes
+      }
+      if (selection.missing.length) {
+        throw new Error(
+          `白名单里的技能未找到：${selection.missing.join(', ')}；请修正 ${path.relative(REPO, SKILL_ALLOWLIST)}`)
+      }
+      log(`  · 打包 ${selection.packaged.length} 个技能：${selection.packaged.map(skill => skill.name).join(', ') || '无'}`)
+      log(`  · 合计 ${files} 文件 / ${human(bytes)}`)
+      if (selection.skipped.length) {
+        log(`  · 跳过 ${selection.skipped.length} 项：${selection.skipped.map(item => `${item.name}（${item.reason}）`).join('、')}`)
+      }
+      skillSummary = {
+        mode: ALL_SKILLS ? 'all' : 'allowlist',
+        allowlistFile: allowlist ? path.relative(REPO, allowlist.file).replace(/\\/g, '/') : null,
+        packaged: selection.packaged.map(skill => skill.name),
+        skipped: selection.skipped,
+        missing: selection.missing,
+      }
     } else {
       log(`· 跳过技能模板：${skills} 不存在`)
+      skillSummary = { ...skillSummary, packaged: [], skipped: [{ name: skills, reason: '技能目录不存在' }] }
     }
   }
 
@@ -376,6 +567,8 @@ function main() {
     python: pythonVersion,
     dependencies,
     excludedDependencies: EXCLUDED_PACKAGES,
+    skills: skillSummary,
+    plugins: pluginSummary,
     ripgrep: rg ? path.relative(PAYLOAD, rg).replace(/\\/g, '/') : null,
     runtimeArchives,
     bytecodeCleanup,
@@ -388,4 +581,7 @@ function main() {
   log(`  依赖 ${manifest.dependencies.length} 项（已排除：${EXCLUDED_PACKAGES.length} 类重依赖）`)
 }
 
-main()
+const invokedDirectly = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) main()
+
+export { copyTree, readPluginTiers, readSkillAllowlist, selectPlugins, selectSkills, skillFrontmatterName }

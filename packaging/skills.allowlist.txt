@@ -1,0 +1,15 @@
+# 技能打包白名单 —— 只把这里列出的技能拷进安装包。
+#
+# 判定与运行时的技能启用/禁用状态无关：界面里后来开关了哪些技能，
+# 都不会改变这份名单。加技能就往下面加一行（目录名或 SKILL.md 的 name 都行），
+# 删技能就删一行。行内 # 之后是注释，空行忽略。
+#
+# 临时要打一个全量包：node scripts/prepare-payload.mjs --all-skills
+# 只想看这次会打哪些：  node scripts/prepare-payload.mjs --list-skills
+canvas-design
+docx
+pdf
+pptx
+skill-creator
+use-myagent-features
+xlsx

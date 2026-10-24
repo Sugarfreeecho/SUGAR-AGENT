@@ -67,9 +67,39 @@ node scripts\build.mjs --dir             # 只出未打包目录（调试、最�
 node scripts\build.mjs --skip-payload    # 复用现有载荷，只重打安装包
 node scripts\prepare-payload.mjs --skip-deps       # 复用已装好的 site-packages 重刷 app 代码
 node scripts\prepare-payload.mjs --build-frontend  # 先跑 frontend 的 vite build
+node scripts\prepare-payload.mjs --list-skills     # 只看白名单会打包/跳过哪些技能，不写载荷
+node scripts\prepare-payload.mjs --list-plugins    # 只看按分级表会打包/跳过哪些插件，不写载荷
+node scripts\build.mjs --all-skills                # 忽略白名单，全量打包技能
+node scripts\build.mjs --all-plugins               # 连独立功能插件一起打包
 $env:SUGARAGENT_MAX_COMPRESSION='1'; node scripts\build.mjs   # 极限压缩（安装包更小、构建更慢）
 $env:SUGARAGENT_PIP_INDEX='https://pypi.tuna.tsinghua.edu.cn/simple'  # 国内镜像装依赖
 ```
+
+### 技能模板只打包白名单里的技能
+
+技能模板取自 `SKILLS_DIR`（默认 `workspace\skills`），但**不会整目录照搬**，只拷 `packaging\skills.allowlist.txt` 里列出的目录：
+
+- 白名单是**打包侧的固定契约**：一行一个技能（写目录名或 `SKILL.md` 的 `name` 都行），`#` 之后是注释。与运行时的技能启停状态（`.config\skill_states.json`）**完全无关**——界面里以后开关了哪些技能，都不影响打包结果。
+- 加技能就加一行、删技能就删一行；新增的白名单项如果对不上任何目录，构建会直接失败并列出名字，避免改名后静默漏打。
+- 与运行期扫描规则一致：只认第一层目录且必须有 `SKILL.md`。因此 `workspace\skills\隐藏\`（运行期本来就不注册）和散落在技能根目录的 zip 永远不会进包。
+- 真要发一个全量技能包（演示/排障）：`node scripts\prepare-payload.mjs --all-skills`，它只忽略白名单这一次。
+- 打包结果写进 `runtime-manifest.json` 的 `skills` 字段（`mode` / `allowlistFile` / `packaged` / `skipped` / `missing`），便于事后审计。
+
+### 插件范围由分级表决定
+
+插件是否进包不在这里另列名单，而是读 `app/plugins/tiers.json`（运行期与打包共用的唯一分级表）：
+
+| 分级 | 进包 | 设置页 | 默认状态 | 工具 |
+|---|---|---|---|---|
+| `system` | 是 | 隐藏 | 启用 | 常驻 |
+| `system-external` | 是 | 可见可开关 | 启用 | 常驻 |
+| `extension` | 是 | 可见可开关 | 启用 | 延迟加载 |
+| `standalone` | **否** | 可见可开关 | **停用** | 延迟加载 |
+
+- 当前 `standalone` 的 6 个（`voice-input`、`chatgpt-subscription`、`feishu-transport`、`game-arena`、`repo-engineering`、`sugar-bili-scroll`）不进安装包；源码运行时仍然可见，只是默认停用。
+- 表里登记为前三档、但仓库里找不到对应目录时，构建直接失败，避免改名后静默漏打。
+- 每插件都有独立环境变量开关：`PLUGIN_<ID>_ENABLED`（如 `PLUGIN_EXECUTION_TOOLS_ENABLED=0`）。环境变量优先级高于界面开关，设置页会把开关置灰并显示变量名。
+- 兼容规则：未登记的老式内置插件（`system_builtin` + native + 位于 `plugins/`）仍按“隐藏”处理；未登记的新插件按“可见、默认启用、不打包”处理。
 
 ### SDK 与 PPT 图标归档
 
@@ -100,15 +130,17 @@ powershell -File scripts\smoke-desktop.ps1 -AppDir "$env:LOCALAPPDATA\Programs\S
 ```
 resources/runtime/
 ├─ app/                  # 应用代码（含 templates/dist 前端产物、tools、native 的 egress helper）
-├─ plugins/              # 10 个内置插件
+├─ plugins/              # 按 tiers.json 收录的插件（当前 9 个，独立功能不进包）
 ├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（85 个依赖）
 │  ├─ Scripts/rg.exe     # 文件搜索用的 ripgrep
 │  └─ Lib/site-packages/lark_oapi.zip # 飞书 SDK，Python 直接从归档加载
-├─ workspace-template/   # 首次启动铺到工作目录的技能模板（18 个技能，含 docx/pdf/pptx/xlsx）
+├─ workspace-template/   # 首次启动铺到工作目录的技能模板（只含 skills.allowlist.txt 里的技能）
 │  └─ skills/ppt-master/templates/icons/{icons.zip,icon-archive.json}
 ├─ runtime-archives.json # 资源归档布局 / 摘要 / 条目数
 └─ runtime-manifest.json # 版本、依赖清单、体积、排除项
 ```
+
+> 只打包激活技能后，若激活列表里没有 `ppt-master`，`workspace-template\skills\ppt-master` 与其图标归档都不存在，`runtime-archives.json` 的 `pptIcons` 记为 `null`；归档校验按“存在才校验”处理，不影响构建。
 
 **不会打进安装包**：`app/.env`（含真实密钥）、`python/Lib/site-packages` 里的历史环境、`workspace/`、`logs/`、`version/`（备份包）、`__pycache__`、开发机 `Scripts/` 里的历史 shim。审计脚本可复核（见下）。
 

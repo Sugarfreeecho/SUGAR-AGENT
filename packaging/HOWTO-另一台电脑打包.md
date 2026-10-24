@@ -35,9 +35,13 @@ build/dist/SugarAgent-Setup-<版本>-x64.exe  （≈251MB，可分发）
 | 工程代码 | 与打包机同版本 | `git clone https://github.com/Sugarfreeecho/SUGAR-AGENT.git`；或整目录拷贝 |
 | **python/ 运行时** | 仓库根必须存在 `python\python.exe` | **不在 git**！从打包机拷 `python\` 整个目录（≈1.2GB） |
 | **workspace/skills** | 技能模板目录（≈108MB，全部技能） | **不在 git**！从打包机拷 `workspace\skills\`（只拷这一层） |
+| **packaging/skills.allowlist.txt** | 技能打包白名单，决定这次打哪几个技能 | 在 git 里，跟着仓库走；加/删技能就改这份名单 |
+| **app/plugins/tiers.json** | 插件分级表，决定哪些插件进包、默认是否启用 | 在 git 里；`standalone` 档不进包，其余三档进包 |
 | 网络（首次） | npm 拉 electron/electron-builder；pip 装 85 个依赖 | 可配镜像（见 §6） |
 
 > 只拷 `workspace\skills\`，**不要**整拷 `workspace\`（里面还有会话/回收站等在本机数据）。
+>
+> 载荷里的技能模板**只包含 `packaging\skills.allowlist.txt` 里列出的技能**，与界面上的技能启停无关。名单项对不上目录时构建会直接失败；临时要全量打包用 `node scripts\build.mjs --all-skills`。
 
 ## 2. 首次打包（一次性，约 30–60 分钟，含下载）
 

@@ -10,6 +10,8 @@
   "scripts": {
     "payload": "node scripts/prepare-payload.mjs",
     "payload:fast": "node scripts/prepare-payload.mjs --skip-deps",
+    "payload:skills": "node scripts/prepare-payload.mjs --list-skills",
+    "payload:plugins": "node scripts/prepare-payload.mjs --list-plugins",
     "icons": "python ../python/python.exe scripts/make-icons.py",
     "dist:dir": "node scripts/build.mjs --dir",
     "dist": "node scripts/build.mjs",

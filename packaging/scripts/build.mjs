@@ -8,6 +8,7 @@
  *   node scripts/build.mjs --dir            # 只出未打包目录（调试用）
  *   node scripts/build.mjs --skip-payload   # 复用现有载荷
  *   node scripts/build.mjs --build-frontend # 附带重新构建前端
+ *   node scripts/build.mjs --all-skills     # 连已禁用的技能一起打包
  */
 
 import fs from 'node:fs'
@@ -49,6 +50,7 @@ function main() {
   if (!SKIP_PAYLOAD) {
     const args = [path.join(HERE, 'prepare-payload.mjs')]
     if (BUILD_FRONTEND) args.push('--build-frontend')
+    if (flags.has('--all-skills')) args.push('--all-skills')
     run(process.execPath, args, { cwd: PACKAGING })
   }
 
