@@ -78,6 +78,7 @@ from attachments.content import durable_content
 from agent_tools import discover_skills, set_skill_enabled
 import model_profiles
 import execution_metrics
+import usage_stats
 from path_picker_util import pick_native_path
 from config_paths import resolve_legacy_config_path
 
@@ -8049,6 +8050,26 @@ def _execution_metrics_session_names() -> Dict[str, str]:
     }
 
 
+def _usage_profile_names() -> Dict[str, str]:
+    """model id → 模型档案名，供用量页「按模型配置」分组。
+
+    请求里没有记录当时用的是哪份档案，只能按当前配置反推；所以这里只认**精确**的
+    model 字段，带供应商前缀的别名由 usage_stats 侧兜底匹配——在这里提前塞尾段会
+    把别人的精确模型顶掉（例如 cmd 的 deepseek/x 会把 ocgo 的 x 抢走）。
+    """
+    mapping: Dict[str, str] = {}
+    try:
+        for profile in model_profiles.sorted_profiles(PROJECT_ROOT):
+            model = str(profile.get("model") or "").strip()
+            name = str(profile.get("name") or "").strip()
+            if not model or not name:
+                continue
+            mapping.setdefault(model, name)
+    except Exception:
+        return {}
+    return mapping
+
+
 @fastapi_app.get("/api/execution-metrics/sessions")
 async def get_execution_metrics_sessions():
     def _build_payload() -> bytes:
@@ -8112,6 +8133,27 @@ async def get_all_execution_metrics(session_id: Optional[str] = None):
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@fastapi_app.get("/api/usage-stats")
+async def get_usage_stats(refresh: int = 0):
+    """本机用量汇总（按天 / 按模型 / 按会话）。
+
+    第一次调用只负责把后台重建踢起来并立刻返回 ``ready: false``——全量扫一遍
+    会话指标要十秒上下，不能挂在请求上等。前端轮询到 ready 再渲染。
+    """
+
+    def _payload() -> dict:
+        return usage_stats.snapshot(
+            session_manager.sessions_dir,
+            cache_path=PROJECT_ROOT / ".config" / "usage_stats_cache.json",
+            names=_execution_metrics_session_names(),
+            profiles=_usage_profile_names(),
+            refresh=bool(refresh),
+        )
+
+    data = await asyncio.to_thread(_payload)
+    return JSONResponse({"ok": True, "data": data}, headers={"Cache-Control": "no-store"})
 
 
 @fastapi_app.get("/sessions/{session_id}/context_tokens")

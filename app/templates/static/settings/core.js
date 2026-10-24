@@ -68,6 +68,7 @@
     security: { vb: '0 0 24 24', sw: 1.6, body: '<path d="M12 3l7 3v5.5c0 4.4-3 8.1-7 9.5-4-1.4-7-5.1-7-9.5V6z"/><path d="M9.4 12l1.9 1.9 3.6-3.8"/>' },
     env: { vb: '0 0 16 16', body: '<path d="M6.27612 1.5L4.52612 14.5" stroke="currentColor"/><path d="M11.4739 1.5L9.72388 14.5" stroke="currentColor"/><path d="M2.39868 5.5H14.0681" stroke="currentColor"/><path d="M1.93188 10.5H13.6013" stroke="currentColor"/>' },
     path: { vb: '0 0 16 16', body: '<path d="M12.3994 13.5986H2.04956C1.49728 13.5986 1.04956 13.1509 1.04956 12.5986V3.40137C1.04956 2.84908 1.49728 2.40137 2.04956 2.40137H4.76632C5.01016 2.40137 5.24561 2.49046 5.42836 2.6519L6.94088 3.98799C7.12364 4.14943 7.35908 4.23852 7.60293 4.23852H12.3994C12.9517 4.23852 13.3994 4.68624 13.3994 5.23852V7.16991" stroke="currentColor"/><path d="M2.55911 7.93683C2.67584 7.49906 3.07229 7.19446 3.52536 7.19446H13.6491C14.3061 7.19446 14.7846 7.81725 14.6153 8.45209L13.4411 12.856C13.3244 13.2938 12.9279 13.5984 12.4748 13.5984H2.35113C1.69411 13.5984 1.21562 12.9756 1.38489 12.3407L2.55911 7.93683Z" stroke="currentColor"/>' },
+    usage: { vb: '0 0 16 16', body: '<path d="M2.5 13.25h11" stroke="currentColor"/><path d="M5 13.25V9" stroke="currentColor"/><path d="M8 13.25V5.5" stroke="currentColor"/><path d="M11 13.25V7.5" stroke="currentColor"/>' },
     chevron: { vb: '0 0 16 16', body: '<path d="M6 4l4 4-4 4" stroke="currentColor"/>' },
     search: { vb: '0 0 16 16', body: '<circle cx="7" cy="7" r="4.5" stroke="currentColor"/><path d="M10.4 10.4L14 14" stroke="currentColor"/>' },
   };
