@@ -10430,8 +10430,12 @@ async def plugin_web_page(plugin_id: str):
         path = await run_in_threadpool(plugin_page, plugin_id)
     except Exception as exc:
         return _plugin_web_error_response(exc)
-    return FileResponse(
-        str(path),
+    source = await run_in_threadpool(path.read_text, encoding="utf-8")
+    bridge = '<script src="/static/plugin-page-bridge.js"></script>'
+    source = re.sub(r"(<head\b[^>]*>)", lambda match: match.group(1) + bridge,
+                    source, count=1, flags=re.IGNORECASE) if re.search(r"<head\b", source, re.IGNORECASE) else bridge + source
+    return HTMLResponse(
+        source,
         media_type="text/html",
         headers={
             "Cache-Control": "no-cache",

@@ -59,6 +59,141 @@ def test_process_height_updates_on_resize_without_work_on_scroll(page):
     page.wait_for_function("body.clientHeight===576")  # Original 72vh limit still applies.
 
 
+def test_hidden_history_skips_repeated_layout_until_revealed(page):
+    source = (ROOT / 'frontend/src/app/modules/message-rendering.js').read_text(encoding='utf-8')
+    page.set_content('''<div id="chat-container" style="height:300px;overflow:auto">
+      <div class="chat-stream" id="stream" hidden><div class="process-aggregate" id="agg">
+        <button class="process-aggregate-resize"></button><div class="process-aggregate-body"></div>
+        <div class="feed-chunk" id="chunk"><div class="feed-chunk-scroller">payload</div></div>
+      </div></div></div>''')
+    page.add_script_tag(content=source[source.index('function measureFeedChunkOverflow('):source.index('var feedChunkOverflowQueue')])
+    page.add_script_tag(content=source[source.index('function syncProcessAggregateHeightUi('):source.index('/* 可视高度变化才重算')])
+    result = page.evaluate('''() => {
+      let geometry=0,styles=0;
+      window.feedChunkCollapsedMax=()=>{styles++;return 60;};
+      const viewport=document.getElementById('chat-container');
+      const measure=viewport.getBoundingClientRect.bind(viewport);
+      viewport.getBoundingClientRect=()=>{geometry++;return measure();};
+      for(let i=0;i<200;i++){syncProcessAggregateHeightUi(agg);measureFeedChunkOverflow(chunk);}
+      const hidden={geometry,styles};
+      document.getElementById('stream').hidden=false;
+      syncProcessAggregateHeightUi(agg);measureFeedChunkOverflow(chunk);
+      return {hidden,geometry,styles};
+    }''')
+    assert result == {'hidden': {'geometry': 0, 'styles': 0}, 'geometry': 1, 'styles': 1}
+
+
+def test_session_title_cleanup_defers_geometry_and_coalesces_latest_rows(page):
+    source = (ROOT/'frontend/src/app/state/session-renderers.js').read_text(encoding='utf8')
+    start = source.index('var sessionNameNormalizationQueue')
+    end = source.index('\n/**', start)
+    page.set_content('<div id="list"></div>')
+    page.add_script_tag(content='window.jobs=[];window.MyAgentUiTasks={afterPaint:work=>jobs.push(work)};'+source[start:end])
+    result = page.evaluate('''() => {
+      const root=document.getElementById('list');let reads=0;
+      const add=(name,width)=>{
+        const el=document.createElement('span');el.className='session-name';
+        el.dataset.original=name;el.textContent=name;
+        Object.defineProperty(el,'scrollWidth',{get:()=>{reads++;return width;}});
+        Object.defineProperty(el,'clientWidth',{get:()=>{reads++;return 100;}});
+        root.append(el);return el;
+      };
+      const ordinary=add('普通会话',300),long=add('需要截断（长标题）',300),short=add('短标题）',50);
+      normalizeTruncatedSessionNames(root);normalizeTruncatedSessionNames(root);
+      const immediate={reads,jobs:jobs.length,text:long.textContent};
+      jobs.shift()();const first={reads,long:long.textContent,short:short.textContent,ordinary:ordinary.textContent};
+      normalizeTruncatedSessionNames(root);root.replaceChildren();
+      const latest=add('替换后的长标题）',300);normalizeTruncatedSessionNames(root);
+      const coalesced=jobs.length;jobs.shift()();
+      return {immediate,first,coalesced,latest:latest.textContent,original:latest.dataset.original};
+    }''')
+    assert result == {
+        'immediate': {'reads': 0, 'jobs': 1, 'text': '需要截断（长标题）'},
+        'first': {'reads': 4, 'long': '需要截断（长标题…', 'short': '短标题）', 'ordinary': '普通会话'},
+        'coalesced': 1, 'latest': '替换后的长标题…', 'original': '替换后的长标题）',
+    }
+
+
+def test_chinese_mutations_skip_translation_and_language_toggles_still_restore(page):
+    page.route('http://ui-language.test/**', lambda route: route.fulfill(
+        content_type='text/html; charset=utf-8',
+        body='<meta charset="utf-8"><body><div id="host"></div><div class="message">打开会话</div></body>'))
+    page.goto('http://ui-language.test/')
+    page.add_script_tag(content=(ROOT/'frontend/src/app/modules/i18n.js').read_text(encoding='utf8'))
+    result = page.evaluate('''async () => {
+      let scans=0;const translate=translateUiNode;
+      translateUiNode=root=>{scans++;return translate(root);};
+      const host=document.getElementById('host');
+      host.innerHTML='<button id="first" title="打开会话">打开会话</button>';
+      await new Promise(resolve=>setTimeout(resolve,0));
+      const chineseScans=scans;
+      applyUiLanguage('en',false);
+      const english={text:first.textContent,title:first.title,content:document.querySelector('.message').textContent};
+      host.insertAdjacentHTML('beforeend','<button id="second" title="打开会话">打开会话</button>');
+      await new Promise(resolve=>setTimeout(resolve,0));
+      const addedEnglish={text:second.textContent,title:second.title};
+      applyUiLanguage('zh-CN',false);
+      return {chineseScans,english,addedEnglish,restored:[first.textContent,first.title,second.textContent,second.title]};
+    }''')
+    assert result == {
+        'chineseScans': 0,
+        'english': {'text': 'Open session', 'title': 'Open session', 'content': '打开会话'},
+        'addedEnglish': {'text': 'Open session', 'title': 'Open session'},
+        'restored': ['打开会话'] * 4,
+    }
+
+
+def test_closed_session_menu_skips_layout_and_open_menu_remains_focusable(page):
+    source = (ROOT/'frontend/src/app/modules/session-management.js').read_text(encoding='utf8')
+    start = source.index('function buildSessionMoreMenuMarkup()')
+    end = source.index('function findSessionForActions', start)
+    page.set_content('<div class="session-item" id="row"></div>')
+    page.add_style_tag(content=(ROOT/'frontend/src/styles/app.css').read_text(encoding='utf8'))
+    page.add_script_tag(content=source[start:end])
+    result = page.evaluate('''() => {
+      document.getElementById('row').innerHTML=buildSessionMoreMenuMarkup();
+      const wrap=document.querySelector('.session-more-wrap');
+      const menu=wrap.querySelector('.session-more-menu');
+      const closed=menu.getClientRects().length;
+      wrap.classList.add('is-open');
+      const item=menu.querySelector('.session-menu-rename');item.focus();
+      const open={visible:menu.getBoundingClientRect().height>0,focused:document.activeElement===item};
+      wrap.classList.remove('is-open');
+      return {closed,open,closedAgain:menu.getClientRects().length};
+    }''')
+    assert result == {'closed': 0, 'open': {'visible': True, 'focused': True}, 'closedAgain': 0}
+
+
+def test_paged_run_generations_do_not_insert_new_output_before_old_history(page):
+    import re
+    source = (ROOT/'frontend/src/app/modules/message-rendering.js').read_text(encoding='utf8')
+    page.set_content('''<div id="body">
+      <div id="older" class="feed-item" data-log-type="llm-reasoning" data-run-id="same-run"
+        data-react-generation="2" data-react-iter="1" data-execution-first-seq="800"></div>
+      <div id="current" class="feed-item" data-log-type="llm-reasoning" data-run-id="same-run"
+        data-react-generation="0" data-react-iter="77" data-execution-first-seq="3090"></div>
+      </div>''')
+    names=['reactFeedPhase','appendProcessRowBeforePendingAppendSteer','appendMonotonicProcessRow','insertReactOrderedFeedRow']
+    page.add_script_tag(content='\n'.join(
+        re.search(r'^function '+name+r'\([\s\S]*?^}',source,re.M)[0] for name in names))
+    result=page.evaluate('''() => {
+      const body=document.getElementById('body');body._reactOrderTailKey=[2,1,0];
+      const add=(id,seq,iter,generation,type='llm-reasoning')=>{
+        const row=document.createElement('div');row.id=id;row.className='feed-item';
+        Object.assign(row.dataset,{executionFirstSeq:String(seq),runId:'same-run',logType:type});
+        insertReactOrderedFeedRow(body,row,type,iter,generation);
+      };
+      add('new',3200,78,0);
+      const initial=Array.from(body.children,node=>node.id);
+      add('late-old',900,2,2);
+      add('tool',3210,78,0,'tool-call');
+      add('response',3215,78,0,'llm-response');
+      return {initial,final:Array.from(body.children,node=>node.id)};
+    }''')
+    assert result['initial']==['older','current','new']
+    assert result['final']==['older','late-old','current','new','response','tool']
+
+
 def test_viewed_turn_uses_bounded_geometry_reads_and_preserves_selection(page):
     source = (ROOT / "plugins/change-review/web/change-review.js").read_text(encoding="utf-8")
     page.set_content(

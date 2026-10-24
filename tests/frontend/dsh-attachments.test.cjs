@@ -84,10 +84,11 @@ test('user message attachments render as an equal-height horizontal thumbnail st
   const strip = userMessage.children[0];
   assert.equal(strip.classList.contains('msg-user-attachment-strip'), true);
   assert.equal(strip.children.length, 2);
-  assert.equal(strip.children.every(image => image.classList.contains('msg-attachment-thumbnail')), true);
+  assert.equal(strip.children.every(card => card.children[0].children[0].classList.contains('msg-attachment-thumbnail')), true);
   assert.equal(f.requests.length, 2);
   assert.match(styles, /\.msg-user-attachment-strip\s*\{[^}]*display:\s*flex;[^}]*flex-flow:\s*row wrap;/s);
-  assert.match(styles, /\.msg-attachment-thumbnail\s*\{[^}]*height:\s*5rem;[^}]*object-fit:\s*contain;/s);
+  assert.match(styles, /\.msg-attachment-preview-trigger\s*\{[^}]*height:[^}]+\}/s);
+  assert.match(styles, /\.msg-attachment-preview-trigger \.msg-attachment-thumbnail\s*\{[^}]*height:\s*100%;[^}]*object-fit:\s*contain;/s);
 });
 
 test('history and tool previews use a transient blob and release it when removed', async () => {
@@ -146,6 +147,55 @@ test('detaching all consumers aborts an unfinished download', () => {
   f.container.children[0].isConnected = false;
   f.observers[0].callback();
   assert.equal(signal.aborted, true);
+  assert.equal(f.context.durableImagePreviews.size, 0);
+});
+
+test('offscreen originals are deferred and visible downloads leave connection capacity', async () => {
+  const f = fixture();
+  let visibility, active = 0, peak = 0;
+  const observed = new Set(), gates = [];
+  f.context.IntersectionObserver = class {
+    constructor(callback) { visibility = callback; }
+    observe(node) { observed.add(node); }
+    unobserve(node) { observed.delete(node); }
+    disconnect() { observed.clear(); }
+  };
+  f.context.fetch = () => {
+    active++; peak = Math.max(peak, active);
+    return new Promise(resolve => gates.push(() => {
+      active--; resolve({ ok: true, blob: async () => ({}) });
+    }));
+  };
+  const references = Array.from({ length: 12 }, (_, i) => ({
+    ...ref, attachmentId: 'sha256:' + i.toString(16).padStart(64, '0'),
+  }));
+  f.context.renderDurableAttachmentImages(f.container, references);
+  assert.equal(gates.length, 0, 'a hidden history does not download every image');
+  assert.equal(observed.size, 12);
+  visibility(f.container.children.map(target => ({ target, isIntersecting: true })));
+  assert.equal(gates.length, 2, 'only two originals occupy the connection pool');
+  while (gates.length) {
+    gates.shift()();
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(peak, 2);
+  assert(f.container.children.every(node => node.src === 'blob:test-image'));
+  assert(f.container.children.every(node => !node.dataset.attachmentDeferred));
+});
+
+test('an offscreen image removed before visibility is never downloaded', () => {
+  const f = fixture();
+  const observed = new Set();
+  f.context.IntersectionObserver = class {
+    observe(node) { observed.add(node); }
+    unobserve(node) { observed.delete(node); }
+    disconnect() { observed.clear(); }
+  };
+  f.context.renderDurableAttachmentImages(f.container, [ref]);
+  f.container.children[0].isConnected = false;
+  f.observers[0].callback();
+  assert.equal(observed.size, 0);
+  assert.equal(f.requests.length, 0);
   assert.equal(f.context.durableImagePreviews.size, 0);
 });
 

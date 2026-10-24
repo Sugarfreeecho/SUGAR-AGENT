@@ -18,8 +18,10 @@ def test_runtime_footer_remains_the_dashboard_entrypoint() -> None:
 
     assert 'id="sidebar-runtime-link"' in markup
     assert 'href="/execution-dashboard"' not in markup
-    manifest = (ROOT / "plugins/execution-dashboard/.myagent-plugin/plugin.json").read_text(encoding="utf-8")
-    assert '"navigation"' in manifest
+    # 执行看板已并入设置中心「用量统计」：入口是设置分区，不再是独立插件页。
+    usage_section = (ROOT / "app/templates/static/settings/sections_usage.js").read_text(encoding="utf-8")
+    assert "id: 'usage'" in usage_section
+    assert not (ROOT / "plugins/execution-dashboard").exists()
 
 
 def test_gear_entry_opens_the_settings_center_overlay() -> None:

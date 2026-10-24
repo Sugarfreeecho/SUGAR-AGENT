@@ -108,6 +108,16 @@ def test_static_page_and_assets_stay_inside_declared_plugin_paths(tmp_path, monk
         plugin_asset("web.demo", "../index.html")
 
 
+def test_plugin_page_includes_the_shared_bridge_and_preserves_frame_policy(tmp_path, monkeypatch):
+    import asyncio
+    import webui
+
+    _configure(tmp_path, monkeypatch)
+    response = asyncio.run(webui.plugin_web_page("web.demo"))
+    assert '<script src="/static/plugin-page-bridge.js"></script>' in response.body.decode()
+    assert "frame-ancestors 'self'" in response.headers["content-security-policy"]
+
+
 def test_legacy_top_level_plugin_page_redirects_to_canonical_url(
     tmp_path,
     monkeypatch,

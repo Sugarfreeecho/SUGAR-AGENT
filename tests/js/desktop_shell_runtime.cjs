@@ -32,8 +32,12 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
       this.options = options
       this.webContents = Object.assign(new EventEmitter(), {
         mainFrame: { url: 'http://127.0.0.1:8192/' },
-        setWindowOpenHandler: () => {},
+        setWindowOpenHandler: handler => { calls.windowOpenHandler = handler },
         getURL: () => this.webContents.mainFrame.url,
+        session: {
+          setPermissionCheckHandler: handler => { calls.permissionCheck = handler },
+          setPermissionRequestHandler: handler => { calls.permissionRequest = handler },
+        },
       })
       calls.window = this
       this.minimized = true
@@ -76,7 +80,7 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
         return promise
       },
     },
-    shell: { openExternal: url => { calls.external = url }, openPath: () => {} },
+    shell: { openExternal: url => { calls.external = url; return Promise.resolve() }, openPath: () => {} },
   }
   BrowserWindow.fromWebContents = () => calls.window
   const fakeFs = {
@@ -123,7 +127,12 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
   const http = {
     get: (options, callback) => {
       const request = Object.assign(new EventEmitter(), { destroy() {} })
-      const respond = () => callback({ statusCode: 200, resume() {} })
+      const respond = () => {
+        const response = Object.assign(new EventEmitter(), { statusCode: 200, setEncoding() {}, resume() {} })
+        callback(response)
+        response.emit('data', JSON.stringify({ ok: true, protocol: 'myagent-lifecycle-v1', instance_id: 'test-instance' }))
+        response.emit('end')
+      }
       calls.health.push({ request, respond, options })
       if (!deferHealth) queueMicrotask(respond)
       return request
@@ -157,7 +166,15 @@ function shellHarness({ argv = [], configured = true, reused = true, packaged = 
         calls.pathOpen = { options, payload }
         return Promise.resolve({ ok: true, path: 'D:\\validated.txt' })
       } },
-      './desktop-shortcuts': { removeLegacyElectronShortcuts() {} } })[name],
+      './desktop-shortcuts': { removeLegacyElectronShortcuts() {} },
+      './lifecycle-bridge': { createLifecycleBridge: callbacks => { calls.lifecycleCallbacks = callbacks; return ({
+        newInstance: () => 'test-instance', environment: () => ({ MYAGENT_LIFECYCLE_INSTANCE_ID: 'test-instance' }),
+        start() {}, close() {}, fail() {}, status: () => null,
+        requestManual: async () => ({ ok: true, operation: { phase: 'awaiting_confirmation' } }),
+      }) } },
+      './speech-permissions': require('../../packaging/electron/speech-permissions'),
+      './browser-guests': require('../../packaging/electron/browser-guests'),
+    })[name],
     process: { argv, env: {}, resourcesPath: 'D:\\SugarAgent Runtime', platform: 'win32', execPath },
     __dirname: path.join(ROOT, 'packaging/electron'), URL, Buffer,
     setTimeout: manualTimers ? (callback, delay) => {
@@ -186,6 +203,43 @@ function runRestartTimer(calls) {
   calls.timers.delete(id)
   return timer.callback()
 }
+
+test('navigation and redirects reject origin-prefix spoofing and IPC rejects foreign frames', () => {
+  const { api, calls } = shellHarness()
+  api.createWindow(); api.registerIpc()
+  const contents = calls.window.webContents
+  const spoof = 'http://127.0.0.1:8192@evil.example/'
+  assert.equal(calls.windowOpenHandler({ url: spoof }).action, 'deny')
+  assert.equal(calls.windowOpenHandler({ url: 'http://127.0.0.1:8192/settings' }).action, 'allow')
+  for (const name of ['will-navigate', 'will-redirect']) {
+    let prevented = false
+    contents.emit(name, { preventDefault() { prevented = true } }, spoof)
+    assert.equal(prevented, true)
+  }
+  for (const channel of ['info', 'open-logs', 'open-workdir', 'open-external', 'restart-backend']) {
+    const handler = calls.ipc.get('sugaragent:' + channel)
+    assert.throws(() => handler({ sender: contents, senderFrame: { url: contents.mainFrame.url } }, 'https://example.com'))
+    contents.mainFrame.url = 'https://evil.example/'
+    assert.throws(() => handler({ sender: contents, senderFrame: contents.mainFrame }, 'https://example.com'))
+    contents.mainFrame.url = 'http://127.0.0.1:8192/plugins/demo'
+    assert.throws(() => handler({ sender: contents, senderFrame: contents.mainFrame }, 'https://example.com'))
+    contents.mainFrame.url = 'http://127.0.0.1:8192/'
+  }
+  assert.equal(calls.ipc.get('sugaragent:info')({ sender: contents, senderFrame: contents.mainFrame }).port, 8192)
+})
+
+test('speech permissions allow only the required APIs on the application main frame', () => {
+  const { calls, api } = shellHarness()
+  api.createWindow()
+  const contents = calls.window.webContents
+  const details = { isMainFrame: true, requestingUrl: contents.mainFrame.url, mediaTypes: ['audio'], mediaType: 'audio' }
+  assert.equal(calls.permissionCheck(contents, 'media', 'http://127.0.0.1:8192', details), true)
+  for (const permission of ['notifications', 'geolocation', 'midi', 'clipboard-read']) {
+    calls.permissionRequest(contents, permission, value => assert.equal(value, false), details)
+  }
+  calls.permissionRequest(contents, 'clipboard-sanitized-write', value => assert.equal(value, true), details)
+  calls.permissionRequest({}, 'clipboard-sanitized-write', value => assert.equal(value, false), details)
+})
 
 function lastStatus(calls) {
   const status = calls.writes.filter(([file]) => file.endsWith('desktop-status.json')).at(-1)
@@ -310,7 +364,7 @@ test('desktop actions and backend environment share configured paths and refresh
   assert.equal(api.resolveLayout(true).workDir, paths.work_dir)
 })
 
-test('tray restart treats the old exit as expected and reloads after the replacement is ready', async () => {
+test('authorized restart treats the old exit as expected and reloads after the replacement is ready', async () => {
   const paths = { work_dir: 'E:\\Projects', skills_dir: 'E:\\Library\\skills', log_dir: 'E:\\Logs' }
   const { api, calls } = shellHarness({ manualTimers: true, paths })
   api.createWindow()
@@ -320,7 +374,7 @@ test('tray restart treats the old exit as expected and reloads after the replace
   const old = calls.children[0]
   const oldLog = calls.logStreams[0]
   paths.work_dir = 'F:\\New Projects'
-  assert.equal(calls.menu.find(item => item.label === '重启内置服务').click(), true)
+  assert.equal(api.restartBackend(), true)
   assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, false)
   assert.equal(calls.taskkills[0].args.join(' '), '/PID 10000 /T /F')
   assert.equal(calls.taskkills[0].options.windowsHide, true)
@@ -372,17 +426,17 @@ test('late exit and close from the old child preserve the new child, status, and
   assert.equal(calls.dialogs.length, 0)
 })
 
-test('tray, IPC, and recovery restarts share one operation while waiting for readiness', async () => {
+test('authorized and recovery restarts share one operation while waiting for readiness', async () => {
   const { api, calls } = shellHarness({ manualTimers: true, deferHealth: true })
   api.createWindow()
   api.registerIpc()
-  const restart = calls.ipc.get('sugaragent:restart-backend')
+  const restart = api.restartBackend
   assert.equal(restart(), false, 'startup cannot be interrupted by a restart')
   api.ready()
   api.startBackend()
   assert.equal(restart(), true)
   assert.equal(restart(), false)
-  assert.equal(calls.menu.find(item => item.label === '重启内置服务').click(), false)
+  assert.equal(await calls.menu.find(item => item.label === '重启内置服务').click(), false)
   assert.equal(calls.timers.size, 1)
   const operation = runRestartTimer(calls)
   assert.equal(calls.children.length, 2)
@@ -394,6 +448,38 @@ test('tray, IPC, and recovery restarts share one operation while waiting for rea
   assert.equal(calls.errorBoxes.length, 0)
   assert.equal(calls.loads.length, 1)
   assert.equal(calls.menu.find(item => item.label === '重启内置服务').enabled, true)
+})
+
+test('desktop menu and trusted IPC request confirmation without killing the backend', async () => {
+  const { api, calls } = shellHarness()
+  api.createWindow()
+  api.ready()
+  api.startBackend()
+  api.createTray()
+  api.registerIpc()
+  const restart = calls.ipc.get('sugaragent:restart-backend')
+  assert.throws(() => restart({ sender: {}, senderFrame: {} }), /Invalid browser sender/)
+  const sender = calls.window.webContents
+  const result = await restart({ sender, senderFrame: sender.mainFrame })
+  assert.equal(result.operation.phase, 'awaiting_confirmation')
+  assert.equal((await calls.menu.find(item => item.label === '重启内置服务').click()).operation.phase, 'awaiting_confirmation')
+  assert.equal(calls.taskkills.length, 0)
+  assert.equal(calls.children.length, 1)
+})
+
+test('a supervisor prepares expected exit before allowing the backend to shut itself down', async () => {
+  const { api, calls } = shellHarness({ manualTimers: true })
+  api.createWindow(); api.ready(); api.startBackend()
+  const operation = { restart_id:'restart', target_instance_id:'test-instance', expected_new_instance_id:'test-instance', phase:'draining' }
+  assert.equal(calls.lifecycleCallbacks.onPrepare(operation),true)
+  calls.children[0].emit('exit',0,null)
+  assert.equal(calls.dialogs.length,0)
+  assert.equal(api.backend(),null)
+  assert.equal(api.restartBackend(operation),true)
+  await runRestartTimer(calls)
+  assert.equal(calls.taskkills.length,0)
+  assert.equal(calls.children.length,2)
+  assert.equal(calls.errorBoxes.length,0)
 })
 
 test('quit cancels the pending restart and guards a callback already queued for dispatch', async () => {
@@ -740,7 +826,7 @@ test('preload syncs initial theme and subsequent root changes, including legacy 
   const root = { classList: { contains: value => classes.has(value) }, dataset: {} }
   let stored = ''
   vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'packaging/electron/preload.js'), 'utf8'), {
-    require: () => ({ contextBridge: { exposeInMainWorld() {} }, ipcRenderer: { send: (...args) => sent.push(args) } }),
+    require: () => ({ contextBridge: { exposeInMainWorld() {} }, ipcRenderer: { on() {}, send: (...args) => sent.push(args) } }),
     process: { isMainFrame: true },
     document: { documentElement: root },
     localStorage: { getItem: () => stored },

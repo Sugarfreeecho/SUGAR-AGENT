@@ -522,12 +522,13 @@ def test_chat_input_supports_clipboard_files_and_images_as_paths():
     assert "if (state.uploadBusy) return false;" in sse
 
 
-def test_image_followup_waits_for_run_end_and_keeps_structured_attachments():
+def test_image_followup_allows_manual_send_and_keeps_structured_attachments():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     picker = (ROOT / "frontend/src/vendor/myagent_path_picker.js").read_text(encoding="utf-8")
 
     assert "attachments: Array.isArray(attachments) ? attachments.slice() : []" in sse
-    assert "if (options.pendingQuestion || attachments.length)" in sse
+    assert "if (options.pendingQuestion || attachments.length)" not in sse
+    assert "item.deferForHumanQuestion = true;" in sse
     assert "attachments: Array.isArray(item.attachments) ? item.attachments : []" in sse
     assert "attachments: item.attachments || []" in sse
     assert "const rememberedAttachments = Array.isArray(options.attachments)" in sse
@@ -973,7 +974,8 @@ def test_live_history_owner_is_never_replaced_by_target_window():
     assert "has_newer: !!paging.has_newer" in scroll
     assert "has_newer: !!raw.has_newer" in scroll
     assert "has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer" in sessions
-    assert sse.count("ensureLatestHistoryTailForLiveAppend(") >= 3
+    assert "await ensureLatestHistoryTailForLiveAppend(runSessionId)" in sse
+    assert "await ensureLatestHistoryTailForLiveAppend(submitSessionIdInitial)" in sse
     assert "liveHistoryOwner" in jump
     assert "!liveHistoryOwner" in jump
     assert "loadOlderHistoryChunk({ keepTocStable: true, turns: 50 })" in jump
@@ -1114,7 +1116,10 @@ def test_frontend_session_restore_distinguishes_loaded_cached_and_running_sessio
     assert "restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow" in sessions
     assert "sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom" in sessions
     assert "var allAggs = stream.querySelectorAll('.process-aggregate');" in scroll
-    assert "loadSessionMessages(sessionId, sessionHadUnreadResult ? 'bottom' : 'smooth-bottom'" in sessions
+    assert "var initialScrollMode = 'bottom';" in sessions
+    assert "loadSessionMessages(sessionId, initialScrollMode," in sessions
+    startup = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
+    assert "switchSession(targetSession, { initialLoad: true })" in startup
     assert "scrollToBottom({ smooth: mode === 'smooth-bottom' });" in rendering
     assert "sessionHadUnreadResult = !!(" in sessions
 

@@ -807,6 +807,8 @@ async function deleteSessionFromMenu(sess, rowDiv) {
     void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
         .then(function (resp) {
             if (!resp.ok) throw new Error('delete failed: ' + resp.status);
+            if (typeof dockRightPageHost !== 'undefined') dockRightPageHost?.releaseSession(deletedSessionId);
+            if (typeof dockForgetSession === 'function') dockForgetSession(deletedSessionId);
         })
         .catch(function (err) {
             console.error('删除会话失败:', err);
@@ -939,7 +941,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     div.innerHTML = '<div class="session-item-head">'
         + '<div class="session-item-main">'
         + '<div class="session-item-title-row">'
-        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
+        + '<span class="session-name" data-id="' + escapeHtml(String(sess.id || '')) + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
         + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
         + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'

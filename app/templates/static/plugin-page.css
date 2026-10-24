@@ -1,0 +1,14 @@
+:root[data-myagent-page] { color-scheme: light; --bg:#f7f8fa; --panel:#fff; --panel2:#eef1f5; --line:#d9dee7; --text:#202633; --muted:#677286; --accent:#3169ba; --accent2:#34734a; --warn:#8b6512; }
+:root[data-myagent-page].theme-dark, :root[data-myagent-page].theme-purple { color-scheme:dark; --bg:#151517; --panel:#202023; --panel2:#29292e; --line:#3b3b44; --text:#e5e5e9; --muted:#a3a3b1; --accent:#89b4fa; --accent2:#a6e3a1; --warn:#f9e2af; }
+:root[data-myagent-page] body { margin:0; background:var(--bg); color:var(--text); font-size:1rem; }
+:root[data-myagent-page] main, :root[data-myagent-page] .wrap { max-width:100%; min-width:0; box-sizing:border-box; }
+:root[data-myagent-page] pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+:root[data-myagent-page] input, :root[data-myagent-page] select, :root[data-myagent-page] textarea { max-width:100%; box-sizing:border-box; }
+:root[data-myagent-page] .topbar, :root[data-myagent-page] .card, :root[data-myagent-page] section { background:var(--panel); border-color:var(--line); }
+:root[data-myagent-page] input, :root[data-myagent-page] select, :root[data-myagent-page] textarea, :root[data-myagent-page] .stat { background:var(--panel2) !important; color:var(--text); border-color:var(--line); }
+:root[data-myagent-page] .muted, :root[data-myagent-page] .field label, :root[data-myagent-page] .stat .k { color:var(--muted); }
+:root[data-myagent-page] .btn-ghost { background:var(--panel2); color:var(--text); }
+:root[data-myagent-page] .tm-topbar { flex-wrap:wrap; padding:.75rem; background:var(--panel); }
+:root[data-myagent-page] .tm-grid { grid-template-columns:minmax(0,1fr); }
+:root[data-myagent-page] .tm-controls { flex-wrap:wrap; }
+@media(max-width:600px) { :root[data-myagent-page] main, :root[data-myagent-page] .wrap { padding:.75rem; } }

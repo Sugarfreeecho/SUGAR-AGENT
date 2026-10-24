@@ -68,6 +68,21 @@ def test_navigation_contribution_uses_host_owned_destination(tmp_path):
     )
 
 
+def test_details_tabs_validate_scope_and_keep_the_destination_host_owned(tmp_path):
+    plugin = _plugin(tmp_path, [], extra_ui={"details.tab": [
+        {"id": "main", "title": "Details", "scope": "app", "order": -50000,
+         "href": "https://foreign.example", "renderer": {"module": "evil.js"}},
+        {"id": "main", "title": "Duplicate"},
+        {"id": "invalid", "scope": "arbitrary", "title": "Invalid"},
+    ]})
+    rows = plugin_ui_contributions(plugin)
+    assert len(rows) == 1
+    assert rows[0] == {"id": "main", "plugin_id": "ui.demo", "slot": "details.tab",
+                       "title": "Details", "description": "", "scope": "app", "order": -10000,
+                       "href": "/plugins/ui.demo", "target": "plugin-page",
+                       "signature": plugin.content_signature[:64]}
+
+
 def test_ui_only_session_todo_plugin_is_a_supported_native_plugin():
     plugin = load_plugin(ROOT / "plugins" / "session-todo")
 
@@ -710,6 +725,17 @@ def test_composer_action_rejects_unknown_actions_and_oversized_text(tmp_path):
     )
 
     assert [row for row in plugin_ui_contributions(plugin) if row["slot"] == "composer.action"] == []
+
+
+def test_settings_page_embedding_is_explicit_and_uses_host_owned_url(tmp_path):
+    plugin = _plugin(tmp_path, [], extra_ui={"settings.section": [
+        {"id": "inline", "title": "Inline", "target": "plugin-page", "embedded": True,
+         "href": "https://evil.example"},
+        {"id": "standalone", "title": "Standalone", "target": "plugin-page", "embedded": "true"},
+    ]})
+    rows = [row for row in plugin_ui_contributions(plugin) if row["slot"] == "settings.section"]
+    assert rows[0]["embedded"] is True and rows[0]["href"] == "/plugins/ui.demo"
+    assert "embedded" not in rows[1]
 
 
 def test_session_ui_projection_disappears_when_plugin_is_disabled(tmp_path, monkeypatch):

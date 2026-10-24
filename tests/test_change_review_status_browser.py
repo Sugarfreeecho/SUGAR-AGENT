@@ -35,7 +35,7 @@ def test_review_empty_failure_recovery_and_turn_isolation_in_browser():
             window.MyAgentPubar = {registerPane() {return {
                 host: document.getElementById('review'),
                 setVisible(value) { document.getElementById('review').hidden = !value; },
-                setCount() {}, setNarrow() {}, remove() {},
+                setCount() {}, setNarrow(value) { window.reviewNarrow = value; }, remove() {},
             };}};
             const blob = URL.createObjectURL(new Blob([source], {type:'text/javascript'}));
             window.reviewExtension = await import(blob);
@@ -44,6 +44,16 @@ def test_review_empty_failure_recovery_and_turn_isolation_in_browser():
                 detail: {sessionId:'session', rootSessionId:'session', eventIndex:1,
                     event:{type:'file_changes_updated', changes:[], change_review_status:status}},
             }));
+            window.sendRecordedChanges = changes => {
+                const aggregate = document.querySelector('.process-aggregate');
+                const row = document.createElement('div'); row.className = 'feed-item feed--tool';
+                row._toolCallEvent = {type:'tool_result',ui:{changes}};
+                aggregate.appendChild(row);
+                document.dispatchEvent(new CustomEvent('myagent:tool-call-rendered', {
+                    detail: {sessionId:'session',rootSessionId:'session',eventIndex:1,
+                        event:row._toolCallEvent,aggregate,row},
+                }));
+            };
         }''', source)
         message = page.locator('#review .change-review-status')
         playwright.expect(page.locator('#review')).to_be_hidden()
@@ -60,8 +70,36 @@ def test_review_empty_failure_recovery_and_turn_isolation_in_browser():
         playwright.expect(page.locator('#review')).to_be_hidden()
         page.evaluate('s => sendReview(s)', dict(base, status='checked', coverage='unavailable', at=13))
         playwright.expect(page.locator('#review')).to_be_hidden()
-        page.evaluate('s => sendReview(s)', dict(base, status='failed', reason='old turn failure', at=14))
+        page.evaluate('''() => sendRecordedChanges([{path:'src/example.py',snapshot_id:'example',
+            turn_id:'turn',added:3,removed:1,diff:'-old\\n+new'}])''')
+        playwright.expect(page.locator('#review')).to_be_visible()
+        playwright.expect(message).to_have_count(0)
+        playwright.expect(page.locator('#review .change-review-file')).to_have_count(1)
+        playwright.expect(page.locator('#review .change-review-summary')).to_contain_text('+3')
+        playwright.expect(page.locator('#review .change-review-summary')).to_contain_text('−1')
+        assert '未覆盖' not in page.evaluate('reviewNarrow.summaryTip')
+        assert '可能' not in page.evaluate('reviewNarrow.summaryTip')
+        page.evaluate('s => sendReview(s)', dict(base, tool_call_id='other', status='checked', coverage='unavailable', at=14))
+        playwright.expect(message).to_have_count(0)
+        page.evaluate('''() => {document.documentElement.lang='en';
+            document.dispatchEvent(new CustomEvent('myagent:language-change'));}''')
+        playwright.expect(message).to_have_count(0)
+        assert 'unrecorded' not in page.evaluate('reviewNarrow.summaryTip')
+        page.evaluate('''() => {document.documentElement.lang='zh';
+            document.dispatchEvent(new CustomEvent('myagent:language-change'));}''')
+        page.evaluate('s => sendReview(s)', dict(base, status='checked', at=15))
+        playwright.expect(message).to_have_count(0)
+        page.evaluate('s => sendReview(s)', dict(base, tool_call_id='other', status='checked', at=16))
+        playwright.expect(message).to_have_count(0)
+        playwright.expect(page.locator('#review')).to_be_visible()
+        page.evaluate('s => sendReview(s)', dict(base, status='checked', coverage='declared_paths', at=17))
+        playwright.expect(message).to_have_count(0)
+        assert '可能' not in page.evaluate('reviewNarrow.summaryTip')
+        page.evaluate('s => sendReview(s)', dict(base, status='checked', at=18))
+        playwright.expect(message).to_have_count(0)
+        page.evaluate('s => sendReview(s)', dict(base, status='failed', reason='old turn failure', at=19))
         playwright.expect(message).to_contain_text('old turn failure')
+        playwright.expect(message).to_contain_text('已记录上述改动；部分改动审查失败')
         page.evaluate('''() => {
             const stream = document.getElementById('chat-stream');
             stream.insertAdjacentHTML('beforeend', '<div style="height:400px"></div><div class="msg-wrap--user" data-event-index="10">Next question</div>');

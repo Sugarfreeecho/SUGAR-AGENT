@@ -1,4 +1,4 @@
-"""Full LLM text survives streaming, folding, finalization and history recovery."""
+"""Full LLM and tool text survives streaming, folding and history recovery."""
 import os
 import re
 from pathlib import Path
@@ -76,6 +76,7 @@ def page(browser_page):
       function bumpAggregateMaxReactIter(){}
       function mutateSmoothTraceRowHeight(row,mutation){mutation();}
       function registerMermaidLazy(){}
+      function renderDurableAttachmentImages(){}
       function splitThinkTagsForUi(text){return {content:text};}
       function selectExecutionProcessGroup(){}
       function removeTemporaryStatus(){}
@@ -98,6 +99,8 @@ def page(browser_page):
         "discardPendingToolRowRender", "findToolCallRow", "findToolDraftRow", "scheduleToolRowRender",
         "deltaDedupeKey", "hasSeenStreamDelta", "appendToolCallDelta", "appendToolPendingRow",
         "preferredToolPendingCommandPreview",
+        "setToolRowText", "formatToolCommandLine", "formatToolDoneLine", "upsertToolCallResult",
+        "autoCollapseToolRowAfterResult", "rootSessionIdForRenderedNode",
     ))
     setup += "\n".join(function_source(i18n, name) for name in ("setUiRuntimeText", "getUiRuntimeText"))
     setup += "\n".join(function_source(scrolling, name) for name in (
@@ -365,7 +368,64 @@ def test_execution_records_preserve_long_deltas_and_recovery(page, kind):
     assert all(result.values())
 
 
-def test_scoped_abort_and_non_llm_truncation_remain(page):
+@pytest.mark.parametrize("shape", ["single", "multi"])
+def test_long_tool_draft_output_completion_and_history_keep_full_text(page, shape):
+    result = page.evaluate("""shape => {
+      const text=shape==='single'?'工具😀中间正文 '.repeat(5000)
+        :Array.from({length:450},(_,i)=>'工具第 '+i+' 行：保留中间正文😀').join('\\n');
+      const args='{"content":"'+text+'"}';
+      start('tool-call','',{reactIter:1});
+      const row=sc.closest('.feed-item');row.dataset.toolCallId='long-tool';
+      rememberToolStreamRow(ctx,row,'','long-tool');
+      writeToolCallLlmText(sc,'write_file',args);
+      const draftComplete=getUiRuntimeText(sc)===formatToolDraftLine('write_file',args);
+      appendToolPendingRow(ctx,{tool:'run_shell',tool_call_id:'long-tool',
+        args:{},command_preview:text,react_iter:1},currentSessionId);
+      const pendingComplete=getUiRuntimeText(sc)===formatToolPendingLine('run_shell',{},text);
+      setToolRowText(row,text+'\\n实时输出完成',ctx,currentSessionId);
+      const outputComplete=getUiRuntimeText(sc)===text+'\\n实时输出完成';
+      upsertToolCallResult(ctx,{tool:'run_shell',tool_call_id:'long-tool',
+        args:{},command_preview:'echo full',result:text},currentSessionId);
+      const expected=formatToolDoneLine('run_shell',{},text,'echo full');
+      const completedComplete=getUiRuntimeText(sc)===expected;
+      const collapsed=row.classList.contains('is-collapsed');
+      row.querySelector('.feed-row-collapse').click();
+      const expandedComplete=!row.classList.contains('is-collapsed')&&getUiRuntimeText(sc)===expected;
+      replayingMessages=true;start('tool-call',expected,{historyHydrate:true,reactIter:1});
+      return {draftComplete,pendingComplete,outputComplete,completedComplete,collapsed,expandedComplete,
+        historyComplete:getUiRuntimeText(sc)===expected};
+    }""", shape)
+    assert all(result.values()), result
+
+
+@pytest.mark.parametrize("shape", ["single", "multi"])
+def test_long_tool_execution_deltas_and_recovery_keep_full_text(page, shape):
+    result = page.evaluate("""shape => {
+      const text=shape==='single'?'长工具正文😀 '.repeat(5000)+'END'
+        :Array.from({length:450},(_,i)=>'output '+i+' 中间保留😀').join('\\n');
+      const args='{"content":"'+text+'"}',id='long-tool-execution';
+      body.replaceChildren();ctx.llm={};
+      const render=update=>renderExecutionRecord(ctx,
+        updateExecutionRecord(currentSessionId,{execution_id:id,kind:'tool',...update}),currentSessionId);
+      render({tool:'write_file',status:'generating',arguments_raw:args,last_runtime_seq:1});
+      const sc=body.querySelector('.feed-chunk-scroller');
+      const draftComplete=getUiRuntimeText(sc)===formatToolDraftLine('write_file',args);
+      render({status:'running',command_preview:'echo full',output_delta:text,last_runtime_seq:2});
+      const outputComplete=getUiRuntimeText(sc).includes(text);
+      render({output_delta:'\\n尾部增量',last_runtime_seq:3});
+      const deltaComplete=getUiRuntimeText(sc).includes(text+'\\n尾部增量');
+      render({status:'completed',result:text+'\\n完整结果',last_runtime_seq:4});
+      const completed=getUiRuntimeText(sc);
+      const completedComplete=completed.includes(text+'\\n完整结果');
+      body.replaceChildren();replayingMessages=true;
+      renderExecutionRecord(ctx,executionRecordsBySession.get(currentSessionId).get(id),currentSessionId);
+      return {draftComplete,outputComplete,deltaComplete,completedComplete,
+        recoveryComplete:getUiRuntimeText(body.querySelector('.feed-chunk-scroller'))===completed};
+    }""", shape)
+    assert all(result.values()), result
+
+
+def test_scoped_abort_and_auxiliary_log_truncation_remain(page):
     result = page.evaluate("""() => {
       const text=('tool '.repeat(30)+'\\n').repeat(400)+'END';write(text);
       const row=sc.closest('.feed-item');
@@ -373,7 +433,7 @@ def test_scoped_abort_and_non_llm_truncation_remain(page):
       const otherScopeKept=row.isConnected && sc.textContent===text;
       discardLlmStreamChunks(ctx,{react_iter:1,run_id:'run-1'});
       const removed=!row.isConnected;
-      const types=['tool-call','status','context-summary-reasoning'];
+      const types=['status','context-summary-reasoning'];
       const truncationKept=types.every(type=>{
         const node=createProcessFeedRow(ctx,type,text,{historyHydrate:true},currentSessionId);
         return node.textContent===truncateLogTextForUi(text) && node.textContent.length<text.length;

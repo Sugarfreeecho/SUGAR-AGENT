@@ -99,6 +99,13 @@ class DockRetainedPages {
         record.page.element.remove();
     }
 
+    releaseSession(sessionId) {
+        const sid = String(sessionId || '');
+        for (const [key, record] of this.records) {
+            if (record.surfaceId === sid) this.release(key);
+        }
+    }
+
     title(tab) {
         return this.records.get(dockPageKey(dockRightState.sessionId, tab.id))?.page.title || tab.title;
     }

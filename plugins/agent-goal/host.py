@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import Any, Mapping
 
 from fastapi import APIRouter, Request
@@ -11,13 +12,14 @@ from session_event_bus import publish_session_event
 
 async def _invoke_goal(context, arguments: Mapping[str, Any]):
     from agent_goal import GoalError, manager_for
+    from agent_fact_commit import run_fact_commit
     from tool_registry import ToolOutcome
 
     tool_name = str(context.service("tool_name") or "")
     try:
         manager = manager_for(context.service("session_manager"))
         if tool_name == "create_goal":
-            goal = manager.create(
+            operation = partial(manager.create,
                 context.session_id,
                 str(arguments.get("objective") or ""),
                 arguments.get("token_budget"),
@@ -25,9 +27,9 @@ async def _invoke_goal(context, arguments: Mapping[str, Any]):
                 run_id=context.run_id,
             )
         elif tool_name == "get_goal":
-            goal = manager.get(context.session_id)
+            operation = partial(manager.get, context.session_id)
         elif tool_name == "update_goal":
-            goal = manager.update_status(
+            operation = partial(manager.update_status,
                 context.session_id,
                 str(arguments.get("status") or ""),
                 str(arguments.get("reason") or ""),
@@ -38,6 +40,7 @@ async def _invoke_goal(context, arguments: Mapping[str, Any]):
             )
         else:
             return ToolOutcome.failed("unknown_goal_operation", tool_name)
+        goal = await run_fact_commit(operation, trace_state=context.state)
     except (GoalError, ValueError) as exc:
         return ToolOutcome.failed("goal_error", str(exc))
 

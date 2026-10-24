@@ -52,6 +52,8 @@ def test_settings_assets_support_conditional_cache_and_invalidate(tmp_path, monk
     weak = client.get("/static/settings/core.js", headers={"If-None-Match": "W/" + first.headers["etag"]})
     assert weak.status_code == 304
     version = webui._settings_asset_version()
+    versioned = client.get(f"/static/settings/core.js?v={version}")
+    assert versioned.headers["cache-control"] == "public, max-age=31536000, immutable"
     asset.write_text("new();", encoding="utf-8")
     changed = client.get("/static/settings/core.js?v=1", headers={"If-None-Match": first.headers["etag"]})
     assert changed.status_code == 200 and changed.text == "new();"

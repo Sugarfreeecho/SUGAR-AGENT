@@ -78,6 +78,13 @@ function dockSurfaceExists(sessionId, area) {
     return !!dockAreaSurfaces(area)[String(sessionId || '')];
 }
 
+/** Forget only a deleted session; ordinary switching keeps its layout alive. */
+function dockForgetSession(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    for (const surfaces of Object.values(dockSurfacesByArea)) delete surfaces[sid];
+}
+
 /** Replace one session's surface, leaving every other session by reference. */
 function dockSeat(sessionId, next, area) {
     const sid = String(sessionId || '');

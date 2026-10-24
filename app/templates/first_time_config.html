@@ -916,17 +916,28 @@
         okBtn.removeEventListener('click', onOk);
         cancelBtn.removeEventListener('click', onCancel);
         overlay.removeEventListener('click', onOverlay);
+        overlay.removeEventListener('pointerdown', onOverlayDown);
         document.removeEventListener('keydown', onKey);
         setTimeout(function () { overlay.hidden = true; }, 230);
         resolve(result);
       }
       function onOk() { cleanup(true); }
       function onCancel() { cleanup(false); }
-      function onOverlay(e) { if (e.target === overlay) cleanup(false); }
+      /* 点遮罩关闭：按下点落在卡片上时不算数。浏览器把 click 派发给按下/松开
+         目标的最近公共祖先——在卡片里按住、拖到遮罩上松开时祖先就是遮罩，只看
+         event.target 会把这次拖拽误判成「点了遮罩」而关掉对话框。 */
+      let pressOnContent = false;
+      function onOverlayDown(e) { pressOnContent = e.target !== overlay; }
+      function onOverlay(e) {
+        const dismissed = e.target === overlay && !pressOnContent;
+        pressOnContent = false;
+        if (dismissed) cleanup(false);
+      }
       function onKey(e) { if (e.key === 'Escape') cleanup(false); }
 
       okBtn.addEventListener('click', onOk);
       cancelBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('pointerdown', onOverlayDown);
       overlay.addEventListener('click', onOverlay);
       document.addEventListener('keydown', onKey);
     });

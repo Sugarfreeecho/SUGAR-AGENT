@@ -351,3 +351,35 @@ def test_mcp_tools_and_plugins_keep_descriptions_in_hover_tips():
     # 卡片提示点出「悬停看说明」
     assert "悬停插件名看简介" in ext
     assert "悬停工具名看说明" in ext
+
+
+def test_model_dialog_lists_models_in_its_own_filterable_menu():
+    """「从接口获取」不再挂 datalist：浏览器会拿模型名称框里已有的文字筛选项，
+    编辑已有模型时列表几乎被筛空。筛选框改成菜单内部的一块。"""
+    root = Path(__file__).resolve().parents[1]
+    basic = (root / "app" / "templates" / "static" / "settings" / "sections_basic.js").read_text(encoding="utf-8")
+    css = (root / "app" / "templates" / "static" / "settings" / "settings.css").read_text(encoding="utf-8")
+
+    assert "model-datalist" not in basic
+    assert "setAttribute('list'" not in basic
+    assert "data-model-filter" in basic
+    assert "st-model-menu-search" in basic
+    assert "st-model-option" in basic
+    # 编辑态把 profile_id 一起发出去，后端才能复用已存密钥（否则 401）
+    assert "profile_id: p.id || ''" in basic
+    assert ".st-model-menu {" in css and ".st-model-menu-search" in css
+
+
+def test_settings_backdrops_only_dismiss_on_a_real_backdrop_click():
+    """在弹窗内按下、拖到遮罩上松开时，浏览器把 click 派发给两者的共同祖先（遮罩），
+    旧写法只看 event.target 就会误关窗口。现在要求按下与松开都落在遮罩上。"""
+    root = Path(__file__).resolve().parents[1]
+    core = (root / "app" / "templates" / "static" / "settings" / "core.js").read_text(encoding="utf-8")
+
+    assert "function bindBackdropDismiss(backdrop, onDismiss)" in core
+    assert "bindBackdropDismiss($('#st-dialog'), closeDialog);" in core
+    assert "bindBackdropDismiss($('#st-confirm'), askConfirmHide);" in core
+    assert "bindBackdropDismiss(stage, leaveSettings);" in core
+    # 裸的「点遮罩就关」判定必须消失
+    assert "event.target.id === 'st-dialog'" not in core
+    assert "event.target.id === 'st-confirm'" not in core

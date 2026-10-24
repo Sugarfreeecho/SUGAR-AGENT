@@ -29,13 +29,21 @@ export function reviewStatusKey(status) {
 export function acceptReviewStatus(previous, incoming) {
     return !previous || Number(incoming.at || 0) >= Number(previous.at || 0);
 }
-export function reviewStatusState(statuses) {
-    const rows = Array.from(statuses || []);
-    const failure = rows.find(status => status.status === 'failed');
+export function reviewStatusState(statuses, hasRecordedChanges = false) {
+    let count = 0; let unreviewedCalls = 0; let declaredPaths = false; let failure = null;
+    for (const status of statuses || []) {
+        count += 1;
+        if (!failure && status.status === 'failed') failure = status;
+        if (status.coverage === 'unavailable') unreviewedCalls += 1;
+        if (status.coverage === 'declared_paths') declaredPaths = true;
+    }
     if (failure) return { state: 'failed', reason: String(failure.reason || '') };
-    if (rows.some(status => status.coverage === 'unavailable')) return { state: 'unavailable' };
-    if (rows.some(status => status.coverage === 'declared_paths')) return { state: 'partial' };
-    return { state: rows.length ? 'checked' : 'unloaded' };
+    if (unreviewedCalls) return {
+        state: hasRecordedChanges || unreviewedCalls < count ? 'partial' : 'unavailable',
+        unreviewedCalls,
+    };
+    if (declaredPaths) return { state: 'partial' };
+    return { state: count ? 'checked' : 'unloaded' };
 }
 function rememberReviewStatus(status, detail) {
     if (!status || !['checked', 'failed'].includes(status.status)) return false;
@@ -61,18 +69,18 @@ function rememberReviewStatus(status, detail) {
     reviewStatuses.set(key, { status, uiTurnKey });
     return true;
 }
-function statusForViewedTurn() {
+function statusForViewedTurn(hasRecordedChanges = false) {
     const range = viewedTurnRange();
     const key = range ? range.key : latestRootTurnId();
     renderedTurnKey = key;
-    return reviewStatusState(reviewStatusesByTurn.get(key)?.values() || []);
+    return reviewStatusState(reviewStatusesByTurn.get(key)?.values() || [], hasRecordedChanges);
 }
-function reviewStateText(state) {
-    if (state.state === 'failed') return t('改动审查未记录：', 'Change review failed: ') + state.reason;
-    if (state.state === 'unavailable') return t('当前目录未纳入审查范围，无法判断是否有改动', 'This directory is outside review coverage; changes are unknown');
-    if (state.state === 'partial') return t('仅检查声明路径；Shell 等外部改动可能未记录', 'Declared paths checked; shell and external changes may be unrecorded');
-    if (state.state === 'checked') return t('审查范围内暂无改动', 'No changes within review coverage');
-    return t('本轮尚未检查文件改动', 'File changes have not been checked for this turn');
+function reviewStateText(state, hasRecordedChanges = false) {
+    if (state.state !== 'failed') return '';
+    const recorded = hasRecordedChanges ? t('已记录上述改动；', 'The changes above are recorded; ') : '';
+    return recorded + (hasRecordedChanges
+        ? t('部分改动审查失败：', 'Some change reviews failed: ')
+        : t('改动审查未记录：', 'Change review failed: ')) + state.reason;
 }
 function reviewStateHtml(state) {
     return reviewStateText(state).replace(/[&<>"']/g, ch => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[ch]));
@@ -83,6 +91,17 @@ function zh() {
 }
 function t(cn, en) { return zh() ? cn : en; }
 function activeSessionId() {
+    // The sidebar may filter/collapse the active row. The app's session is
+    // authoritative; currentSessionId lives in its shared scope, not on window.
+    const dock = globalThis.MyAgentDock;
+    if (dock && typeof dock.sessionId === 'function') {
+        const sessionId = String(dock.sessionId() || '');
+        return sessionId && typeof dock.surfaceKey === 'function'
+            ? String(dock.surfaceKey(sessionId) || sessionId) : sessionId;
+    }
+    const stream = document.getElementById('chat-stream');
+    const owner = stream && (stream.dataset.sessionId || stream.dataset.cacheSessionId);
+    if (owner) return String(owner);
     const row = document.querySelector('#sessions-list .session-item.active[data-session-id]');
     if (row) return String(row.dataset.sessionId || '');
     if (typeof globalThis.currentSessionId === 'string') return globalThis.currentSessionId;
@@ -152,18 +171,34 @@ function scrollViewportOf(stream) {
     }
     return null;
 }
+function reviewViewport(stream) {
+    const container = scrollViewportOf(stream) || stream;
+    let inset = 0;
+    if (pubarHandle && typeof pubarHandle.getNarrowHeight === 'function') {
+        inset = pubarHandle.getNarrowHeight();
+    } else if (bar && !bar.hidden) {
+        const style = getComputedStyle(bar);
+        inset = bar.getBoundingClientRect().height
+            + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+    }
+    // A narrow entry consumes composer space and shrinks the message viewport.
+    // Use bounds without that contribution so showing/hiding the review cannot
+    // change which turn/process is selected and trigger the reverse transition.
+    return { container, inset: Math.max(0, Number(inset) || 0) };
+}
 function viewedTurnRange(stream, users) {
     stream = stream || document.getElementById('chat-stream');
     if (!stream) return null;
     users = users || stream.querySelectorAll('.msg-wrap--user[data-event-index]');
     if (!users.length) return null;
-    const container = scrollViewportOf(stream) || stream;
+    const viewport = reviewViewport(stream);
+    const container = viewport.container;
     let nearBottom = false;
     if (typeof container.scrollTop === 'number' && Number(container.clientHeight) > 0) {
-        nearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 24;
+        nearBottom = container.scrollTop + container.clientHeight + viewport.inset >= container.scrollHeight - 24;
     }
     const cr = container.getBoundingClientRect ? container.getBoundingClientRect() : { top: 0, height: 0 };
-    const pivot = cr.top + cr.height * 0.5;
+    const pivot = cr.top + (cr.height + viewport.inset) * 0.5;
     let chosen = null;
     if (!nearBottom) {
         // 用户轮次按文档流排序，二分定位视口中线之前最近的一轮。
@@ -183,7 +218,7 @@ function viewedTurnRange(stream, users) {
         if (node.classList && node.classList.contains('msg-wrap--user')) break;
         end = node;
     }
-    return { stream, start: chosen, end, key: String(chosen.getAttribute('data-event-index') || '') };
+    return { stream, start: chosen, end, key: String(chosen.getAttribute('data-event-index') || ''), viewport };
 }
 function turnRangeAggregate(range) {
     if (!range) return null;
@@ -306,7 +341,7 @@ function clippingParents(aggregate) {
     clippingAncestors.set(aggregate, parents);
     return parents;
 }
-function visibilityMetric(aggregate) {
+function visibilityMetric(aggregate, viewport) {
     if (!aggregate || !aggregate.getBoundingClientRect) return null;
     const rect = aggregate.getBoundingClientRect();
     const documentHeight = document.documentElement && document.documentElement.clientHeight;
@@ -316,7 +351,8 @@ function visibilityMetric(aggregate) {
         if (!parent.isConnected || !parent.getBoundingClientRect) return;
         const bounds = parent.getBoundingClientRect();
         top = Math.max(top, bounds.top);
-        bottom = Math.min(bottom, bounds.bottom);
+        bottom = Math.min(bottom, bounds.bottom
+            + (viewport && parent === viewport.container ? viewport.inset : 0));
     });
     const visibleTop = Math.max(top, rect.top);
     const visibleBottom = Math.min(bottom, rect.bottom);
@@ -356,7 +392,7 @@ function viewportAggregate() {
         /* 关联按轮：只取「正在查看的那一轮」的过程框。 */
         if (reviewedKey && inferredAggregateTurnId(aggregate) !== reviewedKey) return;
         candidates.push(aggregate);
-        metrics.push(visibilityMetric(aggregate));
+        metrics.push(visibilityMetric(aggregate, viewed && viewed.viewport));
     });
     const index = chooseVisibleChangeReviewIndex(metrics);
     if (index >= 0) return candidates[index];
@@ -633,11 +669,12 @@ function renderReviewHost(host, rows, options) {
         }));
     });
     const state = options.reviewState || { state: 'unloaded' };
-    if (!rows.length || ['failed', 'partial', 'unavailable'].includes(state.state)) {
+    // Coverage limits do not establish that files were missed; show actual failures only.
+    if (state.state === 'failed') {
         const message = document.createElement('div');
-        message.className = 'change-review-status' + (state.state === 'failed' ? ' is-error' : '');
-        message.setAttribute('role', state.state === 'failed' ? 'alert' : 'status');
-        message.textContent = reviewStateText(state);
+        message.className = 'change-review-status is-error';
+        message.setAttribute('role', 'alert');
+        message.textContent = reviewStateText(state, rows.length > 0);
         list.appendChild(message);
     }
     const parts = splitReviewRows(rows);
@@ -702,7 +739,9 @@ function updatePlacement(visible) {
                 label: t('改动审查', 'Change review'),
                 summaryHtml: rows.length && currentReviewState.state !== 'failed'
                     ? narrowSummaryHtml(parts) : reviewStateHtml(currentReviewState),
-                summaryTip: rows.length ? statsTitle(stats(parts.active)) : reviewStateText(currentReviewState),
+                summaryTip: rows.length ? statsTitle(stats(parts.active))
+                    + (currentReviewState.state === 'failed'
+                        ? '\n' + reviewStateText(currentReviewState) : '') : reviewStateText(currentReviewState),
                 actions: rows.length ? [{ label: t('查看', 'View'), tip: t('查看本轮改动', 'View changes for this turn'), onClick: function () { openDetails(); } }] : [],
             });
         }
@@ -724,7 +763,7 @@ function render() {
     const rows = activeAggregate ? displayTurnRows(activeAggregate) : [];
     /* 关联区域 = 当前轮（用户问题 → 对应 final 卡片）：过程框展开与否不再影响
        “这一轮的改动”是否关联显示。 */
-    currentReviewState = statusForViewedTurn();
+    currentReviewState = statusForViewedTurn(rows.length > 0);
     const visible = Boolean(mountedSessionId && (rows.length || currentReviewState.state === 'failed'));
     if (visible && cardHost) renderReviewHost(cardHost, rows, {
         showView: true,
@@ -1052,7 +1091,7 @@ export async function installChatExtension(context) {
         const detail = event && event.detail ? event.detail : {};
         const active = activeSessionId();
         // Child-agent extension events must not switch the root conversation.
-        // The session list's active marker is authoritative for the reader.
+        // Resolve the root through the app session, independently of sidebar rows.
         if (detail.sessionId && active && String(detail.sessionId) !== active) return;
         switchSessionView(active || detail.sessionId || '');
     };
@@ -1063,11 +1102,16 @@ export async function installChatExtension(context) {
     if (sessionObserver && sessions) sessionObserver.observe(sessions, {
         subtree: true, attributes: true, childList: true, attributeFilter: ['class'],
     });
+    const stream = document.getElementById('chat-stream');
+    if (sessionObserver && stream) sessionObserver.observe(stream, {
+        attributes: true, attributeFilter: ['data-session-id', 'data-cache-session-id'],
+    });
     document.addEventListener('myagent:tool-call-rendered', toolListener);
     document.addEventListener('myagent:process-aggregate-toggle', toggleListener);
     document.addEventListener('myagent:ui-event', uiListener);
     document.addEventListener('myagent:change-review-state', reviewStateListener);
     document.addEventListener('myagent:extension-state-changed', sessionListener);
+    document.addEventListener('myagent:session-change', sessionListener);
     document.addEventListener('myagent:language-change', render);
     // Scroll events do not bubble, so capture them to cover both the main chat
     // scroller and the sub-agent grid without installing per-panel listeners.
@@ -1085,6 +1129,7 @@ export async function installChatExtension(context) {
         document.removeEventListener('myagent:ui-event', uiListener);
         document.removeEventListener('myagent:change-review-state', reviewStateListener);
         document.removeEventListener('myagent:extension-state-changed', sessionListener);
+        document.removeEventListener('myagent:session-change', sessionListener);
         document.removeEventListener('myagent:language-change', render);
         document.removeEventListener('scroll', viewportListener, true);
         if (typeof globalThis.removeEventListener === 'function') {

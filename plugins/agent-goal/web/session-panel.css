@@ -1,6 +1,10 @@
 .plugin-session-panel--custom.agent-goal-panel-host { padding:0; border:0; background:transparent; box-shadow:none; backdrop-filter:none; }
 .agent-goal-panel-host .chat-goal-card {
     flex:0 0 auto; min-height:0;
+    /* .workspace-side-panel 自带 overflow:hidden，会让卡片变成“最近的滚动容器”，
+       底下那排 .chat-goal-actions 的 sticky 就失效（按钮又跟着正文滚走）。
+       这里壳子是透明的，不需要裁切，放开让 sticky 认到 .pubar-panes。 */
+    overflow:visible;
 }
 .agent-goal-panel-host .chat-goal-card[hidden],
 .agent-goal-panel-host .chat-goal-icon-btn[hidden],
@@ -16,15 +20,25 @@
 }
 .agent-goal-panel-host .chat-goal-objective {
     color:var(--text-primary); background:transparent; border:0; padding:0;
-    display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:6; line-clamp:6;
-    overflow:hidden; overflow-wrap:anywhere; cursor:default;
+    /* 不设文本上限：Goal 描述原样铺开（保留换行），高度上限交给
+       会话状态浮层本身（--side-panel-max-height = 70vh）+ .pubar-panes 的统一滚动。 */
+    display:block; overflow:visible; overflow-wrap:anywhere; white-space:pre-wrap; cursor:default;
 }
 .agent-goal-panel-host .chat-goal-meta {
     margin:.34rem 0 0; padding:0; border:0; color:var(--text-tertiary);
     font:500 .56rem/1.4 var(--sans); font-variant-numeric:tabular-nums;
 }
 .agent-goal-panel-host .chat-goal-objective:focus-visible { outline:1px solid var(--accent-2); outline-offset:2px; border-radius:3px; }
-.agent-goal-panel-host .chat-goal-actions { display:flex; align-items:center; gap:.25rem; margin-top:.3rem; }
+.agent-goal-panel-host .chat-goal-actions {
+    display:flex; align-items:center; gap:.25rem; margin-top:.3rem;
+    /* 常驻：Goal 描述再长，操作按钮也不跟着被顶到可视区外——贴在会话状态浮层的
+       可视底边（滚动容器是 .pubar-panes），卡片滚到底时自然回落到原位。
+       底色取浮层同一块 --floating-surface，正文从下面穿过时不会透字。 */
+    position:sticky; bottom:0; z-index:2;
+    padding:.3rem 0 .18rem;
+    background:var(--floating-surface);
+    box-shadow:0 -10px 14px -12px rgba(0,0,0,.5);
+}
 .agent-goal-panel-host .chat-goal-icon-btn {
     display:inline-flex; align-items:center; justify-content:center; flex:0 0 1.65rem;
     width:1.65rem; height:1.45rem; padding:0; border:1px solid var(--border-glass); border-radius:5px;

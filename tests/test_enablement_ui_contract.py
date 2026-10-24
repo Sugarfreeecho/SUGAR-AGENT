@@ -114,7 +114,8 @@ def test_skill_picker_exposes_enablement_controls():
     assert "toggleSkillPickerPlugin" in picker
     assert "skillPickerPluginPageHref" in picker
     assert "skillPickerOpenPageHtml" in picker
-    assert 'class="skill-picker-toggle plugin-toggle-action"' in picker
+    # The class may be followed by the existing dynamic loading-state suffix.
+    assert 'class="skill-picker-toggle plugin-toggle-action' in picker
     assert "plugin-open-action" in picker
     assert 'plugin-open-action" href="' in picker
     assert 'target="_blank" rel="noopener noreferrer"' in picker

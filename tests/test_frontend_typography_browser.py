@@ -364,3 +364,43 @@ def test_session_scrollbar_reveals_without_moving_content(typography_page, theme
     assert measure()['color'] == before['color']
     page.locator('.pubar-panes button').focus()
     assert measure()['color'] != before['color']
+
+
+def test_approval_message_body_caps_at_five_lines(typography_page):
+    """审批正文 13px、上限 5 行；超出在框内滚动，短正文不被撑高。"""
+    page = typography_page
+    page.set_viewport_size({"width": 900, "height": 800})
+    page.evaluate("""() => {
+      document.documentElement.style.fontSize = '16px';
+      const host = document.createElement('div');
+      host.id = 'approval-probe';
+      host.style.cssText = 'position:fixed;left:-10000px;top:0;width:420px';
+      const long = Array.from({length: 20}, (_, i) =>
+        '第 ' + (i + 1) + ' 行：run_shell --workdir D:/workspace/outputs/report-' + i + '.json').join('\\n');
+      host.innerHTML =
+        '<div class="human-approval-message" data-probe="long">' + long + '</div>' +
+        '<div class="human-approval-message" data-probe="short">命令：git status\\n工作目录：D:/workspace</div>';
+      document.body.append(host);
+    }""")
+    result = page.evaluate("""() => {
+      const read = (name) => {
+        const el = document.querySelector('#approval-probe [data-probe="' + name + '"]');
+        const cs = getComputedStyle(el);
+        const line = parseFloat(cs.lineHeight);
+        return {
+          size: parseFloat(cs.fontSize),
+          lines: el.getBoundingClientRect().height / line,
+          scrollable: el.scrollHeight > el.clientHeight + 0.5,
+          overflowY: cs.overflowY,
+        };
+      };
+      return {long: read('long'), short: read('short')};
+    }""")
+    assert result["long"]["size"] == pytest.approx(13)
+    assert result["short"]["size"] == pytest.approx(13)
+    assert result["long"]["lines"] == pytest.approx(5, abs=0.05)
+    assert result["long"]["overflowY"] == "auto"
+    assert result["long"]["scrollable"] is True
+    # 短正文跟着内容走，不留 5 行空档、也不出滚动条
+    assert result["short"]["lines"] == pytest.approx(2, abs=0.05)
+    assert result["short"]["scrollable"] is False

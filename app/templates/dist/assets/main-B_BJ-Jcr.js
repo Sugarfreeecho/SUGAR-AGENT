@@ -12306,7 +12306,21 @@ function workspaceMediaUrl(rel) {
     return metadata && metadata.version ? url + '&v=' + encodeURIComponent(metadata.version) : url;
 }
 
-var workspaceImageMetadataCache = new Map();
+var workspaceImageMetadataCache = new class extends Map {
+    get(key) {
+        if (!this.has(key)) return undefined;
+        const value = super.get(key);
+        this.delete(key);
+        this.set(key, value);
+        return value;
+    }
+    set(key, value) {
+        this.delete(key);
+        super.set(key, value);
+        if (this.size > 2048) this.delete(this.keys().next().value);
+        return this;
+    }
+}();
 var workspaceImageMetadataRequestId = 0;
 var pendingWorkspaceImages = new Set();
 
@@ -23398,6 +23412,8 @@ async function deleteSessionFromMenu(sess, rowDiv) {
     void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
         .then(function (resp) {
             if (!resp.ok) throw new Error('delete failed: ' + resp.status);
+            if (typeof dockRightPageHost !== 'undefined') dockRightPageHost?.releaseSession(deletedSessionId);
+            if (typeof dockForgetSession === 'function') dockForgetSession(deletedSessionId);
         })
         .catch(function (err) {
             console.error('删除会话失败:', err);
@@ -23530,7 +23546,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     div.innerHTML = '<div class="session-item-head">'
         + '<div class="session-item-main">'
         + '<div class="session-item-title-row">'
-        + '<span class="session-name" data-id="' + sess.id + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
+        + '<span class="session-name" data-id="' + escapeHtml(String(sess.id || '')) + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
         + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
         + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
@@ -35274,6 +35290,13 @@ function dockSurfaceExists(sessionId, area) {
     return !!dockAreaSurfaces(area)[String(sessionId || '')];
 }
 
+/** Forget only a deleted session; ordinary switching keeps its layout alive. */
+function dockForgetSession(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    for (const surfaces of Object.values(dockSurfacesByArea)) delete surfaces[sid];
+}
+
 /** Replace one session's surface, leaving every other session by reference. */
 function dockSeat(sessionId, next, area) {
     const sid = String(sessionId || '');
@@ -38131,6 +38154,13 @@ class DockRetainedPages {\r
         this.records.delete(key);\r
         record.page.dispose?.();\r
         record.page.element.remove();\r
+    }\r
+\r
+    releaseSession(sessionId) {\r
+        const sid = String(sessionId || '');\r
+        for (const [key, record] of this.records) {\r
+            if (record.surfaceId === sid) this.release(key);\r
+        }\r
     }\r
 \r
     title(tab) {\r

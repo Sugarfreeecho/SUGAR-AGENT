@@ -23,7 +23,21 @@ function workspaceMediaUrl(rel) {
     return metadata && metadata.version ? url + '&v=' + encodeURIComponent(metadata.version) : url;
 }
 
-var workspaceImageMetadataCache = new Map();
+var workspaceImageMetadataCache = new class extends Map {
+    get(key) {
+        if (!this.has(key)) return undefined;
+        const value = super.get(key);
+        this.delete(key);
+        this.set(key, value);
+        return value;
+    }
+    set(key, value) {
+        this.delete(key);
+        super.set(key, value);
+        if (this.size > 2048) this.delete(this.keys().next().value);
+        return this;
+    }
+}();
 var workspaceImageMetadataRequestId = 0;
 var pendingWorkspaceImages = new Set();
 

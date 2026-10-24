@@ -72,20 +72,24 @@ def validate_plugin_write_origin(
         raise PluginWebError(403, "cross_origin_denied", "Cross-origin plugin write denied")
 
 
-def _enabled_plugin(plugin_id: str) -> PluginDefinition:
+def _enabled_plugin(plugin_id: str, *, refresh: bool = True) -> PluginDefinition:
     namespace = normalize_namespace(plugin_id)
-    loaded = load_plugins(force=True)
+    loaded = load_plugins(force=refresh)
     plugin = next(
         (item for item in loaded.plugins if item.plugin_id == namespace),
         None,
     )
     if plugin is None:
         raise PluginWebError(404, "plugin_not_found", "Plugin is not enabled")
+    if not refresh:
+        from agent_extensions import plugin_manager
+        if not plugin_manager().is_enabled(namespace):
+            raise PluginWebError(404, "plugin_not_found", "Plugin is not enabled")
     return plugin
 
 
 def plugin_page(plugin_id: str) -> Path:
-    plugin = _enabled_plugin(plugin_id)
+    plugin = _enabled_plugin(plugin_id, refresh=False)
     try:
         manifest = plugin_web_manifest(plugin)
     except (OSError, PluginSecurityError) as exc:
@@ -96,7 +100,18 @@ def plugin_page(plugin_id: str) -> Path:
 
 
 def plugin_asset(plugin_id: str, asset_path: str) -> Path:
-    plugin = _enabled_plugin(plugin_id)
+    try:
+        plugin = _enabled_plugin(plugin_id, refresh=False)
+    except PluginWebError:
+        # Bundled settings must still load when their feature is disabled.
+        from plugins import get_plugin_manager
+        from plugins.ui import plugin_ui_contributions
+        namespace = normalize_namespace(plugin_id)
+        plugin = next((item for item in get_plugin_manager().discover()
+                       if item.plugin_id == namespace and item.system_builtin), None)
+        if plugin is None or not any(item.get("slot") == "settings.section" and item.get("target") == "renderer"
+                                     for item in plugin_ui_contributions(plugin)):
+            raise
     try:
         return resolve_plugin_asset(plugin, asset_path)
     except (OSError, PluginSecurityError) as exc:

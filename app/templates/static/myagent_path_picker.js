@@ -1083,9 +1083,17 @@
         textarea.focus();
       }
     });
+    /* 点面板外面关闭：按下点落在面板里时不算数。浏览器把 click 派发给按下/松开
+       目标的最近公共祖先——在面板里按住（拖滚动条、选文件）、拖到外面再松开时
+       祖先落在面板之外，只看 click 就会把这次拖拽误判成「点了外面」。 */
+    var pressStartedInside = false;
+    document.addEventListener('pointerdown', function (ev) {
+      if (state.open) pressStartedInside = panel.contains(ev.target);
+    }, true);
     document.addEventListener('click', function (ev) {
       if (!state.open) return;
       if (panel.contains(ev.target)) return;
+      if (pressStartedInside) { pressStartedInside = false; return; }
       close();
     });
     window.addEventListener('resize', function () { if (state.open) positionPanel(); });
@@ -1196,6 +1204,22 @@
     var panelApi = createWorkspaceFilePanel(textarea, function () {
       fileInput.click();
     });
+    /* 面板开着时按钮保持“激活”高亮：面板还能被 × / 点外部 / Esc 关掉，
+       所以直接跟它的 is-open 类同步（同时补 aria-expanded / aria-haspopup）。 */
+    button.setAttribute('aria-haspopup', 'dialog');
+    function syncPanelTriggerState() {
+      var open = !!(panelApi.panel && panelApi.panel.classList.contains('is-open'));
+      button.classList.toggle('is-open', open);
+      button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (panelApi.panel) {
+      if (typeof MutationObserver === 'function') {
+        new MutationObserver(syncPanelTriggerState).observe(
+          panelApi.panel, { attributes: true, attributeFilter: ['class'] }
+        );
+      }
+      syncPanelTriggerState();
+    }
     button.addEventListener('click', function (ev) {
       ev.stopPropagation();
       ev.preventDefault();

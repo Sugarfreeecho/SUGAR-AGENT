@@ -222,7 +222,10 @@ export function renderSessionPanel(context) {
         renderClock();
         const currentStatus = String(goal.status || 'active');
         const full = String(goal.objective || '').trim();
-        objective.textContent = objectiveSummary(full);
+        /* 左栏页签里显示完整 Goal 描述（含换行），不再截到 200 字/6 行；
+           高度由会话状态浮层统一限（70vh）并在 .pubar-panes 里滚动。
+           输入框上方的窄态条目仍用 objectiveSummary 的短摘要。 */
+        objective.textContent = full;
         globalThis.setUiHoverTip?.(objective, full);
         objective.setAttribute('aria-label', full);
         const usedTokens = Math.max(0, Number(goal.used_tokens || 0));

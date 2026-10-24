@@ -9,6 +9,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_embedded_plugin_settings_bridge_rejects_foreign_frames_and_urls():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for frontend runtime checks")
+    result = subprocess.run([node, str(ROOT / "tests/js/plugin_settings_embed_runtime.cjs")],
+                            cwd=ROOT, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "embed runtime checks passed" in result.stdout
+
+
 def test_plugin_ui_slot_frontend_runtime_and_safe_text_rendering():
     node = shutil.which("node")
     if not node:

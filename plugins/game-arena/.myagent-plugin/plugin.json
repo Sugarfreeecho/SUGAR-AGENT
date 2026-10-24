@@ -143,6 +143,15 @@
             }
           ]
         }
+      ],
+      "details.tab": [
+        {
+          "id": "main",
+          "title": "Game Arena",
+          "description": "Open the battle arena (Gomoku & Go).",
+          "scope": "app",
+          "order": 50
+        }
       ]
     }
   },

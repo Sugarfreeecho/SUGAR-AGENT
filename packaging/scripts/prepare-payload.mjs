@@ -295,6 +295,13 @@ function main() {
 
   if (BUILD_FRONTEND) buildFrontend()
 
+  if (process.platform === 'win32') {
+    log('· 校验并更新 Windows egress helper…')
+    run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(REPO, 'scripts', 'build_egress_helper_windows.ps1'), '-IfNeeded'],
+    { cwd: REPO, windowsHide: true })
+  }
+
   const distIndex = path.join(REPO, 'app', 'templates', 'dist', 'index.html')
   if (!fs.existsSync(distIndex)) {
     log('· 警告：app/templates/dist/index.html 不存在，界面会显示后端兜底页；请先构建前端')

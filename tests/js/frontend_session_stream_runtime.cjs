@@ -131,19 +131,19 @@ function navigationPort() {
   return p;
 }
 async function testUnreadNavigation() {
-  for (const badge of ['server', 'local', 'none']) {
+  for (const badge of ['server', 'local', 'none', 'startup']) {
     const rt = switchFixture(), c = rt.context, timers = [], modes = [];
     c.setTimeout = fn => { timers.push(fn); return timers.length; };
     c.sessionStore.get = () => ({ last_activity_at: '2020-01-01', unread_result: badge === 'server' });
     if (badge === 'local') c.sessionUnreadComplete.add('B');
     c.clearSessionUnreadState = sid => { c.sessionUnreadComplete.delete(sid); };
-    c.restoreCachedSessionStream = () => { assert.equal(badge, 'none', 'unread must bypass old cached DOM'); return false; };
+    c.restoreCachedSessionStream = () => { assert(['none', 'startup'].includes(badge), 'unread must bypass old cached DOM'); return false; };
     for (const name of ['resetSessionHistoryPaging', 'emptyChatStreamKeepingStrip', 'showLoading', 'refreshSubagentTreePanel']) c[name] = () => {};
     c.loadSessionMessages = async (sid, mode) => { modes.push(mode); return true; };
-    const switched = c.switchSession('B');
+    const switched = c.switchSession('B', { initialLoad: badge === 'startup' });
     await timers.shift()();
     await switched;
-    assert.deepEqual(modes, [badge === 'none' ? 'smooth-bottom' : 'bottom']);
+    assert.deepEqual(modes, ['bottom'], 'materialized history opens directly at the newest result');
   }
 
   const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1,
@@ -185,19 +185,28 @@ async function testUnreadNavigation() {
   assert.equal(c.isHistorySmoothScrollActive(), true, 'old cleanup cannot release new scroll ownership');
 }
 
-async function testUnreadHistoryLoadLayout() {
+async function testUnreadHistoryLoadLayout(slowEvents = false) {
   const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1, messageLoadEpoch: 0, AbortController,
     sessionStore: { ui: {} }, replayingMessages: false, suppressTocDuringSessionLoad: false,
     HISTORY_DIALOGUES_PER_PAGE: 20, HISTORY_EVENT_BUDGET: 1000,
     chatContainer: navigationPort(), isSessionRunning: () => false, isServerStreamActive: () => false,
     getSessionRunState: () => null, document: { getElementById: () => null },
     beforeSessionMessageSnapshotAvailable: () => false,
-    fetchWithTimeout: async () => ({ ok: true, json: async () => [{ type: 'user' }, { type: 'final' }] }),
+    fetchWithTimeout: async (_url, _options, _timeout, consume) => {
+      const response = { ok: true, json: async () => slowEvents
+        ? Array.from({length:40}, () => ({type:'user'})) : [{ type: 'user' }, { type: 'final' }] };
+      return consume ? consume(response) : response;
+    },
     newDomContext: stream => ({ stream }), chatStreamHasConversationContent: () => true,
     streamChatNearBottom: true, streamProcNearBottom: true, liveAutoFollow: true,
     shouldGateScrollByRunSession: () => false, isSubagentStreamCtx: () => false,
   });
   const c = rt.context, stream = { hidden: false, querySelectorAll: () => [] }, order = [];
+  let rendered=0, sliceEvents=0, maxSliceEvents=0, yields=0, simulatedNow=0;
+  if (slowEvents) {
+    c.performance={now:()=>simulatedNow};
+    c.setTimeout=fn=>{maxSliceEvents=Math.max(maxSliceEvents,sliceEvents);sliceEvents=0;yields++;queueMicrotask(fn);return yields;};
+  }
   c.getVisibleChatStream = () => stream;
   loadNavigationHelpers(c);
   vm.runInContext(between(scrolling, 'function followStreamProcessScroll(', 'function finishStreamScrollIfFollow('), c);
@@ -208,6 +217,7 @@ async function testUnreadHistoryLoadLayout() {
   c.elapsedSince = () => 0;
   c.prepareWorkspaceImageLayout = async () => { order.push('images'); assert(stream.hidden); };
   c.reduceAndRenderMessageEvent = ctx => {
+    if (slowEvents) { simulatedNow+=5;rendered++;sliceEvents++; }
     c.followStreamProcessScroll(ctx, 's', 'row');
     assert.equal(vm.runInContext('smoothFollowController.isFollowing(chatContainer)', c), false,
       'history replay cannot start the live row follower');
@@ -217,10 +227,10 @@ async function testUnreadHistoryLoadLayout() {
     c.chatContainer.scrollHeight = 1600;
     c.requestAnimationFrame(() => { c.chatContainer.scrollHeight = 1800; });
   };
-  vm.runInContext(between(source('session-management'), 'async function loadSessionMessages(', 'function chatStreamHasConversationContent('), c);
+  vm.runInContext(between(source('session-management'), 'async function fetchSessionHistoryJSON(', 'function chatStreamHasConversationContent('), c);
   let done = false;
   const loaded = c.loadSessionMessages('s', 'bottom').then(ok => { done = true; return ok; });
-  for (let i = 0; i < 50 && !done; i++) { await Promise.resolve(); rt.frame(); }
+  for (let i = 0; i < 200 && !done; i++) { await Promise.resolve(); rt.frame(); }
   assert(done, 'instant history loading completes without waiting for an animation');
   assert.equal(await loaded, true);
   assert.deepEqual(order, ['images', 'layout']);
@@ -228,6 +238,11 @@ async function testUnreadHistoryLoadLayout() {
   assert(c.chatContainer.writes.every(mode => mode === 'auto'));
   assert.equal(c.replayingMessages, false);
   assert.equal(rt.frames.size, 0);
+  if (slowEvents) {
+    assert.equal(rendered,40);
+    assert(yields>=10, 'expensive events yield by elapsed time before reaching the count limit');
+    assert(maxSliceEvents<=3, 'a 5 ms event cannot keep input waiting behind a long batch');
+  }
 }
 async function report() {
   const t = runtime(); loadTextHelpers(t.context);
@@ -265,6 +280,7 @@ async function main() {
   if (process.argv.includes('--report')) { console.log(JSON.stringify(result, null, 2)); return; }
   await testUnreadNavigation();
   await testUnreadHistoryLoadLayout();
+  await testUnreadHistoryLoadLayout(true);
   assert.equal(result.newlineResult, 'A\nB');
   assert.equal(result.staleRestores, 0);
   assert.equal(result.cachedScrollAfterFrames, 120);
@@ -279,10 +295,18 @@ async function main() {
   assert.equal(switchState.context.messageLoadEpoch, 1, 'cache restore invalidates old history requests');
   assert.equal(switchState.context.replayingMessages, false);
   const pendingSwitch = switchFixture();
+  let hydrate, finishHistory;
+  pendingSwitch.context.restoreCachedSessionStream = () => false;
+  pendingSwitch.context.setTimeout = callback => { hydrate = callback; return 1; };
+  for (const name of ['resetSessionHistoryPaging', 'emptyChatStreamKeepingStrip', 'showLoading']) pendingSwitch.context[name] = () => {};
+  pendingSwitch.context.loadSessionMessages = () => new Promise(resolve => { finishHistory = resolve; });
   const pendingPromise = pendingSwitch.context.switchSession('child');
   assert.equal(pendingSwitch.context.sessionStore.ui.loadingMessages, true,
     'live attachment must wait while the addressed session is restoring history');
   pendingSwitch.gates.child();
+  const hydration = hydrate();
+  finishHistory(true);
+  await hydration;
   await pendingPromise;
   assert.equal(pendingSwitch.context.sessionStore.ui.loadingMessages, false);
   const partialStream = { dataset: {} };

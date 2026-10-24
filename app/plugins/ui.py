@@ -277,6 +277,27 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
     except (OSError, PluginSecurityError):
         web = None
     if web is not None and web.entry is not None:
+        for raw in _slot_rows(raw_ui, "details.tab", "details_tabs", 16):
+            contribution_id = str(raw.get("id") or "main").strip()
+            title = str(raw.get("title") or plugin.name).strip()
+            description = str(raw.get("description") or "").strip()
+            scope = str(raw.get("scope") or "session").strip()
+            key = ("details.tab", contribution_id)
+            if (not _CONTRIBUTION_ID_RE.fullmatch(contribution_id) or key in seen
+                    or not title or len(title) > _MAX_LABEL_LENGTH
+                    or len(description) > _MAX_DESCRIPTION_LENGTH or scope not in {"session", "app"}):
+                continue
+            try:
+                order = max(_MIN_ORDER, min(_MAX_ORDER, int(raw.get("order", 100))))
+            except (TypeError, ValueError):
+                order = 100
+            seen.add(key)
+            out.append({"id": contribution_id, "plugin_id": plugin.plugin_id,
+                        "slot": "details.tab", "title": title, "description": description,
+                        "scope": scope, "order": order, "href": f"/plugins/{plugin.plugin_id}",
+                        "target": "plugin-page"})
+            if plugin.content_signature:
+                out[-1]["signature"] = str(plugin.content_signature)[:64]
         for raw in _navigation_rows(raw_ui.get("navigation")):
             contribution_id = str(raw.get("id") or "main").strip()
             raw_label = plugin.name if "label" not in raw else raw.get("label")
@@ -322,6 +343,7 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
         contribution_id = str(raw.get("id") or "main").strip()
         title = str(raw.get("title") or (settings_schema or {}).get("title") or plugin.name).strip()
         target = str(raw.get("target") or ("settings" if settings_schema else "plugin-page")).strip()
+        renderer = _trusted_panel_renderer(plugin, raw.get("renderer")) if target == "renderer" else None
         label = str(raw.get("label") or ("Save" if target == "settings" else "Open")).strip()
         description = str(
             raw.get("description")
@@ -337,7 +359,8 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
             or len(title) > _MAX_LABEL_LENGTH
             or len(label) > _MAX_LABEL_LENGTH
             or len(description) > _MAX_DESCRIPTION_LENGTH
-            or target not in {"settings", "plugin-page"}
+            or target not in {"settings", "plugin-page", "renderer"}
+            or (target == "renderer" and renderer is None)
             or (target == "settings" and settings_schema is None)
             or (target == "plugin-page" and (web is None or web.entry is None))
         ):
@@ -355,12 +378,16 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
             "label": label,
             "description": description,
             "order": max(_MIN_ORDER, min(_MAX_ORDER, order)),
-            "target": "plugin-settings" if target == "settings" else "plugin-page",
+            "target": "plugin-settings" if target == "settings" else target,
         }
         if target == "settings":
             contribution["endpoint"] = f"/api/plugins/{plugin.plugin_id}/settings"
+        elif target == "renderer":
+            contribution["renderer"] = renderer
         else:
             contribution["href"] = f"/plugins/{plugin.plugin_id}"
+            if raw.get("embedded") is True:
+                contribution["embedded"] = True
         out.append(contribution)
 
     for raw in _slot_rows(

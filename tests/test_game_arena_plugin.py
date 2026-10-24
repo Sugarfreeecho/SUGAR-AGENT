@@ -142,11 +142,12 @@ def test_game_arena_web_start_uses_one_time_host_session_grant():
     assert "plugin_id:'game-arena'" in source
 
 
-def test_game_arena_links_to_canonical_execution_dashboard_page():
+def test_game_arena_links_to_the_usage_tab_in_settings():
     source = (PLUGIN_ROOT / "web" / "index.html").read_text(encoding="utf-8")
 
-    assert 'href="/plugins/execution-dashboard"' in source
+    assert 'href="/settings#usage"' in source
     assert 'href="/execution-dashboard"' not in source
+    assert 'href="/plugins/execution-dashboard"' not in source
 
 
 def test_game_arena_uses_host_validated_default_board_size_setting(tmp_path):

@@ -36,9 +36,11 @@ app.whenReady().then(async () => {
       return win
     },
     mainWindow: null, quitting: false, nativeTheme, dialog, shell, path,
+    require: name => require(path.resolve(root, 'packaging/electron', name)),
     TRAY_ICON: path.join(root, 'packaging/assets/tray.ico'),
     __dirname: path.join(root, 'packaging/electron'),
     baseUrl: () => `http://127.0.0.1:${port}`,
+    browserGuests: require('../../packaging/electron/browser-guests').createBrowserGuests({ session: require('electron').session, hostUrl: () => `http://127.0.0.1:${port}` }),
     isConfigured: () => true, log() {}, writeStatus() {}, notifyStartupLauncher() {},
   })
   vm.runInContext(methods + '\nglobalThis.api = { showStartup, loadApp }', harness)

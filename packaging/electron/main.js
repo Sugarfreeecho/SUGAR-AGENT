@@ -10,7 +10,7 @@
  *  4. 后端异常退出时给出可操作的恢复对话框。
  */
 
-const { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, shell } = require('electron')
+const { app, BrowserWindow, Menu, Notification, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, session, shell } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const http = require('node:http')
@@ -19,12 +19,17 @@ const path = require('node:path')
 const { createNotificationBridge } = require('./notifications')
 const { removeLegacyElectronShortcuts } = require('./desktop-shortcuts')
 const { openWorkspacePath } = require('./local-paths')
+const { createLifecycleBridge } = require('./lifecycle-bridge')
 
 const HOST = '127.0.0.1'
 const BASE_PORT = Number(process.env.SUGARAGENT_PORT || 8192)
 const PORT_SPAN = 8
 let activePort = BASE_PORT
 const baseUrl = () => `http://${HOST}:${activePort}`
+function isApplicationUrl(value) {
+  try { return new URL(value).origin === baseUrl() } catch { return false }
+}
+const browserGuests = require('./browser-guests').createBrowserGuests({ session, hostUrl: baseUrl })
 
 const RUNTIME_DIR = path.join(process.resourcesPath, 'runtime')
 const PYTHON_EXE = path.join(RUNTIME_DIR, 'python', process.platform === 'win32' ? 'python.exe' : 'python3')
@@ -46,6 +51,8 @@ let backendLogFile = null
 let quitting = false
 let restartTimer = null
 let backendRestarting = false
+let backendPreparing = false
+let lifecycleBridge = null
 const expectedBackendExits = new WeakSet()
 let uiReady = false
 let pendingActivation = parseDesktopActivation(process.argv)
@@ -159,9 +166,11 @@ function backendEnv() {
     SUGARAGENT_NOTIFY_PORT: notificationBridge ? String(notificationBridge.port) : '',
     SUGARAGENT_NOTIFY_TOKEN: notificationBridge ? notificationBridge.token : '',
     MYAGENT_SERVER_PORT: String(activePort),
+    MYAGENT_SUPERVISOR_PID: String(process.pid || ''),
     WORK_DIR: current.workDir,
     SKILLS_DIR: current.skillsDir || path.join(current.workDir, 'skills'),
     LOG_DIR: current.logDir,
+    ...(lifecycleBridge ? lifecycleBridge.environment() : {}),
   })
   return env
 }
@@ -218,7 +227,7 @@ function openBackendLogs() {
   return true
 }
 
-function startBackend() {
+function startBackend(operation = null) {
   if (quitting) return null
   if (backend) return backend
   if (!fs.existsSync(PYTHON_EXE)) {
@@ -229,6 +238,28 @@ function startBackend() {
     fatal(`缺少应用入口：${APP_ENTRY}`)
     return
   }
+  if (!lifecycleBridge) {
+    lifecycleBridge = createLifecycleBridge({ python: PYTHON_EXE,
+      script: path.join(RUNTIME_DIR, 'app', 'lifecycle_supervisor.py'), baseUrl,
+      onRestart: request => { if (!restartBackend(request)) lifecycleBridge.fail(request, '重启操作未能接管') },
+      onPrepare: request => {
+        if (!uiReady || !backend || request.target_instance_id !== backend.lifecycleInstanceId || quitting || backendRestarting) return false
+        expectedBackendExits.add(backend)
+        backendPreparing = true
+        createTray()
+        return true
+      },
+      onStatus: request => {
+        if (request.phase === 'failed') {
+          backendPreparing = false
+          if (backend) expectedBackendExits.delete(backend)
+          createTray()
+        }
+        if (mainWindow && mainWindow.webContents.send) mainWindow.webContents.send('sugaragent:lifecycle-status', request)
+      }, log })
+  }
+  const instanceId = lifecycleBridge.newInstance(operation)
+  lifecycleBridge.start(backendEnv())
   seedWorkspace()
   const stream = openBackendLog()
   stream.write(`\n===== 启动后端 ${new Date().toISOString()} =====\n`)
@@ -239,6 +270,7 @@ function startBackend() {
       env: backendEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      detached: !IS_WINDOWS,
     })
   } catch (error) {
     stream.end()
@@ -246,6 +278,7 @@ function startBackend() {
     throw error
   }
   backend = child
+  child.lifecycleInstanceId = instanceId
   log(`后端已启动 pid=${child.pid}`)
   writeStatus({ backendState: 'started' })
   child.stdout.pipe(stream, { end: false })
@@ -315,12 +348,14 @@ function stopBackend() {
   return true
 }
 
-function restartBackend() {
+function restartBackend(operation = null) {
   if (quitting || !uiReady || backendRestarting) return false
   backendRestarting = true
+  backendPreparing = false
   createTray()
   if (mainWindow) mainWindow.setProgressBar(2)
   if (!stopBackend()) {
+    if (operation) lifecycleBridge.fail(operation, '旧服务未能停止')
     backendRestarting = false
     if (mainWindow) mainWindow.setProgressBar(-1)
     createTray()
@@ -334,7 +369,7 @@ function restartBackend() {
     let reloaded = false
     try {
       if (quitting) return
-      const child = startBackend()
+      const child = startBackend(operation)
       const ready = await waitForBackend(180000, child)
       if (quitting) return
       if (!ready) {
@@ -342,6 +377,7 @@ function restartBackend() {
           ? '等待内置服务超过 180 秒仍未就绪。'
           : '内置服务启动失败或已退出。'
         dialog.showErrorBox('重启内置服务失败', `${message}\n日志目录：${LOG_DIR}`)
+        if (operation) lifecycleBridge.fail(operation, message)
         return
       }
       const activation = pendingActivation
@@ -352,6 +388,7 @@ function restartBackend() {
       reloaded = true
       if (mainWindow) void reportDesktopWindowVisibility(mainWindow.isVisible())
     } catch (error) {
+      if (operation) lifecycleBridge.fail(operation, error.message)
       log(`后端重启失败：${error.message}`)
       if (!quitting) {
         if (!backend) writeStatus({ backendState: 'exited', backendError: error.message })
@@ -375,11 +412,20 @@ function restartBackend() {
 
 // ------------------------------------------------------------- healthcheck ---
 
-function probeOnce(timeout = 1500) {
+function probeOnce(timeout = 1500, instanceId = '') {
   return new Promise(resolve => {
-    const request = http.get({ host: HOST, port: activePort, path: '/api/runtime-status', timeout }, response => {
-      response.resume()
-      resolve(response.statusCode >= 200 && response.statusCode < 500)
+    const request = http.get({ host: HOST, port: activePort, path: '/api/ready', timeout }, response => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', chunk => { body += chunk; if (body.length > 16384) { request.destroy(); resolve(false) } })
+      response.on('end', () => {
+        try {
+          const payload = JSON.parse(body)
+          resolve(response.statusCode === 200 && payload.ok === true && payload.protocol === 'myagent-lifecycle-v1'
+            && payload.instance_id === instanceId)
+        } catch { resolve(false) }
+      })
+      response.on('error', () => resolve(false))
     })
     request.on('timeout', () => { request.destroy(); resolve(false) })
     request.on('error', () => resolve(false))
@@ -408,7 +454,7 @@ async function waitForBackend(timeoutMs = 180000, child = backend) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (quitting || !child || backend !== child) return false
-    const ready = await probeOnce()
+    const ready = await probeOnce(1500, child.lifecycleInstanceId)
     if (quitting || backend !== child) return false
     if (ready) return true
     await new Promise(resolve => setTimeout(resolve, 400))
@@ -555,6 +601,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       spellcheck: false,
     },
   })
@@ -564,6 +611,7 @@ function createWindow() {
     notifyStartupLauncher()
   })
   require('./speech-permissions').installSpeechPermissions(mainWindow.webContents, baseUrl)
+  browserGuests.bind(mainWindow)
   mainWindow.on('close', event => {
     if (quitting) return
     event.preventDefault()
@@ -572,16 +620,18 @@ function createWindow() {
   mainWindow.on('hide', () => { void reportDesktopWindowVisibility(false) })
   mainWindow.on('show', () => { void reportDesktopWindowVisibility(true) })
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith(baseUrl())) return { action: 'allow' }
+    if (isApplicationUrl(url)) return { action: 'allow', overrideBrowserWindowOptions: { webPreferences: { webviewTag: false } } }
     shell.openExternal(url).catch(() => {})
     return { action: 'deny' }
   })
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(baseUrl())) {
+  const guardNavigation = (event, url) => {
+    if (!isApplicationUrl(url)) {
       event.preventDefault()
       shell.openExternal(url).catch(() => {})
     }
-  })
+  }
+  mainWindow.webContents.on('will-navigate', guardNavigation)
+  mainWindow.webContents.on('will-redirect', guardNavigation)
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     log(`渲染进程异常：${JSON.stringify(details)}`)
     dialog.showMessageBox({
@@ -660,7 +710,7 @@ function requestSessionActivation(session) {
 
 async function activateDesktop(activation) {
   // 启动期间复用已有的启动页，保留会话请求直到应用界面就绪。
-  if (!uiReady || backendRestarting) {
+  if (!uiReady || backendRestarting || backendPreparing) {
     pendingActivation = activation
     if (mainWindow) showWindow()
     return
@@ -692,6 +742,19 @@ function trayImage() {
   return image.isEmpty() ? nativeImage.createEmpty() : image
 }
 
+async function requestBackendRestart() {
+  try {
+    if (!uiReady || !lifecycleBridge || quitting || backendRestarting || backendPreparing) return false
+    const result = await lifecycleBridge.requestManual()
+    showWindow()
+    if (mainWindow && mainWindow.webContents.send) mainWindow.webContents.send('sugaragent:lifecycle-status', result.operation)
+    return result
+  } catch (error) {
+    dialog.showErrorBox('无法提交重启请求', error.message)
+    return false
+  }
+}
+
 function createTray() {
   if (!tray) {
     tray = new Tray(trayImage())
@@ -700,9 +763,9 @@ function createTray() {
   }
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开主界面', click: () => showWindow() },
-    { label: '在浏览器中打开', enabled: uiReady && !backendRestarting, click: () => shell.openExternal(`${baseUrl()}/`) },
+    { label: '在浏览器中打开', enabled: uiReady && !backendRestarting && !backendPreparing, click: () => shell.openExternal(`${baseUrl()}/`) },
     { type: 'separator' },
-    { label: '重启内置服务', enabled: uiReady && !backendRestarting, click: () => restartBackend() },
+    { label: '重启内置服务', enabled: uiReady && !backendRestarting && !backendPreparing, click: () => requestBackendRestart() },
     { label: '打开后台日志', click: () => openBackendLogs() },
     { label: '打开工作目录', click: () => shell.openPath(resolveLayout().workDir) },
     { type: 'separator' },
@@ -719,7 +782,29 @@ function fatal(message) {
 }
 
 function registerIpc() {
-  ipcMain.handle('sugaragent:info', () => ({
+  function assertAppSender(event) {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame) throw new Error('Invalid browser sender')
+    const url = new URL(event.senderFrame.url)
+    if (url.origin !== baseUrl() || !['/', '/setup', '/settings'].includes(url.pathname)
+        && !url.pathname.startsWith('/setup/')) throw new Error('Desktop IPC requires the application document')
+    return url
+  }
+  function assertBrowserSender(event) {
+    const url = assertAppSender(event)
+    if (url.origin !== baseUrl() || url.pathname !== '/') throw new Error('Browser IPC requires the application document')
+  }
+  ipcMain.handle('sugaragent:browser-acquire', (event, workspace) => {
+    assertBrowserSender(event)
+    return browserGuests.acquire(event.sender, workspace)
+  })
+  ipcMain.handle('sugaragent:browser-release', (event, lease) => {
+    assertBrowserSender(event)
+    if (typeof lease !== 'string') throw new Error('Invalid browser lease')
+    return browserGuests.release(event.sender, lease)
+  })
+  ipcMain.handle('sugaragent:info', event => {
+    assertAppSender(event)
+    return {
     version: app.getVersion(),
     port: activePort,
     baseUrl: baseUrl(),
@@ -727,16 +812,30 @@ function registerIpc() {
     userDir: USER_DIR,
     logsDir: LOG_DIR,
     workDir: resolveLayout().workDir,
-  }))
-  ipcMain.handle('sugaragent:restart-backend', () => restartBackend())
-  ipcMain.handle('sugaragent:open-logs', () => openBackendLogs())
+    }
+  })
+  ipcMain.handle('sugaragent:restart-backend', event => {
+    assertBrowserSender(event)
+    return requestBackendRestart()
+  })
+  ipcMain.handle('sugaragent:lifecycle-status', event => {
+    assertBrowserSender(event)
+    return lifecycleBridge ? lifecycleBridge.status() : null
+  })
+  ipcMain.handle('sugaragent:open-logs', event => {
+    assertAppSender(event)
+    return openBackendLogs()
+  })
   ipcMain.on('sugaragent:theme', applyNativeTheme)
   ipcMain.on('sugaragent:language', (event, language) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame) return
     try { if (new URL(event.senderFrame.url).origin !== baseUrl()) return } catch { return }
     event.sender.sugarAgentLanguage = language === 'en' ? 'en' : 'zh-CN'
   })
-  ipcMain.handle('sugaragent:open-workdir', () => shell.openPath(resolveLayout().workDir))
+  ipcMain.handle('sugaragent:open-workdir', event => {
+    assertAppSender(event)
+    return shell.openPath(resolveLayout().workDir)
+  })
   ipcMain.handle('sugaragent:open-local-path', (event, payload) => {
     if (!mainWindow || event.sender !== mainWindow.webContents
         || event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '无效的页面来源' }
@@ -745,7 +844,8 @@ function registerIpc() {
     } catch { return { ok: false, error: '无效的页面来源' } }
     return openWorkspacePath({ baseUrl: baseUrl(), shell, log }, payload)
   })
-  ipcMain.handle('sugaragent:open-external', (_event, url) => {
+  ipcMain.handle('sugaragent:open-external', (event, url) => {
+    assertAppSender(event)
     if (typeof url === 'string' && /^https?:\/\//i.test(url)) return shell.openExternal(url)
     return false
   })
@@ -830,6 +930,7 @@ if (!gotLock) {
   })
 
   app.on('will-quit', () => {
+    if (lifecycleBridge) lifecycleBridge.close()
     if (notificationBridge) notificationBridge.close()
     stopBackend()
   })

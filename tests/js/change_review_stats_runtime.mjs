@@ -5,7 +5,22 @@ const sourceUrl = new URL('../../plugins/change-review/web/change-review.js', im
 const source = await readFile(sourceUrl, 'utf8');
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
 const { stats, hasLineStats, acceptChangeUpdate, splitReviewRows,
-    workspaceReviewKey, mergeReviewChanges, reviewUpdatesForTool } = await import(moduleUrl);
+    workspaceReviewKey, mergeReviewChanges, reviewUpdatesForTool, reviewStatusState } = await import(moduleUrl);
+
+// One uncovered call must not label an otherwise reviewed turn as uncovered.
+const checked = { status: 'checked', coverage: 'workspace' };
+const uncovered = { status: 'checked', coverage: 'unavailable' };
+assert.deepEqual(reviewStatusState([]), { state: 'unloaded' });
+assert.deepEqual(reviewStatusState([checked]), { state: 'checked' });
+assert.deepEqual(reviewStatusState([uncovered]), { state: 'unavailable', unreviewedCalls: 1 });
+assert.deepEqual(reviewStatusState([uncovered, uncovered]), { state: 'unavailable', unreviewedCalls: 2 });
+assert.deepEqual(reviewStatusState([checked, uncovered]), { state: 'partial', unreviewedCalls: 1 });
+assert.deepEqual(reviewStatusState([uncovered], true), { state: 'partial', unreviewedCalls: 1 });
+assert.deepEqual(reviewStatusState([{ ...checked, coverage: 'declared_paths' }]), { state: 'partial' });
+assert.deepEqual(reviewStatusState([{ ...checked, coverage: 'declared_paths' }, uncovered]),
+    { state: 'partial', unreviewedCalls: 1 });
+assert.deepEqual(reviewStatusState([checked, uncovered, { status: 'failed', reason: 'snapshot failed' }], true),
+    { state: 'failed', reason: 'snapshot failed' });
 
 const scope = {run_id:'run', react_iter:2, stream_seq:4, tool_call_id:'same-call'};
 assert.notEqual(workspaceReviewKey(scope), workspaceReviewKey({...scope, run_id:'other-run'}));
