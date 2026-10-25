@@ -1,0 +1,16 @@
+# sugar-bili-scroll 额外 Python 依赖
+#
+# aiohttp / bilibili-api-python：B站接口与异步请求
+# pillow：表情与封面处理
+# faster-whisper：可选，本地视频转写；不装则只用字幕/评论链路
+# 安装到应用内置运行时（外网）：
+#   python\python.exe -m pip install -r plugins\sugar-bili-scroll\requirements.txt
+# 华为云镜像：
+#   python\python.exe -m pip install -r plugins\sugar-bili-scroll\requirements.txt ^
+#     --index-url https://mirrors.huaweicloud.com/repository/pypi/simple
+# 华为内网：把 --index-url 换成内网 PyPI 源，或先设置 PIP_INDEX_URL。
+# 完整获取方式见 docs/standalone-plugin-dependencies.md
+aiohttp>=3.9,<4
+bilibili-api-python>=17.4,<18
+pillow>=10
+faster-whisper>=1.0,<2

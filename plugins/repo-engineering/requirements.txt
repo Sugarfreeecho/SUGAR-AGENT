@@ -1,0 +1,4 @@
+# repo-engineering 额外 Python 依赖：无。
+#
+# 该插件是纯声明式（skills/）Codex 格式插件，不含 Python 代码。
+# 完整说明见 docs/standalone-plugin-dependencies.md

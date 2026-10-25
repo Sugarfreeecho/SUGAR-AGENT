@@ -24,6 +24,20 @@ from .security import PluginError, PluginValidationError, is_path_within, safe_p
 CommandRunner = Callable[[Sequence[str], Path, float], subprocess.CompletedProcess[str]]
 
 
+def _requirements_has_packages(path: Path) -> bool:
+    """A comment-only manifest means "no dependencies", not "create a venv"."""
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return True
+    for line in lines:
+        value = line.split("#", 1)[0].strip()
+        if value and not value.startswith("-"):
+            return True
+    return False
+
+
 def _default_runner(
     command: Sequence[str],
     cwd: Path,
@@ -352,7 +366,8 @@ class PluginInstaller:
                 "dependencies.python must be an array, object, true, or null"
             )
         conventional = plugin.root / "requirements.txt"
-        if requirements is None and conventional.is_file():
+        if (requirements is None and conventional.is_file()
+                and _requirements_has_packages(conventional)):
             requirements = conventional.resolve()
             requested = True
         return packages, requirements, requested

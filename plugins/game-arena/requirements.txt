@@ -1,0 +1,5 @@
+# game-arena 额外 Python 依赖：无。
+#
+# runtime worker（plugin.py）只使用标准库与随应用提供的 myagent_plugin_sdk，
+# 前端页面使用插件自带的静态资源，不需要 pip 安装。
+# 完整说明见 docs/standalone-plugin-dependencies.md

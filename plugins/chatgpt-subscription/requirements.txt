@@ -1,1 +1,12 @@
+# chatgpt-subscription 额外 Python 依赖
+#
+# PyJWT[crypto] 用于解析/校验订阅令牌；pywin32 仅 Windows 需要（DPAPI 保存凭据）。
+# 安装到应用内置运行时（外网）：
+#   python\python.exe -m pip install -r plugins\chatgpt-subscription\requirements.txt
+# 华为云镜像：
+#   python\python.exe -m pip install -r plugins\chatgpt-subscription\requirements.txt ^
+#     --index-url https://mirrors.huaweicloud.com/repository/pypi/simple
+# 华为内网：把 --index-url 换成内网 PyPI 源，或先设置 PIP_INDEX_URL。
+# 完整获取方式见 docs/standalone-plugin-dependencies.md
 PyJWT[crypto]>=2.10,<3
+pywin32>=306; sys_platform == "win32"

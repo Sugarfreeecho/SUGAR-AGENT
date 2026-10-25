@@ -80,6 +80,12 @@
 - 会话创建后立即 `set_session_name` 为「插件体检 · <插件名> v<版本>」，不再等首轮结束后的自动命名。
 - 验证：`tests/test_plugin_availability.py` 断言提示词含插件目录与工作目录行，工作目录为空时省略。
 
+### 2.10 Standalone 插件依赖清单与获取方式
+
+- 6 个 `standalone` 插件都补了 `requirements.txt`：`voice-input`（sherpa-onnx、numpy）、`chatgpt-subscription`（PyJWT[crypto]、pywin32）、`sugar-bili-scroll`（aiohttp、bilibili-api-python、pillow、faster-whisper）；`feishu-transport`、`game-arena`、`repo-engineering` 为“无第三方依赖”的注释清单。
+- 新增 `docs/standalone-plugin-dependencies.md`：依赖总表、安装目标（应用内置运行时 / 插件 venv）、外网 PyPI、华为云镜像、华为内网 `PIP_INDEX_URL`、离线 wheel 与自检命令。
+- 安装器识别“仅注释”的 `requirements.txt`，不再为无依赖插件创建 `.myagent-runtime` venv。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

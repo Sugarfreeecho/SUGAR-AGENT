@@ -1,3 +1,12 @@
-# Only needed for the optional local SenseVoice provider.
+# voice-input 额外 Python 依赖
+#
+# 仅“本地 SenseVoice 离线识别”需要；使用 API 语音识别时不需要安装。
+# 安装到应用内置运行时（外网）：
+#   python\python.exe -m pip install -r plugins\voice-input\requirements.txt
+# 华为云镜像：
+#   python\python.exe -m pip install -r plugins\voice-input\requirements.txt ^
+#     --index-url https://mirrors.huaweicloud.com/repository/pypi/simple
+# 华为内网：把 --index-url 换成内网 PyPI 源，或先设置 PIP_INDEX_URL。
+# 完整获取方式见 docs/standalone-plugin-dependencies.md
 sherpa-onnx==1.13.8
 numpy>=1.24,<2

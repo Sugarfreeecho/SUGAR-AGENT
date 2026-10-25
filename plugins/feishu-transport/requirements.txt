@@ -1,0 +1,10 @@
+# feishu-transport 额外 Python 依赖：无。
+#
+# 该插件只调用应用内置的 remote_control / webui 与 lark-oapi，
+# lark-oapi 已随 SugarAgent 运行时提供，无需单独安装。
+# 若要在插件本地 venv 中复用，可执行：
+#   python\python.exe -m pip install lark-oapi
+# 华为云镜像：
+#   python\python.exe -m pip install lark-oapi ^
+#     --index-url https://mirrors.huaweicloud.com/repository/pypi/simple
+# 完整说明见 docs/standalone-plugin-dependencies.md

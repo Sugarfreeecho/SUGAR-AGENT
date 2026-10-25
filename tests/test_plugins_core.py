@@ -362,6 +362,25 @@ def test_state_store_rejects_non_boolean_state(tmp_path):
         PluginStateStore(path).read()
 
 
+def test_comment_only_requirements_does_not_request_python_dependencies(tmp_path):
+    """Standalone plugins without third-party packages must not build a venv."""
+
+    from app.plugins.installer import PluginInstaller
+
+    root = tmp_path / "plugin"
+    _make_native(root)
+    (root / "requirements.txt").write_text(
+        "# no third-party packages\n# comments only\n", encoding="utf-8"
+    )
+    plugin = load_plugin(root)
+
+    packages, requirements, requested = PluginInstaller._python_dependency_spec(plugin)
+
+    assert packages == []
+    assert requirements is None
+    assert requested is False
+
+
 def test_global_switch_prevents_all_discovery_and_resource_loading(tmp_path, monkeypatch):
     plugin_root = tmp_path / "plugin"
     _make_native(plugin_root)
