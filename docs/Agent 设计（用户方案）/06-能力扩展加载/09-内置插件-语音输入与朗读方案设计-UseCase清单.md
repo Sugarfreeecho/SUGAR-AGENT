@@ -1,6 +1,6 @@
 # 语音输入与朗读 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-24 v4（覆盖至：当前工作区；括号默认不读、文件/链接/代码分类计数、边生成边读、按块类型的语音计划、播放控制、自动朗读开关）
+- 版本：2026-10-24 v5（覆盖至：当前工作区；输入框上方的录音条与一步录音、括号默认不读、文件/链接/代码分类计数、边生成边读、按块类型的语音计划、播放控制、自动朗读开关）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/voice-input`（speech_input/{api,service,providers,configuration,protocol,worker}.py、web/{chat,settings,shared,capture}.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 09；配套通则见 01–07）
@@ -210,6 +210,15 @@
 | UC-604 | 窄窗口 | 按钮不换行、不被压缩 | `white-space: nowrap` + `flex: 0 0 auto`；420/520/760/1280 px 下尺寸一致 | `web/voice.css` |
 | UC-605 | 朗读报错 | 浮窗打开并显示原因 | 只在仍是当前播放时提示，避免停止后弹错误 | `web/chat.js:read` 的 catch |
 | UC-606 | 浏览器不支持 AudioContext | 提示不支持流式播放 | 抛错走同一 catch，不静默失败 | `web/chat.js:stream` |
+| UC-607 | 点麦克风 | 立刻开始录音，不需要第二次点击 | 旧流程是「弹出浮窗 → 点开始录音」，现在一次点击进入录音态 | `web/chat.js:open` |
+| UC-608 | 录音中 | 输入框上方出现录音条，草稿仍可见 | 录音条绝对定位在 `.composer-row` 之上（`bottom: calc(100% + .5rem)`），不改动输入框高度 | `web/voice.css:.voice-dock` |
+| UC-609 | 录音条内容 | 红点 + 计时 + 实时波形 + 「再点一下麦克风结束」 | 波形按 RMS 开方映射，并叠加固定包络，安静时也不会塌成一条虚线 | `web/chat.js:pushLevel`、`WAVE_SHAPE` |
+| UC-610 | 再点麦克风或点「完成」 | 结束录音并进入识别 | 麦克风在录音态为红色、`aria-pressed=true`、标签改为「停止录音」 | `web/chat.js:setState` |
+| UC-611 | 点「取消」/ Escape / 点别处 | 丢弃本次录音、释放麦克风、把焦点还给输入框 | 关闭时 `capture.dispose()` 并中止在途请求 | `web/chat.js:hide` |
+| UC-612 | 识别成功 | 文字插入草稿，录音条 1.2 秒后自动收起 | 草稿在录音期间被改过时不插入，改为显示识别结果与「插入 / 取消」 | `web/chat.js:finish` |
+| UC-613 | 右键麦克风或长按 0.55 秒 | 直接打开语音设置 | 长按后抑制随后的 click，避免同时又开一次录音 | `web/chat.js` 指针事件 |
+| UC-614 | 未启用或未配置 | 录音条直接说明缺什么，并给出「语音设置」 | 不再需要先弹窗再发现没配置 | `web/chat.js:open` |
+| UC-615 | 浅色/深色主题与减少动效 | 录音条跟随主题变量；`prefers-reduced-motion` 下不播放入场与脉冲动画 | 只使用 `--surface-glass`、`--border-hover`、`--accent-1` 等既有变量 | `web/voice.css` |
 
 ---
 
@@ -237,6 +246,7 @@
 | UC-401~405 | 同上两项缓存用例；`_trim_cache` 由代码走查覆盖 |
 | UC-506 | `tests/js/speech_input_runtime.cjs`（权限处理器 + 波形编码 + 草稿插入守卫） |
 | UC-601~606 | `tests/js/voice_plugin_browser.cjs`（启动聚焦、主题焦点、设置直达、浮窗、草稿冲突、Final 朗读、停止与释放）；辅以 `e2e_gap.py`、`e2e_cache.py`、`btn_narrow.py` 的实测记录 |
+| UC-607~615 | `tests/js/voice_plugin_browser.cjs`（一步录音、录音条位置、草稿冲突、自动收起、释放）；`workspace/tts-light-samples/dock-theme-*.png` 为浅/深主题实机截图 |
 | UC-321~331 | `workspace/TempOutput/tswork/plan_probe.py`、`plan_kinds.py`：对真实回答与合成 DOM 打印语音计划逐条比对 |
 | UC-341~347 | `workspace/TempOutput/tswork/plan_play.py`（暂停/继续/从头/控件挂载与移除）、`plan_auto.py`（开关开/关两条路径） |
 | UC-361~367 | `workspace/TempOutput/tswork/parse_test.mjs`（前缀稳定：逐字追加时已读单元从不改写、半张表不读）、`live_test.py`（注入流式行，验证 1→2→保持→4 的增量与结束后不重复） |

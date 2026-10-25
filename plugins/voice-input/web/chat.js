@@ -15,21 +15,29 @@ export function installChatExtension() {
     mic.type = 'button'; mic.id = 'speech-input-btn'; mic.className = 'voice-mic';
     mic.setAttribute('aria-label', t('语音输入', 'Voice input'));
     mic.setAttribute('aria-haspopup', 'dialog'); mic.setAttribute('aria-expanded', 'false');
+    mic.setAttribute('aria-pressed', 'false');
     mic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>';
     send.before(mic);
-    const menu = document.createElement('div');
-    menu.className = 'voice-popover'; menu.hidden = true;
-    menu.setAttribute('role', 'dialog'); menu.setAttribute('aria-label', t('语音输入', 'Voice input'));
-    menu.innerHTML = '<header><strong></strong><button type="button" data-close>×</button></header><p role="status" aria-live="polite"></p>'
-        + '<meter min="0" max="0.2" hidden></meter><div data-transcript hidden tabindex="0"></div><footer>'
-        + '<button type="button" data-record></button><button type="button" data-insert hidden></button><button type="button" data-cancel></button><button type="button" data-settings></button></footer>';
-    document.body.append(menu);
-    menu.querySelector('strong').textContent = t('语音输入', 'Voice input');
-    menu.querySelector('[data-close]').setAttribute('aria-label', t('关闭', 'Close'));
-    menu.querySelector('[data-cancel]').textContent = t('取消', 'Cancel');
-    menu.querySelector('[data-insert]').textContent = t('插入文字', 'Insert text');
-    menu.querySelector('[data-settings]').textContent = t('语音设置', 'Voice settings');
-    menu.querySelector('meter').setAttribute('aria-label', t('麦克风音量', 'Microphone level'));
+    // A compact bar that sits on top of the composer instead of a dialog: the mic
+    // starts recording on the first click and the bar only reports state.
+    const dock = document.createElement('div');
+    dock.className = 'voice-dock'; dock.hidden = true; dock.dataset.state = 'idle';
+    dock.setAttribute('role', 'group'); dock.setAttribute('aria-label', t('语音输入', 'Voice input'));
+    dock.innerHTML = '<span class="voice-dock-led" aria-hidden="true"></span><span class="voice-dock-time" aria-hidden="true">0:00</span>'
+        + '<div class="voice-wave" aria-hidden="true">' + '<i></i>'.repeat(14) + '</div>'
+        + '<p class="voice-dock-text" role="status" aria-live="polite"></p><div class="voice-dock-actions">'
+        + '<button type="button" data-settings></button><button type="button" data-cancel></button>'
+        + '<button type="button" data-finish></button><button type="button" data-insert></button></div>';
+    dock.querySelector('[data-settings]').textContent = t('语音设置', 'Settings');
+    dock.querySelector('[data-cancel]').textContent = t('取消', 'Cancel');
+    dock.querySelector('[data-finish]').textContent = t('完成', 'Done');
+    dock.querySelector('[data-insert]').textContent = t('插入', 'Insert');
+    const dockText = dock.querySelector('.voice-dock-text');
+    const dockTime = dock.querySelector('.voice-dock-time');
+    const waveBars = [...dock.querySelectorAll('.voice-wave i')];
+    const host = input.closest('.composer-row') || input.parentElement;
+    host.classList.add('voice-host');
+    host.append(dock);
     let operation = null, pending = null, disposed = false, snapshot = null, checking = false, playback = null;
     // Progressive reading of the answer while it is still being generated.
     let live = null;
@@ -43,24 +51,49 @@ export function installChatExtension() {
     let preRunWraps = null;
     const autoDone = new WeakSet();
     const readButtons = new Set();
-    const status = message => { menu.querySelector('[role="status"]').textContent = message; };
-    function position() {
-        if (menu.hidden) return;
-        const anchor = mic.getBoundingClientRect();
-        const box = menu.getBoundingClientRect();
-        menu.style.left = Math.max(8, Math.min(innerWidth - box.width - 8, anchor.right - box.width)) + 'px';
-        menu.style.top = Math.max(8, Math.min(innerHeight - box.height - 8, anchor.top - box.height - 8)) + 'px';
+    let dockState = 'idle', hideTimer = null;
+    const levels = new Array(14).fill(0);
+    const WAVE_SHAPE = [.38, .62, .9, .55, .78, 1, .68, .45, .82, .58, .95, .5, .72, .4];
+    const status = message => { dockText.textContent = message; };
+    const ACTIONS = { checking: [], recording: ['cancel', 'finish'], transcribing: ['cancel'],
+        confirm: ['cancel', 'insert'], error: ['settings', 'cancel'], done: [] };
+    const actionName = button => ['settings', 'cancel', 'finish', 'insert']
+        .find(name => button.getAttribute('data-' + name) !== null);
+    function pushLevel(value) {
+        // Square root gives quiet speech visible movement; the floor keeps the
+        // envelope readable in a silent room.
+        const raw = Math.max(0, Math.min(.2, Number(value) || 0)) / 0.2;
+        levels.push(Math.min(1, Math.max(.45, Math.sqrt(raw))));
+        levels.shift();
+        // A fixed envelope keeps the row readable as a waveform when the input is
+        // quiet, instead of collapsing into a dashed line.
+        waveBars.forEach((bar, index) => {
+            const shape = WAVE_SHAPE[index % WAVE_SHAPE.length];
+            bar.style.transform = 'scaleY(' + (.12 + levels[index] * shape * .88).toFixed(2) + ')';
+        });
     }
-    function render() {
-        const record = menu.querySelector('[data-record]');
-        record.textContent = operation?.phase === 'recording' ? t('停止并识别', 'Stop and transcribe') : t('开始录音', 'Start recording');
-        record.disabled = checking || !!pending || input.disabled || input.readOnly || !!operation && operation.phase !== 'recording';
-        menu.querySelector('meter').hidden = operation?.phase !== 'recording';
-        menu.querySelector('[data-insert]').hidden = !pending;
-        menu.querySelector('[data-transcript]').hidden = !pending;
-        menu.querySelector('[data-transcript]').textContent = pending?.text || '';
-        position();
+    function setState(next, message) {
+        dockState = next;
+        clearTimeout(hideTimer);
+        dock.hidden = false;
+        dock.dataset.state = next;
+        const recording = next === 'recording';
+        if (recording && levels.every(level => level <= .06)) {
+            levels.forEach((_, index) => { levels[index] = .35 + .65 * WAVE_SHAPE[index % WAVE_SHAPE.length]; });
+            pushLevel(.04);
+        }
+        mic.classList.toggle('is-recording', recording);
+        mic.setAttribute('aria-pressed', recording ? 'true' : 'false');
+        mic.setAttribute('aria-expanded', recording ? 'true' : 'false');
+        mic.setAttribute('aria-label', recording ? t('停止录音', 'Stop recording') : t('语音输入', 'Voice input'));
+        if (message !== undefined) dockText.textContent = message;
+        const allowed = ACTIONS[next] || [];
+        for (const button of dock.querySelectorAll('.voice-dock-actions button')) {
+            button.hidden = !allowed.includes(actionName(button));
+        }
     }
+    // Kept as the single re-render entry point used across the recording flow.
+    function render() { if (!dock.hidden) setState(dockState); }
     function stopPlayback() {
         const active = playback; playback = null; live = null;
         if (!active) return;
@@ -85,48 +118,77 @@ export function installChatExtension() {
             void voiceRequest('transcriptions/' + active.id, { method: 'DELETE', keepalive: true }).catch(() => {});
             await active.capture.dispose().catch(() => {});
         }
-        render();
     }
     async function hide(restoreFocus = false) {
-        const wasOpen = !menu.hidden;
-        menu.hidden = true; mic.setAttribute('aria-expanded', 'false');
+        const wasOpen = !dock.hidden;
+        clearTimeout(hideTimer);
+        dock.hidden = true; dockState = 'idle';
+        mic.classList.remove('is-recording');
+        mic.setAttribute('aria-expanded', 'false'); mic.setAttribute('aria-pressed', 'false');
+        mic.setAttribute('aria-label', t('语音输入', 'Voice input'));
         await cancel();
         // Session changes and outside clicks must leave the user's focus alone.
-        if (wasOpen && restoreFocus && !disposed && mic.isConnected && menu.hidden) mic.focus({ preventScroll: true });
+        if (wasOpen && restoreFocus && !disposed && input.isConnected) input.focus({ preventScroll: true });
     }
+    function hideSoon(delay = 1500) {
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => { if (!operation && !pending) void hide(); }, delay);
+    }
+    // One click starts recording; clicking again stops it. Configuration problems
+    // surface in the bar instead of costing an extra click to find out.
     async function open() {
-        if (!menu.hidden) { await hide(true); return; }
-        menu.hidden = false; mic.setAttribute('aria-expanded', 'true');
-        status(t('正在检查语音设置…', 'Checking voice settings…')); checking = true; render();
+        if (operation?.phase === 'recording') { await finish(); return; }
+        if (checking || operation || pending) return;
+        if (input.disabled || input.readOnly) return;
+        checking = true; setState('checking', t('正在检查语音设置…', 'Checking voice settings…'));
         try {
             snapshot = await (await voiceRequest('status')).json();
-            if (disposed || menu.hidden) return;
-            status(!snapshot.enabled ? t('请先在语音设置中启用语音输入。', 'Enable voice input in Voice settings.')
-                : snapshot.phase !== 'ready' ? t('请在语音设置中配置 API，或准备本地模型。', 'Configure an API or prepare a local model in Voice settings.')
-                : t('点击开始录音；识别文字会插入草稿。', 'Start recording; the transcript will be inserted into your draft.'));
-        } catch (error) { status(error.message); }
-        finally { checking = false; render(); if (!menu.hidden) menu.querySelector('[data-record]').focus(); }
+            if (disposed) return;
+            if (!snapshot.enabled) {
+                setState('error', t('语音输入未启用。', 'Voice input is off.'));
+                return;
+            }
+            if (snapshot.phase !== 'ready') {
+                setState('error', t('尚未配置识别接口或本地模型。', 'No speech API or local model configured yet.'));
+                return;
+            }
+        } catch (error) {
+            setState('error', error.message);
+            return;
+        } finally { checking = false; }
+        await record();
     }
     const alive = active => operation === active && !active.abort.signal.aborted && active.span.sessionId === composer.sessionId();
     async function failed(active, error) {
         if (!alive(active)) return;
         await cancel();
-        if (!disposed && !operation) status(error.name === 'NotAllowedError' ? t('请允许麦克风访问。', 'Allow microphone access.') : error.message);
+        if (!disposed && !operation) {
+            setState('error', error.name === 'NotAllowedError'
+                ? t('请允许麦克风访问。', 'Allow microphone access.')
+                : error.message || t('录音失败。', 'Recording failed.'));
+        }
     }
     async function record() {
         if (operation?.phase === 'recording') { await finish(); return; }
         if (operation || pending || checking || input.disabled || input.readOnly) return;
-        if (!snapshot?.enabled || snapshot.phase !== 'ready') { status(t('请先完成语音设置中的配置。', 'Complete voice configuration in Voice settings first.')); return; }
+        if (!snapshot?.enabled || snapshot.phase !== 'ready') {
+            setState('error', t('尚未配置识别接口或本地模型。', 'No speech API or local model configured yet.'));
+            return;
+        }
         stopPlayback();
         const active = { id: crypto.randomUUID(), capture: new SpeechCapture(), abort: new AbortController(), span: composer.capture(), phase: 'permission' };
-        operation = active; status(t('正在请求麦克风权限…', 'Requesting microphone access…')); render();
+        operation = active;
+        setState('checking', t('正在请求麦克风权限…', 'Requesting microphone access…'));
         try {
             await active.capture.start(error => { void failed(active, error); });
             if (!alive(active)) { await active.capture.dispose(); return; }
-            active.phase = 'recording'; active.started = Date.now(); render();
+            active.phase = 'recording'; active.started = Date.now();
+            // The mic itself stops the take; say so instead of repeating "recording".
+            setState('recording', t('再点一下麦克风结束', 'Tap the mic again to stop'));
             active.tick = setInterval(() => {
-                menu.querySelector('meter').value = active.capture.level();
-                status(t('正在录音', 'Recording') + ' · ' + Math.floor((Date.now() - active.started) / 1000) + 's');
+                const seconds = Math.max(0, Math.floor((Date.now() - active.started) / 1000));
+                dockTime.textContent = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+                pushLevel(active.capture.level());
             }, 100);
             active.limit = setTimeout(() => { void finish(); }, snapshot.maxDurationSeconds * 1000);
         } catch (error) { await failed(active, error); }
@@ -135,17 +197,24 @@ export function installChatExtension() {
         const active = operation;
         if (!active || active.phase !== 'recording') return;
         active.phase = 'transcribing'; clearInterval(active.tick); clearTimeout(active.limit);
-        status(t('正在识别…', 'Transcribing…')); render();
+        setState('transcribing', t('正在识别…', 'Transcribing…'));
         try {
             const audio = await active.capture.stop(snapshot.maxDurationSeconds);
             if (!alive(active)) return;
             const result = await (await voiceRequest('transcribe', { method: 'POST', headers: { 'Content-Type': 'audio/wav', 'X-Speech-Request-Id': active.id }, body: audio, signal: active.abort.signal })).json();
             if (!alive(active)) return;
             operation = null;
-            if (!result.text?.trim()) status(t('未识别到语音。', 'No speech detected.'));
-            else if (composer.insert(result.text, active.span)) status(t('识别文字已插入草稿。', 'Transcript inserted into draft.'));
-            else { pending = { text: result.text, sessionId: active.span.sessionId }; status(t('草稿已变化，请确认后插入或取消。', 'Draft changed; review before inserting or cancelling.')); }
-            render();
+            if (!result.text?.trim()) {
+                setState('done', t('没听清，再说一次？', "Didn't catch that; try again?"));
+                hideSoon(1800);
+            } else if (composer.insert(result.text, active.span)) {
+                setState('done', t('已插入草稿', 'Inserted'));
+                hideSoon(1200);
+            } else {
+                // The draft moved while recording; never overwrite it silently.
+                pending = { text: result.text, sessionId: active.span.sessionId };
+                setState('confirm', result.text);
+            }
         } catch (error) { await failed(active, error); }
     }
     async function read(wrap, button) {
@@ -168,7 +237,7 @@ export function installChatExtension() {
             }
         } catch (error) {
             if (playback === active && error.name !== 'AbortError') {
-                menu.hidden = false; mic.setAttribute('aria-expanded', 'true'); status(error.message); render();
+                setState('error', error.message);
             }
         } finally { if (playback === active) stopPlayback(); }
     }
@@ -447,30 +516,44 @@ export function installChatExtension() {
     observer.observe(document.getElementById('chat-container') || document.body, { childList: true, subtree: true });
     const inputObserver = new MutationObserver(() => { if ((input.disabled || input.readOnly) && operation) void cancel(); render(); });
     inputObserver.observe(input, { attributes: true, attributeFilter: ['disabled', 'readonly'] });
-    on(mic, 'click', () => { void open(); });
-    on(menu.querySelector('[data-close]'), 'click', () => { void hide(true); });
-    on(menu.querySelector('[data-record]'), 'click', () => { void record(); });
-    on(menu.querySelector('[data-cancel]'), 'click', () => { void cancel(); status(t('已取消。', 'Cancelled.')); });
-    on(menu.querySelector('[data-insert]'), 'click', () => {
+    // A long press (or right click) is the shortcut to settings, as in chat apps
+    // where the mic button has no room for a second control.
+    let longPressed = false, pressTimer = null;
+    const openSettings = () => { void hide(); globalThis.myagentOpenSettings?.('plugin:voice-input:voice'); };
+    on(mic, 'pointerdown', () => {
+        longPressed = false;
+        pressTimer = setTimeout(() => { longPressed = true; openSettings(); }, 550);
+    });
+    for (const type of ['pointerup', 'pointerleave', 'pointercancel']) on(mic, type, () => clearTimeout(pressTimer));
+    on(mic, 'contextmenu', event => { event.preventDefault(); clearTimeout(pressTimer); openSettings(); });
+    on(mic, 'click', () => {
+        if (longPressed) { longPressed = false; return; }
+        void open();
+    });
+    on(dock.querySelector('[data-cancel]'), 'click', () => { void hide(true); });
+    on(dock.querySelector('[data-finish]'), 'click', () => { void finish(); });
+    on(dock.querySelector('[data-insert]'), 'click', () => {
         if (pending && pending.sessionId === composer.sessionId() && composer.insert(pending.text, composer.capture())) {
-            pending = null; status(t('识别文字已插入草稿。', 'Transcript inserted into draft.')); render();
+            pending = null;
+            setState('done', t('已插入草稿', 'Inserted'));
+            hideSoon(1200);
         }
     });
-    on(menu.querySelector('[data-settings]'), 'click', () => { void hide(); globalThis.myagentOpenSettings?.('plugin:voice-input:voice'); });
+    on(dock.querySelector('[data-settings]'), 'click', openSettings);
     on(document, 'myagent:session-change', () => {
         sawStreaming = false; liveCovered = false; preRunWraps = null; clearTimeout(autoTimer); void hide(); stopPlayback();
     });
     on(document, 'myagent:settings-closed', () => { snapshot = null; void loadVoiceFlag(); });
     on(document, 'myagent:plugins-changed', () => { void loadVoiceFlag(); });
-    on(document, 'keydown', event => { if (event.key === 'Escape' && !menu.hidden) { event.preventDefault(); void hide(true); } });
-    on(document, 'pointerdown', event => { if (!menu.hidden && !menu.contains(event.target) && !mic.contains(event.target)) void hide(); });
+    on(document, 'keydown', event => { if (event.key === 'Escape' && !dock.hidden) { event.preventDefault(); void hide(true); } });
+    on(document, 'pointerdown', event => { if (!dock.hidden && !dock.contains(event.target) && !mic.contains(event.target)) void hide(); });
     on(document, 'visibilitychange', () => { if (document.hidden && operation) void hide(); });
     on(window, 'blur', () => { if (operation?.phase === 'recording') void hide(); });
-    on(window, 'resize', position); on(document, 'scroll', position, true);
     on(window, 'pagehide', () => { void cancel(); stopPlayback(); });
     scan();
     return () => {
         disposed = true; void cancel(); stopPlayback(); observer.disconnect(); inputObserver.disconnect();
-        listeners.forEach(remove => remove()); readButtons.forEach(button => button.remove()); mic.remove(); menu.remove();
+        listeners.forEach(remove => remove()); readButtons.forEach(button => button.remove());
+        mic.remove(); dock.remove(); host.classList.remove('voice-host');
     };
 }

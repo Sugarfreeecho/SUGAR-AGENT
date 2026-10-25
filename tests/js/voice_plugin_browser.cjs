@@ -1,4 +1,4 @@
-/** Headless, fake-device checks of plugin settings, floating capture and Final TTS. */
+/** Headless, fake-device checks of plugin settings, one-click capture and Final TTS. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -113,8 +113,8 @@ async function until(expression) { await page.waitForFunction(expression, null, 
     assert.equal(state.tts.voice, '冰糖'); assert.equal(state.enabled, true);
     fs.mkdirSync(output, { recursive: true }); await page.screenshot({ path: path.join(output, 'voice-settings.png'), fullPage: true });
     await page.goto(origin);
-    await page.locator('#speech-input-btn').click();
-    await page.locator('[data-settings]').click();
+    // Right click (or long press) is the shortcut to voice settings.
+    await page.locator('#speech-input-btn').click({ button: 'right' });
     await page.locator('[data-voice-field="asr.provider"]').waitFor();
     assert.equal(new URL(page.url()).hash, '#plugin:voice-input:voice');
     assert.equal(await page.locator('#st-title').innerText(), '语音输入与朗读');
@@ -136,27 +136,30 @@ async function until(expression) { await page.waitForFunction(expression, null, 
         assert.deepEqual(focus, { visible: true, style: 'solid', width: '2px', themed: true });
     }
     await page.keyboard.press('Enter');
-    await until('document.querySelector(".voice-popover [data-record]").disabled === false');
+    await until('document.querySelector(".voice-dock").dataset.state === "recording"');
+    assert.equal(await page.locator('#speech-input-btn').getAttribute('aria-pressed'), 'true');
+    await page.locator('.composer-row').screenshot({ path: path.join(output, 'voice-recording.png') });
     await page.keyboard.press('Escape');
-    await until('document.querySelector(".voice-popover").hidden && document.activeElement.id === "speech-input-btn"');
+    await until('document.querySelector(".voice-dock").hidden && document.activeElement.id === "message-input"');
     await page.locator('#speech-input-btn').click();
     await page.locator('#message-input').click();
-    assert.equal(await run('document.activeElement.id'), 'message-input', 'dismissing the menu must not take focus away from the draft');
-    assert.equal(await page.locator('.voice-popover').evaluate(node => node.hidden), true);
+    assert.equal(await run('document.activeElement.id'), 'message-input', 'leaving the bar must not take focus away from the draft');
+    assert.equal(await page.locator('.voice-dock').evaluate(node => node.hidden), true);
     await page.locator('#speech-input-btn').click();
-    await until('document.querySelector(".voice-popover [data-record]").disabled === false');
+    await until('document.querySelector(".voice-dock").dataset.state === "recording"');
     assert.equal(await page.locator('.speech-activity, .speech-options-btn').count(), 0);
-    assert.equal(await page.locator('.voice-popover').evaluate(node => getComputedStyle(node).position), 'fixed');
-    await page.locator('[data-record]').click();
-    await until('!document.querySelector(".voice-popover meter").hidden');
+    // The bar sits on the composer instead of floating anywhere on screen.
+    assert.equal(await page.locator('.voice-dock').evaluate(node => getComputedStyle(node).position), 'absolute');
+    assert.equal(await page.locator('.voice-dock').evaluate(node => node.getBoundingClientRect().bottom
+        <= node.closest('.composer-row').getBoundingClientRect().top + 1), true);
     await page.waitForTimeout(350);
-    await page.screenshot({ path: path.join(output, 'floating-recording.png') });
-    await page.locator('[data-record]').click();
+    await page.locator('#speech-input-btn').click();
     await until('document.querySelector("textarea").value === "语音测试成功"');
     assert.equal(transcriptions, 1);
     hold = true;
-    await page.locator('[data-record]').click(); await until('!document.querySelector(".voice-popover meter").hidden');
-    await page.waitForTimeout(250); await page.locator('[data-record]').click();
+    await page.locator('#speech-input-btn').click();
+    await until('document.querySelector(".voice-dock").dataset.state === "recording"');
+    await page.waitForTimeout(250); await page.locator('#speech-input-btn').click();
     const end = Date.now() + 5000;
     while (!heldResponse) { if (Date.now() > end) throw new Error('No ASR request'); await new Promise(resolve => setTimeout(resolve, 20)); }
     await run('messageInput.value="正在编辑";messageInput.dispatchEvent(new Event("input"))');
@@ -165,7 +168,8 @@ async function until(expression) { await page.waitForFunction(expression, null, 
     assert.equal(await page.locator('textarea').inputValue(), '正在编辑');
     await page.locator('[data-insert]').click();
     assert.ok((await page.locator('textarea').inputValue()).includes('保留文字'));
-    await page.locator('[data-close]').click();
+    // A successful insert closes the bar on its own.
+    await until('document.querySelector(".voice-dock").hidden');
     const audioResponse = page.waitForResponse(response => response.url().endsWith('/api/speech/synthesize/stream'));
     await page.locator('.voice-read').click();
     await until('document.querySelector(".voice-read").classList.contains("is-playing")');
@@ -174,9 +178,9 @@ async function until(expression) { await page.waitForFunction(expression, null, 
     await page.locator('.voice-read').click();
     await until('!document.querySelector(".voice-read").classList.contains("is-playing")');
     await run('window.disposeVoice()');
-    assert.equal(await page.locator('#speech-input-btn,.voice-read,.voice-popover').count(), 0);
+    assert.equal(await page.locator('#speech-input-btn,.voice-read,.voice-dock').count(), 0);
     assert.deepEqual(errors, []);
-    console.log('voice plugin browser passed: startup focus, themed keyboard focus, direct settings navigation, floating capture, draft conflict, Final TTS, stop and disposal');
+    console.log('voice plugin browser passed: startup focus, themed keyboard focus, direct settings navigation, one-click capture, draft conflict, Final TTS, stop and disposal');
     clearTimeout(timeout); await browser.close(); server.close();
 })().catch(async error => {
     console.error(error); clearTimeout(timeout);
