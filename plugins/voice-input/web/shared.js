@@ -167,3 +167,155 @@ export function buildSpeechPlan(root, t = (zh) => zh) {
     if (items.length) items[0].gap = 0;
     return items;
 }
+
+// ---------------------------------------------------------------- markdown ---
+
+/** Strip markdown syntax down to something worth hearing. */
+function speechText(raw) {
+    const text = String(raw == null ? '' : raw)
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+        .replace(/`([^`]+)`/g, (_, code) => inlineCode(code))
+        .replace(/(\*\*|__)(.+?)\1/g, '$2')
+        .replace(/(\*|_)(.+?)\1/g, '$2')
+        .replace(/~~(.+?)~~/g, '$1')
+        .replace(/^\s{0,3}>\s?/gm, '');
+    return text.replace(SPEECH_NOISE, '').replace(/\s+/g, ' ').trim();
+}
+
+function splitRow(line) {
+    return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => speechText(cell));
+}
+
+const isBlankLine = line => !line.trim();
+const isFenceLine = line => /^\s{0,3}(```|~~~)/.test(line);
+const isHeadingLine = line => /^\s{0,3}#{1,6}\s+/.test(line);
+const isRuleLine = line => /^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/.test(line);
+const isItemLine = line => /^\s{0,3}(?:[-*+]|\d+[.)])\s+/.test(line);
+const isQuoteLine = line => /^\s{0,3}>\s?/.test(line);
+const isTableRow = line => line.includes('|');
+const isTableSep = line => /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(line);
+const itemLabel = line => /^\s{0,3}([-*+]|\d+[.)])\s+/.exec(line);
+
+/**
+ * Parse streamed markdown into speaking units, keeping only what is settled.
+ *
+ * While an answer streams, the trailing block is still growing - a half-written
+ * table is indistinguishable from a paragraph until its separator row lands. So
+ * everything except the last block counts as settled, and the last block counts
+ * only once something follows it (or when `final` says the stream ended).
+ */
+export function parseSpeechMarkdown(markdown, final = false, t = (zh) => zh) {
+    const lines = String(markdown == null ? '' : markdown).replace(/\r\n?/g, '\n').split('\n');
+    const units = [];
+    let index = 0;
+    // True when the text simply ran out mid-block, so that block may still grow.
+    let tailOpen = false;
+    while (index < lines.length) {
+        const line = lines[index];
+        if (isBlankLine(line)) { index += 1; continue; }
+        if (isRuleLine(line)) { index += 1; continue; }
+
+        if (isFenceLine(line)) {
+            const marker = line.trim().slice(0, 3);
+            let end = index + 1;
+            while (end < lines.length && !lines[end].trim().startsWith(marker)) end += 1;
+            const closed = end < lines.length;
+            if (closed) {
+                const body = lines.slice(index + 1, end).join('\n');
+                const language = line.trim().slice(3).trim();
+                units.push(...codeItems({ textContent: body, querySelector: () => (language ? { className: 'language-' + language } : null) }, t));
+            }
+            index = closed ? end + 1 : lines.length;
+            if (closed) tailOpen = false;
+            continue;
+        }
+
+        if (isHeadingLine(line)) {
+            const text = speechText(line.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/\s*#+\s*$/, ''));
+            if (text) units.push({ kind: 'heading', gap: .4, text });
+            index += 1;
+            tailOpen = index >= lines.length;
+            continue;
+        }
+
+        if (isTableRow(line) && index + 1 < lines.length && isTableSep(lines[index + 1])) {
+            const headers = splitRow(line).filter(Boolean);
+            index += 2;
+            const rows = [];
+            while (index < lines.length && isTableRow(lines[index]) && !isBlankLine(lines[index])) { rows.push(splitRow(lines[index])); index += 1; }
+            // An unterminated table is still growing: its row count would be wrong,
+            // and the hint would have to be re-read on every new row.
+            if (index >= lines.length && !final) continue;
+            tailOpen = index >= lines.length;
+            if (rows.length) {
+                // No row count here: rows keep arriving while streaming, and a hint
+                // that changes after being spoken cannot be taken back.
+                units.push({ kind: 'table', gap: .5, text: headers.length
+                    ? t('下面是一张表格，列有：' + headers.join('、') + '。',
+                        'Here is a table with these columns: ' + headers.join(', ') + '.')
+                    : t('下面是一张表格。', 'Here is a table.') });
+                const spokenRows = rows.slice(0, 8);
+                spokenRows.forEach((cells, at) => {
+                    const pairs = cells.map((value, column) => (headers[column] ? headers[column] + '，' + value : value)).filter(Boolean);
+                    if (!pairs.length) return;
+                    units.push({ kind: 'table-row', gap: .18,
+                        text: t('第 ' + (at + 1) + ' 行：' + pairs.join('；') + '。',
+                            'Row ' + (at + 1) + ': ' + pairs.join('; ') + '.') });
+                });
+                if (rows.length > spokenRows.length) {
+                    units.push({ kind: 'table-row', gap: .2,
+                        text: t('其余行请查看原文。', 'The remaining rows are in the message.') });
+                }
+            }
+            continue;
+        }
+
+        if (isItemLine(line)) {
+            let count = 0;
+            while (index < lines.length && isItemLine(lines[index])) {
+                let body = lines[index].replace(/^\s{0,3}(?:[-*+]|\d+[.)])\s+/, '');
+                index += 1;
+                // Wrapped continuation lines belong to the same item.
+                while (index < lines.length && !isBlankLine(lines[index])
+                    && !isItemLine(lines[index]) && !isHeadingLine(lines[index])
+                    && !isFenceLine(lines[index]) && !isQuoteLine(lines[index])) {
+                    body += ' ' + lines[index].trim();
+                    index += 1;
+                }
+                count += 1;
+                const text = speechText(body);
+                if (text) units.push({ kind: 'list', gap: .22, text: t('第 ' + count + '，', 'Item ' + count + ', ') + text });
+            }
+            tailOpen = index >= lines.length;
+            continue;
+        }
+
+        if (isQuoteLine(line)) {
+            const body = [];
+            while (index < lines.length && isQuoteLine(lines[index])) { body.push(lines[index].replace(/^\s{0,3}>\s?/, '')); index += 1; }
+            const text = speechText(body.join(' '));
+            if (text) units.push({ kind: 'quote', gap: .35, text: t('引用：', 'Quoted: ') + text });
+            tailOpen = index >= lines.length;
+            continue;
+        }
+
+        const body = [];
+        while (index < lines.length && !isBlankLine(lines[index]) && !isFenceLine(lines[index])
+            && !isHeadingLine(lines[index]) && !isItemLine(lines[index]) && !isQuoteLine(lines[index])
+            && !isRuleLine(lines[index])
+            && !(isTableRow(lines[index]) && index + 1 < lines.length && isTableSep(lines[index + 1]))) {
+            body.push(lines[index]);
+            index += 1;
+        }
+        const text = speechText(body.join(' '));
+        if (text) units.push({ kind: 'paragraph', gap: .3, text });
+        // A trailing line with pipes may still turn into a table header once its
+        // separator row arrives, so hold it while the answer is streaming.
+        tailOpen = index >= lines.length
+            || (!final && body.length > 0 && body[body.length - 1].includes('|'));
+    }
+    if (!final && tailOpen && units.length) units.pop();
+    if (units.length) units[0].gap = 0;
+    return units;
+}

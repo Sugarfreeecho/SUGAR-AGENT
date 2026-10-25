@@ -1,5 +1,5 @@
 import { SpeechCapture } from './capture.js';
-import { voiceText as t, voiceRequest, splitSpeechText, buildSpeechPlan } from './shared.js';
+import { voiceText as t, voiceRequest, splitSpeechText, buildSpeechPlan, parseSpeechMarkdown } from './shared.js';
 
 export function installChatExtension() {
     const composer = globalThis.MyAgentComposer;
@@ -31,10 +31,14 @@ export function installChatExtension() {
     menu.querySelector('[data-settings]').textContent = t('语音设置', 'Voice settings');
     menu.querySelector('meter').setAttribute('aria-label', t('麦克风音量', 'Microphone level'));
     let operation = null, pending = null, disposed = false, snapshot = null, checking = false, playback = null;
+    // Progressive reading of the answer while it is still being generated.
+    let live = null;
     // Auto reading stays disarmed until a run has actually streamed in, so opening an
     // old session never starts talking on its own.
     let autoRead = false, sawStreaming = false, autoTimer = null;
     let autoPending = null;
+    // Set once a run has been read progressively; its answer card must not be read again.
+    let liveCovered = false;
     // Frames that already existed when this run started must never be auto read.
     let preRunWraps = null;
     const autoDone = new WeakSet();
@@ -58,7 +62,7 @@ export function installChatExtension() {
         position();
     }
     function stopPlayback() {
-        const active = playback; playback = null;
+        const active = playback; playback = null; live = null;
         if (!active) return;
         active.abort.abort();
         if (active.id) void voiceRequest('transcriptions/' + active.id, { method: 'DELETE', keepalive: true }).catch(() => {});
@@ -68,9 +72,11 @@ export function installChatExtension() {
         if (active.sources) active.sources.length = 0;
         if (active.ctx) void active.ctx.close().catch(() => {});
         for (const control of active.controls || []) control.remove();
-        active.button.classList.remove('is-playing');
-        active.button.textContent = t('朗读', 'Read aloud');
-        active.button.setAttribute('aria-pressed', 'false');
+        if (active.button) {
+            active.button.classList.remove('is-playing');
+            active.button.textContent = t('朗读', 'Read aloud');
+            active.button.setAttribute('aria-pressed', 'false');
+        }
     }
     async function cancel() {
         const active = operation; operation = null; pending = null;
@@ -290,6 +296,96 @@ export function installChatExtension() {
             if (active.url) { URL.revokeObjectURL(active.url); active.url = null; }
         }
     }
+    // The answer streams into a plain-text row long before the card is rendered,
+    // so auto reading follows that row and speaks each block once it settles.
+    function liveScroller() {
+        const rows = [...document.querySelectorAll('.feed-item[data-log-type="llm-response"]')];
+        const row = rows.reverse().find(node => node.querySelector('.feed-chunk.is-streaming'));
+        return row ? (row.querySelector('.feed-chunk-scroller') || row.querySelector('.feed-chunk')) : null;
+    }
+    function startLive() {
+        if (!autoRead || playback || disposed) return null;
+        const scroller = liveScroller();
+        if (!scroller) return null;
+        const active = { live: true, queue: [], fed: [], text: '', scroller, abort: new AbortController() };
+        playback = active; live = active;
+        liveCovered = true;
+        void streamLive(active).catch(error => {
+            if (error.name !== 'AbortError' && playback === active) stopPlayback();
+        });
+        return active;
+    }
+    function pumpLive() {
+        const active = live;
+        if (!active || playback !== active) return;
+        if (active.scroller.isConnected) active.text = active.scroller.textContent || '';
+        const ended = !document.querySelector('.feed-chunk.is-streaming');
+        if (!active.text.trim() && !ended) return;
+        // Settled prefix only: the trailing block may still be receiving tokens.
+        const units = parseSpeechMarkdown(active.text, ended, t);
+        for (let index = 0; index < units.length; index += 1) {
+            const text = units[index].text;
+            if (active.fed[index] !== undefined) {
+                // The text under an already queued block changed; stop rather than
+                // speak something the user never saw.
+                if (active.fed[index] !== text) { stopPlayback(); return; }
+                continue;
+            }
+            active.fed[index] = text;
+            active.queue.push(units[index]);
+        }
+        if (!active.button) {
+            const wraps = [...document.querySelectorAll('.msg-wrap--answer-frame')];
+            const wrap = wraps[wraps.length - 1];
+            const button = wrap && wrap.querySelector('.voice-read');
+            if (button && button.parentElement) {
+                active.button = button; active.wrap = wrap;
+                autoDone.add(wrap);
+                button.classList.add('is-playing'); button.textContent = t('停止朗读', 'Stop reading');
+                button.setAttribute('aria-pressed', 'true');
+                mountControls(active);
+            }
+        }
+        active.ended = ended;
+    }
+    async function streamLive(active) {
+        const Ctx = AudioContextClass;
+        if (!Ctx) throw new Error(t('当前浏览器不支持流式播放。', 'This browser cannot stream audio.'));
+        const ctx = new Ctx(); active.ctx = ctx; active.sources = []; active.next = ctx.currentTime + .1;
+        if (ctx.state === 'suspended') await ctx.resume();
+        let at = 0, aheadIndex = -1, ahead = null;
+        const prepare = index => {
+            if (index >= active.queue.length) return null;
+            if (aheadIndex === index) return ahead;
+            aheadIndex = index; ahead = startSpeech(active.queue[index].text, active);
+            ahead.catch(() => {});
+            return ahead;
+        };
+        for (;;) {
+            while (at >= active.queue.length) {
+                if (playback !== active || active.ended) break;
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            if (playback !== active) return;
+            if (at >= active.queue.length) break;
+            const request = prepare(at);
+            const item = active.queue[at];
+            at += 1;
+            // A block that already arrived is requested now, so the pause between
+            // blocks is the gap we chose rather than the synthesis latency.
+            prepare(at);
+            while (playback === active && active.next - ctx.currentTime > 24) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+            if (playback !== active) return;
+            active.next += item.gap || 0;
+            await consume(await request, active);
+        }
+        while (playback === active && ctx.currentTime < active.next - .02) {
+            await new Promise(resolve => setTimeout(resolve, 120));
+        }
+        if (playback === active) stopPlayback();
+    }
     function scan() {
         document.querySelectorAll('.msg-wrap--answer-frame .msg-toolbar').forEach(toolbar => {
             if (toolbar.querySelector('.voice-read')) return;
@@ -312,6 +408,8 @@ export function installChatExtension() {
         if (document.querySelector('.is-streaming')) return;
         const wraps = [...document.querySelectorAll('.msg-wrap--answer-frame')];
         const fresh = wraps.filter(node => !preRunWraps || !preRunWraps.has(node));
+        // This run was already spoken while it streamed; do not repeat its card.
+        if (liveCovered) { for (const node of fresh) autoDone.add(node); return; }
         const wrap = fresh[fresh.length - 1];
         if (!wrap || autoDone.has(wrap)) return;
         const button = wrap.querySelector('.voice-read');
@@ -339,7 +437,11 @@ export function installChatExtension() {
             sawStreaming = true;
         }
         scan();
-        if (playback && !playback.button.isConnected) stopPlayback();
+        if (autoRead && sawStreaming && !disposed) {
+            if (!playback) startLive();
+            pumpLive();
+        }
+        if (playback && playback.button && !playback.button.isConnected) stopPlayback();
     });
     observer.observe(document.getElementById('chat-container') || document.body, { childList: true, subtree: true });
     const inputObserver = new MutationObserver(() => { if ((input.disabled || input.readOnly) && operation) void cancel(); render(); });
@@ -355,7 +457,7 @@ export function installChatExtension() {
     });
     on(menu.querySelector('[data-settings]'), 'click', () => { void hide(); globalThis.myagentOpenSettings?.('plugin:voice-input:voice'); });
     on(document, 'myagent:session-change', () => {
-        sawStreaming = false; preRunWraps = null; clearTimeout(autoTimer); void hide(); stopPlayback();
+        sawStreaming = false; liveCovered = false; preRunWraps = null; clearTimeout(autoTimer); void hide(); stopPlayback();
     });
     on(document, 'myagent:settings-closed', () => { snapshot = null; void loadVoiceFlag(); });
     on(document, 'myagent:plugins-changed', () => { void loadVoiceFlag(); });

@@ -1,6 +1,6 @@
 # 语音输入与朗读 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-24 v2（覆盖至：当前工作区；按块类型的语音计划、播放控制、自动朗读开关）
+- 版本：2026-10-24 v3（覆盖至：当前工作区；边生成边读的流式朗读、按块类型的语音计划、播放控制、自动朗读开关）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/voice-input`（speech_input/{api,service,providers,configuration,protocol,worker}.py、web/{chat,settings,shared,capture}.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 09；配套通则见 01–07）
@@ -44,6 +44,7 @@
 | 按块类型生成语音计划（段落/标题/列表/表格/代码/图片） | ✅ |
 | 暂停 / 继续 / 从头朗读 | ✅ |
 | 回答完成后自动朗读（可关） | ✅ |
+| 边生成边读（自动朗读时读流式草稿，只读定型块） | ✅ |
 | 合成结果 PCM 缓存（哈希键 + LRU） | ✅ |
 | 桌面端麦克风授权（仅回环主框架） | ✅ |
 | 本地 TTS | ⚪ 未实现 |
@@ -139,6 +140,23 @@
 | UC-345 | 打开「回答完成后自动朗读」 | 一次运行结束后自动开始朗读本次新产生的那条回答 | 只有在本次会话内**观测到流式活动**后才启用，打开旧会话不会自说自话；答案卡是一次成型渲染的，排队延时只有 150 ms，只用于避开"卡片还在拼装"的瞬间 | `web/chat.js:queueAutoRead` |
 | UC-349 | 自动朗读排队时页面上还有旧回答 | 只读本次运行新出现的卡片，绝不读上一条 | 进入流式状态时快照已存在的卡片（`preRunWraps`），排队只在新卡片里选；同一卡片重复排队不重置计时器 | `web/chat.js` `preRunWraps`、`autoPending` |
 | UC-350 | 页面持续有无关 DOM 变动 | 排队计时不会被无限推迟 | 目标卡片与文本未变时直接返回，不 `clearTimeout` 重排 | `web/chat.js:queueAutoRead` |
+
+### 5.3 边生成边读（UC-36x）
+
+自动朗读开启时，回答还在生成就开始读；读的是过程行里的纯文本草稿，由插件自己解析 markdown。手动朗读不受影响，仍读最终卡片。
+
+| 编号 | 触发 | 预期现象 | 规则与边界 | 依据 |
+|---|---|---|---|---|
+| UC-361 | 自动朗读开启，模型开始输出 | 第一段定型后就开始出声，不等整条回答结束 | 目标是 `.feed-item[data-log-type="llm-response"]` 里的 `.feed-chunk.is-streaming` 草稿；只在自动朗读下启用 | `web/chat.js:startLive`、`liveScroller` |
+| UC-362 | 回答正在写第三段 | 前两段已在播，第三段不读 | 除最后一块外都算定型；最后一块等它后面出现新内容或流结束 | `web/shared.js:parseSpeechMarkdown` |
+| UC-363 | 表格行陆续到达 | 分隔行到齐前一个字都不读，到齐后先报列名再逐行读 | 未终止的表格整块跳过；提示语不带行数，避免读出口后再改写 | 同上 |
+| UC-364 | 某行以 `\|` 结尾 | 先不读，等下一行 | 下一行可能是表格分隔行，会把这一行变成表头 | 同上 |
+| UC-365 | 代码围栏没收口 | 不读围栏内容 | 只有闭合围栏才生成「这里有一段 js 代码，共 N 行…」 | 同上 |
+| UC-366 | 已读单元的文字被改写 | 立即停止朗读 | 宁可中断，也不读用户没看到的内容 | `web/chat.js:pumpLive` 的 `fed` 比对 |
+| UC-367 | 流结束 | 补齐最后一块，读完自动收尾 | `ended` 置位后队列排空即停 | `web/chat.js:streamLive` |
+| UC-368 | 本轮已边生成边读 | 最终卡片不再读第二遍 | `liveCovered` 标记，本轮的卡片直接记入 `autoDone` | `web/chat.js:queueAutoRead` |
+| UC-369 | 流式朗读进行中用户点某张卡片的「朗读」 | 先停流式，再按最终卡片重读 | 两者共用一个播放会话 | `web/chat.js:read` 开头的 `stopPlayback()` |
+| UC-370 | 流式朗读中切换会话 / 停止 | 立即中止，队列清空 | `stopPlayback` 负责 abort、关闭 AudioContext、清 `live` | `web/chat.js:stopPlayback` |
 | UC-346 | 自动朗读为关 | 一律等用户点击 | 开关关闭时不排队、不预取 | 同上 |
 | UC-347 | 自动朗读进行中切换会话 | 立即停止，且新会话历史不被朗读 | 会话切换清 `sawStreaming` 与定时器 | `web/chat.js` `myagent:session-change` |
 | UC-348 | 同一段内容重复朗读 | 第二次几乎立即出声，不发新请求 | 命中 PCM 缓存；分段变化会改变缓存键，旧条目随 LRU 淘汰 | `service.py:_cache_key`、`service.py:stream_speech` |
@@ -213,5 +231,6 @@
 | UC-601~606 | `tests/js/voice_plugin_browser.cjs`（启动聚焦、主题焦点、设置直达、浮窗、草稿冲突、Final 朗读、停止与释放）；辅以 `e2e_gap.py`、`e2e_cache.py`、`btn_narrow.py` 的实测记录 |
 | UC-321~331 | `workspace/TempOutput/tswork/plan_probe.py`、`plan_kinds.py`：对真实回答与合成 DOM 打印语音计划逐条比对 |
 | UC-341~347 | `workspace/TempOutput/tswork/plan_play.py`（暂停/继续/从头/控件挂载与移除）、`plan_auto.py`（开关开/关两条路径） |
+| UC-361~367 | `workspace/TempOutput/tswork/parse_test.mjs`（前缀稳定：逐字追加时已读单元从不改写、半张表不读）、`live_test.py`（注入流式行，验证 1→2→保持→4 的增量与结束后不重复） |
 | UC-508 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`、`test_settings_default_persist_and_validate` |
 | 端到端 | `scripts/smoke_speech_input.py --audio <16k-mono-pcm16.wav>` |
