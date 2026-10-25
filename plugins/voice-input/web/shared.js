@@ -44,25 +44,78 @@ export function splitSpeechText(text, limit = 1800) {
 // stray syllables or swallow the next character.
 const SPEECH_NOISE = /[\u200B-\u200D\uFEFF\uFE0F\u20E3\u{1F000}-\u{1FAFF}\u{2190}-\u{21FF}\u{2300}-\u{27BF}]/gu;
 const INLINE_CODE_LIMIT = 24;
+// Stand-ins for spans nobody can follow by ear. They are typed so a run of file
+// paths reads as "N files" rather than "N code spans", and links stay links.
+const SPANS = { file: '\u0000', link: '\u0001', code: '\u0002' };
+const FILE_PATTERN = /(?:^|[\\/])[^\s\\/]+\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?:-\d+)?)?$/;
+let readParenthetical = false;
+
+export function setSpeechOptions(options = {}) {
+    if (typeof options.readParenthetical === 'boolean') readParenthetical = options.readParenthetical;
+}
 
 function inlineCode(value) {
     const text = value.trim();
-    // A URL or a long identifier is unlistenable; name it instead of spelling it out.
-    if (/^https?:\/\//i.test(text)) return '链接';
-    return text.length > INLINE_CODE_LIMIT ? '一段代码' : text;
+    if (/^https?:\/\//i.test(text)) return SPANS.link;
+    if (FILE_PATTERN.test(text)) {
+        // A bare name such as chat.js is short enough to say out loud.
+        return !/[\\/]/.test(text) && text.length <= INLINE_CODE_LIMIT ? text : SPANS.file;
+    }
+    return text.length > INLINE_CODE_LIMIT ? SPANS.code : text;
+}
+
+function spanPhrase(kind, count) {
+    if (kind === 'file') {
+        return count <= 1 ? voiceText('一个文件', 'a file') : voiceText(count + ' 个文件', count + ' files');
+    }
+    if (kind === 'link') {
+        return count <= 1 ? voiceText('一个链接', 'a link') : voiceText(count + ' 个链接', count + ' links');
+    }
+    return count <= 1 ? voiceText('一段代码', 'a code span') : voiceText(count + ' 处代码', count + ' code spans');
+}
+
+function collapseSpans(text) {
+    let out = text;
+    for (const [kind, mark] of Object.entries(SPANS)) {
+        const run = new RegExp(mark + '(?:\\s*[、，,；;和与]\\s*' + mark + ')*', 'g');
+        out = out.replace(run, match => spanPhrase(kind, match.split(mark).length - 1));
+    }
+    return out;
+}
+
+/** Parentheses usually hold asides, dates and file paths - noise when listening. */
+function stripParenthetical(text) {
+    if (readParenthetical) return text;
+    let out = text;
+    for (let pass = 0; pass < 4; pass += 1) {
+        const next = out.replace(/（[^（）]*）/g, '').replace(/\([^()]*\)/g, '');
+        if (next === out) break;
+        out = next;
+    }
+    return out;
+}
+
+/** Dropping parentheses leaves double spaces and gaps between Chinese characters. */
+function tidy(text) {
+    return text
+        .replace(/[\t ]+/g, ' ')
+        .replace(/\s+([，。；、！？：）」』】])/g, '$1')
+        .replace(/([（「『【])\s+/g, '$1')
+        .replace(/(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, '')
+        .trim();
 }
 
 function spoken(node) {
     const clone = node.cloneNode(true);
     clone.querySelectorAll('button, script, style').forEach(child => child.remove());
     clone.querySelectorAll('code').forEach(child => child.replaceWith(document.createTextNode(inlineCode(child.textContent))));
-    return clone.textContent.replace(SPEECH_NOISE, '').replace(/\s+/g, ' ').trim();
+    return tidy(collapseSpans(stripParenthetical(clone.textContent)).replace(SPEECH_NOISE, ''));
 }
 
 function cellText(node) {
     const clone = node.cloneNode(true);
     clone.querySelectorAll('code').forEach(child => child.replaceWith(document.createTextNode(inlineCode(child.textContent))));
-    return clone.textContent.replace(SPEECH_NOISE, '').replace(/\s+/g, ' ').trim();
+    return tidy(collapseSpans(stripParenthetical(clone.textContent)).replace(SPEECH_NOISE, ''));
 }
 
 function tableItems(table, t) {
@@ -180,7 +233,7 @@ function speechText(raw) {
         .replace(/(\*|_)(.+?)\1/g, '$2')
         .replace(/~~(.+?)~~/g, '$1')
         .replace(/^\s{0,3}>\s?/gm, '');
-    return text.replace(SPEECH_NOISE, '').replace(/\s+/g, ' ').trim();
+    return tidy(collapseSpans(stripParenthetical(text)).replace(SPEECH_NOISE, ''));
 }
 
 function splitRow(line) {

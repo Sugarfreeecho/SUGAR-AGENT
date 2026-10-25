@@ -59,6 +59,7 @@ async def test_settings_default_persist_and_validate(service):
     state = await service.snapshot()
     assert not state["enabled"] and state["phase"] == "unprepared"
     assert state["tts"]["autoRead"] is False
+    assert state["tts"]["readParenthetical"] is False
     assert not service.root.exists()
     await service.configure({"enabled": True, "language": "yue", "asr": {"provider": "local"}})
     restored = SpeechService(service.root.parent.parent)
@@ -78,6 +79,11 @@ async def test_auto_read_requires_a_boolean(service):
         with pytest.raises(SpeechError):
             await service.configure({"tts": {"autoRead": value}})
     assert service.settings["tts"]["autoRead"] is True
+    await service.configure({"tts": {"readParenthetical": True}})
+    assert service.settings["tts"]["readParenthetical"] is True
+    for value in ("false", 0, None):
+        with pytest.raises(SpeechError):
+            await service.configure({"tts": {"readParenthetical": value}})
     await service.close()
 
 

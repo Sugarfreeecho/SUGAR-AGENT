@@ -30,9 +30,12 @@ export async function mountSettings({ root, settings: A }) {
                 select('asr', 'provider', t('识别方式', 'Recognition provider'), [...providers, ['local', 'SenseVoice · ' + t('本地离线', 'Local offline')]], asr.provider) +
                 select('root', 'language', t('识别语言', 'Language'), languages, state?.language || 'auto') + apiFields('asr', asr) +
                 '<div data-local-info>' + W.note(t('本地模式需另装插件 requirements.txt，首次下载约 241 MB 模型，并占用 CPU 和内存。API 模式不加载这些资源。', 'Local mode requires the plugin requirements.txt and about 241 MB of models, plus CPU and memory. API mode does not load them.')) + '</div>') +
-            W.card(t('Final 卡片朗读（TTS）', 'Final-card reading (TTS)'), t('仅在点击朗读时发送卡片文字；不自动朗读，也不需要本地 TTS 模型。', 'Card text is sent only when you click Read aloud; no automatic playback or local TTS model.'),
+            W.card(t('Final 卡片朗读（TTS）', 'Final-card reading (TTS)'), t('只在点击朗读或开启自动朗读时发送卡片文字；不需要本地 TTS 模型。', 'Card text is sent when you click Read aloud or enable automatic reading; no local TTS model needed.'),
                 checked('tts.enabled', t('启用朗读', 'Enable reading'), tts.enabled) +
                 checked('tts.autoRead', t('回答完成后自动朗读', 'Read answers automatically'), tts.autoRead) +
+                // Only offered when the running backend knows the field, so an older
+                // process cannot fail the whole save on an unknown key.
+                ('readParenthetical' in tts ? checked('tts.readParenthetical', t('朗读括号里的内容', 'Read text in parentheses'), tts.readParenthetical) : '') +
                 select('tts', 'provider', t('合成接口', 'Speech provider'), providers, tts.provider) + apiFields('tts', tts) +
                 field('tts', 'voice', t('音色 ID', 'Voice ID'), 'text', tts.voice || '') +
                 W.note(t('小米音色：mimo_default、冰糖、茉莉、苏打、白桦、Mia、Chloe、Milo、Dean。音色名可直接填写。', 'MiMo voices: mimo_default, 冰糖, 茉莉, 苏打, 白桦, Mia, Chloe, Milo, Dean. Enter a voice ID directly.')) +

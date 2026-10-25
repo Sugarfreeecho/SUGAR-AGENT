@@ -1,5 +1,5 @@
 import { SpeechCapture } from './capture.js';
-import { voiceText as t, voiceRequest, splitSpeechText, buildSpeechPlan, parseSpeechMarkdown } from './shared.js';
+import { voiceText as t, voiceRequest, splitSpeechText, buildSpeechPlan, parseSpeechMarkdown, setSpeechOptions } from './shared.js';
 
 export function installChatExtension() {
     const composer = globalThis.MyAgentComposer;
@@ -400,6 +400,7 @@ export function installChatExtension() {
         try {
             const state = await (await voiceRequest('status')).json();
             autoRead = !!(state?.tts?.enabled && state?.tts?.autoRead);
+            setSpeechOptions({ readParenthetical: !!state?.tts?.readParenthetical });
         } catch { autoRead = false; }
     }
     void loadVoiceFlag();

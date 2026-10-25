@@ -1,6 +1,6 @@
 # 语音输入与朗读 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-24 v3（覆盖至：当前工作区；边生成边读的流式朗读、按块类型的语音计划、播放控制、自动朗读开关）
+- 版本：2026-10-24 v4（覆盖至：当前工作区；括号默认不读、文件/链接/代码分类计数、边生成边读、按块类型的语音计划、播放控制、自动朗读开关）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/voice-input`（speech_input/{api,service,providers,configuration,protocol,worker}.py、web/{chat,settings,shared,capture}.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 09；配套通则见 01–07）
@@ -45,6 +45,8 @@
 | 暂停 / 继续 / 从头朗读 | ✅ |
 | 回答完成后自动朗读（可关） | ✅ |
 | 边生成边读（自动朗读时读流式草稿，只读定型块） | ✅ |
+| 括号内容默认不读（可开关） | ✅ |
+| 路径 / 链接 / 代码分类计数 | ✅ |
 | 合成结果 PCM 缓存（哈希键 + LRU） | ✅ |
 | 桌面端麦克风授权（仅回环主框架） | ✅ |
 | 本地 TTS | ⚪ 未实现 |
@@ -140,6 +142,11 @@
 | UC-345 | 打开「回答完成后自动朗读」 | 一次运行结束后自动开始朗读本次新产生的那条回答 | 只有在本次会话内**观测到流式活动**后才启用，打开旧会话不会自说自话；答案卡是一次成型渲染的，排队延时只有 150 ms，只用于避开"卡片还在拼装"的瞬间 | `web/chat.js:queueAutoRead` |
 | UC-349 | 自动朗读排队时页面上还有旧回答 | 只读本次运行新出现的卡片，绝不读上一条 | 进入流式状态时快照已存在的卡片（`preRunWraps`），排队只在新卡片里选；同一卡片重复排队不重置计时器 | `web/chat.js` `preRunWraps`、`autoPending` |
 | UC-350 | 页面持续有无关 DOM 变动 | 排队计时不会被无限推迟 | 目标卡片与文本未变时直接返回，不 `clearTimeout` 重排 | `web/chat.js:queueAutoRead` |
+| UC-351 | 文本里有中文或英文括号 | 括号内内容不读 | `（）`、`()` 成对剔除，最多递归 4 层处理嵌套；开关打开后原样保留 | `web/shared.js:stripParenthetical` |
+| UC-352 | 一句话里出现多个路径 | 合并成「N 个文件」，不逐条念路径 | 行内代码先分类再聚合；同类之间允许「、，、；和与」分隔 | `web/shared.js:inlineCode`、`collapseSpans` |
+| UC-353 | 出现多个 URL / 多个长标识符 | 分别读「N 个链接」「N 处代码」 | 三类标记互不合并，按出现顺序各自计数 | 同上 |
+| UC-354 | 短文件名如 `chat.js` | 照读文件名 | 无路径分隔符且不超过 24 字符时保留原文 | `web/shared.js:inlineCode` |
+| UC-355 | 括号剔除后留下空格 | 不出现停顿怪句 | `tidy()` 清掉中文之间的空格与标点前的空格 | `web/shared.js:tidy` |
 
 ### 5.3 边生成边读（UC-36x）
 
@@ -189,6 +196,7 @@
 | UC-506 | 桌面端网页请求麦克风 | 仅主框架、仅回环源、仅 audio 授权；iframe 与外部源被拒 | `setPermissionCheckHandler` 与 `setPermissionRequestHandler` 同时把关，非 media 权限保持 Electron 默认行为 | `packaging/electron/speech-permissions.js` |
 | UC-507 | ASR 用 MiMo 但语言选了方言 | 返回错误而不是静默识别错 | MiMo ASR 只接受 auto/zh/en，其它取值由 `providers.transcribe` 拒绝 | `providers.py:transcribe` |
 | UC-508 | 保存「回答完成后自动朗读」 | 只接受布尔，字符串/数字被拒 | `merge_settings` 单独校验 `tts.autoRead`；默认 `False` | `configuration.py` |
+| UC-509 | 保存「朗读括号里的内容」 | 只接受布尔，默认关闭 | 默认 `readParenthetical=False`；关闭时合成前剔除括号内容 | `configuration.py`、`web/shared.js:stripParenthetical` |
 
 ---
 
@@ -233,4 +241,6 @@
 | UC-341~347 | `workspace/TempOutput/tswork/plan_play.py`（暂停/继续/从头/控件挂载与移除）、`plan_auto.py`（开关开/关两条路径） |
 | UC-361~367 | `workspace/TempOutput/tswork/parse_test.mjs`（前缀稳定：逐字追加时已读单元从不改写、半张表不读）、`live_test.py`（注入流式行，验证 1→2→保持→4 的增量与结束后不重复） |
 | UC-508 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`、`test_settings_default_persist_and_validate` |
+| UC-351~355 | `workspace/TempOutput/tswork/paren_test.mjs`：括号开/关、嵌套、中英文括号、多个路径合并、短文件名保留、版本号不被误判 |
+| UC-509 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`（含 `readParenthetical` 类型校验） |
 | 端到端 | `scripts/smoke_speech_input.py --audio <16k-mono-pcm16.wav>` |
