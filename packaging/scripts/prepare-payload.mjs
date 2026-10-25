@@ -68,6 +68,8 @@ const EXCLUDED_PACKAGES = [
   'pymupdf（PDF 渲染；保留 pdfplumber）',
   'markitdown（文档转 Markdown）',
   'sentry-sdk / coverage / pytest / pytest-asyncio / python-magic（开发与监控）',
+  'aiohttp 及其传递依赖（唯一使用者 sugar-bili-scroll，独立功能不随包分发）',
+  'aiofiles / cachetools / chardet / jinja2 / loguru / tiktoken / regex / markupsafe / win32-setctime（代码无引用）',
 ]
 
 // ------------------------------------------------------------------ helpers ---
@@ -329,8 +331,8 @@ function verifyImports() {
   const probe = [
     'import importlib, sys',
     'mods = ["fastapi","uvicorn","httpx","openai","PIL","jsonschema","mcp","lark_oapi",',
-    '        "openpyxl","pdfplumber","psutil","dotenv","yaml","orjson","aiohttp","loguru",',
-    '        "tokenizers","tiktoken","sse_starlette","multipart","jinja2","chardet","cachetools"]',
+    '        "openpyxl","pdfplumber","pypdf","psutil","dotenv","yaml","orjson",',
+    '        "tokenizers","sse_starlette","multipart"]',
     'missing = []',
     'for name in mods:',
     '    try: importlib.import_module(name)',
@@ -377,8 +379,39 @@ function ensureRipgrep() {
     log(`· 已把 ripgrep 复制到 Scripts：${path.relative(PAYLOAD, found[0])}`)
     return existing
   }
-  log('· 注意：未在依赖中找到 rg.exe，文件搜索工具可能降级')
-  return null
+  // pip 26 with --target does not materialize wheel `data/scripts` entries
+  // (ripgrep's RECORD points at ../../bin/rg.exe, which never appears), so pull
+  // the wheel once and extract the binary ourselves.
+  const staging = path.join(BUILD, '.ripgrep-wheel')
+  const spec = fs.readFileSync(REQUIREMENTS, 'utf8').split(/\r?\n/)
+    .map(line => line.trim())
+    .find(line => /^ripgrep(\s|[<>=!~]|$)/i.test(line)) || 'ripgrep'
+  try {
+    rmrf(staging)
+    fs.mkdirSync(staging, { recursive: true })
+    run(REPO_PYTHON, ['-B', '-m', 'pip', 'download', '--no-deps',
+      '--disable-pip-version-check', '--dest', staging, spec],
+      { cwd: PACKAGING, windowsHide: true, env: PYTHON_BUILD_ENV })
+    const extract = [
+      'import glob, pathlib, sys, zipfile',
+      'wheels = glob.glob(sys.argv[1] + "/*.whl")',
+      'if not wheels: sys.exit("no ripgrep wheel")',
+      'target = pathlib.Path(sys.argv[2])',
+      'with zipfile.ZipFile(wheels[0]) as archive:',
+      '    names = [n for n in archive.namelist() if n.lower().endswith("rg.exe")]',
+      '    if not names: sys.exit("no rg.exe in wheel")',
+      '    target.write_bytes(archive.read(names[0]))',
+    ].join('\n')
+    run(REPO_PYTHON, ['-B', '-c', extract, staging, existing],
+      { cwd: PACKAGING, windowsHide: true, env: PYTHON_BUILD_ENV })
+    log('· 已从 ripgrep wheel 提取 rg.exe 到 Scripts')
+    return existing
+  } catch (error) {
+    log(`· 注意：无法提取 ripgrep（${error.message}）；文件搜索会退回 Python 扫描`)
+    return null
+  } finally {
+    rmrf(staging)
+  }
 }
 
 function dependenciesList() {
