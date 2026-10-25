@@ -92,6 +92,13 @@
 - `packaging/requirements.desktop.txt` 加入 `agent-client-protocol==0.12.1`，载荷自检增加 `from acp.schema import HttpMcpServer, McpServerStdio`。
 - 重跑全量载荷：6,640 文件 / 229.8 MB / **72 个依赖**；`smoke-payload` 健康检查通过，日志不再出现插件安装失败。
 
+### 2.12 飞书 SDK 改为按需安装、删除重复词表
+
+- 核心的飞书远程控制实现留在 `app/remote_control/transports/feishu/`，`feishu-transport` 插件只负责启停；`lark_oapi` 在 `FeishuSDKTransport.build()` 内懒加载，`FEISHU_ENABLED` 默认关闭。安装包此前无条件内置整个 SDK（`lark_oapi.zip` 45.4 MB + `pycryptodome` 4.5 MB + `websockets` + `requests-toolbelt`）。
+- `requirements.desktop.txt` 移除 `lark-oapi`；`archive-runtime.py` 在 SDK 不存在时返回 `sdk: null`，`runtime-archives.cjs` 允许空 SDK 并拒绝残留归档；自检仅在检测到 `lark_oapi` 时校验 zip。飞书指南补充桌面版手动安装命令。
+- `app/tools/deepseek_v3_tokenizer/` 下重复的嵌套副本（含 7.5 MB `tokenizer.json`）无任何引用，删除；`agent_tokenizer.py` 只读顶层 `tokenizer.json`。
+- 重跑全量载荷：**6,239 文件 / 171.6 MB / 68 个依赖**（-58.2 MB）；`runtime-archives.json` 为 `{"sdk": null, "pptIcons": null}`，`smoke-payload` 健康检查通过。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

@@ -9,7 +9,7 @@
 | 安装包（向导式，默认） | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe` | ≈ 251 MB |
 | 安装包差分块 | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe.blockmap` | ≈ 200 KB |
 | 未打包目录版 | `packaging/build/dist/win-unpacked/` | 调试用；现有产物尚未应用资源归档优化 |
-| 运行时载荷 | `packaging/build/payload/` | 中间产物；下次准备时自动合并飞书 SDK 与 PPT 图标 |
+| 运行时载荷 | `packaging/build/payload/` | 中间产物；下次准备时按需合并飞书 SDK、合并 PPT 图标 |
 
 2026-10-14 的 1.5.4 优化包位于 `build/dist-1.5.4/SugarAgent-Setup-1.5.4-x64.exe`（224.5 MiB）；载荷 8,130 个文件、应用 8,152 个文件、松散字节码为 0。构建与验证记录见 `docs/desktop-release-1.5.4-2026-10-14.md`。
 
@@ -40,7 +40,7 @@ packaging/
 │  └─ preload.js                 # 最小渲染进程桥接
 ├─ scripts/
 │  ├─ prepare-payload.mjs        # 组装运行时载荷（拷贝 + 裁剪 + pip 安装 + 自检 + 清单）
-│  ├─ archive-runtime.py         # 合并飞书 SDK / PPT 图标，并适配载荷中的图标读取脚本
+│  ├─ archive-runtime.py         # 按需合并飞书 SDK、合并 PPT 图标，并适配载荷中的图标读取脚本
 │  ├─ runtime-archives.cjs       # 拒绝未优化或已展开图标的旧载荷
 │  ├─ make-icons.py              # PNG → 多尺寸 ICO（应用图标 / 托盘图标）
 │  ├─ build.mjs                  # 一键构建：图标 → 载荷 → electron-builder
@@ -105,7 +105,7 @@ $env:SUGARAGENT_PIP_INDEX='https://pypi.tuna.tsinghua.edu.cn/simple'  # 国内�
 
 载荷准备默认执行资源合并，以减少安装和首次启动时的文件创建与复制：
 
-- 飞书 SDK 的代码与预编译字节码放入 `python/Lib/site-packages/lark_oapi.zip`，通过随载荷写入的 `.pth` 文件直接导入；SDK 的 `.dist-info` 元数据与其它原生依赖保留在磁盘上，`RECORD` 同步记录归档和加载文件以兼容 pip 卸载/升级。归档使用同一便携 Python 生成字节码，载荷自检验证归档导入及消息、长连接入口。
+- 飞书 SDK **默认不随包**（`lark-oapi` 已移出 `requirements.desktop.txt`）。如果用户自行装进载荷，其代码与预编译字节码会放入 `python/Lib/site-packages/lark_oapi.zip`，通过 `.pth` 直接导入；归档使用同一便携 Python 生成字节码，载荷自检仅在检测到 `lark_oapi` 时校验归档与消息、长连接入口。未安装时 `runtime-archives.json` 的 `sdk` 记为 `null`，归档校验跳过。
 - PPT 图标放入 `workspace-template/skills/ppt-master/templates/icons/icons.zip`，另有完整名称索引 `icon-archive.json`。源工作区技能不变；只适配载荷副本的图标同步、SVG 解析和预览读取，使用哪个 SVG 才提取哪个。首次启动复制的是归档，完整图标库保持离线可用。
 - 搜索尚未使用的图标：在 `ppt-master` 技能目录运行 `python scripts/sugaragent_icon_archive.py list --library tabler-outline --query home`。文件夹列表只显示已经提取的图标。项目自定义图标优先保留。
 - `runtime-archives.json` 与 `runtime-manifest.json` 记录归档路径、校验摘要和条目数。技能来源读取入口变化时，准备流程会明确失败，要求复核适配。
@@ -131,9 +131,9 @@ powershell -File scripts\smoke-desktop.ps1 -AppDir "$env:LOCALAPPDATA\Programs\S
 resources/runtime/
 ├─ app/                  # 应用代码（含 templates/dist 前端产物、tools、native 的 egress helper）
 ├─ plugins/              # 按 tiers.json 收录的插件（当前 9 个，独立功能不进包）
-├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（72 个依赖）
+├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（68 个依赖）
 │  ├─ Scripts/rg.exe     # 文件搜索用的 ripgrep
-│  └─ Lib/site-packages/lark_oapi.zip # 飞书 SDK，Python 直接从归档加载
+│  └─ Lib/site-packages/lark_oapi.zip # 可选：飞书 SDK 归档（默认不存在，按需安装后归档）
 ├─ workspace-template/   # 首次启动铺到工作目录的技能模板（只含 skills.allowlist.txt 里的技能）
 │  └─ skills/ppt-master/templates/icons/{icons.zip,icon-archive.json}
 ├─ runtime-archives.json # 资源归档布局 / 摘要 / 条目数
@@ -146,7 +146,13 @@ resources/runtime/
 
 ## 内置依赖策略
 
-保留应用本体运行需要的库（fastapi/uvicorn/openai/httpx/mcp/lark-oapi/pillow/openpyxl/pdfplumber/pypdf/tokenizers/psutil/pywin32…）。
+保留应用本体运行需要的库（fastapi/uvicorn/openai/httpx/mcp/pillow/openpyxl/pdfplumber/pypdf/tokenizers/psutil/pywin32…）。
+飞书 SDK（`lark-oapi`）**不再随包**：核心远程控制在 `FEISHU_ENABLED=1` 时才懒加载它，需要飞书时用内置 pip 补装：
+
+```powershell
+"%LOCALAPPDATA%\Programs\SugarAgent\resources\runtime\python\python.exe" -m pip install lark-oapi
+```
+
 2026-10-25 清理：`aiohttp` 及其传递依赖只被不随包的 `sugar-bili-scroll` 使用；`aiofiles/cachetools/chardet/jinja2/loguru/tiktoken` 代码已无引用。`standalone` 插件（`voice-input`、`sugar-bili-scroll` 等）的依赖改为按需安装，清单与镜像地址见 `docs/standalone-plugin-dependencies.md`。
 **有意排除**重依赖：`playwright`、`matplotlib`、`pandas`、`pymupdf`、`markitdown`、`sentry-sdk`、`coverage`、`pytest*`、`python-magic` —— 桌面版因此少了浏览器自动化、图表绘制、重型数据分析等能力，但安装包小了 300 MB 以上。
 

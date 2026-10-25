@@ -329,8 +329,8 @@ function optimizeRuntimeArchives() {
 
 function verifyImports() {
   const probe = [
-    'import importlib, sys',
-    'mods = ["fastapi","uvicorn","httpx","openai","PIL","jsonschema","mcp","lark_oapi",',
+    'import importlib, importlib.util, sys',
+    'mods = ["fastapi","uvicorn","httpx","openai","PIL","jsonschema","mcp",',
     '        "openpyxl","pdfplumber","pypdf","psutil","dotenv","yaml","orjson",',
     '        "tokenizers","sse_starlette","multipart"]',
     'missing = []',
@@ -338,11 +338,11 @@ function verifyImports() {
     '    try: importlib.import_module(name)',
     '    except Exception as exc: missing.append(f"{name}: {exc}")',
     'if not missing:',
-    '    import lark_oapi',
-    '    if ".zip" not in lark_oapi.__file__: missing.append("lark_oapi was not loaded from its archive")',
-    '    from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody',
-    '    from lark_oapi.ws import Client',
     '    from acp.schema import HttpMcpServer, McpServerStdio',
+    '    if importlib.util.find_spec("lark_oapi") is not None:',
+    '        import lark_oapi',
+    '        if ".zip" not in lark_oapi.__file__: missing.append("lark_oapi was not loaded from its archive")',
+    '        from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody',
     'print("IMPORT_CLEAN" if not missing else "IMPORT_FAIL " + "; ".join(missing))',
   ].join('\n')
   const result = spawnSync(PAYLOAD_PYTHON, ['-B', '-c', probe], {

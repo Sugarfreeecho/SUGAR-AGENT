@@ -10,13 +10,17 @@ function assertRuntimeArchives(payload, { checkBytecode = true } = {}) {
   const fail = message => { throw new Error(`${message}；请先重新准备载荷（npm run payload:fast 或 npm run payload）`) }
   if (!fs.existsSync(report)) fail('载荷尚未进行 SDK / PPT 图标归档优化')
   const info = JSON.parse(fs.readFileSync(report, 'utf8'))
-  if (info.schemaVersion !== 1 || !info.sdk) fail('运行时归档清单不完整')
+  if (info.schemaVersion !== 1) fail('运行时归档清单不完整')
   const sdk = path.join(payload, 'python', 'Lib', 'site-packages')
   const zip = path.join(sdk, 'lark_oapi.zip')
   const pth = path.join(sdk, 'sugaragent-runtime-archives.pth')
-  if (!fs.existsSync(zip) || !fs.existsSync(pth) ||
-      !fs.readFileSync(pth, 'utf8').split(/\r?\n/).includes('lark_oapi.zip') ||
-      fs.existsSync(path.join(sdk, 'lark_oapi'))) fail('飞书 SDK 归档或加载路径不正确')
+  if (info.sdk) {
+    if (!fs.existsSync(zip) || !fs.existsSync(pth) ||
+        !fs.readFileSync(pth, 'utf8').split(/\r?\n/).includes('lark_oapi.zip') ||
+        fs.existsSync(path.join(sdk, 'lark_oapi'))) fail('飞书 SDK 归档或加载路径不正确')
+  } else if (fs.existsSync(zip) || fs.existsSync(pth) || fs.existsSync(path.join(sdk, 'lark_oapi'))) {
+    fail('载荷不含飞书 SDK，但仍残留归档或加载路径')
+  }
   const skill = path.join(payload, 'workspace-template', 'skills', 'ppt-master')
   if (fs.existsSync(skill)) {
     const icons = path.join(skill, 'templates', 'icons')

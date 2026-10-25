@@ -111,7 +111,10 @@ def archive_sdk(payload: Path) -> dict:
     elif target.is_file():
         replaced = None
     else:
-        raise RuntimeError("Missing lark_oapi dependency in desktop payload")
+        # lark-oapi is optional: Feishu remote control imports it lazily and the
+        # desktop payload no longer bundles it. Nothing to archive.
+        (site / PTH_NAME).unlink(missing_ok=True)
+        return None
     with zipfile.ZipFile(target) as archive:
         names = archive.namelist()
         if ("lark_oapi/__init__.pyc" not in names or archive.testzip() is not None
