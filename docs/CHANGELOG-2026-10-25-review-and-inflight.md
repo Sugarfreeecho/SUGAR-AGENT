@@ -63,3 +63,10 @@
 | `f8ffc4a` | test(voice): cover microphone and read-aloud browser integration |
 | `8c36076` | fix(frontend): render optimistic attachment previews immediately |
 | This commit | docs(review): record verified fixes and the grouped delivery |
+
+## 技能目录重命名与手册扩写（2026-10-25）
+
+- 原 use-myagent-features 重命名为 sugar-agent-manual，正文与描述统一改用 SugarAgent 品牌；packaging/skills.allowlist.txt 同步。
+- 手册从 4 篇扩到 8 篇参考 + 路由式 SKILL.md：产品概览、前端功能地图、内置工具、插件与技能、设置中心（10 个分区 + 环境变量分组）、Goal/Hooks/MCP、报障排障、Agent 自我认知。
+- 事实来源：README.md、pp/.env.example、plugins/*/plugin.json、pp/templates/static/settings/sections_*.js、docs/tool-disclosure.md、docs/tool_result_status.md。
+- 校验：frontmatter 可解析（name/description），8 个参考链接全部存在；gent_tools.discover_skills() 返回新名称，旧名称不再出现。

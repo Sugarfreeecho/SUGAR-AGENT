@@ -11,5 +11,5 @@ docx
 pdf
 pptx
 skill-creator
-use-myagent-features
+sugar-agent-manual
 xlsx
