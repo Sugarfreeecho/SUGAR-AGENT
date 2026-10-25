@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SugarAgent · 首次配置</title>
+<title>SugarAgent · 欢迎</title>
 <link rel="icon" type="image/png" href="/assets/sugar-logo.png">
 <link rel="apple-touch-icon" href="/assets/sugar-logo.png">
 <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
@@ -12,34 +12,24 @@
   :root {
     --space-bg: #1e1e2e;
     --surface-glass: rgba(22, 22, 36, 0.96);
-    --surface-glass2: rgba(40, 40, 60, 0.94);
     --surface-glass3: rgba(62, 63, 86, 0.78);
     --border-glass: rgba(205, 214, 244, 0.055);
     --border-accent: rgba(203, 166, 247, 0.22);
     --text-primary: #cdd6f4;
     --text-secondary: #a6adc8;
     --text-tertiary: #6c7086;
-    --accent-gradient: linear-gradient(135deg, #b4befe 0%, #cba6f7 50%, #dac2f0 100%);
-    --accent-glow: rgba(203, 166, 247, 0.28);
     --accent-brand-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%);
-    --accent-brand-glow: rgba(108, 92, 231, 0.28);
-    --shadow-brand-glow: 0 4px 24px rgba(108, 92, 231, 0.18);
-    --border-brand-accent: rgba(124, 111, 247, 0.22);
-    --green-accent: #a6e3a1;
     --red-accent: #f38ba8;
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    --mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, 'Microsoft YaHei', monospace;
     --radius-sm: 8px;
     --radius-md: 14px;
     --radius-lg: 20px;
     --shadow-soft: 0 10px 44px rgba(0,0,0,0.38);
-    --shadow-glow: 0 4px 24px rgba(203, 166, 247, 0.18);
     --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   }
   :root.theme-light {
     --space-bg: #e4e9f2;
     --surface-glass: rgba(255, 255, 255, 0.93);
-    --surface-glass2: rgba(255, 255, 255, 0.98);
     --surface-glass3: rgba(242, 245, 250, 0.96);
     --border-glass: rgba(0, 0, 0, 0.09);
     --border-accent: rgba(99, 102, 241, 0.38);
@@ -47,8 +37,6 @@
     --text-secondary: #282a3a;
     --text-tertiary: #484a5e;
     --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.1), 0 2px 10px rgba(0, 0, 0, 0.04);
-    --shadow-glow: 0 4px 22px rgba(99, 102, 241, 0.16);
-    --accent-glow: rgba(99, 102, 241, 0.18);
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -65,18 +53,12 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
-
   button, input, select, textarea { font-family: var(--sans); }
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 8px; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
-  ::-webkit-scrollbar-corner { background: transparent; }
-  ::-webkit-scrollbar-button { width: 0; height: 0; display: none; }
   :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(15, 23, 42, 0.08); border-radius: 8px; }
-  :root.theme-light ::-webkit-scrollbar-thumb:hover,
-  :root.theme-light ::-webkit-scrollbar-thumb:active { background: rgba(15, 23, 42, 0.22); }
 
   .bg-grid {
     position: fixed; inset: 0;
@@ -104,10 +86,15 @@
 
   .container {
     position: relative; z-index: 1;
-    width: 100%; max-width: 520px;
+    width: 100%; max-width: 480px;
     padding: 1.25rem;
     animation: fadeUp 0.55s var(--ease-out-expo);
   }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
   .wizard-language-toggle {
     position: absolute;
     top: 1rem;
@@ -130,67 +117,43 @@
   .wizard-language-toggle:hover { color: var(--text-primary); border-color: var(--border-accent); background: rgba(99,102,241,.12); transform: translateY(-1px); }
   .wizard-language-toggle__icon { font-size: .82rem; line-height: 1; letter-spacing: -.12em; }
   :root.theme-light .wizard-language-toggle { background: rgba(0,0,0,.035); }
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(14px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
 
   .card {
     position: relative;
     background: var(--surface-glass3);
     border: 1px solid var(--border-glass);
     border-radius: var(--radius-lg);
-    padding: 2.5rem 2rem 2rem;
+    padding: 2.75rem 2rem 2rem;
     backdrop-filter: blur(22px);
     -webkit-backdrop-filter: blur(22px);
     box-shadow: var(--shadow-soft);
+    text-align: center;
   }
-  :root.theme-light .card {
-    box-shadow: var(--shadow-soft), 0 1px 0 rgba(255,255,255,0.8) inset;
-  }
+  :root.theme-light .card { box-shadow: var(--shadow-soft), 0 1px 0 rgba(255,255,255,0.8) inset; }
 
-  .logo { text-align: center; margin-bottom: 2rem; }
+  .logo { margin-bottom: 1.9rem; }
   .logo-icon {
-    width: 56px;
-    height: 56px;
+    width: 56px; height: 56px;
     border-radius: var(--radius-md);
-    background: transparent;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 0.85rem;
-    box-shadow: none;
     user-select: none;
     -webkit-user-select: none;
     overflow: hidden;
   }
-  .logo-icon img {
-    width: 100%;
-    height: 100%;
-    display: block;
-    user-select: none;
-    -webkit-user-select: none;
-    pointer-events: none;
-  }
+  .logo-icon img { width: 100%; height: 100%; display: block; pointer-events: none; }
   .logo h1 {
     font-size: 1.35rem;
     font-weight: 800;
-    letter-spacing: 0;
-    font-family: var(--sans);
     margin-bottom: 0.25rem;
     background: linear-gradient(135deg, #f0eff5 0%, #c8c6d6 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
     user-select: none;
-    -webkit-user-select: none;
     cursor: default;
-    display: block;
-    min-width: 0;
-    max-width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: clip;
   }
   :root.theme-light .logo h1 {
     background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
@@ -198,1029 +161,200 @@
     background-clip: text;
     -webkit-text-fill-color: transparent;
   }
-  .logo p {
-    color: var(--text-secondary);
-    font-size: 0.74rem;
-    font-weight: 500;
-    line-height: 1.18;
-  }
   .brand-sub {
     display: flex;
     flex-direction: column;
     gap: 0.06rem;
-    margin-top: 0.1rem;
     color: #7f8699;
     letter-spacing: 0.01em;
     line-height: 1.12;
     font-size: 0.56rem;
-    font-family: var(--sans);
     user-select: none;
-    -webkit-user-select: none;
     cursor: default;
   }
-  .brand-sub-line {
-    display: block;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
-  }
-  .brand-sub-line--en {
-    font-size: inherit;
-    letter-spacing: 0.03em;
-  }
-  .brand-sub-line--zh {
-    font-size: inherit;
-  }
-  .wizard-intro {
-    margin: -0.55rem 0 1.7rem;
-    text-align: center;
-    font-size: 1.05rem;
+  .brand-sub-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .welcome-title {
+    font-size: 1.06rem;
     font-weight: 800;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.01em;
+    margin-bottom: 0.55rem;
+  }
+  .welcome-sub {
     color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.65;
+    margin: 0 auto 1.75rem;
+    max-width: 21rem;
   }
 
-  .form-row-2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 0.85rem;
-    margin-bottom: 1.1rem;
-    align-items: start;
-  }
-  .form-row-2 .form-group { margin-bottom: 0; }
-  .model-hint-below {
-    margin-bottom: 1.1rem;
-    margin-top: -0.35rem;
-  }
-  @media (max-width: 480px) {
-    .form-row-2 { grid-template-columns: 1fr; gap: 0; }
-    .form-row-2 .form-group:first-child { margin-bottom: 1.1rem; }
-    .model-row { grid-template-columns: 1fr; }
-    .model-row__side, .model-row__meta { text-align: left; }
-    .model-row__limits { white-space: normal; }
-  }
-
-  .form-group { margin-bottom: 1.1rem; }
-  .form-group label {
-    display: block;
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: 0.35rem;
-    letter-spacing: 0.02em;
-  }
-  .form-group label .required { color: var(--red-accent); margin-left: 2px; font-weight: 900; }
-
-  .form-group input,
-  .form-group select {
-    width: 100%;
-    padding: 0.65rem 0.85rem;
-    background: var(--surface-glass2);
-    border: 1px solid var(--border-glass);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: 0.88rem;
-    font-family: var(--sans);
-    outline: none;
-    transition: border-color 0.2s var(--ease-out-expo), box-shadow 0.2s var(--ease-out-expo);
-  }
-  :root.theme-light .form-group input,
-  :root.theme-light .form-group select {
-    background: #fff;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-  }
-  .form-group input:focus,
-  .form-group select:focus {
-    border-color: rgba(108, 92, 231, 0.45);
-    box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12), var(--shadow-brand-glow);
-  }
-  :root.theme-light .form-group input:focus,
-  :root.theme-light .form-group select:focus {
-    border-color: rgba(99, 102, 241, 0.45);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.14);
-  }
-  .form-group input.autofill-flash,
-  .form-group select.autofill-flash {
-    border-color: rgba(108, 92, 231, 0.72);
-    box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.2), var(--shadow-brand-glow);
-  }
-  .form-group input.model-name-invalid {
-    border-color: rgba(243,139,168,0.72) !important;
-    box-shadow: 0 0 0 3px rgba(243,139,168,0.16) !important;
-  }
-  :root.theme-light .form-group input.autofill-flash,
-  :root.theme-light .form-group select.autofill-flash {
-    border-color: rgba(99, 102, 241, 0.64);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
-  }
-  .form-group input::placeholder { color: var(--text-tertiary); opacity: 0.65; }
-  .select-wrap {
-    position: relative;
-    display: block;
-  }
-  .select-wrap select {
-    cursor: pointer;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    appearance: none;
-    background-image: none;
-    padding-right: 2rem;
-  }
-  .select-wrap select::-ms-expand { display: none; }
-  .select-wrap::after {
-    content: '';
-    position: absolute;
-    right: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 12px;
-    height: 12px;
-    pointer-events: none;
-    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239898b8' d='M6 8L1 3h10z'/%3E%3C/svg%3E") no-repeat center / contain;
-  }
-  :root.theme-light .select-wrap::after {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23484a5e' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-  }
-  .form-group select option {
-    background-color: var(--surface-glass2);
-    color: var(--text-primary);
-  }
-  :root.theme-light .form-group select option {
-    background-color: #fff;
-    color: var(--text-primary);
-  }
-
-  .form-hint {
-    font-size: 0.72rem;
-    color: var(--text-tertiary);
-    margin-top: 0.3rem;
-    line-height: 1.45;
-  }
-  .form-hint a { color: #9388fa; text-decoration: none; font-weight: 500; }
-  .form-hint a:hover { text-decoration: underline; }
-  :root.theme-light .form-hint a { color: #4338ca; }
-
-  .model-discovery {
-    margin: -0.35rem 0 1.1rem;
-  }
-  .model-discovery-row {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    flex-wrap: wrap;
-  }
-  .model-fetch-btn {
-    border: 1px solid var(--border-glass);
-    background: rgba(255,255,255,0.045);
-    color: var(--text-secondary);
-    border-radius: var(--radius-sm);
-    padding: 0.52rem 0.8rem;
-    font-family: var(--sans);
-    font-size: 0.74rem;
-    font-weight: 700;
-    cursor: pointer;
-  }
-  .model-fetch-btn:hover:not(:disabled) {
-    border-color: rgba(99,102,241,0.36);
-    color: var(--text-primary);
-    background: rgba(99,102,241,0.1);
-  }
-  .model-fetch-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-  .model-discovery-status {
-    flex: 1;
-    min-width: 12rem;
-    color: var(--text-tertiary);
-    font-size: 0.72rem;
-    line-height: 1.4;
-  }
-  .model-list {
-    display: grid;
-    gap: 0.45rem;
-    margin-top: 0.65rem;
-    max-height: 12rem;
-    overflow: auto;
-    padding-right: 0.15rem;
-  }
-  .model-row {
-    width: 100%;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.55rem;
-    padding: 0.56rem 0.65rem;
-    border: 1px solid var(--border-glass);
-    border-radius: var(--radius-sm);
-    background: rgba(255,255,255,0.04);
-    color: var(--text-primary);
-    text-align: left;
-    cursor: pointer;
-    font-family: var(--sans);
-  }
-  .model-row:hover {
-    border-color: rgba(99,102,241,0.36);
-    background: rgba(99,102,241,0.1);
-  }
-  .model-row.is-selected,
-  .model-row--empty.is-selected {
-    border-color: rgba(108, 92, 231, 0.68);
-    background: rgba(108, 92, 231, 0.13);
-    box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.14), var(--shadow-brand-glow);
-  }
-  :root.theme-light .model-row.is-selected,
-  :root.theme-light .model-row--empty.is-selected {
-    border-color: rgba(99, 102, 241, 0.58);
-    background: rgba(99, 102, 241, 0.1);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.14);
-  }
-  .model-row--empty {
-    cursor: default;
-    color: var(--text-tertiary);
-  }
-  .model-row__main { min-width: 0; }
-  .model-row__id {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--mono);
-    font-size: 0.76rem;
-    font-weight: 700;
-  }
-  .model-row__side { align-self: center; text-align: right; }
-  .model-row__meta {
-    display: block;
-    margin-bottom: 0.14rem;
-    color: var(--text-tertiary);
-    font-size: 0.66rem;
-    text-align: right;
-  }
-  .model-row__limits {
-    display: block;
-    color: var(--text-secondary);
-    font-family: var(--mono);
-    font-size: 0.66rem;
-    white-space: nowrap;
-  }
-  :root.theme-light .model-fetch-btn,
-  :root.theme-light .model-row {
-    background: rgba(0,0,0,0.025);
-    border-color: rgba(0,0,0,0.1);
-  }
-  @media (max-width: 480px) {
-    .model-row { grid-template-columns: 1fr; }
-    .model-row__side, .model-row__meta { text-align: left; }
-    .model-row__limits { white-space: normal; }
-  }
-
+  .welcome-actions { display: flex; flex-direction: column; gap: 0.6rem; }
   .btn {
     width: 100%;
-    padding: 0.75rem;
-    border: none;
+    padding: 0.78rem;
     border-radius: var(--radius-sm);
     font-size: 0.92rem;
     font-weight: 700;
-    font-family: var(--sans);
     cursor: pointer;
-    margin-top: 0.35rem;
-    transition: transform 0.25s var(--ease-out-expo), box-shadow 0.25s var(--ease-out-expo);
+    transition: transform 0.25s var(--ease-out-expo), box-shadow 0.25s var(--ease-out-expo),
+      color .18s ease, border-color .18s ease, background .18s ease;
   }
   .btn-primary {
+    border: none;
     background: var(--accent-brand-gradient);
     color: #fff;
     box-shadow: 0 4px 18px rgba(108, 92, 231, 0.35);
   }
-  .btn-primary:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 26px rgba(108, 92, 231, 0.42);
-  }
+  .btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 26px rgba(108, 92, 231, 0.42); }
   .btn-primary:active:not(:disabled) { transform: translateY(0); }
-  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-
-  .status {
-    display: none;
-    padding: 0.65rem 0.85rem;
-    border-radius: var(--radius-sm);
-    font-size: 0.82rem;
-    margin-bottom: 1rem;
-    text-align: center;
-    font-weight: 500;
+  .btn-ghost {
+    background: rgba(255,255,255,.045);
+    border: 1px solid var(--border-glass);
+    color: var(--text-secondary);
   }
-  .status.error {
-    display: block;
+  .btn-ghost:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-accent); background: rgba(99,102,241,.12); }
+  :root.theme-light .btn-ghost { background: rgba(0,0,0,.03); color: var(--text-secondary); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn:focus-visible { outline: 2px solid var(--border-accent); outline-offset: 2px; }
+
+  .welcome-error {
+    margin-top: 1rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: var(--radius-sm);
     background: rgba(243,139,168,0.12);
     border: 1px solid rgba(243,139,168,0.28);
     color: var(--red-accent);
+    font-size: 0.78rem;
   }
-  .status.success {
-    display: block;
-    background: rgba(166,227,161,0.12);
-    border: 1px solid rgba(166,227,161,0.26);
-    color: var(--green-accent);
-  }
-  :root.theme-light .status.error {
-    background: rgba(254,226,226,0.85);
-    border-color: rgba(243,139,168,0.35);
-    color: #991b1b;
-  }
-  :root.theme-light .status.success {
-    background: rgba(209,250,229,0.9);
-    border-color: rgba(166,227,161,0.35);
-    color: #065f46;
-  }
-
-  .wizard-status-help {
-    display: none;
-    margin-top: 8px;
-    margin-bottom: 14px;
-    font-size: 11px;
-    color: var(--text-tertiary);
-    text-align: center;
-    line-height: 1.45;
-  }
-  .wizard-status-help.is-visible { display: block; }
-
-  .footer {
-    text-align: center;
-    margin-top: 1.35rem;
-    font-size: 0.72rem;
-    color: var(--text-tertiary);
-  }
-  .footer-advanced-link {
-    color: var(--text-secondary);
-    text-decoration: none;
-    border-bottom: 1px dashed rgba(124, 111, 247, 0.45);
-    transition: color 0.18s, border-color 0.18s;
-    font-weight: 600;
-  }
-  .footer-advanced-link:hover {
-    color: #c7d2fe;
-    border-bottom-color: rgba(165,180,252,0.55);
-  }
-  :root.theme-light .footer-advanced-link:hover {
-    color: var(--text-primary);
-    border-bottom-color: rgba(99,102,241,0.45);
-  }
-
-  @media (max-width: 480px) {
-    .card { padding: 1.75rem 1.25rem 1.5rem; }
-  }
-
-  /* ═══ 确认弹窗（与设计系统一致） ═══ */
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 1rem;
-    background: rgba(10, 10, 20, 0.55);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    opacity: 0;
-    transition: opacity 0.22s var(--ease-out-expo);
-  }
-  .modal-overlay[hidden] { display: none; }
-  .modal-overlay.is-open { opacity: 1; }
-  .modal-card {
-    width: min(92vw, 22rem);
-    background: var(--surface-glass2);
-    border: 1px solid var(--border-glass);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-soft);
-    padding: 1.5rem 1.4rem 1.2rem;
-    text-align: center;
-    transform: translateY(10px) scale(0.97);
-    transition: transform 0.25s var(--ease-out-expo);
-  }
-  .modal-overlay.is-open .modal-card {
-    transform: translateY(0) scale(1);
-  }
-  .modal-icon {
-    width: 3rem;
-    height: 3rem;
-    margin: 0 auto 0.85rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    font-size: 1.5rem;
-    color: #f9c74f;
-    background: rgba(249, 199, 79, 0.12);
-    border: 1px solid rgba(249, 199, 79, 0.28);
-  }
-  .modal-title {
-    font-size: 1rem;
-    font-weight: 800;
-    color: var(--text-primary);
-    margin-bottom: 0.5rem;
-  }
-  .modal-desc {
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    line-height: 1.6;
-    margin-bottom: 1.15rem;
-  }
-  .modal-actions {
-    display: flex;
-    gap: 0.6rem;
-  }
-  .modal-btn {
-    flex: 1;
-    padding: 0.6rem 0;
-    border-radius: var(--radius-sm);
-    font-family: var(--sans);
-    font-size: 0.8rem;
-    font-weight: 700;
-    cursor: pointer;
-    border: 1px solid var(--border-glass);
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--text-secondary);
-    transition: all 0.2s var(--ease-out-expo);
-  }
-  .modal-btn:hover {
-    color: var(--text-primary);
-    border-color: rgba(99, 102, 241, 0.36);
-    background: rgba(99, 102, 241, 0.1);
-  }
-  .modal-btn-ok {
-    border: none;
-    background: var(--accent-brand-gradient);
-    color: #fff;
-    box-shadow: 0 4px 16px rgba(108, 92, 231, 0.32);
-  }
-  .modal-btn-ok:hover {
-    background: var(--accent-brand-gradient);
-    color: #fff;
-    filter: brightness(1.08);
-  }
+  :root.theme-light .welcome-error { background: rgba(254,226,226,0.85); border-color: rgba(243,139,168,0.35); color: #991b1b; }
 </style>
 </head>
 <body>
 <div class="bg-grid" aria-hidden="true"></div>
 <div class="bg-glow" aria-hidden="true"></div>
 
-<div class="container">
+<main class="container">
   <div class="card">
-    <button type="button" id="wizard-language-toggle" class="wizard-language-toggle" aria-label="切换为英文" title="切换语言">
+    <button type="button" id="welcome-language-toggle" class="wizard-language-toggle" aria-label="切换为英文" title="切换语言">
       <span class="wizard-language-toggle__icon" aria-hidden="true">中/EN</span>
     </button>
     <div class="logo">
       <div class="logo-icon" aria-hidden="true"><img src="/assets/sugar-logo.png" alt="" draggable="false"></div>
       <h1>SugarAgent</h1>
-      <p class="brand-sub" title="Self-Upgrade General Agent - 自优化通用智能平台">
+      <p class="brand-sub">
         <span class="brand-sub-line brand-sub-line--en">Self-Upgrade General Agent</span>
         <span class="brand-sub-line brand-sub-line--zh">自优化通用智能平台</span>
       </p>
     </div>
-    <p class="wizard-intro">开始配置你的首个 模型API</p>
 
-    <div id="status" class="status"></div>
-    <div id="wizard-status-help" class="wizard-status-help" aria-live="polite">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
+    <h2 class="welcome-title" data-i18n="title">欢迎使用 SugarAgent</h2>
+    <p class="welcome-sub" data-i18n="sub">先配置一个模型 API 就能开始对话，之后可随时在设置里添加或切换模型。</p>
 
-    <form id="configForm">
-      <div class="form-group" id="baseUrlGroup">
-        <label>API BASE URL <span class="required">*</span></label>
-        <input type="text" id="baseUrl" placeholder="http://models.ascend.huawei.com/v1" autocomplete="off" aria-required="true">
-      </div>
-
-      <div class="form-group" id="apiKeyGroup">
-        <label>API Key <span class="required">*</span></label>
-        <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
-        <div class="form-hint">
-          DeepSeek: <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a><br>
-          Opencode Go: <a href="https://opencode.ai/go?ref=VXCGNZ7Y3R" target="_blank" rel="noopener">opencode.ai/go</a>
-        </div>
-      </div>
-
-      <div class="model-discovery" aria-label="模型发现">
-        <div class="model-discovery-row">
-          <button type="button" class="model-fetch-btn" id="modelFetchBtn">获取模型列表</button>
-          <button type="button" class="model-fetch-btn" id="modelContextBtn">获取上下文长度</button>
-          <span class="model-discovery-status" id="modelDiscoveryStatus"></span>
-        </div>
-        <div id="modelDiscoveryList" class="model-list"></div>
-      </div>
-
-      <div class="form-row-2">
-        <div class="form-group">
-          <label for="llmProvider">API 类型 <span class="required">*</span></label>
-          <div class="select-wrap">
-            <select id="llmProvider">
-              <option value="openai-compatible">OpenAI Chat Completions</option>
-              <option value="openai-responses">OpenAI Responses</option>
-              <option value="anthropic">Anthropic Messages</option>
-            </select>
-          </div>
-        </div>
-        <div class="form-group">
-          <label>模型名称 <span class="required">*</span></label>
-          <input type="text" id="modelName" placeholder="deepseek-v4-flash" autocomplete="off">
-        </div>
-      </div>
-      <div class="form-hint model-hint-below" id="modelHint">使用 OpenAI SDK 兼容接口，可自行填写模型名称或从上方列表选择。</div>
-
-      <div class="form-row-2">
-        <div class="form-group">
-          <label>上下文门限（tokens）</label>
-          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="119808">
-        </div>
-        <div class="form-group">
-          <label>单次回复上限（tokens）</label>
-          <input type="text" id="maxOutputTokens" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="8192">
-        </div>
-      </div>
-
-      <button type="submit" class="btn btn-primary" id="submitBtn">
-        保存配置并启动
-      </button>
-    </form>
-
-    <div class="footer">
-      <a href="#" id="footer-advanced-link" class="footer-advanced-link">高级设置（与聊天共用命名窗口，可回到原标签）</a>
-      <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">模型配置保存为 model profile；其他运行设置可在高级设置中修改。</div>
-      <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">如需帮助或反馈，请联系GitHub @sugarfreeecho</div>
+    <div class="welcome-actions">
+      <button type="button" id="welcome-start" class="btn btn-primary" data-i18n="start">立即配置首个模型</button>
+      <button type="button" id="welcome-later" class="btn btn-ghost" data-i18n="later">稍后配置</button>
     </div>
+
+    <p class="welcome-error" id="welcome-error" role="alert" hidden></p>
   </div>
-</div>
+</main>
 
 <script>
-  const providerMap = {
-    'openai-compatible': {
-      baseUrl: 'http://models.ascend.huawei.com/v1',
-      keyPlaceholder: 'sk-...',
-      defaultModel: 'deepseek-v4-flash',
-      modelHint: '使用 OpenAI Chat Completions 协议，请填写服务商提供的模型名称。',
+(function () {
+  'use strict';
+  var LS_LANG = 'myagent-language';
+  var COPY = {
+    zh: {
+      title: '欢迎使用 SugarAgent',
+      sub: '先配置一个模型 API 就能开始对话，之后可随时在设置里添加或切换模型。',
+      start: '立即配置首个模型',
+      later: '稍后配置',
+      entering: '正在进入主界面…',
+      failed: '进入主界面失败，请重试。',
+      docTitle: 'SugarAgent · 欢迎',
+      switchLang: '切换为英文',
     },
-    'openai-responses': {
-      baseUrl: 'https://api.openai.com/v1',
-      keyPlaceholder: 'sk-...',
-      defaultModel: '',
-      modelHint: '使用 OpenAI Responses 协议，请确认服务商支持此接口。',
-    },
-    anthropic: {
-      baseUrl: 'https://api.anthropic.com',
-      keyPlaceholder: 'sk-ant-...',
-      defaultModel: '',
-      modelHint: '使用 Anthropic Messages 协议，支持原生接口和兼容网关。',
+    en: {
+      title: 'Welcome to SugarAgent',
+      sub: 'Add one model API to start chatting. You can add or switch models in Settings at any time.',
+      start: 'Set up your first model',
+      later: 'Later',
+      entering: 'Opening the workspace…',
+      failed: 'Could not open the workspace. Please try again.',
+      docTitle: 'SugarAgent · Welcome',
+      switchLang: 'Switch to Chinese',
     },
   };
-
-  const llmProvider = document.getElementById('llmProvider');
-  const baseUrl = document.getElementById('baseUrl');
-  const apiKey = document.getElementById('apiKey');
-  const modelName = document.getElementById('modelName');
-  const modelHintEl = document.getElementById('modelHint');
-  const status = document.getElementById('status');
-  const submitBtn = document.getElementById('submitBtn');
-  const contextWindowEl = document.getElementById('contextWindow');
-  const maxOutputTokensEl = document.getElementById('maxOutputTokens');
-  const modelFetchBtn = document.getElementById('modelFetchBtn');
-  const modelContextBtn = document.getElementById('modelContextBtn');
-  const modelDiscoveryStatus = document.getElementById('modelDiscoveryStatus');
-  const modelDiscoveryList = document.getElementById('modelDiscoveryList');
-
-  let modelFetchTimer = null;
-  let lastModelFetchKey = '';
-  let selectedDiscoveredModelId = '';
-  let discoveredModelIds = [];
-
-  function wizardEsc(value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+  function currentLang() {
+    try { return localStorage.getItem(LS_LANG) === 'en' ? 'en' : 'zh'; } catch (e) { return 'zh'; }
   }
+  var lang = currentLang();
+  var toggle = document.getElementById('welcome-language-toggle');
+  var startBtn = document.getElementById('welcome-start');
+  var laterBtn = document.getElementById('welcome-later');
+  var errorEl = document.getElementById('welcome-error');
 
-  function setModelDiscoveryStatus(message) {
-    if (modelDiscoveryStatus) modelDiscoveryStatus.textContent = message || '';
-  }
-
-  function currentModelSelectionKey() {
-    return String(selectedDiscoveredModelId || (modelName && modelName.value) || '').trim();
-  }
-
-  function validateModelNameAgainstDiscovered(showMessage) {
-    const model = String((modelName && modelName.value) || '').trim();
-    const invalid = !!(discoveredModelIds.length && model && !discoveredModelIds.includes(model));
-    if (modelName) modelName.classList.toggle('model-name-invalid', invalid);
-    if (invalid && showMessage) {
-      setModelDiscoveryStatus('模型名称必须与已获取模型列表中的模型 ID 完全一致。');
+  function applyLang() {
+    var copy = COPY[lang];
+    document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
+    document.title = copy.docTitle;
+    Array.prototype.slice.call(document.querySelectorAll('[data-i18n]')).forEach(function (el) {
+      var text = copy[el.getAttribute('data-i18n')];
+      if (text) el.textContent = text;
+    });
+    if (toggle) {
+      toggle.setAttribute('aria-label', copy.switchLang);
+      toggle.setAttribute('title', copy.switchLang);
     }
-    return !invalid;
   }
 
-  function updateModelSelectionHighlight() {
-    if (!modelDiscoveryList) return;
-    const selected = currentModelSelectionKey();
-    modelDiscoveryList.querySelectorAll('.model-row').forEach((row) => {
-      const rowModel = String(row.getAttribute('data-model-id') || '').trim();
-      row.classList.toggle('is-selected', row.classList.contains('model-row--empty') ? !selected : !!selected && rowModel === selected);
+  function showError(message) {
+    if (!errorEl) return;
+    errorEl.textContent = message || COPY[lang].failed;
+    errorEl.hidden = false;
+  }
+  function clearError() {
+    if (errorEl) errorEl.hidden = true;
+  }
+
+  if (toggle) {
+    toggle.addEventListener('click', function () {
+      lang = lang === 'en' ? 'zh' : 'en';
+      try { localStorage.setItem(LS_LANG, lang === 'en' ? 'en' : 'zh-CN'); } catch (e) { /* ignore */ }
+      applyLang();
     });
   }
 
-  function flashAutofilledFields(fields) {
-    (fields || []).forEach((el) => {
-      if (!el) return;
-      el.classList.add('autofill-flash');
+  /* 立即配置：设置中心 → 模型页签，并自动弹出「添加模型」对话框。 */
+  if (startBtn) {
+    startBtn.addEventListener('click', function () {
+      /* 带 #models 是为了兼容尚未重启的后端：即使查询参数没被识别，也能直接落到模型页签。 */
+      window.location.href = '/settings?section=models&add=1#models';
     });
   }
 
-  function clearAutofillHighlight(el) {
-    if (el) el.classList.remove('autofill-flash');
-  }
-
-  function modelLimitSource(model) {
-    const source = String((model && (model.limit_source || model.context_window_source)) || '');
-    if (source === 'api') return 'API 返回窗口信息';
-    if (source === 'probe') return 'HTTP 400 错误消息探测';
-    if (source === 'huawei') return 'Huawei API 默认 128K';
-    if (source === 'table') return 'models_table.md 映射';
-    if (source === 'default') return '默认 128K 模型窗口';
-    return '模型窗口推断';
-  }
-
-  function positiveInt(value, fallback) {
-    const n = parseInt(value, 10);
-    return Number.isFinite(n) && n > 0 ? n : fallback;
-  }
-
-  function formatTokens(value) {
-    return String(Math.max(0, positiveInt(value, 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  }
-
-  function recommendedModelWindows(modelMaxContext) {
-    const max = positiveInt(modelMaxContext, 0);
-    if (!max) return { out: 8192, ctx: 119808, theoretical: 119808, cap: 128000, capped: false };
-    let out = max < 130000 ? 8192 : Math.min(Math.floor(max * 0.1), max < 300000 ? 30000 : 50000);
-    out = Math.max(1, Math.min(out, Math.max(1, max - 1)));
-    const theoretical = Math.max(1, max - out);
-    const cap = max < 300000 ? 128000 : 512000;
-    return {
-      out,
-      ctx: Math.min(theoretical, cap),
-      theoretical,
-      cap,
-      capped: theoretical > cap,
-    };
-  }
-
-  function applyDiscoveredModel(model) {
-    model = model || {};
-    const modelMaxContext = positiveInt(model.model_context_window || model.context_window, 128000);
-    const windows = recommendedModelWindows(modelMaxContext);
-    selectedDiscoveredModelId = String(model.id || model.model || '').trim();
-    if (modelName) modelName.value = model.id || model.model || '';
-    if (contextWindowEl) contextWindowEl.value = String(windows.ctx);
-    if (maxOutputTokensEl) maxOutputTokensEl.value = String(windows.out);
-    updateModelSelectionHighlight();
-    flashAutofilledFields([modelName, contextWindowEl, maxOutputTokensEl]);
-    validateModelNameAgainstDiscovered(false);
-    setModelDiscoveryStatus(windows.capped
-      ? '已填入模型和窗口参数；理论最大可配上下文门限为 ' + formatTokens(windows.theoretical) + ' tokens，默认填入 ' + formatTokens(windows.cap) + ' tokens。'
-      : '已填入模型和窗口参数。');
-  }
-
-  function currentModelMetadata() {
-    const row = modelDiscoveryList && modelDiscoveryList.querySelector('.model-row.is-selected[data-model]');
-    if (row) {
-      try { return JSON.parse(row.getAttribute('data-model') || '{}'); } catch (err) {}
-    }
-    return {
-      model: String((modelName && modelName.value) || '').trim(),
-      context_window: String((contextWindowEl && contextWindowEl.value) || '').trim(),
-      max_output_tokens: String((maxOutputTokensEl && maxOutputTokensEl.value) || '').trim(),
-    };
-  }
-
-  function askConfirmDialog(title, message) {
-    return new Promise(function (resolve) {
-      const overlay = document.getElementById('confirmOverlay');
-      const titleEl = document.getElementById('confirmTitle');
-      const descEl = document.getElementById('confirmDesc');
-      const okBtn = document.getElementById('confirmOk');
-      const cancelBtn = document.getElementById('confirmCancel');
-      if (!overlay || !okBtn || !cancelBtn) { resolve(false); return; }
-
-      titleEl.textContent = title;
-      descEl.textContent = message;
-      overlay.hidden = false;
-      requestAnimationFrame(function () {
-        requestAnimationFrame(function () { overlay.classList.add('is-open'); });
-      });
-      okBtn.focus();
-
-      function cleanup(result) {
-        overlay.classList.remove('is-open');
-        okBtn.removeEventListener('click', onOk);
-        cancelBtn.removeEventListener('click', onCancel);
-        overlay.removeEventListener('click', onOverlay);
-        overlay.removeEventListener('pointerdown', onOverlayDown);
-        document.removeEventListener('keydown', onKey);
-        setTimeout(function () { overlay.hidden = true; }, 230);
-        resolve(result);
-      }
-      function onOk() { cleanup(true); }
-      function onCancel() { cleanup(false); }
-      /* 点遮罩关闭：按下点落在卡片上时不算数。浏览器把 click 派发给按下/松开
-         目标的最近公共祖先——在卡片里按住、拖到遮罩上松开时祖先就是遮罩，只看
-         event.target 会把这次拖拽误判成「点了遮罩」而关掉对话框。 */
-      let pressOnContent = false;
-      function onOverlayDown(e) { pressOnContent = e.target !== overlay; }
-      function onOverlay(e) {
-        const dismissed = e.target === overlay && !pressOnContent;
-        pressOnContent = false;
-        if (dismissed) cleanup(false);
-      }
-      function onKey(e) { if (e.key === 'Escape') cleanup(false); }
-
-      okBtn.addEventListener('click', onOk);
-      cancelBtn.addEventListener('click', onCancel);
-      overlay.addEventListener('pointerdown', onOverlayDown);
-      overlay.addEventListener('click', onOverlay);
-      document.addEventListener('keydown', onKey);
-    });
-  }
-
-  async function probeCurrentModelContext() {
-    const confirmed = await askConfirmDialog(
-      '获取上下文长度',
-      '获取上下文长度会向模型 API 发送探测请求，可能消耗 API 额度。是否继续？'
-    );
-    if (!confirmed) return;
-    const model = currentModelMetadata();
-    const modelId = String(model.model || model.id || (modelName && modelName.value) || '').trim();
-    if (!baseUrl.value.trim() || !apiKey.value.trim() || !modelId) {
-      setModelDiscoveryStatus('请先填写 API BASE URL、API Key 和模型名称。');
-      return;
-    }
-    if (modelContextBtn) modelContextBtn.disabled = true;
-    setModelDiscoveryStatus('正在探测 ' + modelId + ' 的真实上下文窗口...');
-    try {
-      const resp = await fetch('/api/model_profiles/probe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          base_url: baseUrl.value.trim(),
-          api_key: apiKey.value.trim(),
-          model: modelId,
-          llm_type: llmProvider.value,
-          metadata: model,
-        }),
-      });
-      const result = await resp.json().catch(() => ({
-        ok: false,
-        error: 'HTTP ' + resp.status + (resp.statusText ? ' ' + resp.statusText : '') + '（响应无法解析为 JSON）',
-      }));
-      if (!result.ok) throw new Error(result.error || '探测失败');
-      const merged = Object.assign({}, model, result.model || {});
-      applyDiscoveredModel(merged);
-      const probeDetail = String((result.model && result.model.probe_error) || '').trim();
-      setModelDiscoveryStatus(result.model && result.model.probe_succeeded
-        ? '已获取上下文长度；探测请求可能已消耗 API 额度。'
-        : (probeDetail
-          ? '上下文探测失败，已使用列表/默认窗口：' + probeDetail
-          : '未从 API 错误消息取得真实上下文窗口，已保留列表/默认窗口；探测请求可能已消耗 API 额度。'));
-    } catch (err) {
-      setModelDiscoveryStatus('获取上下文长度失败：' + String(err.message || err));
-    } finally {
-      if (modelContextBtn) modelContextBtn.disabled = false;
-    }
-  }
-
-  function renderDiscoveredModels(items) {
-    if (!modelDiscoveryList) return;
-    items = items || [];
-    discoveredModelIds = items.map((item) => String((item && (item.id || item.model)) || '').trim()).filter(Boolean);
-    if (!items.length) {
-      modelDiscoveryList.innerHTML = "<div class='model-row model-row--empty is-selected'><span class='model-row__main'><span class='model-row__id'>未获取到模型</span></span></div>";
-      validateModelNameAgainstDiscovered(false);
-      return;
-    }
-    let html = '';
-    for (const model of items) {
-      const raw = wizardEsc(JSON.stringify(model));
-      const modelId = String(model.id || model.model || '');
-      const selected = modelId && modelId === currentModelSelectionKey() ? ' is-selected' : '';
-      html += "<button type='button' class='model-row" + selected + "' data-model-id='" + wizardEsc(modelId) + "' data-model='" + raw + "'>"
-        + "<span class='model-row__main'><span class='model-row__id'>" + wizardEsc(model.id) + "</span></span>"
-        + "<span class='model-row__side'><span class='model-row__meta'>" + wizardEsc(modelLimitSource(model)) + "</span>"
-        + "<span class='model-row__limits'>" + wizardEsc(model.context_window) + " ctx / " + wizardEsc(model.max_output_tokens) + " out</span></span>"
-        + "</button>";
-    }
-    modelDiscoveryList.innerHTML = html;
-    modelDiscoveryList.querySelectorAll('.model-row').forEach((row) => {
-      row.addEventListener('click', () => {
-        try {
-          const model = JSON.parse(row.getAttribute('data-model') || '{}');
-          selectedDiscoveredModelId = String(model.id || model.model || '').trim();
-          applyDiscoveredModel(model);
-          setModelDiscoveryStatus('已选择模型；如需探测真实上下文窗口，请点击“获取上下文长度”。');
-        } catch (err) {}
-      });
-    });
-    updateModelSelectionHighlight();
-    validateModelNameAgainstDiscovered(false);
-  }
-
-  async function fetchDiscoveredModels() {
-    const url = baseUrl.value.trim();
-    if (!url || url.length < 8) {
-      setModelDiscoveryStatus('填写 API BASE URL 后可获取模型列表。');
-      return;
-    }
-    if (modelFetchBtn) modelFetchBtn.disabled = true;
-    setModelDiscoveryStatus('正在获取模型列表...');
-    try {
-      const resp = await fetch('/api/model_profiles/discover', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ base_url: url, api_key: apiKey.value.trim() }),
-      });
-      const result = await resp.json();
-      if (!result.ok) throw new Error(result.error || '获取失败');
-      renderDiscoveredModels(result.models || []);
-      setModelDiscoveryStatus('已获取 ' + ((result.models || []).length) + ' 个模型。');
-    } catch (err) {
-      setModelDiscoveryStatus('获取失败：' + String(err.message || err));
-    } finally {
-      if (modelFetchBtn) modelFetchBtn.disabled = false;
-    }
-  }
-
-  function scheduleModelDiscovery() {
-    const url = baseUrl.value.trim();
-    if (!url || url.length < 8) return;
-    if (modelFetchTimer) clearTimeout(modelFetchTimer);
-    modelFetchTimer = setTimeout(() => {
-      const key = url + '|' + apiKey.value.trim().slice(0, 8);
-      if (key === lastModelFetchKey) return;
-      lastModelFetchKey = key;
-      fetchDiscoveredModels();
-    }, 850);
-  }
-
-  function syncProviderUi(provider) {
-    const p = providerMap[provider];
-    if (!p) return;
-    apiKey.placeholder = p.keyPlaceholder;
-    modelHintEl.textContent = p.modelHint;
-    modelName.placeholder = p.defaultModel;
-  }
-
-  var prefill = window.__WIZARD_PREFILL__;
-  var hasPrefill = prefill && typeof prefill === 'object' && Object.keys(prefill).length > 0;
-
-  if (hasPrefill) {
-    if (providerMap[prefill.llm_provider]) llmProvider.value = prefill.llm_provider;
-    if (prefill.model_name) modelName.value = prefill.model_name;
-    if (prefill.llm_base_url) baseUrl.value = prefill.llm_base_url;
-    if (prefill.api_key !== undefined && prefill.api_key !== null) apiKey.value = prefill.api_key;
-    if (prefill.context_window && contextWindowEl) contextWindowEl.value = prefill.context_window;
-    if (prefill.max_output_tokens && maxOutputTokensEl) maxOutputTokensEl.value = prefill.max_output_tokens;
-  }
-  syncProviderUi(llmProvider.value);
-  const initialProvider = providerMap[llmProvider.value];
-  if (!baseUrl.value.trim()) baseUrl.value = initialProvider.baseUrl;
-  if (!modelName.value.trim()) modelName.value = initialProvider.defaultModel;
-
-  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '119808';
-  if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
-
-  llmProvider.addEventListener('change', () => syncProviderUi(llmProvider.value));
-  baseUrl.addEventListener('input', scheduleModelDiscovery);
-  baseUrl.addEventListener('change', scheduleModelDiscovery);
-  apiKey.addEventListener('input', scheduleModelDiscovery);
-  if (modelName) modelName.addEventListener('input', () => { selectedDiscoveredModelId = ''; updateModelSelectionHighlight(); clearAutofillHighlight(modelName); validateModelNameAgainstDiscovered(false); });
-  if (contextWindowEl) contextWindowEl.addEventListener('input', () => clearAutofillHighlight(contextWindowEl));
-  if (maxOutputTokensEl) maxOutputTokensEl.addEventListener('input', () => clearAutofillHighlight(maxOutputTokensEl));
-  if (modelFetchBtn) modelFetchBtn.addEventListener('click', fetchDiscoveredModels);
-  if (modelContextBtn) modelContextBtn.addEventListener('click', probeCurrentModelContext);
-
-  document.getElementById('configForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    status.className = 'status';
-    status.style.display = 'none';
-    var whClear = document.getElementById('wizard-status-help');
-    if (whClear) {
-      whClear.classList.remove('is-visible');
-      whClear.hidden = true;
-    }
-
-    const provider = llmProvider.value;
-    const key = apiKey.value.trim();
-    const url = baseUrl.value.trim();
-    const model = document.getElementById('modelName').value.trim();
-
-    if (!model) {
-      showStatus('请填写模型名称', 'error');
-      return;
-    }
-
-    if (!validateModelNameAgainstDiscovered(true)) {
-      showStatus('模型名称必须与已获取模型列表中的模型 ID 完全一致', 'error');
-      return;
-    }
-
-    if (!url) {
-      showStatus('请填写 API BASE URL', 'error');
-      return;
-    }
-
-    if (!key) {
-      showStatus('请填写 API Key', 'error');
-      return;
-    }
-
-    submitBtn.disabled = true;
-    submitBtn.textContent = '正在保存...';
-
-    try {
-      const configPayload = {
-        llm_provider: provider,
-        llm_base_url: url,
-        api_key: key,
-        model_name: model,
-        discovered_model_ids: discoveredModelIds,
-        context_window: contextWindowEl ? contextWindowEl.value.trim() : '119808',
-        max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',
-      };
-      // Older running backends still default omitted runtime fields. Echo existing
-      // hidden values when available so saving a model never resets those settings.
-      if (prefill && prefill.work_dir) configPayload.work_dir = prefill.work_dir;
-      if (prefill && prefill.search_provider) configPayload.search_provider = prefill.search_provider;
-      if (prefill && prefill.search_api_key) configPayload.search_api_key = prefill.search_api_key;
-      const resp = await fetch('/api/save_config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(configPayload),
-      });
-
-      const result = await resp.json();
-      if (result.ok) {
-        if (result.restart_required) {
-          showStatus('配置已保存；WORK_DIR 重启服务后生效。', 'success');
-          alert('WORK_DIR 已保存，重启服务后生效。');
-          setTimeout(() => { window.location.href = '/'; }, 1500);
-          return;
-        }
-        showStatus('✅ 配置已保存！正在启动 Agent...', 'success');
-        setTimeout(() => { window.location.href = '/'; }, 1500);
-      } else {
-        showStatus('❌ ' + (result.error || '保存失败'), 'error');
-      }
-    } catch (err) {
-      showStatus('⚠️ 配置服务器未启动，请检查服务状态后重试', 'error');
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = '保存配置并启动';
-    }
-  });
-
-  function showStatus(msg, type) {
-    status.textContent = msg;
-    status.className = 'status ' + type;
-    status.style.display = 'block';
-    var wh = document.getElementById('wizard-status-help');
-    if (wh) {
-      if (type === 'error') {
-        wh.hidden = false;
-        wh.classList.add('is-visible');
-      } else {
-        wh.hidden = true;
-        wh.classList.remove('is-visible');
-      }
-    }
-  }
-
-  var footerAdv = document.getElementById('footer-advanced-link');
-  if (footerAdv) {
-    footerAdv.addEventListener('click', function (e) {
-      e.preventDefault();
-      var w = window.open('/setup/env', 'myagent-env');
-      if (w) {
-        try { w.focus(); } catch (err) {}
-      } else {
-        window.location.href = '/setup/env';
+  /* 稍后配置：记下这次选择（cookie），避免主界面被 /setup 门槛弹回欢迎页。 */
+  if (laterBtn) {
+    laterBtn.addEventListener('click', async function () {
+      clearError();
+      var label = laterBtn.textContent;
+      laterBtn.disabled = true;
+      laterBtn.textContent = COPY[lang].entering;
+      try {
+        var resp = await fetch('/api/setup/skip', { method: 'POST', credentials: 'same-origin' });
+        var data = await resp.json().catch(function () { return {}; });
+        if (!resp.ok || !data || !data.ok) throw new Error((data && data.error) || 'skip failed');
+        window.location.href = '/';
+      } catch (err) {
+        laterBtn.disabled = false;
+        laterBtn.textContent = label;
+        showError(COPY[lang].failed);
       }
     });
   }
+
+  applyLang();
+})();
 </script>
-<script src="/static/setup_i18n.js"></script>
-
-<div class="modal-overlay" id="confirmOverlay" hidden>
-  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmDesc">
-    <div class="modal-icon" aria-hidden="true">⚠</div>
-    <div class="modal-title" id="confirmTitle">获取上下文长度</div>
-    <div class="modal-desc" id="confirmDesc"></div>
-    <div class="modal-actions">
-      <button type="button" class="modal-btn" id="confirmCancel">取消</button>
-      <button type="button" class="modal-btn modal-btn-ok" id="confirmOk">确定</button>
-    </div>
-  </div>
-</div>
 </body>
 </html>

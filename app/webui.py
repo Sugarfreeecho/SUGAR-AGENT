@@ -8990,6 +8990,31 @@ def _is_configured():
     return _has_complete_model_profile_for_main_ui()
 
 
+# 欢迎页「稍后配置」：把一次选择记在 cookie 里，主界面不再被 /setup 门槛拦回去。
+SETUP_DEFERRED_COOKIE = "myagent_setup_deferred"
+
+
+def _setup_deferred(req: _Request) -> bool:
+    try:
+        return str(req.cookies.get(SETUP_DEFERRED_COOKIE) or "").strip().lower() in {"1", "true", "yes"}
+    except Exception:
+        return False
+
+
+@fastapi_app.post("/api/setup/skip")
+async def setup_skip():
+    """欢迎页「稍后配置」：放行主界面（一年内有效，配置好模型后自然不再拦截）。"""
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        SETUP_DEFERRED_COOKIE,
+        "1",
+        max_age=60 * 60 * 24 * 365,
+        path="/",
+        samesite="lax",
+    )
+    return response
+
+
 @fastapi_app.get("/setup", response_class=_HTMLResponse)
 async def setup_page():
     # 每次都从磁盘读，替换 templates/first_time_config.html 后立即生效；避免 stale 缓存
@@ -9384,14 +9409,19 @@ def _load_settings_center_html(section: str, request: Optional[Request] = None) 
         )
     session_id = ""
     embedded = False
+    auto_add_model = False
     if request is not None:
         session_id = str(request.query_params.get("session_id") or "")
         embedded = str(request.query_params.get("embedded") or "").strip().lower() in ("1", "true", "yes")
+        # 欢迎页「立即配置首个模型」：/settings?section=models&add=1 直接落到模型页签并弹添加模型。
+        section = str(request.query_params.get("section") or section or "general").strip() or "general"
+        auto_add_model = str(request.query_params.get("add") or "").strip().lower() in ("1", "true", "yes")
     bootstrap = {
         "section": section,
         "workspace": str(WORK_DIR),
         "sessionId": session_id,
         "embedded": embedded,
+        "autoAddModel": auto_add_model,
     }
     body = _read_text_cached(_SETTINGS_CENTER_PATH, "")
     body = body.replace("__SETTINGS_ASSET_VERSION__", str(_settings_asset_version()))
@@ -10489,6 +10519,7 @@ async def _config_check(req: _Request, call_next):
         "/setup/extensions",
         "/settings",
         "/api/save_config",
+        "/api/setup/skip",
         "/api/env",
         "/api/mcp_config",
         "/api/mcp/tools",
@@ -10503,7 +10534,7 @@ async def _config_check(req: _Request, call_next):
         "/api/workspace-info",
     ) or p.startswith("/static/") or p.startswith("/assets/") or p.startswith("/api/model_profiles/") or p.startswith("/api/plugins/") or p.startswith("/api/extensions/") or p.startswith("/api/skills/") or p.startswith("/api/security/") or p.startswith("/api/mcp/tools/") or p.startswith("/api/mcp/servers/") or p.startswith("/api/features/") or p.startswith("/api/remote/v1/"):
         return await call_next(req)
-    if not await asyncio.to_thread(_is_configured):
+    if not _setup_deferred(req) and not await asyncio.to_thread(_is_configured):
         return _RedirectResponse(url="/setup")
     return await call_next(req)
 

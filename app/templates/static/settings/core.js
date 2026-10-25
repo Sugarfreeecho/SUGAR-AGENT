@@ -634,6 +634,12 @@
     setDirty, setDirtyMessage(zh, en) { state.dirtyMessage = t(zh, en); updateFooter(); },
     reload, showSection, notifyHostPrefs, setPref, setPrefs, filterSearchRows,
     requestClose: leaveSettings,
+    /* 欢迎页「立即配置首个模型」：模型分区渲染后自动弹出添加模型对话框（只消费一次）。 */
+    consumeAutoAddModel() {
+      if (!BOOT.autoAddModel) return false;
+      BOOT.autoAddModel = false;
+      return true;
+    },
     storedFontPx, applyStFontSize, clampFont, FONT_MIN, FONT_MAX, FONT_DEFAULT, FONT_LEVEL_PX,
     get lang() { return state.lang; },
     get search() { return state.search || ''; },
