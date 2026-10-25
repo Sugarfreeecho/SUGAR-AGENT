@@ -342,6 +342,7 @@ function verifyImports() {
     '    if ".zip" not in lark_oapi.__file__: missing.append("lark_oapi was not loaded from its archive")',
     '    from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody',
     '    from lark_oapi.ws import Client',
+    '    from acp.schema import HttpMcpServer, McpServerStdio',
     'print("IMPORT_CLEAN" if not missing else "IMPORT_FAIL " + "; ".join(missing))',
   ].join('\n')
   const result = spawnSync(PAYLOAD_PYTHON, ['-B', '-c', probe], {

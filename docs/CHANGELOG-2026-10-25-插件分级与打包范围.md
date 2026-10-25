@@ -86,6 +86,12 @@
 - 新增 `docs/standalone-plugin-dependencies.md`：依赖总表、安装目标（应用内置运行时 / 插件 venv）、外网 PyPI、华为云镜像、华为内网 `PIP_INDEX_URL`、离线 wheel 与自检命令。
 - 安装器识别“仅注释”的 `requirements.txt`，不再为无依赖插件创建 `.myagent-runtime` venv。
 
+### 2.11 安装包补入 agent-client-protocol
+
+- 新增的 `acp-agents` 插件（`extension` 档，随包）依赖 `agent-client-protocol`，但桌面依赖清单缺失，冒烟日志报 `ModuleNotFoundError: No module named 'acp'`。
+- `packaging/requirements.desktop.txt` 加入 `agent-client-protocol==0.12.1`，载荷自检增加 `from acp.schema import HttpMcpServer, McpServerStdio`。
+- 重跑全量载荷：6,640 文件 / 229.8 MB / **72 个依赖**；`smoke-payload` 健康检查通过，日志不再出现插件安装失败。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

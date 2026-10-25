@@ -15,6 +15,7 @@
 #                   —— 当前代码没有引用（分词走 tokenizers），2026-10-25 清理
 ddgs==9.0
 defusedxml
+agent-client-protocol==0.12.1
 fastapi==0.136.1
 httptools==0.6.1
 httpx

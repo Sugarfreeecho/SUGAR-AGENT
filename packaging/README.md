@@ -131,7 +131,7 @@ powershell -File scripts\smoke-desktop.ps1 -AppDir "$env:LOCALAPPDATA\Programs\S
 resources/runtime/
 ├─ app/                  # 应用代码（含 templates/dist 前端产物、tools、native 的 egress helper）
 ├─ plugins/              # 按 tiers.json 收录的插件（当前 9 个，独立功能不进包）
-├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（71 个依赖）
+├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（72 个依赖）
 │  ├─ Scripts/rg.exe     # 文件搜索用的 ripgrep
 │  └─ Lib/site-packages/lark_oapi.zip # 飞书 SDK，Python 直接从归档加载
 ├─ workspace-template/   # 首次启动铺到工作目录的技能模板（只含 skills.allowlist.txt 里的技能）
