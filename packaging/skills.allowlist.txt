@@ -8,7 +8,6 @@
 # 只想看这次会打哪些：  node scripts/prepare-payload.mjs --list-skills
 canvas-design
 docx
-pdf
 pptx
 skill-creator
 sugar-agent-manual

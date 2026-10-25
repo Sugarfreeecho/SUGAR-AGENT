@@ -70,6 +70,7 @@ const EXCLUDED_PACKAGES = [
   'sentry-sdk / coverage / pytest / pytest-asyncio / python-magic（开发与监控）',
   'aiohttp 及其传递依赖（唯一使用者 sugar-bili-scroll，独立功能不随包分发）',
   'aiofiles / cachetools / chardet / jinja2 / loguru / tiktoken / regex / markupsafe / win32-setctime（代码无引用）',
+  'pdfplumber / pdfminer.six / pypdfium2 / pypdf（pdf 技能已移出打包白名单）',
 ]
 
 // ------------------------------------------------------------------ helpers ---
@@ -331,7 +332,7 @@ function verifyImports() {
   const probe = [
     'import importlib, importlib.util, sys',
     'mods = ["fastapi","uvicorn","httpx","openai","PIL","jsonschema","mcp",',
-    '        "openpyxl","pdfplumber","pypdf","psutil","dotenv","yaml","orjson",',
+    '        "openpyxl","psutil","dotenv","yaml","orjson",',
     '        "tokenizers","sse_starlette","multipart"]',
     'missing = []',
     'for name in mods:',

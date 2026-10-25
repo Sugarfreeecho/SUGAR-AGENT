@@ -99,6 +99,13 @@
 - `app/tools/deepseek_v3_tokenizer/` 下重复的嵌套副本（含 7.5 MB `tokenizer.json`）无任何引用，删除；`agent_tokenizer.py` 只读顶层 `tokenizer.json`。
 - 重跑全量载荷：**6,239 文件 / 171.6 MB / 68 个依赖**（-58.2 MB）；`runtime-archives.json` 为 `{"sdk": null, "pptIcons": null}`，`smoke-payload` 健康检查通过。
 
+### 2.13 移除 PDF 栈与 pdf 技能
+
+- `app/` 与 `plugins/` 均无 `pdfplumber` / `pdfminer` / `pypdfium2` / `pypdf` 引用，只有 `workspace/skills/pdf` 的脚本使用。
+- `packaging/skills.allowlist.txt` 删除 `pdf`；`requirements.desktop.txt` 删除 `pdfplumber`、`pypdf`（连带 `pdfminer.six`、`pypdfium2`）；自检探针同步。
+- 重跑全量载荷：**5,882 文件 / 154.4 MB / 64 个依赖**（-17.2 MB）；技能模板剩 6 个，`smoke-payload` 健康检查通过。
+- 源码环境仍保留 `workspace/skills/pdf` 与 `app/requirements.txt` 中的 PDF 依赖，只是不再进安装包。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

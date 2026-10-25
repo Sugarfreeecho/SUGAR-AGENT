@@ -131,7 +131,7 @@ powershell -File scripts\smoke-desktop.ps1 -AppDir "$env:LOCALAPPDATA\Programs\S
 resources/runtime/
 ├─ app/                  # 应用代码（含 templates/dist 前端产物、tools、native 的 egress helper）
 ├─ plugins/              # 按 tiers.json 收录的插件（当前 9 个，独立功能不进包）
-├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（68 个依赖）
+├─ python/               # 便携 CPython 3.10.11 基座 + 干净安装的 site-packages（64 个依赖）
 │  ├─ Scripts/rg.exe     # 文件搜索用的 ripgrep
 │  └─ Lib/site-packages/lark_oapi.zip # 可选：飞书 SDK 归档（默认不存在，按需安装后归档）
 ├─ workspace-template/   # 首次启动铺到工作目录的技能模板（只含 skills.allowlist.txt 里的技能）
@@ -146,14 +146,14 @@ resources/runtime/
 
 ## 内置依赖策略
 
-保留应用本体运行需要的库（fastapi/uvicorn/openai/httpx/mcp/pillow/openpyxl/pdfplumber/pypdf/tokenizers/psutil/pywin32…）。
+保留应用本体运行需要的库（fastapi/uvicorn/openai/httpx/mcp/pillow/openpyxl/tokenizers/psutil/pywin32…）。
 飞书 SDK（`lark-oapi`）**不再随包**：核心远程控制在 `FEISHU_ENABLED=1` 时才懒加载它，需要飞书时用内置 pip 补装：
 
 ```powershell
 "%LOCALAPPDATA%\Programs\SugarAgent\resources\runtime\python\python.exe" -m pip install lark-oapi
 ```
 
-2026-10-25 清理：`aiohttp` 及其传递依赖只被不随包的 `sugar-bili-scroll` 使用；`aiofiles/cachetools/chardet/jinja2/loguru/tiktoken` 代码已无引用。`standalone` 插件（`voice-input`、`sugar-bili-scroll` 等）的依赖改为按需安装，清单与镜像地址见 `docs/standalone-plugin-dependencies.md`。
+2026-10-25 清理：`aiohttp` 及其传递依赖只被不随包的 `sugar-bili-scroll` 使用；`aiofiles/cachetools/chardet/jinja2/loguru/tiktoken` 代码已无引用；`pdf` 技能移出白名单，`pdfplumber/pdfminer.six/pypdfium2/pypdf` 一并移除。`standalone` 插件（`voice-input`、`sugar-bili-scroll` 等）的依赖改为按需安装，清单与镜像地址见 `docs/standalone-plugin-dependencies.md`。
 **有意排除**重依赖：`playwright`、`matplotlib`、`pandas`、`pymupdf`、`markitdown`、`sentry-sdk`、`coverage`、`pytest*`、`python-magic` —— 桌面版因此少了浏览器自动化、图表绘制、重型数据分析等能力，但安装包小了 300 MB 以上。
 
 用户后续需要时，可用**随包自带的 pip** 补装到内置运行时（无需再装 Python）：
