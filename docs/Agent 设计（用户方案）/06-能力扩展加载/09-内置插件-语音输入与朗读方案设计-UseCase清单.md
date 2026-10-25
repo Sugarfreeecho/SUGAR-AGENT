@@ -1,6 +1,6 @@
 # 语音输入与朗读 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-24 v1（覆盖至：当前工作区；流式朗读、按句预取、PCM 缓存、本地 SenseVoice、桌面麦克风授权）
+- 版本：2026-10-24 v2（覆盖至：当前工作区；按块类型的语音计划、播放控制、自动朗读开关）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/voice-input`（speech_input/{api,service,providers,configuration,protocol,worker}.py、web/{chat,settings,shared,capture}.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 09；配套通则见 01–07）
@@ -41,6 +41,9 @@
 | 云端 TTS（通用 `/audio/speech`、MiMo chat audio） | ✅ |
 | MiMo 流式朗读（PCM16 分片边收边播） | ✅ |
 | 按句切段 + 下一段预取 | ✅ |
+| 按块类型生成语音计划（段落/标题/列表/表格/代码/图片） | ✅ |
+| 暂停 / 继续 / 从头朗读 | ✅ |
+| 回答完成后自动朗读（可关） | ✅ |
 | 合成结果 PCM 缓存（哈希键 + LRU） | ✅ |
 | 桌面端麦克风授权（仅回环主框架） | ✅ |
 | 本地 TTS | ⚪ 未实现 |
@@ -107,6 +110,37 @@
 | UC-312 | 上游流超过 32 MiB | 中断并返回 502 | `STREAM_LIMIT` 兜底，避免异常流打满内存 | `providers.py:STREAM_LIMIT` |
 | UC-313 | 上层在生成过程中断开 | 上游连接随之关闭，不留后台推理 | 响应迭代器检测 `request.is_disconnected()` 后返回，生成器 `finally` 关闭文件与连接 | `api.py:audio`、`service.py:stream_speech` |
 
+### 5.1 语音计划：按块类型分段（UC-32x）
+
+先由 `buildSpeechPlan(root)` 把渲染后的回答拆成「语音单元」，每个单元一次请求、一次播放，单元之间按类型插停顿。空白单元与 `hr` 丢弃。
+
+| 编号 | 触发 | 预期现象 | 规则与边界 | 依据 |
+|---|---|---|---|---|
+| UC-321 | 回答里含表格 | 先读「下面是一张表格，共 N 行，列有：…」，再逐行读 | 行文本按「列名，值；…」拼装，表头取自 `thead th/td`；无表头时直接拼值 | `web/shared.js:tableItems` |
+| UC-322 | 表格超过 8 行 | 只读前 8 行，末尾补「其余 N 行请查看原文」 | 避免长表格把耳朵拖死；阈值是 8 | 同上 |
+| UC-323 | 表格单元格里含数字与状态 | 逐格读，不出现两格粘成一句 | 每格单独取值再拼，唯一分隔符是「，」和「；」 | 同上 |
+| UC-324 | 回答里含代码块 | 只读「这里有一段 js 代码，共 N 行，就不逐行念了，请查看原文。」 | 语言取自 `code.language-*`；行数按非空行统计；代码内容从不朗读 | `web/shared.js:codeItems` |
+| UC-325 | 回答里含图片 | 读「此处有一张图片：<alt 或图注>」 | 名称依次取 `alt`、`title`、`figcaption`；都没有就只说有图 | `web/shared.js:imageItems` |
+| UC-326 | 有序/无序列表 | 每项独立成段，前缀「第 N，」 | 只取 `:scope > li`，嵌套列表随父项一起读 | `web/shared.js:buildSpeechPlan` |
+| UC-327 | 引用块 | 读「引用：」+ 原文 | 前缀不进原文，仅作语气提示 | 同上 |
+| UC-328 | 行内代码 | 短代码照读；超过 24 字符读「一段代码」；URL 读「链接」 | 避免把路径、密钥、URL 逐字拼出来 | `web/shared.js:inlineCode` |
+| UC-329 | 文本含表情符号或零宽字符 | 不朗读、不吞字 | 统一在 `SPEECH_NOISE` 里剔除 | `web/shared.js:SPEECH_NOISE` |
+| UC-330 | 块与块之间 | 有可感知停顿，且不同类型时长不同 | 段落 0.3、标题 0.4、列表 0.22、引用 0.35、表格提示 0.5、表行 0.18、代码/图片 0.45（秒） | `web/shared.js` 各 `gap` 字段 |
+| UC-331 | 回答没有任何块级结构 | 仍能整段朗读 | 兜底：整块文本作为单段，`gap` 归零 | `web/shared.js:buildSpeechPlan` 末尾 |
+
+### 5.2 播放控制与自动朗读（UC-34x）
+
+| 编号 | 触发 | 预期现象 | 规则与边界 | 依据 |
+|---|---|---|---|---|
+| UC-341 | 开始朗读 | 工具栏在原「停止朗读」旁出现「暂停」「从头」 | 两个控件随播放挂载，`stopPlayback` 时移除，不留残按钮 | `web/chat.js:mountControls` |
+| UC-342 | 点「暂停」 | 声音停下，按钮变「继续」；再点从**原位置**接着读 | 挂起 AudioContext 时钟，已排期缓冲停在原处，不重排、不重发请求 | `web/chat.js` 暂停分支 |
+| UC-343 | 点「从头」 | 丢弃当前进度，从第一块重新开始 | 先 `stopPlayback()` 再 `read()`；命中缓存时首块几乎立即出声 | `web/chat.js` 重播分支 |
+| UC-344 | 非流式服务商（整段合成）下的暂停 | 行为一致 | 此时暂停作用于 `Audio` 元素，不依赖 AudioContext | `web/chat.js` `active.audio` 分支 |
+| UC-345 | 打开「回答完成后自动朗读」 | 一次运行结束后自动开始朗读最后一条回答 | 只有在本次会话内**观测到流式活动**后才启用，打开旧会话不会自说自话；文本需稳定 1.2 s 才触发 | `web/chat.js:queueAutoRead` |
+| UC-346 | 自动朗读为关 | 一律等用户点击 | 开关关闭时不排队、不预取 | 同上 |
+| UC-347 | 自动朗读进行中切换会话 | 立即停止，且新会话历史不被朗读 | 会话切换清 `sawStreaming` 与定时器 | `web/chat.js` `myagent:session-change` |
+| UC-348 | 同一段内容重复朗读 | 第二次几乎立即出声，不发新请求 | 命中 PCM 缓存；分段变化会改变缓存键，旧条目随 LRU 淘汰 | `service.py:_cache_key`、`service.py:stream_speech` |
+
 ---
 
 ## 6. 缓存（UC-4xx）
@@ -134,6 +168,7 @@
 | UC-505 | 普通用户朗读或识别 | 允许，但只能取消自己的请求 | `transcribe`/`synthesize` 要求 `write`；取消按 `(owner, identity)` 匹配 | `api.py:transcribe`、`service.py:cancel` |
 | UC-506 | 桌面端网页请求麦克风 | 仅主框架、仅回环源、仅 audio 授权；iframe 与外部源被拒 | `setPermissionCheckHandler` 与 `setPermissionRequestHandler` 同时把关，非 media 权限保持 Electron 默认行为 | `packaging/electron/speech-permissions.js` |
 | UC-507 | ASR 用 MiMo 但语言选了方言 | 返回错误而不是静默识别错 | MiMo ASR 只接受 auto/zh/en，其它取值由 `providers.transcribe` 拒绝 | `providers.py:transcribe` |
+| UC-508 | 保存「回答完成后自动朗读」 | 只接受布尔，字符串/数字被拒 | `merge_settings` 单独校验 `tts.autoRead`；默认 `False` | `configuration.py` |
 
 ---
 
@@ -160,7 +195,7 @@
 | UC-704 | 不做跨进程共享 | 缓存目录属宿主进程，多实例部署时各自维护 |
 | UC-705 | 本地 TTS 未实现 | 当前 `local` 只用于 ASR；插件仍只连接云端 TTS |
 | UC-706 | 文本归一化依赖服务商 | 数字、单位、缩写由上游处理；本插件不做 G2P 或数字规则 |
-| UC-707 | 浏览器自动化用例未入库 | `tests/js/voice_plugin_browser.cjs` 依赖旧的插件贡献渲染方式，待设置中心那批改动落地后一并提交 |
+| UC-707 | 浏览器自动化用例的挂载前提 | `tests/js/voice_plugin_browser.cjs` 需要设置中心能渲染插件贡献；设置中心那批改动入库后该用例通过，已随 1.3.0 一并提交 |
 
 ---
 
@@ -173,5 +208,8 @@
 | UC-301~313 | `tests/test_voice_plugin.py::test_streaming_tts_caches_pcm_and_replays_it`、`test_streaming_tts_keeps_partial_audio_out_of_the_cache`、`test_streaming_endpoint_rejects_non_mimo_providers` |
 | UC-401~405 | 同上两项缓存用例；`_trim_cache` 由代码走查覆盖 |
 | UC-506 | `tests/js/speech_input_runtime.cjs`（权限处理器 + 波形编码 + 草稿插入守卫） |
-| UC-601~606 | `workspace/TempOutput/tswork/e2e_gap.py`、`e2e_cache.py`、`btn_narrow.py` 的实测记录；正式回归待 `voice_plugin_browser.cjs` 入库 |
+| UC-601~606 | `tests/js/voice_plugin_browser.cjs`（启动聚焦、主题焦点、设置直达、浮窗、草稿冲突、Final 朗读、停止与释放）；辅以 `e2e_gap.py`、`e2e_cache.py`、`btn_narrow.py` 的实测记录 |
+| UC-321~331 | `workspace/TempOutput/tswork/plan_probe.py`、`plan_kinds.py`：对真实回答与合成 DOM 打印语音计划逐条比对 |
+| UC-341~347 | `workspace/TempOutput/tswork/plan_play.py`（暂停/继续/从头/控件挂载与移除）、`plan_auto.py`（开关开/关两条路径） |
+| UC-508 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`、`test_settings_default_persist_and_validate` |
 | 端到端 | `scripts/smoke_speech_input.py --audio <16k-mono-pcm16.wav>` |

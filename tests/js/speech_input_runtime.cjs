@@ -89,7 +89,15 @@ function permissionChecks() {
     assert.equal(check(contents, 'media', 'http://127.0.0.1:8192', { mediaType: 'video' }), false);
     assert.equal(check(contents, 'media', 'http://127.0.0.1:8192', { mediaType: 'audio', isMainFrame: false }), false);
     assert.equal(check(contents, 'media', 'http://127.0.0.1:8192', { mediaType: 'audio' }), false);
-    assert.equal(check(contents, 'clipboard-sanitized-write', 'http://127.0.0.1:8192', {}), true);
+    // UI permissions stay available, but only from the trusted application frame.
+    assert.equal(check(contents, 'clipboard-sanitized-write', 'http://127.0.0.1:8192',
+        { isMainFrame: true, requestingUrl: contents.getURL() }), true);
+    assert.equal(check(contents, 'fullscreen', 'http://127.0.0.1:8192',
+        { isMainFrame: true, requestingUrl: contents.getURL() }), true);
+    assert.equal(check(contents, 'clipboard-sanitized-write', 'https://evil.example',
+        { isMainFrame: true, requestingUrl: 'https://evil.example/' }), false);
+    assert.equal(check(contents, 'unknown-permission', 'http://127.0.0.1:8192',
+        { isMainFrame: true, requestingUrl: contents.getURL() }), false);
     let allowed;
     request(contents, 'media', value => { allowed = value; }, { requestingUrl: contents.getURL(), mediaTypes: ['audio'], isMainFrame: true });
     assert.equal(allowed, true);

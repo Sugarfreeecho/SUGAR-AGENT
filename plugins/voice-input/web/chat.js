@@ -1,5 +1,5 @@
 import { SpeechCapture } from './capture.js';
-import { voiceText as t, voiceRequest, splitSpeechText } from './shared.js';
+import { voiceText as t, voiceRequest, splitSpeechText, buildSpeechPlan } from './shared.js';
 
 export function installChatExtension() {
     const composer = globalThis.MyAgentComposer;
@@ -31,6 +31,10 @@ export function installChatExtension() {
     menu.querySelector('[data-settings]').textContent = t('语音设置', 'Voice settings');
     menu.querySelector('meter').setAttribute('aria-label', t('麦克风音量', 'Microphone level'));
     let operation = null, pending = null, disposed = false, snapshot = null, checking = false, playback = null;
+    // Auto reading stays disarmed until a run has actually streamed in, so opening an
+    // old session never starts talking on its own.
+    let autoRead = false, sawStreaming = false, autoTimer = null;
+    const autoDone = new WeakSet();
     const readButtons = new Set();
     const status = message => { menu.querySelector('[role="status"]').textContent = message; };
     function position() {
@@ -60,6 +64,7 @@ export function installChatExtension() {
         for (const source of active.sources || []) { try { source.stop(); } catch { /* already ended */ } }
         if (active.sources) active.sources.length = 0;
         if (active.ctx) void active.ctx.close().catch(() => {});
+        for (const control of active.controls || []) control.remove();
         active.button.classList.remove('is-playing');
         active.button.textContent = t('朗读', 'Read aloud');
         active.button.setAttribute('aria-pressed', 'false');
@@ -139,29 +144,55 @@ export function installChatExtension() {
         stopPlayback();
         const content = wrap.querySelector('.message.assistant');
         if (!content) return;
-        const clone = content.cloneNode(true);
-        clone.querySelectorAll('pre, button, script, style, .mermaid').forEach(node => node.remove());
-        clone.querySelectorAll('p, li, h1, h2, h3, h4, blockquote, tr').forEach(node => node.append(document.createTextNode('\n')));
-        clone.querySelectorAll('br').forEach(node => node.replaceWith(document.createTextNode('\n')));
-        const text = clone.textContent.replace(/\n{3,}/g, '\n\n').trim();
-        if (!text) return;
-        const active = { button, abort: new AbortController() }; playback = active;
+        const items = buildSpeechPlan(content, t);
+        if (!items.length) return;
+        const active = { button, wrap, items, abort: new AbortController() }; playback = active;
         button.classList.add('is-playing'); button.textContent = t('停止朗读', 'Stop reading'); button.setAttribute('aria-pressed', 'true');
+        mountControls(active);
         try {
-            const parts = splitSpeechText(text, 110);
-            try { await stream(parts, active); }
+            try { await stream(active); }
             catch (error) {
                 if (error.code !== 'streaming-unsupported' || playback !== active) throw error;
                 // The provider has no incremental audio: fall back to one buffered request per segment.
                 if (active.ctx) { void active.ctx.close().catch(() => {}); active.ctx = null; active.sources = null; }
-                // Whole-answer requests hurt far more here than segment count, so widen the window.
-                await buffered(splitSpeechText(text, 600), active);
+                await buffered(active);
             }
         } catch (error) {
             if (playback === active && error.name !== 'AbortError') {
                 menu.hidden = false; mic.setAttribute('aria-expanded', 'true'); status(error.message); render();
             }
         } finally { if (playback === active) stopPlayback(); }
+    }
+    function mountControls(active) {
+        const bar = active.button.parentElement;
+        if (!bar) return;
+        const pause = document.createElement('button');
+        pause.type = 'button'; pause.className = 'msg-tb voice-pause';
+        pause.textContent = t('暂停', 'Pause');
+        pause.setAttribute('aria-pressed', 'false');
+        pause.onclick = event => {
+            event.stopPropagation();
+            active.paused = !active.paused;
+            if (active.ctx) {
+                // Suspending the clock holds every scheduled buffer at its position.
+                if (active.paused) void active.ctx.suspend().catch(() => {}); else void active.ctx.resume().catch(() => {});
+            } else if (active.audio) {
+                if (active.paused) active.audio.pause(); else void active.audio.play().catch(() => {});
+            }
+            pause.textContent = active.paused ? t('继续', 'Resume') : t('暂停', 'Pause');
+            pause.setAttribute('aria-pressed', active.paused ? 'true' : 'false');
+        };
+        const restart = document.createElement('button');
+        restart.type = 'button'; restart.className = 'msg-tb voice-restart';
+        restart.textContent = t('从头', 'Restart');
+        restart.onclick = event => {
+            event.stopPropagation();
+            const wrap = active.wrap;
+            stopPlayback();
+            void read(wrap, active.button);
+        };
+        active.controls = [pause, restart];
+        for (const control of active.controls) active.button.after(control);
     }
     const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
     function startSpeech(part, active) {
@@ -210,22 +241,25 @@ export function installChatExtension() {
             }
         } finally { reader.cancel().catch(() => {}); }
     }
-    async function stream(parts, active) {
+    async function stream(active) {
         const Ctx = AudioContextClass;
         if (!Ctx) throw new Error(t('当前浏览器不支持流式播放。', 'This browser cannot stream audio.'));
         const ctx = new Ctx(); active.ctx = ctx; active.sources = []; active.next = ctx.currentTime + .1;
         if (ctx.state === 'suspended') await ctx.resume();
-        let ahead = parts.length ? startSpeech(parts[0], active) : null;
-        for (let index = 0; index < parts.length; index += 1) {
+        const items = active.items;
+        let ahead = items.length ? startSpeech(items[0].text, active) : null;
+        for (let index = 0; index < items.length; index += 1) {
             const request = ahead;
-            // The next request is already in flight while this segment is still arriving.
-            ahead = index + 1 < parts.length ? startSpeech(parts[index + 1], active) : null;
+            // The next segment is already in flight while this one is still arriving.
+            ahead = index + 1 < items.length ? startSpeech(items[index + 1].text, active) : null;
             if (ahead) ahead.catch(() => {});
             // Keep roughly one segment of scheduled audio in hand instead of buffering the answer.
             while (playback === active && active.next - ctx.currentTime > 24) {
                 await new Promise(resolve => setTimeout(resolve, 200));
             }
             if (playback !== active) return;
+            // A table or code block starts after a real pause, not mid-sentence.
+            active.next += items[index].gap || 0;
             await consume(await request, active);
             if (playback !== active) return;
         }
@@ -233,12 +267,15 @@ export function installChatExtension() {
             await new Promise(resolve => setTimeout(resolve, 120));
         }
     }
-    async function buffered(parts, active) {
-        for (const part of parts) {
+    async function buffered(active) {
+        for (const item of active.items) {
             if (playback !== active || disposed) break;
+            if (item.gap) await new Promise(resolve => setTimeout(resolve, item.gap * 1000));
+            while (playback === active && active.paused) await new Promise(resolve => setTimeout(resolve, 120));
+            if (playback !== active) break;
             active.id = crypto.randomUUID();
             const response = await voiceRequest('synthesize', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ requestId: active.id, text: part }), signal: active.abort.signal });
+                body: JSON.stringify({ requestId: active.id, text: item.text }), signal: active.abort.signal });
             const blob = await response.blob();
             if (playback !== active) break;
             active.url = URL.createObjectURL(blob); active.audio = new Audio(active.url);
@@ -258,8 +295,40 @@ export function installChatExtension() {
             toolbar.append(button); readButtons.add(button);
             button.onclick = event => { event.stopPropagation(); void read(toolbar.closest('.msg-wrap--answer-frame'), button); };
         });
+        queueAutoRead();
     }
-    const observer = new MutationObserver(() => { scan(); if (playback && !playback.button.isConnected) stopPlayback(); });
+    async function loadVoiceFlag() {
+        try {
+            const state = await (await voiceRequest('status')).json();
+            autoRead = !!(state?.tts?.enabled && state?.tts?.autoRead);
+        } catch { autoRead = false; }
+    }
+    void loadVoiceFlag();
+    function queueAutoRead() {
+        if (!autoRead || !sawStreaming || disposed) return;
+        if (document.querySelector('.is-streaming')) return;
+        const wraps = [...document.querySelectorAll('.msg-wrap--answer-frame')];
+        const wrap = wraps[wraps.length - 1];
+        if (!wrap || autoDone.has(wrap)) return;
+        const button = wrap.querySelector('.voice-read');
+        const content = wrap.querySelector('.message.assistant');
+        if (!button || !content) return;
+        clearTimeout(autoTimer);
+        const text = content.textContent.trim();
+        // Wait for the answer to stop changing before speaking, or the tail is cut off.
+        autoTimer = setTimeout(() => {
+            if (!autoRead || playback || disposed || !wrap.isConnected || autoDone.has(wrap)) return;
+            if (document.querySelector('.is-streaming')) return;
+            if ((wrap.querySelector('.message.assistant')?.textContent || '').trim() !== text || !text) return;
+            autoDone.add(wrap);
+            void read(wrap, button);
+        }, 1200);
+    }
+    const observer = new MutationObserver(() => {
+        if (document.querySelector('.is-streaming')) sawStreaming = true;
+        scan();
+        if (playback && !playback.button.isConnected) stopPlayback();
+    });
     observer.observe(document.getElementById('chat-container') || document.body, { childList: true, subtree: true });
     const inputObserver = new MutationObserver(() => { if ((input.disabled || input.readOnly) && operation) void cancel(); render(); });
     inputObserver.observe(input, { attributes: true, attributeFilter: ['disabled', 'readonly'] });
@@ -273,8 +342,9 @@ export function installChatExtension() {
         }
     });
     on(menu.querySelector('[data-settings]'), 'click', () => { void hide(); globalThis.myagentOpenSettings?.('plugin:voice-input:voice'); });
-    on(document, 'myagent:session-change', () => { void hide(); stopPlayback(); });
-    on(document, 'myagent:settings-closed', () => { snapshot = null; });
+    on(document, 'myagent:session-change', () => { sawStreaming = false; clearTimeout(autoTimer); void hide(); stopPlayback(); });
+    on(document, 'myagent:settings-closed', () => { snapshot = null; void loadVoiceFlag(); });
+    on(document, 'myagent:plugins-changed', () => { void loadVoiceFlag(); });
     on(document, 'keydown', event => { if (event.key === 'Escape' && !menu.hidden) { event.preventDefault(); void hide(true); } });
     on(document, 'pointerdown', event => { if (!menu.hidden && !menu.contains(event.target) && !mic.contains(event.target)) void hide(); });
     on(document, 'visibilitychange', () => { if (document.hidden && operation) void hide(); });

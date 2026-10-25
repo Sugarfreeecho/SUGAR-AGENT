@@ -14,7 +14,9 @@
 .voice-popover button { font: inherit; border: 1px solid var(--border-hover, #444); border-radius: .4rem; padding: .3rem .6rem; background: var(--surface-glass2, #333); color: inherit; cursor: pointer; }
 .voice-popover meter { width: 100%; }
 .voice-popover [data-transcript] { white-space: pre-wrap; max-height: 8rem; overflow: auto; overflow-wrap: anywhere; }
-.voice-read { cursor: pointer; flex: 0 0 auto; white-space: nowrap; }
+.voice-read,
+.voice-pause,
+.voice-restart { cursor: pointer; flex: 0 0 auto; white-space: nowrap; }
 /* The accent fill marks playback; keeping primary text keeps the 0.62rem label legible. */
 .voice-read.is-playing { color: var(--text-primary); background: rgba(var(--brand-accent-rgb, var(--accent-rgb)), .18); border-color: var(--border-accent); }
 .voice-settings .voice-error { color: #d65c5c; overflow-wrap: anywhere; }

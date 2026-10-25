@@ -58,6 +58,7 @@ def service(tmp_path, monkeypatch):
 async def test_settings_default_persist_and_validate(service):
     state = await service.snapshot()
     assert not state["enabled"] and state["phase"] == "unprepared"
+    assert state["tts"]["autoRead"] is False
     assert not service.root.exists()
     await service.configure({"enabled": True, "language": "yue", "asr": {"provider": "local"}})
     restored = SpeechService(service.root.parent.parent)
@@ -66,6 +67,17 @@ async def test_settings_default_persist_and_validate(service):
         with pytest.raises(SpeechError):
             await service.configure(changes)
     assert restored.settings == service.settings
+    await service.close()
+
+
+@async_test
+async def test_auto_read_requires_a_boolean(service):
+    await service.configure({"tts": {"enabled": True, "autoRead": True}})
+    assert service.settings["tts"]["autoRead"] is True
+    for value in ("true", 1, None, []):
+        with pytest.raises(SpeechError):
+            await service.configure({"tts": {"autoRead": value}})
+    assert service.settings["tts"]["autoRead"] is True
     await service.close()
 
 
