@@ -424,6 +424,12 @@ class SubagentTaskRegistry:
         # cross-thread state and must not use a loop-bound asyncio.Lock.
         self._lock = threading.RLock()
 
+    @staticmethod
+    def _notify_activity_changed(child_id: str) -> None:
+        notify = getattr(session_manager, "_notify_session_state_changed", None)
+        if callable(notify):
+            notify(child_id, {"subagent_running"})
+
     async def reserve(self, child_id: str, run_id: str, *, parent_session_id: str = "") -> bool:
         """Atomically reserve the single execution slot for a subagent."""
         with self._lock:
@@ -436,7 +442,8 @@ class SubagentTaskRegistry:
             pid = (parent_session_id or "").strip()
             if pid:
                 self._parent_by_child[child_id] = pid
-            return True
+        self._notify_activity_changed(child_id)
+        return True
 
     async def attach(self, child_id: str, run_id: str, task: asyncio.Task) -> bool:
         """Attach a task to a reservation without replacing another run."""
@@ -469,6 +476,7 @@ class SubagentTaskRegistry:
                         self._tasks.pop(child_id, None)
                         self._run_ids.pop(child_id, None)
                         self._parent_by_child.pop(child_id, None)
+                self._notify_activity_changed(child_id)
                 try:
                     done_task.result()
                 except asyncio.CancelledError:
@@ -525,7 +533,8 @@ class SubagentTaskRegistry:
             self._tasks.pop(child_id, None)
             self._run_ids.pop(child_id, None)
             self._parent_by_child.pop(child_id, None)
-            return True
+        self._notify_activity_changed(child_id)
+        return True
 
     def is_running(self, child_id: str) -> bool:
         with self._lock:

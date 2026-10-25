@@ -67,6 +67,8 @@ from agent_loop import (
     transition_session_steer,
 )
 from session_lifecycle import get_active_run_info, get_run_started_at, is_run_active
+from session_search import install_session_search
+from session_activity import attach_background_work, background_work_snapshot
 from session_event_bus import (
     add_event_listener,
     publish_session_event,
@@ -1925,6 +1927,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     descendants_by_session = {}
     load_subagent_index = getattr(session_manager, "_load_subagent_index", None)
     subagent_index = load_subagent_index() if callable(load_subagent_index) else {}
+    background_work = background_work_snapshot(session_manager, subagent_index=subagent_index)
     for child_id in subagent_index:
         cursor, visited = child_id, {child_id}
         while cursor in subagent_index:
@@ -1945,6 +1948,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             logger.exception("Failed to batch pending human-interaction state for /sessions/state")
     t_after_pending_counts = _time.perf_counter()
     for s in sessions:
+        attach_background_work(s, background_work)
         sid = s.get("id")
         if not sid:
             s["stream_active"] = False
@@ -2052,7 +2056,7 @@ async def _sessions_state_payload_async(include_archived: bool = False) -> dict:
     return await asyncio.shield(task)
 
 
-def _invalidate_sessions_state_cache() -> int:
+def _invalidate_sessions_state_cache(*, terminal_event: Optional[dict] = None) -> int:
     """Discard snapshots and reject refreshes that started before a state change.
 
     Serving stale data is useful when a snapshot merely expires by TTL, but it
@@ -2072,7 +2076,9 @@ def _invalidate_sessions_state_cache() -> int:
                 "payload": None,
             }
         revision = _sessions_state_cache_generation
-    _sessions_state_signal.publish(revision)
+        # Publish under the generation lock so a later metadata revision cannot
+        # overtake a terminal notification produced by another worker thread.
+        _sessions_state_signal.publish(revision, terminal_event=terminal_event)
     return revision
 
 
@@ -3671,6 +3677,9 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
         s["react_can_continue"] = False
 
 
+_session_search = install_session_search(fastapi_app, session_manager, add_event_listener)
+
+
 @fastapi_app.get("/sessions")
 async def list_sessions(
     include_archived: bool = Query(False),
@@ -3682,6 +3691,7 @@ async def list_sessions(
 
     def _build_response() -> JSONResponse:
         sessions = session_manager.list_sessions(include_archived=include_archived or archived_only)
+        background_work = background_work_snapshot(session_manager)
         archived_count = session_manager.archived_session_count()
         if archived_only:
             sessions = [s for s in sessions if bool(s.get("archived"))]
@@ -3696,6 +3706,7 @@ async def list_sessions(
         except Exception:
             interaction_service = None
         for s in sessions:
+            attach_background_work(s, background_work)
             sid = s.get("id")
             if sid:
                 sid = str(sid)
@@ -3728,8 +3739,9 @@ async def list_sessions(
 
 @fastapi_app.get("/sessions/changes")
 async def sessions_changes(after_revision: int = Query(0, ge=0)):
-    revision = await _sessions_state_signal.wait(after_revision)
-    return JSONResponse(content={"state_revision": revision}, headers={"Cache-Control": "no-store"})
+    await _sessions_state_signal.wait(after_revision)
+    return JSONResponse(content=_sessions_state_signal.changes_since(after_revision),
+                        headers={"Cache-Control": "no-store"})
 
 
 @fastapi_app.get("/sessions/state")
@@ -3948,6 +3960,7 @@ async def get_session_detail(
             s["react_can_continue"] = False
             s["react_auto_resume"] = False
             s["queued_followup_state"] = "paused"
+        attach_background_work(s, background_work_snapshot(session_manager))
         return JSONResponse(content=s)
 
     return await asyncio.to_thread(_build_detail_response)
@@ -5181,6 +5194,7 @@ async def delete_session(session_id: str):
         await run_in_threadpool(_run_history_op_locked, sid, session_manager.delete_session, sid)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    _session_search.invalidate(sid)
     state_revision = _invalidate_sessions_state_cache()
     return JSONResponse(content={"status": "ok", "state_revision": state_revision})
 
@@ -6290,6 +6304,8 @@ def _ui_attention_terminal_is_obsolete(session_id: str, status: str) -> bool:
         return True
     if status != "completed":
         return False
+    if any(background_work_snapshot(session_manager).get(session_id, {}).values()):
+        return True
     try:
         from agent_goal import goal_enabled, manager_for
 
@@ -6374,6 +6390,8 @@ _UI_ATTENTION_NOTIFY_EVENT_TYPES = {
 
 _SESSION_STATE_INVALIDATION_EVENT_TYPES = {
     "run_started",
+    "subagent_start",
+    "subagent_finish",
     "final",
     "run_finished",
     "run_failed",
@@ -6385,7 +6403,16 @@ def _on_session_lifecycle_event_invalidate_state(_session_id: str, event: dict) 
     if not isinstance(event, dict):
         return
     if str(event.get("type") or "") in _SESSION_STATE_INVALIDATION_EVENT_TYPES:
-        _invalidate_sessions_state_cache()
+        if (event.get("type") in {"run_finished", "run_failed", "run_interrupted"}
+                and event.get("run_id") and not event.get("_subagent_forward")):
+            terminal = {key: event[key] for key in (
+                "type", "run_id", "result_status", "background_jobs_running", "subagent_running",
+                "cleanup_scope", "checkpoint_ok",
+            ) if key in event}
+            terminal.update(session_id=_session_id, ephemeral=True)
+            _invalidate_sessions_state_cache(terminal_event=terminal)
+        else:
+            _invalidate_sessions_state_cache()
 
 
 def _on_session_event_for_attention_notify(session_id: str, event: dict) -> None:
@@ -8724,6 +8751,7 @@ async def truncate_session_events(
             content={"ok": False, "error": "truncation failed"},
             status_code=400,
         )
+    _session_search.invalidate(session_id)
     try:
         from workflow_extensions import session_workflows
 
@@ -9526,7 +9554,7 @@ async def diagnose_plugin_api(plugin_id: str):
             await asyncio.to_thread(
                 session_manager.set_session_name,
                 session_id,
-                f"插件体检 · {plugin.name} v{plugin.version}",
+                f"{plugin.name}插件可用性检查",
             )
         except Exception:
             logger.warning("Plugin diagnose session rename failed", exc_info=True)
@@ -10312,13 +10340,14 @@ async def save_config(req: _Request):
             "@ai-sdk/openai": "openai-responses",
             "openai-responses": "openai-responses",
             "openai-compatible": "openai-compatible",
+            "openai-completions": "openai-compatible",
             "compatible": "openai-compatible",
             "anthropic": "anthropic",
             "@ai-sdk/anthropic": "anthropic",
         }
         exec_type = provider_aliases.get(prov or "openai-compatible")
         if exec_type is None:
-            raise ValueError("unsupported LLM provider; choose openai-compatible, openai-responses, or anthropic")
+            raise ValueError("unsupported LLM provider; choose openai-completions, openai-responses, or anthropic")
 
         if not mn:
             raise ValueError("missing model")
@@ -10809,6 +10838,7 @@ async def stop_webui_lifecycle() -> None:
     from session_lifecycle import _cancel_tasks
     await _cancel_tasks([task for task in tasks if task is not None and not task.done()], timeout=2)
     cleanup = [
+        ("session search", lambda: asyncio.to_thread(_session_search.close)),
         ("subagent notifications", stop_subagent_notification_runner),
         ("host extensions", lambda: stop_bundled_host_extensions(
             {"session_manager": session_manager, "project_root": PROJECT_ROOT, "work_dir": WORK_DIR, "app": fastapi_app})),

@@ -22,6 +22,7 @@ const context = vm.createContext({
     },
 });
 vm.runInContext(read('state/session-store.js') + '\nglobalThis.store = sessionStore;', context);
+vm.runInContext(read('state/session-selectors.js'), context);
 vm.runInContext(shared.slice(shared.indexOf('function clearSessionUnreadState('), shared.indexOf('function userMessageShouldCollapse(')), context);
 vm.runInContext(read('state/session-event-reducer.js'), context);
 vm.runInContext(management.slice(management.indexOf('function applySessionItemIndicators('), management.indexOf('function sidebarHighlightedSessionId(')), context);
@@ -146,5 +147,32 @@ function terminal(type, run, extra = {}) {
     context.store.applyActiveRunForSession('s1', snapshot('running', 0, 'legacy-run'));
     assert(!context.store.isRunFinalizing('s1'));
     assert(!context.store.finalizingRunIdsBySession.has('s1'));
+
+    // Background work owns a steady yellow indicator after the main run ends,
+    // including snapshots with a stale successful/failed unread result.
+    for (const field of ['background_jobs_running', 'subagent_running']) {
+        for (const selected of ['s1', 'other']) {
+            context.currentSessionId = selected;
+            context.store.applyActiveRuns([]);
+            context.store.applySnapshot([{id: 's1', [field]: 1, unread_result: true,
+                unread_result_status: 'success'}]);
+            assert.deepEqual([...indicator()], ['is-background-running']);
+            terminal('run_finished', 'background-parent-' + field, {[field]: 1, result_status: 'pending'});
+            assert.deepEqual([...indicator()], ['is-background-running'], 'the terminal event cannot flash green');
+            assert.equal(context.store.get('s1').unread_result, false);
+        }
+        context.store.applySnapshot([{id: 's1', [field]: 1, unread_result: true,
+            unread_result_status: 'failed'}]);
+        assert.deepEqual([...indicator()], ['is-background-running'], 'running work takes indicator priority');
+        terminal('run_started', 'background-followup-' + field);
+        assert(indicator().has('is-generating'), 'the resumed main run pulses normally');
+        assert(!indicator().has('is-unread-result'));
+        terminal('run_finished', 'background-followup-' + field, {
+            background_jobs_running: 0, subagent_running: 0, result_status: 'success',
+        });
+        assert.deepEqual([...indicator()], ['is-unread-result'], 'completion is restored after all work ends');
+        context.store.applySnapshot([{id: 's1'}]);
+        assert.equal(indicator().size, 0, 'a later read idle session has no background indicator');
+    }
     console.log('session result attention runtime checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

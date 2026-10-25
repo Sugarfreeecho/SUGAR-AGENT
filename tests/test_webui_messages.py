@@ -1564,7 +1564,11 @@ def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(m
 
     try:
         first = webui._build_sessions_state_snapshot_cached(False)
-        time.sleep(0.01)
+        # Windows monotonic clocks can have a tick longer than this test's
+        # 1 ms TTL. Expire the cached timestamp explicitly instead of relying
+        # on a 10 ms sleep crossing a clock tick.
+        with webui._sessions_state_cache_lock:
+            webui._sessions_state_cache[False]["ts"] = time.monotonic() - 1
         second = webui._build_sessions_state_snapshot_cached(False)
         assert refresh_started.wait(5)
         third = webui._build_sessions_state_snapshot_cached(False)

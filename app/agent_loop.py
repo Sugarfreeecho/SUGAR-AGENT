@@ -2585,6 +2585,12 @@ def _mark_run_terminal_unread(session_id: str, event_type: str, run_id: str = ""
         result_status = goal_result_status(goal)
     except Exception:
         result_status = None
+    from session_activity import background_work_snapshot
+
+    if result_status != "failed" and any(
+        background_work_snapshot(session_manager).get(session_id, {}).values()
+    ):
+        result_status = "pending"
     if result_status == "pending":
         session_manager.clear_session_unread_result(session_id)
     else:
@@ -3113,10 +3119,23 @@ async def _finalize_agent_run_lifecycle(
         if workflow_result_status in {"success", "failed", "pending"}:
             terminal_event["result_status"] = workflow_result_status
         terminal_type = str(terminal_event.get("type") or "run_interrupted")
+        from session_activity import background_work_snapshot
+
+        background_work = background_work_snapshot(session_manager).get(session_id, {})
+        terminal_event.update(
+            background_jobs_running=background_work.get("background_jobs_running", 0),
+            subagent_running=background_work.get("subagent_running", 0),
+        )
+        if (
+            terminal_type == "run_finished"
+            and terminal_event.get("result_status") != "failed"
+            and any(background_work.values())
+        ):
+            terminal_event["result_status"] = "pending"
         terminal_payload = {
             key: value
             for key, value in terminal_event.items()
-            if key not in {"type", "ephemeral", "run_id"}
+            if key not in {"type", "ephemeral", "run_id", "background_jobs_running", "subagent_running"}
         }
         terminal_payload.setdefault("mode", mode)
         terminal_error: Optional[BaseException] = None
@@ -7158,6 +7177,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             agent_mcp.invoke_tool_by_fname(
                                 execution_name,
                                 tool_args if isinstance(tool_args, dict) else {},
+                                session_id=state["session_id"],
+                                run_id=str(state.get("_runtime_v2_run_id") or ""),
+                                tool_call_id=str(tool_id or ""),
                                 work_dir=mcp_work_dir,
                                 image_enabled="image" in mcp_modalities,
                                 model=active_candidate.get("model") or iter_model,

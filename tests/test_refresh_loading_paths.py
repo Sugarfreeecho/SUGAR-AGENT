@@ -99,6 +99,8 @@ def test_slow_security_health_probe_keeps_http_event_loop_responsive(monkeypatch
 
 
 def test_sidebar_counts_exclude_archived_and_unrelated_descendants(monkeypatch):
+    from session_activity import attach_background_work, background_work_snapshot
+
     counted = []
     index = {'visible-child': 'visible', 'nested': 'visible-child', 'archived-child': 'archived', 'orphan': 'missing'}
     service = SimpleNamespace(pending_counts_many=lambda ids: counted.append(set(ids)) or {
@@ -112,6 +114,8 @@ def test_sidebar_counts_exclude_archived_and_unrelated_descendants(monkeypatch):
         '_cleanup_stale_active_chat': lambda: None,
         '_session_run_state_fields_light': lambda _: {'stream_active': False, 'run_active': False, 'run_started_at': None},
         'is_session_title_generation_pending': lambda _: False,
+        'attach_background_work': attach_background_work,
+        'background_work_snapshot': background_work_snapshot,
     }
     build = real_function('app/webui.py', '_build_sessions_state_snapshot', namespace)
     assert build()['sessions'][0]['pending_human_interactions']['total'] == 0

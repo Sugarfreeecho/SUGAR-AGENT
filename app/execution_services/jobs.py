@@ -108,6 +108,7 @@ class ExecutionService:
         self.manager = session_manager
         self.max_concurrent = max_concurrent
         self.jobs: dict[str, Job] = {}
+        self._sidebar_active_jobs: set[str] = set()
         self._loop = None
         self._thread = None
         self._lock = threading.Lock()
@@ -202,6 +203,15 @@ class ExecutionService:
              "notice_suppressed": job.notice_suppressed,
              "permission_mode": job.permission_mode, "model_cursor": job.output.cursor,
              "result": job.result, "result_pending": job.result_pending})
+        active = bool(job.visible and job.status in ACTIVE)
+        if active != (job.id in self._sidebar_active_jobs):
+            if active:
+                self._sidebar_active_jobs.add(job.id)
+            else:
+                self._sidebar_active_jobs.discard(job.id)
+            notify = getattr(self.manager, "_notify_session_state_changed", None)
+            if callable(notify):
+                notify(job.owner, {"background_jobs_running"})
 
     async def recover(self, owner):
         if owner in self._recovered:

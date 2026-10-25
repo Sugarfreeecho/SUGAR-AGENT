@@ -1,0 +1,22 @@
+{
+  "sessions": 1000,
+  "messages": 100000,
+  "runs": 15,
+  "cold_index_ms": 92677.57,
+  "fts5_trigram": true,
+  "complete_absent_query_ms": 1132.37,
+  "warm_first_batch": {
+    "metadata": {
+      "median_ms": 48.79,
+      "p95_ms": 62.4
+    },
+    "active_content": {
+      "median_ms": 51.14,
+      "p95_ms": 55.12
+    },
+    "archived_content": {
+      "median_ms": 55.68,
+      "p95_ms": 70.29
+    }
+  }
+}
