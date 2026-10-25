@@ -16,7 +16,7 @@ def test_catalog_reads_plugin_state_once_and_observes_next_pass_changes(monkeypa
     state = {"version": 1, "plugins": {"example": {"enabled": True}}}
     read = Mock(side_effect=lambda: {"version": 1, "plugins": {key: dict(value) for key, value in state["plugins"].items()}})
     get_manager = Mock(return_value=SimpleNamespace(state=SimpleNamespace(read=read),
-        is_enabled=lambda name: state["plugins"][name]["enabled"]))
+        is_enabled=lambda name: read()["plugins"][name]["enabled"]))
     monkeypatch.setattr(manager, "get_plugin_manager", get_manager)
     monkeypatch.setattr(manager, "plugins_enabled", lambda: True)
     registry = HostToolInvokerRegistry()
@@ -38,8 +38,9 @@ def test_unreadable_state_disables_every_binding_in_the_same_pass(monkeypatch):
     import plugins.manager as manager
     from host_tool_registry import HostToolInvokerRegistry
 
+    # Host availability calls the manager facade, which owns state reads.
     read = Mock(side_effect=OSError("state unavailable"))
-    monkeypatch.setattr(manager, "get_plugin_manager", lambda: SimpleNamespace(state=SimpleNamespace(read=read)))
+    monkeypatch.setattr(manager, "get_plugin_manager", lambda: SimpleNamespace(state=SimpleNamespace(read=read), is_enabled=lambda name: read()))
     monkeypatch.setattr(manager, "plugins_enabled", lambda: True)
     registry = HostToolInvokerRegistry()
     async def invoke(*args):
@@ -63,7 +64,7 @@ def test_host_builder_uses_one_snapshot_and_execution_checks_live_disable(monkey
     state = {"plugins": {"example": {"enabled": True}}}
     read = Mock(side_effect=lambda: {"plugins": {"example": dict(state["plugins"]["example"])}})
     get_manager = Mock(return_value=SimpleNamespace(state=SimpleNamespace(read=read),
-        is_enabled=lambda name: state["plugins"][name]["enabled"]))
+        is_enabled=lambda name: read()["plugins"][name]["enabled"]))
     monkeypatch.setattr(manager, "get_plugin_manager", get_manager)
     monkeypatch.setattr(manager, "plugins_enabled", lambda: True)
     registry = HostToolInvokerRegistry()
@@ -85,7 +86,8 @@ def test_host_builder_uses_one_snapshot_and_execution_checks_live_disable(monkey
     asyncio.run(registry.invoke("example_0", SimpleNamespace(services={}), {}))
     assert not called
     rows, _ = agent_loop._build_host_tool_catalog({})
-    assert not rows and read.call_count == 2
+    # One first catalog read, one live invocation check, one next catalog read.
+    assert not rows and read.call_count == 3
 
 
 def test_host_catalog_work_does_not_block_the_builders_event_loop(monkeypatch):

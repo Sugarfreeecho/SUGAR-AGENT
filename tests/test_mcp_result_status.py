@@ -26,6 +26,11 @@ def server(monkeypatch, raw=None, error=None):
     monkeypatch.setattr(agent_mcp, "_servers", {"server": SimpleNamespace(
         _task=SimpleNamespace(done=lambda: False), call_tool=call)})
     monkeypatch.setattr(agent_mcp, "_load_disabled_mcp_tools", lambda: set())
+    # The loader stub must model a successful state read; production fails
+    # closed until this flag is set. Never inherit the user's live state.
+    monkeypatch.setattr(agent_mcp, "_disabled_mcp_tools_loaded", True)
+    monkeypatch.setattr(agent_mcp, "_enabled_flag", lambda: True)
+    monkeypatch.setattr(agent_mcp, "_unapproved_published_servers", lambda: frozenset())
     monkeypatch.setattr(agent_mcp, "get_tool_contract", lambda _: {})
     # Text-only results do not need the application's persistent image store.
     formatter = agent_mcp.format_call_tool_result

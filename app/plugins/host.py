@@ -127,7 +127,12 @@ def bundled_host_plugin_enabled(plugin_id: str) -> bool:
             cached = snapshot["plugins"].get(key)
             if cached is None:
                 # tier default + per-plugin environment override + persisted state
-                cached = get_plugin_manager().is_enabled(key)
+                try:
+                    cached = get_plugin_manager().is_enabled(key)
+                except Exception:
+                    # One failed read disables this plugin for this catalog
+                    # pass; retry on the next pass or actual invocation.
+                    cached = False
                 snapshot["plugins"][key] = bool(cached)
             return bool(snapshot["enabled"] and cached)
         manager = get_plugin_manager()

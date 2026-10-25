@@ -12,6 +12,7 @@
       "execution-tools"
     ],
     "extension": [
+      "acp-agents",
       "desktop-notifications",
       "computer-use",
       "thread-monitor",

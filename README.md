@@ -105,6 +105,8 @@ MyAgent 全局统一使用一套持久权限模式，主界面提供三档固定
 
 完整依赖列表见 [app/requirements.txt](app/requirements.txt)。
 
+ACP v1 双向接入：通过 `app/acp_stdio.py` 向编辑器或 DSH 提供 Agent；通过 ACP Agents 插件的 `acp_task` 委派给配置的外部 Agent。启动参数、目标配置及能力范围见 [ACP 使用说明](plugins/acp-agents/README.md)，协议设计见 [ACP 规格](docs/acp.md)。
+
 ---
 
 ## 目录结构
@@ -154,7 +156,7 @@ SugarAgent/
 │   ├── .env                      # 环境变量配置
 │   ├── requirements.txt          # Python 依赖
 │   ├── templates/                # 后端 HTML 模板与 Vite 构建产物
-│   │   ├── first_time_config.html  # 首次配置向导
+│   │   ├── first_time_config.html  # 首次启动欢迎页（立即配置 / 稍后配置）
 │   │   ├── settings_center.html    # 设置中心（模型、环境变量、安全、扩展等分区）
 │   │   └── dist/                   # Vite 生产构建输出
 │   └── tools/                    # 工具辅助资源（tokenizer 等）

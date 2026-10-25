@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "acp-agents",
+  "name": "ACP Agents",
+  "version": "1.0.0",
+  "description": "标准 ACP v1 双向接入：向编辑器/DSH 提供本地 Agent，按配置委派任务给外部 ACP Agent。",
+  "settings_schema": {
+    "type": "object",
+    "schema_version": 1,
+    "title": "ACP Agents",
+    "description": "服务端使用现有后端与审批。出站目标由用户配置，模型只能选择目标 ID。",
+    "properties": {
+      "agents_json": {
+        "type": "string",
+        "title": "外部 ACP Agent 配置（JSON）",
+        "description": "对象的 key 为 target ID；值包含 command、args、env_refs、permission（reject/allow）、timeout（秒）。凭据只通过 env_refs 引用环境变量名。",
+        "format": "multiline",
+        "default": "{}"
+      }
+    }
+  },
+  "capabilities": {"trusted_host": {"entry": "host.py"}},
+  "permissions": {"context": [], "services": []}
+}

@@ -686,9 +686,10 @@ class _PersistentMcpServer:
                         fut: asyncio.Future = req[0]
                         tname: str = req[1]
                         targs: Dict[str, Any] = req[2]
+                        meta = req[3] if len(req) > 3 else None
                         try:
                             result = await asyncio.wait_for(
-                                session.call_tool(tname, targs),
+                                session.call_tool(tname, targs, **({"meta": meta} if meta else {})),
                                 timeout=self.call_timeout_sec,
                             )
                             if not fut.done():
@@ -760,14 +761,14 @@ class _PersistentMcpServer:
                 raise RuntimeError(f"MCP server `{self.alias}` restart failed: {last_err}") from last_err
             raise RuntimeError(f"MCP server `{self.alias}` restart failed")
 
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any], *, meta: Optional[dict] = None) -> Any:
         if self._task is None or self._task.done():
             await self._restart()
         if self._fatal:
             raise RuntimeError(self._fatal)
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
-        await self._queue.put((fut, tool_name, dict(arguments or {})))
+        await self._queue.put((fut, tool_name, dict(arguments or {}), meta))
         return await fut
 
     async def stop(self) -> None:
@@ -929,8 +930,24 @@ def _make_sse_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
     return _PersistentMcpServer(alias, "sse", _cm, call_timeout_sec=call_timeout)
 
 
-def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
-    url = str(cfg.get("url") or "").strip()
+def _streamable_url(cfg: dict) -> str:
+    """A bundled host endpoint follows the running backend's configured port."""
+    path = cfg.get("host_path")
+    if path is not None:
+        from urllib.parse import urlsplit
+        parsed = urlsplit(str(path))
+        if (not str(path).startswith("/api/") or parsed.scheme or parsed.netloc
+                or parsed.query or parsed.fragment or ".." in parsed.path.split("/")):
+            raise ValueError("MCP host_path must be an absolute /api/ path")
+        port = int(os.environ.get("MYAGENT_SERVER_PORT") or 8192)
+        if not 1 <= port <= 65535:
+            raise ValueError("Invalid MYAGENT_SERVER_PORT")
+        return f"http://127.0.0.1:{port}{path}"
+    return str(cfg.get("url") or "").strip()
+
+
+def _make_streamable_connector(alias: str, cfg: dict, *, register_tools: bool = True) -> _PersistentMcpServer:
+    url = _streamable_url(cfg)
     headers = _headers_from_config(cfg)
     timeout_sec = float(cfg.get("timeout", 30))
     read_sec = float(cfg.get("sse_read_timeout", cfg.get("read_timeout", 300)))
@@ -946,7 +963,61 @@ def _make_streamable_connector(alias: str, cfg: dict) -> _PersistentMcpServer:
                 read, write, _ = streams
                 yield (read, write)
 
-    return _PersistentMcpServer(alias, "streamable-http", _cm, call_timeout_sec=call_timeout)
+    server = _PersistentMcpServer(alias, "streamable-http", _cm, call_timeout_sec=call_timeout, register_tools=register_tools)
+    server.host_context = cfg.get("host_context") is True
+    return server
+
+
+class SessionMcpClient:
+    """An explicitly owned MCP connection that never publishes global tools."""
+
+    def __init__(self, server):
+        self._server = server
+        self.tools = tuple(server._tools)
+        self._closed = False
+
+    async def call(self, name: str, arguments: dict):
+        if self._closed:
+            raise RuntimeError("session MCP client is closed")
+        return await _run_on_mcp_loop(self._server.call_tool(name, arguments))
+
+    async def close(self):
+        if not self._closed:
+            self._closed = True
+            try:
+                await _run_on_mcp_loop(self._server.stop())
+            except BaseException:
+                self._closed = False
+                raise
+
+
+async def open_session_mcp_client(alias: str, config: dict) -> SessionMcpClient:
+    """Connect one stdio/HTTP client after the existing registration policy gate.
+
+    The caller owns close, session visibility and per-call authorization.
+    Failure rolls back the unpublished connection on the MCP owner loop.
+    """
+    from security.extensions import mcp_descriptor, mcp_registration_is_approved
+
+    if not mcp_registration_is_approved(mcp_descriptor(alias, config)):
+        raise PermissionError("MCP registration approval is required")
+
+    async def open_owned():
+        transport = _resolve_transport(config)
+        if transport == "stdio":
+            server = _make_stdio_connector(alias, config, register_tools=False)
+        elif transport == "streamable-http":
+            server = _make_streamable_connector(alias, config, register_tools=False)
+        else:
+            raise ValueError("session MCP supports only stdio and Streamable HTTP")
+        try:
+            await server.start()
+        except BaseException:
+            await server.stop()
+            raise
+        return SessionMcpClient(server)
+
+    return await _run_on_mcp_loop(open_owned())
 
 
 async def _shutdown_servers_unlocked() -> None:
@@ -1011,7 +1082,7 @@ async def _start_configured_server_unlocked(alias: str, cfg: dict) -> None:
             raise ValueError("SSE transport requires url")
         srv = _make_sse_connector(alias, cfg)
     elif transport == "streamable-http":
-        if not str(cfg.get("url") or "").strip():
+        if not _streamable_url(cfg):
             raise ValueError("Streamable HTTP transport requires url")
         srv = _make_streamable_connector(alias, cfg)
     else:
@@ -1531,6 +1602,9 @@ async def invoke_tool_by_fname(
     image_enabled: bool = False,
     model: str = "",
     return_outcome: bool = False,
+    session_id: str = "",
+    run_id: str = "",
+    tool_call_id: str = "",
 ) -> Any:
     if function_name not in _fname_to_tool:
         await ensure_started()
@@ -1543,6 +1617,7 @@ async def invoke_tool_by_fname(
             image_enabled=image_enabled,
             model=model,
             return_outcome=return_outcome,
+            session_id=session_id, run_id=run_id, tool_call_id=tool_call_id,
         )
     )
 
@@ -1556,6 +1631,9 @@ async def _invoke_tool_by_fname_impl(
     image_enabled: bool = False,
     model: str = "",
     return_outcome: bool = False,
+    session_id: str = "",
+    run_id: str = "",
+    tool_call_id: str = "",
 ) -> Any:
     def failure(code, message, *, content=None, timed_out=False):
         return ToolOutcome.failed(code, message, content=message if content is None else content,
@@ -1627,8 +1705,13 @@ async def _invoke_tool_by_fname_impl(
         except Exception as e:
             return failure("mcp_reconnect_error", f"Error: MCP server `{alias}` reconnect failed: {e}")
     t0 = time.perf_counter()
+    meta = None
     try:
-        raw = await srv.call_tool(orig, call_arguments)
+        if getattr(srv, "host_context", False) is True:
+            import mcp_host_context
+            meta = mcp_host_context.issue(alias, orig, call_arguments,
+                session_id=session_id, run_id=run_id, tool_call_id=tool_call_id)
+        raw = await srv.call_tool(orig, call_arguments, **({"meta": meta} if meta else {}))
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         raw_dump = _serialize_call_tool_result_for_log(raw)
         is_error = raw.get("isError", False) if isinstance(raw, dict) else getattr(raw, "isError", False)
@@ -1661,3 +1744,6 @@ async def _invoke_tool_by_fname_impl(
         timed_out = isinstance(e, TimeoutError)
         return failure("mcp_call_timed_out" if timed_out else "mcp_invocation_error",
             f"MCP tool error ({function_name}): {e}", timed_out=timed_out)
+    finally:
+        if meta:
+            mcp_host_context.revoke(meta)
