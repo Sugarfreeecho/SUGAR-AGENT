@@ -58,6 +58,13 @@
 - 统一为“未启用”（英文 `Not enabled`）；切换按钮仍保留“启用 / 停用”的动作语义，`已禁用` 继续用于用户主动关闭的 Skill / MCP 工具。
 - `setup_i18n.js` 补充 `未启用`、`已停用` 的英文映射；`frontend/src` 与 `app/templates/dist` 同提交（vite build，9.66s）。
 
+### 2.7 插件可用性体检与体检会话
+
+- 每个插件行新增「检查可用性」按钮；**刚由未启用打开**（本地待检查标记）或**已启用但 `loaded=false`**（启用失败）时按钮高亮（橙色描边），刷新后仍保留待检查标记。
+- 后端新增 `GET /api/plugins/{id}/availability`：静态检查全局开关、启用状态、清单兼容性、trusted_host 路径、`requirements.txt` 依赖、必填配置、Web/runtime 入口，返回 `ready / degraded / unavailable` 与逐项证据。
+- 后端新增 `POST /api/plugins/{id}/diagnose`：建一个诊断会话，把报告写进首条提示词返回；设置页用一次性 localStorage 键把提示词交给主界面，`/?session=<id>` 打开后自动发送，Agent 实际调用工具/页面复核，再按阻塞项逐步引导（不自行改源码/配置）。
+- 新增 `tests/test_plugin_availability.py`（5 项）；连同设置中心、插件核心与目录测试共 56 passed / 1 skipped。前端 `vite build` 13.48s，src 与 dist 同提交。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

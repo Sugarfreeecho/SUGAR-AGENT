@@ -47,6 +47,20 @@
     });
   }
 
+  /* 体检按钮：刚被打开、或启用后仍没加载成功的插件，先高亮提醒去检查一次。 */
+  const PLUGIN_CHECK_PENDING_KEY = 'myagent.pluginCheckPending';
+  function pluginCheckPending() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PLUGIN_CHECK_PENDING_KEY) || '[]');
+      return new Set(Array.isArray(raw) ? raw.map(String) : []);
+    } catch (e) { return new Set(); }
+  }
+  function markPluginCheckPending(id, pending) {
+    const set = pluginCheckPending();
+    if (pending) set.add(String(id)); else set.delete(String(id));
+    try { localStorage.setItem(PLUGIN_CHECK_PENDING_KEY, JSON.stringify(Array.from(set))); } catch (e) { /* ignore */ }
+  }
+
   A.registerSection({
     id: 'plugins', icon: 'plugins', zh: '插件', en: 'Plugins', mode: 'instant',
     zhSub: '插件可带工具、技能和 Hooks，启停后即时生效。', enSub: 'Plugins may bundle tools, skills and hooks.',
@@ -56,11 +70,13 @@
     },
     render(d) {
       const plugins = (d.plugins || []).filter((p) => (p.tier ? p.tier !== 'system' : !p.system_builtin));
+      const pendingChecks = pluginCheckPending();
       const rows = plugins.map((p) => {
         const compat = p.compatibility || {};
         const bad = compat.status === 'incompatible' || compat.compatible === false;
         const loaded = p.loaded !== false && p.enabled !== false;
         const envLocked = p.env_override === true || p.env_override === false;
+        const needsCheck = pendingChecks.has(pluginId(p)) || (p.enabled !== false && p.loaded === false);
         return W.lrow(
           tipIf(esc(pluginName(p)) + (p.version ? ' <span class="st-muted">v' + esc(p.version) + '</span>' : ''),
             p.description || ''),
@@ -70,6 +86,10 @@
           W.sw('plugin:' + pluginId(p), p.enabled !== false,
             envLocked ? 'disabled aria-disabled="true" title="' + t('由环境变量控制', 'Controlled by environment variable') + '"' : '') +
           (envLocked ? W.chip('ENV ' + esc(p.env_var || '')) : '') +
+          '<button type="button" class="st-btn sm' + (needsCheck ? ' is-pending' : '') + '" data-act="plugin-check" data-id="' + esc(pluginId(p)) + '"' +
+            (needsCheck ? ' style="border-color:#d97706;color:#f59e0b"' : '') +
+            ' title="' + t('拉起一个会话，检查这个插件是否真实可用', 'Open a session that verifies whether this plugin really works') + '">' +
+            t('检查可用性', 'Check') + '</button>' +
           '<button type="button" class="st-btn sm text" data-act="plugin-settings" data-id="' + esc(pluginId(p)) + '">' + t('设置', 'Settings') + '</button>' +
           '<button type="button" class="st-btn sm text danger" data-act="plugin-del" data-id="' + esc(pluginId(p)) + '" data-name="' + esc(pluginName(p)) + '">' + t('移除', 'Remove') + '</button>'
         );
@@ -110,8 +130,12 @@
       if (key.indexOf('plugin:') !== 0) return;
       const id = key.slice('plugin:'.length);
       api('/api/plugins/' + encodeURIComponent(id) + '/enabled', { method: 'POST', body: { enabled: on } })
-        .then(() => { toast(on ? t('已启用', 'Enabled') : t('已停用', 'Disabled')); reload(); })
-        .catch((err) => { reportError(err); reload(); });
+        .then(() => {
+          if (on) markPluginCheckPending(id, true);
+          toast(on ? t('已启用', 'Enabled') : t('已停用', 'Disabled'));
+          reload();
+        })
+        .catch((err) => { markPluginCheckPending(id, true); reportError(err); reload(); });
     },
     onAction(act, el) {
       if (act === 'plugin-install') {
@@ -133,6 +157,29 @@
         return;
       }
       if (act === 'plugin-settings') { pluginSettingsDialog(el.dataset.id); return; }
+      if (act === 'plugin-check') {
+        const id = el.dataset.id;
+        if (el.disabled) return;
+        el.disabled = true;
+        toast(t('正在生成体检会话…', 'Preparing diagnostic session…'));
+        api('/api/plugins/' + encodeURIComponent(id) + '/diagnose', { method: 'POST', body: {} })
+          .then((res) => {
+            if (!res || !res.session_id) throw new Error(t('未返回会话', 'No session returned'));
+            markPluginCheckPending(id, false);
+            try {
+              localStorage.setItem('myagent.pluginDiagnosePrompt:' + res.session_id, res.prompt || '');
+            } catch (e) { /* ignore */ }
+            const url = '/?session=' + encodeURIComponent(res.session_id);
+            // Keep the returned handle (noopener makes window.open return null
+            // even when the tab opened), then drop opener access explicitly.
+            const opened = window.open(url, '_blank');
+            if (opened) { try { opened.opener = null; } catch (e) { /* ignore */ } }
+            else window.location.assign(url);
+          })
+          .catch((err) => { markPluginCheckPending(id, true); reportError(err); reload(); })
+          .finally(() => { el.disabled = false; });
+        return;
+      }
       if (act === 'plugin-reload') {
         api('/api/extensions/reload', { method: 'POST', body: {} })
           .then((res) => {

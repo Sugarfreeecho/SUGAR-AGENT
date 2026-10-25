@@ -9129,7 +9129,7 @@ _ENV_HINTS: dict[str, str] = {
     "OPENAI_MAX_RETRIES": "显式可重试错误路径允许的请求尝试数（含首次），默认 4；全部计入统一请求总预算。",
     "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC": "所有 Chat Completions 均在传输层等待首个有效 token；达到该秒数后追加一路并行 API 请求，首个有效 token 的连接胜出。非流式调用仅在上层缓冲赢家的完整结果；设为 0 关闭。",
     "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES": "单次逻辑模型调用因慢响应最多追加的并行 API 请求数，默认 2；设为 0 关闭并行重试。",
-    "OPENAI_TOTAL_REQUEST_BUDGET": "单次逻辑模型调用中 hedge、错误重试和模型回退共享的物理 API 请求总预算，默认 6。",
+    "OPENAI_TOTAL_REQUEST_BUDGET": "单次逻辑模型调用中首 token hedge 与同模型错误重试共享的物理 API 请求总预算，默认 6；模型切换按候选链规则执行，不受该预算阻断或计数。",
     "OPENAI_TOTAL_DEADLINE_SEC": "单次逻辑模型调用包含全部并行与串行尝试的总截止时间（秒），默认 600。",
     "OPENAI_MAX_INFLIGHT_REQUESTS": "单次逻辑模型调用同时存在的 API 请求连接上限，默认 3。",
     "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；本机离线时等待网络恢复，其他错误达到上限后进入常规模型回退。",
@@ -9465,6 +9465,62 @@ async def get_plugin_catalog():
     finally:
         logger.info("plugin_catalog_timing total_ms=%.3f timing=%s",
                     (_catalog_time.perf_counter() - started) * 1000, timing)
+
+
+def _find_discovered_plugin(plugin_id: str):
+    """Resolve one discovered plugin for availability/diagnose endpoints."""
+
+    from agent_extensions import plugin_manager
+    from plugins import normalize_namespace
+
+    namespace = normalize_namespace(plugin_id)
+    plugin = next(
+        (item for item in plugin_manager().discover() if item.plugin_id == namespace),
+        None,
+    )
+    if plugin is None:
+        raise LookupError(namespace)
+    return plugin
+
+
+@fastapi_app.get("/api/plugins/{plugin_id}/availability")
+async def get_plugin_availability_api(plugin_id: str):
+    try:
+        from plugin_availability import plugin_availability
+
+        plugin = await asyncio.to_thread(_find_discovered_plugin, plugin_id)
+        report = await asyncio.to_thread(plugin_availability, plugin)
+        return JSONResponse({"ok": True, **report})
+    except LookupError:
+        return JSONResponse({"ok": False, "error": "plugin_not_found"}, status_code=404)
+    except Exception:
+        logger.exception("Plugin availability check failed")
+        return JSONResponse({"ok": False, "error": "plugin_availability_failed"}, status_code=500)
+
+
+@fastapi_app.post("/api/plugins/{plugin_id}/diagnose")
+async def diagnose_plugin_api(plugin_id: str):
+    """Create a diagnostic session primed with the static availability report."""
+
+    try:
+        from plugin_availability import diagnosis_prompt, plugin_availability
+
+        plugin = await asyncio.to_thread(_find_discovered_plugin, plugin_id)
+        report = await asyncio.to_thread(plugin_availability, plugin)
+        session_id, _, _, _, _, _ = await asyncio.to_thread(
+            session_manager.get_or_create_session
+        )
+        return JSONResponse({
+            "ok": True,
+            "session_id": session_id,
+            "prompt": diagnosis_prompt(plugin, report),
+            "availability": report,
+        })
+    except LookupError:
+        return JSONResponse({"ok": False, "error": "plugin_not_found"}, status_code=404)
+    except Exception:
+        logger.exception("Plugin diagnose session failed")
+        return JSONResponse({"ok": False, "error": "plugin_diagnose_failed"}, status_code=500)
 
 
 @fastapi_app.post("/api/extensions/session-ui")

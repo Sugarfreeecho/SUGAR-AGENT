@@ -24251,6 +24251,41 @@ var pendingQuerySession = (function () {
     return '';
 })();
 
+/* 插件体检：设置页把诊断提示词放进 localStorage，主界面在新会话就绪后自动发送一次。 */
+function pluginDiagnosePromptKey(sessionId) {
+    return 'myagent.pluginDiagnosePrompt:' + sessionId;
+}
+
+function hasPluginDiagnosePrompt(sessionId) {
+    try { return !!localStorage.getItem(pluginDiagnosePromptKey(sessionId)); } catch (e) { return false; }
+}
+
+function maybeAutoSendPluginDiagnose(sessionId) {
+    var key = pluginDiagnosePromptKey(sessionId);
+    var text = '';
+    try {
+        text = localStorage.getItem(key) || '';
+        if (text) localStorage.removeItem(key);
+    } catch (e) { return; }
+    if (!text) return;
+    var input = document.getElementById('message-input');
+    if (input) {
+        input.value = text;
+        if (typeof syncComposerInputState === 'function') {
+            try { syncComposerInputState(); } catch (e) { /* ignore */ }
+        }
+    }
+    if (typeof sendMessage !== 'function') return;
+    try {
+        var pending = sendMessage({ message: text, sessionId: sessionId });
+        if (pending && typeof pending.catch === 'function') {
+            pending.catch(function (error) { console.warn('plugin diagnose autosend failed', error); });
+        }
+    } catch (error) {
+        console.warn('plugin diagnose autosend failed', error);
+    }
+}
+
 function maybeTakeOverActiveRuntimeSession(payload) {
     var sid = String(currentSessionId || '').trim();
     var activeIds = payload && Array.isArray(payload.active_session_ids)
@@ -24604,8 +24639,13 @@ async function loadSessionsInner(opts) {
             var queryTarget = pendingQuerySession;
             pendingQuerySession = '';
             var known = allSessions.some(function (s) { return s && s.id === queryTarget; });
-            if (known && queryTarget !== currentSessionId && typeof switchSession === 'function') {
-                void Promise.resolve(switchSession(queryTarget)).catch(function (err) { /* ignore */ });
+            var diagnosePrompt = hasPluginDiagnosePrompt(queryTarget);
+            if ((known || diagnosePrompt) && queryTarget !== currentSessionId && typeof switchSession === 'function') {
+                void Promise.resolve(switchSession(queryTarget)).then(function () {
+                    maybeAutoSendPluginDiagnose(queryTarget);
+                }).catch(function (err) { /* ignore */ });
+            } else if (queryTarget === currentSessionId) {
+                maybeAutoSendPluginDiagnose(queryTarget);
             }
         }
 

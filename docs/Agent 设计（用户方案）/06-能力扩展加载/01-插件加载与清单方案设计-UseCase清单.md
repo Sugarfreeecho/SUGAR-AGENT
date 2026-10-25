@@ -1,6 +1,6 @@
 # 插件加载与清单 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-25 v8（插件四级分层与逐插件环境开关）
+- 版本：2026-10-25 v9（插件可用性体检与体检会话）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/manager.py`、`plugins/loader.py`、`agent_extensions.load_plugins`、`plugins/models.py`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -81,6 +81,13 @@
 - **规则与边界**：分级表是运行期与桌面打包的唯一口径；`system_builtin` 只保留“原生渲染/信任”语义，不再决定设置页可见性。未登记插件沿用“可见、默认启用、不打包”，未登记的老式内置插件仍隐藏。环境变量不落盘，界面开关仍写 `.config/plugins-state.json`；`standalone` 仅影响打包与默认值，用户手动启用后照常加载。
 - **依据**：`plugins/tiers.json`、`plugins/tiers.py`、`plugins/manager.is_enabled`、`plugins/host.bundled_host_plugin_enabled`、`agent_extensions._plugin_catalog_data`、`packaging/scripts/prepare-payload.mjs`。
 
+### UC-6A11 插件可用性体检与体检会话
+
+- **触发**：设置页插件行点击「检查可用性」；插件刚由未启用打开，或已启用但 `loaded=false`（启用失败）时按钮高亮。
+- **预期现象**：`GET /api/plugins/{id}/availability` 返回 `state`（ready / degraded / unavailable）和逐项 `checks`：全局开关、启用状态、清单兼容性、trusted_host 信任路径、`requirements.txt` 声明的依赖、必填配置、Web 入口、runtime 入口。`POST /api/plugins/{id}/diagnose` 新建会话并把报告写进首条提示词；主界面用一次性 localStorage 键接收提示词并自动发送，由 Agent 实际调用工具/页面复核，再按阻塞项逐步引导。
+- **规则与边界**：体检只做静态检查，不导入插件代码；真实可用性以会话内调用结果为准。报告只用于引导，不改变启停或配置；安装依赖、改配置等动作需用户确认后执行。自动发送读取即删除，避免刷新重复发送；弹窗被拦截时退回当前标签打开。
+- **依据**：`app/plugin_availability.py`、`app/webui.py`（`/api/plugins/{id}/availability`、`/api/plugins/{id}/diagnose`）、`app/templates/static/settings/sections_ext.js`、`frontend/src/app/modules/session-management.js`、`tests/test_plugin_availability.py`。
+
 ## 3. 边界
 
 - 加载失败≠崩溃：失败信息进入运行错误列表（`plugin_runtime_errors`）。
@@ -99,8 +106,11 @@
 | UC-6A8 | `_manager_configuration_token`、`get_plugin_manager`、`_migrate_legacy_path`、`_user_plugins_dir` |
 | UC-6A9 | `load_plugins(refresh_loop=...)`、`_schedule_plugin_cache_refresh`、`tests/test_hook_worker_plugin_cache.py` |
 | UC-6A10 | `plugins/tiers.py`、`plugins/manager.py`、`agent_extensions.py`、`packaging/scripts/prepare-payload.mjs` |
+| UC-6A11 | `plugin_availability.py`、`webui.py`、`sections_ext.js`、`session-management.js` |
 
 ## 5. 版本记录
+
+- 2026-10-25 v9：新增插件可用性体检接口与体检会话；设置页按钮在刚启用/启用失败时高亮，会话内由 Agent 实际复核并分步引导。
 
 - 2026-10-25 v8：新增四级分层（system / system-external / extension / standalone）、逐插件 `PLUGIN_<ID>_ENABLED` 与环境变量优先级；打包范围改由同一张分级表派生。
 
