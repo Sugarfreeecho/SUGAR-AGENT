@@ -9507,13 +9507,33 @@ async def diagnose_plugin_api(plugin_id: str):
 
         plugin = await asyncio.to_thread(_find_discovered_plugin, plugin_id)
         report = await asyncio.to_thread(plugin_availability, plugin)
-        session_id, _, _, _, _, _ = await asyncio.to_thread(
-            session_manager.get_or_create_session
-        )
+        # Bind the diagnostic session to the plugin directory so relative reads
+        # and shell commands work there; fall back to the default workspace.
+        work_dir = str(plugin.root)
+        try:
+            session_id, _, _, _, _, _ = await asyncio.to_thread(
+                session_manager.get_or_create_session, None, work_dir=work_dir
+            )
+        except ValueError:
+            work_dir = ""
+            session_id, _, _, _, _, _ = await asyncio.to_thread(
+                session_manager.get_or_create_session
+            )
+        # Name the session up front: auto-naming only lands after the first run
+        # finishes, so an empty diagnostic session would sit in the sidebar as
+        # "新会话" until then.
+        try:
+            await asyncio.to_thread(
+                session_manager.set_session_name,
+                session_id,
+                f"插件体检 · {plugin.name} v{plugin.version}",
+            )
+        except Exception:
+            logger.warning("Plugin diagnose session rename failed", exc_info=True)
         return JSONResponse({
             "ok": True,
             "session_id": session_id,
-            "prompt": diagnosis_prompt(plugin, report),
+            "prompt": diagnosis_prompt(plugin, report, session_work_dir=work_dir),
             "availability": report,
         })
     except LookupError:

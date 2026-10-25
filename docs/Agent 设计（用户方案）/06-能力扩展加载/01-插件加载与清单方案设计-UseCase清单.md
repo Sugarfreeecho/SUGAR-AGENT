@@ -85,6 +85,7 @@
 
 - **触发**：设置页插件行点击「检查可用性」；插件刚由未启用打开，或已启用但 `loaded=false`（启用失败）时按钮高亮。
 - **预期现象**：`GET /api/plugins/{id}/availability` 返回 `state`（ready / degraded / unavailable）和逐项 `checks`：全局开关、启用状态、清单兼容性、trusted_host 信任路径、`requirements.txt` 声明的依赖、必填配置、Web 入口、runtime 入口。`POST /api/plugins/{id}/diagnose` 新建会话并把报告写进首条提示词；主界面用一次性 localStorage 键接收提示词并自动发送，由 Agent 实际调用工具/页面复核，再按阻塞项逐步引导。
+- **会话形态**：提示词同时给出插件目录、清单文件、依赖清单与页面/设置/可用性接口；会话工作目录设为插件目录（不可用时回退默认目录）。会话创建后立即命名为「插件体检 · <插件名> v<版本>」，不等首轮结束的自动命名。
 - **规则与边界**：体检只做静态检查，不导入插件代码；真实可用性以会话内调用结果为准。报告只用于引导，不改变启停或配置；安装依赖、改配置等动作需用户确认后执行。自动发送读取即删除，避免刷新重复发送；弹窗被拦截时退回当前标签打开。
 - **依据**：`app/plugin_availability.py`、`app/webui.py`（`/api/plugins/{id}/availability`、`/api/plugins/{id}/diagnose`）、`app/templates/static/settings/sections_ext.js`、`frontend/src/app/modules/session-management.js`、`tests/test_plugin_availability.py`。
 

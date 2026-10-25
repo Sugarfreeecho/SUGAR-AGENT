@@ -90,5 +90,10 @@ def test_diagnosis_prompt_carries_report_and_guardrails(tmp_path):
     prompt = diagnosis_prompt(plugin, report)
 
     assert "check-demo" in prompt
+    assert str((tmp_path / "demo").resolve()) in prompt
+    assert "本次会话工作目录" in prompt
     assert "自动检查结果" in prompt
     assert "不要修改插件源码" in prompt
+
+    without_workdir = diagnosis_prompt(plugin, report, session_work_dir="")
+    assert "本次会话工作目录" not in without_workdir

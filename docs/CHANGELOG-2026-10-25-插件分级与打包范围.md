@@ -72,6 +72,14 @@
 - **现场证据**：会话 `75e21c91-b14c-4d3a-9f68-9a4724e1e854` 的 `events.jsonl` 只有 `session_meta` 与 `extension_state_changed`，没有 user 事件，也没有 run。
 - **验证**：`vite build` 5.89s；dist 含 `myagentOpenPluginDiagnose`（3 处）、`myagent:plugin-diagnose`（1 处）与 `pluginDiagnosePrompt`（8 处）。设置静态 JS 不再出现 `window.open`。
 
+### 2.9 体检会话带上插件目录并主动命名
+
+- 原提示词只给插件 id / 名称 / 版本，Agent 不知道插件装在哪；会话工作目录也停在默认 workspace。
+- `diagnosis_prompt` 新增「插件位置」段：插件目录、清单文件、`requirements.txt`（存在时）、插件页面、设置接口与可用性接口。
+- `POST /api/plugins/{id}/diagnose` 创建会话时把 `work_dir` 设为插件目录（路径不可用时回退默认目录，并在提示词里省略工作目录行）。
+- 会话创建后立即 `set_session_name` 为「插件体检 · <插件名> v<版本>」，不再等首轮结束后的自动命名。
+- 验证：`tests/test_plugin_availability.py` 断言提示词含插件目录与工作目录行，工作目录为空时省略。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

@@ -141,16 +141,41 @@ def plugin_availability(plugin: Any, *, manager: Any = None) -> Dict[str, Any]:
     }
 
 
-def diagnosis_prompt(plugin: Any, report: Mapping[str, Any]) -> str:
+def diagnosis_prompt(
+    plugin: Any,
+    report: Mapping[str, Any],
+    *,
+    session_work_dir: Optional[str] = None,
+) -> str:
     """First user turn for the diagnostic session."""
 
+    root = Path(str(getattr(plugin, "root", "") or "")).resolve()
+    manifest = Path(str(getattr(plugin, "manifest_path", "") or ""))
+    capabilities = _capabilities(plugin)
+    requirements = root / "requirements.txt"
+    plugin_id = str(plugin.plugin_id)
+    effective_work_dir = str(root) if session_work_dir is None else str(session_work_dir)
     lines = [
         f"请检查插件 `{plugin.plugin_id}`（{plugin.name} v{plugin.version}）是否真实可用，"
         "并在不可用时逐步引导我完成调测。",
         "",
+        "## 插件位置",
+        f"- 插件目录：`{root}`",
+        f"- 清单文件：`{manifest}`",
+    ]
+    if effective_work_dir:
+        lines.append(f"- 本次会话工作目录：`{effective_work_dir}`（相对路径即插件目录）")
+    if requirements.is_file():
+        lines.append(f"- 依赖清单：`{requirements}`")
+    if isinstance(capabilities.get("web"), Mapping):
+        lines.append(f"- 插件页面：`/plugins/{plugin_id}`")
+    lines.extend([
+        f"- 设置接口：`GET/PATCH /api/plugins/{plugin_id}/settings`",
+        f"- 可用性接口：`GET /api/plugins/{plugin_id}/availability`",
+        "",
         "## 自动检查结果",
         f"- 分级：`{report.get('tier')}`；启用状态：{'已启用' if report.get('enabled') else '未启用'}；结论：**{report.get('state')}**",
-    ]
+    ])
     for item in report.get("checks") or []:
         mark = "通过" if item.get("ok") else ("阻塞" if item.get("fatal") else "问题")
         detail = str(item.get("detail") or "").strip()
