@@ -44,6 +44,14 @@
 - 技能：只打包 `packaging/skills.allowlist.txt`（当前 7 个），与运行时启停无关；`npm run payload:skills` 预览，`--all-skills` 全量。
 - `runtime-manifest.json` 增加 `plugins` 字段（`mode` / `tiersFile` / `packaged` / `skipped`），`skills` 字段改为 `allowlistFile`。
 
+### 2.5 修复：停用插件仍被加载（语音按钮/设置页签残留）
+
+- **现象**：`voice-input` 在目录里显示 `configured_enabled=false`，但聊天页仍有语音按钮、设置页仍有“语音输入与朗读”页签。
+- **根因**：`PluginManager._enabled_definitions()` 直接读 `.config/plugins-state.json`，无记录时按“启用”处理，绕过了分级默认值与 `PLUGIN_*` 环境变量。目录走 `is_enabled()`（false），加载器走旧逻辑（true），于是 `loaded=true`，`chat.extension` / `settings.section` 继续注入。
+- **修复**：加载与目录改为同一优先级——环境变量 > 持久状态 > 分级默认值；新增回归 `test_tier_default_and_env_override_control_loading`，并把 `repo-engineering` 契约测试改为显式启用（standalone 默认停用）。
+- **附带**：旧代码对 `system_builtin` 插件即使停用也保留 `settings.section`；`voice-input` 已归入 `standalone`，停用后不再保留任何 UI 贡献。
+- **验证**：临时目录实测仅加载 9 个非 standalone 插件；`PLUGIN_VOICE_INPUT_ENABLED=1` 可恢复加载，`PLUGIN_AGENT_GOAL_ENABLED=0` 可停用内置；相关 pytest 118 passed / 1 skipped。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

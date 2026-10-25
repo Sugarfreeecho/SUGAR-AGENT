@@ -45,6 +45,8 @@ def _make_skill(root: Path, directory: str = "review", name: str = "review") -> 
 def test_repository_engineering_plugin_contract(tmp_path):
     plugin_root = Path(__file__).resolve().parents[1] / "plugins" / "repo-engineering"
     manager = PluginManager([plugin_root.parent], tmp_path / "plugin-state.json")
+    # repo-engineering is a standalone plugin: shipped disabled, opt-in.
+    manager.enable("repo-engineering")
 
     loaded = manager.load_enabled()
 
@@ -324,6 +326,33 @@ def test_corrupt_enable_state_fails_closed_without_loading_plugins(tmp_path):
 
     assert loaded.plugins == ()
     assert any("Cannot read plugin state" in error for error in loaded.errors)
+
+
+def test_tier_default_and_env_override_control_loading(tmp_path, monkeypatch):
+    """A tier-disabled plugin must not load tools/UI just because state is silent."""
+
+    from app.plugins import manager as manager_module
+
+    plugin_root = tmp_path / "plugin"
+    _make_native(plugin_root, id="tier-demo")
+    _make_skill(plugin_root)
+    monkeypatch.setattr(
+        manager_module.tiers,
+        "default_enabled",
+        lambda plugin_id: plugin_id != "tier-demo",
+    )
+    manager = PluginManager([tmp_path], tmp_path / "state.json")
+
+    assert manager.is_enabled("tier-demo") is False
+    assert manager.load_enabled().plugins == ()
+
+    monkeypatch.setenv("PLUGIN_TIER_DEMO_ENABLED", "1")
+    assert manager.is_enabled("tier-demo") is True
+    assert [plugin.plugin_id for plugin in manager.load_enabled().plugins] == ["tier-demo"]
+
+    monkeypatch.delenv("PLUGIN_TIER_DEMO_ENABLED")
+    _write_json(tmp_path / "state.json", {"version": 1, "plugins": {"tier-demo": {"enabled": True}}})
+    assert [plugin.plugin_id for plugin in manager.load_enabled().plugins] == ["tier-demo"]
 
 
 def test_state_store_rejects_non_boolean_state(tmp_path):

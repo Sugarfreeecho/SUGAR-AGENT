@@ -215,7 +215,17 @@ class PluginManager:
             return [], [str(exc)]
         for plugin in report.plugins:
             state = states.get(plugin.plugin_id)
-            is_enabled = True if not isinstance(state, dict) else bool(state.get("enabled"))
+            # Same precedence as is_enabled(): environment override, persisted
+            # state, then the tier default. Reading the raw state here used to
+            # default to "enabled", so a standalone plugin showed as disabled in
+            # the catalog while still loading its tools and UI contributions.
+            override = tiers.env_override(plugin.plugin_id)
+            if override is not None:
+                is_enabled = override
+            elif isinstance(state, dict):
+                is_enabled = bool(state.get("enabled"))
+            else:
+                is_enabled = tiers.default_enabled(plugin.plugin_id)
             if not is_enabled:
                 continue
             if plugin.compatibility.status == "unsupported":
