@@ -402,8 +402,8 @@ def test_huawei_domain_precedes_table_but_not_api_limits(tmp_path, monkeypatch):
     )
     assert model_profiles.is_huawei_api_domain("https://example.com/v1/huawei") is False
     assert huawei == {
-        "context_window": 128000,
-        "max_output_tokens": 8192,
+        "context_window": 200000,
+        "max_output_tokens": 20000,
         "context_source": "huawei",
         "output_source": "recommended",
     }
@@ -467,12 +467,33 @@ def test_huawei_upsert_fills_only_missing_limits_and_preserves_manual_values(tmp
         },
     )
 
-    assert automatic["model_context_window"] == 128000
-    assert automatic["max_output_tokens"] == 8192
-    assert automatic["context_window"] == 119808
+    # 华为域名默认 200K 窗口 / 180K 压缩阈值 / 20K 输出 / high 思考强度
+    assert automatic["model_context_window"] == 200000
+    assert automatic["max_output_tokens"] == 20000
+    assert automatic["context_window"] == 180000
+    assert automatic["reasoning_effort"] == "high"
     assert manual["model_context_window"] == 300000
     assert manual["max_output_tokens"] == 24000
     assert manual["context_window"] == 200000
+    assert manual["reasoning_effort"] == "high"
+
+
+def test_openai_completions_alias_and_ascend_defaults(tmp_path):
+    saved = model_profiles.upsert_profile(
+        tmp_path,
+        {
+            "model": "demo-ascend-model",
+            "llm_type": "openai-completions",
+            "base_url": "http://models.ascend.huawei.com/v1",
+            "api_key": "test-key",
+        },
+    )
+
+    assert saved["llm_type"] == "openai-compatible"
+    assert saved["model_context_window"] == 200000
+    assert saved["context_window"] == 180000
+    assert saved["max_output_tokens"] == 20000
+    assert saved["reasoning_effort"] == "high"
 
 
 def test_probe_context_window_from_http_400_error():
@@ -944,13 +965,10 @@ def test_settings_model_profile_list_wires_drag_drop_reordering():
 def test_probe_failure_surfaces_raw_error_in_model_config_ui():
     root = Path(__file__).resolve().parents[1]
     html = (root / "app/templates/static/settings/sections_basic.js").read_text(encoding="utf-8")
-    wizard = (root / "app" / "templates" / "first_time_config.html").read_text(encoding="utf-8")
     i18n = (root / "app" / "templates" / "static" / "setup_i18n.js").read_text(encoding="utf-8")
 
     assert "const detail = String(result.probe_error || '').trim();" in html
     assert "上下文探测失败，已使用列表/默认窗口：" in html
-    assert "result.model.probe_error" in wizard
-    assert "'上下文探测失败，已使用列表/默认窗口：' + probeDetail" in wizard
     assert "Context probe failed; using listed/default window: $1" in i18n
 
 

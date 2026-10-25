@@ -31,6 +31,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW = 128_000
 DEFAULT_UNKNOWN_CONTEXT_WINDOW = 119_808
 DEFAULT_UNKNOWN_OUTPUT_TOKENS = 8_192
+# 华为域名（models.ascend.huawei.com 等）没有上报窗口时按 200K 处理：
+# 窗口 200K、压缩阈值 180K、输出上限 20K、思考强度 high。
+HUAWEI_DEFAULT_MODEL_CONTEXT_WINDOW = 200_000
+HUAWEI_DEFAULT_CONTEXT_WINDOW = 180_000
+HUAWEI_DEFAULT_MAX_OUTPUT_TOKENS = 20_000
+HUAWEI_DEFAULT_REASONING_EFFORT = "high"
 MODEL_LIMITS_TABLE_PATH = Path(__file__).resolve().parent / "data" / "models_table.md"
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CONTEXT_PROBE_TOKEN_COUNT = 3_000_000
@@ -195,6 +201,15 @@ def recommended_model_windows(model_context_window: Any) -> dict[str, int]:
         "model_context_window": max_context,
         "max_output_tokens": output,
         "context_window": min(theoretical, cap),
+    }
+
+
+def huawei_default_windows() -> dict[str, int]:
+    """华为域名的默认窗口（不走上游 128K/512K 的通用封顶逻辑）。"""
+    return {
+        "model_context_window": HUAWEI_DEFAULT_MODEL_CONTEXT_WINDOW,
+        "max_output_tokens": HUAWEI_DEFAULT_MAX_OUTPUT_TOKENS,
+        "context_window": HUAWEI_DEFAULT_CONTEXT_WINDOW,
     }
 
 
@@ -429,7 +444,7 @@ def infer_model_limits(
     out = raw_out
     out_source = "api" if raw_out > 0 else ""
     if ctx <= 0 and is_huawei_api_domain(base_url):
-        ctx = DEFAULT_UNKNOWN_MODEL_CONTEXT_WINDOW
+        ctx = HUAWEI_DEFAULT_MODEL_CONTEXT_WINDOW
         ctx_source = "huawei"
     if ctx <= 0:
         table_context = _model_table_context_for_model(model_id)
@@ -1529,6 +1544,9 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
     enabled = payload.get("enabled") if "enabled" in payload else (old or {}).get("enabled", True)
     inferred_limits = infer_model_limits(model, base_url=base_url)
     recommended = recommended_model_windows(inferred_limits["context_window"])
+    if str(inferred_limits.get("context_source") or "") == "huawei":
+        # 华为域名没有上报窗口时用 200K/180K/20K，而不是通用推断的 128K。
+        recommended = huawei_default_windows()
     context_window = _safe_int(
         payload.get("context_window"),
         _safe_int((old or {}).get("context_window"), recommended["context_window"]),
@@ -1577,7 +1595,8 @@ def upsert_profile(project_root: Path, payload: dict) -> dict:
                 ),
                 strict=True,
             ),
-            "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort")),
+            "reasoning_effort": _clean_reasoning_effort(payload.get("reasoning_effort"))
+            or (HUAWEI_DEFAULT_REASONING_EFFORT if is_huawei_api_domain(base_url) else ""),
             "temperature": str(payload.get("temperature") or "").strip(),
             "extra_body_json": _clean_extra_body_json(payload.get("extra_body_json")),
             "multimodal_mode": normalize_multimodal_mode(

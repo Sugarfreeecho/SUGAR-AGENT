@@ -501,14 +501,21 @@ def test_chat_completion_does_not_replace_preferred_text_profile_for_image(monke
     assert not any(message["role"] == "system" for message in sent)
 
 
-def test_fallback_candidates_consume_shared_logical_request_budget(monkeypatch):
+def test_fallback_candidates_follow_chain_without_request_budget(monkeypatch):
+    """模型切换不再受共享请求预算阻断，始终按候选链顺序执行。
+
+    历史行为：第二个候选用完预算后，第三个候选被 LLM-BLOCKED-SWITCH 拦住，
+    任务以预算错误结束。现在预算只覆盖首 token hedge 与同模型重试，切换
+    必须走完候选链，最终抛出最后一个候选的真实错误。
+    """
+
     import agent_harness
     import agent_openai
     from agent_messages import UserMessage
 
     monkeypatch.setattr(agent_openai, "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC", 0)
     monkeypatch.setattr(agent_openai, "OPENAI_MAX_RETRIES", 1)
-    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_REQUEST_BUDGET", 2)
+    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_REQUEST_BUDGET", 1)
     calls = []
 
     class _Completions:
@@ -529,7 +536,7 @@ def test_fallback_candidates_consume_shared_logical_request_budget(monkeypatch):
         {"client": _Client("three"), "model": "three", "max_output_tokens": 128},
     ])
 
-    with pytest.raises(RuntimeError, match="budget"):
+    with pytest.raises(RuntimeError, match="three failed"):
         agent_openai.chat_completion(
             client,
             "one",
@@ -538,7 +545,63 @@ def test_fallback_candidates_consume_shared_logical_request_budget(monkeypatch):
             max_tokens=32,
         )
 
-    assert calls == ["one", "two"]
+    assert calls == ["one", "two", "three"]
+
+
+def test_stream_fallback_ignores_exhausted_shared_request_budget(monkeypatch):
+    """共享预算耗尽时，流式候选切换仍然继续，不再提前抛错。"""
+
+    import agent_harness
+    import agent_openai
+    from llm import TransportEvent
+
+    monkeypatch.setattr(agent_openai, "OPENAI_TOTAL_REQUEST_BUDGET", 1)
+    calls = []
+
+    class _Transport:
+        def __init__(self, name, *, fail=False):
+            self.name = name
+            self.fail = fail
+
+        def stream_completion(self, **_kwargs):
+            calls.append(self.name)
+            if self.fail:
+                raise RuntimeError(f"{self.name} unavailable")
+            yield TransportEvent("content_delta", text="ok", model=self.name)
+            yield TransportEvent("finish", finish_reason="stop", model=self.name)
+
+    client = agent_harness.ExecutorLLMClient([
+        {
+            "profile_id": "primary",
+            "transport": _Transport("primary", fail=True),
+            "provider": "openai",
+            "model": "primary",
+            "max_output_tokens": 128,
+        },
+        {
+            "profile_id": "backup",
+            "transport": _Transport("backup"),
+            "provider": "openai-compatible",
+            "model": "backup",
+            "max_output_tokens": 128,
+        },
+    ])
+
+    budget = agent_openai._LogicalRequestBudget()
+    assert budget.claim() is True
+    assert budget.claim() is False
+    agent_openai._bind_recovery_budget(budget)
+    try:
+        events = list(
+            client.stream_completion(
+                model="ignored", messages=[], max_tokens=32
+            )
+        )
+    finally:
+        agent_openai._bind_recovery_budget(None)
+
+    assert calls == ["primary", "backup"]
+    assert any(event.text == "ok" for event in events)
 
 
 def test_transport_fallback_circuit_skips_failed_profile_for_same_run(monkeypatch):

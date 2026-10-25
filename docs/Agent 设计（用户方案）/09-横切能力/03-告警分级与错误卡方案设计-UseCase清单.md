@@ -15,18 +15,18 @@
 
 ### UC-9C1 告警分级与目录 ✅
 - **触发**：各类异常/状态发生。
-- **预期现象**：告警按规范分级出现；目录涵盖 LLM-RETRY / LLM-DEGRADE / LLM-SWITCH / LLM-BUDGET / LLM-BLOCKED-SWITCH / LLM-RECOVERED / LLM-FAILED / NET-RETRY / NET-OFFLINE / NET-RESTORED / CTX-COMPRESS / CTX-FULL。
+- **预期现象**：告警按规范分级出现；目录涵盖 LLM-RETRY / LLM-DEGRADE / LLM-SWITCH / LLM-BUDGET / LLM-RECOVERED / LLM-FAILED / NET-RETRY / NET-OFFLINE / NET-RESTORED / CTX-COMPRESS / CTX-FULL。（原 LLM-BLOCKED-SWITCH 随 2026-10 预算阻断移除一并下线。）
 - **规则与边界**：`ephemeral` 类不写历史；持久化类参与回放。
 - **依据**：`ALERT_SPEC.md` 目录章节。
 
 ### UC-9C2 合并去噪（coalesce）✅
 - **触发**：同类告警连续发生（如多次重试）。
 - **预期现象**：按 `coalesce_key` **原地更新**（计数/时间），不刷屏；run 结束有配平（recovered）。
-- **依据**：`_emit_retry_status / _emit_blocked_switch_status`（coalesce_key 用法）。
+- **依据**：`_emit_retry_status`（coalesce_key 用法）、模型自动切换状态事件。
 
 ### UC-9C3 已实现告警（现状）✅
-- **触发**：重试 / 自动切换 / 预算阻断 / 网络重连。
-- **预期现象**：LLM-RETRY（L1 轻提示）、模型自动切换状态、LLM-BLOCKED-SWITCH（L2）、NET-RETRY 依次正确出现并有对应恢复配平。
+- **触发**：重试 / 自动切换 / 网络重连。
+- **预期现象**：LLM-RETRY（L1 轻提示）、模型自动切换状态、NET-RETRY 依次正确出现并有对应恢复配平。
 - **依据**：`agent_harness.py` L1173/L1384/L1433、`agent_loop.py` 重连段；`IMPLEMENTATION_20260912.md`（含测试与性能记录）。
 
 ### UC-9C4 规划中的告警 🟡

@@ -37,7 +37,7 @@ def test_connection_error_maps_to_net():
 
 def test_budget_wrapped_connection_prefers_net():
     """17bea699 core regression: outer budget RuntimeError carries connection cause."""
-    outer = RuntimeError("LLM request budget exhausted before model fallback")
+    outer = RuntimeError("LLM request budget exhausted before stream-options fallback")
     outer.__cause__ = _FakeConnectionError("Connection error.")
     result = _classify(outer)
     assert result["code"] == "NET", (
@@ -46,7 +46,7 @@ def test_budget_wrapped_connection_prefers_net():
 
 
 def test_bare_budget_error_maps_to_budget():
-    result = _classify(RuntimeError("LLM request budget exhausted before model fallback"))
+    result = _classify(RuntimeError("LLM request budget exhausted before stream-options fallback"))
     assert result["code"] == "BUDGET"
     assert result["retry"] == 1
     assert "预算" in result["title"]
@@ -58,7 +58,7 @@ def test_unknown_error_falls_back_to_other():
 
 
 def test_priority_specific_code_beats_budget():
-    outer = RuntimeError("LLM request budget exhausted before model fallback")
+    outer = RuntimeError("LLM request budget exhausted before stream-options fallback")
     outer.__cause__ = _FakeConnectionError("read timeout while connecting to provider")
     result = _classify(outer)
     assert result["code"] in {"NET"}

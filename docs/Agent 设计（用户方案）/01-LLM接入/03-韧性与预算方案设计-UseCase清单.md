@@ -27,9 +27,9 @@
 
 ### UC-1C3 共享逻辑请求预算
 - **触发**：一次逻辑请求内发生 重试+对冲+后续 的组合。
-- **预期现象**：物理请求总数 ≤ 6（默认）；到顶后受控终止（错误文案明确），绝不无限重试。
-- **规则与边界**：预算被 **hedge/重试/fallback 三路共摊**；预算不足时的切换尝试会变成 `LLM-BLOCKED-SWITCH`（见 04）。
-- **依据**：`agent_openai.py::_LogicalRequestBudget`、`agent_harness._raise_budget_exhausted_before_fallback`。
+- **预期现象**：hedge 与同模型重试的物理请求总数 ≤ 6（默认）；到顶后这两路受控终止，绝不无限重试。
+- **规则与边界**：预算由 **hedge / 同模型重试两路共摊**；模型切换（候选链）不占预算、也不被预算阻断，按候选链规则执行（见 04·UC-1D2，2026-10 起）。
+- **依据**：`agent_openai.py::_LogicalRequestBudget`、`_claim_additional_recovery_request`。
 
 ### UC-1C4 截止与并发上限
 - **触发**：模型长时间无响应 / 并发会话增多。

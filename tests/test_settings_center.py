@@ -64,6 +64,44 @@ def test_settings_page_keeps_path_picker_available():
     assert "myagent_path_picker.js" in body
 
 
+def test_setup_serves_welcome_page_with_two_actions():
+    body = _client().get("/setup").text
+    assert 'id="welcome-start"' in body
+    assert 'id="welcome-later"' in body
+    assert "立即配置首个模型" in body
+    assert "稍后配置" in body
+    assert '/settings?section=models&add=1#models' in body
+    assert "/api/setup/skip" in body
+    # 旧配置向导的表单与协议下拉不再下发
+    assert 'id="configForm"' not in body
+    assert 'id="llmProvider"' not in body
+
+
+def test_settings_query_preselects_models_and_requests_add_dialog():
+    body = _client().get("/settings?section=models&add=1").text
+    assert '"section": "models"' in body
+    assert '"autoAddModel": true' in body
+    assert '"autoAddModel": false' in _client().get("/settings").text
+
+
+def test_setup_skip_unlocks_main_ui_without_model(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(webui, "_is_configured", lambda: False)
+    client = _client()
+    redirect = client.get("/", follow_redirects=False)
+    assert redirect.status_code in (302, 307)
+    assert redirect.headers["location"] == "/setup"
+
+    skipped = client.post("/api/setup/skip")
+    assert skipped.status_code == 200
+    assert skipped.json() == {"ok": True}
+    assert skipped.cookies.get(webui.SETUP_DEFERRED_COOKIE) == "1"
+
+    allowed = client.get("/", follow_redirects=False)
+    assert allowed.status_code == 200
+
+
 def test_env_api_can_remove_keys(tmp_path, monkeypatch):
     import webui
 

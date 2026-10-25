@@ -1,6 +1,6 @@
 # 自动切换与预算阻断 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-09-18 v2（覆盖至：HEAD `1fd80ca` + 运行中切换修复）
+- 版本：2026-10 v3（2026-10 起移除「预算阻断切换」；切换只按候选链规则执行）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_harness.py`（`_FallbackCompletions` 全链路）、`app/model_profiles.py`（候选链）。
 - 上级：`00-LLM接入整体设计.md`
@@ -9,7 +9,7 @@
 
 ## 1. 功能定位
 
-当前模型无法继续时，按**候选链**自动切换并**续跑**任务；当预算不足时，明确阻断而不是假装切换。
+当前模型无法继续时，按**候选链**自动切换并**续跑**任务。切换只受候选链规则约束：共享请求预算（首 token hedge / 同模型重试）不再阻断切换，也不把候选请求计入预算。
 
 ## 2. UseCase
 
@@ -19,11 +19,10 @@
 - **规则与边界**：切换是"续跑"——已完成轮次/工具结果不重放；候选链顺序 = 档案面板排序；同 run 内已失败的候选会被熔断跳过（"本轮运行跳过已失败模型"），**手动切换会清空该会话 live run 的熔断记录**使其立即重试（见 05·UC-1E1/1E4）；无备选时直接进入失败路径（错误分类见 UC-2xx）。
 - **依据**：`agent_harness.py::_FallbackCompletions`（候选链驱动）、`_emit_model_switch_status`、`model_profiles.fallback_chain()`。
 
-### UC-1D2 预算阻断（LLM-BLOCKED-SWITCH）
-- **触发**：需要切换，但共享预算（UC-1C3）已耗尽。
-- **预期现象**：L2 告警「切换被预算阻断」，任务以明确错误结束；不发送任何"切换后请求"。
-- **规则与边界**：保留原因链（raise ... from last_error），错误卡正确分类（BUDGET 而非"未知"）；此为已实现告警（与 🟡 的 LLM-BUDGET 不同——后者是"预算将尽"的事前提醒，仍未实现）。
-- **依据**：`_emit_blocked_switch_status`（coalesce_key=LLM-BLOCKED-SWITCH）、`_raise_budget_exhausted_before_fallback`、alert_spec 实施记录。
+### UC-1D2 预算阻断（LLM-BLOCKED-SWITCH）— 2026-10 已移除
+- **原触发**：需要切换，但共享预算（UC-1C3）已耗尽。
+- **现行为**：不再存在该阻断。预算耗尽只影响 hedge 与同模型重试，候选链按顺序继续尝试备用模型；候选全部失败时抛出最后一个候选的真实错误（保留原因链，错误卡照常分类）。
+- **依据**：`agent_harness.py::_FallbackCompletions`、`ExecutorLLMClient._stream_completion_iter`（候选循环内无预算门）；`tests/test_agent_harness_executor_session.py` 的切换-预算回归用例。
 
 ## 3. 边界
 
@@ -35,9 +34,10 @@
 | 用例 | 代码 |
 |---|---|
 | UC-1D1 | `agent_harness.py` `_FallbackCompletions` / `_emit_model_switch_status` |
-| UC-1D2 | `agent_harness.py` L1433 附近（LLM-BLOCKED-SWITCH） |
+| UC-1D2 | 已移除（2026-10）：候选循环不再调用预算 claim，`_emit_blocked_switch_status` / `_raise_budget_exhausted_before_fallback` 已删除 |
 
 ## 5. 版本记录
 
 - 2026-09-13 v1：拆分为独立功能（原在切换大类中，与手动切换分离）。
 - 2026-09-18 v2：对齐运行中切换修复——补熔断跳过与"手动切换清熔断"、fallback 接管改写绑定及其选择纪元守卫（见 05·UC-1E1/1E4）。
+- 2026-10 v3：移除 UC-1D2 预算阻断——模型切换只按候选链规则执行，不再消耗/受限于 hedge 与同模型重试的共享请求预算。

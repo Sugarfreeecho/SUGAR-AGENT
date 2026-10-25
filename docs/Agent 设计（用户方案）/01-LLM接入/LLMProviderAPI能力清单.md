@@ -88,7 +88,7 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | 自动：候选链切换（【模型自动切换】状态事件）、同模型重试、媒体降级、adopt 备选档案（受选择纪元守卫，不覆盖更新的手动选择） | `agent_harness.py` `_FallbackCompletions` | 【图·切换节点】 |
-| 预算阻断：想切换但预算不足 → `LLM-BLOCKED-SWITCH` | `agent_harness.py` `_emit_blocked_switch_status` | 【卡】 |
+| 切换不受共享预算阻断（2026-10 移除 `LLM-BLOCKED-SWITCH`）：候选链按序尝试，全部失败则抛最后一个候选的真实错误 | `agent_harness.py` `_FallbackCompletions`、`_stream_completion_iter` | 【单】 |
 | 手动：模型选择器（主会话/子代理会话均可用；清熔断立即重试、下一次模型调用生效） | `webui.py`、`agent_harness.py` | 【卡】 |
 | 手动：子代理 `switch_model`（安全边界中断并恢复）/ 选择器路径（数据动作、不打断） | `agent_subagent.py::switch_subagent_model_profile(handover=…)` | 【卡】 |
 | 手动切换一致性：选择纪元（旧请求接管不改写新选择）、熔断代际（重置后不重新污染）、配置缓存代际 | `agent_harness.py` | 【单】 |
@@ -100,7 +100,7 @@
 | 本机离线检测（OS 提示 + 主动探测，离线时不发散 fallback） | `agent_harness.py` `machine_network_available` | 【图·网络节点】 |
 | SSL bypass（requests/httpx 全局 `verify=False` 补丁，默认开、可关） | `app/ssl_bypass.py`、`SSL_BYPASS_ENABLED=0` | 【图·网络节点(副标题)】 |
 | 流响应读到 EOF 后回收连接；keepalive 默认 300 秒、池上限 20/100 | `agent_harness.RequestResponseLogger`、`OPENAI_KEEPALIVE_EXPIRY` | 【单】 |
-| 首选候选 `_DirectStreamTransport` 直连（同一 chunk 的思考/正文/多路工具调用增量逐一透传）；候选预算、熔断和 facade 回退保持不变 | `agent_harness._DirectStreamTransport`、`_FallbackCompletions` | 【单】 |
+| 首选候选 `_DirectStreamTransport` 直连（同一 chunk 的思考/正文/多路工具调用增量逐一透传）；熔断和 facade 回退保持不变 | `agent_harness._DirectStreamTransport`、`_FallbackCompletions` | 【单】 |
 | 启动后台预热提示/连接；消息到达且池子过冷时按需 worker 预热 | `warm_prompt_build_path`、`warm_llm_connections*`、`webui.start_webui_lifecycle` | 【单】 |
 | 密钥脱敏：日志/状态文案统一 `_redact_runtime_log_text` | `agent_openai.py`、`agent_harness.py` | 【单】 |
 
@@ -108,9 +108,9 @@
 | 能力 | 位置 | 状态 |
 |---|---|---|
 | Token 用量采集（`record_usage` → runtime_observability / execution_metrics） | `agent_openai.py` `extract_usage_dict`、`runtime_observability.py` | 【卡】 |
-| 已实现告警：`LLM-RETRY`(L1)、`LLM-BLOCKED-SWITCH`(L2)、模型自动切换状态、错误卡分类 NET/BUDGET/CTX/429/5xx + retry 字段 | `agent_harness.py`、`agent_loop.py` | 【图·告警节点】 |
+| 已实现告警：`LLM-RETRY`(L1)、模型自动切换状态、错误卡分类 NET/BUDGET/CTX/429/5xx + retry 字段（`LLM-BLOCKED-SWITCH` 随预算阻断一起于 2026-10 移除） | `agent_harness.py`、`agent_loop.py` | 【图·告警节点】 |
 | 告警目录中的规划项：`LLM-HEDGE`、`LLM-DEGRADE`、`LLM-BUDGET`、`LLM-RECOVERED`、`LLM-FAILED`、`NET-OFFLINE`、`NET-RESTORED` 等（分级 L0–L3、ephemeral/持久化、恢复配平） | `workspace/alert_spec_myagent/ALERT_SPEC.md` | 【单·规划中】 |
-| 错误原因链保留（`raise ... from`）保证分类器不落"未知错误" | `agent_harness.py` `_raise_budget_exhausted_before_fallback` | 【单】 |
+| 错误原因链保留（`raise ... from`）保证分类器不落"未知错误" | `agent_harness.py` 候选失败 `last_error` 抛出、`agent_loop.py::_classify_api_error` | 【单】 |
 
 ## 10. 边界说明
 - 本清单由代码扫描整理（含 grep 函数清单 + 关键实现片段核对），未覆盖 UI 前端细节（如模型选择器交互）与测试文件内部实现。

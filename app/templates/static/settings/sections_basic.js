@@ -148,8 +148,41 @@
   });
 
   /* ── 模型 ───────────────────────────────────────────────────────────── */
-  const LLM_TYPES = ['openai-compatible', 'openai-responses', 'anthropic'];
+  /* Chat Completions 对外按 AI SDK 的写法叫 openai-completions；后端
+     （llm.transport / model_profiles）会把它归一到 openai-compatible 存档。 */
+  const LLM_TYPES = ['openai-completions', 'openai-responses', 'anthropic'];
+  const DEFAULT_BASE_URL = 'http://models.ascend.huawei.com/v1';
+  /* 华为域名没有上报窗口时的默认值：200K 窗口 / 180K 压缩阈值 / 20K 输出。 */
+  const HUAWEI_LIMITS = { model_context_window: 200000, context_window: 180000, max_output_tokens: 20000 };
   const REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+  function llmTypeForUi(raw) {
+    const key = String(raw || '').trim().toLowerCase();
+    if (key === 'openai-compatible' || key === 'openai_compatible' || key === 'openai'
+      || key === 'compatible' || key === 'chat-completions' || key === 'local') return 'openai-completions';
+    return LLM_TYPES.indexOf(key) >= 0 ? key : 'openai-completions';
+  }
+
+  function isHuaweiBaseUrl(url) {
+    const text = String(url || '').trim();
+    if (!text) return false;
+    try {
+      const host = new URL(text).hostname.toLowerCase();
+      return ['huawei.com', 'huaweicloud.com', 'myhuaweicloud.com']
+        .some((domain) => host === domain || host.endsWith('.' + domain));
+    } catch (error) {
+      return /huawei/i.test(text);
+    }
+  }
+
+  function huaweiLimitDefaults(url) {
+    const apply = isHuaweiBaseUrl(url);
+    return {
+      model_context_window: apply ? String(HUAWEI_LIMITS.model_context_window) : '',
+      context_window: apply ? String(HUAWEI_LIMITS.context_window) : '',
+      max_output_tokens: apply ? String(HUAWEI_LIMITS.max_output_tokens) : '',
+    };
+  }
 
   /* 连通性探测的判定词表与着色。后端只回 state，中英文案留在前端，
      免得改一个字也要跑一趟 Python。 */
@@ -205,6 +238,9 @@
   function modelDialog(profile) {
     const p = profile || {};
     const isNew = !profile;
+    /* 新档案：API 地址预填当前向导用的华为 ascend 网关，窗口/阈值/输出按域名给默认值。 */
+    const initialBaseUrl = String(p.base_url || DEFAULT_BASE_URL);
+    const autoLimits = isNew ? huaweiLimitDefaults(initialBaseUrl) : null;
     const selectedEffort = REASONING_EFFORTS.includes(p.reasoning_effort) ? p.reasoning_effort : 'high';
     let capabilityAutomatic = p.capability_source !== 'manual';
     const capabilityText = A.lang === 'en' && p.capability_description_en
@@ -218,15 +254,15 @@
       body:
         modelField(t('API 类型', 'API type'), t('按服务商要求选择协议', 'Select the protocol required by your provider'),
           '<select class="st-input" data-field="llm_type">' +
-          LLM_TYPES.map((v) => '<option value="' + v + '"' + ((p.llm_type || 'openai-compatible') === v ? ' selected' : '') + '>' + v + '</option>').join('') +
+          LLM_TYPES.map((v) => '<option value="' + v + '"' + (llmTypeForUi(p.llm_type) === v ? ' selected' : '') + '>' + v + '</option>').join('') +
           '</select>', true) +
         modelField(t('API 地址', 'API base URL'), t('模型服务的接口地址', 'Model service endpoint'),
-          '<input class="st-input" data-field="base_url" value="' + esc(p.base_url || '') + '" placeholder="https://api.openai.com/v1">', true) +
+          '<input class="st-input" data-field="base_url" value="' + esc(initialBaseUrl) + '" placeholder="' + esc(DEFAULT_BASE_URL) + '">', true) +
         modelField('API Key', p.api_key_set ? t('已配置，留空表示不修改', 'Configured — leave empty to keep') : t('密钥只写，保存后不再回显', 'Write-only'),
           '<input class="st-input" type="password" data-field="api_key" placeholder="' + (p.api_key_set ? '••••••' : 'sk-…') + '">', !p.api_key_set) +
         modelField(t('模型名称', 'Model name'), t('实际发送给接口的 model', 'Sent as the "model" field'),
           '<div class="st-model-field-stack">' +
-            '<input class="st-input" data-field="model" value="' + esc(p.model || '') + '" placeholder="gpt-5-codex">' +
+            '<input class="st-input" data-field="model" value="' + esc(p.model || '') + '">' +
             '<div class="st-model-connect-row">' +
               W.btn(t('从接口获取', 'Fetch'), 'model-fetch') +
               W.btn(t('测试连通', 'Test'), 'model-connect') +
@@ -235,10 +271,10 @@
           '</div>', true) +
         W.adv(t('高级设置', 'Advanced'),
           modelField(t('方案名称', 'Profile name'), t('留空使用模型名称', 'Defaults to model name'), '<input class="st-input" data-field="name" value="' + esc(p.name || '') + '">') +
-          modelField(t('模型总窗口', 'Model window limit'), '', '<input class="st-input" data-field="model_context_window" value="' + esc(p.model_context_window || '') + '">' +
+          modelField(t('模型总窗口', 'Model window limit'), '', '<input class="st-input" data-field="model_context_window" value="' + esc(p.model_context_window || (autoLimits ? autoLimits.model_context_window : '')) + '">' +
             W.btn(t('探测窗口', 'Probe limit'), 'model-probe')) +
-          modelField(t('上下文长度（压缩阈值）', 'Context length (compaction threshold)'), t('达到此长度时压缩上下文；留空保留现有值或使用默认值', 'Compact at this length; keep existing value or default when empty'), '<input class="st-input" data-field="context_window" value="' + esc(p.context_window || '') + '" placeholder="400000">') +
-          modelField(t('输出上限', 'Max output'), '', '<input class="st-input" data-field="max_output_tokens" value="' + esc(p.max_output_tokens || '') + '" placeholder="128000">') +
+          modelField(t('上下文长度（压缩阈值）', 'Context length (compaction threshold)'), t('达到此长度时压缩上下文；留空保留现有值或使用默认值', 'Compact at this length; keep existing value or default when empty'), '<input class="st-input" data-field="context_window" value="' + esc(p.context_window || (autoLimits ? autoLimits.context_window : '')) + '" placeholder="180000">') +
+          modelField(t('输出上限', 'Max output'), '', '<input class="st-input" data-field="max_output_tokens" value="' + esc(p.max_output_tokens || (autoLimits ? autoLimits.max_output_tokens : '')) + '" placeholder="20000">') +
           modelField(t('温度', 'Temperature'), '', '<input class="st-input" data-field="temperature" value="' + esc(p.temperature == null ? '' : p.temperature) + '" placeholder="0.7">') +
           modelField(t('推理强度', 'Reasoning effort'), t('默认开启思考；强度取决于模型支持', 'Thinking is enabled by default; supported effort varies by model'),
             '<select class="st-input" data-field="reasoning_effort">' + REASONING_EFFORTS.map((value) => '<option value="' + value + '"' +
@@ -267,7 +303,7 @@
         const baseUrl = dialogValue('base_url');
         if (!model) { toast(t('请填写模型名称', 'Model name is required'), true); return true; }
         if (!baseUrl) { toast(t('请填写 API 地址', 'API base URL is required'), true); return true; }
-        const payload = { model, base_url: baseUrl, id: p.id, name: dialogValue('name') || model, llm_type: dialogValue('llm_type') || 'openai-compatible' };
+        const payload = { model, base_url: baseUrl, id: p.id, name: dialogValue('name') || model, llm_type: dialogValue('llm_type') || 'openai-completions' };
         const key = dialogValue('api_key');
         if (!key && !p.api_key_set) { toast(t('请填写 API Key', 'API key is required'), true); return true; }
         if (key) payload.api_key = key;
@@ -303,6 +339,21 @@
         field.setAttribute('aria-required', String(required));
       });
     });
+    /* 新建档案时随 API 地址切换默认窗口：只覆盖自动填进去的值，用户手改过的保持不动。 */
+    if (isNew) {
+      const baseInput = body.querySelector('[data-field="base_url"]');
+      let appliedLimits = autoLimits;
+      baseInput.addEventListener('change', () => {
+        const nextLimits = huaweiLimitDefaults(baseInput.value);
+        ['model_context_window', 'context_window', 'max_output_tokens'].forEach((field) => {
+          const input = body.querySelector('[data-field="' + field + '"]');
+          if (!input) return;
+          const current = String(input.value || '').trim();
+          if (current === '' || current === appliedLimits[field]) input.value = nextLimits[field];
+        });
+        appliedLimits = nextLimits;
+      });
+    }
     const capability = body.querySelector('[data-field="capability_description"]');
     let capabilityEpoch = 0, capabilityTimer = null;
     capability.addEventListener('input', () => { capabilityAutomatic = false; capabilityEpoch++; });
@@ -737,6 +788,8 @@
     after(root, d) {
       window.__lastProfiles = (d && d.profiles) || [];
       wireProfileReorder(root, d);
+      /* 欢迎页「立即配置首个模型」带 add=1 进来：渲染完直接弹添加模型对话框。 */
+      if (A.consumeAutoAddModel && A.consumeAutoAddModel()) modelDialog(null);
     },
   });
 

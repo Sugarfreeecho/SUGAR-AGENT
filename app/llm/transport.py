@@ -4,7 +4,8 @@ The rest of the agent consumes :class:`TransportEvent` objects.  Provider
 wire formats stay in this module:
 
 * ``openai`` / ``@ai-sdk/openai`` -> OpenAI Responses API
-* ``openai-compatible`` / ``@ai-sdk/openai-compatible`` -> Chat Completions
+* ``openai-completions`` / ``openai-compatible`` /
+  ``@ai-sdk/openai-compatible`` -> Chat Completions
 * ``anthropic`` / ``@ai-sdk/anthropic`` -> Anthropic Messages API
 
 This module lives under :mod:`llm` so provider wire protocols do not leak back
@@ -66,6 +67,7 @@ _PROVIDER_ALIASES = {
     "openai-responses": LLMProvider.OPENAI,
     "@ai-sdk/openai": LLMProvider.OPENAI,
     "openai-compatible": LLMProvider.OPENAI_COMPATIBLE,
+    "openai-completions": LLMProvider.OPENAI_COMPATIBLE,
     "openai_compatible": LLMProvider.OPENAI_COMPATIBLE,
     "compatible": LLMProvider.OPENAI_COMPATIBLE,
     "chat-completions": LLMProvider.OPENAI_COMPATIBLE,
@@ -142,7 +144,7 @@ def normalize_provider(value: Any) -> LLMProvider:
     try:
         return _PROVIDER_ALIASES[key]
     except KeyError as exc:
-        allowed = "openai-responses, openai-compatible, anthropic"
+        allowed = "openai-completions, openai-responses, anthropic"
         raise ValueError(f"unsupported LLM provider {value!r}; expected {allowed}") from exc
 
 

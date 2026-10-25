@@ -526,7 +526,7 @@ def test_model_protocol_is_visible_explicit_and_saved(settings_page):
     selector = page.locator('[data-field="llm_type"]')
     assert selector.is_visible()
     assert selector.locator('option').evaluate_all("options=>options.map(option=>option.value)") == [
-        "openai-compatible", "openai-responses", "anthropic",
+        "openai-completions", "openai-responses", "anthropic",
     ]
     assert selector.input_value() == "openai-responses"
     selector.select_option("anthropic")
@@ -536,6 +536,35 @@ def test_model_protocol_is_visible_explicit_and_saved(settings_page):
                             if request["path"] == "/api/model_profiles" and request["method"] == "POST"))
     assert saved["llm_type"] == "anthropic"
     assert saved["base_url"] == "https://example.invalid/v1"
+
+
+def test_auto_add_opens_model_dialog_with_ascend_and_huawei_defaults(settings_page):
+    """欢迎页带 add=1 进来：模型页签渲染后自动弹「添加模型」，并预填华为 ascend 默认值。"""
+    page, _ = settings_page
+
+    def open_models_with_add(route):
+        if urlsplit(route.request.url).path != "/settings":
+            route.fallback()
+            return
+        html = (ROOT / "app/templates/settings_center.html").read_text(encoding="utf-8")
+        html = html.replace("__SETTINGS_ASSET_VERSION__", "1").replace(
+            "__SETTINGS_BOOTSTRAP__",
+            '{"section":"models","sessionId":"fixture","autoAddModel":true}')
+        route.fulfill(status=200, content_type="text/html", body=html)
+
+    page.route("**/*", open_models_with_add)
+    try:
+        page.goto("http://settings.test/settings?section=models&add=1")
+        page.locator("#st-dialog").wait_for(state="visible")
+        assert page.locator('[data-field="base_url"]').input_value() == "http://models.ascend.huawei.com/v1"
+        assert page.locator('[data-field="model"]').input_value() == ""
+        assert page.locator('[data-field="llm_type"]').input_value() == "openai-completions"
+        page.locator("#st-dlg-body details summary").click()
+        assert page.locator('[data-field="model_context_window"]').input_value() == "200000"
+        assert page.locator('[data-field="context_window"]').input_value() == "180000"
+        assert page.locator('[data-field="max_output_tokens"]').input_value() == "20000"
+    finally:
+        page.unroute("**/*", open_models_with_add)
 
 
 def test_model_connect_button_wraps_below_the_name_field_and_reports(settings_page):
@@ -806,47 +835,43 @@ def test_usage_section_polls_until_the_background_build_finishes(settings_page):
     assert "late-model" in page.locator(".st-usage-table").first.inner_text()
 
 
-@pytest.mark.parametrize("protocol", ["openai-compatible", "openai-responses", "anthropic"])
-def test_setup_protocol_selector_preserves_custom_endpoint_and_submits_it(browser_page, protocol):
+def test_welcome_page_routes_immediate_setup_and_defers_to_main_ui(browser_page):
+    """欢迎页只有两个按钮：立即配置落到模型页签并带自动弹窗标记，稍后配置记下选择再进主界面。"""
     page = browser_page
-    submissions = []
+    skipped = []
 
     def route(request):
         path = urlsplit(request.request.url).path
         if path == "/setup":
             request.fulfill(status=200, content_type="text/html",
                             body=(ROOT / "app/templates/first_time_config.html").read_text(encoding="utf-8"))
-        elif path == "/static/setup_i18n.js":
-            request.fulfill(status=200, content_type="application/javascript",
-                            body=(ROOT / "app/templates/static/setup_i18n.js").read_text(encoding="utf-8"))
-        elif path == "/api/save_config":
-            submissions.append(json.loads(request.request.post_data))
-            request.fulfill(status=200, content_type="application/json",
-                            body=json.dumps({"ok": False, "error": "fixture prevents navigation"}))
-        elif path.startswith("/api/"):
-            request.fulfill(status=200, content_type="application/json", body='{"ok":true,"models":[]}')
+        elif path == "/api/setup/skip":
+            skipped.append(request.request.method)
+            request.fulfill(status=200, content_type="application/json", body='{"ok": true}')
+        elif path in {"/settings", "/"}:
+            request.fulfill(status=200, content_type="text/html", body="<html><body>fixture</body></html>")
         else:
             request.fulfill(status=404, body="")
 
     page.route("**/*", route)
     try:
         page.goto("http://setup.test/setup")
-        selector = page.locator("#llmProvider")
-        assert selector.is_visible()
-        assert selector.locator('option').evaluate_all("options=>options.map(option=>option.value)") == [
-            "openai-compatible", "openai-responses", "anthropic",
-        ]
-        page.locator("#baseUrl").fill("https://gateway.example/v1")
-        page.locator("#modelName").fill("fixture-model")
-        page.locator("#apiKey").fill("fixture-key")
-        selector.select_option(protocol)
-        assert page.locator("#baseUrl").input_value() == "https://gateway.example/v1"
-        assert page.locator("#modelName").input_value() == "fixture-model"
-        page.locator("#submitBtn").click()
-        page.wait_for_function("document.querySelector('.status').textContent.includes('fixture prevents navigation')")
-        assert len(submissions) == 1
-        assert submissions[0]["llm_provider"] == protocol
-        assert submissions[0]["llm_base_url"] == "https://gateway.example/v1"
+        buttons = page.locator(".welcome-actions .btn")
+        assert buttons.count() == 2
+        assert buttons.nth(0).inner_text().strip() == "立即配置首个模型"
+        assert buttons.nth(1).inner_text().strip() == "稍后配置"
+        assert page.locator("#configForm, #llmProvider").count() == 0, "旧配置向导表单不应再出现"
+
+        buttons.nth(0).click()
+        page.wait_for_function(
+            "location.pathname + location.search + location.hash === '/settings?section=models&add=1#models'")
+        page.go_back()
+        page.wait_for_function("location.pathname === '/setup'")
+        assert skipped == [], "立即配置不该跳过配置门槛"
+
+        page.locator(".welcome-actions .btn").nth(1).click()
+        page.wait_for_function("location.pathname === '/'")
+        assert skipped == ["POST"]
     finally:
         page.goto("about:blank")
         page.unroute("**/*", route)
