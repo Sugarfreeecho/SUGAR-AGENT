@@ -22,6 +22,12 @@ BV3 = "BV1tsnv6vEyT"
 def runtime(host, monkeypatch):
     # Import the real runner before installing the isolated session facade.
     import agent_loop  # noqa: F401
+    import agent_mcp
+    async def ready():
+        pass
+    monkeypatch.setattr(agent_mcp, "ensure_started", ready)
+    monkeypatch.setattr(agent_mcp, "list_configured_servers", lambda: [
+        {"server": "sugar-bili-scroll/bili", "connected": True}])
     cfg = {"daily_quota": 3, "inbound_reply": True, "inbound_public_reply": True,
            "inbound_dm_public_comment": True, "inbound_whitelist": "100 好友", "inbound_channels": "all",
            "inbound_cooldown_minutes": 0, "inbound_max_per_hour": 20}
@@ -453,7 +459,7 @@ def test_real_runner_scopes_tools_forwards_rows_and_releases_reservation(runtime
 
     async def stream(prompt, session_id, run_id, **kwargs):
         scope = agent_loop.run_tool_scope_for(session_id)
-        assert scope["run_id"] == run_id and "bili_reply" in scope["allow"]
+        assert scope["run_id"] == run_id and rt.h.mcp_function_name("bili_reply") in scope["allow"]
         assert "run_shell" not in scope["allow"]
         assert rt.flow.store.run(run_id)["session_id"] == session_id
         yield {"type": "llm_response", "react_iter": 1, "content": "真实执行入口的回复"}

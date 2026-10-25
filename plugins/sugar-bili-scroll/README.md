@@ -1,10 +1,24 @@
 # 刷 B站 · sugar-bili-scroll
 
-SugarAgent 的 `trusted_host` 原生插件，承接 dsh-bili-scroll 的刷视频能力，新增表情库、入站互动和多任务管理。当前源码版本 **0.4.0**。
+SugarAgent 的 `trusted_host` 原生插件，承接 dsh-bili-scroll 的刷视频能力，新增表情库、入站互动和多任务管理。当前源码版本 **0.5.0**。
 
 本次实现和验证结果见 [实施与验收记录](IMPLEMENTATION.md)；接手时发现的问题保留在 [历史审查](DEVELOPMENT.md)。源码验证与线上运行分别记录，不用原会话的完成标记代替验收。
 
 原项目已有 UC、迁移状态、新增 UC 及未完整迁移项见 [DSH → Sugar UC 对照清单](UC_COMPARISON.md)。
+
+## MCP 与随包 Skill（0.5.0）
+
+14 个 B站业务工具通过 `.mcp.json` 的 `sugar-bili-scroll/bili` 服务注册，使用宿主同进程 Streamable HTTP，入口 `/api/sugar-bili-scroll/mcp/`。原生 `tool_definitions()` 不再注册 B站工具，避免重复。控制台、值班调度、入站回复、多账号和宿主转写继续由 trusted_host 提供。
+
+服务端工具短名仍为 `bili_*`，SugarAgent 模型目录中的名称为 `mcp_sugar_bili_scroll_bili_bili_*`。自动会话的工具范围及系统提示词同步转换，SQLite运行权限仍保存短名；每次调用通过宿主一次性元数据票据验证会话身份、参数和运行权限，模型不能自行指定身份。MCP目录固定发布14个schema，调用时校验开关和最新权限。其他MCP客户端不具备SugarAgent身份票据，当前版本用于宿主内部连接。
+
+随包 [bili-scroll Skill](skills/bili-scroll/SKILL.md) 由宿主发现为 `sugar-bili-scroll:bili-scroll`，覆盖 Agent注册/自检/卸载、工具使用、用户配置和功能介绍。附管理助手：
+
+```powershell
+.\python\python.exe plugins/sugar-bili-scroll/skills/bili-scroll/scripts/manage.py doctor
+```
+
+`doctor/status`只读；`register/disable/uninstall`改变对应运行态。bundled源码通常不在宿主可写卸载目录，需按Skill说明先停用，再按用户意图保留或移走源码；默认保留所有运行数据。首次加载0.5.0包含宿主代码更新，需要重启Agent。此次按此前“暂不重启”保留源码，未对真实B站账号做写入验证。
 
 ## 使用
 
@@ -44,7 +58,7 @@ SugarAgent 的 `trusted_host` 原生插件，承接 dsh-bili-scroll 的刷视频
 
 模型用 `bili_record_video` 记录每条看过的视频，包含挑中 / 跳过及原因。宿主校验全局判重和当天额度，然后生成任务日报与归档。关闭日报仍消耗额度、保留判重和归档。空结果或模型失败的运行也会留下简短运行记录（日报关闭除外）。
 
-每任务独立拥有额度、窗口、间隔、预算、会话、轮数、日报及归档；全局只共享判重表和表情库。设置在工具目录构建时生效，真正调用时再读取最新状态。运行中关闭任务、撤销白名单或关闭写入能力后，后续调用会被拒绝。
+每任务独立拥有额度、窗口、间隔、预算、会话、轮数、日报及归档；全局只共享判重表和表情库。MCP 发布固定 schema，自动会话按本轮权限收窄工具范围，真正调用时再读取最新状态。运行中关闭任务、撤销白名单或关闭写入能力后，后续调用会被拒绝。
 
 旧单任务数据只迁移给能匹配原会话的任务，或唯一的“默认任务”；不会复制给每个任务。旧数据保留，迁移账本标记已导入内容。无法可靠匹配时保留原数据，避免猜测归属。
 
@@ -73,11 +87,19 @@ SugarAgent 的 `trusted_host` 原生插件，承接 dsh-bili-scroll 的刷视频
 
 现有能力层依赖 `bilibili-api-python==17.4.2`、`qrcode` 及其相关依赖；选择 local 引擎还需 `faster-whisper`、`av`。宿主引擎需可用的语音输入服务和 ffmpeg。
 
+## 收藏视频工具
+
+`bili_favorite_add(bvid, fid=0)` 将一条视频收藏到当前启用账号的收藏夹。先用 `bili_favorite_folders` 查询收藏夹 ID；`fid` 省略或为 0 时使用设置中的 `fav_folder_id`，未配置则要求明确指定，不自动猜收藏夹。
+
+普通 Agent 会话及白名单入站会话可调用；陌生人没有此工具。执行前校验 BV 号、收藏夹归属、当前账号及最新权限；失败返回失败，成功返回 BV／收藏夹／视频 aid 等结果。不会创建收藏夹或移除其他收藏。切换账号后需要选择该账号自己的收藏夹。
+
+白名单私聊可说“把 BV…… 收藏到收藏夹 123”。值班任务继续由宿主自动收藏挑中的视频，值班模型不额外持有显式收藏工具。收藏动作与普通私信回复分别执行，普通回复超长而未投递时不会撤销已成功收藏。
+
 ## 开发与验证
 
 逐项真机操作、测试输入与通过标准见 [UC 验收步骤](UC_TESTING.md)。
 
-主要模块：`host.py` 注册工具和 HTTP、管理生命周期；`workflow.py` 负责业务；`store.py` 保存事务事实；`tasks.py` 管理任务及迁移；`inbound.py` 拉消息；`bili_client.py` 适配 B站；`emotes.py` 管理表情；`asr.py` 转写。
+主要模块：`mcp_server.py` 提供 MCP 工具，`host.py` 提供 HTTP、管理生命周期；`workflow.py` 负责业务；`store.py` 保存事务事实；`tasks.py` 管理任务及迁移；`inbound.py` 拉消息；`bili_client.py` 适配 B站；`emotes.py` 管理表情；`asr.py` 转写。
 
 ```powershell
 .\python\python.exe plugins\sugar-bili-scroll\tests\evidence_check.py
@@ -89,3 +111,5 @@ SugarAgent 的 `trusted_host` 原生插件，承接 dsh-bili-scroll 的刷视频
 0.3.2：状态页显示当前登录 UID，并提供“退出 B站登录”“切换 B站账号”和“取消扫码”。退出仅清除本插件的本地凭证；切换账号先退出旧账号，再生成二维码。取消扫码后，仍在返回的扫码请求不能写入凭证。B站任务运行期间禁止退出/切换；换号后重新初始化消息游标、隔离回复会话、停止旧账号待回复任务并保留历史回执。白名单和任务设置保留，自动回复总开关保持原值。
 
 0.4.0：保存多个账号登录态，每次启用一个。账号列表可免扫码切换、退出保留、显式移除；切换前验证，失败时保留当前账号；原单账号凭证自动导入。0.3.2 的退出清除行为由本版的“退出保留／移除删除”替代。
+
+0.4.1：新增 `bili_favorite_add` 收藏视频工具，支持指定收藏夹或使用配置值；接入普通会话、白名单权限及当前账号收藏夹校验。

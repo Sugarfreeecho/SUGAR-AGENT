@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "bili": {
+      "transport": "streamable-http",
+      "host_path": "/api/sugar-bili-scroll/mcp/",
+      "host_context": true,
+      "tool_timeout": 900,
+      "read_timeout": 960,
+      "default_tool_effect": "read",
+      "tool_contracts": {
+        "bili_record_video": {
+          "effect": "workspace_write"
+        },
+        "bili_emote_save": {
+          "effect": "workspace_write"
+        },
+        "bili_favorite_add": {
+          "effect": "external_write"
+        },
+        "bili_reply": {
+          "effect": "external_write"
+        },
+        "bili_send_message": {
+          "effect": "external_write"
+        }
+      }
+    }
+  }
+}

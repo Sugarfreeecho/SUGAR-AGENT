@@ -53,6 +53,8 @@ class Workflow:
             if str(policy.get("uid") or "") not in whitelist:
                 return []
         names = list(BUSINESS)
+        if mode in {"dm", "reply"}:
+            names.append("bili_favorite_add")
         if settings.get("transcribe"):
             names.append("bili_transcribe")
         if mode == "duty":
@@ -79,6 +81,8 @@ class Workflow:
             comment, dm = self.h._write_tools_enabled(settings)
             if name == "bili_record_video":
                 raise ValueError("视频记账只能在值班任务中调用")
+            if name == "bili_transcribe" and not settings.get("transcribe"):
+                raise ValueError("本地转写未开启")
             if name == "bili_reply" and not comment:
                 raise ValueError("自动评论未开启")
             if name == "bili_send_message" and not dm:
@@ -89,6 +93,17 @@ class Workflow:
             if name not in self.allowed(policy, settings):
                 raise ValueError("本轮无权使用这个工具")
         args = dict(arguments)
+        if name == "bili_favorite_add":
+            if self.h._runtime.get("account_changing"):
+                raise ValueError("账号正在切换，请稍后再收藏")
+            if not BVID.fullmatch(str(args.get("bvid") or "")):
+                raise ValueError("BV 号无效")
+            fid = args.get("fid", 0)
+            if isinstance(fid, bool) or not isinstance(fid, (int, str)) or not str(fid).isdigit():
+                raise ValueError("收藏夹 id 必须为非负整数")
+            args["fid"] = int(fid) or int(settings.get("fav_folder_id") or 0)
+            if args["fid"] <= 0:
+                raise ValueError("请先用 bili_favorite_folders 查询收藏夹，并传入 fid；也可在设置中配置收藏夹 id")
         if name == "bili_send_message":
             if int(args.get("receiver_uid") or 0) != int(settings.get("dm_uid") or 0):
                 raise ValueError("只能投递到本任务配置的私信收件人")
@@ -117,6 +132,21 @@ class Workflow:
         if name == "bili_emote_save" and run and not self.store.reserve(run_id, "emotes", 3):
             raise ValueError("本轮最多收藏 3 个表情")
         return policy, settings, args
+
+    async def favorite_video(self, context, bvid, fid):
+        h = self.h
+        stamp = h.inbound.credential_stamp(h._home())
+        folders = await h.bili_client.favorite_folders(h._home(), 0)
+        if folders.get("error"):
+            return {"ok": False, "error": str(folders["error"])}
+        if fid not in {int(row.get("id") or 0) for row in folders.get("folders", [])}:
+            return {"ok": False, "error": "所选收藏夹不属于当前登录账号，请用 bili_favorite_folders 查询当前账号的收藏夹"}
+        if stamp != h.inbound.credential_stamp(h._home()):
+            return {"ok": False, "error": "登录账号已变化，请确认当前账号后重新收藏"}
+        self.authorize(context, "bili_favorite_add", {"bvid": bvid, "fid": fid})
+        result = await h.bili_client.favorite_add(h._home(), bvid, fid)
+        h.duty.log(h._home(), f"收藏工具 {bvid} → {fid}：" + ("成功" if result.get("ok") else "失败"))
+        return result
 
     def legacy_count(self, row, day):
         try:

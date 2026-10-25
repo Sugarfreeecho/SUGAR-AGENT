@@ -1,6 +1,6 @@
 # 开发接手 · 实施与验收记录
 
-记录始于 2026-10-23，更新至 2026-10-24（Asia/Shanghai）。承接 MyAgent 会话 `4bc203cb-adb5-4a8e-8ada-c9f299c3e7c6` 的 dsh-bili-scroll → sugar-bili-scroll UC 项目。当前清单版本为 0.4.0；新增独立完整系统提示词的实现和 210 项回归见 [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md)，多账号功能见 [MULTI_ACCOUNT.md](MULTI_ACCOUNT.md)。下文按阶段保留 0.2.0 至 0.4.0 的验收记录。
+记录始于 2026-10-23，更新至 2026-10-25（Asia/Shanghai）。承接 MyAgent 会话 `4bc203cb-adb5-4a8e-8ada-c9f299c3e7c6` 的 dsh-bili-scroll → sugar-bili-scroll UC 项目。当前清单版本为 0.5.0；新增独立完整系统提示词的实现和 210 项回归见 [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md)，多账号功能见 [MULTI_ACCOUNT.md](MULTI_ACCOUNT.md)。下文按阶段保留验收记录。
 
 ## 原 10 项逐项结论
 
@@ -77,3 +77,37 @@
 0.4.0（2026-10-24）：按用户选择实现保存多个登录态、每次启用一个账号。SQLite 保存账号凭证，当前文件表示单一启用账号；原凭证自动纳入，新增扫码保留旧账号，同 UID 更新而不重复；退出保留，显式移除才删除。切换前验证，失效、网络错误和 UID 不匹配时保留当前账号；切换验证期间暂停新任务，运行中禁止切换／移除。账号 API 只返回元信息。账号存储、HTTP、浏览器、原 UC、工具范围和系统提示词相关回归 **114 项通过**。测试使用临时凭证与认证替身，没有真实消息投递。
 
 0.4.0 已在无运行中会话／B站任务时通过常驻托盘重载。在线账号列表接口可用，跨来源启用／移除均返回 403；真实浏览器桌面和 390 px 窄屏均显示账号控件，无 JS 错误和水平溢出。核对时没有启用或保存账号，入站总开关继续关闭；没有自动启用账号、发起真实扫码或发送消息。记录及截图位于 `.analysis/sugar-bili-scroll-multi-account-20261024/`。
+
+0.4.1（2026-10-25）：新增模型可调用的 `bili_favorite_add(bvid, fid=0)`。普通会话和白名单互动可使用；值班自动收藏仍由宿主执行。显式收藏夹优先于配置，未配置时不猜目标；校验当前账号收藏夹、参数及最新白名单，查询期间换号或撤销权限会阻止写入。收藏失败返回失败结果。相关 UC、账号、浏览器、工具范围和系统提示词回归 **129 项通过**，含 15 项新增收藏工具用例；全部使用传输替身，没有向真实 B站账号收藏视频。
+
+0.4.1 部署状态：在线核对有 1 个其他运行中的 Agent 会话。用户明确选择“暂不重启，保留已完成代码”，因此未重启后端，新工具尚未完成在线加载验证，待下一次后端重启生效。
+
+
+## 0.5.0：MCP工具与随包Skill（2026-10-25）
+
+按用户要求将14个B站业务工具改为MCP注册：manifest声明`.mcp.json`，服务名`sugar-bili-scroll/bili`，使用宿主进程内的Streamable HTTP端点`/api/sugar-bili-scroll/mcp/`。trusted_host继续提供调度、入站、控制台和ASR服务；原生工具目录入口返回空，避免同时注册两套工具。传输端口随`MYAGENT_SERVER_PORT`，默认8192。
+
+宿主MCP适配新增可选`host_context`元数据通道：Agent循环传递真实session/run/tool_call，连接器在模型参数之外发出一次性随机票据；服务核对票据绑定的服务、工具、参数和有效期，再使用原有持久运行授权校验。缺少、伪造、重放或目标不匹配均拒绝；停用后关闭服务，重新启用创建新的会话管理器。票据仅保存在当前宿主进程中，外部MCP客户端不能伪造SugarAgent会话权限。无此配置的其他MCP服务保持原调用方式。
+
+自动会话白名单范围映射为MCP函数名，持久业务策略仍用bili_*短名；完整系统提示词和轮次提示中的短名在渲染时转换。固定发布14个schema，每次实际调用重查开关/白名单/楼层/收件人/额度；普通会话也校验转写开关。MCP效应契约区分读取、本地插件数据写入和B站写入；本地写工具不声明Git工作树隔离兼容，受宿主工作树校验约束。
+
+新增随包`skills/bili-scroll/SKILL.md`，宿主识别为`sugar-bili-scroll:bili-scroll`，四份参考指导分别覆盖Agent管理、工具使用、用户配置、功能介绍。管理助手支持status/doctor/register/disable/uninstall；默认doctor只读，不调用会创建诊断会话的diagnose接口。卸载通过宿主安装器；bundled源码不在可写安装目录时如实失败，并在Skill说明停用、保留运行数据和显式移走源码的恢复步骤。
+
+首轮扩展回归发现旧`test_mcp_result_status`替身没有模拟“禁用状态已成功加载”标志，修正测试隔离，保留生产代码读取失败时拒绝调用的行为。综合回归 **203项通过**（包含6项真实MCP协议/身份/生命周期/ASR/收藏测试、7项Skill助手/参考文档测试，其他为原业务、浏览器、工具范围、会话上下文及MCP通用回归）。平台调用均为替身，不使用真实B站写入。
+
+```powershell
+.\python\python.exe -m pytest tests/test_sugar_bili_scroll_mcp.py tests/test_sugar_bili_scroll_skill.py tests/test_sugar_bili_scroll_favorite_tool.py tests/test_sugar_bili_scroll_tasks.py tests/test_sugar_bili_scroll_workflows.py tests/test_sugar_bili_scroll_accounts.py tests/test_sugar_bili_scroll_browser.py tests/test_run_tool_scope.py tests/test_session_system_context.py tests/test_mcp_result_status.py tests/test_agent_mcp_cache.py tests/test_mcp_registration_switch.py tests/test_mcp_tool_selection.py tests/test_mcp_background_catalog.py tests/test_mcp_state_read_failures.py -q
+```
+
+Skill通过skill-creator的quick_validate；清单由实际插件加载器发现MCP和Skill。实施前备份位于`.analysis/sugar-bili-scroll-mcp-skill-20261025/before/`。保留同工作区其他会话的修改。
+
+部署状态：继续遵守用户“暂不重启，保留已完成代码”的选择；没有重启/重载在线后端，没有修改实际登录态、白名单、任务或自动回复开关。首次加载本版需要重启Agent后端；上述是源码及隔离协议验证，不代替在线版本和真实平台发送验收。
+
+
+最终合并验收：**356项全部通过**，2项为已安装websockets/uvicorn的弃用提示。包含上述203项，以及工具命名/搜索/注册表、宿主可用性目录、会话工作区、工具审批准备、共享可观测性、Skill管理、插件宿主服务与目录加载检查。扩展检查另修正宿主可用性目录在读取失败时本次目录内重复重读的问题，缓存失败仅限当前检查，下次目录或实际调用重新读；对应替身通过manager.is_enabled模拟真实读路径，执行时再次校验会额外读一次。5项可用性目录检查通过。
+
+最终命令：
+
+```powershell
+.\python\python.exe -m pytest tests/test_sugar_bili_scroll_mcp.py tests/test_sugar_bili_scroll_skill.py tests/test_sugar_bili_scroll_favorite_tool.py tests/test_sugar_bili_scroll_tasks.py tests/test_sugar_bili_scroll_workflows.py tests/test_sugar_bili_scroll_accounts.py tests/test_sugar_bili_scroll_browser.py tests/test_run_tool_scope.py tests/test_session_system_context.py tests/test_mcp_result_status.py tests/test_agent_mcp_cache.py tests/test_mcp_registration_switch.py tests/test_mcp_tool_selection.py tests/test_mcp_background_catalog.py tests/test_mcp_state_read_failures.py tests/test_tool_naming.py tests/test_tool_search.py tests/test_tool_registry.py tests/test_host_catalog_availability_scope.py tests/test_session_workspace_paths.py tests/test_tool_review_preparation.py tests/test_runtime_observability_shared.py tests/test_skills_admin.py tests/test_plugin_host_services.py tests/test_plugin_catalog_loading.py -q
+```

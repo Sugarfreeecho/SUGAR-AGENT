@@ -9,7 +9,7 @@
   · 代价：必须物理装在 `plugins/<plugin_id>/`（`plugins/host.py` 的信任边界检查）。
 
 对外提供的三样东西：
-  1. `tool_definitions()` —— 把 B站 能力注册成模型工具（写工具按配置条件注册）
+  1. `mcp_server.py` —— 通过 Streamable HTTP MCP 注册 B站 工具并校验宿主会话权限
   2. `install()` —— 设置页要用的 HTTP 接口 + 静态页
   3. `start()` / `stop()` —— 60 秒 tick 的调度器
 """
@@ -420,6 +420,8 @@ async def _invoke(context, arguments: Mapping[str, Any]):
             )
         elif name == "bili_favorite_folders":
             payload = await bili_client.favorite_folders(home, int(arguments.get("uid") or 0))
+        elif name == "bili_favorite_add":
+            payload = await _flow().favorite_video(context, str(arguments["bvid"]), int(arguments["fid"]))
         elif name == "bili_transcribe":
             payload = await asr.transcribe(
                 home,
@@ -498,34 +500,8 @@ async def _invoke(context, arguments: Mapping[str, Any]):
     return ToolOutcome.completed(bili_client.dumps(payload))
 
 
-def tool_definitions(context, plugin):
-    """把能力注册成宿主工具；写工具按配置条件注册（未开启就根本不存在）。"""
-    from host_tool_registry import host_tool_invokers
-
-    _runtime["plugin"] = plugin
-
-    def _plugin_on() -> bool:
-        try:
-            return bool(context["is_enabled"](plugin.plugin_id))
-        except Exception:  # noqa: BLE001
-            return False
-
-    def gate(name: str):
-        def enabled():
-            if not _plugin_on():
-                return False
-            settings = _settings(plugin)
-            if name == "bili_transcribe":
-                return bool(settings.get("transcribe"))
-            if name in {"bili_reply", "bili_send_message"}:
-                candidates = [settings] + [_task_settings(row) for row in tasks_mod.load(_home()) if row.get("enabled")]
-                pos = 0 if name == "bili_reply" else 1
-                task_enabled = any(_write_tools_enabled(row)[pos] for row in candidates)
-                inbound_enabled = name == "bili_reply" and settings.get("inbound_reply") and (settings.get("inbound_public_reply", True) or settings.get("inbound_dm_public_comment", True))
-                return bool(task_enabled or inbound_enabled)
-            return True
-        return enabled
-
+def mcp_tool_rows():
+    """Stable MCP schemas; permissions are rechecked on every invocation."""
     rows: list[tuple[dict, bool, str]] = [
         (_fn("bili_record_video", "记录本任务看过的视频、挑选结论并生成日报/归档；每条视频都要记录。全局判重和每日配额由宿主校验。", {
             "bvid": {"type": "string"}, "title": {"type": "string"}, "author": {"type": "string"},
@@ -549,6 +525,20 @@ def tool_definitions(context, plugin):
             ),
             False,
             "read",
+        ),
+        (
+            _fn(
+                "bili_favorite_add",
+                "将一条视频收藏到当前登录 B站账号的收藏夹。可先用 bili_favorite_folders 查询收藏夹 id。"
+                "fid 不传或为 0 时使用设置中的收藏夹 id；未配置时必须指定 fid。不会创建收藏夹或取消已有收藏。",
+                {
+                    "bvid": {"type": "string", "description": "视频 BV 号"},
+                    "fid": {"type": "integer", "minimum": 0, "description": "当前账号收藏夹 id，省略或 0 使用设置值"},
+                },
+                ["bvid"],
+            ),
+            True,
+            "external_write",
         ),
         (
             _fn(
@@ -627,6 +617,7 @@ def tool_definitions(context, plugin):
             _fn(
                 "bili_transcribe",
                 "本地转写：把没有字幕的视频用 Whisper 转成文字（慢，几十秒到几分钟）。"
+                "必须先在设置中开启本地转写。"
                 "只在「字幕是空的、但这条视频看起来值得判断」时用，别拿它当字幕的替代。"
                 "转出来是空串表示没有人声，那是结果不是故障，别重试。",
                 {
@@ -634,7 +625,7 @@ def tool_definitions(context, plugin):
                 },
                 ["bvid"],
             ),
-            True,  # 受设置门控：只有开了「本地转写」才出现
+            True,  # 每次调用校验转写开关，自动会话目录另有范围限制
             "read",
         ),
         (
@@ -706,7 +697,7 @@ def tool_definitions(context, plugin):
         (
             _fn(
                 "bili_send_message",
-                "给 B站 用户发私信。只有 dm_mode 不是 off 且填了收件人 UID 才会出现这只工具。"
+                "给 B站 用户发私信。只有 dm_mode 不是 off 且填了收件人 UID 才允许调用。"
                 "私信有 500 字符上限，超了会被接口拒（code 21007）。",
                 {
                     "receiver_uid": {"type": "integer"},
@@ -719,28 +710,22 @@ def tool_definitions(context, plugin):
         ),
     ]
 
-    policy = (context.get("session_meta") or {}).get("_plugin_run_policy")
-    permitted = set(policy.get("allowed", [])) if policy else None
-    definitions: list[dict] = []
-    for definition, is_write, effect in rows:
-        name = definition["function"]["name"]
-        resolve = gate(name)
-        host_tool_invokers.register(
-            name,
-            _invoke,
-            replace=True,
-            effect=effect,
-            enabled=resolve,
-            owner=plugin.plugin_id,
-        )
-        # 当前配置下不可用的写工具，连定义都不返回（模型侧根本不存在这只工具）。
-        if permitted is not None and name not in permitted:
-            continue
-        if name == "bili_record_video" and permitted is None:
-            continue
-        if resolve():
-            definitions.append(definition)
-    return definitions
+    return rows
+
+
+def tool_definitions(context, plugin):
+    """No native Bili registrations: the plugin manifest owns MCP discovery."""
+    return []
+
+
+def mcp_function_name(name):
+    from agent_mcp import _safe_function_key
+    return _safe_function_key(PLUGIN_ID + "/bili", name)
+
+
+def _mcp_tool_text(text):
+    import re
+    return re.sub(r"\bbili_[a-z_]+\b", lambda match: mcp_function_name(match[0]), text)
 
 
 # ── 一轮的提示词 ────────────────────────────────────────────────────────
@@ -767,7 +752,7 @@ def _render_system_prompt(kind, variables=None):
     variables = {"task_home": str(_home()), "seen_file": str(duty.seen_file(_home())), **(variables or {})}
     template = prompts_mod.load(_home()).get(kind) or _default_system_prompts()[kind]
     template = template.replace("<家目录>/seen.md", "{{seen_file}}").replace("<家目录>\\seen.md", "{{seen_file}}").replace("<家目录>", "{{task_home}}")
-    return prompts_mod.render(template, variables)
+    return _mcp_tool_text(prompts_mod.render(template, variables))
 
 
 def build_system_context(task_home: Optional[Path] = None) -> str:
@@ -967,7 +952,9 @@ def _run_round_blocking(prompt: str, session_id: str, run_id: str, budget: float
         return {"ok": False, "busy": True, "error": "会话正在运行，稍后重试"}
     policy = dict(policy or {})
     policy["allowed"] = list(allow) if allow is not None else policy.get("allowed", [])
-    token = set_run_tool_scope(session_id, allow=allow, deny=deny, run_id=run_id, context=policy)
+    wire_allow = [mcp_function_name(name) for name in allow] if allow is not None else None
+    wire_deny = [mcp_function_name(name) for name in deny] if deny is not None else None
+    token = set_run_tool_scope(session_id, allow=wire_allow, deny=wire_deny, run_id=run_id, context=policy)
     deadline = time.monotonic() + budget if budget else 0
     timed_out = False
     finals, errors = [], []
@@ -978,7 +965,13 @@ def _run_round_blocking(prompt: str, session_id: str, run_id: str, budget: float
         return timed_out or _runtime.get("stopping", False) or session_manager.is_interrupt_requested(sid, run_id)
 
     async def run():
-        async for event in astream_events(prompt, session_id=session_id, should_stop=should_stop, run_id=run_id):
+        if allow:
+            import agent_mcp
+            await agent_mcp.ensure_started()
+            if not any(row.get("server") == PLUGIN_ID + "/bili" and row.get("connected")
+                       for row in agent_mcp.list_configured_servers()):
+                raise RuntimeError("B站 MCP 未连接，请在 MCP 设置注册 sugar-bili-scroll/bili")
+        async for event in astream_events(_mcp_tool_text(prompt), session_id=session_id, should_stop=should_stop, run_id=run_id):
             if event.get("type") == "final" and str(event.get("content") or "").strip():
                 finals.append(str(event["content"]))
             elif event.get("type") == "error":
@@ -1007,11 +1000,9 @@ def _run_round_blocking(prompt: str, session_id: str, run_id: str, budget: float
 
 
 
-# ── 自动收藏（宿主干的活，**不给模型这只手**） ─────────────────────────
+# ── 值班自动收藏（由宿主按任务配置执行） ──────────────────────────────
 #
-# 为什么是宿主做：收藏会把视频**永久**写进用户账号。让模型自己决定收什么，
-# 等于把"账号里有什么"交给一次推理的随机性。上游也是这么分的工 ——
-# 模型只负责挑，收哪些由设置里的收藏夹 + 今天报告里的 `### BV号` 决定。
+# 值班模型只负责挑；白名单互动及普通会话可通过 bili_favorite_add 显式收藏。
 
 async def favorite_today(why: str = "手动", task_id: str = "") -> dict:
     home, settings = _home(), _settings()
@@ -1430,6 +1421,7 @@ async def start(_context, plugin) -> None:
             store_mod.HOST_SERVICES.update(app=app, loop=_runtime["loop"])
     except Exception:  # noqa: BLE001
         pass
+    await _load_sibling("mcp_server").start(sys.modules[__name__])
     duty.ensure_charter(SHIPPED_CHARTER, home)
     duty.ensure_notes(home)
     task = _runtime.get("task")
@@ -1442,6 +1434,7 @@ async def start(_context, plugin) -> None:
 
 async def stop(_context, plugin) -> None:
     _runtime["stopping"] = True
+    await _load_sibling("mcp_server").stop(sys.modules[__name__])
     for key in ("task", "inbound_task"):
         task = _runtime.get(key)
         _runtime[key] = None
@@ -1476,6 +1469,7 @@ def install(app, context, plugin) -> None:
     duty.ensure_charter(SHIPPED_CHARTER, _runtime["home"])
     duty.ensure_notes(_runtime["home"])
 
+    _load_sibling("mcp_server").install(app, sys.modules[__name__])
     router = APIRouter(prefix=f"/api/{PLUGIN_ID}")
 
     def _origin_ok(request: Request) -> bool:

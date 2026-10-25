@@ -5,7 +5,7 @@
 ## 对照基线与统计口径
 
 - DSH：迁移时下载的 `c1overzz/dsh-bili-scroll` **0.1.19**，本地目录 `D:/AI/AI Agent/SugarAgent Demo/dsh-bili-scroll`，提交 `eab82bb749bdab1e58723b734011dbb583993785`；本次检查工作树干净。这里比较迁移基线，不代表上游现在的最新版本。
-- Sugar：本仓库 `plugins/sugar-bili-scroll` **0.4.0** 当前源码；0.4.0 多登录态按本日用户确认补充。
+- Sugar：本仓库 `plugins/sugar-bili-scroll` **0.4.1** 当前源码；0.4.0 多登录态、0.4.1 显式收藏工具按后续用户要求补充。
 - UC 按使用者的操作和结果划分；底层函数、修复次数和原会话的十项开发任务，不直接当作十个业务 UC。
 - “已迁移”指存在对应执行路径；“改造”表示入口或行为发生变化；“部分”表示还有原版行为缺口。源码实现、隔离回归、真实账号验收分别记录。
 - 原版 README 的路线图和工具清单有滞后，因此以 `index.js`、`client.js`、`prompts/duty.md` 和配套模块为主要依据。
@@ -55,6 +55,7 @@
 | S08 | 多任务管理及隔离 | 新建、编辑、删除、启停、立即运行任务；不同主题拥有独立会话、额度、窗口、间隔、预算、日报和归档 | 已实现；任务串行调度，共享全局判重和表情库；页面展示每任务今日数、剩余额度、轮数和错误 |
 | S09 | 三类会话独立完整系统提示词 | 分别编辑值班、私聊、评论回复的完整提示词，替换普通会话基础提示词，可保存和恢复默认 | 已实现；下一轮生效，保留聊天记录。宿主 `replace` 模式是通用扩展，三份模板及编辑器属于本插件 |
 | S10 | 多账号登录态、退出、切换和取消扫码 | 保存多个 UID 登录态，每次启用一个；验证后免扫码切换；退出保留，移除才删除；取消扫码 | 0.4.0 扩展；任务运行时阻止退出／切换，取消后丢弃在途结果；换号隔离回复会话、重建游标、停止旧账号待处理任务。详见 [多账号说明](MULTI_ACCOUNT.md) |
+| S11 | 显式收藏视频工具 | 普通会话／白名单来信可要求收藏指定视频，选择当前账号收藏夹 | 0.4.1 新增 `bili_favorite_add`；与原版及现有的宿主自动收藏分开，校验账号、收藏夹和最新权限 |
 
 ## 三、迁移中的增强，不能简单算作全新业务
 
@@ -112,3 +113,8 @@ Sugar 当前实现：
 - `store.py`：事实、队列、权限、回执、恢复和账号切换。
 - `tasks.py`、`inbound.py`、`emotes.py`、`asr.py`、`bili_client.py`、`system_prompts.py`：对应业务实现。
 - `tests/test_sugar_bili_scroll_tasks.py`、`tests/test_sugar_bili_scroll_workflows.py`、`tests/test_sugar_bili_scroll_browser.py`：相关隔离回归。
+
+
+## 0.5.0 补充：MCP与Skill
+
+14个B站业务工具迁为MCP注册，服务`sugar-bili-scroll/bili`；调度/控制台仍由trusted_host提供。新增随包Skill`sugar-bili-scroll:bili-scroll`，覆盖Agent注册、自检、卸载和工具使用，以及用户设置、功能介绍；管理助手只读自检并支持明确管理命令。此版本为源码验证，尚未按用户授权重启加载；不改变上述历史业务UC缺口。详见[Skill入口](skills/bili-scroll/SKILL.md)与[实施记录](IMPLEMENTATION.md)。

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "id": "sugar-bili-scroll",
   "name": "刷B站（值班）",
-  "version": "0.4.0",
-  "description": "多任务值班、表情库和入站回复；插件会话使用独立完整系统提示词，支持编辑、持久保存和恢复默认。",
+  "version": "0.5.0",
+  "description": "B站多任务值班、入站回复、多账号登录态；MCP业务工具与随包使用管理Skill。",
   "settings_schema": {
     "type": "object",
     "schema_version": 1,
@@ -61,7 +61,7 @@
       "auto_comment": {
         "type": "boolean",
         "title": "自动评论并 @ 我",
-        "description": "关着时模型手里根本没有 bili_reply 这只工具。",
+        "description": "关闭时值班会话不开放评论，普通会话调用也会被拒绝；入站评论由独立开关控制。",
         "default": false
       },
       "mention_name": {
@@ -141,7 +141,7 @@
       "transcribe": {
         "type": "boolean",
         "title": "本地转写（没字幕的视频）",
-        "description": "开了才给模型 bili_transcribe。默认复用宿主「语音输入」那套，不用再下模型。",
+        "description": "开启后才允许调用 bili_transcribe。默认复用宿主语音输入服务，不用再下载模型。",
         "default": false
       },
       "asr_engine": {
@@ -177,7 +177,7 @@
       "fav_folder_id": {
         "type": "integer",
         "title": "自动收藏到（收藏夹 id）",
-        "description": "0 = 关闭。填了之后，每轮挑中的视频由宿主收进这个收藏夹 —— 模型手里没有这只工具。",
+        "description": "0 = 关闭值班自动收藏；填入后自动收藏挑中的视频。显式收藏视频工具未指定收藏夹时也使用此值。",
         "minimum": 0,
         "default": 0
       },
@@ -251,5 +251,18 @@
   "permissions": {
     "context": [],
     "services": []
+  },
+  "mcp_servers": ".mcp.json",
+  "skills": [
+    "skills"
+  ],
+  "dependencies": {
+    "python": {
+      "packages": [
+        "mcp==1.28.1",
+        "bilibili-api-python==17.4.2",
+        "qrcode"
+      ]
+    }
   }
 }
