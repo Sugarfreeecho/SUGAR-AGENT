@@ -29,3 +29,5 @@
 主要文件：`plugins/voice-input/web/shared.js`（语音计划）、`web/chat.js`（分块播放、控制、自动朗读）、`web/voice.css`、`web/settings.js`、`speech_input/configuration.py`（`tts.autoRead`）。审查清单见 `06-能力扩展加载/09-内置插件-语音输入与朗读方案设计-UseCase清单.md`（v2，新增 UC-321~331、UC-341~348、UC-508）。
 
 设置中心那批改动入库后，此前一直失败的 `tests/js/voice_plugin_browser.cjs` 已能通过（启动聚焦、主题焦点、设置直达、浮窗、草稿冲突、Final 朗读、停止与释放）；`tests/js/speech_input_runtime.cjs` 里对权限处理器的断言同步到更严格的实现（UI 权限也要求来自受信主框架）。
+
+**自动朗读的等待从 1.2 秒降到 150 毫秒。** 原先的 1.2 秒是怕读到半截回答，但最终答案卡是运行提交时**一次性** `renderMarkdown` 生成的（`message-rendering.js:5523`），不会边写边长，这段等待纯属延迟。缩短后发现一个新问题：排队时若页面上还有上一条回答，会抢先把旧消息读出来。改为进入流式状态时先快照已存在的卡片（`preRunWraps`），排队只在新卡片里选；同一卡片重复排队不再重置计时器，避免页面持续变动把启动无限推后。

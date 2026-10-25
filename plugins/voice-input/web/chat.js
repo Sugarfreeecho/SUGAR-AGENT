@@ -34,6 +34,9 @@ export function installChatExtension() {
     // Auto reading stays disarmed until a run has actually streamed in, so opening an
     // old session never starts talking on its own.
     let autoRead = false, sawStreaming = false, autoTimer = null;
+    let autoPending = null;
+    // Frames that already existed when this run started must never be auto read.
+    let preRunWraps = null;
     const autoDone = new WeakSet();
     const readButtons = new Set();
     const status = message => { menu.querySelector('[role="status"]').textContent = message; };
@@ -308,24 +311,33 @@ export function installChatExtension() {
         if (!autoRead || !sawStreaming || disposed) return;
         if (document.querySelector('.is-streaming')) return;
         const wraps = [...document.querySelectorAll('.msg-wrap--answer-frame')];
-        const wrap = wraps[wraps.length - 1];
+        const fresh = wraps.filter(node => !preRunWraps || !preRunWraps.has(node));
+        const wrap = fresh[fresh.length - 1];
         if (!wrap || autoDone.has(wrap)) return;
         const button = wrap.querySelector('.voice-read');
         const content = wrap.querySelector('.message.assistant');
         if (!button || !content) return;
-        clearTimeout(autoTimer);
         const text = content.textContent.trim();
-        // Wait for the answer to stop changing before speaking, or the tail is cut off.
+        // Re-arming on every mutation would let page activity starve the timer.
+        if (autoPending && autoPending.wrap === wrap && autoPending.text === text) return;
+        clearTimeout(autoTimer);
+        autoPending = { wrap, text };
+        // The answer card is rendered once, complete, when the run commits, so this
+        // only guards against a card that is still being assembled - not a delay.
         autoTimer = setTimeout(() => {
+            autoPending = null;
             if (!autoRead || playback || disposed || !wrap.isConnected || autoDone.has(wrap)) return;
             if (document.querySelector('.is-streaming')) return;
             if ((wrap.querySelector('.message.assistant')?.textContent || '').trim() !== text || !text) return;
             autoDone.add(wrap);
             void read(wrap, button);
-        }, 1200);
+        }, 150);
     }
     const observer = new MutationObserver(() => {
-        if (document.querySelector('.is-streaming')) sawStreaming = true;
+        if (document.querySelector('.is-streaming')) {
+            if (!sawStreaming) preRunWraps = new Set(document.querySelectorAll('.msg-wrap--answer-frame'));
+            sawStreaming = true;
+        }
         scan();
         if (playback && !playback.button.isConnected) stopPlayback();
     });
@@ -342,7 +354,9 @@ export function installChatExtension() {
         }
     });
     on(menu.querySelector('[data-settings]'), 'click', () => { void hide(); globalThis.myagentOpenSettings?.('plugin:voice-input:voice'); });
-    on(document, 'myagent:session-change', () => { sawStreaming = false; clearTimeout(autoTimer); void hide(); stopPlayback(); });
+    on(document, 'myagent:session-change', () => {
+        sawStreaming = false; preRunWraps = null; clearTimeout(autoTimer); void hide(); stopPlayback();
+    });
     on(document, 'myagent:settings-closed', () => { snapshot = null; void loadVoiceFlag(); });
     on(document, 'myagent:plugins-changed', () => { void loadVoiceFlag(); });
     on(document, 'keydown', event => { if (event.key === 'Escape' && !menu.hidden) { event.preventDefault(); void hide(true); } });
