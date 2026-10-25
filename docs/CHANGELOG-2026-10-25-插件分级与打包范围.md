@@ -52,6 +52,12 @@
 - **附带**：旧代码对 `system_builtin` 插件即使停用也保留 `settings.section`；`voice-input` 已归入 `standalone`，停用后不再保留任何 UI 贡献。
 - **验证**：临时目录实测仅加载 9 个非 standalone 插件；`PLUGIN_VOICE_INPUT_ENABLED=1` 可恢复加载，`PLUGIN_AGENT_GOAL_ENABLED=0` 可停用内置；相关 pytest 118 passed / 1 skipped。
 
+### 2.6 文案：插件的“已禁用”改为“未启用”
+
+- `standalone` 插件是“默认未启用”，并未被用户主动禁用；聊天页技能选择器与设置页原先分别写“已禁用 / 已停用”，语义不一致。
+- 统一为“未启用”（英文 `Not enabled`）；切换按钮仍保留“启用 / 停用”的动作语义，`已禁用` 继续用于用户主动关闭的 Skill / MCP 工具。
+- `setup_i18n.js` 补充 `未启用`、`已停用` 的英文映射；`frontend/src` 与 `app/templates/dist` 同提交（vite build，9.66s）。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

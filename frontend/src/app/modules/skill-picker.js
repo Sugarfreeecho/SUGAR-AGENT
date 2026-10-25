@@ -380,7 +380,7 @@ function renderSkillPickerPluginsHtml() {
             var pageHref = skillPickerPluginPageHref(plugin);
             var operation = pluginToggleBusy[id];
             var busy = !!operation;
-            var status = busy ? skillPickerPluginToggleStatus(operation) : (enabled ? '已启用' : '已禁用');
+            var status = busy ? skillPickerPluginToggleStatus(operation) : (enabled ? '已启用' : '未启用');
             var detail = ['插件：' + name, 'ID：' + id, '版本：' + version, '格式：' + type, '兼容性：' + compatibility, '状态：' + status].join('\n');
             return '<div class="skill-picker-option ext-option plugin-option' + (enabled ? '' : ' is-disabled') + (pageHref ? ' has-page' : '') + (busy ? ' is-busy' : '') + '" aria-busy="' + (busy ? 'true' : 'false') + '" data-ui-tip="' + skillPickerEscape(detail) + '">'
                 + '<span class="plugin-type-badge">' + skillPickerEscape(type) + '</span>'

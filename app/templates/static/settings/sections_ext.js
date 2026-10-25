@@ -66,7 +66,7 @@
             p.description || ''),
           esc(componentsSummary(p) || p.namespace || ''),
           (bad ? W.status('warn', t('不兼容', 'Incompatible'))
-            : loaded ? W.status('ok', t('正常', 'OK')) : W.status('warn', t('已停用', 'Disabled'))) +
+            : loaded ? W.status('ok', t('正常', 'OK')) : W.status('warn', t('未启用', 'Not enabled'))) +
           W.sw('plugin:' + pluginId(p), p.enabled !== false,
             envLocked ? 'disabled aria-disabled="true" title="' + t('由环境变量控制', 'Controlled by environment variable') + '"' : '') +
           (envLocked ? W.chip('ENV ' + esc(p.env_var || '')) : '') +
