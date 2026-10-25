@@ -274,6 +274,18 @@ window.addEventListener('message', function (event) {
         }
         return;
     }
+    if (data.type === 'myagent:plugin-diagnose' && typeof data.sessionId === 'string') {
+        var diagnoseSession = data.sessionId;
+        var diagnosePrompt = typeof data.prompt === 'string' ? data.prompt : '';
+        finishClosingSettingsCenter();
+        if (typeof window.myagentOpenPluginDiagnose === 'function') {
+            window.myagentOpenPluginDiagnose(diagnoseSession, diagnosePrompt);
+        } else {
+            try { localStorage.setItem('myagent.pluginDiagnosePrompt:' + diagnoseSession, diagnosePrompt); } catch (e) { /* ignore */ }
+            window.location.assign('/?session=' + encodeURIComponent(diagnoseSession));
+        }
+        return;
+    }
     if (data.type === 'myagent:settings-close') { finishClosingSettingsCenter(); return; }
     if (data.type === 'myagent:plugins-changed') {
         document.dispatchEvent(new CustomEvent('myagent:plugins-changed'));

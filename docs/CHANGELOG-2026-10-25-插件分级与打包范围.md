@@ -65,6 +65,13 @@
 - 后端新增 `POST /api/plugins/{id}/diagnose`：建一个诊断会话，把报告写进首条提示词返回；设置页用一次性 localStorage 键把提示词交给主界面，`/?session=<id>` 打开后自动发送，Agent 实际调用工具/页面复核，再按阻塞项逐步引导（不自行改源码/配置）。
 - 新增 `tests/test_plugin_availability.py`（5 项）；连同设置中心、插件核心与目录测试共 56 passed / 1 skipped。前端 `vite build` 13.48s，src 与 dist 同提交。
 
+### 2.8 修复：体检会话多开一页、任务未发出
+
+- **多开一页**：设置中心实际是应用内的 `iframe` 浮层（`settings.js:mountSettingsCenter`），体检按钮却用 `window.open('_blank')`，于是额外弹出一个完整应用页。改为先 `postMessage({type:'myagent:plugin-diagnose'})` 交给宿主：宿主关闭设置浮层、切换会话并发送；只有设置页被单独打开（无父窗口）时才在当前标签导航。
+- **任务没发出**：深链 `/?session=<id>` 在 `layout-panels.init()` 里就被消费并清空 `pendingQuerySession`，`loadSessionList` 的深链分支永远看不到它，自动发送从未执行。现在 `init()` 恢复会话后直接调用 `maybeAutoSendPluginDiagnose(lastSessionId)`；同时把宿主入口收敛为 `window.myagentOpenPluginDiagnose(sessionId, prompt)`。
+- **现场证据**：会话 `75e21c91-b14c-4d3a-9f68-9a4724e1e854` 的 `events.jsonl` 只有 `session_meta` 与 `extension_state_changed`，没有 user 事件，也没有 run。
+- **验证**：`vite build` 5.89s；dist 含 `myagentOpenPluginDiagnose`（3 处）、`myagent:plugin-diagnose`（1 处）与 `pluginDiagnosePrompt`（8 处）。设置静态 JS 不再出现 `window.open`。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

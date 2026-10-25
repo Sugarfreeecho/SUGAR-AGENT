@@ -1681,6 +1681,22 @@ function maybeAutoSendPluginDiagnose(sessionId) {
     }
 }
 
+/* 设置中心（应用内 iframe）通过 postMessage 调这里，避免再开一个应用页。 */
+function openPluginDiagnoseSession(sessionId, prompt) {
+    var sid = String(sessionId || '').trim();
+    if (!sid) return;
+    if (prompt) {
+        try { localStorage.setItem(pluginDiagnosePromptKey(sid), String(prompt)); } catch (e) { /* ignore */ }
+    }
+    var run = function () { maybeAutoSendPluginDiagnose(sid); };
+    if (typeof switchSession === 'function' && sid !== currentSessionId) {
+        void Promise.resolve(switchSession(sid)).then(run).catch(run);
+    } else {
+        run();
+    }
+}
+try { window.myagentOpenPluginDiagnose = openPluginDiagnoseSession; } catch (e) { /* ignore */ }
+
 function maybeTakeOverActiveRuntimeSession(payload) {
     var sid = String(currentSessionId || '').trim();
     var activeIds = payload && Array.isArray(payload.active_session_ids)

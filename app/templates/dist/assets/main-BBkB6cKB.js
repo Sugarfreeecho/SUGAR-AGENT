@@ -1536,6 +1536,18 @@ window.addEventListener('message', function (event) {
         }
         return;
     }
+    if (data.type === 'myagent:plugin-diagnose' && typeof data.sessionId === 'string') {
+        var diagnoseSession = data.sessionId;
+        var diagnosePrompt = typeof data.prompt === 'string' ? data.prompt : '';
+        finishClosingSettingsCenter();
+        if (typeof window.myagentOpenPluginDiagnose === 'function') {
+            window.myagentOpenPluginDiagnose(diagnoseSession, diagnosePrompt);
+        } else {
+            try { localStorage.setItem('myagent.pluginDiagnosePrompt:' + diagnoseSession, diagnosePrompt); } catch (e) { /* ignore */ }
+            window.location.assign('/?session=' + encodeURIComponent(diagnoseSession));
+        }
+        return;
+    }
     if (data.type === 'myagent:settings-close') { finishClosingSettingsCenter(); return; }
     if (data.type === 'myagent:plugins-changed') {
         document.dispatchEvent(new CustomEvent('myagent:plugins-changed'));
@@ -21352,11 +21364,28 @@ function runtimeLifecycleIsBlocked() {
     return runtimeLifecycle.serverDraining || (!!operation && ['authorized','checkpointed','draining','stopping','starting','recovering'].includes(operation.phase));
 }
 function runtimeLifecycleStorageKey() { return 'myagent-lifecycle:' + location.origin; }
-function acceptRuntimeLifecycleOperation(operation) {
+function dismissRuntimeLifecycleOperation() {
+    if (!runtimeLifecycle.operation) return;
+    runtimeLifecycle.dismissed = runtimeLifecycle.operation.restart_id;
+    try { sessionStorage.setItem(runtimeLifecycleStorageKey() + ':dismissed', runtimeLifecycle.dismissed); } catch (_) { /* retain memory */ }
+    renderRuntimeLifecycle();
+}
+function acceptRuntimeLifecycleOperation(operation, options) {
     if (!operation || !operation.restart_id || !operation.phase) return false;
+    options = options || {};
+    // Chat history and SSE replay are not evidence of a new lifecycle change.
+    // The status endpoint restores pending work independently of chat history.
+    if (options.replayed || (options.source && !['event','sse','status','restore'].includes(options.source))) return false;
     var previous = runtimeLifecycle.operation;
     if (previous && previous.restart_id === operation.restart_id && Number(previous.revision) > Number(operation.revision)) return false;
     if (previous && previous.restart_id !== operation.restart_id && Number(previous.created_at) > Number(operation.created_at)) return false;
+    var sameOperation = previous && previous.restart_id === operation.restart_id;
+    // Initial snapshots contain recent outcomes as well as active requests.
+    // Only a completion of an operation this page was tracking is a new result.
+    if (['completed','denied','cancelled'].includes(operation.phase)
+        && (options.source === 'restore' || (options.source === 'status' && !sameOperation))) {
+        runtimeLifecycle.dismissed = operation.restart_id;
+    }
     if (!previous || previous.restart_id !== operation.restart_id) runtimeLifecycle.resume = operation.resume_requester !== false;
     runtimeLifecycle.operation = operation;
     try { sessionStorage.setItem(runtimeLifecycleStorageKey(), JSON.stringify(operation)); } catch (_) { /* retain memory */ }
@@ -21428,7 +21457,7 @@ function buildLifecycleCard(operation, inline) {
         if (window.sugarAgentDesktop && window.sugarAgentDesktop.openLogs) button('查看日志',function() { void window.sugarAgentDesktop.openLogs(); });
     }
     if (['completed','denied','cancelled','failed'].includes(operation.phase) && !inline) {
-        button('收起',function() { runtimeLifecycle.dismissed = operation.restart_id; renderRuntimeLifecycle(); });
+        button('收起',dismissRuntimeLifecycleOperation);
     }
     card.appendChild(actions); return card;
 }
@@ -21506,13 +21535,20 @@ async function refreshRuntimeLifecycle() {
         runtimeLifecycle.uiToken = payload.ui_token || '';
         var changed = runtimeLifecycle.instanceId && runtimeLifecycle.instanceId !== payload.instance_id;
         var operation = (payload.operations || [])[0];
-        if (operation && operation.phase === 'completed' && operation.expected_new_instance_id !== payload.instance_id) throw new Error('服务实例身份尚未核实');
+        if (operation && operation.phase === 'completed' && operation.expected_new_instance_id !== payload.instance_id) {
+            var previous = runtimeLifecycle.operation;
+            if (previous && previous.restart_id === operation.restart_id
+                && !['completed','denied','cancelled','failed'].includes(previous.phase)) throw new Error('服务实例身份尚未核实');
+            // A result from an older instance is history, not this connection's
+            // completion. It must not prevent observing the current service.
+            operation = null;
+        }
         runtimeLifecycle.instanceId = payload.instance_id;
         runtimeLifecycle.offlineAt = 0;
         runtimeLifecycle.serverDraining = !!payload.draining;
         runtimeLifecycle.supervisorUnavailable = payload.restart_available === false && operation
             && ['authorized','checkpointed','draining','stopping','starting','recovering'].includes(operation.phase);
-        if (operation) acceptRuntimeLifecycleOperation(operation);
+        if (operation) acceptRuntimeLifecycleOperation(operation, {source:'status'});
         if (changed && payload.ready) {
             if (typeof reconcileRunStateFromServer === 'function') void reconcileRunStateFromServer({silent:true});
             if (typeof currentSessionId !== 'undefined' && currentSessionId && typeof switchSession === 'function') void switchSession(currentSessionId,{forceReload:true});
@@ -21526,8 +21562,9 @@ async function refreshRuntimeLifecycle() {
 }
 function initRuntimeLifecycle() {
     try {
+        runtimeLifecycle.dismissed = sessionStorage.getItem(runtimeLifecycleStorageKey() + ':dismissed') || '';
         var saved = JSON.parse(sessionStorage.getItem(runtimeLifecycleStorageKey()) || 'null');
-        if (saved && Date.now()/1000 - Number(saved.created_at) < 86400) acceptRuntimeLifecycleOperation(saved);
+        if (saved && Date.now()/1000 - Number(saved.created_at) < 86400) acceptRuntimeLifecycleOperation(saved, {source:'restore'});
     } catch(_) { /* no saved request */ }
     if (window.sugarAgentDesktop && window.sugarAgentDesktop.onLifecycleStatus) {
         window.sugarAgentDesktop.onLifecycleStatus(function(operation) {
@@ -22424,7 +22461,8 @@ function renderEvent(ctx, event, eventIndex, runSessionId, renderOptions) {
     }
     if (!event || typeof event !== 'object') return;
     if (event.type === 'lifecycle_changed' && typeof acceptRuntimeLifecycleOperation === 'function') {
-        acceptRuntimeLifecycleOperation(event.operation);
+        acceptRuntimeLifecycleOperation(event.operation, { source: renderOptions?.source || 'event',
+            replayed: !!(event.replayed_recent || event.replayed_snapshot) });
         return;
     }
     syncRenderContextRunScope(ctx, event);
@@ -24285,6 +24323,22 @@ function maybeAutoSendPluginDiagnose(sessionId) {
         console.warn('plugin diagnose autosend failed', error);
     }
 }
+
+/* 设置中心（应用内 iframe）通过 postMessage 调这里，避免再开一个应用页。 */
+function openPluginDiagnoseSession(sessionId, prompt) {
+    var sid = String(sessionId || '').trim();
+    if (!sid) return;
+    if (prompt) {
+        try { localStorage.setItem(pluginDiagnosePromptKey(sid), String(prompt)); } catch (e) { /* ignore */ }
+    }
+    var run = function () { maybeAutoSendPluginDiagnose(sid); };
+    if (typeof switchSession === 'function' && sid !== currentSessionId) {
+        void Promise.resolve(switchSession(sid)).then(run).catch(run);
+    } else {
+        run();
+    }
+}
+try { window.myagentOpenPluginDiagnose = openPluginDiagnoseSession; } catch (e) { /* ignore */ }
 
 function maybeTakeOverActiveRuntimeSession(payload) {
     var sid = String(currentSessionId || '').trim();
@@ -31330,6 +31384,11 @@ async function init() {
     if (restoringHistory && (targetSession === lastSessionId || currentSessionId !== lastSessionId)) await restoringHistory;
     else if (targetSession) await switchSession(targetSession, { initialLoad: true });
     else await createNewSession();
+    // Deep links are consumed here before loadSessionList runs, so the
+    // plugin-diagnose prompt must be sent from this point as well.
+    if (lastSessionId && typeof maybeAutoSendPluginDiagnose === 'function') {
+        maybeAutoSendPluginDiagnose(lastSessionId);
+    }
     // Startup already scans background sessions. Prioritize the visible one
     // independently, without waiting for that entire scan or its HTTP reply.
     if (currentSessionId) {

@@ -66,6 +66,11 @@ async function init() {
     if (restoringHistory && (targetSession === lastSessionId || currentSessionId !== lastSessionId)) await restoringHistory;
     else if (targetSession) await switchSession(targetSession, { initialLoad: true });
     else await createNewSession();
+    // Deep links are consumed here before loadSessionList runs, so the
+    // plugin-diagnose prompt must be sent from this point as well.
+    if (lastSessionId && typeof maybeAutoSendPluginDiagnose === 'function') {
+        maybeAutoSendPluginDiagnose(lastSessionId);
+    }
     // Startup already scans background sessions. Prioritize the visible one
     // independently, without waiting for that entire scan or its HTTP reply.
     if (currentSessionId) {

@@ -166,15 +166,20 @@
           .then((res) => {
             if (!res || !res.session_id) throw new Error(t('未返回会话', 'No session returned'));
             markPluginCheckPending(id, false);
-            try {
-              localStorage.setItem('myagent.pluginDiagnosePrompt:' + res.session_id, res.prompt || '');
-            } catch (e) { /* ignore */ }
-            const url = '/?session=' + encodeURIComponent(res.session_id);
-            // Keep the returned handle (noopener makes window.open return null
-            // even when the tab opened), then drop opener access explicitly.
-            const opened = window.open(url, '_blank');
-            if (opened) { try { opened.opener = null; } catch (e) { /* ignore */ } }
-            else window.location.assign(url);
+            const prompt = res.prompt || '';
+            // 设置中心是应用内 iframe：交给宿主切换会话，避免再开一个应用页。
+            if (window.parent && window.parent !== window) {
+              try {
+                window.parent.postMessage({
+                  type: 'myagent:plugin-diagnose',
+                  sessionId: res.session_id,
+                  prompt,
+                }, window.location.origin);
+                return;
+              } catch (e) { /* fall through to standalone navigation */ }
+            }
+            try { localStorage.setItem('myagent.pluginDiagnosePrompt:' + res.session_id, prompt); } catch (e) { /* ignore */ }
+            window.location.assign('/?session=' + encodeURIComponent(res.session_id));
           })
           .catch((err) => { markPluginCheckPending(id, true); reportError(err); reload(); })
           .finally(() => { el.disabled = false; });
