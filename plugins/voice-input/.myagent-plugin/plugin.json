@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "voice-input",
   "name": "语音输入与朗读",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "system_builtin": true,
   "description": "API 语音识别、可选本地 SenseVoice 和 Final 卡片朗读。",
   "capabilities": {

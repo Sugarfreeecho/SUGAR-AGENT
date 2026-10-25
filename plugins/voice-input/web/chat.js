@@ -27,11 +27,14 @@ export function installChatExtension() {
         + '<div class="voice-wave" aria-hidden="true">' + '<i></i>'.repeat(14) + '</div>'
         + '<p class="voice-dock-text" role="status" aria-live="polite"></p><div class="voice-dock-actions">'
         + '<button type="button" data-settings></button><button type="button" data-cancel></button>'
-        + '<button type="button" data-finish></button><button type="button" data-insert></button></div>';
+        + '<button type="button" data-finish></button><button type="button" data-insert></button>'
+        + '<button type="button" data-pause></button><button type="button" data-playstop></button></div>';
     dock.querySelector('[data-settings]').textContent = t('语音设置', 'Settings');
     dock.querySelector('[data-cancel]').textContent = t('取消', 'Cancel');
     dock.querySelector('[data-finish]').textContent = t('完成', 'Done');
     dock.querySelector('[data-insert]').textContent = t('插入', 'Insert');
+    dock.querySelector('[data-pause]').textContent = t('暂停', 'Pause');
+    dock.querySelector('[data-playstop]').textContent = t('停止朗读', 'Stop');
     const dockText = dock.querySelector('.voice-dock-text');
     const dockTime = dock.querySelector('.voice-dock-time');
     const waveBars = [...dock.querySelectorAll('.voice-wave i')];
@@ -46,20 +49,26 @@ export function installChatExtension() {
     let autoRead = false, sawStreaming = false, autoTimer = null;
     // "all" also follows runs that are not in the open session; "current" stays local.
     let autoReadScope = 'all', focusOnly = false;
+    // "final" waits for the whole run; "progressive" speaks settled blocks as they arrive.
+    let autoReadMode = 'progressive';
     let autoPending = null;
     // Set once a run has been read progressively; its answer card must not be read again.
     let liveCovered = false;
+    // Whether this run actually produced speech; a run that streamed nothing must
+    // still have its answer card read.
+    let liveSpoke = false;
     // Frames that already existed when this run started must never be auto read.
     let preRunWraps = null;
     const autoDone = new WeakSet();
     const readButtons = new Set();
-    let dockState = 'idle', hideTimer = null;
+    let dockState = 'idle', dockMode = null, hideTimer = null;
     const levels = new Array(14).fill(0);
     const WAVE_SHAPE = [.38, .62, .9, .55, .78, 1, .68, .45, .82, .58, .95, .5, .72, .4];
     const status = message => { dockText.textContent = message; };
     const ACTIONS = { checking: [], recording: ['cancel', 'finish'], transcribing: ['cancel'],
-        confirm: ['cancel', 'insert'], error: ['settings', 'cancel'], done: [] };
-    const actionName = button => ['settings', 'cancel', 'finish', 'insert']
+        confirm: ['cancel', 'insert'], error: ['settings', 'cancel'], done: [],
+        playing: ['pause', 'playstop'], paused: ['pause', 'playstop'] };
+    const actionName = button => ['settings', 'cancel', 'finish', 'insert', 'pause', 'playstop']
         .find(name => button.getAttribute('data-' + name) !== null);
     function pushLevel(value) {
         // Square root gives quiet speech visible movement; the floor keeps the
@@ -112,6 +121,7 @@ export function installChatExtension() {
             active.button.textContent = t('朗读', 'Read aloud');
             active.button.setAttribute('aria-pressed', 'false');
         }
+        updatePlaybackDock();
     }
     async function cancel() {
         const active = operation; operation = null; pending = null;
@@ -229,6 +239,7 @@ export function installChatExtension() {
         const active = { button, wrap, items, abort: new AbortController() }; playback = active;
         button.classList.add('is-playing'); button.textContent = t('停止朗读', 'Stop reading'); button.setAttribute('aria-pressed', 'true');
         mountControls(active);
+        updatePlaybackDock();
         try {
             try { await stream(active); }
             catch (error) {
@@ -243,6 +254,37 @@ export function installChatExtension() {
             }
         } finally { if (playback === active) stopPlayback(); }
     }
+    /** Pause holds the audio clock where it is; resuming continues from there. */
+    function togglePause(active) {
+        if (!active) return false;
+        active.paused = !active.paused;
+        if (active.ctx) {
+            if (active.paused) void active.ctx.suspend().catch(() => {}); else void active.ctx.resume().catch(() => {});
+        } else if (active.audio) {
+            if (active.paused) active.audio.pause(); else void active.audio.play().catch(() => {});
+        }
+        return active.paused;
+    }
+    // The dock doubles as the player when the answer card is gone (session switched,
+    // or the answer is still streaming and has no card yet).
+    function updatePlaybackDock() {
+        const active = playback;
+        // A card that is detached, or hidden behind the switched-away session, cannot
+        // carry the controls any more.
+        const onCard = !!(active && active.button && active.button.isConnected && active.button.offsetParent !== null);
+        if (active && !onCard) {
+            const paused = !!active.paused;
+            setState(paused ? 'paused' : 'playing', paused ? t('已暂停', 'Paused') : t('正在朗读', 'Reading aloud'));
+            dock.querySelector('[data-pause]').textContent = paused ? t('继续', 'Resume') : t('暂停', 'Pause');
+            dock.querySelector('[data-pause]').setAttribute('aria-pressed', paused ? 'true' : 'false');
+            dockMode = 'playback';
+        } else if (dockMode === 'playback') {
+            dockMode = null;
+            dock.hidden = true; dockState = 'idle';
+            mic.classList.remove('is-recording');
+            mic.setAttribute('aria-expanded', 'false'); mic.setAttribute('aria-pressed', 'false');
+        }
+    }
     function mountControls(active) {
         const bar = active.button.parentElement;
         if (!bar) return;
@@ -252,13 +294,7 @@ export function installChatExtension() {
         pause.setAttribute('aria-pressed', 'false');
         pause.onclick = event => {
             event.stopPropagation();
-            active.paused = !active.paused;
-            if (active.ctx) {
-                // Suspending the clock holds every scheduled buffer at its position.
-                if (active.paused) void active.ctx.suspend().catch(() => {}); else void active.ctx.resume().catch(() => {});
-            } else if (active.audio) {
-                if (active.paused) active.audio.pause(); else void active.audio.play().catch(() => {});
-            }
+            togglePause(active);
             pause.textContent = active.paused ? t('继续', 'Resume') : t('暂停', 'Pause');
             pause.setAttribute('aria-pressed', active.paused ? 'true' : 'false');
         };
@@ -379,6 +415,7 @@ export function installChatExtension() {
     }
     function startLive() {
         if (!autoRead || playback || disposed) return null;
+        if (autoReadMode === 'final') return null;
         if (focusOnly && !document.hasFocus()) return null;
         const scroller = liveScroller();
         if (!scroller) return null;
@@ -386,6 +423,7 @@ export function installChatExtension() {
             chunk: scroller.closest('.feed-chunk'), abort: new AbortController() };
         playback = active; live = active;
         liveCovered = true;
+        updatePlaybackDock();
         void streamLive(active).catch(error => {
             if (error.name !== 'AbortError' && playback === active) stopPlayback();
         });
@@ -394,6 +432,16 @@ export function installChatExtension() {
     function pumpLive() {
         const active = live;
         if (!active || playback !== active) return;
+        // A tool run speaks across several iterations; each one streams into its own
+        // row. Follow the new row inside the same playback instead of dropping it.
+        const candidate = liveScroller();
+        if (candidate && candidate !== active.scroller) {
+            active.scroller = candidate;
+            active.chunk = candidate.closest('.feed-chunk');
+            active.text = '';
+            active.fed = [];
+            active.ended = false;
+        }
         if (active.scroller.isConnected) active.text = active.scroller.textContent || '';
         // Only this run's own state counts; another session streaming must not keep
         // this one open, and must not close it either.
@@ -411,6 +459,7 @@ export function installChatExtension() {
             }
             active.fed[index] = text;
             active.queue.push(units[index]);
+            liveSpoke = true;
         }
         if (!active.button) {
             const wraps = [...document.querySelectorAll('.msg-wrap--answer-frame')];
@@ -422,6 +471,7 @@ export function installChatExtension() {
                 button.classList.add('is-playing'); button.textContent = t('停止朗读', 'Stop reading');
                 button.setAttribute('aria-pressed', 'true');
                 mountControls(active);
+                updatePlaybackDock();
             }
         }
         active.ended = ended;
@@ -480,6 +530,7 @@ export function installChatExtension() {
             autoRead = !!(state?.tts?.enabled && state?.tts?.autoRead);
             autoReadScope = state?.tts?.autoReadScope === 'current' ? 'current' : 'all';
             focusOnly = !!state?.tts?.autoReadOnlyFocused;
+            autoReadMode = state?.tts?.autoReadMode === 'final' ? 'final' : 'progressive';
             setSpeechOptions({ readParenthetical: !!state?.tts?.readParenthetical });
             applyScope();
         } catch { autoRead = false; }
@@ -495,8 +546,8 @@ export function installChatExtension() {
         if (focusOnly && !document.hasFocus()) return;
         const wraps = [...scopedRoot().querySelectorAll('.msg-wrap--answer-frame')];
         const fresh = wraps.filter(node => !preRunWraps || !preRunWraps.has(node));
-        // This run was already spoken while it streamed; do not repeat its card.
-        if (liveCovered) { for (const node of fresh) autoDone.add(node); return; }
+        // Only skip the card when this run actually produced speech while streaming.
+        if (liveCovered && liveSpoke) { for (const node of fresh) autoDone.add(node); return; }
         const wrap = fresh[fresh.length - 1];
         if (!wrap || autoDone.has(wrap)) return;
         const button = wrap.querySelector('.voice-read');
@@ -521,7 +572,10 @@ export function installChatExtension() {
     }
     const observer = new MutationObserver(() => {
         if (streamingNow()) {
-            if (!sawStreaming) preRunWraps = new Set(scopedRoot().querySelectorAll('.msg-wrap--answer-frame'));
+            if (!sawStreaming) {
+                preRunWraps = new Set(scopedRoot().querySelectorAll('.msg-wrap--answer-frame'));
+                liveSpoke = false;
+            }
             sawStreaming = true;
         }
         scan();
@@ -529,7 +583,7 @@ export function installChatExtension() {
             if (!playback) startLive();
             pumpLive();
         }
-        if (playback && playback.button && !playback.button.isConnected) stopPlayback();
+        updatePlaybackDock();
     });
     observer.observe(document.getElementById('chat-container') || document.body, { childList: true, subtree: true });
     // Scope "all" also follows runs rendered outside the message container (other
@@ -570,8 +624,16 @@ export function installChatExtension() {
         }
     });
     on(dock.querySelector('[data-settings]'), 'click', openSettings);
+    on(dock.querySelector('[data-pause]'), 'click', () => { togglePause(playback); updatePlaybackDock(); });
+    on(dock.querySelector('[data-playstop]'), 'click', () => { stopPlayback(); });
     on(document, 'myagent:session-change', () => {
-        sawStreaming = false; liveCovered = false; preRunWraps = null; clearTimeout(autoTimer); void hide(); stopPlayback();
+        // Reading is not tied to the session you are looking at: switching away keeps
+        // the voice going and moves its controls into the dock.
+        sawStreaming = false; liveCovered = false; liveSpoke = false; preRunWraps = null;
+        clearTimeout(autoTimer);
+        void hide().then(() => updatePlaybackDock());
+        // The message list is replaced a beat after the event, so check again once it is.
+        setTimeout(() => { if (!disposed) updatePlaybackDock(); }, 400);
     });
     on(document, 'myagent:settings-closed', () => { snapshot = null; void loadVoiceFlag(); });
     on(document, 'myagent:plugins-changed', () => { void loadVoiceFlag(); });

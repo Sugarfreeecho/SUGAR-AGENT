@@ -1,6 +1,6 @@
 # 语音输入与朗读 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-24 v6（覆盖至：当前工作区；自动朗读的会话范围与聚焦限制、输入框上方的录音条与一步录音、括号默认不读、文件/链接/代码分类计数、边生成边读、按块类型的语音计划、播放控制）
+- 版本：2026-10-25 v7（覆盖至：当前工作区；朗读不随会话切换中断、工具调用时只读最终回答、朗读时机可选、自动朗读的会话范围与聚焦限制、录音条与一步录音）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/voice-input`（speech_input/{api,service,providers,configuration,protocol,worker}.py、web/{chat,settings,shared,capture}.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 09；配套通则见 01–07）
@@ -167,10 +167,23 @@
 | UC-367 | 流结束 | 补齐最后一块，读完自动收尾 | `ended` 置位后队列排空即停 | `web/chat.js:streamLive` |
 | UC-368 | 本轮已边生成边读 | 最终卡片不再读第二遍 | `liveCovered` 标记，本轮的卡片直接记入 `autoDone` | `web/chat.js:queueAutoRead` |
 | UC-369 | 流式朗读进行中用户点某张卡片的「朗读」 | 先停流式，再按最终卡片重读 | 两者共用一个播放会话 | `web/chat.js:read` 开头的 `stopPlayback()` |
-| UC-370 | 流式朗读中切换会话 / 停止 | 立即中止，队列清空 | `stopPlayback` 负责 abort、关闭 AudioContext、清 `live` | `web/chat.js:stopPlayback` |
+| UC-370 | 流式朗读中点停止 | 立即中止，队列清空 | `stopPlayback` 负责 abort、关闭 AudioContext、清 `live`；切换会话不再触发它（见 UC-371） | `web/chat.js:stopPlayback` |
 | UC-346 | 自动朗读为关 | 一律等用户点击 | 开关关闭时不排队、不预取 | 同上 |
-| UC-347 | 自动朗读进行中切换会话 | 立即停止，且新会话历史不被朗读 | 会话切换清 `sawStreaming` 与定时器 | `web/chat.js` `myagent:session-change` |
+| UC-347 | 自动朗读进行中切换会话 | 当前内容继续读完；新会话历史不被朗读 | 会话切换只清本轮的 `sawStreaming`/`liveCovered` 与定时器，不再停播（见 UC-371） | `web/chat.js` `myagent:session-change` |
 | UC-348 | 同一段内容重复朗读 | 第二次几乎立即出声，不发新请求 | 命中 PCM 缓存；分段变化会改变缓存键，旧条目随 LRU 淘汰 | `service.py:_cache_key`、`service.py:stream_speech` |
+
+### 5.4 跨会话播放与朗读时机（UC-37x）
+
+| 编号 | 触发 | 预期现象 | 规则与边界 | 依据 |
+|---|---|---|---|---|
+| UC-371 | 朗读过程中切换会话 | 声音不中断，继续读完 | 会话切换不再调用 `stopPlayback()`；只重置本轮的自动朗读标记与定时器 | `web/chat.js` `myagent:session-change` |
+| UC-372 | 原卡片已离开视野（切走会话） | 输入框上方的录音条变成播放条，给出「暂停 / 继续」「停止朗读」 | 卡片按钮 `isConnected` 为假或 `offsetParent` 为空时接管；卡片回到视野后交还，不在两处重复显示 | `web/chat.js:updatePlaybackDock` |
+| UC-373 | 播放条上暂停 / 继续 | 与卡片按钮完全等价，从原位置续读 | 复用同一个 `togglePause`；挂起 AudioContext 时钟 | 同上 |
+| UC-374 | 边生成边读遇到工具调用 | 不打断，继续读；工具执行不产生朗读 | 每轮模型输出各自流式成行，`pumpLive` 发现新的流式行时在同一播放会话内换轨（重置 `fed`/`text`），不重启音频 | `web/chat.js:pumpLive` |
+| UC-377 | 上一轮音频尚未播完，下一轮文字已到 | 无缝接上，不丢内容也不重叠 | 换轨只追加队列，`active.next` 继续累加，音频时钟不重置 | 同上 |
+| UC-378 | 本轮没有任何流式朗读（例如最终内容只在 `final` 事件里给出） | 最终卡片照常朗读 | `liveSpoke` 只在真正入队后置位；`liveCovered && liveSpoke` 才跳过卡片 | `web/chat.js:queueAutoRead` |
+| UC-375 | 朗读时机设为「仅整轮完成后」 | 生成期间不出声，最终卡片出现后读一次 | `startLive` 直接返回空，只走卡片路径（UC-345） | `web/chat.js:startLive` |
+| UC-376 | 手动点「朗读」 | 始终读最终卡片，不受时机与工具判定影响 | 不经过 `startLive`，与本轮标记无关 | `web/chat.js:read` |
 
 ---
 
@@ -203,6 +216,7 @@
 | UC-509 | 保存「朗读括号里的内容」 | 只接受布尔，默认关闭 | 默认 `readParenthetical=False`；关闭时合成前剔除括号内容 | `configuration.py`、`web/shared.js:stripParenthetical` |
 | UC-510 | 保存「自动朗读范围」 | 只接受 `current` / `all`，默认 `all` | 非法值报 `invalid-settings` | `configuration.py` |
 | UC-511 | 保存「仅在窗口聚焦时朗读」 | 只接受布尔，默认关闭 | 默认 `autoReadOnlyFocused=False` | `configuration.py` |
+| UC-512 | 保存「朗读时机」 | 只接受 `progressive` / `final`，默认 `progressive` | `final` 时不启动流式朗读，只等最终卡片 | `configuration.py` |
 
 ---
 
@@ -261,4 +275,7 @@
 | UC-509 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`（含 `readParenthetical` 类型校验） |
 | UC-356~359 | `tests/js/voice_plugin_browser.cjs`（范围为当前会话时不读别人的流、聚焦暂停/恢复）；枚举校验见 `test_auto_read_requires_a_boolean` |
 | UC-510~511 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean` |
+| UC-512 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`（含 `autoReadMode` 枚举校验） |
+| UC-371~373 | `workspace/TempOutput/tswork/switch_probe.py`：切会话后 AudioContext 仍为 running、`starts` 不重置；播放条出现并可暂停（suspended）/继续（running）/停止（隐藏） |
+| UC-374~378 | `workspace/TempOutput/tswork/tool_probe.py`：旁白→朗读；注入 tool-call→播放不中断；下一轮流式行→接续朗读；最终卡片→不重复 |
 | 端到端 | `scripts/smoke_speech_input.py --audio <16k-mono-pcm16.wav>` |

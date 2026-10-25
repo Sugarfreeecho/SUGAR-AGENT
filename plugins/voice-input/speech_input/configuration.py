@@ -8,6 +8,7 @@ DEFAULTS = {
     "tts": {"enabled": False, "provider": "mimo", "base_url": "https://api.xiaomimimo.com/v1",
             "model": "mimo-v2.5-tts", "api_key": "", "voice": "mimo_default", "speed": 1.0, "instructions": "",
             "autoRead": False, "autoReadScope": "all", "autoReadOnlyFocused": False,
+            "autoReadMode": "progressive",
             "readParenthetical": False},
 }
 
@@ -34,6 +35,8 @@ def merge_settings(current, patch):
         raise ValueError("autoReadScope must be current or all")
     if not isinstance(result["tts"]["autoReadOnlyFocused"], bool):
         raise ValueError("autoReadOnlyFocused must be boolean")
+    if result["tts"]["autoReadMode"] not in ("progressive", "final"):
+        raise ValueError("autoReadMode must be progressive or final")
     if not isinstance(result["tts"]["readParenthetical"], bool):
         raise ValueError("readParenthetical must be boolean")
     if result["language"] not in ("auto", "zh", "en", "yue", "ja", "ko"):

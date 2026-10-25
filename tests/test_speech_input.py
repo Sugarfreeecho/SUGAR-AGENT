@@ -94,6 +94,11 @@ async def test_auto_read_requires_a_boolean(service):
     for value in ("true", 1, None):
         with pytest.raises(SpeechError):
             await service.configure({"tts": {"autoReadOnlyFocused": value}})
+    await service.configure({"tts": {"autoReadMode": "final"}})
+    assert service.settings["tts"]["autoReadMode"] == "final"
+    for value in ("always", "", 1, None):
+        with pytest.raises(SpeechError):
+            await service.configure({"tts": {"autoReadMode": value}})
     await service.close()
 
 

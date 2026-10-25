@@ -40,6 +40,10 @@ export async function mountSettings({ root, settings: A }) {
                     [['current', t('仅当前打开的会话', 'Open session only')], ['all', t('所有会话（含后台）', 'All sessions, background included')]],
                     tts.autoReadScope) : '') +
                 ('autoReadOnlyFocused' in tts ? checked('tts.autoReadOnlyFocused', t('仅在窗口聚焦时朗读', 'Read only while the window is focused'), tts.autoReadOnlyFocused) : '') +
+                ('autoReadMode' in tts ? select('tts', 'autoReadMode', t('朗读时机', 'When to read'),
+                    [['progressive', t('边生成边读', 'While generating')],
+                     ['final', t('仅整轮完成后读最终回答', 'Only the final answer, after the run ends')]],
+                    tts.autoReadMode) : '') +
                 select('tts', 'provider', t('合成接口', 'Speech provider'), providers, tts.provider) + apiFields('tts', tts) +
                 field('tts', 'voice', t('音色 ID', 'Voice ID'), 'text', tts.voice || '') +
                 W.note(t('小米音色：mimo_default、冰糖、茉莉、苏打、白桦、Mia、Chloe、Milo、Dean。音色名可直接填写。', 'MiMo voices: mimo_default, 冰糖, 茉莉, 苏打, 白桦, Mia, Chloe, Milo, Dean. Enter a voice ID directly.')) +
