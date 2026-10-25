@@ -1,10 +1,14 @@
-# feishu-transport 额外 Python 依赖：无。
+# feishu-transport 额外 Python 依赖
 #
-# 该插件只调用应用内置的 remote_control / webui 与 lark-oapi，
-# lark-oapi 已随 SugarAgent 运行时提供，无需单独安装。
-# 若要在插件本地 venv 中复用，可执行：
-#   python\python.exe -m pip install lark-oapi
+# 飞书官方 SDK（长连接、消息 API）。实现已在本插件内（feishu_transport/），
+# 核心不再包含任何飞书代码，也不内置 lark-oapi。
+#
+# trusted_host 插件在应用进程内运行，请装到应用内置运行时（安装器不会为本插件
+# 创建 venv，manifest 里 dependencies.python=false）：
+#   python\python.exe -m pip install -r plugins\feishu-transport\requirements.txt
 # 华为云镜像：
-#   python\python.exe -m pip install lark-oapi ^
+#   python\python.exe -m pip install -r plugins\feishu-transport\requirements.txt ^
 #     --index-url https://mirrors.huaweicloud.com/repository/pypi/simple
+# 华为内网：把 --index-url 换成内网 PyPI 源，或先设置 PIP_INDEX_URL。
 # 完整说明见 docs/standalone-plugin-dependencies.md
+lark-oapi>=1.0

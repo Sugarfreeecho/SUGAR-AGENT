@@ -11,7 +11,7 @@
 |---|---|---|---|
 | `voice-input` | `sherpa-onnx==1.13.8`、`numpy>=1.24,<2` | 本地 SenseVoice 离线识别 | 可选（API 语音不需要） |
 | `chatgpt-subscription` | `PyJWT[crypto]>=2.10,<3`、`pywin32>=306; win32` | 订阅令牌解析 / DPAPI 保存凭据 | 必需 |
-| `feishu-transport` | 无（复用内置 `lark-oapi`） | 飞书远程控制通道 | — |
+| `feishu-transport` | `lark-oapi>=1.0` | 飞书长连接与消息 API（传输实现已在本插件内） | 必需 |
 | `game-arena` | 无（标准库 + `myagent_plugin_sdk`） | 五子棋 / 围棋 worker | — |
 | `repo-engineering` | 无（纯声明式 skills） | 仓库工程流程 | — |
 | `sugar-bili-scroll` | `aiohttp>=3.9,<4`、`bilibili-api-python>=17.4,<18`、`pillow>=10`、`faster-whisper>=1.0,<2` | B站接口、表情处理、视频转写 | `faster-whisper` 可选 |
@@ -65,10 +65,11 @@ python\python.exe -m pip install -r plugins\sugar-bili-scroll\requirements.txt
 ```powershell
 python\python.exe -c "import sherpa_onnx, numpy; print('voice ok')"
 python\python.exe -c "import jwt, cryptography, win32crypt; print('chatgpt ok')"
+python\python.exe -c "import lark_oapi; print('feishu ok')"
 python\python.exe -c "import aiohttp, bilibili_api, PIL, faster_whisper; print('bili ok')"
 ```
 
-`feishu-transport` / `game-arena` / `repo-engineering` 无第三方依赖，跳过即可。
+`game-arena` / `repo-engineering` 无第三方依赖，跳过即可。
 
 ## 5. 版本口径
 

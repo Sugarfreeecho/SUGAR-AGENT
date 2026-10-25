@@ -106,6 +106,13 @@
 - 重跑全量载荷：**5,882 文件 / 154.4 MB / 64 个依赖**（-17.2 MB）；技能模板剩 6 个，`smoke-payload` 健康检查通过。
 - 源码环境仍保留 `workspace/skills/pdf` 与 `app/requirements.txt` 中的 PDF 依赖，只是不再进安装包。
 
+### 2.14 飞书传输实现移入 feishu-transport 插件
+
+- 五个实现文件（`adapter/config/models/store/runtime`）与启用指南从 `app/remote_control/transports/feishu/` 移入 `plugins/feishu-transport/feishu_transport/`；核心 `app/remote_control/transports/` 整体删除。
+- 新增公开接口 `app/remote_control/public.py:transport_context()`，只暴露 `dependencies`（`SessionControlService` 依赖）与 `gateway_service`；插件不再 import `webui` 私有属性。
+- 插件 `host.py` 自行加载本地包（带内容签名变更时清理缓存），`plugin.json` 升到 1.1.0 并声明 `dependencies.python=false`；`requirements.txt` 改为 `lark-oapi>=1.0`，安装到应用运行时。
+- 测试导入路径同步（`feishu_transport.*`）；`test_feishu_adapter`、`test_sugaragent_state_paths`、插件核心/目录测试共 58 passed / 1 skipped。
+
 ## 3. 验证
 
 - `python -m py_compile`：`tiers.py`、`manager.py`、`host.py`、`agent_extensions.py`、`agent_tools.py`、`web-search-providers/host.py` 通过。

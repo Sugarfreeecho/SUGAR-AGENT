@@ -2,7 +2,8 @@
   "schema_version": 1,
   "id": "feishu-transport",
   "name": "Feishu Remote Transport",
-  "version": "1.0.0",
-  "description": "Optional Feishu transport for the authenticated remote-control service.",
+  "version": "1.1.0",
+  "description": "Optional Feishu transport: implementation, lifecycle and the lark-oapi SDK dependency for remote control.",
+  "dependencies": {"python": false},
   "capabilities": {"trusted_host": {"entry": "host.py"}}
 }

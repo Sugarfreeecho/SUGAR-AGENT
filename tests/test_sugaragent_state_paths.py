@@ -10,8 +10,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
+FEISHU_PLUGIN = ROOT / "plugins" / "feishu-transport"
 if str(APP) not in sys.path:
     sys.path.insert(0, str(APP))
+if str(FEISHU_PLUGIN) not in sys.path:
+    sys.path.insert(0, str(FEISHU_PLUGIN))
 
 
 def test_plugin_legacy_user_dir_is_migrated_to_sugaragent(monkeypatch, tmp_path):
@@ -93,7 +96,7 @@ def test_remote_control_default_state_dir_uses_sugaragent(tmp_path, monkeypatch)
 
 
 def test_feishu_default_state_dir_uses_sugaragent(tmp_path, monkeypatch):
-    from remote_control.transports.feishu.config import FeishuConfig
+    from feishu_transport.config import FeishuConfig
 
     monkeypatch.delenv("FEISHU_STATE_DIR", raising=False)
     legacy = tmp_path / ".myagent" / "feishu"

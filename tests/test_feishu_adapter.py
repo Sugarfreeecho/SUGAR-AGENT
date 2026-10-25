@@ -10,13 +10,16 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
+FEISHU_PLUGIN_DIR = ROOT / "plugins" / "feishu-transport"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
+if str(FEISHU_PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(FEISHU_PLUGIN_DIR))
 
-from remote_control.transports.feishu.adapter import FeishuTransportAdapter
-from remote_control.transports.feishu.config import FeishuConfig
-from remote_control.transports.feishu.models import parse_message_event
-from remote_control.transports.feishu.store import FeishuStateStore
+from feishu_transport.adapter import FeishuTransportAdapter
+from feishu_transport.config import FeishuConfig
+from feishu_transport.models import parse_message_event
+from feishu_transport.store import FeishuStateStore
 from remote_control.service import RemoteControlError
 
 

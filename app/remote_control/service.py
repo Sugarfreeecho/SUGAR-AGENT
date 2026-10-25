@@ -31,7 +31,7 @@ class ControlDependencies:
 
 
 class SessionControlService:
-    """Application service shared by transport adapters such as WebSocket and Feishu."""
+    """Application service shared by core and optional plugin transports."""
 
     METHOD_SCOPES = {
         "system.health": "read",
