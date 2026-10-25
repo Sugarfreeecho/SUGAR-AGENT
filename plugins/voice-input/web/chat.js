@@ -44,6 +44,8 @@ export function installChatExtension() {
     // Auto reading stays disarmed until a run has actually streamed in, so opening an
     // old session never starts talking on its own.
     let autoRead = false, sawStreaming = false, autoTimer = null;
+    // "all" also follows runs that are not in the open session; "current" stays local.
+    let autoReadScope = 'all', focusOnly = false;
     let autoPending = null;
     // Set once a run has been read progressively; its answer card must not be read again.
     let liveCovered = false;
@@ -368,15 +370,20 @@ export function installChatExtension() {
     // The answer streams into a plain-text row long before the card is rendered,
     // so auto reading follows that row and speaks each block once it settles.
     function liveScroller() {
-        const rows = [...document.querySelectorAll('.feed-item[data-log-type="llm-response"]')];
+        // Reading the whole document used to pick up other sessions' runs, which is
+        // now a choice rather than an accident.
+        const scope = autoReadScope === 'all' ? document : (document.getElementById('chat-container') || document);
+        const rows = [...scope.querySelectorAll('.feed-item[data-log-type="llm-response"]')];
         const row = rows.reverse().find(node => node.querySelector('.feed-chunk.is-streaming'));
         return row ? (row.querySelector('.feed-chunk-scroller') || row.querySelector('.feed-chunk')) : null;
     }
     function startLive() {
         if (!autoRead || playback || disposed) return null;
+        if (focusOnly && !document.hasFocus()) return null;
         const scroller = liveScroller();
         if (!scroller) return null;
-        const active = { live: true, queue: [], fed: [], text: '', scroller, abort: new AbortController() };
+        const active = { live: true, queue: [], fed: [], text: '', scroller,
+            chunk: scroller.closest('.feed-chunk'), abort: new AbortController() };
         playback = active; live = active;
         liveCovered = true;
         void streamLive(active).catch(error => {
@@ -388,7 +395,9 @@ export function installChatExtension() {
         const active = live;
         if (!active || playback !== active) return;
         if (active.scroller.isConnected) active.text = active.scroller.textContent || '';
-        const ended = !document.querySelector('.feed-chunk.is-streaming');
+        // Only this run's own state counts; another session streaming must not keep
+        // this one open, and must not close it either.
+        const ended = !active.chunk || !active.chunk.isConnected || !active.chunk.classList.contains('is-streaming');
         if (!active.text.trim() && !ended) return;
         // Settled prefix only: the trailing block may still be receiving tokens.
         const units = parseSpeechMarkdown(active.text, ended, t);
@@ -469,14 +478,22 @@ export function installChatExtension() {
         try {
             const state = await (await voiceRequest('status')).json();
             autoRead = !!(state?.tts?.enabled && state?.tts?.autoRead);
+            autoReadScope = state?.tts?.autoReadScope === 'current' ? 'current' : 'all';
+            focusOnly = !!state?.tts?.autoReadOnlyFocused;
             setSpeechOptions({ readParenthetical: !!state?.tts?.readParenthetical });
+            applyScope();
         } catch { autoRead = false; }
     }
     void loadVoiceFlag();
+    function scopedRoot() {
+        return autoReadScope === 'all' ? document : (document.getElementById('chat-container') || document);
+    }
+    function streamingNow() { return !!scopedRoot().querySelector('.feed-chunk.is-streaming'); }
     function queueAutoRead() {
         if (!autoRead || !sawStreaming || disposed) return;
-        if (document.querySelector('.is-streaming')) return;
-        const wraps = [...document.querySelectorAll('.msg-wrap--answer-frame')];
+        if (streamingNow()) return;
+        if (focusOnly && !document.hasFocus()) return;
+        const wraps = [...scopedRoot().querySelectorAll('.msg-wrap--answer-frame')];
         const fresh = wraps.filter(node => !preRunWraps || !preRunWraps.has(node));
         // This run was already spoken while it streamed; do not repeat its card.
         if (liveCovered) { for (const node of fresh) autoDone.add(node); return; }
@@ -495,15 +512,16 @@ export function installChatExtension() {
         autoTimer = setTimeout(() => {
             autoPending = null;
             if (!autoRead || playback || disposed || !wrap.isConnected || autoDone.has(wrap)) return;
-            if (document.querySelector('.is-streaming')) return;
+            if (focusOnly && !document.hasFocus()) return;
+            if (streamingNow()) return;
             if ((wrap.querySelector('.message.assistant')?.textContent || '').trim() !== text || !text) return;
             autoDone.add(wrap);
             void read(wrap, button);
         }, 150);
     }
     const observer = new MutationObserver(() => {
-        if (document.querySelector('.is-streaming')) {
-            if (!sawStreaming) preRunWraps = new Set(document.querySelectorAll('.msg-wrap--answer-frame'));
+        if (streamingNow()) {
+            if (!sawStreaming) preRunWraps = new Set(scopedRoot().querySelectorAll('.msg-wrap--answer-frame'));
             sawStreaming = true;
         }
         scan();
@@ -514,6 +532,18 @@ export function installChatExtension() {
         if (playback && playback.button && !playback.button.isConnected) stopPlayback();
     });
     observer.observe(document.getElementById('chat-container') || document.body, { childList: true, subtree: true });
+    // Scope "all" also follows runs rendered outside the message container (other
+    // sessions, docks), so the observer has to cover the document; else it stays off.
+    const wideObserver = new MutationObserver(() => {
+        if (!autoRead || disposed || autoReadScope !== 'all') return;
+        if (!playback && startLive()) sawStreaming = true;
+        pumpLive();
+    });
+    function applyScope() {
+        wideObserver.disconnect();
+        if (autoReadScope === 'all' && autoRead) wideObserver.observe(document.body, { childList: true, subtree: true });
+    }
+    applyScope();
     const inputObserver = new MutationObserver(() => { if ((input.disabled || input.readOnly) && operation) void cancel(); render(); });
     inputObserver.observe(input, { attributes: true, attributeFilter: ['disabled', 'readonly'] });
     // A long press (or right click) is the shortcut to settings, as in chat apps
@@ -549,10 +579,24 @@ export function installChatExtension() {
     on(document, 'pointerdown', event => { if (!dock.hidden && !dock.contains(event.target) && !mic.contains(event.target)) void hide(); });
     on(document, 'visibilitychange', () => { if (document.hidden && operation) void hide(); });
     on(window, 'blur', () => { if (operation?.phase === 'recording') void hide(); });
+    // With "focused only" on, losing focus pauses the voice instead of talking to an
+    // empty desk; refocusing resumes the same position, not a restart.
+    on(window, 'blur', () => {
+        const active = playback;
+        if (!focusOnly || !active?.ctx || active.focusPaused) return;
+        active.focusPaused = true;
+        if (!active.paused) void active.ctx.suspend().catch(() => {});
+    });
+    on(window, 'focus', () => {
+        const active = playback;
+        if (!active?.focusPaused) return;
+        active.focusPaused = false;
+        if (!active.paused) void active.ctx.resume().catch(() => {});
+    });
     on(window, 'pagehide', () => { void cancel(); stopPlayback(); });
     scan();
     return () => {
-        disposed = true; void cancel(); stopPlayback(); observer.disconnect(); inputObserver.disconnect();
+        disposed = true; void cancel(); stopPlayback(); observer.disconnect(); inputObserver.disconnect(); wideObserver.disconnect();
         listeners.forEach(remove => remove()); readButtons.forEach(button => button.remove());
         mic.remove(); dock.remove(); host.classList.remove('voice-host');
     };

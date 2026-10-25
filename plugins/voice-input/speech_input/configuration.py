@@ -7,7 +7,8 @@ DEFAULTS = {
     "asr": {"provider": "openai-compatible", "base_url": "", "model": "", "api_key": ""},
     "tts": {"enabled": False, "provider": "mimo", "base_url": "https://api.xiaomimimo.com/v1",
             "model": "mimo-v2.5-tts", "api_key": "", "voice": "mimo_default", "speed": 1.0, "instructions": "",
-            "autoRead": False, "readParenthetical": False},
+            "autoRead": False, "autoReadScope": "all", "autoReadOnlyFocused": False,
+            "readParenthetical": False},
 }
 
 
@@ -29,6 +30,10 @@ def merge_settings(current, patch):
         raise ValueError("enabled must be boolean")
     if not isinstance(result["tts"]["autoRead"], bool):
         raise ValueError("autoRead must be boolean")
+    if result["tts"]["autoReadScope"] not in ("current", "all"):
+        raise ValueError("autoReadScope must be current or all")
+    if not isinstance(result["tts"]["autoReadOnlyFocused"], bool):
+        raise ValueError("autoReadOnlyFocused must be boolean")
     if not isinstance(result["tts"]["readParenthetical"], bool):
         raise ValueError("readParenthetical must be boolean")
     if result["language"] not in ("auto", "zh", "en", "yue", "ja", "ko"):

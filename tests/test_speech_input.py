@@ -84,6 +84,16 @@ async def test_auto_read_requires_a_boolean(service):
     for value in ("false", 0, None):
         with pytest.raises(SpeechError):
             await service.configure({"tts": {"readParenthetical": value}})
+    await service.configure({"tts": {"autoReadScope": "current"}})
+    assert service.settings["tts"]["autoReadScope"] == "current"
+    for value in ("open", "ALL", 1, None):
+        with pytest.raises(SpeechError):
+            await service.configure({"tts": {"autoReadScope": value}})
+    await service.configure({"tts": {"autoReadOnlyFocused": True}})
+    assert service.settings["tts"]["autoReadOnlyFocused"] is True
+    for value in ("true", 1, None):
+        with pytest.raises(SpeechError):
+            await service.configure({"tts": {"autoReadOnlyFocused": value}})
     await service.close()
 
 

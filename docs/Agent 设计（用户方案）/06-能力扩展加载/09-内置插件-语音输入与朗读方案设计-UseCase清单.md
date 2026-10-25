@@ -1,6 +1,6 @@
 # 语音输入与朗读 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-24 v5（覆盖至：当前工作区；输入框上方的录音条与一步录音、括号默认不读、文件/链接/代码分类计数、边生成边读、按块类型的语音计划、播放控制、自动朗读开关）
+- 版本：2026-10-24 v6（覆盖至：当前工作区；自动朗读的会话范围与聚焦限制、输入框上方的录音条与一步录音、括号默认不读、文件/链接/代码分类计数、边生成边读、按块类型的语音计划、播放控制）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/voice-input`（speech_input/{api,service,providers,configuration,protocol,worker}.py、web/{chat,settings,shared,capture}.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 09；配套通则见 01–07）
@@ -142,6 +142,10 @@
 | UC-345 | 打开「回答完成后自动朗读」 | 一次运行结束后自动开始朗读本次新产生的那条回答 | 只有在本次会话内**观测到流式活动**后才启用，打开旧会话不会自说自话；答案卡是一次成型渲染的，排队延时只有 150 ms，只用于避开"卡片还在拼装"的瞬间 | `web/chat.js:queueAutoRead` |
 | UC-349 | 自动朗读排队时页面上还有旧回答 | 只读本次运行新出现的卡片，绝不读上一条 | 进入流式状态时快照已存在的卡片（`preRunWraps`），排队只在新卡片里选；同一卡片重复排队不重置计时器 | `web/chat.js` `preRunWraps`、`autoPending` |
 | UC-350 | 页面持续有无关 DOM 变动 | 排队计时不会被无限推迟 | 目标卡片与文本未变时直接返回，不 `clearTimeout` 重排 | `web/chat.js:queueAutoRead` |
+| UC-356 | 自动朗读范围为「所有会话」 | 后台会话的回答也会朗读 | 流式行在整个 document 里查找，包含非消息区容器 | `web/chat.js:liveScroller` |
+| UC-357 | 自动朗读范围为「仅当前会话」 | 只读消息容器里的这一条会话 | 查找范围收窄到 `#chat-container`；后台流既不会触发朗读，也不会让当前会话误判为"还在生成" | `web/chat.js:scopedRoot` |
+| UC-358 | 开启「仅在窗口聚焦时朗读」 | 失焦暂停、回到窗口继续 | 失焦挂起 AudioContext（停在原位置），聚焦恢复；用户手动按下的暂停不会被聚焦覆盖 | `web/chat.js` blur/focus 处理 |
+| UC-359 | 两个会话同时生成（范围为所有会话） | 只跟随其中一条，不混读 | 单一播放会话；`ended` 以本会话自己的 `.feed-chunk` 为准 | `web/chat.js:pumpLive` |
 | UC-351 | 文本里有中文或英文括号 | 括号内内容不读 | `（）`、`()` 成对剔除，最多递归 4 层处理嵌套；开关打开后原样保留 | `web/shared.js:stripParenthetical` |
 | UC-352 | 一句话里出现多个路径 | 合并成「N 个文件」，不逐条念路径 | 行内代码先分类再聚合；同类之间允许「、，、；和与」分隔 | `web/shared.js:inlineCode`、`collapseSpans` |
 | UC-353 | 出现多个 URL / 多个长标识符 | 分别读「N 个链接」「N 处代码」 | 三类标记互不合并，按出现顺序各自计数 | 同上 |
@@ -197,6 +201,8 @@
 | UC-507 | ASR 用 MiMo 但语言选了方言 | 返回错误而不是静默识别错 | MiMo ASR 只接受 auto/zh/en，其它取值由 `providers.transcribe` 拒绝 | `providers.py:transcribe` |
 | UC-508 | 保存「回答完成后自动朗读」 | 只接受布尔，字符串/数字被拒 | `merge_settings` 单独校验 `tts.autoRead`；默认 `False` | `configuration.py` |
 | UC-509 | 保存「朗读括号里的内容」 | 只接受布尔，默认关闭 | 默认 `readParenthetical=False`；关闭时合成前剔除括号内容 | `configuration.py`、`web/shared.js:stripParenthetical` |
+| UC-510 | 保存「自动朗读范围」 | 只接受 `current` / `all`，默认 `all` | 非法值报 `invalid-settings` | `configuration.py` |
+| UC-511 | 保存「仅在窗口聚焦时朗读」 | 只接受布尔，默认关闭 | 默认 `autoReadOnlyFocused=False` | `configuration.py` |
 
 ---
 
@@ -253,4 +259,6 @@
 | UC-508 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`、`test_settings_default_persist_and_validate` |
 | UC-351~355 | `workspace/TempOutput/tswork/paren_test.mjs`：括号开/关、嵌套、中英文括号、多个路径合并、短文件名保留、版本号不被误判 |
 | UC-509 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean`（含 `readParenthetical` 类型校验） |
+| UC-356~359 | `tests/js/voice_plugin_browser.cjs`（范围为当前会话时不读别人的流、聚焦暂停/恢复）；枚举校验见 `test_auto_read_requires_a_boolean` |
+| UC-510~511 | `tests/test_speech_input.py::test_auto_read_requires_a_boolean` |
 | 端到端 | `scripts/smoke_speech_input.py --audio <16k-mono-pcm16.wav>` |

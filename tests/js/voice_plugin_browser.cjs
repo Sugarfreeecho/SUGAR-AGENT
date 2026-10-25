@@ -177,6 +177,33 @@ async function until(expression) { await page.waitForFunction(expression, null, 
     assert.ok(synthesized[0].includes('最终回答')); assert.ok(!synthesized[0].includes('DO_NOT_READ_CODE'));
     await page.locator('.voice-read').click();
     await until('!document.querySelector(".voice-read").classList.contains("is-playing")');
+
+    // Scope: a streaming run outside #chat-container belongs to a background session.
+    // Passed as a real function: a string would be evaluated as an expression and
+    // the function body would never run.
+    const backgroundRun = () => {
+        const row = document.createElement('div');
+        row.className = 'feed-item';
+        row.setAttribute('data-log-type', 'llm-response');
+        // The trailing blank line marks the paragraph settled, so it can be spoken
+        // while the stream is still open.
+        row.innerHTML = '<div class="feed-chunk is-streaming"><div class="feed-chunk-scroller">后台会话的这段回答。\n\n</div></div>';
+        document.body.append(row);
+    };
+    state.tts.enabled = true; state.tts.autoRead = true; state.tts.autoReadScope = 'current';
+    await page.goto(origin);
+    await page.locator('#speech-input-btn').waitFor();
+    const beforeScope = synthesized.length;
+    await page.evaluate(backgroundRun);
+    await page.waitForTimeout(900);
+    assert.equal(synthesized.length, beforeScope, 'scope=current must ignore runs outside the message container');
+    state.tts.autoReadScope = 'all';
+    await page.goto(origin);
+    await page.locator('#speech-input-btn').waitFor();
+    await page.evaluate(backgroundRun);
+    await page.waitForTimeout(1200);
+    assert.ok(synthesized.length > beforeScope, 'scope=all must read a background run');
+
     await run('window.disposeVoice()');
     assert.equal(await page.locator('#speech-input-btn,.voice-read,.voice-dock').count(), 0);
     assert.deepEqual(errors, []);
