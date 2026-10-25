@@ -195,7 +195,7 @@ function sessionGroupSessionsVisible(group, opts) {
     for (let i = 0; i < sessions.length; i += 1) {
         const s = sessions[i];
         const running = (typeof isSessionRunning === 'function') && isSessionRunning(s.id);
-        const busy = running || (Number(s.subagent_running || 0) > 0);
+        const busy = running || sessionHasBackgroundWork(s);
         if (busy) { rows.push(s); continue; }
         if (idleCount < quota) { rows.push(s); idleCount += 1; }
     }
@@ -347,6 +347,11 @@ function selectSessionSections() {
 
 function selectArchivedDisplayCount() {
     return sessionStore.archivedCount;
+}
+
+function sessionHasBackgroundWork(session) {
+    return !!session && (Number(session.background_jobs_running || 0) > 0
+        || Number(session.subagent_running || 0) > 0);
 }
 
 function selectIsSessionRunning(sessionId) {

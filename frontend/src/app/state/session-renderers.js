@@ -177,8 +177,8 @@ function appendSessionGroupBlock(body, group, allSessions, nextStreamMap) {
     });
     if (typeof bindUiHoverTip === 'function') bindUiHoverTip(head);
 
-    // 工作目录分组头 hover 浮出两个动作：在该目录新建会话 / 目录的更多操作。
-    if (group.isWorkDirGroup && workDirPath && typeof buildSessionGroupActions === 'function') {
+    // 时间和工作目录均提供分组管理；工作目录额外保留新建和路径操作。
+    if (typeof buildSessionGroupActions === 'function') {
         headRow.appendChild(head);
         headRow.appendChild(buildSessionGroupActions(group, workDirPath));
     } else {

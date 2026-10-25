@@ -84,7 +84,7 @@ const sessionStore = {
             const sid = String(s.id);
             if (this.isDeletedSessionTombstoned(sid)) continue;
             snapshotIds.add(sid);
-            const nextSession = Object.assign({}, s);
+            const nextSession = Object.assign({}, this.normalizeSessionRunState(s));
             if (typeof shouldSuppressSessionUnreadSnapshot === 'function'
                 && shouldSuppressSessionUnreadSnapshot(nextSession)) {
                 nextSession.unread_result = false;
@@ -143,6 +143,7 @@ const sessionStore = {
         if (!session || !session.id) return;
         const sid = String(session.id);
         if (this.isDeletedSessionTombstoned(sid)) return;
+        session = this.normalizeSessionRunState(session);
         const nextSession = (
             typeof shouldSuppressSessionUnreadSnapshot === 'function'
             && shouldSuppressSessionUnreadSnapshot(session)
@@ -279,7 +280,7 @@ const sessionStore = {
         const totalCount = Number.isFinite(requestedTotal)
             ? Math.max(0, requestedTotal)
             : filtered.length;
-        const list = filtered.slice(0, totalCount);
+        const list = filtered.slice(0, totalCount).map(session => this.normalizeSessionRunState(session));
         const requestedVisible = options.visibleCount != null ? Number(options.visibleCount) : list.length;
         this.archivedLoaded = true;
         this.archivedSessions = list;
@@ -360,6 +361,26 @@ const sessionStore = {
 
     hasRun(sessionId) {
         return this.runsBySession.has(String(sessionId || ''));
+    },
+
+    normalizeSessionRunState(session) {
+        const sid = String(session.id || '');
+        const advertised = session.active_run;
+        const rid = String(advertised && (advertised.run_id || advertised.runId) || '');
+        if (!rid || !this.isTerminalRun(sid, rid)) return session;
+        // Metadata responses may outlive their run. Keep their title/workdir
+        // updates, but never let them roll lifecycle state back past terminal.
+        const current = this.getActiveRunInfo(sid);
+        const local = this.getRun(sid);
+        const localId = String(local && local.runId || '');
+        const currentId = String(current && (current.run_id || current.runId) || '');
+        const active = currentId && current.run_active !== false && !this.isTerminalRun(sid, currentId) ? current
+            : (localId && !this.isTerminalRun(sid, localId)
+                ? {session_id: sid, run_id: localId, run_active: true} : null);
+        return Object.assign({}, session, {
+            active_run: active, run_active: !!active, stream_active: !!active,
+            run_started_at: active && active.started_at || null,
+        });
     },
 
     markTerminalRun(sessionId, runId) {
@@ -481,6 +502,12 @@ const sessionStore = {
         const runId = String((info && (info.run_id || info.runId)) || '').trim();
         const active = !!(info && info.run_active !== false);
         const identified = !(info && info.runtime_v2) || !!runId;
+        if (runId && this.isTerminalRun(sid, runId)
+            && this.normalizeSessionRunState({id: sid, active_run: info}).active_run) {
+            // A delayed single-row refresh for the old terminal must not
+            // delete the newer identity preserved by the summary write.
+            return true;
+        }
         if (active && identified && !(runId && this.isTerminalRun(sid, runId))) {
             this.activeRunInfoBySession.set(sid, info);
             this.setStreamActive(sid, true);

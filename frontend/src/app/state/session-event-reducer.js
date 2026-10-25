@@ -82,6 +82,12 @@ function applySessionEvent(event, opts) {
         if (runId && knownCurrentRunId && runId !== knownCurrentRunId) {
             return { handled: true, staleTerminalIgnored: true, messageRecord: messageRecord };
         }
+        const sess = sessionStore.get(sessionId);
+        if (sess) {
+            ['background_jobs_running', 'subagent_running'].forEach(function (field) {
+                if (Object.prototype.hasOwnProperty.call(event, field)) sess[field] = event[field];
+            });
+        }
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
         const resultStatus = (type === 'run_interrupted' || type === 'run_failed')
@@ -91,7 +97,7 @@ function applySessionEvent(event, opts) {
             && isGoalActiveForSession(sessionId);
         if (resultStatus === 'failed') {
             markSessionResultComplete(sessionId, 'failed', runId);
-        } else if ((goalContinues || resultStatus === 'pending') && typeof clearSessionUnreadState === 'function') {
+        } else if ((goalContinues || resultStatus === 'pending' || sessionHasBackgroundWork(sess)) && typeof clearSessionUnreadState === 'function') {
             clearSessionUnreadState(sessionId, { server: false });
         } else {
             // A successful new terminal resolves the previous failed result.

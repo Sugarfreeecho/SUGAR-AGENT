@@ -183,7 +183,7 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     if (!itemDiv || !sessionId) return;
     syncSessionDraftBadge(itemDiv, sessionId);
     syncSessionRowQuickActions(itemDiv, sessionId);
-    itemDiv.classList.remove('is-generating', 'is-finalizing', 'is-unread-result', 'is-unread-failed');
+    itemDiv.classList.remove('is-generating', 'is-finalizing', 'is-background-running', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
     var sess = sessionStore.get(sessionId);
@@ -192,12 +192,13 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     var failed = !!(sess && sess.unread_result_status === 'failed');
     var hasUnreadResult = failed || (!isSelectedSession && (sess ? !!sess.unread_result : localUnreadResult));
     var running = isSessionRunning(sessionId);
+    var backgroundRunning = sessionHasBackgroundWork(sess);
     var finalizing = running && sessionStore.isRunFinalizing(sessionId);
     if (running) {
         itemDiv.classList.add(finalizing ? 'is-finalizing' : 'is-generating');
         // A retry shows the current running state while retaining the failure
         // record. Successful queued results can still show a pulsing green dot.
-        var hasUnreadSuccess = hasUnreadResult && !failed;
+        var hasUnreadSuccess = hasUnreadResult && !failed && !backgroundRunning;
         if (hasUnreadSuccess) {
             itemDiv.classList.add('is-unread-result');
         }
@@ -209,6 +210,9 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
                     : (finalizing ? '回复已生成，正在收尾' : '生成中')
             );
         }
+    } else if (backgroundRunning) {
+        itemDiv.classList.add('is-background-running');
+        if (nameEl) nameEl.setAttribute('data-ui-tip', '后台任务仍在运行');
     } else {
         if (!hasUnreadResult) return;
         itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
@@ -761,6 +765,29 @@ async function deleteSessionFromMenu(sess, rowDiv) {
     if (!okDel) return;
     const wasArchivedLoaded = sessionStore.archivedLoaded;
     const deletedSessionId = String(sess.id || '');
+    await removeDeletedSessionFromUi(sess, rowDiv);
+    void requestInterrupt(deletedSessionId, '', 'session_deleted');
+    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
+        .then(function (resp) {
+            if (!resp.ok) throw new Error('delete failed: ' + resp.status);
+            releaseDeletedSessionDock(deletedSessionId);
+        })
+        .catch(function (err) {
+            console.error('删除会话失败:', err);
+            sessionStore.clearDeletedSessionTombstone(deletedSessionId);
+            void loadSessions({ skipArchivedRefresh: true });
+            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
+        });
+}
+
+function releaseDeletedSessionDock(sessionId) {
+    if (typeof dockRightPageHost !== 'undefined') dockRightPageHost?.releaseSession(sessionId);
+    if (typeof dockForgetSession === 'function') dockForgetSession(sessionId);
+}
+
+async function removeDeletedSessionFromUi(sess, rowDiv, opts) {
+    const wasArchivedLoaded = sessionStore.archivedLoaded;
+    const deletedSessionId = String(sess.id || '');
     const nextSession = sessionStore.list().find(function (s) {
         return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
     }) || null;
@@ -799,23 +826,10 @@ async function deleteSessionFromMenu(sess, rowDiv) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
     }
-    if (currentSessionId === deletedSessionId) {
+    if (currentSessionId === deletedSessionId && !(opts && opts.deferSwitch)) {
         if (nextSession) await switchSession(nextSession.id);
         else await createNewSession();
     }
-    void requestInterrupt(deletedSessionId, '', 'session_deleted');
-    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
-        .then(function (resp) {
-            if (!resp.ok) throw new Error('delete failed: ' + resp.status);
-            if (typeof dockRightPageHost !== 'undefined') dockRightPageHost?.releaseSession(deletedSessionId);
-            if (typeof dockForgetSession === 'function') dockForgetSession(deletedSessionId);
-        })
-        .catch(function (err) {
-            console.error('删除会话失败:', err);
-            sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-            void loadSessions({ skipArchivedRefresh: true });
-            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
-        });
 }
 
 function bindSessionActionMenu(wrap, getSession, rowDiv) {
@@ -1238,7 +1252,7 @@ async function refreshSingleSessionRowInner(sessionId) {
         } else if (sessionUnreadComplete.delete(sess.id)) {
             persistSessionUnread();
         }
-        if (Number(sess.subagent_running || 0) > 0) {
+        if (sessionHasBackgroundWork(sess)) {
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
         }
@@ -1408,6 +1422,10 @@ function patchSessionListRows(ids) {
 }
 
 function renderSessionListIfChanged(force) {
+    if (typeof sessionSearchState !== 'undefined' && sessionSearchState.dialog && sessionSearchState.q) {
+        observeSessionSearchStore();
+        renderSessionSearchResults();
+    }
     const nextLayout = computeSessionListLayoutKey();
     const nextContent = computeSessionListContentMap();
     if (!force && nextLayout === sessionListLayoutKey && sessionContentMapsEqual(nextContent, sessionListContentMap)) {
@@ -1899,12 +1917,14 @@ var sessionListChangeWatcherStarted = false;
 var sessionListChangeWatcherEpoch = 0;
 var sessionListChangeController = null;
 var sessionListChangeTimer = null;
+var sessionListChangeRevision = null;
 
 function startSessionListChangeWatcher() {
     if (sessionListChangeWatcherStarted) return;
     sessionListChangeWatcherStarted = true;
     const epoch = ++sessionListChangeWatcherEpoch;
-    let revision = Number(sessionStore.lastAppliedStateRevision) || 0;
+    let revision = sessionListChangeRevision != null ? sessionListChangeRevision
+        : (Number(sessionStore.lastAppliedStateRevision) || 0);
     const poll = async function () {
         let delay = 0;
         const controller = new AbortController();
@@ -1918,6 +1938,12 @@ function startSessionListChangeWatcher() {
             const next = Number(payload && payload.state_revision);
             if (epoch !== sessionListChangeWatcherEpoch) return;
             if (!Number.isFinite(next) || next <= 0) throw new Error('invalid session changes response');
+            // The existing long poll also carries committed terminal facts.
+            // Apply them before loading summaries so a lost SSE terminal never
+            // leaves a local reader or an old HTTP response owning the run.
+            if (typeof applySessionTerminalNotifications === 'function') {
+                applySessionTerminalNotifications(payload.terminal_events);
+            }
             if (next !== Number(sessionStore.lastAppliedStateRevision)) {
                 // A request already in flight can predate this notification.
                 // Start a fresh one; its epoch prevents older results winning.
@@ -1926,7 +1952,11 @@ function startSessionListChangeWatcher() {
                     throw new Error('session changes snapshot not yet applied');
                 }
             }
-            revision = Number(sessionStore.lastAppliedStateRevision) || next;
+            // A summary loaded above can already include a later revision.
+            // Only acknowledge notifications actually delivered by this poll;
+            // otherwise a terminal committed during that load is skipped.
+            revision = next;
+            sessionListChangeRevision = revision;
         } catch (error) {
             delay = 2000;
         } finally {
@@ -3431,7 +3461,7 @@ function bindSessionGroupDrag(wrap, headRow, group) {
     });
 }
 
-/** 工作目录分组头右侧：+（在该目录新建）/ ⋯（重命名、复制路径、在资源管理器打开）。 */
+/** 所有分组提供会话管理；工作目录额外提供新建与路径操作。 */
 function buildSessionGroupActions(group, workDirPath) {
     const actions = document.createElement('div');
     actions.className = 'session-group-actions';
@@ -3464,9 +3494,11 @@ function buildSessionGroupActions(group, workDirPath) {
         + SIDEBAR_ICON_SVG.dots + '</button>'
         + '<div class="sidebar-popup-menu session-group-menu" role="menu" aria-label="'
         + escapeHtml(moreLabel) + '">'
-        + '<button type="button" role="menuitem" data-group-action="rename">重命名</button>'
-        + '<button type="button" role="menuitem" data-group-action="copy">复制路径</button>'
-        + '<button type="button" role="menuitem" data-group-action="reveal">在资源管理器打开</button>'
+        + '<button type="button" role="menuitem" data-group-action="manage">会话管理</button>'
+        + (group.isWorkDirGroup ? '<div class="sidebar-popup-separator" role="separator"></div>'
+            + '<button type="button" role="menuitem" data-group-action="rename">重命名</button>'
+            + (workDirPath ? '<button type="button" role="menuitem" data-group-action="copy">复制路径</button>'
+                + '<button type="button" role="menuitem" data-group-action="reveal">在资源管理器打开</button>' : '') : '')
         + '</div>';
     bindSidebarPopup(popup);
     popup.addEventListener('click', function (e) {
@@ -3476,12 +3508,13 @@ function buildSessionGroupActions(group, workDirPath) {
         e.stopPropagation();
         setSidebarPopupOpen(popup, false);
         const action = item.getAttribute('data-group-action');
-        if (action === 'copy') copyWorkDirPath(workDirPath);
+        if (action === 'manage') openSessionGroupManager(group, popup.querySelector('[data-popup-trigger]'));
+        else if (action === 'copy') copyWorkDirPath(workDirPath);
         else if (action === 'reveal') revealWorkDirInExplorer(workDirPath);
         else if (action === 'rename') renameWorkDirGroup(group, workDirPath);
     });
 
-    actions.appendChild(newBtn);
+    if (group.isWorkDirGroup && workDirPath) actions.appendChild(newBtn);
     actions.appendChild(popup);
     return actions;
 }
@@ -3496,7 +3529,9 @@ function buildSessionViewMenuMarkup() {
             + '<span class="session-view-menu-check" aria-hidden="true">' + SIDEBAR_ICON_SVG.check + '</span>'
             + '</button>';
     }
-    return '<div class="sidebar-popup-label" role="presentation">分组方式</div>'
+    return '<button type="button" role="menuitem" data-session-advanced-search>高级搜索</button>'
+        + '<div class="sidebar-popup-separator" role="separator"></div>'
+        + '<div class="sidebar-popup-label" role="presentation">分组方式</div>'
         + row('data-session-group-by', 'time', '按时间')
         + row('data-session-group-by', 'workdir', '按工作目录')
         + '<div class="sidebar-popup-separator" role="separator"></div>'
@@ -3559,6 +3594,7 @@ function setSessionSearchExpanded(expanded, opts) {
         }
     } else if (input) {
         input.value = '';
+        if (getSessionListSearchQuery()) applySessionListSearch('');
     }
 }
 
@@ -3994,11 +4030,15 @@ function mountSessionImportOnce() {
     if (viewPopup) {
         bindSidebarPopup(viewPopup);
         viewPopup.addEventListener('click', function (e) {
-            const item = (e.target && e.target.closest) ? e.target.closest('[role="menuitemradio"]') : null;
+            const item = (e.target && e.target.closest) ? e.target.closest('[role="menuitemradio"], [data-session-advanced-search]') : null;
             if (!item) return;
             e.preventDefault();
             e.stopPropagation();
             setSidebarPopupOpen(viewPopup, false);
+            if (item.hasAttribute('data-session-advanced-search')) {
+                openAdvancedSessionSearch(getSessionListSearchQuery(), viewPopup.querySelector('[data-popup-trigger]'));
+                return;
+            }
             const groupBy = item.getAttribute('data-session-group-by');
             const listMode = item.getAttribute('data-session-list-mode-option');
             const archive = item.getAttribute('data-session-archive-filter');
@@ -4018,54 +4058,9 @@ function mountSessionImportOnce() {
         });
     }
 
-    const searchBtn = document.getElementById('session-search-btn');
     const searchBox = document.getElementById('session-search-box');
     const searchInput = document.getElementById('session-search-input');
-    const searchClear = document.getElementById('session-search-clear');
-    const collapseSearch = function (returnFocus) {
-        applySessionListSearch('');
-        setSessionSearchExpanded(false);
-        if (returnFocus && searchBtn) {
-            try { searchBtn.focus(); } catch (err) { /* ignore */ }
-        }
-    };
-    if (searchBtn) {
-        searchBtn.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            const next = !head.classList.contains('is-searching');
-            setSessionSearchExpanded(next, { selectInput: true });
-        });
-    }
-    if (searchInput) {
-        searchInput.addEventListener('input', function () {
-            applySessionListSearch(searchInput.value);
-        });
-        searchInput.addEventListener('keydown', function (e) {
-            if (e.key !== 'Escape') return;
-            e.preventDefault();
-            e.stopPropagation();
-            collapseSearch(true);
-        });
-    }
-    if (searchClear) {
-        searchClear.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            collapseSearch(true);
-        });
-        bindUiHoverTip(searchClear);
-    }
-    // DSH 对齐：点击外部时若有查询词只失焦（保留过滤），没有查询词才收起。
-    document.addEventListener('pointerdown', function (e) {
-        if (!head.classList.contains('is-searching')) return;
-        if (head.contains(e.target)) return;
-        if (getSessionListSearchQuery()) {
-            if (searchInput && document.activeElement === searchInput) searchInput.blur();
-            return;
-        }
-        setSessionSearchExpanded(false);
-    }, true);
+    if (typeof initSessionSearchControls === 'function') initSessionSearchControls(head);
 
     // 第三个按钮已由「在新文件夹中新建会话」改为「刷新会话列表和页面」（见 refreshSessionListAndPage）。
     const refreshBtn = document.getElementById('session-refresh-btn');

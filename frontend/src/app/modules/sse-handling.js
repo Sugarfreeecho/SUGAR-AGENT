@@ -240,6 +240,41 @@ function endRunForClient(sessionId, ctx, opts) {
     }
 }
 
+function applySessionTerminalNotifications(events) {
+    (Array.isArray(events) ? events : []).forEach(function (event) {
+        var sid = String(event && event.session_id || '');
+        var rid = String(event && event.run_id || '');
+        if (!sid || !rid || !['run_finished', 'run_failed', 'run_interrupted'].includes(event.type)) return;
+        var run = getSessionRunState(sid);
+        if (sessionStore.isTerminalRun(sid, rid) && (!run || run.runId !== rid)) return;
+        var reduced = applySessionEvent(Object.assign({}, event, {ephemeral: true}), {
+            sessionId: sid, source: 'session-changes',
+        });
+        if (reduced.staleTerminalIgnored) return;
+        // Catching up an existing tab may replay background completions. They
+        // need terminal protection, not one history/queue request per old run.
+        if (!run && !getFollowupQueue(sid).length) {
+            syncSessionListIndicatorClasses();
+            setSendButtonState();
+            return;
+        }
+        var ctx = run && run.ctx;
+        if (ctx) {
+            ctx.terminalSeen = true;
+            ctx.streamCompletedSuccessfully = event.type === 'run_finished';
+            if (event.cleanup_scope === 'none' || event.checkpoint_ok === false) {
+                ctx.preserveInterruptedPartial = true;
+            }
+        }
+        if (run) abortSessionRun(sid, getRunAbortReason(sid, ctx) === 'user' ? 'user' : 'reconcile-finished');
+        endRunForClient(sid, ctx, {
+            runId: rid, drainFollowup: true, scroll: false,
+            reconcileFinal: event.type === 'run_finished',
+            discardPartialStreams: event.type !== 'run_finished',
+        });
+    });
+}
+
 async function fetchSessionEventStream(url, controller) {
     var timer = null;
     try {

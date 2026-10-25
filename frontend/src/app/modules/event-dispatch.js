@@ -180,7 +180,8 @@ function renderEvent(ctx, event, eventIndex, runSessionId, renderOptions) {
     }
     if (!event || typeof event !== 'object') return;
     if (event.type === 'lifecycle_changed' && typeof acceptRuntimeLifecycleOperation === 'function') {
-        acceptRuntimeLifecycleOperation(event.operation);
+        acceptRuntimeLifecycleOperation(event.operation, { source: renderOptions?.source || 'event',
+            replayed: !!(event.replayed_recent || event.replayed_snapshot) });
         return;
     }
     syncRenderContextRunScope(ctx, event);

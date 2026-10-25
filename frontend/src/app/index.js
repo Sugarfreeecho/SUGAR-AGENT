@@ -37,6 +37,8 @@ import runtimeLifecycleSource from './modules/runtime-lifecycle.js?raw';
 import permissionsSource from './modules/permissions.js?raw';
 import eventDispatchSource from './modules/event-dispatch.js?raw';
 import sessionManagementSource from './modules/session-management.js?raw';
+import sessionSearchSource from './modules/session-search.js?raw';
+import sessionGroupManagerSource from './modules/session-group-manager.js?raw';
 import sseHandlingSource from './modules/sse-handling.js?raw';
 import layoutPanelsSource from './modules/layout-panels.js?raw';
 import contextMenusSource from './modules/context-menus.js?raw';
@@ -197,6 +199,8 @@ const uiSources = [
     runtimeLifecycleSource,
     permissionsSource,
     eventDispatchSource,
+    sessionSearchSource,
+    sessionGroupManagerSource,
     sessionManagementSource,
     sseHandlingSource,
     layoutPanelsSource,

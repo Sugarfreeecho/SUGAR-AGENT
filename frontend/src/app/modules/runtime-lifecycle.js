@@ -7,11 +7,28 @@ function runtimeLifecycleIsBlocked() {
     return runtimeLifecycle.serverDraining || (!!operation && ['authorized','checkpointed','draining','stopping','starting','recovering'].includes(operation.phase));
 }
 function runtimeLifecycleStorageKey() { return 'myagent-lifecycle:' + location.origin; }
-function acceptRuntimeLifecycleOperation(operation) {
+function dismissRuntimeLifecycleOperation() {
+    if (!runtimeLifecycle.operation) return;
+    runtimeLifecycle.dismissed = runtimeLifecycle.operation.restart_id;
+    try { sessionStorage.setItem(runtimeLifecycleStorageKey() + ':dismissed', runtimeLifecycle.dismissed); } catch (_) { /* retain memory */ }
+    renderRuntimeLifecycle();
+}
+function acceptRuntimeLifecycleOperation(operation, options) {
     if (!operation || !operation.restart_id || !operation.phase) return false;
+    options = options || {};
+    // Chat history and SSE replay are not evidence of a new lifecycle change.
+    // The status endpoint restores pending work independently of chat history.
+    if (options.replayed || (options.source && !['event','sse','status','restore'].includes(options.source))) return false;
     var previous = runtimeLifecycle.operation;
     if (previous && previous.restart_id === operation.restart_id && Number(previous.revision) > Number(operation.revision)) return false;
     if (previous && previous.restart_id !== operation.restart_id && Number(previous.created_at) > Number(operation.created_at)) return false;
+    var sameOperation = previous && previous.restart_id === operation.restart_id;
+    // Initial snapshots contain recent outcomes as well as active requests.
+    // Only a completion of an operation this page was tracking is a new result.
+    if (['completed','denied','cancelled'].includes(operation.phase)
+        && (options.source === 'restore' || (options.source === 'status' && !sameOperation))) {
+        runtimeLifecycle.dismissed = operation.restart_id;
+    }
     if (!previous || previous.restart_id !== operation.restart_id) runtimeLifecycle.resume = operation.resume_requester !== false;
     runtimeLifecycle.operation = operation;
     try { sessionStorage.setItem(runtimeLifecycleStorageKey(), JSON.stringify(operation)); } catch (_) { /* retain memory */ }
@@ -83,7 +100,7 @@ function buildLifecycleCard(operation, inline) {
         if (window.sugarAgentDesktop && window.sugarAgentDesktop.openLogs) button('查看日志',function() { void window.sugarAgentDesktop.openLogs(); });
     }
     if (['completed','denied','cancelled','failed'].includes(operation.phase) && !inline) {
-        button('收起',function() { runtimeLifecycle.dismissed = operation.restart_id; renderRuntimeLifecycle(); });
+        button('收起',dismissRuntimeLifecycleOperation);
     }
     card.appendChild(actions); return card;
 }
@@ -161,13 +178,20 @@ async function refreshRuntimeLifecycle() {
         runtimeLifecycle.uiToken = payload.ui_token || '';
         var changed = runtimeLifecycle.instanceId && runtimeLifecycle.instanceId !== payload.instance_id;
         var operation = (payload.operations || [])[0];
-        if (operation && operation.phase === 'completed' && operation.expected_new_instance_id !== payload.instance_id) throw new Error('服务实例身份尚未核实');
+        if (operation && operation.phase === 'completed' && operation.expected_new_instance_id !== payload.instance_id) {
+            var previous = runtimeLifecycle.operation;
+            if (previous && previous.restart_id === operation.restart_id
+                && !['completed','denied','cancelled','failed'].includes(previous.phase)) throw new Error('服务实例身份尚未核实');
+            // A result from an older instance is history, not this connection's
+            // completion. It must not prevent observing the current service.
+            operation = null;
+        }
         runtimeLifecycle.instanceId = payload.instance_id;
         runtimeLifecycle.offlineAt = 0;
         runtimeLifecycle.serverDraining = !!payload.draining;
         runtimeLifecycle.supervisorUnavailable = payload.restart_available === false && operation
             && ['authorized','checkpointed','draining','stopping','starting','recovering'].includes(operation.phase);
-        if (operation) acceptRuntimeLifecycleOperation(operation);
+        if (operation) acceptRuntimeLifecycleOperation(operation, {source:'status'});
         if (changed && payload.ready) {
             if (typeof reconcileRunStateFromServer === 'function') void reconcileRunStateFromServer({silent:true});
             if (typeof currentSessionId !== 'undefined' && currentSessionId && typeof switchSession === 'function') void switchSession(currentSessionId,{forceReload:true});
@@ -181,8 +205,9 @@ async function refreshRuntimeLifecycle() {
 }
 function initRuntimeLifecycle() {
     try {
+        runtimeLifecycle.dismissed = sessionStorage.getItem(runtimeLifecycleStorageKey() + ':dismissed') || '';
         var saved = JSON.parse(sessionStorage.getItem(runtimeLifecycleStorageKey()) || 'null');
-        if (saved && Date.now()/1000 - Number(saved.created_at) < 86400) acceptRuntimeLifecycleOperation(saved);
+        if (saved && Date.now()/1000 - Number(saved.created_at) < 86400) acceptRuntimeLifecycleOperation(saved, {source:'restore'});
     } catch(_) { /* no saved request */ }
     if (window.sugarAgentDesktop && window.sugarAgentDesktop.onLifecycleStatus) {
         window.sugarAgentDesktop.onLifecycleStatus(function(operation) {
