@@ -19,4 +19,6 @@
 
 实测：朗读中切会话，AudioContext 保持 `running`、音频块计数不重置；播放条出现并在暂停/继续/停止时分别进入 `suspended`、`running`、隐藏。带工具的运行里，注入 tool-call 后播放不中断，下一轮的流式行会被接续朗读，最终卡片不重复。
 
+**修掉一个"看着像坏了"的 bug。** 流式朗读挂载控制按钮时，取的是页面上最后一张回答卡——在已有历史的会话里，那是**上一条**回答。结果旧卡片的「朗读」变成了「停止朗读」，而本轮的播放条反而被隐藏，点哪个都别扭。现在只允许本轮（不在 `preRunWraps` 里）的卡片接管，本轮卡片还没出现时维持播放条。
+
 主要文件：`plugins/voice-input/web/chat.js`（`updatePlaybackDock`、`togglePause`、`pumpLive` 换轨、会话切换处理）、`web/settings.js`、`speech_input/configuration.py`（`tts.autoReadMode`）。

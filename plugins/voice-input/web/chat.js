@@ -229,13 +229,17 @@ export function installChatExtension() {
             }
         } catch (error) { await failed(active, error); }
     }
-    async function read(wrap, button) {
+    async function read(wrap, button, manual = false) {
         if (playback?.button === button) { stopPlayback(); return; }
         stopPlayback();
         const content = wrap.querySelector('.message.assistant');
         if (!content) return;
         const items = buildSpeechPlan(content, t);
-        if (!items.length) return;
+        if (!items.length) {
+            // Clicking and hearing nothing looks like a fault; say why instead.
+            if (manual) { setState('error', t('这条回答没有可朗读的文字。', 'Nothing to read in this answer.')); hideSoon(2400); }
+            return;
+        }
         const active = { button, wrap, items, abort: new AbortController() }; playback = active;
         button.classList.add('is-playing'); button.textContent = t('停止朗读', 'Stop reading'); button.setAttribute('aria-pressed', 'true');
         mountControls(active);
@@ -462,7 +466,10 @@ export function installChatExtension() {
             liveSpoke = true;
         }
         if (!active.button) {
-            const wraps = [...document.querySelectorAll('.msg-wrap--answer-frame')];
+            // Only this run's own card may take over the controls; an older answer
+            // would otherwise sprout a "stop reading" button for someone else's voice.
+            const wraps = [...scopedRoot().querySelectorAll('.msg-wrap--answer-frame')]
+                .filter(node => !preRunWraps || !preRunWraps.has(node));
             const wrap = wraps[wraps.length - 1];
             const button = wrap && wrap.querySelector('.voice-read');
             if (button && button.parentElement) {
@@ -520,7 +527,7 @@ export function installChatExtension() {
             const button = document.createElement('button'); button.type = 'button'; button.className = 'msg-tb voice-read';
             button.textContent = t('朗读', 'Read aloud'); button.setAttribute('aria-pressed', 'false');
             toolbar.append(button); readButtons.add(button);
-            button.onclick = event => { event.stopPropagation(); void read(toolbar.closest('.msg-wrap--answer-frame'), button); };
+            button.onclick = event => { event.stopPropagation(); void read(toolbar.closest('.msg-wrap--answer-frame'), button, true); };
         });
         queueAutoRead();
     }

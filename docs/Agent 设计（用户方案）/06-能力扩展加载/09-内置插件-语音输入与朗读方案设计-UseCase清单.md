@@ -182,6 +182,7 @@
 | UC-374 | 边生成边读遇到工具调用 | 不打断，继续读；工具执行不产生朗读 | 每轮模型输出各自流式成行，`pumpLive` 发现新的流式行时在同一播放会话内换轨（重置 `fed`/`text`），不重启音频 | `web/chat.js:pumpLive` |
 | UC-377 | 上一轮音频尚未播完，下一轮文字已到 | 无缝接上，不丢内容也不重叠 | 换轨只追加队列，`active.next` 继续累加，音频时钟不重置 | 同上 |
 | UC-378 | 本轮没有任何流式朗读（例如最终内容只在 `final` 事件里给出） | 最终卡片照常朗读 | `liveSpoke` 只在真正入队后置位；`liveCovered && liveSpoke` 才跳过卡片 | `web/chat.js:queueAutoRead` |
+| UC-379 | 流式朗读时页面上有更早的回答卡片 | 控制按钮不挂到旧卡片上 | 只允许本轮（不在 `preRunWraps` 里）的卡片接管；否则维持播放条 | `web/chat.js:pumpLive` |
 | UC-375 | 朗读时机设为「仅整轮完成后」 | 生成期间不出声，最终卡片出现后读一次 | `startLive` 直接返回空，只走卡片路径（UC-345） | `web/chat.js:startLive` |
 | UC-376 | 手动点「朗读」 | 始终读最终卡片，不受时机与工具判定影响 | 不经过 `startLive`，与本轮标记无关 | `web/chat.js:read` |
 
