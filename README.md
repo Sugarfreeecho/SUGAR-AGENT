@@ -1,5 +1,7 @@
 # SugarAgent
 
+会话与自动化 CLI：[`agent-session-control.py`](agent-session-control.py)，连接现有后端，支持会话控制、System Prompt/工具配置、定时任务及事件规则。见[使用说明](docs/session-control.md)和[接口迁移清单](docs/session-control-migration.md)。
+
 > **Self-Upgrading General Agent Runtime**
 >
 > 一款本地运行的可自优化代码通用智能平台。在本机完成代码开发、文件处理、联网检索、研究分析、文档生成和多步骤自动化任务，同时保留可审计的会话记录与运行日志。

@@ -1,6 +1,6 @@
 # 插件上下文注入 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-23 v2，增加会话固定系统上下文。
+- 版本：2026-10-27 v3，插件目录worker保留后台刷新语义。
 - 状态：已接入，验证记录见末节。
 - 上级：00《WebUI 对话界面》、06《能力扩展加载》；参考 [DSH 分析](../../plugin-context-injection-and-dsh-analysis-2026-10-22.md)，接口细节见 [Plugin API](../../plugin_api_v1.md)。
 
@@ -21,6 +21,8 @@
 - **预期现象**：在输入 token 计算前把当前插件资料加入请求；子代理绑定自己的真实 session_id；网络重试复用步骤已有消息。
 - **规则与边界**：提供器不因页面可见而自动唤醒空闲模型；标题、摘要、独立评判等后台请求不主动采集。右栏共享显示 surface 不作为业务身份。
 - **依据**：`plugin_context.prepare_for_step`、`agent_loop._inject_plugin_context_step`。
+
+步骤准备中的初次插件目录读取与收集后的目录复核，均在线程中显式传入原owner loop。已存在同键过期目录时，复用既有后台刷新并返回当前目录，避免worker因没有running loop而同步扫目录；冷缓存、配置失效、force及实际执行的信任/启停检查沿用原规则。动态提供器资料仍每步采集，不跨步骤缓存业务内容。新增无正文的`plugin_context_prepare`分段见[运行复核与验证](../../performance/interround-current-and-plugin-context-2026-10-27.md)。
 
 ### UC-5C3 去重、失效和压缩后恢复
 - **触发**：资料变化、采集失败、禁用、签名变化、撤销授权或压缩上下文。

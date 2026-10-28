@@ -1,6 +1,6 @@
 # 插件加载与清单 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-25 v9（插件可用性体检与体检会话）
+- 版本：2026-10-27 v10（上下文准备worker复用目录后台刷新）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`plugins/manager.py`、`plugins/loader.py`、`agent_extensions.load_plugins`、`plugins/models.py`。
 - 上级：`00-能力扩展加载整体设计.md`
@@ -67,12 +67,14 @@
 
 `default_state_path`未显式配置状态路径时只解析一次本模块所属项目根，再用于新配置和legacy迁移路径；受控检查两条结果路径相同，源文件resolve调用从2次变1次。不增加跨调用缓存，不免除每次配置/目录/源身份检查或迁移互斥。显式路径分支和实时信任语义保持；不能将减少一次解析称为目录revision全部免I/O。完整关联实现、回归与待生产加载范围见[报告§13](../../performance/agent-subagent-interround-2026-10-21.md#13-事实提交与hook准备的事件循环隔离补修)。
 
-### UC-6A9 后台Hook准备保留目录陈旧命中
+### UC-6A9 Hook与上下文准备worker保留目录陈旧命中
 
 - **触发**：Hook准备已在线程执行，同键插件目录超过原30秒TTL。
 - **预期现象**：返回已有目录，显式使用原owner loop安排一次后台刷新。future注册和去重在该loop，扫描在worker并沿用原扫描锁；目录准备线程不因缺少running loop退回同步扫描。
 - **规则与边界**：排队回调和刷新发布均核对catalog generation，失效后旧回调不能扫描/回填；排队期间目录已更新或切换键时，旧请求不再扫描。force、冷缓存、无可用或已关闭loop仍等待真实加载，不放宽实际调用时的实时信任/启停检查。executor提交失败清理in-flight和活动计数，后续仍可刷新。
 - **依据**：`load_plugins(refresh_loop=...) / _schedule_plugin_cache_refresh / _prepare_hook_dispatch`；最初6项目录新增用例所在39项组合通过；补同键/新鲜度2例后，最终冻结定向27项通过、源码无漂移，包含当前8项目录例及相关Hook/失效/取消。23:22自然运行暴露了线程化初版的同步扫描回退，补修与未加载限制见[报告§14](../../performance/agent-subagent-interround-2026-10-21.md#14-2322自然重启与hook目录刷新回退补修)。
+
+UC-6A9的原owner loop传递规则同时适用于`plugin_context.prepare_for_step`的初次读取和收集后复核。两处调用均使用`to_thread(load_plugins, refresh_loop=owner_loop)`；保留冷目录同步等待、既有generation发布与实时信任边界，不缓存动态业务资料。新增回归先复现旧路径的等待/缺失loop，再验证修复，详见[10-27报告](../../performance/interround-current-and-plugin-context-2026-10-27.md)。
 
 ### UC-6A10 插件四级分层与逐插件环境开关
 
@@ -110,6 +112,8 @@
 | UC-6A11 | `plugin_availability.py`、`webui.py`、`sections_ext.js`、`session-management.js` |
 
 ## 5. 版本记录
+
+- 2026-10-27 v10：动态上下文初次读取与收集复核均传原owner loop；复用现有SWR和冷加载/实时信任边界，不跨步骤缓存业务资料。
 
 - 2026-10-25 v9：新增插件可用性体检接口与体检会话；设置页按钮在刚启用/启用失败时高亮，会话内由 Agent 实际复核并分步引导。
 
