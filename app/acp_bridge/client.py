@@ -22,6 +22,7 @@ class AgentTarget:
     env_refs: tuple = ()
     permission: str = "reject"
     timeout: float = 600
+    session_control: bool = False
 
     def environment(self):
         from security.extensions import minimal_extension_environment
@@ -31,7 +32,13 @@ class AgentTarget:
             if name not in os.environ:
                 raise ValueError("a configured ACP environment reference is unavailable")
             explicit[name] = os.environ[name]
-        return minimal_extension_environment(explicit=explicit)
+        environment = minimal_extension_environment(explicit=explicit)
+        # A delegated agent must never borrow the human CLI credential file.
+        environment["MYAGENT_CONTROL_TASK"] = "1"
+        if self.session_control:
+            from session_control.integration import child_environment
+            environment = child_environment(environment)
+        return environment
 
 
 def parse_targets(raw):
@@ -42,19 +49,20 @@ def parse_targets(raw):
     for name, config in value.items():
         if not isinstance(name, str) or not name.strip() or not isinstance(config, dict):
             raise ValueError("invalid ACP target")
-        if set(config) - {"command", "args", "env_refs", "permission", "timeout"}:
+        if set(config) - {"command", "args", "env_refs", "permission", "timeout", "session_control"}:
             raise ValueError("unknown ACP target field")
         command, args, refs = config.get("command"), config.get("args", []), config.get("env_refs", [])
         timeout = config.get("timeout", 600)
         permission = config.get("permission", "reject")
+        session_control = config.get("session_control", False)
         if (not isinstance(command, str) or not command.strip() or "\0" in command
                 or not isinstance(args, list) or any(not isinstance(arg, str) or "\0" in arg for arg in args)
                 or not isinstance(refs, list) or any(not isinstance(ref, str) or not ref or "=" in ref or "\0" in ref for ref in refs)
                 or isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or not 1 <= timeout <= 86400
-                or permission not in {"reject", "allow"}):
+                or permission not in {"reject", "allow"} or type(session_control) is not bool):
             raise ValueError("invalid ACP target configuration")
-        targets[name] = AgentTarget(name, command, tuple(args), tuple(refs), permission, float(timeout))
+        targets[name] = AgentTarget(name, command, tuple(args), tuple(refs), permission, float(timeout), session_control)
     return targets
 
 
@@ -151,57 +159,13 @@ async def _reap(process, children):
             await asyncio.wait_for(process.wait(), 3)
 
 
-async def run_target(target: AgentTarget, prompt: str, cwd: str):
+async def run_target(target: AgentTarget, prompt: str, cwd: str, *, session_id=None, on_message=None):
+    from .peer import peer_transport
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 200000:
         raise ValueError("ACP task must contain between 1 and 200000 characters")
-    path = Path(cwd)
-    if not path.is_absolute() or not path.is_dir():
-        raise ValueError("ACP task cwd must be an existing absolute directory")
-    client = DelegationClient(target.permission)
-    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
-    process = await asyncio.create_subprocess_exec(target.command, *target.args,
-        cwd=str(path.resolve()), env=target.environment(), stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=8 * 1024 * 1024, **options)
-    connection = None
-    operation = None
-    session_id = None
-    children = []
-    try:
-        connection = acp.connect_to_agent(client, process.stdin, process.stdout, use_unstable_protocol=True)
-
-        async def execute():
-            nonlocal session_id
-            initialized = await connection.initialize(protocol_version=acp.PROTOCOL_VERSION,
-                client_capabilities=s.ClientCapabilities(),
-                client_info=s.Implementation(name="sugaragent-acp-client", version="1.0.0"))
-            if initialized.protocol_version != acp.PROTOCOL_VERSION:
-                raise ValueError("ACP protocol version mismatch")
-            session = await connection.new_session(cwd=str(path.resolve()), mcp_servers=[])
-            session_id = session.session_id
-            response = await connection.prompt(session_id=session_id, prompt=[acp.text_block(prompt)])
-            return {"agent": target.name, "session_id": session_id, "stop_reason": response.stop_reason,
-                    "output": "".join(client.chunks), "truncated": client.truncated,
-                    "permission_requested": client.permission_requested}
-
-        operation = asyncio.create_task(execute())
-        try:
-            return await asyncio.wait_for(asyncio.shield(operation), target.timeout)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            if session_id:
-                try:
-                    await asyncio.wait_for(connection.cancel(session_id=session_id), 2)
-                    await asyncio.wait_for(asyncio.shield(operation), 3)
-                except Exception:
-                    pass  # Cleanup below reaps the process if cooperative cancellation failed.
-            raise
-    finally:
-        children = _descendants(process.pid)
-        if operation is not None and not operation.done():
-            operation.cancel()
-        if operation is not None:
-            await asyncio.gather(operation, return_exceptions=True)
-        try:
-            if connection is not None:
-                await connection.close()
-        finally:
-            await _reap(process, children)
+    async def execute():
+        async with peer_transport(target, cwd) as peer:
+            action = await peer.resume(session_id) if session_id else "new"
+            sid = session_id or await peer.new_session()
+            return {**await peer.prompt(sid, prompt, on_message), "session_action": action}
+    return await asyncio.wait_for(execute(), target.timeout)

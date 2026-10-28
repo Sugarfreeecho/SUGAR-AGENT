@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "acp-agents",
   "name": "ACP Agents",
-  "version": "1.0.0",
+  "version": "1.2.1",
   "description": "标准 ACP v1 双向接入：向编辑器/DSH 提供本地 Agent，按配置委派任务给外部 ACP Agent。",
   "settings_schema": {
     "type": "object",
@@ -19,6 +19,13 @@
       }
     }
   },
-  "capabilities": {"trusted_host": {"entry": "host.py"}},
+  "capabilities": {
+    "trusted_host": {"entry": "host.py"},
+    "web": {"entry": "web/index.html", "assets": "web/assets"},
+    "ui": {"settings.section": [{
+      "id": "main", "title": "ACP Agents", "description": "查看接入 SugarAgent 的客户端，配置外部 ACP Agent。",
+      "target": "plugin-page", "embedded": true, "order": 50
+    }]}
+  },
   "permissions": {"context": [], "services": []}
 }

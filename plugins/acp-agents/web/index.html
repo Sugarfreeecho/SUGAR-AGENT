@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="same-origin">
+  <title>ACP Agents · SugarAgent</title>
+  <script src="/plugin-assets/acp-agents/theme.js?v=1.2.1"></script>
+  <link rel="stylesheet" href="/static/settings/settings.css">
+  <link rel="stylesheet" href="/plugin-assets/acp-agents/app.css?v=1.2.1">
+  <script src="/plugin-assets/acp-agents/app.js?v=1.2.1" defer></script>
+</head>
+<body>
+<main>
+  <header class="standalone">
+    <a href="/settings#plugin:acp-agents:main" data-en="← Back to settings">← 返回设置</a>
+    <h1>ACP Agents</h1>
+  </header>
+  <section class="st-card" aria-labelledby="inbound-heading">
+    <div class="heading">
+      <div><h2 id="inbound-heading" data-en="Connected clients · inbound">接入的客户端 · 入站</h2>
+        <p data-en="Editors and agents using SugarAgent through ACP v1. Updates every 5 seconds.">通过 ACP v1 调用 SugarAgent 的编辑器和 Agent。每 5 秒更新。</p></div>
+      <button id="refresh" class="st-btn" data-en="Refresh">刷新</button>
+    </div>
+    <div class="content">
+      <div id="connection-error" class="notice error" role="status" hidden></div>
+      <p id="summary" aria-live="polite" data-en="Loading connection status…">正在读取连接状态…</p>
+      <div id="connections"></div>
+      <p class="hint" data-en="Only adapters with monitoring enabled appear here. Reconnect clients started before this update. Heartbeat timeout means the connection is unconfirmed; disconnected records remain for 10 minutes.">这里显示启用连接监测的适配器。更新前已启动的客户端需要重新连接。心跳超时表示暂时无法确认连接；断开记录保留 10 分钟。</p>
+    </div>
+  </section>
+  <section class="st-card" aria-labelledby="remote-heading">
+    <div class="heading"><div><h2 id="remote-heading" data-en="Outbound sessions and tasks">出站会话与任务</h2>
+      <p data-en="Choose a source conversation and an external session. Actions run through the source agent and its normal approvals.">选择发起任务的 SugarAgent 会话与外部会话。操作交由该会话的 Agent 执行，沿用现有审批。</p></div></div>
+    <div class="content">
+      <div id="outbound-error" class="notice error" role="status" hidden></div>
+      <div class="remote-grid">
+        <label><span data-en="Source SugarAgent conversation">来源 SugarAgent 会话</span><select id="source-session"></select></label>
+        <label><span data-en="Target agent">目标 Agent</span><select id="target-agent"></select></label>
+      </div>
+      <label for="remote-session" data-en="External session">外部会话</label><select id="remote-session"></select>
+      <div class="actions">
+        <button id="remote-list" class="st-btn" data-en="Query existing sessions">查询已有会话</button>
+        <button id="remote-more" class="st-btn" data-en="Load more sessions">加载更多会话</button>
+        <button id="remote-new" class="st-btn" data-en="Create new session">创建新会话</button>
+        <button id="remote-close" class="st-btn" data-en="Release connection">释放连接</button>
+      </div>
+      <p class="hint" data-en="Leave External session set to New for a fresh context. Select an ID to continue that session. Resume failures never create a replacement. Closing a connection keeps its history; reuse after disconnection requires peer resume support.">选择“新建会话”会使用新上下文；选择已有 ID 会续接该会话，失败时不会自动改成新建。释放连接保留历史，断开后续接需要目标支持 resume。</p>
+      <label for="task-prompt" data-en="Task">任务内容</label><textarea id="task-prompt" rows="4" maxlength="50000"></textarea>
+      <div class="actions">
+        <label class="check"><input id="task-background" type="checkbox" checked><span data-en="Run in background">后台执行</span></label>
+        <label><span data-en="Background reporting">后台回送</span><select id="task-notify">
+          <option value="final" data-en="On completion only">仅结束回报</option>
+          <option value="all" data-en="Progress and final result">中间进度和最终结果</option>
+          <option value="none" data-en="Store only; no push">仅保存，不主动回送</option>
+        </select></label>
+        <button id="task-submit" class="st-btn primary" data-en="Submit task">发送任务</button>
+      </div>
+      <p class="hint" data-en="Progress posts notices without waking the model. Completion reporting queues a turn in the source conversation and includes all collected reply text. Foreground calls return directly without an extra callback. ACP v1 does not guarantee a final-text marker: text streams are progress and prompt completion produces the result.">中间进度以提示消息回送，不唤醒模型；结束回报包含已收集的全部普通回复文本，并在来源会话排队触发后续处理。同步调用直接返回，不重复回送。ACP v1 不保证标记哪段文本是最终回复：文本流显示为进度，任务结束后形成结果。</p>
+      <div id="outbound-notice" class="notice" role="status" hidden></div>
+      <h3 data-en="Task history">任务记录</h3><div id="outbound-tasks"></div>
+      <div id="task-detail" hidden>
+        <h3 data-en="Progress">中间进度</h3><pre id="task-progress"></pre>
+        <h3 data-en="Final result / partial output">最终结果／已收集内容</h3><pre id="task-result"></pre>
+        <p id="task-delivery" class="hint"></p>
+      </div>
+    </div>
+  </section>
+  <section class="st-card" aria-labelledby="access-heading">
+    <div class="heading"><div><h2 id="access-heading" data-en="Connect to SugarAgent">接入 SugarAgent</h2>
+      <p data-en="Launch a stdio adapter from an ACP client such as DSH. Keep the SugarAgent backend running.">在 DSH 等 ACP 客户端中启动 stdio 适配器。SugarAgent 后端需要保持运行。</p></div></div>
+    <div class="content">
+      <label for="launch" data-en="Launch configuration">启动配置</label>
+      <textarea id="launch" readonly rows="7" spellcheck="false" aria-label="ACP launch configuration"></textarea>
+      <div class="actions"><button id="copy-launch" class="st-btn" disabled data-en="Copy configuration">复制配置</button>
+        <span class="hint" data-en="Standard ACP v1 · stdio · list / resume / close">标准 ACP v1 · stdio · list / resume / close</span></div>
+      <p class="hint" data-en="env_refs lists environment variable names, never token values. Supply a host-issued MYAGENT_CONTROL_TOKEN to the adapter, or use the saved Session Control login. Clients have different configuration wrappers; use command and args from this example.">env_refs 只列出环境变量名。启动适配器时提供宿主签发的 MYAGENT_CONTROL_TOKEN，或使用已保存的 Session Control 登录。不同客户端的配置外层格式各异，command 和 args 可按此填写。</p>
+      <a href="/api/acp/status" target="_blank" rel="noopener" data-en="View protocol status">查看协议状态</a>
+    </div>
+  </section>
+  <section class="st-card" aria-labelledby="outbound-heading">
+    <div class="heading"><div><h2 id="outbound-heading" data-en="External agents · outbound">外部 Agent · 出站</h2>
+      <p data-en="Targets SugarAgent can delegate tasks to. An empty object means no outbound targets are configured.">配置 SugarAgent 可以委派任务的目标。空对象表示尚未配置出站目标。</p></div></div>
+    <div class="content">
+      <div id="settings-error" class="notice error" role="status" hidden></div>
+      <label for="targets" data-en="External ACP agent configuration (JSON)">外部 ACP Agent 配置（JSON）</label>
+      <textarea id="targets" rows="9" spellcheck="false" disabled aria-describedby="target-hint"></textarea>
+      <p id="target-hint" class="hint" data-en="Each key is a target ID. Fields: command, args, env_refs, permission (reject/allow), timeout (seconds), session_control (optional). Credentials must be referenced using environment variable names.">对象的 key 为目标 ID。字段：command、args、env_refs、permission（reject/allow）、timeout（秒）、session_control（可选）。凭据通过环境变量名引用。</p>
+      <div class="actions"><button id="save" class="st-btn primary" disabled data-en="Save configuration">保存配置</button>
+        <button id="reload-targets" class="st-btn" data-en="Reload configuration">重新读取配置</button>
+        <span id="draft-status" class="hint" role="status"></span></div>
+      <details><summary data-en="Configuration example">配置示例</summary><pre>{
+  "dsh": {
+    "command": "node",
+    "args": ["/absolute/path/to/dsh.js", "--profile", "acp"],
+    "env_refs": ["DEEPSEEK_API_KEY"],
+    "permission": "reject",
+    "timeout": 600
+  }
+}</pre><p class="hint" data-en="Replace the example path with your installed DSH entry point. Saving does not start the external agent.">请将示例路径替换为实际安装的 DSH 入口。保存配置不会启动外部 Agent。</p></details>
+    </div>
+  </section>
+  <div id="message" class="notice" role="status" aria-live="polite" hidden></div>
+</main>
+</body>
+</html>

@@ -1,4 +1,4 @@
-"""Real production stdio entry point over an isolated keyless HTTP runtime."""
+"""Real stdio entry point over isolated authenticated session control HTTP."""
 import asyncio
 import json
 import os
@@ -17,9 +17,11 @@ from acp_bridge.client import AgentTarget, run_target
 
 
 @pytest.fixture
-def runtime_url(tmp_path):
+def runtime_url(tmp_path, monkeypatch):
     rows = {}
+    operations = {}
     resolved = threading.Event()
+    monkeypatch.setenv("MYAGENT_CONTROL_TOKEN", "isolated-acp-test-credential")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -34,6 +36,22 @@ def runtime_url(tmp_path):
             self.wfile.write(data)
 
         def do_GET(self):
+            if self.path.startswith("/api/control/v1/operations/"):
+                assert self.headers.get("Authorization") == "Bearer isolated-acp-test-credential"
+                operation = operations[self.path.split("/")[5]]
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.end_headers()
+                def event(value):
+                    self.wfile.write((json.dumps(value) + "\n").encode())
+                    self.wfile.flush()
+                if operation["message"] == "permission":
+                    event({"type": "approval_requested", "approval_id": "approval-1", "tool_call_id": "tool-1"})
+                    assert resolved.wait(10), "ACP permission response was not forwarded"
+                event({"type": "llm_response", "content": "answer"})
+                event({"type": "final", "content": "answer"})
+                event({"type": "operation.completed", "operation": {"status": "succeeded", "content": "answer"}})
+                return
             if self.path == "/api/acp/status":
                 return self.reply({"protocol": "acp", "version": 1})
             if self.path == "/api/model_profiles":
@@ -47,6 +65,43 @@ def runtime_url(tmp_path):
 
         def do_POST(self):
             raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path == "/api/control/v1/rpc":
+                assert self.headers.get("Authorization") == "Bearer isolated-acp-test-credential"
+                request = json.loads(raw)
+                method, params = request["method"], request["params"]
+                if method == "session.create":
+                    sid = "session-" + str(len(rows) + 1)
+                    rows[sid] = {"id": sid, "name": sid, "work_dir": params["work_dir"], "model_profile_id": "model-a", "reasoning_effort": "", "config": {}, "revision": 0}
+                    result = {"session_id": sid}
+                elif method == "session.list":
+                    result = {"sessions": list(rows.values())}
+                elif method == "session.get":
+                    result = {"session": rows[params["session_id"]]}
+                elif method == "session.delete":
+                    rows.pop(params["session_id"], None)
+                    result = {"ok": True}
+                elif method == "session.config.get":
+                    row = rows[params["session_id"]]
+                    result = {"config": row["config"], "revision": row["revision"]}
+                elif method == "session.config.update":
+                    row = rows[params["session_id"]]
+                    assert params["expected_revision"] == row["revision"]
+                    row.update(params["config"])
+                    row["config"], row["revision"] = params["config"], row["revision"] + 1
+                    result = {"ok": True}
+                elif method == "session.send":
+                    oid = "op-" + str(len(operations) + 1)
+                    operations[oid] = params
+                    result = {"operation_id": oid, "run_id": "run-" + oid}
+                elif method == "approval.resolve":
+                    assert params["approve"] is True
+                    resolved.set()
+                    result = {"ok": True}
+                elif method == "operation.cancel":
+                    result = {"ok": True}
+                else:
+                    raise AssertionError(method)
+                return self.reply({"schema_version": 1, "ok": True, "data": result, "error": None})
             if self.path == "/chat":
                 from urllib.parse import parse_qs
                 form = parse_qs(raw.decode())
@@ -93,7 +148,7 @@ def runtime_url(tmp_path):
 
 def test_production_stdio_entry_works_with_official_python_client(runtime_url, tmp_path):
     target = AgentTarget("sugaragent", sys.executable,
-                        (str(ROOT / "app/acp_stdio.py"), "--server-url", runtime_url))
+                        (str(ROOT / "app/acp_stdio.py"), "--server-url", runtime_url), env_refs=("MYAGENT_CONTROL_TOKEN",))
     result = asyncio.run(run_target(target, "hello", str(tmp_path)))
     assert result["output"] == "answer"
     assert result["stop_reason"] == "end_turn"

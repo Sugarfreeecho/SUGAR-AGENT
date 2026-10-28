@@ -19,6 +19,9 @@ from acp_bridge.mcp import resolve_servers
 
 
 class Backend:
+    async def register_connection(self, client_info, protocol_version):
+        self.client_info = client_info
+
     def __init__(self, cwd):
         self.cwd = str(cwd)
         self.rows = {}

@@ -54,6 +54,7 @@ class SugarACPAgent(acp.Agent):
         self.connection = conn
 
     async def initialize(self, protocol_version, **kwargs):
+        await self.backend.register_connection(kwargs.get("client_info"), protocol_version)
         return s.InitializeResponse(protocol_version=acp.PROTOCOL_VERSION,
             agent_info=s.Implementation(name="sugaragent", version="1.0.0"),
             agent_capabilities=s.AgentCapabilities(
