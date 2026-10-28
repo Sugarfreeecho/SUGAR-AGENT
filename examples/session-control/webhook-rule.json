@@ -1,0 +1,7 @@
+{
+  "name": "构建失败后分析",
+  "trigger": {"kind": "event", "types": ["webhook.received"], "condition": {"field": "data.status", "op": "eq", "value": "failed"}},
+  "target": {"mode": "existing", "session_id": "SESSION_ID"},
+  "action": {"kind": "prompt", "text": "分析构建失败事件，提出修复建议。"},
+  "runtime_override": {"read_only": true}
+}

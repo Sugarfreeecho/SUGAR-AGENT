@@ -84,7 +84,7 @@ import usage_stats
 from path_picker_util import pick_native_path
 from config_paths import resolve_legacy_config_path
 
-from notification_providers import notify_user
+from notification_providers import notify_user, notification_provider_ids
 
 _PATH_PICKER_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "myagent_path_picker.js"
 _SETUP_I18N_JS_PATH = Path(__file__).resolve().parent / "templates" / "static" / "setup_i18n.js"
@@ -172,6 +172,8 @@ async def _webui_lifespan(_app: FastAPI):
 
 
 fastapi_app = FastAPI(lifespan=_webui_lifespan)
+from plugin_page_assets import install_plugin_page_assets
+install_plugin_page_assets(fastapi_app)
 try:
     from agent_extensions import load_plugins
     from plugins.host import install_bundled_host_extensions
@@ -847,7 +849,7 @@ def _session_was_manually_stopped(session_id: str) -> bool:
         reason = str(session_manager.get_interrupt_reason(sid) or "").strip().lower()
     except Exception:
         return False
-    return reason in {"user", "user_button", "manual", "manual_stop", "stop_button"}
+    return reason in {"user", "user_button", "manual", "manual_stop", "stop_button", "remote_user", "control_stop", "user_stop"}
 
 
 def _append_recovered_question_tool_result(record: dict) -> bool:
@@ -2684,11 +2686,17 @@ async def workspace_assets(rel: str, session_id: str = "", work_dir: str = ""):
 
     The URL shape keeps sibling assets resolvable: a document at
     ``/api/workspace-assets/<dir>/page.html`` loads ``./style.css`` from
-    ``/api/workspace-assets/<dir>/style.css``. The path goes through the same
-    allowed-root gate as the other workspace readers; the response is no-store
-    so a reload always reflects the file on disk.
+    ``/api/workspace-assets/<dir>/style.css``. Native absolute paths may point
+    anywhere on the local filesystem; relative paths use the selected workspace.
+    The response is no-store so a reload reflects the file on disk.
     """
-    root = await run_in_threadpool(_workspace_request_root, session_id, work_dir)
+    # Native preview URLs carry their full path so sibling resources keep
+    # resolving even without a chat context or a usable default workspace.
+    native = Path(unquote(rel)).expanduser()
+    if not session_id and not work_dir and native.is_absolute():
+        root = native.parent
+    else:
+        root = await run_in_threadpool(_workspace_request_root, session_id, work_dir)
     try:
         path = await run_in_threadpool(_resolve_workspace_view_path, rel, root)
     except ValueError:
@@ -6410,6 +6418,8 @@ def _on_session_lifecycle_event_invalidate_state(_session_id: str, event: dict) 
                 "cleanup_scope", "checkpoint_ok",
             ) if key in event}
             terminal.update(session_id=_session_id, ephemeral=True)
+            if event.get("type") == "run_failed":
+                terminal["error"] = str(event.get("error") or "")[:1000]
             _invalidate_sessions_state_cache(terminal_event=terminal)
         else:
             _invalidate_sessions_state_cache()
@@ -6421,6 +6431,13 @@ def _on_session_event_for_attention_notify(session_id: str, event: dict) -> None
     reason = _UI_ATTENTION_NOTIFY_EVENT_TYPES.get(str(event.get("type") or ""))
     if not reason:
         return
+    control = globals().get("_session_control_application")
+    worker = control.service.workers.get(session_id) if control else None
+    if worker and (not event.get("run_id") or event["run_id"] == worker[1]["run_id"]):
+        task_id = worker[1]["request"].get("_automation_id")
+        task = control.store.get("automations", task_id) if task_id else None
+        if task and "notification" in task:
+            return  # This task's durable notification policy owns delivery.
     # Agent streams publish from worker-thread event loops; forward to the
     # main server loop so the delayed task outlives the worker stream.
     loop = _UI_ATTENTION_MAIN_LOOP
@@ -9388,7 +9405,7 @@ def _remove_env_keys(text: str, keys: list[str]) -> str:
 # 这样托盘、书签与既有链接不断链。
 _SETTINGS_CENTER_PATH = _Path(__file__).resolve().parent / "templates" / "settings_center.html"
 _SETTINGS_STATIC_DIR = _Path(__file__).resolve().parent / "templates" / "static" / "settings"
-_SETTINGS_ASSET_FILES = ("settings.css", "resource_cache.js", "core.js", "package_import.js", "plugin_sections.js", "sections_basic.js", "sections_usage.js", "usage_detail.js", "sections_ext.js", "sections_ops.js")
+_SETTINGS_ASSET_FILES = ("settings.css", "resource_cache.js", "core.js", "package_import.js", "plugin_sections.js", "sections_basic.js", "sections_schedules.js", "sections_usage.js", "usage_detail.js", "sections_ext.js", "sections_ops.js")
 
 
 def _settings_asset_version() -> int:
@@ -10464,11 +10481,56 @@ _control_dependencies = _RemoteControlDependencies(
     release_start=_release_session_chat_start,
     is_stream_active=_is_session_stream_active,
 )
+from session_control.integration import install as _install_session_control
+
+
+async def _control_update_model(session_id, profile_id):
+    if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, profile_id)):
+        raise ValueError("unknown model_profile_id")
+    with session_manager._session_metadata_lock(session_id):
+        metadata = session_manager._load_metadata_unlocked(session_id)
+        metadata["model_profile_id"] = profile_id
+        session_manager._save_metadata_unlocked(session_id, metadata)
+
+
+async def _control_update_effort(session_id, effort):
+    if effort not in model_profiles.REASONING_EFFORTS:
+        raise ValueError("invalid reasoning_effort")
+    await asyncio.to_thread(_persist_session_reasoning_effort, session_id, effort)
+
+
+def _control_export(params):
+    archive, filename = _build_session_export_archive(params["session_id"])
+    return {"session_id": params["session_id"], "archive_path": str(archive), "filename": filename}
+
+
+async def _control_notify_automation(task, operation, kind):
+    outcome = "需要确认后继续" if kind == "pending_human" else "已完成" if operation["status"] == "succeeded" else "运行未完成，请查看执行记录"
+    return await notify_user("定时任务 · " + task["name"], outcome, operation["session_id"])
+
+
+_session_control_application = _install_session_control(
+    fastapi_app, _control_dependencies, _remote_control_config,
+    {"search": _session_search, "continue": astream_events_continuation,
+     "pending_human": _session_pending_human_count,
+     "followup_state": _queued_followup_start_state, "manually_stopped": _session_was_manually_stopped,
+     "has_local_activity": _has_local_worker_activity,
+     "notify_automation": _control_notify_automation,
+     "notification_ready": lambda: bool(notification_provider_ids()),
+     "model_profile_id": _control_update_model, "reasoning_effort": _control_update_effort,
+     "session.export": _control_export,
+     "source_enabled": lambda plugin_id: __import__("plugins.host", fromlist=["bundled_host_plugin_enabled"]).bundled_host_plugin_enabled(plugin_id),
+     "session.import": lambda params: _import_session_from(params.get("source", ""), params.get("kind", ""))},
+)
+_reserve_session_chat_start = _session_control_application.service.coordinator.reserve
+_release_session_chat_start = _session_control_application.service.coordinator.release
 _remote_control_gateway = _register_remote_control(
     fastapi_app,
     _remote_control_config,
     _control_dependencies,
 )
+if _remote_control_gateway is not None:
+    _remote_control_gateway.service = _session_control_application.service
 
 from vision_api import register_vision_api as _register_vision_api
 
@@ -10588,19 +10650,8 @@ async def plugin_web_page(plugin_id: str):
 
 @fastapi_app.get("/plugin-assets/{plugin_id}/{asset_path:path}")
 async def plugin_web_asset(plugin_id: str, asset_path: str):
-    from plugin_web_gateway import plugin_asset
-
-    try:
-        path = await run_in_threadpool(plugin_asset, plugin_id, asset_path)
-    except Exception as exc:
-        return _plugin_web_error_response(exc)
-    return FileResponse(
-        str(path),
-        headers={
-            "Cache-Control": "public, max-age=3600",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+    from plugin_page_assets import serve_plugin_asset
+    return await serve_plugin_asset(plugin_id, asset_path)
 
 
 @fastapi_app.api_route(
@@ -10748,6 +10799,7 @@ async def start_webui_lifecycle() -> None:
     """Start Web UI services shared by the default and production lifespans."""
     from runtime_lifecycle import configure
     lifecycle = configure(session_manager)
+    await _session_control_application.start()
     # Shared by button, remote-control and plugin get_or_create_session calls.
     # Refills run on a worker so filesystem latency cannot block event ingress.
     session_manager.start_session_draft_reserve()
@@ -10869,6 +10921,7 @@ async def stop_webui_lifecycle() -> None:
     from session_lifecycle import _cancel_tasks
     await _cancel_tasks([task for task in tasks if task is not None and not task.done()], timeout=2)
     cleanup = [
+        ("session control", _session_control_application.close),
         ("session search", lambda: asyncio.to_thread(_session_search.close)),
         ("subagent notifications", stop_subagent_notification_runner),
         ("host extensions", lambda: stop_bundled_host_extensions(

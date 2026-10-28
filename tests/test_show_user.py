@@ -84,6 +84,8 @@ def test_display_persists_before_publish_and_returns_without_waiting_for_user(sh
     {"kind": "notification", "text": ""},
     {"kind": "notification", "text": "a" * 2001},
     {"kind": "settings", "section": "https://evil.test/"},
+    {"kind": "file", "path": "missing.txt"},
+    {"kind": "file", "path": "."},
     {"kind": "shell", "text": "ignored"},
 ])
 def test_invalid_display_is_not_persisted_or_published(show_context, arguments):
@@ -94,20 +96,73 @@ def test_invalid_display_is_not_persisted_or_published(show_context, arguments):
     assert not events and not manager.get_ui_events_for_display("s1")
 
 
-def test_workspace_file_uses_read_authorization_and_rejects_escape(show_context, tmp_path):
+def test_user_file_display_is_not_an_agent_file_read(show_context, tmp_path):
     context, _, _, events, workspace = show_context
     from security.runtime import classify_tool
+    from security.models import DecisionOutcome, PERMISSION_PRESETS, PermissionMode
+    from security.policy import PolicyEngine
     document = workspace / "guide.md"
     document.write_text("# Guide", encoding="utf-8")
     args = {"kind": "file", "title": "文档", "path": "guide.md"}
     request = classify_tool("show_user", args, workspace)
-    assert request.action == "fs.read" and request.resource == str(document.resolve())
+    assert request.action == "tool.call" and request.resource == "show_user"
     assert asyncio.run(invoke_show_user(context, args)).kind is ToolOutcomeKind.COMPLETED
     assert events[0]["presentation"]["path"] == str(document.resolve())
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
-    with pytest.raises(ValueError, match="inside the current"):
-        prepare_presentation({"kind": "file", "title": "外部文件", "path": str(outside)}, workspace=workspace)
+    outside_args = {"kind": "file", "title": "外部文件", "path": str(outside)}
+    request = classify_tool("show_user", outside_args, workspace)
+    preset = PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL]
+    assert PolicyEngine(workspace).decide(request, preset, sandbox_available=True).outcome is DecisionOutcome.ALLOW
+    reader = classify_tool("read_file", {"path": str(outside)}, workspace)
+    assert reader.action == "fs.read"
+    assert "required_dirs" not in request.metadata
+    result = asyncio.run(invoke_show_user(context, outside_args))
+    assert result.kind is ToolOutcomeKind.COMPLETED
+    assert events[-1]["presentation"]["path"] == str(outside.resolve())
+    assert "text" not in json.loads(result.content)
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_external_display_accepts_absolute_and_parent_relative_paths(show_context, tmp_path, relative):
+    _, _, _, _, workspace = show_context
+    outside = tmp_path / "目录外 报告.html"
+    outside.write_text("<h1>Report</h1>", encoding="utf-8")
+    args = {"kind": "file", "title": "报告", "path": "../" + outside.name if relative else str(outside)}
+    record = prepare_presentation(args, workspace=workspace)
+    assert record["path"] == str(outside.resolve())
+    workspace.rmdir()
+    assert prepare_presentation(args, workspace=workspace)["path"] == record["path"]
+
+
+def test_external_viewer_reads_text_media_html_and_sibling_assets_without_a_workspace(show_context, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from urllib.parse import quote
+    import webui
+    _, _, _, _, workspace = show_context
+    external = tmp_path / "目录外 文档"
+    external.mkdir()
+    (external / "report.txt").write_text("用户查看的正文", encoding="utf-8")
+    (external / "index.html").write_text('<link rel="stylesheet" href="style.css"><h1>报告</h1>', encoding="utf-8")
+    (external / "style.css").write_text("h1{color:green}", encoding="utf-8")
+    Image.new("RGB", (30, 20), "white").save(external / "image.png")
+    (external / "audio.wav").write_bytes(b"RIFF-demo")
+    workspace.rmdir()
+    monkeypatch.setattr(webui, "WORK_DIR", workspace)
+    client = TestClient(webui.fastapi_app)
+    params = {"work_dir": str(external)}
+    response = client.get("/api/workspace-file-text", params={**params, "rel": str(external / "report.txt")})
+    assert response.json()["text"] == "用户查看的正文"
+    response = client.get("/api/workspace-image", params={**params, "rel": str(external / "image.png")})
+    assert response.content == (external / "image.png").read_bytes()
+    response = client.get("/api/workspace-media", params={**params, "rel": str(external / "audio.wav")})
+    assert response.content == b"RIFF-demo"
+    for name in ("index.html", "style.css"):
+        url = "/api/workspace-assets/" + quote((external / name).as_posix(), safe="/")
+        response = client.get(url, params=params)
+        assert response.status_code == 200
+        assert response.content == (external / name).read_bytes()
+        assert client.get(url).content == response.content
 
 
 def test_plugin_page_requires_an_enabled_declared_destination(show_context, monkeypatch):

@@ -122,6 +122,15 @@ class ExecutionService:
         self._close_reasons: dict[str, set[str]] = {}
         self.boot_id = uuid.uuid4().hex
         self.terminals = None
+        self._shutdown_callbacks = set()
+
+    def register_shutdown_callback(self, callback):
+        with self._lock:
+            self._shutdown_callbacks.add(callback)
+
+    def unregister_shutdown_callback(self, callback):
+        with self._lock:
+            self._shutdown_callbacks.discard(callback)
 
     def start(self):
         with self._lock:
@@ -371,9 +380,39 @@ class ExecutionService:
         if job.visible:
             await self._persist_job(job)
 
-    async def list_jobs(self, owner):
-        await self.recover(owner)
-        return [j.public() for j in self.jobs.values() if j.owner == owner and j.visible]
+    async def list_jobs(self, owner, *, include_descendants=False, active_only=False):
+        from session_activity import session_ancestor_ids
+
+        owners = {owner}
+        if include_descendants:
+            load_index = getattr(self.manager, "_load_subagent_index", None)
+            index = await asyncio.to_thread(load_index) if callable(load_index) else {}
+            owners.update(child for child in index if owner in session_ancestor_ids(child, index))
+        # The capsule observes live work only. Do not read extension history or
+        # logs on its polling path (including idle sessions after a host restart).
+        if not active_only:
+            for identifier in owners:
+                await self.recover(identifier)
+        selected = [job for job in self.jobs.values() if job.owner in owners and job.visible
+                    and (not active_only or job.status in ACTIVE)]
+        if not include_descendants:
+            return [job.public() for job in selected]
+
+        # Capture job facts before the metadata await; completed work must not
+        # leak into an active-only snapshot while labels are being resolved.
+        rows = [{**job.public(), "owner_session_id": job.owner} for job in selected]
+
+        def labels():
+            load_metadata = getattr(self.manager, "_load_metadata_unlocked", None)
+            result = {}
+            for identifier in {row["owner_session_id"] for row in rows}:
+                meta = load_metadata(identifier) if callable(load_metadata) else None
+                result[identifier] = str((meta or {}).get("name") or identifier[:12])
+            return result
+
+        owner_labels = await asyncio.to_thread(labels) if rows else {}
+        return [{**row, "owner_label": owner_labels[row["owner_session_id"]]}
+                for row in sorted(rows, key=lambda row: (row["started_at"], row["id"]))]
 
     async def output(self, owner, job_id, wait=False, timeout_ms=30000, *, offset=None):
         await self.recover(owner)
@@ -410,6 +449,15 @@ class ExecutionService:
 
     async def kill(self, owner, job_id, reason="", *, suppress=True):
         job = self.owned(owner, job_id)
+        return await self._kill_job(job, reason, suppress=suppress)
+
+    async def kill_foreground(self, owner, job_id, reason=""):
+        job = self.jobs.get(str(job_id))
+        if job is None or job.owner != owner:
+            raise ValueError("foreground job not found for this Agent")
+        return await self._kill_job(job, reason, suppress=True)
+
+    async def _kill_job(self, job, reason, *, suppress):
         if job.status not in ACTIVE:
             return {"outcome": "already-finished", "job": job.public()}
         job.notice_suppressed = job.notice_suppressed or suppress
@@ -635,9 +683,10 @@ class ExecutionService:
         if not self._thread or not self._thread.is_alive():
             return
         async def clean():
-            from .computer import _MANAGER
-            if _MANAGER is not None and _MANAGER.service is self:
-                await _MANAGER.stop()
+            with self._lock:
+                callbacks = tuple(self._shutdown_callbacks)
+            for callback in callbacks:
+                await callback()
             self._closing = True
             for owner in {j.owner for j in self.jobs.values()}:
                 await self.stop_owner(owner, close_terminals=True, reason="host_shutdown")

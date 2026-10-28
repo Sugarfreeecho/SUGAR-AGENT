@@ -348,6 +348,25 @@ def test_queued_user_turn_is_projected_live_without_optimistic_skip(queued_runti
     assert payload["ui_event"]["turn_id"] == "queued-id"
 
 
+def test_control_adopted_user_turn_preserves_operation_receipt_without_legacy_flags(queued_runtime, monkeypatch):
+    agent, directory = queued_runtime
+    import webui
+    from runtime_v2.ui_projection import RuntimeUiProjection
+
+    monkeypatch.setattr(webui, "session_manager", agent.session_manager)
+    event = agent._runtime_v2_react_history_ops().commit_user_turn(
+        "adopted", "already being executed", run_id="control-run", operation_id="queued-operation",
+    )
+    payload = webui._runtime_v2_chat_sse_payload("adopted", event.to_dict())
+    assert payload["skip_ui"] is True  # The direct /chat bubble was already optimistic.
+    assert payload["runtime_event"]["payload"]["operation_id"] == "queued-operation"
+    assert not payload["runtime_event"]["payload"].get("queued_followup")
+    projection = RuntimeUiProjection(directory)
+    assert projection.read_ui_events("adopted")[0]["operation_id"] == "queued-operation"
+    # The cached row representation must preserve the same receipt too.
+    assert projection.read_ui_page("adopted", limit=20)["events"][0]["operation_id"] == "queued-operation"
+
+
 def test_recovery_finishes_original_answer_before_consuming_the_queued_turn(queued_runtime, monkeypatch):
     agent, directory = queued_runtime
     import webui

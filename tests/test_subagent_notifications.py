@@ -1,6 +1,7 @@
 """Background child results wake the parent without a browser producer."""
 import asyncio
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,11 @@ def wakeup(tmp_path, monkeypatch):
     import agent_harness
     import agent_loop
     import agent_subagent_notifications as notifications
+    import session_control.integration as integration
+    from session_control.api import register_control
+    from remote_control.store import RemoteControlStore
+    from runtime_v2 import RuntimeHistoryOps
+    from fastapi import FastAPI
 
     monkeypatch.setenv("RUNTIME_VERSION", "2")
     manager = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
@@ -20,7 +26,7 @@ def wakeup(tmp_path, monkeypatch):
     admission = {"busy": False, "human": 0, "stopped": False}
     calls, released, delivered = [], [], []
 
-    async def reserve(sid, run_id):
+    def reserve(sid, run_id):
         if admission["busy"]:
             return None
         admission["busy"] = True
@@ -30,11 +36,6 @@ def wakeup(tmp_path, monkeypatch):
         released.append((sid, token))
         admission["busy"] = False
 
-    monkeypatch.setitem(sys.modules, "webui", SimpleNamespace(
-        _reserve_session_chat_start_off_loop=reserve,
-        _release_session_chat_start=release,
-        _session_pending_human_count=lambda sid: admission["human"],
-    ))
     monkeypatch.setattr(manager, "is_interrupt_requested", lambda *args: admission["stopped"])
 
     async def continuation(sid, **kwargs):
@@ -42,13 +43,24 @@ def wakeup(tmp_path, monkeypatch):
         rows = manager.claim_pending_subagent_notifications(sid, kwargs["run_id"])
         delivered.extend(row["result"] for row in rows)
         manager.resolve_pending_subagent_claim(sid, kwargs["run_id"], consumed=True)
-        manager.append_ui_event(sid, {
-            "type": "final", "content": "combined", "run_id": kwargs["run_id"],
-        })
+        RuntimeHistoryOps(manager.sessions_dir, path_resolver=manager._resolve_session_path).commit_assistant_final(
+            sid, "combined", operation_id="final:" + kwargs["run_id"], run_id=kwargs["run_id"])
         yield {"type": "final", "content": "combined"}
 
     monkeypatch.setattr(agent_loop, "astream_events_continuation", continuation)
     notifications._failed_batches.clear()
+    control = register_control(FastAPI(), SimpleNamespace(session_manager=manager, reserve_start=reserve,
+        release_start=release, is_stream_active=lambda _: admission["busy"], astream_events=None),
+        tmp_path / "control", RemoteControlStore(tmp_path / "remote"), callbacks={
+            "continue": lambda *args, **kwargs: agent_loop.astream_events_continuation(*args, **kwargs),
+            "pending_human": lambda _: admission["human"], "manually_stopped": lambda _: admission["stopped"]})
+    monkeypatch.setattr(integration, "_application", control)
+    original_continue = notifications._continue
+    async def with_backend_started(*args):
+        # Each isolated asyncio.run models an application event-loop lifecycle.
+        await control.start()
+        return await original_continue(*args)
+    monkeypatch.setattr(notifications, "_continue", with_backend_started)
 
     def complete(child="child-1", parent_run="parent-run"):
         manager.append_pending_subagent_result(owner, {
@@ -56,8 +68,11 @@ def wakeup(tmp_path, monkeypatch):
             "status": "completed", "result": child + " result",
         })
 
-    return SimpleNamespace(manager=manager, owner=owner, admission=admission, calls=calls,
-                           released=released, delivered=delivered, complete=complete)
+    yield SimpleNamespace(manager=manager, owner=owner, admission=admission, calls=calls,
+                          released=released, delivered=delivered, complete=complete, control=control)
+    if control.service.engine and control.service.engine._listener:
+        from session_event_bus import remove_event_listener
+        remove_event_listener(control.service.engine._listener)
 
 
 def test_busy_parent_retries_then_consumes_late_results_once(wakeup):
@@ -68,17 +83,19 @@ def test_busy_parent_retries_then_consumes_late_results_once(wakeup):
     w.admission["busy"] = True
 
     async def scenario():
-        assert await _continue(w.manager, w.owner) is True
+        accepted = asyncio.create_task(_continue(w.manager, w.owner))
+        await asyncio.sleep(.6)
+        assert not accepted.done()
         assert w.calls == []
         assert w.manager.has_pending_subagent_notifications(w.owner)
         w.admission["busy"] = False
-        assert await _continue(w.manager, w.owner) is False
+        assert await asyncio.wait_for(accepted, 5) is False
         assert await _continue(w.manager, w.owner) is False
 
     asyncio.run(scenario())
     assert len(w.calls) == 1
     assert w.calls[0][0] == w.owner
-    assert w.calls[0][1]["run_id"].startswith("subagent-wakeup-")
+    assert w.calls[0][1]["run_id"].startswith("control-")
     assert sorted(w.delivered) == ["child-1 result", "child-2 result"]
     assert not w.manager.has_pending_subagent_notifications(w.owner)
     assert sum(event["type"] == "user" for event in w.manager._load_ui_events_for_active_runtime(w.owner)) == 1
@@ -145,7 +162,7 @@ def test_stop_archive_and_pending_human_interactions_block_automatic_generation(
     assert asyncio.run(_continue(w.manager, w.owner)) is (blocked == "human")
     assert w.calls == []
     assert w.manager.has_pending_subagent_notifications(w.owner)
-    assert len(w.released) == 1
+    assert not w.released
     if blocked == "human":
         w.admission["human"] = 0
         asyncio.run(_continue(w.manager, w.owner))
@@ -212,24 +229,28 @@ def test_runner_recovers_pending_and_accepts_worker_thread_results_without_brows
     assert w.delivered == ["persisted result", "worker-thread-child result"]
 
 
-def test_shutdown_cancels_wakeup_and_releases_parent_reservation(wakeup, monkeypatch):
+def test_observer_shutdown_keeps_accepted_wakeup_backend_shutdown_releases_it(wakeup, monkeypatch):
     import agent_loop
     import agent_subagent_notifications as notifications
     w = wakeup
 
     async def scenario():
-        started = asyncio.Event()
+        started = threading.Event()
 
         async def waiting(sid, **kwargs):
             started.set()
-            await asyncio.Event().wait()
-            yield {}
+            while not kwargs["should_stop"](sid):
+                await asyncio.sleep(.01)
+            if False:
+                yield {}
 
         monkeypatch.setattr(agent_loop, "astream_events_continuation", waiting)
         w.complete()
         await notifications.start_runner(w.manager)
-        await asyncio.wait_for(started.wait(), 4)
+        assert await asyncio.to_thread(started.wait, 4)
         await notifications.stop_runner()
+        assert w.admission["busy"]  # Only the observation task disconnected.
+        await w.control.close()
         assert not w.admission["busy"]
         assert len(w.released) == 1
         assert w.manager.has_pending_subagent_notifications(w.owner)

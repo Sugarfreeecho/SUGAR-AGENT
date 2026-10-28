@@ -1262,7 +1262,8 @@ def _subprocess_env_for_shell() -> Dict[str, str]:
             env["PYTHONIOENCODING"] = "utf-8"
     scratch = str(runtime_files.current_run(WORK_DIR).scratch_dir)
     env.update(TEMP=scratch, TMP=scratch, TMPDIR=scratch)
-    return env
+    from session_control.integration import child_environment
+    return child_environment(env)
 
 
 def _decode_byte_line(line: bytes) -> str:
@@ -4284,6 +4285,11 @@ def _url_safe_for_fetch(url: str) -> tuple[bool, str]:
 
 def _safe_redirect_target(current_url: str, location: str) -> tuple[Optional[str], str]:
     target = urljoin(current_url, location)
+    from session_control.integration import redirect_allowed
+    try:
+        redirect_allowed(target)
+    except ValueError as exc:
+        return None, str(exc)
     ok, err = _url_safe_for_fetch(target)
     if not ok:
         return None, err
@@ -4883,7 +4889,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "level": {"type": "string", "enum": ["info", "success", "warning", "error"], "description": "For notice: visual level, default info."},
             "duration_ms": {"type": "integer", "minimum": 0, "maximum": 30000, "description": "For notice: 1000–30000 milliseconds, default 8000; 0 keeps it visible until dismissed."},
             "format": {"type": "string", "enum": ["text", "markdown"], "description": "For text: default text. Markdown is rendered without executable HTML or remote image loading."},
-            "path": {"type": "string", "description": "For file: an existing file inside the current session workspace, relative or absolute."},
+            "path": {"type": "string", "description": "For file: any existing local file for the user to view. Absolute paths may be outside the workspace; relative paths resolve from the current session workspace. Displaying a file does not require Agent file-read approval or return its contents to the model."},
             "attachment_id": {"type": "string", "description": "For image: attachmentId (sha256:...) returned by read_file or another image tool."},
             "data_url": {"type": "string", "description": "For image: alternative PNG/JPEG/WebP/GIF base64 data URL actually returned by a tool; at most 2 MiB. Exactly one image source."},
             "alt": {"type": "string", "maxLength": 200, "description": "Required accessible description for image."},

@@ -32,37 +32,35 @@ def _batch(rows):
 
 
 async def _continue(manager, owner):
-    """Return whether a busy or newly updated parent needs another attempt."""
-    import webui
-
-    run_id = "subagent-wakeup-" + uuid.uuid4().hex
-    token = await webui._reserve_session_chat_start_off_loop(owner, run_id)
-    if not token:
-        return True
-    batch = None
+    """Submit one durable wakeup per pending result batch."""
+    from session_control.public import host_client, stable_key, register_source_lifecycle
+    from session_control.errors import ControlError
+    meta = await asyncio.to_thread(manager._load_metadata, owner)
+    if not meta or meta.get("archived") or manager.is_interrupt_requested(owner):
+        return False
+    rows = await asyncio.to_thread(manager.prepare_pending_subagent_continuation, owner)
+    if not rows:
+        _failed_batches.pop(owner, None)
+        return False
+    batch = _batch(rows)
+    if _failed_batches.get(owner) == batch:
+        return False
+    def before(sid, _run_id, _request):
+        if not manager.prepare_pending_subagent_continuation(sid):
+            raise ControlError("intent_obsolete", "Child results were already consumed", status=409)
+    register_source_lifecycle("@runtime/subagents", before=before)
+    client = host_client("@runtime/subagents", session_ids=[owner], runtime=True,
+        capabilities=["session.continue", "operation.cancel"])
     try:
-        meta = await asyncio.to_thread(manager._load_metadata, owner)
-        if not meta or meta.get("archived") or manager.is_interrupt_requested(owner):
-            return False
-        if await asyncio.to_thread(webui._session_pending_human_count, owner):
-            return True
-        rows = await asyncio.to_thread(manager.prepare_pending_subagent_continuation, owner)
-        if not rows:
-            _failed_batches.pop(owner, None)
-            return False
-        batch = _batch(rows)
-        if _failed_batches.get(owner) == batch or manager.is_interrupt_requested(owner):
-            return False
-        from agent_loop import astream_events_continuation
-        async for _event in astream_events_continuation(
-            owner, run_id=run_id,
-            should_stop=lambda sid: manager.is_interrupt_requested(sid, run_id),
-        ):
-            pass
+        operation = await client.call("session.continue", {"session_id": owner,
+            "_respect_stop": True, "_continuation_source": "subagent-results",
+            "_require_pending_subagents": True},
+            key=stable_key("subagent-wakeup", [owner, sorted(batch)]), coalesce=True)
+        if operation["status"] == "queued" and client.service.callbacks.get("pending_human", lambda _: 0)(owner):
+            return True  # Backend now owns the queued wakeup.
+        await client.wait(operation["operation_id"])
         remaining = await asyncio.to_thread(manager.prepare_pending_subagent_continuation, owner)
         if remaining and _batch(remaining) <= batch:
-            # Empty model history or an early hook can leave delivery pending.
-            # Keep the output available without automatically retrying forever.
             _failed_batches[owner] = _batch(remaining)
             return False
         _failed_batches.pop(owner, None)
@@ -71,11 +69,8 @@ async def _continue(manager, owner):
         raise
     except Exception:
         log.exception("background subagent continuation failed: %s", owner)
-        if batch is not None:
-            _failed_batches[owner] = batch
+        _failed_batches[owner] = batch
         return False
-    finally:
-        webui._release_session_chat_start(owner, token)
 
 
 async def start_runner(manager):

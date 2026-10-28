@@ -793,6 +793,30 @@ def _blocked_tool_result(
     }
 
 
+def _tool_execution_error_result(
+    tool_call: Dict[str, Any],
+    error: Exception,
+) -> Dict[str, Any]:
+    """Keep unexpected execution failures attached to their original call."""
+    tool_name = str(tool_call.get("name") or "")
+    message = f"工具执行异常: {error}"
+    logger.error(message)
+    return {
+        "type": "tool",
+        "tool_name": tool_name,
+        "tool_args": tool_call.get("args") or {},
+        "tool_id": str(tool_call.get("id") or ""),
+        "tool_call_index": tool_call.get("index"),
+        "result": message,
+        "tool_detail_log": message,
+        "tool_detail_llm": message,
+        "tool_detail_ui": message,
+        "result_for_log": message,
+        "tool_failed": True,
+        "tool_status": _tool_result_status(tool_name, message, failed=True),
+    }
+
+
 def _unknown_tool_result(
     tool_name: str,
     tool_args: Dict[str, Any],
@@ -2265,7 +2289,8 @@ def _build_static_segments_for_session(
 
     from session_system_context import assemble_session_system_segments, effective_system_context_mode
 
-    metadata = session_meta if isinstance(session_meta, dict) else {}
+    from session_control.configuration import apply_metadata
+    metadata = apply_metadata(session_id, session_meta if isinstance(session_meta, dict) else {})
     replacement = effective_system_context_mode(metadata) == "replace"
     env_static = build_env_static(session_id or None, minimal=True) if replacement else build_env_static(session_id or None)
     segments = () if replacement else tuple(build_static_system_segments(
@@ -2273,7 +2298,7 @@ def _build_static_segments_for_session(
     ))
 
     return assemble_session_system_segments(
-        segments, env_static, session_meta if isinstance(session_meta, dict) else {},
+        segments, env_static, metadata,
     )
 
 
@@ -4183,6 +4208,7 @@ async def build_combined_tool_registry_for_session(
         from agent_subagent import filter_tools_for_session
         combined_tools = filter_tools_for_session(combined_tools, session_meta)
 
+    registration_started = time.perf_counter()
     registry = ToolRegistry()
     for definition in combined_tools:
         name = _model_tool_definition_name(definition)
@@ -4239,16 +4265,26 @@ async def build_combined_tool_registry_for_session(
             logger.warning("Duplicate tool registration was skipped: %s", exc)
         except ToolRegistryError as exc:
             logger.warning("Invalid tool registration was skipped: %s", exc)
+    if timing_callback is not None:
+        timing_callback("tool_registry_register", registration_started)
+    policy_started = time.perf_counter()
     _simplify_external_tool_names(registry, plugin_contracts_by_name, inherited_sources)
+    from session_control.configuration import active_config, filter_registry
+    filter_registry(registry, active_config(sid, session_meta))
     try:
         _, _, _, tool_context_window = resolve_executor_config_for_session(sid)
     except Exception:
         tool_context_window = None
+    if timing_callback is not None:
+        timing_callback("tool_registry_policy", policy_started)
+    disclosure_started = time.perf_counter()
     tool_search.assemble(
         registry,
         context_window=tool_context_window,
         pinned_names=agent_mcp.get_pinned_tool_names(),
     )
+    if timing_callback is not None:
+        timing_callback("tool_registry_disclosure", disclosure_started)
     return registry
 
 
@@ -5616,7 +5652,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                        "_last_tool_result_committed_perf", "_last_model_worker_done_perf"):
         state.pop(timing_key, None)
 
-    session_meta = dict(session_manager._load_metadata(state["session_id"]) or {})
+    from session_control.configuration import apply_metadata
+    session_meta = apply_metadata(state["session_id"], session_manager._load_metadata(state["session_id"]) or {})
     if session_meta.get("is_subagent"):
         # Legacy children may still inherit from a mutable parent. Freeze this
         # run's effective root before the parent can switch during execution.
@@ -5954,6 +5991,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     "registry": tool_registry,
                     "definitions": combined_tools,
                 }
+            _t_runtime_snapshot = time.perf_counter()
             runtime_config_revision = (static_revision, tool_revision, _static_key)
             last_prompt_runtime_config = state.get("_last_prompt_runtime_config")
             if (
@@ -5982,6 +6020,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             last_prompt_runtime_config["model_runtime"] = (
                 executor_runtime_snapshot_for_session(state["session_id"])
             )
+            _pre_api_timing_mark(pre_api_timings, "tool_runtime_snapshot", _t_runtime_snapshot)
             # Definition callbacks do not cover host loading, definition copies
             # or the fork runtime snapshot. Preserve those previously invisible
             # milliseconds without counting the nested callback spans twice.
@@ -6036,6 +6075,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             except Exception:
                 _msg_token_paths = {}
             _t_pre_api = time.perf_counter()
+            from session_control.configuration import _authority_check
+            _control_authority = _authority_check.get()
+            if _control_authority:
+                _control_authority()
             # Resolve at every LLM boundary.  The resolver's hot cache keeps
             # the unchanged path cheap, while a profile update invalidates the
             # session entry so the very next ReAct request uses the new model,
@@ -6520,6 +6563,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_call_index = tool_call.get("index")
                 tool_descriptor = tool_registry.resolve(tool_name)
                 execution_name = tool_descriptor.execution_name if tool_descriptor else tool_name
+                from session_control.integration import consume_tool_budget
+                try:
+                    consume_tool_budget(state)
+                except ValueError as exc:
+                    return _blocked_tool_result(tool_name, tool_args, tool_id, str(exc))
+                if tool_descriptor is not None:
+                    from session_control.configuration import constrain_call
+                    try:
+                        tool_args = constrain_call(state["session_id"], tool_descriptor, tool_args,
+                                                   session_work_root(session_meta), inject=False)
+                        tool_call["args"] = tool_args
+                    except ValueError as exc:
+                        return _blocked_tool_result(tool_name, tool_args, tool_id, str(exc))
                 if _runtime_v2_is_primary() and tool_descriptor is not None and tool_descriptor.effect != "read":
                     from runtime_v2.execution_journal import ExecutionJournal
                     uncertain = ExecutionJournal(session_manager.sessions_dir,
@@ -7016,6 +7072,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             "Approval could not be bound to the final tool request.",
                         )
 
+                # Recheck task authority and final arguments after approvals.
+                if tool_descriptor is not None:
+                    from session_control.configuration import constrain_call
+                    try:
+                        constrain_call(state["session_id"], tool_descriptor, tool_args,
+                                       security_workspace, inject=False)
+                    except ValueError as exc:
+                        return _blocked_tool_result(tool_name, tool_args, tool_id, str(exc))
                 # Run the final steer check before announcing that execution started.
                 await _raise_if_steer_requested(state, emit, "tool")
                 await _push_stream_event(state, {
@@ -7540,6 +7604,14 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         corrupted_length=len(tool_args[_STREAM_CORRUPTED_ARGUMENTS_KEY]),
                     )
                     return short_circuit(corrupted)
+                if tool_descriptor is not None:
+                    from session_control.configuration import constrain_call
+                    try:
+                        tool_args = constrain_call(state["session_id"], tool_descriptor, tool_args,
+                                                   session_work_root(session_meta))
+                        call["args"] = tool_args
+                    except ValueError as exc:
+                        return short_circuit(_blocked_tool_result(tool_name, tool_args, tool_id, str(exc)))
                 pre = await _dispatch_state_hook(
                     "PreToolUse",
                     state,
@@ -7912,6 +7984,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             llm_delta_seq = 0
             tool_delta_seq = 0
             turn = None
+            # A closed streamed call can run before the assistant turn arrives.
+            # Reset every iteration: 0 means the current batch is still unknown.
+            tool_calls_list = None
             streamed_this_call = False
             early_tool_detected = False
             seen_tool_call_ids: set = set()
@@ -7981,7 +8056,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 except _SteerRestartRequested:
                     raise
                 except Exception as e:
-                    r = e
+                    r = _tool_execution_error_result(tc, e)
                 early_tool_results[int(idx)] = r
                 # The tool may execute as soon as its streamed JSON arguments
                 # close, but its durable/live completed row must not overtake
@@ -9591,7 +9666,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         except _SteerRestartRequested:
                             raise
                         except Exception as e:
-                            r = e
+                            r = _tool_execution_error_result(tc, e)
                         return (tc, r)
 
                     tasks = [asyncio.create_task(run_one_with_tc(tc)) for tc in group_calls]
@@ -9752,17 +9827,6 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 _round_tool_post_total_ms = 0
                 for res in exec_results:
                     await _raise_if_steer_requested(state, emit, "tool")
-                    if isinstance(res, Exception):
-                        logger.error(f"工具执行异常: {res}")
-                        state["_react_ui_tool_fail_count"] = int(state.get("_react_ui_tool_fail_count", 0) or 0) + 1
-                        await _emit_live_metrics(state, emit)
-                        error_msg = ToolMessage(content=f"工具执行异常: {str(res)}", tool_call_id="unknown")
-                        work_messages.append(error_msg)
-                        llm_history.append(error_msg)
-                        _runtime_v2_append_model_message(state, error_msg)
-                        # 追加流式事件
-                        await _push_stream_event(state, {"type": "error", "content": f"工具执行异常: {str(res)}"}, emit=emit)
-                        continue
                     if res is None:
                         continue
 
@@ -10291,6 +10355,10 @@ async def _flush_file_tool_reviews(state: State, emit=None) -> None:
                 logger.warning('change review failure notification could not be committed', exc_info=True)
 
 
+from session_control.integration import managed_turn as _managed_control_turn
+
+
+@_managed_control_turn
 async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
     """Own scratch through successful, cancelled and failed ReAct execution."""
     with runtime_files.run_scope(WORK_DIR, str(state.get("session_id") or ""), str(state.get("_runtime_v2_run_id") or ""), cleanup=False) as owner:
@@ -10675,6 +10743,34 @@ def is_session_title_generation_pending(session_id: str) -> bool:
         return str(session_id or "").strip() in _TITLE_GENERATION_PENDING
 
 
+@local_operation("post_final_processing")
+def _finish_after_final_sync(state: State, timings: Dict[str, int]) -> State:
+    # The title model already runs in the background, but deciding whether to
+    # enqueue it can read workflow/metadata files. Keep that work, logging and
+    # history finalization off the loop that forwards the committed final.
+    started = time.perf_counter()
+    with local_step("title_check_after_final"):
+        schedule_session_title_generation(state)
+    timings["title_check_after_final"] = _timing_ms(started)
+    started = time.perf_counter()
+    with local_step("history_finish_after_final"):
+        state = finish(state)
+    timings["finish_after_final"] = _timing_ms(started)
+    return state
+
+
+async def _finish_after_final_off_loop(state: State, timings: Dict[str, int]) -> State:
+    started = time.perf_counter()
+    # This is awaited selected work, not a detached cleanup task: cancellation
+    # must settle its history writer before terminal commit or another turn.
+    state = await run_fact_commit(_finish_after_final_sync, state, timings)
+    timings["post_final_dispatch_overhead"] = max(
+        0, _timing_ms(started)
+        - timings["title_check_after_final"] - timings["finish_after_final"],
+    )
+    return state
+
+
 def finish(state: State) -> State:
     """最终处理：保存会话并输出最终结果；标题由独立后台任务生成。"""
     state = prepare_final_event(state)
@@ -11029,6 +11125,7 @@ async def astream_events(
         "_prompt_language": prompt_language,
     }
     _workflow_callbacks().call("initialize_state", state, prev_work_messages)
+    state["_runtime_v2_turn_id"] = str(user_operation_id or "").strip() or runtime_v2_run_id
     _workflow_callbacks().call("capture_dialogue",
         state,
         "user",
@@ -11187,6 +11284,8 @@ async def astream_events(
             _t_run_start = time.perf_counter()
             user_ui_type = "user_steer" if str(ui_user_event_type or "") == "user_steer" else "user"
             user_ui_event = {"type": user_ui_type, "content": ui_user_content if ui_user_content is not None else user_input}
+            if str(user_operation_id or "").strip():
+                user_ui_event["operation_id"] = str(user_operation_id).strip()
             from attachments.request_budget import walk_images
             from attachments.content import redact_image_payloads
             user_ui_event["content"] = redact_image_payloads(user_ui_event["content"])
@@ -11322,10 +11421,7 @@ async def astream_events(
                 final_timings["yield_after_final"] = _timing_ms(_t_final)
                 _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="chat")
                 stream_event_count_after_final = len(state["stream_events"])
-                schedule_session_title_generation(state)
-                _t_final = time.perf_counter()
-                state = finish(state)
-                final_timings["finish_after_final"] = _timing_ms(_t_final)
+                state = await _finish_after_final_off_loop(state, final_timings)
                 _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="chat")
                 _t_final = time.perf_counter()
                 for evt in state["stream_events"][stream_event_count_after_final:]:
@@ -11379,6 +11475,7 @@ async def astream_events(
                 )
             except Exception:
                 logger.debug("RunFailed Hook dispatch failed", exc_info=True)
+            logger.exception("Agent run failed: session=%s run=%s mode=chat", session_id, runtime_v2_run_id)
             terminal_event = {"type": "run_failed", "run_id": runtime_v2_run_id, "error": str(exc), "ephemeral": True}
             raise
         finally:
@@ -11763,10 +11860,7 @@ async def astream_events_continuation(
                 final_timings["yield_after_final"] = _timing_ms(_t_final)
                 _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "yield_after_final", final_timings["yield_after_final"], run_id=runtime_v2_run_id, mode="continuation")
                 stream_event_count_after_final = len(state["stream_events"])
-                schedule_session_title_generation(state)
-                _t_final = time.perf_counter()
-                state = finish(state)
-                final_timings["finish_after_final"] = _timing_ms(_t_final)
+                state = await _finish_after_final_off_loop(state, final_timings)
                 _pipeline_step_timing_log("final_pipeline_step_timing", session_id, "finish_after_final", final_timings["finish_after_final"], run_id=runtime_v2_run_id, mode="continuation")
                 _t_final = time.perf_counter()
                 for evt in state["stream_events"][stream_event_count_after_final:]:
@@ -11830,6 +11924,7 @@ async def astream_events_continuation(
             except Exception:
                 logger.debug("RunFailed Hook dispatch failed", exc_info=True)
             terminal_event = {"type": "run_failed", "error": str(exc), "ephemeral": True}
+            logger.exception("Agent run failed: session=%s run=%s mode=continuation", session_id, runtime_v2_run_id)
             raise
         finally:
             await _finalize_agent_run_lifecycle(

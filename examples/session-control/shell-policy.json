@@ -1,0 +1,8 @@
+{
+  "system_prompt": {"mode": "append", "text": "只运行获准的版本查询命令。"},
+  "tools": {"mode": "custom", "allow": [{"kind": "host", "owner": "core.tools", "name": "run_shell"}],
+    "bindings": [{"tool_ref": {"kind": "host", "owner": "core.tools", "name": "run_shell"},
+      "defaults": {"timeout_ms": 5000}, "fixed": {"workdir": ".", "run_in_background": false},
+      "constraints": [{"pointer": "/command", "kind": "enum", "values": ["git --version"]},
+        {"pointer": "/timeout_ms", "kind": "number", "min": 1, "max": 5000}]}]}
+}

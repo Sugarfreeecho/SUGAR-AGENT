@@ -1,0 +1,7 @@
+{
+  "name": "研究完成后汇总",
+  "trigger": {"kind": "event", "types": ["turn.completed"], "condition": {"field": "data.session_id", "op": "eq", "value": "SOURCE_SESSION_ID"}},
+  "target": {"mode": "existing", "session_id": "TARGET_SESSION_ID"},
+  "action": {"kind": "prompt", "text": "根据收到的研究完成事件汇总结果，引用来源。"},
+  "runtime_override": {"tools": {"mode": "custom", "allow": []}}
+}

@@ -228,9 +228,9 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             effect="control", arguments={"arguments": args, "previous_root": str(workspace.resolve())},
             metadata={"tool": name, "declared": True, "valid_directory": bool(target),
                       "previous_root": str(workspace.resolve())})
-    from execution_services.computer import tool_contract as computer_tool_contract
-    computer_contract = computer_tool_contract(name)
-    if computer_contract:
+    from host_tool_contracts import tool_contract as host_tool_contract
+    computer_contract = host_tool_contract(name)
+    if computer_contract.get("managed_by") == "computer-use":
         from agent_tools import _agent_protected_process_ids
         target = args.get("target") if isinstance(args.get("target"), dict) else {}
         pid = target.get("pid", args.get("pid"))
@@ -478,8 +478,6 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
     action = None
     effect = "read"
     if name in {"read_file", "ls", "list_dir", "glob", "grep"}:
-        action = "fs.read"
-    elif name == "show_user" and args.get("kind") == "file":
         action = "fs.read"
     elif name in {"write_file", "edit_file", "apply_patch"}:
         action, effect = "fs.write", "workspace_write"

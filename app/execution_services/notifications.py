@@ -35,30 +35,29 @@ async def _initialize_owner(service, owner):
 
 
 async def _continue(service, owner):
-    import webui
-    run_id = "job-wakeup-" + uuid.uuid4().hex
-    token = webui._reserve_session_chat_start(owner, run_id)
-    if not token:
+    from session_control.public import host_client, stable_key, register_source_lifecycle
+    from session_control.errors import ControlError
+    notices = await service.call(service.notices, owner)
+    if not notices or service.manager.is_interrupt_requested(owner):
         return
+    def before(sid, _run_id, _request):
+        if not asyncio.run(service.call(service.notices, sid)):
+            raise ControlError("intent_obsolete", "Background results were already consumed", status=409)
+    register_source_lifecycle("execution-tools", before=before)
+    client = host_client("execution-tools", session_ids=[owner],
+        capabilities=["session.continue", "operation.cancel"])
     try:
-        if not await service.call(service.notices, owner):
-            return
-        if service.manager.is_interrupt_requested(owner) or webui._session_pending_human_count(owner):
-            return
-        from agent_loop import astream_events_continuation
-        async for _event in astream_events_continuation(owner,
-            should_stop=lambda sid: service.manager.is_interrupt_requested(sid, run_id),
-            require_pending_subagents=False, run_id=run_id, continuation_source="tool-jobs"):
-            pass
+        operation = await client.call("session.continue", {"session_id": owner,
+            "_respect_stop": True, "_continuation_source": "tool-jobs"},
+            key=stable_key("job-wakeup", [owner, notices]), coalesce=True)
+        result = await client.wait(operation["operation_id"])
+        if result["status"] in {"failed", "unknown"}:
+            await service.call(service.stop_owner, owner, reason="job_wakeup_failed")
     except asyncio.CancelledError:
         raise
     except Exception:
         log.exception("background job continuation failed: %s", owner)
-        # Avoid repeatedly retrying a failed automatic run. Records/output are
-        # still available, and the next human turn can handle pending notices.
         await service.call(service.stop_owner, owner, reason="job_wakeup_failed")
-    finally:
-        webui._release_session_chat_start(owner, token)
 
 
 async def start_runner(service):

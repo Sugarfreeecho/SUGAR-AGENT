@@ -2,6 +2,17 @@
 from __future__ import annotations
 
 
+def session_ancestor_ids(owner, subagent_index):
+    """Walk ownership once, tolerating a damaged/cyclic subagent index."""
+    seen = {owner}
+    while owner in subagent_index:
+        owner = subagent_index[owner]
+        if owner in seen:
+            break
+        seen.add(owner)
+        yield owner
+
+
 def background_work_snapshot(manager, *, subagent_index=None) -> dict[str, dict[str, int]]:
     from agent_subagent import subagent_registry
     from execution_services import jobs
@@ -12,15 +23,6 @@ def background_work_snapshot(manager, *, subagent_index=None) -> dict[str, dict[
         subagent_index = load_index() if callable(load_index) else {}
     activity = {}
 
-    def ancestors(owner):
-        seen = {owner}
-        while owner in subagent_index:
-            owner = subagent_index[owner]
-            if owner in seen:
-                break
-            seen.add(owner)
-            yield owner
-
     def add(owner, field):
         counts = activity.setdefault(owner, {"background_jobs_running": 0, "subagent_running": 0})
         counts[field] += 1
@@ -28,7 +30,7 @@ def background_work_snapshot(manager, *, subagent_index=None) -> dict[str, dict[
     running_children = set(subagent_registry.running_runs())
     running_children.update(child for child in subagent_index if is_run_active(child))
     for child in running_children:
-        for parent in ancestors(child):
+        for parent in session_ancestor_ids(child, subagent_index):
             add(parent, "subagent_running")
     service = jobs._SERVICE
     if service is not None and service.manager is manager:
@@ -36,7 +38,7 @@ def background_work_snapshot(manager, *, subagent_index=None) -> dict[str, dict[
         for job in tuple(service.jobs.values()):
             if job.visible and job.status in jobs.ACTIVE:
                 add(job.owner, "background_jobs_running")
-                for parent in ancestors(job.owner):
+                for parent in session_ancestor_ids(job.owner, subagent_index):
                     add(parent, "background_jobs_running")
     return activity
 

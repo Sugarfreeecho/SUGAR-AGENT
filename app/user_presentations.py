@@ -87,10 +87,8 @@ def prepare_presentation(arguments, *, workspace):
         root = Path(workspace).resolve()
         path = Path(raw).expanduser()
         path = (path if path.is_absolute() else root / path).resolve()
-        if not path.is_relative_to(root):
-            raise ValueError("file must be inside the current session workspace; use read_file and an image attachment for an external image")
         if not path.is_file():
-            raise ValueError("file does not exist in the session workspace")
+            raise ValueError("file does not exist")
         out["path"] = str(path)
     else:
         plugin_id = _text(arguments, "plugin_id", 128).strip()

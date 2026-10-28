@@ -617,3 +617,54 @@ textarea.st-input.st-skill-sources { min-height: 56px; }
 }
 .st-skill-conflict-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .st-skill-conflict-actions .st-input { width: 180px; height: 28px; font-family: var(--st-mono); }
+
+/* Native schedules: neutral cards and a scrolling editor, shared across themes. */
+.st-schedule-toolbar, .st-schedule-item-head, .st-schedule-meta, .st-schedule-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.st-schedule-toolbar { margin-bottom: 16px; }
+.st-schedule-item { border: 1px solid var(--st-border); border-radius: 14px; padding: 18px; margin-bottom: 14px; min-width: 0; }
+.st-schedule-item-head { align-items: flex-start; }
+.st-schedule-item h3 { margin: 0 0 4px; font-size: var(--st-fs); overflow-wrap: anywhere; }
+.st-schedule-description { color: var(--st-text-2); margin: 14px 0; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.st-schedule-meta { justify-content: flex-start; flex-wrap: wrap; color: var(--st-text-2); font-size: var(--st-fs-xs); }
+.st-schedule-meta span { min-width: 0; overflow-wrap: anywhere; }
+.st-schedule-actions { justify-content: flex-end; flex-wrap: wrap; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--st-border-soft); gap: 4px; }
+.st-schedule-empty { padding: 50px 18px; text-align: center; border: 1px dashed var(--st-border); border-radius: 14px; }
+.st-schedule-empty svg, .st-schedule-empty p { color: var(--st-text-2); }
+.st-schedule-empty h3 { margin: 12px 0 4px; }
+.st-schedule-error { color: var(--st-danger); white-space: pre-wrap; overflow-wrap: anywhere; }
+.st-modal .st-box.form:has(.st-schedule-form) { width: 680px; max-height: min(900px, 92vh); border-radius: 20px; }
+.st-schedule-form { padding: 18px 0 8px; }
+.st-schedule-field { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; min-width: 0; }
+.st-schedule-field > span { color: var(--st-text-2); font-size: var(--st-fs-sm); }
+.st-schedule-form .st-card { margin: 16px 0; padding: 0 14px; border-radius: 16px; }
+.st-schedule-form .st-card .st-schedule-field { padding-left: 0; padding-right: 0; }
+.st-schedule-form > .st-schedule-field { padding: 0; margin-bottom: 16px; }
+textarea.st-input.st-schedule-prompt { min-height: 150px; font-family: var(--st-sans); font-size: var(--st-fs); border-radius: 14px; }
+.st-schedule-form .st-row { padding: 14px 0; }
+.st-schedule-form .st-ctl { min-width: 0; }
+.st-schedule-form .st-adv { margin: 18px 0 0; }
+.st-schedule-form .st-adv > .st-inner { padding: 0; }
+.st-schedule-weekdays { display: flex; flex-wrap: wrap; gap: 6px; }
+.st-schedule-weekdays label { cursor: pointer; position: relative; }
+.st-schedule-weekdays input { position: absolute; opacity: 0; width: 1px; }
+.st-schedule-weekdays span { display: block; border: 1px solid var(--st-border); border-radius: 8px; min-width: 32px; padding: 5px; text-align: center; }
+.st-schedule-weekdays input:checked + span { background: var(--st-primary); color: var(--st-primary-fg); }
+.st-schedule-weekdays input:focus-visible + span { outline: 2px solid var(--st-accent); }
+.st-schedule-tools { max-height: 220px; overflow-y: auto; margin: 8px 0 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.st-schedule-tool { display: flex; align-items: flex-start; gap: 7px; font-size: var(--st-fs-sm); overflow-wrap: anywhere; min-width: 0; }
+.st-schedule-tool small { display: block; color: var(--st-text-3); font-size: var(--st-fs-xs); }
+.st-schedule-history { padding: 16px 0; }
+.st-schedule-run { padding: 16px 0; border-bottom: 1px solid var(--st-border); overflow-wrap: anywhere; }
+.st-schedule-result { max-height: 240px; overflow-y: auto; white-space: pre-wrap; font: inherit; background: var(--st-surface); padding: 12px; border-radius: 10px; }
+.st-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+@media (max-width: 600px) {
+  .st-schedule-toolbar { align-items: flex-start; }
+  .st-schedule-toolbar .st-acts { flex-wrap: wrap; justify-content: flex-end; }
+  .st-modal .st-schedule-form .st-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .st-schedule-form .st-ctl { justify-content: flex-start; }
+  .st-schedule-form .st-ctl > .st-input { width: 100%; }
+  .st-schedule-tools { grid-template-columns: minmax(0, 1fr); }
+  .st-schedule-item { padding: 14px; }
+}

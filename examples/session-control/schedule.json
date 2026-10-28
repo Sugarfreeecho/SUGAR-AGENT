@@ -1,0 +1,8 @@
+{
+  "name": "每日研究进度",
+  "trigger": {"kind": "weekdays", "time": "09:00", "time_zone": "Asia/Shanghai"},
+  "target": {"mode": "existing", "session_id": "SESSION_ID"},
+  "action": {"kind": "prompt", "text": "根据当前研究资料整理进度、阻塞点和下一步。"},
+  "runtime_override": {"system_prompt": {"mode": "append", "text": "本轮只整理报告，不修改文件。"}, "read_only": true},
+  "misfire": "latest"
+}

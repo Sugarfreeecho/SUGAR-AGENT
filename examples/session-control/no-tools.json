@@ -1,0 +1,4 @@
+{
+  "system_prompt": {"mode": "replace", "text": "你是文本校对助手。直接返回修订后的文本。"},
+  "tools": {"mode": "custom", "allow": []}
+}

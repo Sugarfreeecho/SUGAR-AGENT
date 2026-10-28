@@ -23,7 +23,7 @@ class TransportContext:
     gateway_service: Optional[Any]
 
 
-def transport_context() -> TransportContext:
+def transport_context(source_id="") -> TransportContext:
     """Return the live session-control dependencies and shared gateway service.
 
     Importing ``webui`` lazily keeps this module importable in contexts that
@@ -32,13 +32,13 @@ def transport_context() -> TransportContext:
 
     import webui
 
-    gateway = getattr(webui, "_remote_control_gateway", None)
     dependencies = getattr(webui, "_control_dependencies", None)
     if dependencies is None:
         raise RuntimeError("remote control dependencies are not initialised")
+    from session_control.public import transport_service
     return TransportContext(
         dependencies=dependencies,
-        gateway_service=getattr(gateway, "service", None),
+        gateway_service=transport_service(source_id),
     )
 
 

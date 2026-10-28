@@ -1,12 +1,10 @@
 """Permission-checked host services available to isolated plugin workers."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import threading
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Sequence
 
 from plugins.models import PluginDefinition
@@ -14,8 +12,6 @@ from plugins.models import PluginDefinition
 
 logger = logging.getLogger(__name__)
 _reservation_lock = threading.RLock()
-_session_reservations: Dict[str, str] = {}
-_owner_runs: Dict[str, list[SessionRunRequest]] = {}
 _session_run_grants: Dict[str, tuple[str, frozenset[str], float]] = {}
 _TERMINAL_RUN_STATUSES = frozenset(
     {
@@ -35,13 +31,6 @@ class PluginHostServiceError(RuntimeError):
         super().__init__(message)
         self.status = int(status)
         self.code = str(code)
-
-
-@dataclass(frozen=True)
-class SessionRunRequest:
-    session_id: str
-    prompt: str
-    run_id: str
 
 
 def _declared_services(plugin: PluginDefinition) -> frozenset[str]:
@@ -76,194 +65,76 @@ def _session_is_active(session_id: str) -> bool:
     return False
 
 
-def _release_many(owner: str, session_ids: Sequence[str]) -> None:
-    with _reservation_lock:
-        for session_id in session_ids:
-            if _session_reservations.get(session_id) == owner:
-                _session_reservations.pop(session_id, None)
-        if owner not in _session_reservations.values():
-            _owner_runs.pop(owner, None)
-
-
-def _run_session_background(
-    owner: str,
-    request: SessionRunRequest,
-) -> None:
-    from agent_harness import session_manager
-    from agent_loop import astream_events
-
-    async def run() -> None:
-        async for _event in astream_events(
-            request.prompt,
-            session_id=request.session_id,
-            should_stop=lambda sid: session_manager.is_interrupt_requested(sid, request.run_id),
-            run_id=request.run_id,
-        ):
-            pass
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(run())
-    except Exception:
-        logger.exception(
-            "Plugin-started session run failed: session=%s run=%s",
-            request.session_id,
-            request.run_id,
-        )
-    finally:
-        try:
-            loop.close()
-        finally:
-            _release_many(owner, [request.session_id])
-
-
 def _sessions_run_many(
     plugin: PluginDefinition,
     action: Mapping[str, Any],
     *,
     authorized_session_ids: frozenset[str],
+    request_key: str,
 ) -> Dict[str, Any]:
     from agent_harness import session_manager
+    from session_control.public import host_client
+    from session_control.errors import ControlError
 
-    raw_sessions = action.get("sessions")
-    if not isinstance(raw_sessions, list) or not 1 <= len(raw_sessions) <= 8:
-        raise PluginHostServiceError(
-            400,
-            "invalid_service_request",
-            "sessions.run_many requires 1-8 session requests",
-        )
-    owner = f"{plugin.plugin_id}:{uuid.uuid4().hex}"
-    requests = []
-    seen = set()
-    for raw in raw_sessions:
-        if not isinstance(raw, Mapping):
+    rows = action.get("sessions")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 8:
+        raise PluginHostServiceError(400, "invalid_service_request", "sessions.run_many requires 1-8 requests")
+    requests, seen = [], set()
+    for row in rows:
+        if not isinstance(row, Mapping):
             raise PluginHostServiceError(400, "invalid_service_request", "Invalid session request")
-        session_id = str(raw.get("session_id") or "").strip()
-        prompt = str(raw.get("prompt") or "")
-        if not session_id or session_id in seen or not prompt.strip() or len(prompt) > 50_000:
+        sid, prompt = str(row.get("session_id") or "").strip(), str(row.get("prompt") or "")
+        if not sid or sid in seen or not prompt.strip() or len(prompt) > 50_000:
             raise PluginHostServiceError(400, "invalid_service_request", "Invalid session or prompt")
-        if session_manager.get_session_summary(session_id) is None:
-            raise PluginHostServiceError(404, "session_not_found", f"Session {session_id} was not found")
-        seen.add(session_id)
-        requests.append(
-            SessionRunRequest(
-                session_id=session_id,
-                prompt=prompt,
-                run_id=f"plugin-{plugin.plugin_id}-{uuid.uuid4().hex}",
-            )
-        )
-
-    session_ids = [item.session_id for item in requests]
+        if session_manager.get_session_summary(sid) is None:
+            raise PluginHostServiceError(404, "session_not_found", "Session not found: " + sid)
+        seen.add(sid)
+        requests.append({"session_id": sid, "message": prompt, "mode": "queue"})
     if not authorized_session_ids:
-        raise PluginHostServiceError(
-            403,
-            "session_run_grant_required",
-            "sessions.run_many requires a host-issued session grant",
-        )
-    if frozenset(session_ids) != authorized_session_ids:
-        raise PluginHostServiceError(
-            403,
-            "session_scope_denied",
-            "The session grant does not match the requested sessions",
-        )
-    with _reservation_lock:
-        busy = [
-            session_id
-            for session_id in session_ids
-            if session_id in _session_reservations or _session_is_active(session_id)
-        ]
-        if busy:
-            raise PluginHostServiceError(
-                409,
-                "session_busy",
-                f"Session is already running: {busy[0]}",
-            )
-        for session_id in session_ids:
-            _session_reservations[session_id] = owner
-        _owner_runs[owner] = list(requests)
-
-    threads = [
-        threading.Thread(
-            target=_run_session_background,
-            args=(owner, request),
-            name=f"plugin-session-{request.session_id[:12]}",
-            daemon=True,
-        )
-        for request in requests
-    ]
-    started = []
+        raise PluginHostServiceError(403, "session_run_grant_required", "A host-issued session grant is required")
+    if frozenset(seen) != authorized_session_ids:
+        raise PluginHostServiceError(403, "session_scope_denied", "Session grant does not match requested sessions")
     try:
-        for thread in threads:
-            thread.start()
-            started.append(thread)
-    except Exception as exc:
-        _release_many(owner, session_ids)
-        for request in requests[: len(started)]:
-            try:
-                session_manager.request_interrupt(
-                    request.session_id,
-                    request.run_id,
-                    reason="plugin_start_rollback",
-                )
-            except Exception:
-                logger.debug("Plugin session rollback interrupt failed", exc_info=True)
-        raise PluginHostServiceError(
-            503,
-            "service_start_failed",
-            "Could not start every reserved session",
-        ) from exc
-    return {
-        "service": "sessions.run_many",
-        "accepted": True,
-        "session_ids": session_ids,
-        "run_ids": [item.run_id for item in requests],
-    }
+        client = host_client(plugin.plugin_id, session_ids=sorted(seen),
+            capabilities=["session.send", "session.send_batch", "operation.cancel"])
+        result = client.blocking("session.send_batch", {"requests": requests}, key=request_key)
+    except ControlError as exc:
+        raise PluginHostServiceError(exc.status, exc.code, str(exc)) from exc
+    operations = result["operations"]
+    return {"service": "sessions.run_many", "accepted": True,
+            "session_ids": [row["session_id"] for row in operations],
+            "run_ids": [row["run_id"] for row in operations],
+            "operation_ids": [row["operation_id"] for row in operations],
+            "operations": operations}
 
 
 def release_plugin_leases(plugin_id: str, *, cancel_runs: bool = True) -> int:
-    """Release and optionally cancel every session run owned by one plugin."""
-
-    namespace = str(plugin_id or "").strip()
-    prefix = namespace + ":"
-    with _reservation_lock:
-        owners = {
-            owner
-            for owner in _session_reservations.values()
-            if owner.startswith(prefix)
-        }
-        requests = [request for owner in owners for request in _owner_runs.get(owner, [])]
-        for session_id, owner in list(_session_reservations.items()):
-            if owner in owners:
-                _session_reservations.pop(session_id, None)
-        for owner in owners:
-            _owner_runs.pop(owner, None)
-    if cancel_runs and requests:
-        from agent_harness import session_manager
-
-        for request in requests:
-            try:
-                session_manager.request_interrupt(
-                    request.session_id,
-                    request.run_id,
-                    reason="plugin_disabled",
-                )
-            except Exception:
-                logger.debug("Plugin-owned run cancellation failed", exc_info=True)
-    return len(requests)
+    from session_control.integration import application
+    app = application()
+    if app is None:
+        return 0
+    from session_control.public import source_state
+    source_state(plugin_id, False, app=app)
+    operations = app.store.source_operations(plugin_id)
+    if cancel_runs:
+        for operation in operations:
+            if operation["status"] == "queued":
+                app.store.update_operation(operation["id"], expected="queued", status="cancelled", delivery="cancelled")
+            else:
+                app.service.mark_cancelled(operation)
+                app.service.manager.request_interrupt(operation["session_id"], operation["run_id"], reason="plugin_disabled")
+    return len(operations)
 
 
 def release_all_plugin_leases(*, cancel_runs: bool = True) -> int:
-    with _reservation_lock:
-        plugin_ids = {
-            owner.split(":", 1)[0]
-            for owner in _session_reservations.values()
-            if ":" in owner
-        }
-    return sum(
-        release_plugin_leases(plugin_id, cancel_runs=cancel_runs)
-        for plugin_id in plugin_ids
-    )
+    from session_control.integration import application
+    app = application()
+    if app is None:
+        return 0
+    return sum(release_plugin_leases(row["id"], cancel_runs=cancel_runs)
+               for row in app.store.list("host_sources")
+               if not row["id"].startswith("@runtime/")
+               if not app.service.callbacks.get("source_enabled", lambda _: False)(row["id"]))
 
 
 def execute_host_actions(
@@ -285,7 +156,8 @@ def execute_host_actions(
     if not authorized_session_ids and str(trusted_session_id or "").strip():
         authorized_session_ids = frozenset({str(trusted_session_id).strip()})
     results = []
-    for action in actions:
+    from session_control.public import stable_key
+    for index, action in enumerate(actions):
         if not isinstance(action, Mapping):
             raise PluginHostServiceError(400, "invalid_host_action", "Host action must be an object")
         service = str(action.get("service") or "").strip()
@@ -301,6 +173,7 @@ def execute_host_actions(
                     plugin,
                     action,
                     authorized_session_ids=authorized_session_ids,
+                    request_key=stable_key("plugin-batch", [trusted_run_id or action.get("idempotency_key") or str(uuid.uuid4()), index, action]),
                 )
             )
         elif service.startswith("session_state.") or service == "session_events.append":

@@ -1,6 +1,21 @@
 """Small loop/lifecycle seams; feature implementation stays outside ReAct."""
+import threading
+
 from . import jobs
 from agent_local_timing import local_step
+
+_GUIDANCE_LOCK = threading.RLock()
+_GUIDANCE_PROVIDERS = set()
+
+
+def register_prompt_guidance(provider):
+    with _GUIDANCE_LOCK:
+        _GUIDANCE_PROVIDERS.add(provider)
+
+
+def unregister_prompt_guidance(provider):
+    with _GUIDANCE_LOCK:
+        _GUIDANCE_PROVIDERS.discard(provider)
 
 
 def prompt_guidance():
@@ -15,9 +30,15 @@ def prompt_guidance():
             "A signal's delivered flag alone does not prove interruption; inspect interruptVerified and terminal_read. "
             "Windows SIGINT may forcibly end owned child programs after Ctrl+C fails to restore the shell prompt; "
             "check forced/fallback. In-process shell commands have no separate termination target; explicit terminal_close stops the shell.")
-    from .computer import _MANAGER, GUIDANCE
-    if _MANAGER is not None and _MANAGER.state == "ready" and _MANAGER._plugin_enabled():
-        parts.append(GUIDANCE)
+    with _GUIDANCE_LOCK:
+        providers = tuple(_GUIDANCE_PROVIDERS)
+    for provider in providers:
+        try:
+            guidance = provider()
+            if guidance:
+                parts.append(guidance)
+        except Exception:
+            jobs.log.warning("Optional execution prompt guidance failed", exc_info=True)
     return "\n\n".join(parts)
 
 

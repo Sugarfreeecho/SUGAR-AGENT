@@ -415,7 +415,7 @@ async def invoke_plugin_tool(
 
         clean = dict(value)
         actions = clean.pop("_host_actions", None)
-        results = execute_host_actions(
+        results = await asyncio.to_thread(execute_host_actions,
             plugin_definition,
             actions,
             trusted_session_id=str(session_id or "").strip(),

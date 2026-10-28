@@ -1,0 +1,8 @@
+{
+  "system_prompt": {"mode": "append", "text": "你负责审查当前工作区的代码。先读取证据，引用文件路径，报告可以复现的问题。"},
+  "tools": {"mode": "custom", "allow": [{"kind": "host", "owner": "core.tools", "name": "read_file"}],
+    "bindings": [{"tool_ref": {"kind": "host", "owner": "core.tools", "name": "read_file"}, "required": true,
+      "constraints": [{"pointer": "/path", "kind": "path", "roots": ["$workspace"]}]}]},
+  "read_only": true,
+  "limits": {"timeout_seconds": 300, "max_tool_calls": 30}
+}

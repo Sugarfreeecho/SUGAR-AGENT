@@ -8,6 +8,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from tests.test_session_control import composed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 from execution_services.jobs import ExecutionService
@@ -47,45 +48,48 @@ def test_restart_preserves_job_record_and_never_replays_command(tmp_path):
     asyncio.run(run())
 
 
-def test_busy_to_idle_wakeup_uses_single_writer_and_system_notice(tmp_path, monkeypatch):
+def test_busy_to_idle_wakeup_uses_single_writer_and_system_notice(tmp_path, monkeypatch, composed):
     import agent_loop
+    import session_control.integration as integration
     from execution_services.notifications import _continue
     from execution_services.integration import consume_notices
+    from tests.test_session_control import new_session
+    from runtime_v2 import RuntimeHistoryOps
+    c = composed
+    monkeypatch.setattr(integration, "_application", c.control)
     service = ExecutionService()
-    service.manager = SimpleNamespace(is_interrupt_requested=lambda *args: False)
     monkeypatch.setattr(jobs, "_SERVICE", service)
     calls = []
-    reservation = {"busy": True}
-    fake_webui = SimpleNamespace(
-        _reserve_session_chat_start=lambda *args: None if reservation["busy"] else "token",
-        _release_session_chat_start=lambda *args: calls.append("released"),
-        _session_pending_human_count=lambda owner: 0)
-    monkeypatch.setitem(sys.modules, "webui", fake_webui)
-    state = {"session_id": "owner", "llm_history": [], "work_messages": []}
-    async def continuation(owner, **kwargs):
-        calls.append(kwargs["continuation_source"])
-        assert kwargs["require_pending_subagents"] is False
-        assert await consume_notices(state, lambda *args: None)
-        yield {"type": "final"}
-    monkeypatch.setattr(agent_loop, "astream_events_continuation", continuation)
     async def run():
-        # In-memory unit test, not a production persistence binding.
-        service.manager = None
-        job = await service.call(service.admit, "owner", "process", "done")
+        sid = await new_session(c)
+        state = {"session_id": sid, "llm_history": [], "work_messages": []}
+        job = await service.call(service.admit, sid, "process", "done")
         await service.call(service.settle, job)
-        service.manager = SimpleNamespace(is_interrupt_requested=lambda *args: False)
+        service.manager = c.manager
         async def no_persist(*args):
             pass
         monkeypatch.setattr(service, "persist", no_persist)
-        await _continue(service, "owner")
-        assert await service.call(service.notices, "owner")
-        reservation["busy"] = False
-        await _continue(service, "owner")
-        assert calls.count("tool-jobs") == 1
-        assert not await service.call(service.notices, "owner")
+        async def continuation(owner, **kwargs):
+            calls.append(kwargs["continuation_source"])
+            assert kwargs["require_pending_subagents"] is False
+            assert await consume_notices(state, lambda *args: None)
+            RuntimeHistoryOps(c.manager.sessions_dir, path_resolver=c.manager._resolve_session_path).commit_assistant_final(
+                sid, "done", operation_id="final:" + kwargs["run_id"], run_id=kwargs["run_id"])
+            yield {"type": "final", "content": "done"}
+        c.service.callbacks["continue"] = continuation
+        await c.control.start()
+        c.active[sid] = "browser"
+        pending = asyncio.create_task(_continue(service, sid))
+        await asyncio.sleep(.6)
+        assert not calls and await service.call(service.notices, sid)
+        assert any(op["status"] == "queued" and op["method"] == "session.continue" for op in c.store.operations(session_id=sid))
+        c.active.pop(sid)
+        await asyncio.wait_for(pending, 5)
+        assert calls == ["tool-jobs"] and not await service.call(service.notices, sid)
         assert all(isinstance(message, agent_loop.SystemMessage) for message in state["llm_history"])
-        await _continue(service, "owner")
-        assert calls.count("tool-jobs") == 1
+        await _continue(service, sid)
+        assert calls == ["tool-jobs"]
+        await c.control.close()
         await service.shutdown()
     asyncio.run(run())
 

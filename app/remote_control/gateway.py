@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from session_control.errors import ControlError
 
 from .config import RemoteControlConfig
 from .protocol import ProtocolError, event_frame, parse_request, response_error, response_ok
@@ -447,7 +448,7 @@ class RemoteControlGateway:
                     await outbound.put(response_ok(frame.request_id, result, replayed=replayed))
                 except ProtocolError as exc:
                     await outbound.put(response_error(exc.request_id, exc.code, exc.message))
-                except RemoteControlError as exc:
+                except (RemoteControlError, ControlError) as exc:
                     await asyncio.to_thread(
                         self.store.audit,
                         principal_id=principal.device_id,

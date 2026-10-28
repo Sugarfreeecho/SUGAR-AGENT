@@ -97,6 +97,13 @@ async def execute_prepared(prepared, cwd, spawn_kw, command, timeout, background
                 await service.call(service.kill, owner, identifier, "run interrupted")
                 raise asyncio.CancelledError()
             if time.monotonic() >= deadline:
+                from session_control.integration import shell_background_allowed
+                if not shell_background_allowed():
+                    await service.call(service.kill_foreground, owner, identifier, "background execution forbidden by task configuration")
+                    snapshot = await service.call(service.foreground_snapshot, identifier)
+                    text = "Error: Command timed out; background execution is disabled for this task."
+                    await report("failed", text, snapshot)
+                    return text
                 snapshot = await service.call(service.foreground_snapshot, identifier, promote=True)
                 text = f"Command still running; promoted to background job {identifier}\nCollect with job_output(job_id=\"{identifier}\")."
                 await report("running" if not snapshot["done"] else snapshot["job"]["status"], text, snapshot)

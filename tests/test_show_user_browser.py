@@ -100,6 +100,54 @@ def test_webpage_uses_existing_browser_and_reopen_is_one_tab(presentation_page):
     assert not errors, [str(e) for e in errors]
 
 
+@pytest.mark.parametrize('path', ['E:/outside/目录外 report.txt', '/home/outside/目录外 report.txt'])
+def test_external_file_uses_native_path_and_its_own_context(presentation_page, path):
+    from urllib.parse import parse_qs, urlsplit
+    page, _, errors, _ = presentation_page
+    page.add_script_tag(content=(ROOT / 'frontend/src/app/config.js').read_text(encoding='utf-8').replace('export function', 'function'))
+    requests = []
+    def serve(route):
+        requests.append(parse_qs(urlsplit(route.request.url).query))
+        route.fulfill(content_type='application/json', body='{"ok":true,"text":"用户查看的正文","truncated":false}')
+    page.route('**/api/workspace-file-text*', serve)
+    page.evaluate("path => {window.__WORK_DIR__='Z:/missing-workspace';presentation.presentation={...presentation.presentation,kind:'file',path}}", path)
+    _render(page)
+    page.wait_for_function("document.querySelector('.dock-doc-content pre')?.textContent==='用户查看的正文'")
+    assert page.locator('[data-dock-file-rel]').get_attribute('data-dock-file-rel') == path
+    assert requests[0]['rel'] == [path]
+    assert requests[0]['work_dir'] == [path.rsplit('/', 1)[0] + '/']
+    assert 'session_id' not in requests[0]
+    page.locator('.show-user-open').click()
+    assert page.locator('[data-dock-file-rel]').count() == 1
+    assert not errors, [str(e) for e in errors]
+
+
+def test_external_html_resolves_sibling_assets_and_source_view(presentation_page):
+    from urllib.parse import unquote, urlsplit
+    page, _, errors, _ = presentation_page
+    page.add_script_tag(content=(ROOT / 'frontend/src/app/config.js').read_text(encoding='utf-8').replace('export function', 'function'))
+    assets = []
+    def serve_asset(route):
+        path = unquote(urlsplit(route.request.url).path)
+        assets.append(path)
+        if path.endswith('style.css'):
+            route.fulfill(content_type='text/css', body='h1{color:rgb(1,2,3)}')
+        else:
+            route.fulfill(content_type='text/html; charset=utf-8', body='<link rel="stylesheet" href="style.css"><h1>目录外页面</h1>')
+    page.route('**/api/workspace-assets/**', serve_asset)
+    page.route('**/api/workspace-file-text*', lambda route: route.fulfill(content_type='application/json', body='{"ok":true,"text":"<h1>目录外页面</h1>"}'))
+    page.evaluate("presentation.presentation={...presentation.presentation,kind:'file',path:'/home/outside/report.html'}")
+    _render(page)
+    frame = page.frame_locator('[data-dock-doc-frame]')
+    frame.locator('h1').wait_for()
+    assert frame.locator('h1').evaluate("el=>getComputedStyle(el).color") == 'rgb(1, 2, 3)'
+    assert assets == ['/api/workspace-assets//home/outside/report.html', '/api/workspace-assets//home/outside/style.css']
+    page.wait_for_function('dockRightPageHost.frame===null')
+    page.locator('[data-dock-doc-source-toggle]').click()
+    assert page.locator('.dock-doc-content pre').inner_text() == '<h1>目录外页面</h1>'
+    assert not errors, [str(e) for e in errors]
+
+
 def test_image_in_details_loads_and_text_is_not_html(presentation_page):
     page, _, errors, _ = presentation_page
     output = BytesIO()

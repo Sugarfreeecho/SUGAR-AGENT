@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import re
 import sys
 import threading
 import time
@@ -846,7 +847,7 @@ def test_frontend_open_session_acknowledgement_blocks_stale_unread_snapshots():
     assert "shouldSuppressSessionUnreadSnapshot(session)" in store_source
     assert "const appliedSession = sessionStore.get(sess.id) || sess;" in sessions_source
     assert "var isSelectedSession = String(sessionId) === String(currentSessionId || '')" in sessions_source
-    assert "clearSessionUnreadState(sessionId);\n        return true;" in sessions_source
+    assert re.search(r"clearSessionUnreadState\(sessionId\);\n[ \t]+return true;", sessions_source)
     assert "clearSessionUnreadState(sessionId, { expectedRunId: runId })" in (
         ROOT / "frontend/src/app/state/session-event-reducer.js"
     ).read_text(encoding="utf-8")

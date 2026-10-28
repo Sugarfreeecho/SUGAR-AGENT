@@ -3659,6 +3659,7 @@ class SessionManager:
         self.repository = SessionRepository(sessions_dir, self._resolve_session_path)
         self.event_log = SessionEventLog(self.repository)
         self._lock = threading.Lock()
+        self._control_creation_lock = threading.Lock()
         self._metadata_session_locks: Dict[str, threading.Lock] = {}
         self._metadata_session_locks_guard = threading.Lock()
         self._interrupt_cache: Dict[str, Tuple[bool, str, str]] = {}
@@ -3698,6 +3699,11 @@ class SessionManager:
         fields: Iterable[str],
     ) -> None:
         changed_fields = frozenset(str(field) for field in fields if str(field))
+        try:
+            from session_control.integration import summary_changed
+            summary_changed(self, session_id, changed_fields)
+        except Exception:
+            logger.exception("session control lifecycle notification failed for %s", session_id)
         with self._session_state_listener_lock:
             listeners = list(self._session_state_listeners)
         for listener in listeners:
@@ -6824,6 +6830,10 @@ class SessionManager:
                 return metadata
             metadata["system_context"] = value
             metadata["system_context_mode"] = selected_mode
+            if isinstance(metadata.get("session_runtime_config"), dict):
+                metadata["session_runtime_config"] = {
+                    **metadata["session_runtime_config"], "system_prompt": {"mode": selected_mode, "text": value}}
+                metadata["runtime_config_revision"] = int(metadata.get("runtime_config_revision", 0)) + 1
             metadata["updated_at"] = datetime.now().isoformat()
             self._save_metadata_unlocked(sid, metadata)
         return metadata
@@ -6931,6 +6941,15 @@ class SessionManager:
             # Freeze this child's instructions at creation, just like its root.
             metadata["system_context"] = effective_system_context(parent_metadata)
             metadata["system_context_mode"] = effective_system_context_mode(parent_metadata)
+            from session_control.configuration import active_config
+            inherited_config = active_config(parent_id, parent_metadata)
+            from session_control.configuration import _active
+            inherited_scope = _active.get()
+            if isinstance(parent_metadata.get("session_runtime_config"), dict) or (inherited_scope and inherited_scope[0] == parent_id):
+                metadata["session_runtime_config"] = json.loads(json.dumps(inherited_config))
+                metadata["system_context"] = inherited_config["system_prompt"]["text"]
+                metadata["system_context_mode"] = inherited_config["system_prompt"]["mode"]
+                metadata["runtime_config_revision"] = int(parent_metadata.get("runtime_config_revision", 0))
             parent_auth = parent_metadata.get("authorized_dirs")
             if isinstance(parent_auth, list) and parent_auth:
                 metadata["authorized_dirs"] = [str(x) for x in parent_auth if str(x).strip()]
@@ -7232,10 +7251,20 @@ class SessionManager:
         if reserve is not None:
             reserve.stop()
 
+    def create_session_with_id(self, session_id: str, **kwargs):
+        """Materialize a previously admitted identity without duplicating a retry."""
+        sid = str(uuid.UUID(str(session_id)))
+        with self._control_creation_lock:
+            if self._get_metadata_path(sid).is_file():
+                return sid
+            self._create_new_session(control_session_id=sid, **kwargs)
+        return sid
+
     def _create_new_session(
         self, *, model_profile_id: str = "", draft: bool = False,
         work_dir: str = "", system_context: str = "", standby: bool = False,
         system_context_mode: str = "append",
+        control_session_id: str = "",
     ) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
         from session_system_context import validate_system_context
 
@@ -7250,10 +7279,10 @@ class SessionManager:
             requested_work_dir = ""
         create_started = time.perf_counter()
         reserve = self._session_draft_reserve
-        reserved_id = reserve.take() if reserve is not None and not standby else None
+        reserved_id = reserve.take() if reserve is not None and not standby and not control_session_id else None
         if reserved_id and not (self.sessions_dir / reserved_id / "metadata.json").is_file():
             reserved_id = None
-        session_id = reserved_id or str(uuid.uuid4())
+        session_id = control_session_id or reserved_id or str(uuid.uuid4())
         uuid_ready = time.perf_counter()
         work_messages: List[dict] = []
         llm_history = []           # 新会话 llm_history 为空
@@ -8091,6 +8120,8 @@ class SessionManager:
         interrupt_reason = str(reason or "user").strip() or "user"
         if not sid:
             return
+        from session_control.integration import session_stopped
+        session_stopped(self, sid, interrupt_reason)
         if self._is_deleted_session(sid):
             return
         with self._session_metadata_lock(sid):
@@ -8436,6 +8467,10 @@ def resolve_executor_candidates_for_session(
         except Exception:
             meta = {}
         if isinstance(meta, dict):
+            from session_control.configuration import _active
+            current_config = _active.get()
+            if current_config and current_config[0] == sid:
+                meta = {**meta, **{key: current_config[1][key] for key in ("model_profile_id", "reasoning_effort") if key in current_config[1]}}
             if reasoning_effort_override is None:
                 reasoning_effort_override = str(meta.get("reasoning_effort") or "")
             if profile_id_override is None:
@@ -8513,6 +8548,10 @@ def _build_executor_config_for_session(sid: str) -> Tuple[Any, str, int, int]:
         meta = session_manager._load_metadata(sid)
     except Exception:
         meta = {}
+    from session_control.configuration import _active
+    scoped = _active.get()
+    if scoped and scoped[0] == sid:
+        meta = {**(meta or {}), **{key: scoped[1][key] for key in ("model_profile_id", "reasoning_effort") if key in scoped[1]}}
     profile_id = ""
     if isinstance(meta, dict):
         profile_id = str(meta.get("model_profile_id") or "").strip()
@@ -8558,6 +8597,10 @@ def _build_executor_config_for_session(sid: str) -> Tuple[Any, str, int, int]:
 def resolve_executor_config_for_session(session_id: str) -> Tuple[Any, str, int, int]:
     """Resolve executor client/model plus per-session model limits."""
     sid = (session_id or "").strip()
+    from session_control.configuration import _active
+    current_config = _active.get()
+    if current_config and current_config[0] == sid and any(key in current_config[1] for key in ("model_profile_id", "reasoning_effort")):
+        return _build_executor_config_for_session(sid)
     if not sid:
         return _build_executor_config_for_session(sid)
     for _attempt in range(3):
