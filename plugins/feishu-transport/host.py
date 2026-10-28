@@ -29,7 +29,7 @@ if str(_PLUGIN_ROOT) in sys.path:
 
 
 async def start(context, _plugin):
-    ctx = transport_context()
+    ctx = transport_context("feishu-transport")
     runtime = FeishuRuntimeManager(
         FeishuConfig.from_env(context["project_root"]),
         ctx.dependencies,

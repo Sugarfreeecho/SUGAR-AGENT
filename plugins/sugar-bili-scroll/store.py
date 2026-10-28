@@ -41,7 +41,7 @@ class Store:
                     run_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, policy TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 1, comments INTEGER NOT NULL DEFAULT 0,
                     pictures INTEGER NOT NULL DEFAULT 0, emotes INTEGER NOT NULL DEFAULT 0,
-                    created REAL NOT NULL);
+                    coins INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS bindings(
                     kind TEXT NOT NULL, key TEXT NOT NULL, session_id TEXT NOT NULL,
                     PRIMARY KEY(kind,key));
@@ -55,6 +55,10 @@ class Store:
                     uid TEXT PRIMARY KEY, credential TEXT NOT NULL, updated REAL NOT NULL,
                     error TEXT NOT NULL DEFAULT '');
             """)
+            # 老库补列：coins 是后加的计数，不补的话已有任务第一次投币会报 no such column。
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(runs)")}
+            if "coins" not in columns:
+                db.execute("ALTER TABLE runs ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
             db.execute("BEGIN IMMEDIATE")
             yield db
             db.commit()
@@ -177,11 +181,14 @@ class Store:
 
     def finish(self, key, status, error="", result=None, *, retry_delay=60):
         with self.db() as db:
-            row = db.execute("SELECT attempts FROM jobs WHERE key=?", (key,)).fetchone()
+            row = db.execute("SELECT attempts,result FROM jobs WHERE key=?", (key,)).fetchone()
+            result = dict(result or {})
+            if row and "_control_retry" in json.loads(row[1]):
+                result["_control_retry"] = json.loads(row[1])["_control_retry"]
             if status == "retry":
                 status = "pending" if row and row[0] < 3 else "failed"
             db.execute("UPDATE jobs SET status=?,error=?,result=?,available=?,lease=0,updated=? WHERE key=?",
-                       (status, str(error)[:1000], dumps(result or {}), time.time()+retry_delay, time.time(), key))
+                       (status, str(error)[:1000], dumps(result), time.time()+retry_delay, time.time(), key))
             if status not in {"pending", "processing", "linked", "unknown"}:
                 for child in db.execute("SELECT key,result FROM jobs WHERE status='linked'").fetchall():
                     if json.loads(child["result"]).get("coalesced_into") == key:
@@ -194,6 +201,11 @@ class Store:
                                    "WHERE key=? AND status IN ('failed','skipped')",
                                    (time.time(), time.time(), key)).rowcount)
             if changed:
+                row = db.execute("SELECT result FROM jobs WHERE key=?", (key,)).fetchone()
+                result = json.loads(row[0])
+                result["_control_retry"] = int(result.get("_control_retry", 0)) + 1
+                result.pop("operation_id", None)
+                db.execute("UPDATE jobs SET result=? WHERE key=?", (dumps(result), key))
                 db.execute("UPDATE outbox SET status='prepared' WHERE job_key=? AND status='failed'", (key,))
             return changed
 
@@ -282,7 +294,7 @@ class Store:
             db.execute("UPDATE runs SET active=0 WHERE run_id=?", (run_id,))
 
     def reserve(self, run_id, field, limit):
-        if field not in {"pictures", "comments", "emotes"}:
+        if field not in {"pictures", "comments", "emotes", "coins"}:
             raise ValueError("invalid run counter")
         with self.db() as db:
             return bool(db.execute(f"UPDATE runs SET {field}={field}+1 WHERE run_id=? AND active=1 AND {field}<?",

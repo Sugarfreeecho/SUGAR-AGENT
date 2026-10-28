@@ -15,6 +15,10 @@ from execution_services.jobs import ACTIVE
 from execution_services.terminals import terminal_manager
 from tool_result_status import legacy_tool_outcome
 
+# 记录最近一次 install 的插件内容签名：重载时宿主先装新版本再停旧版本，
+# 旧版本据此判断"自己已被接替"，不要把宿主执行服务里的任务和终端一起收掉。
+_ROUTE_SIGNATURE_KEY = "execution_tools_route_signature"
+
 _SCHEMAS = {}
 
 
@@ -153,9 +157,10 @@ def install(app, context, plugin):
         return value
 
     @router.get("/sessions/{session_id}/jobs")
-    async def jobs(session_id: str):
+    async def jobs(session_id: str, include_descendants: bool = False, active_only: bool = False):
         service = checked(session_id)
-        return {"jobs": await service.call(service.list_jobs, session_id)}
+        return {"jobs": await service.call(service.list_jobs, session_id,
+            include_descendants=include_descendants, active_only=active_only)}
 
     @router.get("/sessions/{session_id}/jobs/{job_id}/output")
     async def output(session_id: str, job_id: str, offset: int = 0):
@@ -256,7 +261,19 @@ def install(app, context, plugin):
         return {"shells": [{"name": name, "path": shutil.which(name)} for name in candidates if shutil.which(name)],
                 "userTerminalPrivileges": "system_user", "maxTerminals": 8}
 
+    # 热重载：先摘掉上一轮注册的同名 APIRoute。include_router 会复制 route 对象，
+    # 且 FastAPI 先注册先匹配，不摘掉旧处理器就会一直赢。
+    from fastapi.routing import APIRoute
+
+    stale_paths = {route.path for route in router.routes}
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not isinstance(route, APIRoute)
+        or getattr(route, "path", "") not in stale_paths
+    ]
+    app.openapi_schema = None
     app.include_router(router)
+    setattr(app.state, _ROUTE_SIGNATURE_KEY, str(getattr(plugin, "content_signature", "") or ""))
 
 
 async def start(context, plugin):
@@ -269,7 +286,15 @@ async def start(context, plugin):
 
 async def stop(context, plugin):
     from execution_services.notifications import stop_runner
+
     await stop_runner()
+    # 热重载时宿主先 install 新版本、再 stop 旧版本：状态里的签名已经不是本模块的，
+    # 说明有新版本接手。任务与终端属于宿主执行服务，不随之销毁，交给新模块继续用。
+    # 只有真正停用或移除（没有新版本接手）才收尾，停用会打断任务，这是刻意的。
+    app = context.get("app") if hasattr(context, "get") else None
+    installed = str(getattr(getattr(app, "state", None), _ROUTE_SIGNATURE_KEY, "") or "")
+    if installed and installed != str(getattr(plugin, "content_signature", "") or ""):
+        return
     service = execution_service(context["session_manager"])
     async def clean():
         owners = {j.owner for j in service.jobs.values() if j.status in ACTIVE}

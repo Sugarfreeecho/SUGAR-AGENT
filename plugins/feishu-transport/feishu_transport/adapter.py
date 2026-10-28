@@ -9,6 +9,8 @@ import time
 from typing import Any, Callable
 
 from remote_control.service import RemoteControlError, SessionControlService
+from session_control.errors import ControlError
+from session_control.service import TERMINAL
 from remote_control.store import DevicePrincipal
 
 from .config import FeishuConfig
@@ -111,7 +113,7 @@ class FeishuTransportAdapter:
         "• /approve <审批ID>：允许工具执行\n"
         "• /reject <审批ID>：拒绝工具执行\n"
         "• /help：显示帮助\n"
-        "普通文本会发送到当前会话；会话运行中时会作为 append steer 排队。"
+        "普通文本会持久排队发送到当前会话；运行结果由后端接收并投递。"
     )
 
     def __init__(
@@ -146,6 +148,8 @@ class FeishuTransportAdapter:
             asyncio.set_event_loop(loop)
             self._event_loop = loop
             self._loop_ready.set()
+            if getattr(self.service, "durable_operations", False):
+                loop.create_task(self._delivery_loop())
             loop.run_forever()
             pending = asyncio.all_tasks(loop)
             for task in pending:
@@ -276,7 +280,7 @@ class FeishuTransportAdapter:
             try:
                 await self.service.execute(principal, "session.get", {"session_id": sid})
                 return sid
-            except RemoteControlError as exc:
+            except (RemoteControlError, ControlError) as exc:
                 if exc.code != "session_not_found":
                     raise
                 stale_sid = sid
@@ -487,6 +491,14 @@ class FeishuTransportAdapter:
             return
 
         sid = await self._current_session(message, principal, create=True)
+        if getattr(self.service, "durable_operations", False):
+            row = {"session_id": sid, "text": text, "operation_id": "", "cursor": 0,
+                "principal": {"device_id": principal.device_id, "name": principal.name,
+                    "scopes": list(principal.scopes), "credential_kind": principal.credential_kind}}
+            await asyncio.to_thread(self.state_store.track_delivery, message.message_id, row)
+            # Admission and reply retry both use persistent records and stable IDs.
+            await self.pump_deliveries()
+            return
         ready = asyncio.Event()
         reply_ready = asyncio.Event()
         run_ref: dict[str, str] = {}
@@ -528,3 +540,47 @@ class FeishuTransportAdapter:
             relay_task.cancel()
             await asyncio.gather(relay_task, return_exceptions=True)
             raise
+
+    async def _delivery_loop(self):
+        while not self._stopping.is_set():
+            try:
+                await self.pump_deliveries()
+            except Exception:
+                logger.exception("Feishu durable delivery reconciliation failed")
+            await asyncio.sleep(.5)
+
+    async def pump_deliveries(self):
+        # A normal SDK callback and the background reconciler may overlap.
+        lock = getattr(self, "_delivery_lock", None)
+        if lock is None:
+            self._delivery_lock = lock = asyncio.Lock()
+        async with lock:
+            for row in await asyncio.to_thread(self.state_store.pending_deliveries):
+                mid = row["message_id"]
+                principal = DevicePrincipal(**{**row["principal"], "scopes": frozenset(row["principal"]["scopes"])})
+                try:
+                    if not row["operation_id"]:
+                        receipt, _ = await self.service.execute(principal, "session.send", {
+                            "session_id": row["session_id"], "message": row["text"], "mode": "queue"}, idempotency_key=mid)
+                        row["operation_id"] = receipt["operation_id"]
+                        await asyncio.to_thread(self.state_store.save_delivery, mid, row)
+                    if not row.get("acknowledged"):
+                        await self._reply(mid, "已收到，正在处理。", purpose="accepted")
+                        row["acknowledged"] = True
+                        await asyncio.to_thread(self.state_store.save_delivery, mid, row)
+                    receipt, _ = await self.service.execute(principal, "operation.get", {"id": row["operation_id"]})
+                    events = await self.service.event_page(principal, row["operation_id"], after=row["cursor"])
+                    for event in events:
+                        if event["type"] in {"approval_requested", "tool_approval_required"}:
+                            approval_id = str(event.get("approval_id") or "")
+                            if approval_id:
+                                await self._reply(mid, f"需要工具审批：{event.get('title') or event.get('tool') or '工具调用'}\n允许：/approve {approval_id}\n拒绝：/reject {approval_id}", purpose="approval:" + approval_id)
+                        row["cursor"] = event["cursor"]
+                    if events:
+                        await asyncio.to_thread(self.state_store.save_delivery, mid, row)
+                    if receipt["status"] in TERMINAL:
+                        text = receipt.get("content") if receipt["status"] == "succeeded" else "运行未完成：" + str((receipt.get("error") or {}).get("message") or receipt["status"])
+                        await self._reply(mid, text, purpose="result:" + row["operation_id"])
+                        await asyncio.to_thread(self.state_store.save_delivery, mid, row, completed=True)
+                except Exception as exc:
+                    await asyncio.to_thread(self.state_store.retry_delivery, mid, type(exc).__name__ + ": " + str(exc))

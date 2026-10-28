@@ -22,6 +22,18 @@
         },
         "bili_send_message": {
           "effect": "external_write"
+        },
+        "bili_watch_later_add": {
+          "effect": "external_write"
+        },
+        "bili_interact": {
+          "effect": "external_write"
+        },
+        "bili_cover": {
+          "effect": "workspace_write"
+        },
+        "bili_frame": {
+          "effect": "workspace_write"
         }
       }
     }

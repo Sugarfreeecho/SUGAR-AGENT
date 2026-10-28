@@ -79,6 +79,7 @@ async def execute_team_tool(
     parent_key_context: str = "",
     emit=None,
     parent_run_id: str = "",
+    parent_runtime_config: dict | None = None,
 ) -> str:
     """Execute a model ``team`` action with session-derived identity."""
 
@@ -109,6 +110,7 @@ async def execute_team_tool(
             parent_key_context=parent_key_context,
             emit=emit,
             parent_run_id=parent_run_id,
+            parent_runtime_config=parent_runtime_config,
         )
         return result
     if action == "dispatch":
@@ -122,6 +124,7 @@ async def execute_team_tool(
             parent_key_context=parent_key_context,
             emit=emit,
             parent_run_id=parent_run_id,
+            parent_runtime_config=parent_runtime_config,
         )
     if action == "remove_member":
         return _json_result(
@@ -162,6 +165,7 @@ async def execute_team_tool(
             parent_key_context=parent_key_context,
             emit=emit,
             parent_run_id=parent_run_id,
+            parent_runtime_config=parent_runtime_config,
         )
         created = dict(created)
         created["auto_scheduled"] = scheduled
@@ -201,6 +205,7 @@ async def execute_team_tool(
             parent_key_context=parent_key_context,
             emit=emit,
             parent_run_id=parent_run_id,
+            parent_runtime_config=parent_runtime_config,
         )
         updated = dict(updated)
         updated["auto_scheduled"] = scheduled
@@ -215,6 +220,7 @@ async def execute_team_tool(
                 emit=emit,
                 parent_run_id=parent_run_id,
                 force=True,
+                parent_runtime_config=parent_runtime_config,
             ),
         )
     if action == "send_message":
@@ -350,26 +356,36 @@ async def _dispatch_member(
     emit,
     parent_run_id: str,
     auto_continue: bool = True,
+    parent_runtime_config: dict | None = None,
 ) -> str:
     from agent_subagent import run_subagent_task
 
     team = service.read_team(root_id) or {}
+    if team.get("status") != "active":
+        raise AgentTeamError("team is not active")
     member = (team.get("members") or {}).get(member_id)
     if not isinstance(member, dict):
         raise AgentTeamError(f"member not found: {member_id}")
+    if member.get("removed") or member.get("state") not in {"idle", "starting"}:
+        raise AgentTeamError("member must be idle before dispatch")
     child_id = str(member.get("child_session_id") or "")
     if not child_id:
         raise AgentTeamError("member has no persistent child session")
     task = (team.get("tasks") or {}).get(task_id) if task_id else None
     if task_id and not isinstance(task, dict):
         raise AgentTeamError(f"task not found: {task_id}")
-    if task_id and not task.get("assignee_id"):
-        service.claim_task(root_id, task_id, member_id)
     role = str(member.get("role") or "team member")
     member_prompt = str(member.get("prompt") or "")
     assignment = prompt.strip() or (str(task.get("description") or task.get("title") or "") if task else "")
     if not assignment:
         raise AgentTeamError("dispatch requires prompt or task_id")
+    if task_id:
+        if task.get("assignee_id") and task.get("assignee_id") != member_id:
+            raise AgentTeamError("task is assigned to another member")
+        if task.get("status") in {"completed", "cancelled"}:
+            raise AgentTeamError("cannot dispatch a terminal task")
+        if not task.get("assignee_id"):
+            service.claim_task(root_id, task_id, member_id)
     full_prompt = (
         f"You are persistent Agent Team member {member.get('name')} ({member_id}), role: {role}.\n"
         f"Root team session: {root_id}.\n"
@@ -378,7 +394,7 @@ async def _dispatch_member(
         + "Use the team tool to read your inbox, coordinate, and update task status.\n"
         + f"Current assignment:\n{assignment}"
     )
-    service.set_member_state(root_id, member_id, "working", detail=assignment[:1000])
+    service.set_member_state(root_id, member_id, "working", detail=assignment[:1000], expected_states={"idle", "starting"})
     try:
         result = await run_subagent_task(
             tool_args={
@@ -392,29 +408,38 @@ async def _dispatch_member(
             parent_key_context=parent_key_context,
             emit=emit,
             parent_run_id=parent_run_id,
+            parent_runtime_config=parent_runtime_config,
         )
+        if str(result).startswith("Error:"):
+            raise AgentTeamError(str(result))
         if run_in_background:
             from agent_subagent import subagent_registry
             from agent_harness import session_manager
 
             async def monitor_background_member() -> None:
                 try:
-                    completed_result = await subagent_registry.wait(child_id)
+                    try:
+                        completed_result = await asyncio.shield(subagent_registry.wait(child_id))
+                    except asyncio.CancelledError:
+                        # Child cancellation must still settle the roster. A
+                        # cancelled monitor itself belongs to host shutdown.
+                        if subagent_registry.is_running(child_id):
+                            raise
+                        completed_result = None
                     current_team = await asyncio.to_thread(service.read_team, root_id)
                     current = (
                         ((current_team or {}).get("members") or {}).get(member_id) or {}
                     )
                     # A member that stopped to request permission must remain
                     # visibly blocked until the lead resolves and redispatches.
-                    if current.get("state") != "waiting_permission":
+                    if current.get("state") not in {"waiting_permission", "stopping", "stopped"} and not current.get("removed"):
                         metadata = (
                             await asyncio.to_thread(
                                 session_manager._load_metadata,
                                 child_id,
                             )
-                            if task_id
-                            else {}
                         )
+                        failed = str((metadata or {}).get("subagent_run_status") or "") in {"failed", "error"}
                         current_task = (
                             ((current_team or {}).get("tasks") or {}).get(task_id) or {}
                         )
@@ -437,15 +462,16 @@ async def _dispatch_member(
                             service.set_member_state,
                             root_id,
                             member_id,
-                            "idle",
+                            "failed" if failed else "idle",
                         )
-                        if auto_continue:
+                        if auto_continue and not failed:
                             await _auto_schedule_team(
                                 service,
                                 root_id,
                                 parent_key_context=parent_key_context,
                                 emit=emit,
                                 parent_run_id=parent_run_id,
+                                parent_runtime_config=parent_runtime_config,
                             )
                 except Exception as monitor_exc:
                     try:
@@ -494,7 +520,8 @@ async def _dispatch_member(
                     result=str(result or "")[:64_000],
                     detail="completed by automatic Team dispatch",
                 )
-            service.set_member_state(root_id, member_id, "idle")
+            if current_member.get("state") != "waiting_permission":
+                service.set_member_state(root_id, member_id, "idle")
             if auto_continue:
                 await _auto_schedule_team(
                     service,
@@ -502,6 +529,7 @@ async def _dispatch_member(
                     parent_key_context=parent_key_context,
                     emit=emit,
                     parent_run_id=parent_run_id,
+                    parent_runtime_config=parent_runtime_config,
                 )
         return _json_result(
             "dispatch",
@@ -513,6 +541,9 @@ async def _dispatch_member(
                 "result": result,
             },
         )
+    except asyncio.CancelledError:
+        service.set_member_state(root_id, member_id, "idle", detail="dispatch interrupted")
+        raise
     except Exception as exc:
         service.set_member_state(root_id, member_id, "failed", detail=str(exc))
         raise
@@ -526,6 +557,7 @@ async def _auto_schedule_team(
     emit,
     parent_run_id: str,
     force: bool = False,
+    parent_runtime_config: dict | None = None,
 ) -> list[dict]:
     """Claim ready tasks for idle members and wake their persistent sessions."""
     if not force and not _auto_schedule_enabled():
@@ -570,6 +602,7 @@ async def _auto_schedule_team(
                         emit=emit,
                         parent_run_id=parent_run_id,
                         auto_continue=True,
+                        parent_runtime_config=parent_runtime_config,
                     )
                     scheduled.append(
                         {

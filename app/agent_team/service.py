@@ -168,6 +168,7 @@ class AgentTeamService:
         state: str,
         *,
         detail: str = "",
+        expected_states: set[str] | None = None,
     ) -> dict:
         sid = clean_id(session_id, "session_id")
         mid = clean_id(member_id, "member_id")
@@ -182,7 +183,11 @@ class AgentTeamService:
             team = self._team_from_snapshot(snapshot)
             if team.get("status") in {"stopped", "archived"}:
                 raise AgentTeamConflictError("team is no longer mutable")
-            self._member(team, mid)
+            member = self._member(team, mid)
+            if expected_states is not None and member.get("state") not in expected_states:
+                raise AgentTeamConflictError("member state changed; refresh before dispatch")
+            if next_state == "working":
+                self._require_active(team)
 
         self.store.append_event(sid, "team_member_state_changed", payload, guard=guard)
         return self._required_team(sid)["members"][mid]
@@ -196,10 +201,12 @@ class AgentTeamService:
             if team.get("status") in {"stopped", "archived"}:
                 raise AgentTeamConflictError("team is no longer mutable")
             member = self._member(team, mid)
+            if member.get("state") in {"working", "stopping", "waiting_permission"}:
+                raise AgentTeamConflictError("interrupt the running member before removal")
             assigned = [
                 task_id
                 for task_id, task in (team.get("tasks") or {}).items()
-                if task.get("assignee_id") == mid and task.get("status") == "in_progress"
+                if task.get("assignee_id") == mid and task.get("status") in {"in_progress", "blocked"}
             ]
             if assigned:
                 raise AgentTeamConflictError(
@@ -293,6 +300,11 @@ class AgentTeamService:
         status: str,
         result: str = "",
         detail: str = "",
+        title: str | None = None,
+        description: str | None = None,
+        priority: str | None = None,
+        depends_on: Iterable[str] | None = None,
+        expected_seq: int | None = None,
     ) -> dict:
         sid = clean_id(session_id, "session_id")
         tid = clean_id(task_id, "task_id")
@@ -303,15 +315,42 @@ class AgentTeamService:
             "result": clean_text(result, "result", max_length=64_000, required=False),
             "detail": clean_text(detail, "detail", max_length=4000, required=False),
         }
+        if next_status == "pending":
+            payload["assignee_id"] = None
+        if title is not None:
+            payload["title"] = clean_text(title, "title", max_length=300)
+        if description is not None:
+            payload["description"] = clean_text(description, "description", max_length=32_000, required=False)
+        if priority is not None:
+            payload["priority"] = choice(priority, "priority", TASK_PRIORITIES)
+        if depends_on is not None:
+            payload["depends_on"] = list(dict.fromkeys(clean_id(value, "depends_on") for value in depends_on))
 
         def guard(snapshot: dict) -> None:
             team = self._team_from_snapshot(snapshot)
             if team.get("status") in {"stopped", "archived"}:
                 raise AgentTeamConflictError("team is no longer mutable")
             task = self._task(team, tid)
+            if expected_seq is not None and int(task.get("seq") or 0) != int(expected_seq):
+                raise AgentTeamConflictError("task changed; refresh before saving")
+            graph = team.get("tasks") or {}
+            for dependency in payload.get("depends_on", []):
+                if dependency not in graph:
+                    raise AgentTeamNotFoundError(f"dependency task not found: {dependency}")
+            visiting = list(payload.get("depends_on", []))
+            visited = set()
+            while visiting:
+                dependency = visiting.pop()
+                if dependency == tid:
+                    raise AgentTeamValidationError("task dependencies must not contain a cycle")
+                if dependency not in visited:
+                    visited.add(dependency)
+                    visiting.extend((graph.get(dependency) or {}).get("depends_on") or [])
             current_status = str(task.get("status") or "pending")
             if current_status in {"completed", "cancelled"} and next_status != current_status:
                 raise AgentTeamConflictError("terminal task status cannot be reopened")
+            if next_status == "in_progress" and not task.get("assignee_id"):
+                raise AgentTeamConflictError("claim the task before marking it in progress")
 
         self.store.append_event(sid, "team_task_updated", payload, guard=guard)
         return self._required_team(sid)["tasks"][tid]
@@ -418,8 +457,8 @@ class AgentTeamService:
             task = self._task(team, tid)
             if task.get("assignee_id") != mid:
                 raise AgentTeamConflictError("only the current assignee may release this task")
-            if task.get("status") != "in_progress":
-                raise AgentTeamConflictError("only an in-progress task may be released")
+            if task.get("status") not in {"in_progress", "blocked"}:
+                raise AgentTeamConflictError("only an in-progress or blocked task may be released")
 
         self.store.append_event(
             sid,
@@ -509,10 +548,10 @@ class AgentTeamService:
                 "team_message_delivery_failed": "failed",
             }[event_type]
             transitions = {
-                "queued": {"delivering", "delivered", "failed"},
-                "delivering": {"delivered", "failed"},
+                "queued": {"delivering", "delivered", "consumed", "failed"},
+                "delivering": {"delivered", "consumed", "failed"},
                 "delivered": {"consumed"},
-                "failed": {"delivering", "delivered"},
+                "failed": {"delivering", "delivered", "consumed"},
                 "consumed": set(),
             }
             if next_status != current and next_status not in transitions.get(current, set()):
@@ -553,6 +592,9 @@ class AgentTeamService:
             team = self._team_from_snapshot(snapshot)
             if team.get("status") != "shutting_down":
                 raise AgentTeamConflictError("team shutdown has not been requested")
+            if any(member.get("state") in {"working", "stopping", "waiting_permission"}
+                   for member in (team.get("members") or {}).values()):
+                raise AgentTeamConflictError("wait for or interrupt running members before completing shutdown")
 
         self.store.append_event(sid, "team_shutdown_completed", {}, guard=guard)
         return self._required_team(sid)

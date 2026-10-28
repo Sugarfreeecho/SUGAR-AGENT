@@ -1,6 +1,7 @@
 """Trusted lifecycle adapter for the bundled Goal workflow."""
 from __future__ import annotations
 
+import asyncio
 import json
 from functools import partial
 from typing import Any, Mapping
@@ -136,6 +137,8 @@ def tool_definitions(context, plugin):
 
 
 def install(app, context, plugin):
+    from plugin_page_assets import install_plugin_page_assets
+    install_plugin_page_assets(app)
     from agent_goal import goal_enabled, manager_for
 
     session_manager = context["session_manager"]
@@ -159,9 +162,10 @@ def install(app, context, plugin):
             if not bundled_host_plugin_enabled(plugin.plugin_id):
                 return JSONResponse({"enabled": False, "goal": None}, status_code=404)
             enabled = goal_enabled()
-            return JSONResponse(
-                {"enabled": enabled, "goal": manager_for(session_manager).get(session_id) if enabled else None}
-            )
+            if not await asyncio.to_thread(session_manager.get_session_summary, session_id):
+                return JSONResponse({"error": "session not found"}, status_code=404)
+            goal = await asyncio.to_thread(manager_for(session_manager).get, session_id) if enabled else None
+            return JSONResponse({"enabled": enabled, "goal": goal}, headers={"Cache-Control": "no-store"})
         except Exception as exc:
             return JSONResponse({"enabled": False, "goal": None, "error": str(exc)}, status_code=503)
 
@@ -171,15 +175,29 @@ def install(app, context, plugin):
 
         if not bundled_host_plugin_enabled(plugin.plugin_id):
             return JSONResponse({"ok": False, "error": "plugin disabled"}, status_code=404)
+        if not await asyncio.to_thread(session_manager.get_session_summary, session_id):
+            return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
         return await _control_goal(session_manager, session_id, action, request)
 
+    # 热重载：先摘掉上一轮注册的同名 APIRoute。include_router 会复制 route 对象，
+    # 且 FastAPI 先注册先匹配，不摘掉旧处理器就会一直赢。
+    from fastapi.routing import APIRoute
+
+    stale_paths = {route.path for route in router.routes}
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not isinstance(route, APIRoute)
+        or getattr(route, "path", "") not in stale_paths
+    ]
+    app.openapi_schema = None
     app.include_router(router)
 
 
 async def _control_goal(session_manager, session_id: str, action: str, request: Request):
     from agent_goal import manager_for
+    from agent_fact_commit import run_fact_commit
 
-    if action not in {"pause", "resume", "cancel", "edit", "delete", "review"}:
+    if action not in {"create", "pause", "resume", "cancel", "edit", "delete", "review"}:
         return JSONResponse({"ok": False, "error": "unknown action"}, status_code=400)
     try:
         try:
@@ -188,23 +206,30 @@ async def _control_goal(session_manager, session_id: str, action: str, request: 
             body = {}
         body = body if isinstance(body, dict) else {}
         manager = manager_for(session_manager)
-        if action == "review":
-            goal = manager.review_completion(
+        expected = {"expected_goal_id": str(body["expected_goal_id"])} if body.get("expected_goal_id") else {}
+        if action == "create":
+            operation = partial(manager.create, session_id, str(body.get("objective") or ""),
+                                body.get("token_budget"), actor="user")
+        elif action == "review":
+            operation = partial(manager.review_completion,
                 session_id, str(body.get("decision") or ""),
                 objective=str(body.get("objective") or ""),
                 judge_result=str(body.get("judge_result") or body.get("feedback") or ""),
                 additional_budget=body.get("additional_budget"), actor="user",
+                **expected,
             )
         else:
             kwargs = {"additional_budget": body.get("additional_budget"),
                       "reason": str(body.get("reason") or ""), "actor": "user"}
+            kwargs.update(expected)
             if action == "edit":
                 kwargs["objective"] = body.get("objective")
-            goal = manager.user_action(session_id, action, **kwargs)
+            operation = partial(manager.user_action, session_id, action, **kwargs)
+        goal = await run_fact_commit(operation)
         if action in {"pause", "cancel"}:
             session_manager.request_interrupt(session_id, reason=f"workflow_{action}")
-        if action == "review" and str(body.get("decision") or "").strip().lower() == "continue":
-            session_manager.clear_interrupt(session_id)
+        if action in {"create", "resume"} or (action == "review" and str(body.get("decision") or "").strip().lower() == "continue"):
+            await asyncio.to_thread(session_manager.clear_interrupt, session_id)
         public_goal = None if action == "delete" or goal.get("deleted") is True else goal
         event_action = (
             f"user_review_{str(body.get('decision') or '').strip().lower()}"
@@ -227,7 +252,6 @@ control_goal = _control_goal
 async def start(_context, _plugin):
     import importlib.util
     from pathlib import Path
-    import webui
 
     path = Path(__file__).with_name("runner.py")
     spec = importlib.util.spec_from_file_location("myagent_agent_goal_runner", path)
@@ -235,7 +259,7 @@ async def start(_context, _plugin):
     assert spec and spec.loader
     spec.loader.exec_module(module)
     globals()["_runner"] = module
-    await module.start(webui)
+    await module.start()
 
 
 async def stop(_context, _plugin):

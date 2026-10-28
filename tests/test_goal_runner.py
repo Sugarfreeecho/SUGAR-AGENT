@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.test_session_control import composed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,7 @@ class _RuntimeProxy:
 class _RunnerProxy:
     def __getattr__(self, name):
         import webui
-        _GOAL_RUNNER._host = webui
+        _GOAL_RUNNER._host = SimpleNamespace(manager=webui.session_manager, is_active=webui._has_local_worker_activity, is_stopped=webui._session_was_manually_stopped, pending_human=webui._session_pending_human_count)
         return getattr(_GOAL_RUNNER, name)
 
 
@@ -144,44 +145,45 @@ def test_discover_accounts_abandoned_goal_run_before_replacement(monkeypatch):
 
 
 @pytest.mark.parametrize("stage", ["before_events", "after_events", "empty"])
-def test_goal_runner_failure_pauses_and_is_not_discovered_again(tmp_path, monkeypatch, stage):
+def test_goal_runner_failure_pauses_and_is_not_discovered_again(tmp_path, monkeypatch, stage, composed):
     import agent_goal
-
+    import session_control.integration as integration
+    from tests.test_session_control import new_session
+    c = composed
+    monkeypatch.setattr(integration, "_application", c.control)
     monkeypatch.setenv("GOAL_ENABLED", "1")
     monkeypatch.setenv("RUNTIME_VERSION", "2")
-    manager = agent_goal.GoalManager(tmp_path)
-    manager.create("s1", "Stop when the runtime fails")
-    releases = []
+    manager = agent_goal.GoalManager(tmp_path / "goals")
     calls = []
-
-    async def continuation(_sid, **kwargs):
-        calls.append(kwargs["run_id"])
-        if stage == "empty":
-            return
-        if stage == "after_events":
-            yield {"type": "run_started"}
-        raise RuntimeError("provider unavailable")
-
-    monkeypatch.setattr(agent_goal, "manager_for", lambda _host: manager)
-    monkeypatch.setattr(_GOAL_RUNNER, "_host", SimpleNamespace(
-        session_manager=object(),
-        _reserve_session_chat_start=lambda *_args: "lease",
-        _release_session_chat_start=lambda *args: releases.append(args),
-        _session_was_manually_stopped=lambda _sid: False,
-        _session_pending_human_count=lambda _sid: 0,
-        _has_local_worker_activity=lambda _sid: False,
-        astream_events_continuation=continuation,
-    ))
-    asyncio.run(_GOAL_RUNNER._continue("s1"))
-    failed = manager.get("s1")
-    assert failed["status"] == "paused"
-    assert failed["pause_reason"] == "run_failed"
-    assert failed["last_error"] == ("continuation_produced_no_events" if stage == "empty" else "provider unavailable")
-    assert failed["run_count"] == failed["continuation_count"] == 1
-    assert releases == [("s1", "lease")]
-    assert _GOAL_RUNNER._discover(["s1"]) == []
-    asyncio.run(_GOAL_RUNNER._continue("s1"))
-    assert len(calls) == 1
+    async def scenario():
+        sid = await new_session(c)
+        manager.create(sid, "Stop when the runtime fails")
+        monkeypatch.setattr(agent_goal, "manager_for", lambda _host: manager)
+        monkeypatch.setattr(c.manager, "can_continue_react_session", lambda _sid: True)
+        monkeypatch.setattr(_GOAL_RUNNER, "_host", SimpleNamespace(
+            manager=c.manager, is_stopped=lambda _: False,
+            pending_human=lambda _: 0, is_active=lambda _: False))
+        async def continuation(_sid, **kwargs):
+            calls.append(kwargs["run_id"])
+            if stage == "empty":
+                return
+            if stage == "after_events":
+                yield {"type": "run_started"}
+            raise RuntimeError("provider unavailable")
+        c.service.callbacks["continue"] = continuation
+        await c.control.start()
+        await _GOAL_RUNNER._continue(sid)
+        await c.control.close()
+        failed = manager.get(sid)
+        assert failed["status"] == "paused"
+        assert failed["pause_reason"] == "run_failed"
+        assert failed["last_error"] == ("continuation_produced_no_events" if stage == "empty" else "provider unavailable")
+        assert failed["run_count"] == failed["continuation_count"] == 1
+        assert _GOAL_RUNNER._discover([sid]) == []
+        await _GOAL_RUNNER._continue(sid)
+        assert len(calls) == 1
+        assert not c.active
+    asyncio.run(scenario())
 
 
 def test_reconcile_durable_failed_continuation_pauses_goal(tmp_path, monkeypatch):
@@ -194,7 +196,7 @@ def test_reconcile_durable_failed_continuation_pauses_goal(tmp_path, monkeypatch
     manager.create("s1", "Recover a failed run without retrying it")
     manager.mark_continuation_started("s1", run_id="failed-run")
     monkeypatch.setattr(_GOAL_RUNNER, "_host", SimpleNamespace(
-        _has_local_worker_activity=lambda _sid: False,
+        is_active=lambda _sid: False,
     ))
     monkeypatch.setattr(runtime_observability, "snapshot", lambda _sid: {
         "runs": [{"run_id": "failed-run", "status": "failed"}],
@@ -207,43 +209,39 @@ def test_reconcile_durable_failed_continuation_pauses_goal(tmp_path, monkeypatch
     assert not manager.should_continue("s1")
 
 
-def test_background_goal_runner_drains_continuation_without_browser(monkeypatch):
+def test_background_goal_runner_drains_continuation_without_browser(composed, monkeypatch):
     import agent_goal
-    import webui
-
-    events = []
-    releases = []
-
-    class Manager:
-        @staticmethod
-        def should_continue(_session_id):
-            return True
-
-        @staticmethod
-        def get(_session_id):
-            return {}
-
-        @staticmethod
-        def mark_continuation_started(session_id, *, run_id=""):
-            events.append(("started", session_id, run_id))
-
-    async def continuation(session_id, **kwargs):
-        events.append(("event", session_id, kwargs.get("run_id"), kwargs.get("continuation_source")))
-        yield {"type": "status"}
-
-    monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
-    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
-    monkeypatch.setattr(webui, "astream_events_continuation", continuation)
-    monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
-    monkeypatch.setattr(webui, "_release_session_chat_start", lambda sid, token="": releases.append((sid, token)))
-
-    asyncio.run(goal_runner._continue("s1"))
-
-    assert events[0][0] == "started"
-    assert events[1][0:2] == ("event", "s1")
-    assert events[1][2] == events[0][2]
-    assert events[1][3] == "agent-goal"
-    assert releases == [("s1", "lease")]
+    import session_control.integration as integration
+    from tests.test_session_control import new_session
+    from runtime_v2 import RuntimeHistoryOps
+    c = composed
+    monkeypatch.setattr(integration, "_application", c.control)
+    manager = agent_goal.GoalManager(c.root / "goals")
+    monkeypatch.setenv("GOAL_ENABLED", "1")
+    async def scenario():
+        sid = await new_session(c)
+        manager.create(sid, "continue")
+        monkeypatch.setattr(agent_goal, "manager_for", lambda _: manager)
+        monkeypatch.setattr(c.manager, "can_continue_react_session", lambda _: True)
+        monkeypatch.setattr(_GOAL_RUNNER, "_host", SimpleNamespace(manager=c.manager,
+            is_stopped=lambda _: False, pending_human=lambda _: 0))
+        async def continuation(sid, **kwargs):
+            assert kwargs["continuation_source"] == "agent-goal"
+            run_id = kwargs["run_id"]
+            RuntimeHistoryOps(c.manager.sessions_dir, path_resolver=c.manager._resolve_session_path).commit_assistant_final(
+                sid, "done", operation_id="final:" + run_id, run_id=run_id)
+            manager.record_run(sid, 0, continuation=True, run_id=run_id, outcome="finished")
+            yield {"type": "final", "content": "done"}
+        c.service.callbacks["continue"] = continuation
+        await c.control.start()
+        await _GOAL_RUNNER._continue(sid)
+        await c.control.close()
+        operations = c.store.operations(session_id=sid)
+        assert any(op["method"] == "session.continue" and op["status"] == "succeeded"
+                   and op["request"]["_source"]["id"] == "agent-goal" for op in operations)
+        assert manager.get(sid)["continuation_count"] == 1
+        assert not c.active
+    asyncio.run(scenario())
 
 
 def test_background_goal_runner_stops_for_pending_human_interaction(monkeypatch):
@@ -307,45 +305,6 @@ def test_background_goal_runner_does_not_restart_a_manually_stopped_session(monk
     assert events == []
 
 
-def test_background_goal_runner_accounts_empty_continuation_as_failure(monkeypatch):
-    import agent_goal
-    import webui
-
-    recorded = []
-
-    class Manager:
-        @staticmethod
-        def should_continue(_session_id):
-            return True
-
-        @staticmethod
-        def get(_session_id):
-            return {"id": "g1", "status": "active"}
-
-        @staticmethod
-        def mark_continuation_started(_session_id, *, run_id=""):
-            return {"current_run_id": run_id}
-
-        @staticmethod
-        def record_run(session_id, used_tokens, **kwargs):
-            recorded.append((session_id, used_tokens, kwargs))
-
-    async def continuation(_session_id, **_kwargs):
-        if False:
-            yield {}
-
-    monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
-    monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
-    monkeypatch.setattr(webui, "astream_events_continuation", continuation)
-    monkeypatch.setattr(webui, "_reserve_session_chat_start", lambda _sid, _run_id="": "lease")
-    monkeypatch.setattr(webui, "_release_session_chat_start", lambda _sid, token="": None)
-
-    asyncio.run(goal_runner._continue("s1"))
-
-    assert len(recorded) == 1
-    assert recorded[0][2]["outcome"] == "failed"
-    assert recorded[0][2]["continuation"] is True
-    assert recorded[0][2]["run_id"].startswith("workflow-runner-")
 
 
 def test_hook_stop_persists_goal_pause_and_pushes_live_state(monkeypatch):
@@ -745,6 +704,7 @@ def test_goal_control_forwards_budget_and_publishes_live_state(monkeypatch):
 
     calls = []
     published = []
+    cleared = []
 
     class Manager:
         @staticmethod
@@ -763,11 +723,13 @@ def test_goal_control_forwards_budget_and_publishes_live_state(monkeypatch):
     monkeypatch.setattr(agent_goal, "manager_for", lambda _session_manager: Manager())
     monkeypatch.setattr(goal_host, "publish_session_event", publish)
 
+    monkeypatch.setattr(webui.session_manager, "clear_interrupt", lambda sid: cleared.append(sid))
     response = asyncio.run(goal_host.control_goal(webui.session_manager, "s1", "resume", Request()))
     body = json.loads(response.body)
 
     assert response.status_code == 200
     assert body["ok"] is True
+    assert cleared == ["s1"]
     assert calls == [
         (
             "s1",

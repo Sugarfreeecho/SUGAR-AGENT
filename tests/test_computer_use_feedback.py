@@ -14,9 +14,11 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
-from execution_services.computer import ComputerUseManager, READ_TOOLS
-from execution_services.computer_results import project_result
+from tests.computer_use_plugin import computer, computer_results
 from execution_services.jobs import ExecutionService
+
+ComputerUseManager, READ_TOOLS = computer.ComputerUseManager, computer.READ_TOOLS
+project_result = computer_results.project_result
 
 
 def fixture_tools():
@@ -262,7 +264,7 @@ def test_screenshot_mapping_accounts_for_store_and_request_resizes(tmp_path):
 
 def test_browser_screenshots_do_not_claim_native_window_coordinates():
     from attachments.messages_text import request_image_handle_text
-    from execution_services.computer_results import image_source
+    image_source = computer_results.image_source
     ref = {"attachmentId": "image", "width": 1600, "height": 900, "mediaType": "image/png",
            "source": image_source("get_browser_state", {})}
     text = request_image_handle_text(ref, SimpleNamespace(width=800, height=450), "preview.png")
@@ -363,7 +365,6 @@ def test_queued_invocation_rechecks_permission_mode_before_input(provider, monke
 def test_profile_setting_api_origin_validation_and_startup_restore(provider, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    import execution_services.computer as computer
     import execution_services.jobs as jobs
     import plugins.host
     import security.runtime

@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import json
 import tempfile
@@ -9,6 +10,7 @@ import pytest
 from openai import OpenAI
 
 from session_system_context import MAX_SYSTEM_CONTEXT_BYTES, SYSTEM_CONTEXT_HEADING
+from tests.test_session_control import composed, run_async
 
 
 @pytest.fixture
@@ -202,7 +204,16 @@ def test_actual_http_body_contains_one_system_charter_and_short_user_round(sessi
         assert [m["content"] for m in body["messages"] if m["role"] == "user"] == ["只含这一轮的参数"]
 
 
-def test_bili_existing_and_new_sessions_use_system_context_and_refresh_charter(sessions, monkeypatch):
+@run_async
+async def test_bili_existing_and_new_sessions_use_system_context_and_refresh_charter(composed, monkeypatch):
+    import agent_harness as harness
+    import agent_loop
+    import session_control.integration as integration
+    sessions = composed.manager
+    monkeypatch.setattr(harness, "session_manager", sessions)
+    monkeypatch.setattr(agent_loop, "session_manager", sessions)
+    monkeypatch.setattr(integration, "_application", composed.control)
+    await composed.control.start()
     path = Path(__file__).resolve().parents[1] / "plugins/sugar-bili-scroll/host.py"
     spec = importlib.util.spec_from_file_location("test_bili_system_context_host", path)
     host = importlib.util.module_from_spec(spec)
@@ -212,19 +223,20 @@ def test_bili_existing_and_new_sessions_use_system_context_and_refresh_charter(s
     (home / "duty.md").write_text("独特的章程正文，家目录 <家目录>", encoding="utf-8")
     monkeypatch.setattr(host, "_home", lambda: home)
     monkeypatch.setattr(host, "_write_settings", lambda value: None)
-    sid = host._ensure_session({})
+    sid = await asyncio.to_thread(host._ensure_session, {})
     assert sessions._load_metadata(sid)["system_context"] == host.build_system_context()
     assert str(home) in host.build_system_context() and "<家目录>" not in host.build_system_context()
     prompt = host.build_prompt({})
     assert "独特的章程正文" not in prompt and "本轮参数" in prompt
     assert not (home / "charter-sent.json").exists()
     (home / "duty.md").write_text("修改过的章程", encoding="utf-8")
-    assert host._ensure_session({"duty_session_id": sid}) == sid
+    assert await asyncio.to_thread(host._ensure_session, {"duty_session_id": sid}) == sid
     assert prefix(sessions, sid)[0] == host.build_system_context()
     assert sessions._load_metadata(sid)["system_context_mode"] == "replace"
     legacy = sessions.get_or_create_session()[0]
-    assert host._ensure_session({"duty_session_id": legacy}) == legacy
+    assert await asyncio.to_thread(host._ensure_session, {"duty_session_id": legacy}) == legacy
     assert "修改过的章程" in sessions._load_metadata(legacy)["system_context"]
+    await composed.control.close()
 
 
 def test_replace_mode_skips_host_templates_and_matches_token_estimates(sessions, monkeypatch):

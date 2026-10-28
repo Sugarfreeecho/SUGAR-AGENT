@@ -48,7 +48,7 @@ def _reconcile_incomplete_run(manager: Any, session_id: str) -> bool:
     current_run_id = str(goal.get("current_run_id") or "").strip()
     if not current_run_id:
         return True
-    if _host._has_local_worker_activity(session_id):
+    if _host.is_active(session_id):
         return False
 
     status = ""
@@ -96,9 +96,9 @@ def _discover(candidate_session_ids: list[str] | None = None) -> list[str]:
 
     if not goal_enabled():
         return []
-    manager = manager_for(_host.session_manager)
+    manager = manager_for(_host.manager)
     rows = (
-        _host.session_manager.list_sessions(include_archived=True)
+        _host.manager.list_sessions(include_archived=True)
         if candidate_session_ids is None
         else ({"id": value} for value in candidate_session_ids)
     )
@@ -108,85 +108,60 @@ def _discover(candidate_session_ids: list[str] | None = None) -> list[str]:
         if not sid:
             continue
         try:
-            if _host._session_was_manually_stopped(sid):
+            if _host.is_stopped(sid):
                 continue
             if not _reconcile_incomplete_run(manager, sid):
                 continue
-            if manager.should_continue(sid) and _host._session_pending_human_count(sid) <= 0:
+            if manager.should_continue(sid) and _host.pending_human(sid) <= 0:
                 runnable.append(sid)
         except Exception:
             logger.debug("Goal workflow discovery failed for %s", sid, exc_info=True)
     return runnable
 
 
-async def _continue(session_id: str) -> None:
+def _register_control_hooks():
     from agent_goal import manager_for
+    from session_control.public import register_source_lifecycle
+    from session_control.errors import ControlError
 
-    sid = str(session_id or "").strip()
-    run_id = "workflow-runner-" + uuid.uuid4().hex
-    token = _host._reserve_session_chat_start(sid, run_id) or ""
-    if not token:
-        return
-    manager = manager_for(_host.session_manager)
-    saw_event = False
-    try:
-        if not manager.should_continue(sid) or _host._session_was_manually_stopped(sid):
-            return
-        if _host._session_pending_human_count(sid) > 0:
-            return
-        current = manager.get(sid) or {}
-        recovery_reason = "process_or_network_interruption" if current.get("current_run_id") else ""
+    def before(sid, run_id, _request):
+        manager = manager_for(_host.manager)
+        if not manager.should_continue(sid) or _host.is_stopped(sid):
+            raise ControlError("intent_obsolete", "Goal no longer requests continuation", status=409)
         manager.mark_continuation_started(sid, run_id=run_id)
 
-        def should_stop(value: str) -> bool:
-            return _host.session_manager.is_interrupt_requested(value, run_id)
+    def after(sid, run_id, operation):
+        manager = manager_for(_host.manager)
+        if (manager.get(sid) or {}).get("current_run_id") != run_id:
+            return  # Runtime hooks already accounted this run and its usage.
+        outcome = "failed" if operation["status"] in {"failed", "unknown"} else "interrupted"
+        manager.record_run(sid, 0, continuation=True, run_id=run_id, outcome=outcome,
+            error=str((operation.get("error") or {}).get("message") or "continuation_produced_no_events"))
+    register_source_lifecycle("agent-goal", before=before, after=after)
 
-        async for _event in _host.astream_events_continuation(
-            sid,
-            should_stop=should_stop,
-            require_pending_subagents=False,
-            recovery_reason=recovery_reason,
-            run_id=run_id,
-            continuation_source="agent-goal",
-        ):
-            saw_event = True
-        if not saw_event:
-            manager.record_run(
-                sid,
-                0,
-                continuation=True,
-                run_id=run_id,
-                outcome="failed",
-                error="continuation_produced_no_events",
-            )
-    except asyncio.CancelledError:
-        try:
-            manager.record_run(
-                sid,
-                0,
-                continuation=True,
-                run_id=run_id,
-                outcome="interrupted",
-                error="scheduler_cancelled",
-            )
-        except Exception:
-            logger.debug("Goal workflow cancellation accounting failed", exc_info=True)
-        raise
-    except Exception as exc:
-        logger.warning("Goal workflow continuation failed for %s: %s", sid, exc)
-        try:
-            manager.record_run(
-                sid,
-                0,
-                continuation=True,
-                run_id=run_id,
-                outcome="failed",
-                error=str(exc),
-            )
-        except Exception:
-            logger.debug("Goal workflow fallback accounting failed", exc_info=True)
-    finally:
-        _host._release_session_chat_start(sid, token)
+
+async def _continue(session_id: str) -> None:
+    from agent_goal import manager_for
+    from session_control.public import host_client, stable_key
+
+    sid = str(session_id or "").strip()
+    manager = manager_for(_host.manager)
+    if not manager.should_continue(sid) or _host.is_stopped(sid):
+        return
+    if _host.pending_human(sid) > 0:
+        return
+    _register_control_hooks()
+    current = manager.get(sid) or {}
+    client = host_client("agent-goal", session_ids=[sid],
+        capabilities=["session.continue", "operation.cancel"])
+    operation = await client.call("session.continue", {"session_id": sid,
+        "_respect_stop": True, "_continuation_source": "agent-goal",
+        "_recovery_reason": "process_or_network_interruption" if current.get("current_run_id") else ""},
+        key=stable_key("goal", [sid, current]), coalesce=True)
+    result = await client.wait(operation["operation_id"])
+    if result["status"] == "failed" and not (manager.get(sid) or {}).get("current_run_id"):
+        manager.record_run(sid, 0, continuation=True, run_id=result["run_id"], outcome="failed",
+            error=str((result.get("error") or {}).get("message") or "continuation_failed"))
 
 
 async def _loop() -> None:
@@ -205,7 +180,7 @@ async def _loop() -> None:
                     existing = _workers.get(sid)
                     if existing and not existing.done():
                         continue
-                    if _host._has_local_worker_activity(sid):
+                    if _host.is_active(sid):
                         continue
                     task = asyncio.create_task(_continue(sid), name=f"workflow-agent-goal-{sid}")
                     _workers[sid] = task
@@ -227,11 +202,12 @@ async def _loop() -> None:
         unsubscribe()
 
 
-async def start(host_module: Any) -> bool:
+async def start(host_module: Any = None) -> bool:
     global _host, _scheduler
     from agent_goal import goal_enabled
 
-    _host = host_module
+    from session_control.public import HostRuntimeState
+    _host = host_module or HostRuntimeState()
     if not goal_enabled() or (_scheduler and not _scheduler.done()):
         return False
     _scheduler = asyncio.create_task(_loop(), name="workflow-agent-goal-scheduler")

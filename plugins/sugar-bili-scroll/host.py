@@ -14,8 +14,10 @@
   3. `start()` / `stop()` —— 60 秒 tick 的调度器
 """
 import asyncio
+import hashlib
 import importlib.util
 import json
+import re
 import sys
 import threading
 import time
@@ -31,12 +33,17 @@ def _load_sibling(stem: str):
     ⚠️ trusted_host 的入口是用 `spec_from_file_location` 加载的，**插件目录不在
     `sys.path` 上** —— 直接 `import duty` 会 ModuleNotFoundError。这里用带前缀的
     私有模块名显式加载，既不污染 `sys.path`，也不会和宿主的同名模块（比如 "duty"）撞车。
+
+    ⚠️ 模块名必须带内容摘要：插件热重载时 host.py 会换成新模块，但如果兄弟模块用固定名字，
+    `sys.modules` 会把 workflow/bili_client 这些继续留在旧代码上 —— 表现就是新 schema 生效、
+    真调用却打到不存在的函数。摘要一变就加载新模块，旧模块自然不再被引用。
     """
-    name = f"myagent_plugin_sugar_bili_scroll_{stem}"
+    path = Path(__file__).with_name(f"{stem}.py")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    name = f"myagent_plugin_sugar_bili_scroll_{stem}_{digest}"
     cached = sys.modules.get(name)
     if cached is not None:
         return cached
-    path = Path(__file__).with_name(f"{stem}.py")
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"无法加载插件模块：{path}")
@@ -388,12 +395,68 @@ async def _search_emotes(home: Path, query: str, scope: str, limit: int) -> dict
     return out
 
 
+async def _normalized_arguments(arguments: Mapping[str, Any]) -> dict:
+    """把 bvid 统一成 BV 号：av 号、完整链接、b23.tv 短链都认。
+
+    放在授权之前，是因为权限判断（值班只能动自己挑中的视频）依赖同一个 BV 号 ——
+    先校验再解析会出现「用链接就绕过 picked 校验」的洞。
+    """
+    args = dict(arguments or {})
+    raw = str(args.get("bvid") or "").strip()
+    if not raw:
+        return args
+    # 已经是干净的 BV 号就不用碰网络 —— 绝大多数调用走这条，也不依赖 bili_client 已加载。
+    if re.fullmatch(r"BV[0-9A-Za-z]{10}", raw):
+        args["bvid"] = raw
+        return args
+    resolved = await bili_client.resolve_bvid(raw, data_dir=_home())
+    if not resolved.get("ok"):
+        raise ValueError(str(resolved.get("error") or "视频标识无效"))
+    args["bvid"] = resolved["bvid"]
+    return args
+
+
+def _capabilities(policy: Mapping[str, Any], settings: Mapping[str, Any]) -> dict:
+    """一次问清「现在能干什么」，省得模型靠调用被拒去试权限边界。"""
+    home = _home()
+    cred = bili_client.load_credential(home)
+    can_comment, can_dm = _write_tools_enabled(settings)
+    try:
+        names = _flow().allowed(policy, settings)
+    except Exception:  # noqa: BLE001
+        names = []
+    return {
+        "account": {
+            "logged_in": cred is not None,
+            "uid": str(getattr(cred, "dedeuserid", "") or ""),
+            "changing": bool(_runtime.get("account_changing")),
+        },
+        "mode": str(policy.get("mode") or "manual"),
+        "can": {
+            "comment": can_comment,
+            "dm": can_dm,
+            "dm_uid": int(settings.get("dm_uid") or 0),
+            "favorite_folder": int(settings.get("fav_folder_id") or 0),
+            "toview_add": bool(settings.get("allow_toview", True)),
+            "like": bool(settings.get("allow_like")),
+            "triple": bool(settings.get("allow_triple")),
+            "coin": bool(settings.get("allow_coin")),
+            "coin_per_round": int(settings.get("coin_per_round") or 0),
+            "follow": bool(settings.get("allow_follow")),
+            "transcribe": bool(settings.get("transcribe")),
+        },
+        "tools": names,
+        "note": "tools 是本轮会话可用的工具；can 是当前设置。值班任务还会叠加任务级开关和当日额度。",
+    }
+
+
 async def _invoke(context, arguments: Mapping[str, Any]):
     from tool_registry import ToolOutcome
 
     name = str(context.service("tool_name") or "")
     home = _home()
     try:
+        arguments = await _normalized_arguments(arguments)
         policy, settings, arguments = _flow().authorize(context, name, arguments)
         if name == "bili_record_video":
             payload = _flow().record(policy, arguments)
@@ -402,6 +465,7 @@ async def _invoke(context, arguments: Mapping[str, Any]):
                 str(arguments.get("keyword") or ""),
                 int(arguments.get("num") or 10),
                 str(arguments.get("order") or "totalrank"),
+                int(arguments.get("page") or 1),
             )
             seen = duty.seen_bvids(home)
             for video in payload.get("videos", []):
@@ -410,16 +474,70 @@ async def _invoke(context, arguments: Mapping[str, Any]):
             payload = await bili_client.subtitles(home, str(arguments.get("bvid") or ""))
         elif name == "bili_comments":
             payload = await bili_client.comments(
-                home, str(arguments.get("bvid") or ""), int(arguments.get("num") or 30)
+                home,
+                str(arguments.get("bvid") or ""),
+                int(arguments.get("num") or 30),
+                str(arguments.get("sort") or "hot"),
+                int(arguments.get("root") or 0),
+                int(arguments.get("page") or 1),
             )
         elif name == "bili_video_info":
-            payload = await bili_client.video_info(home, str(arguments.get("bvid") or ""))
+            payload = await bili_client.video_info(
+                home, str(arguments.get("bvid") or ""), bool(arguments.get("detail")))
         elif name == "bili_danmaku":
             payload = await bili_client.danmaku(
                 home, str(arguments.get("bvid") or ""), int(arguments.get("num") or 100)
             )
         elif name == "bili_favorite_folders":
             payload = await bili_client.favorite_folders(home, int(arguments.get("uid") or 0))
+        elif name == "bili_discover":
+            payload = await bili_client.discover(
+                home,
+                str(arguments.get("source") or "hot"),
+                int(arguments.get("limit") or 10),
+                str(arguments.get("tid") or "all"),
+                int(arguments.get("mid") or 0),
+                str(arguments.get("bvid") or ""),
+                int(arguments.get("page") or 1),
+            )
+        elif name == "bili_my_list":
+            payload = await bili_client.my_list(
+                home,
+                str(arguments.get("kind") or "toview"),
+                int(arguments.get("fid") or 0),
+                int(arguments.get("limit") or 20),
+            )
+        elif name == "bili_highlights":
+            payload = await bili_client.highlights(
+                home,
+                str(arguments.get("bvid") or ""),
+                int(arguments.get("window") or 30),
+                int(arguments.get("top") or 5),
+            )
+        elif name == "bili_cover":
+            payload = await bili_client.cover(
+                home, str(arguments.get("bvid") or ""), str(arguments.get("size") or "original"))
+        elif name == "bili_frame":
+            payload = await bili_client.frame(
+                home,
+                str(arguments.get("bvid") or ""),
+                str(arguments.get("at") or ""),
+                str(arguments.get("source") or "storyboard"),
+                int(arguments.get("width") or 1280),
+                int(arguments.get("top") or 3),
+            )
+        elif name == "bili_capabilities":
+            payload = _capabilities(policy, settings)
+        elif name == "bili_watch_later_add":
+            payload = await bili_client.watch_later_add(home, str(arguments.get("bvid") or ""))
+        elif name == "bili_interact":
+            payload = await bili_client.interact(
+                home,
+                str(arguments.get("action") or ""),
+                str(arguments.get("bvid") or ""),
+                int(arguments.get("uid") or 0),
+                int(arguments.get("num") or 1),
+            )
         elif name == "bili_favorite_add":
             payload = await _flow().favorite_video(context, str(arguments["bvid"]), int(arguments["fid"]))
         elif name == "bili_transcribe":
@@ -515,11 +633,13 @@ def mcp_tool_rows():
         (
             _fn(
                 "bili_search",
-                "搜索 B站 视频。order 可选 totalrank（综合）/ click（播放）/ pubdate（最新）/ dm（弹幕）。",
+                "搜索 B站 视频。order 可选 totalrank（综合）/ click（播放）/ pubdate（最新）/ dm（弹幕）；"
+                "page 翻页（1–50），和 bili_discover 的分页口径一致。",
                 {
                     "keyword": {"type": "string", "description": "搜索关键词"},
                     "num": {"type": "integer", "minimum": 1, "maximum": 50, "description": "返回条数，默认 10"},
                     "order": {"type": "string", "enum": ["totalrank", "click", "pubdate", "dm"]},
+                    "page": {"type": "integer", "minimum": 1, "maximum": 50, "description": "页码，默认 1"},
                 },
                 ["keyword"],
             ),
@@ -553,12 +673,20 @@ def mcp_tool_rows():
         (
             _fn(
                 "bili_comments",
-                "取 B站 视频的热门评论。返回里的 error 字段表示抓取失败（风控/网络），不是「0 条评论」。"
+                "取 B站 视频的评论：sort=hot 按热度（默认）、time 按时间；要给 root（某条评论的 rpid）"
+                "就改抓那条下面的楼中楼，用来查「谁回了我」。返回里的 error 字段表示抓取失败（风控/网络），"
+                "不是「0 条评论」。"
                 "每条评论可能带 `emotes`（正文里的表情码）和 `pictures`（评论图地址 + 宽高）—— "
                 "想收藏表情就看这两个字段，别自己拼图床地址。",
                 {
                     "bvid": {"type": "string"},
                     "num": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "sort": {"type": "string", "enum": ["hot", "time"],
+                             "description": "hot 热度（默认）/ time 最新"},
+                    "root": {"type": "integer", "minimum": 0,
+                             "description": "抓这条评论下的楼中楼；0 表示抓顶层"},
+                    "page": {"type": "integer", "minimum": 1, "maximum": 50,
+                             "description": "顶层评论起始页，默认 1"},
                 },
                 ["bvid"],
             ),
@@ -568,8 +696,12 @@ def mcp_tool_rows():
         (
             _fn(
                 "bili_video_info",
-                "取 B站 视频详情：标题、简介、UP、播放/点赞/收藏、标签、发布时间。",
-                {"bvid": {"type": "string"}},
+                "取 B站 视频详情：标题、简介、UP、cid、分P 列表、标签、封面地址、分辨率、播放/点赞/收藏、发布时间。"
+                "detail=true 时额外取实时在看人数和 B站官方 AI 摘要（各多打一个接口，默认不取）。",
+                {
+                    "bvid": {"type": "string"},
+                    "detail": {"type": "boolean", "description": "是否额外取在线人数与 AI 摘要，默认 false"},
+                },
                 ["bvid"],
             ),
             False,
@@ -710,6 +842,143 @@ def mcp_tool_rows():
         ),
     ]
 
+    rows += [
+        (
+            _fn(
+                "bili_discover",
+                "发现值得看的视频，不靠关键词：source=hot 热门 / weekly 每周必看 / rank 分区排行 / "
+                "up 某个 UP 的投稿（要 mid）/ feed 我关注的人的新投稿 / related 和某条视频相关的推荐（要 bvid）。"
+                "rank 可用 tid 选分区：all/technology/game/knowledge/music/dance/cinephile/douga/ent/"
+                "fashion/food/guochuang/kichiku/life/sports/animal/car/bangumi/documentary/movie/tv/variety/rookie。",
+                {
+                    "source": {
+                        "type": "string",
+                        "enum": ["hot", "weekly", "rank", "up", "feed", "related"],
+                        "description": "数据来源",
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "返回条数，默认 10"},
+                    "tid": {"type": "string", "description": "rank 的分区名，默认 all（全站）"},
+                    "mid": {"type": "integer", "description": "source=up 时的 UP 主 UID"},
+                    "bvid": {"type": "string", "description": "source=related 时的源视频"},
+                    "page": {"type": "integer", "minimum": 1, "description": "页码，默认 1"},
+                },
+                ["source"],
+            ),
+            False,
+            "read",
+        ),
+        (
+            _fn(
+                "bili_my_list",
+                "看自己账号里的库：kind=toview 稍后再看 / favorites 某个收藏夹里的视频（要给 fid）/ "
+                "history 观看历史（带看到哪、有没有看完）。历史条目可能只有 av 号，把 url 或 av 号直接交给其它工具也能用。",
+                {
+                    "kind": {"type": "string", "enum": ["toview", "favorites", "history"]},
+                    "fid": {"type": "integer", "minimum": 0, "description": "kind=favorites 必填，先用 bili_favorite_folders 查"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "返回条数，默认 20"},
+                },
+                ["kind"],
+            ),
+            False,
+            "read",
+        ),
+        (
+            _fn(
+                "bili_highlights",
+                "按弹幕密度找视频里最热闹的几分钟，用来判断「哪一段值得看」。"
+                "只采样前几段弹幕，超长视频的尾部不在统计里，别当成全片统计。",
+                {
+                    "bvid": {"type": "string"},
+                    "window": {"type": "integer", "minimum": 10, "maximum": 120, "description": "统计窗口（秒），默认 30"},
+                    "top": {"type": "integer", "minimum": 1, "maximum": 10, "description": "返回几个窗口，默认 5"},
+                },
+                ["bvid"],
+            ),
+            False,
+            "read",
+        ),
+        (
+            _fn(
+                "bili_capabilities",
+                "查当前账号和这一轮能用哪些 B站 能力（评论/私信/收藏/稍后再看/点赞/投币/关注/转写）。"
+                "不确定有没有权限时先问它，别靠调用失败去试。",
+                {},
+                [],
+            ),
+            False,
+            "read",
+        ),
+        (
+            _fn(
+                "bili_cover",
+                "下载视频封面到本地，返回文件路径、尺寸和字节数；同一条视频 24 小时内复用。"
+                "size=small 会缩到 672 宽。只读 B站，不碰视频流。",
+                {
+                    "bvid": {"type": "string"},
+                    "size": {"type": "string", "enum": ["original", "small"],
+                             "description": "original 原图，small 672 宽，默认 original"},
+                },
+                ["bvid"],
+            ),
+            True,
+            "workspace_write",
+        ),
+        (
+            _fn(
+                "bili_frame",
+                "按时间点截取画面并保存成图片。at 写秒数（'120,3:30'），留空或写 highlights 就自动取弹幕峰值，"
+                "正好接 bili_highlights。默认 source=storyboard：用 B站官方预览图（全片 300 帧、480×270、不下载视频，快）；"
+                "要原画就传 source=stream（走 DASH 视频流 + ffmpeg，吃带宽但清晰）。一次最多 5 张，同点 24 小时内复用。",
+                {
+                    "bvid": {"type": "string"},
+                    "at": {"type": "string",
+                           "description": "秒数，逗号分隔，支持 3:30 写法；留空或 highlights = 自动取弹幕峰值"},
+                    "source": {"type": "string", "enum": ["storyboard", "stream"],
+                               "description": "storyboard 预览图（默认）/ stream 原画抽帧"},
+                    "width": {"type": "integer", "minimum": 320, "maximum": 1920,
+                              "description": "stream 抽帧的输出宽度，默认 1280"},
+                    "top": {"type": "integer", "minimum": 1, "maximum": 5,
+                            "description": "at=highlights 时取几个峰值，默认 3"},
+                },
+                ["bvid"],
+            ),
+            True,
+            "workspace_write",
+        ),
+        (
+            _fn(
+                "bili_watch_later_add",
+                "把一条视频加入当前账号的「稍后再看」。比收藏轻；只添加，不会取消或清空列表。"
+                "受设置里「允许加入稍后再看」开关控制，值班任务只能加本轮挑中的视频。",
+                {"bvid": {"type": "string", "description": "BV 号 / av 号 / 视频链接都行"}},
+                ["bvid"],
+            ),
+            True,
+            "external_write",
+        ),
+        (
+            _fn(
+                "bili_interact",
+                "对视频或 UP 主做写入动作：action=like 点赞 / unlike 取消赞 / triple 一键三连（赞+币+收藏，"
+                "会真的花 2 枚硬币）/ coin 投币 / follow 关注（只关注，不取关）。"
+                "每个动作都要先在插件设置里打开对应开关，关着会被拒；投币次数受每轮额度限制。",
+                {
+                    "action": {
+                        "type": "string",
+                        "enum": ["like", "unlike", "triple", "coin", "follow"],
+                        "description": "要做的动作",
+                    },
+                    "bvid": {"type": "string", "description": "like/unlike/triple/coin 必填"},
+                    "uid": {"type": "integer", "description": "follow 时的 UP 主 UID"},
+                    "num": {"type": "integer", "minimum": 1, "maximum": 2, "description": "coin 投几枚，默认 1"},
+                },
+                ["action"],
+            ),
+            True,
+            "external_write",
+        ),
+    ]
+
     return rows
 
 
@@ -792,6 +1061,23 @@ def build_prompt(settings: Mapping[str, Any]) -> str:
         f"整轮**工具调用控制在 {tool_budget} 次以内**（一条视频大约 3 次）；"
         "同一个工具连续失败两次就跳过这条视频。"
     )
+    parts.append(
+        "🧭 找片不只有关键词：`bili_discover` 能看热门（hot）、每周必看（weekly）、分区排行（rank）、"
+        "关注动态（feed）、相关推荐（related）。关键词翻来覆去都是老面孔时换一个来源，"
+        "别在同一批结果里反复挑。长视频先用 `bili_highlights` 看哪几分钟弹幕最密，再决定值不值得读全文。"
+    )
+    interactions = [label for key, label in (("allow_toview", "加入稍后再看"), ("allow_like", "点赞"),
+                                             ("allow_triple", "一键三连"), ("allow_coin", "投币"),
+                                             ("allow_follow", "关注UP主"))
+                    if bool(settings.get(key, key == "allow_toview"))]
+    if interactions:
+        parts.append(
+            f"互动**开着**：{'、'.join(interactions)}。"
+            "具体工具是 `bili_watch_later_add`（加入稍后再看）和 "
+            "`bili_interact`（action=like/unlike/triple/coin/follow）—— 别自己编成 `bili_watch_later` 这类名字。"
+            "只能对本轮 picked 的视频用（投币还受每轮额度限制），"
+            "不要给没挑中的视频做互动；三连会真的花硬币，别当普通点赞用。"
+        )
     if picked > 0:
         parts.append(
             f"今天已经挑过 {picked} 条了 ⇒ **这一轮最多再挑 {left} 条**"
@@ -890,154 +1176,102 @@ def build_prompt(settings: Mapping[str, Any]) -> str:
 # ── 跑一轮 ──────────────────────────────────────────────────────────────
 
 def _ensure_session(settings: dict) -> str:
-    """确保有一个专用值班会话；没有就建一个并把 id 写回设置。"""
-    from agent_harness import session_manager
+    sid = _bind_session(str(settings.get("duty_session_id") or ""), key="duty",
+        name="B站值班", prompt=build_system_context(),
+        profile=str(settings.get("duty_model_profile") or ""))
+    _write_settings({"duty_session_id": sid})
+    return sid
 
-    sid = str(settings.get("duty_session_id") or "").strip()
-    system_context = build_system_context()
-    # ⭐ 钉住模型：实测过一轮 430 秒 0 次工具调用，回查发现那几轮用的是
-    #    `recursive/flint-v1.0:free` —— 免费模型不发 tool_call。
-    #    值班看的是"它自己去调 bili_*"，模型不支持工具等于整条链路废掉。
-    profile = str(settings.get("duty_model_profile") or "").strip()
-    if sid:
-        try:
-            exists = session_manager.get_session_summary(sid) is not None
-        except Exception:  # noqa: BLE001
-            exists = False
-        if exists:
-            current = ""
-            try:
-                current = str((session_manager._load_metadata(sid) or {}).get("model_profile_id") or "")
-            except Exception:  # noqa: BLE001
-                current = ""
-            if profile and current != profile:
-                duty.log(
-                    _home(),
-                    f"值班会话的模型对不上（现在是 {current or '未钉'}，要求 {profile}），换一条新会话",
-                )
-                sid = ""
-            else:
-                # Existing duty sessions migrate on their next round. Unchanged
-                # context is a no-op; edits to the user's charter replace it here.
-                session_manager.set_session_system_context(sid, system_context, mode="replace")
-                return sid
 
-    session_id, *_ = session_manager.get_or_create_session(
-        None,
-        model_profile_id=profile,
-        system_context=system_context,
-        system_context_mode="replace",
-    )
-    try:
-        session_manager.set_session_name(session_id, "B站值班")
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        _write_settings({"duty_session_id": session_id})
-    except Exception:  # noqa: BLE001
-        pass
-    duty.log(_home(), f"已自动创建值班会话 {session_id}")
-    return session_id
+def _bind_session(sid, *, key, name, prompt, profile=""):
+    from agent_harness import session_manager, session_work_root, WORK_DIR
+    from session_control.public import ensure_host_session
+    metadata = session_manager._load_metadata(sid) if sid else {}
+    if profile and metadata and metadata.get("model_profile_id") != profile:
+        sid, metadata = "", {}
+    return ensure_host_session(PLUGIN_ID, sid, key=[str(_home()), key, profile],
+        name=name, prompt=prompt, workspace=str(session_work_root(metadata or {}) or WORK_DIR),
+        model_profile_id=profile)
 
 
 def _run_round_blocking(prompt: str, session_id: str, run_id: str, budget: float = 0.0,
                         allow: Optional[list[str]] = None, deny: Optional[list[str]] = None,
                         policy: Optional[dict] = None, on_event=None) -> dict:
-    from agent_harness import session_manager
-    from agent_loop import astream_events, clear_run_tool_scope, set_run_tool_scope
-    from webui import _reserve_session_chat_start, _release_session_chat_start
-
-    reservation = _reserve_session_chat_start(session_id, run_id)
-    if not reservation:
-        return {"ok": False, "busy": True, "error": "会话正在运行，稍后重试"}
-    policy = dict(policy or {})
-    policy["allowed"] = list(allow) if allow is not None else policy.get("allowed", [])
-    wire_allow = [mcp_function_name(name) for name in allow] if allow is not None else None
-    wire_deny = [mcp_function_name(name) for name in deny] if deny is not None else None
-    token = set_run_tool_scope(session_id, allow=wire_allow, deny=wire_deny, run_id=run_id, context=policy)
-    deadline = time.monotonic() + budget if budget else 0
-    timed_out = False
-    finals, errors = [], []
-
-    def should_stop(sid):
-        nonlocal timed_out
-        timed_out = bool(deadline and time.monotonic() > deadline)
-        return timed_out or _runtime.get("stopping", False) or session_manager.is_interrupt_requested(sid, run_id)
-
+    from session_control.public import host_client, stable_key
+    client = host_client(PLUGIN_ID, session_ids=[session_id],
+                         capabilities=["session.send", "operation.cancel"])
     async def run():
-        if allow:
-            import agent_mcp
-            await agent_mcp.ensure_started()
-            if not any(row.get("server") == PLUGIN_ID + "/bili" and row.get("connected")
-                       for row in agent_mcp.list_configured_servers()):
-                raise RuntimeError("B站 MCP 未连接，请在 MCP 设置注册 sugar-bili-scroll/bili")
-        async for event in astream_events(_mcp_tool_text(prompt), session_id=session_id, should_stop=should_stop, run_id=run_id):
-            if event.get("type") == "final" and str(event.get("content") or "").strip():
-                finals.append(str(event["content"]))
-            elif event.get("type") == "error":
-                errors.append(str(event.get("content") or event.get("message") or "模型执行失败"))
-            if on_event is not None:
-                pending = on_event(event)
-                if asyncio.iscoroutine(pending):
-                    await pending
+        job_key = (policy or {}).get("job_key")
+        prior = (_flow().store.job(job_key) or {}).get("result", {}) if job_key else {}
+        key = stable_key("bili-job", [job_key, prior.get("_control_retry", 0)]) if job_key else run_id
+        receipt = await client.run(session_id, _mcp_tool_text(prompt), key=key, budget=budget,
+            allow=[mcp_function_name(name) for name in allow] if allow is not None else None,
+            deny=[mcp_function_name(name) for name in deny] if deny else None,
+            context=dict(policy or {}), on_event=on_event,
+            should_stop=lambda: bool(_runtime.get("stopping", False)))
+        content = receipt.get("content")
+        return {"ok": receipt["status"] == "succeeded",
+                "finals": [content] if content else [],
+                "error": str((receipt.get("error") or {}).get("message") or
+                             ("" if receipt["status"] == "succeeded" else receipt["status"])),
+                "operation_id": receipt["operation_id"], "run_id": receipt["run_id"],
+                "permanent": receipt["status"] in {"unknown", "interrupted", "stopped", "cancelled"}}
+    return asyncio.run(run())
 
-    loop = asyncio.new_event_loop()
+
+
+async def favorite_today(why: str = "手动", *, task_id: str = "") -> dict:
+    """把这条任务今天挑中的视频收进收藏夹。
+
+    ⭐ 支持**跨账号**：`fav_uid` 指的是"收藏进谁的夹子"，可以和跑任务的账号不同
+    （小号刷到好视频 → 收进大号）。写操作用目标账号自己的凭证，
+    但**不切换**全局生效账号，值班和入站不会跟着换人。
+    """
+    home = _home()
+    row = _task_row(task_id) if task_id else (_task_rows() or [{}])[0]
+    settings = _settings()
+    task_home = tasks_mod.task_home(home, row) if row else home
+    folder = int(row.get("fav_folder_id") or 0) or max(0, int(settings.get("fav_folder_id") or 0))
+    if folder <= 0:
+        return {"ok": False, "error": "还没选收藏夹（任务里填「收藏夹 id」，或设置里填「自动收藏到」）"}
+    target_uid = str(row.get("fav_uid") or "").strip()
+    if target_uid:
+        if bili_client.account_credential(home, target_uid) is None:
+            return {"ok": False, "error": f"没有保存账号 {target_uid}，请先在设置页扫码添加"}
+    elif bili_client.load_credential(home) is None:
+        return {"ok": False, "error": "B站 未登录"}
+    if _runtime.get("fav_busy"):
+        return {"ok": False, "error": "上一次收藏还没跑完"}
+
+    ids = duty.pick_ids(task_home)
+    if not ids:
+        return {"ok": False, "error": "这条任务今天还没有挑中的视频（报告里行首 `### BV号`）"}
+
+    _runtime["fav_busy"] = True
     try:
-        _flow().store.start_run(run_id, session_id, policy)
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(run())
-        if timed_out:
-            errors.append("本轮超过运行时间上限")
-        return {"ok": not errors, "finals": finals, "error": "；".join(errors)}
+        added = 0
+        failures: list[str] = []
+        for bvid in ids:
+            try:
+                if target_uid:
+                    result = await bili_client.favorite_add_as(home, target_uid, bvid, folder)
+                else:
+                    result = await bili_client.favorite_add(home, bvid, folder)
+            except Exception as exc:  # noqa: BLE001
+                result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            if result.get("ok"):
+                added += 1
+            else:
+                failures.append(f"{bvid}: {str(result.get('error') or '未知原因')[:80]}")
+        who = f"账号 {target_uid}" if target_uid else "当前账号"
+        duty.log(home, f"自动收藏（{why}，到{who} 夹 {folder}）：{added}/{len(ids)} 条"
+                 + (f"，失败 {len(failures)} 条" if failures else ""))
+        if failures:
+            duty.log(home, "  收藏失败明细：" + " | ".join(failures[:5]))
+        return {"ok": True, "added": added, "total": len(ids), "failures": failures,
+                "uid": target_uid or "", "folder": folder}
     finally:
-        try:
-            _flow().store.end_run(run_id)
-        finally:
-            clear_run_tool_scope(session_id, token)
-            _release_session_chat_start(session_id, reservation)
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
-
-
-
-# ── 值班自动收藏（由宿主按任务配置执行） ──────────────────────────────
-#
-# 值班模型只负责挑；白名单互动及普通会话可通过 bili_favorite_add 显式收藏。
-
-async def favorite_today(why: str = "手动", task_id: str = "") -> dict:
-    home, settings = _home(), _settings()
-    folder = max(0, int(settings.get("fav_folder_id") or 0))
-    if not folder:
-        return {"ok": False, "error": "未配置收藏夹"}
-    rows = [_task_row(task_id)] if task_id else _task_rows()
-    ids = []
-    for row in rows:
-        if not row:
-            continue
-        for ident in duty.pick_ids(tasks_mod.task_home(home, row)):
-            if ident not in ids:
-                ids.append(ident)
-        for item in _flow().store.observations(row["id"], duty.day_key()):
-            if item.get("picked") and item["bvid"] not in ids:
-                ids.append(item["bvid"])
-    failures, added = [], 0
-    for ident in ids:
-        key = "favorite:" + str(folder) + ":" + ident
-        if _flow().store.get(key):
-            added += 1
-            continue
-        try:
-            result = await bili_client.favorite_add(home, ident, folder)
-        except Exception as exc:
-            result = {"ok": False, "error": str(exc)}
-        if result.get("ok"):
-            _flow().store.put(key, True)
-            added += 1
-        else:
-            failures.append(ident + ": " + str(result.get("error") or "收藏失败"))
-    duty.log(home, f"自动收藏（{why}）：{added}/{len(ids)} 条")
-    return {"ok": not failures, "added": added, "total": len(ids), "failures": failures}
-
+        _runtime["fav_busy"] = False
 
 
 def favorite_today_blocking(why: str = "自动", task_id: str = "") -> dict:
@@ -1085,12 +1319,15 @@ def _task_settings(row: Mapping[str, Any]) -> dict:
 
 
 def _ensure_task_session(row: dict, settings: Mapping[str, Any]) -> str:
-    """每任务一条会话：名字 `B站值班·<任务名>`，并写回任务表。"""
-    from agent_harness import session_manager
-
-    sid = str(row.get("session_id") or "").strip()
-    # ⭐ 任务级上下文：章程（公共）+ 这条任务的边界（名字/关键词/额度/窗口），
-    #    多条任务共用一份章程，但"我这条任务只管什么"必须分开说清。
+    # 多账号：这条任务指定了运行账号就先切过去（本地切换，不联网验活）。
+    # 不指定就沿用当前生效账号。
+    run_uid = str(row.get("account_uid") or "").strip()
+    if run_uid:
+        active = bili_client.load_credential(_home())
+        if str(getattr(active, "dedeuserid", "") or "") != run_uid:
+            switched = bili_client.activate_local(_home(), run_uid)
+            duty.log(_home(), f"任务「{row.get('name')}」切换到账号 {run_uid}："
+                     + ("成功" if switched.get("ok") else str(switched.get("error"))))
     system_context = build_system_context(tasks_mod.task_home(_home(), row)) + (
         "\n\n### 本条任务\n"
         f"- 任务名：{row.get('name') or '未命名'}\n"
@@ -1099,49 +1336,13 @@ def _ensure_task_session(row: dict, settings: Mapping[str, Any]) -> str:
         f"- 谷时窗口：{row.get('valley_windows') or ''}\n"
         "- 判重表是**全局共享**的：别的任务看过的视频，这条任务不要再挑。\n"
     )
-    profile = str(settings.get("duty_model_profile") or "").strip()
-    if sid:
-        try:
-            exists = session_manager.get_session_summary(sid) is not None
-        except Exception:  # noqa: BLE001
-            exists = True
-        if exists:
-            current = None
-            try:
-                current = str((session_manager._load_metadata(sid) or {}).get("model_profile_id") or "")
-            except Exception:  # noqa: BLE001
-                current = None
-            if profile and current is not None and current != profile:
-                duty.log(_home(), f"任务「{row.get('name')}」的会话模型对不上，换新会话")
-                sid = ""
-            else:
-                session_manager.set_session_system_context(sid, system_context, mode="replace")
-                return sid
 
-    session_id, *_ = session_manager.get_or_create_session(
-        None,
-        model_profile_id=profile,
-        system_context=system_context,
-        system_context_mode="replace",
-    )
-    try:
-        session_manager.set_session_name(session_id, f"B站值班·{row.get('name') or '任务'}")
-    except Exception:  # noqa: BLE001
-        pass
-    row["session_id"] = session_id
-    # _task_rows() reloads fresh dictionaries; saving them without updating the
-    # matching row would discard the new id and create a new session each round.
-    tasks_mod.update(_home(), row["id"], {"session_id": session_id})
-    duty.log(_home(), f"任务「{row.get('name')}」建好会话 {session_id}")
-    return session_id
-
-
-# ── 私聊：即时回复（每用户一条会话 + steer 插入） ──────────────────────
-#
-# 和"任务回复"的区别（用户 2026-10-22 定的）：
-#   · 即时回复：像聊天，一人一条会话，消息用 steer 插进正在生成的会话；
-#   · 任务回复：评论/@ 走工具发出去，按任务排队。
-# 这里只给 B站 相关工具 —— 私聊窗口不该碰得到 shell 和文件。
+    sid = _bind_session(str(row.get("session_id") or ""), key=["task", row["id"]],
+        name=f"B站值班·{row.get('name') or '任务'}", prompt=system_context,
+        profile=str(settings.get("duty_model_profile") or ""))
+    row["session_id"] = sid
+    tasks_mod.update(_home(), row["id"], {"session_id": sid})
+    return sid
 
 def _dm_sessions_file():
     folder = _home() / "inbound"
@@ -1404,6 +1605,18 @@ async def _scheduler() -> None:
 
 # ── 生命周期 ────────────────────────────────────────────────────────────
 
+def _register_control_hooks():
+    from session_control.public import register_source_lifecycle
+
+    def before(sid, run_id, request):
+        policy = {**request.get("_run_scope_context", {}), "run_id": run_id}
+        _flow().store.start_run(run_id, sid, policy)
+        if policy.get("job_key"):
+            _flow().store.annotate(policy["job_key"], {"operation_id": request["_operation_id"]}, sid, run_id)
+    register_source_lifecycle(PLUGIN_ID, before=before,
+        after=lambda _sid, run_id, _operation: _flow().store.end_run(run_id))
+
+
 async def start(_context, plugin) -> None:
     from plugins.storage import plugin_storage_layout
 
@@ -1412,6 +1625,7 @@ async def start(_context, plugin) -> None:
     _runtime["plugin"] = plugin
     _runtime["stopping"] = False
     _flow().store.recover()
+    _register_control_hooks()
     # 语音输入服务挂在 app.state 上，转写要靠它；顺便记住主循环（跨线程调用要用）
     try:
         _runtime["loop"] = asyncio.get_running_loop()
@@ -1707,6 +1921,14 @@ def install(app, context, plugin) -> None:
         except OSError as exc:
             return JSONResponse({"ok": False, "error": f"退出登录失败：{exc}"}, status_code=500)
 
+    @router.get("/accounts/{uid}/folders")
+    async def account_folders(uid: str):
+        """列出某个**已保存账号**的收藏夹 —— 跨账号收藏要选目标夹。"""
+        if not uid.isdigit():
+            return JSONResponse({"ok": False, "error": "UID 必须为数字"}, status_code=400)
+        result = await bili_client.favorite_folders_as(_home(), uid)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 404)
+
     @router.post("/favorite-now")
     async def favorite_now(request: Request):
         """把今天报告里挑中的视频收进设置里的收藏夹（宿主干，不经模型）。"""
@@ -1714,9 +1936,10 @@ def install(app, context, plugin) -> None:
             return JSONResponse({"ok": False, "error": "origin rejected"}, status_code=403)
         if _account_busy():
             return JSONResponse({"ok": False, "error": "B站任务或账号切换正在进行"}, status_code=409)
+        body = await _json_body(request)
         _runtime["busy"] = True
         try:
-            result = await favorite_today("手动")
+            result = await favorite_today("手动", task_id=str(body.get("task_id") or ""))
         finally:
             _runtime["busy"] = False
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
@@ -1981,6 +2204,19 @@ def install(app, context, plugin) -> None:
                 parts.append("# " + row["name"] + "\n\n" + target.read_text(encoding="utf-8"))
         return JSONResponse({"ok": True, "exists": bool(parts), "text": "\n\n---\n\n".join(parts), "path": "；".join(paths)})
 
+    # 热重载：先摘掉上一轮注册的同名 APIRoute。include_router 会复制 route 对象，
+    # 且 FastAPI 先注册先匹配，不摘掉旧处理器就会一直赢（面板看起来正常、实际跑旧代码）。
+    # 只清 APIRoute：MCP 网关是 app.mount 的 Mount（同前缀 /api/sugar-bili-scroll/mcp），
+    # 按路径前缀清会把它一起删掉，而 mcp_server.install() 发现 state 已存在就不会再挂。
+    from fastapi.routing import APIRoute
+
+    stale_paths = {route.path for route in router.routes}
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not isinstance(route, APIRoute)
+        or getattr(route, "path", "") not in stale_paths
+    ]
+    app.openapi_schema = None
     app.include_router(router)
 
 

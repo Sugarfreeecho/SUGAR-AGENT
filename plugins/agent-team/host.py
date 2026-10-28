@@ -1,6 +1,8 @@
 """Trusted host adapter for the bundled Agent Team workflow."""
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 from typing import Any, Mapping
 
@@ -66,6 +68,7 @@ def tool_definitions(context, plugin):
                     "role": {"type": "string"}, "prompt": {"type": "string"},
                     "model_profile_id": {"type": "string"}, "readonly": {"type": "boolean"},
                     "member_id": {"type": "string"}, "task_id": {"type": "string"},
+                    "state": {"type": "string", "enum": ["starting", "idle", "working", "waiting_permission", "stopping", "stopped", "failed"]},
                     "description": {"type": "string"},
                     "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
                     "depends_on": {"type": "array", "items": {"type": "string"}},
@@ -98,7 +101,53 @@ def _service(context):
     )
 
 
+async def _runtime_action(context, session_id, data):
+    from agent_team.models import AgentTeamError
+    from agent_team.tools import execute_team_tool
+    from agent_subagent import run_subagent_task, subagent_registry
+    from session_event_bus import publish_session_event
+
+    service = _service(context)
+    action = data["action"]
+    if action in {"interrupt_member", "recover_member"}:
+        team = await asyncio.to_thread(service.read_team, session_id) or {}
+        member_id = str(data.get("member_id") or "")
+        member = (team.get("members") or {}).get(member_id)
+        if not member or member.get("removed"):
+            raise AgentTeamError("member not found")
+        child_id = str(member.get("child_session_id") or "")
+        if action == "interrupt_member":
+            if not subagent_registry.is_running(child_id):
+                return await asyncio.to_thread(service.set_member_state, session_id, member_id, "stopped", detail="no live member execution; stopped by operator")
+            await asyncio.to_thread(service.set_member_state, session_id, member_id, "stopping", detail="operator requested interrupt")
+            result = await run_subagent_task(tool_args={"action": "interrupt", "resume": child_id},
+                parent_session_id=session_id, parent_key_context="", emit=None, parent_run_id="team_console")
+            if str(result).startswith("Error:"):
+                raise AgentTeamError(str(result))
+            if not subagent_registry.is_running(child_id):
+                await asyncio.to_thread(service.set_member_state, session_id, member_id, "stopped", detail="interrupted by operator")
+            return {"result": result}
+        if subagent_registry.is_running(child_id):
+            raise AgentTeamError("member is still running; interrupt it before recovery")
+        if member.get("state") not in {"failed", "stopped", "working", "starting", "stopping"}:
+            raise AgentTeamError("member does not need recovery")
+        if team.get("status") != "active":
+            raise AgentTeamError("team is not active")
+        return await asyncio.to_thread(service.set_member_state, session_id, member_id, "idle", detail="recovered by operator")
+
+    args = {key: data[key] for key in ("action", "name", "role", "prompt", "model_profile_id", "readonly", "member_id", "task_id") if key in data}
+    if action == "dispatch":
+        args["run_in_background"] = True
+    async def emit(event):
+        await publish_session_event(session_id, event)
+    result = await execute_team_tool(args, session_id=session_id, parent_run_id="team_console", emit=emit)
+    await publish_session_event(session_id, {"type": "extension_state_changed", "plugin_id": "agent-team", "namespace": "team", "ephemeral": True})
+    return json.loads(result).get("data")
+
+
 def install(app, context, _plugin):
+    from plugin_page_assets import install_plugin_page_assets
+    install_plugin_page_assets(app)
     from fastapi import APIRouter, Depends, HTTPException
     from agent_team.api import create_agent_team_router
     from plugins.host import bundled_host_plugin_enabled
@@ -115,8 +164,21 @@ def install(app, context, _plugin):
         create_agent_team_router(
             lambda: _service(context),
             session_exists=lambda session_id: bool(manager.get_session_summary(session_id)),
+            runtime_action=lambda session_id, data: _runtime_action(context, session_id, data),
         )
     )
+
+    # 热重载：先摘掉上一轮注册的同名 APIRoute。include_router 会复制 route 对象，
+    # 且 FastAPI 先注册先匹配，不摘掉旧处理器就会一直赢。
+    from fastapi.routing import APIRoute
+
+    stale_paths = {route.path for route in guarded.routes}
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not isinstance(route, APIRoute)
+        or getattr(route, "path", "") not in stale_paths
+    ]
+    app.openapi_schema = None
     app.include_router(guarded)
 
 

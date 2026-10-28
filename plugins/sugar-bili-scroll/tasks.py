@@ -138,6 +138,11 @@ def new_row(**kwargs: Any) -> dict:
         "dm_mode": "off",
         "dm_uid": 0,
         "reply_to_comments": False,
+        # 多账号：这条任务用哪个号跑（0/空 = 当前生效账号），
+        # 以及挑中的视频收藏进哪个号的哪个夹（小号挑、大号收）。
+        "account_uid": "",
+        "fav_uid": "",
+        "fav_folder_id": 0,
         "session_id": "",
         "created_at": time.time(),
     }
@@ -165,6 +170,9 @@ def normalise(row: Mapping[str, Any]) -> dict:
     out["dm_mode"] = mode if mode in ("off", "only", "both") else "off"
     out["dm_uid"] = max(0, int(out.get("dm_uid") or 0))
     out["reply_to_comments"] = bool(out.get("reply_to_comments"))
+    out["account_uid"] = str(out.get("account_uid") or "").strip()
+    out["fav_uid"] = str(out.get("fav_uid") or "").strip()
+    out["fav_folder_id"] = max(0, int(out.get("fav_folder_id") or 0))
     out["session_id"] = str(out.get("session_id") or "")
     return out
 

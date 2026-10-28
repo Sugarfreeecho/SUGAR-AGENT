@@ -722,7 +722,7 @@ def test_goal_ui_is_plugin_owned_not_built_into_the_main_shell():
     for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
         assert 'id="chat-goal-card"' not in markup
-    assert "Completion review" in (ROOT / "plugins/agent-goal/web/index.html").read_text(encoding="utf-8")
+    assert 'id="review-card"' in (ROOT / "plugins/agent-goal/web/index.html").read_text(encoding="utf-8")
     return
     assert "syncGoalTodoPanelVisibility()" in renderer
     assert "当前会话暂无 Goal" not in renderer

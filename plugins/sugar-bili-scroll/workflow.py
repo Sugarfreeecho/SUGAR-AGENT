@@ -13,7 +13,12 @@ from pathlib import Path
 
 
 BUSINESS = ["bili_search", "bili_video_info", "bili_subtitle", "bili_comments", "bili_danmaku",
-            "bili_emotes", "bili_emote_save", "bili_verify_comment", "bili_favorite_folders"]
+            "bili_emotes", "bili_emote_save", "bili_verify_comment", "bili_favorite_folders",
+            "bili_discover", "bili_my_list", "bili_highlights", "bili_capabilities",
+            "bili_cover", "bili_frame"]
+# 写入类工具恒定发布 schema，能不能用由设置开关决定；开关关着时连会话工具范围都不给。
+WRITE_LABELS = {"allow_like": "点赞", "allow_triple": "一键三连",
+                "allow_coin": "投币", "allow_follow": "关注"}
 BVID = re.compile(r"BV[0-9A-Za-z]{10}\Z")
 
 
@@ -53,6 +58,7 @@ class Workflow:
             if str(policy.get("uid") or "") not in whitelist:
                 return []
         names = list(BUSINESS)
+        names.extend(self.write_names(settings))
         if mode in {"dm", "reply"}:
             names.append("bili_favorite_add")
         if settings.get("transcribe"):
@@ -67,6 +73,54 @@ class Workflow:
         elif mode == "reply" or (mode == "dm" and settings.get("inbound_dm_public_comment", True)):
             names.append("bili_reply")
         return names
+
+    def write_names(self, settings):
+        """设置里开着的写入工具。开关是唯一判据，模型自己开不了。"""
+        names = []
+        if settings.get("allow_toview", True):
+            names.append("bili_watch_later_add")
+        if any(bool(settings.get(key)) for key in WRITE_LABELS):
+            names.append("bili_interact")
+        return names
+
+    def _require_picked(self, policy, args):
+        """值班任务只能动自己这一轮挑中过的视频 —— 和 bili_reply 同一条规则。"""
+        row = self.h._task_row(policy.get("task_id", ""))
+        if not row:
+            raise ValueError("任务不存在或已停用")
+        picked = {x["bvid"] for x in self.store.observations(row["id"], self.h.duty.day_key())
+                  if x.get("picked")}
+        if args.get("bvid") not in picked:
+            raise ValueError("先用 bili_record_video 记录本任务本轮挑中的视频，再做这个动作")
+
+    def _authorize_interact(self, policy, settings, args, run_id):
+        action = str(args.get("action") or "").strip().lower()
+        switches = {"like": "allow_like", "unlike": "allow_like", "triple": "allow_triple",
+                    "coin": "allow_coin", "follow": "allow_follow"}
+        if action not in switches:
+            raise ValueError("action 只能是 like/unlike/triple/coin/follow")
+        switch = switches[action]
+        if not settings.get(switch):
+            raise ValueError(f"「{WRITE_LABELS[switch]}」没开：去插件设置里打开，模型不能自己开")
+        if action == "follow":
+            uid = args.get("uid")
+            if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
+                raise ValueError("action=follow 需要正整数 uid")
+        else:
+            if not str(args.get("bvid") or ""):
+                raise ValueError(f"action={action} 需要 bvid")
+            if policy.get("mode") == "duty":
+                self._require_picked(policy, args)
+        if action == "coin":
+            num = args.get("num", 1)
+            if isinstance(num, bool) or not isinstance(num, int) or not 1 <= num <= 2:
+                raise ValueError("num 只能是 1 或 2")
+            args["num"] = num
+            limit = int(settings.get("coin_per_round") or 0)
+            if limit <= 0:
+                raise ValueError("每轮投币次数是 0：先去设置里给个额度")
+            if run_id and not self.store.reserve(run_id, "coins", limit):
+                raise ValueError("本轮投币次数已用完")
 
     def authorize(self, context, name, arguments):
         run_id = str(getattr(context, "run_id", "") or "")
@@ -131,6 +185,13 @@ class Workflow:
                     raise ValueError("本轮评论额度已用完")
         if name == "bili_emote_save" and run and not self.store.reserve(run_id, "emotes", 3):
             raise ValueError("本轮最多收藏 3 个表情")
+        if name == "bili_watch_later_add":
+            if not settings.get("allow_toview", True):
+                raise ValueError("「加入稍后再看」没开：去插件设置里打开")
+            if policy.get("mode") == "duty":
+                self._require_picked(policy, args)
+        if name == "bili_interact":
+            self._authorize_interact(policy, settings, args, run_id if run else "")
         return policy, settings, args
 
     async def favorite_video(self, context, bvid, fid):
@@ -266,7 +327,9 @@ class Workflow:
         finally:
             self.store.put("task:" + row["id"], {"run_id": "", "error": result.get("error", "")})
         favorite = {"ok": True, "skipped": "未配置自动收藏"}
-        if picked and int(settings.get("fav_folder_id") or 0):
+        # 任务自己的收藏夹优先（支持跨账号：小号跑、大号收）
+        fav_folder = int(row.get("fav_folder_id") or 0) or int(settings.get("fav_folder_id") or 0)
+        if picked and fav_folder:
             favorite = h.favorite_today_blocking("随任务", task_id=row["id"])
         elapsed = int(time.monotonic()-started)
         h.duty.log(h._home(), f"任务「{row['name']}」结束，用时 {elapsed}s，今日已挑 {picked} 条；{'完成' if result.get('ok') else result.get('error')}")
@@ -333,23 +396,14 @@ class Workflow:
         account = str(getattr(credential, "dedeuserid", "") or "")
         if account:
             key = account + ":" + key
-        from agent_harness import session_manager
         with self.lock:
             sid = self.store.bind(kind, key)
             if not sid and kind == "dm":
                 sid = str(self.h._dm_map().get(key) or "")
-            if sid:
-                try:
-                    alive = session_manager.get_session_summary(sid) is not None
-                except Exception:
-                    alive = True
-                if alive:
-                    session_manager.set_session_system_context(sid, context, mode="replace")
-                    self.store.bind(kind, key, sid)
-                    return sid
             profile = str(self.h._settings().get("duty_model_profile") or "")
-            sid, *_ = session_manager.get_or_create_session(None, model_profile_id=profile, system_context=context, system_context_mode="replace")
-            session_manager.set_session_name(sid, ("B站私信·UID" if kind == "dm" else "B站回复·") + display_key)
+            sid = self.h._bind_session(sid or "", key=[kind, key],
+                name=("B站私信·UID" if kind == "dm" else "B站回复·") + display_key,
+                prompt=context, profile=profile)
             self.store.bind(kind, key, sid)
             return sid
 
@@ -385,7 +439,7 @@ class Workflow:
             slot = "dm:" + uid if channel == "dm" else "public"
             if slot in self.workers:
                 if channel == "dm":
-                    self.attach_dm(job)
+                    await asyncio.to_thread(self.attach_dm, job)
                 continue
             if len(self.workers) >= 4:
                 break
@@ -397,7 +451,7 @@ class Workflow:
             self.workers[slot] = asyncio.create_task(asyncio.to_thread(self.process, self.store.job(key)))
 
     def attach_dm(self, job):
-        from agent_loop import enqueue_session_steer
+        from session_control.public import host_client
         uid = str(job["event"]["uid"])
         with self.lock:
             active = self.active_dm.get(uid)
@@ -407,10 +461,13 @@ class Workflow:
             if not self.store.claim(job["key"], active["session_id"], active["run_id"]):
                 return False
             client = "bili-dm:" + job["key"] + ":" + str(job["attempts"]+1)
-            queued = enqueue_session_steer(active["session_id"], job["event"]["text"], client_id=client, mode="append")
-            if not queued.get("ok"):
+            try:
+                control = host_client("sugar-bili-scroll", session_ids=[active["session_id"]], capabilities=["session.steer"])
+                queued = control.blocking("session.steer", {"session_id": active["session_id"], "message": job["event"]["text"], "mode": "append"}, key=client)
+            except Exception:
                 self.store.finish(job["key"], "retry", "消息插入失败")
                 return False
+            client = queued["item"]["client_id"]
             active["steers"][client] = job["key"]
             active["jobs"].append(job["key"])
             self.store.annotate(job["key"], {"coalesced_into": active["jobs"][0]}, active["session_id"], active["run_id"])
@@ -472,6 +529,11 @@ class Workflow:
         async def on_event(item):
             nonlocal last_body
             kind = item.get("type")
+            if kind == "operation.accepted":
+                with self.lock:
+                    active["run_id"] = item["run_id"]
+                self.store.annotate(key, {"operation_id": item["operation_id"]}, sid, item["run_id"])
+                return
             if kind == "user_steer":
                 with self.lock:
                     consumed_key = active["steers"].get(item.get("client_id"))
@@ -533,10 +595,11 @@ class Workflow:
                 status = "linked" if parent["status"] in {"pending", "unknown"} else parent["status"]
                 self.store.finish(attached, status, parent["error"], {**details, "session_id": sid, "coalesced_into": key})
             else:
-                from agent_loop import remove_session_steer
+                from session_control.public import host_client
                 for client, value in active["steers"].items():
                     if value == attached:
-                        remove_session_steer(sid, client_id=client)
+                        control = host_client("sugar-bili-scroll", session_ids=[sid], capabilities=["session.steer.cancel"])
+                        control.blocking("session.steer.cancel", {"session_id": sid, "client_id": client}, key="remove:" + client)
                 self.store.finish(attached, "retry", "前轮结束前未消费，重新排队")
 
     def process_comment(self, job):

@@ -21,6 +21,7 @@ from .service import AgentTeamService
 def create_agent_team_router(
     service_factory: Callable[[], AgentTeamService],
     session_exists: Callable[[str], bool] | None = None,
+    runtime_action=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/agent-team", tags=["agent-team"])
 
@@ -57,6 +58,26 @@ def create_agent_team_router(
         if not isinstance(value, dict):
             return JSONResponse({"ok": False, "error": "json body must be an object"}, status_code=400)
         return value
+
+    @router.post("/{session_id}/control")
+    async def control_team(session_id: str, request: Request):
+        data = await body(request)
+        if isinstance(data, JSONResponse):
+            return data
+        if data.get("action") not in {"spawn_member", "dispatch", "auto_schedule", "interrupt_member", "recover_member"}:
+            return JSONResponse({"ok": False, "error": "unsupported runtime action"}, status_code=400)
+        checked = await invoke("read_team", session_id)
+        if checked.status_code != 200:
+            return checked
+        if runtime_action is None:
+            return JSONResponse({"ok": False, "error": "team runtime unavailable"}, status_code=503)
+        try:
+            result = await runtime_action(session_id, data)
+            return JSONResponse({"ok": True, "data": result})
+        except (AgentTeamValidationError, ValueError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
 
     @router.get("/{session_id}")
     async def get_team(session_id: str):
@@ -123,6 +144,10 @@ def create_agent_team_router(
         data = await body(request)
         if isinstance(data, JSONResponse):
             return data
+        if "depends_on" in data and not isinstance(data["depends_on"], list):
+            return JSONResponse({"ok": False, "error": "depends_on must be an array"}, status_code=400)
+        if "expected_seq" in data and (type(data["expected_seq"]) is not int or data["expected_seq"] < 0):
+            return JSONResponse({"ok": False, "error": "expected_seq must be a non-negative integer"}, status_code=400)
         return await invoke(
             "update_task",
             session_id,
@@ -130,6 +155,7 @@ def create_agent_team_router(
             status=data.get("status"),
             result=data.get("result") or "",
             detail=data.get("detail") or "",
+            **{key: data[key] for key in ("title", "description", "priority", "depends_on", "expected_seq") if key in data},
         )
 
     @router.post("/{session_id}/tasks/{task_id}/claim")

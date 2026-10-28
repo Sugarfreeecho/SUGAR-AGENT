@@ -43,14 +43,12 @@ class RuntimeTeamStore:
 
     def read_snapshot(self, session_id: str) -> dict:
         require_agent_team_enabled()
-        snapshot = self.snapshots.read_consistent(session_id, self.event_log, self.projector)
+        snapshot = self.snapshots.read_consistent_view(session_id, self.event_log, self.projector)
         extensions = snapshot.get("extensions") if isinstance(snapshot, dict) else {}
         plugin = extensions.get("agent-team") if isinstance(extensions, dict) else {}
         row = plugin.get("team") if isinstance(plugin, dict) else {}
         value = row.get("value") if isinstance(row, dict) else None
-        result = dict(snapshot)
-        result["team"] = copy.deepcopy(value) if isinstance(value, dict) else None
-        return result
+        return {"team": copy.deepcopy(value) if isinstance(value, dict) else None}
 
     def append_event(
         self,

@@ -9,6 +9,9 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import agent_harness as real_harness
+from session_control.public import ensure_host_session as real_session_binding
+from tests.test_session_control import composed, run_async
 
 from tests.test_sugar_bili_scroll_tasks import host
 
@@ -43,7 +46,24 @@ def runtime(host, monkeypatch):
         get_or_create_session=create, set_session_name=lambda *args: None,
         set_session_system_context=lambda sid, text, **kw: sessions[sid].update(system_context=text, system_context_mode=kw.get("mode", "append")),
         _load_metadata=lambda sid: sessions.get(sid, {}), is_interrupt_requested=lambda *args: False)
-    monkeypatch.setitem(sys.modules, "agent_harness", SimpleNamespace(session_manager=manager))
+    monkeypatch.setitem(sys.modules, "agent_harness", SimpleNamespace(
+        session_manager=manager, session_work_root=lambda metadata=None: host._home(),
+        WORK_DIR=host._home()))
+
+    # host._bind_session 现在走 session_control；单测用同一个假 session_manager 兜住，
+    # 否则每个用例都因为「应用会话服务不可用」失败（那是环境问题，不是业务失败）。
+    import session_control.public as control_public
+
+    def ensure_host_session(source_id, sid="", key=None, name=None, prompt=None,
+                            workspace=None, model_profile_id=""):
+        if sid and sid in sessions:
+            sessions[sid].update(name=name, system_context=prompt, system_context_mode="replace")
+            return sid
+        new_sid, _ = create()
+        sessions[new_sid].update(name=name, system_context=prompt, system_context_mode="replace")
+        return new_sid
+
+    monkeypatch.setattr(control_public, "ensure_host_session", ensure_host_session)
 
     async def reply(home, bvid, text, rpid=0, root=0, picture=None):
         calls.append(("comment", bvid, text, rpid, root, picture))
@@ -61,6 +81,33 @@ def runtime(host, monkeypatch):
 def event(key="dm:100:1", uid="100", channel="dm", bvid=BV1, rpid=11, root=10, text="你好"):
     return {"key": key, "uid": uid, "channel": channel, "nickname": "访客", "text": text,
             "target": {"kind": "dm" if channel == "dm" else "comment", "uid": uid, "bvid": bvid, "rpid": rpid, "root": root}}
+
+
+@pytest.fixture
+def controlled_runtime(composed, runtime, monkeypatch):
+    import session_control.integration as integration
+    import session_control.public as public
+    from tool_registry import ToolDescriptor, ToolRegistry
+    c, rt = composed, runtime
+    monkeypatch.setitem(sys.modules, "agent_harness", real_harness)
+    monkeypatch.setattr(real_harness, "session_manager", c.manager)
+    monkeypatch.setattr(integration, "_application", c.control)
+    monkeypatch.setattr(public, "ensure_host_session", real_session_binding)
+    async def catalog(*args, **kwargs):
+        registry = ToolRegistry()
+        for name in rt.flow.allowed({"mode": "dm", "uid": "100"}):
+            registry.register(ToolDescriptor.from_openai_definition({"type": "function", "function": {
+                "name": rt.h.mcp_function_name(name), "parameters": {"type": "object", "properties": {}}}},
+                invocation_kind="mcp", owner="sugar-bili-scroll/bili", effect="read"))
+        return registry
+    c.service.callbacks["catalog"] = catalog
+    rt.h._register_control_hooks()
+    released, release = [], c.service.deps.release_start
+    def release_start(sid, token):
+        released.append(sid)
+        release(sid, token)
+    c.service.deps.release_start = release_start
+    return SimpleNamespace(rt=rt, c=c, released=released)
 
 
 def enqueue(rt, ev):
@@ -265,26 +312,29 @@ def test_white_comment_without_tool_send_has_no_fallback(runtime, monkeypatch):
     assert rt.flow.store.job(job["key"])["status"] == "skipped"
 
 
-def test_new_dm_is_steered_into_existing_run(runtime, monkeypatch):
-    rt, started, release = runtime, threading.Event(), threading.Event()
+@run_async
+async def test_new_dm_is_steered_into_existing_run(controlled_runtime):
+    import agent_loop
+    from runtime_v2 import RuntimeHistoryOps
+    cr = controlled_runtime
+    rt, c = cr.rt, cr.c
+    started, release = threading.Event(), threading.Event()
     steers, runs = [], []
-    monkeypatch.setitem(sys.modules, "agent_loop", SimpleNamespace(
-        enqueue_session_steer=lambda sid, text, **kw: steers.append((sid, text, kw)) or {"ok": True},
-        remove_session_steer=lambda *a, **kw: {"ok": True}))
-
-    def run(prompt, sid, run_id, on_event, **kwargs):
-        runs.append(sid)
+    async def stream(prompt, session_id, run_id, user_operation_id, **kwargs):
+        runs.append(session_id)
+        ops = RuntimeHistoryOps(c.manager.sessions_dir, path_resolver=c.manager._resolve_session_path)
+        ops.commit_user_turn(session_id, prompt, operation_id=user_operation_id, run_id=run_id)
         started.set()
-        assert release.wait(5)
-        async def emit():
-            await on_event({"type": "user_steer", "client_id": steers[0][2]["client_id"]})
-            await on_event({"type": "final", "content": "收到两条"})
-        asyncio.run(emit())
-        return {"ok": True}
-
-    monkeypatch.setattr(rt.h, "_run_round_blocking", run)
-
-    async def scenario():
+        while not release.is_set():
+            await asyncio.sleep(.01)
+        steers.extend(agent_loop._pop_session_steers(session_id))
+        for row in steers:
+            yield {"type": "user_steer", "client_id": row["client_id"]}
+        ops.commit_assistant_final(session_id, "收到两条", operation_id="final:" + user_operation_id, run_id=run_id)
+        yield {"type": "final", "content": "收到两条"}
+    c.service.deps.astream_events = stream
+    await c.control.start()
+    try:
         rt.flow.store.poll_commit({"bootstrapped": True}, [event()])
         await rt.flow.dispatch()
         assert await asyncio.to_thread(started.wait, 3)
@@ -292,10 +342,11 @@ def test_new_dm_is_steered_into_existing_run(runtime, monkeypatch):
         await rt.flow.dispatch()
         release.set()
         await asyncio.gather(*rt.flow.workers.values())
-
-    asyncio.run(scenario())
+    finally:
+        release.set()
+        await c.control.close()
     assert len(runs) == 1 and len(steers) == 1
-    assert steers[0][2]["mode"] == "append"
+    assert steers[0]["mode"] == "append"
     assert rt.flow.store.job("dm:100:2")["status"] == "sent"
     assert len(rt.calls) == 1
 
@@ -450,47 +501,70 @@ def test_send_limits_queue_reply_rows_without_regenerating(runtime, monkeypatch)
     assert len(rt.flow.store.get("inbound")["recent"]) == 2
 
 
-def test_real_runner_scopes_tools_forwards_rows_and_releases_reservation(runtime, monkeypatch):
+@run_async
+async def test_real_runner_scopes_tools_forwards_rows_and_releases_reservation(controlled_runtime):
     import agent_loop
-    rt, released = runtime, []
-    monkeypatch.setitem(sys.modules, "webui", SimpleNamespace(
-        _reserve_session_chat_start=lambda *args: "reservation",
-        _release_session_chat_start=lambda *args: released.append(args)))
-
-    async def stream(prompt, session_id, run_id, **kwargs):
+    from session_control.configuration import active_config
+    from runtime_v2 import RuntimeHistoryOps
+    cr = controlled_runtime
+    rt, c = cr.rt, cr.c
+    async def stream(prompt, session_id, run_id, user_operation_id, **kwargs):
         scope = agent_loop.run_tool_scope_for(session_id)
-        assert scope["run_id"] == run_id and rt.h.mcp_function_name("bili_reply") in scope["allow"]
-        assert "run_shell" not in scope["allow"]
+        tools = [ref["name"] for ref in active_config(session_id)["tools"]["allow"]]
+        assert scope["run_id"] == run_id and rt.h.mcp_function_name("bili_reply") in tools
+        assert "run_shell" not in tools and scope["context"]["job_key"]
         assert rt.flow.store.run(run_id)["session_id"] == session_id
+        ops = RuntimeHistoryOps(c.manager.sessions_dir, path_resolver=c.manager._resolve_session_path)
+        ops.commit_user_turn(session_id, prompt, operation_id=user_operation_id, run_id=run_id)
         yield {"type": "llm_response", "react_iter": 1, "content": "真实执行入口的回复"}
+        ops.commit_assistant_final(session_id, "真实执行入口的回复", operation_id="final:" + user_operation_id, run_id=run_id)
         yield {"type": "final", "content": "真实执行入口的回复"}
-
-    monkeypatch.setattr(agent_loop, "astream_events", stream)
+    c.service.deps.astream_events = stream
+    await c.control.start()
     job = enqueue(rt, event())
-    rt.flow.process(job)
+    await asyncio.to_thread(rt.flow.process, job)
+    await c.control.close()
     assert rt.flow.store.job(job["key"])["status"] == "sent"
-    assert len(released) == len(rt.calls) == 1
-    assert agent_loop.run_tool_scope_for(released[0][0]) == {}
+    assert len(cr.released) == len(rt.calls) == 1
+    assert agent_loop.run_tool_scope_for(cr.released[0]) == {}
+    receipt = rt.flow.store.job(job["key"])["result"]
+    assert c.store.get_operation(receipt["operation_id"])["status"] == "succeeded"
 
 
-def test_runner_failure_restores_scope_and_job_can_retry(runtime, monkeypatch):
+@run_async
+async def test_runner_failure_restores_scope_and_manual_retry_creates_new_operation(controlled_runtime):
     import agent_loop
-    rt, released = runtime, []
-    monkeypatch.setitem(sys.modules, "webui", SimpleNamespace(
-        _reserve_session_chat_start=lambda *args: "token",
-        _release_session_chat_start=lambda *args: released.append(args)))
-
+    cr = controlled_runtime
+    rt, c = cr.rt, cr.c
+    attempts = []
+    normal = c.service.deps.astream_events
     async def fail(*args, **kwargs):
+        attempts.append(1)
         raise RuntimeError("model failed")
         yield {}
-
-    monkeypatch.setattr(agent_loop, "astream_events", fail)
+    c.service.deps.astream_events = fail
+    await c.control.start()
     job = enqueue(rt, event())
-    rt.flow.process(job)
+    await asyncio.to_thread(rt.flow.process, job)
     assert rt.flow.store.job(job["key"])["status"] == "pending"
-    assert rt.flow.store.run(session_id=released[0][0]) is None
-    assert agent_loop.run_tool_scope_for(released[0][0]) == {}
+    assert agent_loop.run_tool_scope_for(cr.released[0]) == {}
     assert not rt.calls
+    failed = rt.flow.store.job(job["key"])["result"]["operation_id"]
+    rt.flow.store.defer(job["key"], 0)
+    assert rt.flow.store.claim(job["key"])
+    await asyncio.to_thread(rt.flow.process, rt.flow.store.job(job["key"]))
+    assert attempts == [1]  # Domain retry observes the same failed operation.
+    rt.flow.store.finish(job["key"], "failed", "model failed")
+    assert rt.flow.store.retry(job["key"])
+    assert rt.flow.store.job(job["key"])["result"]["_control_retry"] == 1
+    c.service.deps.astream_events = normal
+    assert rt.flow.store.claim(job["key"])
+    await asyncio.to_thread(rt.flow.process, rt.flow.store.job(job["key"]))
+    await c.control.close()
+    saved = rt.flow.store.job(job["key"])
+    assert saved["status"] == "sent"
+    assert saved["result"]["operation_id"] != failed
+    assert c.store.get_operation(failed)["status"] == "failed"
 
 
 def test_channel_first_failure_still_bootstraps_silently_later(runtime, monkeypatch):

@@ -9,6 +9,8 @@ from urllib.request import Request, urlopen
 
 PLUGIN = "sugar-bili-scroll"
 SERVER = PLUGIN + "/bili"
+# MCP 目录固定发布的工具数。改工具就要同步这里，否则 doctor 会把"新版本"报成故障。
+EXPECTED_TOOLS = 22
 
 
 def request(base, path, method="GET", body=None):
@@ -59,8 +61,9 @@ def execute(command, base):
         issues = []
         if availability.get("state") not in {"ready", "degraded"}:
             issues.append("Plugin is disabled or unavailable; inspect availability checks")
-        if not server.get("connected") or int(server.get("tool_count") or 0) != 14:
-            issues.append("MCP is not connected with all 14 tools; inspect registration/approval and backend version")
+        if not server.get("connected") or int(server.get("tool_count") or 0) != EXPECTED_TOOLS:
+            issues.append(f"MCP is not connected with all {EXPECTED_TOOLS} tools; "
+                          "inspect registration/approval and backend version")
         if not summary["logged_in"]:
             issues.append("No valid active Bilibili login")
         if summary["transcribe"] and not summary["asr_ready"]:

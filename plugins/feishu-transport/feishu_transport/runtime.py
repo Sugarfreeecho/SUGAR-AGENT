@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import threading
 
-from remote_control.service import ControlDependencies, SessionControlService
-from remote_control.store import RemoteControlStore
+from remote_control.service import ControlDependencies
+from session_control.public import ServiceProxy, transport_service
 
 from .adapter import FeishuTransportAdapter
 from .config import FeishuConfig
@@ -18,7 +18,7 @@ class FeishuRuntimeManager:
         config: FeishuConfig,
         dependencies: ControlDependencies,
         *,
-        shared_service: SessionControlService | None = None,
+        shared_service: ServiceProxy | None = None,
     ):
         self.config = config
         self.dependencies = dependencies
@@ -37,10 +37,7 @@ class FeishuRuntimeManager:
         with self._lock:
             if self._adapter is not None:
                 return self._adapter
-            service = self.shared_service
-            if service is None:
-                control_store = RemoteControlStore(self.config.state_dir / "control-plane")
-                service = SessionControlService(self.dependencies, control_store)
+            service = self.shared_service or transport_service("feishu-transport")
             adapter = FeishuTransportAdapter(
                 self.config,
                 service,

@@ -90,9 +90,25 @@ def test_task_session_is_saved_and_reused_on_next_round(host, monkeypatch):
         get_or_create_session=create,
         set_session_name=lambda *args: None,
         set_session_system_context=lambda *args, **kwargs: contexts.append(args),
+        _load_metadata=lambda sid: {"id": sid} if sid in created else {},
     )
-    monkeypatch.setitem(sys.modules, "agent_harness", SimpleNamespace(session_manager=manager))
+    monkeypatch.setitem(sys.modules, "agent_harness", SimpleNamespace(
+        session_manager=manager, session_work_root=lambda metadata=None: host._home(),
+        WORK_DIR=host._home()))
     monkeypatch.setattr(host, "build_system_context", lambda task_home=None: "固定章程")
+    # host._bind_session 现在走 session_control；单测里用同一个假 manager 兜住，
+    # 不然会撞上「应用会话服务不可用」这个环境错误。
+    import session_control.public as control_public
+
+    def ensure_host_session(source_id, sid="", key=None, name=None, prompt=None,
+                            workspace=None, model_profile_id=""):
+        if sid and sid in created:
+            return sid
+        new_sid, _ = create()
+        manager.set_session_system_context(new_sid, prompt, mode="replace")
+        return new_sid
+
+    monkeypatch.setattr(control_public, "ensure_host_session", ensure_host_session)
     first = host._ensure_task_session(host._task_row(row["id"]), {})
     saved = host._task_row(row["id"])
     assert saved["session_id"] == first
@@ -133,13 +149,13 @@ def test_cold_tool_instance_uses_host_storage(host, monkeypatch, tmp_path):
     host._runtime.update(home=None, plugin=None)
     calls = []
 
-    async def search(keyword, num, order):
-        calls.append((keyword, num, order))
+    async def search(keyword, num, order, page=1):
+        calls.append((keyword, num, order, page))
         return {"videos": [], "count": 0}
 
     monkeypatch.setattr(host, "bili_client", SimpleNamespace(search_videos=search, dumps=json.dumps))
     context = SimpleNamespace(service=lambda key: "bili_search")
     result = asyncio.run(host._invoke(context, {"keyword": "测试"}))
-    assert calls == [("测试", 10, "totalrank")]
+    assert calls == [("测试", 10, "totalrank", 1)]
     assert host._home() == tmp_path / "storage" / host.PLUGIN_ID / "data"
     assert result.kind.value == "completed"

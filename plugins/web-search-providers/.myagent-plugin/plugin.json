@@ -2,12 +2,18 @@
   "schema_version": 1,
   "id": "web-search-providers",
   "name": "Web Search Providers",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DuckDuckGo, Brave, Tavily, SearXNG and Jina search transports plus the web_search tool they inject.",
   "permissions": {
     "secrets": ["BRAVE_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"]
   },
   "capabilities": {
-    "trusted_host": {"entry": "host.py"}
+    "trusted_host": {"entry": "host.py"},
+    "web": {"entry": "web/index.html", "assets": "web/assets"},
+    "ui": {
+      "settings.section": [{
+        "id": "search", "title": "联网搜索", "description": "选择搜索引擎、配置 API 密钥并测试 web_search 工具", "target": "plugin-page", "embedded": true, "order": 30
+      }]
+    }
   }
 }

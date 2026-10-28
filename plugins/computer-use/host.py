@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from execution_services import execution_service
-from execution_services.computer import computer_manager
+from .computer_use.computer import computer_manager
 
 
 def tool_definitions(context, plugin):
@@ -52,6 +52,17 @@ def install(app, context, plugin):
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
+    # 热重载：先摘掉上一轮注册的同名 APIRoute。include_router 会复制 route 对象，
+    # 且 FastAPI 先注册先匹配，不摘掉旧处理器就会一直赢。
+    from fastapi.routing import APIRoute
+
+    stale_paths = {route.path for route in router.routes}
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not isinstance(route, APIRoute)
+        or getattr(route, "path", "") not in stale_paths
+    ]
+    app.openapi_schema = None
     app.include_router(router)
 
 

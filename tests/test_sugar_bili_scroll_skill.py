@@ -22,7 +22,8 @@ def test_doctor_is_read_only_and_does_not_print_credentials(monkeypatch, capsys)
         if path.endswith("/inbound"):
             return {"enabled": False, "jobs": [{"text": "private-message"}]}
         if path == "/api/mcp/tools":
-            return {"servers": [{"server": manage.SERVER, "connected": True, "tool_count": 14}]}
+            return {"servers": [{"server": manage.SERVER, "connected": True,
+                                 "tool_count": manage.EXPECTED_TOOLS}]}
         return {"ok": True, "enabled": True, "state": "ready", "checks": []}
     monkeypatch.setattr(manage, "request", call)
     assert manage.main(["doctor"]) == 0

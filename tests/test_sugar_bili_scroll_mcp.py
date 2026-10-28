@@ -85,7 +85,7 @@ def test_context_tickets_bind_identity_tool_args_expiry_and_cannot_replay(monkey
 
 def test_real_mcp_catalog_and_context_permissions(runtime, monkeypatch):
     rt = runtime
-    async def search(keyword, num, order):
+    async def search(keyword, num, order, page=1):
         return {"videos": [{"bvid": BV1, "title": keyword}]}
     rt.h.bili_client.search_videos = search
 
@@ -95,8 +95,10 @@ def test_real_mcp_catalog_and_context_permissions(runtime, monkeypatch):
                 async with ClientSession(read, write) as client:
                     await client.initialize()
                     catalog = (await client.list_tools()).tools
-                    assert len(catalog) == 14
+                    assert len(catalog) == 22
                     assert next(t for t in catalog if t.name == "bili_favorite_add").annotations.readOnlyHint is False
+                    assert next(t for t in catalog if t.name == "bili_discover").annotations.readOnlyHint is True
+                    assert next(t for t in catalog if t.name == "bili_interact").annotations.readOnlyHint is False
                     args = {"keyword": "MCP"}
                     assert (await client.call_tool("bili_search", args)).isError
                     forged = await client.call_tool("bili_search", args, meta={"session_id": "s", "run_id": "manual"})
@@ -133,7 +135,7 @@ def test_real_mcp_catalog_and_context_permissions(runtime, monkeypatch):
             async with streamable_http_client(url) as (read, write, _):
                 async with ClientSession(read, write) as client:
                     await client.initialize()
-                    assert len((await client.list_tools()).tools) == 14
+                    assert len((await client.list_tools()).tools) == 22
     asyncio.run(run())
 
 

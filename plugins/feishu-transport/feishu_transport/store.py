@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 import threading
 import time
 from pathlib import Path
@@ -41,6 +42,10 @@ class FeishuStateStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_seen_messages_received_at
                     ON seen_messages(received_at);
+                CREATE TABLE IF NOT EXISTS deliveries (
+                    message_id TEXT PRIMARY KEY, body TEXT NOT NULL, state TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0, next_at REAL NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '');
                 """
             )
 
@@ -67,6 +72,26 @@ class FeishuStateStore:
                 "DELETE FROM seen_messages WHERE message_id=?",
                 (str(message_id or "").strip(),),
             ).rowcount == 1
+
+    def track_delivery(self, message_id, body):
+        with self._lock, self._connect() as conn:
+            conn.execute("INSERT OR IGNORE INTO deliveries(message_id,body,state) VALUES (?,?,'pending')",
+                (message_id, json.dumps(body, ensure_ascii=False)))
+
+    def pending_deliveries(self, limit=20):
+        with self._lock, self._connect() as conn:
+            return [{"message_id": row[0], **json.loads(row[1]), "attempts": row[2]} for row in conn.execute(
+                "SELECT message_id,body,attempts FROM deliveries WHERE state='pending' AND next_at<=? ORDER BY rowid LIMIT ?", (time.time(), limit))]
+
+    def save_delivery(self, message_id, body, *, completed=False):
+        with self._lock, self._connect() as conn:
+            conn.execute("UPDATE deliveries SET body=?,state=?,attempts=0,next_at=0,last_error='' WHERE message_id=?",
+                (json.dumps({k: v for k, v in body.items() if k not in {"message_id", "attempts"}}, ensure_ascii=False), "delivered" if completed else "pending", message_id))
+
+    def retry_delivery(self, message_id, error):
+        with self._lock, self._connect() as conn:
+            conn.execute("UPDATE deliveries SET attempts=attempts+1,next_at=? + min(300,pow(2,min(attempts,8))),last_error=? WHERE message_id=?",
+                (time.time(), str(error)[:2000], message_id))
 
     def get_binding(self, conversation_key: str) -> str:
         key = str(conversation_key or "").strip()

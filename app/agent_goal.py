@@ -596,6 +596,7 @@ class GoalManager:
         additional_budget: Optional[int] = None,
         actor: str = "user",
         run_id: str = "",
+        expected_goal_id: str = "",
     ) -> Dict[str, Any]:
         decision = str(decision or "").strip().lower()
         if decision not in {"approve", "save", "continue"}:
@@ -616,6 +617,8 @@ class GoalManager:
         def mutate(current: Optional[Dict[str, Any]]):
             if not current or current.get("deleted") is True:
                 raise GoalError("No goal exists for this session.")
+            if expected_goal_id and current.get("id") != expected_goal_id:
+                raise GoalError("Goal changed; refresh before reviewing.")
             if current.get("status") != "completed":
                 raise GoalError("Only a completed goal can be reviewed.")
             goal = dict(current)
@@ -687,6 +690,7 @@ class GoalManager:
         reason: str = "",
         actor: str = "user",
         run_id: str = "",
+        expected_goal_id: str = "",
     ) -> Dict[str, Any]:
         action = str(action or "").strip().lower()
         if additional_budget is not None:
@@ -703,12 +707,14 @@ class GoalManager:
         def mutate(current: Optional[Dict[str, Any]]):
             if not current or current.get("deleted") is True:
                 raise GoalError("No goal exists for this session.")
+            if expected_goal_id and current.get("id") != expected_goal_id:
+                raise GoalError("Goal changed; refresh before applying this action.")
             goal = dict(current)
             if action == "pause" and goal.get("status") == "active":
                 self._stop_clock(goal)
                 goal["status"] = "paused"
                 goal["pause_reason"] = str(reason or "manual")
-            elif action == "resume" and goal.get("status") == "paused":
+            elif action == "resume" and goal.get("status") in {"paused", "blocked"}:
                 budget = goal.get("token_budget")
                 exhausted = budget is not None and int(goal.get("used_tokens") or 0) >= int(budget)
                 if exhausted and additional_budget is None:
@@ -721,6 +727,10 @@ class GoalManager:
                 goal["pause_reason"] = None
                 goal["next_retry_at"] = None
                 goal["consecutive_failures"] = 0
+                goal["blocked_streak"] = 0
+                goal["blocked_reason"] = None
+                goal["blocked_fingerprint"] = None
+                goal["blocker_key"] = None
             elif action == "cancel" and goal.get("status") in ACTIVE_GOAL_STATUSES:
                 self._stop_clock(goal)
                 goal["status"] = "cancelled"

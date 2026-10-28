@@ -1,5 +1,7 @@
 # 开发接手 · 实施与验收记录
 
+> **读法提示（2026-10-27 补）**：下面的部署记录写于 0.2–0.5 阶段，当时插件路由清理还没按路径实现，所以多条记录写着「首次加载需重启」。当前口径已变：插件目录内的任何改动（含 `host.py` 路由、兄弟模块、MCP）用「重新发现 / 热重载」即可生效，只有改宿主 `app/*.py` 或 `.env` 才需要重启，见 [插件热重载](../../docs/plugin_hot_reload.md)。历史记录按阶段保留，不作为当前操作依据。
+
 记录始于 2026-10-23，更新至 2026-10-25（Asia/Shanghai）。承接 MyAgent 会话 `4bc203cb-adb5-4a8e-8ada-c9f299c3e7c6` 的 dsh-bili-scroll → sugar-bili-scroll UC 项目。当前清单版本为 0.5.0；新增独立完整系统提示词的实现和 210 项回归见 [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md)，多账号功能见 [MULTI_ACCOUNT.md](MULTI_ACCOUNT.md)。下文按阶段保留验收记录。
 
 ## 原 10 项逐项结论
@@ -111,3 +113,76 @@ Skill通过skill-creator的quick_validate；清单由实际插件加载器发现
 ```powershell
 .\python\python.exe -m pytest tests/test_sugar_bili_scroll_mcp.py tests/test_sugar_bili_scroll_skill.py tests/test_sugar_bili_scroll_favorite_tool.py tests/test_sugar_bili_scroll_tasks.py tests/test_sugar_bili_scroll_workflows.py tests/test_sugar_bili_scroll_accounts.py tests/test_sugar_bili_scroll_browser.py tests/test_run_tool_scope.py tests/test_session_system_context.py tests/test_mcp_result_status.py tests/test_agent_mcp_cache.py tests/test_mcp_registration_switch.py tests/test_mcp_tool_selection.py tests/test_mcp_background_catalog.py tests/test_mcp_state_read_failures.py tests/test_tool_naming.py tests/test_tool_search.py tests/test_tool_registry.py tests/test_host_catalog_availability_scope.py tests/test_session_workspace_paths.py tests/test_tool_review_preparation.py tests/test_runtime_observability_shared.py tests/test_skills_admin.py tests/test_plugin_host_services.py tests/test_plugin_catalog_loading.py -q
 ```
+
+## 0.6.0：发现、个人列表与互动工具（2026-10）
+
+按用户「把能加的加上」的要求，工具从 14 个扩到 20 个，新增：
+
+| 工具 | 效应 | 说明 |
+|---|---|---|
+| `bili_discover` | read | hot / weekly / rank / up / feed / related 六个来源 |
+| `bili_my_list` | read | toview / favorites / history |
+| `bili_highlights` | read | 弹幕按窗口聚合，找最热闹的几分钟 |
+| `bili_capabilities` | read | 账号、开关、本轮可用工具 |
+| `bili_watch_later_add` | external_write | 加入稍后再看，`allow_toview` 默认开 |
+| `bili_interact` | external_write | like/unlike/triple/coin/follow，四个开关默认关 |
+
+`bvid` 参数改为统一解析：BV 号、`av` 号、带 `?p=` 的完整链接、`b23.tv` 短链。解析放在 `workflow.authorize` 之前，保证「用链接传参」和「用 BV 号传参」走同一条权限路径，值班的 `picked` 校验无法被链接绕过。
+
+权限模型：读取类进 `BUSINESS`（白名单会话按白名单收窄）；写入类只在对应开关打开时进入 `allowed()` 名单，真正调用时 `_authorize_interact` 再查一次，值班任务额外要求本轮 `bili_record_video` 已记录 `picked`。投币次数用 `runs.coins` 计数，旧库通过 `PRAGMA table_info` 检测后 `ALTER TABLE` 补列。
+
+真实接口核对（只读，未做任何 B站 写入）：`hot`/`rank`/`up`/`related`/`history`/`toview` 字段映射正确；`feed` 在该账号（关注 0 人）下返回 0 条并给出 `note`；`highlights` 对一条热门视频采样 5923 条弹幕，输出 0:00（781）、1:00（629）、8:30（313）三个峰值窗口；`av170001 → BV17x411w7KC`、带参数的链接解析正确。核对中发现并修掉两处真实问题：`get_related` 在 17.4.2 返回 list 而非 dict；`User.get_videos` 匿名请求会吃 412，改为带登录态并统一把风控错误压成一句话。
+
+回归：新增 `tests/test_sugar_bili_scroll_discover.py`（9 项，覆盖解析、六个来源映射、个人列表、弹幕分桶、写入失败如实上报、开关与额度、目录效应声明、参数解析在权限校验之前、capabilities）。相关 7 个文件合计 **110 项通过**；`test_new_dm_is_steered_into_existing_run`、`test_real_runner_scopes_tools_forwards_rows_and_releases_reservation`、`test_runner_failure_restores_scope_and_job_can_retry` 三项仍失败，原因是工作区里未提交的 `session_control` 重构（`_bind_session`/`_run_round_blocking` 改走控制面）没有对应的测试替身，属于既有问题，与本版工具无关。
+
+部署状态：未重启后端，改用 `POST /api/extensions/reload` 热重载。首次重载暴露了两个只热一半的问题：`_load_sibling()` 用固定模块名，`sys.modules` 让 workflow/bili_client/store 继续跑旧代码（表现为 MCP 已是 20 个 schema、`bili_capabilities` 仍只列 9 个工具、`bili_discover` 直接报错）；`install()` 每轮都追加一套路由，旧处理器先匹配。修法：模块名带文件内容摘要；`install()` 注册前摘掉上一轮路由；`manage.py` 的工具数断言从写死 14 改为 `EXPECTED_TOOLS = 20`。修复后再重载验证：MCP 20 个工具已连接、设置 35 项含 6 个新开关、`bili_capabilities` 列出新工具、`bili_discover(hot)` 与 `bili_my_list(history)` 实调成功、`doctor` 回到 `ok: true`。未对真实账号执行点赞、投币、三连、关注或加入稍后再看。
+
+## 统一会话控制接入（2026-10-27）
+
+会话绑定和 Prompt 更新改由宿主公共控制服务处理；业务轮次、单轮工具范围、预算、私信追加与撤回共用持久入箱及执行协调器。来信 job 保存实际 operation/run，按稳定业务键恢复观察；自动重试不会重跑已经失败或结果不明的模型轮次，显式重试增加代次。账号、额度、来信游标、发送 outbox 和业务定时仍由插件持有。
+
+上节记录的三项旧入口测试已改为连接隔离控制后端，验证真实持久执行、受限工具、私信追加、失败清理及显式重试。会话控制与 B站流程定向回归 67 项通过；宿主改造需后端重启加载，本阶段未重启应用，也未调用真实平台写入接口。公共接入规范见 [接口迁移清单](../../docs/session-control-migration.md)。
+
+## 0.7.0：封面与画面截图（2026-10-27）
+
+按用户要求把「看视频时能拿到什么画面」补齐，工具从 20 个扩到 22 个：
+
+| 工具 | 实现 |
+|---|---|
+| `bili_cover` | `info["pic"]` + `Referer`/`UA` 下载到 `<data>/shots/<bvid>/cover.jpg`；`size=small` 用 Pillow 缩到 672 宽；24 小时内按文件 mtime 复用 |
+| `bili_frame` | `at` 支持 `"120,3:30"` 或留空取 `bili_highlights` 峰值；`source=storyboard` 走 `get_video_snapshot`（3 张 10×10 雪碧图、300 帧、480×270，Pillow 按最近时间点裁格）；`source=stream` 走 `get_download_url` 的 DASH 流 + ffmpeg `-ss` 抽帧；storyboard 失败自动降级并标 `degraded` |
+
+同时修掉 `bili_video_info` 的既有缺陷：`tags` 读的是 `info["tag"]`，而 17.4.2 的 `get_info()` 不返回该键，导致标签**恒为空数组**；改为 `Video.get_tags()`。补 `cid`、`pages`（列表）、`cover`、`dimension`、`tid`，`page_count` 另给；`detail=true` 追加 `online` 与官方 `ai_summary`。
+
+真机核对（只读，未做任何 B站 写入）：
+
+- 封面：`BV12qnt6VEM1` → 1002×564、119,885 字节，`source_url` 与详情里的 `cover` 一致。
+- storyboard：同一视频请求 `at="60,510"`，命中最近的时间点 58s / 508s，产出两张 480×270 JPEG（30,829 / 18,073 字节），打开确认是真实画面（8:28 的酒店窗景）。
+- stream：`at="510"`、`width=1280` → 1280×720、65,913 字节，ffmpeg `rc=0`。
+- 详情：`tags` 返回 8 个（了不起的旅行家/美国/生活记录/赛博朋克/旅游/vlog/边缘行者/自驾），`pages` 1 条带 `cid=42989062102`，`online.count=3`，`ai_summary` 110 字 + 3 段大纲。
+- 该视频的 `tname` 与 `tname_v2` 在接口里都是空串（B站没填），不是解析问题；因此输出里同时给了 `tid`。
+
+回归：`test_sugar_bili_scroll_discover.py` 新增 5 项（详情字段与 detail、封面只下一次再复用、storyboard 裁最近格、storyboard 失败降级 stream、峰值自动取点与 `3:30` 解析），该文件 13 项全过；MCP 用例的工具数断言改为 22；`manage.py` 的 `EXPECTED_TOOLS` 同步为 22。
+
+热重载：这次用插件开关（停用→启用）而不是全局 `/api/extensions/reload`，只重建本插件的 MCP 连接。过程记录：停用后 `tool_count` 归 0，启用后下一次轮询即 22 且 connected。未重启后端。
+
+## 0.7.1：按用户报错清单逐条核对后的修复（2026-10-27）
+
+用户整理了一份「真的坏了 / 能力缺口 / 用错了 / 没测过」的清单。逐条复现与核对结果：
+
+| 报错 | 结论 | 处理 |
+|---|---|---|
+| `bili_verify_comment` 两次 `visible:null` + `取视频信息失败` | **属实，是 bug** | 根因：用裸 `aiohttp` 打 `x/web-interface/view`，返回 412 HTML，`_jget` 解不出 JSON 就当成「视频已删」。改走库里的 `Video.get_info()` 取 aid；顶层按「最新+热门各 3 页」扫描，楼中楼走 `Api` 会话扫最多 60 条 |
+| `bili_search` 传 `page` 被拒 | **属实，是结构不一致** | `search_videos` 原来把 `page` 写死成 1；补 `page` 1–50 并透传，返回里回显 |
+| `bili_comments` 只能取热门 | **属实，是能力缺口** | 增加 `sort=hot/time`、`root`（楼中楼）、`page` |
+| `bili_reply` 多次 `61001` | 属实，但属账号侧限制 | 新增 `_response_error` 映射：61001→需绑定手机号、-101→重新登录、-412→风控、12015→太频繁；`uncertain` 对已确定失败为 false |
+| `bili_search` 早期「插件尚未激活」 | 已修复的历史问题 | `_home()` 现在自己从 `plugin_storage_layout` 推出数据目录，不再依赖 `start()`；本轮多次调用未复现 |
+| 稍后再看/投币 `Unknown or unavailable deferred tool` | **不是工具坏了** | 工具名是 `bili_watch_later_add`，不是 `bili_watch_later`；本轮实调成功并把 BV12qnt6VEM1 加进稍后再看，`bili_my_list(kind=toview)` 能查到。投币/点赞仍受开关限制，四个开关默认关 |
+| 收藏没加成 `BV1NKHP63E7h` | **不是只读导致** | `bili_favorite_folders` 本来就是只读；要加收藏得调 `bili_favorite_add(bvid, fid)`。未指定 fid 且没配置 `fav_folder_id` 时按既有契约直接拒绝、不发网络请求（有测试锁定），不会替用户猜收藏夹 |
+| `tool_search` 被封 | 宿主执行范围限制 | 报错来自 `app/session_control/configuration.py:319` 的 `tool_scope_denied`，是插件自动会话的 allow 名单只放 B站工具；`tool_describe` 不受影响。属设计如此，不改插件 |
+| `bili_discover` 报 `Bound arguments do not match` | 参数用错 | 真参数是 `source`，没有 `mode`；本轮用 `source=hot` 实调通过 |
+| `bili_record_video` 标题回显成 BV 号 | 模型少传 `title` | 可选参数，不是丢字段；值班任务里带上标题即可 |
+
+本轮实调覆盖（此前「没测过」的部分）：`bili_discover(hot)`、`bili_highlights`（5980 条弹幕，峰值 0:00/1:00/8:30）、`bili_danmaku`、`bili_emotes(panel)`、`bili_emote_save`（命中已有 [doge]，返回 duplicate）、`bili_favorite_folders`（默认收藏夹 4375066445）、`bili_watch_later_add` + `bili_my_list(toview)`、`bili_comments` 的 hot/time/root 三种模式、`bili_verify_comment` 顶层与楼中楼各一条（均 `visible:true`）。
+
+回归：`test_sugar_bili_scroll_discover.py` 增至 18 项（新增分页透传、时间序与楼中楼、复核命中、61001 文案）；B站相关 7 个测试文件 **122 项通过**。插件用开关热重载，MCP 仍是 22 个工具，未重启后端。

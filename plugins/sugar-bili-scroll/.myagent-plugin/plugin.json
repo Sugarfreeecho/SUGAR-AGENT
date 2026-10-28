@@ -2,8 +2,8 @@
   "schema_version": 1,
   "id": "sugar-bili-scroll",
   "name": "刷B站（值班）",
-  "version": "0.5.0",
-  "description": "B站多任务值班、入站回复、多账号登录态；MCP业务工具与随包使用管理Skill。",
+  "version": "0.7.1",
+  "description": "B站多任务值班、入站回复、多账号登录态；发现/个人列表/互动工具与随包使用管理Skill。",
   "settings_schema": {
     "type": "object",
     "schema_version": 1,
@@ -180,6 +180,44 @@
         "description": "0 = 关闭值班自动收藏；填入后自动收藏挑中的视频。显式收藏视频工具未指定收藏夹时也使用此值。",
         "minimum": 0,
         "default": 0
+      },
+      "allow_toview": {
+        "type": "boolean",
+        "title": "允许加入稍后再看",
+        "description": "开了之后模型才能把视频丢进「稍后再看」。只添加，不会取消或清空列表。",
+        "default": true
+      },
+      "allow_like": {
+        "type": "boolean",
+        "title": "允许点赞",
+        "description": "默认关。开了之后模型可以对视频点赞或取消赞。",
+        "default": false
+      },
+      "allow_triple": {
+        "type": "boolean",
+        "title": "允许一键三连",
+        "description": "默认关。三连 = 点赞 + 投 2 枚硬币 + 收藏，会真的花硬币。",
+        "default": false
+      },
+      "allow_coin": {
+        "type": "boolean",
+        "title": "允许投币",
+        "description": "默认关。投币会消耗账号硬币，次数由下一项限制。",
+        "default": false
+      },
+      "coin_per_round": {
+        "type": "integer",
+        "title": "每轮最多投几次币",
+        "description": "一次投币 1~2 枚；这里限制每轮「投几次」。0 = 不允许投。",
+        "minimum": 0,
+        "maximum": 5,
+        "default": 1
+      },
+      "allow_follow": {
+        "type": "boolean",
+        "title": "允许关注 UP 主",
+        "description": "默认关。只能关注，不会取关。",
+        "default": false
       },
       "workspace": {
         "type": "string",

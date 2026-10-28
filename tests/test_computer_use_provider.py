@@ -13,7 +13,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 from execution_services.jobs import ExecutionService
-from execution_services.computer import ComputerUseManager
+from tests.computer_use_plugin import computer
+
+ComputerUseManager = computer.ComputerUseManager
 
 
 class Driver:

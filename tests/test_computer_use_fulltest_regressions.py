@@ -11,13 +11,19 @@ import pytest
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
-from execution_services.computer import ComputerUseManager
-from execution_services.computer_policy import (RecordingEvidence, fixed_window_preview,
-    normalize_receipt, repair_cursor_null_position, validate_replay, write_recording_manifest,
-    record_window_mapping)
-from execution_services.computer_results import image_source, project_result
+from tests.computer_use_plugin import computer, computer_policy, computer_results
 from execution_services.jobs import ExecutionService
 from tests.test_computer_use_feedback import provider
+
+ComputerUseManager = computer.ComputerUseManager
+RecordingEvidence = computer_policy.RecordingEvidence
+fixed_window_preview = computer_policy.fixed_window_preview
+normalize_receipt = computer_policy.normalize_receipt
+repair_cursor_null_position = computer_policy.repair_cursor_null_position
+validate_replay = computer_policy.validate_replay
+write_recording_manifest = computer_policy.write_recording_manifest
+record_window_mapping = computer_policy.record_window_mapping
+image_source, project_result = computer_results.image_source, computer_results.project_result
 
 
 def screenshot(width=800, height=1003):
@@ -193,7 +199,7 @@ def test_replay_handles_uncapped_images_and_rejects_geometry_mutations(tmp_path)
 
 @pytest.mark.parametrize("invalid", [[], {"windows": {}}, {"policy": "fixed_driver_image_v1", "max_image_dimension": 1568, "windows": {"bad": {}}}])
 def test_invalid_replay_contract_is_refused_before_native_dispatch(tmp_path, invalid):
-    from execution_services.computer_policy import RECORDING_MANIFEST
+    RECORDING_MANIFEST = computer_policy.RECORDING_MANIFEST
     (tmp_path / RECORDING_MANIFEST).write_text(json.dumps(invalid))
     assert validate_replay(tmp_path, {"max_image_dimension": 1568})["isError"]
 

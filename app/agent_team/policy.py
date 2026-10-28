@@ -60,19 +60,9 @@ def workspace_write_lock(session_meta: dict | None, tool_name: str) -> threading
 
 
 async def acquire_workspace_write_lock(lock: threading.Lock) -> None:
-    """Acquire a primitive lock without leaking it when the waiter is cancelled."""
-
-    waiter = asyncio.create_task(asyncio.to_thread(lock.acquire))
-    try:
-        await asyncio.shield(waiter)
-    except asyncio.CancelledError:
-        # ``to_thread`` cannot cancel a running Lock.acquire. Wait until that
-        # worker owns the lock, release its orphaned acquisition, then preserve
-        # cancellation for the caller.
-        acquired = await waiter
-        if acquired:
-            lock.release()
-        raise
+    """Wait without leaving an uncancellable Lock.acquire in the thread pool."""
+    while not lock.acquire(blocking=False):
+        await asyncio.sleep(0.025)
 
 
 def _write_tool_names() -> set[str]:
