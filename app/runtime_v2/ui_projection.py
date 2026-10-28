@@ -1552,6 +1552,8 @@ class RuntimeUiProjection:
                 )
                 return data
             data = {"type": "user", "content": payload.get("ui_content") or payload.get("content") or "", "created_at": event.timestamp}
+            if payload.get("operation_id"):
+                data["operation_id"] = str(payload["operation_id"])
             if event.run_id:
                 data["turn_id"] = str(payload.get("turn_id") or event.run_id)
             if payload.get("queued_followup"):
@@ -1623,6 +1625,11 @@ class RuntimeUiProjection:
             data["type"] = data.get("type") or "context_tokens"
             data.setdefault("created_at", event.timestamp)
             return data
+        if event.type == "run_failed":
+            # Failures must survive reconnect/history loading, just like the
+            # tool rows before them. A terminal flag alone hides why output ended.
+            return {"type": "run_failed", "run_id": event.run_id,
+                    "error": str(payload.get("error") or ""), "created_at": event.timestamp}
         if event.type in {"ui_event", "legacy_ui_event"}:
             data = dict(payload)
             if data.get("type"):

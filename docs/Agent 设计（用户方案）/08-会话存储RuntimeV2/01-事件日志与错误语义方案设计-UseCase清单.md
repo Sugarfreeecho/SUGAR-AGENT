@@ -1,6 +1,6 @@
 # 事件日志与错误语义 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-18 v11（追加路径复用与seq缓存身份守卫）
+- 版本：2026-10-27 v12（稀疏索引有效路径的原子发布）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/event_log.py`（777 行）、`event_schema.py`、`config.py`、`versions.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`
@@ -112,6 +112,13 @@
 - **规则与边界**：缓存命中必须同时匹配device、非零inode、size、mtime_ns；未知身份及旧三字段缓存回事实读取。冷读前后源stat不一致不得发布缓存；写入缓存还核对flush后writer的fstat，防止把原文件seq挂到替换文件上。实际事实write/flush、事务锁和所有权边界保持同步；派生缓存失败不改变成功事实的返回。
 - **依据**：`SessionEventLog.next_seq/_cached_last_seq/_update_seq_cache`及三种追加入口；`tests/runtime_v2/test_seq_cache_append_binding.py`共11项，覆盖保留size/mtime的替换、resolver切换、观察者与追加交错、未知身份、旧缓存及三种入口的flush后替换。性能与证据边界见[c004实跑与补修](../../performance/agent-session-8533-run-c004-2026-10-18.md)。
 
+### UC-8A16 稀疏索引临时名不扩张有效目标路径
+
+- **触发**：在较深的会话/子代理目录首次构建稀疏seq索引，或追加跨过新的锚点。
+- **预期现象**：使用短于`seq_offset_index.json`的同目录临时basename，公开目标路径可用时，不能仅因PID/线程/完整UUID拼接而发布失败；成功索引继续服务尾部读取，避免反复完整构建。
+- **规则与边界**：独占创建、flush、fsync、原子replace和失败清理不变；索引仍是派生品，现有source/seq校验、失效回退和版本保持。公开目标本身不可用仍报既有错误，不宣称任意长路径支持。
+- **依据**：`SessionEventLog._write_seq_offset_index`；`tests/runtime_v2/test_cache_temp_paths.py`模拟与真实Windows边界、禁止重复重建及跨锚点读写；[10-27复核](../../performance/runtime-cache-paths-and-registry-audit-2026-10-27.md)。
+
 ## 3. 边界
 
 - 事件类型清单由 `event_schema.py` 白名单管理（新增类型需要登记）；
@@ -122,6 +129,8 @@
 见上表（全为 runtime_v2 文件）。
 
 ## 5. 版本记录
+
+- 2026-10-27 v12：稀疏索引采用短同目录临时名，保留有效目标路径的原子发布能力与完整校验；新增原失败、真实Win32边界和索引复用回归。
 
 - 2026-10-18 v11：新增UC-8A15；同次追加绑定一次路径，seq缓存以实际源身份及读取/flush后的stat发布，未知或变化来源回退事实。
 

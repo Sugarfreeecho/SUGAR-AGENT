@@ -631,7 +631,9 @@ class SessionEventLog:
     def _write_seq_offset_index(self, session_id: str, entries: List[List[int]]) -> None:
         path = self.seq_offset_index_path(session_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
+        # Keep atomic-write temporaries shorter than the public filename: valid
+        # nested Windows session paths must not fail only when building a cache.
+        tmp = path.with_name(f".i-{uuid.uuid4().hex[:12]}")
         try:
             with tmp.open("x", encoding="utf-8") as fh:
                 json.dump(

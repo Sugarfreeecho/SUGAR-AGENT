@@ -11,6 +11,19 @@ from app.runtime_v2.blob_store import BlobStore
 
 
 class RuntimeUiProjectionTests(unittest.TestCase):
+    def test_failed_run_exposes_persisted_cause_in_full_and_cached_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.append("s1", "run_started", {}, run_id="failed-run")
+            mirror.append("s1", "run_failed", {"error": "deque mutated during iteration"}, run_id="failed-run")
+            projection = RuntimeUiProjection(tmp)
+            rows = projection.read_ui_events("s1")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["type"], "run_failed")
+            self.assertEqual(rows[0]["run_id"], "failed-run")
+            self.assertEqual(rows[0]["error"], "deque mutated during iteration")
+            self.assertEqual(projection.read_ui_page("s1")["events"][0]["error"], rows[0]["error"])
+
     def test_user_projection_exposes_stable_turn_id_and_steer_is_not_a_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
             history = RuntimeHistoryOps(tmp)

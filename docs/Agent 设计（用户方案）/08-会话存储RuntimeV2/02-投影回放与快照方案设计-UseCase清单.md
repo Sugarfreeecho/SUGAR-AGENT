@@ -1,6 +1,6 @@
 # 投影、回放与快照 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-18 v7（快照字节游标与成功写入尾部衔接）
+- 版本：2026-10-27 v8（执行恢复检查点有效路径发布）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`runtime_v2/projector.py`（1270 行）、`ui_projection.py`（1304 行）、`model_projection.py`、`snapshot_store.py`（580 行）、`blob_store.py`。
 - 上级：`00-会话存储RuntimeV2整体设计.md`
@@ -80,6 +80,13 @@
 - **规则与边界**：预热只前移线程创建，不提前提交事实。原异步开关、10ms可配置短等待、取消、后台排空和同步事实耐久语义保留；启动失败走原惰性重试，运行中提高worker配置仍可增建。没有将真实834ms发布包络全部归因Thread.start。
 - **依据**：`webui._warm_runtime_checkpoint_workers/start_webui_lifecycle`、`SnapshotStore.start_checkpoint_workers`；`tests/test_checkpoint_warmup_and_local_phases.py`验证并发有界、无文件副作用、首事实无需再建快照线程、失败非致命和事实可恢复；[e046验收](../../performance/agent-session-8533-run-e046-2026-10-18.md)。
 
+### UC-8B12 执行恢复检查点使用短临时文件名
+
+- **触发**：后台封存较深会话/子代理目录内的执行恢复检查点。
+- **预期现象**：临时basename短于公开`execution_recovery.chk`，有效公开路径不再因额外拼接完整UUID和后缀而写入失败；冷缓存时能够真正从检查点恢复执行状态。
+- **规则与边界**：同目录独占创建、flush/fsync/原子replace、跨进程锁、完整内容SHA及source检查、取消和旧代保护均保留。事实日志仍为权威，缓存格式和版本不变；不绕过校验来报恢复成功，不承诺公开目标本身无效的路径也可用。
+- **依据**：`RecoveryCheckpoint._write`、`tests/runtime_v2/test_cache_temp_paths.py`中的模拟/真实Win32边界和清除journal缓存后的checkpoint恢复；[复核与原夹具验证](../../performance/runtime-cache-paths-and-registry-audit-2026-10-27.md)。
+
 ## 3. 边界
 
 - 投影缓存失效规则由事件类型驱动（提交/替换/修剪等）；
@@ -90,6 +97,8 @@
 见上表。
 
 ## 5. 版本记录
+
+- 2026-10-27 v8：执行恢复检查点使用短临时名，保留原子发布、锁和完整性/来源校验，实际验证有效公开路径下的冷恢复。
 
 - 2026-10-18 v8：新增UC-8B11，快照线程在服务启动时通过worker预建；保留失败惰性重试、配置上限和事实边界，补齐834ms发布包络的诊断。
 

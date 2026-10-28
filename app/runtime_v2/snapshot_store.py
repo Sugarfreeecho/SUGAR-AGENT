@@ -611,17 +611,18 @@ class SnapshotStore:
             if self._signature_matches(snapshot, event_log.event_path(session_id)):
                 return snapshot
             if self._projection_version_matches(snapshot):
-                last_seq = max(0, int(snapshot.get("last_seq") or 0))
-                pending = event_log.read_after_seq(session_id, last_seq)
-                if pending and all(int(event.seq) > last_seq for event in pending):
-                    rebuilt = snapshot
-                    for event in pending:
-                        rebuilt = projector.project_incremental(rebuilt, event)
-                    self.stamp_event_log(
-                        session_id, rebuilt, event_log.event_path(session_id)
-                    )
-                    self.write(session_id, rebuilt)
-                    return rebuilt
+                through = max(0, event_log.next_seq(session_id) - 1)
+                rebuilt = self.project_after_append(
+                    session_id, snapshot, event_log, projector, through)
+                self.stamp_event_log(
+                    session_id, rebuilt, event_log.event_path(session_id)
+                )
+                # Facts are already committed. Publish the COW view now and
+                # use the same bounded checkpoint path as live appends, rather
+                # than encoding/fsyncing a full snapshot under the fact lock
+                # for every reader that catches up a few stream updates.
+                self.write_checkpointed(session_id, rebuilt)
+                return rebuilt
             rebuilt = projector.project(event_log.read_all(session_id))
             self.stamp_event_log(session_id, rebuilt, event_log.event_path(session_id))
             self.write(session_id, rebuilt)

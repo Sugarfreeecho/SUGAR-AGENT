@@ -188,7 +188,9 @@ class RecoveryCheckpoint:
             except (OSError, KeyError, TypeError, ValueError):
                 pass
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+            # A valid checkpoint path may already be near the Win32 limit.
+            # Preserve exclusive creation/replace without a longer basename.
+            tmp = path.with_name(f".r-{uuid.uuid4().hex[:12]}")
             try:
                 with tmp.open("xb") as fh:
                     fh.write(json.dumps(header, separators=(",", ":")).encode("utf-8") + b"\n")

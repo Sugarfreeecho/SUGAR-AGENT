@@ -1,6 +1,6 @@
 # 观测与运行看板 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-23 v30（grep 准入和放弃队列口径）
+- 版本：2026-10-27 v32（final投递和收尾独立口径）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/runtime_observability.py`（record_usage L269 等）、`app/execution_metrics.py`（运行看板/心跳）、`agent_loop.py`（埋点调用）。
 - 上级：`00-横切能力整体设计.md`
@@ -192,6 +192,8 @@
 
 回读历史时须同时识别 `payload.duration_ms`、`tool_status.duration_ms` 和旧 `status.duration_ms`，并核对 producer 的计时起止。旧导入记录可在 `tool_started` 下保存完整结果与最终时长，不能只按事件名筛终态；无时长草稿也不能填0或视为长执行。按 session/run/call_id 合并重复事件和备份，递归覆盖子代理；日志起始日期仅表示日志保留边界。宽口径以请求开始日、执行事实以完成日分组，分别统计；仅一对一调用或明确ID可作差，不用最近时间强行配对。现存251个长执行段逐条原事件校验及CSV见[历史复核](../../performance/grep-history-review-2026-10-23.md)。这描述分析方法，不新增生产计时字段。
 
+10-27新增`local_operation_timing.kind=plugin_context_prepare`：初次catalog、consistent snapshot、provider collect、catalog revalidate、plan snapshot五段；仅慢调用记录，沿用session/run/iteration及单调时钟，不携带资料正文。`pre_api_timing`中的`tool_registry_register / tool_registry_policy / tool_registry_disclosure / tool_runtime_snapshot`为原目录总段内的互斥步骤，剩余`tool_registry_unattributed`继续保留。子段不与父总段叠加；给历史缺失的1093ms添加探针不能冒充已完成历史归因。当前进程41次完整端点中6次≥500ms及完整复核见[10-27报告](../../performance/interround-current-and-plugin-context-2026-10-27.md)。
+
 ## 3. 历史生产基线（2026-09-19 会话 `8278fdd4`）
 
 | 指标 | 结果 |
@@ -209,6 +211,12 @@
 仍需重启后的生产会话确认。
 
 09-29/30 的本地延迟复测已另列于 [05 · §4.2](05-性能优化基线与已完成项方案设计-UseCase清单.md)。上述历史样本不得作为该批修改已达标的证据，也不用于把新观察到的本地空档归因到上下文长度或服务器响应。
+
+### final投递与收尾的观测补充
+
+- final事实时间戳在写入流程中生成，不能当提交确认或浏览器显示锚点；模型worker结束、本地消费、final提交/发布、收帧、DOM及绘制应分别核验。final后同步工作可以挡住异步投递，但run_finalize耗时不能直接算成final发布前等待。
+- 普通/续跑的新`post_final_processing`包含`title_check_after_final`和`history_finish_after_final`，与既有`fact_commit_await`排队/线程/恢复锚点关联；final_pipeline补齐原先漏掉的标题检查，增加互斥的调度余量。`finish_after_final`仍是finish本体，整数取整和线程包络不重复相加，无正文诊断规则不变。
+- 当前5个生产run与历史混合样本、300ms固定等待的TCP夹具分别报告。夹具没有完整生产WebUI路由或浏览器绘制，不能替代真实卡片验收。见[本批报告](../../performance/final-card-delivery-2026-10-27.md)及02/08 UC-2H7。
 
 ## 4. 边界
 
@@ -256,6 +264,9 @@
 实际样本通过35个不重复arguments片段复原完整JSON，以seq27429为参数完成边界，至卡片journal锚点约3545ms；这是服务端关联证据。不能把工具总时长中的用户回答等待算进出卡耗时。真实前缀对照仅衡量后端准备，生产SSE/绘制仍需另测，见[专项报告](../../performance/ask-user-card-latency-2026-10-23.md)。
 
 ## 6. 版本记录
+
+- 2026-10-27 v32：区分final事实/投递/显示与终态收尾，增加标题检查及等待式线程收尾观测，保留真实浏览器端点缺失的限制。
+- 2026-10-27 v31：动态上下文五段及目录注册/策略/披露/运行快照明细；保留未归属差额和父子段包含关系，按自然重启区分41个当前样本及历史累计。
 
 - 2026-10-23 v30：grep新增准入锚点、队列结局和未进入worker的空值语义；明确包含关系、放弃后不可迟到更新及超时/取消原因保持。
 
