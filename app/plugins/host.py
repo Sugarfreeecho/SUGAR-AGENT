@@ -102,12 +102,22 @@ def _module(plugin: PluginDefinition) -> ModuleType | None:
         return cached
     digest = hashlib.sha256(f"{entry}:{plugin.content_signature}".encode()).hexdigest()[:16]
     name = f"myagent_bundled_host_{digest}"
-    spec = importlib.util.spec_from_file_location(name, entry)
+    # Give each adapter its own package namespace so implementation modules
+    # can stay inside the plugin without adding its directory to sys.path.
+    spec = importlib.util.spec_from_file_location(
+        name, entry, submodule_search_locations=[str(entry.parent)]
+    )
     if spec is None or spec.loader is None:
         raise PluginSecurityError(f"Cannot load trusted host entry: {entry}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        for module_name in list(sys.modules):
+            if module_name == name or module_name.startswith(name + "."):
+                sys.modules.pop(module_name, None)
+        raise
     _MODULES[key] = module
     return module
 
@@ -237,6 +247,11 @@ async def start_bundled_host_extensions(
 
 
 async def _stop_bundled_host_extension(plugin, module, context) -> None:
+    from session_control.integration import application
+    control = application()
+    if control is not None and control.service.manager is context.get("session_manager") and not control.service.closing:
+        from plugin_host_services import release_plugin_leases
+        release_plugin_leases(plugin.plugin_id)
     stop = getattr(module, "stop", None)
     if callable(stop):
         value = stop(dict(context), plugin)

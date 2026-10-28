@@ -13,3 +13,8 @@ API 模式不检查、下载或加载本地模型。`requirements.txt` 只用于
 MiMo 预设：基础地址 `https://api.xiaomimimo.com/v1`，识别模型 `mimo-v2.5-asr`，朗读模型 `mimo-v2.5-tts`，默认音色 `mimo_default`。模型和音色均可手动修改。识别与朗读分别填写密钥，可使用同一账号的 API Key。
 
 详见 [使用说明](../../docs/speech_input.md)。
+
+## 热重载
+
+- 改本目录里的代码、`speech_input/` 或前端 → 设置页「重新发现 / 热重载」即生效，不必重启：宿主按内容摘要给适配器和 `speech_input` 包起名，摘要一变就是新模块；`install()` 发现摘要变化会先关旧 service，再重建 service 与 `/api/speech/*` 路由（同名路由先摘后注册）。
+- 判定口径见 [插件热重载](../../docs/plugin_hot_reload.md)。

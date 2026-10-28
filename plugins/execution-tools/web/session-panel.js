@@ -11,7 +11,7 @@ function button(label, action) {
     node.addEventListener('click', async () => {
         node.disabled = true;
         try { await action(); }
-        catch (error) { globalThis.alert(String(error.message || error)); }
+        catch (error) { if (node.isConnected && error.name !== 'AbortError') globalThis.alert(String(error.message || error)); }
         finally { node.disabled = false; }
     });
     return node;
@@ -34,6 +34,9 @@ export function renderSessionPanel(context) {
     let busy = false;
     let modal = null;
     let closeView = null;
+    let viewVisibility = null;
+    let requestedTerminalId = context.terminalId || '';
+    const isVisible = () => !document.hidden && (!globalThis.MyAgentPluginPage || globalThis.MyAgentPluginPage.visible);
     const request = async (url, data) => {
         const response = await context.request(url, {
             method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store',
@@ -62,7 +65,7 @@ export function renderSessionPanel(context) {
         dialog.append(heading);
         modal.append(dialog);
         document.body.append(modal);
-        closeView = () => { modal?.remove(); modal = null; closeView = null; };
+        closeView = () => { modal?.remove(); modal = null; closeView = null; viewVisibility = null; };
         return dialog;
     }
 
@@ -84,7 +87,7 @@ export function renderSessionPanel(context) {
         let updating = false;
         let disposed = false;
         const refresh = async () => {
-            if (updating || disposed) return;
+            if (updating || disposed || !alive || !isVisible()) return;
             updating = true;
             try {
                 const result = await request(`${prefix}/jobs/${encodeURIComponent(job.id)}/output?offset=${offset}`);
@@ -153,9 +156,10 @@ export function renderSessionPanel(context) {
         ]);
         const action = (name, data) => request(`${prefix}/terminals/${encodeURIComponent(session.id)}/${name}`, { ...data, connection });
         const connect = () => {
-            if (disposed) return;
+            if (disposed || !alive || !isVisible()) return;
             source = new EventSource(`${prefix}/terminals/${encodeURIComponent(session.id)}/events?connection=${encodeURIComponent(connection)}&offset=${offset}`);
             source.onmessage = (event) => {
+                if (disposed || !source || !isVisible()) return;
                 const result = JSON.parse(event.data);
                 writable = result.status === 'running';
                 if (result.truncated) { terminal.reset(); terminal.write(result.viewport.replace(/\n/g, '\r\n')); }
@@ -164,23 +168,34 @@ export function renderSessionPanel(context) {
                 if (result.status !== 'running') { writable = false; source.close(); }
             };
             source.onerror = () => {
+                if (disposed || !source || !isVisible()) return;
                 writable = false;
                 source.close();
                 retryTimer = setTimeout(connect, 1000);
             };
         };
-        connect();
+        viewVisibility = visible => {
+            if (!visible) {
+                writable = false;
+                source?.close(); source = null;
+                clearTimeout(retryTimer);
+            } else if (!disposed && !source) {
+                fit.fit(); connect();
+            }
+        };
+        if (isVisible()) connect();
         const input = terminal.onData((text) => {
             if (!writable) return;
             inputQueue = inputQueue.then(() => action('input', { text })).catch((error) => {
                 writable = false;
-                terminal.writeln('\r\n' + error.message);
+                if (!disposed && alive) terminal.writeln('\r\n' + error.message);
             });
         });
         let resizeTimer;
         const observer = new ResizeObserver(() => {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
+                if (disposed || !isVisible()) return;
                 fit.fit();
                 if (writable) action('resize', { rows: terminal.rows, cols: terminal.cols }).catch(() => {});
             }, 100);
@@ -262,7 +277,7 @@ export function renderSessionPanel(context) {
     }).catch((error) => { computerStatus.textContent = error.message; });
 
     async function refresh() {
-        if (!alive || busy || document.hidden || globalThis.MyAgentContextMenu?.isOpenFor(root)) return;
+        if (!alive || busy || !isVisible() || globalThis.MyAgentContextMenu?.isOpenFor(root)) return;
         busy = true;
         try {
             const [jobResult, terminalResult] = await Promise.all([request(prefix + '/jobs'), request(prefix + '/terminals')]);
@@ -276,7 +291,9 @@ export function renderSessionPanel(context) {
                 if (['running', 'stopping'].includes(job.status)) row.append(button('停止', async () => { await request(`${prefix}/jobs/${encodeURIComponent(job.id)}/kill`, {}); await refresh(); }));
                 jobs.append(row);
             });
+            if (!alive) return;
             terminals.replaceChildren();
+            if (!terminalResult.user.length && !terminalResult.model.length) terminals.append(element('p', '暂无持久终端', 'execution-status'));
             [...terminalResult.user, ...terminalResult.model].forEach((session) => {
                 const row = element('div', null, 'execution-row');
                 row.append(element('span', `${session.actor === 'user' ? '用户' : 'Agent'} · ${session.name} [${session.status}]`),
@@ -285,14 +302,26 @@ export function renderSessionPanel(context) {
                 terminals.append(row);
             });
             status.textContent = '';
+            if (requestedTerminalId) {
+                const identifier = requestedTerminalId;
+                requestedTerminalId = '';
+                const terminal = [...terminalResult.model, ...terminalResult.user].find(item => item.id === identifier);
+                if (terminal) await showTerminal(terminal);
+                else status.textContent = '对应终端不存在';
+            }
         } catch (error) { status.textContent = error.message; }
         finally { busy = false; }
     }
     refresh();
     const timer = setInterval(refresh, 1000);
+    const onVisibility = () => { viewVisibility?.(isVisible()); if (isVisible()) void refresh(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    document.addEventListener('myagent:plugin-page-visibility', onVisibility);
     return (details) => {
         alive = false;
         clearInterval(timer);
+        document.removeEventListener('visibilitychange', onVisibility);
+        document.removeEventListener('myagent:plugin-page-visibility', onVisibility);
         if (modal && String(details?.nextSessionId || '') === String(context.sessionId)) return false;
         closeView?.();
         return true;

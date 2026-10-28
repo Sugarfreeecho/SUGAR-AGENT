@@ -116,10 +116,10 @@ def test_session_panels_clear_containers_whose_panels_disappeared():
     assert "session panel container cleanup runtime checks passed" in result.stdout
 
     source = (ROOT / "frontend/src/app/plugin-ui-slots.js").read_text(encoding="utf-8")
-    assert "pluginSessionPanelContainers.forEach(function (container) {" in source
+    assert "state.containers.forEach(function (container) {" in source
     assert "if (fragments.has(container)) return;" in source
-    assert "pluginSessionPanelContainers = new Set(fragments.keys());" in source
-    assert "pluginSessionPanelCleanupContainers.get(cleanup) !== container" in source
+    assert "state.containers = new Set(fragments.keys());" in source
+    assert "state.cleanupContainers.get(cleanup) !== container" in source
 
 
 def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_rendering():

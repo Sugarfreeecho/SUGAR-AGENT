@@ -54,6 +54,9 @@
     if (!frame || event.origin !== window.location.origin || event.source !== frame.contentWindow) return;
     const data = event.data || {};
     if (data.type === 'myagent:plugin-settings-ready') sendFrameContext(frame);
+    if (data.type === 'myagent:plugin-settings-dirty' && typeof data.dirty === 'boolean') {
+      frame.dataset.dirty = String(data.dirty);
+    }
     if (data.type === 'myagent:plugin-settings-resize' && Number.isFinite(data.height)) {
       frame.style.height = Math.max(320, Math.min(20000, Math.ceil(data.height))) + 'px';
     }

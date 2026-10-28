@@ -34,7 +34,8 @@ SugarAgent 的现有 `openai-responses` 模型协议。1.1.0 使用设置宿主�
    还复用宿主已有的 `httpx`、`FastAPI`；Windows 凭据保护使用宿主已有的 `pywin32`。
    此插件的宿主适配器在 SugarAgent 进程内运行，因此依赖须装入**宿主 Python**，
    仅安装到插件私有 Worker 虚拟环境无效。当前工程运行时已有这些依赖。
-3. 重启 SugarAgent，确认「插件」中 **ChatGPT Subscription** 已启用。
+3. 在设置页启用 **ChatGPT Subscription**；插件目录更新后点「重新发现 / 热重载」即可，不必重启
+   （重载会关闭旧的本机适配器端口再按保存的端口重建，见 [插件热重载](../../docs/plugin_hot_reload.md)）。
 4. 打开 **设置 → ChatGPT 订阅**。当前仓库已支持内嵌，无需再打开独立窗口。
 5. 点击 **Continue with ChatGPT**，在系统浏览器选择账号、工作区并授权使用套餐。
    浏览器没有自动打开时，可点击页签中的授权链接。完成授权后，设置页签会自动更新。

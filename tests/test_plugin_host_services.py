@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from tests.test_session_control import composed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,115 +75,68 @@ def test_session_activity_check_rejects_a_running_runtime_status(monkeypatch):
     assert services._session_is_active("session-running") is True
 
 
-def test_sessions_run_many_reserves_every_session_atomically(tmp_path, monkeypatch):
+def test_sessions_run_many_durably_queues_busy_sessions_and_revokes_only_plugin_inputs(composed, tmp_path, monkeypatch):
+    import asyncio
     import agent_harness
     import plugin_host_services as services
-
-    interrupts = []
-
-    class FakeSessionManager:
-        def get_session_summary(self, session_id):
-            return {"id": session_id} if session_id in {"s1", "s2", "s3"} else None
-
-        def request_interrupt(self, session_id, run_id, reason=""):
-            interrupts.append((session_id, run_id, reason))
-
-    monkeypatch.setattr(agent_harness, "session_manager", FakeSessionManager())
-    monkeypatch.setattr(services, "_session_is_active", lambda _session_id: False)
-    services._session_reservations.clear()
-    started = threading.Event()
-    release = threading.Event()
-    started_sessions = []
-
-    def fake_run(owner, request):
-        started_sessions.append(request.session_id)
-        if len(started_sessions) == 2:
-            started.set()
-        release.wait(timeout=2)
-        services._release_many(owner, [request.session_id])
-
-    monkeypatch.setattr(services, "_run_session_background", fake_run)
+    import session_control.integration as integration
+    from tests.test_session_control import new_session
+    c = composed
+    monkeypatch.setattr(integration, "_application", c.control)
+    monkeypatch.setattr(agent_harness, "session_manager", c.manager)
     plugin = _plugin(tmp_path, ["sessions.run_many"])
-    first = services.execute_host_actions(
-        plugin,
-        [
-            {
-                "service": "sessions.run_many",
-                "sessions": [
-                    {"session_id": "s1", "prompt": "one"},
-                    {"session_id": "s2", "prompt": "two"},
-                ],
-            }
-        ],
-        trusted_session_ids=("s1", "s2"),
-    )
-    assert started.wait(timeout=1)
-
-    with pytest.raises(services.PluginHostServiceError, match="s2") as exc_info:
-        services.execute_host_actions(
-            plugin,
-            [
-                {
-                    "service": "sessions.run_many",
-                    "sessions": [
-                        {"session_id": "s2", "prompt": "busy"},
-                        {"session_id": "s3", "prompt": "must not reserve"},
-                    ],
-                }
-            ],
-            trusted_session_ids=("s2", "s3"),
-        )
-
-    assert first[0]["accepted"] is True
-    assert exc_info.value.code == "session_busy"
-    assert "s3" not in services._session_reservations
-    assert services.release_plugin_leases("service.demo") == 2
-    assert not services._session_reservations
-    assert {item[0] for item in interrupts} == {"s1", "s2"}
-    assert {item[2] for item in interrupts} == {"plugin_disabled"}
-    release.set()
+    async def scenario():
+        one, two = await new_session(c), await new_session(c)
+        c.active.update({one: "browser-one", two: "browser-two"})
+        await c.control.start()
+        action = [{"service": "sessions.run_many", "sessions": [
+            {"session_id": one, "prompt": "one"}, {"session_id": two, "prompt": "two"}]}]
+        first = await asyncio.to_thread(services.execute_host_actions, plugin, action,
+            trusted_session_ids=(one, two), trusted_run_id="trigger-one")
+        replay = await asyncio.to_thread(services.execute_host_actions, plugin, action,
+            trusted_session_ids=(one, two), trusted_run_id="trigger-one")
+        assert first[0]["accepted"] and len(first[0]["operation_ids"]) == 2
+        assert replay[0]["operation_ids"] == first[0]["operation_ids"]
+        second = await asyncio.to_thread(services.execute_host_actions, plugin, action,
+            trusted_session_ids=(one, two), trusted_run_id="trigger-two")
+        assert second[0]["operation_ids"] != first[0]["operation_ids"]
+        assert all(c.store.get_operation(oid)["status"] == "queued"
+                   for oid in first[0]["operation_ids"] + second[0]["operation_ids"])
+        assert services.release_plugin_leases(plugin.plugin_id) == 4
+        assert all(c.store.get_operation(oid)["status"] == "cancelled"
+                   for oid in first[0]["operation_ids"] + second[0]["operation_ids"])
+        assert c.active == {one: "browser-one", two: "browser-two"}
+        c.active.clear()
+        await c.control.close()
+    asyncio.run(scenario())
 
 
-def test_sessions_run_many_requires_an_exact_host_authorized_session_set(
-    tmp_path, monkeypatch
-):
+def test_sessions_run_many_requires_an_exact_host_authorized_session_set(composed, tmp_path, monkeypatch):
+    import asyncio
     import agent_harness
     import plugin_host_services as services
-
-    class FakeSessionManager:
-        @staticmethod
-        def get_session_summary(session_id):
-            return {"id": session_id} if session_id in {"s1", "s2"} else None
-
-    monkeypatch.setattr(agent_harness, "session_manager", FakeSessionManager())
-    monkeypatch.setattr(services, "_session_is_active", lambda _session_id: False)
-    monkeypatch.setattr(
-        services,
-        "_run_session_background",
-        lambda owner, request: services._release_many(owner, [request.session_id]),
-    )
-    services._session_reservations.clear()
+    import session_control.integration as integration
+    from tests.test_session_control import new_session
+    c = composed
+    monkeypatch.setattr(integration, "_application", c.control)
+    monkeypatch.setattr(agent_harness, "session_manager", c.manager)
     plugin = _plugin(tmp_path, ["sessions.run_many"])
-    action = [{
-        "service": "sessions.run_many",
-        "sessions": [
-            {"session_id": "s1", "prompt": "one"},
-            {"session_id": "s2", "prompt": "two"},
-        ],
-    }]
-
-    with pytest.raises(services.PluginHostServiceError) as missing:
-        services.execute_host_actions(plugin, action)
-    assert missing.value.code == "session_run_grant_required"
-
-    with pytest.raises(services.PluginHostServiceError) as mismatched:
-        services.execute_host_actions(plugin, action, trusted_session_ids=("s1",))
-    assert mismatched.value.code == "session_scope_denied"
-
-    result = services.execute_host_actions(
-        plugin, action, trusted_session_ids=("s1", "s2")
-    )
-    assert result[0]["accepted"] is True
+    async def scenario():
+        one, two = await new_session(c), await new_session(c)
+        await c.control.start()
+        action = [{"service": "sessions.run_many", "sessions": [
+            {"session_id": one, "prompt": "one"}, {"session_id": two, "prompt": "two"}]}]
+        with pytest.raises(services.PluginHostServiceError) as missing:
+            services.execute_host_actions(plugin, action)
+        assert missing.value.code == "session_run_grant_required"
+        with pytest.raises(services.PluginHostServiceError) as mismatched:
+            services.execute_host_actions(plugin, action, trusted_session_ids=(one,))
+        assert mismatched.value.code == "session_scope_denied"
+        assert not any(op["method"] == "session.send" for op in c.store.operations())
+        result = await asyncio.to_thread(services.execute_host_actions, plugin, action, trusted_session_ids=(one, two))
+        assert result[0]["accepted"]
+        await c.control.close()
+    asyncio.run(scenario())
 
 
 def test_session_run_grant_is_plugin_bound_and_one_use(tmp_path, monkeypatch):

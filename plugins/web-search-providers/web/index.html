@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>联网搜索 · SugarAgent</title>
+  <script src="/plugin-assets/web-search-providers/theme.js?v=1.1.0"></script>
+  <link rel="stylesheet" href="/static/settings/settings.css">
+  <link rel="stylesheet" href="/plugin-assets/web-search-providers/app.css?v=1.1.0">
+  <script src="/plugin-assets/web-search-providers/app.js?v=1.1.0" defer></script>
+</head>
+<body>
+  <main class="search-view">
+    <header class="standalone-header">
+      <a href="/settings#plugin:web-search-providers:search" data-en="← Back to settings">← 返回设置</a>
+      <h1 data-en="Web search">联网搜索</h1>
+      <p data-en="Choose the provider behind the web_search tool, store its key, and test the connection.">配置 web_search 工具使用的搜索引擎与访问凭据，并测试实际连通性。</p>
+    </header>
+    <div id="message" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <section class="st-card" aria-labelledby="engine-heading">
+      <div class="card-heading">
+        <h2 id="engine-heading" data-en="Search engine">搜索引擎</h2>
+        <div class="header-actions">
+          <span id="status-chip" class="status-chip" data-kind="idle" data-en="Loading">读取中</span>
+          <button id="refresh" class="st-btn text sm" data-en="Refresh status">刷新状态</button>
+        </div>
+      </div>
+      <div class="section-body">
+        <label for="provider" data-en="Provider">搜索引擎</label>
+        <select id="provider" class="st-input">
+          <option value="duckduckgo">DuckDuckGo</option>
+          <option value="tavily">Tavily</option>
+          <option value="brave">Brave Search</option>
+          <option value="searxng">SearXNG</option>
+          <option value="jina">Jina</option>
+        </select>
+        <p id="provider-hint" class="hint"></p>
+        <p id="status-reason" class="hint" hidden></p>
+        <label for="max-results" data-en="Results per search">单次结果上限</label>
+        <input id="max-results" class="st-input" type="number" min="1" max="100" step="1" inputmode="numeric">
+        <p class="hint" data-en="web_search accepts 1–100 results. When the model omits count, this limit is used.">web_search 允许 1–100 条结果；模型未指定条数时使用此上限。</p>
+        <div class="actions">
+          <button id="save-settings" class="st-btn primary" data-en="Save settings">保存设置</button>
+          <button id="reset-settings" class="st-btn text" data-en="Use defaults">恢复默认</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="st-card" aria-labelledby="credential-heading">
+      <div class="card-heading">
+        <h2 id="credential-heading" data-en="Access credential">访问凭据</h2>
+        <span id="credential-chip" class="status-chip" data-kind="idle"></span>
+      </div>
+      <div class="section-body">
+        <div id="credential-none" class="empty-state" hidden></div>
+        <div id="credential-key" hidden>
+          <label id="credential-label" for="credential-value"></label>
+          <input id="credential-value" class="st-input" type="password" autocomplete="off" spellcheck="false">
+          <p id="credential-hint" class="hint"></p>
+          <div class="actions">
+            <button id="save-credential" class="st-btn primary" data-en="Save key">保存密钥</button>
+            <button id="remove-credential" class="st-btn text danger" data-en="Remove">移除</button>
+          </div>
+        </div>
+        <div id="credential-searxng" hidden>
+          <label for="searxng-url" data-en="SearXNG instance URL">SearXNG 实例地址</label>
+          <input id="searxng-url" class="st-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://search.example.com">
+          <p class="hint" data-en="Use a public http(s) instance with JSON output enabled. Local and private addresses are rejected.">需为可公网访问的 http(s) 实例，并开启 JSON 输出；本机与内网地址会被拒绝。</p>
+          <div class="actions">
+            <button id="save-searxng" class="st-btn primary" data-en="Save address">保存地址</button>
+            <button id="remove-searxng" class="st-btn text danger" data-en="Remove">移除</button>
+          </div>
+        </div>
+        <p id="credential-summary" class="hint"></p>
+      </div>
+    </section>
+
+    <section class="st-card" aria-labelledby="test-heading">
+      <div class="card-heading">
+        <h2 id="test-heading" data-en="Test search">测试搜索</h2>
+        <span id="test-chip" class="status-chip" data-kind="idle"></span>
+      </div>
+      <div class="section-body">
+        <label for="test-query" data-en="Query">搜索词</label>
+        <div class="test-row">
+          <input id="test-query" class="st-input" type="search" autocomplete="off" value="SugarAgent">
+          <button id="run-test" class="st-btn primary" data-en="Test">开始测试</button>
+        </div>
+        <p id="test-status" class="inline-status" role="status" aria-live="polite" hidden></p>
+        <pre id="test-output" class="test-output" hidden></pre>
+      </div>
+    </section>
+
+    <details class="help-details">
+      <summary data-en="How web_search uses these settings">web_search 如何使用这里的设置</summary>
+      <p data-en="Settings are written to the same .env as the settings center and applied to the running process immediately.">设置会写入与设置中心相同的 .env，并立即应用到当前进程，无需重启。</p>
+      <p data-en="A saved key is shown only as a masked suffix. Leaving the key field empty keeps the existing value.">已保存的密钥只显示掩码后缀；密钥输入框留空表示保持原值。</p>
+      <p data-en="At runtime the tool falls back to DuckDuckGo when the selected provider fails. The test above checks the selected provider directly.">工具运行时会回退到 DuckDuckGo；上方测试只验证当前选中的引擎，便于定位凭据问题。</p>
+      <p id="config-file-hint" class="hint"></p>
+    </details>
+  </main>
+</body>
+</html>

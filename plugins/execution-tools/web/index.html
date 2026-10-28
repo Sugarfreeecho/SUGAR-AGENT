@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>执行与终端 · 控制台</title><link rel="stylesheet" href="/plugin-assets/execution-tools/style.css"></head><body><main>
+<header><div><div class="eyebrow">EXECUTION TOOLS</div><h1>执行与终端</h1><p>后台任务、任务输出、持久终端与 Computer Use。</p></div><a href="/" id="back">返回会话</a></header>
+<div class="session-bar"><form id="select" class="session-picker"><label>会话<input id="session" list="sessions" required maxlength="160" placeholder="选择会话，或输入会话 ID" autocomplete="off"></label><button class="primary">打开会话</button><button type="button" id="refresh">刷新</button></form><datalist id="sessions"></datalist><div id="sync-status" role="status"></div></div>
+<div id="error" role="alert"></div><div id="notice" role="status"></div><div id="workspace"><section class="empty" id="empty"><h2>选择会话以查看执行状态</h2><p>详情栏会自动绑定当前会话。</p></section><section id="execution" class="card" hidden></section></div>
+</main><script type="module" src="/plugin-assets/execution-tools/app.js"></script></body></html>
