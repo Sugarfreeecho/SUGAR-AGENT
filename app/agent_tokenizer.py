@@ -156,6 +156,7 @@ def _messages_token_fingerprint_from_hashes(hashes: List[str]) -> str:
 # Messages are treated as immutable once appended, the same assumption the prompt
 # caches already make.
 _MESSAGE_TOKEN_LIST_CACHE: "deque" = deque(maxlen=8)
+_INCREMENTAL_TOKEN_CACHE_LOCK = threading.Lock()
 
 
 
@@ -163,7 +164,9 @@ def _reuse_hash_prefix(items: List[Any]) -> Tuple[List[str], int]:
     """Longest cached prefix sharing object identity with ``items``."""
     best_hashes: List[str] = []
     best_len = 0
-    for cached_len, cached_hashes, cached_msgs in _MESSAGE_TOKEN_LIST_CACHE:
+    with _INCREMENTAL_TOKEN_CACHE_LOCK:
+        cached_rows = tuple(_MESSAGE_TOKEN_LIST_CACHE)
+    for cached_len, cached_hashes, cached_msgs in cached_rows:
         if cached_len <= best_len or cached_len > len(items):
             continue
         if all(a is b for a, b in zip(items[:cached_len], cached_msgs)):
@@ -188,7 +191,8 @@ def _messages_token_hashes(messages: List[Any]) -> List[str]:
     hashes = list(cached_hashes)
     for msg in items[start:]:
         hashes.append(_message_token_cache_hash(msg))
-    _MESSAGE_TOKEN_LIST_CACHE.append((len(items), hashes, items))
+    with _INCREMENTAL_TOKEN_CACHE_LOCK:
+        _MESSAGE_TOKEN_LIST_CACHE.append((len(items), hashes, items))
     return hashes
 
 
@@ -387,9 +391,10 @@ def _record_token_path(path: str, chars: int = 0) -> None:
 
 
 def _clear_flatten_token_cache() -> None:
-    _FLATTEN_TOKEN_CACHE.clear()
-    _FLATTEN_TOKEN_EXACT.clear()
-    _FLATTEN_TEXT_CACHE.clear()
+    with _INCREMENTAL_TOKEN_CACHE_LOCK:
+        _FLATTEN_TOKEN_CACHE.clear()
+        _FLATTEN_TOKEN_EXACT.clear()
+        _FLATTEN_TEXT_CACHE.clear()
 
 
 def _flatten_messages_incremental(messages: List[Any]) -> str:
@@ -399,7 +404,12 @@ def _flatten_messages_incremental(messages: List[Any]) -> str:
         return ""
     best_items: List[Any] = []
     best_text = ""
-    for cached_items, cached_text in _FLATTEN_TEXT_CACHE:
+    # These process-wide caches are shared by independent session workers.
+    # Snapshot only the bounded entry references; compare/flatten outside the
+    # lock so a large history never serializes other sessions' token estimates.
+    with _INCREMENTAL_TOKEN_CACHE_LOCK:
+        cached_rows = tuple(_FLATTEN_TEXT_CACHE)
+    for cached_items, cached_text in cached_rows:
         cached_len = len(cached_items)
         if cached_len <= len(best_items) or cached_len > len(items):
             continue
@@ -415,7 +425,8 @@ def _flatten_messages_incremental(messages: List[Any]) -> str:
             _flatten_message_parts(item) for item in items[len(best_items):]
         )
         text = (best_text + "\n\n" + tail) if best_items else tail
-    _FLATTEN_TEXT_CACHE.append((items, text))
+    with _INCREMENTAL_TOKEN_CACHE_LOCK:
+        _FLATTEN_TEXT_CACHE.append((items, text))
     return text
 
 
@@ -462,12 +473,14 @@ def count_message_tokens_incremental(messages: List[Any]) -> int:
     text = _flatten_messages_incremental(messages)
     if not text and not messages:
         return 0
-    exact = _FLATTEN_TOKEN_EXACT.get(text)
+    with _INCREMENTAL_TOKEN_CACHE_LOCK:
+        exact = _FLATTEN_TOKEN_EXACT.get(text)
+        cached_rows = tuple(_FLATTEN_TOKEN_CACHE) if exact is None else ()
     if exact is not None:
         _record_token_path("exact")
         return exact
     best_prefix, best_tokens = "", 0
-    for cached_text, cached_tokens in _FLATTEN_TOKEN_CACHE:
+    for cached_text, cached_tokens in cached_rows:
         if len(cached_text) <= len(best_prefix) or len(cached_text) >= len(text):
             continue
         # The cached text must be exactly this prefix, ending on a message
@@ -481,10 +494,11 @@ def count_message_tokens_incremental(messages: List[Any]) -> int:
         tail_text = text[len(best_prefix):]
         total = best_tokens + count_text_tokens(tail_text)
         _record_token_path("prefix", len(tail_text))
-    _FLATTEN_TOKEN_CACHE.append((text, total))
-    if len(_FLATTEN_TOKEN_EXACT) > 64:
-        _FLATTEN_TOKEN_EXACT.clear()
-    _FLATTEN_TOKEN_EXACT[text] = total
+    with _INCREMENTAL_TOKEN_CACHE_LOCK:
+        _FLATTEN_TOKEN_CACHE.append((text, total))
+        if len(_FLATTEN_TOKEN_EXACT) > 64:
+            _FLATTEN_TOKEN_EXACT.clear()
+        _FLATTEN_TOKEN_EXACT[text] = total
     return total
 
 

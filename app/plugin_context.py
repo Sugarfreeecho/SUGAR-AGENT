@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Mapping
+from agent_local_timing import local_operation, local_step
 
 METADATA_KEY = "plugin_context"
 COLLECTION_TIMEOUT_SECONDS = 8
@@ -156,6 +157,7 @@ async def collect(plugins, registry, context, extensions):
     return definitions, outcomes, failed
 
 
+@local_operation('plugin_context_prepare', slow_ms=50)
 async def prepare_for_step(state, manager, history, *, step, workspace_root, context_window):
     """Prepare against the real business session, independently of visible pages."""
     from agent_extensions import load_plugins
@@ -165,7 +167,11 @@ async def prepare_for_step(state, manager, history, *, step, workspace_root, con
     from runtime_v2.snapshot_store import SnapshotStore
     from agent_tokenizer import count_text_tokens
 
-    loaded = await asyncio.to_thread(load_plugins)
+    # Stale catalog reads run in a worker; hand refresh scheduling back to this
+    # loop so they cannot fall back to an inline directory scan/scan-lock wait.
+    owner_loop = asyncio.get_running_loop()
+    with local_step('context_plugin_catalog'):
+        loaded = await asyncio.to_thread(load_plugins, refresh_loop=owner_loop)
     plugins = tuple(loaded.plugins)
     retained = next((value for message in reversed(history) if (value := message_snapshot(message))), None)
     if not any(declared(plugin) for plugin in plugins) and not retained and not state.get('_plugin_context_seen'):
@@ -179,14 +185,16 @@ async def prepare_for_step(state, manager, history, *, step, workspace_root, con
         resolver = getattr(manager, '_resolve_session_path', None)
         return SnapshotStore(root, path_resolver=resolver).read_consistent_view(
             sid, SessionEventLog(root, path_resolver=resolver), RuntimeProjector())
-    snapshot = await asyncio.to_thread(read_snapshot)
+    with local_step('context_snapshot_read'):
+        snapshot = await asyncio.to_thread(read_snapshot)
     previous = (snapshot.get('context') or {}).get(METADATA_KEY)
     if not any(declared(plugin) for plugin in plugins) and not retained and not previous:
         return None
     registry = get_plugin_runtime_registry()
     context = {'session_id': sid, 'run_id': str(state.get('_runtime_v2_run_id') or ''),
                'step': int(step), 'workspace_root': str(workspace_root)}
-    definitions, outcomes, failed = await collect(plugins, registry, context, snapshot.get('extensions') or {})
+    with local_step('context_provider_collect'):
+        definitions, outcomes, failed = await collect(plugins, registry, context, snapshot.get('extensions') or {})
     failures = tuple(sorted(
         [f"{plugin_id}:{identifier}: {row['error']}" for (plugin_id, identifier), row in outcomes.items() if 'error' in row]
         + [f"{plugin_id}: provider catalog unavailable" for plugin_id in failed]))
@@ -195,13 +203,15 @@ async def prepare_for_step(state, manager, history, *, step, workspace_root, con
         if failures:
             logger.warning("Plugin context collection failed session=%s details=%s", sid, "; ".join(failures)[:2000])
     # A disable or signature change while a worker was collecting invalidates its result.
-    current = await asyncio.to_thread(load_plugins)
+    with local_step('context_catalog_revalidate'):
+        current = await asyncio.to_thread(load_plugins, refresh_loop=owner_loop)
     active = {plugin.plugin_id: plugin.content_signature for plugin in current.plugins if declared(plugin)}
     definitions = [row for row in definitions if active.get(row['plugin_id']) == row['plugin_signature']]
     failed = {key: value for key, value in failed.items() if active.get(key) == value}
     budget = min(4096, max(0, int(context_window * .05)))
-    planned = await asyncio.to_thread(plan_snapshot, history, previous, definitions, outcomes, failed,
-                                    max_tokens=budget, count=count_text_tokens)
+    with local_step('context_plan_snapshot'):
+        planned = await asyncio.to_thread(plan_snapshot, history, previous, definitions, outcomes, failed,
+                                        max_tokens=budget, count=count_text_tokens)
     if planned:
         state['_plugin_context_seen'] = True
     return planned
