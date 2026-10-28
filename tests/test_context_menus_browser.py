@@ -387,6 +387,76 @@ def test_dock_context_menu_preserves_protected_tabs_and_offers_float(page):
     assert page.evaluate("actions.at(-1)[0]") == "dock"
 
 
+def test_dock_tab_menu_offers_refresh_only_for_pages_that_can_refresh(page):
+    files = [f"dock/engine/{name}.js" for name in ("types", "tree", "constraints", "geometry", "operations", "planner", "sequence", "controller")]
+    files += [f"dock/renderer/{name}.js" for name in ("gesture", "measure", "dock-surface", "float-layer")]
+    source = "\n".join((ROOT / "frontend/src/app/modules" / file).read_text(encoding="utf-8") for file in files)
+    page.add_script_tag(content=source + """
+      var host=document.createElement('div');host.style.cssText='width:800px;height:500px';document.body.append(host);
+      var state=dockCreateInitialState(dockCreateMinter(0),id=>({id,kind:'document',contentId:'a',title:'A'}));
+      var pane=state.nodes[state.rootId], plain=pane.activeTabId;
+      state.expanded=true;
+      state.tabs['plugin']={id:'plugin',kind:'plugin-page',contentId:'p',title:'插件页'};
+      pane.tabs.push('plugin');
+      window.refreshed=[];
+      var view=new DockSurfaceView({root:host,
+        renderTab:tab=>{
+          var el=document.createElement('div');
+          if(tab.id==='plugin') el.__dockRefresh=()=>refreshed.push('hook:'+tab.id);
+          return el;
+        },
+        canRefreshTab:id=>id==='plugin',
+        intents:{refreshTab:id=>refreshed.push('intent:'+id),duplicateTab(){},closeTab(){},floatTab(){},
+          splitPane(){},addTab(){}}});
+      view.mount();view.sync(state);view.splitBlock=()=>undefined;
+    """)
+    # 普通页签没有刷新项（菜单只对能刷新的页面出现该项）
+    page.locator('[data-dock-tab]').first.click(button="right")
+    assert menu(page).get_by_role("menuitem", name="刷新", exact=True).count() == 0
+    page.keyboard.press("Escape")
+    # 插件页面页签：菜单出现「刷新」（排在复制/分屏之前），点击走到 refreshTab intent
+    page.locator('[data-dock-tab="plugin"]').click(button="right")
+    labels = page.eval_on_selector_all(".ui-context-menu [role='menuitem']", "els=>els.map(e=>e.innerText.trim())")
+    assert "刷新" in labels and labels.index("刷新") < labels.index("复制标签")
+    choose(page, "刷新")
+    assert page.evaluate("refreshed") == ["intent:plugin"]
+
+
+def test_link_menu_separates_details_column_from_system_browser(page):
+    populate(page, '''<div id="chat"><a id="chat-link" href="https://example.com/from-chat">Chat link</a></div>
+      <div class="dock-rightbar"><div class="dock-doc"><a id="dock-link" href="https://example.com/from-dock">Dock link</a></div></div>''')
+    page.evaluate("""() => {
+      window.dockCalls = [];
+      window.MyAgentDock = {
+        openBrowser(url, options) { dockCalls.push([url, options || {}]); return true; },
+        detailsState() {
+          return { nodes: { root: { kind: 'pane', id: 'pane-1', tabs: ['t1'] } },
+                   tabs: { t1: { id: 't1', kind: 'document' } } };
+        },
+      };
+    }""")
+    # 聊天里的外链：详情栏 + 系统浏览器两条路
+    page.locator("#chat-link").click(button="right")
+    assert menu(page).get_by_role("menuitem", name="在详情栏打开", exact=True).is_visible()
+    assert menu(page).get_by_role("menuitem", name="在系统浏览器打开", exact=True).is_visible()
+    choose(page, "在详情栏打开")
+    assert page.evaluate("dockCalls") == [["https://example.com/from-chat", {"split": False}]]
+    # 详情栏里的链接：另一屏（原页面留着）
+    page.locator("#dock-link").click(button="right")
+    assert menu(page).get_by_role("menuitem", name="在详情栏另一屏打开", exact=True).is_visible()
+    choose(page, "在详情栏另一屏打开")
+    assert page.evaluate("dockCalls.at(-1)") == ["https://example.com/from-dock", {"split": True}]
+    # 两屏已满时退回普通“在详情栏打开”
+    page.evaluate("""() => {
+      MyAgentDock.detailsState = () => ({ nodes: {
+        a: { kind: 'pane', id: 'pane-1', tabs: ['t1'] },
+        b: { kind: 'pane', id: 'pane-2', tabs: ['t2'] } },
+        tabs: { t1: { id: 't1', kind: 'document' }, t2: { id: 't2', kind: 'browser' } } });
+    }""")
+    page.locator("#dock-link").click(button="right")
+    assert menu(page).get_by_role("menuitem", name="在详情栏打开", exact=True).is_visible()
+
+
 def test_user_terminal_menu_uses_real_xterm_copy_paste_and_cleanup(page):
     page.add_style_tag(path=str(ROOT / "plugins/execution-tools/web/session-panel.css"))
     page.add_style_tag(path=str(ROOT / "frontend/node_modules/@xterm/xterm/css/xterm.css"))

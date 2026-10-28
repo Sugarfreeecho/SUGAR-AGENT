@@ -18,13 +18,8 @@ let sessionUiPendingIds = new Set();
 let sessionUiLatestGeneration = new Map();
 let pluginSessionUiCache = new Map();
 let pluginSessionPanelRenderers = new Map();
-let pluginSessionPanelSnapshot = null;
-let pluginSessionPanelCleanups = [];
-/* 上一轮真正写入过面板的容器（含 pubar 页签 host）。当 payload 里不再出现某个面板时，
-   必须显式清空对应容器，否则旧卡片会一直留在 DOM 上（例如计划清空后 session.panel 消失）。 */
-let pluginSessionPanelContainers = new Set();
-/* cleanup 与它所属容器的对应关系：容器被清空时同步摘掉这些 cleanup。 */
-let pluginSessionPanelCleanupContainers = new Map();
+const pluginSidebarPanelState = { snapshot: null, cleanups: [], containers: new Set(), cleanupContainers: new Map() };
+const pluginConsolePanelViews = new Set();
 let pluginChatExtensionCleanups = [];
 let pluginChatGeneration = 0;
 let pluginUiInitialization = 0;
@@ -844,17 +839,24 @@ function bindSessionPanelHoverTips(panel) {
     panel.querySelectorAll('[title], [data-ui-tip]').forEach(globalThis.bindUiHoverTip);
 }
 
-function renderSessionPanels(rows, sessions) {
-    const host = document.getElementById('plugin-session-panels');
+export function isPluginConsolePanel(item) {
+    const id = item && item.group && item.group.id;
+    return !id || id === 'plugins' || id === 'execution';
+}
+
+function renderSessionPanels(rows, sessions, view = null) {
+    const host = view ? view.container : document.getElementById('plugin-session-panels');
     if (!host) return;
     const active = rows.find(function (row) { return row.classList.contains('active'); });
-    const sessionId = active ? String(active.dataset.sessionId || '') : '';
+    const sessionId = view ? view.sessionId : active ? String(active.dataset.sessionId || '') : '';
     const model = sessions[sessionId];
-    const panels = model ? model.panels : [];
-    const pubarApi = globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.paneHostFor === 'function'
+    const panels = (model ? model.panels : []).filter(item => view
+        ? item.pluginId === view.pluginId && isPluginConsolePanel(item) : !isPluginConsolePanel(item));
+    const pubarApi = !view && globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.paneHostFor === 'function'
         ? globalThis.MyAgentPubar : null;
+    const state = view || pluginSidebarPanelState;
     const signature = JSON.stringify([sessionId, panels]);
-    const previous = pluginSessionPanelSnapshot;
+    const previous = state.snapshot;
     if (previous && previous.signature === signature && previous.host === host
         && previous.pubarApi === pubarApi && previous.renderers === pluginSessionPanelRenderers
         && previous.containers.every(function (entry) {
@@ -863,29 +865,29 @@ function renderSessionPanels(rows, sessions) {
                 && children.every(function (child, index) { return child === entry.children[index]; });
         })) return;
     const retainedCleanups = [];
-    pluginSessionPanelCleanups.forEach(function (cleanup) {
+    state.cleanups.forEach(function (cleanup) {
         try {
             if (cleanup({ nextSessionId: sessionId }) === false) retainedCleanups.push(cleanup);
         }
         catch (error) { console.warn('Plugin session panel cleanup failed', error); }
     });
-    pluginSessionPanelCleanups = retainedCleanups;
+    state.cleanups = retainedCleanups;
     const retainedOwners = new Map();
     retainedCleanups.forEach(function (cleanup) {
-        if (pluginSessionPanelCleanupContainers.has(cleanup)) {
-            retainedOwners.set(cleanup, pluginSessionPanelCleanupContainers.get(cleanup));
+        if (state.cleanupContainers.has(cleanup)) {
+            retainedOwners.set(cleanup, state.cleanupContainers.get(cleanup));
         }
     });
-    pluginSessionPanelCleanupContainers = retainedOwners;
+    state.cleanupContainers = retainedOwners;
     const fragments = new Map();
     function containerFor(item) {
         let container = host;
-        if (pubarApi) {
-            const group = item && item.group && item.group.id ? item.group : null;
+        if (pubarApi && !view) {
+            const group = item.group;
             try {
                 const paneHost = pubarApi.paneHostFor(
-                    group ? group.id : 'plugins',
-                    group ? { label: group.label, order: group.order } : null
+                    group.id,
+                    { label: group.label, order: group.order }
                 );
                 if (paneHost) container = paneHost;
             } catch (error) {
@@ -932,8 +934,8 @@ function renderSessionPanels(rows, sessions) {
                     },
                 });
                 if (typeof cleanup === 'function') {
-                    pluginSessionPanelCleanups.push(cleanup);
-                    pluginSessionPanelCleanupContainers.set(cleanup, panelContainer);
+                    state.cleanups.push(cleanup);
+                    state.cleanupContainers.set(cleanup, panelContainer);
                 }
                 bindSessionPanelHoverTips(panel);
                 fragment.appendChild(panel);
@@ -1107,16 +1109,16 @@ function renderSessionPanels(rows, sessions) {
     });
     /* 本次 payload 已无面板、但上一轮写入过的容器：显式清空并摘掉其 cleanup。
        只重建「本次仍有面板」的容器会让消失的面板（计划清空、插件停用等）永远留在页面上。 */
-    pluginSessionPanelContainers.forEach(function (container) {
+    state.containers.forEach(function (container) {
         if (fragments.has(container)) return;
         container.replaceChildren();
-        pluginSessionPanelCleanups = pluginSessionPanelCleanups.filter(function (cleanup) {
-            if (pluginSessionPanelCleanupContainers.get(cleanup) !== container) return true;
-            pluginSessionPanelCleanupContainers.delete(cleanup);
+        state.cleanups = state.cleanups.filter(function (cleanup) {
+            if (state.cleanupContainers.get(cleanup) !== container) return true;
+            state.cleanupContainers.delete(cleanup);
             return false;
         });
     });
-    pluginSessionPanelContainers = new Set(fragments.keys());
+    state.containers = new Set(fragments.keys());
     let visiblePanelCount = 0;
     fragments.forEach(function (fragment, container) {
         container.replaceChildren(fragment);
@@ -1127,13 +1129,38 @@ function renderSessionPanels(rows, sessions) {
     const usedFallbackHost = fragments.has(host);
     if (pubarApi && !usedFallbackHost) host.hidden = true;
     else host.hidden = visiblePanelCount === 0;
-    pluginSessionPanelSnapshot = { signature, host, pubarApi, renderers: pluginSessionPanelRenderers,
+    state.snapshot = { signature, host, pubarApi, renderers: pluginSessionPanelRenderers,
         containers: Array.from(new Set([host, ...fragments.keys()])).map(function (container) {
             return { container, children: Array.from(container.children) };
         }) };
     document.dispatchEvent(new CustomEvent('myagent:plugin-session-ui-rendered', {
         detail: { sessionId, panelCount: visiblePanelCount },
     }));
+}
+
+/** Mount the same declared fields/actions inside one retained plugin console. */
+export function mountPluginConsoleSessionPanels({ container, sessionId, pluginId, onContent }) {
+    const view = { container, sessionId, pluginId, snapshot: null, cleanups: [], containers: new Set(), cleanupContainers: new Map() };
+    pluginConsolePanelViews.add(view);
+    const render = () => {
+        const model = pluginSessionUiCache.get(sessionId) || { panels: [] };
+        renderSessionPanels([], { [sessionId]: model }, view);
+        if (typeof onContent === 'function') onContent(!container.hidden);
+    };
+    const update = event => {
+        if ((event.detail?.sessionIds || []).includes(sessionId)) render();
+    };
+    document.addEventListener('myagent:plugin-session-ui-updated', update);
+    document.addEventListener('myagent:plugin-ui-ready', render);
+    render();
+    void refreshPluginSessionUi([sessionId]);
+    return () => {
+        pluginConsolePanelViews.delete(view);
+        document.removeEventListener('myagent:plugin-session-ui-updated', update);
+        document.removeEventListener('myagent:plugin-ui-ready', render);
+        view.cleanups.forEach(cleanup => { try { cleanup({ nextSessionId: '' }); } catch {} });
+        container.replaceChildren();
+    };
 }
 
 function cachedPluginSessionUi(rows) {
@@ -1176,8 +1203,10 @@ async function refreshPluginSessionUiOnce(requestedSessionIds) {
     const request = sessionUiRequest;
     if (typeof request !== 'function') return;
     const rows = visibleSessionRows();
-    const visibleIds = rows.map(function (row) { return String(row.dataset.sessionId || ''); })
-        .filter(Boolean);
+    const visibleIds = Array.from(new Set([
+        ...Array.from(pluginConsolePanelViews, view => view.sessionId),
+        ...rows.map(function (row) { return String(row.dataset.sessionId || ''); }),
+    ].filter(Boolean)));
     const visibleSet = new Set(visibleIds);
     const requested = Array.isArray(requestedSessionIds)
         ? requestedSessionIds.map(function (value) { return String(value || '').trim(); })
@@ -1213,6 +1242,7 @@ async function refreshPluginSessionUiOnce(requestedSessionIds) {
                 pluginSessionUiCache.set(sessionId, sessions[sessionId]);
             }
         });
+        document.dispatchEvent(new CustomEvent('myagent:plugin-session-ui-updated', { detail: { sessionIds } }));
         const currentRows = visibleSessionRows();
         const cached = cachedPluginSessionUi(currentRows);
         renderSessionBadges(currentRows, cached);
@@ -1295,6 +1325,7 @@ function initPluginSessionUi() {
 }
 
 export async function initPluginUiSlots(options = {}) {
+    globalThis.MyAgentPluginSessionPanels = { mount: mountPluginConsoleSessionPanels };
     const generation = ++pluginUiInitialization;
     const request = typeof options.fetch === 'function'
         ? options.fetch

@@ -609,7 +609,9 @@ def test_frontend_human_interaction_contract_is_wired():
     assert ".human-approval-decisions" in css
     assert ".human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }" in css
     slot_card = css.split(".human-interaction-tool-slot .human-interaction-card {", 1)[1].split("}", 1)[0]
-    assert "width: min(720px, calc(100% - 1rem));" in slot_card
+    # 640 上限：执行过程框的宽度是 --content-column-width(68cqi)，720 会把整条
+    # 工具行占满，看起来像被卡片撑开；收窄后卡片两侧才是内缩的。
+    assert "width: min(640px, calc(100% - 1rem));" in slot_card
     assert "margin: 0.65rem auto;" in slot_card
     assert "width: 100%; margin: 0.65rem 0 0;" not in slot_card
     assert ".feed-row-collapse {" in css

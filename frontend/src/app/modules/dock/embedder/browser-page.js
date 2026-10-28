@@ -163,7 +163,9 @@ class DockBrowserPage {
             frame.setAttribute('allowpopups', '');
             frame.setAttribute('src', 'about:blank#' + reservation.lease);
             this.frame = frame;
-            this.unsubscribe = this.bridge.onOpenRequested(reservation.lease, url => dockRightOpenBrowser(url));
+            // A page asking for a new window keeps the page you are reading: the
+            // target opens in the second pane (see dockRightOpenBrowser `split`).
+            this.unsubscribe = this.bridge.onOpenRequested(reservation.lease, url => dockRightOpenBrowser(url, { split: true }));
             const ready = new Promise((resolve, reject) => {
                 const timer = setTimeout(() => reject(new Error('Browser startup timed out')), 15000);
                 this.cancelReady = () => { clearTimeout(timer); resolve(null); };
@@ -243,12 +245,28 @@ function dockRightOpenBrowser(value = '', options = {}) {
     if (value && !dockParseBrowserAddress(value)) return false;
     dockRightEnsureMounted();
     const surfaceId = dockRightSurfaceKey(currentSessionId) || DOCK_APP_SURFACE_KEY;
+    // `split`: the link came from inside the column, so it opens beside the page
+    // it came from instead of replacing it. The new pane's seed page is replaced
+    // rather than left as a second tab next to the link.
+    let paneId = options.paneId;
+    let replaceTab = options.replaceTab;
+    if (paneId === undefined && options.split) {
+        let createdPane;
+        dockActionSplitPane(surfaceId, undefined, dockRightSeed(), id => { createdPane = id; }, DOCK_RIGHT_AREA);
+        const layout = createdPane ? dockSurfaceOf(surfaceId, DOCK_RIGHT_AREA)?.layout : null;
+        const pane = layout && layout.nodes ? layout.nodes[createdPane] : null;
+        if (pane) {
+            paneId = createdPane;
+            if (pane.tabs && pane.tabs.length === 1) replaceTab = pane.tabs[0];
+        }
+    }
     const request = { url: value, workspace: typeof getActiveWorkDir === 'function' ? getActiveWorkDir() : '',
         sessionId: String(currentSessionId || ''), nonce: String(options.presentationId || crypto.randomUUID()) };
     dockRightState.sessionId = surfaceId;
     dockActionOpenContent(surfaceId, { kind: 'browser', title: String(options.title || dockPageText('浏览器', 'Browser')).slice(0, 100),
         contentId: 'myagent-browser://page/' + encodeURIComponent(JSON.stringify(request)),
-        replaceTab: options.replaceTab, revealIfOpened: !!options.presentationId }, dockRightSeed(), null, DOCK_RIGHT_AREA);
+        paneId: replaceTab === undefined ? paneId : undefined,
+        replaceTab, revealIfOpened: !!options.presentationId }, dockRightSeed(), null, DOCK_RIGHT_AREA);
     dockRightEnsureWidthMode(surfaceId); dockRightRender();
     return true;
 }

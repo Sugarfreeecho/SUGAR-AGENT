@@ -128,7 +128,9 @@ globalThis.document = {
         const key = String(type);
         (documentEvents[key] = documentEvents[key] || []).push(handler);
     },
-    removeEventListener: function () {},
+    removeEventListener: function (type, handler) {
+        documentEvents[type] = (documentEvents[type] || []).filter(entry => entry !== handler);
+    },
     dispatchEvent: function (event) {
         (documentEvents[String(event && event.type)] || []).forEach(function (handler) {
             handler(event);
@@ -234,6 +236,32 @@ assert.equal(host.children.length, 1, '面板重新出现时容器恢复渲染')
 host.replaceChildren();
 await mod.refreshPluginSessionUi(['s1']);
 assert.equal(host.children.length,1,'a recreated host is not mistaken for a retained panel');
+
+// Default/legacy execution groups are never painted into the workspace sidebar.
+const generic = { plugin_id:'ui.demo',id:'status',title:'Plugin state',variant:'info',
+    fields:[{label:'State',value:'ready',format:'text'}],actions:[] };
+const legacyExecution = { ...generic, plugin_id:'execution-tools',group:{id:'execution',label:'执行'} };
+payload = {ok:true,sessions:{s1:{badges:[],panels:[planPanel,generic,legacyExecution]}}};
+const consoleHost=makeElement('div');
+const disposeConsole=mod.mountPluginConsoleSessionPanels({container:consoleHost,sessionId:'s1',pluginId:'ui.demo'});
+await mod.refreshPluginSessionUi(['s1']);
+assert.equal(host.children.length,1,'left fallback only retains the plan');
+assert.equal(host.children[0].dataset.pluginId,'session-todo');
+assert.equal(consoleHost.children.length,1,'default plugin state is in its console');
+assert.equal(consoleHost.children[0].dataset.pluginId,'ui.demo');
+assert.equal(paneHosts.plugins,undefined);
+assert.equal(paneHosts.execution,undefined);
+const retainedConsolePanel=consoleHost.children[0];
+await mod.refreshPluginSessionUi(['s1']);
+assert.equal(consoleHost.children[0],retainedConsolePanel,'console updates preserve unchanged DOM');
+payload={ok:true,sessions:{s1:{badges:[],panels:[planPanel]}}};
+await mod.refreshPluginSessionUi(['s1']);
+assert.equal(consoleHost.children.length,0,'removed plugin state is removed from the console');
+assert.equal(host.children.length,1,'console cleanup does not remove the plan');
+disposeConsole();
+payload={ok:true,sessions:{s1:{badges:[],panels:[planPanel,generic]}}};
+await mod.refreshPluginSessionUi(['s1']);
+assert.equal(consoleHost.children.length,0,'closed consoles stay unmounted');
 
 gated=true;requestCount=0;peak=0;requestIds.length=0;
 const first=mod.refreshPluginSessionUi(['s1']);

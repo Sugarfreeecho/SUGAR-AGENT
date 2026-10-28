@@ -1312,16 +1312,26 @@ function refreshAggregateStatsSmart(agg) {
 
 function renderProcessAggregateStats(el, sourceText, tailText) {
     if (!el) return;
-    el.textContent = '';
-    var head = document.createElement('span');
+    // Stream deltas often leave every statistic unchanged. Retain the spans
+    // so those updates do not create nodes or invalidate styles again.
+    var head = el.firstChild, tail = el.lastChild;
+    if (!head || head === tail || el.childNodes.length !== 2
+        || head.nodeName !== 'SPAN' || tail.nodeName !== 'SPAN') {
+        el.textContent = '';
+        head = document.createElement('span');
+        tail = document.createElement('span');
+        // Model/profile names and cache values are data, not UI copy.
+        tail.setAttribute('data-i18n-skip', 'true');
+        el.appendChild(head);
+        el.appendChild(tail);
+    }
     if (typeof setUiRuntimeText === 'function') setUiRuntimeText(head, sourceText);
-    else head.textContent = typeof translateUiString === 'function' ? translateUiString(sourceText) : sourceText;
-    var tail = document.createElement('span');
-    // Model/profile names and cache values are data, not UI copy.
-    tail.setAttribute('data-i18n-skip', 'true');
-    tail.textContent = String(tailText == null ? '' : tailText);
-    el.appendChild(head);
-    el.appendChild(tail);
+    else {
+        var displayed = typeof translateUiString === 'function' ? translateUiString(sourceText) : sourceText;
+        if (head.textContent !== displayed) head.textContent = displayed;
+    }
+    var nextTail = String(tailText == null ? '' : tailText);
+    if (tail.textContent !== nextTail) tail.textContent = nextTail;
 }
 
 function refreshProcessAggregateStats(agg) {
@@ -1395,6 +1405,33 @@ var executionRecoveryBySession = new Map();
 // Share the index across contexts rendering the same stream, including recovery
 // and detached history fragments. Dropping a stream also releases its index.
 var executionRowsByStream = new WeakMap();
+var pendingExecutionRendersByStream = new WeakMap();
+
+function flushPendingExecutionRenders(stream) {
+    var pending = pendingExecutionRendersByStream.get(stream);
+    if (!pending) return;
+    pendingExecutionRendersByStream.delete(stream);
+    clearTimeout(pending.timer);
+    pending.records.forEach(function (item) {
+        // A reload/eviction may have replaced these rows. Never recreate an
+        // obsolete row from a delayed presentation update.
+        if (!stream.isConnected || !stream.contains(item.row)) return;
+        if (item.row.dataset.executionId !== String(item.record.execution_id)) return;
+        if (Number(item.row.dataset.executionRenderedSeq || 0) > Number(item.record.last_runtime_seq || 0)) return;
+        renderExecutionRecord(item.ctx, item.record, item.sessionId, {backgroundFlush:true});
+    });
+}
+
+function queueBackgroundExecutionRender(ctx, row, record, sessionId) {
+    var stream = ctx.stream;
+    var pending = pendingExecutionRendersByStream.get(stream);
+    if (!pending) {
+        pending = {records:new Map(), timer:0};
+        pendingExecutionRendersByStream.set(stream, pending);
+        pending.timer = setTimeout(function () { flushPendingExecutionRenders(stream); }, 250);
+    }
+    pending.records.set(String(record.execution_id), {ctx:ctx, row:row, record:record, sessionId:sessionId});
+}
 
 function invalidateExecutionRowIndex(stream) {
     if (stream) executionRowsByStream.delete(stream);
@@ -1431,13 +1468,48 @@ function findIndexedExecutionRow(stream, executionId) {
 
 function findExecutionProcessGroup(stream, groupId, runId) {
     if (!stream) return null;
-    var groups = Array.from(stream.querySelectorAll('.process-aggregate'));
-    if (groupId) return groups.reverse().find(function (group) {
-        return group.dataset.processGroupId === String(groupId);
-    }) || null;
-    if (runId) return groups.reverse().find(function (group) {
-        return group.dataset.processRunId === String(runId) && !group.dataset.procEndedAt;
-    }) || null;
+    // Observe structural boundaries rather than scanning every historical
+    // group for each token. takeRecords also handles synchronous prepend,
+    // replacement and metadata changes before the observer callback runs.
+    var cache = findExecutionProcessGroup.indexes;
+    if (!cache) cache = findExecutionProcessGroup.indexes = new WeakMap();
+    var index = cache.get(stream);
+    function changed(records) {
+        return records.some(function (record) {
+            if (record.type === 'attributes') {
+                var isGroup = record.target.matches('.process-aggregate');
+                if (record.attributeName === 'class') {
+                    return /(?:^|\s)process-aggregate(?:\s|$)/.test(record.oldValue || '') !== isGroup;
+                }
+                return isGroup;
+            }
+            return Array.from(record.addedNodes).concat(Array.from(record.removedNodes)).some(function (node) {
+                return node.nodeType === 1 && (node.matches('.process-aggregate') || node.querySelector('.process-aggregate'));
+            });
+        });
+    }
+    if (!index) {
+        index = {dirty:true, byGroup:new Map(), byRun:new Map(), observer:null};
+        if (typeof MutationObserver === 'function' && stream.nodeType) {
+            index.observer = new MutationObserver(function (records) {
+                if (changed(records)) index.dirty = true;
+            });
+            index.observer.observe(stream, {childList:true, subtree:true, attributes:true, attributeOldValue:true,
+                attributeFilter:['data-process-group-id', 'data-process-run-id', 'data-proc-ended-at', 'class']});
+            cache.set(stream, index);
+        }
+    }
+    if (index.observer && changed(index.observer.takeRecords())) index.dirty = true;
+    if (index.dirty) {
+        index.byGroup.clear(); index.byRun.clear();
+        Array.from(stream.querySelectorAll('.process-aggregate')).forEach(function (group) {
+            if (group.dataset.processGroupId) index.byGroup.set(String(group.dataset.processGroupId), group);
+            if (group.dataset.processRunId && !group.dataset.procEndedAt) index.byRun.set(String(group.dataset.processRunId), group);
+        });
+        index.dirty = false;
+    }
+    if (groupId) return index.byGroup.get(String(groupId)) || null;
+    if (runId) return index.byRun.get(String(runId)) || null;
     var users = Array.from(stream.querySelectorAll('.msg-wrap--user[data-runtime-seq]'));
     var latest = users[users.length - 1];
     if (latest) return findExecutionProcessGroup(stream, 'turn:' + latest.dataset.runtimeSeq, '');
@@ -1521,6 +1593,20 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     // rewrite its text or move the follow target a second time.
     if (row && runtimeSeq > 0 && row.dataset.executionRenderedSeq === String(runtimeSeq)
         && row.dataset.executionStatus === String(record.status || '') && !opts.snapshot) return;
+    var background = ctx.stream.classList && ctx.stream.classList.contains('is-offscreen');
+    if (!opts.backgroundFlush && typeof flushPendingExecutionRenders === 'function') {
+        // The reducer already owns every delta. Only coalesce presentation of
+        // existing text rows; new rows and state transitions remain barriers.
+        if (row && background && (opts.smoothText || opts.backgroundText) && !opts.snapshot && !replayingMessages
+            && (record.status === 'generating' || (record.kind === 'tool' && record.status === 'running'
+                && row.dataset.executionStatus === 'running'))
+            && (record.kind !== 'tool' || String(row.dataset.toolCallId || '') === String(record.tool_call_id || ''))
+            && ['reasoning','response','tool'].indexOf(record.kind) >= 0) {
+            queueBackgroundExecutionRender(ctx, row, record, sessionId);
+            return;
+        }
+        flushPendingExecutionRenders(ctx.stream);
+    }
     var generation = typeof syncRenderContextRunScope === 'function'
         ? syncRenderContextRunScope(ctx, record) : reactGenerationForContext(ctx);
     var executionGenerations = ctx.reactGenerationsByExecutionId || (ctx.reactGenerationsByExecutionId = new Map());
@@ -1567,8 +1653,10 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     // authoritative body immediately, without replaying old typing animations.
     var smoothText = opts.smoothText === true && record.status === 'generating'
         && (record.kind === 'reasoning' || record.kind === 'response' || record.kind === 'tool')
-        && !replayingMessages && !historicalRun && ctx.llm
+        && !replayingMessages && !historicalRun && !background && ctx.llm
         && typeof isSmoothStreamActive === 'function' && isSmoothStreamActive();
+    var attachInteractions = !row || !row.dataset.executionId
+        || row.dataset.toolCallId !== String(record.tool_call_id || '') || opts.snapshot;
     if (!row) {
         var type = record.kind === 'tool' ? 'tool-call' : record.kind === 'reasoning' ? 'llm-reasoning' : 'llm-response';
         var sc = createProcessFeedRow(ctx, type, smoothText ? '' : text, {reactIter:record.react_iter,
@@ -1614,7 +1702,9 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
     }
     var chunk = row.querySelector('.feed-chunk');
     if (chunk) { chunk.classList.toggle('is-streaming', record.status === 'generating'); refreshFeedChunkOverflow(chunk); }
-    if (typeof attachHumanInteractionCardsForToolCall === 'function' && record.tool_call_id) attachHumanInteractionCardsForToolCall(ctx.stream, record.tool_call_id);
+    // New cards attach through the interaction renderer itself. Reattach on
+    // row creation/recovery, not for every text/output delta on the same row.
+    if (attachInteractions && typeof attachHumanInteractionCardsForToolCall === 'function' && record.tool_call_id) attachHumanInteractionCardsForToolCall(ctx.stream, record.tool_call_id);
     if (typeof renderDurableAttachmentImages === 'function') renderDurableAttachmentImages(row, record.attachments || []);
     var owner = row.closest && row.closest('.process-aggregate');
     if (owner) { unregisterProcessAggregateRow(row); registerProcessAggregateRow(owner, row); }
@@ -1665,6 +1755,7 @@ function renderExecutionEvent(ctx, event, sessionId) {
     else return false;
     renderExecutionRecord(ctx, updateExecutionRecord(sessionId, update), sessionId, {
         smoothText: !event.replayed_snapshot && (type === 'llm_reasoning_delta' || type === 'llm_response_delta' || type === 'tool_call_delta'),
+        backgroundText: !event.replayed_snapshot && type === 'tool_command_delta',
         snapshot: !!event.replayed_snapshot,
     });
     return true;
@@ -1746,6 +1837,23 @@ function ensureProcessGroup(ctx) {
     refreshProcessAggregateStats(wrap);
     if (processAggregateNeedsLiveStats(wrap)) scheduleLiveProcessAggregateStats();
     return wrap;
+}
+
+function renderRunFailure(ctx, event, sessionId) {
+    if (!ctx || !event || event.type !== 'run_failed') return;
+    var runId = String(event.run_id || event.runId || ctx.runId || '');
+    var group = ctx.currentProcessGroup || ensureProcessGroup(ctx);
+    if (!group) return;
+    if (group.dataset.runFailureId === runId && group.classList.contains('is-failed')) return;
+    group.dataset.runFailureId = runId;
+    group.classList.add('is-failed');
+    var error = String(event.error || '执行异常中断，请重试。');
+    var title = group.querySelector('.process-aggregate-title');
+    if (title) {
+        title.textContent = '执行失败';
+        title.title = error;
+    }
+    appendLog(ctx, '本轮执行失败：' + error, 'error-log', sessionId);
 }
 
 function sealProcessGroup(ctx) {
@@ -2819,6 +2927,7 @@ function updateSessionTitle() {
     const br = document.getElementById('breadcrumb-text');
     const sub = document.getElementById('breadcrumb-sub');
     if (!br || !sub) return;
+    if (typeof backgroundTaskUi !== 'undefined') backgroundTaskUi.noteCurrentSession(currentSessionId);
     // 防御：寻址态标记还在，但寻址栈已空（例如返回父会话时 switchSession 提前
     // 返回、没走到重渲染）→ 强制刷掉旧面包屑，避免残留地址栏。
     var addressingActive = typeof subagentAddressing !== 'undefined' && subagentAddressing

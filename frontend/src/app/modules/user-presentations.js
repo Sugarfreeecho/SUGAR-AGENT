@@ -112,9 +112,6 @@ function openShowUserPresentation(record, automatic) {
             opened = record.plugin_id
                 ? api.openPluginPage(record.plugin_id, { pageId: record.page_id, sessionId: record.session_id })
                 : (api.openDetailsTab('plugins'), true);
-        } else if (record.kind === 'file') {
-            api.openDetailsFile(record.path);
-            opened = true;
         } else {
             opened = api.openPresentation({ contentId: SHOW_USER_ADDRESS + encodeURIComponent(showUserKey(record)), title: record.title });
         }
@@ -238,6 +235,7 @@ function showUserPresentationBody(tab) {
     var root = showUserElement('section', 'show-user-view');
     root.setAttribute('data-show-user-view', key || '');
     if (!record) { root.appendChild(showUserElement('p', '', showUserText('展示内容暂不可用，请从会话记录重新打开。', 'Content unavailable. Reopen it from the chat.'))); return root; }
+    if (record.kind === 'file') return dockRightDocumentBody(Object.assign({}, tab, { localFilePath: record.path }));
     root.appendChild(showUserElement('h2', 'show-user-view-title', record.title));
     if (record.kind === 'text') {
         var body = showUserElement('div', 'show-user-document');

@@ -32,6 +32,21 @@ def test_terminal_signal_retains_bounded_deltas_and_consistent_cursor():
     assert signal.changes_since(298)["terminal_events"][0]["run_id"] == "299"
 
 
+def test_failure_signal_carries_a_bounded_cause(monkeypatch):
+    import webui
+    from session_state_signal import SessionStateSignal
+
+    signal = SessionStateSignal(webui._sessions_state_cache_generation)
+    monkeypatch.setattr(webui, "_sessions_state_signal", signal)
+    base = signal.revision
+    webui._on_session_lifecycle_event_invalidate_state("s", {
+        "type": "run_failed", "run_id": "r", "error": "failure cause " * 1000,
+    })
+    terminal = signal.changes_since(base)["terminal_events"][0]
+    assert terminal["type"] == "run_failed"
+    assert terminal["error"] == ("failure cause " * 1000)[:1000]
+
+
 def test_committed_terminal_reaches_all_tabs_without_a_new_request_type(monkeypatch):
     import webui
     from session_state_signal import SessionStateSignal

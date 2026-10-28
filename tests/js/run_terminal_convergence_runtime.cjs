@@ -80,9 +80,15 @@ for (const name of ['endRunForClient', 'applySessionTerminalNotifications']) {
   const newer = {runId: 'newer', ctx: {}, controller: {abort() {aborts++;}}};
   e.setSessionRunState('s', newer);
   e.store.applyActiveRunForSession('s', running('newer').active_run);
+  const staleStart = e.applySessionEvent({type:'run_started',run_id:'missed',ephemeral:true}, {sessionId:'s',source:'sse'});
+  assert.equal(staleStart.staleLifecycleIgnored, true);
+  assert.equal(e.store.getActiveRunInfo('s').run_id, 'newer', 'an old replayed start cannot clear a newer run');
   e.applySessionTerminalNotifications([{...event, run_id: 'older'}]);
   assert.equal(e.store.getRun('s'), newer, 'a delayed old terminal must not abort the next run');
   assert.equal(aborts, 1);
+  e.clearSessionRunState('s');
+  e.endRunForClient('s', {runId:'old-reader'}, {runId:'old-reader'});
+  assert.equal(e.store.getActiveRunInfo('s').run_id, 'newer', 'late reader cleanup cannot clear a newer server-owned execution');
 
   const noContext = {runId: 'no-context', controller: {abort() {aborts++;}}};
   e.setSessionRunState('s', noContext);

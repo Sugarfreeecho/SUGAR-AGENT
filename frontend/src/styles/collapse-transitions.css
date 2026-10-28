@@ -72,10 +72,11 @@
     pointer-events: none;
 }
 
+/* 折叠摘要现在是标题行的一部分（单行省略），overflow 由 app.css 控制；
+   这里只保留高度/透明度的过渡，且只对仍会被收起的 detail 生效。 */
 .human-terminal-summary,
 .human-terminal-detail {
     height: auto;
-    overflow: visible;
     opacity: 1;
     transition:
         height var(--ui-collapse-duration) var(--ui-collapse-easing),
@@ -84,8 +85,9 @@
         visibility 0s linear 0s;
 }
 
-.human-interaction-card.is-collapsed > .human-terminal-detail,
-.human-interaction-card.is-expanded > .human-terminal-summary {
+.human-terminal-detail { overflow: visible; }
+
+.human-interaction-card.is-collapsed > .human-terminal-detail {
     height: 0;
     overflow: hidden;
     padding-block: 0;

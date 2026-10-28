@@ -391,7 +391,7 @@ function renderSkillPickerPluginsHtml() {
                 + '</span>'
                 + '<span class="plugin-option-actions">'
                 + '<button type="button" class="skill-picker-toggle plugin-toggle-action' + (busy ? ' is-loading' : '') + '" data-plugin-id="' + skillPickerEscape(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (busy ? status : (enabled ? '停用' : '启用')) + '" aria-label="' + (busy ? status : (enabled ? '停用' : '启用')) + '"' + ((busy || !globalOn) ? ' disabled' : '') + (!globalOn ? ' title="PLUGINS_ENABLED is disabled"' : '') + '>' + (busy ? '<span class="plugin-toggle-spinner" aria-hidden="true"></span>' : skillPickerToggleHtml(enabled)) + '</button>'
-                + (pageHref ? '<a class="skill-picker-toggle plugin-open-action" href="' + skillPickerEscape(pageHref) + '" target="_blank" rel="noopener noreferrer" data-ui-tip="打开页面" aria-label="打开页面">' + skillPickerOpenPageHtml() + '</a>' : '')
+                + (pageHref ? '<a class="skill-picker-toggle plugin-open-action" href="' + skillPickerEscape(pageHref) + '" data-plugin-id="' + skillPickerEscape(id) + '" target="_blank" rel="noopener noreferrer" data-ui-tip="打开页面" aria-label="打开页面">' + skillPickerOpenPageHtml() + '</a>' : '')
                 + '</span>'
                 + '</div>';
         }).join('');
@@ -580,7 +580,20 @@ function renderSkillPicker(opts) {
         });
     });
     e.popover.querySelectorAll('.plugin-open-action').forEach(function (link) {
-        link.addEventListener('click', function (ev) { ev.stopPropagation(); });
+        link.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            // Plugins open in the details column by default; the anchor keeps
+            // target="_blank" only as the fallback for when the dock cannot
+            // take it (unknown page, missing session, older bundle).
+            var dock = globalThis.MyAgentDock;
+            var id = String(link.getAttribute('data-plugin-id') || '');
+            if (!id || !dock || typeof dock.openPluginPage !== 'function') return;
+            var opened = false;
+            try { opened = dock.openPluginPage(id) !== false; } catch (error) { opened = false; }
+            if (!opened) return;
+            ev.preventDefault();
+            closeSkillPicker();
+        });
     });
 }
 

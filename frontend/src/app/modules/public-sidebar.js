@@ -1,7 +1,8 @@
 /* 公共左侧栏（会话状态面板）· 方案 B（页签）
  *
  * 一条栏 = 头部 + 页签条 + 页签内容。内容按 session.panel 的 group 声明分组
- * （缺省「插件」组），「改动」页签由改动审查插件通过 MyAgentPubar.registerPane 注册。
+ * 显式的计划/目标等分组保留在这里；通用插件面板与执行面板由详情栏插件控制台承载。
+ * 「改动」页签由改动审查插件通过 MyAgentPubar.registerPane 注册。
  * 显隐、徽标、活动页签记忆与键盘切换集中在本模块；开合 / 避让 / 自动折叠仍由
  * layout-panels.js 负责——本模块只通过 hasContent() 向其提供“是否有内容”的统一判定。
  *
@@ -11,8 +12,8 @@
 
 var PUBAR_ROOT_ID = 'chat-todo-plan';
 var PUBAR_ACTIVE_TAB_KEY = 'pubar-active-tab';
-var PUBAR_DEFAULT_GROUP_ID = 'plugins';
-var PUBAR_DEFAULT_GROUP_LABEL = '插件';
+var PUBAR_DEFAULT_GROUP_ID = 'status';
+var PUBAR_DEFAULT_GROUP_LABEL = '状态';
 var PUBAR_DEFAULT_ORDER = 30;
 var PUBAR_ORDER_FALLBACK = 100;
 var PUBAR_PULSE_MS = 1600;
@@ -70,6 +71,7 @@ function pubarSortPaneDom() {
 
 function pubarEnsurePane(rawId, meta) {
     var id = String(rawId || '').trim();
+    if (id === 'plugins' || id === 'execution') return null;
     if (!PUBAR_ID_PATTERN.test(id)) id = PUBAR_DEFAULT_GROUP_ID;
     var existing = pubarFindPane(id);
     if (existing) return existing;
@@ -546,7 +548,8 @@ function pubarUpdateNarrowChip(id, text) {
 /* 宿主渲染管线入口：取/建分组的页签与内容宿主（宿主缺省隐藏，内容出现后由 sync 显示）。 */
 function pubarPaneHostFor(groupId, meta) {
     if (!pubarInitialized) return null;
-    return pubarEnsurePane(groupId, meta).host;
+    var pane = pubarEnsurePane(groupId, meta);
+    return pane ? pane.host : null;
 }
 
 /* 外部内容注册（改动审查等）：返回句柄；setVisible / setCount 驱动页签显隐与徽标。 */
@@ -554,7 +557,7 @@ function pubarRegisterPane(options) {
     options = options || {};
     if (!pubarInitialized) return null;
     var id = String(options.id || '').trim();
-    if (!PUBAR_ID_PATTERN.test(id)) return null;
+    if (!PUBAR_ID_PATTERN.test(id) || id === 'plugins' || id === 'execution') return null;
     var pane = pubarFindPane(id) || pubarEnsurePane(id, { label: options.label, order: options.order });
     pane.owner = 'external';
     if (options.order != null && Number.isFinite(Number(options.order))) pane.order = Number(options.order);

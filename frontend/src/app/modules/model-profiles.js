@@ -207,7 +207,9 @@ async function loadModelProfilesForSwitcher(force) {
     }
     if (modelProfilesLoadPromise) {
         if (!force) return modelProfilesLoadPromise;
-        await modelProfilesLoadPromise;
+        // An explicit refresh must still run if the older shared request
+        // failed; inheriting that rejection made recovery fail immediately.
+        await modelProfilesLoadPromise.catch(function () {});
         return loadModelProfilesForSwitcher(true);
     }
     const promise = (async function () {
@@ -438,9 +440,15 @@ async function refreshModelProfileSelector(sessionId, opts) {
     if (!opts.silent && !modelProfilesCache && e.current) e.current.textContent = '正在加载模型配置';
     try {
         const profilesRequest = loadModelProfilesForSwitcher(opts.forceProfiles);
-        const bindingRequest = sid
-            ? fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', { credentials: 'same-origin' }).then(function (r) { return r.json(); })
-            : Promise.resolve(null);
+        const bindingUrl = '/sessions/' + encodeURIComponent(sid) + '/model_profile';
+        const readBinding = function (response) {
+            if (response.ok === false) throw new Error('会话模型绑定加载失败: ' + response.status);
+            return response.json();
+        };
+        const bindingRequest = !sid ? Promise.resolve(null)
+            : typeof fetchWithTimeout === 'function'
+                ? fetchWithTimeout(bindingUrl, { credentials: 'same-origin' }, 12000, readBinding)
+                : fetch(bindingUrl, { credentials: 'same-origin' }).then(readBinding);
         var results = await Promise.all([profilesRequest, bindingRequest]);
         var j = results[1];
         var selectedProfileId = (sid ? modelProfileIdBySession[sid] : newSessionModelProfileId())
@@ -464,12 +472,31 @@ async function refreshModelProfileSelector(sessionId, opts) {
             modelReasoningEffortBySession[sid] = String((j && j.reasoning_effort) || '');
         }
         activeModelProfileId = selectedProfileId;
+        if (e.trigger) e.trigger.removeAttribute('data-model-load-failed');
         renderModelProfileControl();
         return true;
     } catch (err) {
         if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
-        if (e.current) e.current.textContent = '模型配置加载失败';
-        if (e.menu) e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">模型配置加载失败</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
+        var knownId = sid ? modelProfileIdBySession[sid] : newSessionModelProfileId();
+        var hasKnownBinding = knownId && modelProfilesCache && (modelProfilesCache.profiles || []).some(function (profile) {
+            return String(profile.id || '') === String(knownId);
+        });
+        if (hasKnownBinding) {
+            activeModelProfileId = knownId;
+            renderModelProfileControl();
+        } else if (e.current) {
+            e.current.textContent = '模型配置暂时不可用';
+        }
+        if (e.trigger) {
+            e.trigger.setAttribute('data-model-load-failed', 'true');
+            e.trigger.setAttribute('title', hasKnownBinding ? '模型配置刷新失败，显示上次成功加载的配置；可点击重试' : '模型配置加载失败；可点击重试');
+        }
+        if (e.menu) {
+            e.menu.innerHTML = '<button type="button" class="composer-model-option" data-model-profile-retry><span class="composer-model-option-name">重试加载模型配置</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
+            e.menu.querySelector('[data-model-profile-retry]').addEventListener('click', function () {
+                void refreshModelProfileSelectorInBackground(sid, {silent: true, forceProfiles: true, invalidate: true});
+            });
+        }
         return false;
     }
 }
@@ -713,6 +740,14 @@ window.refreshModelProfileSelector = refreshModelProfileSelector;
 window.refreshModelProfileSelectorInBackground = refreshModelProfileSelectorInBackground;
 window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;
 window.addEventListener('myagent:catalog-invalidated', function () { modelProfilesLoadedAt = 0; });
+function retryFailedModelProfileRefresh() {
+    var trigger = els().trigger;
+    if (trigger && trigger.getAttribute('data-model-load-failed') === 'true') {
+        void refreshModelProfileSelectorInBackground(currentSessionId, {silent: true});
+    }
+}
+window.addEventListener('focus', retryFailedModelProfileRefresh);
+window.addEventListener('online', retryFailedModelProfileRefresh);
 document.addEventListener('myagent:settings-closed', function () {
     refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });
 });

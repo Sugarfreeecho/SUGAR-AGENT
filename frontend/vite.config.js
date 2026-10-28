@@ -51,7 +51,8 @@ export default defineConfig({
     emptyOutDir: true,
     reportCompressedSize: false,
     rollupOptions: {
-      input: { main: resolve(__dirname, 'index.html') },
+      input: { main: resolve(__dirname, 'index.html'), 'terminal-runtime': resolve(__dirname, 'src/app/terminal-runtime.js') },
+      output: { entryFileNames: chunk => chunk.name === 'terminal-runtime' ? 'assets/terminal-runtime.js' : 'assets/[name]-[hash].js' },
     },
   },
   server: {

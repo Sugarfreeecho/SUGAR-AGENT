@@ -27,6 +27,11 @@ function dockAlwaysTrue() {
     return true;
 }
 
+/** Tabs only offer 刷新 when their page says it can refresh (plugin frames do). */
+function dockAlwaysFalse() {
+    return false;
+}
+
 /** Fractions closer than this are the same split. */
 const DOCK_SIZE_TOLERANCE = 1e-9;
 
@@ -55,6 +60,7 @@ class DockSurfaceView {
         this.canAddTab = config.canAddTab || dockAlwaysTrue;
         this.canCloseTab = config.canCloseTab || dockAlwaysTrue;
         this.canSplitSurface = config.canSplitSurface || dockAlwaysTrue;
+        this.canRefreshTab = config.canRefreshTab || dockAlwaysFalse;
         this.hideSplitWhenBlocked = !!config.hideSplitWhenBlocked;
         this.dropZones = config.dropZones === 'horizontal' ? 'horizontal' : 'edges';
         this.minPaneFraction = typeof config.minPaneFraction === 'number' ? config.minPaneFraction : DOCK_MIN_PANE_FRACTION;
@@ -649,7 +655,12 @@ class DockSurfaceView {
                 if (this.state.tabs[id] && this.canCloseTab(id)) this.intents.closeTab(id);
             });
             const block = paneId ? this.splitBlock(paneId) : 'budget';
+            // Only pages that expose a refresh hook offer 刷新 (plugin pages and
+            // the plugin catalogue); every other tab would show a dead item.
+            const canRefresh = typeof this.intents.refreshTab === 'function' && this.canRefreshTab(tabId);
             const items = [
+                ...(canRefresh ? [{ label: this.labels.refreshTab || '刷新', valid,
+                    action: () => this.intents.refreshTab(tabId) }] : []),
                 { label: this.labels.duplicateTab || '复制标签', valid, action: () => this.intents.duplicateTab(tabId) },
                 { label: this.labels.splitPane || '左右分屏', disabled: !!block, valid,
                     title: block === 'width' ? this.labels.splitPaneNarrow : block ? this.labels.splitPaneDisabled : '',

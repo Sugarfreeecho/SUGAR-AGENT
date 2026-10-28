@@ -19,6 +19,9 @@ import contextStoreSource from './state/context-store.js?raw';
 import subagentCatalogStoreSource from './state/subagent-catalog-store.js?raw';
 import subagentAddressingSource from './state/subagent-addressing.js?raw';
 import subagentFramesSource from './modules/subagent-frames.js?raw';
+import titlebarActivitySource from './modules/titlebar-activity.js?raw';
+import backgroundTaskStoreSource from './state/background-task-store.js?raw';
+import backgroundTaskUiSource from './modules/background-task-ui.js?raw';
 import subagentCatalogUiSource from './modules/subagent-catalog-ui.js?raw';
 import subagentUiDecisionsSource from './state/subagent-ui-decisions.js?raw';
 import subagentComposerUiSource from './modules/subagent-composer-ui.js?raw';
@@ -118,6 +121,7 @@ messageInput.addEventListener('input', function () { composerDraftRevision++; })
 if (typeof subagentCatalogUi !== 'undefined' && subagentCatalogUi) {
     subagentCatalogUi.bindStore();
 }
+backgroundTaskUi.bind();
 if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {
     subagentAddressing.subscribe(function () {
         if (typeof subagentComposerUi !== 'undefined' && subagentComposerUi) {
@@ -182,6 +186,9 @@ const uiSources = [
     subagentCatalogStoreSource,
     subagentAddressingSource,
     subagentFramesSource,
+    titlebarActivitySource,
+    backgroundTaskStoreSource,
+    backgroundTaskUiSource,
     subagentCatalogUiSource,
     subagentUiDecisionsSource,
     subagentComposerUiSource,

@@ -222,25 +222,29 @@ await new Promise(function (resolve) { setTimeout(resolve, 220); });
 assert.equal(mod.pubarGetActiveId(), 'changes', '新页签出现后自动切换');
 assert.equal(changes.host.hidden, false);
 
-const pluginsHost = mod.pubarPaneHostFor('plugins', null);
+assert.equal(mod.pubarPaneHostFor('plugins', null), null, '通用插件面板已迁至详情栏');
+assert.equal(mod.pubarPaneHostFor('execution', {label:'执行'}), null, '执行面板已迁至详情栏');
+assert.equal(mod.pubarRegisterPane({id:'plugins',label:'插件'}), null, '旧扩展不能重建已移除页签');
+assert.equal(mod.pubarRegisterPane({id:'execution',label:'执行'}), null);
+const pluginsHost = mod.pubarPaneHostFor('goal', { label: '目标', order: 20 });
 const pluginsChild = makeElement('section');
 pluginsHost.appendChild(pluginsChild);
 mod.pubarSync();
 assert.deepEqual(
     tabs.children.map(function (tab) { return tab.getAttribute('data-pubar-tab'); }),
-    ['plan', 'plugins', 'changes']
+    ['plan', 'goal', 'changes']
 );
 const pluginsTab = tabs.children[1];
 assert.equal(pluginsTab.children[1].hidden, true, '插件页签仅在 >1 时显示数字');
 assert.equal(pluginsTab.classList.contains('is-pulse'), false, '自动跟切不叠加脉冲');
 await new Promise(function (resolve) { setTimeout(resolve, 220); });
-assert.equal(mod.pubarGetActiveId(), 'plugins', '新面板出现后自动切换');
+assert.equal(mod.pubarGetActiveId(), 'goal', '新面板出现后自动切换');
 
 const keydown = tabs._listeners.keydown[0];
 keydown({ key: 'ArrowRight', preventDefault: function () {} });
 assert.equal(mod.pubarGetActiveId(), 'changes');
 keydown({ key: 'ArrowLeft', preventDefault: function () {} });
-assert.equal(mod.pubarGetActiveId(), 'plugins');
+assert.equal(mod.pubarGetActiveId(), 'goal');
 keydown({ key: 'End', preventDefault: function () {} });
 assert.equal(mod.pubarGetActiveId(), 'changes');
 assert.equal(changes.host.hidden, false);
@@ -249,11 +253,11 @@ assert.equal(storage.get('pubar-active-tab'), 'changes', '活动页签被记忆'
 
 mod.pubarNotifyActivity(pluginsChild);
 await new Promise(function (resolve) { setTimeout(resolve, 220); });
-assert.equal(mod.pubarGetActiveId(), 'plugins', '显式活动通知自动切换');
+assert.equal(mod.pubarGetActiveId(), 'goal', '显式活动通知自动切换');
 
 const detachedPanel = makeElement('section');
 mod.pubarNotifyActivity(detachedPanel);
-assert.equal(mod.pubarGetActiveId(), 'plugins', '未挂载上报暂不切换');
+assert.equal(mod.pubarGetActiveId(), 'goal', '未挂载上报暂不切换');
 planHost.appendChild(detachedPanel);
 await new Promise(function (resolve) { setTimeout(resolve, 400); });
 assert.equal(mod.pubarGetActiveId(), 'plan', '未挂载上报在内容提交后补切');

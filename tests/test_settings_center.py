@@ -22,6 +22,7 @@ def test_settings_routes_render_single_page_with_preselect():
         ("/setup/env", "env"),
         ("/setup/mcp", "mcp"),
         ("/setup/extensions", "plugins"),
+        ("/settings?section=schedules", "schedules"),
     ):
         response = client.get(path)
         assert response.status_code == 200, path
@@ -30,6 +31,7 @@ def test_settings_routes_render_single_page_with_preselect():
         assert 'id="st-nav-list"' in body
         assert "/static/settings/core.js" in body
         assert "/static/settings/sections_basic.js" in body
+        assert "/static/settings/sections_schedules.js" in body
         assert "/static/settings/sections_ext.js" in body
         assert "/static/settings/sections_ops.js" in body
         assert '"section": "%s"' % section in body
@@ -46,6 +48,7 @@ def test_settings_static_assets_are_whitelisted():
         "package_import.js": "application/javascript",
         "plugin_sections.js": "application/javascript",
         "sections_basic.js": "application/javascript",
+        "sections_schedules.js": "application/javascript",
         "sections_ext.js": "application/javascript",
         "sections_ops.js": "application/javascript",
     }

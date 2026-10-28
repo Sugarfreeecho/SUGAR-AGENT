@@ -270,7 +270,14 @@
 .dock-page-seat { width:100%; height:100%; min-width:0; min-height:0; }
 .dock-retained-page { position:fixed; overflow:hidden; background:var(--main-area-bg); pointer-events:auto; }
 .dock-retained-page[hidden] { display:none !important; }
-.dock-plugin-page > iframe { display:block; width:100%; height:100%; border:0; }
+.dock-plugin-page { display:flex; flex-direction:column; min-height:0; }
+.dock-plugin-page > iframe { display:block; width:100%; flex:1; min-height:0; border:0; }
+.dock-plugin-session-state { flex:none; max-height:45%; overflow:auto; padding:10px 14px; border-bottom:1px solid var(--border-glass); color:var(--text-primary); }
+.dock-plugin-session-state > summary { cursor:pointer; font-size:12px; color:var(--text-muted); }
+.dock-plugin-session-state .plugin-session-panel { margin-top:10px; }
+.dock-plugin-session-state .plugin-session-panel-title { font-size:.85rem; }
+.dock-plugin-session-state .plugin-session-panel-description, .dock-plugin-session-state .plugin-session-panel-field { font-size:.8rem; }
+.dock-plugin-page--projection .dock-plugin-session-state { flex:1; max-height:none; }
 .dock-browser-page { display:flex; flex-direction:column; color:var(--text-primary); }
 .dock-browser-toolbar { display:flex; flex:none; box-sizing:border-box; gap:4px; align-items:center; height:38px; padding:5px 6px; border-bottom:.5px solid var(--border-glass); }
 .dock-browser-tool { display:inline-flex; flex:none; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:0; border-radius:4px; color:var(--text-secondary); background:transparent; cursor:pointer; }

@@ -16,7 +16,7 @@ function fixture() {
     modelProfileSelectionEpoch:0,modelProfilesRefreshPromises:{},activeModelProfileId:'p1',
     els:()=>({control:{}}),newSessionModelProfileId:()=>'',h:s=>s,
     renderModelProfileControl:()=>rendered.push(context.activeModelProfileId),
-    fetch:url=>new Promise(resolve=>calls.push({url,resolve})),
+    fetch:url=>new Promise((resolve,reject)=>calls.push({url,resolve,reject})),
   });
   vm.runInContext(['loadModelProfilesForSwitcher','refreshModelProfileSelector',
     'refreshModelProfileSelectorInBackground','noteModelBindingChanged'].map(fn).join('\n'),context);
@@ -64,5 +64,13 @@ function fixture() {
   const forced=f.context.loadModelProfilesForSwitcher(true);
   assert.equal(f.calls.length,2,'explicit configuration change bypasses TTL');
   f.reply(1,profiles);await forced;
+  f=fixture();f.advance(30001);
+  const failedList=f.context.loadModelProfilesForSwitcher();
+  const recover=f.context.loadModelProfilesForSwitcher(true);
+  f.calls[0].reject(new Error('temporary outage'));
+  await assert.rejects(failedList,/temporary outage/);
+  await tick();
+  assert.equal(f.calls.length,2,'an explicit retry must perform a fresh GET after a failed shared load');
+  f.reply(1,profiles);await recover;
   console.log('model profile refresh request checks passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

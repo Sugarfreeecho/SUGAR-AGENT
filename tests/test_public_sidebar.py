@@ -55,7 +55,8 @@ def test_plugin_session_panels_route_through_group_hosts():
 
     assert "globalThis.MyAgentPubar && typeof globalThis.MyAgentPubar.paneHostFor === 'function'" in source
     assert "pubarApi.paneHostFor(" in source
-    assert "group ? group.id : 'plugins'" in source
+    assert "!isPluginConsolePanel(item)" in source
+    assert "mountPluginConsoleSessionPanels" in source
     assert "if (group) model.group = group;" in source
     assert "const usedFallbackHost = fragments.has(host);" in source
     assert "visiblePanelCount" in source

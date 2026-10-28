@@ -169,6 +169,7 @@ function dockRightSurfaceLabels() {
         closeTab: '关闭标签',
         addTab: '新建窗口',
         duplicateTab: '复制标签',
+        refreshTab: '刷新',
         dockFloat: '收回到侧边栏',
         closeFloat: '关闭浮窗',
         dropZone: { center: '移入此面板', left: '分屏到左侧', right: '分屏到右侧' },
@@ -291,7 +292,7 @@ function dockRightFileIcon(name) {
 const DOCK_FOLDER_ICON = window.MyAgentIcons.svg('folder', 'dock-files-icon');
 
 /** The card a file that cannot be shown inline falls back to: open it in the system app. */
-function dockRightSystemCard(rel) {
+function dockRightSystemCard(rel, context) {
     const wrap = document.createElement('div');
     wrap.className = 'dock-doc-fallback';
     const note = document.createElement('div');
@@ -302,7 +303,7 @@ function dockRightSystemCard(rel) {
     open.className = 'dock-link-button';
     open.textContent = dockRightText('openSystem');
     open.addEventListener('click', () => {
-        void dockRightOpenSystemPath(rel);
+        void dockRightOpenSystemPath(rel, context);
     });
     wrap.appendChild(note);
     wrap.appendChild(open);
@@ -337,8 +338,8 @@ function dockRightOpenPathSmart(pathValue) {
     void dockRightOpenSystemPath(rel);
 }
 
-function dockRightOpenSystemPath(rel) {
-    return openWorkspaceLocalPath(rel, false).then(data => {
+function dockRightOpenSystemPath(rel, context) {
+    return openWorkspaceLocalPath(rel, false, { context }).then(data => {
         if (!data || !data.ok) throw new Error((data && data.error) || '无法打开文件');
     }).catch(error => {
         if (typeof showOpenFileFeedback === 'function') showOpenFileFeedback('无法打开：' + error.message);
@@ -402,6 +403,8 @@ function dockRightEnsureMounted() {
             return !!surface && dockPanePage(surface.layout, paneId, 'guide') === undefined;
         },
         canCloseTab: () => true,
+        // Only plugin pages / the plugin catalogue can refresh themselves.
+        canRefreshTab: dockRightCanRefreshTab,
         // Two panes is the column's ceiling: with two already open the split
         // control hides (below), so a dead button never lingers (feedback #8).
         canSplitSurface: () => {
@@ -426,6 +429,7 @@ function dockRightEnsureMounted() {
         renderTab: (tab) => dockRightRenderTabBody(tab),
         renderTabTitle: dockRightRenderTabTitle,
         canCloseTab: () => true,
+        canRefreshTab: dockRightCanRefreshTab,
     });
     dockRightState.floats.mount();
 
@@ -650,11 +654,45 @@ function dockRightStartResize(event) {
 
 // ── intents and rendering ────────────────────────────────────────────────────
 
+/**
+ * The refresh hook behind a tab, or null when the page has none.
+ * Plugin pages reload their frame (`DockPluginPage.reload`); the plugin
+ * catalogue re-renders from the current contributions (`__dockRefresh`).
+ * Both are only offered through the tab menu when this returns a hook, so
+ * ordinary pages never show a dead 刷新 item.
+ */
+function dockRightTabRefresh(tabId) {
+    const surfaceId = dockRightState.sessionId;
+    const surface = surfaceId ? dockSurfaceOf(surfaceId, DOCK_RIGHT_AREA) : null;
+    const tab = surface && surface.layout && surface.layout.tabs ? surface.layout.tabs[tabId] : null;
+    if (!tab) return null;
+    const page = dockRightPageHost?.page(surfaceId, tabId);
+    if (page && typeof page.reload === 'function') return () => page.reload();
+    // Docked panes cache bodies by tab id; floating panes rebuild one body per panel.
+    const dockedBody = dockRightState.surface && dockRightState.surface.tabBodies
+        ? dockRightState.surface.tabBodies[tabId] : null;
+    const floatEntry = Object.values(dockRightState.floats?.entries || {})
+        .find(entry => entry.tabId === tabId);
+    const floatBody = floatEntry && floatEntry.body ? floatEntry.body.firstElementChild : null;
+    for (const body of [dockedBody, floatBody]) {
+        const hook = body && (body.__dockRefresh || body.__dockRefreshPlugins);
+        if (typeof hook === 'function') return () => hook();
+    }
+    return null;
+}
+
+/** Whether the tab menu should offer 刷新 for this tab. */
+function dockRightCanRefreshTab(tabId) {
+    return !!dockRightTabRefresh(tabId);
+}
+
 /** Settled intent results for the column, routed into the `right` area's store. */
 function dockRightIntents() {
     const redraw = () => dockRightRender();
     const session = () => dockRightState.sessionId;
     return {
+        // Refresh never touches the layout: the page reloads in place.
+        refreshTab: (tabId) => { dockRightTabRefresh(tabId)?.(); },
         focusTab: (tabId) => { if (dockActionFocusTab(session(), tabId, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
         focusPane: (paneId) => { if (dockActionFocusPane(session(), paneId, dockRightSeed(), DOCK_RIGHT_AREA)) redraw(); },
         splitPane: (paneId) => { if (dockActionSplitPane(session(), paneId, dockRightSeed(), null, DOCK_RIGHT_AREA)) redraw(); },
@@ -1184,10 +1222,13 @@ function dockRightDocumentBody(tab) {
     const el = document.createElement('div');
     el.className = 'dock-doc';
     el.setAttribute('data-dock-document', tab.id);
-    const rel = workspaceAbsolutePath(decodeURIComponent(String(tab.contentId || '').slice(DOCK_RIGHT_FILE_PREFIX.length)), getWorkspaceRequestContext());
+    // show_user supplies a canonical native path. Its viewer uses the file's
+    // own directory, independently of the chat workspace (which may be gone).
+    const localFile = tab.localFilePath ? String(tab.localFilePath).replace(/\\/g, '/') : '';
+    const context = localFile ? { work_dir: localFile.replace(/[^/]*$/, '') } : getWorkspaceRequestContext();
+    const rel = localFile || workspaceAbsolutePath(decodeURIComponent(String(tab.contentId || '').slice(DOCK_RIGHT_FILE_PREFIX.length)), context);
     el.setAttribute('data-dock-file-rel', rel);
     const suffix = dockRightSuffix(rel);
-    const context = getWorkspaceRequestContext();
     const state = { abort: null, released: false, rel: rel, suffix: suffix, context };
     dockRightState.tabState[tab.id] = state;
 
@@ -1212,7 +1253,7 @@ function dockRightDocumentBody(tab) {
     reveal.title = dockRightText('reveal');
     reveal.innerHTML = DOCK_ICON_REVEAL;
     reveal.addEventListener('click', () => {
-        void openWorkspaceLocalPath(rel, true)
+        void openWorkspaceLocalPath(rel, true, { context })
             .then((data) => {
                 if (typeof showOpenFileFeedback === 'function') {
                     if (data && data.ok) showOpenFileFeedback('已打开文件目录');
@@ -1228,7 +1269,7 @@ function dockRightDocumentBody(tab) {
     openSystem.className = 'dock-link-button';
     openSystem.textContent = dockRightText('openSystem');
     openSystem.addEventListener('click', () => {
-        void dockRightOpenSystemPath(rel);
+        void dockRightOpenSystemPath(rel, context);
     });
     // The refresh control keeps the head's far right corner on every page;
     // the system-open action sits beside the title instead (it ran between
@@ -1246,9 +1287,9 @@ function dockRightDocumentBody(tab) {
         const image = document.createElement('img');
         image.className = 'dock-doc-image';
         image.alt = name.textContent;
-        image.src = workspaceApiUrl('/api/workspace-image', { rel: rel });
+        image.src = workspaceApiUrl('/api/workspace-image', { rel: rel }, context);
         image.addEventListener('error', () => {
-            content.replaceChildren(dockRightSystemCard(rel));
+            content.replaceChildren(dockRightSystemCard(rel, context));
         });
         content.appendChild(image);
         refresh.addEventListener('click', () => {
@@ -1258,7 +1299,7 @@ function dockRightDocumentBody(tab) {
         const media = document.createElement(DOCK_RIGHT_VIDEO_SUFFIXES.indexOf(suffix) >= 0 ? 'video' : 'audio');
         media.className = 'dock-doc-media';
         media.controls = true;
-        media.src = workspaceApiUrl('/api/workspace-media', { rel: rel });
+        media.src = workspaceApiUrl('/api/workspace-media', { rel: rel }, context);
         content.appendChild(media);
         refresh.addEventListener('click', () => {
             try { media.load(); } catch (error) { /* ignore */ }
@@ -1266,7 +1307,7 @@ function dockRightDocumentBody(tab) {
     } else if (DOCK_RIGHT_BINARY_SUFFIXES.indexOf(suffix) >= 0) {
         // Feedback #5: a non-text file goes straight to the system-app card
         // instead of showing mojibake.
-        content.appendChild(dockRightSystemCard(rel));
+        content.appendChild(dockRightSystemCard(rel, context));
         refresh.disabled = true;
     } else if (DOCK_RIGHT_HTML_SUFFIXES.indexOf(suffix) >= 0) {
         // HTML renders as a page by default — sandboxed iframe, its own
@@ -1404,7 +1445,7 @@ async function dockRightLoadText(content, state) {
         if (replacements > 0 && replacements > text.length * 0.02) {
             // Undecodable bytes: this is not a text file after all; hand it to
             // the system app instead of displaying replacement glyphs.
-            content.replaceChildren(dockRightSystemCard(state.rel));
+            content.replaceChildren(dockRightSystemCard(state.rel, state.context));
             return;
         }
         const pre = document.createElement('pre');

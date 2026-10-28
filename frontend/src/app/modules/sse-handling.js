@@ -175,6 +175,19 @@ function endRunForClient(sessionId, ctx, opts) {
     if (!sid) return;
     var allowFollowupDrain = opts.drainFollowup !== false
         && getRunAbortReason(sid, ctx) !== 'user';
+    // Runtime ownership is critical cleanup; rendering and other optional
+    // observers below must never keep an ended reader occupying this session.
+    var currentRun = getSessionRunState(sid);
+    var expectedRunId = String(opts.runId || (ctx && ctx.runId) || '');
+    var activeInfo = sessionStore.getActiveRunInfo(sid);
+    var knownRunId = String((currentRun && currentRun.runId) || (activeInfo && (activeInfo.run_id || activeInfo.runId)) || '');
+    if (expectedRunId && knownRunId && knownRunId !== expectedRunId) return;
+    if (currentRun) clearSessionRunStateIfMatch(sid, expectedRunId);
+    markSessionRunInactive(sid);
+    resetStreamReconnectState(sid);
+    if (ctx && opts.terminalEvent && typeof renderRunFailure === 'function') {
+        renderRunFailure(ctx, opts.terminalEvent, sid);
+    }
     var preserveInterruptedPartial = !!(
         ctx && ctx.preserveInterruptedPartial && opts.discardPartialStreams
     );
@@ -202,9 +215,10 @@ function endRunForClient(sessionId, ctx, opts) {
     if (allowCollapse) {
         var terminalAggregate = ctx && ctx.currentProcessGroup;
         if (terminalAggregate && terminalAggregate.isConnected) {
-            terminalAggregate.classList.add('is-collapsed');
+            var failed = opts.terminalEvent && opts.terminalEvent.type === 'run_failed';
+            terminalAggregate.classList.toggle('is-collapsed', !failed);
             var terminalTop = terminalAggregate.querySelector('.process-aggregate-top');
-            if (terminalTop) terminalTop.setAttribute('aria-expanded', 'false');
+            if (terminalTop) terminalTop.setAttribute('aria-expanded', failed ? 'true' : 'false');
             updateProcessBrief(terminalAggregate);
         }
         sealProcessGroup(ctx);
@@ -215,11 +229,6 @@ function endRunForClient(sessionId, ctx, opts) {
     // edge while only the outer chat viewport is snapped.
     if (liveAutoFollow && opts.scroll !== false) {
         finishStreamScrollIfFollow(ctx, sid);
-    }
-    markSessionRunInactive(sid);
-    resetStreamReconnectState(sid);
-    if (getSessionRunState(sid)) {
-        clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId));
     }
     syncSessionListIndicatorClasses();
     setSendButtonState();
@@ -268,6 +277,7 @@ function applySessionTerminalNotifications(events) {
         }
         if (run) abortSessionRun(sid, getRunAbortReason(sid, ctx) === 'user' ? 'user' : 'reconcile-finished');
         endRunForClient(sid, ctx, {
+            terminalEvent: event,
             runId: rid, drainFollowup: true, scroll: false,
             reconcileFinal: event.type === 'run_finished',
             discardPartialStreams: event.type !== 'run_finished',
@@ -417,6 +427,20 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
     } finally {
         clearInterval(progressTimer);
         if (runCtx) runCtx.streamConsuming = false;
+        var closingRun = getSessionRunState(runSessionId);
+        var ownedReader = !!(runCtx && closingRun && closingRun.ctx === runCtx);
+        // A local run represents this HTTP reader, not the server's execution.
+        // EOF, cancellation and failed presentation hooks all release it. The
+        // independent active-run snapshot continues to describe backend work.
+        if (ownedReader) clearSessionRunState(runSessionId);
+        if (ownedReader && runCtx.terminalSeen !== true
+            && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            console.info('stream recovery', {reason:'missing-terminal', sessionId:runSessionId, runtimeSeq:runCtx.lastRuntimeSeq || 0});
+            if (!runCtx.lastRuntimeSeq) streamHistoryRecoveryBySession.add(runSessionId);
+            setTimeout(function () {
+                scheduleActiveSessionReconnect(runSessionId, { delayMs: 100, failure: true });
+            }, 0);
+        }
         if (typeof requestExtensionStateConvergence === 'function') {
             requestExtensionStateConvergence(runSessionId, 'stream-closed');
         }
@@ -427,17 +451,6 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
             /* 兜底：运行期间任何后台改绑（fallback 接管、压缩期模型调用等）都在
                流关闭后对齐一次，保证右下角选择器最终与实际绑定一致。 */
             refreshModelProfileSelectorInBackground(runSessionId, { silent: true, invalidate: true });
-        }
-        var closingRun = getSessionRunState(runSessionId);
-        if (runCtx && closingRun && closingRun.ctx === runCtx && runCtx.terminalSeen !== true
-            && getRunAbortReason(runSessionId, runCtx) !== 'user') {
-            console.info('stream recovery', {reason:'missing-terminal', sessionId:runSessionId, runtimeSeq:runCtx.lastRuntimeSeq || 0});
-            if (!runCtx.lastRuntimeSeq) streamHistoryRecoveryBySession.add(runSessionId);
-            clearSessionRunState(runSessionId);
-            // Let the caller finish its cleanup before acquiring another stream.
-            setTimeout(function () {
-                scheduleActiveSessionReconnect(runSessionId, { delayMs: 100, failure: true });
-            }, 0);
         }
     }
 }
@@ -574,6 +587,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     var executionUpdate = Object.assign({}, parsed.update, {last_runtime_seq:parsed.runtime_seq});
                     if (!executionUpdate.run_id && parsed.run_id) executionUpdate.run_id = parsed.run_id;
                     renderExecutionRecord(runCtx, updateExecutionRecord(runSessionId, executionUpdate), runSessionId, {
+                        backgroundText: !parsed.replayed_snapshot && Object.prototype.hasOwnProperty.call(executionUpdate, 'output_delta'),
                         smoothText: !parsed.replayed_snapshot && ['text_delta', 'name_delta', 'arguments_delta'].some(function (key) {
                             return Object.prototype.hasOwnProperty.call(executionUpdate, key);
                         }),
@@ -618,15 +632,19 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     if (!reservedSteerIndex) streamEventIdx += 1;
                     continue;
                 }
-                if (parsed.type === 'user' && parsed.queued_followup) {
-                    removeConsumedFollowupSteer(eventSessionId, parsed);
-                    initRunFinalTracking(runCtx);
+                if (parsed.type === 'user') {
+                    var consumedFollowup = removeConsumedFollowupSteer(eventSessionId, parsed);
+                    if (consumedFollowup || parsed.queued_followup) initRunFinalTracking(runCtx);
                 }
                 const reduced = applySessionEvent(parsed, {
                     sessionId: eventSessionId,
                     eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,
                     source: 'sse',
                 });
+                if (reduced.staleTerminalIgnored || reduced.staleLifecycleIgnored) {
+                    if (!parsed.ephemeral) streamEventIdx += 1;
+                    continue;
+                }
                 if (reduced.runStateChanged) {
                     if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
                         if (runCtx) {
@@ -640,6 +658,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                             runCtx.preserveInterruptedPartial = true;
                         }
                         endRunForClient(eventSessionId, runCtx, {
+                            terminalEvent: parsed,
                             finalDelayMs: 80,
                             followupDelayMs: 0,
                             runId: parsed.run_id || parsed.runId || (runCtx && runCtx.runId),
@@ -1162,6 +1181,11 @@ function applySkippedRuntimeV2EventMetadata(event, runCtx, sessionId) {
     if (!event || !event.skip_ui) return;
     const runtimeEvent = event.runtime_event && typeof event.runtime_event === 'object' ? event.runtime_event : null;
     if (!runtimeEvent || (runtimeEvent.type !== 'message_user' && runtimeEvent.type !== 'user_turn_committed')) return;
+    if (runtimeEvent.payload && runtimeEvent.payload.operation_id) {
+        // Optimistic rendering skips the duplicate bubble, not the durable
+        // operation receipt. Background queues need the receipt as well.
+        removeConsumedFollowupSteer(sessionId, {type:'user', operation_id:runtimeEvent.payload.operation_id});
+    }
     const runtimeSeq = Number(event.runtime_seq || event.seq);
     if (!Number.isFinite(runtimeSeq) || runtimeSeq <= 0) return;
     if (runCtx) runCtx.lastUserRuntimeSeq = Math.floor(runtimeSeq);
@@ -1215,9 +1239,11 @@ function restoreReactGenerationFromProcessGroup(ctx, processGroup) {
     return generation;
 }
 
+var sessionStreamAttachments = new Set();
+
 async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
-    if (!sessionId || getSessionRunState(sessionId)) return;
+    if (!sessionId || getSessionRunState(sessionId) || sessionStreamAttachments.has(sessionId)) return;
     // A session switch replays its durable history first. Starting SSE during
     // that replay creates a local run that can cancel history hydration and
     // leave only a later follow-up/process row in the child page.
@@ -1230,8 +1256,12 @@ async function attachSessionEventStream(sessionId, opts) {
         delete opts.afterIndex;
     }
     var runSessionId = sessionId;
+    var requestedInfo = sessionStore.getActiveRunInfo(runSessionId) || {};
+    var requestedRunId = String(requestedInfo.run_id || requestedInfo.runId || '');
+    if (requestedRunId && sessionStore.isTerminalRun(runSessionId, requestedRunId)) return;
     var runCtx = null;
     var reattachFailed = false;
+    sessionStreamAttachments.add(runSessionId);
     try {
         if (runSessionId !== currentSessionId) return;
         requestExtensionStateConvergence(runSessionId, 'stream-attaching');
@@ -1256,6 +1286,14 @@ async function attachSessionEventStream(sessionId, opts) {
             var attachTailReady = await ensureLatestHistoryTailForLiveAppend(runSessionId);
             if (!attachTailReady || runSessionId !== currentSessionId) return;
         }
+        // History/tail loading yields to terminal notifications and new sends.
+        // An old attachment must not reclaim a closed run or overwrite a reader
+        // created while that I/O was pending, even when attachment was forced.
+        if (runSessionId !== currentSessionId || getSessionRunState(runSessionId)) return;
+        if (requestedRunId && sessionStore.isTerminalRun(runSessionId, requestedRunId)) return;
+        var currentAttachInfo = sessionStore.getActiveRunInfo(runSessionId) || {};
+        var currentAttachRunId = String(currentAttachInfo.run_id || currentAttachInfo.runId || '');
+        if (currentAttachRunId && sessionStore.isTerminalRun(runSessionId, currentAttachRunId)) return;
         if (!opts.force && !isServerStreamActive(runSessionId)) return;
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
@@ -1317,6 +1355,7 @@ async function attachSessionEventStream(sessionId, opts) {
         const msg = (error && error.message) ? String(error.message) : String(error);
         if (runCtx && runSessionId === currentSessionId) appendLog(runCtx, '恢复实时流失败: ' + msg, 'error-log', runSessionId);
     } finally {
+        sessionStreamAttachments.delete(runSessionId);
         if (runCtx) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
@@ -1936,6 +1975,10 @@ function followupQueueRenderSignature(sessionId, queue) {
             steerMode: item && item.steerMode === 'append' ? 'append' : 'interrupt',
             display: String((item && (item.display || item.text)) || ''),
             skills: Array.isArray(item && item.skills) ? item.skills.map(String) : [],
+            attachments: (Array.isArray(item && item.attachments) ? item.attachments : []).map(function (attachment) {
+                var ref = attachment && (attachment.attachment || attachment) || {};
+                return String(ref.attachmentId || ref.name || (attachment && attachment.name) || '');
+            }),
             deferUntilRunEnd: !!(item && item.deferUntilRunEnd),
             awaitingRunEnd: !!(item && item.awaitingRunEnd),
         };
@@ -2231,7 +2274,13 @@ function renderFollowupQueue(sessionId) {
         var itemSkills = Array.isArray(item.skills) ? item.skills : [];
         var itemDisplay = String(item.display || item.text || '');
         var itemDetail = itemDisplay + (itemSkills.length ? ('\n\nSkill: ' + itemSkills.join('、')) : '');
-        text.textContent = itemDisplay + (itemSkills.length ? ('  · Skill: ' + itemSkills.join('、')) : '');
+        var itemAttachments = Array.isArray(item.attachments) ? item.attachments : [];
+        // 文本单独一层：外层是 flex，附件缩略图要并排在文本后面，
+        // 省略号只作用于文本层，避免图片把行撑成多行。
+        var textLabel = document.createElement('span');
+        textLabel.className = 'followup-queue-text-label';
+        textLabel.textContent = itemDisplay + (itemSkills.length ? ('  · Skill: ' + itemSkills.join('、')) : '');
+        text.appendChild(textLabel);
         text.setAttribute('data-ui-tip', itemDetail);
         var status = document.createElement('div');
         status.className = 'followup-queue-status';
@@ -2265,7 +2314,9 @@ function renderFollowupQueue(sessionId) {
         row.appendChild(sendNow);
         row.appendChild(undo);
         panel.appendChild(row);
-        renderDurableAttachmentImages(text, item.attachments || []);
+        if (typeof renderFollowupAttachmentThumbs === 'function') {
+            renderFollowupAttachmentThumbs(text, itemAttachments);
+        }
         if (typeof initUiHoverTips === 'function') initUiHoverTips(row);
     });
     positionFollowupQueuePanel();
@@ -2917,8 +2968,8 @@ async function syncFollowupQueueFromServer(sessionId) {
 
 function removeConsumedFollowupSteer(sessionId, ev) {
     const sid = String(sessionId || '');
-    if (!sid || !ev || (!ev.steer && !ev.queued_followup)) return false;
-    var steerId = String(ev.steer_id || '');
+    if (!sid || !ev || (!ev.steer && !ev.queued_followup && !(ev.type === 'user' && ev.operation_id))) return false;
+    var steerId = String(ev.steer_id || ev.operation_id || '');
     var clientId = String(ev.client_id || '');
     if (!steerId && !clientId) return false;
     var q = getFollowupQueue(sid);
@@ -4067,6 +4118,9 @@ async function sendMessage(options) {
         return false;
     } finally {
         _clientStepStart = nowPipelineMs();
+        if (getSessionRunState(runSessionId) === optimisticRunState) {
+            clearSessionRunStateIfMatch(runSessionId, clientRunId);
+        }
         finalizeLlmStreamChunks(runCtx);
         finalizeProgressStreamChunks(runCtx);
         if (!switchedAway && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
@@ -4074,12 +4128,6 @@ async function sendMessage(options) {
         }
         if (liveAutoFollow && !switchedAway) {
             finishStreamScrollIfFollow(runCtx, runSessionId);
-        }
-        if (runSessionId !== currentSessionId) {
-            void tryMarkSessionUnreadComplete(runSessionId);
-        }
-        if (getSessionRunState(runSessionId) && runCtx && runCtx.terminalSeen === true) {
-            clearSessionRunStateIfMatch(runSessionId, clientRunId);
         }
         if (streamDisconnectedUnexpectedly && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {
             scheduleActiveSessionReconnect(runSessionId, { delayMs: 500, failure: true });

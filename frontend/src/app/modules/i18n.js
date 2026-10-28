@@ -19,6 +19,8 @@ const UI_TRANSLATIONS_EN = {
     '暂停播放': 'Pause playback', '静音': 'Mute', '取消静音': 'Unmute',
     '循环播放': 'Loop playback', '取消循环播放': 'Disable loop', '复制媒体地址': 'Copy media address',
     '播放': 'Play', '打开链接': 'Open link', '复制链接地址': 'Copy link address',
+    '在详情栏打开': 'Open in details', '在详情栏另一屏打开': 'Open in details beside it',
+    '在系统浏览器打开': 'Open in system browser',
     '打开文件': 'Open file', '移除附件': 'Remove attachment', '清除计划': 'Clear plan',
     '查看改动': 'View changes', '查看本轮改动': 'View changes for this turn',
     '自优化通用智能平台': 'Self-optimizing general intelligence platform',
@@ -798,7 +800,7 @@ function setUiRuntimeText(el, original, incremental) {
     if (!el) return;
     var source = String(original == null ? '' : original);
     uiI18nRuntimeOriginal.set(el, source);
-    el.setAttribute('data-ui-runtime-text', '1');
+    if (el.getAttribute('data-ui-runtime-text') !== '1') el.setAttribute('data-ui-runtime-text', '1');
     var displayed = uiLanguage === 'en' ? translateUiString(source) : source;
     var node = el.firstChild;
     if (incremental && node && node === el.lastChild && node.nodeType === 3) {

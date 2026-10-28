@@ -1604,9 +1604,14 @@ function createHumanTerminalCard(record, sessionId) {
             : '此请求已结束，仅供查看，无法再次操作。'
     ));
     while (head && head.nextSibling) detail.appendChild(head.nextSibling);
-    card.appendChild(summary);
     card.appendChild(detail);
     if (head) {
+        // 结论并进标题行：折叠态整卡只剩一行高度（原来 summary 单独挂在卡片
+        // 底部，会和标题行各占一条）。展开后由 CSS 让它在标题下方换行显示，
+        // 所以这里不再用 aria-hidden/inert 隐藏它。
+        var copy = head.querySelector('.human-card-head-copy');
+        if (copy) copy.appendChild(summary);
+        else card.appendChild(summary);
         var toggle = humanElement('button', 'human-terminal-toggle', '展开');
         toggle.type = 'button';
         toggle.title = '展开或收起完整请求';
@@ -1617,8 +1622,6 @@ function createHumanTerminalCard(record, sessionId) {
             toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
             if (typeof setUiRuntimeText === 'function') setUiRuntimeText(toggle, expanded ? '收起' : '展开');
             else toggle.textContent = expanded ? '收起' : '展开';
-            summary.setAttribute('aria-hidden', expanded ? 'true' : 'false');
-            summary.inert = expanded;
             detail.setAttribute('aria-hidden', expanded ? 'false' : 'true');
             detail.inert = !expanded;
             card.classList.toggle('is-expanded', expanded);

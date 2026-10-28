@@ -52,8 +52,9 @@ function applySessionEvent(event, opts) {
     }
     if (type === 'run_started' || type === 'run_attached') {
         if (runId && sessionStore.isTerminalRun(sessionId, runId)) {
-            markSessionRunInactive(sessionId);
-            return { handled: true, runStateChanged: true, messageRecord: messageRecord };
+            // A replayed start of a closed run has no lifecycle authority,
+            // including authority to clear a newer run in the same session.
+            return { handled: true, staleLifecycleIgnored: true, messageRecord: messageRecord };
         }
         const suppressed = typeof isSessionStreamStopSuppressed === 'function'
             && isSessionStreamStopSuppressed(sessionId);

@@ -176,6 +176,23 @@ def test_registered_renderer_browser_and_application_pages_work_without_a_sessio
     assert not errors, [str(error) for error in errors]
 
 
+def test_link_opened_from_the_column_takes_the_second_pane(details_page):
+    page, _calls, errors, _rows = details_page
+    page.evaluate("MyAgentDock.openPluginPage('demo')")
+    plugin_frame(page)
+    assert page.evaluate("MyAgentDock.openBrowser('https://browser.fixture.test/one', {split: true})") is True
+    page.wait_for_timeout(250)
+    state = page.evaluate("""() => {
+      const layout = MyAgentDock.detailsState();
+      const panes = Object.values(layout.nodes).filter(node => node.kind === 'pane');
+      return { panes: panes.length, kinds: panes.map(pane => pane.tabs.map(id => layout.tabs[id] && layout.tabs[id].kind)) };
+    }""")
+    # 原来的插件页留在第一屏，链接页面落在新增的第二屏（新屏的“开始”页被替换掉）
+    assert state['panes'] == 2, state
+    assert sorted(kind for kinds in state['kinds'] for kind in kinds) == ['browser', 'plugin-page'], state
+    assert not errors, [str(error) for error in errors]
+
+
 def test_plugin_content_update_releases_old_browsing_context(details_page):
     page, _calls, errors, rows = details_page
     page.evaluate('rows=>MyAgentDock.syncPluginPages(rows)', [{**rows[0], 'signature': 'version-one'}])

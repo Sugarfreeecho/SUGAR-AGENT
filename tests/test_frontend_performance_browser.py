@@ -313,6 +313,53 @@ def test_execution_updates_reuse_rows_across_history_and_context_changes(page):
                       "isolated": True, "merged": True, "reloaded": True}
 
 
+@pytest.mark.parametrize("runtime_i18n", [True, False])
+def test_streamed_stats_skip_unchanged_dom_and_keep_localization(page, runtime_i18n):
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    i18n = (ROOT / "frontend/src/app/modules/i18n.js").read_text(encoding="utf-8")
+    page.set_content('<div id="stats"></div>')
+    page.add_script_tag(content="""
+      var uiI18nRuntimeOriginal=new WeakMap(),uiLanguage='zh';
+      function translateUiString(text){return uiLanguage==='en'?text.replace(/步/g,'steps'):text;}
+    """)
+    if runtime_i18n:
+        page.add_script_tag(content=i18n[
+            i18n.index("function setUiRuntimeText("):
+            i18n.index("function getUiRuntimeText(")
+        ])
+    page.add_script_tag(content=rendering[
+        rendering.index("function renderProcessAggregateStats("):
+        rendering.index("function refreshProcessAggregateStats(")
+    ])
+    result = page.evaluate("""() => {
+      const el=document.getElementById('stats');
+      renderProcessAggregateStats(el,'1 步','model-步 · input=1');
+      const head=el.firstChild,tail=el.lastChild;
+      const observer=new MutationObserver(()=>{});
+      observer.observe(el,{childList:true,subtree:true,attributes:true,characterData:true});
+      for(let i=0;i<1000;i++)renderProcessAggregateStats(el,'1 步','model-步 · input=1');
+      const unchangedMutations=observer.takeRecords().length;
+      observer.disconnect();
+      uiLanguage='en';
+      renderProcessAggregateStats(el,'1 步','model-步 · input=2');
+      const english=head.textContent;
+      const untranslatedTail=tail.textContent;
+      uiLanguage='zh';
+      renderProcessAggregateStats(el,'2 步',null);
+      const chinese=head.textContent;
+      const emptyTail=tail.textContent;
+      const reused=head===el.firstChild&&tail===el.lastChild;
+      el.textContent='';
+      renderProcessAggregateStats(el,'3 步','output=2');
+      return {unchangedMutations,english,untranslatedTail,chinese,emptyTail,reused,
+        recreated:el.childNodes.length===2&&el.firstChild!==head,
+        tailSkip:el.lastChild.getAttribute('data-i18n-skip')};
+    }""")
+    assert result == {"unchangedMutations": 0, "english": "1 steps",
+                      "untranslatedTail": "model-步 · input=2", "chinese": "2 步",
+                      "emptyTail": "", "reused": True, "recreated": True, "tailSkip": "true"}
+
+
 def test_streamed_stats_do_not_restyle_unrelated_history(page):
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
@@ -358,5 +405,6 @@ def test_streamed_stats_do_not_restyle_unrelated_history(page):
         cdp.detach()
     assert complete, "Browser did not finish the style-work trace"
     resolved = [event for event in events if event["name"] == "StyleResolver::ResolveStyle"]
-    assert resolved, "Browser did not report style resolution work"
+    # Retained spans can avoid style resolution altogether. Keep the bound
+    # against accidentally invalidating the unrelated historical rows.
     assert len(resolved) < 100, f"Stats updates resolved {len(resolved)} styles across unrelated history"

@@ -50,7 +50,10 @@ function runtime({enabled = true, reduced = false} = {}) {
         remove() {this.isConnected = false; this.sc.isConnected = false;},
         closest: selector => selector === '.process-aggregate' ? group : row};
       let node = null;
-      const sc = {isConnected: true, replacements: 0, setAttribute() {},
+      const attributes = new Map();
+      const sc = {isConnected: true, replacements: 0,
+        setAttribute(name, value) {attributes.set(name, String(value));},
+        getAttribute(name) {return attributes.get(name) ?? null;},
         closest: selector => selector === '.feed-chunk' ? chunk : row,
         get firstChild() {return node;}, get lastChild() {return node;},
         get textContent() {return node ? node.data : '';},

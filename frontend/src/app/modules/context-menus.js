@@ -163,6 +163,40 @@ function uiContextMenuFileItems(rel, path, directory) {
     ];
 }
 
+/** Hand a URL to the desktop shell, or to a browser tab outside the desktop app. */
+function uiContextMenuOpenExternal(href) {
+    const url = String(href || '');
+    try {
+        if (!/^https?:$/i.test(new URL(url, location.href).protocol)) return;
+    } catch (error) { return; }
+    if (window.sugarAgentDesktop && typeof window.sugarAgentDesktop.openExternal === 'function') {
+        window.sugarAgentDesktop.openExternal(url);
+        return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+/** The details column, when this page can drive it. */
+function uiContextMenuDock() {
+    const api = globalThis.MyAgentDock;
+    return api && typeof api.openBrowser === 'function' ? api : null;
+}
+
+/**
+ * Whether a link inside the details column can open in a second pane: the
+ * column holds one non-empty pane (its own). Two panes are the ceiling.
+ */
+function uiContextMenuDetailsCanSplit() {
+    const api = uiContextMenuDock();
+    let layout = null;
+    try {
+        layout = api && typeof api.detailsState === 'function' ? api.detailsState() : null;
+    } catch (error) { layout = null; }
+    if (!layout || !layout.nodes) return false;
+    const panes = Object.values(layout.nodes).filter(node => node && node.kind === 'pane');
+    return panes.length === 1 && Array.isArray(panes[0].tabs) && panes[0].tabs.length > 0;
+}
+
 function uiContextMenuAbsolutePath(rel) {
     if (/^(?:[a-z]:[\\/]|[\\/]{2}|\/)/i.test(rel)) return rel;
     const root = String(getActiveWorkDir() || '').replace(/[\\/]+$/, '');
@@ -189,8 +223,11 @@ function uiContextMenuWorkbenchItems(target) {
     if ((node = target.closest('.input-path-chip, a.msg-link-workspace-open'))) {
         const link = node.matches('a') ? node : node.querySelector('a[data-workspace-open]');
         const rel = link && link.getAttribute('data-workspace-open');
+        const textInline = !!(rel && globalThis.MyAgentDock
+            && typeof globalThis.MyAgentDock.isTextPath === 'function'
+            && globalThis.MyAgentDock.isTextPath(rel));
         if (rel) return { owner: node, items: [
-            { label: '打开文件', action: () => link.click() },
+            { label: textInline ? '在详情栏打开' : '打开文件', action: () => link.click() },
             ...uiContextMenuFileItems(rel, uiContextMenuAbsolutePath(rel), false),
             uiContextMenuButton(node.querySelector('.input-path-chip-remove'), '移除附件'),
         ] };
@@ -342,10 +379,18 @@ function uiContextMenuResolve(event) {
     const link = target.closest('a[href]');
     if (link && !link.matches('.msg-link-workspace-open, [data-event-index]') && /^https?:$/i.test(new URL(link.href, location.href).protocol)) {
         const href = link.href;
-        items.push({ label: '打开链接', action: () => {
-            if (window.sugarAgentDesktop) return window.sugarAgentDesktop.openExternal(href);
-            window.open(href, '_blank', 'noopener,noreferrer');
-        } }, { label: '复制链接地址', action: () => uiContextMenuCopy(href) });
+        const dock = uiContextMenuDock();
+        // 链接就长在详情栏里（文档预览等）时优先“另一屏”：原页面留在左边，
+        // 链接开在新增的一屏；别的链接则直接打开/聚焦详情栏。
+        const split = !!dock && !!link.closest('.dock-rightbar, .dock-float') && uiContextMenuDetailsCanSplit();
+        items.push(
+            { label: !dock ? '打开链接' : (split ? '在详情栏另一屏打开' : '在详情栏打开'),
+                action: () => {
+                    if (dock && dock.openBrowser(href, { split })) return;
+                    uiContextMenuOpenExternal(href);
+                } },
+            { label: '在系统浏览器打开', action: () => uiContextMenuOpenExternal(href) },
+            { label: '复制链接地址', action: () => uiContextMenuCopy(href) });
     }
     if (items.length && resolved) items.push(null);
     if (resolved) items.push(...resolved.items);

@@ -1552,8 +1552,20 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
 }
 :root.theme-light .titlebar { box-shadow: 0 3px 14px rgba(0,0,0,0.05); }
-.breadcrumb { flex: 1 1 auto; min-width: 0; }
+.breadcrumb { flex: 1 1 auto; min-width: 0; container-type: inline-size; container-name: breadcrumb; }
 .breadcrumb-title-row { display: flex; align-items: center; min-width: 0; }
+.breadcrumb-activities { display: flex; align-items: center; gap: 0.5rem; margin-left: 0.5rem; min-width: 0; flex: 0 0 auto; max-width: 100%; }
+.breadcrumb-activities:empty { display: none; }
+.breadcrumb-activities .subagent-catalog-trigger { margin-left: 0; min-width: 0; flex-shrink: 1; }
+.breadcrumb-activities .subagent-catalog-label { overflow: hidden; text-overflow: ellipsis; }
+.breadcrumb-activities #subagent-catalog-trigger { order: 0; }
+.breadcrumb-activities #background-task-trigger { order: 1; }
+@container breadcrumb (max-width: 480px) {
+    .breadcrumb-title-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+    #breadcrumb-text { grid-column: 1; grid-row: 1; }
+    .breadcrumb-session-actions { grid-column: 2; grid-row: 1; }
+    .breadcrumb-activities { grid-column: 1 / -1; grid-row: 2; margin-left: 0; margin-top: 0.25rem; max-width: 100%; }
+}
 #breadcrumb-text {
     color: var(--text-primary); font-weight: 600;
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -3846,6 +3858,11 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--process-accent-strong) 14%, transparent);
     animation: processPulse 1.6s ease-in-out infinite;
 }
+:root .process-aggregate:not(.subagent-grid-card).is-failed .process-aggregate-title::before {
+    background: var(--process-error, #ef6b73);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--process-error, #ef6b73) 14%, transparent);
+    animation: none;
+}
 @keyframes processPulse {
     0%, 100% { opacity: 0.72; transform: scale(0.9); }
     50% { opacity: 1; transform: scale(1); }
@@ -4302,7 +4319,9 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     transition: background 0.14s ease;
 }
 /* 握把：拖拽点与序号合并成一个约 36×26px 的命中区。原来只有字形本身
-   （约 17×11px）那么大，鼠标与触控都要瞄得很准才拖得动。 */
+   （约 17×11px）那么大，鼠标与触控都要瞄得很准才拖得动。
+   盒子本身不画底与边框：队列是很窄的一条，外框会让每行多出一个方块，
+   命中区、悬停提示与焦点环仍然保留。 */
 .followup-queue-grip {
     display: inline-flex;
     align-items: center;
@@ -4311,9 +4330,9 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     align-self: stretch;
     min-width: 2.55rem;
     padding: 0 0.42rem 0 0.3rem;
-    border: 1px solid rgba(var(--text-primary-rgb),0.06);
+    border: 1px solid transparent;
     border-radius: 8px;
-    background: rgba(var(--text-primary-rgb),0.045);
+    background: transparent;
     color: var(--text-muted);
     cursor: grab;
     user-select: none;
@@ -4324,13 +4343,13 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .followup-queue-grip:hover {
     color: var(--text-primary);
-    background: rgba(var(--accent-rgb),0.14);
-    border-color: rgba(var(--accent-rgb),0.3);
+    background: rgba(var(--text-primary-rgb),0.05);
+    border-color: transparent;
 }
 .followup-queue-grip:focus-visible {
     outline: none;
     color: var(--text-primary);
-    border-color: rgba(var(--accent-rgb),0.45);
+    border-color: transparent;
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.2);
 }
 .followup-queue-grip:active {
@@ -4339,7 +4358,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .followup-queue-grip.is-disabled {
     opacity: 0.34;
     cursor: default;
-    background: rgba(var(--text-primary-rgb),0.03);
+    background: transparent;
     border-color: transparent;
 }
 .followup-queue-drag {
@@ -4417,13 +4436,73 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     font-size: var(--ui-text-xs);
     font-weight: 400;
 }
+/* 文本与附件缩略图并排在同一格里：省略号只作用于文本层，图片不参与撑高行。 */
 .followup-queue-text {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    overflow: hidden;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: var(--ui-text-md);
+}
+.followup-queue-text-label {
+    /* 不吃掉剩余空间：缩略图紧跟正文，长文本先被省略号截断。 */
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--text-secondary);
-    font-size: var(--ui-text-md);
+}
+/* 附件：1.7rem 小方块，最多三枚 + “+N”。原图会按 60vh 撑高整行再被 nowrap
+   裁掉，既占地方又看不见图，这里把队列内图片一律限高。 */
+.followup-queue-attachments {
+    flex: 0 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.24rem;
+    min-width: 0;
+    max-width: min(9.6rem, 45%);
+    overflow: hidden;
+}
+.followup-queue-row img { max-height: 1.7rem; }
+.followup-queue-thumb {
+    flex: 0 0 auto;
+    width: 1.7rem;
+    height: 1.7rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 7px;
+    background: var(--surface-glass3);
+    object-fit: cover;
+    object-position: center;
+    cursor: zoom-in;
+}
+.followup-queue-thumb:hover {
+    border-color: var(--border-brand-accent);
+    filter: brightness(1.12);
+}
+.followup-queue-attachment-badge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    height: 1.7rem;
+    min-width: 1.7rem;
+    padding: 0 0.3rem;
+    border: 1px solid var(--border-glass);
+    border-radius: 7px;
+    background: var(--surface-glass2);
+    color: var(--text-tertiary);
+    font-family: var(--sans);
+    font-size: 0.58rem;
+    line-height: 1;
+    letter-spacing: 0.04em;
+}
+.followup-queue-attachment-more {
+    color: var(--accent-2);
+    background: rgba(var(--accent-rgb),0.12);
 }
 .followup-queue-status {
     color: var(--text-muted);
@@ -6039,11 +6118,14 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 
 .human-interaction-card {
     position: relative;
-    width: min(720px, calc(100% - 1rem));
+    /* 640 而不是 720：执行过程框宽度是 --content-column-width = min(68cqi, 100%)，
+       常见宽屏下约 750–820px，720px 的卡片会把整条执行过程行占满，看起来
+       像把工具条目「撑开」了。收到 640 后卡片两侧稳定留出 ~50px 内缩。 */
+    width: min(640px, calc(100% - 1rem));
     align-self: center;
-    margin: 0.45rem auto;
+    margin: 0.4rem auto;
     border: 1px solid rgba(var(--accent-rgb), 0.22);
-    border-radius: 16px;
+    border-radius: 14px;
     background: var(--modal-bg);
     box-shadow: 0 14px 42px rgba(0, 0, 0, 0.22);
     overflow: hidden;
@@ -6068,19 +6150,19 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .human-interaction-tool-slot { width: 100%; padding: 0 0.7rem 0.7rem; }
 .human-interaction-tool-slot .human-interaction-card {
-    width: min(720px, calc(100% - 1rem));
+    width: min(640px, calc(100% - 1rem));
     margin: 0.65rem auto;
 }
 .auto-review-status {
-    width: min(720px, calc(100% - 1rem));
+    width: min(640px, calc(100% - 1rem));
     align-self: center;
     margin: 0.55rem auto 0.2rem;
     display: flex;
     align-items: flex-start;
     gap: 0.55rem;
-    padding: 0.55rem 0.7rem;
+    padding: 0.45rem 0.62rem;
     border: 1px solid rgba(137, 180, 250, 0.28);
-    border-radius: 12px;
+    border-radius: 10px;
     background: rgba(137, 180, 250, 0.08);
     color: #bcd0ff;
     font-size: var(--ui-text-sm);
@@ -6173,14 +6255,14 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-approval-card.is-danger .human-approval-review--risk { border-left-color: var(--red-accent, #f38ba8); }
 .human-approval-card.is-danger .human-approval-review { border-color: rgba(243, 139, 168, 0.2); background: rgba(243, 139, 168, 0.06); }
 .human-approval-consequence {
-    margin-top: 0.6rem;
-    padding: 0.55rem 0.7rem;
+    margin-top: 0.45rem;
+    padding: 0.42rem 0.58rem;
     border: 1px solid rgba(243, 139, 168, 0.38);
-    border-radius: 10px;
+    border-radius: 9px;
     background: rgba(243, 139, 168, 0.08);
     color: var(--red-accent);
     font-size: var(--ui-text-sm);
-    line-height: 1.5;
+    line-height: 1.45;
     white-space: pre-wrap;
 }
 .human-approval-card.is-danger .human-allow-btn {
@@ -6199,20 +6281,21 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-card-head {
     display: flex;
     align-items: center;
-    gap: 0.72rem;
-    padding: 0.9rem 1rem;
+    gap: 0.6rem;
+    padding: 0.62rem 0.85rem;
     border-bottom: 1px solid var(--border-glass);
 }
 .human-card-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
+    width: 26px;
+    height: 26px;
     flex: 0 0 auto;
-    border-radius: 10px;
+    border-radius: 8px;
     background: rgba(var(--accent-rgb), 0.14);
     color: var(--accent-2);
+    font-size: var(--ui-text-sm);
     font-weight: 600;
 }
 .human-approval-card .human-card-icon { background: rgba(249, 226, 175, 0.12); color: var(--amber-accent); }
@@ -6221,13 +6304,17 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
     font-weight: 400;
+    line-height: 1.25;
     letter-spacing: 0;
     text-transform: uppercase;
 }
-.human-card-title { margin: 0.12rem 0 0; color: var(--text-primary); font-size: var(--ui-text-lg); font-weight: 400; }
+/* 标题从 --ui-text-lg(1rem) 降到 --ui-text-md(0.875rem)：卡片是消息流里的
+   嵌入式控件，和正文标题同级会显得像独立面板；kicker 仍是 0.75rem，
+   两者靠行高 1.35 拉开层次，视觉层级不靠字号差。 */
+.human-card-title { margin: 0.08rem 0 0; color: var(--text-primary); font-size: var(--ui-text-md); font-weight: 400; line-height: 1.35; }
 .human-card-status {
     flex: 0 0 auto;
-    padding: 0.22rem 0.5rem;
+    padding: 0.14rem 0.44rem;
     border-radius: 999px;
     background: rgba(var(--accent-rgb), 0.1);
     color: var(--accent-2);
@@ -6236,11 +6323,11 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-approval-card .human-card-status { background: rgba(249, 226, 175, 0.1); color: var(--amber-accent); }
 .human-interaction-card.is-terminal .human-card-status { background: rgba(166, 227, 161, 0.09); color: var(--green-accent); }
 .human-terminal-toggle {
-    min-height: 32px;
+    min-height: 26px;
     flex: 0 0 auto;
     border: 1px solid var(--border-glass);
-    border-radius: 8px;
-    padding: 0.28rem 0.58rem;
+    border-radius: 7px;
+    padding: 0.16rem 0.5rem;
     background: transparent;
     color: var(--accent-2);
     cursor: pointer;
@@ -6249,11 +6336,24 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .human-terminal-toggle:hover { border-color: var(--border-accent); background: rgba(var(--accent-rgb), 0.06); }
 .human-terminal-toggle:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
-.human-terminal-toggle::after { content: '⌄'; display: inline-block; margin-left: 0.32rem; transform: rotate(-90deg); }
-.human-terminal-toggle[aria-expanded="true"]::after { transform: rotate(0); }
+/* 箭头用边框折角画，不再用 '⌄' 字形：U+2304 在雅黑/回退字体里会渲染成
+   贴着基线的短横（看起来像文字下划线），且 12px 下与文字基线对不齐。
+   形状与 .process-chev::before / .user-msg-chevron 保持同一套画法。 */
+.human-terminal-toggle::after {
+    content: '';
+    display: inline-block;
+    width: 0.34rem;
+    height: 0.34rem;
+    margin-left: 0.34rem;
+    border-right: 1.4px solid currentColor;
+    border-bottom: 1.4px solid currentColor;
+    vertical-align: 0.14em;
+    transform: rotate(-45deg);
+}
+.human-terminal-toggle[aria-expanded="true"]::after { vertical-align: 0.02em; transform: rotate(45deg); }
 .human-readonly-notice {
-    margin: 0.8rem 1rem 0;
-    padding: 0.5rem 0.65rem;
+    margin: 0.6rem 0.85rem 0;
+    padding: 0.4rem 0.55rem;
     border: 1px solid rgba(166, 227, 161, 0.22);
     border-radius: 9px;
     background: rgba(166, 227, 161, 0.055);
@@ -6261,18 +6361,18 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     font-size: var(--ui-text-xs);
     line-height: 1.45;
 }
-.human-card-body { padding: 1rem; }
+.human-card-body { padding: 0.7rem 0.85rem; }
 .human-question-tabs {
     display: flex;
     gap: 0.35rem;
-    padding: 0.55rem 1rem 0;
+    padding: 0.44rem 0.85rem 0;
     overflow-x: auto;
 }
 .human-question-progress { display: none; padding: 0.6rem 1rem 0; color: var(--text-secondary); font-size: var(--ui-text-sm); font-weight: 400; }
 .human-question-tab {
     border: 1px solid transparent;
     border-radius: 999px;
-    padding: 0.38rem 0.85rem;
+    padding: 0.28rem 0.72rem;
     background: transparent;
     color: var(--text-tertiary);
     cursor: pointer;
@@ -6287,7 +6387,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-question-tab.is-skipped:not(.is-active)::before { content: '– '; color: var(--text-tertiary); }
 .human-question-pane { display: none; min-width: 0; margin: 0; padding: 0; border: 0; }
 .human-question-pane.is-active { display: block; }
-.human-question-text { width: 100%; padding: 0; color: var(--text-primary); font-size: var(--ui-text-lg); line-height: 1.55; }
+.human-question-text { width: 100%; padding: 0; color: var(--text-primary); font-size: var(--ui-text-md); line-height: 1.5; }
 .show-user-card { display:flex; align-items:center; flex-wrap:wrap; gap:0.7rem; margin:0.6rem 0; padding:0.8rem; border:1px solid var(--border-glass); border-radius:10px; background:rgba(var(--accent-rgb),0.045); }
 .show-user-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:0.3rem; }
 .show-user-title { color:var(--text-primary); font-size:var(--ui-text-md); overflow-wrap:anywhere; }
@@ -6329,16 +6429,16 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-question-image-error { color: var(--text-secondary); font-size: var(--ui-text-sm); line-height: 1.5; }
 .human-question-image-retry { margin-top: 0.45rem; }
 .human-question-image-card [hidden] { display: none !important; }
-.human-question-hint { margin-top: 0.24rem; color: var(--text-tertiary); font-size: var(--ui-text-xs); }
-.human-options { display: grid; gap: 0.55rem; margin-top: 0.85rem; }
+.human-question-hint { margin-top: 0.12rem; color: var(--text-tertiary); font-size: var(--ui-text-xs); line-height: 1.35; }
+.human-options { display: grid; gap: 0.36rem; margin-top: 0.6rem; }
 .human-option {
     position: relative;
     display: flex;
-    align-items: flex-start;
-    gap: 0.65rem;
-    padding: 0.72rem 2.2rem 0.72rem 0.72rem;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.44rem 2rem 0.44rem 0.6rem;
     border: 1px solid var(--border-glass);
-    border-radius: 11px;
+    border-radius: 9px;
     background: rgba(var(--text-primary-rgb), 0.025);
     cursor: pointer;
     transition: border-color 0.16s ease, background 0.16s ease, transform 0.12s ease;
@@ -6363,7 +6463,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     font-weight: 400;
     line-height: 1;
 }
-.human-option > input { margin-top: 0.2rem; accent-color: var(--accent-1); }
+.human-option > input { margin: 0; accent-color: var(--accent-1); }
 .human-interaction-card.is-readonly .human-option { cursor: default; }
 .human-interaction-card.is-readonly .human-option:not(:has(input:checked)):hover {
     border-color: var(--border-glass);
@@ -6373,10 +6473,24 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-interaction-card.is-readonly input:disabled { opacity: 0.72; cursor: default; }
 .human-interaction-card.is-readonly textarea:disabled { opacity: 1; cursor: default; color: var(--text-secondary); }
 .human-interaction-card.is-readonly .human-other-shortcut { display: none !important; }
-.human-option-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 0.2rem; }
-.human-option-label { color: var(--text-primary); font-size: var(--ui-text-md); font-weight: 400; }
+/* 标签与说明同行：原来 label/description 各占一行，每个选项固定 ~66px，
+   四个选项就要多花 70px 高度。改成一行的 baseline 换行流，短说明跟在标签
+   右侧，长说明自然折行到下一行，密度提升但不丢信息。 */
+.human-option-copy {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 0.5rem;
+    row-gap: 0.1rem;
+}
+.human-option-label { color: var(--text-primary); font-size: var(--ui-text-sm); font-weight: 400; line-height: 1.4; }
 .human-other-header { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
-.human-option-description { color: var(--text-secondary); font-size: var(--ui-text-sm); line-height: 1.45; }
+/* 说明与标签同行时用「·」分隔，否则「先看测试失败 把失败的用例…」会读成一句话；
+   说明为空时不渲染分隔符（避免标签旁挂一个孤立的点）。 */
+.human-option-description { color: var(--text-secondary); font-size: var(--ui-text-xs); line-height: 1.4; }
+.human-option-description:not(:empty)::before { content: '·'; margin-right: 0.36rem; opacity: 0.5; }
 .human-option-preview { margin-top: 0.35rem; color: var(--text-secondary); font-size: var(--ui-text-sm); }
 .human-option-preview summary { cursor: pointer; color: var(--accent-2); }
 .human-option-preview pre {
@@ -6408,20 +6522,23 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-option-other:has(.human-other-mark:checked) .human-other-input,
 .human-option-other:has(.human-other-mark:checked) .human-other-shortcut { display: block; }
 .human-other-input:focus { border-color: var(--border-accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14); }
-.human-card-error { min-height: 1.1rem; padding: 0 1rem; color: var(--red-accent); font-size: var(--ui-text-sm); }
+/* 空错误位不再预留 1.1rem 的固定高度：原先每张卡（含已结束的只读卡）
+   底部都挂着一条看不见的空白。 */
+.human-card-error { color: var(--red-accent); font-size: var(--ui-text-sm); line-height: 1.45; }
+.human-card-error:not(:empty) { padding: 0.2rem 0.85rem 0; }
 .human-card-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.6rem;
-    padding: 0.72rem 1rem 0.9rem;
+    padding: 0.46rem 0.85rem 0.58rem;
 }
 .human-card-nav, .human-approval-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; }
 .human-question-card .human-card-nav { margin-left: auto; }
 .human-approval-actions { flex-wrap: nowrap; justify-content: space-between; }
 .human-approval-actions > .human-analyze-btn { flex: 0 0 auto; }
 .human-approval-decisions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; }
-.human-egress-summary { margin-top: 0.75rem; padding: 0.65rem 0.72rem; border: 1px solid rgba(137, 180, 250, 0.2); border-radius: 8px; background: rgba(137, 180, 250, 0.045); }
+.human-egress-summary { margin-top: 0.5rem; padding: 0.48rem 0.6rem; border: 1px solid rgba(137, 180, 250, 0.2); border-radius: 8px; background: rgba(137, 180, 250, 0.045); }
 .human-egress-label { margin-bottom: 0.35rem; color: var(--text-primary); font-weight: 400; font-size: var(--ui-text-sm); }
 .human-egress-row { color: var(--text-soft); font-size: var(--ui-text-xs); line-height: 1.45; overflow-wrap: anywhere; }
 .human-egress-row.is-warning { color: var(--amber-accent); }
@@ -6430,9 +6547,9 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-egress-enforcement.is-partial { color: var(--amber-accent); }
 .human-egress-enforcement.is-degraded { color: var(--amber-accent); }
 .human-secondary-btn, .human-primary-btn {
-    min-height: 40px;
+    min-height: 34px;
     border-radius: 9px;
-    padding: 0.42rem 0.72rem;
+    padding: 0.3rem 0.7rem;
     cursor: pointer;
     font: inherit;
     font-size: var(--ui-text-sm);
@@ -6468,19 +6585,19 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     font-weight: 400;
 }
 .human-deny-btn { color: var(--red-accent); }
-.human-approval-subtitle { margin-bottom: 0.45rem; color: var(--amber-accent); font: var(--ui-text-sm) var(--mono); }
+.human-approval-subtitle { margin-bottom: 0.35rem; color: var(--amber-accent); font: var(--ui-text-sm)/1.45 var(--mono); }
 .human-approval-review {
-    margin: 0 0 0.5rem;
-    padding: 0.5rem 0.62rem;
+    margin: 0 0 0.36rem;
+    padding: 0.38rem 0.52rem;
     border: 1px solid rgba(var(--accent-rgb), 0.14);
-    border-radius: 10px;
+    border-radius: 9px;
     background: rgba(var(--accent-rgb), 0.05);
 }
 .human-approval-review--intercept { border-left: 3px solid var(--amber-accent, #f9e2af); }
 .human-approval-review--risk { border-left: 3px solid var(--red-accent, #f38ba8); }
 .human-approval-review--purpose { border-left: 3px solid var(--blue-accent, #89b4fa); }
 .human-approval-review-label {
-    margin-bottom: 0.22rem;
+    margin-bottom: 0.1rem;
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
     font-weight: 400;
@@ -6489,7 +6606,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .human-approval-review-text {
     color: var(--text-primary);
     font-size: var(--ui-text-sm);
-    line-height: 1.5;
+    line-height: 1.45;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
@@ -6497,17 +6614,17 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 /* 审批正文（工具名/参数/命令等原文）原先继承 body 的 1rem，比卡片内其它字段
    （subtitle/detail/consequence/analysis 都是 --ui-text-sm）大一号，读起来偏散。
    统一到 --ui-text-sm；执行过程条目的正文是 0.74rem，这里刻意比它略大一点。
-   高度上限 5 行（约 7.75em ≈ 101px）：bash/参数一长就会把卡片撑到半屏，
+   高度上限 4 行（约 93px）：bash/参数一长就会把卡片撑到半屏，
    截断又会让用户看不到要批准的命令，所以超出部分在框内滚动。
    滚动条恒定预留（scrollbar-gutter: stable），出现时不挤动换行。 */
 .human-approval-message {
-    --human-approval-message-lines: 5;
+    --human-approval-message-lines: 4;
     color: var(--text-primary);
     font-size: var(--ui-text-sm);
-    line-height: 1.55;
+    line-height: 1.5;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    max-height: calc(1.55em * var(--human-approval-message-lines));
+    max-height: calc(1.5em * var(--human-approval-message-lines));
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
@@ -6515,11 +6632,11 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     --sb-thumb: var(--sb-ink);
     --sb-thumb-hover: var(--sb-ink-hover);
 }
-.human-approval-detail { display: flex; gap: 0.55rem; margin-top: 0.75rem; color: var(--text-tertiary); font-size: var(--ui-text-sm); }
+.human-approval-detail { display: flex; gap: 0.5rem; margin-top: 0.5rem; color: var(--text-tertiary); font-size: var(--ui-text-sm); }
 .human-approval-detail code { color: var(--text-soft); }
 .human-approval-rule-hint {
-    margin-top: 0.55rem;
-    padding: 0.32rem 0.42rem;
+    margin-top: 0.4rem;
+    padding: 0.26rem 0.4rem;
     border-left: 2px solid rgba(137, 180, 250, 0.45);
     border-radius: 0 6px 6px 0;
     background: rgba(137, 180, 250, 0.06);
@@ -6528,14 +6645,14 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     overflow-wrap: anywhere;
 }
 .human-approval-analysis {
-    margin: 0 1rem 0.2rem;
-    padding: 0.72rem 0.82rem;
+    margin: 0 0.85rem 0.2rem;
+    padding: 0.55rem 0.68rem;
     border: 1px solid rgba(137, 180, 250, 0.28);
-    border-radius: 10px;
+    border-radius: 9px;
     background: rgba(137, 180, 250, 0.07);
     color: var(--text-secondary);
     font-size: var(--ui-text-sm);
-    line-height: 1.5;
+    line-height: 1.45;
 }
 .human-approval-analysis[hidden] { display: none; }
 .human-approval-analysis.is-loading { color: var(--text-tertiary); }
@@ -6586,10 +6703,73 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 .human-approval-rejection-input:focus { border-color: var(--red-accent); }
 .human-approval-rejection-hint { margin-top: 0.35rem; color: var(--text-tertiary); font-size: var(--ui-text-xs); }
-.human-terminal-rejection-reason { margin-top: 0.4rem; color: var(--text-tertiary); white-space: pre-wrap; overflow-wrap: anywhere; }
-.human-terminal-summary { padding: 0.8rem 1rem 0.95rem 3.75rem; color: var(--text-secondary); font-size: var(--ui-text-sm); }
-.human-terminal-answer { display: grid; grid-template-columns: minmax(6rem, 0.34fr) minmax(0, 1fr); gap: 0.7rem; }
-.human-terminal-answer + .human-terminal-answer { margin-top: 0.4rem; }
+/* ── 已结束（只读）卡：折叠态压成一行 ──
+   原先 .human-terminal-summary 单独挂在标题行下面（0.8/0.95rem 内边距 +
+   3.75rem 左缩进），和标题各占一条，收起后仍有 116–162px。现在 summary 由
+   createHumanTerminalCard 收进 .human-card-head-copy，与标题同行显示：
+   折叠态整卡只剩一行（图标 + 标题 + 结论 + 状态 + 展开），超长省略；
+   展开后 summary 换行到标题下方，回到两行 + 完整正文。 */
+.human-interaction-card.is-terminal .human-card-head { align-items: flex-start; padding: 0.4rem 0.7rem; gap: 0.5rem; }
+.human-interaction-card.is-terminal .human-card-icon { margin-top: 0.08rem; }
+.human-interaction-card.is-terminal.is-collapsed .human-card-head { border-bottom: 0; }
+.human-interaction-card.is-terminal.is-expanded .human-card-head { padding: 0.55rem 0.8rem; }
+.human-interaction-card.is-terminal .human-card-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    font-size: var(--ui-text-xs);
+}
+.human-interaction-card.is-terminal .human-card-kicker { display: none; }
+.human-interaction-card.is-terminal .human-card-title {
+    flex: 0 0 auto;
+    margin: 0;
+    font-size: var(--ui-text-sm);
+    line-height: 1.35;
+}
+.human-interaction-card.is-terminal .human-card-head-copy {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.human-interaction-card.is-terminal.is-expanded .human-card-head-copy { flex-wrap: wrap; gap: 0.3rem 0.5rem; }
+.human-interaction-card.is-terminal .human-terminal-toggle { min-height: 22px; padding: 0.1rem 0.44rem; }
+.human-interaction-card.is-terminal .human-card-status { padding: 0.1rem 0.38rem; }
+.human-terminal-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: var(--ui-text-xs);
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.human-interaction-card.is-terminal.is-expanded .human-terminal-summary {
+    flex: 1 1 100%;
+    overflow: visible;
+    color: var(--text-secondary);
+    white-space: normal;
+}
+.human-interaction-card.is-terminal .human-terminal-answer {
+    display: inline-block;
+    max-width: 100%;
+    vertical-align: bottom;
+}
+.human-interaction-card.is-terminal .human-terminal-answer-label { margin-right: 0.36rem; }
+/* 分隔点挂在下一条头部：单行超长截断时不会在省略号前留下孤点 */
+.human-interaction-card.is-terminal .human-terminal-answer:not(:first-child)::before {
+    content: '·';
+    margin: 0 0.4rem;
+    opacity: 0.6;
+}
+.human-interaction-card.is-terminal.is-collapsed .human-terminal-rejection-reason { display: inline; margin: 0; white-space: nowrap; }
+.human-interaction-card.is-terminal.is-collapsed .human-terminal-rejection-reason::before {
+    content: '·';
+    margin: 0 0.4rem;
+    opacity: 0.6;
+}
+.human-terminal-rejection-reason { color: var(--text-tertiary); white-space: pre-wrap; overflow-wrap: anywhere; }
 .human-terminal-answer-label { color: var(--text-tertiary); }
 .human-terminal-answer-value { color: var(--text-secondary); overflow-wrap: anywhere; }
 
@@ -6599,6 +6779,17 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 :root.theme-light .human-interaction-card.is-terminal { background: rgba(255,255,255,0.78); box-shadow: none; }
 :root.theme-light .human-interaction-card.is-terminal.is-expanded { background: #ffffff; box-shadow: 0 12px 32px rgba(34, 35, 58, 0.09); }
+/* 浅色主题里 --accent-2 / --amber-accent / --green-accent 仍是深色主题的浅色值，
+   白底上几乎看不见：图标、状态胶囊与展开按钮改用同色系深一档（与
+   .auto-review-status 的浅色覆盖同一思路）。 */
+:root.theme-light .human-card-icon { background: rgba(var(--brand-accent-rgb), 0.1); color: #4338ca; }
+:root.theme-light .human-card-status { background: rgba(var(--brand-accent-rgb), 0.08); color: #4338ca; }
+:root.theme-light .human-approval-card .human-card-icon,
+:root.theme-light .human-approval-card .human-card-status { background: rgba(180, 120, 10, 0.1); color: #a16207; }
+:root.theme-light .human-approval-card.is-danger .human-card-icon,
+:root.theme-light .human-approval-card.is-danger .human-card-status { background: rgba(225, 29, 72, 0.08); color: #be123c; }
+:root.theme-light .human-interaction-card.is-terminal .human-card-status { background: rgba(22, 163, 74, 0.08); color: #15803d; }
+:root.theme-light .human-terminal-toggle { color: #4338ca; border-color: rgba(var(--brand-accent-rgb), 0.24); }
 :root.theme-light .human-option { background: rgba(var(--brand-accent-rgb),0.018); }
 :root.theme-light .human-option:has(input:checked) { background: rgba(var(--brand-accent-rgb),0.075); border-color: rgba(var(--brand-accent-rgb),0.42); }
 :root.theme-light .human-other-input { background: rgba(255,255,255,0.9); }
@@ -6627,13 +6818,35 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     .human-question-card.is-readonly .human-question-tabs { display: flex; }
     .human-question-card.is-readonly .human-question-progress { display: none; }
     .human-review-row, .human-terminal-answer { grid-template-columns: 1fr; gap: 0.18rem; }
-    .human-card-head { align-items: flex-start; padding: 0.78rem; }
-    .human-card-body { padding: 0.78rem; }
-    .human-interaction-card.is-terminal .human-card-head { flex-wrap: wrap; }
-    .human-interaction-card.is-terminal .human-card-head-copy { flex-basis: calc(100% - 2.65rem); }
-    .human-interaction-card.is-terminal .human-card-status { margin-left: 2.65rem; }
-    .human-terminal-summary { padding: 0.72rem 0.78rem 0.85rem; }
-    .human-readonly-notice { margin: 0.7rem 0.78rem 0; }
+    .human-card-head { align-items: flex-start; padding: 0.62rem 0.7rem; }
+    .human-card-body { padding: 0.62rem 0.7rem; }
+    /* 窄屏：标题留在首行（过长省略），折叠摘要折到第二行；
+       状态/展开仍固定在右上，避免图标、结论、按钮叠成三行。 */
+    .human-interaction-card.is-terminal .human-card-head { align-items: flex-start; flex-wrap: nowrap; }
+    .human-interaction-card.is-terminal .human-card-head-copy { flex: 1 1 0; min-width: 0; flex-wrap: wrap; row-gap: 0.15rem; }
+    .human-interaction-card.is-terminal .human-card-title {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .human-interaction-card.is-terminal .human-card-status { margin-left: 0; }
+    /* 窄屏没有横向余量做单行省略，折叠摘要改回可折行并最多两行，
+       避免长答案把收起态又撑成一大块 */
+    .human-interaction-card.is-terminal.is-collapsed .human-terminal-summary {
+        flex: 1 1 100%;
+        max-height: calc(1.45em * 2);
+        white-space: normal;
+        overflow: hidden;
+    }
+    /* 折行时行首/行尾的「·」会变成孤点，窄屏改用留白分隔 */
+    .human-interaction-card.is-terminal.is-collapsed .human-terminal-answer:not(:first-child)::before { content: none; }
+    .human-interaction-card.is-terminal.is-collapsed .human-terminal-answer:not(:last-child) { margin-right: 0.9rem; }
+    /* 拒绝原因在窄屏单独成行，不再依赖行内分隔点 */
+    .human-interaction-card.is-terminal.is-collapsed .human-terminal-rejection-reason { display: block; margin-top: 0.15rem; }
+    .human-interaction-card.is-terminal.is-collapsed .human-terminal-rejection-reason::before { content: none; }
+    .human-readonly-notice { margin: 0.6rem 0.7rem 0; }
 }
 @media (prefers-reduced-motion: reduce) {
     .human-interaction-card[aria-busy="true"] .human-card-status::before { animation: none; }
@@ -7100,7 +7313,7 @@ textarea.plugin-setting-control { resize: vertical; }
     50% { opacity: 0.45; }
 }
 .subagent-catalog-menu {
-    position: fixed; z-index: 220;
+    position: fixed; z-index: 320;
     max-height: min(60vh, 26rem); overflow-y: auto; overflow-x: hidden;
     scrollbar-gutter: stable;
     padding: 0.25rem;
@@ -7157,6 +7370,36 @@ textarea.plugin-setting-control { resize: vertical; }
     font-size: 0.68rem; line-height: 1.5;
 }
 .subagent-catalog-error { color: rgba(243, 139, 168, 0.9); }
+
+/* Background execution shares the subagent capsule's visual scale. */
+.background-task-trigger .subagent-catalog-dot.is-stopping { background: var(--amber-accent, #f9e2af); }
+.background-task-menu { box-sizing: border-box; padding: 0.4rem; }
+.background-task-menu [hidden] { display: none !important; }
+.background-task-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.1rem 0.3rem 0.4rem; }
+.background-task-head strong { font-size: 0.72rem; font-weight: 500; color: var(--text-primary); }
+.background-task-row { padding: 0.5rem 0.35rem; border-radius: 6px; }
+.background-task-row:hover { background: rgba(var(--accent-rgb), 0.06); }
+.background-task-row + .background-task-row { border-top: 1px solid var(--border-glass); }
+.background-task-row-top, .background-task-row-bottom { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.background-task-row-bottom { padding-left: 1rem; margin-top: 0.28rem; }
+.background-task-name { flex: 1 1 auto; min-width: 0; color: var(--text-primary); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.background-task-state { flex: 0 0 auto; font-size: 0.62rem; color: var(--amber-accent, #f9e2af); }
+.background-task-meta { flex: 1 1 auto; min-width: 0; font-size: 0.62rem; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.background-task-actions { display: inline-flex; align-items: center; gap: 0.25rem; flex: 0 0 auto; }
+.background-task-action { appearance: none; border: 1px solid transparent; background: transparent; color: var(--text-secondary); font: 400 0.66rem/1.3 var(--sans); padding: 0.18rem 0.3rem; border-radius: 4px; cursor: pointer; }
+.background-task-action:hover, .background-task-action:focus-visible { background: rgba(var(--accent-rgb), 0.12); border-color: var(--border-brand-accent); }
+.background-task-action:disabled { opacity: 0.5; cursor: default; }
+.background-task-action:focus-visible, .background-task-trigger:focus-visible, .background-task-output:focus-visible { outline: 2px solid var(--border-brand-accent); outline-offset: 1px; }
+.background-task-footer { border-top: 1px solid var(--border-glass); padding: 0.35rem 0.15rem 0.1rem; margin-top: 0.25rem; }
+.background-task-empty, .background-task-terminal-note { padding: 0.35rem; font-size: 0.68rem; line-height: 1.5; color: var(--text-secondary); }
+.background-task-error { font-size: 0.66rem; line-height: 1.5; color: var(--red-accent, #f38ba8); padding: 0.2rem 0.3rem; overflow-wrap: anywhere; margin: 0; }
+.background-task-log-title { display: block; margin: 0.4rem 0.3rem; font-size: 0.72rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.background-task-log > .background-task-meta { margin: 0.3rem; white-space: normal; }
+.background-task-output { margin: 0.35rem 0; padding: 0.5rem; max-height: min(36vh, 16rem); min-height: 4rem; overflow: auto; background: var(--code-surface-bg); color: var(--text-primary); border: 1px solid var(--border-glass); border-radius: 4px; font: 0.66rem/1.5 var(--mono); white-space: pre; }
+:root.theme-light .background-task-state { color: #946200; }
+@media (prefers-reduced-motion: reduce) {
+    .subagent-catalog-dot.is-running { animation: none; }
+}
 
 /* ── 子代理只读编辑器占位 ── */
 .subagent-readonly-composer {

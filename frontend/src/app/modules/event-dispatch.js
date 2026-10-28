@@ -322,6 +322,9 @@ function renderEvent(ctx, event, eventIndex, runSessionId, renderOptions) {
         appendKeyContextStreamDelta(ctx, event.delta, runSessionId, {snapshot: !!event.replayed_snapshot});
     } else if (event.type === 'key_context_body') {
         applyProgressPersistedBody(ctx, event.content, 'key-context', runSessionId);
+    } else if (event.type === 'run_failed') {
+        renderRunFailure(ctx, event, runSessionId);
+        sealProcessGroup(ctx);
     } else if (event.type === 'error') {
         appendLog(ctx, String(event.content || ''), 'error-log', runSessionId);
     } else if (event.type === 'status') {

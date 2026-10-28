@@ -922,18 +922,93 @@ function renderDurableAttachmentImages(container, references) {
             previewImage.decoding = 'async';
             imageHost.host.appendChild(previewImage);
         }
-        var entry = durableImagePreviews.get(ref.attachmentId);
-        if (entry) {
-            entry.nodes.push(previewImage);
-            queueDurableImagePreview(entry, previewImage);
+        trackDurableImagePreview(ref, previewImage);
+    });
+}
+
+/** 把节点挂进同一张图片下拉队列：同一张图在聊天区与追问队列间共享一次请求。 */
+function trackDurableImagePreview(ref, node) {
+    if (!ref || !node) return;
+    var entry = durableImagePreviews.get(ref.attachmentId);
+    if (entry) {
+        entry.nodes.push(node);
+        queueDurableImagePreview(entry, node);
+        return;
+    }
+    entry = { id: ref.attachmentId, nodes: [node], url: '', controller: typeof AbortController === 'function' ? new AbortController() : null };
+    durableImagePreviews.set(ref.attachmentId, entry);
+    if (!durableImageObserver) {
+        durableImageObserver = new MutationObserver(sweepDurableImagePreviews);
+        durableImageObserver.observe(document.body, { childList: true, subtree: true });
+    }
+    queueDurableImagePreview(entry, node);
+}
+
+// 追问队列一行只有一个文本行高，附件只能以小方块并排出现。原图会按 60vh
+// 撑高整行，又被 nowrap + overflow 裁掉，结果既占地方又看不到图。
+var FOLLOWUP_QUEUE_ATTACHMENT_LIMIT = 3;
+
+function followupAttachmentName(entry) {
+    var ref = entry && entry.ref ? entry.ref : {};
+    var item = entry && entry.item ? entry.item : {};
+    return String(item.name || ref.name || '图片附件');
+}
+
+function followupAttachmentBadgeText(name) {
+    var match = /\.([a-z0-9]{1,5})$/i.exec(String(name || ''));
+    return match ? match[1].toUpperCase() : 'FILE';
+}
+
+function followupAttachmentEntries(references) {
+    if (!Array.isArray(references)) return [];
+    return references.map(function (item) {
+        var ref = item && (item.attachment || item);
+        if (!ref) return null;
+        var mediaType = String(ref.mediaType || (item && item.mediaType) || '');
+        var previewable = /^sha256:[a-f0-9]{64}$/.test(String(ref.attachmentId || ''));
+        var image = previewable && (!mediaType || /^image\//i.test(mediaType));
+        return { item: item, ref: ref, image: image };
+    }).filter(Boolean);
+}
+
+function renderFollowupAttachmentThumbs(container, references) {
+    if (!container || typeof container.appendChild !== 'function') return;
+    var entries = followupAttachmentEntries(references);
+    if (!entries.length) return;
+    var strip = document.createElement('span');
+    strip.className = 'followup-queue-attachments';
+    strip.setAttribute('role', 'group');
+    strip.setAttribute('aria-label', '附件');
+    var shown = entries.slice(0, FOLLOWUP_QUEUE_ATTACHMENT_LIMIT);
+    shown.forEach(function (entry) {
+        var name = followupAttachmentName(entry);
+        var tip = name + ' · ' + attachmentImageSizeLabel(entry.item, entry.ref);
+        if (!entry.image) {
+            var badge = document.createElement('span');
+            badge.className = 'followup-queue-attachment-badge';
+            badge.textContent = followupAttachmentBadgeText(name);
+            badge.setAttribute('data-ui-tip', tip);
+            strip.appendChild(badge);
             return;
         }
-        entry = { id: ref.attachmentId, nodes: [previewImage], url: '', controller: typeof AbortController === 'function' ? new AbortController() : null };
-        durableImagePreviews.set(ref.attachmentId, entry);
-        if (!durableImageObserver) {
-            durableImageObserver = new MutationObserver(sweepDurableImagePreviews);
-            durableImageObserver.observe(document.body, { childList: true, subtree: true });
-        }
-        queueDurableImagePreview(entry, previewImage);
+        var thumb = document.createElement('img');
+        thumb.className = 'msg-workspace-image msg-attachment-image followup-queue-thumb';
+        thumb.dataset.attachmentId = entry.ref.attachmentId;
+        thumb.alt = name;
+        thumb.draggable = false;
+        thumb.loading = 'lazy';
+        thumb.decoding = 'async';
+        thumb.setAttribute('data-ui-tip', tip + ' · 点击放大');
+        strip.appendChild(thumb);
+        trackDurableImagePreview(entry.ref, thumb);
     });
+    var hidden = entries.length - shown.length;
+    if (hidden > 0) {
+        var more = document.createElement('span');
+        more.className = 'followup-queue-attachment-badge followup-queue-attachment-more';
+        more.textContent = '+' + hidden;
+        more.setAttribute('data-ui-tip', '还有 ' + hidden + ' 个附件');
+        strip.appendChild(more);
+    }
+    container.appendChild(strip);
 }

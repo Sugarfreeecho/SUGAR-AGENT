@@ -133,7 +133,9 @@ var subagentCatalogUi = (function () {
             el.classList.remove('hidden');
             // 挂在标题行（#breadcrumb-text 的兄弟位置）：纯文本标题不受影响，
             // 且与标题、会话菜单同处一条 flex 行 → 天然垂直对齐。
-            if (el.parentNode !== titleRow) {
+            if (typeof titlebarActivity !== 'undefined') {
+                titlebarActivity.mount(el);
+            } else if (el.parentNode !== titleRow) {
                 var actions = titleRow.querySelector
                     ? titleRow.querySelector('.breadcrumb-session-actions')
                     : null;
@@ -436,9 +438,11 @@ var subagentCatalogUi = (function () {
         }
     }
 
-    function openMenu() {
+    function openMenu(opts) {
+        opts = opts || {};
         var storeRef = store();
         if (!storeRef || !activeParentId || menuOpen) return;
+        if (typeof backgroundTaskUi !== 'undefined') backgroundTaskUi.close({ restoreFocus: false });
         menuOpen = true;
         if (triggerEl) triggerEl.setAttribute('aria-expanded', 'true');
         storeRef.setCatalogOpen(activeParentId, true);
@@ -450,7 +454,7 @@ var subagentCatalogUi = (function () {
         document.addEventListener('mousedown', onDocumentMouseDown, true);
         window.addEventListener('resize', positionMenu, { passive: true });
         requestAnimationFrame(function () {
-            if (!menuOpen) return;
+            if (!menuOpen || opts.focus === false) return;
             focusRow(0);
         });
     }
@@ -497,7 +501,7 @@ var subagentCatalogUi = (function () {
         if (hoverTimer != null) clearTimeout(hoverTimer);
         hoverTimer = setTimeout(function () {
             hoverTimer = null;
-            openMenu();
+            openMenu({ focus: false });
         }, HOVER_OPEN_MS);
     }
 

@@ -1067,6 +1067,19 @@ async function testAttachmentFollowupsCanSendNowAndPreserveAskDeferral() {
 }
 
 (async () => {
+  const receipts = [{id:'first',steerId:'adopted-op',text:'same text'},
+    {id:'second',steerId:'different-op',text:'same text'}];
+  const receiptContext = context({
+    getFollowupQueue: () => receipts,
+    takeFollowupItem: (_sid,id) => receipts.splice(receipts.findIndex(item=>item.id===id),1),
+    renderFollowupQueue() {}, scheduleFollowupQueueDrain() {},
+  });
+  vm.runInContext(between('function removeConsumedFollowupSteer','function isFollowupAutoDrainReady'), receiptContext);
+  assert.equal(receiptContext.removeConsumedFollowupSteer('s', {type:'user',operation_id:'adopted-op'}), true,
+    'a control-adopted committed operation is a queue receipt without a legacy queued_followup flag');
+  assert.deepEqual(receipts.map(item=>item.id), ['second'], 'equal message text must not consume another operation');
+  assert.equal(receiptContext.removeConsumedFollowupSteer('s', {type:'user',operation_id:'adopted-op'}), false,
+    'replayed receipts are idempotent');
   await testAttachmentFollowupsCanSendNowAndPreserveAskDeferral();
   await testQueuedTurnsPublishInOrderWithoutEndingTheRun();
   await testQueuedTurnWithdrawalWaitsForItsRegistration();

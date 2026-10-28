@@ -33,6 +33,7 @@ class DockFloatLayerView {
      * @param {object} config.labels Rendered strings.
      * @param {Function} config.renderTab Renders one tab's body.
      * @param {Function} [config.canCloseTab] Whether a tab offers its close control.
+     * @param {Function} [config.canRefreshTab] Whether a tab offers its refresh entry.
      * @param {Function} [config.renderTabTitle] What a chip shows as its title.
      */
     constructor(config) {
@@ -42,6 +43,7 @@ class DockFloatLayerView {
         this.renderTab = config.renderTab;
         this.renderTabTitle = config.renderTabTitle;
         this.canCloseTab = config.canCloseTab || dockAlwaysTrue;
+        this.canRefreshTab = config.canRefreshTab || (() => false);
         this.state = null;
         this.entries = Object.create(null);
         this.preview = undefined;
@@ -101,7 +103,10 @@ class DockFloatLayerView {
             const openMenu = event => {
                 if (!globalThis.MyAgentContextMenu || !this.state) return;
                 const id = dockOnlyTabId(dockGetPane(this.state, paneId));
+                const canRefresh = typeof this.intents.refreshTab === 'function' && this.canRefreshTab(id);
                 globalThis.MyAgentContextMenu.open(event, [
+                    ...(canRefresh ? [{ label: this.labels.refreshTab || '刷新',
+                        action: () => this.intents.refreshTab(id) }] : []),
                     { label: this.labels.dockFloat || '放回主区', action: () => this.intents.unfloatPane(paneId) },
                     { label: this.labels.closeFloat || '关闭浮窗', disabled: !this.canCloseTab(id),
                         action: () => { if (this.canCloseTab(id)) this.intents.closeTab(id); } },

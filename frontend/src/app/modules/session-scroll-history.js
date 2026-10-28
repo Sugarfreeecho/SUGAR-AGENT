@@ -1051,6 +1051,11 @@ function stashVisibleStreamForSession(sessionId, opts) {
     }
     if (!opts.force && el.dataset.sessionLoadOk !== '1') return false;
     if (el.dataset.sessionLoadFailed === '1') return false;
+    var leavingRun = getSessionRunState(sid);
+    if (leavingRun && leavingRun.ctx && leavingRun.ctx.stream === el) {
+        if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(el);
+        flushLlmDeltaText(leavingRun.ctx);
+    }
     discardCachedSessionStream(sid);
     el.remove();
     el.removeAttribute('id');
@@ -1099,6 +1104,7 @@ function restoreStreamForRunningSession(enteringId) {
     st.id = 'chat-stream';
     st.setAttribute('aria-label', '消息');
     chatContainer.appendChild(st);
+    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(st);
     cacheOrderTouch(enteringId);
     var restoredPaging = restoreHistoryPagingFromStream(st);
     if (restoredPaging) sessionHistoryPaging = restoredPaging;
@@ -1123,6 +1129,7 @@ function restoreCachedSessionStream(enteringId) {
     st.id = 'chat-stream';
     st.setAttribute('aria-label', '消息');
     chatContainer.appendChild(st);
+    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(st);
     cacheOrderTouch(sid);
     var restoredPaging = restoreHistoryPagingFromStream(st);
     if (restoredPaging) sessionHistoryPaging = restoredPaging;
@@ -1357,6 +1364,7 @@ function syncDisconnectedProcessGroups() {
 }
 
 function finalizeLlmStreamChunks(ctx) {
+    if (ctx && typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(ctx.stream);
     if (!ctx) return;
     flushLlmDeltaText(ctx);
     queryFeedChunksInCtx(ctx, '.feed-chunk.is-streaming').forEach(function (ch) {
@@ -1408,6 +1416,7 @@ function finalizeLlmStreamChunks(ctx) {
 
 function discardLlmStreamChunks(ctx, ev) {
     if (!ctx) return;
+    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(ctx.stream);
     ev = ev || {};
     if (ev.cleanup_scope === 'none') {
         finalizeLlmStreamChunks(ctx);

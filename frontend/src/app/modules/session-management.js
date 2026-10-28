@@ -1731,17 +1731,21 @@ function maybeTakeOverActiveRuntimeSession(payload) {
             if (sid !== String(currentSessionId || '')) return;
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
             if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;
-            // The heartbeat is the authoritative local-process signal. Mark
-            // the selected session active before attaching so the observer's
-            // guards and UI state agree during history catch-up.
-            if (typeof setSessionServerStreamActive === 'function') {
-                setSessionServerStreamActive(sid, true);
-            }
+            // A heartbeat requested before run_finished may arrive afterwards.
+            // Reuse the detail refresh this takeover already performs, and let
+            // its identified run state decide whether there is work to attach.
+            const session = await refreshSingleSessionRow(sid);
+            if (!session || (!session.run_active && !session.stream_active)) return;
+            if (sid !== String(currentSessionId || '')) return;
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
+            if (getSessionRunState(sid) || !isServerStreamActive(sid)) return;
+            const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
+            const runId = String(activeInfo.run_id || activeInfo.runId || '');
+            if (runId && sessionStore.isTerminalRun(sid, runId)) return;
             if (typeof resetStreamReconnectState === 'function') resetStreamReconnectState(sid);
             document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
                 detail: { sessionId: sid, phase: 'runtime-takeover' },
             }));
-            if (typeof refreshSingleSessionRow === 'function') void refreshSingleSessionRow(sid);
             if (typeof attachSessionEventStream === 'function') {
                 await attachSessionEventStream(sid, { skipInitialLoad: true, force: true });
             }
