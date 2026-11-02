@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("script", [
+    "human_interaction_attention_runtime.cjs",
     "subagent_parent_sync_runtime.cjs",
     "frontend_session_stream_runtime.cjs",
     "stream_recovery_runtime.cjs",

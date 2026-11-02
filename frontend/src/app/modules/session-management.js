@@ -1576,6 +1576,7 @@ const uiEventCountCache = {
 async function fetchSessionsStateSnapshot(opts) {
     opts = opts || {};
     const requestSeq = ++sessionStore.snapshotRequestSeq;
+    const humanEpochs = typeof captureHumanInteractionEpochs === 'function' ? captureHumanInteractionEpochs() : null;
     const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
     if (typeof sessionLoadingDiagnostics !== 'undefined') {
         const ownsTrace = !opts.loadingTrace;
@@ -1589,7 +1590,8 @@ async function fetchSessionsStateSnapshot(opts) {
                 throw error;
             }
             outcome = 'success';
-            return Object.assign(result.data, {include_archived:!!opts.includeArchived, client_request_seq:requestSeq});
+            return Object.assign(result.data, {include_archived:!!opts.includeArchived, client_request_seq:requestSeq,
+                client_human_interaction_epochs:humanEpochs});
         } catch (error) {
             failure = error;
             throw error;
@@ -1603,6 +1605,7 @@ async function fetchSessionsStateSnapshot(opts) {
         if (!snapshot || !Array.isArray(snapshot.sessions)) throw new Error('invalid sessions state response');
         snapshot.include_archived = !!opts.includeArchived;
         snapshot.client_request_seq = requestSeq;
+        snapshot.client_human_interaction_epochs = humanEpochs;
         return snapshot;
     });
 }
@@ -2033,6 +2036,7 @@ async function loadSessionsInner(opts) {
             if (loadEpoch !== sessionListLoadEpoch) return false;
             console.error('加载会话状态快照失败，回退至旧接口', stateErr);
             const fallbackRequestSeq = ++sessionStore.snapshotRequestSeq;
+            const fallbackHumanEpochs = typeof captureHumanInteractionEpochs === 'function' ? captureHumanInteractionEpochs() : null;
             if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'fallback');
             const result = loadingTrace
                 ? await sessionLoadingDiagnostics.fetchJSON(loadingTrace, '/sessions', {}, 12000)
@@ -2064,6 +2068,7 @@ async function loadSessionsInner(opts) {
                 sessions: allSessions,
                 archived_count: archivedSessionsCount,
                 client_request_seq: fallbackRequestSeq,
+                client_human_interaction_epochs: fallbackHumanEpochs,
             };
         }
         if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'layout');

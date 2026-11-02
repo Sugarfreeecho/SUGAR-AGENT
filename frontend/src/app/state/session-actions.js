@@ -4,7 +4,10 @@ function applySessionSnapshot(snapshot) {
     const requestSeq = Number(snapshot.client_request_seq || 0);
     if (requestSeq > 0 && requestSeq < sessionStore.lastAppliedSnapshotRequestSeq) return false;
     if (requestSeq > 0) sessionStore.lastAppliedSnapshotRequestSeq = requestSeq;
-    const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+    const sessions = typeof reconcileHumanInteractionSnapshot === 'function'
+        ? reconcileHumanInteractionSnapshot(Array.isArray(snapshot.sessions) ? snapshot.sessions : [],
+            snapshot.client_human_interaction_epochs)
+        : (Array.isArray(snapshot.sessions) ? snapshot.sessions : []);
     const archivedCount = snapshot.archived_count != null ? snapshot.archived_count : snapshot.archivedCount;
     const previousActive = new Set();
     sessionStore.activeRunInfoBySession.forEach(function (_run, sid) {

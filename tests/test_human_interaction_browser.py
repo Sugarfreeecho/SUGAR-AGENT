@@ -63,6 +63,47 @@ def human_page():
         browser.close()
 
 
+@pytest.mark.parametrize("kind", ["question", "approval"])
+def test_sidebar_snapshot_recovers_missed_background_human_events(human_page, kind):
+    page = human_page
+    page.add_script_tag(content=(ROOT / "frontend/src/app/state/session-store.js").read_text(encoding="utf-8"))
+    page.add_script_tag(content=(ROOT / "frontend/src/app/state/session-actions.js").read_text(encoding="utf-8"))
+    page.evaluate("""async kind => {
+        currentSessionId = 'other';
+        sessionsList = document.createElement('div');
+        sessionsList.innerHTML = '<div class="session-item" data-session-id="parent">'
+            + '<div class="session-item-head"><div class="session-item-title-row">'
+            + '<span class="session-item-date"></span></div></div></div>';
+        document.body.appendChild(sessionsList);
+        record.kind = kind;
+        record.approval_id = 'approval-1';
+        record.status = 'resolved';
+        sessionStore.applySnapshot([{id:'parent', pending_human_interactions:{total:0}}], 0);
+        await refreshHumanInteractions('parent', {render:false});
+        // A previously viewed session now runs without its own SSE reader.
+        // Only the sidebar summary learns about the new request.
+        record.status = 'pending';
+        applySessionSnapshot({sessions:[{id:'parent', pending_human_interactions:{
+            questions:kind === 'question' ? 1 : 0, approvals:kind === 'approval' ? 1 : 0, total:1
+        }}]});
+        updateAllHumanInteractionSessionBadges();
+    }""", kind)
+    badge = page.locator('.session-human-badge')
+    assert badge.inner_text() == ('?' if kind == 'question' else '!')
+    assert page.locator('.session-item.has-human-pending').count() == 1
+
+    page.evaluate("""async () => {
+        await refreshHumanInteractions('parent', {render:false});
+        // Resolution in another client is also learned through a summary.
+        applySessionSnapshot({sessions:[{id:'parent', pending_human_interactions:{
+            questions:0, approvals:0, total:0
+        }}]});
+        updateAllHumanInteractionSessionBadges();
+    }""")
+    assert badge.count() == 0
+    assert page.locator('.session-item.has-human-pending').count() == 0
+
+
 @pytest.mark.parametrize("owner", ["parent", "child"])
 def test_background_refresh_preserves_editor_focus_selection_and_draft(human_page, owner):
     page = human_page

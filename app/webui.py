@@ -6398,6 +6398,14 @@ _UI_ATTENTION_NOTIFY_EVENT_TYPES = {
 
 _SESSION_STATE_INVALIDATION_EVENT_TYPES = {
     "run_started",
+    "interaction_requested",
+    "interaction_resolved",
+    "interaction_cancelled",
+    "interaction_expired",
+    "approval_requested",
+    "approval_resolved",
+    "approval_cancelled",
+    "approval_expired",
     "subagent_start",
     "subagent_finish",
     "final",

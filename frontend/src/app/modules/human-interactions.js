@@ -9,6 +9,7 @@ function humanInteractionSessionState(sessionId) {
             approvals: Object.create(null),
             loaded: false,
             refreshEpoch: 0,
+            updateEpoch: 0,
         };
     }
     return humanInteractionStoreBySession[sid];
@@ -65,6 +66,7 @@ function applyHumanInteractionEvent(sessionId, event) {
         session_id: event.session_id || previous.session_id || sid,
     });
     collection[id] = record;
+    state.updateEpoch += 1;
     state.loaded = true;
     // A child-owned card can also be displayed in its parent's pending inbox.
     // Keep those copies current when the child is answered from either page.
@@ -75,6 +77,7 @@ function applyHumanInteractionEvent(sessionId, event) {
         if (!target[id] || String(target[id].session_id || otherSid) !== String(record.session_id)) return;
         target[id] = record;
         other.refreshEpoch += 1;
+        other.updateEpoch += 1;
         syncHumanInteractionSessionSummary(otherSid);
     });
     syncHumanInteractionSessionSummary(sid);
@@ -165,14 +168,39 @@ function syncHumanInteractionSessionSummary(sessionId) {
 
 function sessionPendingHumanCounts(sessionId) {
     var sid = String(sessionId || '');
-    var state = humanInteractionStoreBySession[sid];
-    if (state && state.loaded) return humanInteractionPendingCounts(sid);
     var session = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
     var pending = session && session.pending_human_interactions;
+    // The sidebar snapshot also sees requests missed by detached SSE readers.
+    // Live events and interaction refreshes update this same summary.
+    if (!pending) return humanInteractionPendingCounts(sid);
     var questions = Math.max(0, Number(pending && pending.questions) || 0);
     var approvals = Math.max(0, Number(pending && pending.approvals) || 0);
     var total = Math.max(questions + approvals, Number(pending && pending.total) || 0);
     return { questions: questions, approvals: approvals, total: total };
+}
+
+function captureHumanInteractionEpochs() {
+    var epochs = Object.create(null);
+    Object.keys(humanInteractionStoreBySession).forEach(function (sid) {
+        epochs[sid] = humanInteractionStoreBySession[sid].updateEpoch;
+    });
+    return epochs;
+}
+
+function reconcileHumanInteractionSnapshot(sessions, epochs) {
+    if (!epochs) return sessions;
+    return sessions.map(function (session) {
+        var sid = String(session && session.id || '');
+        var state = humanInteractionStoreBySession[sid];
+        if (!state || state.updateEpoch === Number(epochs[sid] || 0)) return session;
+        var current = sessionStore.get(sid);
+        if (!current || !current.pending_human_interactions) return session;
+        // A live event or completed inbox refresh after this request started
+        // owns the counts. The next sidebar request can reconcile them again.
+        return Object.assign({}, session, {
+            pending_human_interactions: Object.assign({}, current.pending_human_interactions),
+        });
+    });
 }
 
 function sessionListForPendingCounts() {
@@ -1768,6 +1796,7 @@ async function refreshHumanInteractions(sessionId, options) {
             state.approvals[String(row.approval_id || '')] = row;
         });
         state.loaded = true;
+        state.updateEpoch += 1;
         syncHumanInteractionSessionSummary(sid);
         if (options.render !== false && sid === String(currentSessionId || '')) renderPendingHumanInteractions(sid);
         return true;
