@@ -100,4 +100,71 @@ class LLMRequestContext:
         }
 
 
-__all__ = ["LLMRequestContext", "LLMRequestPurpose", "TransportEvent"]
+class HttpStreamTransportError(RuntimeError):
+    """Transport failure that carries the provider's HTTP status.
+
+    Both the raw-httpx Chat Completions path and the Anthropic Messages path
+    raise this, so the retry / model-fallback classifiers see one shape
+    instead of guessing at SDK-specific attributes.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        body: str = "",
+        provider_code: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+        self.provider_code = provider_code
+
+
+def response_status_code(exc: BaseException) -> Optional[int]:
+    """HTTP status from an SDK error or the httpx response it wraps.
+
+    ``httpx.HTTPStatusError`` keeps the code on ``.response.status_code`` and
+    has no ``.status_code`` of its own, so reading only the exception demoted
+    every raw-httpx 4xx (403/429/400) to "unknown error".
+    """
+    for value in (
+        getattr(exc, "status_code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        try:
+            status = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= status <= 599:
+            return status
+    return None
+
+
+def safe_response_text(response: Any) -> str:
+    """Return an httpx response body without touching an unread stream.
+
+    ``getattr(response, "text")`` raises ``httpx.ResponseNotRead`` for a
+    streaming response whose body was never consumed -- exactly the shape of a
+    failed stream request. Letting that escape replaces the provider error being
+    diagnosed, so an unread body reads as "".
+    """
+    if response is None:
+        return ""
+    try:
+        if getattr(response, "is_stream_consumed", True) is False:
+            return ""
+        return str(getattr(response, "text", "") or "")
+    except Exception:
+        return ""
+
+
+__all__ = [
+    "HttpStreamTransportError",
+    "LLMRequestContext",
+    "LLMRequestPurpose",
+    "TransportEvent",
+    "response_status_code",
+    "safe_response_text",
+]

@@ -1611,6 +1611,79 @@ def test_anthropic_complete_text_uses_one_non_streaming_request():
     assert result["usage"]["total_tokens"] == 6
 
 
+def test_anthropic_stream_error_carries_status_and_body():
+    """A rejected stream must surface status + provider message, not ResponseNotRead.
+
+    ``raise_for_status()`` on a streaming response leaves the body unread, so
+    every later ``response.text`` touch raised ``httpx.ResponseNotRead`` and
+    replaced the real 403 with "unknown error" (session ae566dc7).
+    """
+    import httpx
+
+    import agent_loop
+    import agent_openai
+    from llm.types import HttpStreamTransportError
+
+    def handler(request):
+        return httpx.Response(
+            403,
+            headers={"content-type": "application/json"},
+            content=json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "permission_error",
+                        "message": "MODEL_NOT_IN_PLAN: upgrade to use this model",
+                    },
+                }
+            ).encode("utf-8"),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        transport = AnthropicMessagesTransport(
+            api_key="secret",
+            base_url="https://api.commandcode.ai/provider/v1",
+            http_client=http_client,
+        )
+        with pytest.raises(HttpStreamTransportError) as raised:
+            list(
+                transport.stream_completion(
+                    model="claude-opus-5-5",
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=8,
+                )
+            )
+
+    error = raised.value
+    assert error.status_code == 403
+    assert error.provider_code == "permission_error"
+    assert "MODEL_NOT_IN_PLAN" in str(error)
+    assert "MODEL_NOT_IN_PLAN" in error.body
+
+    # The diagnostics that used to crash on the unread stream must stay usable.
+    assert agent_openai._is_media_input_error(error) is False
+    assert agent_loop._classify_api_error(error)["code"] == "403"
+    assert agent_loop._classify_api_error(error)["title"] == "当前套餐不含该模型"
+    assert "MODEL_NOT_IN_PLAN" in agent_loop._api_error_search_text(error)
+
+
+def test_safe_response_text_tolerates_unread_stream():
+    import httpx
+
+    from llm.types import response_status_code, safe_response_text
+
+    request = httpx.Request("POST", "https://example.invalid")
+    streamed = httpx.Response(403, request=request, stream=httpx.ByteStream(b'{"error":"x"}'))
+    assert streamed.is_stream_consumed is False
+    with pytest.raises(httpx.ResponseNotRead):
+        streamed.text
+    assert safe_response_text(streamed) == ""
+
+    status_error = httpx.HTTPStatusError("403", request=request, response=streamed)
+    assert getattr(status_error, "status_code", None) is None
+    assert response_status_code(status_error) == 403
+
+
 def test_anthropic_message_conversion_preserves_tool_round_trip():
     system, messages = chat_messages_to_anthropic(
         [

@@ -40,7 +40,14 @@ from .responses import (
     evaluate_continuation,
     responses_capability_cache,
 )
-from .types import LLMRequestContext, LLMRequestPurpose, TransportEvent
+from .types import (
+    HttpStreamTransportError,
+    LLMRequestContext,
+    LLMRequestPurpose,
+    TransportEvent,
+    response_status_code,
+    safe_response_text,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1461,7 +1468,7 @@ def _error_search_text(exc: BaseException) -> str:
     if response is not None:
         values.extend(
             [
-                getattr(response, "text", None),
+                safe_response_text(response) or None,
                 getattr(response, "reason_phrase", None),
             ]
         )
@@ -1764,6 +1771,46 @@ def _apply_anthropic_reasoning(body: Dict[str, Any], request: Dict[str, Any]) ->
         body.pop("temperature", None)
 
 
+def _raise_for_status_with_body(response: Any) -> None:
+    """Raise a status-carrying transport error, reading the body first.
+
+    ``response.raise_for_status()`` raises ``httpx.HTTPStatusError`` whose
+    status lives on ``.response`` and whose body was never consumed. Downstream
+    diagnostics then touch ``response.text`` and get ``ResponseNotRead``, which
+    replaces the real provider error. Reading the body here keeps the contract
+    identical to the raw-httpx Chat Completions path.
+    """
+    try:
+        status_code = int(getattr(response, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        status_code = 0
+    if status_code < 400:
+        return
+    try:
+        error_body = response.read().decode("utf-8", "replace")
+    except Exception:
+        error_body = ""
+    message = "HTTP %s" % status_code
+    provider_code = ""
+    try:
+        parsed = json.loads(error_body)
+        err = parsed.get("error") if isinstance(parsed, dict) else None
+        if isinstance(err, dict):
+            message = str(err.get("message") or message)
+            provider_code = str(err.get("code") or err.get("type") or "")
+        elif isinstance(err, str) and err:
+            message = err
+    except Exception:
+        if error_body:
+            message = "%s: %s" % (message, error_body[:500])
+    raise HttpStreamTransportError(
+        message,
+        status_code=status_code,
+        body=error_body,
+        provider_code=provider_code,
+    )
+
+
 class AnthropicMessagesTransport:
     provider = LLMProvider.ANTHROPIC
 
@@ -1807,7 +1854,7 @@ class AnthropicMessagesTransport:
         if timeout is not None:
             stream_kwargs["timeout"] = float(timeout)
         with self.http_client.stream("POST", self._messages_url(), headers=headers, json=body, **stream_kwargs) as response:
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             yield from self._events(response.iter_lines(), fallback_model=str(request.get("model") or ""))
 
     def complete_text(self, **request: Any) -> Dict[str, Any]:
@@ -1833,7 +1880,7 @@ class AnthropicMessagesTransport:
         response = self.http_client.post(
             self._messages_url(), headers=headers, json=body, **kwargs
         )
-        response.raise_for_status()
+        _raise_for_status_with_body(response)
         payload = response.json()
         text = "".join(
             str(part.get("text") or "")

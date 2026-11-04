@@ -532,7 +532,7 @@ def test_image_followup_allows_manual_send_and_keeps_structured_attachments():
     assert "attachments: Array.isArray(item.attachments) ? item.attachments : []" in sse
     assert "attachments: item.attachments || []" in sse
     assert "const rememberedAttachments = Array.isArray(options.attachments)" in sse
-    assert "function addChatAttachments(textarea, attachments)" in picker
+    assert "function addChatAttachments(textarea, attachments, sessionId)" in picker
 
 
 def test_branch_completion_does_not_hijack_a_later_session_switch():

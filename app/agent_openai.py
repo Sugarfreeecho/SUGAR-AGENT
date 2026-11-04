@@ -37,7 +37,9 @@ from agent_messages import AssistantMessage, SystemMessage, ToolMessage, UserMes
 from agent_think import strip_think_blocks
 from attachments.content import durable_content, project_request_images, chat_tool_images, scan_enabled
 from llm import TransportEvent, merge_streamed_tool_name
+from llm.types import HttpStreamTransportError, response_status_code, safe_response_text
 from json_encoding import encode_plain_json, _orjson as _wire_orjson
+import log_safety
 
 logger = logging.getLogger(__name__)
 
@@ -277,11 +279,7 @@ def _is_retriable_openai_error(exc: BaseException) -> bool:
 # 本机断网由调用方先行检查（暂停回退），不到达本分类器；重试次数与间隔可经
 # LLM_CANDIDATE_RETRY_ATTEMPTS / LLM_CANDIDATE_RETRY_BACKOFF_SEC 调整。
 def _classify_candidate_failure(exc: BaseException) -> str:
-    status_code = getattr(exc, "status_code", None)
-    try:
-        status_code = int(status_code) if status_code is not None else None
-    except (TypeError, ValueError):
-        status_code = None
+    status_code = response_status_code(exc)
     if status_code is not None:
         if status_code == 429:
             return "retry"
@@ -947,7 +945,7 @@ def _exception_search_text(exc: BaseException) -> str:
     if response is not None:
         values.extend(
             [
-                getattr(response, "text", None),
+                safe_response_text(response) or None,
                 getattr(response, "reason_phrase", None),
             ]
         )
@@ -1150,22 +1148,6 @@ def _prefer_direct_stream() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
-class HttpStreamTransportError(RuntimeError):
-    """Transport failure raised by the raw-httpx stream path.
-
-    Carries ``status_code`` so the existing retry / model-fallback classifiers
-    (``_is_retriable_openai_error``, ``_classify_candidate_failure``) and the
-    media-input diagnostics keep working without knowing which transport ran.
-    """
-
-    def __init__(self, message: str, *, status_code: Optional[int] = None,
-                 body: str = "", provider_code: str = "") -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.body = body
-        self.provider_code = provider_code
-
-
 def _fast_wire_json(payload: Any) -> Optional[bytes]:
     """Encode ordinary JSON without accepting types that httpx would reject."""
     if _wire_orjson is None:
@@ -1280,7 +1262,7 @@ def _http_stream_chat_completion(
                 try:
                     body = json.loads(data)
                 except Exception:
-                    logger.debug("跳过无法解析的流式分片: %s", data[:200])
+                    logger.debug("跳过无法解析的流式分片: %s", log_safety.digest(data))
                     continue
                 yield _chunk_namespace(body)
             # The `with` block just closed the response; publish the metrics now
@@ -1296,7 +1278,7 @@ def _http_stream_chat_completion(
             return
         raise HttpStreamTransportError(
             "raw httpx stream failed: %s" % exc,
-            status_code=getattr(exc, "status_code", None),
+            status_code=response_status_code(exc),
         ) from exc
 
 
@@ -1988,7 +1970,7 @@ def parse_assistant_message(
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
             except json.JSONDecodeError:
-                logger.warning("工具参数 JSON 解析失败，使用空对象: %s", raw_args[:200])
+                logger.warning("工具参数 JSON 解析失败，使用空对象: %s", log_safety.digest(raw_args))
                 args = {}
             tool_calls.append({"name": name, "args": args, "id": tid})
     if tools is not None:
@@ -2337,6 +2319,78 @@ def _accumulate_tool_call_delta(
                 tool_acc[idx]["arguments"] += (json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args))
 
 
+def _longest_subsequence_prefix(text: str, unit: str) -> int:
+    """Length of the longest prefix of ``text`` that is a subsequence of ``unit``."""
+    cursor = 0
+    limit = len(unit)
+    for offset, char in enumerate(text):
+        while cursor < limit and unit[cursor] != char:
+            cursor += 1
+        if cursor >= limit:
+            return offset
+        cursor += 1
+    return len(text)
+
+
+def _recover_repeated_stream_arguments(raw_args: str) -> Optional[Dict[str, Any]]:
+    """Recover arguments when the stream delivered the same JSON payload twice or more.
+
+    Relays between the provider and this client occasionally re-send a whole
+    ``function.arguments`` payload, and a fragment can be dropped at a frame
+    boundary, so the concatenated buffer looks like
+    ``<damaged copy><copy><copy>...``. That is invalid JSON, yet the intended
+    arguments are fully present; reporting a transport failure makes the model
+    retry a call that will be duplicated again.
+
+    The repair only fires on that exact signature: one JSON object that repeats
+    at least twice and whose leftover text is still (nearly) a copy of it. Any
+    other malformed payload is left alone so genuine model mistakes stay visible.
+    """
+    if not isinstance(raw_args, str) or len(raw_args) < 24:
+        return None
+    decoder = json.JSONDecoder()
+    best: Optional[Tuple[int, int, Dict[str, Any]]] = None
+    attempts = 0
+    for pos, char in enumerate(raw_args):
+        if char != "{":
+            continue
+        if attempts >= 512:
+            break
+        attempts += 1
+        try:
+            obj, end = decoder.raw_decode(raw_args, pos)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(obj, dict) or not obj:
+            continue
+        length = end - pos
+        if best is None or length > best[1]:
+            best = (pos, length, obj)
+            if length * 2 >= len(raw_args):
+                # A candidate that covers half the buffer is the repeated unit;
+                # nothing longer can repeat twice, so stop scanning early.
+                break
+    if best is None:
+        return None
+    body = raw_args[best[0]:best[0] + best[1]]
+    min_fragment = max(8, len(body) // 2)
+    copies = 0
+    cursor = 0
+    total = len(raw_args)
+    while cursor < total:
+        if raw_args.startswith(body, cursor):
+            cursor += len(body)
+            copies += 1
+            continue
+        take = _longest_subsequence_prefix(raw_args[cursor:cursor + len(body)], body)
+        if take < min_fragment:
+            return None
+        cursor += take
+    if copies < 2:
+        return None
+    return best[2]
+
+
 def _tool_call_delta_payloads(delta_tool_calls: Any) -> List[Dict[str, str]]:
     if not delta_tool_calls:
         return []
@@ -2375,16 +2429,29 @@ def _tool_acc_to_parsed_list(tool_acc: Dict[int, Dict[str, str]]) -> Optional[Li
             try:
                 args = json.loads(raw_args)
             except json.JSONDecodeError as exc:
+                recovered = _recover_repeated_stream_arguments(raw_args)
+                if recovered is not None:
+                    # Duplicate re-delivery is a transport artefact, not a model
+                    # mistake: the payload is intact once de-duplicated, so run
+                    # the call instead of bouncing a retryable error back.
+                    logger.warning(
+                        "流式工具参数被重复投递，已去重还原: tool=%s len=%s args=%s",
+                        name or f"index{i}",
+                        len(raw_args),
+                        log_safety.digest(raw_args),
+                    )
+                    tool_calls.append({"name": name, "args": recovered, "id": tid, "index": i})
+                    continue
                 # Unreadable streamed arguments are a transport-layer fault,
                 # not a model request to validate. Keep the raw text so the
                 # tool layer can answer with an identifiable transport error
                 # instead of pretending the model sent an empty argument
                 # object (that misdirects the model into blind retries).
                 logger.warning(
-                    "流式工具参数 JSON 损坏（transport 层丢参或截断）: tool=%s error=%s args[:200]=%s",
+                    "流式工具参数 JSON 损坏（transport 层丢参或截断）: tool=%s error=%s args=%s",
                     name or f"index{i}",
                     exc,
-                    raw_args[:200],
+                    log_safety.digest(raw_args),
                 )
                 tool_calls.append(
                     {"name": name, "args": {"_stream_corrupted_arguments": raw_args}, "id": tid, "index": i}
