@@ -103,6 +103,35 @@ async def test_new_chat_schedule_retains_tool_budget_and_explicit_keys_across_ru
         await c.control.close()
 
 
+PAIRING_CAPABILITIES = ["read", "session.create", "session.send",
+    *("automation." + action for action in ("list", "get", "history", "create", "update", "pause", "resume", "run", "delete"))]
+
+
+@run_async
+async def test_trusted_browser_pairing_creates_and_owns_its_schedule(composed, monkeypatch):
+    import session_control.integration as integration
+    c = composed
+    monkeypatch.setattr(integration, "_application", c.control)
+    sid = await new_session(c)
+    await c.control.start()
+    def pairing(identity):
+        return Principal(identity, policy=validate_policy({"scope": "all", "capabilities": PAIRING_CAPABILITIES},
+                                                          workspace=str(c.root), current_session=sid))
+    parent, other = pairing("paired-browser"), pairing("other-browser")
+    try:
+        with runtime_scope(sid, validate_config({}), principal=parent):
+            created = await tool(context(c, sid), definition())
+        assert created["owner"] == "paired-browser"
+        assert created["target"] == {"mode": "existing", "session_id": sid}
+        with runtime_scope(sid, validate_config({}), principal=parent):
+            listed = await tool(context(c, sid, "list"), {"action": "list"}, read=True)
+        assert [row["id"] for row in listed["items"]] == [created["id"]]
+        with runtime_scope(sid, validate_config({}), principal=other):
+            assert (await tool(context(c, sid, "other-list"), {"action": "list"}, read=True))["items"] == []
+    finally:
+        await c.control.close()
+
+
 @run_async
 async def test_revoked_creator_blocks_later_dispatch_even_after_human_edits(composed, monkeypatch):
     import session_control.integration as integration

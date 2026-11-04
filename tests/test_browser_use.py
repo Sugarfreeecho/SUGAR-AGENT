@@ -144,22 +144,15 @@ def test_pairing_reuses_identity_and_grants_trusted_schedules(browser_host):
             response = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
                 json={"method": "session.create", "params": {"name": "From extension", "work_dir": str(c.root)}, "idempotency_key": "browser-test-create"})
             assert response.status_code == 200, response.text
-            sid = response.json()["data"]["session_id"]
-            created = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
-                json={"method": "automation.create", "params": {
-                    "name": "Pairing schedule", "trigger": {"kind": "interval", "seconds": 3600},
-                    "target": {"mode": "existing", "session_id": sid},
-                    "policy": {"scope": "all", "capabilities": ["session.send"]},
-                    "action": {"kind": "prompt", "text": "继续"}}, "idempotency_key": "browser-test-schedule"})
-            assert created.status_code == 200, created.text
-            task = created.json()["data"]
-            assert task["owner"] == principal.id
-            listed = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
-                json={"method": "automation.list", "params": {}, "idempotency_key": "browser-test-list"})
-            assert [row["id"] for row in listed.json()["data"]["items"]] == [task["id"]]
-            assert (await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
-                json={"method": "automation.delete", "params": {"id": task["id"], "expected_revision": task["revision"]},
-                      "idempotency_key": "browser-test-delete"})).status_code == 200
+            assert response.json()["data"]["session_id"]
+            # Past the capability gate: an empty definition now fails validation
+            # instead of returning 403 forbidden.
+            gated = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
+                json={"method": "automation.create", "params": {}, "idempotency_key": "browser-test-schedule"})
+            assert gated.status_code == 400, gated.text
+            blocked = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
+                json={"method": "device.revoke", "params": {}, "idempotency_key": "forbidden"})
+            assert blocked.status_code == 403
             revoked = await client.post('/api/browser/v1/devices/' + principal.id + '/revoke', headers={"Origin": "http://127.0.0.1"}, json={})
             assert revoked.status_code == 200, revoked.text
             with pytest.raises(Exception, match="revoked"):
