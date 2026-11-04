@@ -278,34 +278,27 @@ def test_legacy_and_permissive_modes_keep_individual_delivery(child_runtime, mon
     assert len(published) == 4
 
 
-def test_heartbeat_file_io_yields_the_child_event_loop(child_runtime, monkeypatch):
+def test_status_and_delta_delivery_do_not_rewrite_shared_heartbeat_metadata(child_runtime, monkeypatch):
     child, manager, metrics, published, parent, execute = child_runtime
-    entered, release = threading.Event(), threading.Event()
     original = manager.patch_subagent_metadata
 
     def patch(sid, fields):
-        if set(fields) == {"subagent_run_heartbeat_at", "subagent_run_status"}:
-            entered.set()
-            assert release.wait(5)
+        assert set(fields) != {"subagent_run_heartbeat_at", "subagent_run_status"}
         return original(sid, fields)
 
     monkeypatch.setattr(manager, "patch_subagent_metadata", patch)
 
     async def react(state, emit):
-        task = asyncio.create_task(emit({"type": "status", "content": "working"}))
-        try:
-            assert await asyncio.to_thread(entered.wait, 3)
-            progress = asyncio.Event()
-            asyncio.get_running_loop().call_soon(progress.set)
-            await progress.wait()
-        finally:
-            release.set()
-        await task
+        assert ("child", state["_runtime_v2_run_id"]) in metrics._heartbeat_controls
+        await emit({"type": "status", "content": "working"})
+        await emit({"type": "llm_response_delta", "delta": "text", "react_iter": 1,
+                    "stream_seq": 1, "delta_seq": 1, "ephemeral": True})
         return done(state)
 
     result = asyncio.run(asyncio.wait_for(execute(react), 8))
     assert "done" in result
     assert any(e["type"] == "status" for e in published)
+    assert any(e["type"] == "llm_response_delta" for e in published)
 
 
 def test_partially_failed_metrics_start_still_finishes_and_clears_heartbeat(child_runtime, monkeypatch):
@@ -325,16 +318,14 @@ def test_partially_failed_metrics_start_still_finishes_and_clears_heartbeat(chil
     assert metrics._load("child")["runs"][-1]["status"] == "finished"
 
 
-@pytest.mark.parametrize("write", ["heartbeat", "ui"])
-def test_cancel_waits_for_started_write_before_terminalizing(child_runtime, monkeypatch, write):
+def test_cancel_waits_for_started_ui_write_before_terminalizing(child_runtime, monkeypatch):
     child, manager, metrics, published, parent, execute = child_runtime
     entered, release = threading.Event(), threading.Event()
-    target = "patch_subagent_metadata" if write == "heartbeat" else "append_ui_event"
+    target = "append_ui_event"
     original = getattr(manager, target)
 
     def blocked(sid, event, **kwargs):
-        eligible = (set(event) == {"subagent_run_heartbeat_at", "subagent_run_status"} if write == "heartbeat"
-                    else event.get("type") == "status")
+        eligible = event.get("type") == "status"
         if eligible:
             entered.set()
             assert release.wait(5)
@@ -362,11 +353,7 @@ def test_cancel_waits_for_started_write_before_terminalizing(child_runtime, monk
 
     asyncio.run(asyncio.wait_for(run(), 8))
     assert metrics._load("child")["runs"][-1]["status"] == "interrupted"
-    if write == "heartbeat":
-        statuses = [m["subagent_run_status"] for m in manager.metadata if "subagent_run_status" in m]
-        assert statuses[-1] == "interrupted"
-    else:
-        assert [e["type"] for e in manager.ui].index("status") < [e["type"] for e in manager.ui].index("final")
+    assert [e["type"] for e in manager.ui].index("status") < [e["type"] for e in manager.ui].index("final")
 
 
 def test_react_run_error_is_not_reported_as_a_successful_subagent(child_runtime):

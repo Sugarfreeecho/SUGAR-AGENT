@@ -22,6 +22,7 @@ import re
 import threading
 import time
 from collections import OrderedDict, deque
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -45,6 +46,14 @@ _PROMPT_USAGE_EXACT_CACHE_MAX = 256
 _TOOL_SCHEMA_CACHE: "OrderedDict[int, tuple[Any, str, int]]" = OrderedDict()
 _TOOL_SCHEMA_CACHE_LOCK = threading.Lock()
 _TOOL_SCHEMA_CACHE_MAX = 32
+_TOOL_SCHEMA_CONTENT_CACHE: "OrderedDict[str, tuple[str, int]]" = OrderedDict()
+_TOOL_SCHEMA_CONTENT_CACHE_BYTES = 0
+_TOOL_SCHEMA_CONTENT_CACHE_MAX_BYTES = 4 * 1024 * 1024
+_TOOL_SCHEMA_CACHE_STATE = None
+_TOOL_SCHEMA_TOKENIZER_FAILURES = 0
+# Single-flight exact encoding without holding the global cache lock. Fixed
+# stripes bound coordination storage even when many catalogs arrive together.
+_TOOL_SCHEMA_ENCODE_LOCKS = tuple(threading.Lock() for _ in range(16))
 
 
 def _token_cache_text_hash(text: Any) -> str:
@@ -57,22 +66,73 @@ def _tool_definitions_fingerprint(tools: Optional[List[Dict[str, Any]]]) -> str:
     return _tool_schema_cache_values(tools)[0]
 
 
+def _sync_tool_schema_cache_state() -> None:
+    """Called under the cache lock; a tokenizer/counter switch invalidates both tiers."""
+    global _TOOL_SCHEMA_CACHE_STATE, _TOOL_SCHEMA_CONTENT_CACHE_BYTES
+    state = _TOOL_SCHEMA_CACHE_STATE
+    if (state is None or state[0] is not _TOKENIZER or state[1] != _LOAD_FAILED
+            or state[2] is not count_text_tokens or state[3] != _TOOL_SCHEMA_TOKENIZER_FAILURES):
+        _TOOL_SCHEMA_CACHE.clear()
+        _TOOL_SCHEMA_CONTENT_CACHE.clear()
+        _TOOL_SCHEMA_CONTENT_CACHE_BYTES = 0
+        _TOOL_SCHEMA_CACHE_STATE = (_TOKENIZER, _LOAD_FAILED, count_text_tokens, _TOOL_SCHEMA_TOKENIZER_FAILURES)
+
+
+def _remember_tool_schema_values(tools, fingerprint, tokens) -> None:
+    # The strong reference is also the id-reuse guard. Published lists retain
+    # the existing immutable-input contract; rebuilt lists use exact JSON keys.
+    key = id(tools)
+    _TOOL_SCHEMA_CACHE[key] = (tools, fingerprint, tokens)
+    _TOOL_SCHEMA_CACHE.move_to_end(key)
+    while len(_TOOL_SCHEMA_CACHE) > _TOOL_SCHEMA_CACHE_MAX:
+        _TOOL_SCHEMA_CACHE.popitem(last=False)
+
+
 def _tool_schema_cache_values(tools: List[Dict[str, Any]]) -> tuple[str, int]:
+    global _TOOL_SCHEMA_CONTENT_CACHE_BYTES
     key = id(tools)
     with _TOOL_SCHEMA_CACHE_LOCK:
+        _sync_tool_schema_cache_state()
         cached = _TOOL_SCHEMA_CACHE.get(key)
         if cached is not None and cached[0] is tools:
             _TOOL_SCHEMA_CACHE.move_to_end(key)
             return cached[1], int(cached[2])
     raw = json_dumps_stable(list(tools))
-    fingerprint = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
-    tokens = count_text_tokens(raw)
-    with _TOOL_SCHEMA_CACHE_LOCK:
-        _TOOL_SCHEMA_CACHE[key] = (tools, fingerprint, tokens)
-        _TOOL_SCHEMA_CACHE.move_to_end(key)
-        while len(_TOOL_SCHEMA_CACHE) > _TOOL_SCHEMA_CACHE_MAX:
-            _TOOL_SCHEMA_CACHE.popitem(last=False)
-    return fingerprint, tokens
+    encoded = raw.encode("utf-8", errors="ignore")
+    fingerprint = hashlib.sha1(encoded).hexdigest()
+    # The digest chooses a coordination stripe, never an equality key.
+    cacheable = len(encoded) <= _TOOL_SCHEMA_CONTENT_CACHE_MAX_BYTES
+    guard = (_TOOL_SCHEMA_ENCODE_LOCKS[int(fingerprint[:2], 16) % len(_TOOL_SCHEMA_ENCODE_LOCKS)]
+             if cacheable else nullcontext())
+    with guard:
+        with _TOOL_SCHEMA_CACHE_LOCK:
+            _sync_tool_schema_cache_state()
+            content = _TOOL_SCHEMA_CONTENT_CACHE.get(raw)
+            if content is not None:
+                _TOOL_SCHEMA_CONTENT_CACHE.move_to_end(raw)
+                _remember_tool_schema_values(tools, *content)
+                return content
+        counter, tokenizer_before = count_text_tokens, _TOKENIZER
+        failures_before = _TOOL_SCHEMA_TOKENIZER_FAILURES
+        tokens = counter(raw)
+        with _TOOL_SCHEMA_CACHE_LOCK:
+            _sync_tool_schema_cache_state()
+            # Lazy initial tokenizer loading is expected. A live replacement
+            # during an encode must not publish an old count under the new one.
+            if (counter is not count_text_tokens
+                    or tokenizer_before is not None and _TOKENIZER is not tokenizer_before
+                    or failures_before != _TOOL_SCHEMA_TOKENIZER_FAILURES):
+                return fingerprint, tokens
+            _remember_tool_schema_values(tools, fingerprint, tokens)
+            if cacheable:
+                _TOOL_SCHEMA_CONTENT_CACHE[raw] = (fingerprint, tokens)
+                _TOOL_SCHEMA_CONTENT_CACHE.move_to_end(raw)
+                _TOOL_SCHEMA_CONTENT_CACHE_BYTES += len(encoded)
+                while (_TOOL_SCHEMA_CONTENT_CACHE_BYTES > _TOOL_SCHEMA_CONTENT_CACHE_MAX_BYTES
+                       or len(_TOOL_SCHEMA_CONTENT_CACHE) > _TOOL_SCHEMA_CACHE_MAX):
+                    old, _ = _TOOL_SCHEMA_CONTENT_CACHE.popitem(last=False)
+                    _TOOL_SCHEMA_CONTENT_CACHE_BYTES -= len(old.encode("utf-8", errors="ignore"))
+        return fingerprint, tokens
 
 
 def _request_token_fingerprint(message_fingerprint: str, tool_fingerprint: str) -> str:
@@ -311,6 +371,7 @@ def _count_by_chars_4(s: str) -> int:
 
 
 def count_text_tokens(text: str) -> int:
+    global _TOOL_SCHEMA_TOKENIZER_FAILURES
     s = text or ""
     tok = _get_tokenizer()
     if tok is None:
@@ -319,6 +380,9 @@ def count_text_tokens(text: str) -> int:
         enc = tok.encode(s)
         return len(enc.ids)
     except Exception as e:
+        # Do not share a transient encode fallback across rebuilt catalogs.
+        with _TOOL_SCHEMA_CACHE_LOCK:
+            _TOOL_SCHEMA_TOKENIZER_FAILURES += 1
         logger.debug("encode 失败，回退字符/4：%s", e)
         return _count_by_chars_4(s)
 

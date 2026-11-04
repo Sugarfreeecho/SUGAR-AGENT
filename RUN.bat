@@ -4,6 +4,8 @@ chcp 65001 >nul
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 set "PYTHONIOENCODING=utf-8"
+rem Local FFmpeg toolchain (tools\ is gitignored): let ffmpeg/ffprobe resolve by name
+if exist "%ROOT%tools\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe" set "PATH=%ROOT%tools\ffmpeg-8.1-essentials_build\bin;%PATH%"
 set "LAUNCHER_PY=%ROOT%app\tray_launcher.py"
 set "REQUIREMENTS=%ROOT%app\requirements.txt"
 set "DEPENDENCY_STAMP=%ROOT%app\.requirements.installed"

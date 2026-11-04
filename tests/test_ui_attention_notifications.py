@@ -28,6 +28,7 @@ def _isolate_attention_delivery(monkeypatch):
     monkeypatch.setattr(webui, "_ui_closed_notify_task", None)
     monkeypatch.setattr(webui, "_ui_attention_notify_reasons", {})
     monkeypatch.setattr(webui, "_ui_presence_tokens", {})
+    monkeypatch.setattr(webui, "_ui_attention_surfaces", {})
     monkeypatch.setattr(webui, "_desktop_ui_hidden", None)
     monkeypatch.setattr(webui, "_last_ui_attention_notify_at", 0)
     monkeypatch.setattr(webui, "_notification_context", lambda sid, status, count: ("SugarAgent", status))

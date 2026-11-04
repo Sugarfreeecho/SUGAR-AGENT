@@ -12,7 +12,7 @@ B = '22222222-2222-4222-8222-222222222222'
 
 
 @pytest.fixture
-def search_page(browser_page):
+def search_page(browser_page, request):
     page = browser_page
     html = (ROOT / 'frontend/index.html').read_text(encoding='utf8')
     shell = html[html.index('<div id="session-list-head"'):html.index('<div class="sidebar-runtime"')]
@@ -23,6 +23,12 @@ def search_page(browser_page):
         f'<aside>{shell}</aside><div id="chat-stream"><div data-event-index="1">answer</div></div>'))
     page.goto('http://127.0.0.1/search-fixture')
     source = (ROOT / 'frontend/src/app/modules/session-search.js').read_text(encoding='utf8')
+    if getattr(request, 'param', 'source') == 'dist':
+        dist = ROOT / 'app/templates/dist'
+        asset = re.search(r'src="/(assets/main-[^"]+\.js)"', (dist / 'index.html').read_text(encoding='utf8')).group(1)
+        bundle = (dist / asset).read_text(encoding='utf8')
+        literal = re.search(r'`/\* Full-text search lives(?:\\[\s\S]|[^`\\])*`', bundle).group()
+        source = page.evaluate('literal => (0, eval)(literal)', literal)
     selectors = (ROOT / 'frontend/src/app/state/session-selectors.js').read_text(encoding='utf8')
     management = (ROOT / 'frontend/src/app/modules/session-management.js').read_text(encoding='utf8')
     expanded = re.search(r'^function setSessionSearchExpanded\([\s\S]*?^}', management, re.M).group()
@@ -215,3 +221,40 @@ def test_advanced_clear_and_close_cancel_only_advanced_requests(search_page):
     assert page.locator('.session-search-result').count() == 0
     assert page.evaluate('sessionsList.innerHTML===sidebarBefore')
     assert page.locator('#session-advanced-search-btn').evaluate('(el)=>el===document.activeElement')
+
+
+@pytest.mark.parametrize('search_page', ['source', 'dist'], indirect=True)
+def test_slow_session_progress_updates_without_rebuilding_results(search_page):
+    page = search_page
+    open_advanced(page)
+    page.locator('#session-advanced-search-input').fill('needle')
+    page.wait_for_function('searchCalls.length===1')
+    finish(page, 'metadata')
+    emit(page, 'upsert', dict(phase='active_content', session=session(), hits=[hit()], hit_cursor=None))
+    page.locator('.session-search-expand').click()
+    page.evaluate('window.resultNode=document.querySelector(".session-search-result");'
+                  'window.expandButton=document.querySelector(".session-search-expand");expandButton.focus()')
+    # A progress-only event must never walk/rebuild all of the result rows.
+    page.evaluate('() => {window.progressRowBuilds=0;window.originalBuildRow=sessionSearchBuildRow;'
+                  'sessionSearchBuildRow=function(){progressRowBuilds++;return originalBuildRow.apply(this,arguments)};}')
+    progress = dict(phase='active_content', scanned=10, total=112,
+                    current_session=dict(id=B, name='<img src=x> slow session'), elapsed_seconds=2)
+    emit(page, 'progress', progress)
+    status = page.locator('#session-search-status')
+    page.wait_for_function('document.getElementById("session-search-status").textContent.includes("已用时 2 秒")')
+    assert '已检查 10/112' in status.inner_text()
+    assert '<img src=x> slow session' in status.inner_text()
+    assert status.locator('img').count() == 0
+    assert page.evaluate('resultNode===document.querySelector(".session-search-result")')
+    assert page.evaluate('expandButton===document.activeElement')
+    assert page.locator('.session-search-hit').count() == 1
+    emit(page, 'progress', dict(phase='active_content', scanned=11, total=112, current_session=None))
+    page.wait_for_function('document.getElementById("session-search-status").textContent.includes("已检查 11/112")')
+    assert '已用时' not in status.inner_text()
+    assert 'slow session' not in status.inner_text()
+    assert page.evaluate('progressRowBuilds') == 0
+    page.evaluate('() => {sessionSearchBuildRow=originalBuildRow}')
+    finish(page, 'active_content'); finish(page, 'archived_content'); emit(page, 'done', {})
+    page.evaluate('searchStream.close()')
+    page.wait_for_function('document.getElementById("session-search-status").textContent.includes("检索完成")')
+    assert page.locator('#session-advanced-results').get_attribute('aria-busy') == 'false'

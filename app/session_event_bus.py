@@ -17,6 +17,17 @@ _event_bus_epoch = uuid.uuid4().hex
 _lock = threading.Lock()
 _event_listeners: list = []
 
+
+class SessionStreamOverflow(RuntimeError):
+    """A lossless observer must reload durable state before continuing."""
+
+
+class _SessionQueue(asyncio.Queue):
+    def __init__(self, fail_on_overflow, maxsize=1000):
+        super().__init__(maxsize=maxsize)
+        self.fail_on_overflow = fail_on_overflow
+        self.overflowed = False
+
 _SNAPSHOT_DELTA_FIELDS = {
     "llm_reasoning_delta": ("delta",),
     "llm_response_delta": ("delta",),
@@ -195,10 +206,16 @@ def _deliver_to_subscriber(
     event: dict | None,
 ) -> None:
     def put_nowait() -> None:
+        if getattr(queue, "overflowed", False):
+            return
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
-            pass
+            if getattr(queue, "fail_on_overflow", False):
+                queue.overflowed = True
+                while not queue.empty():
+                    queue.get_nowait()
+                queue.put_nowait(SessionStreamOverflow("Session event buffer overflowed; reload durable history"))
 
     try:
         current_loop = asyncio.get_running_loop()
@@ -453,14 +470,15 @@ async def subscribe_session_events(
     replay_recent: bool = True,
     *,
     after_runtime_seq: int | None = None,
+    persistent: bool = False,
+    fail_on_overflow: bool = False,
 ) -> AsyncGenerator[dict | None, None]:
     sid = _sid(session_id)
     if not sid:
         return
-    q: asyncio.Queue = asyncio.Queue(maxsize=1000)
     loop = asyncio.get_running_loop()
-    subscriber = (q, loop)
     with _lock:
+        replay = []
         if replay_recent:
             snapshot_types = set(_SNAPSHOT_DELTA_FIELDS)
             replay = _live_delta_replay_unlocked(sid)
@@ -471,6 +489,12 @@ async def subscribe_session_events(
                 if str(ev.get("type") or "") not in snapshot_types | _LIVE_STATE_TYPES
             )
             replay.sort(key=lambda row: int(row.get("event_bus_seq") or row.get("seq") or 0))
+        # A reconnect may restore more distinct snapshots than a normal live
+        # burst. Bootstrap the whole current snapshot instead of reconnecting
+        # forever on an already-full initial queue.
+        q: asyncio.Queue = _SessionQueue(fail_on_overflow,maxsize=max(1000,len(replay)+1))
+        subscriber = (q, loop)
+        if replay_recent:
             for ev in replay:
                 runtime_seq = int(ev.get("execution_runtime_seq") or ev.get("runtime_seq") or 0)
                 if after_runtime_seq is not None and 0 < runtime_seq <= after_runtime_seq:
@@ -482,6 +506,12 @@ async def subscribe_session_events(
     try:
         while True:
             item = await q.get()
+            if isinstance(item, SessionStreamOverflow):
+                raise item
+            # Browser sidebars follow a conversation across turns. The normal
+            # /chat consumer still ends when its one execution closes.
+            if item is None and persistent:
+                continue
             yield item
             if item is None:
                 break

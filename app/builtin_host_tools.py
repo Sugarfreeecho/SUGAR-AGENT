@@ -237,6 +237,13 @@ def _invoke_tool_call_unresolved(_context, _arguments):
 
 
 def register_builtin_host_tools() -> None:
+    from session_control.model_tools import invoke_manage_scheduled_task, invoke_scheduled_tasks
+    for name, invoker, effect in (("scheduled_tasks", invoke_scheduled_tasks, "read"),
+                                  ("manage_scheduled_task", invoke_manage_scheduled_task, "workspace_write")):
+        if not host_tool_invokers.has(name):
+            host_tool_invokers.register(name, invoker, owner="core.schedules", effect=effect,
+                policy=ToolExecutionPolicy(effect=effect, parallel_safe=effect == "read",
+                                           early_stream_safe=False, interruptibility="safe"))
     if not host_tool_invokers.has("show_user"):
         from user_presentations import invoke_show_user
         host_tool_invokers.register(

@@ -124,6 +124,9 @@ def measure_signatures(module, workspace: Path, samples: int):
 
 
 def main():
+    # This benchmark targets the opt-in workspace sweep (see change-review
+    # UC-121); the product default only records declared file tools.
+    os.environ.setdefault("MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP", "1")
     parser = argparse.ArgumentParser()
     parser.add_argument("--files", type=int, default=300)
     parser.add_argument("--file-kib", type=int, default=64)

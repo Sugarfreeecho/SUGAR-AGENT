@@ -30,6 +30,12 @@ def _load_store():
     return _load_plugin_module('store.py', 'test_compact_review_store')
 
 
+@pytest.fixture(autouse=True)
+def _enable_workspace_sweep(monkeypatch):
+    """Storage contracts below assume the opt-in workspace baseline exists."""
+    monkeypatch.setenv('MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP', '1')
+
+
 @pytest.fixture
 def review(tmp_path, monkeypatch):
     import agent_tools

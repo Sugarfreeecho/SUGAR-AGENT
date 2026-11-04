@@ -28,7 +28,12 @@ def host(monkeypatch, tmp_path):
     module._runtime["plugin"] = SimpleNamespace(plugin_id=module.PLUGIN_ID)
     module._home().mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(module, "_settings", lambda *args: {"daily_quota": 3})
-    return module
+    from session_control.resources import BoundedWorkPool
+    pool = BoundedWorkPool("test-bili", 4, pending=4)
+    monkeypatch.setattr(module, "_work_pool", lambda: pool)
+    monkeypatch.setattr(module, "_io_pool", lambda: pool)
+    yield module
+    pool.close()
 
 
 def test_scheduler_executes_due_task_after_reserving_busy(host, monkeypatch):
@@ -48,17 +53,8 @@ def test_scheduler_executes_due_task_after_reserving_busy(host, monkeypatch):
     monkeypatch.setattr(host, "run_once", run_once)
 
     async def one_tick():
-        sleeps = 0
-
-        async def sleep(seconds):
-            nonlocal sleeps
-            sleeps += 1
-            if sleeps > 1:
-                raise asyncio.CancelledError
-
-        monkeypatch.setattr(host.asyncio, "sleep", sleep)
-        with pytest.raises(asyncio.CancelledError):
-            await host._scheduler()
+        await host._scheduler()
+        await host._runtime["duty_work"]
 
     asyncio.run(one_tick())
     assert calls == [{"manual": False, "task_id": row["id"]}]

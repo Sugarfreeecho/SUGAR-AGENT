@@ -263,6 +263,7 @@ class SessionSearch:
 
     def _documents(self, sid, stop):
         root = self._session_dir(sid)
+        archives = sorted((root / "history_context_archives").glob("*.jsonl"), reverse=True)
         obsolete = set()
         primary_v2 = getattr(self.manager, "_runtime_v2_primary", lambda: True)()
         executions = []
@@ -275,7 +276,10 @@ class SessionSearch:
             history = []
             # Only explicit destructive edits suppress archive copies. A compacted
             # snapshot may drop UI rows while their compressed originals remain valid.
-            for event in projection.event_log.iter_events(sid):
+            # Replaying edits only serves to suppress obsolete archive copies.
+            # Ordinary sessions have no archives and need no second full replay.
+            events = projection.event_log.iter_events(sid, _skip_attachment_types=frozenset({"execution_recorded"})) if archives else ()
+            for event in events:
                 if stop.is_set():
                     return
                 if event.type == "runtime_snapshot_compacted":
@@ -327,7 +331,7 @@ class SessionSearch:
                 seen.add((role, content))
                 turn = turns.get(str(record.get("turn_id")))
                 yield f"execution:{sid}:{record['execution_id']}", role, content, turn, turn
-        for path in sorted((root / "history_context_archives").glob("*.jsonl"), reverse=True):
+        for path in archives:
             with path.open(encoding="utf-8") as source:
                 for line in source:
                     if stop.is_set():
@@ -498,12 +502,17 @@ class SessionSearch:
                         meta[s["id"]] = match
                 candidates = sorted([s for s in candidates if s["id"] in meta], key=lambda s: meta[s["id"]][0])
             offset = ctx["cursor"]["offset"] if ctx["cursor"] else 0
-            yield "progress", dict(phase=phase, scanned=0, total=len(candidates))
+            yield "progress", dict(phase=phase, scanned=0 if ctx["sid"] else offset,
+                                   total=len(candidates), current_session=None)
             count = 0
             failures = []
             try:
                 candidate_offset = 0 if ctx["sid"] else offset
                 for pos, s in enumerate(candidates[candidate_offset:], candidate_offset):
+                    if stop.is_set():
+                        return
+                    yield "progress", dict(phase=phase, scanned=pos, total=len(candidates),
+                                           current_session={"id": s["id"], "name": s.get("name") or "未命名会话"})
                     if stop.is_set():
                         return
                     if phase == "metadata":
@@ -520,6 +529,7 @@ class SessionSearch:
                             if ctx["sid"]:
                                 raise
                             failures.append(exc)
+                            yield "progress", dict(phase=phase, scanned=pos + 1, total=len(candidates), current_session=None)
                             continue
                     if hits:
                         # The 21st match is a lookahead, not a consumed result.
@@ -529,8 +539,7 @@ class SessionSearch:
                         hit_cursor = self.cursor(ctx, phase, (offset if ctx["sid"] else 0) + len(hits), hits[0].get("source_version"), s["id"]) if more else None
                         yield "upsert", dict(phase=phase, session=s, hits=hits, hit_cursor=hit_cursor)
                         count += 1
-                    if (pos + 1) % 10 == 0:
-                        yield "progress", dict(phase=phase, scanned=pos + 1, total=len(candidates))
+                    yield "progress", dict(phase=phase, scanned=pos + 1, total=len(candidates), current_session=None)
                 else:
                     if not failures:
                         yield "phase_done", dict(phase=phase, cursor=None, scanned=len(candidates), total=len(candidates))
@@ -605,6 +614,8 @@ def install_session_search(app, manager, add_event_listener=None):
 
         async def stream_content():
             producer = asyncio.create_task(asyncio.to_thread(produce))
+            current_progress = None
+            session_started = last_frame = time.monotonic()
             try:
                 while not stop.is_set():
                     if await request.is_disconnected():
@@ -612,10 +623,25 @@ def install_session_search(app, manager, add_event_listener=None):
                     try:
                         event = await asyncio.to_thread(events.get, True, .25)
                     except queue.Empty:
+                        now = time.monotonic()
+                        if now - last_frame >= 1:
+                            last_frame = now
+                            if current_progress and current_progress.get("current_session"):
+                                data = dict(current_progress, elapsed_seconds=int(now - session_started))
+                                yield f"event: progress\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                            else:
+                                yield ": keep-alive\n\n"
                         continue
                     if event is None:
                         break
                     name, data = event
+                    now = time.monotonic()
+                    if name == "progress":
+                        current_progress = data
+                        session_started = now
+                    elif name in {"phase_done", "error", "done"}:
+                        current_progress = None
+                    last_frame = now
                     yield f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
             finally:
                 stop.set()

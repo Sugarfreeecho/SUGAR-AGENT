@@ -707,6 +707,7 @@ def test_finalizer_preserves_workflow_result_in_durable_and_live_terminals(monke
     monkeypatch.setattr(agent_loop, "_workflow_callbacks", lambda: Callbacks())
     monkeypatch.setattr(agent_loop, "_clear_steer_run_control", lambda *_args: None)
     monkeypatch.setattr(agent_loop, "_mark_run_terminal_unread", lambda *_args: None)
+    monkeypatch.setattr(agent_loop.session_manager, "get_run_start_order", lambda _sid, _rid: 42)
     monkeypatch.setattr(agent_loop, "close_session_stream", close_stream)
     monkeypatch.setattr(agent_loop.execution_metrics, "finish_run", lambda *_args, **_kwargs: None)
     asyncio.run(agent_loop._finalize_agent_run_lifecycle(
@@ -716,8 +717,11 @@ def test_finalizer_preserves_workflow_result_in_durable_and_live_terminals(monke
         steer_control=None, emit=emit, queue=asyncio.Queue(), consumer_attached=False,
     ))
     assert synced == [{"run_id": "r1"}]
-    assert committed == [("run_finished", {"result_status": result_status, "mode": "continuation"})]
+    assert committed == [("run_finished", {
+        "result_status": result_status, "mode": "continuation", "result_run_order": 42,
+    })]
     assert emitted[-1]["result_status"] == result_status
+    assert emitted[-1]["result_run_order"] == 42
 
 
 def test_runtime_lifecycle_accepts_only_one_concurrent_terminal(monkeypatch):
@@ -816,7 +820,7 @@ def test_frontend_final_waits_for_authoritative_terminal_event():
         "if (runSessionId !== currentSessionId) {", 1
     )[1].split("if (getSessionRunState(runSessionId))", 1)[0]
 
-    assert "function markSessionResultComplete(sessionId, status, runId)" in shared_source
+    assert "function markSessionResultComplete(sessionId, status, runId, runOrder)" in shared_source
     assert "sessionUnreadComplete.add(sid)" in shared_source
     assert "markRunFinalSeen(runCtx);" in final_handler
     assert "markSessionResultComplete" not in final_handler

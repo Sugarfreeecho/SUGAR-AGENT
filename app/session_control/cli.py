@@ -162,7 +162,7 @@ def exit_code(error):
         return 3
     if error.status == 404:
         return 4
-    if error.status in {409, 425}:
+    if error.status in {409, 425, 429}:
         return 5
     return 2 if error.status in {400, 413, 422} else 1
 

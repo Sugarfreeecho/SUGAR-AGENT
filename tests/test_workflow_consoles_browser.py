@@ -79,6 +79,9 @@ def consoles(browser_page, tmp_path, monkeypatch):
         host.install(app, {"session_manager": sessions}, SimpleNamespace(plugin_id=plugin_id))
     app.add_api_route('/plugins/{plugin_id}', webui.plugin_web_page)
     app.add_api_route('/plugin-assets/{plugin_id}/{asset_path:path}', webui.plugin_web_asset)
+    app.add_api_route('/settings', webui.settings_center_page)
+    app.add_api_route('/static/settings/{asset_name}', webui.serve_settings_asset)
+    app.add_api_route('/static/myagent_path_picker.js', webui.serve_path_picker_js)
     client = TestClient(app)
     client.__enter__()
     browser_context = browser_page.context.browser.new_context(viewport={"width": 1100, "height": 800})
@@ -92,14 +95,20 @@ def consoles(browser_page, tmp_path, monkeypatch):
         request = request_route.request
         path = urlsplit(request.url).path
         requests.append((request.method, path))
-        if path.startswith(("/plugins/", "/plugin-assets/", "/static/")):
-            response = client.get(path)
+        if path == '/settings' or path.startswith(("/plugins/", "/plugin-assets/", "/static/")):
+            parsed = urlsplit(request.url)
+            response = client.get(path + ('?' + parsed.query if parsed.query else ''))
             assert response.status_code == 200, f"Console resource unavailable: {path}"
             request_route.fulfill(status=response.status_code, headers=dict(response.headers), body=response.content)
         elif path == "/sessions":
             request_route.fulfill(json=[{"id": "s1", "name": "交付任务"}, {"id": "s2", "name": "另一会话"}])
         elif path == "/api/model_profiles":
             request_route.fulfill(json={"profiles": [{"id": "test-model", "name": "测试模型"}]})
+        elif path in ('/api/plugins/catalog', '/api/extensions'):
+            from plugins import plugin_ui_contributions
+            request_route.fulfill(json={'ok': True, 'plugins': [], 'ui_contributions': [
+                row for plugin_id in ('agent-goal', 'agent-team')
+                for row in plugin_ui_contributions(load_plugin(ROOT / 'plugins' / plugin_id))]})
         else:
             response = client.request(request.method, path, content=request.post_data, headers={"Content-Type": "application/json"})
             request_route.fulfill(status=response.status_code, content_type="application/json", body=response.content)
@@ -129,6 +138,7 @@ def test_goal_create_edit_pause_resume_review_and_session_switch(consoles):
     assert page.locator("#objective").inner_text() == "完成两个插件的控制台"
     page.get_by_role("button", name="暂停目标").click()
     page.locator("#goal-status .badge[data-status=paused]").wait_for()
+    assert ('interrupt', 's1') not in c.calls
     page.get_by_role("button", name="恢复目标", exact=True).click()
     page.locator("#resume-budget").fill("500")
     page.get_by_role("button", name="恢复执行").click()

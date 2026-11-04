@@ -1626,8 +1626,10 @@ def plugin_catalog_snapshot(*, refresh_loop=None) -> Dict[str, Any]:
 def _plugin_catalog_data(manager, loaded) -> Dict[str, Any]:
     try:
         from plugins.ui import plugin_ui_contributions
+        from plugins.web import bundled_setup_page
     except ImportError:  # pragma: no cover - package import style
         from .plugins.ui import plugin_ui_contributions
+        from .plugins.web import bundled_setup_page
 
     # load_enabled already discovers all plugins, including disabled ones.
     with _lock:
@@ -1653,6 +1655,10 @@ def _plugin_catalog_data(manager, loaded) -> Dict[str, Any]:
         row["ui"] = []
         if row["loaded"]:
             row["ui"] = list(plugin_ui_contributions(plugin))
+            ui_contributions.extend(row["ui"])
+        elif bundled_setup_page(plugin):
+            row["ui"] = [item for item in plugin_ui_contributions(plugin)
+                         if item.get("slot") == "settings.section" and item.get("target") in {"plugin-page", "renderer"}]
             ui_contributions.extend(row["ui"])
         elif hidden:
             # Trusted settings remain available so a disabled bundled capability can be enabled again.

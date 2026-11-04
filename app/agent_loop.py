@@ -20,15 +20,18 @@ import asyncio
 import gc
 import uuid
 import runtime_files
+import log_safety
 import threading
+from collections import Counter
 from agent_fact_commit import run_fact_commit
+from ui_process_timing import UiProcessTiming
 from datetime import datetime
 import inspect
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TypedDict, List, Dict, Any, AsyncGenerator, Callable, Mapping, Optional, Tuple
-from agent_local_timing import local_operation, local_step, mark_local
+from agent_local_timing import flush_local_operation_summary, local_operation, local_step, mark_local
 
 from agent_harness import (
     EXECUTOR_TEMPERATURE,
@@ -53,10 +56,6 @@ from agent_harness import (
     CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES,
     REPEAT_DETECTION_THRESHOLD_SUMMARY,
     REPEAT_DETECTION_THRESHOLD_ERROR,
-    COLOR_WHITE,
-    COLOR_BLUE,
-    COLOR_YELLOW,
-    COLOR_RESET,
     apply_final_dedup_to_messages,
     derive_dialogue_from_assistant_history,
     LOG_TRUNCATE_KEEP_CHARS,
@@ -103,6 +102,7 @@ from agent_openai import (
     run_chat_completion_stream_worker,
 )
 from llm import LLMRequestContext, LLMRequestPurpose, merge_streamed_tool_name
+from llm.types import response_status_code, safe_response_text
 from model_profiles import extract_context_window_from_error
 from tool_registry import (
     DuplicateToolError,
@@ -159,7 +159,9 @@ from workflow_extensions import activate_bundled_workflow_callbacks, session_wor
 from workspace_media_snapshots import snapshot_workspace_images
 
 
-LLM_FULL_CALL_TRACE = str(os.getenv("LLM_FULL_CALL_TRACE", "0")).strip().lower() in {
+LLM_FULL_CALL_TRACE = log_safety.MODE == "full" and str(
+    os.getenv("LLM_FULL_CALL_TRACE", "0")
+).strip().lower() in {
     "1", "true", "yes", "on",
 }
 from session_event_bus import close_session_stream, prune_session_ephemeral, publish_session_event
@@ -1668,7 +1670,25 @@ def _truncate_xml_content_blocks(xml_text: str, keep_chars: int) -> str:
     return pattern.sub(_repl, xml_text)
 
 
+def _tool_call_names(calls: Any) -> List[str]:
+    """只取工具名（枚举），不读取参数，用于日志里的调用概览。"""
+    names: List[str] = []
+    for call in calls or []:
+        if isinstance(call, dict):
+            name = call.get("name")
+        else:
+            name = getattr(call, "name", None)
+        if name:
+            names.append(str(name))
+    return names
+
+
 tools_dict = {k: v for k, v in tools.items()}
+
+# Control tools whose completion rewrites model history or process state.
+# Read-only calls must not cross such a barrier inside one tool batch.
+BATCH_BARRIER_TOOL_NAMES = frozenset({"context_manage", "request_restart", "tool_call"})
+
 
 def _can_execute_closed_stream_tool(
     tool_name: str, descriptor: Any = None
@@ -3144,6 +3164,11 @@ async def _finalize_agent_run_lifecycle(
         if workflow_result_status in {"success", "failed", "pending"}:
             terminal_event["result_status"] = workflow_result_status
         terminal_type = str(terminal_event.get("type") or "run_interrupted")
+        run_order_reader = getattr(session_manager, "get_run_start_order", None)
+        if callable(run_order_reader):
+            run_order = run_order_reader(session_id, run_id)
+            if run_order:
+                terminal_event["result_run_order"] = run_order
         from session_activity import background_work_snapshot
 
         background_work = background_work_snapshot(session_manager).get(session_id, {})
@@ -4271,6 +4296,8 @@ async def build_combined_tool_registry_for_session(
     _simplify_external_tool_names(registry, plugin_contracts_by_name, inherited_sources)
     from session_control.configuration import active_config, filter_registry
     filter_registry(registry, active_config(sid, session_meta))
+    from host_tool_contracts import filter_preferred_mcp_tools
+    filter_preferred_mcp_tools(registry, agent_mcp.get_tool_identity)
     try:
         _, _, _, tool_context_window = resolve_executor_config_for_session(sid)
     except Exception:
@@ -4278,8 +4305,8 @@ async def build_combined_tool_registry_for_session(
     if timing_callback is not None:
         timing_callback("tool_registry_policy", policy_started)
     disclosure_started = time.perf_counter()
-    tool_search.assemble(
-        registry,
+    await asyncio.to_thread(
+        tool_search.assemble, registry,
         context_window=tool_context_window,
         pinned_names=agent_mcp.get_pinned_tool_names(),
     )
@@ -4512,6 +4539,7 @@ async def _consume_steer_messages(
         steer_mode = str((item or {}).get("mode") or "interrupt")
         metadata = {"steer_id": steer_id, "client_id": str(item.get("client_id") or ""),
                     "steer_mode": steer_mode}
+        if item.get('ui_attachments'):metadata['attachments']=item['ui_attachments']
         content = item.get("user_content") or text
         if after_turn:
             state["_pending_queued_turn_id"] = steer_id
@@ -5179,7 +5207,7 @@ async def _emit_tool_call_sse_batch(emit, results, react_iter, state):
     await asyncio.sleep(0)
 
 
-def _attach_tool_batch_emitter(emit, state, session_id, run_id, lifecycle, queue, attached):
+def _attach_tool_batch_emitter(emit, state, session_id, run_id, lifecycle, queue, attached, timing=None):
     async def emit_batch(events):
         from runtime_v2 import runtime_v2_primary, runtime_v2_strict
         combined = getattr(session_manager, "commit_execution_ui_events", None)
@@ -5195,6 +5223,8 @@ def _attach_tool_batch_emitter(emit, state, session_id, run_id, lifecycle, queue
         for row in rows:
             row.setdefault("run_id", run_id)
             row.setdefault("stream_seq", state.get("_active_stream_seq"))
+            if timing is not None:
+                timing.annotate(row)
         cancelled = threading.Event()
         with _runtime_session_path_scope():
             try:
@@ -5292,7 +5322,7 @@ def _api_error_search_text(exc: BaseException) -> str:
         if response is not None:
             values.extend(
                 [
-                    getattr(response, "text", None),
+                    safe_response_text(response) or None,
                     getattr(response, "reason_phrase", None),
                 ]
             )
@@ -5416,11 +5446,7 @@ def _classify_api_error_leaf(exc: BaseException) -> dict:
 
     msg = str(exc).lower()
     context_limit = _context_limit_error_info(exc)
-    status_code = getattr(exc, "status_code", None)
-    try:
-        status_code = int(status_code) if status_code is not None else None
-    except (TypeError, ValueError):
-        status_code = None
+    status_code = response_status_code(exc)
 
     if context_limit["matched"]:
         return {
@@ -5443,6 +5469,29 @@ def _classify_api_error_leaf(exc: BaseException) -> dict:
                 "solution": "请检查当前 model profile 中的 API Key 是否正确。",
                 "retry": 0}
     if isinstance(exc, PermissionDeniedError) or status_code == 403:
+        # A 403 is not always region/risk-control: providers also use it for
+        # "this key's plan does not include this model" (CommandCode returns
+        # ``MODEL_NOT_IN_PLAN``). Say so, otherwise the user keeps checking
+        # the key and the proxy for a billing problem.
+        if any(
+            marker in msg
+            for marker in (
+                "model_not_in_plan",
+                "not in plan",
+                "not included in your plan",
+                "not available in your plan",
+                "upgrade your plan",
+                "plan does not",
+                "subscription",
+                "insufficient_quota",
+                "quota exceeded",
+                "套餐",
+            )
+        ):
+            return {"code": "403", "title": "当前套餐不含该模型",
+                    "msg": "API Key 有效，但所属套餐未开通这个模型。",
+                    "solution": "请在服务商后台升级套餐或开通按量付费，或切换到套餐内的模型。",
+                    "retry": 0}
         return {"code": "403", "title": "访问被拒绝",
                 "msg": "当前地区不支持或 API Key 被风控。",
                 "solution": "请新建 API Key，或检查服务地区限制。",
@@ -6939,6 +6988,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "message": redact_sensitive_tool_text(spec["message"]),
                                         "subtitle": redact_sensitive_tool_text(spec.get("subtitle") or ""),
                                         "security_request_digest": sec_decision.request_digest,
+                                        "external_workspace_grantable": bool(spec.get("external_workspace_grantable", False)),
                                         "security_grant_digest": str(spec.get("security_grant_digest") or ""),
                                         "security_rule_id": sec_decision.rule_id,
                                         "allow_always_available": bool(
@@ -8299,15 +8349,12 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                     payload_dict,
                                 )
                                 if step == "transport_breakdown":
-                                    transport_parts = []
                                     transport_values = {}
                                     for key, value in payload_dict.items():
                                         if key in {"step", "model"}:
                                             continue
-                                        if isinstance(value, (int, float)):
-                                            transport_parts.append(f"{key}={int(value)}{'B' if 'bytes' in key or 'length' in key else 'ms'}")
-                                            if key != "ms_since_api_start":
-                                                transport_values[key] = int(value)
+                                        if isinstance(value, (int, float)) and key != "ms_since_api_start":
+                                            transport_values[key] = int(value)
                                     execution_metrics.record_phase(
                                         state["session_id"],
                                         str(state.get("_runtime_v2_run_id") or ""),
@@ -8316,13 +8363,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         transport_values,
                                         total_ms=int(payload_dict.get("trace_elapsed_ms") or payload_dict.get("ms_since_api_start") or 0),
                                     )
-                                    logger.info(
-                                        "http_transport_timing session=%s react_iter=%s model=%s %s",
-                                        state["session_id"],
-                                        int(iter_count),
-                                        redact_sensitive_tool_text(str(iter_model or "")),
-                                        " ".join(transport_parts),
-                                    )
+                                    # 同一份 transport_breakdown 已随 llm_stream_timing 输出，不再单独记一行。
                             continue
                         if tag == "usage":
                             llm_call_usage = payload
@@ -9131,20 +9172,29 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             context_limit_recovery_pending = False
             context_limit_reported_window = 0
             context_limit_last_error_detail = ""
-            # 正文与思考严格分源
+            # 正文与思考严格分源；日志只记录指纹，正文由会话事件承载
             response_text = turn.content or ""
             reasoning_text = (turn.reasoning_content or "").strip()
-            response_log_text = truncate_head_tail(response_text, LOG_TRUNCATE_KEEP_CHARS)
-            reasoning_log_text = truncate_head_tail(reasoning_text, LOG_TRUNCATE_KEEP_CHARS) if reasoning_text else ""
-
-            if reasoning_text:
+            if log_safety.payload_enabled():
+                if reasoning_text:
+                    logger.info(
+                        "LLM Reasoning (iter %s): %s",
+                        iter_count,
+                        truncate_head_tail(reasoning_text, LOG_TRUNCATE_KEEP_CHARS),
+                    )
                 logger.info(
-                    f"LLM Reasoning (iter {iter_count}): "
-                    f"{reasoning_log_text}"
+                    "LLM Response (iter %s): %s",
+                    iter_count,
+                    truncate_head_tail(response_text, LOG_TRUNCATE_KEEP_CHARS)
+                    if response_text.strip() else "(无正文)",
                 )
             logger.info(
-                f"LLM Response (iter {iter_count}): "
-                f"{response_log_text if (response_text or '').strip() else '(无正文)'}"
+                "llm_turn iter=%s finish=%s content=%s reasoning=%s tool_calls=%s",
+                iter_count,
+                (llm_call_finish.get("finish_reason") or "-"),
+                log_safety.digest(response_text),
+                log_safety.digest(reasoning_text),
+                _tool_call_names(turn.tool_calls) or "-",
             )
 
             # 推送给前端：流式时已在 delta 中展示；非流式仍发整段事件（与持久化一致）
@@ -9643,107 +9693,205 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     descriptor = tool_search.call_descriptor(tool_registry, tool_call)
                     return bool(descriptor and descriptor.parallel_safe)
 
-                async def run_group(group_calls: List[Dict[str, Any]]) -> List[Any]:
-                    """
-                    并行执行一批只读工具；用 as_completed 使「每个工具一结束就发 tool_call」，
-                    再按原 tool_calls 顺序组装返回值供后续写 llm_history（顺序与 OpenAI 要求一致）。
-                    """
-                    if not group_calls:
-                        return []
+                # 分类执行策略（v2）：
+                # 1) 只读工具与任何工具并行：批次一开始就全部启动，只受 MAX_PARALLEL_TOOLS
+                #    与系统严重压力门限约束，不再等前面的写操作/Shell 跑完
+                # 2) 有副作用或状态依赖的工具按原始 tool_calls 顺序逐个串行
+                # 3) 改写历史/进程的控制类工具是屏障：它之前的只读先完成，它之后的只读等它结束
+                def _batch_barrier_positions(calls: List[Dict[str, Any]]) -> set[int]:
+                    positions: set[int] = set()
+                    for position, call in enumerate(calls):
+                        descriptor = tool_search.call_descriptor(tool_registry, call)
+                        resolved_name = str(
+                            getattr(descriptor, "name", "") or call.get("name") or ""
+                        )
+                        if resolved_name in BATCH_BARRIER_TOOL_NAMES:
+                            positions.add(position)
+                        elif bool(getattr(descriptor, "interactive", False)):
+                            positions.add(position)
+                    return positions
 
-                    local_pressure_limit = cpu_pressure.tool_parallelism(MAX_PARALLEL_TOOLS)
-                    local_pressure_semaphore = asyncio.Semaphore(local_pressure_limit)
-
-                    async def run_one_with_tc(tc: Dict[str, Any]):
-                        try:
-                            tool_name = str((tc or {}).get("name") or "")
-                            descriptor = tool_search.call_descriptor(tool_registry, tc)
-                            if descriptor is not None and descriptor.pressure_limited:
-                                async with local_pressure_semaphore:
-                                    r = await _await_steerable(state, execute_one(tc), emit, "tool")
-                            else:
-                                r = await _await_steerable(state, execute_one(tc), emit, "tool")
-                        except _SteerRestartRequested:
-                            raise
-                        except Exception as e:
-                            r = _tool_execution_error_result(tc, e)
-                        return (tc, r)
-
-                    tasks = [asyncio.create_task(run_one_with_tc(tc)) for tc in group_calls]
-                    by_id: Dict[str, Any] = {}
+                def _early_task_for(call: Dict[str, Any]) -> Optional[asyncio.Task]:
                     try:
-                        pending_tasks = set(tasks)
-                        while pending_tasks:
-                            done_tasks, pending_tasks = await asyncio.wait(
-                                pending_tasks,
+                        early_index = int(call.get("index"))
+                    except (TypeError, ValueError):
+                        return None
+                    return early_tool_tasks.get(early_index)
+
+                async def run_tool_batch(calls: List[Dict[str, Any]]) -> List[Any]:
+                    """Execute one assistant tool batch and return results in model order.
+
+                    Read-only calls start immediately and may overlap every other
+                    call, including Shell and file writes. Calls with side effects
+                    or state dependencies still run one at a time in the model's
+                    order, and their results keep that order for history assembly.
+                    """
+                    results: Dict[int, Any] = {}
+                    barrier_positions = _batch_barrier_positions(calls)
+                    barrier_events = {
+                        position: asyncio.Event() for position in barrier_positions
+                    }
+                    read_semaphore = asyncio.Semaphore(max(1, int(MAX_PARALLEL_TOOLS)))
+                    pressure_semaphore = asyncio.Semaphore(
+                        max(1, int(cpu_pressure.tool_parallelism(MAX_PARALLEL_TOOLS)))
+                    )
+
+                    async def run_single(
+                        call: Dict[str, Any],
+                        defer_steer: bool = False,
+                        catch_errors: bool = False,
+                    ) -> Any:
+                        early_task = _early_task_for(call)
+                        try:
+                            if early_task is not None:
+                                return await _await_steerable(state, early_task, emit, "tool")
+                            return await _await_steerable(
+                                state,
+                                execute_one(call),
+                                emit,
+                                "tool",
+                                defer_steer=defer_steer,
+                            )
+                        except (_SteerRestartRequested, asyncio.CancelledError):
+                            raise
+                        except Exception as exc:
+                            if not catch_errors:
+                                raise
+                            return _tool_execution_error_result(call, exc)
+
+                    async def run_read(
+                        position: int,
+                        call: Dict[str, Any],
+                        gate: Optional[asyncio.Event],
+                    ) -> Tuple[int, Any]:
+                        if gate is not None:
+                            await gate.wait()
+                        descriptor = tool_search.call_descriptor(tool_registry, call)
+                        async with read_semaphore:
+                            if bool(getattr(descriptor, "pressure_limited", False)):
+                                async with pressure_semaphore:
+                                    return position, await run_single(call, catch_errors=True)
+                            return position, await run_single(call, catch_errors=True)
+
+                    async def run_serial(call: Dict[str, Any]) -> Any:
+                        # Serialized writes keep their real result when a steer
+                        # lands mid-flight; the steer is applied at the next
+                        # checkpoint instead of pretending they rolled back.
+                        policy = _tool_steer_policy(
+                            str(call.get("name") or ""),
+                            tool_search.call_descriptor(tool_registry, call),
+                        )
+                        return await run_single(
+                            call,
+                            defer_steer=str(policy.get("interruptibility") or "")
+                            == "non_interruptible",
+                        )
+
+                    pending_reads: Dict[int, asyncio.Task] = {}
+                    serial_calls: List[Tuple[int, Dict[str, Any]]] = []
+                    gate: Optional[asyncio.Event] = None
+                    for position, call in enumerate(calls):
+                        if is_read_only_tool(call):
+                            pending_reads[position] = asyncio.create_task(
+                                run_read(position, call, gate)
+                            )
+                            continue
+                        serial_calls.append((position, call))
+                        if position in barrier_events:
+                            gate = barrier_events[position]
+
+                    cursor = 0
+                    active_position: Optional[int] = None
+                    active_task: Optional[asyncio.Task] = None
+                    try:
+                        while pending_reads or cursor < len(serial_calls) or active_task is not None:
+                            if active_task is None:
+                                await _raise_if_steer_requested(state, emit, "tool")
+                                if not _state_run_has_write_fence(state):
+                                    raise asyncio.CancelledError()
+                                if _state_interrupt_requested(state):
+                                    if _is_followup_interrupt(state["session_id"]):
+                                        raise asyncio.CancelledError()
+                                    break
+                                if cursor < len(serial_calls):
+                                    position, call = serial_calls[cursor]
+                                    # A history/process barrier must not start
+                                    # while an earlier read is still settling.
+                                    blocked = position in barrier_events and any(
+                                        read_position < position
+                                        for read_position in pending_reads
+                                    )
+                                    if not blocked:
+                                        active_position = position
+                                        active_task = asyncio.create_task(run_serial(call))
+                                        cursor += 1
+                            waiters = set(pending_reads.values())
+                            if active_task is not None:
+                                waiters.add(active_task)
+                            if not waiters:
+                                await asyncio.sleep(0)
+                                continue
+                            done, _pending = await asyncio.wait(
+                                waiters,
                                 timeout=0.03,
                                 return_when=asyncio.FIRST_COMPLETED,
                             )
-                            if not done_tasks:
-                                await _raise_if_steer_requested(state, emit, "tool")
+                            if not done:
                                 continue
-                            successful = [done for done in done_tasks
-                                          if not done.cancelled() and done.exception() is None]
-                            completed = [await done for done in successful]
-                            await checkpoint_ready_tool_results([result for _, result in completed])
-                            # Preserve every successful completed result before
-                            # propagating a sibling's steer/cancellation error.
-                            for done in done_tasks:
-                                if done not in successful:
-                                    await done
-                            for tc, r in completed:
-                                tid = (tc or {}).get("id", "")
-                                if tid is not None:
-                                    by_id[tid] = r
-                                if (
-                                    emit
-                                    and isinstance(r, dict)
-                                    and r.get("type") == "tool"
-                                    and not r.get("_sse_emitted")
-                                ):
-                                    r["_sse_emitted"] = True
-                                    await _emit_tool_call_sse(emit, r, iter_count, state)
-                            await _raise_if_steer_requested(state, emit, "tool")
-                    except _SteerRestartRequested:
-                        for task in tasks:
-                            if not task.done():
-                                task.add_done_callback(_discard_task_result)
-                                task.cancel()
+                            failures: List[BaseException] = []
+                            completed_reads: List[Tuple[int, Any]] = []
+                            for read_position, read_task in list(pending_reads.items()):
+                                if read_task not in done:
+                                    continue
+                                pending_reads.pop(read_position, None)
+                                if read_task.cancelled():
+                                    continue
+                                error = read_task.exception()
+                                if error is not None:
+                                    failures.append(error)
+                                    continue
+                                completed_reads.append(read_task.result())
+                            if completed_reads:
+                                await checkpoint_ready_tool_results(
+                                    [result for _, result in completed_reads]
+                                )
+                                for read_position, read_result in completed_reads:
+                                    results[read_position] = read_result
+                            if active_task is not None and active_task in done:
+                                finished_position = active_position
+                                finished_task = active_task
+                                active_position = None
+                                active_task = None
+                                finished_result = await finished_task
+                                if finished_position is not None:
+                                    finished_result = await checkpoint_completed_tool_result(
+                                        finished_result
+                                    )
+                                    results[finished_position] = finished_result
+                                    barrier = barrier_events.get(finished_position)
+                                    if barrier is not None:
+                                        barrier.set()
+                            if failures:
+                                raise failures[0]
+                    except (_SteerRestartRequested, asyncio.CancelledError):
+                        if active_task is not None and not active_task.done():
+                            # In-flight serialized side effects settle through
+                            # their own steer policy; never cancel them here.
+                            try:
+                                await active_task
+                            except BaseException:
+                                pass
                         raise
-                    out: List[Any] = []
-                    for tc in group_calls:
-                        tid = tc.get("id", "")
-                        if tid in by_id:
-                            out.append(by_id[tid])
-                    return out
+                    finally:
+                        for read_task in pending_reads.values():
+                            if not read_task.done():
+                                read_task.add_done_callback(_discard_task_result)
+                                read_task.cancel()
+                    return [results[position] for position in sorted(results)]
 
-                # 分类执行策略：
-                # 1) 只读工具同组并行（带并发上限）
-                # 2) 写操作工具逐个串行
-                # 3) 保持原始 tool_calls 顺序边界（读组/写组分段）
-                exec_results = []
-                pending_read_only = []
-
-                async def flush_read_only():
-                    nonlocal pending_read_only, exec_results
-                    while pending_read_only:
-                        # Keep network-bound tools at their normal concurrency;
-                        # run_group applies the severe-pressure semaphore only
-                        # to local filesystem/indexing work.
-                        chunk = pending_read_only[:MAX_PARALLEL_TOOLS]
-                        pending_read_only = pending_read_only[MAX_PARALLEL_TOOLS:]
-                        chunk_results = await run_group(chunk)
-                        exec_results.extend(chunk_results)
-
-                for tool_call_position, tool_call in enumerate(tool_calls_list):
-                    await _raise_if_steer_requested(state, emit, "tool")
-                    if not _state_run_has_write_fence(state):
-                        raise asyncio.CancelledError()
-                    if _state_interrupt_requested(state):
-                        if _is_followup_interrupt(state["session_id"]):
-                            raise asyncio.CancelledError()
-                        break
-                    if invalid_interactive_batch:
+                exec_results: List[Any] = []
+                if invalid_interactive_batch:
+                    for tool_call in tool_calls_list:
                         rejected = _blocked_tool_result(
                             str(tool_call.get("name") or "tool"),
                             tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {},
@@ -9753,59 +9901,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         rejected["tool_call_index"] = tool_call.get("index")
                         rejected = await checkpoint_completed_tool_result(rejected)
                         exec_results.append(rejected)
-                        continue
-                    try:
-                        early_idx = int(tool_call.get("index")) if tool_call.get("index") is not None else None
-                    except Exception:
-                        early_idx = None
-                    if early_idx is not None and early_idx in early_tool_tasks:
-                        await flush_read_only()
-                        early_result = await _await_steerable(
-                            state,
-                            early_tool_tasks[early_idx],
-                            emit,
-                            "tool",
-                        )
-                        ready_results = [early_result]
-                        if is_read_only_tool(tool_call):
-                            for following in tool_calls_list[tool_call_position + 1:]:
-                                if not is_read_only_tool(following):
-                                    break
-                                following_index = following.get("index")
-                                try:
-                                    following_task = early_tool_tasks.get(int(following_index))
-                                except (TypeError, ValueError):
-                                    break
-                                if following_task is None or not following_task.done() or following_task.cancelled():
-                                    break
-                                if following_task.exception() is not None:
-                                    break
-                                ready_results.append(following_task.result())
-                        await checkpoint_ready_tool_results(ready_results)
-                        exec_results.append(early_result)
-                        continue
-                    if is_read_only_tool(tool_call):
-                        pending_read_only.append(tool_call)
-                        continue
+                else:
+                    exec_results = await run_tool_batch(tool_calls_list)
 
-                    # 写操作前先清空当前只读并行队列
-                    await flush_read_only()
-                    write_result = await _await_steerable(
-                        state,
-                        execute_one(tool_call),
-                        emit,
-                        "tool",
-                        defer_steer=_tool_steer_policy(
-                            str(tool_call.get("name") or ""),
-                            tool_search.call_descriptor(tool_registry, tool_call),
-                        )["interruptibility"] == "non_interruptible",
-                    )
-                    write_result = await checkpoint_completed_tool_result(write_result)
-                    exec_results.append(write_result)
-
-                # 末尾残留的只读工具并行执行
                 await _raise_if_steer_requested(state, emit, "tool")
-                await flush_read_only()
                 await _flush_file_tool_reviews(state, emit)
                 state.pop('_change_review_batch_active', None)
 
@@ -9923,9 +10022,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         "args": res["tool_args"],
                         "result": res["result"]
                     })
-                    logger.info(f"工具调用: {res['tool_name']}({str(res['tool_args'])}) -> {res['result_for_log']}")
+                    logger.info(
+                        "tool_call name=%s args=%s args_sha=%s status=%s result=%s "
+                        "react_iter=%s call_id=%s",
+                        res["tool_name"],
+                        log_safety.shape(res.get("tool_args")),
+                        log_safety.digest(res.get("tool_args")),
+                        res.get("execution_status") or "-",
+                        log_safety.digest(res.get("result") or ""),
+                        iter_count,
+                        res.get("tool_id") or "-",
+                    )
 
-                    # 并行只读批已在 run_group 内发 SSE；单工具/写路径在此发
+                    # 并行只读结果已在 run_tool_batch 内发 SSE；串行/单工具路径在此发
                     _t_tool_post = time.perf_counter()
                     if emit and not (isinstance(res, dict) and res.get("_sse_emitted")):
                         r = emit({
@@ -10783,33 +10892,50 @@ def finish(state: State) -> State:
     total_output_tokens = 0
     if state.get("llm_calls"):
         logger.info("=== LLM Call Details ===")
-        for call in state["llm_calls"]:
+        for index, call in enumerate(state["llm_calls"], 1):
             usage = call.get("usage")
             if usage:
                 total_input_tokens += int(usage.get("prompt_tokens", 0) or 0)
                 total_output_tokens += int(usage.get("completion_tokens", 0) or 0)
 
-            logger.info("Model: %s", redact_sensitive_tool_text(call.get("model")))
-            logger.info(">>> Agent to LLM:")
-            for msg in call["request"]:
-                role = msg.get('role', 'unknown')
-                content = msg.get('content', '')
-                if role in ("user", "user&history"):
-                    content = _truncate_xml_content_blocks(content, LOG_TRUNCATE_KEEP_CHARS)
-                else:
-                    content = truncate_head_tail(content, LOG_TRUNCATE_KEEP_CHARS)
-                logger.info(f"{COLOR_WHITE}  {role}: {content}{COLOR_RESET}")
+            model = redact_sensitive_tool_text(call.get("model"))
+            response = call.get("response") or {}
+            if log_safety.payload_enabled():
+                logger.info("Model: %s", model)
+                logger.info(">>> Agent to LLM:")
+                for msg in call.get("request") or []:
+                    role = msg.get('role', 'unknown')
+                    content = msg.get('content', '')
+                    if role in ("user", "user&history"):
+                        content = _truncate_xml_content_blocks(content, LOG_TRUNCATE_KEEP_CHARS)
+                    else:
+                        content = truncate_head_tail(content, LOG_TRUNCATE_KEEP_CHARS)
+                    logger.info("  %s: %s", role, content)
 
-            logger.info("<<< LLM Response:")
-            resp = call["response"]
-            if resp.get("tool_calls"):
-                tool_calls_text = truncate_head_tail(str(resp["tool_calls"]), LOG_TRUNCATE_KEEP_CHARS)
-                logger.info(f"{COLOR_BLUE}  tool_calls: {tool_calls_text}{COLOR_RESET}")
+                logger.info("<<< LLM Response:")
+                if response.get("tool_calls"):
+                    logger.info(
+                        "  tool_calls: %s",
+                        truncate_head_tail(str(response["tool_calls"]), LOG_TRUNCATE_KEEP_CHARS),
+                    )
+                else:
+                    logger.info(
+                        "  %s",
+                        truncate_head_tail(response.get("content") or '', LOG_TRUNCATE_KEEP_CHARS),
+                    )
+                logger.info("<<Finish>>")
             else:
-                content = resp.get('content', '')
-                content = truncate_head_tail(content, LOG_TRUNCATE_KEEP_CHARS)
-                logger.info(f"{COLOR_YELLOW}  {content}{COLOR_RESET}")
-            logger.info("<<Finish>>")
+                roles = Counter(str(m.get("role", "unknown")) for m in (call.get("request") or []))
+                logger.info(
+                    "llm_call iter=%s model=%s messages=%s roles=%s content=%s finish=%s tool_calls=%s",
+                    index,
+                    model,
+                    call.get("request_message_count") or len(call.get("request") or []),
+                    dict(roles),
+                    log_safety.digest(response.get("content") or ""),
+                    response.get("finish_reason") or "-",
+                    _tool_call_names(response.get("tool_calls")) or "-",
+                )
     else:
         logger.info("=== LLM Call Details ===")
         logger.info("(No LLM calls recorded)")
@@ -10818,6 +10944,8 @@ def finish(state: State) -> State:
         logger.info(
             f"Total tokens: input={total_input_tokens}, output={total_output_tokens}, total={total_input_tokens+total_output_tokens}"
         )
+    # 高频计时按 run 聚合后在此收口，避免每个事件一行 JSON。
+    flush_local_operation_summary()
 
     # 终稿：与最后一条 is_assistant_response 同文则只保留一条，标 is_final 并去 is_assistant_response（无重复 agent/llm）
     fr = (state.get("final_response") or "").strip()
@@ -10867,6 +10995,7 @@ def _release_pending_queued_turn(state: State) -> None:
     )
 
 
+@local_operation('queued_turn_handoff', slow_ms=100)
 async def _continue_with_queued_turn(state: State, emit, should_stop=None) -> bool:
     """Keep the run and transport alive after a complete, persisted answer."""
     sid = state["session_id"]
@@ -10890,6 +11019,19 @@ async def _continue_with_queued_turn(state: State, emit, should_stop=None) -> bo
     state["reminder_inserted"] = False
     _reset_steer_control(state)
     return True
+
+
+@local_operation('post_final_handoff', slow_ms=100)
+async def _finish_session_end_hooks(state: State, emit, *, mode: str, run_id: str) -> None:
+    with local_step('anchor_pending_subagent_results'):
+        anchor = getattr(session_manager, 'anchor_pending_subagent_results_for_run', None)
+        if callable(anchor):
+            anchor(state['session_id'], run_id)
+    with local_step('session_end_hook'):
+        await _dispatch_state_hook(
+            'SessionEnd', state,
+            {'matcher_value': mode, 'mode': mode,
+             'status': 'failed' if state.get('_run_error') else 'finished'}, emit)
 
 
 async def astream_events(
@@ -11146,6 +11288,8 @@ async def astream_events(
         "chat",
     )
 
+    process_timing = UiProcessTiming()
+
     async def emit(ev: Dict[str, Any]) -> None:
         with _runtime_session_path_scope():
             await emit_event(ev)
@@ -11165,6 +11309,7 @@ async def astream_events(
                 event_type,
             )
             return
+        process_timing.annotate(ev)
         ev = await persist_execution_event(session_manager, session_id, ev, commit_ui=True)
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final":
@@ -11202,7 +11347,7 @@ async def astream_events(
             await queue.put(public_event)
 
     _attach_tool_batch_emitter(emit, state, session_id, runtime_v2_run_id, runtime_lifecycle,
-                               queue, lambda: consumer_attached)
+                               queue, lambda: consumer_attached, process_timing)
     power_guard = AgentRunPowerGuard()
 
     async def on_runtime_resume(resume: RuntimeResume) -> None:
@@ -11443,17 +11588,7 @@ async def astream_events(
                 )
                 if not await _continue_with_queued_turn(state, emit, should_stop):
                     break
-            anchor_pending = getattr(
-                session_manager, "anchor_pending_subagent_results_for_run", None
-            )
-            if callable(anchor_pending):
-                anchor_pending(session_id, runtime_v2_run_id)
-            await _dispatch_state_hook(
-                "SessionEnd",
-                state,
-                {"matcher_value": "chat", "mode": "chat", "status": "failed" if state.get("_run_error") else "finished"},
-                emit,
-            )
+            await _finish_session_end_hooks(state, emit, mode='chat', run_id=runtime_v2_run_id)
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
@@ -11661,7 +11796,7 @@ async def astream_events_continuation(
     _workflow_callbacks().call(
         "initialize_state", state, prior_work_messages_for_judge
     )
-    session_manager.clear_interrupt(session_id)
+    session_manager.clear_interrupt(session_id, runtime_v2_run_id)
     steer_control = _register_steer_run_control(session_id, runtime_v2_run_id)
     state["_steer_control"] = steer_control
 
@@ -11672,6 +11807,8 @@ async def astream_events_continuation(
         runtime_v2_run_id,
         "continuation",
     )
+
+    process_timing = UiProcessTiming()
 
     async def emit(ev: Dict[str, Any]) -> None:
         with _runtime_session_path_scope():
@@ -11690,6 +11827,7 @@ async def astream_events_continuation(
                 event_type,
             )
             return
+        process_timing.annotate(ev)
         ev = await persist_execution_event(session_manager, session_id, ev, commit_ui=True)
         runtime_committed = bool(ev.get("_runtime_v2_committed"))
         if ev.get("type") == "final":
@@ -11719,7 +11857,7 @@ async def astream_events_continuation(
             await queue.put(public_event)
 
     _attach_tool_batch_emitter(emit, state, session_id, runtime_v2_run_id, runtime_lifecycle,
-                               queue, lambda: consumer_attached)
+                               queue, lambda: consumer_attached, process_timing)
     power_guard = AgentRunPowerGuard()
 
     async def on_runtime_resume(resume: RuntimeResume) -> None:
@@ -11883,21 +12021,7 @@ async def astream_events_continuation(
                 )
                 if not await _continue_with_queued_turn(state, emit, should_stop):
                     break
-            anchor_pending = getattr(
-                session_manager, "anchor_pending_subagent_results_for_run", None
-            )
-            if callable(anchor_pending):
-                anchor_pending(session_id, runtime_v2_run_id)
-            await _dispatch_state_hook(
-                "SessionEnd",
-                state,
-                {
-                    "matcher_value": "continuation",
-                    "mode": "continuation",
-                    "status": "failed" if state.get("_run_error") else "finished",
-                },
-                emit,
-            )
+            await _finish_session_end_hooks(state, emit, mode='continuation', run_id=runtime_v2_run_id)
             completed = True
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}

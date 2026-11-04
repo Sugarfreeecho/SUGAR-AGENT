@@ -154,6 +154,28 @@ def test_production_stdio_entry_works_with_official_python_client(runtime_url, t
     assert result["stop_reason"] == "end_turn"
 
 
+def test_terminal_caller_returns_completed_result_and_resumes_same_session(runtime_url, tmp_path):
+    receipt = tmp_path / "result.json"
+    base = [sys.executable, str(ROOT / "app/acp_call.py"), "--server-url", runtime_url,
+            "--cwd", str(tmp_path), "--prompt", "hello", "--result-file", str(receipt)]
+    first = subprocess.run(base, capture_output=True, text=True, encoding="utf-8", timeout=30, cwd=tmp_path)
+    assert first.returncode == 0, first.stderr + first.stdout
+    rows = [json.loads(line) for line in first.stdout.splitlines()]
+    assert [row["event"] for row in rows] == ["started", "progress", "completed"]
+    assert rows[-1]["status"] == "succeeded" and rows[-1]["output"] == "answer"
+    assert rows[-1]["connected"] is False
+    assert json.loads(receipt.read_text(encoding="utf-8")) == {key: value for key, value in rows[-1].items() if key != "event"}
+    sid = rows[-1]["session_id"]
+    saved = json.loads(receipt.read_text(encoding="utf-8"))
+    assert saved["session_id"] == sid and saved["output"] == "answer"
+    second = subprocess.run([*base, "--session-id", sid], capture_output=True, text=True,
+                            encoding="utf-8", timeout=30, cwd=tmp_path)
+    assert second.returncode == 0, second.stderr + second.stdout
+    result = json.loads(second.stdout.splitlines()[-1])
+    assert result["session_id"] == sid and result["session_action"] == "resume"
+    assert result["output"] == "answer"
+
+
 @pytest.mark.skipif(not os.environ.get("ACP_TYPESCRIPT_SDK"), reason="set ACP_TYPESCRIPT_SDK to DSH's installed SDK dist/acp.js")
 def test_dsh_typescript_sdk_conformance(runtime_url, tmp_path):
     completed = subprocess.run(["node", str(ROOT / "tests/fixtures/acp_conformance.mjs"),

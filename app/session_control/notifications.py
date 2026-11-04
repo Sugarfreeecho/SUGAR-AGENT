@@ -10,7 +10,7 @@ async def deliver_notifications(control):
     def pending():
         with control.store.transaction() as db:
             return [dict(row) for row in db.execute("SELECT * FROM automation_notices WHERE status='pending' LIMIT 20")]
-    for notice in await asyncio.to_thread(pending):
+    for notice in await control.resources.io.run("@automation-notices", pending):
         if notice["kind"] == "dispatch":
             task = control.store.get("automations", notice["operation_id"])
             sid = (task or {}).get("target", {}).get("session_id", "")
@@ -19,7 +19,7 @@ async def deliver_notifications(control):
             op = {"id": "", "status": "failed", "delivery": "rejected", "session_id": sid, "run_id": "",
                   "created": time.time(), "updated": time.time(), "error": (task or {}).get("last_error")}
         else:
-            op = await asyncio.to_thread(control.store.get_operation, notice["operation_id"])
+            op = await control.resources.io.run("@automation-notices", control.store.get_operation, notice["operation_id"])
             task = control.store.get("automations", op["request"].get("_automation_id")) if op else None
         status, error = "suppressed", ""
         mode = (task or {}).get("notification", "never")

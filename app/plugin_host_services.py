@@ -115,6 +115,9 @@ def release_plugin_leases(plugin_id: str, *, cancel_runs: bool = True) -> int:
         return 0
     from session_control.public import source_state
     source_state(plugin_id, False, app=app)
+    app.service.monitors.revoke_namespace(plugin_id)
+    app.service.resources.business.cancel_owner(plugin_id)
+    app.service.resources.io.cancel_owner(plugin_id)
     operations = app.store.source_operations(plugin_id)
     if cancel_runs:
         for operation in operations:

@@ -18,9 +18,15 @@ from .configuration import (ConfigRepository, apply_metadata, configure_reposito
 from .errors import ControlError
 from .policy import Principal, READ, check_session, validate_policy, workspace_key
 from .store import digest
+from agent_local_timing import LocalOperationTrace, local_step
 
 log = logging.getLogger(__name__)
 TERMINAL = {"succeeded", "failed", "stopped", "interrupted", "unknown", "cancelled", "coalesced", "rejected"}
+# URL constraints are only accepted from in-process tools that attest to their
+# own redirect validation: the core file tools, or the bundled
+# web-search-providers plugin that now owns web_fetch / web_download.
+_URL_CONSTRAINT_TOOLS = frozenset({"web_fetch", "web_download"})
+_URL_CONSTRAINT_OWNERS = frozenset({"core.tools", "web-search-providers"})
 
 
 class SessionControlService:
@@ -40,11 +46,37 @@ class SessionControlService:
         self.engine = None
         self.legacy_scan_at = 0.
         self.created_at = time.time()
+        self._dispatch_lock = asyncio.Lock()
+        self._dispatch_task = None
+        self._dispatch_requested = False
+        from .resources import ControlResources
+        from .monitors import MonitorKey, SharedMonitorHub
+        self.monitor_key = MonitorKey.make("control", str(self.store.path), namespace="@control")
+        self.resources = ControlResources(on_complete=self._runtime_ready)
+        self.monitor_enabled = lambda namespace: namespace.startswith("@") or self.callbacks.get("source_enabled", lambda _: True)(namespace)
+        self.monitors = SharedMonitorHub(self.resources, enabled=self.monitor_enabled)
         from remote_control.service import SessionControlService as Legacy
         self.legacy = Legacy(dependencies, identities.remote)
 
     def required_scope(self, method):
         return self.legacy.required_scope(method)
+
+    def _session_summary(self, sid):
+        summary = self.manager.get_session_summary(sid)
+        if summary:
+            return summary
+        # Nested children intentionally stay out of the root session index.
+        # Address them by their real metadata, as the main UI detail API does.
+        try:
+            sid = self.manager._normalize_session_id(sid)
+            meta = self.manager._load_metadata(sid) or {}
+            deleted = getattr(self.manager, "_is_deleted_session", lambda _sid: False)(sid)
+        except (ValueError, OSError):
+            return None
+        if deleted or not meta.get("is_subagent") or not meta.get("parent_session_id"):
+            return None
+        fields = ("name", "created_at", "updated_at", "pinned", "archived", "is_subagent", "parent_session_id", "subagent_description", "subagent_type")
+        return {"id": sid, **{key: meta[key] for key in fields if key in meta}}
 
     def authorize(self, principal, method, params):
         if os.getenv("MYAGENT_SESSION_CONTROL_ENABLED", "1").lower() in {"0", "false", "no"}:
@@ -57,7 +89,7 @@ class SessionControlService:
         if needs_session and not sid:
             raise ControlError("invalid_params", "session_id is required")
         if sid:
-            if not isinstance(sid, str) or not self.manager.get_session_summary(sid):
+            if not isinstance(sid, str) or not self._session_summary(sid):
                 raise ControlError("session_not_found", "Session not found", status=404)
             check_session(principal, sid, self.manager)
         sources = [*principal.source_ancestors, *([params["_source"]] if params.get("_source") else [])]
@@ -69,12 +101,18 @@ class SessionControlService:
             seen_sources.add(binding)
             live = self.store.get("host_sources", source["id"])
             enabled = self.callbacks.get("source_enabled")
+            persistent_browser = source.get("kind") == "browser-pairing"
+            if persistent_browser:
+                identity = principal.parent_id or principal.id
+                record = self.store.get("browser_connections", identity)
+                if source["id"] != "browser-use" or not record or record.get("revoked"):
+                    raise ControlError("unauthorized", "Browser pairing was revoked", status=401)
             if source.get("kind") == "runtime":
                 from .public import RUNTIME_SOURCES
                 if source["id"] not in RUNTIME_SOURCES:
                     raise ControlError("forbidden", "Unregistered runtime source", status=403)
                 enabled = None
-            if not live or not live["enabled"] or live["epoch"] != source["epoch"] or (enabled is not None and not enabled(source["id"])):
+            if not live or not live["enabled"] or (not persistent_browser and live["epoch"] != source["epoch"]) or (enabled is not None and not enabled(source["id"])):
                 raise ControlError("source_disabled", "Plugin authorization was revoked", status=403)
         if params.get("_automation_id"):
             task = self.store.get("automations", params["_automation_id"])
@@ -121,7 +159,12 @@ class SessionControlService:
             raise ControlError("invalid_params", "params must be an object")
         if len(json.dumps(params, ensure_ascii=False).encode()) > 1024 * 1024:
             raise ControlError("request_too_large", "Request exceeds 1 MiB", status=413)
-        self.authorize(principal, method, params)
+        if method in {"operation.get", "operation.wait"}:
+            # Goal/transport waiters poll on the HTTP loop. Source checks may
+            # acquire the same SQLite/file locks as an active writer.
+            await asyncio.to_thread(self.authorize, principal, method, params)
+        else:
+            self.authorize(principal, method, params)
         if method == "session.send_batch":
             rows = params.get("requests")
             if not isinstance(rows, list) or not 1 <= len(rows) <= 8:
@@ -141,10 +184,14 @@ class SessionControlService:
                 admissions.append(request)
             operations = await asyncio.to_thread(self.store.admit_many, principal.id, idempotency_key, admissions)
             await self.start()
+            self._request_dispatch()
             return {"accepted": True, "operations": [self.receipt(op) for op in operations]}, False
         if method == "session.send":
             if not isinstance(params.get("message"), str) or not params["message"].strip():
                 raise ControlError("invalid_params", "message must be non-empty text")
+            if "attachments" in params:
+                from .attachments import prepare_message_attachments
+                params = await asyncio.to_thread(prepare_message_attachments, principal, params, self.store)
             if params.get("mode", "queue") not in {"queue", "append", "interrupt"}:
                 raise ControlError("invalid_params", "Invalid message mode")
             if params.get("mode", "queue") != "queue":
@@ -153,7 +200,12 @@ class SessionControlService:
                     self.authorize(principal, "session.interrupt", params)
                 if params.get("runtime_override"):
                     raise ControlError("invalid_params", "Runtime overrides require queue mode")
-                if self.deps.is_stream_active(params["session_id"]):
+                previous = await asyncio.to_thread(self.store.find_operation, principal.id, idempotency_key)
+                if previous and previous["method"] in {"session.send", "session.steer"}:
+                    # Preserve the original route across a run ending or starting.
+                    # admit() still verifies all arguments for this key.
+                    method = previous["method"]
+                elif self.deps.is_stream_active(params["session_id"]):
                     method = "session.steer"
         if method == "session.steer" and params.get("mode") == "interrupt":
             self.authorize(principal, "session.interrupt", params)
@@ -167,6 +219,7 @@ class SessionControlService:
             return self.receipt(operation), True
         if method in {"session.send", "session.continue", "session.recover"}:
             await self.start()
+            self._request_dispatch()
             return self.receipt(operation), False
         if method == "automation.run":
             # fire() may create a session under the same identity. The operation
@@ -191,7 +244,8 @@ class SessionControlService:
         sid = p.get("session_id", "")
         if method == "system.health":
             return {"ok": True, "protocol_version": 1, "service": "session-control", "backend_owned": True,
-                    "features": ["sessions", "configuration", "presets", "schedules", "events", "webhooks"]}
+                    "features": ["sessions", "configuration", "presets", "schedules", "events", "webhooks", "shared_monitors", "bounded_workers", "fair_queues"],
+                    "resources": self.resources.snapshot(), "monitors": self.monitors.snapshot()}
         if method == "auth.status":
             return {"principal": {"id": principal.id, "name": principal.name, "admin": principal.admin, "policy": principal.policy}}
         if method == "session.list":
@@ -205,7 +259,7 @@ class SessionControlService:
                     continue
             return {"sessions": allowed, "count": len(allowed)}
         if method == "session.get":
-            summary = self.manager.get_session_summary(sid)
+            summary = self._session_summary(sid)
             if p.get("include_runtime"):
                 from agent_harness import session_work_root
                 meta = self.manager._load_metadata(sid)
@@ -215,13 +269,19 @@ class SessionControlService:
             return {"session": summary}
         if method == "session.history":
             limit = max(1, min(int(p.get("limit", 50)), 500))
-            page = await asyncio.to_thread(self.manager.get_ui_events_page, sid, limit=limit,
-                                           before_index=p.get("before_index"), turns=p.get("turns"))
+            def history_page():
+                from runtime_v2 import runtime_v2_primary
+                if runtime_v2_primary():
+                    from runtime_v2.ui_projection import RuntimeUiProjection
+                    projection = RuntimeUiProjection(self.manager.sessions_dir, path_resolver=self.manager._resolve_session_path)
+                    return projection.read_ui_page(sid, limit=limit, before_index=p.get("before_index"), turns=p.get("turns"))
+                return self.manager.get_ui_events_page(sid, limit=limit, before_index=p.get("before_index"), turns=p.get("turns"))
+            page = await asyncio.to_thread(history_page)
             return {"session_id": sid, **page}
         if method == "session.search":
             return await asyncio.to_thread(self._search, principal, p)
         if method == "session.attach":
-            return {"session": self.manager.get_session_summary(sid), "history": await self._read(principal, "session.history", p),
+            return {"session": self._session_summary(sid), "history": await self._read(principal, "session.history", p),
                     "cursor": self.store.cursor("event_highwater", 0)}
         if method == "session.detach":
             return {"detached": True, "session_id": sid}
@@ -252,7 +312,7 @@ class SessionControlService:
             if not math.isfinite(timeout) or timeout < 0:
                 raise ControlError("invalid_params", "timeout must be a non-negative finite number")
             deadline = time.monotonic() + min(timeout, 300)
-            while True:
+            def read_checked_operation():
                 op = self.store.get_operation(oid)
                 if not op:
                     raise ControlError("not_found", "Execution not found", status=404)
@@ -260,6 +320,9 @@ class SessionControlService:
                     raise ControlError("forbidden", "Execution belongs to another caller", status=403)
                 if op["session_id"]:
                     check_session(principal, op["session_id"], self.manager)
+                return op
+            while True:
+                op = await asyncio.to_thread(read_checked_operation)
                 if method.endswith("get") or op["status"] in TERMINAL:
                     value = self.receipt(op)
                     value["runtime_config"] = op.get("snapshot")
@@ -267,7 +330,7 @@ class SessionControlService:
                 if time.monotonic() >= deadline:
                     raise ControlError("wait_timeout", "Wait expired; execution remains active", status=408,
                                        details=self.receipt(op))
-                await asyncio.sleep(.1)
+                await asyncio.sleep(.25)
         if method == "automation.history":
             rows = self.store.operations(session_id=p.get("session_id"), automation_id=p.get("id"), limit=p.get("limit", 100), newest=True)
             visible = []
@@ -407,7 +470,12 @@ class SessionControlService:
                         raise ControlError("unsupported_constraint", "Parameter path is not declared by the tool schema")
                 if rule["kind"] == "url":
                     # Remote/MCP implementations cannot attest to redirects.
-                    if d.invocation_kind.value != "host" or d.owner != "core.tools" or d.execution_name not in {"web_fetch", "web_download"} or rule["pointer"] != "/url":
+                    url_capable = (
+                        d.execution_name in _URL_CONSTRAINT_TOOLS
+                        and d.owner in _URL_CONSTRAINT_OWNERS
+                        and d.invocation_kind.value in {"host", "host_service"}
+                    )
+                    if not url_capable or rule["pointer"] != "/url":
                         raise ControlError("unsupported_constraint", "URL semantics are not declared for this tool")
                 if rule["kind"] == "path":
                     names = {"read_file": {"path", "file_path"}, "write_file": {"path", "file_path"},
@@ -514,7 +582,8 @@ class SessionControlService:
         if method == "session.steer":
             from remote_control.service import SessionControlService as Legacy
             legacy = Legacy(self.deps, self.identities.remote)
-            return await legacy._session_steer({**p, "client_id": operation["id"]})
+            return await legacy._session_steer({**p, "client_id": operation["id"]},
+                user_content=operation["request"].get("_legacy_user_content"))
         if method == "session.steer.cancel":
             original = self.store.get_operation(p.get("client_id"))
             if not original or original["session_id"] != sid or (not principal.admin and original["principal"] != principal.id):
@@ -645,6 +714,16 @@ class SessionControlService:
             return
         self.loop = asyncio.get_running_loop()
         self.closing = False
+        if self.resources.runtime.closed or (self.monitors.loop is not None and self.monitors.loop is not self.loop):
+            if self.monitors._listener:
+                from session_event_bus import remove_event_listener
+                remove_event_listener(self.monitors._listener)
+            self.resources.close()
+            from .resources import ControlResources
+            from .monitors import SharedMonitorHub
+            self.resources = ControlResources(on_complete=self._runtime_ready)
+            self.monitors = SharedMonitorHub(self.resources, enabled=self.monitor_enabled)
+            self._dispatch_lock = asyncio.Lock()
         from .automation import AutomationService
         self.engine = self.engine or AutomationService(self)
         configure_repository(self.configs)
@@ -657,14 +736,21 @@ class SessionControlService:
         for op in self.store.operations(status="running", limit=1000) + self.store.operations(status="cancelling", limit=1000):
             if not self.deps.is_stream_active(op["session_id"]):
                 self.store.update_operation(op["id"], status="unknown", error={"code": "process_interrupted", "message": "Inspect or recover the original run"})
-        self.task = asyncio.create_task(self._loop(), name="session-control-scheduler")
+        await self.monitors.start()
+        if self.monitor_key not in self.monitors.sources:
+            self.monitors.subscribe(self.monitor_key, "@control", self._tick, interval=.5,
+                events=("run_finished", "run_failed", "run_interrupted", "user_turn_committed", "interaction_resolved", "lifecycle_changed"))
+        self.task = self.monitors.task
+        self._request_dispatch()
 
     async def close(self):
         self.closing = True
-        if self.task:
-            self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
-            self.task = None
+        dispatch, self._dispatch_task = self._dispatch_task, None
+        if dispatch and dispatch is not asyncio.current_task():
+            dispatch.cancel()
+            await asyncio.gather(dispatch, return_exceptions=True)
+        await self.monitors.close()
+        self.task = None
         for sid, (task, op) in list(self.workers.items()):
             self.mark_cancelled(op)
             self.manager.request_interrupt(sid, op["run_id"], reason="backend_shutdown")
@@ -674,46 +760,100 @@ class SessionControlService:
             from session_event_bus import remove_event_listener
             remove_event_listener(self.engine._listener)
             self.engine._listener = None
+        self.resources.close()
 
-    async def _loop(self):
-        while not self.closing:
-            try:
-                for sid, (task, operation) in list(self.workers.items()):
-                    if task.done():
-                        try:
-                            task.result()
-                        except Exception:
-                            log.exception("Control worker failed")
-                        self.workers.pop(sid, None)
-                        self.cancellations.pop(operation["id"], None)
-                await self.engine.tick()
-                await self.adopt_followups()
-                for op in self.store.pending_heads():
-                    sid = op["session_id"]
-                    if sid not in self.workers:
-                        await self._dispatch(op)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("Session control scheduling failed")
-            await asyncio.sleep(.5)
+    def _runtime_ready(self):
+        self.monitors.wake(self.monitor_key)
+        self._request_dispatch()
+
+    def _request_dispatch(self):
+        """Wake durable admissions without waiting for unrelated event bridging."""
+        if self.closing or not self.loop or not self.loop.is_running():
+            return
+        self._dispatch_requested = True
+        if self._dispatch_task and not self._dispatch_task.done():
+            return
+        async def drain():
+            while self._dispatch_requested and not self.closing:
+                self._dispatch_requested = False
+                await self._dispatch_pending()
+        self._dispatch_task = asyncio.create_task(drain(), name='control-dispatch-ready')
+        def finished(task):
+            if not task.cancelled():
+                try:
+                    task.result()
+                except Exception:
+                    log.exception('Immediate control dispatch failed; durable queue retained')
+        self._dispatch_task.add_done_callback(finished)
+
+    def _reap_workers(self):
+        for sid, (task, operation) in list(self.workers.items()):
+            if task.done():
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    log.exception("Control worker failed")
+                self.workers.pop(sid, None)
+                self.cancellations.pop(operation["id"], None)
+
+    async def _dispatch_pending(self):
+        async with self._dispatch_lock:
+            if self.closing:
+                return
+            self._reap_workers()
+            for op in self.resources.fair.ordered(self.store.pending_heads())[:32]:
+                if not self.resources.runtime.available():
+                    break
+                if op["session_id"] not in self.workers:
+                    if await self._dispatch(op):
+                        # A full bridge batch advanced the durable dedup cursor.
+                        # Drain the next batch without another maintenance cycle.
+                        self._request_dispatch()
+
+    async def _tick(self):
+        if self.closing:
+            return
+        await self._dispatch_pending()
+        await self.engine.tick()
+        await self.adopt_followups()
+        await self._dispatch_pending()
 
     async def _dispatch(self, op):
+        trace = LocalOperationTrace('control_dispatch', session_id=op.get('session_id', ''), run_id=op.get('run_id', ''))
+        with trace.bind():
+            try:
+                return await self._dispatch_operation(op)
+            finally:
+                trace.finish(slow_ms=100)
+
+    async def _dispatch_operation(self, op):
+        from .resources import source_key
         sid = op["session_id"]
         p = op["request"]
+        source = source_key(op)
+        if self.closing or not self.resources.runtime.available(source):
+            return
+        task_id = p.get("_automation_id")
+        if task_id and sum(not future.done() and item["request"].get("_automation_id") == task_id for future, item in self.workers.values()) >= self.resources.per_task:
+            return
         token = None
         retry = self.store.get("dispatch_retries", op["id"]) or {}
         if retry.get("next_at", 0) > time.time():
             return
         try:
             principal = Principal(**p["_principal"])
-            self.authorize(principal, op["method"], p)
+            with local_step('authorize'):
+                self.authorize(principal, op["method"], p)
             if p.get("_source_lifecycle") and p.get("_source", {}).get("id") not in self.callbacks.get("source_before_run", {}):
                 return  # Restored domain inputs wait for their lifecycle adapter.
-            meta = await asyncio.to_thread(self.manager._load_metadata, sid)
+            with local_step('load_metadata'):
+                meta = await self.resources.io.run("@dispatch", self.manager._load_metadata, sid)
             if meta.get("archived"):
                 return
-            pending = self.callbacks.get("pending_human", lambda _: 0)(sid)
+            with local_step('pending_human'):
+                pending = self.callbacks.get("pending_human", lambda _: 0)(sid)
             if pending or self.deps.is_stream_active(sid):
                 return
             if p.get("_respect_stop") and self.callbacks.get("manually_stopped", lambda _: False)(sid):
@@ -726,8 +866,10 @@ class SessionControlService:
                 if not (job_notice or child_notice) and not self.manager.can_continue_react_session(sid) and not session_workflows.continuation_source(sid):
                     raise ControlError("nothing_to_continue", "Session has no unfinished turn or active workflow", status=409)
             if self.engine:
-                if await asyncio.to_thread(self.engine._bridge_session, sid):
-                    return  # Finish this session's durable dedup index before delivery.
+                with local_step('durable_event_bridge'):
+                    bridging = await self.resources.io.run("@dispatch", self.engine._bridge_session, sid)
+                if bridging:
+                    return True  # Finish the durable dedup index before delivery.
             if self.store.receipt(sid, p.get("_legacy_followup_id", op["id"])):
                 self.store.update_operation(op["id"], status="unknown", delivery="committed",
                     error={"code": "already_committed", "message": "Original input is committed; recover its run instead of resending"})
@@ -735,10 +877,12 @@ class SessionControlService:
             cfg = op.get("snapshot") or resolve_config(from_metadata(meta), p.get("runtime_override"))
             if principal.runtime_ceiling:
                 cfg = resolve_config(cfg, principal.runtime_ceiling)
-            await self.validate_bindings(sid, cfg)
+            with local_step('validate_bindings'):
+                await self.validate_bindings(sid, cfg)
             if p.get("_automation_id") and self.callbacks.get("manually_stopped", lambda _: False)(sid):
                 return
-            token = await self.coordinator.reserve_async(sid, op["run_id"])
+            with local_step('reserve_run'):
+                token = await self.coordinator.reserve_async(sid, op["run_id"], pool=self.resources.io)
             if not token:
                 return
             if p.get("_legacy_followup_id"):
@@ -749,14 +893,25 @@ class SessionControlService:
                     self.coordinator.release(sid, token)
                     self.store.update_operation(op["id"], status="coalesced", delivery="coalesced")
                     return
-            if not self.store.update_operation(op["id"], expected="queued", status="running", snapshot=cfg):
+            if not self.store.update_operation(op["id"], expected="queued", expected_updated=op["updated"], status="running", snapshot=cfg):
                 self.coordinator.release(sid, token)
                 return
             self.cancellations.setdefault(op["id"], threading.Event())
-            self.workers[sid] = (asyncio.create_task(asyncio.to_thread(self._run, op, cfg, token)), op)
+            future = self.resources.runtime.try_submit(source, self._run, op, cfg, token)
+            if future is None:
+                self.coordinator.release(sid, token)
+                self.store.update_operation(op["id"], expected="running", status="queued")
+                return
+            self.workers[sid] = (future, op)
+        except asyncio.CancelledError:
+            if token:
+                self.coordinator.release(sid, token)
+            raise
         except Exception as exc:
             if token:
                 self.coordinator.release(sid, token)
+            if getattr(exc, "code", "") == "work_pool_full":
+                return
             transient = isinstance(exc, (TimeoutError, ConnectionError)) or getattr(exc, "code", "") in {"backend_unavailable", "provider_unavailable", "catalog_unavailable"}
             attempts = retry.get("attempts", 0) + 1
             if transient and attempts <= 3:
@@ -788,11 +943,14 @@ class SessionControlService:
         if cancellation.is_set():
             self.store.update_operation(op["id"], status="stopped")
             return
+        preparation = LocalOperationTrace('control_run_prepare', session_id=sid, run_id=op['run_id'])
+        preparation_logged = False
         def should_stop(s):
             return cancellation.is_set() or self.manager.is_interrupt_requested(s, op["run_id"])
         from runtime_v2.event_log import SessionEventLog
         events = SessionEventLog(self.manager.sessions_dir, self.manager._resolve_session_path)
-        tail = events.read_latest(sid, 1)
+        with preparation.step('history_tail'):
+            tail = events.read_latest(sid, 1)
         start_seq = tail[-1].seq if tail else 0
         turn_id = p.get("_legacy_followup_id", op["id"]) if op["method"] == "session.send" else op["run_id"]
         def committed_final():
@@ -844,7 +1002,8 @@ class SessionControlService:
                 if cancellation.is_set():
                     raise ControlError("execution_cancelled", "Execution was cancelled", status=403)
                 self.authorize(principal, op["method"], p)
-            self.manager.clear_interrupt(sid, op["run_id"])
+            with preparation.step('clear_interrupt'):
+                self.manager.clear_interrupt(sid, op["run_id"])
             with runtime_scope(sid, cfg, authority, principal):
                 from contextlib import ExitStack
                 with ExitStack() as scopes:
@@ -854,7 +1013,10 @@ class SessionControlService:
                         scopes.callback(clear_run_tool_scope, sid, scope)
                     hook = self.callbacks.get("source_before_run", {}).get(p.get("_source", {}).get("id"))
                     if hook:
-                        hook(sid, op["run_id"], {**p, "_operation_id": op["id"]})
+                        with preparation.step('source_before_run'):
+                            hook(sid, op["run_id"], {**p, "_operation_id": op["id"]})
+                    preparation.finish(slow_ms=100)
+                    preparation_logged = True
                     asyncio.run(consume())
             # Only this operation's durable turn can complete its execution.
             final = committed_final()
@@ -863,6 +1025,8 @@ class SessionControlService:
             self.store.update_operation(op["id"], status=status, result={"content": final, "turn_id": turn_id},
                                         error={"code": "run_failed", "message": failure} if failure and final is None else None)
         except BaseException as exc:
+            if not preparation_logged:
+                preparation.finish(slow_ms=100)
             final = committed_final()
             self.store.update_operation(op["id"], status="succeeded" if final is not None else "coalesced" if getattr(exc, "code", "") == "intent_obsolete" else "stopped" if cancellation.is_set() else "interrupted" if isinstance(exc, asyncio.CancelledError) else "failed",
                 result={"content": final, "turn_id": turn_id}, error=None if final is not None else {"code": "run_failed", "message": str(exc)})
@@ -874,15 +1038,31 @@ class SessionControlService:
             return
         self.legacy_scan_at = time.monotonic() + 2
         from agent_loop import list_session_steers
-        for session in self.manager.list_sessions(include_archived=False):
-            sid = session["id"]
+        busy_sessions = set(self.workers)
+
+        def read_candidates():
+            # Directory resolution, queue locks and file reads can stall for
+            # seconds on Windows. Keep the whole scan off the HTTP loop, not
+            # just the readiness check for the rare nonempty queue.
+            candidates = []
+            for session in self.manager.list_sessions(include_archived=False):
+                sid = session["id"]
+                if sid in busy_sessions:
+                    continue
+                entries = [item for item in list_session_steers(sid).get("items", [])
+                           if item.get("after_turn") and item.get("state") == "queued"]
+                if entries:
+                    candidates.append((sid, entries))
+            return candidates
+
+        candidates = await self.resources.io.run("@followups", read_candidates)
+        self.legacy_scan_at = time.monotonic() + 2
+        for sid, entries in candidates:
             if sid in self.workers:
                 continue
-            entries = [item for item in list_session_steers(sid).get("items", [])
-                       if item.get("after_turn") and item.get("state") == "queued"]
             # The readiness callback can rebuild historical UI projections.
             # No queued followup means there is nothing to admit or recover.
-            if not entries or await asyncio.to_thread(state, sid) != "ready":
+            if not entries or await self.resources.io.run("@followups", state, sid) != "ready":
                 continue
             for item in entries:
                 principal = Principal("webui:" + sid, "Accepted WebUI followup", False,

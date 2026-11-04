@@ -96,3 +96,8 @@ skeleton-width-audit/
 tools/
 # One-off probe/scratch dirs from local sessions
 utf8_probe_*/
+
+# 本机自建插件（standalone：不进安装包、不入库）
+# plugins/remotion 由本机手工维护，未在 app/plugins/tiers.json 登记；
+# 如需随仓库分发，删掉这一行并登记到 extension 档。
+plugins/remotion/

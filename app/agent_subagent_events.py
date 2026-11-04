@@ -21,6 +21,8 @@ async def persist_execution_event(manager, session_id: str, event: Dict[str, Any
         return event
     from runtime_v2 import runtime_v2_primary
     if not runtime_v2_primary():
+        event.pop("_process_received_at", None)
+        event.pop("_reasoning_timing", None)
         return event
     import asyncio
     from runtime_v2 import runtime_v2_strict

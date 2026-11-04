@@ -93,6 +93,8 @@ def controlled_runtime(composed, runtime, monkeypatch):
     monkeypatch.setattr(real_harness, "session_manager", c.manager)
     monkeypatch.setattr(integration, "_application", c.control)
     monkeypatch.setattr(public, "ensure_host_session", real_session_binding)
+    monkeypatch.setattr(rt.h, "_work_pool", lambda: c.service.resources.business)
+    monkeypatch.setattr(rt.h, "_io_pool", lambda: c.service.resources.io)
     async def catalog(*args, **kwargs):
         registry = ToolRegistry()
         for name in rt.flow.allowed({"mode": "dm", "uid": "100"}):

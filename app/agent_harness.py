@@ -944,11 +944,116 @@ def truncate_tool_result_for_llm(text: Any, keep_chars: int) -> str:
     return notice + text[: max(0, int(keep_chars))]
 
 # ==================== 日志配置 ====================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+import log_safety
 from attachments.logging import ImagePayloadFilter
+from logging.handlers import RotatingFileHandler
+
+_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT)
 for _log_handler in logging.root.handlers:
     _log_handler.addFilter(ImagePayloadFilter())
+    _log_handler.setFormatter(log_safety.PayloadSafeFormatter(_LOG_FORMAT))
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(str(os.getenv(name, default)).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+# 日志存储与保留（正文不落盘的策略见 log_safety）
+LOG_MAX_BYTES = _env_int("LOG_MAX_BYTES", 8 * 1024 * 1024)
+LOG_BACKUP_COUNT = _env_int("LOG_BACKUP_COUNT", 2)
+LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 14)
+LOG_TOTAL_MAX_MB = _env_int("LOG_TOTAL_MAX_MB", 512)
+LOG_PRUNE_MODE = os.getenv("LOG_PRUNE_MODE", "report").strip().lower()
+_PROTECTED_LOG_FILES = frozenset({"agent_terminal.log", "agent_update.log", "launcher_console.log"})
+_LOG_PRUNE_DONE = False
+
+
+def _log_file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _log_file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _prune_log_dir_once() -> None:
+    """按保留期与总量上限盘点日志；LOG_PRUNE_MODE=delete 时才真正删除。"""
+    global _LOG_PRUNE_DONE
+    if _LOG_PRUNE_DONE:
+        return
+    _LOG_PRUNE_DONE = True
+    try:
+        files = [
+            p for p in LOG_DIR.iterdir()
+            if p.is_file()
+            and p.name not in _PROTECTED_LOG_FILES
+            and (p.name.endswith(".log") or ".log." in p.name)
+        ]
+    except OSError:
+        return
+    if not files:
+        return
+    now = time.time()
+    expired = []
+    if LOG_RETENTION_DAYS > 0:
+        cutoff = now - LOG_RETENTION_DAYS * 86400
+        expired = [p for p in files if _log_file_mtime(p) < cutoff]
+    remaining = [p for p in files if p not in expired]
+    oversize = []
+    if LOG_TOTAL_MAX_MB > 0:
+        total = sum(_log_file_size(p) for p in remaining)
+        limit = LOG_TOTAL_MAX_MB * 1024 * 1024
+        if total > limit:
+            for path in sorted(remaining, key=_log_file_mtime):
+                if total <= limit:
+                    break
+                oversize.append(path)
+                total -= _log_file_size(path)
+    candidates = expired + oversize
+    if not candidates:
+        return
+    freed_mb = sum(_log_file_size(p) for p in candidates) / 1048576
+    if LOG_PRUNE_MODE != "delete":
+        logger.info(
+            "log_prune_report mode=report files=%d mb=%.1f retention_days=%s total_max_mb=%s",
+            len(candidates), freed_mb, LOG_RETENTION_DAYS, LOG_TOTAL_MAX_MB,
+        )
+        return
+    removed = 0
+    for path in candidates:
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    logger.info("log_prune_done removed=%d mb=%.1f", removed, freed_mb)
+
+
+def _append_session_index(session_id: str, log_path: Path) -> None:
+    """文件名不再含用户输入，用索引文件保留 session → 日志映射。"""
+    if not session_id:
+        return
+    try:
+        row = {
+            "session": session_id,
+            "file": log_path.name,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        with (LOG_DIR / "session_index.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 # ANSI 颜色码
 COLOR_WHITE = "\033[97m"
@@ -956,34 +1061,55 @@ COLOR_BLUE = "\033[94m"
 COLOR_YELLOW = "\033[93m"
 COLOR_RESET = "\033[0m"
 
-def setup_logging(user_input: str, session_id: str = ""):
-    """初始化日志，每次会话创建独立日志文件"""
+def setup_logging(user_input: str, session_id: str = "", *, name_hint: str = ""):
+    """初始化日志，每次运行创建独立日志文件；正文只以指纹形式落盘。"""
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+    # 不依赖 root 的级别：宿主（uvicorn / pytest）可能把 root 留在 WARNING。
+    logger.setLevel(logging.INFO)
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_input = re.sub(r'[^a-zA-Z0-9\u4e00-\u9fff]', '_', user_input)[:30]
-    if session_id:
-        log_filename = f"{session_id[:8]}_{safe_input}.log"
-    else:
-        log_filename = f"{timestamp}_{safe_input}.log"
-    log_path = LOG_DIR / log_filename
+    stem = session_id[:8] if session_id else f"session_{timestamp}"
+    if name_hint:
+        hint = re.sub(r"[^a-zA-Z0-9_-]", "_", str(name_hint))[:20].strip("_")
+        if hint:
+            stem = f"{stem}_{hint}"
+    log_path = LOG_DIR / f"{stem}.log"
 
-    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding='utf-8',
+    )
     file_handler.addFilter(ImagePayloadFilter())
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    file_handler.setFormatter(log_safety.PayloadSafeFormatter(_LOG_FORMAT))
     logger.addHandler(file_handler)
 
     if VERBOSE_LOGGING:
         console_handler = logging.StreamHandler()
         console_handler.addFilter(ImagePayloadFilter())
-        console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        console_handler.setFormatter(log_safety.PayloadSafeFormatter('%(asctime)s - %(levelname)s - %(message)s'))
         logger.addHandler(console_handler)
 
-    logger.info(f"日志文件已创建: {log_path}")
-    logger.info(f"用户输入: {user_input}")
+    _prune_log_dir_once()
+    logger.info(
+        "log_ready path=%s session=%s payload_mode=%s",
+        log_path.name, session_id or "-", log_safety.MODE,
+    )
+    logger.info("session_input session=%s input=%s", session_id or "-", log_safety.digest(user_input))
+    _append_session_index(session_id, log_path)
+    return log_path
 
 # ==================== 提示词模板加载 ====================
 def normalize_prompt_language(language: str = "zh-CN") -> str:
@@ -2001,6 +2127,42 @@ class _FallbackChat:
         self.completions.set_status_callback(status_callback)
 
 
+def _apply_summary_reasoning_controls(
+    request: Dict[str, Any], candidate: Dict[str, Any],
+) -> None:
+    """Keep context summaries cheap without changing the session's controls."""
+    if LLMRequestContext.from_value(request.get("request_context")).purpose is not LLMRequestPurpose.SUMMARY:
+        return
+    # Compatible profiles with thinking disabled may be ordinary chat models
+    # that reject effort entirely. Keep their existing no-thinking controls.
+    if (
+        candidate.get("provider") == "openai-compatible"
+        and not request.get("reasoning_effort")
+        and not _thinking_enabled_from_extra_dict(request.get("extra_body"))
+    ):
+        return
+    # Low works for reasoning models that reject `none`. Apply this after the
+    # candidate controls so session settings and fallback profiles cannot undo it.
+    request["reasoning_effort"] = "low"
+    extra = copy.deepcopy(request.get("extra_body") or {})
+    if "reasoning_effort" in extra:
+        extra["reasoning_effort"] = "low"
+    if isinstance(extra.get("reasoning"), dict):
+        extra["reasoning"]["effort"] = "low"
+    thinking = extra.get("thinking")
+    if isinstance(thinking, dict):
+        # Let the Anthropic adapter derive the small budget from `low` rather
+        # than retaining a profile's explicit high thinking budget.
+        thinking.pop("budget_tokens", None)
+    # DeepSeek's effort levels do not include low; use its no-thinking mode.
+    if "deepseek" in str(request.get("model") or "").lower():
+        extra["thinking"] = {"type": "disabled"}
+        extra.pop("reasoning_effort", None)
+        request.pop("reasoning_effort", None)
+    if extra:
+        request["extra_body"] = extra
+
+
 class ExecutorLLMClient:
     """Executor facade that retries provider-neutral model transports."""
 
@@ -2247,6 +2409,7 @@ class ExecutorLLMClient:
             else:
                 call_kwargs.pop("extra_body", None)
                 call_kwargs.pop("reasoning_effort", None)
+            _apply_summary_reasoning_controls(call_kwargs, item)
             try:
                 if index > 0:
                     if last_error is not None:
@@ -2375,6 +2538,7 @@ class ExecutorLLMClient:
                 call_kwargs["reasoning_effort"] = item.get("reasoning_effort")
             else:
                 call_kwargs.pop("reasoning_effort", None)
+            _apply_summary_reasoning_controls(call_kwargs, item)
             from attachments.content import project_request_images
             from types import SimpleNamespace
             call_kwargs["messages"] = project_request_images(
@@ -3693,6 +3857,15 @@ class SessionManager:
             if listener not in self._session_state_listeners:
                 self._session_state_listeners.append(listener)
 
+    def remove_session_state_listener(
+        self,
+        listener: Callable[[str, frozenset[str]], None],
+    ) -> None:
+        """Release observers owned by a closed transport or view."""
+        with self._session_state_listener_lock:
+            if listener in self._session_state_listeners:
+                self._session_state_listeners.remove(listener)
+
     def _notify_session_state_changed(
         self,
         session_id: str,
@@ -3934,6 +4107,8 @@ class SessionManager:
                     "unread_result": bool(meta.get("unread_result", False)),
                     "unread_result_at": meta.get("unread_result_at"),
                     "unread_result_status": str(meta.get("unread_result_status") or "success"),
+                    "unread_result_run_order": int(meta.get("unread_result_run_order") or 0),
+                    "unread_result_last_run_id": str(meta.get("unread_result_last_run_id") or ""),
                     "last_user_preview": str(meta.get("last_user_preview") or ""),
                 }
                 unread_result_run_id = str(meta.get("unread_result_run_id") or "").strip()
@@ -4604,11 +4779,14 @@ class SessionManager:
         rid = str(run_id or "").strip()
         if not rid:
             return 0
+        rows = self._load_pending_subagent_results(session_id)
+        if not any(str(item.get("parent_run_id") or "").strip() == rid
+                   and item.get("after_final_index") is None for item in rows):
+            return 0
         events = self._load_ui_events_for_active_runtime(session_id)
         final_idx = self._latest_final_index_without_later_user(events)
         if final_idx < 0:
             return 0
-        rows = self._load_pending_subagent_results(session_id)
         changed = 0
         for item in rows:
             if str(item.get("parent_run_id") or "").strip() != rid:
@@ -6064,8 +6242,6 @@ class SessionManager:
         boundary_for_branch=True 时按「分支点 final 前 user」取锚点，且不裁掉该 user 轮。
         """
         try:
-            events = self._load_ui_events_for_active_runtime(session_id)
-            n = len(events)
             if before_index < 0:
                 return False
             runtime_truncate_keep_seq: Optional[int] = None
@@ -6079,26 +6255,17 @@ class SessionManager:
                         self.repository.sessions_dir,
                         path_resolver=self._resolve_session_path,
                     )
-                    if truncate_before_seq is not None:
-                        target_seq = int(truncate_before_seq)
-                    else:
-                        target_seq = int(projection.ui_index_to_runtime_seq(session_id, before_index) or 0)
-                    if target_seq <= 0:
+                    boundary = projection.resolve_truncate_boundary(
+                        session_id, before_index, truncate_before_seq,
+                    )
+                    if boundary is None:
                         return False
-                    end_index = projection.runtime_seq_to_ui_end_index(session_id, target_seq)
-                    keep_seq = projection.previous_visible_runtime_seq_before(session_id, target_seq)
-                    if end_index is None or keep_seq is None:
-                        return False
-                    before_index = max(0, int(end_index) - 1)
+                    before_index, target_seq, keep_seq = boundary
                     runtime_truncate_target_seq = int(target_seq)
                     runtime_truncate_keep_seq = int(keep_seq)
                     runtime_seq_truncate = True
-                    events = projection.read_ui_events_fast(session_id)
-                    n = len(events)
                 except (TypeError, ValueError):
                     return False
-            if before_index > n:
-                before_index = n
             if self._runtime_v2_primary():
                 if runtime_truncate_target_seq is not None and runtime_truncate_keep_seq is not None:
                     truncated = self._observe_runtime_v2_history(
@@ -6125,6 +6292,10 @@ class SessionManager:
                     )
                     return False
                 return True
+            events = self._load_ui_events_for_active_runtime(session_id)
+            n = len(events)
+            if before_index > n:
+                before_index = n
             new_events = events[:before_index]
             if create_backup:
                 self._backup_session_before_truncate(
@@ -6211,49 +6382,18 @@ class SessionManager:
             branch_from_seq: Optional[int] = None
             if self._runtime_v2_primary() and branch_after_seq is not None:
                 try:
-                    from runtime_v2.ui_projection import RuntimeUiProjection
-
-                    projection = RuntimeUiProjection(
-                        self.repository.sessions_dir,
-                        path_resolver=self._resolve_session_path,
-                    )
                     seq = int(branch_after_seq)
-                    source_event = None
-                    for candidate in projection.event_log.iter_events(sid):
-                        if int(candidate.seq) == seq:
-                            source_event = candidate
-                            break
-                    events = projection.read_ui_events_fast(sid)
-                    n = len(events)
-                    if source_event is None:
-                        logger.info(
-                            "Runtime V2 branch after_seq not found; falling back to before_index: session=%s seq=%s before_index=%s",
-                            sid,
-                            seq,
-                            before_index,
-                        )
+                    # The visible projection already includes runtime identity,
+                    # deletion and rewrite semantics. Reuse this one view for
+                    # validation and mapping instead of replaying the log again.
+                    target_index = next((index for index, event in enumerate(events)
+                                         if event.get("runtime_seq") == seq and event.get("type") == "final"), None)
+                    if target_index is not None:
+                        before_index = target_index + 1
+                        branch_from_seq = seq
                     else:
-                        source_ui = projection._event_to_ui(sid, source_event)
-                        if not source_ui or source_ui.get("type") != "final":
-                            logger.info(
-                                "Runtime V2 branch after_seq is not final; falling back to before_index: session=%s seq=%s type=%s before_index=%s",
-                                sid,
-                                seq,
-                                str(source_ui.get("type") if isinstance(source_ui, dict) else source_event.type),
-                                before_index,
-                            )
-                        else:
-                            seq_before_index = projection.runtime_seq_to_ui_end_index(sid, seq)
-                            if seq_before_index is None:
-                                logger.info(
-                                    "Runtime V2 branch after_seq not visible; falling back to before_index: session=%s seq=%s before_index=%s",
-                                    sid,
-                                    seq,
-                                    before_index,
-                                )
-                            else:
-                                before_index = int(seq_before_index)
-                                branch_from_seq = seq
+                        logger.info("Runtime V2 branch after_seq not a visible final; falling back to before_index: session=%s seq=%s before_index=%s",
+                                    sid, seq, before_index)
                     if before_index > n:
                         return {"ok": False, "error": "before_index_after_end", "event_count": n}
                 except (TypeError, ValueError):
@@ -6313,12 +6453,7 @@ class SessionManager:
                 meta.pop("pending_subagent_notifications", None)
                 if branch_from_seq is None:
                     try:
-                        from runtime_v2.ui_projection import RuntimeUiProjection
-
-                        mapped_seq = RuntimeUiProjection(
-                            self.repository.sessions_dir,
-                            path_resolver=self._resolve_session_path,
-                        ).ui_index_to_runtime_seq(sid, before_index - 1)
+                        mapped_seq = new_events[-1].get("runtime_seq")
                         branch_from_seq = int(mapped_seq) if mapped_seq is not None else before_index
                     except Exception as exc:
                         logger.debug("Runtime V2 branch source seq mapping failed for %s: %s", sid, exc)
@@ -7796,7 +7931,11 @@ class SessionManager:
             "last_user_preview": str(metadata.get("last_user_preview") or ""),
             "unread_result_at": metadata.get("unread_result_at"),
             "unread_result_status": str(metadata.get("unread_result_status") or "success"),
+            "unread_result_run_order": int(metadata.get("unread_result_run_order") or 0),
+            "unread_result_last_run_id": str(metadata.get("unread_result_last_run_id") or ""),
         }
+        if metadata.get("unread_result_run_id"):
+            entry["unread_result_run_id"] = metadata["unread_result_run_id"]
         for field in ("archived", "pinned", "todo", "goal_review_pending", "draft", "unread_result"):
             entry[field] = bool(metadata.get(field, False))
         with self._lock:
@@ -8007,6 +8146,64 @@ class SessionManager:
         self._save_index()
         self._notify_session_state_changed(session_id, {"name"})
 
+    @staticmethod
+    def _remember_run_start_order(metadata: Dict[str, Any], run_id: str) -> None:
+        """Record the order in which runs started, so a delayed terminal for an
+        older run can be told apart from a newer one without sorting UUIDs."""
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        order = metadata.get("run_start_order")
+        if not isinstance(order, list):
+            order = []
+        order = [str(item).strip() for item in order if str(item).strip()]
+        if rid not in order:
+            order.append(rid)
+        # Keep ranks stable when the bounded history drops its oldest run.
+        metadata["run_start_order_base"] = int(metadata.get("run_start_order_base") or 0) + max(0, len(order) - 64)
+        metadata["run_start_order"] = order[-64:]
+
+    @staticmethod
+    def _run_start_rank(metadata: Dict[str, Any], run_id: str) -> Optional[int]:
+        rid = str(run_id or "").strip()
+        order = metadata.get("run_start_order")
+        if not rid or not isinstance(order, list):
+            return None
+        for index, item in enumerate(order):
+            if str(item).strip() == rid:
+                return int(metadata.get("run_start_order_base") or 0) + index + 1
+        return None
+
+    def get_run_start_order(self, session_id: str, run_id: str) -> int:
+        """A durable per-session run generation, shared by HTTP and SSE."""
+        try:
+            metadata = self._load_metadata(session_id) or {}
+        except (ValueError, OSError):
+            # Delayed notifications may outlive a removed/unavailable session.
+            return 0
+        return self._run_start_rank(metadata, run_id) or 0
+
+    @classmethod
+    def _unread_result_is_stale(cls, metadata: Dict[str, Any], result_run_id: str) -> bool:
+        """True when a terminal write belongs to a run that started before the
+        run whose result is currently recorded. Unknown identities are trusted
+        (fail open) because they cannot be ordered reliably."""
+        # Reading clears `unread_result_run_id`, so keep the last confirmed run
+        # as the ordering reference; otherwise a delayed failure from the run
+        # before it could reappear after the conversation was read.
+        current_run_id = str(
+            metadata.get("unread_result_run_id")
+            or metadata.get("unread_result_last_run_id")
+            or ""
+        ).strip()
+        if not result_run_id or not current_run_id or result_run_id == current_run_id:
+            return False
+        incoming_rank = cls._run_start_rank(metadata, result_run_id)
+        current_rank = metadata.get("unread_result_run_order") or cls._run_start_rank(metadata, current_run_id)
+        if incoming_rank is None or current_rank is None:
+            return False
+        return incoming_rank < current_rank
+
     def mark_session_unread_result(
         self,
         session_id: str,
@@ -8026,6 +8223,11 @@ class SessionManager:
             metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
+            # A retry can commit its terminal before a delayed handler for the
+            # previous run. That older terminal must not resurrect the old
+            # failure (or clear a newer failure) in the durable summary.
+            if self._unread_result_is_stale(metadata, result_run_id):
+                return
             if result_status == "success" and (
                 (
                     metadata.get("unread_result_status") == "failed"
@@ -8040,8 +8242,11 @@ class SessionManager:
             metadata["unread_result"] = True
             metadata["unread_result_at"] = now
             metadata["unread_result_status"] = result_status
+            result_order = self._run_start_rank(metadata, result_run_id) or 0
+            metadata["unread_result_run_order"] = result_order
             if result_run_id:
                 metadata["unread_result_run_id"] = result_run_id
+                metadata["unread_result_last_run_id"] = result_run_id
             else:
                 metadata.pop("unread_result_run_id", None)
             self._save_metadata_unlocked(sid, metadata)
@@ -8052,6 +8257,8 @@ class SessionManager:
                     sess["unread_result"] = True
                     sess["unread_result_at"] = now
                     sess["unread_result_status"] = result_status
+                    sess["unread_result_run_order"] = result_order
+                    sess["unread_result_last_run_id"] = metadata.get("unread_result_last_run_id", "")
                     if result_run_id:
                         sess["unread_result_run_id"] = result_run_id
                     else:
@@ -8153,6 +8360,7 @@ class SessionManager:
                 return
             if rid:
                 metadata["active_run_id"] = rid
+                self._remember_run_start_order(metadata, rid)
                 interrupt_run_id = str(metadata.get("interrupt_run_id") or "").strip()
                 if bool(metadata.get("interrupt_requested")) and interrupt_run_id == rid:
                     self._save_metadata_unlocked(sid, metadata)

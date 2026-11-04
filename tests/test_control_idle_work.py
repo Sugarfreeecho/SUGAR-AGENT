@@ -1,5 +1,6 @@
 """An idle control plane must not replay UI history or fsync every fact."""
 import asyncio
+import threading
 from datetime import datetime, timezone
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -9,7 +10,92 @@ import pytest
 from session_control.automation import AutomationService
 from session_control.service import SessionControlService
 from session_control.store import ControlStore
+from session_control.resources import BoundedWorkPool
 from tests.test_session_control import composed, new_session, rpc, run_async
+
+
+@pytest.fixture
+def control_io():
+    pool = BoundedWorkPool('test-control-io', workers=2, pending=2)
+    yield SimpleNamespace(io=pool)
+    pool.close()
+
+
+@pytest.mark.parametrize('method', ['operation.get', 'operation.wait'])
+@pytest.mark.parametrize('blocked', ['authorize', 'database', 'scope'])
+def test_operation_poll_cannot_block_http_loop(monkeypatch, method, blocked):
+    import session_control.service as module
+    from session_control.policy import Principal
+    entered, release = threading.Event(), threading.Event()
+    def gate(stage):
+        if stage == blocked:
+            entered.set()
+            assert release.wait(4)
+    def get_operation(_):
+        gate('database')
+        return {'id': 'op', 'session_id': 's', 'principal': 'p', 'status': 'succeeded'}
+    monkeypatch.setattr(module, 'check_session', lambda *args: gate('scope'))
+    service = SessionControlService.__new__(SessionControlService)
+    service.principal = lambda principal: principal
+    service.authorize = lambda *args: gate('authorize')
+    service.store = SimpleNamespace(get_operation=get_operation)
+    service.manager = object()
+    service.receipt = lambda op: dict(op)
+    principal = Principal('p', admin=True)
+    async def exercise():
+        task = asyncio.create_task(service.execute(principal, method, {'id': 'op', 'timeout': 1}))
+        watchdog = threading.Timer(3, release.set)
+        watchdog.start()
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            await asyncio.sleep(0)
+            assert not release.is_set(), 'control polling blocked the HTTP loop until watchdog release'
+        finally:
+            release.set()
+            watchdog.cancel()
+        value, _ = await task
+        assert value['status'] == 'succeeded'
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('blocked_read', ['sessions', 'steers'])
+@pytest.mark.parametrize('became_busy', [False, True])
+def test_followup_scan_cannot_block_http_loop(monkeypatch, control_io, blocked_read, became_busy):
+    import agent_loop
+    entered, release = threading.Event(), threading.Event()
+    admitted = []
+    def slow_read(kind):
+        if kind == blocked_read:
+            entered.set()
+            assert release.wait(3)
+    def sessions(**_):
+        slow_read('sessions')
+        return [{'id': 's'}]
+    def steers(sid):
+        slow_read('steers')
+        return {'items': [dict(id='x', state='queued', after_turn=True, content='q')]}
+    monkeypatch.setattr(agent_loop, 'list_session_steers', steers)
+    async def execute(*args, **kwargs):
+        admitted.append(kwargs)
+    service = SimpleNamespace(callbacks={'followup_state': lambda sid: 'ready'}, legacy_scan_at=0,
+        workers={}, manager=SimpleNamespace(list_sessions=sessions), execute=execute, resources=control_io)
+    async def exercise():
+        task = asyncio.create_task(SessionControlService.adopt_followups(service))
+        watchdog = threading.Timer(2, release.set)
+        watchdog.start()
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            # This callback represents another HTTP request on the same loop.
+            await asyncio.sleep(0)
+            assert not release.is_set(), 'disk scan blocked the loop until the watchdog released it'
+            if became_busy:
+                service.workers['s'] = object()
+        finally:
+            release.set()
+            watchdog.cancel()
+            await task
+    asyncio.run(exercise())
+    assert len(admitted) == (0 if became_busy else 1)
 
 
 @pytest.mark.parametrize('tasks', [[], [{'enabled': False, 'trigger': {'kind': 'event'}}],
@@ -86,16 +172,16 @@ async def test_rule_admission_is_not_duplicated_when_watermark_commit_is_replaye
 
 @pytest.mark.parametrize('items', [[], [{'id': 'x', 'state': 'queued', 'after_turn': False}],
                                    [{'id': 'x', 'state': 'sent', 'after_turn': True}]])
-def test_empty_followup_queues_never_check_ui_readiness(monkeypatch, items):
+def test_empty_followup_queues_never_check_ui_readiness(monkeypatch, control_io, items):
     import agent_loop
     monkeypatch.setattr(agent_loop, 'list_session_steers', lambda sid: {'items': items})
     service = SimpleNamespace(callbacks={'followup_state': lambda sid: pytest.fail('idle queue hydrated history')},
-        legacy_scan_at=0, workers={}, manager=SimpleNamespace(list_sessions=lambda **_: [{'id': 's'}]))
+        legacy_scan_at=0, workers={}, manager=SimpleNamespace(list_sessions=lambda **_: [{'id': 's'}]), resources=control_io)
     asyncio.run(SessionControlService.adopt_followups(service))
 
 
 @pytest.mark.parametrize('state', ['ready', 'recovering', 'paused'])
-def test_queued_followups_still_require_ready_state_and_admit_once(monkeypatch, state):
+def test_queued_followups_still_require_ready_state_and_admit_once(monkeypatch, control_io, state):
     import agent_loop
     items = [dict(id='x', state='queued', after_turn=True, content='question', ui_content='visible', user_content='original'),
              dict(id='y', state='queued', after_turn=True, content='next')]
@@ -104,7 +190,8 @@ def test_queued_followups_still_require_ready_state_and_admit_once(monkeypatch, 
     async def execute(*args, **kwargs):
         admitted.append((args, kwargs))
     service = SimpleNamespace(callbacks={'followup_state': lambda sid: checked.append(sid) or state},
-        legacy_scan_at=0, workers={}, manager=SimpleNamespace(list_sessions=lambda **_: [{'id': 's'}]), execute=execute)
+        legacy_scan_at=0, workers={}, manager=SimpleNamespace(list_sessions=lambda **_: [{'id': 's'}]), execute=execute,
+        resources=control_io)
     asyncio.run(SessionControlService.adopt_followups(service))
     assert checked == ['s']
     assert len(admitted) == (1 if state == 'ready' else 0)

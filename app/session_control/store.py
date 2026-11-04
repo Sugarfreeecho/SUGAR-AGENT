@@ -26,6 +26,8 @@ class ControlStore:
         self.path = Path(path)
         self.lock = threading.RLock()
         self._ready = False
+        from .resources import QueueLimits
+        self.queue_limits = QueueLimits.environment()
 
     @contextmanager
     def transaction(self):
@@ -110,7 +112,7 @@ class ControlStore:
         if not isinstance(idem, str) or not idem or len(idem) > 200:
             raise ControlError("idempotency_key_required", "A key of 1-200 characters is required")
         def business(request):
-            value = {k: v for k, v in request.items() if k != "_principal"}
+            value = {k: v for k, v in request.items() if k not in {"_principal", "_subagent_batch"}}
             if value.get("_source"):
                 value["_source"] = {"id": value["_source"]["id"]}
             return value
@@ -129,6 +131,20 @@ class ControlStore:
                 (principal, params["_coalesce_key"])).fetchone()
             if active:
                 return self.operation(active), True
+        if method in {"session.send", "session.continue", "session.recover"}:
+            from .resources import SOURCE_SQL, source_key
+            source = source_key({"request": params, "principal": principal})
+            limits = self.queue_limits
+            clauses = [("total", limits.total, "1=1", ()),
+                       ("source", limits.source, SOURCE_SQL + "=?", (source,)),
+                       ("session", limits.session, "session_id=?", (params.get("session_id", ""),))]
+            if params.get("_automation_id"):
+                clauses.append(("task", limits.task, "json_extract(request,'$._automation_id')=?", (params["_automation_id"],)))
+            for scope, maximum, clause, values in clauses:
+                count = db.execute("SELECT count(*) FROM operations WHERE status='queued' AND method IN ('session.send','session.continue','session.recover') AND " + clause, values).fetchone()[0]
+                if count >= maximum:
+                    raise ControlError("queue_full", "Pending input budget is full; retry with the same idempotency key", status=429,
+                                       details={"scope": scope, "limit": maximum, "retry_after": 1})
         oid = str(uuid.uuid4())
         db.execute("INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?)",
                    (oid, principal, idem, method, fingerprint, encoded(params), "queued", "pending",
@@ -169,14 +185,17 @@ class ControlStore:
             return self.operation(db.execute("SELECT * FROM operations WHERE session_id=? AND run_id=? ORDER BY created DESC LIMIT 1", (sid, run_id)).fetchone())
 
     def pending_heads(self):
+        from .resources import SOURCE_SQL
         with self.transaction() as db:
             return [self.operation(row) for row in db.execute("""
+                WITH heads AS (
                 SELECT op.* FROM operations op WHERE status='queued'
                 AND method IN ('session.send','session.continue','session.recover')
                 AND NOT EXISTS (SELECT 1 FROM operations earlier WHERE earlier.session_id=op.session_id
                     AND earlier.status='queued' AND earlier.method IN ('session.send','session.continue','session.recover')
                     AND (earlier.created < op.created OR (earlier.created=op.created AND earlier.id<op.id)))
-                ORDER BY created LIMIT 1000""")]
+                ), ranked AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY """ + SOURCE_SQL + """ ORDER BY created,id) AS rank FROM heads)
+                SELECT heads.* FROM heads JOIN ranked ON heads.id=ranked.id ORDER BY ranked.rank,heads.created,heads.id LIMIT 1000""")]
 
     def operations(self, *, status=None, session_id=None, automation_id=None, limit=100, newest=False):
         clauses, values = [], []
@@ -194,7 +213,7 @@ class ControlStore:
             return [self.operation(r) for r in db.execute("SELECT * FROM operations" + where + " ORDER BY created " + ("DESC" if newest else "ASC") + " LIMIT ?",
                                                          (*values, min(max(int(limit), 1), 1000)))]
 
-    def update_operation(self, oid, *, expected=None, **fields):
+    def update_operation(self, oid, *, expected=None, expected_updated=None, **fields):
         allowed = {"status", "delivery", "session_id", "result", "error", "snapshot"}
         if not fields or set(fields) - allowed:
             raise ValueError("invalid operation update")
@@ -206,6 +225,9 @@ class ControlStore:
             if expected is not None:
                 sql += " AND status=?"
                 values.append(expected)
+            if expected_updated is not None:
+                sql += " AND updated=?"
+                values.append(expected_updated)
             changed = db.execute(sql, values).rowcount == 1
             if changed and fields.get("status") in {"succeeded", "failed", "stopped", "interrupted", "unknown", "cancelled", "rejected"}:
                 row = db.execute("SELECT request FROM operations WHERE id=?", (oid,)).fetchone()

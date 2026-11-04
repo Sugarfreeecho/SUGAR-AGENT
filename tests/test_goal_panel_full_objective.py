@@ -48,7 +48,7 @@ def test_panel_shows_the_whole_objective_and_only_the_narrow_strip_summarizes() 
     assert "objective.textContent = full;" in source
     assert "objective.textContent = objectiveSummary(full);" not in source
     # 输入框上方的窄态条目仍然用短摘要
-    assert "summary: objectiveSummary(full)," in source
+    assert "summary: actionState.message || objectiveSummary(full)," in source
 
 
 def test_goal_action_row_stays_pinned_while_the_objective_scrolls() -> None:

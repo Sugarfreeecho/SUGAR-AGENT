@@ -33,7 +33,17 @@ def tool_ref(descriptor):
 def ref_key(ref):
     if not isinstance(ref, dict) or set(ref) != {"kind", "owner", "name"} or not all(isinstance(v, str) and v for v in ref.values()):
         raise ControlError("invalid_config", "Tool references require kind, owner and stable name")
-    return (ref["kind"], ref["owner"], ref["name"])
+    key = (ref["kind"], ref["owner"], ref["name"])
+    # These builtins moved to the bundled web plugin without a schema change.
+    # Match old snapshots/ceilings too, even before validate_config reads them,
+    # so persisted deny rules and optional constraints cannot silently lapse.
+    if key[:2] == ("host", "core.tools") and key[2] in {"web_fetch", "web_download"}:
+        return ("host_service", "web-search-providers", key[2])
+    return key
+
+
+def _canonical_tool_ref(ref):
+    return dict(zip(("kind", "owner", "name"), ref_key(ref)))
 
 
 def validate_config(raw, *, partial=False):
@@ -79,8 +89,7 @@ def validate_config(raw, *, partial=False):
         tools.setdefault(field, [])
         if not isinstance(tools[field], list):
             raise ControlError("invalid_config", field + " must be an array")
-        for ref in tools[field]:
-            ref_key(ref)
+        tools[field] = [_canonical_tool_ref(ref) for ref in tools[field]]
     tools.setdefault("bindings", [])
     if not isinstance(tools["bindings"], list):
         raise ControlError("invalid_config", "bindings must be an array")
@@ -89,6 +98,7 @@ def validate_config(raw, *, partial=False):
         if not isinstance(b, dict) or set(b) - {"tool_ref", "schema_digest", "required", "defaults", "fixed", "constraints"}:
             raise ControlError("invalid_config", "Invalid tool binding")
         key = ref_key(b.get("tool_ref"))
+        b["tool_ref"] = _canonical_tool_ref(b["tool_ref"])
         seen.add(key)
         if type(b.get("required", True)) is not bool:
             raise ControlError("invalid_config", "required must be boolean")

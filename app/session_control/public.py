@@ -24,6 +24,20 @@ def control_application():
     return app
 
 
+async def host_monitors():
+    """Trusted adapters register on the single backend scheduler."""
+    app = control_application()
+    if app.service.loop and app.service.loop.is_running():
+        await on_service_loop(app.service, app.service.start)
+    else:
+        await app.service.start()
+    return app.service.monitors
+
+
+def host_work_pool():
+    return control_application().service.resources.business
+
+
 async def on_service_loop(service, callback):
     loop = service.loop
     if loop is None or not loop.is_running():

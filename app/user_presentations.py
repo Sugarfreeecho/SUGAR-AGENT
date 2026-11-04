@@ -16,7 +16,7 @@ from runtime_v2.event_schema import now_iso
 from tool_registry import ToolOutcome
 
 _KINDS = {"webpage", "text", "image", "file", "plugin", "notice", "settings", "notification"}
-_SETTINGS_SECTIONS = {"general", "models", "skills", "plugins", "hooks", "mcp", "usage", "security", "env", "paths"}
+_SETTINGS_SECTIONS = {"general", "models", "skills", "plugins", "hooks", "mcp", "usage", "security", "schedules", "env", "paths"}
 _PLUGIN_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def _settings_section(section):
         for row in plugin_catalog_snapshot().get("ui_contributions", []):
             if row.get("slot") == "settings.section" and section == f"plugin:{row.get('plugin_id')}:{row.get('id')}":
                 return section
-    raise ValueError("section is not an available settings tab: general, models, skills, plugins, hooks, mcp, usage, security, env, paths or a declared plugin:<id>:<section>")
+    raise ValueError("section is not an available settings tab: general, models, skills, plugins, hooks, mcp, usage, security, schedules, env, paths or a declared plugin:<id>:<section>")
 
 
 def prepare_presentation(arguments, *, workspace):

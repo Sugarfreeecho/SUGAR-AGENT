@@ -97,8 +97,10 @@ class ControlApplication:
         if not isinstance(exc, ControlError):
             exc = ControlError("invalid_params" if isinstance(exc, (ValueError, TypeError, KeyError)) else "internal_error",
                                str(exc) if isinstance(exc, (ValueError, TypeError, KeyError)) else "The control operation failed", status=400 if isinstance(exc, (ValueError, TypeError, KeyError)) else 500)
-        return JSONResponse(envelope(request_id=rid, error=exc), status_code=exc.status,
-                            headers={"Cache-Control": "no-store"})
+        headers = {"Cache-Control": "no-store"}
+        if exc.code in {"queue_full", "work_pool_full", "monitor_full"}:
+            headers["Retry-After"] = "1"
+        return JSONResponse(envelope(request_id=rid, error=exc), status_code=exc.status, headers=headers)
 
     async def rpc(self, request: Request):
         rid = ""

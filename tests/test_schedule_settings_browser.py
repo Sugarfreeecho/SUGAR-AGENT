@@ -74,6 +74,22 @@ def fill_basic(page):
     page.locator('[data-field="instructions"]').fill("Review recent changes and summarize blockers.")
 
 
+def test_task_created_elsewhere_appears_on_focus_and_does_not_replace_an_open_editor(schedules):
+    s, page = schedules, schedules.page
+    item = {"id": "model-task", "name": "模型创建的任务", "enabled": True, "revision": 1,
+            "trigger": {"kind": "cron", "expression": "0 9 * * *", "time_zone": "Asia/Shanghai"},
+            "target": {"mode": "existing", "session_id": "s1"}, "action": {"kind": "prompt", "text": "整理进展"}}
+    fill_basic(page)
+    s.items.append(item)
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    assert page.locator('[data-field="name"]').input_value() == "Project review"
+    page.once('dialog', lambda dialog: dialog.accept())
+    page.locator('[data-act="dlg-cancel"]').click()
+    page.locator('#st-dialog').wait_for(state="hidden")
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    page.get_by_role("heading", name="模型创建的任务").wait_for()
+
+
 def test_task_create_edit_pause_run_history_and_delete(schedules):
     s, page = schedules, schedules.page
     assert page.locator('[data-act="nav"][data-id="schedules"]').inner_text() == "定时任务"

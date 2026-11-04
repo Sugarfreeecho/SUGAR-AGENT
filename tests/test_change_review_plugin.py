@@ -64,6 +64,15 @@ def init_git_workspace(path: Path) -> None:
     subprocess.run(["git", "-C", str(path), "config", "user.name", "Review Test"], check=True)
 
 
+@pytest.fixture(autouse=True)
+def _enable_workspace_sweep(monkeypatch):
+    """The suite covers the opt-in workspace diff; the product default is off.
+
+    Default-off behaviour has its own tests, which delete this variable.
+    """
+    monkeypatch.setenv("MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP", "1")
+
+
 def test_create_modify_delete_and_undo(review):
     store, workspace = review
     path = workspace / "hello.txt"
@@ -1431,3 +1440,144 @@ def test_temporary_graduation_keeps_preexisting_origin(review):
     assert (rows[0]["added"], rows[0]["removed"]) == (1, 0)
     store.undo([rows[0]["snapshot_id"]], "undo-graduate")
     assert path.read_text(encoding="utf-8") == "base\n"
+
+
+def test_workspace_sweep_is_off_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP", raising=False)
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("one\ntwo\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True)
+    store = module.FileChangeReviewStore(tmp_path / "session")
+    sys.path.insert(0, str(ROOT / "app"))
+    import agent_tools
+
+    # Shell / MCP / external edits have no review surface without the sweep.
+    assert capture(
+        store, workspace, "run_shell", {"command": "append"},
+        lambda: tracked.write_text("one\ntwo\nthree\n", encoding="utf-8"),
+        run="shell-run",
+    ) == []
+    (workspace / "other.txt").write_text("external\n", encoding="utf-8")
+
+    # Declared file tools still work and stay byte-accurate.
+    with agent_tools.tool_work_dir_override(workspace):
+        rows = capture(
+            store, workspace, "edit_file", {"path": "tracked.txt"},
+            lambda: tracked.write_text("one\nchanged\n", encoding="utf-8"),
+            run="shell-run", call="declared",
+        )
+    assert len(rows) == 1
+    assert rows[0]["path"] == "tracked.txt"
+    assert rows[0]["operation"] == "modify"
+    assert (rows[0]["added"], rows[0]["removed"]) == (1, 2)
+    assert all(row["path"] != "other.txt" for row in rows)
+
+    index = json.loads(store.index_path.read_text(encoding="utf-8"))
+    assert index["baselines"] == {}
+    assert index["deferred_sweeps"] == {}
+
+    # Undo still restores the declared file only.
+    store.undo([rows[0]["snapshot_id"]], "undo-declared")
+    assert tracked.read_text(encoding="utf-8") == "one\ntwo\nthree\n"
+    assert (workspace / "other.txt").read_text(encoding="utf-8") == "external\n"
+
+
+def test_workspace_sweep_opt_in_keeps_git_observation(tmp_path):
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True)
+    store = module.FileChangeReviewStore(tmp_path / "session")
+
+    rows = capture(
+        store, workspace, "run_shell", {"command": "append"},
+        lambda: tracked.write_text("one\ntwo\n", encoding="utf-8"),
+        run="opt-in",
+    )
+    assert len(rows) == 1
+    assert rows[0]["path"] == "tracked.txt"
+    assert (rows[0]["added"], rows[0]["removed"]) == (1, 0)
+
+
+def test_disabled_sweep_retires_legacy_obligations(tmp_path, monkeypatch):
+    monkeypatch.delenv("MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP", raising=False)
+    module = _load_store()
+    store = module.FileChangeReviewStore(tmp_path / "session")
+    index = store._load()
+    index["baselines"]["legacy"] = {
+        "baseline_id": "legacy", "baseline_key": "legacy", "run_id": "old-run",
+        "work_root": str(tmp_path), "entries": {},
+    }
+    index["deferred_sweeps"]["legacy"] = {
+        "run_id": "old-run", "tool_call_id": "old-call", "execution_scope": {},
+        "baseline_key": "legacy", "work_root": str(tmp_path), "entries": [],
+    }
+    store._save(index)
+
+    assert store.flush_deferred_sweeps() == []
+    assert store._load()["deferred_sweeps"] == {}
+
+
+def test_disabled_sweep_recovery_reports_coverage_not_failure(tmp_path, monkeypatch):
+    monkeypatch.delenv("MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP", raising=False)
+    module = _load_store()
+    store = module.FileChangeReviewStore(tmp_path / "session")
+    index = store._empty()
+    index["pending"]["old"] = {
+        "tool": "run_shell", "run_id": "old-turn", "tool_call_id": "old-call",
+        "entries": [], "baseline_key": None, "execution_scope": {},
+    }
+    store._save(index)
+
+    assert store.recover_pending(
+        current_run_id="new", current_turn_id="new-turn",
+        execution_active=lambda _run: False,
+    ) == 1
+    event = store.flush_deferred_sweeps()[0]
+    assert event["changes"] == []
+    status = event["change_review_status"]
+    assert (status["stage"], status["status"], status["coverage"]) == (
+        "recovery", "checked", "unavailable")
+    assert status["reason"] == ""
+
+
+def test_runtime_reports_unavailable_when_sweep_is_off(tmp_path, monkeypatch):
+    monkeypatch.delenv("MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP", raising=False)
+    sys.path.insert(0, str(ROOT / "app"))
+    import agent_tools
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime = _load_plugin_module("runtime.py", "test_review_runtime_sweep_off")
+    manager = SimpleNamespace(
+        _get_session_path=lambda _sid: tmp_path / "session",
+        append_ui_event=lambda *_args, **_kwargs: None,
+    )
+    callbacks = runtime.initialize(SimpleNamespace(session_manager=manager))
+    state = {
+        "session_id": "session", "_runtime_v2_run_id": "run",
+        "_change_review_turn_id": "turn",
+    }
+    with agent_tools.tool_work_dir_override(workspace):
+        external = callbacks["before_native_file_tool"](
+            state, "run_shell", {"command": "echo"}, "call-1")
+        assert external.coverage == "unavailable"
+        changes = callbacks["after_native_file_tool"](state, external)
+        # No capture id: the callback returns an empty list, and the caller's
+        # ChangeReviewCapture falls back to capture.coverage ('unavailable').
+        assert list(changes) == []
+
+        token = callbacks["before_native_file_tool"](
+            state, "write_file", {"path": "a.txt"}, "call-2")
+        (workspace / "a.txt").write_text("hi\n", encoding="utf-8")
+        rows = callbacks["after_native_file_tool"](state, token)
+
+    assert [row["path"] for row in rows] == ["a.txt"]
+    assert rows.coverage == "declared_paths"

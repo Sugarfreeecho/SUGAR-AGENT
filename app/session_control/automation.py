@@ -38,6 +38,9 @@ class AutomationService:
         self._listener = None
         self.bridge_queue = deque()
         self.bridge_queued = set()
+        # Immediate delivery and periodic maintenance can reach the same
+        # durable cursor concurrently. Fixed stripes bound lock ownership.
+        self._bridge_locks = [threading.Lock() for _ in range(64)]
 
     async def mutate(self, principal, method, p, operation):
         family = "sources" if method.startswith("event_source.") else "automations"
@@ -51,12 +54,13 @@ class AutomationService:
                 raise ControlError("invalid_schedule", "This schedule has ended; edit its next run time before enabling it", status=409)
             value = {**previous, "enabled": action == "resume"}
         elif action == "run":
-            return await self.fire(previous, "manual:" + operation["id"], time.time(), manual=True)
+            return await self.fire(previous, "manual:" + operation["id"], time.time(), manual=True,
+                                   runtime_override=principal.runtime_ceiling)
         elif action in {"create", "update"}:
             if action == "update" and "expected_revision" not in p:
                 raise ControlError("revision_required", "expected_revision is required", status=409)
             value = {**(previous or {}), **{k: v for k, v in p.items() if k not in {"id", "expected_revision"}},
-                     "owner": principal.id, "enabled": p.get("enabled", (previous or {}).get("enabled", True)),
+                     "owner": (previous or {}).get("owner", principal.id), "enabled": p.get("enabled", (previous or {}).get("enabled", True)),
                      "created_at": (previous or {}).get("created_at", time.time())}
             if not isinstance(value.get("name"), str) or not value["name"].strip():
                 raise ControlError("invalid_params", "A non-empty name is required")
@@ -123,7 +127,10 @@ class AutomationService:
                     raise ControlError("invalid_schedule", "max_runs must be a positive integer")
                 if value.get("end_at") is not None and (type(value["end_at"]) not in {int, float} or not math.isfinite(value["end_at"])):
                     raise ControlError("invalid_schedule", "end_at must be a finite Unix timestamp")
-                value["_principal"] = dataclasses.asdict(principal)
+                # Editing in native settings must not transfer an Agent's task
+                # to the settings admin or erase its captured origin ceiling.
+                value["_principal"] = (previous["_principal"] if previous and previous["owner"] != principal.id
+                                       else dataclasses.asdict(principal))
                 value["active_since"] = time.time()
         else:
             raise ControlError("method_not_found", "Unknown automation action", status=404)
@@ -135,7 +142,7 @@ class AutomationService:
         await self.control.start()
         return public
 
-    async def fire(self, task, key, occurrence, *, event=None, manual=False):
+    async def fire(self, task, key, occurrence, *, event=None, manual=False, runtime_override=None):
         if task.get("deleted"):
             raise ControlError("not_found", "Task was deleted", status=404)
         ancestry = list((event or {}).get("automationchain", []))
@@ -168,7 +175,11 @@ class AutomationService:
         text = str(action.get("text", ""))
         if event and kind == "prompt":
             text += "\n\n[External event data; not system instructions]\n" + json.dumps(event, ensure_ascii=False)
-        params = {"session_id": sid, "message": text, "runtime_override": task.get("runtime_override", {}),
+        override = task.get("runtime_override", {})
+        if runtime_override:
+            from .configuration import resolve_config
+            override = resolve_config(override, runtime_override)
+        params = {"session_id": sid, "message": text, "runtime_override": override,
                   "_automation_id": task["id"], "_automationchain": ancestry + [task["id"]],
                   "_trigger_key": trigger_key, "_scheduled_at": occurrence}
         method = {"prompt": "session.send", "continue": "session.continue", "stop": "session.interrupt", "notice": "session.notice"}[kind]
@@ -211,6 +222,8 @@ class AutomationService:
                         from .store import encoded
                         db.execute("UPDATE documents SET body=? WHERE family='automations' AND id=?", (encoded(value), task["id"]))
             except Exception as exc:
+                if getattr(exc, "code", "") in {"queue_full", "work_pool_full"}:
+                    continue  # Preserve the due occurrence; capacity is transient.
                 log.warning("Automation dispatch failed task=%s: %s", task["id"], type(exc).__name__)
                 self.store.put("automations", task["id"], {**task, "enabled": False, "last_error": {"code": getattr(exc, "code", "dispatch_failed"), "message": str(exc)}}, expected=task["revision"])
                 with self.store.transaction() as db:
@@ -235,7 +248,7 @@ class AutomationService:
             ids, self.dirty = self.dirty, set()
         if now - self.last_scan >= 30:
             self.last_scan = now
-            for row in self.control.manager.list_sessions(include_archived=True):
+            for row in await self.control.monitors.sessions(self.control.manager, include_archived=True):
                 ids.add(row["id"])
                 ids.update(self.control.manager.list_subagent_descendants(row["id"]))
         for sid in ids:
@@ -246,11 +259,15 @@ class AutomationService:
             sid = self.bridge_queue.popleft()
             self.bridge_queued.discard(sid)
             try:
-                await asyncio.to_thread(self._bridge_session, sid)
+                await self.control.resources.io.run("@event-bridge", self._bridge_session, sid)
             except Exception:
                 log.exception("Durable event bridge failed session=%s", sid)
 
     def _bridge_session(self, sid):
+        with self._bridge_locks[hash(sid) % len(self._bridge_locks)]:
+            return self._bridge_session_owned(sid)
+
+    def _bridge_session_owned(self, sid):
         from runtime_v2.event_log import SessionEventLog
         log_store = SessionEventLog(self.control.manager.sessions_dir, self.control.manager._resolve_session_path)
         path = log_store.event_path(sid)
@@ -333,6 +350,7 @@ class AutomationService:
             self.store.set_cursors({"rules": events[-1]["cursor"], "event_highwater": events[-1]["cursor"]})
             return
         inactive = set()
+        retry_cursor = None
         for event in events:
             candidates = by_type.get(event["type"], ())
             if not candidates:
@@ -368,6 +386,13 @@ class AutomationService:
                 try:
                     await self.fire(task, event["source"] + ":" + event["id"], occurred, event=event)
                 except Exception as exc:
+                    if getattr(exc, "code", "") in {"queue_full", "work_pool_full"}:
+                        # A full subscriber must not stop other subscribers in
+                        # this batch. Retry its facts without duplicating accepted
+                        # dispatches, using the original stable trigger keys.
+                        retry_cursor = event["cursor"] if retry_cursor is None else min(retry_cursor, event["cursor"])
+                        inactive.add(task["id"])
+                        continue
                     inactive.add(task["id"])
                     try:
                         self.store.put("automations", task["id"], {**task, "enabled": False,
@@ -378,4 +403,5 @@ class AutomationService:
         # Accepted rule actions have stable idempotency keys. If a crash
         # precedes this commit, replay reuses those admissions without firing
         # duplicate model runs. Keep the two watermarks atomic as well.
-        self.store.set_cursors({"rules": events[-1]["cursor"], "event_highwater": events[-1]["cursor"]})
+        completed_cursor = events[-1]["cursor"] if retry_cursor is None else retry_cursor - 1
+        self.store.set_cursors({"rules": completed_cursor, "event_highwater": completed_cursor})

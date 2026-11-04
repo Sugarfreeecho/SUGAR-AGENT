@@ -2054,7 +2054,6 @@ async def _execute_subagent_run(
     session_manager.clear_interrupt(child_id)
 
     state: Dict[str, Any] = {}
-    last_heartbeat_at = 0.0
     files_touched: Set[str] = set()
     run_terminalized = False
     run_outcome = "failed"
@@ -2070,21 +2069,6 @@ async def _execute_subagent_run(
         except Exception:
             logger.warning("subagent parent event delivery failed: %s", child_id,
                            exc_info=True)
-
-    async def refresh_child_heartbeat() -> None:
-        nonlocal last_heartbeat_at
-        now_monotonic = asyncio.get_running_loop().time()
-        if now_monotonic - last_heartbeat_at >= 15.0:
-            last_heartbeat_at = now_monotonic
-            try:
-                await _await_subagent_write(session_manager.patch_subagent_metadata,
-                    child_id,
-                    {"subagent_run_heartbeat_at": datetime.now(timezone.utc).isoformat(),
-                     "subagent_run_status": "running"},
-                )
-            except OSError:
-                logger.warning("subagent heartbeat metadata refresh failed: %s", child_id,
-                               exc_info=True)
 
     def prepare_child_event(ev: Dict[str, Any]) -> Dict[str, Any]:
         if str(ev.get("type") or "") == "tool_call":
@@ -2133,11 +2117,14 @@ async def _execute_subagent_run(
             tagged = tag_subagent_forward_event(ev, agent_id=child_id)
             await emit_parent(tagged)
 
-    @local_operation("event_delivery")
+    @local_operation("event_delivery", slow_ms=200)
     async def deliver_child_events(*, events, state, session_id, run_id, event):
         async with delivery_lock:
-            with local_step("child_heartbeat"):
-                await refresh_child_heartbeat()
+            # execution_metrics.start_run registers this exact child/run with
+            # the process-wide 15s heartbeat pump. Status readers prefer that
+            # shared observability heartbeat. Rewriting lifecycle metadata here
+            # duplicated it and made every delivery wait on unrelated file IO.
+            # Metadata still commits at start and terminal ownership boundaries.
             rows = [prepare_child_event(row) for row in events]
             from runtime_v2 import runtime_v2_primary, runtime_v2_strict
             combined = getattr(session_manager, "commit_execution_ui_events", None)

@@ -110,9 +110,11 @@ def test_unexpected_tool_error_keeps_call_id_through_checkpoint(execution_path):
 
     tree = _loop_tree()
     scope = _scope(parallel_safe=execution_path != "early_ordered")
-    scope.update(early_tool_results={}, early_ordered_tool_lock=asyncio.Lock(),
+    scope.update(early_tool_results={}, early_tool_tasks={}, early_ordered_tool_lock=asyncio.Lock(),
                  llm_history=[], work_messages=[], checkpointed_tool_result_ids=set(),
-                 cpu_pressure=SimpleNamespace(tool_parallelism=lambda limit: 2))
+                 cpu_pressure=SimpleNamespace(tool_parallelism=lambda limit: 2),
+                 _state_run_has_write_fence=lambda state: True,
+                 _state_interrupt_requested=lambda state: False)
     committed, emitted = [], []
 
     async def execute_one(call):
@@ -138,7 +140,8 @@ def test_unexpected_tool_error_keeps_call_id_through_checkpoint(execution_path):
                  _persist_state_with_model_append=persist, _emit_tool_call_sse=emit_result,
                  checkpoint_ready_tool_results=checkpoint_ready)
     functions = [_nested(tree, name) for name in (
-        "_run_early_tool_call", "run_group", "checkpoint_completed_tool_result")]
+        "_run_early_tool_call", "is_read_only_tool", "_batch_barrier_positions",
+        "_early_task_for", "run_tool_batch", "checkpoint_completed_tool_result")]
     exec(compile(ast.Module(body=functions, type_ignores=[]), "stream_error_regression", "exec"), scope)
     calls = [
         {"name": "history_context", "id": "call-first", "index": 0, "args": {"action": "search"}},
@@ -147,7 +150,7 @@ def test_unexpected_tool_error_keeps_call_id_through_checkpoint(execution_path):
 
     async def scenario():
         if execution_path == "post_turn_parallel":
-            return await scope["run_group"](calls)
+            return await scope["run_tool_batch"](calls)
         results = await asyncio.gather(*(
             scope["_run_early_tool_call"](call["index"], call) for call in calls))
         # Early completion must still wait for the assistant commit barrier.
@@ -187,3 +190,92 @@ def test_early_tool_control_interrupts_are_not_converted_to_failures(error_type)
     with pytest.raises(error_type):
         asyncio.run(scope["_run_early_tool_call"](0, {"name": "history_context", "args": {}, "id": "call"}))
     assert scope["early_tool_results"] == {}
+
+
+def test_read_only_tools_run_parallel_with_serial_tools():
+    """A shell call must not delay the read-only calls that follow it."""
+    tree = _loop_tree()
+    scope = _scope()
+    read_descriptor = SimpleNamespace(
+        parallel_safe=True, pressure_limited=False, early_stream_safe=True,
+        execution_name="read_file")
+    serial_descriptor = SimpleNamespace(
+        parallel_safe=False, pressure_limited=False, early_stream_safe=True,
+        execution_name="run_shell")
+    scope.update(
+        tool_search=SimpleNamespace(
+            BRIDGE_NAMES=set(),
+            call_descriptor=lambda registry, call: (
+                read_descriptor if call.get("name") == "read_file" else serial_descriptor
+            ),
+        ),
+        early_tool_tasks={}, llm_history=[], work_messages=[],
+        checkpointed_tool_result_ids=set(),
+        cpu_pressure=SimpleNamespace(tool_parallelism=lambda limit: limit),
+        _state_run_has_write_fence=lambda state: True,
+        _state_interrupt_requested=lambda state: False,
+    )
+    committed = []
+
+    def tool_result(call):
+        return {
+            "type": "tool", "tool_id": call["id"], "tool_name": call["name"],
+            "tool_args": dict(call.get("args") or {}), "tool_call_index": call.get("index"),
+            "result": "ok", "tool_detail_ui": "ok", "tool_detail_llm": "ok",
+            "execution_status": "completed",
+        }
+
+    shell_started = asyncio.Event()
+    release_shell = asyncio.Event()
+    read_finished = asyncio.Event()
+
+    async def execute_one(call):
+        if call["name"] == "run_shell":
+            shell_started.set()
+            await release_shell.wait()
+        else:
+            read_finished.set()
+        return tool_result(call)
+
+    def persist(state, message):
+        committed.append(message)
+
+    async def fact_commit(function, *args, on_committed=None):
+        result = function(*args)
+        if on_committed is not None:
+            on_committed(result)
+        return result
+
+    async def emit_result(emit, result, iteration, state):
+        return None
+
+    async def checkpoint_ready(results):
+        for result in results:
+            await scope["checkpoint_completed_tool_result"](result)
+
+    scope.update(execute_one=execute_one, run_fact_commit=fact_commit,
+                 _persist_state_with_model_append=persist,
+                 _emit_tool_call_sse=emit_result,
+                 checkpoint_ready_tool_results=checkpoint_ready)
+    functions = [_nested(tree, name) for name in (
+        "is_read_only_tool", "_batch_barrier_positions", "_early_task_for",
+        "run_tool_batch", "checkpoint_completed_tool_result")]
+    exec(compile(ast.Module(body=functions, type_ignores=[]), "batch_overlap", "exec"), scope)
+
+    calls = [
+        {"name": "run_shell", "id": "call-shell", "index": 0, "args": {"command": "sleep"}},
+        {"name": "read_file", "id": "call-read", "index": 1, "args": {"path": "a.txt"}},
+    ]
+
+    async def scenario():
+        batch = asyncio.create_task(scope["run_tool_batch"](calls))
+        await asyncio.wait_for(shell_started.wait(), 1)
+        # The read-only call must finish while the shell is still running.
+        await asyncio.wait_for(read_finished.wait(), 1)
+        assert not batch.done()
+        release_shell.set()
+        return await asyncio.wait_for(batch, 5)
+
+    results = asyncio.run(scenario())
+    assert [row["tool_id"] for row in results] == ["call-shell", "call-read"]
+    assert [message.tool_call_id for message in committed] == ["call-read", "call-shell"]

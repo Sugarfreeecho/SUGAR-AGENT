@@ -107,3 +107,25 @@ def test_failed_old_dispatch_does_not_overwrite_a_new_definition(tmp_path, monke
     assert current["enabled"] and current["name"] == "new definition"
     assert current["revision"] == 2 and "last_error" not in current
     assert attempts == [1] and store.cursor("rules") == 2
+
+
+def test_full_subscriber_preserves_retry_cursor_without_blocking_other_rules(tmp_path, monkeypatch):
+    from session_control.errors import ControlError
+    store = ControlStore(tmp_path / "control.db")
+    rule(store, "a-full")
+    rule(store, "b-ready")
+    events(store, 3)
+    engine = AutomationService(SimpleNamespace(store=store, manager=SimpleNamespace()))
+    accepted = set()
+    full = [True]
+    async def fire(task, key, *args, **kwargs):
+        if task["id"] == "a-full" and full[0]:
+            raise ControlError("queue_full", "capacity", status=429)
+        accepted.add((task["id"], key))
+    monkeypatch.setattr(engine, "fire", fire)
+    asyncio.run(engine.consume_events())
+    assert len(accepted) == 3 and store.cursor("rules") == 0
+    assert store.get("automations", "a-full")["enabled"]
+    full[0] = False
+    asyncio.run(engine.consume_events())
+    assert len(accepted) == 6 and store.cursor("rules") == 3

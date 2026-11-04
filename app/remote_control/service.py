@@ -226,7 +226,7 @@ class SessionControlService:
         threading.Thread(target=worker, name=f"remote-run-{sid}", daemon=True).start()
         return {"accepted": True, "session_id": sid, "run_id": run_id}
 
-    async def _session_steer(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def _session_steer(self, params: dict[str, Any], *, user_content=None) -> dict[str, Any]:
         sid = self._require_session(params)
         message = str(params.get("message") or "").strip()
         if not message:
@@ -241,6 +241,8 @@ class SessionControlService:
             raise RemoteControlError("invalid_params", "client_id is required")
         from agent_loop import abort_session_steer_run, enqueue_session_steer, transition_session_steer
 
+        from attachments.request_budget import walk_images
+        ui_attachments=[block['attachment'] for block in walk_images(user_content)]
         result = enqueue_session_steer(
             sid,
             message,
@@ -248,6 +250,8 @@ class SessionControlService:
             ui_content=str(params.get("ui_message") or message),
             source_run_id=str(params.get("source_run_id") or ""),
             mode=mode,
+            user_content=user_content,
+            ui_attachments=ui_attachments,
         )
         if not result.get("ok"):
             raise RemoteControlError("steer_rejected", str(result.get("error") or "steer rejected"), details=result)

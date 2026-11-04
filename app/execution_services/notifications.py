@@ -18,14 +18,14 @@ _PANEL_PLUGIN_ID = "execution-tools"
 _PANEL_NAMESPACE = "panel"
 
 
-async def _initialize_owner(service, owner):
+async def _initialize_owner(service, owner, *, io=None):
     """恢复一个会话的执行资源，并在缺失时补齐会话面板状态（幂等）。"""
     await service.call(service.recover, owner)
     store = service._store()
     if store is None:
         return
     try:
-        row = await asyncio.to_thread(store.get, owner, _PANEL_PLUGIN_ID, _PANEL_NAMESPACE)
+        row = await io.run("execution-tools", store.get, owner, _PANEL_PLUGIN_ID, _PANEL_NAMESPACE) if io else await asyncio.to_thread(store.get, owner, _PANEL_PLUGIN_ID, _PANEL_NAMESPACE)
     except Exception:
         log.debug("session panel state probe failed: %s", owner, exc_info=True)
         return
@@ -34,7 +34,7 @@ async def _initialize_owner(service, owner):
     await service.call(service.persist, owner, _PANEL_NAMESPACE, {"enabled": True})
 
 
-async def _continue(service, owner):
+async def _continue(service, owner, *, wait=True):
     from session_control.public import host_client, stable_key, register_source_lifecycle
     from session_control.errors import ControlError
     notices = await service.call(service.notices, owner)
@@ -43,19 +43,24 @@ async def _continue(service, owner):
     def before(sid, _run_id, _request):
         if not asyncio.run(service.call(service.notices, sid)):
             raise ControlError("intent_obsolete", "Background results were already consumed", status=409)
-    register_source_lifecycle("execution-tools", before=before)
+    def after(sid, _run_id, operation):
+        if operation["status"] in {"failed", "unknown"}:
+            asyncio.run(service.call(service.stop_owner, sid, reason="job_wakeup_failed"))
+    register_source_lifecycle("execution-tools", before=before, after=after)
     client = host_client("execution-tools", session_ids=[owner],
         capabilities=["session.continue", "operation.cancel"])
     try:
         operation = await client.call("session.continue", {"session_id": owner,
             "_respect_stop": True, "_continuation_source": "tool-jobs"},
             key=stable_key("job-wakeup", [owner, notices]), coalesce=True)
-        result = await client.wait(operation["operation_id"])
+        result = await client.wait(operation["operation_id"]) if wait else operation
         if result["status"] in {"failed", "unknown"}:
             await service.call(service.stop_owner, owner, reason="job_wakeup_failed")
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        if getattr(exc, "code", "") in {"queue_full", "work_pool_full"}:
+            return
         log.exception("background job continuation failed: %s", owner)
         await service.call(service.stop_owner, owner, reason="job_wakeup_failed")
 
@@ -63,39 +68,35 @@ async def _continue(service, owner):
 async def start_runner(service):
     global _runner
     await stop_runner()
-    async def run():
-        initialized = set()
-        next_scan = 0
-        while True:
-            try:
-                if time.monotonic() >= next_scan:
-                    next_scan = time.monotonic() + 5
-                    rows = await asyncio.to_thread(service.manager.list_sessions, include_archived=False)
-                    for row in rows:
-                        owner = str(row.get("id") or "")
-                        if owner and owner not in initialized:
-                            await _initialize_owner(service, owner)
-                            initialized.add(owner)
-                for owner in await service.call(service.pending_owners):
-                    task = _workers.get(owner)
-                    if not task or task.done():
-                        _workers[owner] = asyncio.create_task(_continue(service, owner))
-                # Retry busy-to-idle delivery without relying on one edge event.
-                await asyncio.sleep(.5)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception("execution notification reconciliation failed")
-                await asyncio.sleep(2)
-    _runner = asyncio.create_task(run())
+    from session_control.public import host_monitors
+    from session_control.monitors import MonitorKey
+    hub = await host_monitors()
+    initialized = set()
+    state = {"scan_at": 0., "owners": [], "offset": 0}
+    async def tick():
+        if time.monotonic() >= state["scan_at"]:
+            state["scan_at"] = time.monotonic() + 5
+            rows = await hub.sessions(service.manager)
+            state["owners"] = [str(row["id"]) for row in rows if row.get("id") and row["id"] not in initialized]
+        for owner in state["owners"][:32]:
+            await _initialize_owner(service, owner, io=hub.resources.io)
+            initialized.add(owner)
+        del state["owners"][:32]
+        owners = list(await service.call(service.pending_owners))
+        if owners:
+            offset = state["offset"] % len(owners)
+            owners = owners[offset:] + owners[:offset]
+            state["offset"] += 32
+        for owner in owners[:32]:
+            await _continue(service, owner, wait=False)
+    _runner = hub.subscribe(MonitorKey.make("job-results", str(service.manager.sessions_dir), namespace="execution-tools"),
+        "execution-tools", tick, interval=.5, events=("extension_state_changed", "run_finished", "run_failed", "interaction_resolved"))
 
 
 async def stop_runner():
     global _runner
-    tasks = ([ _runner ] if _runner else []) + list(_workers.values())
+    subscription = _runner
     _runner = None
     _workers.clear()
-    for task in tasks:
-        task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if subscription:
+        await subscription.close()

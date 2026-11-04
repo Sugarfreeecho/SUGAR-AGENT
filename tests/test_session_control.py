@@ -270,12 +270,12 @@ def test_cli_runs_outside_repo_and_never_falls_back_for_task(tmp_path, monkeypat
     root = Path(__file__).resolve().parents[1]
     env = {**os.environ, "MYAGENT_SESSION_CREDENTIAL_DIR": str(tmp_path), "MYAGENT_CONTROL_TASK": "1"}
     env.pop("MYAGENT_CONTROL_TOKEN", None)
-    result = subprocess.run([sys.executable, str(root / "agent-session-control.py"), "session", "list"], cwd=tmp_path,
+    result = subprocess.run([sys.executable, str(root / "app" / "agent-session-control.py"), "session", "list"], cwd=tmp_path,
                             env=env, text=True, capture_output=True, timeout=20)
     assert result.returncode == 3, result.stderr
     value = json.loads(result.stdout)
     assert value["schema_version"] == 1 and value["error"]["code"] == "unauthorized"
-    help_result = subprocess.run([sys.executable, str(root / "agent-session-control.py"), "schedule", "create", "--help"],
+    help_result = subprocess.run([sys.executable, str(root / "app" / "agent-session-control.py"), "schedule", "create", "--help"],
                                  cwd=tmp_path, env=env, text=True, capture_output=True, timeout=20)
     assert help_result.returncode == 0 and "--file" in help_result.stdout
 
@@ -300,8 +300,10 @@ async def test_restart_preserves_unstarted_input_and_never_replays_committed_inp
     RuntimeHistoryOps(c.manager.sessions_dir, path_resolver=c.manager._resolve_session_path).commit_user_turn(
         sid, "already committed", operation_id=op["id"], run_id=op["run_id"])
     await c.control.start()
-    await asyncio.sleep(.8)
-    assert c.store.get_operation(op["id"])["status"] == "unknown"
+    # Reconciliation is scheduled backend work, not a sub-second timing
+    # guarantee. Wait for its durable receipt rather than sleeping 800 ms.
+    reconciled = await rpc(c, "operation.wait", {"id": op["id"], "timeout": 5})
+    assert reconciled.json()["data"]["status"] == "unknown"
     assert len(c.calls) == 1
     await c.control.close()
 
@@ -363,7 +365,7 @@ def test_cli_real_http_backend_unicode_auth_send_and_config(composed, tmp_path):
     env.pop("MYAGENT_CONTROL_TOKEN", None)
     env.pop("MYAGENT_CONTROL_TASK", None)
     def cli(*args):
-        result = subprocess.run([sys.executable, str(root / "agent-session-control.py"), "--base-url", f"http://127.0.0.1:{port}", *args],
+        result = subprocess.run([sys.executable, str(root / "app" / "agent-session-control.py"), "--base-url", f"http://127.0.0.1:{port}", *args],
                                 cwd=tmp_path, env=env, text=True, encoding="utf-8", capture_output=True, timeout=20)
         assert result.returncode == 0, (result.stdout, result.stderr)
         return json.loads(result.stdout)
@@ -511,6 +513,8 @@ def test_constraint_intersections_schema_change_and_source_aliases(tmp_path):
 @run_async
 async def test_archived_target_keeps_durable_automation_and_scheduler_is_fair(composed):
     c = composed
+    from dataclasses import replace
+    c.store.queue_limits = replace(c.store.queue_limits, session=512)
     sid = await new_session(c)
     await rpc(c, "session.archive", {"session_id": sid})
     created = await rpc(c, "automation.create", {"name": "archived", "target": {"mode": "existing", "session_id": sid},
@@ -654,6 +658,7 @@ async def test_cancel_survives_runtime_clearing_its_interrupt_marker(composed):
 @run_async
 async def test_scheduler_misfire_clock_rewind_and_latest_pending_are_durable(composed, monkeypatch):
     import session_control.automation as automation
+    import session_control.notifications as notifications
     c = composed
     sid = await new_session(c)
     c.active[sid] = "busy"
@@ -664,6 +669,13 @@ async def test_scheduler_misfire_clock_rewind_and_latest_pending_are_durable(com
     async def no_start():
         pass
     monkeypatch.setattr(c.service, "start", no_start)
+    async def no_bridge(_now):
+        pass
+    monkeypatch.setattr(c.service.engine, "bridge", no_bridge)
+    async def no_notifications(_control):
+        pass
+    # Clock arithmetic is isolated from the stopped host's delivery resources.
+    monkeypatch.setattr(notifications, "deliver_notifications", no_notifications)
     now = [task["trigger"]["anchor"] + 185]
     monkeypatch.setattr(automation.time, "time", lambda: now[0])
     await c.service.engine.tick()

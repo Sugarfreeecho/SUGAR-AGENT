@@ -26,6 +26,7 @@ import httpx
 
 from agent_harness import PROJECT_ROOT
 from config_paths import config_path
+import log_safety
 from tool_registry import ToolOutcome
 
 logger = logging.getLogger(__name__)
@@ -612,6 +613,27 @@ def _serialize_call_tool_result_for_log(result: Any, max_len: int = 12000) -> st
         return text if len(text) <= max_len else text[:max_len] + "…[truncated]"
     except Exception:
         return "[MCP result unavailable for logging]"
+
+
+def _summarize_call_tool_result_for_log(result: Any) -> str:
+    """计数型摘要：块数、文本字符数、媒体块数，不读取内容。"""
+    if isinstance(result, dict):
+        blocks = result.get("content")
+        is_error = bool(result.get("isError"))
+    else:
+        blocks = getattr(result, "content", None)
+        is_error = bool(getattr(result, "isError", False))
+    if not isinstance(blocks, (list, tuple)):
+        return f"type={type(result).__name__} is_error={is_error}"
+    text_chars = 0
+    media = 0
+    for block in blocks:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            text_chars += len(text)
+        if str(getattr(block, "type", "") or "") in {"image", "audio", "video"}:
+            media += 1
+    return f"blocks={len(blocks)} text_chars={text_chars} media={media} is_error={is_error}"
 
 
 class _PersistentMcpServer:
@@ -1713,7 +1735,11 @@ async def _invoke_tool_by_fname_impl(
                 session_id=session_id, run_id=run_id, tool_call_id=tool_call_id)
         raw = await srv.call_tool(orig, call_arguments, **({"meta": meta} if meta else {}))
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        raw_dump = _serialize_call_tool_result_for_log(raw)
+        raw_dump = (
+            _serialize_call_tool_result_for_log(raw)
+            if log_safety.payload_enabled()
+            else _summarize_call_tool_result_for_log(raw)
+        )
         is_error = raw.get("isError", False) if isinstance(raw, dict) else getattr(raw, "isError", False)
         logger.info(
             "MCP call_%s server=%s transport=%s tool=%s fname=%s elapsed_ms=%.2f raw=%s",
@@ -1739,7 +1765,7 @@ async def _invoke_tool_by_fname_impl(
             orig,
             function_name,
             elapsed_ms,
-            e,
+            log_safety.error_text(e),
         )
         timed_out = isinstance(e, TimeoutError)
         return failure("mcp_call_timed_out" if timed_out else "mcp_invocation_error",

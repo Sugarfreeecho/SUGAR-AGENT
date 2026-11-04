@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import threading
+import time
 import uuid
 import sys
 
@@ -105,7 +106,9 @@ def test_metadata_scope_alias_order_and_paging(tmp_path):
     assert len(upserts(first)) == 20
     assert upserts(first)[0]['session']['id'] == exact
     cursor = next(v['cursor'] for k, v in first if k == 'phase_done')
-    second = upserts(run(service, phase='metadata', cursor=cursor))
+    second_events = run(service, phase='metadata', cursor=cursor)
+    assert next(v for k, v in second_events if k == 'progress')['scanned'] == 20
+    second = upserts(second_events)
     assert len(second) == 7
     assert not ({r['session']['id'] for r in second} & {r['session']['id'] for r in upserts(first)})
     assert len(upserts(run(service, phase='metadata', scope='archived'))) == 13
@@ -259,3 +262,84 @@ def test_snapshot_compaction_keeps_archive_original_searchable(tmp_path):
     assert len(result) == 1
     assert ':archive:' in result[0]['hits'][0]['ref']
     service.close()
+
+
+def test_progress_reports_each_session_including_unreadable_sources(tmp_path):
+    manager = Manager(tmp_path, v2=False)
+    for _ in range(3):
+        manager.add(messages=[dict(type='user', content='no match')])
+    (manager._resolve_session_path(manager.rows[1]['id']) / 'ui_events.json').unlink()
+    service = SessionSearch(manager)
+    ctx = service.prepare(dict(q='needle', phase='active_content'))
+    events = list(service.search(ctx, threading.Event()))
+    progress = [data for name, data in events if name == 'progress']
+    started = [data for data in progress if data['current_session']]
+    completed = [data['scanned'] for data in progress if data['current_session'] is None]
+    assert [data['current_session']['id'] for data in started] == [s['id'] for s in ctx['sessions']]
+    assert [data['scanned'] for data in started] == [0, 1, 2]
+    assert completed == [0, 1, 2, 3]
+    assert all(data['total'] == 3 for data in progress)
+    assert any(name == 'error' for name, _ in events)
+    service.close()
+
+
+def test_cancel_after_session_progress_avoids_reading_history(tmp_path, monkeypatch):
+    manager = Manager(tmp_path, v2=False)
+    manager.add()
+    service = SessionSearch(manager)
+    monkeypatch.setattr(service, 'hits', lambda *args, **kwargs: pytest.fail('Cancelled search read history'))
+    stop = threading.Event()
+    events = service.search(service.prepare(dict(q='needle', phase='active_content')), stop)
+    assert next(events)[1]['current_session'] is None
+    assert next(events)[1]['current_session']
+    stop.set()
+    assert list(events) == []
+    service.close()
+
+
+def test_sessions_without_archives_do_not_replay_ui_history_twice(tmp_path, monkeypatch):
+    from runtime_v2.ui_projection import RuntimeUiProjection
+    manager = Manager(tmp_path)
+    sid = manager.add(messages=[('user_turn_committed', {'content': 'needle'})])
+    original = RuntimeUiProjection._event_to_ui
+    projected = []
+
+    def track(projection, session_id, event):
+        if session_id == sid:
+            projected.append(event.seq)
+        return original(projection, session_id, event)
+
+    monkeypatch.setattr(RuntimeUiProjection, '_event_to_ui', track)
+    service = SessionSearch(manager)
+    assert upserts(run(service, phase='active_content'))
+    assert projected == [1]
+    service.close()
+
+
+def test_sse_reports_elapsed_time_while_one_session_is_slow(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    manager = Manager(tmp_path, v2=False)
+    sid = manager.add(messages=[dict(type='user', content='needle')])
+    app = FastAPI()
+    service = install_session_search(app, manager)
+    monkeypatch.setattr(service, 'warm', lambda _: None)
+    original = service.hits
+
+    def slow(*args, **kwargs):
+        time.sleep(1.3)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service, 'hits', slow)
+    with TestClient(app) as client:
+        response = client.post('/sessions/search', json=dict(q='needle', phase='active_content'))
+    frames = response.text.split('\n\n')
+    progress = [(i, json.loads(frame.split('data: ', 1)[1])) for i, frame in enumerate(frames)
+                if frame.startswith('event: progress')]
+    timed = [(i, data) for i, data in progress if data.get('elapsed_seconds', 0) >= 1]
+    assert timed
+    assert timed[0][1]['scanned'] == 0
+    assert timed[0][1]['current_session']['id'] == sid
+    assert timed[0][0] < next(i for i, frame in enumerate(frames) if frame.startswith('event: upsert'))
+    assert progress[-1][1]['scanned'] == 1
+    assert progress[-1][1]['current_session'] is None

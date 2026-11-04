@@ -11,6 +11,7 @@ import importlib.util
 import json
 import logging
 import math
+import os
 from pathlib import Path
 import statistics
 import sys
@@ -74,6 +75,9 @@ def legacy_snapshot(path, module):
 
 
 def main():
+    # These A/B measurements exercise the opt-in workspace sweep (UC-121);
+    # the product default only records declared file tools.
+    os.environ.setdefault('MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP', '1')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-store', type=Path, required=True)
     parser.add_argument('--sessions', nargs='*', default=[])

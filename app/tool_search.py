@@ -37,14 +37,15 @@ RESIDENT_TOOLS = frozenset({
     # Core built-ins (app/agent_tools.py OPENAI_TOOL_DEFINITIONS)
     "activate_skill", "apply_patch", "ask_user", "show_user", "context_manage", "switch_work_dir",
     "delete_file", "glob", "grep", "history_context", "ls", "read_file",
-    "run_shell", "task", "web_download", "web_fetch", "web_search",
-    "write_file",
+    "run_shell", "task", "write_file",
+    "scheduled_tasks", "manage_scheduled_task",
     # Bundled plugin host tools (agent-goal / agent-team / session-todo /
-    # execution-tools)
+    # execution-tools / web-search-providers)
     "create_goal", "get_goal", "update_goal", "team", "update_todo",
     "job_output", "job_list", "job_kill",
     "terminal_open", "terminal_send", "terminal_read", "terminal_signal",
     "terminal_close", "terminal_list",
+    "web_search", "web_fetch", "web_download",
 })
 CONFIG_PATH = config_path(Path(__file__).resolve().parents[1], "tool_search.json")
 _config_lock = threading.RLock()

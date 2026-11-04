@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import os
 from pathlib import Path
 import threading
@@ -176,6 +177,40 @@ def test_goal_operations_run_off_the_owner_loop(monkeypatch, tool_name):
 
     asyncio.run(run())
     assert len(published) == 1
+
+
+def test_goal_tool_result_is_projected_for_the_model(monkeypatch):
+    import agent_goal
+
+    host = load_host('agent-goal')
+    goal = {
+        'id': 'goal_1',
+        'objective': 'Keep the context window usable',
+        'status': 'active',
+        'token_budget': 1000,
+        'used_tokens': 10,
+        'remaining_tokens': 990,
+        'elapsed_seconds': 5,
+        'accounted_usage_ids': [f'run:llm:{index}' for index in range(838)],
+    }
+    manager = SimpleNamespace(get=lambda _sid: dict(goal))
+    monkeypatch.setattr(agent_goal, 'manager_for', lambda _: manager)
+
+    async def publish(_event):
+        return None
+
+    services = {'session_manager': object(), 'tool_name': 'get_goal'}
+    context = SimpleNamespace(
+        session_id='s', run_id='r', state={}, service=services.__getitem__, publish=publish,
+    )
+
+    outcome = asyncio.run(host._invoke_goal(context, {}))
+    payload = json.loads(outcome.content)['goal']
+
+    assert 'accounted_usage_ids' not in payload
+    assert payload['accounted_usage_count'] == 838
+    assert payload['remaining_tokens'] == 990
+    assert len(outcome.content) < 2000
 
 
 def test_set_latest_uses_one_transaction_and_preserves_concurrent_revisions(tmp_path, monkeypatch):

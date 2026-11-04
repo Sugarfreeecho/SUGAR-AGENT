@@ -7,11 +7,25 @@ from functools import wraps
 import inspect
 import json
 import logging
+import os
 import threading
 import time
 
 _current = ContextVar("local_operation_trace", default=None)
 _logger = logging.getLogger("agent_harness")
+
+TIMING_MODE = os.getenv("AGENT_LOG_TIMING", "summary").strip().lower()
+if TIMING_MODE not in {"summary", "detail", "off"}:
+    TIMING_MODE = "summary"
+# 逐事件触发的 kind：单条没有诊断价值，summary 模式只按 run 聚合。
+# 其余 kind（round_entry / model_commit 等）每轮或每次提交一条，保留逐条记录。
+SUMMARY_KINDS = frozenset({"event_delivery"})
+SUMMARY_SLOW_MS = max(0, int(os.getenv("AGENT_LOG_TIMING_SLOW_MS", "500") or 500))
+_AGG_SAMPLE_CAP = 256
+_AGG_FLUSH_AT = 1000
+_agg_lock = threading.Lock()
+_agg_rows = {}
+_agg_total = 0
 
 
 class LocalOperationTrace:
@@ -74,6 +88,71 @@ class LocalOperationTrace:
         except Exception:
             pass  # Diagnostics must not change delivery or terminal outcomes.
 
+    def finish(self, *, slow_ms=None):
+        """按 AGENT_LOG_TIMING 逐条、聚合或静默；慢操作始终单独留痕。"""
+        if TIMING_MODE == "off":
+            return
+        elapsed_ms = (time.perf_counter() - self.started) * 1000
+        kind = self.metadata.get("kind") or ""
+        if TIMING_MODE == "summary" and kind in SUMMARY_KINDS:
+            _record_summary(self, elapsed_ms)
+            threshold = SUMMARY_SLOW_MS if slow_ms is None else slow_ms
+            if threshold <= 0 or elapsed_ms >= threshold:
+                self.log()
+            return
+        if slow_ms is not None and elapsed_ms < slow_ms:
+            return
+        self.log()
+
+
+def _p95(samples):
+    if not samples:
+        return 0.0
+    ordered = sorted(samples)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))]
+
+
+def _record_summary(trace, elapsed_ms: float) -> None:
+    global _agg_total
+    key = (
+        trace.metadata.get("kind") or "",
+        trace.metadata.get("session_id") or "",
+        trace.metadata.get("run_id") or "",
+    )
+    with _agg_lock:
+        row = _agg_rows.get(key)
+        if row is None:
+            row = {"count": 0, "total_ms": 0.0, "max_ms": 0.0, "samples": []}
+            _agg_rows[key] = row
+        row["count"] += 1
+        row["total_ms"] += elapsed_ms
+        row["max_ms"] = max(row["max_ms"], elapsed_ms)
+        if len(row["samples"]) < _AGG_SAMPLE_CAP:
+            row["samples"].append(elapsed_ms)
+        _agg_total += 1
+        flush_now = _agg_total >= _AGG_FLUSH_AT
+    if flush_now:
+        flush_local_operation_summary()
+
+
+def flush_local_operation_summary() -> None:
+    """把累计的高频计时压成每 kind/run 一行；由 finish 或阈值触发。"""
+    global _agg_total
+    with _agg_lock:
+        rows = list(_agg_rows.items())
+        _agg_rows.clear()
+        _agg_total = 0
+    for (kind, session_id, run_id), row in rows:
+        try:
+            _logger.info(
+                "local_operation_summary kind=%s session=%s run=%s count=%d "
+                "total_ms=%.0f p95_ms=%.1f max_ms=%.1f",
+                kind, session_id or "-", run_id or "-", row["count"],
+                row["total_ms"], _p95(row["samples"]), row["max_ms"],
+            )
+        except Exception:
+            pass
+
 
 def local_step(name, *, min_ms=0):
     trace = _current.get()
@@ -122,8 +201,7 @@ def local_operation(name, *, slow_ms=None):
                                         event_type=arguments.get("event", ""))
 
         def finish(trace):
-            if slow_ms is None or (time.perf_counter() - trace.started) * 1000 >= slow_ms:
-                trace.log()
+            trace.finish(slow_ms=slow_ms)
 
         if not inspect.iscoroutinefunction(function):
             @wraps(function)

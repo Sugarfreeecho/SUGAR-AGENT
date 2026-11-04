@@ -2,6 +2,7 @@ import sys
 import tempfile
 import threading
 import uuid
+import pytest
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -412,7 +413,8 @@ def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild(t
     ]
 
 
-def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
+@pytest.mark.parametrize('after_seq,before_index', [(None, 2), (2, 99), (123, 2), (1, 2)])
+def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path, after_seq, before_index):
     import agent_harness
 
     source_id = "11111111-1111-4111-8111-111111111111"
@@ -431,8 +433,8 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
         _runtime_v2_primary=lambda: True,
         _resolve_session_path=lambda sid: tmp_path / sid,
         _load_ui_events_for_active_runtime=lambda sid: [
-            {"type": "user", "content": "u1"},
-            {"type": "final", "content": "a1"},
+            {"type": "user", "content": "u1", "runtime_seq": 1},
+            {"type": "final", "content": "a1", "runtime_seq": 2},
         ],
         _load_metadata=lambda sid: {"name": "Source"},
         _save_metadata=lambda sid, meta: saved_meta.append((sid, dict(meta))),
@@ -451,7 +453,8 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path):
     result = agent_harness.SessionManager.branch_session_at_event_index(
         mgr,
         source_id,
-        2,
+        before_index,
+        branch_after_seq=after_seq,
     )
 
     assert result["ok"] is True

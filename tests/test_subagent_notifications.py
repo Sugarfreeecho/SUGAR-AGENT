@@ -56,10 +56,10 @@ def wakeup(tmp_path, monkeypatch):
             "pending_human": lambda _: admission["human"], "manually_stopped": lambda _: admission["stopped"]})
     monkeypatch.setattr(integration, "_application", control)
     original_continue = notifications._continue
-    async def with_backend_started(*args):
+    async def with_backend_started(*args, **kwargs):
         # Each isolated asyncio.run models an application event-loop lifecycle.
         await control.start()
-        return await original_continue(*args)
+        return await original_continue(*args, **kwargs)
     monkeypatch.setattr(notifications, "_continue", with_backend_started)
 
     def complete(child="child-1", parent_run="parent-run"):
@@ -68,8 +68,19 @@ def wakeup(tmp_path, monkeypatch):
             "status": "completed", "result": child + " result",
         })
 
+    def run(coroutine):
+        async def lifecycle():
+            await control.start()
+            try:
+                return await coroutine
+            finally:
+                # Dedicated pools outlive asyncio.run; the application must
+                # explicitly stop and drain its workers before releasing state.
+                await control.close()
+        return asyncio.run(lifecycle())
+
     yield SimpleNamespace(manager=manager, owner=owner, admission=admission, calls=calls,
-                          released=released, delivered=delivered, complete=complete, control=control)
+                          released=released, delivered=delivered, complete=complete, control=control, run=run)
     if control.service.engine and control.service.engine._listener:
         from session_event_bus import remove_event_listener
         remove_event_listener(control.service.engine._listener)
@@ -92,7 +103,7 @@ def test_busy_parent_retries_then_consumes_late_results_once(wakeup):
         assert await asyncio.wait_for(accepted, 5) is False
         assert await _continue(w.manager, w.owner) is False
 
-    asyncio.run(scenario())
+    w.run(scenario())
     assert len(w.calls) == 1
     assert w.calls[0][0] == w.owner
     assert w.calls[0][1]["run_id"].startswith("control-")
@@ -117,7 +128,7 @@ def test_children_finishing_after_separate_continuations_stay_in_original_user_t
         w.complete("stale-child")
         assert await _continue(w.manager, w.owner) is False
 
-    asyncio.run(scenario())
+    w.run(scenario())
     assert len(w.calls) == 2
     assert w.delivered == ["child-1 result", "child-2 result"]
     assert w.manager.has_pending_subagent_notifications(w.owner)
@@ -142,7 +153,7 @@ def test_result_arriving_during_wakeup_gets_another_run_without_replaying_consum
         assert await _continue(w.manager, w.owner) is True
         assert await _continue(w.manager, w.owner) is False
 
-    asyncio.run(scenario())
+    w.run(scenario())
     assert len(w.calls) == 2
     assert w.delivered == ["child-1 result", "late-child result"]
     assert not w.manager.has_pending_subagent_notifications(w.owner)
@@ -159,13 +170,13 @@ def test_stop_archive_and_pending_human_interactions_block_automatic_generation(
         w.manager._save_metadata(w.owner, metadata)
     else:
         w.admission[blocked] = True
-    assert asyncio.run(_continue(w.manager, w.owner)) is (blocked == "human")
+    assert w.run(_continue(w.manager, w.owner)) is (blocked == "human")
     assert w.calls == []
     assert w.manager.has_pending_subagent_notifications(w.owner)
     assert not w.released
     if blocked == "human":
         w.admission["human"] = 0
-        asyncio.run(_continue(w.manager, w.owner))
+        w.run(_continue(w.manager, w.owner))
         assert len(w.calls) == 1
 
 
@@ -193,7 +204,7 @@ def test_failed_or_empty_automatic_run_does_not_retry_the_same_batch(wakeup, mon
         w.complete("child-2")
         await _continue(w.manager, w.owner)
 
-    asyncio.run(scenario())
+    w.run(scenario())
     assert len(attempts) == 2
     assert not w.admission["busy"]
 
@@ -213,7 +224,8 @@ def test_runner_recovers_pending_and_accepts_worker_thread_results_without_brows
     async def scenario():
         await notifications.start_runner(w.manager)
         try:
-            await until(lambda: w.owner in notifications._pending or w.owner in notifications._workers)
+            await until(lambda: any(op['session_id'] == w.owner and op['status'] == 'queued'
+                                    for op in w.control.store.operations()))
             assert w.calls == []
             w.admission["busy"] = False
             await until(lambda: len(w.calls) == 1 and not w.admission["busy"])
@@ -225,7 +237,7 @@ def test_runner_recovers_pending_and_accepts_worker_thread_results_without_brows
         assert not notifications._workers
         assert notifications._runner is None
 
-    asyncio.run(scenario())
+    w.run(scenario())
     assert w.delivered == ["persisted result", "worker-thread-child result"]
 
 
@@ -255,4 +267,4 @@ def test_observer_shutdown_keeps_accepted_wakeup_backend_shutdown_releases_it(wa
         assert len(w.released) == 1
         assert w.manager.has_pending_subagent_notifications(w.owner)
 
-    asyncio.run(scenario())
+    w.run(scenario())
