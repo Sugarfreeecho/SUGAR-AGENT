@@ -27,6 +27,7 @@ class SnapshotStore:
 
     _memory_cache: Dict[str, tuple[tuple[bool, int, int], Dict[str, Any]]] = {}
     _memory_cache_lock = threading.Lock()
+    _load_locks: Dict[str, threading.RLock] = {}
     _checkpoint_condition = threading.Condition(threading.Lock())
     _checkpoint_pending: Dict[str, tuple[Any, str, Dict[str, Any]]] = {}
     _checkpoint_active: set[str] = set()
@@ -56,6 +57,17 @@ class SnapshotStore:
         only project data out of a snapshot can avoid deep-copying several
         duplicated message arrays. Public callers continue to use ``read``.
         """
+        path = self.path(session_id)
+        key = self._cache_key(path)
+        with self._memory_cache_lock:
+            lock = self._load_locks.setdefault(key, threading.RLock())
+        # Multiple panels and recovery may cold-read the same large snapshot.
+        # Wait without holding the cache guard, then recheck the publication.
+        # Writers never acquire this lock, so a read cannot delay fact commits.
+        with lock:
+            return self._load_published(session_id)
+
+    def _load_published(self, session_id: str) -> Dict[str, Any]:
         path = self.path(session_id)
         signature = self._file_signature(path)
         key = self._cache_key(path)

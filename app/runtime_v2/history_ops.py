@@ -1090,7 +1090,28 @@ class RuntimeHistoryOps:
         if key in seen:
             return self.projector.empty_snapshot()
         seen.add(key)
-        origin = self._branch_origin_at_seq(source_session_id, int(branch_from_seq))
+        from itertools import chain
+        events, later_history_ops, origin_metadata = [], [], {}
+        for source_event in self.event_log.iter_events(source_session_id):
+            if int(source_event.seq) <= int(branch_from_seq):
+                events.append(source_event)
+            elif source_event.type in {"message_deleted", "message_rewritten"}:
+                target = self.projector._int_or_none((source_event.payload or {}).get("target_seq"))
+                if target is not None and target <= int(branch_from_seq):
+                    later_history_ops.append(source_event)
+            # Early inherited branch anchors can precede their model seed.
+            # Retain only that provenance, not the unrelated future transcript.
+            elif (source_event.type == "history_branch_created" or (
+                    source_event.type == "model_history_replaced"
+                    and (source_event.payload or {}).get("reason") == "branch_model_seed")):
+                if source_event.type not in origin_metadata:
+                    payload = dict(source_event.payload or {}) if source_event.type == 'history_branch_created' else {'reason': 'branch_model_seed'}
+                    origin_metadata[source_event.type] = RuntimeEvent(
+                        seq=int(source_event.seq), type=source_event.type,
+                        session_id=source_session_id, timestamp=source_event.timestamp, payload=payload,
+                    )
+        origin = self._branch_origin_at_seq(source_session_id, int(branch_from_seq),
+                                          _source_events=chain(events, origin_metadata.values()))
         if origin is not None and origin != key:
             snapshot = self._source_snapshot_at_seq(origin[0], origin[1], _seen=seen)
             # A branch can rewrite/delete one of its inherited seed events.
@@ -1098,9 +1119,8 @@ class RuntimeHistoryOps:
             # semantic edits back to the origin seq before producing another
             # branch checkpoint. Otherwise UI shows the edit while model
             # context silently reverts to the ancestor value.
-            source_events = list(self.event_log.iter_events(source_session_id))
-            by_seq = {int(event.seq): event for event in source_events}
-            for local_op in source_events:
+            by_seq = {int(event.seq): event for event in events}
+            for local_op in chain(events, later_history_ops):
                 if local_op.type not in {"message_deleted", "message_rewritten"}:
                     continue
                 local_target = self.projector._int_or_none((local_op.payload or {}).get("target_seq"))
@@ -1124,15 +1144,6 @@ class RuntimeHistoryOps:
                 ))
             self.projector.finalize(snapshot)
             return snapshot
-        events = []
-        later_history_ops = []
-        for source_event in self.event_log.iter_events(source_session_id):
-            if int(source_event.seq) <= int(branch_from_seq):
-                events.append(source_event)
-            elif source_event.type in {"message_deleted", "message_rewritten"}:
-                target = self.projector._int_or_none((source_event.payload or {}).get("target_seq"))
-                if target is not None and target <= int(branch_from_seq):
-                    later_history_ops.append(source_event)
         if not events:
             return self.projector.empty_snapshot()
         snapshot = self.projector.project(events)
@@ -1161,11 +1172,12 @@ class RuntimeHistoryOps:
                 messages.append(strip_responses_continuation_from_message(item))
         return messages
 
-    def _branch_origin_at_seq(self, source_session_id: str, branch_from_seq: int) -> Optional[tuple[str, int]]:
+    def _branch_origin_at_seq(self, source_session_id: str, branch_from_seq: int, *, _source_events=None) -> Optional[tuple[str, int]]:
         branch_created = None
         branch_model_seed_seq = None
         target_event = None
-        for event in self.event_log.iter_events(source_session_id):
+        source_events = self.event_log.iter_events(source_session_id) if _source_events is None else _source_events
+        for event in source_events:
             if int(event.seq) == int(branch_from_seq):
                 target_event = event
             if event.type == "history_branch_created" and branch_created is None:

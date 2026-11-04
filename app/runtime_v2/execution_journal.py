@@ -8,8 +8,10 @@ from __future__ import annotations
 import copy
 import io
 import json
+import math
 import threading
 import time
+from datetime import datetime
 from typing import Any
 from agent_local_timing import local_timed, local_step, mark_local
 
@@ -26,9 +28,38 @@ TERMINAL = {"completed", "failed", "timed_out", "interrupted", "unknown"}
 STREAM_TYPES = {
     "llm_reasoning_delta", "llm_response_delta", "tool_call_delta",
     "tool_pending", "tool_command_delta", "tool_call", "tool_execution_state",
-    "llm_reasoning", "llm_response",
+    "llm_reasoning", "llm_reasoning_end", "llm_response",
     "approval_requested", "interaction_requested",
 }
+
+
+def _timestamp(value):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except (ValueError, OverflowError):
+            return None
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+
+
+def _reasoning_span(row, measured, finished_at=None):
+    """Recover a span from facts; a new process's partial timer cannot replace it."""
+    started = _timestamp(row.get("started_at"))
+    observed = _timestamp(measured.get("started_at"))
+    duration = measured.get("duration_ms")
+    if (isinstance(duration, (int, float)) and not isinstance(duration, bool)
+            and math.isfinite(duration) and duration >= 0
+            and (started is None or observed is not None and abs(started - observed) < .001)):
+        return {key: measured[key] for key in ("started_at", "finished_at", "duration_ms") if key in measured}
+    if row.get("duration_ms") is not None:
+        return {key: row[key] for key in ("started_at", "finished_at", "duration_ms") if key in row}
+    # Snapshot-only historical rows have no measured start. Leave them unknown.
+    if started is not None and (row.get("timing_started") or row.get("status") == "generating"):
+        span = {"started_at": row["started_at"]}
+        if finished_at is not None:
+            span.update(finished_at=finished_at, duration_ms=max(0, round((finished_at - started) * 1000)))
+        return span
+    return {}
 
 
 def _timed_replay(events, diagnostics):
@@ -201,6 +232,7 @@ class ExecutionJournal:
             if event.seq <= state["seq"]:
                 raise ValueError("execution journal event boundary is not monotonic")
             replay_events += 1
+            state.pop("_reasoning_by_phase", None)
             force_checkpoint = force_checkpoint or event.type in {
                 "assistant_final_committed", "message_assistant_final", "run_finished", "run_failed", "run_interrupted"}
             payload = event.payload or {}
@@ -327,6 +359,9 @@ class ExecutionJournal:
     @local_timed("journal_record")
     def record(self, session_id: str, event: dict) -> dict:
         mark_local("journal_worker_entered")
+        received_at = _timestamp(event.pop("_process_received_at", None))
+        received_at = time.time() if received_at is None else received_at
+        measured_reason = event.pop("_reasoning_timing", {})
         if event.get("_subagent_forward"):
             return event
         kind = str(event.get("type") or "")
@@ -341,6 +376,35 @@ class ExecutionJournal:
                     "turn_id": state["turn"], "run_id": run, "attempt_id": attempt,
                     "react_iter": event.get("react_iter"), "stream_seq": event.get("stream_seq"),
                     "updated_at": now_iso()}
+            # Finish reasoning at its first response/tool boundary, not at the
+            # later full-content commit. These fields live in execution_recorded
+            # facts and therefore survive a genuinely new Python process.
+            if kind != "llm_reasoning_delta":
+                abort = kind in {"llm_stream_aborted", "run_interrupted", "run_failed"}
+                candidate = state["records"].get(f"{run}:reasoning:{attempt}:0")
+                if abort:
+                    candidates = list(state["records"].values())
+                elif candidate is not None:
+                    candidates = [candidate]
+                else:
+                    # Cache misses too: response-only streams must not scan all
+                    # historical rows again for each token.
+                    lookup = state.get("_reasoning_by_phase")
+                    if lookup is None:
+                        lookup = state["_reasoning_by_phase"] = {}
+                        for row in state["records"].values():
+                            if row.get("kind") == "reasoning":
+                                for stream in (row.get("stream_seq"), None):
+                                    lookup[(row.get("run_id"), row.get("react_iter"), stream)] = row["execution_id"]
+                    candidates = [state["records"].get(lookup.get((run, event.get("react_iter"), event.get("stream_seq"))), {})]
+                for row in candidates:
+                    same_phase = (row.get("react_iter") == event.get("react_iter")
+                        and (event.get("stream_seq") is None or row.get("stream_seq") == event.get("stream_seq")))
+                    if (row.get("kind") == "reasoning" and row.get("run_id") == run
+                            and row.get("duration_ms") is None and (abort or same_phase)):
+                        span = _reasoning_span(row, measured_reason, received_at)
+                        if "duration_ms" in span:
+                            self._append(session_id, state, {"execution_id": row["execution_id"], **span}, run)
             if kind in {"llm_stream_aborted", "run_interrupted", "run_failed"}:
                 for row in list(state["records"].values()):
                     if row.get("run_id") == run and row.get("status") not in TERMINAL:
@@ -354,6 +418,13 @@ class ExecutionJournal:
                 event["preserve_execution_records"] = True
                 event["cleanup_scope"] = "none"
                 RecoveryCheckpoint.schedule(self, session_id, state, force=True)
+                return event
+            if kind == "llm_reasoning_end":
+                match = next((row for row in reversed(list(state["records"].values()))
+                    if row.get("kind") == "reasoning" and row.get("run_id") == run
+                    and row.get("react_iter") == event.get("react_iter")
+                    and (event.get("stream_seq") is None or row.get("stream_seq") == event.get("stream_seq"))), {})
+                event.update(_reasoning_span(match, measured_reason))
                 return event
             tool_id = str(event.get("tool_call_id") or event.get("id") or "")
             is_tool = kind.startswith("tool_") or kind in {"approval_requested", "interaction_requested"}
@@ -445,6 +516,23 @@ class ExecutionJournal:
                     update["received_content"] = received
                 update.update(status=event.get("execution_status", "completed"), content=content, ui_committed=True)
             prior = state["records"].get(identity, {})
+            if category == "reasoning":
+                if kind == "llm_reasoning_delta":
+                    update["timing_started"] = True
+                    update["started_at"] = prior.get("started_at", event.get("started_at", received_at))
+                else:
+                    # Matching a snapshot may have changed identity above.
+                    update["started_at"] = prior.get("started_at", event.get("started_at", update["started_at"]))
+                    if prior.get("status") == "generating":
+                        update["timing_started"] = True
+                span = _reasoning_span({**prior, **update}, event if kind == "llm_reasoning" else {},
+                                       received_at if kind == "llm_reasoning" else None)
+                update.update(span)
+                event.update(span)
+            if is_tool and not prior.get("execution_started_at") and (
+                    kind == "tool_command_delta" or kind == "tool_execution_state" and event.get("status") == "running"
+                    or kind == "tool_call" and event.get("started_at") is not None):
+                update["execution_started_at"] = event.get("started_at") or now_iso()
             if (kind == "tool_call" and prior.get("ui_committed")
                     and all(prior.get(key) == update.get(key) for key in
                             ("status", "result", "tool", "args", "attachments"))):
@@ -452,6 +540,15 @@ class ExecutionJournal:
                              attempt_id=attempt, execution_runtime_seq=prior.get("last_runtime_seq"))
                 return event
             saved = self._append(session_id, state, update, run)
+            if category == "reasoning" and state.get("_reasoning_by_phase") is not None:
+                keys = [(run, update.get("react_iter"), stream) for stream in (update.get("stream_seq"), None)]
+                lookup = state["_reasoning_by_phase"]
+                if any(lookup.get(key) != identity for key in keys):
+                    # UI batch planning shallow-copies state. Copy this index
+                    # on change so a failed plan cannot modify the live cache.
+                    lookup = state["_reasoning_by_phase"] = dict(lookup)
+                    for key in keys:
+                        lookup[key] = identity
             event.update(execution_id=identity, process_group_id=update["process_group_id"],
                          attempt_id=attempt, execution_runtime_seq=saved.seq)
             return event

@@ -415,6 +415,33 @@ class RuntimeUiProjection:
                 out.append(ui)
         return self._normalize_react_process_order(out), latest_truncate_seq, has_history_ops
 
+    def resolve_truncate_boundary(
+        self, session_id: str, ui_index: int, runtime_seq: Optional[int] = None,
+    ) -> Optional[Tuple[int, int, int]]:
+        """Resolve (index, target seq, previous seq) in one unhydrated replay.
+
+        An explicit but stale seq must not fall back to an index: that index
+        may now refer to an entirely different user turn after a rewrite.
+        """
+        index = int(ui_index)
+        if index < 0:
+            return None
+        target = int(runtime_seq) if runtime_seq is not None else None
+        if target is not None and target <= 0:
+            return None
+        events, _, _ = self._project_visible_ui_entries(session_id, hydrate=False)
+        if target is None:
+            if index >= len(events):
+                return None
+            target = self._int_or_none(events[index].get("runtime_seq"))
+        if not target or target <= 0:
+            return None
+        for pos, event in enumerate(events):
+            if self._int_or_none(event.get("runtime_seq")) == target:
+                previous = self._int_or_none(events[pos - 1].get("runtime_seq")) if pos else 0
+                return (pos, target, previous) if previous is not None else None
+        return None
+
     def ui_index_to_runtime_seq(self, session_id: str, ui_index: int) -> Optional[int]:
         target = int(ui_index)
         if target < 0:
