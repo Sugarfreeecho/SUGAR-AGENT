@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "id": "power-modes",
+  "name": "电源模式",
+  "version": "2.0.0",
+  "description": "三种互斥的电源模式：护屏（屏幕黑但电脑继续跑）、常亮（屏幕不熄）、任务完成后自动睡眠（关屏待机但不关机）。",
+  "author": {
+    "name": "SugarAgent"
+  },
+  "capabilities": {
+    "ui": {
+      "tray": [
+        {
+          "id": "power-modes",
+          "label": "电源模式",
+          "items": [
+            {
+              "id": "shield",
+              "label": "护屏模式",
+              "description": "全屏纯黑遮罩，电脑保持满速，按任意键或移动鼠标退出。",
+              "command": ["{pythonw}", "scripts/power_modes.py", "set", "shield"],
+              "check": {
+                "file": "{state}/power-mode.json",
+                "key": "mode",
+                "equals": "shield"
+              }
+            },
+            {
+              "id": "awake",
+              "label": "常亮模式",
+              "description": "挂住显示器与系统唤醒锁，屏幕持续常亮。",
+              "command": ["{pythonw}", "scripts/power_modes.py", "set", "awake"],
+              "check": {
+                "file": "{state}/power-mode.json",
+                "key": "mode",
+                "equals": "awake"
+              }
+            },
+            {
+              "id": "autosleep",
+              "label": "任务完成后睡眠",
+              "description": "Agent 全部任务结束后等待一段时间，关屏并进入睡眠，不关机。",
+              "command": ["{pythonw}", "scripts/power_modes.py", "set", "autosleep"],
+              "check": {
+                "file": "{state}/power-mode.json",
+                "key": "mode",
+                "equals": "autosleep"
+              }
+            },
+            {
+              "id": "none",
+              "label": "退出模式（恢复默认）",
+              "description": "停止护屏/常亮/自动睡眠，回到系统默认电源行为。",
+              "command": ["{pythonw}", "scripts/power_modes.py", "set", "none"],
+              "check": {
+                "file": "{state}/power-mode.json",
+                "key": "mode",
+                "equals": "none"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "permissions": {
+    "context": [],
+    "services": []
+  }
+}

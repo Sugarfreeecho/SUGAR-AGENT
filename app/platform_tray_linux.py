@@ -13,6 +13,19 @@ except ImportError:
     from platform_tray import lifecycle_menu_enabled, launch_updater, open_logs_in_terminal
 
 
+def _import_tray_plugins():
+    """Plugin tray contributions are optional; never fatal."""
+
+    try:
+        try:
+            from . import tray_plugins as module
+        except ImportError:
+            import tray_plugins as module
+        return module
+    except Exception:
+        return None
+
+
 def run(root: Path) -> int:
     try:
         import gi
@@ -98,6 +111,42 @@ def run(root: Path) -> int:
             show_error(str(exc))
 
     add("运行日志", view_logs)
+
+    tray_module = _import_tray_plugins()
+    plugin_entries = []
+    if tray_module is not None:
+        try:
+            plugin_entries = tray_module.discover_tray_menu(root)
+        except Exception:
+            plugin_entries = []
+    if plugin_entries:
+        separator()
+        for entry in plugin_entries:
+            children = getattr(entry, "children", None)
+            if children is None:
+                add(
+                    entry.label,
+                    lambda _item, action=entry: background(
+                        lambda: tray_module.launch(action)
+                    ),
+                )
+                continue
+            group_item = Gtk.MenuItem(label=entry.label)
+            submenu = Gtk.Menu()
+            for child in children:
+                child_item = Gtk.MenuItem(label=child.label)
+                child_item.connect(
+                    "activate",
+                    lambda _item, action=child: background(
+                        lambda: tray_module.launch(action)
+                    ),
+                )
+                child_item.show()
+                submenu.append(child_item)
+            group_item.set_submenu(submenu)
+            group_item.show()
+            menu.append(group_item)
+
     if lifecycle_menu_enabled(root):
         separator()
 

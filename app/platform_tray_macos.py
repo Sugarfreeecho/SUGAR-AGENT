@@ -14,6 +14,19 @@ except ImportError:
     from platform_tray import lifecycle_menu_enabled, launch_updater, open_logs_in_terminal
 
 
+def _import_tray_plugins():
+    """Plugin tray contributions are optional; never fatal."""
+
+    try:
+        try:
+            from . import tray_plugins as module
+        except ImportError:
+            import tray_plugins as module
+        return module
+    except Exception:
+        return None
+
+
 def run(root: Path) -> int:
     try:
         import objc
@@ -39,6 +52,8 @@ def run(root: Path) -> int:
     backend = LaunchdUserBackend(root)
     backend.start()
 
+    tray_module = _import_tray_plugins()
+
     class TrayDelegate(NSObject):
         def init(self):
             self = objc.super(TrayDelegate, self).init()
@@ -62,6 +77,18 @@ def run(root: Path) -> int:
             alert.setMessageText_("SugarAgent")
             alert.setInformativeText_(str(message))
             alert.runModal()
+
+        @objc.python_method
+        def _launch_plugin_action(self, index: int) -> None:
+            actions = getattr(self, "plugin_actions", None) or []
+            if 0 <= index < len(actions) and tray_module is not None:
+                try:
+                    tray_module.launch(actions[index])
+                except Exception as exc:
+                    self._error(str(exc))
+
+        def runPluginAction_(self, sender):
+            self._launch_plugin_action(int(sender.tag()))
 
         def openAgent_(self, _sender):
             open_webui("/")
@@ -129,6 +156,45 @@ def run(root: Path) -> int:
     add("高级设置", "openSettings:")
     add("MCP 配置", "openMcp:")
     add("运行日志", "openLogs:")
+
+    # Plugin-contributed entries. Built defensively: a malformed manifest must
+    # never stop the menu bar from appearing.
+    plugin_actions = []
+    try:
+        entries = tray_module.discover_tray_menu(root) if tray_module is not None else []
+        if entries:
+            menu.addItem_(NSMenuItem.separatorItem())
+        for entry in entries:
+            children = getattr(entry, "children", None)
+            if children is None:
+                index = len(plugin_actions)
+                plugin_actions.append(entry)
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    entry.label, "runPluginAction:", ""
+                )
+                item.setTarget_(delegate)
+                item.setTag_(index)
+                menu.addItem_(item)
+                continue
+            parent_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                entry.label, None, ""
+            )
+            submenu = NSMenu.alloc().initWithTitle_(entry.label)
+            for child in children:
+                index = len(plugin_actions)
+                plugin_actions.append(child)
+                child_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    child.label, "runPluginAction:", ""
+                )
+                child_item.setTarget_(delegate)
+                child_item.setTag_(index)
+                submenu.addItem_(child_item)
+            parent_item.setSubmenu_(submenu)
+            menu.addItem_(parent_item)
+    except Exception:
+        plugin_actions = []
+    delegate.plugin_actions = plugin_actions
+
     if lifecycle_menu_enabled(root):
         menu.addItem_(NSMenuItem.separatorItem())
         add("重启", "restartAgent:")

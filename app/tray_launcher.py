@@ -26,6 +26,11 @@ from desktop_notify import show_desktop_notification
 from platform_lifecycle import request_webui_activation
 from proc_flags import NO_WINDOW, hidden_flags
 
+try:  # Optional capability: a packaging gap must never stop the tray itself.
+    import tray_plugins
+except Exception:  # pragma: no cover - defensive
+    tray_plugins = None  # type: ignore[assignment]
+
 
 APP_NAME = "Agent \u667a\u80fd\u4f1a\u8bdd\u52a9\u624b"
 MSG_STARTING = "\u6b63\u5728\u542f\u52a8 Agent\uff0c\u8bf7\u7a0d\u5019..."
@@ -92,6 +97,10 @@ MENU_VIEW_TERMINAL = 1004
 MENU_EXIT = 1005
 MENU_RESTART = 1006
 MENU_UPDATE = 1007
+
+# Plugin-contributed entries occupy a fixed, otherwise unused command range.
+MENU_PLUGIN_BASE = 2000
+MENU_PLUGIN_LIMIT = tray_plugins.MAX_TRAY_ACTIONS if tray_plugins else 0
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -569,6 +578,7 @@ class TrayLauncher:
         self._lifecycle_lock = threading.Lock()
         self._ui_open_lock = threading.Lock()
         self._last_ui_open_at = None
+        self._tray_action_map = {}
         self._watchdog_thread = None
         self.mutex = win32event.CreateMutex(None, True, "MyAgentTrayLauncher")
         self.already_running = win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
@@ -897,6 +907,14 @@ class TrayLauncher:
             win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_ENV, MENU_TEXT_ENV)
             win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_OPEN_MCP, MENU_TEXT_MCP)
             win32gui.AppendMenu(menu, win32con.MF_STRING, MENU_VIEW_TERMINAL, MENU_TEXT_TERMINAL)
+
+            # Plugin-contributed entries stay above the lifecycle block so the
+            # fixed host actions keep a predictable position.
+            plugin_entries = self._collect_tray_entries()
+            if plugin_entries:
+                win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
+                self._append_plugin_entries(menu, plugin_entries)
+
             win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
 
             if _tray_lifecycle_menu_enabled():
@@ -946,12 +964,71 @@ class TrayLauncher:
             self._open_url("/settings#mcp", refresh=True)
         elif command == MENU_VIEW_TERMINAL:
             self._open_terminal_viewer()
+        elif command in self._tray_action_map:
+            self._launch_tray_action(self._tray_action_map[command])
         elif command == MENU_RESTART:
             self._request_restart()
         elif command == MENU_UPDATE:
             self._request_update()
         elif command == MENU_EXIT:
             self._exit_agent()
+
+    def _collect_tray_entries(self):
+        """Rebuild plugin tray entries on every popup.
+
+        Enabling or disabling a plugin in settings therefore takes effect on the
+        next right-click, without restarting the tray supervisor. Checked states
+        are re-read from the plugin's own state file for the same reason.
+        """
+
+        self._tray_action_map = {}
+        if tray_plugins is None:
+            return []
+        try:
+            return tray_plugins.discover_tray_menu(
+                ROOT,
+                python_exe=str(PYTHON_EXE),
+                pythonw_exe=str(PYTHONW_EXE),
+            )
+        except Exception as exc:  # a broken plugin must not break the menu
+            _append_log(f"Tray plugin actions unavailable: {exc}")
+            return []
+
+    def _append_plugin_entries(self, menu, entries) -> None:
+        """Append flat actions and submenu groups, recording their command ids."""
+
+        mapping = {}
+        next_command = MENU_PLUGIN_BASE
+        for entry in entries:
+            if isinstance(entry, tray_plugins.TrayGroup):
+                submenu = win32gui.CreatePopupMenu()
+                for child in entry.children:
+                    flags = win32con.MF_STRING
+                    if child.checked:
+                        flags |= win32con.MF_CHECKED
+                    win32gui.AppendMenu(submenu, flags, next_command, child.label)
+                    mapping[next_command] = child
+                    next_command += 1
+                win32gui.AppendMenu(menu, win32con.MF_POPUP, int(submenu), entry.label)
+                continue
+            flags = win32con.MF_STRING
+            if entry.checked:
+                flags |= win32con.MF_CHECKED
+            win32gui.AppendMenu(menu, flags, next_command, entry.label)
+            mapping[next_command] = entry
+            next_command += 1
+        self._tray_action_map = mapping
+
+    def _launch_tray_action(self, action) -> None:
+        try:
+            tray_plugins.launch(action)
+        except Exception as exc:
+            _append_log(
+                f"Tray plugin action failed: {action.plugin_id}/{action.item_id}: {exc}"
+            )
+            self._show_message(f"插件动作启动失败：{action.label}", error=True)
+            return
+        _append_log(f"Tray plugin action launched: {action.plugin_id}/{action.item_id}")
 
     def _claim_ui_open_slot(self) -> bool:
         """Return True only for the first browser-launch request in the window.
