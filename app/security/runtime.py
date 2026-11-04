@@ -220,6 +220,10 @@ def _effective_shell_base(workdir_value: object, workspace: Path) -> Path | None
 def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) -> CapabilityRequest:
     name = str(tool_name or "").strip()
     args = dict(arguments or {})
+    if name in {"scheduled_tasks", "manage_scheduled_task"}:
+        return CapabilityRequest.create(action="tool.call", resource=name,
+            effect="read" if name == "scheduled_tasks" else "workspace_write", arguments=args,
+            metadata={"tool": name, "declared": True})
     if name == "switch_work_dir":
         from agent_harness import normalize_session_work_dir
         target = normalize_session_work_dir(args.get("work_dir"))
@@ -230,6 +234,25 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                       "previous_root": str(workspace.resolve())})
     from host_tool_contracts import tool_contract as host_tool_contract
     computer_contract = host_tool_contract(name)
+    if computer_contract.get("managed_by") == "browser-use":
+        effect = computer_contract["effect"]
+        metadata = {"tool": name, "declared": True, "network": True}
+        if name in {"browser_snapshot", "browser_find", "browser_take_screenshot"} and isinstance(args.get("filename"), str) and args["filename"]:
+            output_request = classify_tool("write_file", {"path": args["filename"], "content": ""}, workspace)
+            return CapabilityRequest.create(action=output_request.action, resource=output_request.resource,
+                effect=output_request.effect, arguments=args,
+                metadata={**dict(output_request.metadata), **metadata})
+        if name == "browser_tabs" and args.get("action") in {"list", "select"}:
+            effect = "read"
+        if name == "browser_file_upload" and isinstance(args.get("paths"), list):
+            from .policy import sensitive_path
+            paths = [canonical_path(path, workspace) for path in args["paths"] if isinstance(path, str)]
+            metadata["paths"] = [str(path) for path in paths]
+            if any(sensitive_path(path) for path in paths):
+                effect = "credential"
+                metadata["credential_export"] = True
+        return CapabilityRequest.create(action="tool.call", resource=name, effect=effect,
+            arguments=args, metadata=metadata)
     if computer_contract.get("managed_by") == "computer-use":
         from agent_tools import _agent_protected_process_ids
         target = args.get("target") if isinstance(args.get("target"), dict) else {}
