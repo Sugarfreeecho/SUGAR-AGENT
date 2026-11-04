@@ -118,7 +118,7 @@ def browser_host(composed, monkeypatch):
     return host, composed
 
 
-def test_pairing_reuses_identity_and_preserves_least_capabilities(browser_host):
+def test_pairing_reuses_identity_and_grants_trusted_schedules(browser_host):
     host, c = browser_host
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=c.app), base_url="http://127.0.0.1") as client:
@@ -134,17 +134,32 @@ def test_pairing_reuses_identity_and_preserves_least_capabilities(browser_host):
             assert not principal.admin
             assert principal.permits("session.send")
             assert principal.permits("session.config.update")
-            assert not principal.permits("automation.create")
+            # Trusted pairing path: schedules work like the main window, while
+            # admin-only surfaces stay closed.
+            assert principal.permits("automation.create")
+            assert principal.permits("automation.list")
             assert not principal.permits("device.revoke")
             replay = await client.post('/api/browser/v1/claim', headers={"Origin": host.extension_origin()}, json={"code": code})
             assert replay.status_code == 401
             response = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
                 json={"method": "session.create", "params": {"name": "From extension", "work_dir": str(c.root)}, "idempotency_key": "browser-test-create"})
             assert response.status_code == 200, response.text
-            assert response.json()["data"]["session_id"]
-            blocked = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
-                json={"method": "automation.create", "params": {}, "idempotency_key": "forbidden"})
-            assert blocked.status_code == 403
+            sid = response.json()["data"]["session_id"]
+            created = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
+                json={"method": "automation.create", "params": {
+                    "name": "Pairing schedule", "trigger": {"kind": "interval", "seconds": 3600},
+                    "target": {"mode": "existing", "session_id": sid},
+                    "policy": {"scope": "all", "capabilities": ["session.send"]},
+                    "action": {"kind": "prompt", "text": "继续"}}, "idempotency_key": "browser-test-schedule"})
+            assert created.status_code == 200, created.text
+            task = created.json()["data"]
+            assert task["owner"] == principal.id
+            listed = await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
+                json={"method": "automation.list", "params": {}, "idempotency_key": "browser-test-list"})
+            assert [row["id"] for row in listed.json()["data"]["items"]] == [task["id"]]
+            assert (await client.post('/api/control/v1/rpc', headers={"Authorization": "Bearer " + token},
+                json={"method": "automation.delete", "params": {"id": task["id"], "expected_revision": task["revision"]},
+                      "idempotency_key": "browser-test-delete"})).status_code == 200
             revoked = await client.post('/api/browser/v1/devices/' + principal.id + '/revoke', headers={"Origin": "http://127.0.0.1"}, json={})
             assert revoked.status_code == 200, revoked.text
             with pytest.raises(Exception, match="revoked"):
