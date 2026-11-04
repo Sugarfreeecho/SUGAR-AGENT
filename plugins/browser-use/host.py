@@ -15,7 +15,12 @@ from .page_context import normalize_context, with_page_reference
 _manager = None
 CAPABILITIES = ["system.health", "session.list", "session.get", "session.history", "session.search", "session.attach", "session.detach",
     "session.config.get", "operation.get", "operation.wait", "session.create", "session.send", "session.steer", "session.interrupt",
-    "session.update", "session.archive", "session.delete", "session.config.update", "approval.list", "approval.resolve"]
+    "session.update", "session.archive", "session.delete", "session.config.update", "approval.list", "approval.resolve",
+    # The paired browser is a trusted local path: it manages its own schedules
+    # exactly like the main window. Ownership still scopes every object, and
+    # admin surfaces (device.revoke, webhook sources, native settings) stay closed.
+    "read", "automation.list", "automation.get", "automation.history", "automation.create",
+    "automation.update", "automation.pause", "automation.resume", "automation.run", "automation.delete"]
 
 
 def pairing_identity(code):
@@ -33,6 +38,8 @@ def restore_pairing_grants(application):
 
     Migrate only live original browser grants, never delegated task credentials,
     expired/revoked grants, capabilities, or a pairing removed by the user.
+    Live original pairings are also brought up to the current trusted capability
+    set so an existing pairing never needs to be redone after a capability change.
     """
     paired = {row["id"] for row in application.store.list("browser_connections")
               if not row.get("revoked") and row.get("origin") == extension_origin()}
@@ -46,11 +53,17 @@ def restore_pairing_grants(application):
             if (principal.get("id") not in paired or principal.get("admin") or principal.get("parent_id")
                     or principal.get("parent_credential") or principal.get("delegated_policies")
                     or len(ancestors) != 1 or ancestors[0].get("id") != "browser-use"
-                    or ancestors[0].get("kind", "plugin") != "plugin"
+                    or ancestors[0].get("kind", "plugin") not in {"plugin", "browser-pairing"}
                     or not set(json.loads(policy).get("capabilities", [])).issubset(CAPABILITIES)):
                 continue
             principal["source_ancestors"] = [{**ancestors[0], "kind": "browser-pairing"}]
-            db.execute("UPDATE grants SET principal=? WHERE token_hash=?", (json.dumps(principal), token_hash))
+            row_policy = json.loads(policy)
+            granted = list(row_policy.get("capabilities", []))
+            missing = [name for name in CAPABILITIES if name not in granted]
+            if missing:
+                row_policy["capabilities"] = [*granted, *missing]
+            db.execute("UPDATE grants SET principal=?, policy=? WHERE token_hash=?",
+                       (json.dumps(principal), json.dumps(row_policy), token_hash))
 
 
 def websocket_close_code(error):
