@@ -1429,6 +1429,26 @@ def test_branch_route_passes_runtime_seq_boundary(monkeypatch, tmp_path):
     }]
 
 
+def test_branch_route_reuses_receipt_and_rejects_changed_boundary(monkeypatch, tmp_path):
+    import webui
+    from history_operation_requests import HistoryOperationRequests
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, 'session_manager', fake)
+    monkeypatch.setattr(webui, '_branch_session_requests', HistoryOperationRequests())
+    async def exercise():
+        responses = await asyncio.gather(*[webui.branch_session_events(
+            's1', before_index=10, after_seq=123, request_id='same-request') for _ in range(3)])
+        assert all(response.status_code == 200 for response in responses)
+        assert len(fake.branch_calls) == 1
+        again = await webui.branch_session_events('s1', before_index=10, after_seq=123, request_id='same-request')
+        assert again.body == responses[0].body
+        conflict = await webui.branch_session_events('s1', before_index=11, after_seq=123, request_id='same-request')
+        assert conflict.status_code == 409
+        assert len(fake.branch_calls) == 1
+    asyncio.run(exercise())
+
+
 def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
     import webui
 

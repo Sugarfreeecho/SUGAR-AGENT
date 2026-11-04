@@ -123,6 +123,7 @@ store.applySnapshot([{
   unread_result: true,
   unread_result_status: 'success',
   unread_result_run_id: 'run-1',
+  unread_result_run_order: 1,
 }], 0);
 assert.strictEqual(store.get('read-session').unread_result, false);
 assert.strictEqual(store.get('read-session').unread_result_run_id, undefined);
@@ -133,6 +134,7 @@ store.upsert({
   unread_result: true,
   unread_result_status: 'success',
   unread_result_run_id: 'run-1',
+  unread_result_run_order: 1,
 });
 assert.strictEqual(store.get('read-session').unread_result, false);
 assert.strictEqual(store.get('read-session').unread_result_status, undefined);
@@ -144,6 +146,7 @@ store.upsert({
   unread_result: true,
   unread_result_status: 'success',
   unread_result_run_id: 'run-2',
+  unread_result_run_order: 2,
 });
 assert.strictEqual(store.get('read-session').unread_result, true);
 assert.strictEqual(store.get('read-session').unread_result_run_id, 'run-2');

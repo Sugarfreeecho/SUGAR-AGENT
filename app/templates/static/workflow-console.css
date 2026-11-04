@@ -43,7 +43,10 @@ body[data-console] .section-eyebrow { display:block; font-size:14px; font-weight
 body[data-console] .refresh-button { margin-left:auto; min-height:30px; padding:5px 10px; white-space:nowrap; }
 body[data-console] #sync-status { font-size:11px; color:var(--muted); margin-top:6px; }
 body[data-console] .session-picker { grid-template-columns:minmax(0,1fr) auto; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
-:root[data-myagent-page] body[data-console] .session-picker { display:none; }
+:root[data-myagent-page=details] body[data-console] .session-picker { display:none; }
+:root[data-myagent-page=settings] body[data-console] .topbar { display:none; }
+:root[data-myagent-page=settings] body[data-console] main.wrap { padding:0; }
+:root[data-myagent-page=settings] body[data-console] .console-tabs { top:0; }
 body[data-console] button, body[data-console] input, body[data-console] textarea, body[data-console] select { font-family:var(--sans); }
 body[data-console] button { border:0; border-radius:8px; padding:10px 16px; min-height:36px; font-size:13px; font-weight:700; background:#f3f4f6; color:#111; }
 body[data-console] button:hover { background:#e5e7eb; }

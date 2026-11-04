@@ -65,6 +65,104 @@
   background: transparent;
 }
 
+/* Native workflow sections share the settings shell, controls, and scroll area. */
+.workflow-settings { min-width:0; container-type:inline-size; }
+.workflow-settings [hidden] { display:none !important; }
+.workflow-settings [inert] { opacity:.65; }
+.workflow-settings :is(h2,h3,p) { margin:0; }
+.workflow-settings h2 { font-size:var(--st-fs); font-weight:500; }
+.workflow-settings h3 { font-size:var(--st-fs-sm); font-weight:600; }
+.workflow-settings .wf-card-body { padding:14px 16px; }
+.workflow-settings .section-head { justify-content:space-between; flex-wrap:wrap; }
+.workflow-settings :is(.toolbar,.row,.item-head,.bound-session,.member-identity,.creation-footer,.team-lifecycle) { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.workflow-settings :is(.item-head,.creation-footer,.team-lifecycle) { justify-content:space-between; }
+.workflow-settings .toolbar { margin-top:12px; }
+.workflow-settings .st-card-head .toolbar { margin-top:0; }
+.workflow-settings form { display:grid; gap:12px; }
+.workflow-settings .wf-field { display:grid; min-width:0; gap:6px; font-size:var(--st-fs-sm); color:var(--st-text-2); }
+.workflow-settings .wf-field .st-input { width:100%; max-width:100%; }
+.workflow-settings .wf-session-picker { display:flex; width:100%; gap:8px; flex-wrap:wrap; }
+.workflow-settings .wf-session-picker .st-input { flex:1; min-width:150px; width:auto; }
+.workflow-settings .wf-sync { padding:0 16px 12px; }
+.workflow-settings :is(.muted,.hint) { color:var(--st-text-3); font-size:var(--st-fs-sm); line-height:1.6; }
+.workflow-settings .id { color:var(--st-text-3); font:var(--st-fs-xs) var(--st-mono); overflow-wrap:anywhere; }
+.workflow-settings :is(.prose,.objective,.message-content) { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
+.workflow-settings .prose { margin:10px 0; }
+.workflow-settings .objective { font-weight:500; margin-bottom:12px; }
+.workflow-settings :is(#error,#notice) { padding:10px 12px; border-radius:var(--st-radius-sm,8px); margin-bottom:12px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:var(--st-fs-sm); }
+.workflow-settings #error { color:var(--st-danger); background:color-mix(in srgb,var(--st-danger) 8%,transparent); }
+.workflow-settings #notice { color:var(--st-ok); background:color-mix(in srgb,var(--st-ok) 8%,transparent); }
+.workflow-settings :is(#error,#notice):empty { display:none; }
+.workflow-settings .dialog-error { color:var(--st-danger); white-space:pre-wrap; margin-bottom:12px; }
+.workflow-settings .badge { display:inline-flex; flex:none; width:max-content; max-width:100%; padding:2px 8px; border-radius:6px; background:var(--st-surface); color:var(--st-text-2); font-size:var(--st-fs-xs); font-weight:500; }
+.workflow-settings .badge:is([data-status=active],[data-status=working],[data-status=in_progress]) { color:var(--st-accent); background:color-mix(in srgb,var(--st-accent) 10%,transparent); }
+.workflow-settings .badge:is([data-status=done],[data-status=completed],[data-status=idle],[data-status=consumed]) { color:var(--st-ok); background:color-mix(in srgb,var(--st-ok) 10%,transparent); }
+.workflow-settings .badge:is([data-status=paused],[data-status=shutting_down],[data-status=waiting_permission]) { color:var(--st-warn); background:color-mix(in srgb,var(--st-warn) 10%,transparent); }
+.workflow-settings .badge:is([data-status=failed],[data-status=blocked],[data-status=urgent]) { color:var(--st-danger); background:color-mix(in srgb,var(--st-danger) 10%,transparent); }
+.workflow-settings .warning { color:var(--st-warn); }
+.workflow-settings .console-welcome { padding:16px; margin-bottom:12px; border:1px solid var(--st-border); border-radius:var(--st-radius-md); }
+.workflow-settings .console-welcome p { color:var(--st-text-3); margin-top:6px; font-size:var(--st-fs-sm); }
+.workflow-settings .welcome-features { display:none; }
+.workflow-settings #workspace:has(>#create-card:not([hidden]))>#empty { display:none; }
+.workflow-settings .creation-card .wf-card-body>p { margin-bottom:12px; }
+.workflow-settings .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(105px,1fr)); gap:8px; margin-bottom:12px; }
+.workflow-settings .metric { background:var(--st-surface); border-radius:var(--st-radius-sm,8px); padding:10px 12px; min-width:0; }
+.workflow-settings .metric span { display:block; color:var(--st-text-3); font-size:var(--st-fs-xs); }
+.workflow-settings .metric strong { display:block; margin-top:4px; font-size:var(--st-fs-lg); font-weight:500; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.workflow-settings #elapsed { font-size:var(--st-fs-sm); }
+.workflow-settings .goal-stages { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; margin:16px 0 8px; }
+.workflow-settings .goal-stages span { border-top:2px solid var(--st-border); padding-top:6px; color:var(--st-text-3); font-size:var(--st-fs-xs); }
+.workflow-settings .goal-stages [data-state=done] { border-color:var(--st-ok); }
+.workflow-settings .goal-stages [data-state=current] { color:var(--st-text); border-color:var(--st-text); font-weight:500; }
+.workflow-settings progress { width:100%; height:5px; accent-color:var(--st-primary); }
+.workflow-settings #budget-copy { font-size:var(--st-fs-xs); color:var(--st-text-3); }
+.workflow-settings .split { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+.workflow-settings .details { display:grid; gap:8px; margin:12px 0 0; }
+.workflow-settings .detail { display:grid; grid-template-columns:88px minmax(0,1fr); gap:8px; font-size:var(--st-fs-sm); }
+.workflow-settings .detail dt { color:var(--st-text-3); }
+.workflow-settings .detail dd { margin:0; overflow-wrap:anywhere; }
+.workflow-settings :is(.secondary-details,details.st-card) { padding-top:12px; margin-top:12px; border-top:1px solid var(--st-border-soft); font-size:var(--st-fs-sm); }
+.workflow-settings details.st-card { padding:12px 16px; }
+.workflow-settings summary { cursor:pointer; color:var(--st-text-2); }
+.workflow-settings pre { white-space:pre-wrap; overflow-wrap:anywhere; font:var(--st-fs-xs)/1.6 var(--st-mono); max-height:300px; overflow:auto; }
+.workflow-settings #judge-reason { background:var(--st-surface); padding:10px 12px; border-radius:var(--st-radius-sm,8px); font-size:var(--st-fs-sm); }
+.workflow-settings #review-form { margin-top:12px; }
+.workflow-settings .team-lifecycle { border-top:1px solid var(--st-border-soft); margin-top:12px; padding-top:12px; }
+.workflow-settings .team-lifecycle .toolbar { margin-top:0; }
+.workflow-settings .secondary-id { display:none; }
+.workflow-settings .console-tabs { display:flex; gap:16px; flex-wrap:wrap; border-bottom:1px solid var(--st-border); margin-bottom:12px; }
+.workflow-settings .console-tabs .st-btn { border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--st-text-3); padding:0 2px 8px; height:auto; gap:6px; }
+.workflow-settings .console-tabs [aria-selected=true] { color:var(--st-text); border-bottom-color:var(--st-text); }
+.workflow-settings .console-tabs button span { color:var(--st-text-3); font-size:var(--st-fs-xs); }
+.workflow-settings .filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.workflow-settings .filters input { flex:1; min-width:120px; }
+.workflow-settings .filters select { width:auto; }
+.workflow-settings :is(.task-board,.member-grid,.stack) { display:grid; gap:10px; grid-template-columns:minmax(0,1fr); }
+.workflow-settings .task-lane { min-width:0; background:var(--st-surface); border-radius:var(--st-radius-sm,8px); padding:10px; }
+.workflow-settings .lane-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; color:var(--st-text-3); }
+.workflow-settings .lane-count { font-size:var(--st-fs-xs); }
+.workflow-settings .item { padding:12px; border:1px solid var(--st-border-soft); border-radius:var(--st-radius-sm,8px); min-width:0; margin-bottom:10px; }
+.workflow-settings .task-lane .item { background:var(--st-card); }
+.workflow-settings .item:last-child { margin-bottom:0; }
+.workflow-settings :is(.item-head,.member-identity) { flex-wrap:nowrap; align-items:flex-start; }
+.workflow-settings :is(.task-board,.member-grid) .item>.id { display:none; }
+.workflow-settings .item .hint { margin-top:6px; }
+.workflow-settings .item .st-btn { font-size:var(--st-fs-sm); padding:0 10px; height:30px; }
+.workflow-settings .task-dependencies { color:var(--st-warn); font-size:var(--st-fs-xs); }
+.workflow-settings .board-empty { padding:14px; border-radius:var(--st-radius-sm,8px); background:var(--st-surface); }
+.workflow-settings .board-empty p { margin-top:6px; }
+.workflow-settings .member-avatar { display:grid; place-items:center; flex:none; width:30px; height:30px; border-radius:7px; background:var(--st-surface); color:var(--st-text-2); }
+.workflow-settings .member-grid .toolbar a { font-size:var(--st-fs-sm); color:var(--st-accent); text-decoration:none; }
+.workflow-settings .message-content { margin:10px 0; padding:10px; background:var(--st-surface); border-radius:var(--st-radius-sm,8px); font-size:var(--st-fs-sm); }
+.workflow-settings .page-controls { display:flex; justify-content:flex-end; gap:8px; align-items:center; font-size:var(--st-fs-sm); }
+.workflow-settings dialog { width:min(560px,calc(100% - 32px)); max-height:85vh; overflow:auto; margin:auto; padding:20px; border:1px solid var(--st-border); border-radius:var(--st-radius-lg,12px); background:var(--st-panel); color:var(--st-text); font:inherit; box-shadow:var(--st-shadow-panel); }
+.workflow-settings dialog::backdrop { background:var(--st-mask); }
+.workflow-settings dialog h2 { font-size:var(--st-fs-lg); margin-bottom:12px; }
+.workflow-settings dialog .toolbar { justify-content:flex-end; }
+.workflow-settings .checkline { display:flex; align-items:center; gap:8px; }
+.workflow-settings select[multiple] { height:auto; min-height:100px; }
+@container(min-width:700px) { .workflow-settings .split,.workflow-settings .member-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
 /* 深色（DSH dark）：面板 rgb(44,44,46)，选中 rgb(67,69,74) */
 :root.theme-dark {
   --st-page: #1b1b1c;

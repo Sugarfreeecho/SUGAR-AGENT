@@ -199,7 +199,9 @@ async function requestSessionSearch(phase, cursor, sessionId) {
                     entry.contentPhase = data.phase;
                 }
             } else if (name === 'progress' && !sessionId) {
-                state.phases[data.phase] = Object.assign({}, state.phases[data.phase], data, { status: 'loading' });
+                state.phases[data.phase] = Object.assign({}, state.phases[data.phase], { elapsed_seconds: 0 }, data, { status: 'loading' });
+                renderSessionSearchStatus();
+                return;
             } else if (name === 'phase_done') {
                 finished.add(data.phase);
                 if (!sessionId) {
@@ -360,24 +362,8 @@ function renderSessionSearchResults() {
         }
     });
     state.nodes.forEach(function (row, id) { if (!visibleIds.has(id)) { row.remove(); state.nodes.delete(id); } });
-    var statuses = SESSION_SEARCH_PHASES.map(function (p) { return state.phases[p] || {}; });
-    var loading = SESSION_SEARCH_PHASES.find(function (p) { return (state.phases[p] || {}).status === 'loading'; });
-    var complete = statuses.every(function (p) { return p.status === 'done'; });
-    var failed = statuses.some(function (p) { return p.status === 'error'; });
-    var hasMore = statuses.some(function (p) { return p.cursor; });
-    var statusEl = document.getElementById('session-search-status');
-    var statusText = '已发现 ' + state.entries.size + ' 个会话';
-    if (loading) {
-        var progress = state.phases[loading];
-        statusText += ' · ' + SESSION_SEARCH_PROGRESS[loading];
-        if (progress.total) statusText += '（' + (progress.scanned || 0) + '/' + progress.total + '）';
-    } else if (failed) statusText += ' · 部分阶段失败';
-    else if (hasMore) statusText += ' · 还有更多结果';
-    else if (complete) statusText += ' · 检索完成';
-    else statusText += ' · 等待检索';
-    if (statusEl) statusEl.textContent = statusText;
-    if (statusEl && state.stale) statusEl.appendChild(sessionSearchButton('有新内容，重新搜索', function () { beginSessionSearch(state.q); }));
-    state.host.setAttribute('aria-busy', loading ? 'true' : 'false');
+    renderSessionSearchStatus();
+    var complete = SESSION_SEARCH_PHASES.every(function (p) { return (state.phases[p] || {}).status === 'done'; });
     var empty = state.root.querySelector('.session-search-empty');
     if (complete && !state.entries.size) {
         if (!empty) { empty = document.createElement('p'); empty.className = 'session-search-empty'; state.root.appendChild(empty); }
@@ -388,6 +374,34 @@ function renderSessionSearchResults() {
         if (state.selected && state.entries.has(state.selected)) input.setAttribute('aria-activedescendant', 'session-search-result-' + state.selected);
         else input.removeAttribute('aria-activedescendant');
     }
+}
+
+function renderSessionSearchStatus() {
+    var state = sessionSearchState;
+    if (!state.host) return;
+    var statuses = SESSION_SEARCH_PHASES.map(function (p) { return state.phases[p] || {}; });
+    var loading = SESSION_SEARCH_PHASES.find(function (p) { return (state.phases[p] || {}).status === 'loading'; });
+    var complete = statuses.every(function (p) { return p.status === 'done'; });
+    var failed = statuses.some(function (p) { return p.status === 'error'; });
+    var hasMore = statuses.some(function (p) { return p.cursor; });
+    var statusEl = document.getElementById('session-search-status');
+    var statusText = '已发现 ' + state.entries.size + ' 个会话';
+    if (loading) {
+        var progress = state.phases[loading];
+        statusText += ' · ' + SESSION_SEARCH_PROGRESS[loading];
+        if (progress.total) statusText += '（已检查 ' + (progress.scanned || 0) + '/' + progress.total + '）';
+        if (progress.current_session) {
+            var name = Array.from(progress.current_session.name || '未命名会话');
+            statusText += ' · 正在处理「' + name.slice(0, 30).join('') + (name.length > 30 ? '…' : '') + '」';
+            if (progress.elapsed_seconds) statusText += ' · 当前会话已用时 ' + progress.elapsed_seconds + ' 秒';
+        }
+    } else if (failed) statusText += ' · 部分阶段失败';
+    else if (hasMore) statusText += ' · 还有更多结果';
+    else if (complete) statusText += ' · 检索完成';
+    else statusText += ' · 等待检索';
+    if (statusEl) statusEl.textContent = statusText;
+    if (statusEl && state.stale) statusEl.appendChild(sessionSearchButton('有新内容，重新搜索', function () { beginSessionSearch(state.q); }));
+    state.host.setAttribute('aria-busy', loading ? 'true' : 'false');
 }
 
 async function openSessionSearchHit(sid, hit) {

@@ -2245,6 +2245,33 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     /* Preserve the compact message controls independently of the form scale. */
     line-height: normal;
 }
+.branch-operation-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border-glass);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+.branch-operation-status::before {
+    content: '';
+    width: 12px;
+    height: 12px;
+    flex: 0 0 auto;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: branch-status-spin 0.8s linear infinite;
+}
+.branch-operation-status.is-settled::before { display: none; }
+.branch-operation-status.is-error { color: var(--danger, #ef6464); }
+.msg-wrap[data-branching="1"] .msg-toolbar { opacity: 1; pointer-events: auto; }
+.msg-tb:disabled { cursor: wait; opacity: 0.65; }
+@keyframes branch-status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .branch-operation-status::before { animation: none; } }
 .msg-tb:hover {
     background: rgba(var(--accent-rgb),0.16); border-color: var(--border-accent);
     color: var(--text-primary); transform: translateY(-1px);
@@ -2838,6 +2865,21 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 }
 :root.theme-light .message.assistant { color: var(--text-primary); }
 
+/* Final 卡片公式：LaTeX 已转成 Unicode 数学文本，这里只挑数学字体并保留自带的空格 */
+.message.assistant .unicode-math {
+    font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", "Segoe UI Symbol", "Noto Sans Math", "Times New Roman", serif;
+    font-variant-numeric: lining-nums;
+    white-space: pre-wrap;
+}
+.message.assistant .unicode-math--display {
+    display: block;
+    margin: 0.45em 0;
+    padding: 0.1em 0.15em;
+    overflow-x: auto;
+    overflow-y: hidden;
+    line-height: 1.8;
+}
+
 /* 消息内容排版 */
 .message.assistant h1, .message.assistant h2, .message.assistant h3 { font-weight: 600; letter-spacing: 0; }
 .message.assistant h1 { font-size: 1.18em; line-height: 1.3; margin: 0.5em 0 0.25em; }
@@ -2944,7 +2986,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     background: rgba(0,0,0,0.18);
     box-shadow: 0 8px 26px rgba(0,0,0,0.18);
 }
-.message .msg-workspace-image[data-workspace-image-sized="1"] {
+.message .msg-workspace-image[data-workspace-image-sized="1"]:not([data-history-image-fallback="1"]) {
     width: min(100%, var(--msg-image-width), var(--msg-image-height-bound-width));
 }
 .message .msg-workspace-media-figure {
@@ -6709,13 +6751,14 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
    createHumanTerminalCard 收进 .human-card-head-copy，与标题同行显示：
    折叠态整卡只剩一行（图标 + 标题 + 结论 + 状态 + 展开），超长省略；
    展开后 summary 换行到标题下方，回到两行 + 完整正文。 */
-.human-interaction-card.is-terminal .human-card-head { align-items: flex-start; padding: 0.4rem 0.7rem; gap: 0.5rem; }
-.human-interaction-card.is-terminal .human-card-icon { margin-top: 0.08rem; }
+.human-interaction-card.is-terminal .human-card-head { align-items: center; padding: 0.4rem 0.7rem; gap: 0.5rem; }
+/* 展开后标题行变成多行，图标/状态/按钮回到首行顶部，不再按整块高度居中 */
+.human-interaction-card.is-terminal.is-expanded .human-card-head { align-items: flex-start; }
 .human-interaction-card.is-terminal.is-collapsed .human-card-head { border-bottom: 0; }
 .human-interaction-card.is-terminal.is-expanded .human-card-head { padding: 0.55rem 0.8rem; }
 .human-interaction-card.is-terminal .human-card-icon {
-    width: 20px;
-    height: 20px;
+    width: 1.25rem;
+    height: 1.25rem;
     border-radius: 6px;
     font-size: var(--ui-text-xs);
 }
@@ -6724,24 +6767,40 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     flex: 0 0 auto;
     margin: 0;
     font-size: var(--ui-text-sm);
-    line-height: 1.35;
+    /* 与摘要共用同一条 18px 行盒：两者的文字几何中心重合，
+       不再靠 baseline 对齐 13/12px 两套行高（字号一变就会错开）。 */
+    line-height: var(--ui-line-xs);
 }
 .human-interaction-card.is-terminal .human-card-head-copy {
     display: flex;
     flex-wrap: nowrap;
-    align-items: baseline;
+    align-items: center;
     gap: 0.5rem;
 }
-.human-interaction-card.is-terminal.is-expanded .human-card-head-copy { flex-wrap: wrap; gap: 0.3rem 0.5rem; }
-.human-interaction-card.is-terminal .human-terminal-toggle { min-height: 22px; padding: 0.1rem 0.44rem; }
-.human-interaction-card.is-terminal .human-card-status { padding: 0.1rem 0.38rem; }
+.human-interaction-card.is-terminal.is-expanded .human-card-head-copy { flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.5rem; }
+/* 状态胶囊和按钮自己也是 flex 居中：胶囊底色、按钮文字、箭头三者共用一条中线 */
+.human-interaction-card.is-terminal .human-terminal-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.375rem;
+    padding: 0 0.44rem;
+    line-height: 1;
+}
+.human-interaction-card.is-terminal .human-card-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.25rem;
+    padding: 0 0.44rem;
+    line-height: 1;
+}
 .human-terminal-summary {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     color: var(--text-tertiary);
     font-size: var(--ui-text-xs);
-    line-height: 1.45;
+    line-height: var(--ui-line-xs);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -6752,9 +6811,10 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
     white-space: normal;
 }
 .human-interaction-card.is-terminal .human-terminal-answer {
-    display: inline-block;
-    max-width: 100%;
-    vertical-align: bottom;
+    /* 用 inline 而不是 inline-block：inline-block 会让摘要变成原子内联盒，
+       父级的 text-overflow: ellipsis 失效（超长答案被硬切、没有「…」），
+       而且它自带的行盒在字号/行高变化时会把文字顶出行中线。 */
+    display: inline;
 }
 .human-interaction-card.is-terminal .human-terminal-answer-label { margin-right: 0.36rem; }
 /* 分隔点挂在下一条头部：单行超长截断时不会在省略号前留下孤点 */
@@ -6836,7 +6896,8 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
        避免长答案把收起态又撑成一大块 */
     .human-interaction-card.is-terminal.is-collapsed .human-terminal-summary {
         flex: 1 1 100%;
-        max-height: calc(1.45em * 2);
+        /* 行高跟着 --ui-line-xs 走，这里也用行盒高度算两行，避免截掉第二行 */
+        max-height: calc(var(--ui-line-xs) * 2);
         white-space: normal;
         overflow: hidden;
     }

@@ -390,6 +390,17 @@ async function main() {
   assert.equal(slowImage.listeners.load, undefined);
   assert.equal(slowImage.getAttribute('data-history-image-fallback'), '1');
 
+  for (const mode of ['bottom', 'entry-bottom']) {
+    const deferred = new FakeElement('img');
+    deferred.complete = false;
+    assert.equal(await context.waitForHistoryImageLayout('history-session', mode, {
+      querySelectorAll() { return [deferred]; },
+    }), true);
+    assert.equal(deferred.getAttribute('data-history-image-fallback'), '1');
+    assert.equal(deferred.listeners.load, undefined, 'history never waits for this image to decode');
+    assert.equal(historyImageTimeout, null);
+  }
+
   console.log('workspace media runtime checks passed');
 }
 

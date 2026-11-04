@@ -1435,7 +1435,10 @@ function scheduleActiveSessionReconnect(sessionId, opts) {
 
 async function processRewriteTruncateAsync(pr) {
     try {
-        const anchor = document.querySelector('.msg-wrap--user[data-truncate-from="' + String(pr.before) + '"]');
+        const stream = currentSessionId === pr.sessionId ? getVisibleChatStream() : null;
+        const anchor = stream ? stream.querySelector('.msg-wrap--user['
+            + (Number(pr.beforeSeq) > 0 ? 'data-runtime-seq="' + String(pr.beforeSeq) : 'data-event-index="' + String(pr.before))
+            + '"]') : null;
         const res = await truncateSessionOnServer(pr.before, {
             sessionId: pr.sessionId,
             beforeSeq: pr.beforeSeq,
@@ -1443,7 +1446,7 @@ async function processRewriteTruncateAsync(pr) {
         });
         if (!res || !res.ok) {
             showUiAlert({
-                title: '截断失败',
+                title: res && /^truncate_result_/.test(res.error || '') ? '裁剪结果待确认' : '截断失败',
                 message: describeServerSyncFailure(res, '无法同步服务器，改写未生效。'),
                 variant: 'error'
             });
@@ -3916,7 +3919,7 @@ async function sendMessage(options) {
         ? options.attachments
         : (window.MyAgentPathPicker
             && typeof window.MyAgentPathPicker.chatAttachments === 'function'
-            ? window.MyAgentPathPicker.chatAttachments(messageInput)
+            ? window.MyAgentPathPicker.chatAttachments(messageInput, runSessionId)
             : []);
     const attachmentsForRun = rememberedAttachments.filter(function (item) {
         return item && item.path && rawMessage.indexOf(String(item.path)) >= 0;
@@ -3991,7 +3994,7 @@ async function sendMessage(options) {
     }
     if (!Array.isArray(options.attachments) && window.MyAgentPathPicker
             && typeof window.MyAgentPathPicker.clearChatAttachments === 'function') {
-        window.MyAgentPathPicker.clearChatAttachments(messageInput);
+        window.MyAgentPathPicker.clearChatAttachments(messageInput, runSessionId);
     }
     // The backend owns durable UI-message decoration. Sending the undecorated
     // value keeps the optimistic row and the reloaded history identical.

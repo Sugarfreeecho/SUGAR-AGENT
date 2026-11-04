@@ -6,6 +6,7 @@
 
   var MAX_CHAT_UPLOAD_FILE_BYTES = 100 * 1024 * 1024;
   var MAX_CHAT_UPLOAD_TOTAL_BYTES = 200 * 1024 * 1024;
+  var CHAT_UPLOAD_RESPONSE_TIMEOUT_MS = 60 * 1000;
 
   // The app shell provides a shared icon set. Standalone settings pages use the
   // same path data as a fallback because they load this vendor file directly.
@@ -197,6 +198,19 @@
       xhr.open('POST', '/api/upload-chat-files', true);
       xhr.withCredentials = true;
       xhr.timeout = 10 * 60 * 1000;
+      var responseTimer = null;
+      var responseTimedOut = false;
+      function finish(callback, value) {
+        if (responseTimer !== null) clearTimeout(responseTimer);
+        callback(value);
+      }
+      if (xhr.upload) xhr.upload.onload = function () {
+        if (typeof options.onProcessing === 'function') options.onProcessing();
+        responseTimer = setTimeout(function () {
+          responseTimedOut = true;
+          xhr.abort();
+        }, CHAT_UPLOAD_RESPONSE_TIMEOUT_MS);
+      };
       if (xhr.upload && typeof options.onProgress === 'function') {
         xhr.upload.onprogress = function (event) {
           options.onProgress(event.loaded || 0, event.lengthComputable ? event.total : 0);
@@ -210,17 +224,22 @@
         try { data = JSON.parse(xhr.responseText || '{}'); }
         catch (_error) { data = { ok: false, error: '上传失败' }; }
         if (xhr.status < 200 || xhr.status >= 300 || !data.ok) {
-          reject(new Error((data && data.error) || '上传失败'));
+          finish(reject, new Error((data && data.error) || '上传失败'));
           return;
         }
-        resolve(Array.isArray(data.files) ? data.files : []);
+        if (!Array.isArray(data.files) || data.files.length !== list.length
+            || data.files.some(function (item) { return !item || !item.path; })) {
+          finish(reject, new Error('上传结果不完整，请重试。'));
+          return;
+        }
+        finish(resolve, data.files);
       };
-      xhr.onerror = function () { reject(new Error('上传失败：网络连接异常。')); };
-      xhr.ontimeout = function () { reject(new Error('上传超时，请重试。')); };
+      xhr.onerror = function () { finish(reject, new Error('上传失败：网络连接异常。')); };
+      xhr.ontimeout = function () { finish(reject, new Error('上传超时，请重试。')); };
       xhr.onabort = function () {
-        var error = new Error('上传已取消。');
-        error.name = 'AbortError';
-        reject(error);
+        var error = new Error(responseTimedOut ? '上传处理超时，请重试。' : '上传已取消。');
+        if (!responseTimedOut) error.name = 'AbortError';
+        finish(reject, error);
       };
       xhr.send(form);
     });
@@ -262,53 +281,70 @@
     }
   }
 
+  function chatSessionState(textarea, sessionId) {
+    if (!textarea._myAgentChatSessions) textarea._myAgentChatSessions = new Map();
+    var key = sessionId === undefined
+      ? (textarea._myAgentChatSessionId === undefined ? currentChatSessionId() : textarea._myAgentChatSessionId)
+      : String(sessionId || '');
+    var state = textarea._myAgentChatSessions.get(key);
+    if (!state) {
+      state = { sessionId: key, attachments: [], upload: null };
+      textarea._myAgentChatSessions.set(key, state);
+    }
+    return state;
+  }
+
+  function syncChatSession(textarea, sessionId) {
+    if (!textarea) return;
+    var previous = textarea._myAgentActiveUpload;
+    if (previous && previous.panel.parentNode) previous.panel.parentNode.removeChild(previous.panel);
+    var state = chatSessionState(textarea, sessionId);
+    textarea._myAgentChatSessionId = state.sessionId;
+    textarea._myAgentStructuredAttachments = state.attachments;
+    textarea._myAgentActiveUpload = state.upload;
+    if (state.upload) {
+      var wrapper = textarea.closest ? textarea.closest('.input-wrapper') : null;
+      if (wrapper && wrapper.parentNode) wrapper.parentNode.insertBefore(state.upload.panel, wrapper.nextSibling);
+    }
+    renderChatAttachmentTray(textarea);
+    setChatUploadBusy(textarea, !!state.upload);
+  }
+
+  function moveChatSession(textarea, fromSessionId, toSessionId) {
+    if (!textarea) return;
+    var state = chatSessionState(textarea, fromSessionId);
+    textarea._myAgentChatSessions.delete(state.sessionId);
+    state.sessionId = String(toSessionId || '');
+    textarea._myAgentChatSessions.set(state.sessionId, state);
+    if (textarea._myAgentChatSessionId === String(fromSessionId || '')) syncChatSession(textarea, state.sessionId);
+  }
+
   function appendUploadedText(textarea, text, targetSessionId) {
     if (!text) return;
-    var activeSessionId = currentChatSessionId();
-    if (targetSessionId && activeSessionId && targetSessionId !== activeSessionId) {
-      try {
-        if (typeof persistInputDraft === 'function') {
-          var existing = '';
-          if (typeof draftBySession !== 'undefined'
-              && Object.prototype.hasOwnProperty.call(draftBySession, targetSessionId)) {
-            existing = String(draftBySession[targetSessionId] || '');
-          } else if (typeof readStoredInputDraft === 'function') {
-            existing = String(readStoredInputDraft(targetSessionId) || '');
-          }
-          persistInputDraft(targetSessionId, existing.trim() ? (existing + ' ' + text) : text);
-          return;
-        }
-      } catch (_error) { /* fall through only when session draft storage is unavailable */ }
+    if (typeof textarea._myAgentAppendUploadedText === 'function') {
+      textarea._myAgentAppendUploadedText(text, targetSessionId);
       return;
     }
-    insertTextAtCursor(textarea, text);
+    if (chatSessionState(textarea).sessionId !== targetSessionId) return;
+    var start = textarea.selectionStart, end = textarea.selectionEnd, direction = textarea.selectionDirection;
+    textarea.value += (textarea.value && !/\s$/.test(textarea.value) ? ' ' : '') + text;
+    textarea.setSelectionRange(start, end, direction);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
   function insertUploadedFiles(textarea, files, options) {
-    var targetSessionId = currentChatSessionId();
+    var state = chatSessionState(textarea);
     return uploadChatFiles(files, options).then(function (uploaded) {
-      var remembered = Array.isArray(textarea._myAgentStructuredAttachments)
-        ? textarea._myAgentStructuredAttachments.slice()
-        : [];
-      uploaded.forEach(function (item) {
-        if (!item || !item.path) return;
-        if (!remembered.some(function (existing) { return existing.path === item.path; })) {
-          remembered.push({ path: item.path, name: item.name || '', size: Number(item.size || 0), attachment: item.attachment || null });
-        }
-      });
-      textarea._myAgentStructuredAttachments = remembered;
-      renderChatAttachmentTray(textarea);
+      addChatAttachments(textarea, uploaded, state.sessionId);
       var text = uploaded.map(function (item) {
         return quotePickedPath(item.path || item.rel || item.name);
       }).join(' ');
-      appendUploadedText(textarea, text, targetSessionId);
+      appendUploadedText(textarea, text, state.sessionId);
     });
   }
 
-  function chatAttachments(textarea) {
-    return Array.isArray(textarea && textarea._myAgentStructuredAttachments)
-      ? textarea._myAgentStructuredAttachments.slice()
-      : [];
+  function chatAttachments(textarea, sessionId) {
+    return textarea ? chatSessionState(textarea, sessionId).attachments.slice() : [];
   }
 
   function cleanupChatUploads(attachments, useBeacon) {
@@ -335,25 +371,31 @@
     }).then(function (response) { return !!response.ok; }).catch(function () { return false; });
   }
 
-  function clearChatAttachments(textarea) {
+  function clearChatAttachments(textarea, sessionId) {
     if (!textarea) return;
-    textarea._myAgentStructuredAttachments = [];
-    renderChatAttachmentTray(textarea);
+    var state = chatSessionState(textarea, sessionId);
+    state.attachments = [];
+    if (state === chatSessionState(textarea)) {
+      textarea._myAgentStructuredAttachments = state.attachments;
+      renderChatAttachmentTray(textarea);
+    }
   }
 
-  function addChatAttachments(textarea, attachments) {
+  function addChatAttachments(textarea, attachments, sessionId) {
     if (!textarea) return;
-    var remembered = Array.isArray(textarea._myAgentStructuredAttachments)
-      ? textarea._myAgentStructuredAttachments.slice()
-      : [];
+    var state = chatSessionState(textarea, sessionId);
+    var remembered = state.attachments.slice();
     Array.prototype.slice.call(attachments || []).forEach(function (item) {
       if (!item || !item.path) return;
       if (!remembered.some(function (existing) { return existing.path === item.path; })) {
         remembered.push({ path: item.path, name: item.name || '', size: Number(item.size || 0), attachment: item.attachment || null });
       }
     });
-    textarea._myAgentStructuredAttachments = remembered;
-    renderChatAttachmentTray(textarea);
+    state.attachments = remembered;
+    if (state === chatSessionState(textarea)) {
+      textarea._myAgentStructuredAttachments = remembered;
+      renderChatAttachmentTray(textarea);
+    }
   }
 
   function attachmentImageRef(item) {
@@ -369,12 +411,11 @@
 
   function removeChatAttachment(textarea, item) {
     var path = String(item && item.path || '');
-    var attachments = Array.isArray(textarea._myAgentStructuredAttachments)
-      ? textarea._myAgentStructuredAttachments
-      : [];
-    textarea._myAgentStructuredAttachments = attachments.filter(function (attachment) {
+    var state = chatSessionState(textarea);
+    state.attachments = state.attachments.filter(function (attachment) {
       return String(attachment && attachment.path || '') !== path;
     });
+    textarea._myAgentStructuredAttachments = state.attachments;
     if (item) void cleanupChatUploads([item]);
     var removedPathToken = path && typeof global.removeInputPathTokenForPath === 'function'
       ? global.removeInputPathTokenForPath(path)
@@ -388,6 +429,7 @@
       }
     }
     renderChatAttachmentTray(textarea);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.focus();
   }
 
@@ -461,11 +503,11 @@
     });
   }
 
-  function dispatchUploadError(textarea, error) {
+  function dispatchUploadError(textarea, error, sessionId) {
     console.error('chat file upload failed:', error);
     textarea.dispatchEvent(new CustomEvent('myagent:file-paste-error', {
       bubbles: true,
-      detail: { message: String((error && error.message) || error || '上传失败') }
+      detail: { message: String((error && error.message) || error || '上传失败'), sessionId: sessionId }
     }));
   }
 
@@ -506,7 +548,8 @@
       return Promise.reject(error);
     }
     if (!list.length) return Promise.resolve();
-    if (textarea._myAgentActiveUpload) {
+    var session = chatSessionState(textarea);
+    if (session.upload) {
       var busyError = new Error('已有文件正在上传，请等待完成或先取消。');
       dispatchUploadError(textarea, busyError);
       return Promise.reject(busyError);
@@ -517,7 +560,8 @@
     var bar = panel.querySelector('.chat-upload-progress-bar');
     var cancel = panel.querySelector('.chat-upload-cancel');
     var abortUpload = null;
-    var state = textarea._myAgentActiveUpload = {};
+    var state = session.upload = { panel: panel };
+    textarea._myAgentActiveUpload = state;
     setChatUploadBusy(textarea, true);
     cancel.addEventListener('click', function () {
       cancel.disabled = true;
@@ -526,21 +570,25 @@
     });
     return insertUploadedFiles(textarea, list, {
       registerAbort: function (abort) { abortUpload = abort; },
+      onProcessing: function () {
+        label.textContent = '文件已传输，正在处理…';
+        bar.style.width = '99%';
+        progress.removeAttribute('aria-valuenow');
+        progress.setAttribute('aria-valuetext', label.textContent);
+      },
       onProgress: function (loaded, total) {
-        if (textarea._myAgentActiveUpload !== state) return;
-        var percent = total > 0 ? Math.min(100, Math.round(loaded * 100 / total)) : 0;
+        if (session.upload !== state) return;
+        var percent = total > 0 ? Math.min(99, Math.floor(loaded * 100 / total)) : 0;
         label.textContent = '正在上传 ' + list.length + ' 个文件… ' + percent + '%';
         bar.style.width = percent + '%';
         progress.setAttribute('aria-valuenow', String(percent));
       }
     }).catch(function (error) {
-      if (!error || error.name !== 'AbortError') dispatchUploadError(textarea, error);
+      if (!error || error.name !== 'AbortError') dispatchUploadError(textarea, error, session.sessionId);
       throw error;
     }).finally(function () {
-      if (textarea._myAgentActiveUpload === state) {
-        delete textarea._myAgentActiveUpload;
-        setChatUploadBusy(textarea, false);
-      }
+      if (session.upload === state) session.upload = null;
+      if (session === chatSessionState(textarea)) syncChatSession(textarea, session.sessionId);
       if (panel.parentNode) panel.parentNode.removeChild(panel);
     });
   }
@@ -1164,8 +1212,10 @@
     });
   }
 
-  function attachChatPicker(button, textarea) {
+  function attachChatPicker(button, textarea, options) {
     if (!button || !textarea) return;
+    textarea._myAgentAppendUploadedText = options && options.appendUploadedText;
+    syncChatSession(textarea, currentChatSessionId());
     injectStyles();
     renderChatAttachmentTray(textarea);
     bindDropUpload(textarea);
@@ -1180,7 +1230,8 @@
     if (!textarea.dataset.chatUploadCleanupBound) {
       textarea.dataset.chatUploadCleanupBound = '1';
       global.addEventListener('pagehide', function () {
-        var pending = chatAttachments(textarea).concat(textarea._myAgentInFlightUploads || []);
+        var pending = (textarea._myAgentInFlightUploads || []).slice();
+        textarea._myAgentChatSessions.forEach(function (session) { pending = pending.concat(session.attachments); });
         void cleanupChatUploads(pending, true);
       });
     }
@@ -1194,10 +1245,8 @@
     fileInput.addEventListener('change', function () {
       var files = fileInput.files;
       if (!files || !files.length) return;
-      button.disabled = true;
       startChatFileUpload(textarea, files).catch(function () {}).finally(function () {
         fileInput.value = '';
-        button.disabled = false;
       });
     });
 
@@ -1257,6 +1306,8 @@
     cleanupChatUploads: cleanupChatUploads,
     clearChatAttachments: clearChatAttachments,
     addChatAttachments: addChatAttachments,
+    syncChatSession: syncChatSession,
+    moveChatSession: moveChatSession,
     scan: scan,
   };
 

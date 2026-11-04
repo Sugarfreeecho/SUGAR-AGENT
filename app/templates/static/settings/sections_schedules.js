@@ -257,6 +257,24 @@
         profiles: (profiles.profiles || []).filter(p => p.enabled !== false), tools: catalog.tools || [], toolError: catalog.error };
       return data;
     }, render: list, onSearch: A.filterSearchRows,
+    after(_body, loaded) {
+      // Only the visible tab watches for changes. Query the shared task list;
+      // do not start a browser scheduler or reload an active task editor.
+      let disposed = false, pending = false;
+      const signature = JSON.stringify(loaded.items);
+      async function changed() {
+        if (disposed || pending || document.hidden || !document.getElementById('st-dialog').hidden) return;
+        pending = true;
+        try {
+          const current = await rpc('automation.list');
+          if (!disposed && document.getElementById('st-dialog').hidden && JSON.stringify(current.items) !== signature) await A.reload();
+        } catch (_) { /* The refresh button reports connection errors on demand. */ }
+        finally { pending = false; }
+      }
+      const timer = window.setInterval(changed, 5000);
+      window.addEventListener('focus', changed);
+      return () => { disposed = true; window.clearInterval(timer); window.removeEventListener('focus', changed); };
+    },
     onToggle() { document.getElementById('st-dlg-body')._scheduleRefresh?.(); },
     onAction(action, el) {
       if (!action.startsWith('schedule-')) return;

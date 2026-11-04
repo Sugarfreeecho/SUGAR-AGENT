@@ -7,7 +7,25 @@ const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
 const pickPathBtn = document.getElementById('pick-path-btn');
 if (window.MyAgentPathPicker && pickPathBtn && messageInput) {
-    MyAgentPathPicker.attachChatPicker(pickPathBtn, messageInput);
+    MyAgentPathPicker.attachChatPicker(pickPathBtn, messageInput, {
+        appendUploadedText: appendUploadedTextToDraft,
+    });
+}
+// This callback lives in the UI closure, where session drafts and path tokens
+// are available. The standalone path picker cannot access that lexical state.
+function appendUploadedTextToDraft(text, sessionId) {
+    if (String(sessionId || '') !== String(currentSessionId || '')) {
+        const key = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
+        const existing = Object.prototype.hasOwnProperty.call(draftBySession, key)
+            ? String(draftBySession[key] || '') : readStoredInputDraft(sessionId);
+        persistInputDraft(sessionId, existing + (existing && !/\s$/.test(existing) ? ' ' : '') + text);
+        return;
+    }
+    const start = messageInput.selectionStart, end = messageInput.selectionEnd;
+    const direction = messageInput.selectionDirection;
+    messageInput.value += (messageInput.value && !/\s$/.test(messageInput.value) ? ' ' : '') + text;
+    messageInput.setSelectionRange(start, end, direction);
+    messageInput.dispatchEvent(new Event('input', { bubbles: true }));
 }
 if (messageInput) {
     messageInput.addEventListener('myagent:file-upload-state', function () {

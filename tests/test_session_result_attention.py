@@ -105,3 +105,134 @@ def test_subagent_success_does_not_depend_on_response_keywords(manager, monkeypa
     monkeypatch.setattr(store, "_subagent_finish_from_parent_events", lambda *_: {"ok": False, "error": "provider rejected"})
     result = store._resolve_subagent_status(sid, "parent", {}, running=False, result_preview="All done")
     assert result["status"] == "failed"
+
+
+def _start_runs(store, sid, *run_ids):
+    for run_id in run_ids:
+        store.clear_interrupt(sid, run_id)
+
+
+def test_delayed_failure_for_an_older_run_cannot_overwrite_a_newer_success(manager):
+    from agent_harness import SessionManager
+
+    store, sid = manager
+    _start_runs(store, sid, "run-old", "run-new")
+    store.mark_session_unread_result(sid, status="failed", run_id="run-old")
+    store.mark_session_unread_result(sid, status="success", run_id="run-new")
+    assert store.get_session_summary(sid)["unread_result_status"] == "success"
+
+    # The old run's terminal handler runs after the retry already succeeded.
+    store.mark_session_unread_result(sid, status="failed", run_id="run-old")
+    summary = store.get_session_summary(sid)
+    assert summary["unread_result_status"] == "success"
+    assert summary["unread_result_run_id"] == "run-new"
+    assert store.clear_session_unread_result(sid, expected_run_id="run-new") is True
+
+    restarted = SessionManager(store.sessions_dir, store.index_file)
+    reloaded = restarted.get_session_summary(sid)
+    assert reloaded["unread_result"] is False
+    assert reloaded["unread_result_status"] == "success"
+
+
+def test_delayed_success_for_an_older_run_cannot_clear_a_newer_failure(manager):
+    store, sid = manager
+    _start_runs(store, sid, "run-old", "run-new")
+    store.mark_session_unread_result(sid, status="failed", run_id="run-new")
+    store.mark_session_unread_result(sid, status="success", run_id="run-old")
+    summary = store.get_session_summary(sid)
+    assert summary["unread_result_status"] == "failed"
+    assert summary["unread_result_run_id"] == "run-new"
+    assert store.clear_session_unread_result(sid, expected_run_id="run-new") is False
+
+
+def test_failure_of_a_newer_run_is_still_red(manager):
+    store, sid = manager
+    _start_runs(store, sid, "run-old", "run-newer")
+    store.mark_session_unread_result(sid, status="success", run_id="run-old")
+    store.mark_session_unread_result(sid, status="failed", run_id="run-newer")
+    summary = store.get_session_summary(sid)
+    assert summary["unread_result_status"] == "failed"
+    assert summary["unread_result_run_id"] == "run-newer"
+
+
+def test_a_delayed_old_failure_cannot_return_after_the_result_was_read(manager):
+    from agent_harness import SessionManager
+
+    store, sid = manager
+    _start_runs(store, sid, "run-old", "run-new", "run-newer")
+    store.mark_session_unread_result(sid, status="failed", run_id="run-old")
+    store.mark_session_unread_result(sid, status="success", run_id="run-new")
+    assert store.clear_session_unread_result(sid, expected_run_id="run-new") is True
+    assert store.get_session_summary(sid)["unread_result"] is False
+
+    store.mark_session_unread_result(sid, status="failed", run_id="run-old")
+    summary = store.get_session_summary(sid)
+    assert summary["unread_result"] is False
+    assert summary["unread_result_status"] == "success"
+    restarted = SessionManager(store.sessions_dir, store.index_file)
+    assert restarted.get_session_summary(sid)["unread_result"] is False
+
+    store.mark_session_unread_result(sid, status="failed", run_id="run-newer")
+    assert store.get_session_summary(sid)["unread_result_status"] == "failed"
+
+
+def test_runs_without_a_recorded_start_order_fail_open(manager):
+    store, sid = manager
+    # Runs that never registered a start order cannot be compared, so the
+    # write is accepted instead of being guessed away.
+    store.mark_session_unread_result(sid, status="success", run_id="unregistered-new")
+    store.mark_session_unread_result(sid, status="failed", run_id="unregistered-old")
+    assert store.get_session_summary(sid)["unread_result_status"] == "failed"
+
+
+def test_result_generation_survives_history_trimming_reads_and_restart(manager):
+    from agent_harness import SessionManager
+
+    store, sid = manager
+    _start_runs(store, sid, "first", "second")
+    store.mark_session_unread_result(sid, status="success", run_id="second")
+    assert store.get_session_summary(sid)["unread_result_run_order"] == 2
+    assert store.get_run_start_order(sid, "second") == 2
+    # Sliding a bounded history must never renumber a run already sent to clients.
+    _start_runs(store, sid, *(f"next-{i}" for i in range(63)))
+    assert store.get_run_start_order(sid, "second") == 2
+    assert store.get_run_start_order(sid, "next-62") == 65
+    assert store.clear_session_unread_result(sid, expected_run_id="second")
+    restarted = SessionManager(store.sessions_dir, store.index_file)
+    read = restarted.get_session_summary(sid)
+    assert read["unread_result"] is False
+    assert read["unread_result_run_order"] == 2
+    assert read["unread_result_last_run_id"] == "second"
+    restarted.mark_session_unread_result(sid, status="failed", run_id="next-62")
+    assert restarted.get_session_summary(sid)["unread_result_run_order"] == 65
+    restarted.mark_session_unread_result(sid, status="success", run_id="second")
+    assert restarted.get_session_summary(sid)["unread_result_status"] == "failed"
+    restarted.refresh_sessions_index_from_disk()
+    assert restarted.get_session_summary(sid)["unread_result_run_order"] == 65
+
+
+def test_terminal_signal_and_http_summaries_share_the_same_generation(manager, monkeypatch):
+    import webui
+    from session_state_signal import SessionStateSignal
+    from starlette.testclient import TestClient
+
+    store, sid = manager
+    _start_runs(store, sid, "old", "new")
+    store.mark_session_unread_result(sid, status="success", run_id="new")
+    monkeypatch.setattr(webui, "session_manager", store)
+    monkeypatch.setattr(webui, "_is_configured", lambda: True)
+    signal = SessionStateSignal(webui._sessions_state_cache_generation)
+    monkeypatch.setattr(webui, "_sessions_state_signal", signal)
+    base = signal.revision
+    event = {"type": "run_finished", "run_id": "new", "result_status": "success"}
+    webui._on_session_lifecycle_event_invalidate_state(sid, event)
+    assert event["result_run_order"] == 2
+    assert signal.changes_since(base)["terminal_events"][0]["result_run_order"] == 2
+    client = TestClient(webui.fastapi_app)
+    for url in ("/sessions", "/sessions/state", f"/sessions/{sid}"):
+        payload = client.get(url).json()
+        rows = payload if isinstance(payload, list) else payload.get("sessions", [payload])
+        row = next(row for row in rows if row.get("id") == sid)
+        assert row["unread_result_run_order"] == event["result_run_order"]
+    assert store.clear_session_unread_result(sid, expected_run_id="new")
+    assert client.get(f"/sessions/{sid}").json()["unread_result_last_run_id"] == "new"

@@ -73,7 +73,9 @@ function applyWorkspaceImageMetadata(img, metadata) {
         var heightBoundWidth = Math.round(800000 * metadata.width / metadata.height) / 10000;
         img.style.setProperty('--msg-image-width', metadata.width + 'px');
         img.style.setProperty('--msg-image-height-bound-width', heightBoundWidth + 'vh');
-        img.style.aspectRatio = metadata.width + ' / ' + metadata.height;
+        if (img.getAttribute('data-history-image-fallback') !== '1') {
+            img.style.aspectRatio = metadata.width + ' / ' + metadata.height;
+        }
     }
     var rel = String(img.getAttribute('data-workspace-open') || '');
     if (rel && metadata.version) {
@@ -98,14 +100,14 @@ function workspaceImageMetadataHtmlAttrs(rel) {
         + 'vh;aspect-ratio:' + metadata.width + ' / ' + metadata.height + '"';
 }
 
-function prepareWorkspaceImageLayout(root) {
+function prepareWorkspaceImageLayout(root, sessionId) {
     if (!root) return Promise.resolve(false);
     return prepareWorkspaceImages(Array.prototype.slice.call(
         root.querySelectorAll('img.msg-workspace-image[data-workspace-open]')
-    ));
+    ), sessionId);
 }
 
-function prepareWorkspaceImages(images) {
+function prepareWorkspaceImages(images, sessionId) {
     if (!images.length || typeof fetch !== 'function') return Promise.resolve(true);
     var requestId = ++workspaceImageMetadataRequestId;
     var imagesByRel = new Map();
@@ -129,7 +131,8 @@ function prepareWorkspaceImages(images) {
             cache: 'no-store',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ rels: rels.slice(offset, offset + 128) }),
+            body: JSON.stringify(Object.assign({ rels: rels.slice(offset, offset + 128) },
+                sessionId ? { session_id: sessionId } : {})),
         };
         if (controller) requestOptions.signal = controller.signal;
         requests.push(fetch('/api/workspace-image-metadata', requestOptions).then(function (response) {

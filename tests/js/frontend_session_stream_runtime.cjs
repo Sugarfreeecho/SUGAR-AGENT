@@ -143,7 +143,7 @@ async function testUnreadNavigation() {
     const switched = c.switchSession('B', { initialLoad: badge === 'startup' });
     await timers.shift()();
     await switched;
-    assert.deepEqual(modes, ['bottom'], 'materialized history opens directly at the newest result');
+    assert.deepEqual(modes, ['entry-bottom'], 'materialized history uses a bounded entry animation');
   }
 
   const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1,
@@ -185,7 +185,7 @@ async function testUnreadNavigation() {
   assert.equal(c.isHistorySmoothScrollActive(), true, 'old cleanup cannot release new scroll ownership');
 }
 
-async function testUnreadHistoryLoadLayout(slowEvents = false) {
+async function testUnreadHistoryLoadLayout(slowEvents = false, entryMotion = false, stalledMetadata = false) {
   const rt = runtime({ currentSessionId: 's', switchSessionEpoch: 1, messageLoadEpoch: 0, AbortController,
     sessionStore: { ui: {} }, replayingMessages: false, suppressTocDuringSessionLoad: false,
     HISTORY_DIALOGUES_PER_PAGE: 20, HISTORY_EVENT_BUDGET: 1000,
@@ -215,7 +215,10 @@ async function testUnreadHistoryLoadLayout(slowEvents = false) {
     'updateHistorySentinelVisibility', 'bindExistingLogInteractions', 'scheduleTocActiveUpdate',
     'scheduleContextTokensAfterPaint', 'logOpenSessionTiming', 'mergeAdjacentExecutionGroups']) c[name] = () => {};
   c.elapsedSince = () => 0;
-  c.prepareWorkspaceImageLayout = async () => { order.push('images'); assert(stream.hidden); };
+  c.prepareWorkspaceImageLayout = () => {
+    order.push('images'); assert(stream.hidden);
+    return stalledMetadata ? new Promise(() => {}) : Promise.resolve(true);
+  };
   c.reduceAndRenderMessageEvent = ctx => {
     if (slowEvents) { simulatedNow+=5;rendered++;sliceEvents++; }
     c.followStreamProcessScroll(ctx, 's', 'row');
@@ -229,11 +232,17 @@ async function testUnreadHistoryLoadLayout(slowEvents = false) {
   };
   vm.runInContext(between(source('session-management'), 'async function fetchSessionHistoryJSON(', 'function chatStreamHasConversationContent('), c);
   let done = false;
-  const loaded = c.loadSessionMessages('s', 'bottom').then(ok => { done = true; return ok; });
+  const loaded = c.loadSessionMessages('s', entryMotion ? 'entry-bottom' : 'bottom').then(ok => { done = true; return ok; });
   for (let i = 0; i < 200 && !done; i++) { await Promise.resolve(); rt.frame(); }
   assert(done, 'instant history loading completes without waiting for an animation');
   assert.equal(await loaded, true);
   assert.deepEqual(order, ['images', 'layout']);
+  if (entryMotion) {
+    assert(c.isHistorySmoothScrollActive(), 'history becomes usable before the animation finishes');
+    assert.equal(c.sessionStore.ui.loadingMessages, false);
+    for (let i = 0; i < 30; i++) rt.frame();
+    assert.equal(c.isHistorySmoothScrollActive(), false, 'entry animation has a bounded duration');
+  }
   assert.equal(c.chatContainer.scrollTop, 1700);
   assert(c.chatContainer.writes.every(mode => mode === 'auto'));
   assert.equal(c.replayingMessages, false);
@@ -281,6 +290,8 @@ async function main() {
   await testUnreadNavigation();
   await testUnreadHistoryLoadLayout();
   await testUnreadHistoryLoadLayout(true);
+  await testUnreadHistoryLoadLayout(false, true);
+  await testUnreadHistoryLoadLayout(false, true, true);
   assert.equal(result.newlineResult, 'A\nB');
   assert.equal(result.staleRestores, 0);
   assert.equal(result.cachedScrollAfterFrames, 120);

@@ -98,6 +98,97 @@ function terminal(type, run, extra = {}) {
     context.store.applySnapshot([{id: 's1', unread_result: true, unread_result_status: 'failed', unread_result_run_id: 'run-8'}]);
     assert(indicator().has('is-unread-failed'), 'a refreshed failed snapshot stays red');
 
+    // A full-list row or single-row refresh generated before a newer terminal
+    // commits can arrive afterwards. Run ids are opaque, so the store orders
+    // results by when this client confirmed them.
+    function staleFailureRow(runId) {
+        context.currentSessionId = 'other';
+        context.store.applyActiveRuns([]);
+        context.store.applySnapshot([{id: 's1'}]);
+        terminal('run_failed', runId);
+        const row = JSON.parse(JSON.stringify(context.store.get('s1')));
+        terminal('run_started', runId + '-retry');
+        terminal('run_finished', runId + '-retry', {result_status: 'success'});
+        assert(indicator().has('is-unread-result'), 'precondition: the retry is green');
+        return row;
+    }
+
+    context.store.applySnapshot([staleFailureRow('stale-old-1')]);
+    assert(!indicator().has('is-unread-failed'), 'a late full snapshot cannot restore an old failure');
+    assert(indicator().has('is-unread-result'), 'the confirmed retry result survives the late snapshot');
+
+    context.store.upsert(JSON.parse(JSON.stringify(staleFailureRow('stale-old-2'))));
+    assert(!indicator().has('is-unread-failed'), 'a late single-row refresh cannot restore an old failure');
+    assert(indicator().has('is-unread-result'), 'the confirmed retry result survives the late refresh');
+
+    const afterReadRow = staleFailureRow('stale-old-3');
+    context.currentSessionId = 's1';
+    assert.equal(await context.clearSessionUnreadState('s1'), true);
+    assert.equal(indicator().size, 0, 'precondition: reading clears the retry result');
+    context.currentSessionId = 'other';
+    context.store.applySnapshot([afterReadRow]);
+    assert.equal(indicator().size, 0, 'an old failure cannot return after the session was read');
+
+    terminal('run_started', 'fresh-failure');
+    terminal('run_failed', 'fresh-failure');
+    assert(indicator().has('is-unread-failed'), 'a genuinely new failure is still red');
+    context.store.applySnapshot([{id: 's1', unread_result: true,
+        unread_result_status: 'failed', unread_result_run_id: 'fresh-failure'}]);
+    assert(indicator().has('is-unread-failed'), 'its refreshed row stays red');
+    context.store.applySnapshot([{id: 's1', unread_result: true,
+        unread_result_status: 'success', unread_result_run_id: 'fresh-failure'}]);
+    assert(indicator().has('is-unread-failed'), 'a late success row cannot resolve the same failed run');
+    context.store.applySnapshot([{id: 's1', unread_result: true,
+        unread_result_status: 'success', unread_result_run_id: 'next-round-run', unread_result_run_order: 100}]);
+    assert(indicator().has('is-unread-result'), 'a newer confirmed round clears the old failure');
+    assert(!indicator().has('is-unread-failed'));
+
+    terminal('run_failed', 'stale-old-1');
+    assert(indicator().has('is-unread-result'), 'a replayed terminal for an older run cannot turn the row red');
+    assert(!indicator().has('is-unread-failed'));
+    terminal('run_finished', 'stale-old-2', {result_status: 'success'});
+    assert(indicator().has('is-unread-result'), 'a replayed old success cannot change the newer result');
+
+    // The stale run was never observed by this page. A server generation must
+    // determine its age, including after reading and when another tab finishes.
+    for (const method of ['applySnapshot', 'upsert']) {
+        for (const status of ['success', 'failed']) {
+            const current = method + '-' + status;
+            const nextOrder = method === 'applySnapshot' ? 200 : 300;
+            const order = nextOrder + (status === 'failed' ? 10 : 0);
+            terminal('run_started', current);
+            terminal(status === 'failed' ? 'run_failed' : 'run_finished', current,
+                {result_status: status, result_run_order: order});
+            const stale = {id: 's1', unread_result: true,
+                unread_result_run_id: 'unseen-' + current,
+                unread_result_status: status === 'success' ? 'failed' : 'success',
+                unread_result_run_order: order - 1};
+            context.store[method](method === 'applySnapshot' ? [stale] : stale);
+            assert.equal(context.store.get('s1').unread_result_status, status,
+                'a first-seen stale HTTP result cannot replace the live terminal');
+            context.store.upsert({id: 's1', unread_result: true, unread_result_status: status,
+                unread_result_run_id: current, unread_result_run_order: order});
+            assert.equal(context.store.get('s1').unread_result_status, status,
+                'a correct snapshot must not be rejected after a stale response');
+            terminal(status === 'success' ? 'run_failed' : 'run_finished', 'unseen-terminal-' + current,
+                {result_run_order: order - 1});
+            assert.equal(context.store.get('s1').unread_result_status, status,
+                'first-seen older live notifications also have no authority');
+        }
+    }
+    context.store.upsert({id: 's1', unread_result: true, unread_result_status: 'success',
+        unread_result_run_id: 'other-tab-success', unread_result_run_order: 400});
+    assert(indicator().has('is-unread-result'), 'a genuinely newer result from another tab is accepted');
+    assert.equal(await context.clearSessionUnreadState('s1'), true);
+    context.store.applySnapshot([{id: 's1', unread_result: true, unread_result_status: 'failed',
+        unread_result_run_id: 'never-seen-before-read', unread_result_run_order: 399}]);
+    assert.equal(indicator().size, 0, 'reading keeps the generation barrier against unseen old runs');
+    context.store.upsert({id: 's1', unread_result: false, unread_result_last_run_id: 'other-tab-read',
+        unread_result_run_order: 401});
+    context.store.upsert({id: 's1', unread_result: true, unread_result_status: 'failed',
+        unread_result_run_id: 'other-tab-success', unread_result_run_order: 400});
+    assert.equal(indicator().size, 0, 'a newer server-side read result also advances the barrier');
+
     // Interleave SSE turn boundaries with cached and fresh HTTP snapshots.
     // The queued answers deliberately share one run identity.
     context.currentSessionId = 's1';

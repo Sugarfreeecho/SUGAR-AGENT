@@ -259,6 +259,8 @@ _hook_pipeline_warmup_task: Optional[asyncio.Task] = None
 _prompt_build_warmup_task: Optional[asyncio.Task] = None
 _tokenizer_warmup_task: Optional[asyncio.Task] = None
 _ui_presence_tokens: dict[str, dict[str, Any]] = {}
+_ui_attention_surfaces: dict[str, float] = {}
+_UI_ATTENTION_SURFACE_TTL_SEC = 30.0
 _desktop_ui_hidden: Optional[bool] = None
 _ui_activation_seq = 0
 _ui_activation_path = "/"
@@ -997,6 +999,14 @@ def _is_recoverable_react_session(sid: str) -> bool:
         return False
     owner = _react_run_fence_owner(sid)
     if owner.status in {"live", "unknown"}:
+        return False
+    # A complete visible turn has nothing to resume. Check the indexed UI
+    # boundary before loading the full model/execution snapshot: startup used
+    # to parse and retain every completed conversation, competing with the
+    # first history request for CPU, memory and disk. Unfinished turns retain
+    # the existing owner/grace/cleanup and durable interruption checks below.
+    can_continue = getattr(session_manager, "can_continue_react_session", None)
+    if callable(can_continue) and not can_continue(sid):
         return False
     snapshot = _runtime_v2_snapshot(sid)
     # A verified dead owner needs no 30-second heartbeat grace. Legacy fences
@@ -6108,13 +6118,29 @@ def _ui_presence_prune(now: float) -> None:
 
 
 def _ui_presence_has_active() -> bool:
-    """Return True when at least one WebUI tab is visible and focused."""
+    """Include authenticated focused sidebars without making them WebUI tabs."""
 
-    _ui_presence_prune(time.time())
-    return any(
+    now = time.time()
+    _ui_presence_prune(now)
+    for key, seen_at in list(_ui_attention_surfaces.items()):
+        if now - seen_at > _UI_ATTENTION_SURFACE_TTL_SEC:
+            _ui_attention_surfaces.pop(key, None)
+    return bool(_ui_attention_surfaces) or any(
         bool(entry.get("active")) and _ui_presence_page_is_open(entry)
         for entry in _ui_presence_tokens.values()
     )
+
+
+def update_ui_attention_surface(key: str, active: bool) -> None:
+    """Refresh a short focus lease owned by an authenticated transport."""
+    with _ui_presence_lock:
+        if active:
+            _ui_attention_surfaces[key] = time.time()
+        else:
+            _ui_attention_surfaces.pop(key, None)
+    if active:
+        _cancel_pending_ui_attention_notify()
+        _cancel_pending_ui_closed_notify()
 
 
 def _ui_presence_page_is_open(entry: dict) -> bool:
@@ -6421,9 +6447,15 @@ def _on_session_lifecycle_event_invalidate_state(_session_id: str, event: dict) 
     if str(event.get("type") or "") in _SESSION_STATE_INVALIDATION_EVENT_TYPES:
         if (event.get("type") in {"run_finished", "run_failed", "run_interrupted"}
                 and event.get("run_id") and not event.get("_subagent_forward")):
+            # Interrupt/recovery publishers also share the run generation used
+            # by ordinary terminal SSE and the durable session summaries.
+            if not event.get("result_run_order"):
+                run_order = session_manager.get_run_start_order(_session_id, event["run_id"])
+                if run_order:
+                    event["result_run_order"] = run_order
             terminal = {key: event[key] for key in (
                 "type", "run_id", "result_status", "background_jobs_running", "subagent_running",
-                "cleanup_scope", "checkpoint_ok",
+                "cleanup_scope", "checkpoint_ok", "result_run_order",
             ) if key in event}
             terminal.update(session_id=_session_id, ephemeral=True)
             if event.get("type") == "run_failed":
@@ -6485,7 +6517,7 @@ async def _schedule_ui_closed_notify() -> None:
         try:
             await asyncio.sleep(_UI_CLOSED_NOTIFY_GRACE_SEC)
             with _ui_presence_lock:
-                if _ui_presence_has_open_pages():
+                if _ui_presence_has_open_pages() or _ui_presence_has_active():
                     return
             # Page-closed notice is session-agnostic: restore the original
             # "still running in the background" copy instead of a
@@ -8727,13 +8759,38 @@ async def clear_session_unread_result(
     return JSONResponse(content={"status": "ok", "cleared": bool(cleared)})
 
 
+from truncate_operation_requests import TruncateOperationRequests
+_truncate_session_requests = TruncateOperationRequests()
+
+
+@fastapi_app.get("/sessions/{session_id}/truncate/status")
+async def get_truncate_session_status(
+    session_id: str,
+    request_id: str = Query(..., min_length=8, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
+):
+    return JSONResponse(_truncate_session_requests.status(session_id, request_id), headers={"Cache-Control": "no-store"})
+
+
 @fastapi_app.post("/sessions/{session_id}/truncate")
 async def truncate_session_events(
     session_id: str,
     before_index: int = Query(..., description="保留事件区间 [0, before_index)"),
     before_seq: Optional[int] = Query(None, ge=1, description="Runtime V2 visible event seq to truncate before"),
     backup: bool = Query(False, description="whether to create truncate_backups before truncating"),
+    request_id: Optional[str] = Query(None, min_length=8, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
 ):
+    # Keep the old synchronous contract for older clients. New clients receive
+    # a quick acknowledgement and poll a non-mutating receipt endpoint.
+    if not isinstance(request_id, str) or not request_id:
+        return await _truncate_session_events_once(session_id, before_index, before_seq, backup)
+    result = _truncate_session_requests.start(
+        session_id, request_id, (int(before_index), before_seq, bool(backup)),
+        lambda: _truncate_session_events_once(session_id, before_index, before_seq, backup),
+    )
+    return JSONResponse(result, status_code=202 if result.get("status") == "pending" else 200)
+
+
+async def _truncate_session_events_once(session_id, before_index, before_seq, backup):
     """
     仅保留 ui_events[0:before_index]（下标 before_index 及之后丢弃），
     并重建主对话/上下文。使用 query 传参，避免 form 解析失败。
@@ -8795,6 +8852,10 @@ async def truncate_session_events(
     return JSONResponse(content={"ok": True})
 
 
+from history_operation_requests import HistoryOperationRequests
+_branch_session_requests = HistoryOperationRequests()
+
+
 @fastapi_app.post("/sessions/{session_id}/branch")
 async def branch_session_events(
     session_id: str,
@@ -8803,7 +8864,22 @@ async def branch_session_events(
         description="新会话保留 ui_events[0:before_index]（与 truncate 语义一致）",
     ),
     after_seq: Optional[int] = Query(None, ge=1),
+    request_id: Optional[str] = Query(None, min_length=8, max_length=80, pattern=r"^[A-Za-z0-9_-]+$"),
 ):
+    async def create():
+        return await _branch_session_events_once(session_id, before_index, after_seq)
+
+    if not isinstance(request_id, str) or not request_id:
+        return await create()
+    result = await _branch_session_requests.run(
+        (session_id, request_id), (int(before_index), after_seq), create,
+    )
+    if isinstance(result, dict):
+        return JSONResponse(result, status_code=409 if result.get('error') == 'branch_request_conflict' else 429)
+    return result
+
+
+async def _branch_session_events_once(session_id: str, before_index: int, after_seq: Optional[int]):
     """
     在当前会话的 event 下标处复制出分支会话，原会话不变。
     最终答案处分支时，前端应传 final 事件的 eventIndex + 1。
@@ -9152,6 +9228,16 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
         "truncate",
         "日志与截断",
         [
+            "LOG_PAYLOAD_MODE",
+            "LOG_PAYLOAD_PREVIEW_CHARS",
+            "LOG_LINE_MAX_CHARS",
+            "LOG_MAX_BYTES",
+            "LOG_BACKUP_COUNT",
+            "LOG_RETENTION_DAYS",
+            "LOG_TOTAL_MAX_MB",
+            "LOG_PRUNE_MODE",
+            "AGENT_LOG_TIMING",
+            "AGENT_LOG_TIMING_SLOW_MS",
             "LOG_TRUNCATE_KEEP_CHARS",
             "TOOL_RESULT_TRUNCATE_KEEP_CHARS",
             "GREP_MAX_MATCH_LINES",
@@ -9224,7 +9310,7 @@ _ENV_HINTS: dict[str, str] = {
     "MAX_REACT_ITER": "ReAct 主循环最大迭代轮数；0 或不限表示不设上限（默认不限）。",
     "VERBOSE_LOGGING": "是否输出更详细的运行日志。",
     "TODO_MAX_ITEMS": "Todo 列表展示/跟踪条数上限。",
-    "MAX_PARALLEL_TOOLS": "允许的并行工具调用数量上限。",
+    "MAX_PARALLEL_TOOLS": "同批只读工具的并发上限；只读工具可与写操作、Shell 并行，写操作本身仍按顺序串行。",
     "CPU_PRESSURE_ENABLED": "启用正常/繁忙/严重三级系统压力控制器；繁忙保持流式，严重才整段输出。修改后需重启 Agent。",
     "CPU_PRESSURE_BUSY_PERCENT": "CPU 滑动均值进入繁忙状态的阈值，默认 60%；不会关闭流式输出。",
     "CPU_PRESSURE_SEVERE_PERCENT": "CPU 滑动均值进入严重状态的阈值，默认 90%；需连续多轮确认。",
@@ -9242,7 +9328,17 @@ _ENV_HINTS: dict[str, str] = {
     "CONTEXT_COMPRESS_TARGET_RATIO": "压缩后整包输入相对当前会话上下文窗口的目标比例（默认 0.6）。",
     "REPEAT_DETECTION_THRESHOLD_SUMMARY": "重复多少次输出后插入系统提示。",
     "REPEAT_DETECTION_THRESHOLD_ERROR": "重复多少次后中止并报错。",
-    "LOG_TRUNCATE_KEEP_CHARS": "日志/终端单行展示时每端保留字符数。",
+    "LOG_PAYLOAD_MODE": "日志正文策略：off（默认，只记录长度/哈希/结构）、digest（额外记录每段正文首行 80 字符）、full（完整正文，仅临时排障）。修改后对新日志生效。",
+    "LOG_PAYLOAD_PREVIEW_CHARS": "full 模式下单段正文最大字符数；0 表示沿用 LOG_TRUNCATE_KEEP_CHARS。",
+    "LOG_LINE_MAX_CHARS": "兜底单行上限；超长或多行消息会在写入前压成摘要，默认 2000。",
+    "LOG_MAX_BYTES": "单个日志文件的轮转阈值（字节），默认 8388608（8 MiB）；0 关闭轮转。",
+    "LOG_BACKUP_COUNT": "轮转保留的旧文件份数，默认 2。",
+    "LOG_RETENTION_DAYS": "启动时盘点超过该天数的会话日志，默认 14；0 表示不按时间清理。",
+    "LOG_TOTAL_MAX_MB": "会话日志目录总量上限（MB），默认 512；0 表示不按总量清理。",
+    "LOG_PRUNE_MODE": "report（默认）只记录可清理清单；delete 才会真正删除。",
+    "AGENT_LOG_TIMING": "计时日志模式：summary（默认，逐事件的 event_delivery 按 run 聚合）、detail（逐条）、off。",
+    "AGENT_LOG_TIMING_SLOW_MS": "summary 模式下，超过该毫秒数的操作仍单独留一条。",
+    "LOG_TRUNCATE_KEEP_CHARS": "仅 LOG_PAYLOAD_MODE=full 时的日志正文截断长度。",
     "TOOL_RESULT_TRUNCATE_KEEP_CHARS": "单条工具结果触发落盘的字符阈值；超过该值时完整结果落盘，UI/LLM 保留头部一半字符并在截断结果首尾提示路径。",
     "LLM_CONTEXT_TRUNCATE_KEEP_CHARS": "旧变量名，仍兼容读取；建议改用 TOOL_RESULT_TRUNCATE_KEEP_CHARS。",
     "GREP_MAX_MATCH_LINES": "grep 最多返回的匹配行数（跨文件累计）。",
@@ -10493,7 +10589,7 @@ from session_control.integration import install as _install_session_control
 
 
 async def _control_update_model(session_id, profile_id):
-    if not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, profile_id)):
+    if profile_id and not model_profiles.is_usable_profile(model_profiles.get_profile(PROJECT_ROOT, profile_id)):
         raise ValueError("unknown model_profile_id")
     with session_manager._session_metadata_lock(session_id):
         metadata = session_manager._load_metadata_unlocked(session_id)
@@ -10502,7 +10598,7 @@ async def _control_update_model(session_id, profile_id):
 
 
 async def _control_update_effort(session_id, effort):
-    if effort not in model_profiles.REASONING_EFFORTS:
+    if effort and effort not in model_profiles.REASONING_EFFORTS:
         raise ValueError("invalid reasoning_effort")
     await asyncio.to_thread(_persist_session_reasoning_effort, session_id, effort)
 

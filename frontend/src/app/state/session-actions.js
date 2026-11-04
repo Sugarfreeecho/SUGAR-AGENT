@@ -102,6 +102,10 @@ function setCurrentSessionState(sessionId) {
     if (changed) composerDraftRevision++;
     currentSessionId = sessionId || null;
     sessionStore.setCurrentSession(currentSessionId);
+    if (typeof messageInput !== 'undefined' && window.MyAgentPathPicker
+            && typeof window.MyAgentPathPicker.syncChatSession === 'function') {
+        window.MyAgentPathPicker.syncChatSession(messageInput, currentSessionId);
+    }
     if (changed) {
         document.dispatchEvent(new CustomEvent('myagent:session-change', { detail: { sessionId: currentSessionId } }));
     }

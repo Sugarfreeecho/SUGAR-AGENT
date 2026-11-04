@@ -172,11 +172,17 @@ function shouldSuppressSessionUnreadSnapshot(session) {
     return true;
 }
 
-function markSessionResultComplete(sessionId, status, runId) {
+function markSessionResultComplete(sessionId, status, runId, runOrder) {
     var sid = String(sessionId || '');
     if (!sid) return;
     var normalizedStatus = status === 'failed' ? 'failed' : 'success';
     var resultRunId = String(runId || '').trim();
+    if (typeof sessionStore !== 'undefined' && typeof sessionStore.resolveSessionResult === 'function') {
+        // Replayed terminals for a run that a newer confirmed result already
+        // superseded have no authority over the current result.
+        normalizedStatus = sessionStore.resolveSessionResult(sid, resultRunId, normalizedStatus, runOrder);
+        if (normalizedStatus === null) return false;
+    }
     delete sessionUnreadClearInFlight[sid];
     sessionUnreadComplete.add(sid);
     if (typeof sessionStore !== 'undefined') {
@@ -185,16 +191,23 @@ function markSessionResultComplete(sessionId, status, runId) {
             if (normalizedStatus === 'success' && sess.unread_result_status === 'failed'
                 && (!resultRunId || sess.unread_result_run_id === resultRunId)) {
                 normalizedStatus = 'failed';
+                if (resultRunId && typeof sessionStore.recordConfirmedResult === 'function') {
+                    sessionStore.recordConfirmedResult(sid, resultRunId, 'failed', runOrder);
+                }
             }
             sess.unread_result = true;
             sess.unread_result_status = normalizedStatus;
             sess.unread_result_at = new Date().toISOString();
+            if (Number(runOrder) > 0) sess.unread_result_run_order = Number(runOrder);
+            else if (sess.unread_result_last_run_id !== resultRunId) delete sess.unread_result_run_order;
+            sess.unread_result_last_run_id = resultRunId;
             if (resultRunId) sess.unread_result_run_id = resultRunId;
             else delete sess.unread_result_run_id;
         }
     }
     persistSessionUnread();
     if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
+    return true;
 }
 
 function userMessageShouldCollapse(text) {

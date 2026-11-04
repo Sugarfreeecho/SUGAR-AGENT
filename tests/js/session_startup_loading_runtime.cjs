@@ -78,6 +78,39 @@ function deferred() { let resolve; const promise = new Promise(r => resolve = r)
     metadata.resolve({ stream_active: true }); await tick();
     assert.equal(observers, 1, 'late runtime discovery cannot attach to a session that was left');
 
+    // Restored unread state used to cancel the startup request synchronously,
+    // then start another while the first server-side projection kept running.
+    const unreadRequests = [];
+    const unread = vm.createContext({
+        ...s, setTimeout, currentSessionId: null, initialSessionHistoryPrefetch: null,
+        sessionStore: {get: () => ({unread_result: true}), ui: {}},
+        sessionUnreadComplete: new Set(['unread']),
+        HISTORY_DIALOGUES_PER_PAGE: 5, HISTORY_EVENT_BUDGET: 500, Date, AbortController,
+        setCurrentSessionState: sid => { unread.currentSessionId = sid; },
+        refreshSingleSessionRow: async () => ({}),
+        restoreCachedSessionStream: () => false,
+        getVisibleChatStream: () => ({dataset: {}}),
+        resetSessionHistoryPaging() {}, emptyChatStreamKeepingStrip() {}, showLoading() {},
+        fetchSessionHistoryJSON: async (url, signal) => {
+            unreadRequests.push({url, signal});
+            return response;
+        },
+        loadSessionMessages: async sid => {
+            await unread.fetchInitialSessionHistorySnapshot(sid, unread.initialSessionHistoryUrl(sid), new AbortController().signal);
+            return true;
+        },
+    });
+    vm.runInContext(['initialSessionHistoryUrl', 'prefetchInitialSessionHistory', 'fetchInitialSessionHistorySnapshot', 'switchSession'].map(fn).join('\n'), unread);
+    unread.prefetchInitialSessionHistory('unread');
+    await unread.switchSession('unread', {initialLoad: true});
+    assert.equal(unreadRequests.length, 1, 'initial unread history consumes the fresh prefetch without duplication');
+    assert.equal(unreadRequests[0].signal.aborted, false);
+    unread.currentSessionId = null;
+    unread.prefetchInitialSessionHistory('unread');
+    await unread.switchSession('unread', {initialLoad: true, forceReload: true});
+    assert.equal(unreadRequests[1].signal.aborted, true, 'explicit reload still discards prefetch');
+    assert.equal(unreadRequests.length, 3);
+
     const layout = fs.readFileSync(path.join(root, 'frontend/src/app/modules/layout-panels.js'), 'utf8');
     const initialize = layout.match(/^async function init\([^]*?^}/m)[0];
     const sidebar = deferred();

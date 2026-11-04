@@ -44,8 +44,8 @@ export function duration(value) {
     const secs = Math.max(0, Math.floor(Number(value) || 0));
     return `${Math.floor(secs / 3600)} 小时 ${Math.floor(secs % 3600 / 60)} 分 ${secs % 60} 秒`;
 }
-export function budget(id) {
-    const raw = $(id).value.trim();
+export function budget(id, root = document) {
+    const raw = root.querySelector("#" + CSS.escape(id)).value.trim();
     if (!raw) return undefined;
     const value = Number(raw);
     if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Token 预算必须是正整数。');
@@ -53,61 +53,82 @@ export function budget(id) {
 }
 
 export class Console {
-    constructor({ path, render, reset, prepare = value => value }) {
+    constructor({ path, render, reset, prepare = value => value, root = document, sessionId }) {
+        this.root = root;
+        this.$ = id => root.querySelector("#" + CSS.escape(id));
+        this.events = new AbortController();
+        this.intersecting = true;
         this.path = path;
         this.render = render;
         this.reset = reset;
         this.prepare = prepare;
         this.session = '';
         this.sessionNames = new Map();
+        this.hostSession = undefined;
         this.generation = 0;
         this.busy = false;
         this.reading = false;
         this.disposed = false;
         this.lifetime = new AbortController();
-        $('select').addEventListener('submit', event => {
+        this.$('select').addEventListener('submit', event => {
             event.preventDefault();
-            this.open($('session').value.trim());
+            this.open(this.$('session').value.trim());
         });
-        $('refresh').onclick = () => { if (!this.busy) void this.refresh(); };
-        document.addEventListener('myagent:plugin-page-context', event => {
-            const sid = String(event.detail?.sessionId || '').trim();
-            if (sid !== this.session) { $('session').value = sid; this.open(sid); }
-        });
+        this.$('refresh').onclick = () => { if (!this.busy) void this.refresh(); };
         const visibility = () => {
             clearTimeout(this.timer);
             if (this.visible() && this.session && !this.disposed) void this.refresh();
         };
-        document.addEventListener('visibilitychange', visibility);
-        document.addEventListener('myagent:plugin-page-visibility', visibility);
-        const dispose = () => {
-            this.disposed = true;
-            clearTimeout(this.timer);
-            this.lifetime.abort();
-            document.removeEventListener('visibilitychange', visibility);
-            document.removeEventListener('myagent:plugin-page-visibility', visibility);
-        };
-        document.addEventListener('myagent:plugin-page-dispose', dispose, { once: true });
-        window.addEventListener('pagehide', dispose, { once: true });
-        document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('close', () => dialog.querySelector('.dialog-error')?.remove()));
+        document.addEventListener('visibilitychange', visibility, { signal: this.events.signal });
+        if (root === document) {
+            document.addEventListener('myagent:plugin-page-context', event => {
+                const sid = String(event.detail?.sessionId || '').trim();
+                if (sid === this.hostSession) return;
+                this.hostSession = sid;
+                if (sid !== this.session) { this.$('session').value = sid; this.open(sid); }
+            }, { signal: this.events.signal });
+            document.addEventListener('myagent:plugin-page-visibility', visibility, { signal: this.events.signal });
+            document.addEventListener('myagent:plugin-page-dispose', () => this.dispose(), { signal: this.events.signal });
+        } else {
+            this.observer = new IntersectionObserver(entries => {
+                this.intersecting = entries[0]?.isIntersecting === true;
+                visibility();
+            });
+            this.observer.observe(root);
+        }
+        window.addEventListener('pagehide', () => this.dispose(), { signal: this.events.signal });
+        this.root.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('close', () => dialog.querySelector('.dialog-error')?.remove()));
         const query = new URLSearchParams(location.search);
-        const initial = window.MyAgentPluginPage?.context?.sessionId || query.get('session_id') || query.get('sessionId') || query.get('session') || '';
-        if (initial) { $('session').value = initial; this.open(initial); }
+        const initial = sessionId ?? (root === document ? window.MyAgentPluginPage?.context?.sessionId || query.get('session_id') || query.get('sessionId') || query.get('session') || '' : '');
+        if (initial) { this.$('session').value = initial; this.open(initial); }
         else { this.reset(); this.status('请选择会话'); }
         void this.loadSessions();
     }
-    visible() { return !document.hidden && (!window.MyAgentPluginPage || window.MyAgentPluginPage.visible); }
-    status(text) { $('sync-status').textContent = text; }
+    dispose() {
+        if (this.disposed) return;
+        this.disposed = true;
+        clearTimeout(this.timer);
+        this.events.abort();
+        this.lifetime.abort();
+        this.observer?.disconnect();
+        this.root.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
+    }
+    visible() {
+        return !document.hidden && (this.root === document
+            ? !window.MyAgentPluginPage || window.MyAgentPluginPage.visible
+            : this.root.isConnected && this.intersecting && this.root.getClientRects().length > 0);
+    }
+    status(text) { this.$('sync-status').textContent = text; }
     showBinding() {
-        const name = $('session-name'), short = $('session-short-id');
+        const name = this.$('session-name'), short = this.$('session-short-id');
         if (name) name.textContent = this.session ? this.sessionNames.get(this.session) || '当前会话' : '尚未绑定会话';
         if (short) { short.textContent = this.session ? this.session.slice(0, 8) : ''; short.title = this.session; }
     }
     message(text, error = false) {
-        $('error').textContent = error ? text : '';
-        $('notice').textContent = error ? '' : text;
-        document.querySelectorAll('.dialog-error').forEach(el => el.remove());
-        const dialog = document.querySelector('dialog[open]');
+        this.$('error').textContent = error ? text : '';
+        this.$('notice').textContent = error ? '' : text;
+        this.root.querySelectorAll('.dialog-error').forEach(el => el.remove());
+        const dialog = this.root.querySelector('dialog[open]');
         if (error && text && dialog) {
             const message = node('p', 'dialog-error', text);
             message.setAttribute('role', 'alert');
@@ -159,7 +180,7 @@ export class Console {
         if (!this.disposed && this.session && this.visible()) this.timer = setTimeout(() => void this.refresh(), 5000);
     }
     async refresh() {
-        if (this.disposed || !this.session || this.busy || this.reading) return;
+        if (this.disposed || !this.visible() || !this.session || this.busy || this.reading) return;
         const generation = this.generation;
         const readVersion = this.readVersion || 0;
         this.reading = true;
@@ -179,11 +200,11 @@ export class Console {
     }
     setBusy(value) {
         this.busy = value;
-        $('workspace').inert = value;
-        $('workspace').setAttribute('aria-busy', String(value));
-        $('refresh').disabled = value;
-        document.querySelectorAll('.dialog-progress').forEach(el => el.remove());
-        const dialog = document.querySelector('dialog[open]');
+        this.$('workspace').inert = value;
+        this.$('workspace').setAttribute('aria-busy', String(value));
+        this.$('refresh').disabled = value;
+        this.root.querySelectorAll('.dialog-progress').forEach(el => el.remove());
+        const dialog = this.root.querySelector('dialog[open]');
         if (value && dialog) dialog.prepend(node('p', 'dialog-progress muted', '正在处理，请稍候…'));
     }
     async action(path, payload = {}, success = '操作已保存', options = {}) {
@@ -216,14 +237,60 @@ export class Console {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 10000);
         try {
-            const response = await fetch('/sessions?limit=100', { credentials: 'same-origin', signal: controller.signal });
+            const response = await fetch('/sessions?limit=100', { credentials: 'same-origin', signal: AbortSignal.any([this.events.signal, controller.signal]) });
             if (!response.ok || this.disposed) return;
             const body = await response.json();
+            if (this.disposed) return;
             const rows = Array.isArray(body) ? body : body.sessions || [];
             this.sessionNames = new Map(rows.map(row => [row.id, row.name || row.title || row.id]));
             this.showBinding();
-            $('sessions').replaceChildren(...rows.map(row => option(row.id, row.name || row.title || row.id)));
+            this.$('sessions').replaceChildren(...rows.map(row => option(row.id, row.name || row.title || row.id)));
         } catch { /* Manual session entry and the embedded context remain available. */ }
         finally { clearTimeout(timer); }
     }
+}
+
+/** Mount the workflow directly into the settings document using its components. */
+export function mountNativeSettings({ root, settings: A, markup, mountConsole, kind }) {
+    root.classList.add('workflow-settings', 'workflow-' + kind);
+    root.innerHTML = markup;
+    const session = root.querySelector('.session-bar');
+    const replacement = document.createElement('div');
+    replacement.innerHTML = A.W.card('管理会话', '',
+        A.W.row('选择会话', '<span id="session-name">尚未绑定会话</span> <span id="session-short-id" class="id"></span>',
+            '<form id="select" class="wf-session-picker"><input id="session" class="st-input" list="sessions" required maxlength="160" placeholder="选择最近会话，或输入会话 ID" autocomplete="off">' +
+            '<button class="st-btn primary">打开会话</button></form><datalist id="sessions"></datalist>', 'block') +
+        '<div id="sync-status" class="wf-sync st-caption" role="status">等待绑定会话</div>',
+        '<button id="refresh" class="st-btn sm" type="button" aria-label="刷新状态">刷新</button>');
+    session.replaceWith(replacement.firstElementChild);
+    root.querySelectorAll('.card').forEach(card => {
+        card.classList.replace('card', 'st-card');
+        if (card.tagName === 'DETAILS') return;
+        let head = card.querySelector(':scope > .section-head');
+        if (!head && card.firstElementChild?.tagName === 'H2') {
+            head = document.createElement('div');
+            head.className = 'section-head';
+            card.prepend(head);
+            head.append(head.nextElementSibling);
+        }
+        head?.classList.add('st-card-head');
+        const body = document.createElement('div');
+        body.className = 'wf-card-body';
+        [...card.childNodes].filter(child => child !== head).forEach(child => body.append(child));
+        card.append(body);
+    });
+    const decorate = scope => {
+        if (scope.nodeType !== Node.ELEMENT_NODE) return;
+        const elements = [scope, ...scope.querySelectorAll('button,input,select,textarea,label')];
+        elements.forEach(el => {
+            if (el.matches('button')) el.classList.add('st-btn');
+            if (el.matches('input:not([type=checkbox]),select,textarea')) el.classList.add('st-input');
+            if (el.matches('label')) el.classList.add('wf-field');
+        });
+    };
+    decorate(root);
+    const observer = new MutationObserver(changes => changes.forEach(change => change.addedNodes.forEach(decorate)));
+    observer.observe(root, { childList: true, subtree: true });
+    const controller = mountConsole({ root, sessionId: String(A.bootSection?.sessionId || '') });
+    return () => { observer.disconnect(); controller.dispose(); };
 }

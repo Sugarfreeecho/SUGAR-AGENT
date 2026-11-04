@@ -14,6 +14,9 @@ const sessionStore = {
     archivedSessions: null,
     archivedVisibleCount: 0,
     unreadComplete: new Set(),
+    // Results are ordered by the server's durable run generation, never HTTP
+    // arrival order. Retain identities for legacy live-terminal deduplication.
+    confirmedResultsBySession: new Map(),
     sseSeqBySession: new Map(),
     deletedSessionTombstones: new Map(),
     snapshotProtectedSessions: new Map(),
@@ -70,6 +73,95 @@ const sessionStore = {
         return true;
     },
 
+    clearUnreadResultFields(session) {
+        const cleared = Object.assign({}, session, { unread_result: false });
+        delete cleared.unread_result_at;
+        delete cleared.unread_result_status;
+        delete cleared.unread_result_run_id;
+        return cleared;
+    },
+
+    inheritUnreadResult(session, previous) {
+        const reconciled = Object.assign({}, session);
+        const fields = ['unread_result_at', 'unread_result_status', 'unread_result_run_id',
+            'unread_result_run_order', 'unread_result_last_run_id'];
+        reconciled.unread_result = !!(previous && previous.unread_result);
+        fields.forEach(function (field) {
+            if (previous && Object.prototype.hasOwnProperty.call(previous, field)) reconciled[field] = previous[field];
+            else delete reconciled[field];
+        });
+        return reconciled;
+    },
+
+    resultIsSuperseded(sessionId, runId) {
+        const history = this.confirmedResultsBySession.get(String(sessionId || ''));
+        const rid = String(runId || '').trim();
+        if (!history || !history.length || !rid) return false;
+        const index = history.findIndex(function (entry) { return entry.runId === rid; });
+        return index >= 0 && index < history.length - 1;
+    },
+
+    recordConfirmedResult(sessionId, runId, status, runOrder) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        const incoming = status === 'failed' ? 'failed' : 'success';
+        if (!sid || !rid) return incoming;
+        let history = this.confirmedResultsBySession.get(sid);
+        if (!history) {
+            history = [];
+            this.confirmedResultsBySession.set(sid, history);
+        }
+        const known = history.find(function (entry) { return entry.runId === rid; });
+        if (known) {
+            // A run's outcome is sticky: a late duplicate success must not
+            // resolve a failure, while a failure report is never hidden.
+            if (incoming === 'failed') known.status = 'failed';
+            if (Number(runOrder) > 0) known.runOrder = Number(runOrder);
+            return known.status;
+        }
+        history.push({ runId: rid, status: incoming, runOrder: Number(runOrder) || 0 });
+        while (history.length > 32) history.shift();
+        return incoming;
+    },
+
+    resolveSessionResult(sessionId, runId, status, runOrder, fromSnapshot) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        const incoming = status === 'failed' ? 'failed' : 'success';
+        if (!sid) return incoming;
+        const history = this.confirmedResultsBySession.get(sid);
+        const latest = history && history[history.length - 1];
+        const order = Number(runOrder) || 0;
+        if (latest && latest.runOrder > 0) {
+            if (order > 0 && order < latest.runOrder) return null;
+            if (order === latest.runOrder && rid && rid !== latest.runId) return null;
+        }
+        if (rid && this.resultIsSuperseded(sid, rid)) return null;
+        if (!rid) return incoming;
+        // A versionless HTTP row cannot establish that an unfamiliar run is
+        // newer. Do not poison the ordering history with its arrival time.
+        // New live terminals and versioned rows from other tabs still advance it.
+        if (fromSnapshot && latest && latest.runId !== rid && !order) return null;
+        return this.recordConfirmedResult(sid, rid, incoming, order);
+    },
+
+    // Compare even a previously unseen HTTP run with the live result. The
+    // generation survives reading and server restarts, unlike receipt order.
+    reconcileSessionUnreadResult(session, previous) {
+        if (!session) return session;
+        const sid = String(session.id || '');
+        const runId = String(session.unread_result_run_id || session.unread_result_last_run_id || '').trim();
+        if (!sid || !runId) return session;
+        const resolved = this.resolveSessionResult(sid, runId, session.unread_result_status,
+            session.unread_result_run_order, true);
+        if (resolved === null) return this.inheritUnreadResult(session, previous);
+        const status = resolved === 'failed' ? 'failed' : 'success';
+        if (status === 'failed' && (!session.unread_result || session.unread_result_status !== status)) {
+            return Object.assign({}, session, { unread_result: true, unread_result_status: status });
+        }
+        return session;
+    },
+
     applySnapshot(sessions, archivedCount) {
         this.pruneDeletedSessionTombstones();
         const nextById = new Map();
@@ -84,13 +176,11 @@ const sessionStore = {
             const sid = String(s.id);
             if (this.isDeletedSessionTombstoned(sid)) continue;
             snapshotIds.add(sid);
-            const nextSession = Object.assign({}, this.normalizeSessionRunState(s));
+            let nextSession = Object.assign({}, this.normalizeSessionRunState(s));
+            nextSession = this.reconcileSessionUnreadResult(nextSession, this.sessionsById.get(sid));
             if (typeof shouldSuppressSessionUnreadSnapshot === 'function'
                 && shouldSuppressSessionUnreadSnapshot(nextSession)) {
-                nextSession.unread_result = false;
-                delete nextSession.unread_result_at;
-                delete nextSession.unread_result_status;
-                delete nextSession.unread_result_run_id;
+                nextSession = this.clearUnreadResultFields(nextSession);
             }
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {
                 nextSession.stream_active = false;
@@ -144,15 +234,11 @@ const sessionStore = {
         const sid = String(session.id);
         if (this.isDeletedSessionTombstoned(sid)) return;
         session = this.normalizeSessionRunState(session);
+        session = this.reconcileSessionUnreadResult(session, this.sessionsById.get(sid));
         const nextSession = (
             typeof shouldSuppressSessionUnreadSnapshot === 'function'
             && shouldSuppressSessionUnreadSnapshot(session)
-        ) ? Object.assign({}, session, { unread_result: false }) : session;
-        if (nextSession !== session) {
-            delete nextSession.unread_result_at;
-            delete nextSession.unread_result_status;
-            delete nextSession.unread_result_run_id;
-        }
+        ) ? this.clearUnreadResultFields(session) : session;
         const existed = this.sessionOrder.indexOf(sid) >= 0;
         this.sessionsById.set(sid, nextSession);
         if (!existed) {
@@ -218,6 +304,7 @@ const sessionStore = {
         this.finalizingRunIdsBySession.delete(sid);
         this.activeRunInfoBySession.delete(sid);
         this.unreadComplete.delete(sid);
+        this.confirmedResultsBySession.delete(sid);
         this.snapshotProtectedSessions.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
     },

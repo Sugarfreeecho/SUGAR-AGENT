@@ -2573,8 +2573,10 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         var imageLayoutStartedAt = performance.now();
         if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'images');
         var historyScrollBehavior = scrollBehavior;
-        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'bottom') && typeof prepareWorkspaceImageLayout === 'function') {
-            await prepareWorkspaceImageLayout(getVisibleChatStream());
+        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'bottom' || scrollBehavior === 'entry-bottom') && typeof prepareWorkspaceImageLayout === 'function') {
+            var imagePreparation = prepareWorkspaceImageLayout(getVisibleChatStream(), sessionId);
+            if (scrollBehavior === 'smooth-bottom') await imagePreparation;
+            else Promise.resolve(imagePreparation).catch(function () { /* Reserved frames keep history usable. */ });
             if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         }
         var historyImagesReady = await waitForHistoryImageLayout(
@@ -2583,7 +2585,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             getVisibleChatStream()
         );
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        if (scrollBehavior === 'smooth-bottom' && !historyImagesReady) {
+        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'entry-bottom') && !historyImagesReady) {
             historyScrollBehavior = 'bottom';
         }
         if (typeof uiPerformance !== 'undefined') {
@@ -2623,13 +2625,13 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         bindExistingLogInteractions();
         var historyScrollStartedAt = performance.now();
         if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'scroll');
-        // Completed unread results have no animation phase. Settle the log
-        // layout before placing the viewport, including queued overflow work.
-        if (historyScrollBehavior === 'bottom') finalizeExistingLogLayout();
+        // Entry motion starts after log geometry settles and does not gate
+        // history readiness or stream reattachment.
+        if (historyScrollBehavior === 'bottom' || historyScrollBehavior === 'entry-bottom') finalizeExistingLogLayout();
         applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        if (historyScrollBehavior !== 'bottom') finalizeExistingLogLayout();
+        if (historyScrollBehavior !== 'bottom' && historyScrollBehavior !== 'entry-bottom') finalizeExistingLogLayout();
         if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
         if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
             setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
@@ -2765,7 +2767,13 @@ async function switchSession(sessionId, opts) {
         (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)
         || sessionUnreadComplete.has(sessionId)
     );
-    if ((sessionHadUnreadResult || opts.forceReload) && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch) {
+    // Startup prefetch is a fresh server read, including unread results. Do
+    // not abort it merely because local unread state was restored first.
+    // Cached DOM still gets discarded; explicit reloads still bypass prefetch.
+    var freshInitialPrefetch = !!(opts.initialLoad && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch
+        && initialSessionHistoryPrefetch.sessionId === sessionId);
+    if ((opts.forceReload || (sessionHadUnreadResult && !freshInitialPrefetch))
+        && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch) {
         initialSessionHistoryPrefetch.controller.abort();
         initialSessionHistoryPrefetch = null;
     }
@@ -2878,9 +2886,9 @@ async function switchSession(sessionId, opts) {
         setTimeout(async function () {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
         try {
-            // A newly materialized stream has no previous viewport to animate
-            // from. Cached streams restore their reading position above.
-            var initialScrollMode = 'bottom';
+            // Cold history gets a bounded entry glide; cached streams restore
+            // their viewport above. Animation never gates load completion.
+            var initialScrollMode = 'entry-bottom';
             var loadedOk = await loadSessionMessages(sessionId, initialScrollMode, {
                 preloadOlderIfShort: isServerStreamActive(sessionId),
                 allowDuringRun: addressingChildSwitch || isServerStreamActive(sessionId),
@@ -4370,6 +4378,9 @@ async function materializeNewSessionInner() {
             ? messageInput.value
             : readStoredInputDraft(null);
         persistInputDraft(sessionId, draftText);
+        if (window.MyAgentPathPicker && typeof window.MyAgentPathPicker.moveChatSession === 'function') {
+            window.MyAgentPathPicker.moveChatSession(messageInput, null, sessionId);
+        }
         removeStoredInputDraft(null);
 
         if (ownsDraft) {

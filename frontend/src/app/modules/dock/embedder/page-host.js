@@ -252,17 +252,20 @@ function dockSyncPluginPages(rows) {
     const source = Array.isArray(rows) ? rows : [];
     for (const slot of ['details.tab', 'navigation', 'settings.section']) {
         for (const row of source.slice(0, 512)) {
+            const rendererSettings = slot === 'settings.section' && row?.target === 'renderer'
+                && String(row.renderer?.module || '').startsWith('/plugin-assets/' + row.plugin_id + '/')
+                && String(row.renderer?.module || '').split('?')[0].endsWith('.js');
             if (row?.slot !== slot || !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(row.plugin_id)
                 || !/^[a-z][a-z0-9._-]{0,63}$/.test(row.id)
-                || row.href !== '/plugins/' + row.plugin_id || row.target !== 'plugin-page') continue;
+                || (!rendererSettings && (row.href !== '/plugins/' + row.plugin_id || row.target !== 'plugin-page'))) continue;
             const key = row.plugin_id + ':' + row.id;
             if (dockPluginPages.has(key)) continue;
             dockPluginPages.set(key, { pluginId: row.plugin_id, id: row.id,
                 title: String(row.title || row.label || row.plugin_id).slice(0, 64),
-                description: String(row.description || '').slice(0, 200), href: row.href,
+                description: String(row.description || '').slice(0, 200), href: '/plugins/' + row.plugin_id,
                 signature: String(row.signature || '').slice(0, 64),
                 scope: row.scope === 'app' ? 'app' : 'session', order: Number.isFinite(Number(row.order)) ? Number(row.order) : 100,
-                settingsOnly: slot === 'settings.section' && row.embedded === true });
+                settingsOnly: slot === 'settings.section' && (row.embedded === true || rendererSettings) });
         }
     }
     // UI-only plugins still get a console for their former default-group cards.
@@ -281,7 +284,7 @@ function dockSyncPluginPages(rows) {
         for (const [key, record] of dockRightPageHost.records) {
             const definition = record.page.definition;
             const current = definition && dockPluginPages.get(definition.pluginId + ':' + definition.id);
-            if (definition && (!current || current.signature !== definition.signature || current.scope !== definition.scope)) {
+            if (definition && (!current || current.settingsOnly || current.signature !== definition.signature || current.scope !== definition.scope)) {
                 dockClosePageTab(record.tabId, record.surfaceId);
                 dockRightPageHost.release(key);
             }
@@ -384,6 +387,11 @@ function dockPluginPageBody(tab) {
     catch { return dockRightNote(dockPageText('插件页面地址无效', 'Invalid plugin page address')); }
     const definition = dockPluginPages.get(binding.pluginId + ':' + binding.pageId);
     if (!definition) return dockRightNote(dockPageText('插件已停用', 'Plugin disabled'));
+    if (definition.settingsOnly) {
+        const surfaceId = dockRightState.sessionId;
+        queueMicrotask(() => dockClosePageTab(tab.id, surfaceId));
+        return dockRightNote(dockPageText('控制台已移至设置', 'Console moved to Settings'));
+    }
     return dockRightPageHost.seat(tab, () => new DockPluginPage(tab, definition, binding));
 }
 

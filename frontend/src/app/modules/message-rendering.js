@@ -46,7 +46,7 @@ async function historyOperationJson(url, options, timeoutMs) {
     }
     try {
         var r = await fetch(url, requestOptions);
-        var j = await r.json().catch(function () { return {}; });
+        var j = await r.json().catch(function () { return { ok: false, error: 'invalid_server_response' }; });
         if (!j || typeof j !== 'object') j = {};
         j.ok = !!r.ok && j.ok !== false;
         if (!j.error && !r.ok) j.error = 'http_' + r.status;
@@ -58,6 +58,8 @@ async function historyOperationJson(url, options, timeoutMs) {
         if (timer) clearTimeout(timer);
     }
 }
+
+const truncateRequestReceipts = new Map();
 
 async function truncateSessionOnServer(beforeIndex, options) {
     options = options || {};
@@ -72,18 +74,82 @@ async function truncateSessionOnServer(beforeIndex, options) {
     if (Number.isFinite(Number(options.beforeSeq)) && Number(options.beforeSeq) > 0) {
         url += '&before_seq=' + encodeURIComponent(String(Math.floor(Number(options.beforeSeq))));
     }
-    return historyOperationJson(url, { method: 'POST' }, options.timeoutMs || 45000);
+    // Retain inconclusive receipts so another click queries the SAME operation
+    // instead of submitting another destructive request against shifted indexes.
+    const key = sid + ':' + String(options.beforeSeq || '') + ':' + String(beforeIndex) + ':' + !!options.backup;
+    var receipt = truncateRequestReceipts.get(key);
+    if (!receipt) {
+        receipt = {
+            id: (window.crypto && window.crypto.randomUUID)
+                ? window.crypto.randomUUID()
+                : ('truncate-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
+            started: false,
+            pending: null
+        };
+        truncateRequestReceipts.set(key, receipt);
+    }
+    if (receipt.pending) return receipt.pending;
+    const requestUrl = url + '&request_id=' + encodeURIComponent(receipt.id);
+    const statusUrl = '/sessions/' + encodeURIComponent(sid) + '/truncate/status?request_id=' + encodeURIComponent(receipt.id);
+    receipt.pending = (async function () {
+        const deadline = Date.now() + (Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 180000);
+        var res;
+        if (!receipt.started) {
+            receipt.started = true;
+            res = await historyOperationJson(requestUrl, { method: 'POST' }, 10000);
+            // The synchronous response also supports a server during rolling
+            // upgrades. Transport errors are NOT evidence of a failed edit.
+            if (res.ok && !res.status) {
+                truncateRequestReceipts.delete(key);
+                return res;
+            }
+            if (!res.ok && res.error && (res.error === 'truncation failed'
+                || res.error === 'invalid before_index'
+                || res.error.indexOf('truncate_request') === 0
+                || res.error === 'truncate_session_busy'
+                || res.error.indexOf('pending human interaction') === 0)) {
+                truncateRequestReceipts.delete(key);
+                return res;
+            }
+        }
+        while (true) {
+            if (res && res.status === 'completed') {
+                if (res.error !== 'truncate_result_unknown') truncateRequestReceipts.delete(key);
+                return res;
+            }
+            if (res && res.status === 'unknown') {
+                return { ok: false, error: 'truncate_result_unknown' };
+            }
+            if (Date.now() >= deadline) break;
+            res = await historyOperationJson(statusUrl, { method: 'GET', cache: 'no-store' }, Math.min(10000, Math.max(1, deadline - Date.now())));
+            if (res.error === 'http_404' || res.error === 'http_405') {
+                return { ok: false, error: 'truncate_result_unknown' };
+            }
+            if (res.status === 'completed' || res.status === 'unknown') continue;
+            await new Promise(function (resolve) { setTimeout(resolve, 1000); });
+        }
+        return { ok: false, error: res && res.status === 'pending' ? 'truncate_result_pending' : 'truncate_result_unknown' };
+    })();
+    try {
+        return await receipt.pending;
+    } finally {
+        receipt.pending = null;
+    }
 }
 
 function describeServerSyncFailure(res, fallback) {
     var base = fallback || '无法同步服务器。';
     var err = res && res.error ? String(res.error).trim() : '';
     if (!err) return base;
+    if (err === 'truncate_result_pending') return '历史裁剪仍在后台处理中，改写后的消息尚未发送。编辑内容已保留；再次确认将查询原任务，不会重复裁剪。';
+    if (err === 'truncate_result_unknown') return '暂时无法确认历史裁剪结果，改写后的消息尚未发送。请保留编辑内容，恢复连接后刷新会话核对历史；不要直接重复裁剪。';
     var friendly = err;
     if (err === 'no_session') friendly = '当前没有选中的会话。';
     else if (err === 'invalid_before_index' || err === 'invalid before_index') friendly = '消息定位索引无效，可能需要刷新当前会话。';
     else if (err === 'refuse empty truncation') friendly = '服务端拒绝清空整个会话。';
     else if (err === 'truncation failed') friendly = '服务端裁剪历史失败，可能是历史索引已变化或会话文件暂时不一致。';
+    else if (err === 'truncate_session_busy' || err === 'truncate_requests_busy') friendly = '历史裁剪任务仍在处理中，请稍后核对会话状态。';
+    else if (err === 'truncate_request_conflict') friendly = '历史操作请求与原任务不一致，请刷新会话核对。';
     return base + '\n原因：' + friendly;
 }
 
@@ -231,15 +297,124 @@ function openInlineRewriteEditor(wrap, rawText, beforeIndex) {
     } catch (e) { /* ignore */ }
 }
 
+var branchRequestsByAnchor = new Map();
+var branchUiOperationsBySession = new Map();
+
 async function branchSessionOnServer(beforeIndex, sessionId, afterSeq) {
     const sid = sessionId || currentSessionId;
     if (!sid) return { ok: false, error: 'no_session' };
+    var anchor = JSON.stringify([sid, beforeIndex, Number(afterSeq) || 0]);
+    var receipt = branchRequestsByAnchor.get(anchor);
+    if (receipt && receipt.pending) return receipt.pending;
+    if (!receipt) {
+        if (branchRequestsByAnchor.size >= 128) {
+            var oldest = Array.from(branchRequestsByAnchor).find(function (entry) { return !entry[1].pending; });
+            if (oldest) branchRequestsByAnchor.delete(oldest[0]);
+            else return { ok: false, error: 'branch_requests_busy' };
+        }
+        receipt = { id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID()
+            : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2), pending: null };
+        branchRequestsByAnchor.set(anchor, receipt);
+    }
     var url = '/sessions/' + encodeURIComponent(sid) + '/branch'
-        + '?before_index=' + encodeURIComponent(String(beforeIndex));
+        + '?before_index=' + encodeURIComponent(String(beforeIndex))
+        + '&request_id=' + encodeURIComponent(receipt.id);
     if (Number.isFinite(Number(afterSeq)) && Number(afterSeq) > 0) {
         url += '&after_seq=' + encodeURIComponent(String(Math.floor(Number(afterSeq))));
     }
-    return historyOperationJson(url, { method: 'POST' }, 60000);
+    receipt.pending = historyOperationJson(url, { method: 'POST' }, 60000);
+    try {
+        var result = await receipt.pending;
+        // On timeout the server may still be creating the branch. A retry must
+        // reuse its receipt instead of silently creating another conversation.
+        if (result && result.ok) branchRequestsByAnchor.delete(anchor);
+        return result;
+    } finally {
+        receipt.pending = null;
+    }
+}
+
+async function createBranchFromMessage(wrap, sourceSessionId, sourceSwitchEpoch, branchBefore, branchAfterSeq) {
+    if (branchUiOperationsBySession.has(sourceSessionId)) return;
+    var operation = {}, button = wrap.querySelector('[data-act="branch"]');
+    var originalLabel = button ? button.textContent : '分支';
+    var status = null, label = null, elapsed = null, timer = null, opened = false;
+    branchUiOperationsBySession.set(sourceSessionId, operation);
+    wrap.dataset.branching = '1';
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    function progress(text) {
+        if (!status) {
+            var old = wrap.querySelector('.branch-operation-status');
+            if (old) old.remove();
+            status = document.createElement('div');
+            status.className = 'branch-operation-status';
+            label = document.createElement('span');
+            label.setAttribute('role', 'status');
+            label.setAttribute('aria-live', 'polite');
+            elapsed = document.createElement('span');
+            elapsed.setAttribute('aria-hidden', 'true');
+            status.append(label, elapsed);
+            wrap.appendChild(status);
+            var started = Date.now();
+            timer = setInterval(function () { elapsed.textContent = ' · ' + Math.floor((Date.now() - started) / 1000) + ' s'; }, 1000);
+        }
+        label.textContent = text;
+        if (button) button.textContent = text.indexOf('正在创建分支') === 0 ? '创建中…' : '打开中…';
+    }
+    try {
+        var existingBranch = wrap.dataset.branchSessionId;
+        var pendingBranch = wrap.dataset.branchPending === '1';
+        if (!existingBranch && !pendingBranch && !await openUiModal({
+            title: '创建分支会话', subtitle: '原会话不会被修改',
+            message: '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。',
+            confirmText: '创建分支', cancelText: '取消',
+        })) return;
+        progress(existingBranch ? '正在打开分支…' : pendingBranch ? '正在检查分支创建结果…' : '正在创建分支，请勿重复点击…');
+        var res = existingBranch ? { ok: true, session_id: existingBranch }
+            : await branchSessionOnServer(branchBefore, sourceSessionId, branchAfterSeq);
+        if (!res || !res.ok || !res.session_id) {
+            if (res && res.error === 'request_timeout') {
+                wrap.dataset.branchPending = '1';
+                throw new Error('等待响应超时，后台可能仍在创建。点击“继续检查”会查询同一次分支请求。');
+            }
+            throw new Error(describeServerSyncFailure(res, '创建分支未生效。'));
+        }
+        delete wrap.dataset.branchPending;
+        wrap.dataset.branchSessionId = res.session_id;
+        if (res.session && typeof sessionStore !== 'undefined') {
+            sessionStore.upsert(res.session);
+            renderSessionListIfChanged(true);
+        }
+        var sourceStillActive = currentSessionId === sourceSessionId
+            && (sourceSwitchEpoch == null || sourceSwitchEpoch === switchSessionEpoch);
+        if (sourceStillActive) {
+            progress('分支已创建，正在加载会话…');
+            if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(res.session_id);
+            if (await switchSession(res.session_id, { forceReload: true }) === false) {
+                throw new Error('分支已创建，但打开失败。请点击“打开分支”重试。');
+            }
+            opened = true;
+            delete wrap.dataset.branchSessionId;
+        } else {
+            progress('分支已创建，可在会话列表打开。');
+        }
+        setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
+    } catch (err) {
+        var message = String((err && err.message) || err || 'unknown error');
+        progress(message);
+        status.classList.add('is-error');
+        showUiAlert({ title: wrap.dataset.branchSessionId ? '打开分支失败' : wrap.dataset.branchPending ? '创建结果待确认' : '创建失败', message: message, variant: 'error' });
+    } finally {
+        if (timer) clearInterval(timer);
+        if (status) { status.classList.add('is-settled'); if (opened) status.remove(); }
+        delete wrap.dataset.branching;
+        if (button) {
+            button.disabled = false;
+            button.removeAttribute('aria-busy');
+            button.textContent = wrap.dataset.branchSessionId ? '打开分支' : wrap.dataset.branchPending ? '继续检查' : originalLabel;
+        }
+        if (branchUiOperationsBySession.get(sourceSessionId) === operation) branchUiOperationsBySession.delete(sourceSessionId);
+    }
 }
 
 function normalizeBranchFinalText(text) {
@@ -557,7 +732,7 @@ function onMessageToolbarClick(wrap, role, act) {
         return;
     }
     if (act === 'branch' && role === 'assistant') {
-        if (wrap.dataset.branching === '1') return;
+        if (wrap.dataset.branching === '1' || branchUiOperationsBySession.has(currentSessionId)) return;
         const sourceSessionId = currentSessionId;
         const sourceSwitchEpoch = (typeof switchSessionEpoch === 'number') ? switchSessionEpoch : null;
         const eiRaw = wrap.dataset.eventIndex;
@@ -571,54 +746,10 @@ function onMessageToolbarClick(wrap, role, act) {
             return;
         }
         const branchBefore = eventIdx + 1;
-        openUiModal({
-            title: '创建分支会话',
-            subtitle: '原会话不会被修改',
-            message: '将在当前回答之后创建独立分支会话。分支点之前的内容与原会话相同，可在分支中继续提问且不影响原会话。',
-            confirmText: '创建分支',
-            cancelText: '取消',
-        }).then(function (ok) {
-            if (!ok) return;
-            wrap.dataset.branching = '1';
-            (async function () {
-                var runtimeEventType = String(wrap.dataset.runtimeEventType || '');
-                var branchAfterSeq = runtimeEventType && runtimeEventType !== 'message_assistant_final'
-                    ? null
-                    : runtimeSeq;
-                var res = await branchSessionOnServer(branchBefore, sourceSessionId, branchAfterSeq);
-                if (!res || !res.ok || !res.session_id) {
-                    showUiAlert({
-                        title: '创建失败',
-                        message: describeServerSyncFailure(res, '创建分支未生效。'),
-                        variant: 'error',
-                    });
-                    return;
-                }
-                if (res.session && typeof sessionStore !== 'undefined') {
-                    sessionStore.upsert(res.session);
-                    renderSessionListIfChanged(true);
-                }
-                if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(res.session_id);
-                const sourceStillActive = currentSessionId === sourceSessionId
-                    && (sourceSwitchEpoch == null || sourceSwitchEpoch === switchSessionEpoch);
-                if (!sourceStillActive) {
-                    setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
-                    return;
-                }
-                await switchSession(res.session_id, { forceReload: true });
-                setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
-                delete wrap.dataset.branching;
-            })().catch(function (err) {
-                console.error('branch session failed:', err);
-                showUiAlert({
-                    title: '创建失败',
-                    message: String((err && err.message) || err || 'unknown error'),
-                    variant: 'error',
-                });
-            }).finally(function () {
-                delete wrap.dataset.branching;
-            });
-        });
+        // V2 final commits and imported UI finals also carry stable runtime
+        // identities. The server verifies that the target is a visible final.
+        var branchAfterSeq = Number.isFinite(runtimeSeq) && runtimeSeq > 0 ? runtimeSeq : null;
+        void createBranchFromMessage(wrap, sourceSessionId, sourceSwitchEpoch, branchBefore, branchAfterSeq);
         return;
     }
 }
@@ -2073,8 +2204,10 @@ function clampChatScrollTop(y) {
 }
 
 var historySmoothScrollSessionId = '';
+var historyEntryScrollCancel = null;
 
 function beginHistorySmoothScroll(sessionId) {
+    endHistorySmoothScroll();
     if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
         cancelSmoothStreamFollowForHistoryLoad();
     }
@@ -2083,7 +2216,10 @@ function beginHistorySmoothScroll(sessionId) {
 
 function endHistorySmoothScroll(sessionId) {
     var sid = String(sessionId || '');
-    if (!sid || historySmoothScrollSessionId === sid) historySmoothScrollSessionId = '';
+    if (!sid || historySmoothScrollSessionId === sid) {
+        if (historyEntryScrollCancel) historyEntryScrollCancel();
+        historySmoothScrollSessionId = '';
+    }
 }
 
 function isHistorySmoothScrollActive() {
@@ -2093,9 +2229,60 @@ function isHistorySmoothScrollActive() {
     );
 }
 
+function startHistoryEntryScroll(sessionId) {
+    beginHistorySmoothScroll(sessionId);
+    var port = chatContainer, epoch = switchSessionEpoch;
+    var bottom = Math.max(0, port.scrollHeight - port.clientHeight);
+    if (bottom <= 0 || document.visibilityState === 'hidden'
+        || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+        setScrollTopImmediate(port, bottom);
+        endHistorySmoothScroll(sessionId);
+        return;
+    }
+    // Start near the latest result. A long transcript must not turn into a
+    // multi-second flight from its first message, or delay usable history.
+    var distance = Math.min(bottom, 320, port.clientHeight * 0.55);
+    var startedAt = performance.now(), raf = 0, stopped = false;
+    var inputs = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+    function stop() {
+        if (stopped) return;
+        stopped = true;
+        if (raf) cancelAnimationFrame(raf);
+        inputs.forEach(function (name) { port.removeEventListener(name, stop); });
+        if (historyEntryScrollCancel === stop) {
+            historyEntryScrollCancel = null;
+            historySmoothScrollSessionId = '';
+        }
+    }
+    function step(now) {
+        if (stopped) return;
+        if (epoch !== switchSessionEpoch || sessionId !== currentSessionId || port !== chatContainer) {
+            stop();
+            return;
+        }
+        var progress = Math.min(1, Math.max(0, (now - startedAt) / 260));
+        var target = Math.max(0, port.scrollHeight - port.clientHeight);
+        if (isSessionRunning(sessionId) || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))) {
+            setScrollTopImmediate(port, target);
+            stop();
+            return;
+        }
+        setScrollTopImmediate(port, target - distance * Math.pow(1 - progress, 3));
+        if (progress >= 1) {
+            if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.entryAnimation', now - startedAt);
+            stop();
+        }
+        else raf = requestAnimationFrame(step);
+    }
+    historyEntryScrollCancel = stop;
+    inputs.forEach(function (name) { port.addEventListener(name, stop, { passive: true }); });
+    setScrollTopImmediate(port, bottom - distance);
+    raf = requestAnimationFrame(step);
+}
+
 /**
  * @param {string} sessionId
- * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'|'smooth-bottom'} mode
+ * @param {'saved-or-bottom'|'saved-smooth-or-bottom'|'bottom'|'smooth-bottom'|'entry-bottom'} mode
  */
 function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     if (!chatContainer || !sessionId) return;
@@ -2114,6 +2301,14 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
         streamProcNearBottom = true;
         liveAutoFollow = true;
         scrollToBottom();
+        return;
+    }
+
+    if (mode === 'entry-bottom') {
+        streamChatNearBottom = true;
+        streamProcNearBottom = true;
+        liveAutoFollow = true;
+        startHistoryEntryScroll(sessionId);
         return;
     }
 
@@ -2282,10 +2477,22 @@ function historyLoadScrollsToBottom(sessionId, mode) {
 }
 
 function waitForHistoryImageLayout(sessionId, mode, root) {
-    if ((mode !== 'smooth-bottom' && mode !== 'bottom') || !root || sessionId !== currentSessionId) {
+    if ((mode !== 'smooth-bottom' && mode !== 'bottom' && mode !== 'entry-bottom') || !root || sessionId !== currentSessionId) {
         return Promise.resolve(true);
     }
     var images = Array.prototype.slice.call(root.querySelectorAll('.message img'));
+    if (mode === 'entry-bottom' || mode === 'bottom') {
+        images.forEach(function (img) {
+            if (img.getAttribute('data-workspace-image-sized') === '1'
+                || (img.dataset && img.dataset.attachmentDeferred === '1')
+                || (Number(img.getAttribute('width')) > 0 && Number(img.getAttribute('height')) > 0)
+                || (img.complete && img.naturalWidth > 0)) return;
+            // Unknown/slow images get a stable frame before showing history.
+            // Neither metadata HTTP calls nor image decode may gate the text.
+            img.setAttribute('data-history-image-fallback', '1');
+        });
+        return Promise.resolve(true);
+    }
     var pending = images.filter(function (img) {
         // Durable thumbnails reserve their dimensions without downloading
         // offscreen originals. Their eventual decode cannot change the layout.
@@ -2449,10 +2656,19 @@ function waitForChatScrollAfterHistoryLoad(sessionId, mode) {
         });
     }
     if (historyLoadScrollsToBottom(sessionId, mode)) {
+        if (document.visibilityState === 'hidden') return Promise.resolve(true);
         return new Promise(function (resolve) {
-            requestAnimationFrame(function () {
+            var frame = 0, timer = 0, settled = false;
+            function finish() {
+                if (settled) return;
+                settled = true;
+                if (frame) cancelAnimationFrame(frame);
+                if (timer) clearTimeout(timer);
                 resolve(true);
-            });
+            }
+            // Background/occluded windows can suspend animation frames.
+            timer = setTimeout(finish, 80);
+            frame = requestAnimationFrame(finish);
         });
     }
     return Promise.resolve(false);
@@ -4222,7 +4438,7 @@ function escapeMarkdownSingleTildes(text) {
     return out;
 }
 
-function renderMarkdown(text) {
+function renderMarkdown(text, options) {
     if (!text) return '';
     var markdownParser = globalThis.marked;
     if (!markdownParser || typeof markdownParser.parse !== 'function') {
@@ -4235,8 +4451,22 @@ function renderMarkdown(text) {
             configureWorkspaceMarkdownRenderer(markdownParser);
         } catch (e) { /* ignore */ }
     }
+    var source = String(text);
+    var mathItems = null;
+    if (options && options.unicodeMath && typeof replaceMarkdownMathWithUnicode === 'function') {
+        // Final cards show formulas as Unicode math instead of raw TeX. The scan
+        // runs before Markdown parsing, so `_` / `*` inside a formula cannot turn
+        // into emphasis; code spans and fences are skipped.
+        var mathResult = replaceMarkdownMathWithUnicode(source);
+        source = mathResult.text;
+        mathItems = mathResult.items;
+    }
     try {
-        return markdownParser.parse(escapeMarkdownSingleTildes(normalizeExplicitMarkdownPathLinksOutsideFences(text)), { mangle: false, headerIds: false });
+        var html = markdownParser.parse(escapeMarkdownSingleTildes(normalizeExplicitMarkdownPathLinksOutsideFences(source)), { mangle: false, headerIds: false });
+        if (mathItems && mathItems.length && typeof restoreUnicodeMathPlaceholders === 'function') {
+            html = restoreUnicodeMathPlaceholders(html, mathItems);
+        }
+        return html;
     } catch (e) {
         return '<pre class="markdown-fallback">' + escapeHtml(String(text)) + '</pre>';
     }
@@ -5629,7 +5859,9 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         // the original Chinese text exactly.
         setUiRuntimeText(div, displayStr);
     } else {
-        div.innerHTML = renderMarkdown(displayStr);
+        // The assistant branch is the result Final card: formulas render as
+        // Unicode math. User messages and plugin panels keep the plain pipeline.
+        div.innerHTML = renderMarkdown(displayStr, role === 'assistant' ? { unicodeMath: true } : null);
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);

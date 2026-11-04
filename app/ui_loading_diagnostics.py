@@ -150,7 +150,9 @@ def sanitize_client_record(raw):
         return None
     out = {"event": "client_" + raw["event"]}
     for key in ("session_id", "request_id", "load_id", "error_name"):
-        out[key] = safe_id(raw.get(key))
+        value = safe_id(raw.get(key))
+        if value:
+            out[key] = value
     for key, values in {
         "kind": {"history", "session_list"}, "phase": _PHASES,
         "status": {"success", "failed", "cancelled"},
@@ -168,19 +170,102 @@ def sanitize_client_record(raw):
     return out
 
 
+_CLIENT_EVENTS = {"client_load_start", "client_load_end", "client_request_start", "client_request_end"}
+_LOAD_SUMMARY_KEYS = (
+    "session_id", "kind", "status", "phase", "started_at", "reason", "error_name",
+    "elapsed_ms", "fetch_ms", "fallback_ms", "hydrate_ms", "images_ms", "layout_ms", "scroll_ms",
+)
+_REQUEST_KEYS = (
+    "request_id", "route", "status", "status_code", "elapsed_ms", "headers_ms", "body_ms",
+    "server_ms", "timeout_ms", "attempt", "phase", "reason",
+)
+
+
+def compact_client_records(records):
+    """把同一 load_id 的 4 条客户端记录压成 1 条 ``client_load`` 摘要。
+
+    只有批次里出现 ``client_load_end`` 才合并，落单的 request 记录原样保留；
+    失败请求在 ``requests[]`` 里保留 phase/reason，便于区分 headers/body 超时。
+    """
+    groups = {}
+    order = []
+    passthrough = []
+    for index, record in enumerate(records):
+        load_id = record.get("load_id")
+        if not load_id or record.get("event") not in _CLIENT_EVENTS:
+            passthrough.append((index, record))
+            continue
+        group = groups.get(load_id)
+        if group is None:
+            group = {"load": {}, "requests": {}, "request_order": [], "indexes": []}
+            groups[load_id] = group
+            order.append(load_id)
+        group["indexes"].append(index)
+        event = record["event"]
+        if event in {"client_load_start", "client_load_end"}:
+            if event == "client_load_end":
+                group["load"]["complete"] = True
+            for key in _LOAD_SUMMARY_KEYS:
+                value = record.get(key)
+                if value not in (None, ""):
+                    group["load"][key] = value
+        elif event == "client_request_end":
+            request_id = record.get("request_id") or f"#{index}"
+            row = group["requests"].get(request_id)
+            if row is None:
+                row = {}
+                group["requests"][request_id] = row
+                group["request_order"].append(request_id)
+            for key in _REQUEST_KEYS:
+                value = record.get(key)
+                if value not in (None, ""):
+                    row[key] = value
+    merged = []
+    for load_id in order:
+        group = groups[load_id]
+        if not group["load"].get("complete"):
+            merged.extend((index, records[index]) for index in group["indexes"])
+            continue
+        summary = {"event": "client_load", "load_id": load_id}
+        for key, value in group["load"].items():
+            if key != "complete":
+                summary[key] = value
+        rows = [group["requests"][rid] for rid in group["request_order"] if group["requests"][rid]]
+        if rows:
+            summary["requests"] = rows[:6]
+        merged.append((group["indexes"][0], summary))
+    merged.extend(passthrough)
+    merged.sort(key=lambda item: item[0])
+    return [record for _, record in merged]
+
+
 async def monitor_event_loop():
     # This clock includes stalls before ASGI can even receive a page request.
     # Healthy ticks do not produce records or inspect any session data.
     interval = 2.0
+    report_every = 30.0
+    last_report = 0.0
+    pending_max = 0.0
+    pending_count = 0
     while True:
         expected = time.perf_counter() + interval
         expected_at = datetime.now(timezone.utc).timestamp() + interval
         await asyncio.sleep(interval)
         lag_ms = (time.perf_counter() - expected) * 1000
-        if lag_ms >= 500:
-            emit_event({"event": "server_loop_lag", "lag_ms": round(lag_ms, 3),
-                        "expected_at": datetime.fromtimestamp(expected_at, timezone.utc).isoformat(),
-                        "interval_ms": int(interval * 1000)})
+        if lag_ms < 500:
+            continue
+        pending_max = max(pending_max, lag_ms)
+        pending_count += 1
+        now_ts = time.time()
+        if now_ts - last_report < report_every:
+            continue
+        emit_event({"event": "server_loop_lag", "lag_ms": round(lag_ms, 3),
+                    "max_lag_ms": round(pending_max, 3), "count": pending_count,
+                    "expected_at": datetime.fromtimestamp(expected_at, timezone.utc).isoformat(),
+                    "interval_ms": int(interval * 1000)})
+        last_report = now_ts
+        pending_max = 0.0
+        pending_count = 0
 
 
 def register_loading_diagnostics(app):
@@ -199,8 +284,7 @@ def register_loading_diagnostics(app):
             return JSONResponse({"ok": False}, status_code=400)
         if not isinstance(records, list) or len(records) > 32:
             return JSONResponse({"ok": False}, status_code=400)
-        for raw in records:
-            record = sanitize_client_record(raw)
-            if record:
-                emit_event(record)
+        sanitized = [item for item in (sanitize_client_record(raw) for raw in records) if item]
+        for record in compact_client_records(sanitized):
+            emit_event(record)
         return JSONResponse({"ok": True})

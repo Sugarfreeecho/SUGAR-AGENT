@@ -113,6 +113,71 @@ def test_loop_monitor_records_stalls_without_logging_healthy_ticks(monkeypatch):
     assert rows[0]['expected_at'].endswith('+00:00')
 
 
+def _post_records(records):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import ui_loading_diagnostics as d
+    rows = []
+    original = d.emit_event
+    d.emit_event = rows.append
+    try:
+        app = FastAPI()
+        d.register_loading_diagnostics(app)
+        with TestClient(app) as client:
+            assert client.post('/api/ui-loading-diagnostics', json={'records': records}).status_code == 200
+    finally:
+        d.emit_event = original
+    return rows
+
+
+def test_one_load_is_compacted_into_a_single_record():
+    started = '2026-11-02T03:32:52.016Z'
+    base = {'session_id': 's1', 'kind': 'session_list', 'load_id': 'lid-1'}
+    rows = _post_records([
+        {'event': 'load_start', **base, 'started_at': started},
+        {'event': 'request_start', **base, 'request_id': 'rid-1', 'route': 'state',
+         'phase': 'headers', 'timeout_ms': 12000, 'attempt': 1, 'started_at': started},
+        {'event': 'request_end', **base, 'request_id': 'rid-1', 'route': 'state', 'status': 'success',
+         'status_code': 200, 'elapsed_ms': 25, 'headers_ms': 23.6, 'body_ms': 1.2, 'server_ms': 8,
+         'phase': 'body', 'started_at': started},
+        {'event': 'load_end', **base, 'request_id': 'rid-1', 'status': 'success', 'phase': 'layout',
+         'elapsed_ms': 29, 'fetch_ms': 25.2, 'layout_ms': 3.6, 'started_at': started},
+    ])
+
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row['event'] == 'client_load' and row['load_id'] == 'lid-1'
+    assert row['status'] == 'success' and row['elapsed_ms'] == 29 and row['layout_ms'] == 3.6
+    request = row['requests'][0]
+    assert request['request_id'] == 'rid-1' and request['route'] == 'state'
+    assert request['status_code'] == 200 and request['elapsed_ms'] == 25 and request['server_ms'] == 8
+    assert 'client_request_start' not in json.dumps(rows)
+
+
+def test_failed_request_keeps_phase_and_reason_in_summary():
+    base = {'session_id': 's1', 'kind': 'history', 'load_id': 'lid-2'}
+    rows = _post_records([
+        {'event': 'load_start', **base},
+        {'event': 'request_start', **base, 'request_id': 'rid-2', 'route': 'history_snapshot',
+         'phase': 'headers', 'timeout_ms': 12000, 'attempt': 1},
+        {'event': 'request_end', **base, 'request_id': 'rid-2', 'route': 'history_snapshot',
+         'status': 'failed', 'reason': 'timeout', 'phase': 'body', 'elapsed_ms': 12001},
+        {'event': 'load_end', **base, 'status': 'failed', 'reason': 'timeout', 'phase': 'fetch',
+         'elapsed_ms': 12003},
+    ])
+    request = rows[0]['requests'][0]
+    assert request['status'] == 'failed' and request['reason'] == 'timeout' and request['phase'] == 'body'
+
+
+def test_request_without_load_end_passes_through():
+    rows = _post_records([
+        {'event': 'request_end', 'session_id': 's1', 'load_id': 'lid-3', 'request_id': 'rid-3',
+         'route': 'state', 'status': 'failed', 'reason': 'http', 'status_code': 503, 'elapsed_ms': 12},
+    ])
+    assert len(rows) == 1
+    assert rows[0]['event'] == 'client_request_end' and rows[0]['reason'] == 'http'
+
+
 def test_monitor_survives_production_lifespan_override_and_stops_cleanly(monkeypatch):
     from contextlib import asynccontextmanager
     from fastapi import FastAPI

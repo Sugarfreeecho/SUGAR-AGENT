@@ -1861,6 +1861,7 @@ function restoreInputDraft(sessionId) {
         ? draftBySession[draftKey]
         : readStoredInputDraft(sessionId);
     messageInput.value = v != null ? String(v) : '';
+    clearInputPathTokens();
     restoreDraftPathTokens(sessionId, messageInput.value);
     rewriteInputWorkspacePaths();
     autoResizeTextarea();
@@ -1893,8 +1894,17 @@ function collectDraftPathTokens(text) {
 
 function persistDraftPathTokens(sessionId, text) {
     const key = inputDraftPathTokenStorageKey(sessionId);
-    const tokens = collectDraftPathTokens(text);
+    let tokens = collectDraftPathTokens(text);
     try {
+        if (String(sessionId || '') !== String(currentSessionId || '')) {
+            const stored = JSON.parse(localStorage.getItem(key) || 'null');
+            if (stored && typeof stored === 'object') {
+                tokens = Object.create(null);
+                Object.keys(stored).forEach(function (label) {
+                    if (String(text || '').indexOf(label) >= 0) tokens[label] = stored[label];
+                });
+            }
+        }
         if (Object.keys(tokens).length) localStorage.setItem(key, JSON.stringify(tokens));
         else localStorage.removeItem(key);
     } catch (e) { /* ignore */ }

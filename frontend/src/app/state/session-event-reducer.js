@@ -83,6 +83,15 @@ function applySessionEvent(event, opts) {
         if (runId && knownCurrentRunId && runId !== knownCurrentRunId) {
             return { handled: true, staleTerminalIgnored: true, messageRecord: messageRecord };
         }
+        // Check result authority before an old terminal can clear activity or
+        // acknowledge a newer result. HTTP snapshots use this same generation.
+        const history = sessionStore.confirmedResultsBySession.get(sessionId);
+        const latestResult = history && history[history.length - 1];
+        const resultRunOrder = Number(event.result_run_order) || 0;
+        if (sessionStore.resultIsSuperseded(sessionId, runId)
+            || (latestResult && resultRunOrder > 0 && resultRunOrder < latestResult.runOrder)) {
+            return { handled: true, staleTerminalIgnored: true, messageRecord: messageRecord };
+        }
         const sess = sessionStore.get(sessionId);
         if (sess) {
             ['background_jobs_running', 'subagent_running'].forEach(function (field) {
@@ -97,12 +106,12 @@ function applySessionEvent(event, opts) {
             && typeof isGoalActiveForSession === 'function'
             && isGoalActiveForSession(sessionId);
         if (resultStatus === 'failed') {
-            markSessionResultComplete(sessionId, 'failed', runId);
+            markSessionResultComplete(sessionId, 'failed', runId, resultRunOrder);
         } else if ((goalContinues || resultStatus === 'pending' || sessionHasBackgroundWork(sess)) && typeof clearSessionUnreadState === 'function') {
             clearSessionUnreadState(sessionId, { server: false });
         } else {
             // A successful new terminal resolves the previous failed result.
-            markSessionResultComplete(sessionId, 'success', runId);
+            markSessionResultComplete(sessionId, 'success', runId, resultRunOrder);
             if (sessionId === String(currentSessionId || '')
                 && typeof clearSessionUnreadState === 'function') {
                 clearSessionUnreadState(sessionId, { expectedRunId: runId });
