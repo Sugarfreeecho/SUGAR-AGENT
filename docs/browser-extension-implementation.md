@@ -18,6 +18,15 @@
 
 ## 实现
 
+### 0.6.37：配对浏览器纳入可信定时任务路径（仅后端，扩展包不变）
+
+- 背景：侧栏会话由浏览器配对身份投递，能力清单缺少 `automation.*`，模型调用 `manage_scheduled_task` 一律返回 `Capability is not granted: automation.create`；桌面主界面是直连运行、无受限父身份，因此不受影响。
+- `plugins/browser-use/host.py` 的配对能力清单补齐 `read` 与 `automation.list/get/history/create/update/pause/resume/run/delete`，与主界面聊天对齐；`device.revoke`、Webhook 来源、本机设置适配器仍不对配对开放。
+- `restore_pairing_grants` 在插件启动时把仍在有效期内的原始配对凭据补齐到当前能力集，已配对浏览器无需重新配对；委托凭据、子凭据、已撤销与过期凭据保持不动。
+- 归属边界不变：`require_document` 仍按 `owner` 隔离，配对身份只能读取和管理自己创建的任务；任务策略不得超出其自身能力与范围，仍受当前工作目录边界约束。
+- 验收：`tests/test_browser_use.py` 断言配对可通过能力门禁、`device.revoke` 仍为 403；`tests/test_schedule_model_tools.py` 新增配对身份真实创建、列举且其他身份不可见的用例；`tests/test_browser_connection.py` 的恢复与幂等用例保持通过（19 项）。
+- 仅后端改动，扩展包仍为 0.6.36；重启后端生效，已配对凭据自动升级。
+
 ### 0.6.36：逐段延迟的证据采集
 
 - 用户明确提供 `run_shell` 中调用 `/api/mcp/tools` 的具体停点，并确认侧栏已加载 0.6.35。该工具属于运行 `89e13f2e…` 第 12 轮：23:14:34 写入执行中，23:15:24 完成。不是此前首次读取时仍活跃的 `5e48ff8b…` 运行，不能混用两次运行判断。
