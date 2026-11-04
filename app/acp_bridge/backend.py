@@ -160,33 +160,57 @@ class RuntimeBackend:
         if run_id in self.cancelled:
             await self.interrupt(session_id, run_id)
         endpoint = "/api/control/v1/operations/" + operation_id + "/events"
-        final_seen = False
-        async with self.client.stream("GET", endpoint, headers=self.headers()) as response:
-            if response.status_code != 200:
-                await response.aread()
-                ControlClient.decode(response)
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
-                event = json.loads(line)
-                if event.get("type") == "operation.completed":
-                    operation = event["operation"]
-                    if operation["status"] == "succeeded":
-                        if not final_seen and operation.get("content") is not None:
-                            yield {"type": "final", "content": operation["content"]}
-                        yield {"type": "run_finished"}
-                    elif operation["status"] in {"stopped", "interrupted", "cancelled"}:
-                        yield {"type": "run_interrupted"}
-                    else:
-                        yield {"type": "error", "content": (operation.get("error") or {}).get("message") or operation["status"]}
-                    return
-                if event.get("type") == "operation.status":
-                    continue
-                if event.get("type") == "tool_approval_required":
-                    event["type"] = "approval_requested"
-                final_seen = final_seen or event.get("type") == "final"
-                yield event
-        raise RuntimeError("operation stream ended before its execution receipt")
+        cursor = 0
+        final_content = None
+        # Reattach to the accepted operation, never submit the prompt again.
+        # Operation events are durable and their cursor survives HTTP reconnects.
+        for attempt in range(4):
+            try:
+                async with self.client.stream("GET", endpoint, headers=self.headers(),
+                                              params={"cursor": cursor},
+                                              timeout=httpx.Timeout(30, read=30)) as response:
+                    if response.status_code != 200:
+                        await response.aread()
+                        if response.status_code in {502, 503, 504}:
+                            response.raise_for_status()
+                        ControlClient.decode(response)
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        event = json.loads(line)
+                        if event.get("type") == "operation.completed":
+                            operation = event["operation"]
+                            if operation["status"] == "succeeded":
+                                content = operation.get("content")
+                                if content is not None and content != final_content:
+                                    yield {"type": "final", "content": content}
+                                yield {"type": "run_finished"}
+                            elif operation["status"] in {"stopped", "interrupted", "cancelled"}:
+                                yield {"type": "run_interrupted"}
+                            else:
+                                yield {"type": "error", "content": (operation.get("error") or {}).get("message") or operation["status"]}
+                            return
+                        if event.get("type") == "operation.status":
+                            continue
+                        position = event.get("cursor")
+                        if position is not None:
+                            if not isinstance(position, int) or isinstance(position, bool) or position < 1:
+                                raise ValueError("invalid operation event cursor")
+                            if position <= cursor:
+                                continue
+                            cursor = position
+                        if event.get("type") == "tool_approval_required":
+                            event["type"] = "approval_requested"
+                        if event.get("type") == "final":
+                            final_content = event.get("content")
+                        yield event
+                raise httpx.RemoteProtocolError("operation stream ended before its execution receipt")
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in {502, 503, 504}:
+                    raise
+                if attempt == 3:
+                    raise
+                await asyncio.sleep(.25 * 2 ** attempt)
 
     async def close(self):
         if self.monitor_task:

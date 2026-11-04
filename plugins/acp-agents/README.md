@@ -12,7 +12,9 @@
 
 Windows 可使用仓库 `python/python.exe`；Linux/macOS 使用项目虚拟环境。参数数组要把解释器、脚本路径和每个参数分开传递，路径中的空格不需要额外内嵌引号。适配器连接已经运行的后端，不会另起 Web 服务。只有 loopback HTTP origin 被接受，代理环境变量不会用于后端连接。退出 stdio 连接会停止该连接发起的任务并释放其 MCP，持久会话保留。
 
-首次独立连接前，以运行 ACP 客户端的系统用户执行 `python agent-session-control.py auth login`，复用同一后端地址的登录凭据。宿主委派进程使用任务令牌；任务身份缺失时不会回退个人登录。prompt 进入统一持久队列，通过具体 operation 的事件流返回结果和取消；后端连接不依赖远控开关。
+首次独立连接前，以运行 ACP 客户端的系统用户执行 `python app/agent-session-control.py auth login`，复用同一后端地址的登录凭据。宿主委派进程使用任务令牌；任务身份缺失时不会回退个人登录。prompt 进入统一持久队列，通过具体 operation 的事件流返回结果和取消；后端连接不依赖远控开关。
+
+终端内需要直接收到任务结果时，可运行 `python app/acp_call.py --cwd <绝对工作目录> --prompt "任务"`；加 `--session-id` 继续已有会话，`--result-file` 保存最终 JSON。进程会等到 `completed` 后退出；`started` 只代表会话已激活，终端工具若先返回进程 ID 需要继续等待。HTTP 事件流中断按原 operation 和游标有界重连，不重复运行任务。此入口不提供对已经结束的客户端聊天的自动唤醒；详细契约见 [docs/acp.md](../../docs/acp.md)。
 
 客户端依次发送 initialize、session/new（绝对 cwd）、session/prompt，消费 session/update，并响应 session/request_permission。session/list、session/resume、session/close 按声明的 capability 使用。resume 不回放历史。配置使用 session/set_config_option 的 model / reasoning_effort，并始终使用服务返回的 opaque value。
 

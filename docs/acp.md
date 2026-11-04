@@ -15,7 +15,25 @@ flowchart LR
 
 现有后端继续拥有会话、运行、持久化和工具审批。stdio 进程只拥有当前连接激活的会话句柄、prompt、配置和协议映射。prompt 通过公共入箱接收，流与取消绑定具体 operation，忙碌会话排队。连接关闭时取消本连接的 operation、等待 prompt 结束，再释放会话 MCP；持久会话保留。同一会话按单控制端使用，不同会话可并行。普通请求日志只写 stderr。
 
-独立启动 stdio 前，使用同一系统用户运行 `agent-session-control.py auth login` 完成后端登录。适配器复用按地址保存的控制凭据；Agent 宿主可注入受限任务令牌。有任务标记而令牌缺失时拒绝，不回退个人身份。新建、配置修改、审批及 MCP 配置仍分别检查能力；空 MCP 请求只检查会话访问，非空请求另需 `session.mcp.configure`。MCP 所有者由真实身份和连接 ID 共同绑定。
+独立启动 stdio 前，使用同一系统用户运行 `app/agent-session-control.py auth login` 完成后端登录。适配器复用按地址保存的控制凭据；Agent 宿主可注入受限任务令牌。有任务标记而令牌缺失时拒绝，不回退个人身份。新建、配置修改、审批及 MCP 配置仍分别检查能力；空 MCP 请求只检查会话访问，非空请求另需 `session.mcp.configure`。MCP 所有者由真实身份和连接 ID 共同绑定。
+
+## 从命令行调用并接收实际结果
+
+终端工具可以运行仓库内的 ACP 客户端入口；进程会等待当前 prompt 终态，不会在创建会话后提前退出：
+
+```powershell
+.\python\python.exe app/acp_call.py --cwd "D:\path\to\workspace" --prompt "请完成这个任务" --result-file "D:\path\to\result.json"
+```
+
+已有会话加 `--session-id <ID>`，按标准 `session/resume` 继续；省略则新建。长文本可使用 `--prompt-file <UTF-8 文件>` 或 `--stdin`。`--timeout` 默认 600 秒。凭据沿用上面的个人登录或宿主任务令牌，不自动登录或另起后端；默认拒绝 ACP 权限请求。
+
+stdout 为逐行 JSON：`started` 仅代表会话已激活；`progress` 是普通回复文本；`completed` 才是调用结果，包含 request_id、session_id、session_action、status、output、stop_reason、截断和权限标记。成功退出码为 0，任务失败/取消/未正常结束为 1，参数或登录错误为 2，超时为 7。结果文件只写终态，并原子替换；失败和超时保留已收集文本，错误仅返回分类。连接释放后仍可继续同一持久会话，关闭句柄失败不会覆盖已收到的成功任务结果。
+
+调用端必须持续等待读取终端结果：终端工具返回进程 ID 时，应继续等待该进程，直到 `completed`。ACP 不负责唤醒已经结束的 Codex 聊天，也不会把之后从网页发送的任意轮次自动回送给先前客户端；那需要调用端另行实现结果收件和唤醒机制。临时 `.analysis` 状态文件不能作为在线或回传成功的凭据。
+
+适配器读取持久 operation 结果时，HTTP 断开、30 秒读超时或 502/503/504 最多重连 3 次，使用原 operation 和最后事件游标，过滤重复事件，绝不重新提交 prompt。读取最终执行收据作为回复兜底，防止空 final 事件吞掉已有结果；撤销身份或非法事件直接失败。该恢复仅覆盖 HTTP 事件流，不能让已经退出的 ACP 客户端自动复活。
+
+2026-10-31 实际回传验证：原生会话 `a1fb9afe-2136-5236-a403-6ee616f51bd1` 新建和随后 resume 两次均通过 ACP 返回 `ACP_RETURN_20261031_OK`；第二轮没有重传该字符串。测试另外覆盖结果流断线后接续、去重、收据兜底、重试上限、身份撤销、超时保留部分回复、关闭失败与终端入口。
 
 ## 服务端标准接口
 
