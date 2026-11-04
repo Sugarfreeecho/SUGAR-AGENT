@@ -53,6 +53,8 @@ General Agent 是一个本地运行的 AI Agent 开发与使用平台。系统�
 
 Windows、Ubuntu 和 macOS 的常驻图标（Windows 任务栏右下角 / macOS 菜单栏 / Ubuntu 顶部栏）均提供 WebUI、设置、MCP、日志、重启、更新和退出入口。重启与更新操作默认隐藏，由 `MYAGENT_TRAY_SHOW_UPDATE_RESTART` 启用。更新操作由独立进程执行 `git pull --ff-only`，仅在 `app/requirements.txt` 变化时同步 Python 依赖，完成后通过对应生命周期后端恢复服务。更新不得强制覆盖本地修改；失败时必须恢复启动并记录到 `logs/agent_update.log`。
 
+三个平台的托盘都会按插件清单的 `capabilities.ui.tray` 追加已启用插件贡献的菜单条目：命令以 argv 列表、`shell=False` 方式启动，相对路径必须落在插件目录内，清单损坏只移除该条目而不影响菜单。条目在每次弹出菜单时重新解析，因此在设置里停用插件后下一次右键即生效，无需重启托盘。清单形态由 `app/tray_slot.py` 统一校验并进入插件 warning，菜单构建见 `app/tray_plugins.py`，契约见 [插件托盘菜单](docs/plugin-tray-menu.md)。
+
 WebUI 必须继续只监听 `127.0.0.1:8192`。Ubuntu Server 的远程访问通过 SSH 本地端口转发完成，不得因平台适配默认开放局域网或公网监听。
 
 ### 2.2 工具安全运行形态
@@ -210,7 +212,7 @@ ReAct 执行循环，负责：
 - 目录和搜索：`ls`、`glob`、`grep`
 - 命令执行：`run_shell`
 - 用户交互组：`show_user` 在生成过程中展示网页、文本/Markdown、图片、任意目录的本地文件及已启用插件页面，也可显示顶部提示、打开指定设置页签或请求系统通知，展示后继续执行；用户查看本地文件无需 Agent 文件读取审批，正文不返回模型；`ask_user` 收集必须由用户回答的结构化选择。展示记录先持久化再推送，历史/重复事件不重复触发展示动作，后台会话不抢占当前页面。设置导航保护未保存内容；系统通知仅调用已启用的桌面通知提供者，在后端持久化去重，即使网页关闭仍可发送。详见 `docs/show-user.md`。
-- 网络工具：`web_search`、`web_fetch`、`web_download`
+- 网络工具：`web_search`、`web_fetch`、`web_download`（三者均由启用的 `web-search-providers` 插件注入，停用插件即一并移除）
 - 技能系统：`discover_skills`、`get_skills_catalog`、`activate_skill`
 - 任务管理：`update_todo`
 - 上下文管理：`context_manage`
@@ -555,6 +557,8 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 - 网络搜索 provider 不可用时应有明确错误。
 - `web_fetch` 和 `web_download` 必须保留 SSRF 防护和下载大小限制。
+- 三个联网工具（`web_search` / `web_fetch` / `web_download`）都由
+  `plugins/web-search-providers/` 注入；核心不再内置同名工具。
 
 ### 11.4 MCP 配置
 
@@ -688,10 +692,20 @@ SSE 是后端向前端展示 Agent 过程的主通道。事件至少应覆盖以
 
 要求：
 
-- 每次会话/用户输入应能生成可追踪日志。
+- 每次会话/用户输入应能生成可追踪日志；文件名只含 session 前缀与时间戳，不得包含用户输入。
 - 日志中应包含必要的模型、工具、错误和运行过程信息。
+- 日志只记录元数据：模型正文、思考、工具参数值、工具结果、用户输入、系统提示词不得写入；
+  统一记录长度、哈希（`len=/sha=`）、结构指纹、状态、`call_id` 与耗时。
+- 需要正文排障时只能显式设置 `LOG_PAYLOAD_MODE=full`（默认 `off`），开启后日志首行必须给出告警。
 - 日志中必须脱敏敏感配置。
-- 前端显示的工具过程与后端日志应能互相辅助排查。
+- 超过 `LOG_LINE_MAX_CHARS` 的单行或多行消息必须在格式化阶段压成摘要；日志按 `LOG_MAX_BYTES`
+  轮转，启动时按 `LOG_RETENTION_DAYS` / `LOG_TOTAL_MAX_MB` 盘点，只有 `LOG_PRUNE_MODE=delete` 才删除。
+- 逐事件计时（`event_delivery`）必须按 run 聚合，避免单个会话日志被高频 JSON 淹没。
+- 同一 `load_id` 的客户端加载记录（load_start / request_start / request_end / load_end）必须在服务端合并为
+  一条 `client_load` 摘要，失败请求的 `phase`/`reason` 保留在 `requests[]` 中；事件循环卡顿日志最多每 30s 一条。
+- 同一份 `transport_breakdown` 只能输出一次（随 `llm_stream_timing`），不得再单独记录 `http_transport_timing`。
+- 前端显示的工具过程与后端日志应能互相辅助排查；正文以 `sessions/<id>/events.jsonl` 与
+  `TempOutput/tool-results/` 为准。
 
 ## 17. 性能规格
 

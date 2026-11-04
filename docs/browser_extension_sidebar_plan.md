@@ -1,3 +1,7 @@
+# 当前方案入口
+
+本文保留为历史记录。2026-10-29 的重设计与当前实现请阅读 [浏览器扩展重设计](browser_extension_sidebar_redesign.md) 和 [实现与验收记录](browser-extension-implementation.md)。
+
 # 浏览器侧栏插件（Page Assist 形态）实现方案
 
 > 结论先行：本仓库**不需要新增一套聊天后端**。Agent 本体已经是"本机 FastAPI 服务 + 薄客户端 + 事件流"结构，

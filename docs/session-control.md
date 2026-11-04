@@ -1,6 +1,6 @@
 # 统一会话管理 CLI
 
-入口为仓库根目录 `agent-session-control.py`，实现位于 `app/session_control/`。它连接当前 SugarAgent FastAPI 后端；`agentctl.py` 继续负责应用启停。CLI 退出和浏览器关闭不会取消后端已经持久接收的输入。
+入口为 `app/agent-session-control.py`，实现位于 `app/session_control/`。它连接当前 SugarAgent FastAPI 后端；`agentctl.py` 继续负责应用启停。CLI 退出和浏览器关闭不会取消后端已经持久接收的输入。
 
 ## 安装与第一次连接
 
@@ -8,10 +8,10 @@
 
 ```powershell
 .\python\python.exe -m pip install -r app\requirements.txt
-.\python\python.exe agent-session-control.py --help
-.\python\python.exe agent-session-control.py auth login
-.\python\python.exe agent-session-control.py doctor
-.\python\python.exe agent-session-control.py session list
+.\python\python.exe app/agent-session-control.py --help
+.\python\python.exe app/agent-session-control.py auth login
+.\python\python.exe app/agent-session-control.py doctor
+.\python\python.exe app/agent-session-control.py session list
 ```
 
 `auth login` 在交互终端隐藏输入 Bootstrap key 或现有远控配对码。控制服务在后端启动时生成 `bootstrap.key`：Windows 默认 `%LOCALAPPDATA%\SugarAgent\session-control\bootstrap.key`；Linux 默认 `$XDG_STATE_HOME/sugaragent/session-control/bootstrap.key`（未设置时为 `~/.local/state/`）。设置 `MYAGENT_SESSION_CONTROL_HOME` 可覆盖后端状态目录；设置 `MYAGENT_SECURITY_HOME` 时默认使用其同级的 `session-control/`。Bootstrap 只能经直接 loopback 连接兑换管理员身份。现有配对设备保留其原有权限，write 不等于配置或自动化管理员。
@@ -44,25 +44,27 @@
 修改命令接受 `--idempotency-key`。客户端默认每次生成新 key；网络超时后重试需显式复用原 key。后端按身份、key、方法与业务参数摘要去重；同一 key 改参返回冲突。不要将密钥放入业务参数、Prompt 或消息。
 
 ```powershell
-python agent-session-control.py session create --name "研究" --work-dir "D:\Research"
-python agent-session-control.py session read --id SESSION_ID --limit 50
-python agent-session-control.py session search --query "部署"
-python agent-session-control.py session send --id SESSION_ID --message-file prompt.txt --idempotency-key report-20261026
-python agent-session-control.py session send --id SESSION_ID --message "继续处理" --wait --timeout 120
-python agent-session-control.py execution get --id OPERATION_ID
-python agent-session-control.py execution wait --id OPERATION_ID --timeout 120
-python agent-session-control.py execution cancel --id OPERATION_ID
+python app/agent-session-control.py session create --name "研究" --work-dir "D:\Research"
+python app/agent-session-control.py session read --id SESSION_ID --limit 50
+python app/agent-session-control.py session search --query "部署"
+python app/agent-session-control.py session send --id SESSION_ID --message-file prompt.txt --idempotency-key report-20261026
+python app/agent-session-control.py session send --id SESSION_ID --message "继续处理" --wait --timeout 120
+python app/agent-session-control.py execution get --id OPERATION_ID
+python app/agent-session-control.py execution wait --id OPERATION_ID --timeout 120
+python app/agent-session-control.py execution cancel --id OPERATION_ID
 ```
 
 `send` 默认 queue，上一轮结束后运行；append 在当前轮安全边界加入；interrupt 需要额外打断能力。`attach` 仅观察，不新增用户轮次，使用逐行 JSON 输出快照、事件、心跳、游标和 gap。保存 `cursor` 与 `generation` 后可用 `session attach --id ... --cursor ... --generation ...` 重连。无游标连接从当前快照接收后续事实，显式 cursor=0 请求日志回放。日志换代会返回 gap 和新快照。流不返回内部推理或原始工具正文。Ctrl+C 只断开客户端。
 
-普通 send 成功仅表示已持久接收。`--wait` 或 `execution wait` 等待具体执行；超时不取消。自动化 `run --wait` 等待其子执行，不把派发回执当完成。退出码：0 成功；1 执行/内部错误；2 参数错误；3 身份/权限错误；4 不存在；5 状态/版本冲突；6 后端不可达；7 等待超时。
+普通 send 成功仅表示已持久接收。`--wait` 或 `execution wait` 等待具体执行；超时不取消。自动化 `run --wait` 等待其子执行，不把派发回执当完成。退出码：0 成功；1 执行/内部错误；2 参数错误；3 身份/权限错误；4 不存在；5 状态/版本冲突或容量不足；6 后端不可达；7 等待超时。
+
+定时与事件来源由共享监视器调度，短 I/O、业务编排和模型执行使用各自有界工作池。已接受输入按来源、任务和会话独立计账，按来源轮转及会话 FIFO 派发；容量不足返回 HTTP 429、`Retry-After` 与 `queue_full/work_pool_full`，请保留原幂等 key 重试。`doctor` 可查看资源上限和当前占用；默认限额及插件接入说明见[共享监视器与资源预算](shared-event-monitor.md)。
 
 导出下载到 CLI 所在机器；导入上传本地归档，当前上限 256 MiB，沿用已有后端解包、路径校验与 ID 重写：
 
 ```powershell
-python agent-session-control.py session export --id SESSION_ID --output .\session.zip
-python agent-session-control.py session import --archive .\session.zip --idempotency-key import-001
+python app/agent-session-control.py session export --id SESSION_ID --output .\session.zip
+python app/agent-session-control.py session import --archive .\session.zip --idempotency-key import-001
 ```
 
 导出拒绝覆盖已有本地文件。管理员也可通过 JSON `{"source":"后端机器上的目录或归档路径"}` 调用旧导入适配器。导出回执含 `archive_path`、`filename`，可用该 operation ID 下载；后端临时归档过期时需创建新导出。
@@ -70,12 +72,12 @@ python agent-session-control.py session import --archive .\session.zip --idempot
 ## Prompt、工具与预设
 
 ```powershell
-python agent-session-control.py config get --id SESSION_ID
-python agent-session-control.py config set --id SESSION_ID --expected-revision 0 --file examples/session-control/reviewer.json
-python agent-session-control.py config preview --id SESSION_ID
-python agent-session-control.py tools list --session-id SESSION_ID
-python agent-session-control.py tools describe --name read_file
-python agent-session-control.py config reset --id SESSION_ID --expected-revision 1
+python app/agent-session-control.py config get --id SESSION_ID
+python app/agent-session-control.py config set --id SESSION_ID --expected-revision 0 --file examples/session-control/reviewer.json
+python app/agent-session-control.py config preview --id SESSION_ID
+python app/agent-session-control.py tools list --session-id SESSION_ID
+python app/agent-session-control.py tools describe --name read_file
+python app/agent-session-control.py config reset --id SESSION_ID --expected-revision 1
 ```
 
 配置写入采用完整对象替换及 `expected_revision`，Prompt 和工具规则原子保存；读取当前版本后再写。运行中的轮次保留实际配置快照，下一用户轮次采用新配置。`preview` 返回同一 Prompt 组装器的系统段、工具定义及同一 Token 估算器结果；估算不含未来模型输出和循环中动态注入内容。
@@ -91,8 +93,8 @@ path roots 为绝对真实路径或 `$workspace`；内置 URL 工具对重定向
 预设保存明确版本，apply 复制到目标会话，之后的预设升级不会隐式更新会话：
 
 ```powershell
-python agent-session-control.py preset create --name reviewer --file examples/session-control/reviewer.json
-python agent-session-control.py preset apply --id PRESET_ID --session-id SESSION_ID --expected-revision 0
+python app/agent-session-control.py preset create --name reviewer --file examples/session-control/reviewer.json
+python app/agent-session-control.py preset apply --id PRESET_ID --session-id SESSION_ID --expected-revision 0
 ```
 
 用 JSON `revision` 选择旧版。创建/更新任务的 `runtime_override` 支持临时 Prompt 追加/替换、工具收窄、read_only 和 `limits`（timeout_seconds、max_tool_calls）；快照与具体 turn 绑定，不泄漏到下一轮。
@@ -104,14 +106,14 @@ python agent-session-control.py preset apply --id PRESET_ID --session-id SESSION
 替换示例中的 SESSION_ID 和工作目录后提交：
 
 ```powershell
-python agent-session-control.py schedule create --file examples/session-control/schedule.json
-python agent-session-control.py schedule list
-python agent-session-control.py schedule run --id TASK_ID --wait --timeout 120
-python agent-session-control.py schedule pause --id TASK_ID
-python agent-session-control.py schedule resume --id TASK_ID
-python agent-session-control.py event create --file examples/session-control/event-rule.json
-python agent-session-control.py event test --id RULE_ID --file examples/session-control/test-event.json
-python agent-session-control.py execution list --id TASK_ID
+python app/agent-session-control.py schedule create --file examples/session-control/schedule.json
+python app/agent-session-control.py schedule list
+python app/agent-session-control.py schedule run --id TASK_ID --wait --timeout 120
+python app/agent-session-control.py schedule pause --id TASK_ID
+python app/agent-session-control.py schedule resume --id TASK_ID
+python app/agent-session-control.py event create --file examples/session-control/event-rule.json
+python app/agent-session-control.py event test --id RULE_ID --file examples/session-control/test-event.json
+python app/agent-session-control.py execution list --id TASK_ID
 ```
 
 trigger 类型：`at`（有 UTC offset 的 ISO 时间）、`after`（seconds）、`interval`（seconds≥60）、`daily/weekdays`（time）、`weekly`（time、weekdays=ISO 1–7）、`monthly`（time、days=1–31）、`cron`（expression，五字段数字语法及 `* / , -`）。日历规则 time_zone 默认 Asia/Shanghai；周期 interval 保存 anchor。每月不存在的日期和 DST 不存在时间跳过，重复本地时间取较早一次。

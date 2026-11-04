@@ -1,6 +1,6 @@
 # 改动审查 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-22（覆盖至：当前工作区；执行记录携带 ui、插件样式先于上屏、性能基准范围、存储 v2 与四态诊断、pending 恢复）
+- 版本：2026-11-02（覆盖至：当前工作区；存储 v2 与四态诊断、pending 恢复、**工作区差分默认关闭**）
 - 用途：**逐条审查功能与现象是否符合需求**。每条用例给出「触发 → 预期现象 → 规则与边界 → 依据」。审查时按编号逐条勾选；如有不符，反馈编号即可。
 - 适用插件：`plugins/change-review`（store.py / host.py / runtime.py / web/change-review.js）
 - 所属：能力扩展加载模块 → 插件子系统 → 内置插件实例（本文件夹 08；配套通则见 01–07）
@@ -29,6 +29,7 @@
 2. 改动可以安全撤销（并可恢复），有冲突保护，不会误删文件。
 
 **明确的非目标 / 已知边界**（详见 §9）：
+- **工作区差分默认关闭**：默认只统计声明式文件工具（`write_file / edit_file / apply_patch / delete_file`）。shell / 脚本 / MCP / 外部编辑器的落盘改动不进入审查，除非显式设置 `MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP=1`（见 UC-121）；
 - 非 Git 工作根下、经 shell/脚本/MCP 的改动不在观测面（全量扫描方案已撤除）；
 - 不做跨 run 的自动累计（各轮各自结算，用户此前拍板的边界）；
 - 不跟踪 `temporary=True` 文件（全程隐身，见 UC-107）。
@@ -58,7 +59,7 @@
 | **effective** | 相对本轮起点是否还有净变化；改回原样 = `false`（界面上整条消失） |
 | **reverted** | 已被撤销；界面上显示"已撤销"并可恢复 |
 | **dropped** | 历史被修剪、永远不可再操作；其快照字节可被回收 |
-| **temporaries（登记表）** | `temporary=True` 写入时登记"隐身路径"，三处采集源（Git 扫描 / 声明路径 / 删除）一律静默（见 UC-107） |
+| **temporaries（登记表）** | `temporary=True` 写入时登记"隐身路径"，三处采集源（声明路径 / 目录删除 / Git 扫描）一律静默；Git 扫描默认关闭（见 UC-107、UC-121） |
 | **diff_omitted_reason** | 行数未统计的原因：`binary` / `too_large_bytes` / `too_many_lines` / `too_complex` / `directory` |
 | **存储** | 会话目录下 `change_reviews/index.json` + `blobs/`（sha256 压缩块）+ `baselines/*.zip`；索引含 `deferred_sweeps` 补扫义务和 `review_events` 待交付事件 |
 
@@ -69,12 +70,13 @@
 ### UC-101 Git 仓库 · tracked / 未忽略文件 · 任意工具修改
 - **触发**：run 内任何工具（含 run_shell、脚本、MCP、Plugin）改动 Git 仓库里 tracked 或未忽略的未跟踪文件。
 - **预期现象**：文件出现在审查列表，`+x −y` 与 `git diff --numstat` 一致；该行也可撤销。
-- **规则与边界**：每官方用户轮首次采集时用 `git ls-files -co --exclude-standard` 建立基线。声明式文件工具在批次末尾比对工作区；shell/MCP/插件外部工具仍逐次比对，详见 UC-116。
+- **规则与边界**：**需开启工作区差分**（`MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP=1`）；默认关闭时本条不成立，shell/MCP 改动一律不可见（UC-121）。开启后每官方用户轮首次采集时用 `git ls-files -co --exclude-standard` 建立基线。声明式文件工具在批次末尾比对工作区；shell/MCP/插件外部工具仍逐次比对，详见 UC-116。
 - **依据**：`store.py::_git_inventory / _ensure_workspace_baseline / finish_capture`；探针 A / C / J 场景。
 
 ### UC-102 Git 仓库 · 未忽略新文件 · shell/脚本创建
 - **触发**：run_shell 或脚本在 Git 仓库新建未忽略文件。
 - **预期现象**：记录为 `create +N −0`。
+- **规则与边界**：同 UC-101，需开启工作区差分；默认关闭时不可见。
 - **依据**：`finish_capture` 工作区扫描；探针 C 场景。
 
 ### UC-103 Git 仓库 · 被忽略文件 · 原生文件工具
@@ -97,7 +99,7 @@
 ### UC-106 非 Git 工作根 · shell / 脚本 / MCP
 - **触发**：非 Git 根下经 shell/脚本/MCP 的改动。
 - **预期现象**：**不可见**（当前最大盲区）。
-- **规则与边界**：全量扫描方案曾填补此缺口、后按决策撤除（成本约 2s/步 + 复杂度）。**这是取舍，不是故障**。
+- **规则与边界**：全量扫描方案曾填补此缺口、后按决策撤除（成本约 2s/步 + 复杂度）。**这是取舍，不是故障**。工作区差分默认关闭时（UC-121），Git 根下的 shell/MCP 也同样是盲区——默认行为不再区分两者。
 - **依据**：探针 D 场景。
 
 ### UC-107 temporary=True 写入
@@ -147,13 +149,13 @@
 
 ### UC-115 MCP / Plugin 工具（observe_workspace）
 - **触发**：MCP/插件工具执行（带 `observe_workspace=True`）。
-- **预期现象**：与 shell 同级——Git 仓库可见、非 Git 不可见。
+- **预期现象**：开启工作区差分后与 shell 同级——Git 仓库可见、非 Git 不可见；默认关闭时只产生 `coverage=unavailable` 诊断，不产生改动行。
 - **依据**：`agent_loop.py` 采集挂接；`test_runtime_callback_can_observe_an_unknown_external_tool`。
 
 ### UC-116 声明式文件工具批次合并扫描
 - **触发**：同一 ReAct 工具批次内连续执行 `write_file/edit_file/apply_patch/delete_file`，含流式提前启动的完整工具调用。
 - **预期现象**：每次工具结束仍立即保存声明路径的真实状态和差分；工作区枚举/签名检查合并到批次边界一次执行。批次内未声明的外部变动在补扫时出现，不因合并失去撤销/恢复能力。
-- **规则与边界**：只有宿主显式标记批次活动时才延后；直接 store 调用默认仍逐次扫。shell/MCP/插件工具前先完成已有义务，完成后仍逐次扫；不按 1 秒 TTL 跳过扫描，不假设声明之外不会修改。声明路径即使晚于外部改动，也立即采用该轮权威基线起点；临时路径毕业和忽略文件保持原规则。工作区扫尾仍枚举全部 Git 可见路径，只减少频率，不是 watcher 增量扫描。
+- **规则与边界**：只有宿主显式标记批次活动时才延后；直接 store 调用默认仍逐次扫。shell/MCP/插件工具前先完成已有义务，完成后仍逐次扫；不按 1 秒 TTL 跳过扫描，不假设声明之外不会修改。声明路径即使晚于外部改动，也立即采用该轮权威基线起点；临时路径毕业和忽略文件保持原规则。工作区扫尾仍枚举全部 Git 可见路径，只减少频率，不是 watcher 增量扫描。**工作区差分默认关闭（UC-121）**：关闭时批次边界只保存声明路径，不登记补扫义务，也不建立基线。
 - **依据**：`agent_loop.py::_react_node_once` 批次/下一迭代/退出边界、`runtime.py::before_native_file_tool / after_native_file_tool`、`store.py::finish_capture / _sweep_workspace`；`test_declared_batch_sweeps_once_and_preserves_external_undo`、`test_deferred_declared_row_already_uses_turn_origin`、`test_runtime_external_tool_is_batch_boundary_and_logs_breakdown`。
 
 ### UC-117 完整签名检查与可选并行
@@ -166,7 +168,7 @@
 ### UC-118 显式大工作区上限
 - **触发**：用户配置 `MYAGENT_CHANGE_REVIEW_MAX_WORKSPACE_FILES=N`，Git inventory 文件数超过 N。
 - **预期现象**：跳过首次基线字节归档和后续 workspace sweep，只保存声明路径审查；界面明确警告覆盖范围收缩。默认 0 表示无限制。
-- **规则与边界**：此开关是用户主动选择的止血策略，可能遗漏 shell/MCP/插件和未声明路径改动；不可静默默认开启。Git 枚举仍执行才能判断文件数；因此不是大目录枚举成本的全解。行数省略阈值与本开关不同，前者不缩小捕获范围。
+- **规则与边界**：此开关是用户主动选择的止血策略，可能遗漏 shell/MCP/插件和未声明路径改动；不可静默默认开启。**仅在工作区差分开启时有意义**（UC-121 默认关闭，此时本来不建基线、不枚举）。Git 枚举仍执行才能判断文件数；因此不是大目录枚举成本的全解。行数省略阈值与本开关不同，前者不缩小捕获范围。
 - **依据**：`store.py::_inventory / _ensure_workspace_baseline`、`runtime.py::coverage_notice`、`test_workspace_limit_skips_first_baseline_but_keeps_declared_review`。
 
 ### UC-119 审查耗时可归因
@@ -180,6 +182,16 @@
 - **预期现象**：`scripts/benchmark_change_review.py` 在临时 Git 工作区中分别报告首次采集与稳定态的“工具 N 后采集 + 工具 N+1 前采集”耗时；可选报告声明式写入批次的捕获加补扫耗时与 inventory 调用次数，以及串行/4/8 线程签名耗时和输出一致性。可通过 `--baseline-store` 做改动前后比较、`--current-first` 反转顺序检查缓存顺序影响，并用 `--report` 保存 JSON。
 - **规则与边界**：这是 store 层合成微基准，不启动 Agent 主循环，不调用 LLM、实际工具执行或宿主 UI 投递；批次口径也排除文件写入本身。`--target-ms` 默认 500 仅用于当前实现相邻边界最大值的脚本退出码，不是产品 SLA。磁盘缓存、机器负载、样本数和 A/B 顺序都会影响结果；基准结果只支持对应 store 路径的局部判断，不能推导 Agent 整体轮间耗时或收益倍率。数据和已知限制见 [09/05 §4.6](../09-横切能力/05-性能优化基线与已完成项方案设计-UseCase清单.md)。
 - **依据**：`scripts/benchmark_change_review.py::measure / measure_batches / measure_signatures`；`.analysis/change-review-20261005/benchmark-1000.json`、`benchmark-1000-reverse.json`、`benchmark-4295.json`、`benchmark-4295-current-breakdown.json`。
+
+### UC-121 工作区差分默认关闭（共享工作根的安全默认）
+- **触发**：任意会话执行工具（默认配置）。
+- **预期现象**：只记录声明式文件工具的行；shell/脚本/MCP/插件/外部编辑器的落盘改动不出现，也不计入徽标；撤销只作用于声明路径，不会覆盖同目录其他会话的写入。
+- **规则与边界**：
+  - 开关 `MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP=1`（可写入 `app/.env`，需重启后端）恢复 UC-101 / UC-102 / UC-115 的 Git 工作区观测；默认 `0`。
+  - 关闭时不建立每轮工作区基线（`baselines/` 为空）、不执行 `git ls-files`、不登记 `deferred_sweeps`；旧会话遗留的补扫义务在下一次 flush 时退役，旧基线随 `finish_other_runs` 清理。
+  - 覆盖状态：声明式工具为 `declared_paths`；shell/MCP/插件为 `unavailable`（内部诊断，面板只呈现真实失败）。
+  - 历史记录不受影响：已生成的记录仍可撤销/恢复；之后不再新增工作区差分产生的行。
+- **依据**：`store.py::_workspace_sweep_enabled / _create_workspace_baseline / finish_capture / flush_deferred_sweeps`；`test_workspace_sweep_is_off_by_default`、`test_workspace_sweep_opt_in_keeps_git_observation`、`test_disabled_sweep_retires_legacy_obligations`、`test_disabled_sweep_recovery_reports_coverage_not_failure`、`test_runtime_reports_unavailable_when_sweep_is_off`。
 
 ---
 
@@ -405,6 +417,7 @@
 ### UC-701 非 Git / 忽略文件的 shell 盲区
 - **现象**：这类改动在审查中完全不可见（见 UC-104 / UC-106）。
 - **定性**：**已知取舍**（全量扫描因成本与复杂度撤除；四家参考实现同样不做全量扫描）。不计入"故障"。
+- **默认口径**：工作区差分默认关闭（UC-121）后，盲区包含所有 shell / MCP / 外部写入（Git 与非 Git 根一致）；开启 `MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP=1` 后收缩为 UC-104 / UC-106 描述的两种情况。
 - **可选项**：后续若要覆盖，需按工具级捕获或影子快照方案重新设计。
 
 ### UC-702 大文件只"未统计行数"，不失去撤销
@@ -438,6 +451,7 @@
 | UC-115 | `test_runtime_callback_can_observe_an_unknown_external_tool` |
 | UC-116~119/506 | `test_declared_batch_sweeps_once_and_preserves_external_undo`、`test_deferred_sweep_recovers_and_outbox_retries_until_ack`、`test_deferred_declared_row_already_uses_turn_origin`、`test_runtime_delivery_failure_keeps_retryable_outbox`、`test_pending_sweep_and_delivery_survive_baseline_cleanup_and_prune`、线程/上限/日志专项 |
 | UC-120 | `scripts/benchmark_change_review.py`；§4.6 独立 store A/B 原始 JSON 报告 |
+| UC-121 | `test_workspace_sweep_is_off_by_default`、`test_workspace_sweep_opt_in_keeps_git_observation`、`test_disabled_sweep_retires_legacy_obligations`、`test_disabled_sweep_recovery_reports_coverage_not_failure`、`test_runtime_reports_unavailable_when_sweep_is_off` |
 | UC-201/202 | `probe_change_review_stats.py`、`run_patch_identity_probe.py` |
 | UC-301~309 | `test_create_modify_delete_and_undo`、`test_batch_conflict_*`、`test_undo_api_*`、`probe_cross_run_undo.py` |
 | UC-401~408 | `test_undo_then_restore_round_trip`、`test_restore_*`、`test_prepared_restore_*` |

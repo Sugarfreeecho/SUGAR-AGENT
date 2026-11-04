@@ -1,6 +1,6 @@
 # SugarAgent
 
-会话与自动化 CLI：[`agent-session-control.py`](agent-session-control.py)，连接现有后端，支持会话控制、System Prompt/工具配置、定时任务及事件规则。见[使用说明](docs/session-control.md)和[接口迁移清单](docs/session-control-migration.md)。
+会话与自动化 CLI：[`app/agent-session-control.py`](app/agent-session-control.py)，连接现有后端，支持会话控制、System Prompt/工具配置、定时任务及事件规则。见[使用说明](docs/session-control.md)和[接口迁移清单](docs/session-control-migration.md)。
 
 > **Self-Upgrading General Agent Runtime**
 >
@@ -415,9 +415,9 @@ npm run install:hooks
 | `glob` | 文件名模式匹配搜索 |
 | `grep` | 文件内容正则搜索 |
 | `run_shell` | 执行 Shell 命令（超时、截断、路径限制、egress 出口控制） |
-| `web_search` | 网络搜索 |
-| `web_fetch` | 抓取网页文本（SSRF 防护） |
-| `web_download` | 下载文件（大小限制） |
+| `web_search` | 网络搜索（由 `web-search-providers` 插件提供） |
+| `web_fetch` | 抓取网页文本（SSRF 防护，由 `web-search-providers` 插件提供） |
+| `web_download` | 下载文件（大小限制，由 `web-search-providers` 插件提供） |
 | `activate_skill` | 加载技能说明 |
 | `update_todo` | 更新 Todo 计划 |
 | `context_manage` | 上下文压缩与编辑 |
@@ -573,7 +573,23 @@ Chat Completions 将工具图片抽取到连续工具结果之后的 user 消息
 | `LLM_STREAM_COALESCE_MS` | `12` | 流式文本增量合并窗口（首 token 立即推送） |
 | `EXECUTION_METRICS_FLUSH_DELAY_MS` | `200` | 执行指标防抖写盘延迟 |
 | `RUNTIME_OBSERVABILITY_FLUSH_DELAY_MS` | `200` | 可观测性防抖写盘延迟 |
-| `LLM_FULL_CALL_TRACE` | `0` | 调试用完整请求/响应日志 |
+| `LLM_FULL_CALL_TRACE` | `0` | 调试用完整请求/响应日志；需同时设置 `LOG_PAYLOAD_MODE=full` 才生效 |
+
+### 日志配置
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `LOG_PAYLOAD_MODE` | `off` | 日志正文策略：`off` 只记录长度/哈希/结构；`digest` 额外记录每段正文首行；`full` 记录完整正文（仅临时排障） |
+| `LOG_PAYLOAD_PREVIEW_CHARS` | `0` | `full` 模式下单段正文上限，0 表示沿用 `LOG_TRUNCATE_KEEP_CHARS` |
+| `LOG_LINE_MAX_CHARS` | `2000` | 单行兜底上限，超出或多行消息在写入前压成摘要 |
+| `LOG_MAX_BYTES` | `8388608` | 单文件轮转阈值（8 MiB），0 关闭轮转 |
+| `LOG_BACKUP_COUNT` | `2` | 轮转保留的旧文件份数 |
+| `LOG_RETENTION_DAYS` | `14` | 启动时盘点超过该天数的会话日志 |
+| `LOG_TOTAL_MAX_MB` | `512` | 会话日志目录总量上限 |
+| `LOG_PRUNE_MODE` | `report` | `report` 只记录可清理清单；`delete` 才会真正删除 |
+| `AGENT_LOG_TIMING` | `summary` | `summary` 把逐事件的 `event_delivery` 按 run 聚合；`detail` 逐条；`off` 关闭 |
+| `AGENT_LOG_TIMING_SLOW_MS` | `500` | `summary` 模式下超过该毫秒数的操作仍单独留一条 |
+| `LOG_TRUNCATE_KEEP_CHARS` | `200` | 仅 `LOG_PAYLOAD_MODE=full` 时的日志正文截断长度 |
 
 ### 安全与恢复配置
 

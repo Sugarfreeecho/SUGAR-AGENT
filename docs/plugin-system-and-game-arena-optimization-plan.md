@@ -990,6 +990,9 @@ plugins/
 - Execution Dashboard 已迁为独立 Web/UI 导航插件，主 Vite 入口和主 Web 路由不再包含看板页面；
 - DuckDuckGo、Brave、Tavily、SearXNG、Jina 已迁到 `web-search-providers`，核心 `web_search` 只调用
   Search Provider Registry，不再按厂商分支；
+- `web_fetch` / `web_download` 于插件 1.2.0 一并迁入 `web-search-providers`
+  （`plugins/web-search-providers/web_tools.py`），核心不再内置同名工具；
+  `session_control` 的 URL 约束白名单同步接受该插件的 `host_service` 声明；
 - 插件动态启停、安装、卸载和重载会统一协调 Worker、后台服务及可信内置生命周期；普通外部 Manifest
   无法自我授予 `trusted_host`。
 

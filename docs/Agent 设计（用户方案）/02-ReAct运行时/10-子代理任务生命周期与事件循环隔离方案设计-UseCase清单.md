@@ -1,6 +1,6 @@
 # 子代理任务生命周期与事件循环隔离 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-21 v7（继承等待式模型事实与Hook准备隔离）
+- 版本：2026-11-02 v8（共享心跳不阻塞子代理事件交付）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/agent_subagent.py`（`_BackgroundSubagentLoop`、`SubagentTaskRegistry`、`_execute_subagent_run`）、`app/agent_subagent_events.py`、`app/agent_loop.py`（`_run_react_node_off_loop`）、`app/webui.py`（取消入口）、`tests/test_agent_subagent_runtime_v2.py`。
 - 上级：`00-ReAct运行时整体设计.md`
@@ -39,7 +39,7 @@
 
 ### UC-2J5 后台运行的事件与结果通道
 - **触发**：后台任务运行中产生事件、完成或失败。
-- **预期现象**：子事件照常持久化到子会话（可独立回放；运行期约每 15 秒刷新一次子代理心跳状态）；不再向父流实时转发（父循环可能已关闭）；启动瞬间仍向父级发一次 `subagent_start`；完成/失败以 pending 结果 + 任务行状态呈现。
+- **预期现象**：子事件照常持久化到子会话（可独立回放；运行期由共享指标心跳约每 15 秒刷新存活状态，见 UC-2J14）；不再向父流实时转发（父循环可能已关闭）；启动瞬间仍向父级发一次 `subagent_start`；完成/失败以 pending 结果 + 任务行状态呈现。
 - **规则与边界**：实时转发仅限前台运行（`not run_in_background` 门控）；后台的“可见性”由子会话流与待处理结果承担，不依赖父级回调存活。
 - **依据**：`_execute_subagent_run::child_emit`（转发门控）、`_append_parent_pending_result`、`agent_subagent_events.py::should_forward_subagent_event_to_parent`。
 
@@ -90,8 +90,8 @@
 ### UC-2J13 子代理交付复用主循环的耐久优化
 
 - **触发**：`task`创建或续跑子代理，前台独立Task或后台持久loop接收执行结果。
-- **预期现象**：`child_emit`启用`commit_ui=True`，以现有journal/UI单事务提交后再发布；已完成工具结果通过`emit.tool_batch`在同一短事务提交，保持逐条公开事件及原顺序。子页与父级均不接收私有提交回执。每个子代理的交付锁串行化自己的事件；心跳及非组合UI写在线程中执行，但仍等待完成。真实子run ID同时用于共同ReAct state、请求trace、模型事实和指标，新run有独立start/finish；收尾另记`subagent_finalize_before_metrics_ms`与`subagent_metrics_finish`，不冒用主入口完整run_finalize包络。
-- **规则与边界**：只合并已经完成的结果，不等未完成工具凑批。严格模式下整批成功才公开，部分失败不公开成功批次，取消守卫阻止后续行。已开始的心跳、普通UI写及指标注册/结束必须收敛后再完成取消，避免线程晚到覆盖终态或遗留心跳。Legacy/非严格模式、非工具事件及不支持组合提交的manager保留逐条路径。仍在下一API前完成事实提交；状态ID复用既有预约身份，没有另建所有权或跨loop搬迁MCP。后台不调用已关闭父loop的emit。ReAct返回`_run_error`即失败，即使有展示文案也不能标成成功。
+- **预期现象**：`child_emit`启用`commit_ui=True`，以现有journal/UI单事务提交后再发布；已完成工具结果通过`emit.tool_batch`在同一短事务提交，保持逐条公开事件及原顺序。子页与父级均不接收私有提交回执。每个子代理的交付锁串行化自己的事件；非组合UI写在线程中执行，但仍等待完成。运行期心跳由 UC-2J14 的共享泵承担，不再在事件前重复写 metadata。真实子run ID同时用于共同ReAct state、请求trace、模型事实和指标，新run有独立start/finish；收尾另记`subagent_finalize_before_metrics_ms`与`subagent_metrics_finish`，不冒用主入口完整run_finalize包络。
+- **规则与边界**：只合并已经完成的结果，不等未完成工具凑批。严格模式下整批成功才公开，部分失败不公开成功批次，取消守卫阻止后续行。已开始的普通UI写及指标注册/结束必须收敛后再完成取消，避免线程晚到覆盖终态或遗留心跳；共享心跳另按 UC-2J14 防止终态复活。Legacy/非严格模式、非工具事件及不支持组合提交的manager保留逐条路径。仍在下一API前完成事实提交；状态ID复用既有预约身份，没有另建所有权或跨loop搬迁MCP。后台不调用已关闭父loop的emit。ReAct返回`_run_error`即失败，即使有展示文案也不能标成成功。
 - **依据**：`agent_subagent._execute_subagent_run / deliver_child_events / _await_subagent_write / _finish_subagent_metrics`；新增`tests/test_subagent_performance_paths.py`覆盖独立run、真实前后台HTTP、组合提交、部分失败/取消、心跳让出loop与终态顺序。最终定向组合114 passed（含本批15项及原子代理/指标/MCP/权限UI等），扩大组合与修正的测试夹具分开记录；完整负载、严格端点和达标限制见[10-21子代理补修报告](../../performance/agent-subagent-interround-2026-10-21.md)。
 
 #### UC-2J13 补充：共用底层一次追加
@@ -101,6 +101,13 @@
 #### UC-2J13 补充：继承事实线程提交和Hook准备
 
 task子代理继续调用共享ReAct，因此普通助手中间消息、已完成工具单条/批次检查点继承08/03 UC-8C10的等待式线程提交和取消回执，Hook继承06/07的整组后台准备；请求线程也继承有界send_paths。没有按主/子另写一套事实规则。675项组合包含实际前后台非流式loopback、子run身份、取消、工具事实和恢复验证；这不是新生产子任务的500ms验收。子入口delta队列、初始历史和部分终态依然不同，不能说全生命周期性能完全一致。实现和待真实加载结果见[报告§13](../../performance/agent-subagent-interround-2026-10-21.md#13-事实提交与hook准备的事件循环隔离补修)。
+
+### UC-2J14 共享运行心跳不作为事件交付前置条件
+
+- **触发**：前台或后台子代理交付状态、delta、工具结果及终稿。
+- **预期现象**：`execution_metrics.start_run(child_id, run_id, "subagent", …)` 已登记的进程级约15秒心跳泵维护存活信息；交付锁内不再追加 `patch_subagent_metadata` 心跳等待。即使 metadata 写入慢，工具批次也不为重复心跳停顿。
+- **规则与边界**：共享泵按 child/run 精确登记，finish/cancel 注销控制，晚到 pulse 不使终态恢复 running。开始和终结的 metadata 生命周期提交仍等待完成；原始 `subagent_run_heartbeat_at` 是最近生命周期快照，不再承诺每15秒改写该字段。列表优先读取共享 observability 的运行心跳，缺失时回退 metadata；本地所有权、孤儿对账和取消不靠该字段的年龄决定。UI/journal、普通模型事实及初始用户轮的耐久边界均保留，不新增游离写任务。
+- **依据**：`agent_subagent._execute_subagent_run`、`execution_metrics.start_run / _heartbeat_pump / finish_run`、`SessionManager.list_subagents_flat`；`tests/test_subagent_shared_heartbeat.py`、`tests/test_subagent_performance_paths.py`；实测和限制见[11-02报告](../../performance/subagent-heartbeat-and-schema-cache-2026-11-02.md)。UC-2J13 的114项为10-21历史验证，不代表本批门禁。
 
 ## 3. 事件与状态不变式
 
@@ -120,6 +127,8 @@ task子代理继续调用共享ReAct，因此普通助手中间消息、已完�
 3. 本批通知查询回归 `tests/test_agent_harness_reconcile.py`：**40 passed**；验证精确 run 过滤、旧调用回退及空队列提前返回。该组与上方子代理生命周期组分别记录，不混作一次全量测试。
 
 ## 5. 版本记录
+
+- 2026-11-02 v8：移除子代理事件交付锁内的重复 metadata 心跳；明确共享泵、原始字段快照及终态/取消边界，补充 UC-2J14。
 
 - 2026-10-21 v7：补录task通过共享ReAct继承等待式普通模型事实、成功回执/取消收敛、Hook整组准备和发送细分；保持独立delta/历史/终态及未生产验收边界。
 

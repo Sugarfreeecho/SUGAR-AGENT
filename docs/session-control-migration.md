@@ -4,12 +4,14 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| agent-session-control.py | 独立 cwd 的 CLI 引导 |
+| app/agent-session-control.py | 独立 cwd 的 CLI 引导 |
 | app/session_control/cli.py、client.py | 参数、认证凭据、HTTP、等待、NDJSON、归档传输 |
 | api.py | RPC、事件、登录/配对、Webhook、归档 HTTP 接口 |
 | service.py、coordinator.py | 公共查询/命令服务、持久入箱消费、共享启动租约、运行结果对账 |
+| monitors.py、resources.py | 单一监控调度器、引用计数、共享目录快照、有界工作池、来源公平派发与容量预算 |
 | public.py | 宿主插件客户端、后端事件循环桥、受限来源身份、业务绑定、执行观察及生命周期回调 |
 | settings_api.py、notifications.py | 原生设置页的本机同源适配、时区解析及持久任务通知 |
+| model_tools.py | 模型定时任务查询/管理工具、可信会话身份、执行上限继承，与原生设置页共用任务 |
 | policy.py | 真实身份、任务范围、委派上限、撤销检查 |
 | configuration.py、integration.py | Prompt/工具/参数解析、配置版本、每 turn 快照、执行边界与宿主集成 |
 | store.py | 应用级 SQLite WAL，幂等请求、事件消费及提交回执 |
@@ -39,6 +41,7 @@
 | --- | --- | --- |
 | webui 的 /sessions、/chat、continue/recover | 新旧入口共用 SessionManager、Runtime V2 和 SessionExecutionCoordinator；未连接浏览器的 after_turn 追问由后端入箱接管 | 原 HTTP/SSE 格式不变；已有活跃 UI run 继续原流消费器 |
 | 设置中心「定时任务」 | 本机同源适配转接公共服务，与 CLI 共用自动化定义、执行台账和运行配置 | 表单、通知策略、时区与恢复行为见 [设置页说明](schedule-settings.md)；不在浏览器调度 |
+| 模型定时任务工具 | scheduled_tasks / manage_scheduled_task 调用同一 automation 服务，模型创建后设置页直接可见 | 查询与写入分离；当前身份及工具预算限制继续生效；人工编辑保留创建来源身份 |
 | remote_control gateway | 网关安装时转接公共 service.execute；device/approval/audit 转交原服务 | 原配对、审计、审批、WebSocket 格式保留；新 CLI 不依赖远控开关 |
 | 飞书 | 公共传输代理提交 queue；message ID 去重；插件 SQLite 保存 operation、游标及待投递回复 | SDK 长连接仍由插件持有；投递失败退避重试，重连沿用原操作与回复去重标识；不依赖远控开关 |
 | ACP | stdio 桥使用带身份的 RPC、持久 operation 流及精确取消；MCP 挂载独立鉴权和连接所有权 | 保留标准 ACP 协议与插件 MCP 连接；默认不向委派进程转交个人控制凭据 |
