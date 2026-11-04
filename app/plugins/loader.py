@@ -28,6 +28,11 @@ from .security import (
     safe_plugin_path,
 )
 
+try:  # ``app`` on sys.path (script mode) vs package import
+    from ..tray_slot import validate_tray_slots
+except ImportError:  # pragma: no cover - flat import fallback
+    from tray_slot import validate_tray_slots  # type: ignore[no-redef]
+
 
 MANIFEST_MARKERS: Tuple[Tuple[str, str], ...] = (
     (".myagent-plugin", "native"),
@@ -840,6 +845,15 @@ def load_plugin(path: Path | str) -> PluginDefinition:
     if not isinstance(requested_system_builtin, bool):
         warnings.append("system_builtin must be a boolean; treating the plugin as user-visible")
         requested_system_builtin = False
+
+    capabilities = manifest.get("capabilities")
+    declared_ui = capabilities.get("ui") if isinstance(capabilities, Mapping) else None
+    if isinstance(declared_ui, Mapping) and "tray" in declared_ui:
+        # Tray rows are executed by the tray process, not by the backend, but
+        # their shape is validated here so mistakes surface as plugin warnings
+        # instead of a silently missing menu item.
+        errors = validate_tray_slots(declared_ui.get("tray"))
+        warnings.extend(errors)
 
     unsupported = sorted(set(unsupported))
     if source_format == "native" and not unsupported:

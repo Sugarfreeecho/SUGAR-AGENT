@@ -30,7 +30,7 @@
 }
 .agent-goal-panel-host .chat-goal-objective:focus-visible { outline:1px solid var(--accent-2); outline-offset:2px; border-radius:3px; }
 .agent-goal-panel-host .chat-goal-actions {
-    display:flex; align-items:center; gap:.25rem; margin-top:.3rem;
+    display:flex; align-items:center; flex-wrap:wrap; gap:.25rem; margin-top:.3rem;
     /* 常驻：Goal 描述再长，操作按钮也不跟着被顶到可视区外——贴在会话状态浮层的
        可视底边（滚动容器是 .pubar-panes），卡片滚到底时自然回落到原位。
        底色取浮层同一块 --floating-surface，正文从下面穿过时不会透字。 */
@@ -48,6 +48,21 @@
 .agent-goal-panel-host .chat-goal-stats-btn { color:var(--accent-2); margin-right:auto; }
 .agent-goal-panel-host .chat-goal-icon-btn svg { width:.82rem; height:.82rem; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .agent-goal-panel-host .chat-goal-icon-btn svg[hidden] { display:none; }
+.agent-goal-panel-host .chat-goal-icon-btn:disabled,
+.agent-goal-panel-host .chat-goal-icon-btn:disabled:hover { opacity:.6; cursor:wait; transform:none; }
+.agent-goal-panel-host .chat-goal-action-spinner {
+    width:.72rem; height:.72rem; border:1.5px solid currentColor; border-right-color:transparent;
+    border-radius:50%; animation:goal-action-spin .8s linear infinite;
+}
+.agent-goal-panel-host .chat-goal-action-spinner[hidden],
+.agent-goal-panel-host .chat-goal-action-feedback[hidden] { display:none; }
+.agent-goal-panel-host .chat-goal-action-feedback {
+    flex:1 0 100%; min-width:0; font:500 .66rem/1.45 var(--sans); color:var(--text-secondary); overflow-wrap:anywhere;
+}
+.agent-goal-panel-host .chat-goal-action-feedback[data-kind="success"] { color:var(--green-accent,var(--text-primary)); }
+.agent-goal-panel-host .chat-goal-action-feedback[data-kind="error"] { color:var(--red-accent,#f38ba8); }
+@keyframes goal-action-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .agent-goal-panel-host .chat-goal-action-spinner { animation:none; } }
 .agent-goal-panel-host .chat-goal-icon-btn:hover { color:var(--text-primary); border-color:var(--accent-2); background:rgba(137,180,250,.13); transform:translateY(-1px); }
 .agent-goal-panel-host .chat-goal-icon-btn--danger:hover { color:#f38ba8; border-color:rgba(243,139,168,.55); background:rgba(243,139,168,.12); }
 .agent-goal-panel-host .chat-goal-review-btn {

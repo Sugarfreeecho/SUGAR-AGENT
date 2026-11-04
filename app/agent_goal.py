@@ -52,6 +52,86 @@ def goal_result_status(goal: Optional[Dict[str, Any]]) -> Optional[str]:
     return "pending"
 
 
+# Model-facing Goal projection. The durable record also keeps host-only
+# bookkeeping: one idempotency key per accounted LLM call (``accounted_*_ids``,
+# up to 2048 entries) and the raw Judge payload. Serialising that into a tool
+# result costs tens of KB per call, dominates the context window, and pushes
+# the trailing fields (``updated_at``, ``elapsed_seconds``,
+# ``remaining_tokens``) past the tool-result truncation boundary. Models only
+# need counts plus the semantic fields below.
+MODEL_GOAL_FIELDS = (
+    "id",
+    "objective",
+    "status",
+    "pause_reason",
+    "token_budget",
+    "used_tokens",
+    "remaining_tokens",
+    "elapsed_seconds",
+    "version",
+    "run_count",
+    "continuation_count",
+    "consecutive_failures",
+    "last_error",
+    "blocked_streak",
+    "blocked_fingerprint",
+    "blocker_key",
+    "blocked_reason",
+    "next_retry_at",
+    "judge_count",
+    "last_judge_verdict",
+    "last_judge_reason",
+    "last_judged_at",
+    "review_status",
+    "review_feedback_pending",
+    "updated_by",
+    "last_run_id",
+    "created_at",
+    "updated_at",
+)
+
+
+def model_goal_view(goal: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Project a durable Goal record to the compact view a model needs.
+
+    ``accounted_usage_ids`` and friends become plain counts; ``last_judge_raw``,
+    ``last_judge_diagnostics`` and the duplicated ``review_judge_result`` are
+    dropped, except for pending human-review feedback, which is truncated.
+    """
+    if goal is None:
+        return None
+    if not isinstance(goal, dict) or not goal.get("id"):
+        return {}
+    view: Dict[str, Any] = {field: goal.get(field) for field in MODEL_GOAL_FIELDS}
+    if "remaining_tokens" not in goal:
+        budget = goal.get("token_budget")
+        view["remaining_tokens"] = (
+            None if budget is None else max(0, int(budget) - int(goal.get("used_tokens") or 0))
+        )
+    if view.get("blocked_streak") is None:
+        view["blocked_streak"] = 0
+    if view.get("last_error"):
+        view["last_error"] = str(view["last_error"])[:500]
+    review_feedback = str(goal.get("review_judge_result") or "").strip()
+    if goal.get("review_feedback_pending") and review_feedback:
+        view["review_feedback"] = review_feedback[:2000]
+    for flag in (
+        "completion_pending_judge",
+        "completion_judge_requested",
+        "completion_request_duplicate",
+        "blocker_report_recorded",
+        "blocker_report_terminal",
+    ):
+        if goal.get(flag):
+            view[flag] = True
+    if goal.get("required_blocked_streak") is not None:
+        view["required_blocked_streak"] = int(goal["required_blocked_streak"])
+    view["accounted_usage_count"] = len(goal.get("accounted_usage_ids") or [])
+    view["accounted_run_count"] = len(goal.get("accounted_run_ids") or [])
+    view["accounted_judge_run_count"] = len(goal.get("accounted_judge_run_ids") or [])
+    return view
+
+
 def _track_goal_state(
     session_id: str,
     goal: Optional[Dict[str, Any]],

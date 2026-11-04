@@ -439,16 +439,27 @@ class Workflow:
             slot = "dm:" + uid if channel == "dm" else "public"
             if slot in self.workers:
                 if channel == "dm":
-                    await asyncio.to_thread(self.attach_dm, job)
+                    await self.h._io_pool().run(self.h.PLUGIN_ID, self.attach_dm, job)
                 continue
             if len(self.workers) >= 4:
+                break
+            pool = self.h._work_pool()
+            if not pool.available(self.h.PLUGIN_ID):
                 break
             if not self.store.admit(key, uid, cfg["cooldown"], cfg["per_hour"]):
                 self.store.defer(key, 30, "等待同人冷却或每小时额度")
                 continue
             if not self.store.claim(key):
                 continue
-            self.workers[slot] = asyncio.create_task(asyncio.to_thread(self.process, self.store.job(key)))
+            future = pool.try_submit(self.h.PLUGIN_ID, self.process, self.store.job(key))
+            if future is None:
+                self.store.finish(key, "retry", "等待宿主工作池容量", retry_delay=1)
+                break
+            self.workers[slot] = future
+            def cancelled(done, key=key):
+                if done.cancelled():
+                    self.store.finish(key, "retry", "等待重新启用插件后处理", retry_delay=1)
+            future.add_done_callback(cancelled)
 
     def attach_dm(self, job):
         from session_control.public import host_client

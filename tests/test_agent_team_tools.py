@@ -248,3 +248,36 @@ def test_workspace_lock_wait_cancellation_does_not_leak():
         lock.release()
 
     asyncio.run(scenario())
+
+
+def test_team_status_projects_message_bodies_and_task_results(tmp_path, monkeypatch):
+    from agent_team import tools as team_tools
+    from agent_team.service import AgentTeamService
+
+    monkeypatch.setenv("AGENT_TEAM_ENABLED", "1")
+    service = AgentTeamService(tmp_path)
+    monkeypatch.setattr(team_tools, "_service", lambda: service)
+    service.create_team("root", "Big team")
+    member = service.add_member("root", name="Coder", role="implementation")
+    service.create_task("root", title="Build", description="d" * 2000)
+    service.send_message(
+        "root", sender_id="lead", recipient_ids=[member["member_id"]], content="m" * 20000,
+    )
+
+    status = json.loads(
+        asyncio.run(team_tools.execute_team_tool({"action": "status"}, session_id="root"))
+    )["data"]
+    text = json.dumps(status, ensure_ascii=False)
+
+    assert status["status"] == "active"
+    assert status["members"][0]["member_id"] == member["member_id"]
+    assert status["task_counts"] == {"pending": 1}
+    assert status["message_counts"] == {"queued": 1}
+    assert status["messages"][0]["preview"].endswith("…")
+    assert "m" * 1000 not in text and "d" * 1000 not in text
+    assert len(text) < 4000
+
+    # Settings/UI reads keep the durable record; only the tool result is projected.
+    stored = service.read_team("root")
+    assert len(next(iter(stored["messages"].values()))["content"]) == 20000
+    assert len(next(iter(stored["tasks"].values()))["description"]) == 2000

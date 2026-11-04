@@ -17,6 +17,18 @@ class PluginWebManifest:
     api: bool
 
 
+def bundled_setup_page(plugin: PluginDefinition) -> bool:
+    """A host-shipped setup page may remain visible to enable its capability.
+
+    This grants static UI access only, never plugin runtime/API execution.
+    User manifests cannot opt themselves into the bundled trust boundary.
+    """
+    from .host import is_bundled_trusted_host_plugin
+    capabilities = plugin.raw_manifest.get("capabilities", {})
+    web = capabilities.get("web", {}) if isinstance(capabilities, Mapping) else {}
+    return isinstance(web, Mapping) and web.get("setup_when_disabled") is True and is_bundled_trusted_host_plugin(plugin)
+
+
 def _inside(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)

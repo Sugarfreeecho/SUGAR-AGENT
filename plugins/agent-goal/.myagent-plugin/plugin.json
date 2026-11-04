@@ -15,13 +15,6 @@
       "assets": "web"
     },
     "ui": {
-      "navigation": [
-        {
-          "id": "main",
-          "label": "Goals",
-          "order": 55
-        }
-      ],
       "message.renderer": [
         {
           "id": "judge-result",
@@ -124,17 +117,32 @@
               "path": "/last_judge_reason",
               "label": "Judge reason",
               "optional": true
+            },
+            {
+              "path": "/current_run_id",
+              "label": "Current run",
+              "optional": true
+            },
+            {
+              "path": "/run_count",
+              "label": "Run count",
+              "format": "number",
+              "optional": true
             }
           ]
         }
       ],
-      "details.tab": [
+      "settings.section": [
         {
           "id": "main",
-          "title": "Goals",
-          "description": "",
-          "scope": "session",
-          "order": 55
+          "title": "Goal 目标",
+          "description": "管理当前会话的目标、预算、Judge 与人工验收",
+          "target": "renderer",
+          "order": 55,
+          "renderer": {
+            "module": "settings.js",
+            "style": "settings.css"
+          }
         }
       ]
     }

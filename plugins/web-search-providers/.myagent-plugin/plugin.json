@@ -2,8 +2,8 @@
   "schema_version": 1,
   "id": "web-search-providers",
   "name": "Web Search Providers",
-  "version": "1.1.0",
-  "description": "DuckDuckGo, Brave, Tavily, SearXNG and Jina search transports plus the web_search tool they inject.",
+  "version": "1.2.0",
+  "description": "DuckDuckGo, Brave, Tavily, SearXNG and Jina search transports plus the web_search, web_fetch and web_download tools they inject.",
   "permissions": {
     "secrets": ["BRAVE_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"]
   },

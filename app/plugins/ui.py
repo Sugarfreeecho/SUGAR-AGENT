@@ -9,7 +9,12 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Tuple
 from .models import PluginDefinition
 from .security import PluginSecurityError, PluginValidationError
 from .settings import plugin_settings_schema
-from .web import plugin_web_manifest, resolve_plugin_asset
+from .web import bundled_setup_page, plugin_web_manifest, resolve_plugin_asset
+
+try:  # package import vs flat ``app`` on sys.path
+    from ..tray_slot import parse_tray_rows
+except ImportError:  # pragma: no cover - flat import fallback
+    from tray_slot import parse_tray_rows  # type: ignore[no-redef]
 
 
 _CONTRIBUTION_ID_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
@@ -37,17 +42,18 @@ _UNSAFE_POINTER_PARTS = frozenset({"__proto__", "prototype", "constructor"})
 _BUNDLED_ROOT = Path(__file__).resolve().parents[2] / "plugins"
 
 
-def _trusted_panel_renderer(plugin: PluginDefinition, raw: Any) -> Dict[str, str] | None:
-    """Resolve a same-origin renderer for a physically bundled system plugin.
+def _trusted_panel_renderer(plugin: PluginDefinition, raw: Any, *, setup: bool = False) -> Dict[str, str] | None:
+    """Resolve a renderer for a physically bundled system or setup section.
 
     A renderer executes in the host page and therefore has more authority than
     declarative UI metadata. A manifest flag alone must never grant that
     authority to a user-installed plugin.
+    The setup exception applies only to settings sections, never session panels.
     """
 
     if not isinstance(raw, Mapping):
         return None
-    if not plugin.system_builtin or plugin.source_format != "native":
+    if not (plugin.system_builtin or setup and bundled_setup_page(plugin)) or plugin.source_format != "native":
         return None
     try:
         plugin.root.resolve().relative_to(_BUNDLED_ROOT.resolve())
@@ -343,7 +349,7 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
         contribution_id = str(raw.get("id") or "main").strip()
         title = str(raw.get("title") or (settings_schema or {}).get("title") or plugin.name).strip()
         target = str(raw.get("target") or ("settings" if settings_schema else "plugin-page")).strip()
-        renderer = _trusted_panel_renderer(plugin, raw.get("renderer")) if target == "renderer" else None
+        renderer = _trusted_panel_renderer(plugin, raw.get("renderer"), setup=True) if target == "renderer" else None
         label = str(raw.get("label") or ("Save" if target == "settings" else "Open")).strip()
         description = str(
             raw.get("description")
@@ -683,6 +689,33 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
                 "renderer": renderer,
             }
         )
+
+    # Tray entries are executed by the platform tray, not by the browser. The
+    # slot exists so settings can show what a plugin adds to the tray menu and
+    # so manifest mistakes are visible where users already look for plugins.
+    tray_rows, _tray_warnings = parse_tray_rows(raw_ui.get("tray"))
+    for index, row in enumerate(tray_rows):
+        key = ("tray", str(row.get("id") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        contribution = {
+            "id": str(row.get("id") or ""),
+            "plugin_id": plugin.plugin_id,
+            "slot": "tray",
+            "label": str(row.get("label") or ""),
+            "description": str(row.get("description") or ""),
+            "order": max(_MIN_ORDER, min(_MAX_ORDER, 100 + index)),
+            "kind": str(row.get("kind") or "action"),
+        }
+        if contribution["kind"] == "group":
+            contribution["items"] = [
+                {"id": str(child.get("id") or ""), "label": str(child.get("label") or "")}
+                for child in row.get("items") or ()
+            ]
+        else:
+            contribution["checkable"] = bool(row.get("check"))
+        out.append(contribution)
     return tuple(out)
 
 

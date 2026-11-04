@@ -89,7 +89,16 @@ def _enabled_plugin(plugin_id: str, *, refresh: bool = True) -> PluginDefinition
 
 
 def plugin_page(plugin_id: str) -> Path:
-    plugin = _enabled_plugin(plugin_id, refresh=False)
+    try:
+        plugin = _enabled_plugin(plugin_id, refresh=False)
+    except PluginWebError:
+        from plugins import get_plugin_manager
+        from plugins.web import bundled_setup_page
+        namespace = normalize_namespace(plugin_id)
+        plugin = next((item for item in get_plugin_manager().discover()
+                       if item.plugin_id == namespace and bundled_setup_page(item)), None)
+        if plugin is None:
+            raise
     try:
         manifest = plugin_web_manifest(plugin)
     except (OSError, PluginSecurityError) as exc:
@@ -107,10 +116,11 @@ def plugin_asset(plugin_id: str, asset_path: str) -> Path:
         from plugins import get_plugin_manager
         from plugins.ui import plugin_ui_contributions
         namespace = normalize_namespace(plugin_id)
+        from plugins.web import bundled_setup_page
         plugin = next((item for item in get_plugin_manager().discover()
-                       if item.plugin_id == namespace and item.system_builtin), None)
-        if plugin is None or not any(item.get("slot") == "settings.section" and item.get("target") == "renderer"
-                                     for item in plugin_ui_contributions(plugin)):
+                       if item.plugin_id == namespace and (item.system_builtin or bundled_setup_page(item))), None)
+        if plugin is None or not (bundled_setup_page(plugin) or any(item.get("slot") == "settings.section" and item.get("target") == "renderer"
+                                     for item in plugin_ui_contributions(plugin))):
             raise
     try:
         return resolve_plugin_asset(plugin, asset_path)

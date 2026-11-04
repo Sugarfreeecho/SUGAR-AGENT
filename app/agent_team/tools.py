@@ -71,6 +71,133 @@ def _json_result(action: str, data: Any) -> str:
     return json.dumps({"ok": True, "action": action, "data": data}, ensure_ascii=False)
 
 
+_STATUS_TASK_LIMIT = 50
+_STATUS_MESSAGE_LIMIT = 10
+_STATUS_TASK_CHARS = 6000
+_STATUS_MESSAGE_CHARS = 2000
+_TERMINAL_TASK_STATES = {"completed", "cancelled"}
+
+
+def _brief(value: Any, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
+
+
+def _seq(row: dict) -> int:
+    try:
+        return int(row.get("seq") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _status_view(team: dict) -> dict:
+    """Project the durable team record to what the model needs.
+
+    ``read_team`` carries every message body (up to 32k characters each) plus
+    per-recipient deliveries, task results and permission grants. Returning it
+    verbatim spends the context window on coordination bookkeeping, and the
+    head-only tool-result truncation then hides whichever sections sort last.
+    Status therefore reports the roster, the task board and message counters;
+    message bodies stay available through action=read_inbox.
+    """
+    members = team.get("members") if isinstance(team.get("members"), dict) else {}
+    tasks = team.get("tasks") if isinstance(team.get("tasks"), dict) else {}
+    messages = team.get("messages") if isinstance(team.get("messages"), dict) else {}
+    permissions = team.get("permissions") if isinstance(team.get("permissions"), dict) else {}
+
+    roster = []
+    for member in sorted(members.values(), key=lambda row: (str(row.get("name") or ""), str(row.get("member_id") or ""))):
+        if not isinstance(member, dict):
+            continue
+        roster.append({
+            "member_id": member.get("member_id"),
+            "name": member.get("name"),
+            "role": member.get("role"),
+            "state": member.get("state"),
+            "detail": _brief(member.get("detail"), 200),
+            "child_session_id": member.get("child_session_id"),
+            "model_profile_id": member.get("model_profile_id"),
+            "removed": bool(member.get("removed")),
+        })
+
+    task_counts: dict[str, int] = {}
+    for task in tasks.values():
+        if isinstance(task, dict):
+            status = str(task.get("status") or "pending")
+            task_counts[status] = task_counts.get(status, 0) + 1
+    ordered = sorted(
+        (task for task in tasks.values() if isinstance(task, dict)),
+        key=lambda row: (str(row.get("status") or "") in _TERMINAL_TASK_STATES, _seq(row)),
+    )
+    board: list[dict] = []
+    task_budget = _STATUS_TASK_CHARS
+    for task in ordered[:_STATUS_TASK_LIMIT]:
+        row = {
+            "task_id": task.get("task_id"),
+            "title": _brief(task.get("title"), 200),
+            "description": _brief(task.get("description"), 300),
+            "status": task.get("status"),
+            "assignee_id": task.get("assignee_id"),
+            "priority": task.get("priority"),
+            "depends_on": list(task.get("depends_on") or []),
+            "result": _brief(task.get("result"), 300),
+            "updated_at": task.get("updated_at"),
+        }
+        size = len(json.dumps(row, ensure_ascii=False))
+        if board and size > task_budget:
+            break
+        board.append(row)
+        task_budget -= size
+
+    message_counts: dict[str, int] = {}
+    for message in messages.values():
+        if isinstance(message, dict):
+            status = str(message.get("status") or "queued")
+            message_counts[status] = message_counts.get(status, 0) + 1
+    recent = sorted(
+        (message for message in messages.values() if isinstance(message, dict)),
+        key=_seq,
+    )[-_STATUS_MESSAGE_LIMIT:]
+    inbox: list[dict] = []
+    message_budget = _STATUS_MESSAGE_CHARS
+    for message in reversed(recent):
+        row = {
+            "message_id": message.get("message_id"),
+            "sender_id": message.get("sender_id"),
+            "recipient_ids": list(message.get("recipient_ids") or []),
+            "status": message.get("status"),
+            "reply_to": message.get("reply_to"),
+            "created_at": message.get("created_at"),
+            "preview": _brief(message.get("content"), 160),
+        }
+        size = len(json.dumps(row, ensure_ascii=False))
+        if inbox and size > message_budget:
+            break
+        inbox.append(row)
+        message_budget -= size
+    inbox.reverse()
+
+    return {
+        "team_id": team.get("team_id"),
+        "title": team.get("title"),
+        "status": team.get("status"),
+        "status_detail": team.get("status_detail"),
+        "max_members": team.get("max_members"),
+        "created_at": team.get("created_at"),
+        "updated_at": team.get("updated_at"),
+        "last_event": team.get("last_event"),
+        "members": roster,
+        "tasks": board,
+        "task_counts": task_counts,
+        "tasks_omitted": max(0, len(tasks) - len(board)),
+        "messages": inbox,
+        "message_counts": message_counts,
+        "messages_omitted": max(0, len(messages) - len(inbox)),
+        "permission_count": len(permissions),
+        "note": "Message bodies are omitted; use action=read_inbox for full content.",
+    }
+
+
 async def execute_team_tool(
     tool_args: dict,
     *,
@@ -91,7 +218,8 @@ async def execute_team_tool(
     service = _service()
 
     if action == "status":
-        return _json_result(action, service.read_team(root_id))
+        team = service.read_team(root_id)
+        return _json_result(action, _status_view(team) if isinstance(team, dict) else team)
     if action == "create":
         return _json_result(action, service.create_team(root_id, str(args.get("title") or "")))
     if action == "spawn_member":

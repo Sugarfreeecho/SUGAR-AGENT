@@ -1549,58 +1549,57 @@ async def inbound_tick(force: bool = False) -> dict:
 
 async def _inbound_scheduler() -> None:
     from plugins.host import bundled_host_plugin_enabled
-    _runtime["inbound_next_poll"] = 0.0
-    while True:
-        try:
-            if bundled_host_plugin_enabled(PLUGIN_ID) and _settings().get("inbound_reply"):
-                if time.monotonic() >= _runtime.get("inbound_next_poll", 0):
-                    await inbound_tick()
-                    _runtime["inbound_next_poll"] = time.monotonic() + INBOUND_INTERVAL
-                await _flow().dispatch()
-            await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            duty.log(_home(), f"入站监听异常：{type(exc).__name__}: {exc}")
-            await asyncio.sleep(5.0)
+    if bundled_host_plugin_enabled(PLUGIN_ID) and _settings().get("inbound_reply"):
+        if time.monotonic() >= _runtime.get("inbound_next_poll", 0):
+            await inbound_tick()
+            _runtime["inbound_next_poll"] = time.monotonic() + INBOUND_INTERVAL
+        await _flow().dispatch()
+
+
+def _work_pool():
+    from session_control.public import host_work_pool
+    return host_work_pool()
+
+
+def _io_pool():
+    from session_control.public import control_application
+    return control_application().service.resources.io
 
 
 
 async def _scheduler() -> None:
     home = _home()
-    duty.log(home, "调度器已启动（60s tick）")
-    while True:
+    from plugins.host import bundled_host_plugin_enabled
+    if not _runtime.get("plugin") or not bundled_host_plugin_enabled(PLUGIN_ID):
+        return
+    if _runtime.get("busy") or _runtime.get("account_changing"):
+        _log_skip(home, "上一轮还在跑")
+        return
+    if bili_client.load_credential(home) is None or inbound.auth_expired(home):
+        _log_skip(home, "B站 未登录")
+        return
+    pool = _work_pool()
+    if not pool.available(PLUGIN_ID):
+        return  # Keep due business tasks in their existing durable store.
+    _runtime["busy"] = True
+    def scan():
         try:
-            await asyncio.sleep(TICK_SECONDS)
-            definition = _runtime.get("plugin")
-            if definition is None:
-                continue
-            from plugins.host import bundled_host_plugin_enabled
-
-            if not bundled_host_plugin_enabled(PLUGIN_ID):
-                continue
-            # ⭐ 多任务：按任务表逐条判定（各自窗口 / 额度 / 最小间隔），
-            #    一次只跑一条 —— 同一账号同一 CPU，并发只会互相踩。
-            if _runtime.get("busy") or _runtime.get("account_changing"):
-                _log_skip(home, "上一轮还在跑")
-                continue
-            if bili_client.load_credential(home) is None or inbound.auth_expired(home):
-                _log_skip(home, "B站 未登录")
-                continue
-            _runtime["busy"] = True
-            try:
-                outcome = await asyncio.to_thread(scan_tasks, busy_reserved=True)
-                if not outcome.get("ran"):
-                    _log_skip(home, "没有任务到点（窗口/额度/间隔都未满足）")
-            finally:
-                _runtime["busy"] = False
-        except asyncio.CancelledError:
-            duty.log(home, "调度器已停止")
-            raise
-        except Exception as exc:  # noqa: BLE001
-            # 定时器回调绝不让异常外冒 —— 在 DSH 那边这条教训直接把宿主杀过一次。
+            outcome = scan_tasks(busy_reserved=True)
+            if not outcome.get("ran"):
+                _log_skip(home, "没有任务到点（窗口/额度/间隔都未满足）")
+        except Exception as exc:
             duty.log(home, f"调度 tick 异常：{type(exc).__name__}: {exc}")
-            await asyncio.sleep(5.0)
+        finally:
+            _runtime["busy"] = False
+    future = pool.try_submit(PLUGIN_ID, scan)
+    if future is None:
+        _runtime["busy"] = False
+    else:
+        _runtime["duty_work"] = future
+        def settled(done):
+            if done.cancelled():
+                _runtime["busy"] = False
+        future.add_done_callback(settled)
 
 
 # ── 生命周期 ────────────────────────────────────────────────────────────
@@ -1638,12 +1637,18 @@ async def start(_context, plugin) -> None:
     await _load_sibling("mcp_server").start(sys.modules[__name__])
     duty.ensure_charter(SHIPPED_CHARTER, home)
     duty.ensure_notes(home)
+    from session_control.public import host_monitors
+    from session_control.monitors import MonitorKey
+    hub = await host_monitors()
     task = _runtime.get("task")
     if task is None or task.done():
-        _runtime["task"] = asyncio.create_task(_scheduler(), name="sugar-bili-scroll-tick")
+        _runtime["task"] = hub.subscribe(MonitorKey.make("bili-duty", str(home.resolve()), namespace=PLUGIN_ID),
+            PLUGIN_ID + ":duty", _scheduler, interval=TICK_SECONDS, immediate=False)
     inbound_task = _runtime.get("inbound_task")
     if inbound_task is None or inbound_task.done():
-        _runtime["inbound_task"] = asyncio.create_task(_inbound_scheduler(), name="sugar-bili-scroll-inbound")
+        _runtime["inbound_next_poll"] = 0.
+        _runtime["inbound_task"] = hub.subscribe(MonitorKey.make("bili-inbound", str(home.resolve()), namespace=PLUGIN_ID),
+            PLUGIN_ID + ":inbound", _inbound_scheduler, interval=1.)
 
 
 async def stop(_context, plugin) -> None:
@@ -1652,13 +1657,11 @@ async def stop(_context, plugin) -> None:
     for key in ("task", "inbound_task"):
         task = _runtime.get(key)
         _runtime[key] = None
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+        if task is not None:
+            await task.close()
     workers = list(_flow().workers.values())
+    if _runtime.get("duty_work"):
+        workers.append(_runtime["duty_work"])
     if workers:
         await asyncio.wait(workers, timeout=5)
 
@@ -1739,7 +1742,7 @@ def install(app, context, plugin) -> None:
             return JSONResponse({"ok": False, "error": "上一轮还在跑"}, status_code=409)
         _runtime["busy"] = True
         try:
-            result = await asyncio.to_thread(run_once, manual=True)
+            result = await _work_pool().run(PLUGIN_ID, run_once, manual=True)
         finally:
             _runtime["busy"] = False
         return JSONResponse(result, status_code=200 if result.get("ok") else 500)
@@ -1819,7 +1822,7 @@ def install(app, context, plugin) -> None:
             return JSONResponse({"ok": False, "error": "上一轮还在跑"}, status_code=409)
         _runtime["busy"] = True
         try:
-            result = await asyncio.to_thread(run_once, manual=True, task_id=task_id)
+            result = await _work_pool().run(PLUGIN_ID, run_once, manual=True, task_id=task_id)
         finally:
             _runtime["busy"] = False
         status_code = 200 if result.get("ok") else 500

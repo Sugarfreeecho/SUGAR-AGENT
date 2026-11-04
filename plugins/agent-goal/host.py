@@ -12,13 +12,15 @@ from session_event_bus import publish_session_event
 
 
 async def _invoke_goal(context, arguments: Mapping[str, Any]):
-    from agent_goal import GoalError, manager_for
+    from agent_goal import GoalError, manager_for, model_goal_view
     from agent_fact_commit import run_fact_commit
     from tool_registry import ToolOutcome
 
     tool_name = str(context.service("tool_name") or "")
+    continuing = tool_name == "update_goal" and str(arguments.get("status") or "").strip().lower() == "continue"
     try:
-        manager = manager_for(context.service("session_manager"))
+        session_manager = context.service("session_manager")
+        manager = manager_for(session_manager)
         if tool_name == "create_goal":
             operation = partial(manager.create,
                 context.session_id,
@@ -30,18 +32,30 @@ async def _invoke_goal(context, arguments: Mapping[str, Any]):
         elif tool_name == "get_goal":
             operation = partial(manager.get, context.session_id)
         elif tool_name == "update_goal":
-            operation = partial(manager.update_status,
-                context.session_id,
-                str(arguments.get("status") or ""),
-                str(arguments.get("reason") or ""),
-                report_id=context.run_id,
-                blocker_key=str(arguments.get("blocker_key") or ""),
-                actor="model",
-                run_id=context.run_id,
-            )
+            if continuing:
+                operation = partial(manager.user_action,
+                    context.session_id, "resume",
+                    additional_budget=arguments.get("additional_budget"),
+                    reason=str(arguments.get("reason") or ""),
+                    actor="model", run_id=context.run_id,
+                )
+            else:
+                if arguments.get("additional_budget") is not None:
+                    raise GoalError("additional_budget is only supported with status=continue.")
+                operation = partial(manager.update_status,
+                    context.session_id,
+                    str(arguments.get("status") or ""),
+                    str(arguments.get("reason") or ""),
+                    report_id=context.run_id,
+                    blocker_key=str(arguments.get("blocker_key") or ""),
+                    actor="model",
+                    run_id=context.run_id,
+                )
         else:
             return ToolOutcome.failed("unknown_goal_operation", tool_name)
         goal = await run_fact_commit(operation, trace_state=context.state)
+        if continuing:
+            await asyncio.to_thread(session_manager.clear_interrupt, context.session_id)
     except (GoalError, ValueError) as exc:
         return ToolOutcome.failed("goal_error", str(exc))
 
@@ -66,7 +80,9 @@ async def _invoke_goal(context, arguments: Mapping[str, Any]):
         elif requested == resulting == "blocked":
             lifecycle_events.append("GoalBlocked")
     return ToolOutcome.completed(
-        json.dumps({"goal": goal}, ensure_ascii=False),
+        # The model gets the projected view; metadata below still reads the
+        # durable record (completion_judge_requested is host-only).
+        json.dumps({"goal": model_goal_view(goal)}, ensure_ascii=False),
         metadata={
             "lifecycle_events": lifecycle_events,
             "workflow_completion_requested": bool(
@@ -125,11 +141,12 @@ def tool_definitions(context, plugin):
         ),
         _definition(
             "update_goal",
-            "Request independent Judge verification after the objective is actually achieved, or report a genuinely repeated blocker. Judge done moves the goal to human review; Judge continue keeps it active.",
+            "Use status=continue to resume an existing paused or blocked goal, like the play button, when the user asks to resume or a reported blocker has been resolved. Respect user-requested pauses; resume a manually paused goal only when the user asks. Supply additional_budget only when explicitly authorized by the user. Use completed to request independent Judge verification after the objective is achieved, or blocked to report a genuinely repeated blocker. Judge done moves the goal to human review; Judge continue keeps it active.",
             {
-                "status": {"type": "string", "enum": ["completed", "blocked"]},
-                "reason": {"type": "string", "description": "Concrete verification evidence, or the repeated blocker reason."},
+                "status": {"type": "string", "enum": ["completed", "blocked", "continue"]},
+                "reason": {"type": "string", "description": "Concrete verification evidence, repeated blocker reason, or why the goal can now continue."},
                 "blocker_key": {"type": "string", "description": "Stable identifier for the same blocker across runs."},
+                "additional_budget": {"type": "integer", "minimum": 1, "description": "Only for status=continue: optional user-authorized extra token budget; required if the existing budget is exhausted."},
             },
             ["status"],
         ),
@@ -154,8 +171,7 @@ def install(app, context, plugin):
     )
     router = APIRouter()
 
-    @router.get("/sessions/{session_id}/goal")
-    async def get_goal(session_id: str):
+    async def read_goal(session_id: str, *, progress_only=False):
         try:
             from plugins.host import bundled_host_plugin_enabled
 
@@ -165,9 +181,29 @@ def install(app, context, plugin):
             if not await asyncio.to_thread(session_manager.get_session_summary, session_id):
                 return JSONResponse({"error": "session not found"}, status_code=404)
             goal = await asyncio.to_thread(manager_for(session_manager).get, session_id) if enabled else None
-            return JSONResponse({"enabled": enabled, "goal": goal}, headers={"Cache-Control": "no-store"})
+            runner = globals().get('_runner')
+            if runner and hasattr(runner, 'progress_snapshot'):
+                progress = await asyncio.to_thread(runner.progress_snapshot, session_id, goal)
+            else:
+                phase = (goal or {}).get('status')
+                if phase == 'active':
+                    phase = 'running' if goal.get('current_run_id') else 'waiting'
+                progress = {'phase': phase, 'label': '正在执行' if phase == 'running' else '等待下一轮', 'since': None}
+            body = {'enabled': enabled, 'goal_id': (goal or {}).get('id'),
+                    'status': (goal or {}).get('status'), 'continuation': progress}
+            if not progress_only:
+                body['goal'] = goal
+            return JSONResponse(body, headers={"Cache-Control": "no-store"})
         except Exception as exc:
             return JSONResponse({"enabled": False, "goal": None, "error": str(exc)}, status_code=503)
+
+    @router.get("/sessions/{session_id}/goal")
+    async def get_goal(session_id: str):
+        return await read_goal(session_id)
+
+    @router.get("/sessions/{session_id}/goal/progress")
+    async def get_goal_progress(session_id: str):
+        return await read_goal(session_id, progress_only=True)
 
     @router.post("/sessions/{session_id}/goal/{action}")
     async def control_goal(session_id: str, action: str, request: Request):
@@ -226,7 +262,9 @@ async def _control_goal(session_manager, session_id: str, action: str, request: 
                 kwargs["objective"] = body.get("objective")
             operation = partial(manager.user_action, session_id, action, **kwargs)
         goal = await run_fact_commit(operation)
-        if action in {"pause", "cancel"}:
+        # Pausing disables future Goal checks/continuations; the current run
+        # keeps working. Cancelling retains its explicit stop behavior.
+        if action == "cancel":
             session_manager.request_interrupt(session_id, reason=f"workflow_{action}")
         if action in {"create", "resume"} or (action == "review" and str(body.get("decision") or "").strip().lower() == "continue"):
             await asyncio.to_thread(session_manager.clear_interrupt, session_id)

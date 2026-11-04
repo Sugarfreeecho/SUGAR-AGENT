@@ -194,6 +194,17 @@ def _setting(name: str, default: int, maximum: int) -> int:
         return default
 
 
+def _workspace_sweep_enabled() -> bool:
+    """Whether the workspace diff (shell/MCP/external edits) is captured.
+
+    Off by default: the review then only records declared file tools, so a
+    shared work root cannot attribute another session's writes to this one.
+    Set ``MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP=1`` to restore the Git
+    inventory sweep and its per-turn baseline.
+    """
+    return _setting('MYAGENT_CHANGE_REVIEW_WORKSPACE_SWEEP', 0, 1) == 1
+
+
 @lru_cache(maxsize=1)
 def _windows_file_info_api():
     import ctypes
@@ -774,6 +785,8 @@ class FileChangeReviewStore:
 
     def _create_workspace_baseline(self, index: dict, *, run_id: str,
                                    work_root: Path) -> Optional[dict]:
+        if not _workspace_sweep_enabled():
+            return None
         baseline_key = str(run_id or "") + "\0" + self._key(work_root)
         existing = index["baselines"].get(baseline_key)
         if isinstance(existing, dict):
@@ -1351,7 +1364,11 @@ class FileChangeReviewStore:
                     output.append(public)
 
             baseline_key = str(pending.get("baseline_key") or "")
-            if defer_workspace_sweep and baseline_key:
+            if not _workspace_sweep_enabled():
+                # Declared paths are the only source in this mode; an obligation
+                # inherited from an older capture must not keep a baseline alive.
+                index["deferred_sweeps"].pop(baseline_key, None)
+            elif defer_workspace_sweep and baseline_key:
                 # Persist the obligation as well as immediate declared-path
                 # records, so interruption/restart cannot silently lose it.
                 index["deferred_sweeps"][baseline_key] = pending
@@ -1373,7 +1390,18 @@ class FileChangeReviewStore:
             changes = [latest[key] for key in order]
             if recovered:
                 event_id = uuid.uuid4().hex
-                covered = bool(pending.get('entries') or baseline_key in index['baselines'])
+                sweep_covered = _workspace_sweep_enabled() and baseline_key in index['baselines']
+                if sweep_covered:
+                    coverage, status, reason = 'workspace', 'checked', ''
+                elif pending.get('entries'):
+                    coverage, status, reason = 'declared_paths', 'checked', ''
+                elif not _workspace_sweep_enabled():
+                    # A shell/MCP capture never had a surface in this mode; that
+                    # is a known coverage limit, not a failed recovery.
+                    coverage, status, reason = 'unavailable', 'checked', ''
+                else:
+                    coverage, status = 'declared_paths', 'failed'
+                    reason = '旧执行已结束，但事前快照缺失，无法恢复改动记录'
                 index['review_events'][event_id] = self._compact_result({
                     **dict(pending.get('execution_scope') or {}),
                     'type': 'file_changes_updated', 'operation_id': event_id,
@@ -1384,9 +1412,8 @@ class FileChangeReviewStore:
                         'run_id': str((pending.get('execution_scope') or {}).get('run_id') or ''),
                         'turn_id': str(pending.get('run_id') or ''),
                         'tool_call_id': str(pending.get('tool_call_id') or ''),
-                        'stage': 'recovery', 'status': 'checked' if covered else 'failed',
-                        'coverage': 'workspace' if baseline_key in index['baselines'] else 'declared_paths',
-                        'reason': '' if covered else '旧执行已结束，但事前快照缺失，无法恢复改动记录',
+                        'stage': 'recovery', 'status': status,
+                        'coverage': coverage, 'reason': reason,
                         'at': time.time(),
                     },
                 })
@@ -1425,19 +1452,23 @@ class FileChangeReviewStore:
         with self._capture_lock():
             index = self._load()
             dirty = bool(index['deferred_sweeps'])
-            for key, pending in list(index['deferred_sweeps'].items()):
-                changes = self._sweep_workspace(index, pending)
-                if changes:
-                    event_id = uuid.uuid4().hex
-                    index['review_events'][event_id] = self._compact_result({
-                        **dict(pending.get('execution_scope') or {}),
-                        'type': 'file_changes_updated',
-                        'operation_id': event_id,
-                        'tool_call_id': str(pending.get('tool_call_id') or ''),
-                        'turn_id': str(pending.get('run_id') or ''),
-                        'changes': changes,
-                    })
-                index['deferred_sweeps'].pop(key, None)
+            if _workspace_sweep_enabled():
+                for key, pending in list(index['deferred_sweeps'].items()):
+                    changes = self._sweep_workspace(index, pending)
+                    if changes:
+                        event_id = uuid.uuid4().hex
+                        index['review_events'][event_id] = self._compact_result({
+                            **dict(pending.get('execution_scope') or {}),
+                            'type': 'file_changes_updated',
+                            'operation_id': event_id,
+                            'tool_call_id': str(pending.get('tool_call_id') or ''),
+                            'turn_id': str(pending.get('run_id') or ''),
+                            'changes': changes,
+                        })
+                    index['deferred_sweeps'].pop(key, None)
+            else:
+                # Retire obligations saved before the sweep was turned off.
+                index['deferred_sweeps'].clear()
             events = [self._public_result(event) for event in index['review_events'].values()]
             if dirty:
                 self._save(index)

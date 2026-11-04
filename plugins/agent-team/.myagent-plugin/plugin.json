@@ -14,13 +14,6 @@
       "assets": "web"
     },
     "ui": {
-      "navigation": [
-        {
-          "id": "main",
-          "label": "Agent Team",
-          "order": 60
-        }
-      ],
       "session.badge": [
         {
           "id": "active-team",
@@ -32,65 +25,17 @@
           "equals": "active"
         }
       ],
-      "session.panel": [
-        {
-          "id": "current-team",
-          "namespace": "team",
-          "title": "Agent Team",
-          "description": "Members and tasks coordinated for this session.",
-          "variant": "info",
-          "fields": [
-            {
-              "path": "/title",
-              "label": "Team",
-              "optional": true
-            },
-            {
-              "path": "/status",
-              "label": "Status"
-            },
-            {
-              "path": "/members",
-              "label": "Members",
-              "format": "list",
-              "optional": true,
-              "columns": [
-                {
-                  "path": "/name",
-                  "label": "Name"
-                },
-                {
-                  "path": "/state",
-                  "label": "State"
-                }
-              ]
-            },
-            {
-              "path": "/tasks",
-              "label": "Tasks",
-              "format": "list",
-              "optional": true,
-              "columns": [
-                {
-                  "path": "/title",
-                  "label": "Task"
-                },
-                {
-                  "path": "/status",
-                  "label": "Status"
-                }
-              ]
-            }
-          ]
-        }
-      ],
-      "details.tab": [
+      "settings.section": [
         {
           "id": "main",
-          "title": "Agent Team",
-          "description": "",
-          "scope": "session",
-          "order": 60
+          "title": "Agent Team 团队",
+          "description": "管理当前会话的成员、共享任务与协作消息",
+          "target": "renderer",
+          "order": 60,
+          "renderer": {
+            "module": "settings.js",
+            "style": "settings.css"
+          }
         }
       ]
     }

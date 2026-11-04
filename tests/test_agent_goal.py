@@ -722,7 +722,7 @@ def test_goal_ui_is_plugin_owned_not_built_into_the_main_shell():
     for relative_path in ("frontend/index.html", "frontend/src/shell-body.html"):
         markup = (ROOT / relative_path).read_text(encoding="utf-8")
         assert 'id="chat-goal-card"' not in markup
-    assert 'id="review-card"' in (ROOT / "plugins/agent-goal/web/index.html").read_text(encoding="utf-8")
+    assert 'id="review-card"' in (ROOT / "plugins/agent-goal/web/view.js").read_text(encoding="utf-8")
     return
     assert "syncGoalTodoPanelVisibility()" in renderer
     assert "当前会话暂无 Goal" not in renderer
@@ -805,6 +805,78 @@ def test_goal_ui_is_plugin_owned_not_built_into_the_main_shell():
         "const tocTurnsCacheBySession", 1
     )[0]
     assert "pluginPanels.hidden = true" in clear_boundary
+
+
+class ModelGoalViewTests(unittest.TestCase):
+    def _goal(self, **overrides):
+        goal = {
+            "id": "goal_1",
+            "objective": "Ship the durable Goal workflow",
+            "status": "active",
+            "pause_reason": None,
+            "token_budget": 200000,
+            "used_tokens": 128000000,
+            "elapsed_seconds": 3600,
+            "remaining_tokens": 0,
+            "run_count": 9,
+            "continuation_count": 8,
+            "blocked_streak": 0,
+            "blocker_key": None,
+            "blocked_reason": None,
+            "next_retry_at": None,
+            "judge_count": 2,
+            "last_judge_verdict": "continue",
+            "last_judge_reason": "Missing end-to-end evidence",
+            "last_judged_at": "2026-11-01T00:00:00Z",
+            "review_status": None,
+            "review_feedback_pending": False,
+            "created_at": "2026-10-01T00:00:00Z",
+            "updated_at": "2026-11-01T00:00:00Z",
+            "accounted_usage_ids": [f"run:llm:{index}" for index in range(838)],
+            "accounted_run_ids": [f"run-{index}" for index in range(9)],
+            "accounted_judge_run_ids": [f"judge-{index}" for index in range(2)],
+            "last_judge_raw": "judge raw " * 400,
+            "last_judge_diagnostics": {"parser": "x" * 500},
+            "review_judge_result": "review " * 500,
+            "active_since_epoch": 1.0,
+        }
+        goal.update(overrides)
+        return goal
+
+    def test_projection_drops_host_bookkeeping_and_keeps_budget(self):
+        from app.agent_goal import model_goal_view
+
+        goal = self._goal()
+        self.assertGreater(len(json.dumps(goal, ensure_ascii=False)), 20000)
+
+        view = model_goal_view(goal)
+        text = json.dumps(view, ensure_ascii=False)
+
+        for host_only in ("accounted_usage_ids", "accounted_run_ids", "accounted_judge_run_ids",
+                          "last_judge_raw", "last_judge_diagnostics", "review_judge_result",
+                          "active_since_epoch"):
+            self.assertNotIn(host_only, view)
+        self.assertEqual(view["accounted_usage_count"], 838)
+        self.assertEqual(view["accounted_run_count"], 9)
+        self.assertEqual(view["accounted_judge_run_count"], 2)
+        self.assertEqual(view["objective"], "Ship the durable Goal workflow")
+        self.assertEqual(view["remaining_tokens"], 0)
+        self.assertEqual(view["elapsed_seconds"], 3600)
+        self.assertLess(len(text), 2000)
+
+    def test_projection_keeps_only_pending_review_feedback(self):
+        from app.agent_goal import model_goal_view
+
+        self.assertNotIn("review_feedback", model_goal_view(self._goal()))
+        pending = model_goal_view(self._goal(review_feedback_pending=True, review_status="changes_requested"))
+        self.assertTrue(pending["review_feedback_pending"])
+        self.assertEqual(len(pending["review_feedback"]), 2000)
+
+    def test_projection_passes_absent_goal_through(self):
+        from app.agent_goal import model_goal_view
+
+        self.assertIsNone(model_goal_view(None))
+        self.assertEqual(model_goal_view({}), {})
 
 
 if __name__ == "__main__":

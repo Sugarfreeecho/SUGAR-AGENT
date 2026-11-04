@@ -5,7 +5,7 @@ and the desktop packaging script:
 
 ``system``          系统内置：设置页隐藏、工具常驻、环境变量可控
 ``system-external`` 系统外置：设置页可见、工具常驻、环境变量可覆盖
-``extension``       拓展功能：设置页可见、工具延迟加载、默认启用
+``extension``       拓展功能：设置页可见、工具延迟加载、默认启用（defaultEnabled 可覆盖）
 ``standalone``      独立功能：不随安装包分发、默认停用、工具延迟加载
 
 An unlisted plugin is treated as ``standalone`` on purpose: a new directory must
@@ -32,10 +32,11 @@ _FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
 
 _lock = threading.RLock()
 _cache: Optional[tuple[Any, Dict[str, str]]] = None
+_default_overrides: Dict[str, bool] = {}
 
 
 def _table() -> Dict[str, str]:
-    global _cache
+    global _cache, _default_overrides
     try:
         stat = TIERS_PATH.stat()
         signature: Any = (stat.st_mtime_ns, stat.st_size)
@@ -62,6 +63,8 @@ def _table() -> Dict[str, str]:
                         # First declaration wins so a typo cannot silently move
                         # a plugin into a weaker tier.
                         mapping.setdefault(key, tier)
+        defaults = raw.get("defaultEnabled", {}) if isinstance(raw, dict) else {}
+        _default_overrides = {str(key).lower(): value for key, value in defaults.items() if type(value) is bool} if isinstance(defaults, dict) else {}
         _cache = (signature, mapping)
         return mapping
 
@@ -78,13 +81,14 @@ def is_registered(plugin_id: str) -> bool:
 
 
 def default_enabled(plugin_id: str) -> bool:
-    """Standalone plugins ship disabled and must be switched on by hand.
+    """Honor per-plugin defaults before falling back to the product tier.
 
     An unlisted plugin (typically user-installed) keeps the historical
     "enabled by default" behaviour; packaging still only ships listed tiers.
     """
 
-    return tier_of(plugin_id) != "standalone"
+    tier = tier_of(plugin_id)
+    return _default_overrides.get(str(plugin_id).strip().lower(), tier != "standalone")
 
 
 def hidden_in_settings(plugin_id: str) -> bool:

@@ -1,4 +1,4 @@
-"""Trusted public-web search provider implementations."""
+"""Trusted public-web search transports and the web tools they inject."""
 from __future__ import annotations
 
 import asyncio
@@ -415,11 +415,15 @@ def _definition() -> dict[str, Any]:
 
 
 def tool_definitions(context, plugin):
-    """Expose web_search only while this plugin is enabled."""
+    """Expose web_search, web_fetch and web_download while this plugin is enabled."""
     from host_tool_registry import host_tool_invokers
     from tool_execution_policy import ToolExecutionPolicy
+    from . import web_tools
 
-    async def invoke(_context, arguments):
+    def enabled() -> bool:
+        return bool(context["is_enabled"](plugin.plugin_id))
+
+    async def invoke_search(_context, arguments):
         from tool_result_status import legacy_tool_outcome
 
         query = str(arguments.get("query") or "").strip()
@@ -442,13 +446,54 @@ def tool_definitions(context, plugin):
             return legacy_tool_outcome("web_search", f"Error: web search provider unavailable: {exc}")
         return legacy_tool_outcome("web_search", text)
 
+    async def invoke_fetch(_context, arguments):
+        from tool_result_status import legacy_tool_outcome
+
+        url = str(arguments.get("url") or "").strip()
+        if not url:
+            raise ValueError("url is required")
+        text = await web_tools.web_fetch(
+            url,
+            max_chars=arguments.get("max_chars"),
+            max_length=arguments.get("max_length"),
+            limit=arguments.get("limit"),
+        )
+        return legacy_tool_outcome("web_fetch", text)
+
+    async def invoke_download(invocation, arguments):
+        from agent_tools import tool_work_dir_override
+        from security.runtime import execution_scope
+        from tool_result_status import legacy_tool_outcome
+
+        url = str(arguments.get("url") or "").strip()
+        if not url:
+            raise ValueError("url is required")
+        # Host-service invokers receive these bindings as services; unlike the
+        # builtin executor, their caller does not enter the scopes for them.
+        workspace = invocation.service("security_workspace")
+        with tool_work_dir_override(workspace), execution_scope(
+            session_id=invocation.session_id,
+            context=invocation.service("security_context"),
+            request=invocation.service("security_request"),
+            decision=invocation.service("security_decision"),
+            workspace=workspace,
+        ):
+            text = await web_tools.web_download(
+                url,
+                path=arguments.get("path"),
+                target_directory=arguments.get("target_directory"),
+                file_path=arguments.get("file_path"),
+                max_bytes=arguments.get("max_bytes"),
+            )
+        return legacy_tool_outcome("web_download", text)
+
     host_tool_invokers.register(
         "web_search",
-        invoke,
+        invoke_search,
         replace=True,
         owner=plugin.plugin_id,
         effect="read",
-        enabled=lambda: context["is_enabled"](plugin.plugin_id),
+        enabled=enabled,
         policy=ToolExecutionPolicy(
             effect="read",
             parallel_safe=True,
@@ -456,7 +501,30 @@ def tool_definitions(context, plugin):
             interruptibility="safe",
         ),
     )
-    return [_definition()]
+    host_tool_invokers.register(
+        "web_fetch",
+        invoke_fetch,
+        replace=True,
+        owner=plugin.plugin_id,
+        effect="read",
+        enabled=enabled,
+        policy=ToolExecutionPolicy(
+            effect="read",
+            parallel_safe=True,
+            early_stream_safe=True,
+            interruptibility="safe",
+        ),
+    )
+    host_tool_invokers.register(
+        "web_download",
+        invoke_download,
+        replace=True,
+        owner=plugin.plugin_id,
+        effect="write",
+        enabled=enabled,
+        policy=ToolExecutionPolicy(effect="write"),
+    )
+    return [_definition(), *web_tools.definitions()]
 
 
 def install(app, context, _plugin):

@@ -94,16 +94,41 @@ function askBudget() {
 // Hosts recreate panel DOM on refresh; retain a bounded history across renders.
 const lastGoalActivitySignature = new Map();
 const ACTIVITY_HISTORY_LIMIT = 64;
+// Session updates can recreate the panel before the action response arrives.
+const goalActionStates = new Map();
+
+function actionStateFor(key) {
+    if (!goalActionStates.has(key)) {
+        goalActionStates.set(key, { pending: '', message: '', kind: '', revision: 0, timer: null, listeners: new Set() });
+        for (const [oldKey, state] of goalActionStates) {
+            if (goalActionStates.size <= ACTIVITY_HISTORY_LIMIT) break;
+            if (oldKey !== key && !state.pending && !state.listeners.size) {
+                globalThis.clearTimeout(state.timer);
+                goalActionStates.delete(oldKey);
+            }
+        }
+    }
+    return goalActionStates.get(key);
+}
+
+function publishActionState(state, goal) {
+    state.listeners.forEach(function (listener) { listener(goal); });
+}
 
 export function renderSessionPanel(context) {
     const panel = context.container;
     const activityKey = JSON.stringify([context.sessionId, context.item.pluginId, context.item.id]);
+    const actionState = actionStateFor(activityKey);
     panel.classList.add('agent-goal-panel-host');
     let alive = true;
     let goal = initialGoal(context.item);
     let receivedAt = Date.now();
     let activeModal = null;
     let lastClockSecond = null;
+    let continuation = null;
+    let progressReading = false;
+    let progressReadAt = 0;
+    const lifetime = new AbortController();
 
     const card = element('section', 'chat-goal-card workspace-side-panel');
     const heading = element('div', 'chat-goal-heading workspace-side-panel-title');
@@ -120,6 +145,10 @@ export function renderSessionPanel(context) {
     const toggle = element('button', 'chat-goal-icon-btn');
     toggle.type = 'button';
     toggle.append(icon(['M9 5v14', 'M15 5v14'], 'chat-goal-icon-pause'), icon(['m8 5 11 7-11 7Z'], 'chat-goal-icon-play'));
+    const spinner = element('span', 'chat-goal-action-spinner');
+    spinner.hidden = true;
+    spinner.setAttribute('aria-hidden', 'true');
+    toggle.appendChild(spinner);
     const edit = element('button', 'chat-goal-icon-btn');
     edit.type = 'button'; edit.setAttribute('aria-label', t('编辑 Goal'));
     globalThis.setUiHoverTip?.(edit, t('编辑 Goal'));
@@ -132,6 +161,12 @@ export function renderSessionPanel(context) {
     review.type = 'button';
     globalThis.setUiHoverTip?.(review, t('结果审核'));
     actions.append(stats, toggle, edit, remove, review);
+    const feedback = element('div', 'chat-goal-action-feedback');
+    feedback.hidden = true;
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+    feedback.setAttribute('aria-atomic', 'true');
+    actions.appendChild(feedback);
     const metaLine = element('div', 'chat-goal-meta workspace-side-panel-meta');
     card.append(heading, objective, metaLine, actions);
     panel.appendChild(card);
@@ -151,11 +186,12 @@ export function renderSessionPanel(context) {
         panel.hidden = true;
     }
 
-    async function requestAction(action, payload) {
+    async function requestAction(action, payload, options = {}) {
         const response = await context.request(`/sessions/${encodeURIComponent(context.sessionId)}/goal/${encodeURIComponent(action)}`, {
             method: 'POST', credentials: 'same-origin', cache: 'no-store',
             headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
             body: JSON.stringify(payload || {}),
+            signal: options.signal,
         });
         const data = await response.json();
         if (!response.ok) {
@@ -203,8 +239,13 @@ export function renderSessionPanel(context) {
         if (!goal) return;
         const labels = { active: '进行中', paused: '已暂停', completed: '已完成', blocked: '已阻塞', cancelled: '已取消' };
         const currentStatus = String(goal.status || 'active');
-        status.textContent = t(labels[currentStatus] || currentStatus)
-            + (currentStatus === 'active' ? ` · ${elapsedText(liveElapsed())}` : '');
+        const betweenRuns = currentStatus === 'active' && continuation?.label && continuation.phase !== 'running';
+        const progressAge = continuation?.since ? Math.max(0, Date.now() / 1000 - continuation.since) : 0;
+        status.textContent = actionState.pending
+            ? t(actionState.pending === 'resume' ? '正在继续…' : '正在暂停…')
+            : betweenRuns ? t(continuation.label) + (continuation.since ? ` · ${elapsedText(progressAge)}` : '')
+            : t(labels[currentStatus] || currentStatus)
+                + (currentStatus === 'active' ? ` · ${elapsedText(liveElapsed())}` : '');
         const meta = metaText();
         globalThis.setUiHoverTip?.(stats, meta);
         globalThis.setUiHoverTip?.(status, status.textContent);
@@ -244,13 +285,22 @@ export function renderSessionPanel(context) {
                 pubar.notifyActivity(panel);
             }
         }
-        const paused = currentStatus === 'paused';
-        toggle.hidden = currentStatus !== 'active' && !paused;
-        const toggleTip = t(paused ? '开始 Goal' : '暂停 Goal');
+        const resumable = currentStatus === 'paused' || currentStatus === 'blocked';
+        const pending = Boolean(actionState.pending);
+        toggle.hidden = currentStatus !== 'active' && !resumable;
+        const toggleTip = t(pending ? (actionState.pending === 'resume' ? '正在继续…' : '正在暂停…')
+            : currentStatus === 'blocked' ? '继续 Goal' : resumable ? '开始 Goal' : '暂停 Goal');
         toggle.setAttribute('aria-label', toggleTip);
+        toggle.setAttribute('aria-busy', String(pending));
+        toggle.disabled = pending;
         globalThis.setUiHoverTip?.(toggle, toggleTip);
-        toggle.querySelector('.chat-goal-icon-play').toggleAttribute('hidden', !paused);
-        toggle.querySelector('.chat-goal-icon-pause').toggleAttribute('hidden', paused);
+        toggle.querySelector('.chat-goal-icon-play').toggleAttribute('hidden', pending || !resumable);
+        toggle.querySelector('.chat-goal-icon-pause').toggleAttribute('hidden', pending || resumable);
+        spinner.hidden = !pending;
+        feedback.hidden = !actionState.message;
+        feedback.textContent = actionState.message;
+        feedback.dataset.kind = actionState.kind;
+        edit.disabled = remove.disabled = review.disabled = pending;
         edit.hidden = currentStatus === 'completed';
         remove.hidden = currentStatus === 'completed';
         review.hidden = currentStatus !== 'completed';
@@ -258,16 +308,16 @@ export function renderSessionPanel(context) {
         const pubar = globalThis.MyAgentPubar;
         if (pubar && typeof pubar.configureNarrow === 'function') {
             const actions = [];
-            if (!toggle.hidden) actions.push({ icon: paused ? 'play' : 'pause', tip: toggleTip, onClick: function () { toggle.click(); } });
-            if (!edit.hidden) actions.push({ icon: 'edit', tip: t('编辑 Goal'), onClick: function () { edit.click(); } });
-            if (!remove.hidden) actions.push({ icon: 'trash', tip: t('删除 Goal'), onClick: function () { remove.click(); } });
-            if (!review.hidden) actions.push({ label: review.textContent, tip: t('结果审核'), onClick: function () { review.click(); } });
+            if (!toggle.hidden) actions.push({ icon: resumable ? 'play' : 'pause', label: pending ? toggleTip : '', tip: toggleTip, onClick: function () { toggle.click(); } });
+            if (!edit.hidden && !pending) actions.push({ icon: 'edit', tip: t('编辑 Goal'), onClick: function () { edit.click(); } });
+            if (!remove.hidden && !pending) actions.push({ icon: 'trash', tip: t('删除 Goal'), onClick: function () { remove.click(); } });
+            if (!review.hidden && !pending) actions.push({ label: review.textContent, tip: t('结果审核'), onClick: function () { review.click(); } });
             const tone = currentStatus === 'active' ? 'accent' : (currentStatus === 'completed' ? 'green' : 'neutral');
             pubar.configureNarrow('goal', {
                 icon: 'target', label: 'GOAL',
                 chip: { text: status.textContent, tone: tone },
-                summary: objectiveSummary(full),
-                summaryTip: full,
+                summary: actionState.message || objectiveSummary(full),
+                summaryTip: actionState.message || full,
                 actions: actions,
             });
         }
@@ -360,14 +410,43 @@ export function renderSessionPanel(context) {
     }
 
     toggle.addEventListener('click', async function () {
-        let action = goal.status === 'paused' ? 'resume' : 'pause';
+        if (!alive || !goal || actionState.pending) return;
+        const action = ['paused', 'blocked'].includes(goal.status) ? 'resume' : 'pause';
         const payload = {};
         if (action === 'resume' && goal.token_budget != null && Number(goal.remaining_tokens || 0) <= 0) {
             const additional = askBudget(); if (additional == null) return; payload.additional_budget = additional;
         }
-        toggle.disabled = true;
-        try { await requestAction(action, payload); } catch (error) { globalThis.alert?.(String(error.message || error)); }
-        finally { toggle.disabled = false; }
+        if (goal.id !== 'projected') payload.expected_goal_id = goal.id;
+        globalThis.clearTimeout(actionState.timer);
+        actionState.pending = action;
+        actionState.message = t(action === 'resume' ? '正在继续 Goal…' : '正在暂停 Goal…');
+        actionState.kind = 'pending';
+        actionState.revision++;
+        publishActionState(actionState);
+        const controller = new AbortController();
+        const deadline = globalThis.setTimeout(function () { controller.abort(); }, 15000);
+        let result;
+        try {
+            result = await requestAction(action, payload, { signal: controller.signal });
+            actionState.message = result ? t(action === 'resume' ? 'Goal 已继续，自动续跑已启用' : 'Goal 已暂停，当前任务继续执行') : '';
+            actionState.kind = 'success';
+        } catch (error) {
+            actionState.message = error.name === 'AbortError'
+                ? t('请求等待超时，请刷新确认 Goal 状态后再重试。')
+                : `${t(action === 'resume' ? '继续 Goal 失败' : '暂停 Goal 失败')}：${String(error.message || error)}`;
+            actionState.kind = 'error';
+        } finally {
+            globalThis.clearTimeout(deadline);
+            actionState.pending = '';
+            actionState.revision++;
+            publishActionState(actionState, result);
+            if (actionState.kind === 'success') {
+                actionState.timer = globalThis.setTimeout(function () {
+                    actionState.message = '';
+                    publishActionState(actionState);
+                }, 5000);
+            }
+        }
     });
     edit.addEventListener('click', openEdit);
     remove.addEventListener('click', async function () {
@@ -376,19 +455,47 @@ export function renderSessionPanel(context) {
     });
     review.addEventListener('click', openReview);
 
+    const onActionState = function (nextGoal) {
+        if (!alive) return;
+        if (nextGoal) { goal = nextGoal; continuation = null; progressReadAt = 0; receivedAt = Date.now(); }
+        render();
+    };
+    actionState.listeners.add(onActionState);
     render();
+    async function pollProgress() {
+        if (!alive || !goal || goal.status !== 'active' || progressReading || document.hidden
+            || Date.now() - progressReadAt < (['running', 'stopped'].includes(continuation?.phase) ? 15000 : 2000)) return;
+        const goalId = goal.id, revision = actionState.revision;
+        progressReading = true;
+        progressReadAt = Date.now();
+        try {
+            const response = await context.request(`/sessions/${encodeURIComponent(context.sessionId)}/goal/progress`, {
+                method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' },
+                signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(4000)]),
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            if (!alive || !goal || goal.id !== goalId || actionState.revision !== revision || data.goal_id !== goalId) return;
+            const changed = continuation?.phase !== data.continuation?.phase || continuation?.since !== data.continuation?.since;
+            continuation = data.continuation || null;
+            if (changed) render();
+        } catch { /* Keep the last confirmed phase when observation is unavailable. */ }
+        finally { progressReading = false; }
+    }
     const tickClock = function () {
         if (!alive || !goal || goal.status !== 'active' || document.hidden) return;
-        if (Math.floor(liveElapsed()) !== lastClockSecond) renderClock();
+        if (Math.floor(liveElapsed()) !== lastClockSecond || continuation?.phase !== 'running') renderClock();
+        void pollProgress();
     };
     const timer = globalThis.setInterval(tickClock, 1000);
     document.addEventListener('visibilitychange', tickClock);
+    const initialActionRevision = actionState.revision;
     void context.request(`/sessions/${encodeURIComponent(context.sessionId)}/goal`, {
         method: 'GET', credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' },
     }).then(function (response) { return response.ok ? response.json() : null; }).then(function (data) {
-        if (!alive || !data) return;
+        if (!alive || !data || actionState.revision !== initialActionRevision) return;
         if (data.goal && data.goal.deleted !== true) {
-            goal = data.goal; receivedAt = Date.now(); render();
+            goal = data.goal; continuation = data.continuation || null; receivedAt = Date.now(); render();
         } else {
             hideGoalPanel();
             context.notifyStateChanged();
@@ -397,6 +504,8 @@ export function renderSessionPanel(context) {
 
     return function (details) {
         alive = false;
+        lifetime.abort();
+        actionState.listeners.delete(onActionState);
         globalThis.clearInterval(timer);
         document.removeEventListener('visibilitychange', tickClock);
         const sameSession = details

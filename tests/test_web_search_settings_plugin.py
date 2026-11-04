@@ -22,7 +22,7 @@ def test_manifest_exposes_embedded_settings_page():
     plugin = load_plugin(ROOT / "plugins" / "web-search-providers")
     rows = [row for row in plugin_ui_contributions(plugin) if row["slot"] == "settings.section"]
 
-    assert plugin.version == "1.1.0"
+    assert plugin.version == "1.2.0"
     assert rows == [
         {
             "id": "search",

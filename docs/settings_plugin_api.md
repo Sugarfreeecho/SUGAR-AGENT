@@ -68,6 +68,24 @@
 宿主会直接在对应设置页签内加载 `/plugins/{plugin_id}?embedded=1`，不再显示跳转按钮。
 普通表单和未声明内嵌的插件保持原有行为；仅接受布尔值 `true`，页面地址仍由宿主生成。
 
+### 原生会话控制台（2026-10-30）
+
+Goal 与 Agent Team 使用 `target: "renderer"` 的原生设置分区，不加载插件 iframe，也不使用插件页面桥。声明示例：
+
+```json
+{"id":"main","title":"Goal 目标","target":"renderer","renderer":{"module":"settings.js","style":"settings.css"}}
+```
+
+该能力沿用内置可信 renderer 的目录与资源校验。模块导出 `mountSettings({root, settings})`，直接在设置文档的 root 内渲染；通过 `settings.W.card` / `settings.W.row`、`st-btn` / `st-input` 以及 `--st-*` 主题变量复用设置组件。所有查询和动态渲染限定在本次 root，避免访问其他设置分区或修改整个文档的主题。
+
+`settings.bootSection.sessionId` 提供打开设置时的会话；原生控制台保留手动选择其他会话。每次挂载创建独立控制器，返回清理函数，离开分区后取消请求、定时器、可见性观察和全局监听。隐藏设置或浏览器页时停止轮询，恢复可见时继续。主设置内容区承担唯一滚动，弹窗使用同一文档。
+
+两个插件不再声明 `navigation` 或 `details.tab`；Team 的旧状态面板已合入控制台，Goal 的左侧摘要和会话徽标保留。原插件打开动作转到设置，旧详情栏标签自动清理。原独立页面保留兼容，与原生分区共用视图和业务控制器。
+
+浏览器连接同样使用 `target: "renderer"` 的原生设置分区，直接使用宿主的 `st-card`、`st-row`、`st-btn`、`st-input`、`st-seg` 和 `--st-*` 变量。分步安装、配对、默认浏览器、撤销配对及重启确认与独立页面共用控制器，查询限定在当前分区 root；离开后清理轮询、请求、观察器及弹窗。原独立页面继续兼容旧入口。
+
+实际随主程序提供、已通过路径校验并声明 `setup_when_disabled` 的安装设置页也可使用设置 renderer，停用时仍保留此入口以便启用功能。这只提供静态设置界面，不会启动停用的运行时；用户安装路径下的插件不能通过声明相同字段获得原生 renderer 权限，此例外不适用于会话面板。
+
 内嵌页面可使用同源 `postMessage` 与设置外壳交互：
 
 - 页面发送 `myagent:plugin-settings-ready`，宿主返回 `myagent:plugin-settings-context`，
