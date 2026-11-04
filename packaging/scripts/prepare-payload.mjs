@@ -29,6 +29,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import { prepareBrowserAssets, stageBrowserBundle } from './prepare-browser-bundle.mjs'
 
 const { assertRuntimeArchives } = createRequire(import.meta.url)('./runtime-archives.cjs')
 const { cleanupPyc } = createRequire(import.meta.url)('./payload-bytecode.cjs')
@@ -447,7 +448,7 @@ function dependenciesList() {
 
 // ---------------------------------------------------------------------- main ---
 
-function main() {
+async function main() {
   if (LIST_PLUGINS) {
     const selection = selectPlugins(path.join(REPO, 'plugins'), readPluginTiers(), { all: ALL_PLUGINS })
     log(`插件分级表：${path.relative(REPO, PLUGIN_TIERS)}`)
@@ -472,6 +473,10 @@ function main() {
   log(`SugarAgent 桌面版载荷准备 v${PACKAGE_JSON.version}`)
   log(`  仓库：${REPO}`)
   log(`  输出：${PAYLOAD}`)
+
+  // Prepare browser assets before replacing an existing payload. A missing
+  // build input or a failed download must not erase the previous good bundle.
+  const browserAssets = await prepareBrowserAssets({ repo: REPO })
 
   if (BUILD_FRONTEND) buildFrontend()
 
@@ -531,6 +536,7 @@ function main() {
     packaged: pluginSelection.packaged.map(item => ({ id: item.name, tier: item.tier })),
     skipped: pluginSelection.skipped,
   }
+  const browserBundle = stageBrowserBundle(PAYLOAD, browserAssets)
 
   log('· 拷贝 Python 基座 ——')
   copyTree(path.join(REPO, 'python'), path.join(PAYLOAD, 'python'), {
@@ -604,6 +610,7 @@ function main() {
     excludedDependencies: EXCLUDED_PACKAGES,
     skills: skillSummary,
     plugins: pluginSummary,
+    browser: { version: browserBundle.version, node: browserBundle.node.version, lockDigest: browserBundle.lockDigest },
     ripgrep: rg ? path.relative(PAYLOAD, rg).replace(/\\/g, '/') : null,
     runtimeArchives,
     bytecodeCleanup,
@@ -617,6 +624,6 @@ function main() {
 }
 
 const invokedDirectly = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-if (invokedDirectly) main()
+if (invokedDirectly) main().catch(error => { console.error(error.stack || error.message); process.exitCode = 1 })
 
 export { copyTree, readPluginTiers, readSkillAllowlist, selectPlugins, selectSkills, skillFrontmatterName }

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "browser-use",
+  "name": "浏览器连接",
+  "version": "0.6.36",
+  "description": "SugarAgent 侧栏、自动页面关联及现有浏览器连接，复用 Playwright MCP 操作工具。",
+  "capabilities": {
+    "trusted_host": {
+      "entry": "host.py"
+    },
+    "web": {
+      "entry": "web/index.html",
+      "assets": "web",
+      "setup_when_disabled": true
+    },
+    "ui": {
+      "settings.section": [
+        {
+          "id": "browser",
+          "title": "浏览器连接",
+          "target": "renderer",
+          "renderer": {
+            "module": "settings.js",
+            "style": "settings.css"
+          },
+          "order": 35
+        }
+      ],
+      "details.tab": [
+        {
+          "id": "connections",
+          "title": "浏览器连接",
+          "scope": "app",
+          "order": 45
+        }
+      ]
+    }
+  }
+}

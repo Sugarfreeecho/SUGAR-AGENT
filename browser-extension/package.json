@@ -1,0 +1,47 @@
+{
+  "name": "sugaragent-browser-extension",
+  "version": "0.6.36",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "test:sessions": "node tests/session-model-smoke.mjs",
+    "test:host": "node tests/host-smoke.mjs",
+    "test:settings": "node tests/settings-smoke.mjs",
+    "package": "node scripts/package.mjs",
+    "test:menus": "node tests/menu-audit.mjs",
+    "test:human": "node tests/human-smoke.mjs",
+    "test:sync": "node tests/session-sync-smoke.mjs",
+    "test:steer": "node tests/steer-smoke.mjs",
+    "test:connection": "node tests/connection-smoke.mjs",
+    "test:latency": "node tests/latency-smoke.mjs",
+    "test:pending": "node tests/pending-smoke.mjs",
+    "test:restart-process": "node tests/restart-process-smoke.mjs",
+    "test:recovery": "node tests/session-recovery-smoke.mjs",
+    "test:subagents": "node tests/subagents-smoke.mjs",
+    "test:stream-continuity": "node tests/stream-continuity-smoke.mjs",
+    "test:image-entry": "node tests/image-entry-smoke.mjs",
+    "test:run-outcome": "node tests/run-outcome-smoke.mjs",
+    "test:live-recovery": "node tests/live-stream-recovery-smoke.mjs"
+  },
+  "dependencies": {
+    "dompurify": "3.4.17",
+    "highlight.js": "11.11.1",
+    "katex": "0.19.1",
+    "marked": "15.0.12",
+    "mermaid": "10.9.8",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.287",
+    "@types/katex": "0.16.8",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "typescript": "5.7.3",
+    "vite": "6.4.5"
+  }
+}

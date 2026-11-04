@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "SugarAgent",
+  "description": "与本机 SugarAgent 对话，并通过 Playwright 使用当前浏览器完成网页任务。",
+  "version": "0.6.36",
+  "minimum_chrome_version": "125",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "tabs",
+    "debugger",
+    "scripting",
+    "contextMenus",
+    "alarms",
+    "activeTab",
+    "downloads"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "打开 SugarAgent",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "24": "icons/icon-24.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "sidepanel.html#settings",
+  "commands": {
+    "open-sidebar": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
+      "description": "打开 SugarAgent 侧栏"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'self' http: https: ws://127.0.0.1:* ws://localhost:*; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAt7WpeU7aA2VsIsE4lFfFqmwUQctblhxi2kaLhf6sxIIDMVtAnmEm+uvGIKY00mqErJvRtr4xiBXDQ61zW0X3AupoVDZ0EnjZmp7ijy5f+aqLzrfD4ABfqm2YkIQ4b38APrYMMvKbvYAA7CTvgAASq53VthT5w5Zh2+oVgVHanIgtf+FhGexVUIX/1LdlOZae2j1tiBgr0H9HVM3VLYGGs6khERid4qAlu8AN6zX37vUm5Ug6VZL8LKO0awd/kbMmzwkGTSt0rUXqE04k+0EsCCFZCMcjrMMr4YWjOeTrTlUKUHd37fsqS/R5zw/1+2NQq2FEQUb9PFeVz2D0fXK+1wIDAQAB"
+}

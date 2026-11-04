@@ -6,9 +6,9 @@
 
 | 产物 | 路径 | 体积 |
 |---|---|---|
-| 安装包（向导式，默认） | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe` | ≈ 251 MB |
-| 安装包差分块 | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe.blockmap` | ≈ 200 KB |
-| 未打包目录版 | `packaging/build/dist/win-unpacked/` | 调试用；现有产物尚未应用资源归档优化 |
+| 安装包（向导式，默认） | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe` | 以本次构建统计为准 |
+| 安装包差分块 | `packaging/build/dist/SugarAgent-Setup-<版本>-x64.exe.blockmap` | 随安装包生成 |
+| 未打包目录版 | `packaging/build/dist/win-unpacked/` | 调试与安装前验证用 |
 | 运行时载荷 | `packaging/build/payload/` | 中间产物；下次准备时按需合并飞书 SDK、合并 PPT 图标 |
 
 2026-10-14 的 1.5.4 优化包位于 `build/dist-1.5.4/SugarAgent-Setup-1.5.4-x64.exe`（224.5 MiB）；载荷 8,130 个文件、应用 8,152 个文件、松散字节码为 0。构建与验证记录见 `docs/desktop-release-1.5.4-2026-10-14.md`。
@@ -74,6 +74,37 @@ node scripts\build.mjs --all-plugins               # 连独立功能插件一起
 $env:SUGARAGENT_MAX_COMPRESSION='1'; node scripts\build.mjs   # 极限压缩（安装包更小、构建更慢）
 $env:SUGARAGENT_PIP_INDEX='https://pypi.tuna.tsinghua.edu.cn/simple'  # 国内镜像装依赖
 ```
+
+### 浏览器扩展随主程序分发
+
+默认发布载荷包含 `browser-use` 后端插件、浏览器扩展的可加载目录和 ZIP，以及独立 Node 与锁定版 Playwright MCP 生产依赖。首次启动默认关闭浏览器连接，用户在设置中启用后，直接加载扩展并配对；安装版不需要 Node、npm 或额外下载浏览器内核。
+
+每次 `payload` / `payload:fast` 都会先构建浏览器资源，再替换原载荷。生产依赖按 `plugins/browser-use/node/package-lock.json` 缓存在 `build/browser-cache/`，不会裁剪开发目录的 node_modules。Node 固定版本和 SHA-256 记录在 `browser-runtime.lock.json`，优先复用哈希一致的构建主机 Node，否则从官方地址下载并验证；Node LICENSE 及 npm 包许可证随包保留。
+
+当前浏览器资源的隔离载荷约 112.6 MiB（解压后）；这不是完整安装包体积，最终以构建输出为准。
+
+安装后位于 `resources/runtime/`：
+
+```text
+node/node.exe                         # 固定版本独立 Node
+node/LICENSE
+plugins/browser-use/                  # Python 宿主、设置向导
+plugins/browser-use/node/node_modules/ # 锁定版生产依赖
+browser-extension/dist/               # 可直接加载的扩展，无 sourcemap
+outputs/browser-extension/*.zip       # 设置页下载入口
+browser-bundle.json                   # 版本、源输入摘要和逐文件校验值
+```
+
+Electron 打包前、复制资源后都会校验此清单；缺资源、版本不一致或 `--skip-payload` 复用了源码已变化的旧浏览器载荷，会直接中止。运行期始终优先使用内置 Node；安装组件损坏时提示修复应用，不回退到用户 PATH 中的 Node，也不在安装目录执行 npm ci。
+
+可单独生成和验证浏览器载荷，不重建 Python 或 NSIS：
+
+```powershell
+npm run payload:browser -- --output build/browser-release-smoke
+npm run test:browser-bundle -- --payload build/browser-release-smoke
+```
+
+自检会清空 PATH 并禁止系统 Node/npm 查找，用安装目录中的真实宿主启动 Node，验证工具目录、扩展文件、ZIP 下载和离线准备流程。此流程不会开启浏览器调试、修改个人浏览器或重启正在运行的后端。
 
 ### 技能模板只打包白名单里的技能
 

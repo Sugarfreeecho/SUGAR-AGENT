@@ -51,6 +51,7 @@ function main() {
     const args = [path.join(HERE, 'prepare-payload.mjs')]
     if (BUILD_FRONTEND) args.push('--build-frontend')
     if (flags.has('--all-skills')) args.push('--all-skills')
+    if (flags.has('--all-plugins')) args.push('--all-plugins')
     run(process.execPath, args, { cwd: PACKAGING })
   }
 

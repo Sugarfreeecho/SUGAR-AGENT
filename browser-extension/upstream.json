@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/microsoft/playwright",
+  "commit": "e8149b8257d32dcf8f72573ecc43e72439da7080",
+  "mcpVersion": "0.0.83",
+  "playwrightVersion": "1.64.0-alpha-1790635538000",
+  "license": "Apache-2.0",
+  "source": "packages/extension/src/relayConnection.ts",
+  "purpose": "Reuse upstream Chrome extension relay; page automation and model tool schemas remain supplied by Playwright MCP."
+}

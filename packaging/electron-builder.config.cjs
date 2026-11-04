@@ -23,6 +23,7 @@ const { existsSync } = require('node:fs')
 const path = require('node:path')
 const { installStartupLauncher } = require('./scripts/startup-launcher.cjs')
 const { assertRuntimeArchives } = require('./scripts/runtime-archives.cjs')
+const { assertBrowserBundle } = require('./scripts/browser-bundle.cjs')
 
 // 安装器形态：assisted（默认，带向导页面）/ oneclick（双击即装，仅进度条）
 const INSTALLER_STYLE = process.env.SUGARAGENT_INSTALLER_STYLE === 'oneclick' ? 'oneclick' : 'assisted'
@@ -76,6 +77,7 @@ module.exports = {
   compression: process.env.SUGARAGENT_MAX_COMPRESSION === '1' ? 'maximum' : 'normal',
   beforePack: async () => {
     assertRuntimeArchives(path.join(__dirname, 'build', 'payload'))
+    assertBrowserBundle(path.join(__dirname, 'build', 'payload'), { repo: path.resolve(__dirname, '..') })
   },
   afterPack: async context => {
     const payload = path.join(context.appOutDir, 'resources', 'runtime')
@@ -85,6 +87,7 @@ module.exports = {
       throw new Error(`载荷不完整：缺少 ${python} 或 ${entry}；请先运行 npm run payload`)
     }
     assertRuntimeArchives(payload)
+    assertBrowserBundle(payload, { repo: path.resolve(__dirname, '..') })
     context.packager.appInfo.buildNumber = undefined
     await installStartupLauncher(context)
   },
