@@ -39,6 +39,13 @@ class RuntimeUiProjection:
     _index_cache_sizes: Dict[str, int] = {}
     _events_cache_sizes: Dict[str, int] = {}
     _recent_page_cache_sizes: Dict[tuple, int] = {}
+    _checkpoint_condition = threading.Condition()
+    _checkpoint_pending: Dict[str, tuple] = {}
+    _checkpoint_active: set[str] = set()
+    _checkpoint_last: Dict[str, float] = {}
+    _checkpoint_started = False
+    _ASYNC_INDEX_MIN_BYTES = 8 * 1024 * 1024
+    _INDEX_CHECKPOINT_SECONDS = 10.0
 
     def __init__(self, sessions_dir: str | Path, path_resolver: Optional[Callable[[str], str | Path]] = None):
         self.sessions_dir = Path(sessions_dir)
@@ -526,6 +533,33 @@ class RuntimeUiProjection:
             if isinstance(event, dict) and event.get("type") == "user"
         ]
 
+    def read_user_preview_hint(self, session_id: str) -> str:
+        """Best-effort sidebar text with bounded work and no index rebuilding."""
+        signature = self._event_log_signature(session_id)
+        path = self._ui_index_path(session_id)
+        with self._cache_lock:
+            data = self._index_cache.get(str(path.resolve()))
+        try:
+            if data is None and path.stat().st_size <= 2 * 1024 * 1024:
+                with path.open("r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            if (isinstance(data, dict) and data.get("index_version") == UI_PROJECTION_INDEX_VERSION
+                    and tuple(data.get("signature") or ()) == signature
+                    and data.get("source") and source_matches(self.event_log.event_path(session_id), data["source"])):
+                turns = data.get("user_turns") or []
+                return str(turns[-1].get("preview") or "") if turns else ""
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            pass
+        events, _ = self.event_log.read_tail_window(session_id, max_bytes=64 * 1024, max_events=256)
+        if any(event.type in {"runtime_snapshot_compacted", "legacy_truncate_observed", "visible_range_changed",
+                              "message_deleted", "message_rewritten"} for event in events):
+            return ""  # A bounded suffix cannot resolve edits to older history.
+        for event in reversed(events):
+            ui = self.event_to_ui(event)
+            if ui is not None and ui.get("type") == "user":
+                return self._user_turn_preview(ui)
+        return ""
+
     def count_ui_events_light(self, session_id: str) -> tuple[int, int]:
         """Return projected UI count and latest truncate seq.
 
@@ -856,11 +890,67 @@ class RuntimeUiProjection:
                 name, added_locations = store.write(added_rows, file_number=len(files))
                 files.append(name)
                 locations.extend(added_locations)
-            extended.update(row_files=files, row_locations=locations,
-                            source=seal_source(self.event_log.event_path(session_id),
-                                source_boundary(self.event_log.event_path(session_id), read_metadata["byte_offset"])))
+            boundary = source_boundary(self.event_log.event_path(session_id), read_metadata["byte_offset"])
+            extended.update(row_files=files, row_locations=locations, source=boundary)
+            if int(signature[2]) >= self._ASYNC_INDEX_MIN_BYTES:
+                # Memory readers already validated their previous generation
+                # and the appended suffix. Hash the entire persisted prefix in
+                # a coalesced checkpoint, outside the foreground index lock.
+                self._schedule_ui_index_checkpoint(session_id, extended)
+                return extended
+            extended["source"] = seal_source(self.event_log.event_path(session_id), boundary)
         self._write_ui_index(self._ui_index_path(session_id), extended)
         return extended
+
+    def _schedule_ui_index_checkpoint(self, session_id, data):
+        cls = type(self)
+        key = str(self._ui_index_path(session_id).resolve())
+        with cls._checkpoint_condition:
+            if key not in cls._checkpoint_pending and len(cls._checkpoint_pending) >= 16:
+                return  # The older disk generation remains independently recoverable.
+            cls._checkpoint_pending[key] = (self, session_id, data)
+            if not cls._checkpoint_started:
+                threading.Thread(target=cls._ui_index_checkpoint_worker,
+                                 name="ui-index-checkpoint", daemon=True).start()
+                cls._checkpoint_started = True
+            cls._checkpoint_condition.notify_all()
+
+    @classmethod
+    def _ui_index_checkpoint_worker(cls):
+        while True:
+            with cls._checkpoint_condition:
+                while True:
+                    now = time.monotonic()
+                    due = [key for key in cls._checkpoint_pending
+                           if now - cls._checkpoint_last.get(key, 0) >= cls._INDEX_CHECKPOINT_SECONDS]
+                    if due:
+                        key = due[0]
+                        projection, session_id, data = cls._checkpoint_pending.pop(key)
+                        cls._checkpoint_active.add(key)
+                        break
+                    waits = [cls._INDEX_CHECKPOINT_SECONDS - (now - cls._checkpoint_last.get(key, 0))
+                             for key in cls._checkpoint_pending]
+                    cls._checkpoint_condition.wait(max(.01, min(waits)) if waits else None)
+            try:
+                source = seal_source(projection.event_log.event_path(session_id), data["source"])
+                with cls._cache_lock:
+                    lock = cls._index_locks.setdefault(projection._cache_key(session_id), threading.RLock())
+                with lock:
+                    with cls._cache_lock:
+                        current = cls._index_cache.get(key)
+                    # A newer index, repair or invalidation owns publication.
+                    if (current is data and projection._ui_index_path(session_id).parent.is_dir()
+                            and source_matches(projection.event_log.event_path(session_id), source)):
+                        projection._write_ui_index(projection._ui_index_path(session_id), {**data, "source": source})
+            except Exception:
+                logger.warning("UI index checkpoint failed: session=%s", session_id, exc_info=True)
+            finally:
+                with cls._checkpoint_condition:
+                    cls._checkpoint_active.discard(key)
+                    cls._checkpoint_last[key] = time.monotonic()
+                    if len(cls._checkpoint_last) > 64:
+                        cls._checkpoint_last.pop(next(iter(cls._checkpoint_last)))
+                    cls._checkpoint_condition.notify_all()
 
     def _reproject_ui_tail(self, session_id, data, signature, events, read_metadata):
         """Apply history edits/order repairs to derived rows, not old facts."""
@@ -1038,9 +1128,10 @@ class RuntimeUiProjection:
         event_budget: Optional[int] = None,
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
         diagnostics: Optional[dict] = None,
+        include_user_turns: bool = False,
     ) -> dict:
         recent_key = None
-        if legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
+        if not include_user_turns and legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
             recent_key = (self._cache_key(session_id), self._event_log_signature(session_id),
                           int(turns), int(event_budget or 0))
             with self._cache_lock:
@@ -1054,6 +1145,7 @@ class RuntimeUiProjection:
                 session_id, limit=limit, before_index=before_index, after_index=after_index,
                 target_index=target_index, turns=turns, event_budget=event_budget,
                 diagnostics=diagnostics,
+                include_user_turns=include_user_turns,
             )
             if indexed is not None:
                 if recent_key is not None:
@@ -1086,6 +1178,7 @@ class RuntimeUiProjection:
         )
 
     def _read_indexed_ui_page(self, session_id: str, *, diagnostics: Optional[dict] = None,
+                               include_user_turns: bool = False,
                                _rebuilt: bool = False, **options) -> Optional[dict]:
         started = time.perf_counter()
         index = self._read_or_build_ui_index(session_id, diagnostics)
@@ -1104,6 +1197,11 @@ class RuntimeUiProjection:
         page = self._page_events(
             [{"type": "user" if pos in users else ""} for pos in range(total)], **options
         )
+        if include_user_turns and isinstance(index.get("user_turns"), list):
+            # Capture the TOC from the very same immutable index generation.
+            # A live append after page reading must not trigger another full
+            # index extension/hash just to read its user-turn previews.
+            page["user_turns"] = [dict(row) for row in index["user_turns"] if isinstance(row, dict)]
         start, end = page["range_start"], page["range_end"]
         if index.get("row_locations") is not None:
             try:
@@ -1129,7 +1227,8 @@ class RuntimeUiProjection:
                 rebuilt = self._read_or_build_ui_index(session_id)
                 if rebuilt.get("row_locations") is None:
                     return None
-                return self._read_indexed_ui_page(session_id, diagnostics=diagnostics, _rebuilt=True, **options)
+                return self._read_indexed_ui_page(session_id, diagnostics=diagnostics,
+                    include_user_turns=include_user_turns, _rebuilt=True, **options)
         if index.get("has_history_ops"):
             return None
         wanted = seqs[start:end]
@@ -1148,7 +1247,8 @@ class RuntimeUiProjection:
                 rebuilt = self._read_or_build_ui_index(session_id)
                 if rebuilt.get("row_locations") is None:
                     return None
-                return self._read_indexed_ui_page(session_id, diagnostics=diagnostics, _rebuilt=True, **options)
+                return self._read_indexed_ui_page(session_id, diagnostics=diagnostics,
+                    include_user_turns=include_user_turns, _rebuilt=True, **options)
             ui = self._with_run_id(self._event_to_ui(session_id, event), event, run_ids[pos])
             if ui is None:
                 return None

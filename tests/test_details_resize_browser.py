@@ -87,30 +87,36 @@ def test_interrupted_gesture_stops_and_ignores_other_pointer(details_page, end):
 
 def test_width_limits_preserve_workspace_and_preferred_width(details_page):
     page = open_details(details_page)
+    floor = page.evaluate('DOCK_RIGHT_WORKSPACE_FLOOR')
+    # 1440px viewport − 220px sidebar: dragging past the limit may only eat the
+    # space above the workspace floor.
+    widest = 1220 - floor
     x = geometry(page)['edge']
     page.mouse.move(x, 300)
     page.mouse.down()
     page.mouse.move(100, 300)
     page.mouse.up()
-    assert geometry(page)['width'] == 660
-    assert geometry(page)['main'] >= 560
+    assert geometry(page)['width'] == widest
+    assert geometry(page)['main'] >= floor
     page.set_viewport_size({'width': 760, 'height': 900})
     page.wait_for_timeout(350)
     assert geometry(page)['mode'] == 'fullscreen'
     page.set_viewport_size({'width': 1000, 'height': 900})
     page.wait_for_timeout(350)
-    assert geometry(page)['mode'] == 'fullscreen'
+    # A 780px workspace still leaves 320px for the column above the floor.
+    assert geometry(page)['mode'] == 'push'
+    assert geometry(page)['main'] >= floor
     page.set_viewport_size({'width': 1200, 'height': 900})
     page.wait_for_timeout(350)
     assert geometry(page)['mode'] == 'push'
-    assert geometry(page)['main'] >= 560
-    assert page.evaluate("localStorage.getItem(DOCK_RIGHT_WIDTH_KEY)") == '660'
+    assert geometry(page)['main'] >= floor
+    assert page.evaluate("localStorage.getItem(DOCK_RIGHT_WIDTH_KEY)") == str(widest)
     page.set_viewport_size({'width': 1600, 'height': 900})
     page.wait_for_timeout(350)
-    assert geometry(page)['width'] == 660
+    assert geometry(page)['width'] == widest
     page.evaluate("document.getElementById('sidebar').style.width='480px'")
     page.wait_for_timeout(350)
-    assert geometry(page)['main'] >= 560
+    assert geometry(page)['main'] >= floor
 
 
 def test_manual_fullscreen_survives_resize_and_half_screen_stays_collapsed(details_page):
@@ -124,6 +130,12 @@ def test_manual_fullscreen_survives_resize_and_half_screen_stays_collapsed(detai
     page.set_viewport_size({'width': 1000, 'height': 900})
     page.wait_for_timeout(350)
     assert not geometry(page)['expanded']
+    page.set_viewport_size({'width': 900, 'height': 900})
+    page.wait_for_timeout(350)
     page.evaluate('MyAgentDock.openDetails()')
     page.wait_for_timeout(350)
     assert geometry(page)['mode'] == 'fullscreen'
+    page.set_viewport_size({'width': 1000, 'height': 900})
+    page.wait_for_timeout(350)
+    assert geometry(page)['mode'] == 'push'
+    assert geometry(page)['main'] >= page.evaluate('DOCK_RIGHT_WORKSPACE_FLOOR')

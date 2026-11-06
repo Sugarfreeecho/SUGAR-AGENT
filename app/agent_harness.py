@@ -7823,7 +7823,15 @@ class SessionManager:
             preview = str(d.get("last_user_preview") or "").strip()
             if not preview:
                 try:
-                    preview = self.last_user_question_preview(sid, 180)
+                    if self._runtime_v2_primary():
+                        from runtime_v2.ui_projection import RuntimeUiProjection
+                        # Missing legacy previews are cosmetic. Use current
+                        # index metadata or a bounded tail, never a full replay.
+                        hint = RuntimeUiProjection(self.repository.sessions_dir,
+                            path_resolver=self._resolve_session_path).read_user_preview_hint(sid)
+                        preview = _normalize_sidebar_preview_text(hint, 180)
+                    else:
+                        preview = self.last_user_question_preview(sid, 180)
                 except Exception:
                     preview = ""
             d["last_user_preview"] = preview

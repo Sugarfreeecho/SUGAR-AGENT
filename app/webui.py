@@ -7601,6 +7601,7 @@ async def get_session_history_snapshot(
                 turns=tv,
                 event_budget=event_budget_value,
                 diagnostics=page_diagnostics,
+                include_user_turns=True,
             )
             if tail_limit_value is not None:
                 page["event_limited_tail"] = bool(page.get("has_older"))
@@ -7615,7 +7616,9 @@ async def get_session_history_snapshot(
             timings["count"] = int((_time.perf_counter() - t_phase) * 1000)
             t_phase = _time.perf_counter()
             _mark_loading_phase(request, "user_turns")
-            user_turns = projection.read_user_turns_light(session_id)
+            user_turns = page.pop("user_turns", None)
+            if user_turns is None:
+                user_turns = projection.read_user_turns_light(session_id)
             timings["user_turns"] = int((_time.perf_counter() - t_phase) * 1000)
             include_aux_value = include_aux if isinstance(include_aux, bool) else True
             context_tokens = None

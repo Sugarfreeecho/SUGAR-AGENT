@@ -42,8 +42,12 @@ const DOCK_RIGHT_WIDTH_MAX = 960;
 
 /** An expanded column must leave the workspace at least this many pixels of
     usable width; a narrower window keeps the column collapsed instead
-    (feedback: a half-screen snap must not squeeze the workspace into a sliver). */
-const DOCK_RIGHT_WORKSPACE_FLOOR = 560;
+    (feedback: a half-screen snap must not squeeze the workspace into a sliver).
+    560 → 372 (2026-11): the chat column reflows (message column 68cqi, composer
+    side controls fold to the narrow layout) well below the old floor, so the
+    floor now sits at roughly two thirds of 560 and the details column can grow
+    about a third wider before the workspace gives way. */
+const DOCK_RIGHT_WORKSPACE_FLOOR = 372;
 
 /** How much of the session history the change list scans, in pages of 500 events. */
 const DOCK_RIGHT_CHANGE_PAGE_LIMIT = 500;

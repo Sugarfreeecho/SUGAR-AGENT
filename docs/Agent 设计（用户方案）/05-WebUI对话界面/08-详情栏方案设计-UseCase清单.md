@@ -1,6 +1,6 @@
 # 详情栏 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-22 v21（独立插件类型与 DSH 浏览器样式；保留宽度拖拽与窗口模式修复）
+- 版本：2026-11 v22（聊天区最小宽度 560→372，详情栏可更宽）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`frontend/src/app/modules/dock/**`（engine 8 件 / renderer 5 件：icons、gesture、measure、dock-surface、float-layer / embedder 5 件：surface-store、tab-registry、right-column、page-host、browser-page）、`frontend/src/styles/dock.css`、`frontend/src/app/index.js`（`?raw` 登记）、后端 `GET /api/workspace-file-text`、测试 `frontend/tests/dock-engine.test.mjs`（24 项）、冒烟 `workspace/分屏功能需求/dock_verify/dock_smoke.py`（30 项）。
 - 上级：`00-WebUI对话界面整体设计.md`；技术细节与序列化格式见 [`../../frontend-dock.md`](../../frontend-dock.md)；诊断脚本 `dock_verify/turn_scope_probe.py`、`dock_verify/scope_probe_browser.py`。
@@ -25,6 +25,8 @@
 - **依据**：`dock/embedder/right-column.js`（`dockRightToggle` / `dockRightEnsureButton` / `dockRightStartResize` / `dockRightRender` / `dockRightBuildChrome`）、`dock.css`（`.dock-rightbar` / `.dock-expand-btn[hidden]` / `.dock-rightbar-sash`）、`surface-store.js`（区域 `right`）。
 
 2026-10-22 宽度补充：拖拽期间外层宽度立即同步内容，停止收展过渡；捕获当前指针，跨 iframe 松手、取消、丢失捕获、窗口失焦、收起及切换模式均清理手势。push 模式在拖拽、恢复、窗口/左侧栏变化时统一为聊天区保留至少 560px；无法容纳最小 320px 详情栏时采用全屏，保留窗口缩小时自动收起的行为。用户偏好宽度与当前可显示宽度分离，不因临时小窗覆盖偏好；手动全屏按会话保留，普通 resize 不会撤销。
+
+2026-11 宽度调整：聊天区最小宽度 560px → **372px（约 −1/3）**，详情栏最小宽度仍为 320px。拖拽上限、窗口/左侧栏变化后的夹取与 push/全屏判定共用 `DOCK_RIGHT_WORKSPACE_FLOOR`，故 push 门槛变为「工作区 ≥ 372+320=692px 且窗口 ≥768px」；聊天区落到下限时切窄布局（消息列拉满、输入区侧控件折叠），实测 372px 下输入区 340px、无横向溢出。
 
 ### UC-5H8 详情栏 · 开始页（guide，默认页与兜底页）
 - **触发**：详情栏首次打开；`+` 新建窗口；关闭页签后由 settle 回填；`MyAgentDock.openDetailsTab('guide')`。
