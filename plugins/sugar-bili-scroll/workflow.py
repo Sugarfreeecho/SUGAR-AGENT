@@ -61,6 +61,8 @@ class Workflow:
         names.extend(self.write_names(settings))
         if mode in {"dm", "reply"}:
             names.append("bili_favorite_add")
+        if mode == "manual":
+            names.extend(["bili_favorite_add", "bili_favorite_remove"])
         if settings.get("transcribe"):
             names.append("bili_transcribe")
         if mode == "duty":
@@ -207,6 +209,21 @@ class Workflow:
         self.authorize(context, "bili_favorite_add", {"bvid": bvid, "fid": fid})
         result = await h.bili_client.favorite_add(h._home(), bvid, fid)
         h.duty.log(h._home(), f"收藏工具 {bvid} → {fid}：" + ("成功" if result.get("ok") else "失败"))
+        return result
+
+    async def favorite_remove(self, context, bvid, fid):
+        h = self.h
+        stamp = h.inbound.credential_stamp(h._home())
+        folders = await h.bili_client.favorite_folders(h._home(), 0)
+        if folders.get("error"):
+            return {"ok": False, "error": str(folders["error"])}
+        if int(fid) not in {int(row.get("id") or 0) for row in folders.get("folders", [])}:
+            return {"ok": False, "error": "所选收藏夹不属于当前登录账号，请用 bili_favorite_folders 查询当前账号的收藏夹"}
+        if stamp != h.inbound.credential_stamp(h._home()):
+            return {"ok": False, "error": "登录账号已变化，请确认当前账号后重新操作"}
+        self.authorize(context, "bili_favorite_remove", {"bvid": bvid, "fid": int(fid)})
+        result = await h.bili_client.favorite_remove(h._home(), bvid, int(fid))
+        h.duty.log(h._home(), f"移出收藏 {bvid} ← {fid}：" + ("成功" if result.get("ok") else "失败"))
         return result
 
     def legacy_count(self, row, day):

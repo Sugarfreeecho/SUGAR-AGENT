@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 PLUGIN = "sugar-bili-scroll"
 SERVER = PLUGIN + "/bili"
 # MCP 目录固定发布的工具数。改工具就要同步这里，否则 doctor 会把"新版本"报成故障。
-EXPECTED_TOOLS = 22
+EXPECTED_TOOLS = 23
 
 
 def request(base, path, method="GET", body=None):

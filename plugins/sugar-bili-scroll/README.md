@@ -8,7 +8,7 @@ SugarAgent 的 `trusted_host` 原生插件，承接 dsh-bili-scroll 的刷视频
 
 ## MCP 与随包 Skill（0.7.1）
 
-22 个 B站业务工具通过 `.mcp.json` 的 `sugar-bili-scroll/bili` 服务注册，使用宿主同进程 Streamable HTTP，入口 `/api/sugar-bili-scroll/mcp/`。原生 `tool_definitions()` 不再注册 B站工具，避免重复。控制台、值班调度、入站回复、多账号和宿主转写继续由 trusted_host 提供。
+23 个 B站业务工具通过 `.mcp.json` 的 `sugar-bili-scroll/bili` 服务注册，使用宿主同进程 Streamable HTTP，入口 `/api/sugar-bili-scroll/mcp/`。原生 `tool_definitions()` 不再注册 B站工具，避免重复。控制台、值班调度、入站回复、多账号和宿主转写继续由 trusted_host 提供。
 
 服务端工具短名仍为 `bili_*`，SugarAgent 模型目录中的名称为 `mcp_sugar_bili_scroll_bili_bili_*`。自动会话的工具范围及系统提示词同步转换，SQLite运行权限仍保存短名；每次调用通过宿主一次性元数据票据验证会话身份、参数和运行权限，模型不能自行指定身份。MCP目录固定发布22个schema，调用时校验开关和最新权限。其他MCP客户端不具备SugarAgent身份票据，当前版本用于宿主内部连接。
 
@@ -91,7 +91,9 @@ SugarAgent 的 `trusted_host` 原生插件，承接 dsh-bili-scroll 的刷视频
 
 `bili_favorite_add(bvid, fid=0)` 将一条视频收藏到当前启用账号的收藏夹。先用 `bili_favorite_folders` 查询收藏夹 ID；`fid` 省略或为 0 时使用设置中的 `fav_folder_id`，未配置则要求明确指定，不自动猜收藏夹。
 
-普通 Agent 会话及白名单入站会话可调用；陌生人没有此工具。执行前校验 BV 号、收藏夹归属、当前账号及最新权限；失败返回失败，成功返回 BV／收藏夹／视频 aid 等结果。不会创建收藏夹或移除其他收藏。切换账号后需要选择该账号自己的收藏夹。
+`bili_favorite_remove(bvid, fid)` 把一条视频从指定收藏夹移出（等于在该收藏夹里取消收藏）。必须显式给 `fid`，且必须是当前账号的收藏夹；不删除收藏夹本身，也不影响视频在其它收藏夹里的记录。2026-11-04 实测：`del_media_ids` 生效，但回执里的 `success_num` 恒为 0，判断成败只能看有没有异常，并可用 `bili_my_list(kind=favorites)` 复核。同一次 `/x/v3/fav/resource/deal` 请求里 `add_media_ids` 新夹 + `del_media_ids` 旧夹也成立，等价于「移动到另一个收藏夹」。
+
+普通 Agent 会话可调用收藏与移出；白名单入站会话只有收藏（`bili_favorite_add`），不开放移出。执行前校验 BV 号、收藏夹归属、当前账号及最新权限；失败返回失败，成功返回 BV／收藏夹／视频 aid 等结果。不会创建收藏夹。切换账号后需要选择该账号自己的收藏夹。
 
 白名单私聊可说“把 BV…… 收藏到收藏夹 123”。值班任务继续由宿主自动收藏挑中的视频，值班模型不额外持有显式收藏工具。收藏动作与普通私信回复分别执行，普通回复超长而未投递时不会撤销已成功收藏。
 

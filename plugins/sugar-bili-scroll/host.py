@@ -540,6 +540,8 @@ async def _invoke(context, arguments: Mapping[str, Any]):
             )
         elif name == "bili_favorite_add":
             payload = await _flow().favorite_video(context, str(arguments["bvid"]), int(arguments["fid"]))
+        elif name == "bili_favorite_remove":
+            payload = await _flow().favorite_remove(context, str(arguments["bvid"]), int(arguments["fid"]))
         elif name == "bili_transcribe":
             payload = await asr.transcribe(
                 home,
@@ -656,6 +658,21 @@ def mcp_tool_rows():
                     "fid": {"type": "integer", "minimum": 0, "description": "当前账号收藏夹 id，省略或 0 使用设置值"},
                 },
                 ["bvid"],
+            ),
+            True,
+            "external_write",
+        ),
+        (
+            _fn(
+                "bili_favorite_remove",
+                "把一条视频从当前登录 B站账号的指定收藏夹移出（相当于在该收藏夹里取消收藏）。"
+                "必须显式给 fid，且必须是当前账号的收藏夹；不会删除收藏夹本身，也不影响这条视频在其它收藏夹里的记录。"
+                "移出后想确认结果，用 bili_my_list(favorites) 复核，不要相信接口回执里的计数。",
+                {
+                    "bvid": {"type": "string", "description": "视频 BV 号"},
+                    "fid": {"type": "integer", "minimum": 1, "description": "要移出的收藏夹 id"},
+                },
+                ["bvid", "fid"],
             ),
             True,
             "external_write",

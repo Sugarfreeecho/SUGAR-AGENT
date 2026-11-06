@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "sugar-bili-scroll",
   "name": "刷B站（值班）",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "B站多任务值班、入站回复、多账号登录态；发现/个人列表/互动工具与随包使用管理Skill。",
   "settings_schema": {
     "type": "object",

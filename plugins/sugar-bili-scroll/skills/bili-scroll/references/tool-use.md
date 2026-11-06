@@ -18,6 +18,7 @@
 | bili_emote_save | `code`或`url`二选一；`name/tags/bvid`可选；保存本地表情，自动会话每轮最多3个 |
 | bili_record_video | `bvid/picked/reason`必填，`title/author`可选；仅值班运行，用于配额、日报与全局判重 |
 | bili_favorite_add | `bvid`必填，`fid`默认0；0使用设置`fav_folder_id`，未设置则需要显式fid；必须是当前账号的收藏夹 |
+| bili_favorite_remove | `bvid/fid`都必填（fid≥1）；把视频从该收藏夹移出，不删收藏夹；回执`success_num`不可信，用`bili_my_list(favorites)`复核 |
 | bili_reply | `bvid/text`必填；可选`rpid/root/emote/sticker`；评论150字内，sticker必须来自本地表情库且允许图片评论 |
 | bili_send_message | `receiver_uid/text`；仅配置允许的值班或普通会话向配置收件人发送，500字以内 |
 | bili_discover | `source`必填：hot/weekly/rank/up/feed/related；`limit`1–50、`tid`分区名、`mid`UP主UID、`bvid`相关推荐的源视频、`page` |
@@ -37,7 +38,7 @@
 - 发现视频：关键词搜不到或想换口味时用 `bili_discover`——热门/排行看大盘，`up` 追某个 UP，`feed` 看关注动态（关注 0 人时为空是正常的），`related` 顺着一好视频往下摸。长视频先用 `bili_highlights` 看哪几分钟热闹，再决定要不要读全文。
 - 看自己的库：`bili_my_list(kind=toview)` 稍后再看、`favorites` 收藏夹内容、`history` 观看历史。历史条目可能只有 av 号，把 `url` 或 `av` 号交给其它工具也能用。
 - 要看画面：`bili_cover` 拿封面；`bili_frame` 截图。默认 `storyboard` 走官方预览图（480×270、不下载视频、快），要看清字或人脸再传 `source=stream`（原画、吃带宽）。`at` 留空会自动取 `bili_highlights` 的峰值，适合“先找高能段再截图”的一条链。截图落在插件数据目录，结果里的 `degraded=true` 表示预览图不可用、已降级成视频流，要如实说明。
-- 收藏视频：确认视频和用户意图 → `bili_favorite_folders(uid=0)` → 用户指定或设置的收藏夹 → `bili_favorite_add`。只支持添加，不创建收藏夹、不取消收藏。失败不能报成功；账号切换或白名单撤销会被重新校验。
+- 收藏/移出视频：确认视频和用户意图 → `bili_favorite_folders(uid=0)` → 用户指定或设置的收藏夹 → `bili_favorite_add` 收藏、`bili_favorite_remove` 移出。不创建收藏夹；移出只对当前账号的收藏夹生效，不影响同一视频在其它收藏夹里的记录。失败不能报成功；账号切换或白名单撤销会被重新校验。「移动」= 先 add 到目标夹、再 remove 旧夹，两步都成功才算完成。
 - 互动：点赞/三连/投币/关注都要先确认开关打开（不确定就问 `bili_capabilities`）。投币是真实消耗硬币，按设置额度用；没有需要就别主动投。`triple` 会花 2 枚硬币并加收藏，代价比 `like` 大得多，别当成普通点赞。关注只做关注，不提供取关。
 - 查评论：`bili_comments` 默认按热度；要“谁最新说了什么”传 `sort=time`，要“谁回了我那条”把那条的 `rpid` 传给 `root`。楼中楼接口必须走库里的 `Api` 会话，裸请求会吃 412。
 - 发评论：有明确发送意图和目标后使用 `bili_reply`。自动值班必须先通过 `bili_record_video`记为挑中；入站公开回复严格回到原视频原楼层。白名单私聊可在设置允许时要求向指定视频发新评论。工具返回成功只表示B站接口接受；需确认公开可见时再调用复核工具。返回 `61001` 表示账号要先绑定手机号才能评论，换工具或重试都没用。

@@ -1126,6 +1126,42 @@ async def favorite_add(data_dir: Path, bvid: str, fid: int) -> dict:
     return {"ok": True, "bvid": bvid, "fid": folder, "aid": aid}
 
 
+async def favorite_remove(data_dir: Path, bvid: str, fid: int) -> dict:
+    """把一条视频从指定收藏夹移出（del_media_ids）。
+
+    实测（2026-11-04，aid=117224505416241）：add_media_ids 留空、del_media_ids 填收藏夹 id，
+    视频确实被移出，但响应里的 `success_num` 恒为 0 —— 那个字段不能当结果，只能看有无异常。
+    「移动到另一个收藏夹」同一次请求里 add 新夹 + del 旧夹也成立。
+    """
+    cred = get_cred(data_dir)
+    folder = int(fid or 0)
+    if folder <= 0:
+        return {"ok": False, "error": "没有指定收藏夹 id"}
+    info = await video.Video(bvid=bvid, credential=cred).get_info()
+    aid = int(info.get("aid") or 0)
+    if not aid:
+        return {"ok": False, "error": "拿不到 aid"}
+    api = Api(
+        url="https://api.bilibili.com/x/v3/fav/resource/deal",
+        method="POST",
+        verify=True,
+        credential=cred,
+    )
+    api.data = {
+        "rid": aid,
+        "type": 2,  # 2 = 视频
+        "add_media_ids": "",
+        "del_media_ids": str(folder),
+    }
+    try:
+        await api.request()
+    except ResponseCodeException as exc:
+        return {"ok": False, "error": str(exc)[:200], "bvid": bvid, "fid": folder}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}", "bvid": bvid, "fid": folder}
+    return {"ok": True, "bvid": bvid, "fid": folder, "aid": aid}
+
+
 # ── 视频标识解析 ────────────────────────────────────────────────────────
 
 # 用户手里的东西从来不是干净的 BV 号：`av170001`、带 `?p=2` 的完整地址、b23.tv 短链

@@ -12,7 +12,7 @@
 1. 检查当前源码、宿主依赖、插件安装位置；全新安装应把完整目录放在上述 bundled 位置，避免出现重复 ID。manifest声明`mcp==1.28.1`、`bilibili-api-python==17.4.2`和`qrcode`，由宿主Python环境提供；本地Whisper为可选。依赖安装使用项目内置Python，不要装进其他Python环境。
 2. 读取 `GET /api/plugins/catalog`和`GET /api/plugins/sugar-bili-scroll/availability`。可用性报告不能代替实际登录验证。`POST /api/plugins/sugar-bili-scroll/diagnose`会创建诊断会话，仅在用户要求创建诊断会话时使用；默认自检不调用它。
 3. 如果用户要求启用，调用 `POST /api/plugins/sugar-bili-scroll/enabled`，JSON `{"enabled":true}`。服务随插件生命周期启动；插件目录内的更新用 `POST /api/extensions/reload` 重载即可（会重建 MCP 与调度），只有改动宿主 `app/*.py` 或 `.env` 才需要由托盘重启 Agent。已有“暂不重启”约束时保留代码并报告。
-4. 运行助手 `register`，或 `POST /api/mcp/servers/sugar-bili-scroll/bili/register`。检查响应 `registered=true`，再读 `GET /api/mcp/tools`：目标服务有 20 个工具，且已连接。注册审批不足时提示用户在宿主安全设置处理，不能手改审批状态。
+4. 运行助手 `register`，或 `POST /api/mcp/servers/sugar-bili-scroll/bili/register`。检查响应 `registered=true`，再读 `GET /api/mcp/tools`：目标服务有 23 个工具，且已连接。注册审批不足时提示用户在宿主安全设置处理，不能手改审批状态。
 5. 检查工具总开关/单工具开关是否启用。注册成功不等于账号登录或自动回复已开启。
 
 ## 自检与故障定位

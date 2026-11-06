@@ -5,7 +5,7 @@ description: 管理和使用 SugarAgent 的 sugar-bili-scroll B站插件。当�
 
 # B站插件管理与使用
 
-本 Skill 属于 SugarAgent 的 `sugar-bili-scroll`，随插件加载；限定名为 `sugar-bili-scroll:bili-scroll`。宿主保留调度、控制台和账号管理，20 个业务工具通过 MCP 服务 `sugar-bili-scroll/bili` 注册。
+本 Skill 属于 SugarAgent 的 `sugar-bili-scroll`，随插件加载；限定名为 `sugar-bili-scroll:bili-scroll`。宿主保留调度、控制台和账号管理，23 个业务工具通过 MCP 服务 `sugar-bili-scroll/bili` 注册。
 
 普通 Agent 按需加载本 Skill。插件的值班、私聊和评论自动会话仍使用各自完整系统提示词及受限工具范围，不为了读取 Skill 开放文件或命令工具。
 

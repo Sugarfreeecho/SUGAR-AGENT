@@ -2,6 +2,14 @@
 
 > **读法提示（2026-10-27 补）**：下面的部署记录写于 0.2–0.5 阶段，当时插件路由清理还没按路径实现，所以多条记录写着「首次加载需重启」。当前口径已变：插件目录内的任何改动（含 `host.py` 路由、兄弟模块、MCP）用「重新发现 / 热重载」即可生效，只有改宿主 `app/*.py` 或 `.env` 才需要重启，见 [插件热重载](../../docs/plugin_hot_reload.md)。历史记录按阶段保留，不作为当前操作依据。
 
+## 0.7.2（2026-11-04）：收藏夹移出
+
+- 新增 `bili_favorite_remove(bvid, fid)`：`/x/v3/fav/resource/deal` 的 `add_media_ids` 留空、`del_media_ids` 填收藏夹 id。沿用 `bili_favorite_add` 的 BV 解析、收藏夹归属、凭据戳与权限复核；普通会话开放，白名单入站仍只有 `bili_favorite_add`。
+- 真实账号实测（测试对象 `aid=117224505416241`，测完已还原）：加入「大肥鱼工作室」再移出，`bili_my_list(favorites)` 前后逐条一致；同一次请求 `add_media_ids` + `del_media_ids` 可一步移动，反向再调一次即还原，两个夹的列表均回到初始状态。**接口回执 `success_num` 恒为 0，不能当结果**，成败只能看有无异常并用列表复核。
+- 同步 `manage.py` 的 `EXPECTED_TOOLS = 23`，README / SKILL / tool-use / agent-admin 的工具数与说明一起更新。
+- 部署：插件目录内改动，走 `POST /api/extensions/reload` 热重载，不重启宿主。
+- 验收：热重载 24.8s 成功，插件版本 0.7.2、MCP 已连接 **23 个工具**、`doctor` 的 `issues` 为空；用 MCP 工具对 `BV1aPbW6fEoj` 做「加入 → 移出」往返，`bili_my_list` 复核源夹回到 5 条、默认收藏夹仍 13 条；随后把 5 条已分析视频从「大肥鱼工作室」移出（源夹 0 条），目标夹 88 条保留。
+
 记录始于 2026-10-23，更新至 2026-10-25（Asia/Shanghai）。承接 MyAgent 会话 `4bc203cb-adb5-4a8e-8ada-c9f299c3e7c6` 的 dsh-bili-scroll → sugar-bili-scroll UC 项目。当前清单版本为 0.5.0；新增独立完整系统提示词的实现和 210 项回归见 [SYSTEM_PROMPTS.md](SYSTEM_PROMPTS.md)，多账号功能见 [MULTI_ACCOUNT.md](MULTI_ACCOUNT.md)。下文按阶段保留验收记录。
 
 ## 原 10 项逐项结论
