@@ -405,12 +405,16 @@ def test_runtime_v2_truncate_only_changes_visible_range_without_legacy_rebuild(t
     assert e1.seq == 1
     assert e2.seq == 2
     assert e3.seq == 3
-    assert observed == [
-        (
-            ("truncate_visible_history_before_seq", "s1"),
-            {"target_seq": 3, "keep_to_seq": 2, "reason": "runtime_v2_truncate"},
-        )
-    ]
+    assert len(observed) == 1
+    args, kwargs = observed[0]
+    assert args == ("truncate_visible_history_before_seq", "s1")
+    outcome = kwargs.pop("outcome")
+    assert isinstance(outcome, dict)
+    assert kwargs == {
+        "target_seq": 3,
+        "keep_to_seq": 2,
+        "reason": "runtime_v2_truncate",
+    }
 
 
 @pytest.mark.parametrize('after_seq,before_index', [(None, 2), (2, 99), (123, 2), (1, 2)])
@@ -469,6 +473,58 @@ def test_runtime_v2_branch_creates_v2_branch_without_legacy_rebuild(tmp_path, af
             {"source_session_id": source_id, "branch_from_seq": 2, "name": "(1)Source"},
         )
     ]
+
+
+def test_branch_session_inherits_work_dir_in_metadata_and_index(tmp_path):
+    """分支要继承源会话的工作目录，并且索引投影也必须带着它。
+
+    索引行缺 work_dir 时 ``/sessions/{id}`` 与分支响应都会投影成"默认目录"，
+    用户看到的就是"分支没有继承原目录"。
+    """
+    import json
+    import agent_harness
+    from runtime_v2 import RuntimeMirror
+
+    root = tmp_path
+    manager = agent_harness.SessionManager(root, root / "sessions_index.json")
+    sid = "11111111-1111-4111-8111-111111111111"
+    source_dir = root / sid
+    source_dir.mkdir()
+    work_dir = str(tmp_path / "inherited-root")
+    Path(work_dir).mkdir()
+    (source_dir / "metadata.json").write_text(json.dumps({
+        "name": "Source",
+        "created_at": "2026-11-01T00:00:00",
+        "updated_at": "2026-11-01T00:00:00",
+        "work_dir": work_dir,
+        "authorized_dirs": [work_dir],
+        "active_run_id": "control-dead",
+        "interrupt_requested": True,
+        "run_start_order": ["a"],
+        "subagent_ids": ["child-1"],
+        "unread_result": True,
+        "truncate_backups": ["backup-1"],
+    }), encoding="utf-8")
+    mirror = RuntimeMirror(root)
+    mirror.mirror_ui_event(sid, {"type": "user", "content": "u1"})
+    mirror.mirror_ui_event(sid, {"type": "final", "content": "a1"})
+
+    result = manager.branch_session_at_event_index(sid, 2)
+    assert result["ok"] is True
+    new_id = result["session_id"]
+
+    meta = json.loads((root / new_id / "metadata.json").read_text(encoding="utf-8"))
+    assert meta["work_dir"] == work_dir
+    assert meta["authorized_dirs"] == [work_dir]
+    for key in ("active_run_id", "interrupt_requested", "run_start_order",
+                "subagent_ids", "unread_result", "truncate_backups"):
+        assert key not in meta, f"branch must not inherit {key}"
+
+    assert result["session"]["work_dir"] == work_dir
+    assert result["session"]["work_dir_is_default"] is False
+    entry = next(item for item in manager.index if item.get("id") == new_id)
+    assert entry["work_dir"] == work_dir
+    assert manager.get_session_summary(new_id)["work_dir"] == work_dir
 
 
 def test_delete_session_removes_subagent_descendants_and_index(tmp_path, monkeypatch):
@@ -1254,6 +1310,69 @@ def test_unconsumed_parent_run_result_becomes_actionable_after_final(tmp_path):
         mgr, "parent", "run-1"
     ) == 1
     assert agent_harness.SessionManager.can_continue_after_subagents(mgr, "parent") is True
+
+
+def _late_result_manager(tmp_path):
+    import agent_harness
+    from runtime_v2 import RuntimeMirror, RuntimeSubagentStore
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("parent", {"type": "user", "content": "u"})
+    mirror.mirror_ui_event("parent", {"type": "final", "content": "a"})
+    store = RuntimeSubagentStore(tmp_path)
+    store.append_pending_result("parent", {
+        "result_id": "result-1",
+        "agent_id": "agent1",
+        "status": "completed",
+        "result": "late",
+        "parent_run_id": "run-1",
+        "delivery_scope": "parent_run",
+        "delivery_state": "pending",
+    })
+    mgr = _manager_with(
+        repository=_Repository(tmp_path),
+        _runtime_v2_primary=lambda: True,
+        _runtime_subagent_store=lambda: store,
+        _resolve_session_path=lambda sid: tmp_path / sid,
+        _load_metadata=lambda sid: {},
+    )
+    return mgr, store
+
+
+def test_late_subagent_result_after_parent_run_end_becomes_actionable(tmp_path, monkeypatch):
+    """后台子代理在父 run 结束之后才完成时，必须能唤醒主会话。
+
+    父会话的 UI 投影里 final 事件不带 run_id，所以旧实现用 run-id 比对
+    ``finished_runs`` 永远匹配不上，晚到结果会一直停在 pending。
+    """
+    import agent_harness
+    import session_lifecycle
+
+    monkeypatch.setattr(session_lifecycle, "is_run_active", lambda sid, rid="": False)
+    mgr, store = _late_result_manager(tmp_path)
+
+    assert agent_harness.SessionManager.can_continue_after_subagents(mgr, "parent") is True
+    rows = agent_harness.SessionManager.prepare_pending_subagent_continuation(mgr, "parent")
+
+    assert len(rows) == 1
+    saved = store.list_pending_results("parent")
+    assert saved[0]["after_final_index"] == 1
+    assert saved[0]["delivery_scope"] == "after_final"
+
+
+def test_live_parent_run_keeps_late_result_for_its_own_claim(tmp_path, monkeypatch):
+    """归属 run 还活着时不得提前改锚点：该 run 会按 run-id 精确 claim。"""
+    import agent_harness
+    import session_lifecycle
+
+    monkeypatch.setattr(
+        session_lifecycle, "is_run_active", lambda sid, rid="": rid == "run-1"
+    )
+    mgr, store = _late_result_manager(tmp_path)
+
+    assert agent_harness.SessionManager.prepare_pending_subagent_continuation(mgr, "parent") == []
+    assert agent_harness.SessionManager.count_actionable_pending_subagent_results(mgr, "parent") == 0
+    assert store.list_pending_results("parent")[0].get("after_final_index") is None
 
 
 def test_pending_result_claim_can_rollback_and_then_commit(tmp_path):

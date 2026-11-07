@@ -30,10 +30,16 @@ def main() -> int:
     for path in TARGETS:
         if not path.exists():
             continue
-        text = path.read_text(encoding="utf-8")
+        # Read and write with newline="" so the stamp edit never rewrites line
+        # endings. Default text mode translates LF <-> CRLF on Windows, which
+        # makes frontend/index.html and the built dist differ byte-wise and
+        # fails check_frontend_dist_sync on the next date bump.
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            text = handle.read()
         new_text, n = TOKEN_RE.subn(stamp, text)
         if n and new_text != text:
-            path.write_text(new_text, encoding="utf-8")
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(new_text)
             print(f"[version] {path.relative_to(ROOT)} -> {stamp}")
             changed = True
         elif n:

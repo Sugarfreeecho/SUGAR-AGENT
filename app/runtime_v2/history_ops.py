@@ -35,6 +35,17 @@ def _rt2_step_ms(start: float, end: Optional[float] = None) -> int:
     return int(max(0.0, (end - start) * 1000.0))
 
 
+class HistoryWriteCommittedError(RuntimeError):
+    """The fact reached the event log, but the snapshot/projection step failed.
+
+    Callers must treat the operation as **applied**: retrying the same
+    destructive request would otherwise hit a boundary that no longer exists and
+    fail forever, while the UI still shows the pre-operation history.
+    """
+
+    committed = True
+
+
 class RuntimeHistoryOps:
     """Append-only history operations for the V2 path.
 
@@ -956,32 +967,49 @@ class RuntimeHistoryOps:
                 str(run_id or ""),
                 event.seq,
             )
-            snapshot = self.snapshots.read_for_update(session_id)
-            t_after_snapshot_read = time.perf_counter()
-            if (
-                not self.snapshots._projection_version_matches(snapshot)
-                or int(snapshot.get("last_seq") or 0) != int(event.seq) - 1
-            ):
+            # From here on the fact is already durable. A failure must be
+            # reported as "committed": the next read re-projects from the log,
+            # while a blind retry would hit a boundary that no longer exists.
+            try:
+                snapshot = self.snapshots.read_for_update(session_id)
+                t_after_snapshot_read = time.perf_counter()
+                if (
+                    not self.snapshots._projection_version_matches(snapshot)
+                    or int(snapshot.get("last_seq") or 0) != int(event.seq) - 1
+                ):
+                    logger.info(
+                        "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=projection_catchup_started",
+                        session_id,
+                        event_type,
+                        str(run_id or ""),
+                    )
+                    snapshot = self.snapshots.project_after_append(
+                        session_id, snapshot, self.event_log, self.projector, event.seq,
+                    )
+                else:
+                    snapshot = self.projector.project_incremental(snapshot, event)
+                t_after_project = time.perf_counter()
                 logger.info(
-                    "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=projection_catchup_started",
+                    "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=snapshot_write_started",
                     session_id,
                     event_type,
                     str(run_id or ""),
                 )
-                snapshot = self.snapshots.project_after_append(
-                    session_id, snapshot, self.event_log, self.projector, event.seq,
+                self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
+                self.snapshots.write_checkpointed(session_id, snapshot)
+            except Exception as exc:
+                logger.warning(
+                    "rt2_append_and_snapshot_committed_without_snapshot session=%s event_type=%s run_id=%s seq=%s error=%s",
+                    session_id,
+                    event_type,
+                    str(run_id or ""),
+                    event.seq,
+                    exc,
+                    exc_info=True,
                 )
-            else:
-                snapshot = self.projector.project_incremental(snapshot, event)
-            t_after_project = time.perf_counter()
-            logger.info(
-                "rt2_append_and_snapshot_progress session=%s event_type=%s run_id=%s stage=snapshot_write_started",
-                session_id,
-                event_type,
-                str(run_id or ""),
-            )
-            self.snapshots.stamp_event_log(session_id, snapshot, self.event_log.event_path(session_id))
-            self.snapshots.write_checkpointed(session_id, snapshot)
+                raise HistoryWriteCommittedError(
+                    f"{event_type} committed at seq {event.seq} but snapshot update failed: {exc}"
+                ) from exc
         t_after_write = time.perf_counter()
         logger.info(
             "rt2_append_and_snapshot session=%s event_type=%s run_id=%s "

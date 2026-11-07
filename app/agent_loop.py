@@ -3155,6 +3155,32 @@ async def _finalize_agent_run_lifecycle(
                 _release_pending_queued_turn(state)
         except Exception:
             logger.warning("queued turn claim cleanup failed: session=%s run_id=%s", session_id, run_id, exc_info=True)
+        # 取消/异常结束的 run 走不到 SessionEnd 钩子。这里补一次结果锚定，
+        # 否则结束前一刻落盘的子代理结果会永远停在 pending（父会话再不会被唤醒）。
+        try:
+            with local_step("anchor_pending_subagents"):
+                anchor_results = getattr(session_manager, "anchor_pending_subagent_results_for_run", None)
+                anchored = int(anchor_results(session_id, run_id) or 0) if callable(anchor_results) else 0
+                has_pending = bool(getattr(session_manager, "has_pending_subagent_notifications", None)
+                                   and session_manager.has_pending_subagent_notifications(session_id))
+            if anchored or has_pending:
+                # 本任务此刻还没返回，session_lifecycle.is_run_active 仍会把它当成
+                # 活着的 run；等 run 真正结束后再唤醒一次，晚到结果就不必等
+                # 30 秒的兜底扫描。
+                import asyncio as _asyncio
+
+                from agent_subagent_notifications import notify_pending as _notify_pending
+
+                _asyncio.get_running_loop().call_later(
+                    1.0, _notify_pending, session_manager, session_id,
+                )
+        except Exception:
+            logger.warning(
+                "subagent result anchoring failed: session=%s run_id=%s",
+                session_id,
+                run_id,
+                exc_info=True,
+            )
         if completed:
             terminal_event = {
                 "type": "run_finished",

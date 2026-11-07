@@ -95,18 +95,33 @@ async function truncateSessionOnServer(beforeIndex, options) {
         const deadline = Date.now() + (Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 180000);
         var res;
         if (!receipt.started) {
-            receipt.started = true;
-            res = await historyOperationJson(requestUrl, { method: 'POST' }, 10000);
-            // The synchronous response also supports a server during rolling
-            // upgrades. Transport errors are NOT evidence of a failed edit.
-            if (res.ok && !res.status) {
-                truncateRequestReceipts.delete(key);
-                return res;
+            // 服务端会拒绝"还有 run 在跑"的历史改写。停止是异步的，所以先按
+            // retry_after_ms 有界重试，避免用户点一次发送就弹一次错误。
+            var preflightDeadline = Date.now() + 20000;
+            while (!receipt.started) {
+                receipt.started = true;
+                res = await historyOperationJson(requestUrl, { method: 'POST' }, 10000);
+                // The synchronous response also supports a server during rolling
+                // upgrades. Transport errors are NOT evidence of a failed edit.
+                if (res.ok && !res.status) {
+                    truncateRequestReceipts.delete(key);
+                    return res;
+                }
+                var retryable = !res.ok && (res.error === 'run_active' || res.error === 'history_op_busy');
+                if (retryable && Date.now() < preflightDeadline) {
+                    receipt.started = false;
+                    var waitMs = Math.max(300, Math.min(Number(res.retry_after_ms) || 1200, 3000));
+                    await new Promise(function (resolve) { setTimeout(resolve, waitMs); });
+                    continue;
+                }
+                break;
             }
             if (!res.ok && res.error && (res.error === 'truncation failed'
                 || res.error === 'invalid before_index'
                 || res.error.indexOf('truncate_request') === 0
                 || res.error === 'truncate_session_busy'
+                || res.error === 'run_active'
+                || res.error === 'history_op_busy'
                 || res.error.indexOf('pending human interaction') === 0)) {
                 truncateRequestReceipts.delete(key);
                 return res;
@@ -143,6 +158,8 @@ function describeServerSyncFailure(res, fallback) {
     if (!err) return base;
     if (err === 'truncate_result_pending') return '历史裁剪仍在后台处理中，改写后的消息尚未发送。编辑内容已保留；再次确认将查询原任务，不会重复裁剪。';
     if (err === 'truncate_result_unknown') return '暂时无法确认历史裁剪结果，改写后的消息尚未发送。请保留编辑内容，恢复连接后刷新会话核对历史；不要直接重复裁剪。';
+    if (err === 'run_active') return '当前会话还有任务在运行，历史改写被拒绝，所以改写未生效。请先停止当前任务（或等它结束）再发送。';
+    if (err === 'history_op_busy') return '服务端正在处理另一个历史操作（裁剪/分支/迁移），本次改写未生效。请稍等几秒后重试。';
     var friendly = err;
     if (err === 'no_session') friendly = '当前没有选中的会话。';
     else if (err === 'invalid_before_index' || err === 'invalid before_index') friendly = '消息定位索引无效，可能需要刷新当前会话。';
@@ -150,6 +167,7 @@ function describeServerSyncFailure(res, fallback) {
     else if (err === 'truncation failed') friendly = '服务端裁剪历史失败，可能是历史索引已变化或会话文件暂时不一致。';
     else if (err === 'truncate_session_busy' || err === 'truncate_requests_busy') friendly = '历史裁剪任务仍在处理中，请稍后核对会话状态。';
     else if (err === 'truncate_request_conflict') friendly = '历史操作请求与原任务不一致，请刷新会话核对。';
+    else if (err === 'history_op_busy') friendly = '另一个历史操作仍在进行，请稍后重试。';
     return base + '\n原因：' + friendly;
 }
 
@@ -382,7 +400,12 @@ async function createBranchFromMessage(wrap, sourceSessionId, sourceSwitchEpoch,
         delete wrap.dataset.branchPending;
         wrap.dataset.branchSessionId = res.session_id;
         if (res.session && typeof sessionStore !== 'undefined') {
-            sessionStore.upsert(res.session);
+            // 新分支行要挡住仍在路上的旧快照：否则列表重放会把它覆盖成"默认目录"。
+            if (typeof sessionStore.protectFromSnapshots === 'function') {
+                sessionStore.protectFromSnapshots(res.session);
+            } else {
+                sessionStore.upsert(res.session);
+            }
             renderSessionListIfChanged(true);
         }
         var sourceStillActive = currentSessionId === sourceSessionId
@@ -398,7 +421,7 @@ async function createBranchFromMessage(wrap, sourceSessionId, sourceSwitchEpoch,
         } else {
             progress('分支已创建，可在会话列表打开。');
         }
-        setTimeout(function () { void loadSessions({ forceRender: true }); }, 0);
+        setTimeout(function () { void loadSessions({ force: true, forceRender: true }); }, 0);
     } catch (err) {
         var message = String((err && err.message) || err || 'unknown error');
         progress(message);
@@ -3139,6 +3162,10 @@ function updateSidebarLastUserPreviewImmediate(sessionId, questionText) {
     bindUiHoverTip(div);
 }
 
+/* 子代理寻址页的读数补取只做一次：标题栏每次侧栏刷新都会重绘，若没有读数就
+   反复发起请求会变成后台轮询；真正产生读数时 SSE 的 context_tokens 会回填。 */
+var addressedContextFetchRequested = Object.create(null);
+
 function updateSessionTitle() {
     const br = document.getElementById('breadcrumb-text');
     const sub = document.getElementById('breadcrumb-sub');
@@ -3170,7 +3197,23 @@ function updateSessionTitle() {
     }
     // 子代理会话寻址：标题栏显示「返回 chip + 子会话名」，不再显示普通会话菜单
     if (typeof renderSubagentAddressedTitle === 'function' && renderSubagentAddressedTitle(br, sub)) {
-        setContextTokenLabel(null, null);
+        // 子会话有自己的上下文读数，标题栏就是它的表头。这里绝不能固定
+        // 置空：侧栏每次刷新都会走 updateSessionTitle，清掉后没有任何路径
+        // 再回填，子代理页右上角就永远停在「— / —」。改为按当前（子）会话
+        // 的缓存重绘；确实没有读数时该函数自己会退化成空值。
+        if (typeof applyContextTokenLabelForCurrentSession === 'function') {
+            applyContextTokenLabelForCurrentSession();
+            if (typeof scheduleContextTokensAfterPaint === 'function'
+                && !selectContextTokens(currentSessionId)
+                && !addressedContextFetchRequested[currentSessionId]) {
+                addressedContextFetchRequested[currentSessionId] = true;
+                // 子会话的读数通常由历史快照带入；缺失时按会话打开的新鲜度
+                // 窗口补取一次（内部有 TTL 与在途去重）。
+                scheduleContextTokensAfterPaint(currentSessionId);
+            }
+        } else {
+            setContextTokenLabel(null, null);
+        }
         return;
     }
     const sess = selectCurrentSession();

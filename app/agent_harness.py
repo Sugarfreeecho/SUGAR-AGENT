@@ -4754,8 +4754,15 @@ class SessionManager:
                 continue
             afi = item.get("after_final_index")
             if afi is None:
-                # A result completed while a parent run was active belongs to that
-                # run.  It must not be rebound to a future final event.
+                # The owning run is still alive: it claims the row by run id at
+                # its next iteration, so binding it to a final here would
+                # double-deliver. A dead owning run means the result arrived
+                # after that run ended — it must stay deliverable, otherwise the
+                # parent is never woken (the projected final carries no run id,
+                # so the old run-id comparison could never match it).
+                if self._pending_subagent_owner_run_live(session_id, item):
+                    continue
+                out.append(item)
                 continue
             else:
                 try:
@@ -4764,14 +4771,28 @@ class SessionManager:
                     continue
             if anchor < 0 or anchor > last_idx:
                 continue
-            if anchor < last_idx:
-                continue
             if anchor == last_idx:
+                out.append(item)
+            elif not self._pending_subagent_owner_run_live(session_id, item):
+                # 早先一轮的锚点（含 run 结束前没被 claim 的晚到结果）：只有在
+                # 其归属 run 已经不在时才算可续跑，prepare_ 会把它重新锚到当前 final。
                 out.append(item)
         return out
 
     def count_actionable_pending_subagent_results(self, session_id: str) -> int:
         return len(self._actionable_pending_subagent_rows(session_id))
+
+    def _pending_subagent_owner_run_live(self, session_id: str, row: Dict[str, Any]) -> bool:
+        """结果所属的父 run 是否还活着（活着时由该 run 按 run-id 精确 claim）。"""
+        rid = str((row or {}).get("parent_run_id") or "").strip()
+        if not rid:
+            return False
+        try:
+            from session_lifecycle import is_run_active
+
+            return bool(is_run_active(session_id, rid))
+        except Exception:
+            return False
 
     @pending_results_transaction
     def anchor_pending_subagent_results_for_run(self, session_id: str, run_id: str) -> int:
@@ -4806,6 +4827,13 @@ class SessionManager:
 
         Multiple children can finish across successive automatic continuations.
         A new user message must prevent an older result from waking that turn.
+
+        A result whose owning parent run is still alive is left to that run's
+        run-id claim. Once the run is gone (finished, cancelled, failed, or lost
+        with a process restart) the result is a late arrival and is anchored to
+        the current final; otherwise it stays pending forever — the projected
+        ``final`` event carries no run id, so a run-id comparison against the
+        projection can never make it actionable.
         """
         rows = self._load_pending_subagent_results(session_id)
         if not rows:
@@ -4816,9 +4844,6 @@ class SessionManager:
             return []
         user_idx = next((i for i in range(final_idx, -1, -1)
                          if events[i].get("type") == "user"), -1)
-        finished_runs = {str(event.get("run_id") or "") for event in events[user_idx + 1:final_idx + 1]
-                         if event.get("type") == "final" and not event.get("agent_id")}
-        finished_runs.discard("")
         actionable = []
         changed = False
         for row in rows:
@@ -4830,8 +4855,13 @@ class SessionManager:
             except (TypeError, ValueError):
                 anchor = -1
             same_turn = (user_idx < anchor <= final_idx and events[anchor].get("type") == "final")
-            if not same_turn and str(row.get("parent_run_id") or "") not in finished_runs:
-                continue
+            if not same_turn:
+                # 归属 run 还活着 → 交给它自己 claim；否则这是晚到结果。
+                if self._pending_subagent_owner_run_live(session_id, row):
+                    continue
+                # 锚点指向更晚的一轮（历史被裁剪/回滚过）：不把旧结果倒灌进当前轮。
+                if anchor > final_idx:
+                    continue
             if anchor != final_idx:
                 row["after_final_index"] = final_idx
                 row["delivery_scope"] = "after_final"
@@ -5812,7 +5842,14 @@ class SessionManager:
             if require_commit or (runtime_v2_active and runtime_v2_strict_mode):
                 raise
 
-    def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> bool:
+    def _observe_runtime_v2_history(
+        self,
+        method_name: str,
+        session_id: str,
+        *,
+        outcome: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> bool:
         try:
             from runtime_v2 import (
                 runtime_v2_primary,
@@ -5831,7 +5868,20 @@ class SessionManager:
             method(session_id, **kwargs)
             return True
         except Exception as exc:
-            logger.debug("Runtime V2 observe %s failed for session %s: %s", method_name, session_id, exc)
+            committed = bool(getattr(exc, "committed", False))
+            if isinstance(outcome, dict):
+                outcome["committed"] = committed
+                outcome["error"] = str(exc)
+            # 已落盘但快照失败不是"没做事"，必须留痕：否则只能靠用户重试
+            # 撞上不存在的边界，再把失败误判成"未生效"。
+            logger.warning(
+                "Runtime V2 observe %s %s for session %s: %s",
+                method_name,
+                "committed but failed" if committed else "failed",
+                session_id,
+                exc,
+                exc_info=committed,
+            )
             return False
 
     def get_ui_events_for_display(self, session_id: str) -> List[dict]:
@@ -6255,10 +6305,23 @@ class SessionManager:
                         self.repository.sessions_dir,
                         path_resolver=self._resolve_session_path,
                     )
+                    history_state: Dict[str, Any] = {}
                     boundary = projection.resolve_truncate_boundary(
                         session_id, before_index, truncate_before_seq,
+                        history_state=history_state,
                     )
                     if boundary is None:
+                        # 幂等：上一次截断已经落盘（例如快照写失败后客户端重试、
+                        # 或响应丢失后重新确认）。同一个目标 seq 已不可见就说明
+                        # 裁剪已生效，必须按成功返回，不能 400 把用户锁在重试里。
+                        if history_state.get("already_applied"):
+                            logger.info(
+                                "Runtime V2 truncate already applied: session=%s before_index=%s target_seq=%s",
+                                session_id,
+                                before_index,
+                                truncate_before_seq,
+                            )
+                            return True
                         return False
                     before_index, target_seq, keep_seq = boundary
                     runtime_truncate_target_seq = int(target_seq)
@@ -6268,14 +6331,26 @@ class SessionManager:
                     return False
             if self._runtime_v2_primary():
                 if runtime_truncate_target_seq is not None and runtime_truncate_keep_seq is not None:
+                    outcome: Dict[str, Any] = {}
                     truncated = self._observe_runtime_v2_history(
                         "truncate_visible_history_before_seq",
                         session_id,
+                        outcome=outcome,
                         target_seq=runtime_truncate_target_seq,
                         keep_to_seq=runtime_truncate_keep_seq,
                         reason="runtime_v2_truncate",
                     )
                     if truncated is False:
+                        if outcome.get("committed"):
+                            # 事实已落盘，只是快照没写下去：下次读取会按事件流重建。
+                            # 报成功才能让客户端继续发送，而不是卡在"未生效"。
+                            logger.warning(
+                                "Runtime V2 truncate committed without snapshot: session=%s target_seq=%s detail=%s",
+                                session_id,
+                                runtime_truncate_target_seq,
+                                outcome.get("error") or "",
+                            )
+                            return True
                         logger.warning(
                             "Runtime V2 truncate failed: session=%s target_seq=%s keep_to_seq=%s",
                             session_id,
@@ -6357,6 +6432,93 @@ class SessionManager:
                 max_n = max(max_n, int(m.group(1)))
         return f"({max_n + 1}){root}"
 
+    # 分支会话继承的是"会话配置"，不是源会话的运行/回收状态。带过去的 transient
+    # 字段会让新分支看起来还在跑、还带着源会话的子代理和未读结果。
+    _BRANCH_DROPPED_METADATA_KEYS = (
+        "active_run_id",
+        "interrupt_requested",
+        "interrupt_reason",
+        "interrupt_run_id",
+        "run_start_order",
+        "run_start_order_base",
+        "subagent_ids",
+        "unread_result",
+        "unread_result_at",
+        "unread_result_status",
+        "unread_result_run_id",
+        "unread_result_last_run_id",
+        "unread_result_run_order",
+        "draft",
+        "auto_archived",
+        "auto_archived_at",
+        "truncate_backups",
+        "last_truncate_backup",
+        "pending_subagent_notifications",
+        "llm_compress_prefix_backups",
+        "recovered_log_turns",
+        "recovered_after_rewrite_truncation_at",
+        "manual_recovery_backup",
+    )
+
+    def _prepare_branch_metadata(
+        self,
+        source_session_id: str,
+        branch_name: str,
+        now_iso: str,
+        before_index: int,
+        new_events: List[dict],
+    ) -> dict:
+        meta = self._load_metadata(source_session_id)
+        if not isinstance(meta, dict):
+            meta = {}
+        for key in self._BRANCH_DROPPED_METADATA_KEYS:
+            meta.pop(key, None)
+        meta["name"] = branch_name
+        meta["created_at"] = now_iso
+        meta["updated_at"] = now_iso
+        meta["archived"] = False
+        meta["pinned"] = False
+        meta["todo"] = False
+        meta["goal_review_pending"] = False
+        meta.pop("pinned_at", None)
+        src_auth = meta.get("authorized_dirs")
+        if isinstance(src_auth, list) and src_auth:
+            meta["authorized_dirs"] = [str(x) for x in src_auth if str(x).strip()]
+        else:
+            # work_dir 已随 metadata 继承；authorized_dirs 必须覆盖它，否则
+            # 新分支会拿着"默认目录"的授权去操作继承来的工作目录。
+            meta["authorized_dirs"] = [str(session_work_root(meta))]
+        meta["branched_from"] = source_session_id
+        meta["branch_before_index"] = before_index
+        meta["ui_event_count"] = len(new_events)
+        meta["last_user_preview"] = ""
+        for ev in reversed(new_events):
+            if isinstance(ev, dict) and ev.get("type") == "user":
+                meta["last_user_preview"] = _normalize_sidebar_preview_text(
+                    str(ev.get("content") or ""),
+                    180,
+                )
+                break
+        return meta
+
+    @staticmethod
+    def _branch_index_entry(session_id: str, branch_name: str, now_iso: str, meta: dict) -> dict:
+        """索引行必须自带 work_dir：会话摘要是从索引行投影的，缺了它就显示默认目录。"""
+        return {
+            "id": session_id,
+            "name": branch_name,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "archived": False,
+            "pinned": False,
+            "todo": False,
+            "goal_review_pending": False,
+            "pinned_at": None,
+            "work_dir": session_work_dir_override(meta) or None,
+            "last_user_preview": str(meta.get("last_user_preview") or ""),
+            "unread_result": False,
+        }
+
     def branch_session_at_event_index(
         self,
         source_session_id: str,
@@ -6417,40 +6579,7 @@ class SessionManager:
                 }
             if self._runtime_v2_primary():
                 dst_path.mkdir(parents=True, exist_ok=False)
-                meta = self._load_metadata(sid)
-                if not isinstance(meta, dict):
-                    meta = {}
-                meta["name"] = branch_name
-                meta["created_at"] = now_iso
-                meta["updated_at"] = now_iso
-                meta["archived"] = False
-                meta["pinned"] = False
-                meta["todo"] = False
-                meta["goal_review_pending"] = False
-                meta.pop("pinned_at", None)
-                try:
-                    src_meta = self._load_metadata(sid) or {}
-                    src_auth = src_meta.get("authorized_dirs")
-                    if isinstance(src_auth, list) and src_auth:
-                        meta["authorized_dirs"] = [str(x) for x in src_auth if str(x).strip()]
-                    else:
-                        meta["authorized_dirs"] = [str(session_work_root(meta))]
-                except Exception:
-                    meta["authorized_dirs"] = [str(session_work_root(meta))]
-                meta["branched_from"] = sid
-                meta["branch_before_index"] = before_index
-                meta["ui_event_count"] = len(new_events)
-                meta["last_user_preview"] = ""
-                for ev in reversed(new_events):
-                    if isinstance(ev, dict) and ev.get("type") == "user":
-                        meta["last_user_preview"] = _normalize_sidebar_preview_text(
-                            str(ev.get("content") or ""),
-                            180,
-                        )
-                        break
-                meta.pop("truncate_backups", None)
-                meta.pop("last_truncate_backup", None)
-                meta.pop("pending_subagent_notifications", None)
+                meta = self._prepare_branch_metadata(sid, branch_name, now_iso, before_index, new_events)
                 if branch_from_seq is None:
                     try:
                         mapped_seq = new_events[-1].get("runtime_seq")
@@ -6477,33 +6606,14 @@ class SessionManager:
                         logger.warning("failed to roll back partial Runtime V2 branch %s", new_id, exc_info=True)
                     return {"ok": False, "error": "branch_seed_failed", "detail": str(exc)}
                 self._save_metadata(new_id, meta)
-                self.index.append({
-                    "id": new_id,
-                    "name": branch_name,
-                    "created_at": now_iso,
-                    "updated_at": now_iso,
-                    "archived": False,
-                    "pinned": False,
-                    "todo": False,
-                    "goal_review_pending": False,
-                    "pinned_at": None,
-                })
+                entry = self._branch_index_entry(new_id, branch_name, now_iso, meta)
+                self.index.append(entry)
                 self._save_index()
                 return {
                     "ok": True,
                     "session_id": new_id,
                     "name": branch_name,
-                    "session": {
-                        "id": new_id,
-                        "name": branch_name,
-                        "created_at": now_iso,
-                        "updated_at": now_iso,
-                        "archived": False,
-                        "pinned": False,
-                        "todo": False,
-                        "goal_review_pending": False,
-                        "pinned_at": None,
-                    },
+                    "session": self._session_entry_with_activity(dict(entry)),
                 }
             src_llm = self._load_llm_history(sid)
             src_work = self._load_work_messages(sid)
@@ -6525,43 +6635,11 @@ class SessionManager:
                 new_id,
                 [_message_to_dict(m) for m in rebuild_core_messages_from_ui_events(new_events)],
             )
-            meta = self._load_metadata(sid)
-            if not isinstance(meta, dict):
-                meta = {}
-            meta["name"] = branch_name
-            meta["created_at"] = now_iso
-            meta["updated_at"] = now_iso
-            meta["archived"] = False
-            meta["pinned"] = False
-            meta["todo"] = False
-            meta["goal_review_pending"] = False
-            meta.pop("pinned_at", None)
-            meta["branched_from"] = sid
-            meta["branch_before_index"] = before_index
-            meta["ui_event_count"] = len(new_events)
-            meta["last_user_preview"] = ""
-            for ev in reversed(new_events):
-                if isinstance(ev, dict) and ev.get("type") == "user":
-                    meta["last_user_preview"] = _normalize_sidebar_preview_text(
-                        str(ev.get("content") or ""),
-                        180,
-                    )
-                    break
-            meta.pop("truncate_backups", None)
-            meta.pop("last_truncate_backup", None)
-            meta.pop("pending_subagent_notifications", None)
+            meta = self._prepare_branch_metadata(sid, branch_name, now_iso, before_index, new_events)
             self._save_metadata(new_id, meta)
-            self.index.append({
-                "id": new_id,
-                "name": branch_name,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-                "archived": False,
-                "pinned": False,
-                "todo": False,
-                "goal_review_pending": False,
-                "pinned_at": None,
-            })
+            self.index.append(
+                self._branch_index_entry(new_id, branch_name, now_iso, meta)
+            )
             self._save_index()
             logger.info(
                 "创建分支会话 %s ← %s before_index=%s name=%s",
@@ -7918,8 +7996,44 @@ class SessionManager:
         """单条会话摘要（结构与 list_sessions 元素一致），不存在则 None。"""
         for s in self.index:
             if s.get("id") == session_id:
-                return self._session_entry_with_activity(dict(s))
+                return self._session_entry_with_activity(
+                    self._backfill_session_work_dir(dict(s))
+                )
         return None
+
+    def _backfill_session_work_dir(self, row: dict) -> dict:
+        """索引行缺 work_dir 时（老索引/刚创建的分支）按 metadata 补齐一次。
+
+        ``/sessions/{id}`` 与分支接口都走这里；缺字段会被投影成"默认目录"，
+        用户看到的就像分支没有继承原目录。
+        """
+        if session_work_dir_override(row):
+            return row
+        sid = str(row.get("id") or "").strip()
+        if not sid:
+            return row
+        checked = getattr(self, "_work_dir_projection_checked", None)
+        if checked is None:
+            checked = set()
+            self._work_dir_projection_checked = checked
+        if sid in checked:
+            return row
+        try:
+            meta = self._load_metadata(sid)
+        except Exception:
+            return row
+        checked.add(sid)
+        if not isinstance(meta, dict):
+            return row
+        override = session_work_dir_override(meta)
+        if not override:
+            return row
+        row["work_dir"] = override
+        for entry in self.index:
+            if str(entry.get("id")) == sid:
+                entry["work_dir"] = override
+                break
+        return row
 
     def register_imported_session(self, session_id: str) -> None:
         """Publish one completed import to memory and disk before returning it."""

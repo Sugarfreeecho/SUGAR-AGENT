@@ -1350,6 +1350,52 @@ def test_truncate_route_allows_missing_runtime_seq_boundary(monkeypatch, tmp_pat
     }]
 
 
+def test_truncate_route_rejects_active_run(monkeypatch, tmp_path):
+    """旧 run 还在写时改历史会让边界失效，必须先拒绝并让客户端稍后重试。"""
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "_history_mutation_run_active", lambda _sid: True)
+
+    response = asyncio.run(webui.truncate_session_events(
+        "s1",
+        before_index=10,
+        before_seq=99,
+        backup=False,
+    ))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 409
+    assert payload["error"] == "run_active"
+    assert payload["retry_after_ms"] > 0
+    assert fake.truncate_calls == []
+
+
+def test_truncate_route_reports_busy_history_lock(monkeypatch, tmp_path):
+    import webui
+
+    fake = _FakeSessionManager(tmp_path, [])
+    monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(webui, "_history_mutation_run_active", lambda _sid: False)
+
+    def busy(*_args, **_kwargs):
+        raise webui.HistoryOpBusyError("history operation busy")
+
+    monkeypatch.setattr(webui, "_run_history_op_locked", busy)
+
+    response = asyncio.run(webui.truncate_session_events(
+        "s1",
+        before_index=10,
+        before_seq=99,
+        backup=False,
+    ))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 503
+    assert payload["error"] == "history_op_busy"
+
+
 def test_truncate_route_resolves_runtime_alerts(monkeypatch, tmp_path):
     import runtime_observability
     import webui

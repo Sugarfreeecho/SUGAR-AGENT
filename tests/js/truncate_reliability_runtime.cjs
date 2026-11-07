@@ -109,6 +109,51 @@ async function main() {
     assert(clock > 45000, 'long-running truncation must recover beyond the old 45s limit');
     assert.equal(posts, 1);
   }
-  console.log('truncate reliability runtime: 8 scenarios passed');
+  {
+    // 停止是异步的：服务端先回 run_active，客户端必须用同一个 request_id 有界重试，
+    // 否则用户点一次发送就被 409 打断。
+    let clock = 0, posts = 0, ids = new Set();
+    const ctx = context(async (url, options) => {
+      if (options.method !== 'POST') return reply({ ok: true, status: 'completed' });
+      posts++;
+      ids.add((url.match(/request_id=([^&]+)/) || [])[1]);
+      if (posts < 3) return { ok: false, status: 409, json: async () => ({ ok: false, error: 'run_active', retry_after_ms: 1200 }) };
+      return reply({ ok: true, status: 'pending' });
+    }, {
+      Date: { now: () => clock },
+      // 只让"重试等待"推进假时钟；请求超时计时器不推进，否则一次 POST 就把
+      // 20s 的重试窗口耗尽。
+      setTimeout(resolve, delay) { if (delay <= 3000) { clock += delay; resolve(); } return 1; },
+      clearTimeout() {},
+    });
+    const result = await ctx.truncateSessionOnServer(2, {});
+    assert.equal(result.ok, true);
+    assert.equal(posts, 3, 'run_active must be retried, not surfaced immediately');
+    assert.equal(ids.size, 1, 'the retry must reuse the same request receipt');
+    assert(ctx.describeServerSyncFailure({ error: 'run_active' }, '改写未生效').includes('停止'));
+  }
+  {
+    // 重试窗口用完仍被拒：返回可读原因，且不把这次收据留成"已完成"，
+    // 让用户停掉任务后还能重新发起。
+    let clock = 0, posts = 0;
+    const ctx = context(async () => {
+      if (clock >= 0) posts++;
+      return { ok: false, status: 409, json: async () => ({ ok: false, error: 'run_active', retry_after_ms: 3000 }) };
+    }, {
+      Date: { now: () => clock },
+      setTimeout(resolve, delay) { if (delay <= 3000) { clock += delay; resolve(); } return 1; },
+      clearTimeout() {},
+    });
+    const first = await ctx.truncateSessionOnServer(2, {});
+    assert.equal(first.error, 'run_active');
+    const message = ctx.describeServerSyncFailure(first, '改写未生效');
+    assert(message.includes('运行'), 'the failure must explain the running turn');
+    assert(message.includes('停止'), 'the failure must tell the user how to proceed');
+    const postsBefore = posts;
+    const second = await ctx.truncateSessionOnServer(2, {});
+    assert.equal(second.error, 'run_active');
+    assert(posts > postsBefore, 'a later attempt must submit again, not poll a stale receipt');
+  }
+  console.log('truncate reliability runtime: 10 scenarios passed');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

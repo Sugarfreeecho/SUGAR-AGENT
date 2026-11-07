@@ -284,9 +284,38 @@ def _history_op_lock(session_id: str) -> threading.Lock:
         return lock
 
 
+class HistoryOpBusyError(RuntimeError):
+    """Another history mutation is still running for this session."""
+
+
+# 一次裁剪/分支可能要几十秒（大日志 + 事务预算 30s）。无上限等待会让请求
+# 永久挂起；给出上限并回 503，客户端才能明确"忙"而不是"卡住"。
+_HISTORY_OP_LOCK_TIMEOUT_SEC = 60.0
+
+
 def _run_history_op_locked(session_id: str, fn, *args, **kwargs):
-    with _history_op_lock(session_id):
+    lock = _history_op_lock(session_id)
+    if not lock.acquire(timeout=_HISTORY_OP_LOCK_TIMEOUT_SEC):
+        raise HistoryOpBusyError(f"history operation busy for session {session_id}")
+    try:
         return fn(*args, **kwargs)
+    finally:
+        lock.release()
+
+
+def _history_mutation_run_active(sid: str) -> bool:
+    """改历史前必须没有仍存活的父 run：旧 run 的后续写入会让裁剪边界失效。"""
+    session_id = str(sid or "").strip()
+    if not session_id:
+        return False
+    if bool(is_run_active(session_id)):
+        return True
+    try:
+        if _runtime_v2_active_run_info(session_id):
+            return True
+    except Exception:
+        logger.debug("active run probe failed for %s", session_id, exc_info=True)
+    return int(_active_chat_by_session.get(session_id, 0) or 0) > 0
 
 
 def _runtime_sync_file_sig(path: Path) -> dict:
@@ -8784,6 +8813,18 @@ async def truncate_session_events(
 ):
     # Keep the old synchronous contract for older clients. New clients receive
     # a quick acknowledgement and poll a non-mutating receipt endpoint.
+    # 运行栅栏放在受理之前：否则 202 先回、409 只能从状态轮询里冒出来，
+    # 客户端就无法按 retry_after_ms 自动重试了。
+    if await asyncio.to_thread(_history_mutation_run_active, session_id):
+        return JSONResponse(
+            content={
+                "ok": False,
+                "error": "run_active",
+                "retry_after_ms": 1200,
+                "detail": "stop the running turn before rewriting history",
+            },
+            status_code=409,
+        )
     if not isinstance(request_id, str) or not request_id:
         return await _truncate_session_events_once(session_id, before_index, before_seq, backup)
     result = _truncate_session_requests.start(
@@ -8820,15 +8861,32 @@ async def _truncate_session_events_once(session_id, before_index, before_seq, ba
                 },
                 status_code=409,
             )
-        ok = await run_in_threadpool(
-            _run_history_op_locked,
-            session_id,
-            session_manager.truncate_session_at_event_index,
-            session_id,
-            int(before_index),
-            truncate_before_seq=before_seq,
-            create_backup=bool(backup),
-        )
+        if await asyncio.to_thread(_history_mutation_run_active, session_id):
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "error": "run_active",
+                    "retry_after_ms": 1200,
+                    "detail": "stop the running turn before rewriting history",
+                },
+                status_code=409,
+            )
+        try:
+            ok = await run_in_threadpool(
+                _run_history_op_locked,
+                session_id,
+                session_manager.truncate_session_at_event_index,
+                session_id,
+                int(before_index),
+                truncate_before_seq=before_seq,
+                create_backup=bool(backup),
+            )
+        except HistoryOpBusyError as exc:
+            logger.warning("history truncate busy: %s", exc)
+            return JSONResponse(
+                content={"ok": False, "error": "history_op_busy", "retry_after_ms": 2000},
+                status_code=503,
+            )
     except (TypeError, ValueError):
         return JSONResponse(content={"ok": False, "error": "invalid before_index"}, status_code=400)
     if not ok:
@@ -8888,14 +8946,21 @@ async def _branch_session_events_once(session_id: str, before_index: int, after_
     最终答案处分支时，前端应传 final 事件的 eventIndex + 1。
     """
     try:
-        result = await run_in_threadpool(
-            _run_history_op_locked,
-            session_id,
-            session_manager.branch_session_at_event_index,
-            session_id,
-            int(before_index),
-            branch_after_seq=after_seq,
-        )
+        try:
+            result = await run_in_threadpool(
+                _run_history_op_locked,
+                session_id,
+                session_manager.branch_session_at_event_index,
+                session_id,
+                int(before_index),
+                branch_after_seq=after_seq,
+            )
+        except HistoryOpBusyError as exc:
+            logger.warning("history branch busy: %s", exc)
+            return JSONResponse(
+                content={"ok": False, "error": "history_op_busy", "retry_after_ms": 2000},
+                status_code=503,
+            )
     except (TypeError, ValueError):
         return JSONResponse(content={"ok": False, "error": "invalid before_index"}, status_code=400)
     if not result:
@@ -8908,6 +8973,9 @@ async def _branch_session_events_once(session_id: str, before_index: int, after_
             content=result,
             status_code=400,
         )
+    # 分支是新建会话：必须让 /sessions/state 的缓存立即失效，否则侧栏/摘要会
+    # 继续返回创建前的快照（那条路径还缺 work_dir，看起来就像没继承原目录）。
+    _invalidate_sessions_state_cache()
     try:
         from workflow_extensions import session_workflows
 
@@ -8942,6 +9010,12 @@ async def append_ui_events_tail(session_id: str, request: Request):
             session_manager.append_ui_events_tail,
             session_id,
             tail,
+        )
+    except HistoryOpBusyError as exc:
+        logger.warning("history append busy: %s", exc)
+        return JSONResponse(
+            content={"ok": False, "error": "history_op_busy", "retry_after_ms": 2000},
+            status_code=503,
         )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)

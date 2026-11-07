@@ -200,6 +200,8 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '粘贴文件失败': 'Failed to paste file', '文件上传失败': 'File upload failed', '无法保存剪贴板中的文件或图片。': 'Could not save the file or image from the clipboard.',
     '无法上传所选文件或剪贴板中的图片。': 'Could not upload the selected file or clipboard image.',
     '截断失败': 'Truncation failed', '无法同步服务器，改写未生效。': 'Could not sync with the server; the rewrite was not applied.',
+    '当前会话还有任务在运行，历史改写被拒绝，所以改写未生效。请先停止当前任务（或等它结束）再发送。': 'This session still has a running turn, so the history rewrite was rejected and nothing was sent. Stop the turn (or wait for it to finish) and send again.',
+    '服务端正在处理另一个历史操作（裁剪/分支/迁移），本次改写未生效。请稍等几秒后重试。': 'The server is handling another history operation (truncate/branch/migration); the rewrite was not applied. Please retry in a few seconds.',
     '撤销失败，请重试。': 'Undo failed. Please try again.', '检测到上次运行未完成，正在自动恢复任务…': 'The previous run was incomplete. Restoring it automatically…',
     '恢复实时流失败': 'Failed to restore the live stream', '续接失败': 'Failed to continue',
     '追问插入失败': 'Failed to insert follow-up', '追问已被接收，无法撤回': 'The follow-up was accepted and can no longer be withdrawn'

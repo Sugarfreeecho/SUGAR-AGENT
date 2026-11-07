@@ -365,15 +365,19 @@ class RuntimeUiProjection:
         hydrate: bool = True,
         end_offset: Optional[int] = None,
         read_metadata: Optional[dict] = None,
+        history_state: Optional[dict] = None,
     ) -> Tuple[List[dict], int, bool]:
         out: List[dict] = []
         latest_truncate_seq = 0
         has_history_ops = False
         active_run_id = ""
+        log_max_seq = 0
+        truncate_ops = 0
         for event in self.event_log.iter_events(
             session_id, end_offset=end_offset, read_metadata=read_metadata,
             _skip_attachment_types=frozenset({"execution_recorded"}),
         ):
+            log_max_seq = max(log_max_seq, int(event.seq))
             active_run_id = self._active_run_after_event(event, active_run_id)
             if read_metadata is not None:
                 read_metadata.update(last_runtime_seq=int(event.seq), last_run_id=active_run_id)
@@ -395,6 +399,7 @@ class RuntimeUiProjection:
                 try:
                     out = out[:max(0, int(new_count))]
                     latest_truncate_seq = int(event.seq)
+                    truncate_ops += 1
                 except (TypeError, ValueError):
                     pass
                 continue
@@ -403,6 +408,7 @@ class RuntimeUiProjection:
                 payload = dict(event.payload or {})
                 out = self._apply_visible_range_to_projected_events(out, payload)
                 latest_truncate_seq = int(event.seq)
+                truncate_ops += 1
                 continue
             if event.type in {"message_deleted", "message_rewritten"}:
                 out = self._normalize_before_history_op(out)
@@ -420,15 +426,33 @@ class RuntimeUiProjection:
             ui = self._with_run_id(ui, event, active_run_id)
             if ui is not None:
                 out.append(ui)
-        return self._normalize_react_process_order(out), latest_truncate_seq, has_history_ops
+        normalized = self._normalize_react_process_order(out)
+        if history_state is not None:
+            history_state["visible_max_seq"] = max(
+                (self._int_or_none(item.get("runtime_seq")) or 0 for item in normalized),
+                default=0,
+            )
+            history_state["log_max_seq"] = log_max_seq
+            history_state["truncate_ops"] = truncate_ops
+            history_state["has_history_ops"] = has_history_ops
+        return normalized, latest_truncate_seq, has_history_ops
 
     def resolve_truncate_boundary(
-        self, session_id: str, ui_index: int, runtime_seq: Optional[int] = None,
+        self,
+        session_id: str,
+        ui_index: int,
+        runtime_seq: Optional[int] = None,
+        *,
+        history_state: Optional[dict] = None,
     ) -> Optional[Tuple[int, int, int]]:
         """Resolve (index, target seq, previous seq) in one unhydrated replay.
 
         An explicit but stale seq must not fall back to an index: that index
         may now refer to an entirely different user turn after a rewrite.
+
+        ``history_state`` receives the visible/log sequence extent and whether a
+        previous truncation already hides the requested target, so a retried
+        destructive edit can be acknowledged instead of failing forever.
         """
         index = int(ui_index)
         if index < 0:
@@ -436,7 +460,9 @@ class RuntimeUiProjection:
         target = int(runtime_seq) if runtime_seq is not None else None
         if target is not None and target <= 0:
             return None
-        events, _, _ = self._project_visible_ui_entries(session_id, hydrate=False)
+        events, _, _ = self._project_visible_ui_entries(
+            session_id, hydrate=False, history_state=history_state,
+        )
         if target is None:
             if index >= len(events):
                 return None
@@ -447,6 +473,13 @@ class RuntimeUiProjection:
             if self._int_or_none(event.get("runtime_seq")) == target:
                 previous = self._int_or_none(events[pos - 1].get("runtime_seq")) if pos else 0
                 return (pos, target, previous) if previous is not None else None
+        if isinstance(history_state, dict):
+            visible_max = int(history_state.get("visible_max_seq") or 0)
+            log_max = int(history_state.get("log_max_seq") or 0)
+            history_state["already_applied"] = bool(
+                history_state.get("truncate_ops")
+                and visible_max < target <= log_max
+            )
         return None
 
     def ui_index_to_runtime_seq(self, session_id: str, ui_index: int) -> Optional[int]:

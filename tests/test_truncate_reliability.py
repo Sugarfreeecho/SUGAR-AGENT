@@ -92,8 +92,14 @@ def test_truncate_boundary_uses_one_unhydrated_projection(tmp_path, monkeypatch,
     projection = RuntimeUiProjection(tmp_path)
     replay = Mock(wraps=projection._project_visible_ui_entries)
     monkeypatch.setattr(projection, "_project_visible_ui_entries", replay)
-    assert projection.resolve_truncate_boundary("s1", 2, target.seq if explicit else None) == (2, target.seq, answer.seq)
-    replay.assert_called_once_with("s1", hydrate=False)
+    state = {}
+    assert projection.resolve_truncate_boundary(
+        "s1", 2, target.seq if explicit else None, history_state=state,
+    ) == (2, target.seq, answer.seq)
+    replay.assert_called_once()
+    assert replay.call_args.args == ("s1",)
+    assert replay.call_args.kwargs["hydrate"] is False
+    assert replay.call_args.kwargs["history_state"] is state
     assert projection.resolve_truncate_boundary("s1", 0, first.seq) == (0, first.seq, 0)
     assert projection.resolve_truncate_boundary("s1", 2, 999999) is None
     assert projection.resolve_truncate_boundary("s1", 999999) is None
@@ -117,10 +123,64 @@ def test_manager_truncate_skips_redundant_full_history_load(tmp_path):
     assert agent_harness.SessionManager.truncate_session_at_event_index(
         manager, "s1", 2, truncate_before_seq=target.seq, create_backup=False,
     ) is True
-    observed.assert_called_once_with(
-        "truncate_visible_history_before_seq", "s1", target_seq=target.seq,
-        keep_to_seq=previous.seq, reason="runtime_v2_truncate",
+    observed.assert_called_once()
+    assert observed.call_args.args == ("truncate_visible_history_before_seq", "s1")
+    kwargs = dict(observed.call_args.kwargs)
+    outcome = kwargs.pop("outcome")
+    assert isinstance(outcome, dict)
+    assert kwargs == {
+        "target_seq": target.seq,
+        "keep_to_seq": previous.seq,
+        "reason": "runtime_v2_truncate",
+    }
+
+
+def test_repeated_truncate_of_same_target_is_idempotent(tmp_path):
+    """提交后丢失响应再重试：目标 seq 已不可见，必须按成功处理，不能永久 400。"""
+    from runtime_v2 import RuntimeHistoryOps
+
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event("s1", {"type": "user", "content": "first"})
+    answer = mirror.mirror_ui_event("s1", {"type": "final", "content": "answer"})
+    target = mirror.mirror_ui_event("s1", {"type": "user", "content": "rewrite"})
+    RuntimeHistoryOps(tmp_path).truncate_visible_history_before_seq(
+        "s1", target_seq=target.seq, keep_to_seq=answer.seq,
     )
+    state = {}
+    assert RuntimeUiProjection(tmp_path).resolve_truncate_boundary(
+        "s1", 2, target.seq, history_state=state,
+    ) is None
+    assert state["already_applied"] is True
+    # 未发生裁剪时不能把"不存在"误判成"已生效"
+    state2 = {}
+    assert RuntimeUiProjection(tmp_path).resolve_truncate_boundary(
+        "s1", 2, 999999, history_state=state2,
+    ) is None
+    assert state2["already_applied"] is False
+
+
+def test_manager_truncate_counts_committed_without_snapshot_as_applied(tmp_path, monkeypatch):
+    """事实已落盘但快照写失败：必须回成功（快照会在下次读取时重建）。"""
+    import agent_harness
+    from runtime_v2.snapshot_store import SnapshotStore
+
+    sid = "11111111-1111-4111-8111-111111111111"
+    mirror = RuntimeMirror(tmp_path)
+    mirror.mirror_ui_event(sid, {"type": "user", "content": "first"})
+    answer = mirror.mirror_ui_event(sid, {"type": "final", "content": "answer"})
+    target = mirror.mirror_ui_event(sid, {"type": "user", "content": "rewrite"})
+
+    def fail_write(self, *args, **kwargs):
+        raise PermissionError("simulated snapshot write failure")
+
+    monkeypatch.setattr(SnapshotStore, "write_checkpointed", fail_write)
+    manager = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    assert agent_harness.SessionManager.truncate_session_at_event_index(
+        manager, sid, 2, truncate_before_seq=target.seq, create_backup=False,
+    ) is True
+    types = [event.type for event in
+             __import__("runtime_v2").RuntimeHistoryOps(tmp_path).event_log.read_all(sid)]
+    assert "visible_range_changed" in types
 
 
 def test_routes_acknowledge_then_report_same_operation_after_disconnect(monkeypatch):
