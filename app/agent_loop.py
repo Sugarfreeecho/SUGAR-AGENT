@@ -2312,9 +2312,9 @@ def _build_static_segments_for_session(
     from session_control.configuration import apply_metadata
     metadata = apply_metadata(session_id, session_meta if isinstance(session_meta, dict) else {})
     replacement = effective_system_context_mode(metadata) == "replace"
-    env_static = build_env_static(session_id or None, minimal=True) if replacement else build_env_static(session_id or None)
-    segments = () if replacement else tuple(build_static_system_segments(
-        get_skills_catalog(), env_static, prompt_language,
+    env_static = build_env_static(session_id or None, language=prompt_language)
+    segments = tuple(build_static_system_segments(
+        get_skills_catalog(), env_static, prompt_language, include_identity=not replacement,
     ))
 
     return assemble_session_system_segments(
@@ -2353,7 +2353,7 @@ def warm_prompt_build_path(prompt_language: str = "zh-CN") -> None:
     try:
         started = time.perf_counter()
         get_skills_catalog()
-        build_env_static(None)
+        build_env_static(None, language=prompt_language)
         prompt_template_revision(prompt_language)
         logger.info(
             "prompt build path warmed ms=%.0f language=%s",

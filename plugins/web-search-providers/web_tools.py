@@ -387,9 +387,8 @@ def definitions() -> list[dict[str, Any]]:
         ),
         _schema(
             "web_download",
-            "Download a file from a public http(s) URL into WORK_DIR (binary-safe). "
-            "Omit path to save using the URL filename under WORK_DIR (collision-safe rename). "
-            "Same SSRF rules as web_fetch. Not a substitute for web_fetch when you only need readable page text.",
+            "Download a public http(s) URL into WORK_DIR (binary-safe, SSRF-guarded). Omit path to use the "
+            "URL filename with a collision-safe rename.",
             {
                 "url": {"type": "string", "description": "Full http or https URL"},
                 "path": {

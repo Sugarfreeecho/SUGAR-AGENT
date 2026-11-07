@@ -971,86 +971,99 @@ def messages_for_openai_turns(llm_history: List[Any]) -> List[Any]:
     return out
 
 
-def build_env_static(session_id: Optional[str] = None, *, minimal: bool = False) -> str:
-    """Build the Environment block: calendar month, OS, paths, session storage (no live workspace listing)."""
+def build_env_static(
+    session_id: Optional[str] = None, *, minimal: bool = False, language: str = "zh-CN",
+) -> str:
+    """Build the Environment block: calendar month, OS, work paths, session storage (no live workspace listing).
+
+    Only facts that apply to every turn live here. Scenario playbooks (MCP registration, Runtime V2
+    storage details, self-inspection entry, shell syntax) live in the sugar-agent-manual skill.
+    """
     from agent_harness import PROJECT_ROOT as AGENT_PROJECT_ROOT, WORK_DIR, session_manager, session_work_dir
     from agent_tools import describe_run_shell_executor_for_prompt
 
     sid = (session_id or "").strip()
+    is_en = str(language or "").strip().lower() in {"en", "en-us", "en-gb", "english"}
 
     work_root = session_work_dir(sid)
     if minimal:
+        if not is_en:
+            return ("## Environment\n"
+                    f"- 当前月份（宿主本地时间）：{datetime.now():%Y-%m}\n"
+                    f"- 操作系统：{platform.system()}\n"
+                    f"- 会话 ID：{sid or '（未保存）'}\n"
+                    f"- 工作根：{work_root}\n"
+                    "- 只有当前工具目录中的工具可用；权限由宿主强制执行。")
         return ("## Environment\n"
                 f"- Calendar month (host local time): {datetime.now():%Y-%m}\n"
                 f"- OS: {platform.system()}\n"
                 f"- Session ID: {sid or '(unsaved)'}\n"
                 f"- Work root: {work_root}\n"
                 "- Only tools in the current tool catalog are available; the host enforces their permissions.")
+
     wdir = str(work_root)
     proj = str(AGENT_PROJECT_ROOT.resolve())
-
-    session_lines = ""
+    temp_root = str(WORK_DIR / "TempOutput")
+    executor = describe_run_shell_executor_for_prompt(language)
+    session_line = ""
     if sid:
-        try:
-            from runtime_v2 import runtime_v2_primary
-
-            is_v2 = bool(runtime_v2_primary())
-        except Exception:
-            is_v2 = True
-        sdir = session_manager._get_session_path(sid).resolve()
-        try:
-            v_session = "/" + str(sdir.relative_to(work_root)).replace("\\", "/")
-        except ValueError:
-            v_session = str(sdir)
-        v_key = f"{v_session}/key_context.md"
-        v_todo = f"{v_session}/todo_plan.md"
-        session_lines = f"""
-- **Session storage directory**: {sdir}
-  - File-tools path: `{v_session}`. Storage outside the active project uses its native absolute path.
-  - Main files: `llm_history.json`, `dialogue_history.json` (user↔final from `ui_events`), `work_messages.json`, `ui_events.json`, `key_context.md`, `todo_plan.md`, `metadata.json`, plus related artifacts.
-  - Read or grep this directory when in-context messages are insufficient and you need persisted history or the event stream.
-  - Persistent key facts belong in `key_context.md`: `{v_key}`. Use `context_manage` with `mode=edit_key_context` to revise it.
-  - Live todo state belongs in `todo_plan.md`: `{v_todo}`. Use `update_todo`, or `read_file` on `{v_todo}` when you need to inspect it.
-  - Extra `key_context` system message: when non-empty, the server injects the rendered full `key_context.md` body; legacy sessions may strip an embedded `## Todo 计划` section."""
-        if is_v2:
-            session_lines = f"""
-- **Session storage directory**: {sdir}
-  - Runtime V2 canonical storage path: `{v_session}`. This shared storage may be outside the active project.
-  - Canonical facts and rebuildable state live in `events.jsonl`, `snapshots/latest.json`, metadata, indexes, and referenced blobs. Legacy `llm_history.json`, `ui_events.json`, `key_context.md`, and `todo_plan.md` may be absent or stale and must not be used as context authority.
-  - The server injects the active model context and summary. Use `context_manage` for explicit compact/summary edits and `update_todo` for the live plan; do not directly edit Runtime V2 storage files.
-  - Use the conversation history APIs/UI when older visible history is needed."""
-    else:
-        session_lines = "\n- **Session storage directory**: not set for this run."
-
-    run_shell_executor_hint = describe_run_shell_executor_for_prompt()
+        sdir = str(session_manager._get_session_path(sid).resolve())
+        if is_en:
+            session_line = (f"- **Session storage**: {sdir} (use `history_context` for history; "
+                            "Runtime V2 details in the skill)")
+        else:
+            session_line = f"- **本会话存储**：{sdir}（历史检索用 `history_context`；Runtime V2 细则见技能）"
     current_year_month = datetime.now().strftime("%Y-%m")
+
+    if not is_en:
+        text = f"""
+## Environment
+- **当前月份（宿主本地时间）**：**{current_year_month}**
+- **操作系统**：{platform.system()} | **Python**：{platform.python_version()}
+{executor}
+- **工作根** (`WORK_DIR`): {wdir}
+  - 虚拟 `/` 映射到这里；相对路径与 `/outputs/a.txt` 这类虚拟路径都按 `WORK_DIR` 解析。
+  - 工作区外的原生绝对路径可用，受审批与禁区约束（见 `sugar-agent-manual`）。
+- **临时目录**：{temp_root}（跨会话共享）
+- **Agent 项目根** (`AGENT_PROJECT_ROOT`): {proj}
+{session_line}
+    """.strip()
+        return text
 
     text = f"""
 ## Environment
 - **Calendar month (host local time)**: **{current_year_month}**
 - **OS**: {platform.system()} | **Python**: {platform.python_version()}
-{run_shell_executor_hint}
-- **MCP extensions** (optional): With `.config/mcp_servers.json` (or env `MCP_SERVERS_JSON`), or settings saved via **Advanced settings → MCP configuration**, each exact server configuration requires one human registration confirmation before it connects. Tools use their local names by default; plugin and server prefixes are added only to resolve name collisions. Use the exact names in the current tool catalog. Tool calls then follow the current global permission mode and central `allow/ask/deny` policy.
-- **Runtime outputs**: `{WORK_DIR / 'TempOutput'}` is shared across sessions and stays independent of the active project. Use `write_file(temporary=true)` for throwaway scripts and then use its returned absolute path. `run_shell` keeps the project cwd; TEMP/TMP/TMPDIR identify its runtime scratch for intermediate outputs. Keep requested deliverables in the project. Complete tool results remain under `TempOutput/tool-results` for history reads.
-- **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
-  - This is the agent application's own source tree and project-level config root, including files such as `app/agent_loop.py`, `app/agent_tools.py`, `app/agent_harness.py`, `app/agent_tokenizer.py`, `app/prompt.md`, and `.config/mcp_servers.json`.
-  - When the user asks about "your" features, mechanisms, configuration, tool behavior, prompt behavior, self-checks, or asks you to inspect/check yourself, first use this root to read the relevant code and infer the agent's actual behavior before answering.
+{executor}
 - **Work root** (`WORK_DIR`): {wdir}
-  - Use `switch_work_dir` to change this session's root after user approval. The target must be an existing absolute directory. Subsequent tools use the new root; existing terminals and background jobs keep their original cwd. Shell `cd` only affects that shell operation.
-  - Global default and shared data root: {WORK_DIR.resolve()}. Sessions and attachments remain in this shared root.
-  - Virtual `/` maps to this directory. Relative paths and virtual paths like `/outputs/a.txt` resolve under `WORK_DIR`.
-  - `write_file`, `apply_patch`, `edit_file`, `web_download`, `delete_file` (soft-delete target: `WORK_DIR/.trash/`), and restricted `run_shell` resolve relative paths under this tree; **native absolute paths outside WORK_DIR are permitted** after the user approves the target directory through the approval card in restricted modes (full access allows them directly).
-  - `delete_file` refuses protected tool state under `sessions/`, `skills/`, `.trash/`, and their children.
-
-## This conversation's storage{session_lines}
+  - Virtual `/` maps here; relative paths and `/outputs/a.txt`-style virtual paths resolve under it.
+  - Absolute paths outside WORK_DIR are allowed, subject to approval and protected paths (see `sugar-agent-manual`).
+- **Runtime scratch**: {temp_root} (shared across sessions)
+- **Agent project root** (`AGENT_PROJECT_ROOT`): {proj}
+{session_line}
     """.strip()
     return text
+
+
+def build_skills_system_segment(skills_catalog: str, language: str = "zh-CN") -> str:
+    """Skills segment, also used by replace-mode sessions so a custom charter never hides the catalog."""
+    from agent_harness import load_prompt_template
+
+    is_english = str(language or "zh-CN").strip().lower() in {"en", "en-us", "en-gb", "english"}
+    intro = (
+        load_prompt_template("system_skills_intro", "en")
+        if is_english else load_prompt_template("system_skills_intro")
+    ).strip()
+    heading = "## Skills catalog" if is_english else "## 技能目录"
+    return heading + "\n\n" + intro.format(skills_catalog=skills_catalog)
 
 
 def build_static_system_segments(
     skills_catalog: str,
     env_static: str,
     language: str = "zh-CN",
+    *,
+    include_identity: bool = True,
 ) -> List[str]:
     """
     静态 system 分段上送（不含 key_context、不含对话轮）。
@@ -1067,19 +1080,17 @@ def build_static_system_segments(
             else load_prompt_template(name)
         )
 
-    identity = load_for_language("system_identity").strip()
     contract = load_for_language("system_tool_contract").strip()
-    skills_tpl = load_for_language("system_skills_intro").strip()
-    skills_block = skills_tpl.format(skills_catalog=skills_catalog)
     identity_heading = "## Role and response principles" if is_english else "## 角色与回答原则"
     contract_heading = "## Tool-calling policy" if is_english else "## 工具调用策略"
-    skills_heading = "## Skills catalog" if is_english else "## 技能目录"
-    parts = [
-        identity_heading + "\n\n" + identity,
+    parts = []
+    if include_identity:
+        parts.append(identity_heading + "\n\n" + load_for_language("system_identity").strip())
+    parts.extend([
         contract_heading + "\n\n" + contract,
-        skills_heading + "\n\n" + skills_block,
+        build_skills_system_segment(skills_catalog, language),
         env_static.strip(),
-    ]
+    ])
     return [p for p in parts if p.strip()]
 
 
@@ -1103,8 +1114,10 @@ def build_session_system_segments(
     if metadata is None:
         metadata = _session_metadata_for_prompt(sid)
     replacement = effective_system_context_mode(metadata) == "replace"
-    env_static = build_env_static(sid or None, minimal=True) if replacement else build_env_static(sid or None)
-    base = () if replacement else build_static_system_segments(get_skills_catalog(), env_static, language)
+    env_static = build_env_static(sid or None, language=language)
+    base = build_static_system_segments(
+        get_skills_catalog(), env_static, language, include_identity=not replacement,
+    )
     return assemble_session_system_segments(base, env_static, metadata)
 
 

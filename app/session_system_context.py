@@ -56,7 +56,12 @@ def assemble_session_system_segments(
     """
     context, mode = validate_system_context(effective_system_context(metadata), effective_system_context_mode(metadata))
     if mode == "replace":
-        segments = (context, env_static) if env_static.strip() else (context,)
+        # 只替换第一段（角色与回答原则）：工具契约、技能目录、环境保持原样。
+        base = tuple(base_segments)
+        if base:
+            segments = (context, *base)
+        else:
+            segments = (context, env_static) if env_static.strip() else (context,)
         if metadata.get("is_subagent"):
             from agent_subagent import SUBAGENT_RUN_INSTRUCTION
             segments = ("## Subagent 运行约束\n\n" + SUBAGENT_RUN_INSTRUCTION.strip(), *segments)

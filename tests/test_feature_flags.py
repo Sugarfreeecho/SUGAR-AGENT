@@ -802,14 +802,13 @@ def test_tool_pending_switches_generated_draft_to_executing():
 def test_prompt_allows_multi_tool_generation_independent_of_execution_mode():
     prompt = (ROOT / "app/prompt.md").read_text(encoding="utf-8")
 
-    assert "这与工具最终是并行还是串行执行无关" in prompt
-    assert "依照 `tool_calls` 原始顺序串行" in prompt
-    assert "不得猜测未知参数" in prompt
-    assert "已被压缩或可能被压缩的历史信息" in prompt
-    assert "优先调用 `history_context`" in prompt
-    assert "先用 `scope=current` 搜索当前会话" in prompt
-    assert "默认使用干净结果" in prompt
-    assert "`include_source=true`" in prompt
+    assert "推荐同时调用 2–4 个参数已确定的工具" in prompt
+    assert "有副作用的按原顺序串行" in prompt
+    assert "不猜参数" in prompt
+    assert "可能被压缩的历史" in prompt
+    assert "`history_context`" in prompt
+    assert "默认 `scope=current`" in prompt
+    assert "跨会话才用 `global`" in prompt
 
 
 def test_ui_translation_does_not_mutate_conversation_content():

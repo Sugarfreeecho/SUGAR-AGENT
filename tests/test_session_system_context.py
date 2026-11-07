@@ -198,9 +198,10 @@ def test_actual_http_body_contains_one_system_charter_and_short_user_round(sessi
         assert len(charter) == 1 and charter[0]["role"] == "system"
         if mode == "replace":
             systems = [m["content"] for m in body["messages"] if m["role"] == "system"]
-            assert len(systems) == 2 and systems[0] == "固定章程测试正文"
-            assert systems[1].startswith("## Environment")
-            assert "run_shell" not in systems[1] and "Skills catalog" not in systems[1]
+            assert len(systems) == 4 and systems[0] == "固定章程测试正文"
+            assert systems[1].startswith("## 工具调用策略")
+            assert systems[2].startswith("## 技能目录")
+            assert systems[3].startswith("## Environment")
         assert [m["content"] for m in body["messages"] if m["role"] == "user"] == ["只含这一轮的参数"]
 
 
@@ -239,17 +240,25 @@ async def test_bili_existing_and_new_sessions_use_system_context_and_refresh_cha
     await composed.control.close()
 
 
-def test_replace_mode_skips_host_templates_and_matches_token_estimates(sessions, monkeypatch):
-    import agent_loop
+def test_replace_mode_keeps_contract_and_skills_without_identity(sessions, monkeypatch):
+    import agent_harness
     import agent_tokenizer as tokenizer
+
     sid = sessions.get_or_create_session(system_context="独立完整提示词", system_context_mode="replace")[0]
-    def forbidden(*args, **kwargs):
-        pytest.fail("replacement mode must not load ordinary host prompt or skills")
-    monkeypatch.setattr(agent_loop, "build_static_system_segments", forbidden)
-    monkeypatch.setattr(agent_loop, "get_skills_catalog", forbidden)
-    monkeypatch.setattr(tokenizer, "build_static_system_segments", forbidden)
-    assert prefix(sessions, sid) == tokenizer.build_session_system_segments(sid)
-    assert prefix(sessions, sid)[0] == "独立完整提示词"
+    original = agent_harness.load_prompt_template
+
+    def guard(name, *args, **kwargs):
+        if name == "system_identity":
+            pytest.fail("replace mode must not load the ordinary identity template")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(agent_harness, "load_prompt_template", guard)
+    segments = tokenizer.build_session_system_segments(sid)
+    assert prefix(sessions, sid) == segments
+    assert segments[0] == "独立完整提示词"
+    assert segments[1].startswith("## 工具调用策略")
+    assert segments[2].startswith("## 技能目录")
+    assert segments[3].startswith("## Environment")
     assert tokenizer.estimate_full_input_tokens_for_llm_history(sid, [], "") > 0
     fresh = type(sessions)(sessions.sessions_dir, sessions.index_file)
     assert fresh._load_metadata(sid)["system_context_mode"] == "replace"

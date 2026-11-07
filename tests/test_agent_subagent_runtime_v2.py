@@ -526,7 +526,10 @@ def test_subagent_prompt_and_file_attachment_share_image_modality_routing(tmp_pa
         assert not any(message["role"] == "system" for message in text_params)
 
 
-def test_task_tool_description_routes_media_and_keeps_text_only_fallback():
+def test_task_tool_description_stays_short_and_defers_media_routing_to_skill():
+    """The task description is deliberately terse; media routing lives in the skill reference."""
+    from pathlib import Path
+
     from agent_tools import OPENAI_TOOL_DEFINITIONS
 
     task_tool = next(
@@ -534,33 +537,27 @@ def test_task_tool_description_routes_media_and_keeps_text_only_fallback():
         for item in OPENAI_TOOL_DEFINITIONS
         if item.get("function", {}).get("name") == "task"
     )["function"]
-    properties = task_tool["parameters"]["properties"]
 
-    assert "Reading images the current model can see is a parent-side job" in task_tool["description"]
-    assert "use `read_file` in-context when the current profile declares image input" in task_tool[
-        "description"
-    ]
-    assert "When it does not, delegate the image instead" in task_tool["description"]
-    assert "file_attachments" in task_tool["description"]
-    assert "image_url content" in task_tool["description"]
-    assert "text-only profile" in task_tool["description"]
-    assert "wrap each exact local image path in double quotes" in task_tool[
-        "description"
-    ]
-    assert "If the handoff references images, wrap each exact local image path in double quotes" in properties[
-        "prompt"
-    ]["description"]
-    assert "When the handoff needs media input" in properties[
-        "model_profile_id"
-    ]["description"]
-    assert "effective input_modalities are authoritative" in properties[
-        "model_profile_id"
-    ]["description"]
-    assert "how an image is handed to a subagent when the current model cannot see it" in properties[
-        "file_attachments"
-    ]["description"]
-    assert "durable image attachment references" in properties["file_attachments"]["description"]
-    assert "deterministic omission text" in properties["file_attachments"]["description"]
+    # Description keeps only the cross-cutting contract and points at the skill.
+    assert len(task_tool["description"]) <= 600
+    assert "self-contained handoff" in task_tool["description"]
+    assert "sugar-agent-manual" in task_tool["description"]
+    assert "references/03-tools.md" in task_tool["description"]
+
+    # The routing rules moved into the skill reference and must still be there.
+    skill = (
+        Path(__file__).resolve().parents[1]
+        / "workspace/skills/sugar-agent-manual/references/03-tools.md"
+    ).read_text(encoding="utf-8")
+    for phrase in (
+        "file_attachments",
+        "read_file",
+        "双引号",
+        "best-of-n-runner",
+        "worktree",
+        "readonly=true",
+    ):
+        assert phrase in skill, phrase
 
 
 def test_runtime_v2_subagent_run_uses_projection_not_legacy(monkeypatch, tmp_path):

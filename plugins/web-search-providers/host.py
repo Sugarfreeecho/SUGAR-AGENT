@@ -389,9 +389,7 @@ def _definition() -> dict[str, Any]:
         "function": {
             "name": "web_search",
             "description": (
-                "Search the public web through the selected WEB_SEARCH_PROVIDER plugin. "
-                "Provider-specific configuration and fallback behavior are owned by that plugin; "
-                "disabling the plugin removes this tool."
+                "Search the public web via the configured provider plugin; disabling the plugin removes the tool."
             ),
             "parameters": {
                 "type": "object",

@@ -2177,45 +2177,51 @@ def _posix_use_bash_shell() -> bool:
     return shutil.which("bash") is not None
 
 
-def describe_run_shell_executor_for_prompt() -> str:
+def describe_run_shell_executor_for_prompt(language: str = "zh-CN") -> str:
     """
-    Host-accurate shell backend line for the ``## Environment`` system block (matches ``run_shell`` branching).
+    Short host-accurate shell backend line for the ``## Environment`` system block.
+
+    Detailed syntax rules live in the ``sugar-agent-manual`` skill (references/03-tools.md) so the
+    per-request environment block stays small.
     """
+    is_en = str(language or "").strip().lower() in {"en", "en-us", "en-gb", "english"}
     if platform.system() == "Windows":
         if _run_cli_should_use_bash_on_windows():
             b = _windows_bash_executable() or "bash.exe"
-            return (
-                f"- **Actual run_shell executor (this host)**: **Git Bash / bash** — `{b}` (`bash -lc` or `-c`, "
-                "inner `eval` + POSIX `shlex.quote`). **Not** CMD; do not paste bare CMD syntax (e.g. `dir /s /b`) "
-                'into Bash (use `cmd /c "..."` if needed). Do **not** assume `wc` / `head` / `grep` are on PATH—use '
-                "**Python** if missing. Quote paths that contain spaces. **Timeout** capped at **600** s."
-            )
+            if is_en:
+                return (f"- **run_shell executor (this host)**: **Git Bash / bash** — `{b}`; use bash syntax, "
+                        "never bare CMD (`dir /s /b`); assume no `wc`/`head`/`grep`, prefer Python; timeout 600 s. "
+                        "(Details: `sugar-agent-manual` → references/03-tools.md)")
+            return (f"- **run_shell 执行器（本机）**：**Git Bash / bash** — `{b}`；用 bash 语法，不要粘裸 CMD"
+                    "（如 `dir /s /b`）；不要假设有 `wc`/`head`/`grep`，缺失时用 Python；超时 600 秒。"
+                    "（细节见 `sugar-agent-manual` → references/03-tools.md）")
         ps = _windows_powershell_executable()
         if ps:
-            return (
-                f"- **Actual run_shell executor (this host)**: **PowerShell** — `{ps}` (`-EncodedCommand`, UTF-16LE Base64; "
-                "**not** via cmd.exe). **Git Bash is not in use** (not installed, `RUN_SHELL_BASH` not resolved, or "
-                "`RUN_SHELL_USE_BASH=0`). Write commands in **PowerShell** syntax (pipes `|`; separate statements with `;`); "
-                "**do not assume** Bash/POSIX `&&` / `||`, `wc` / `head`, etc.—unless you know they exist here, prefer "
-                "**Python**. **`$` inside double-quoted strings is expanded by PowerShell** (e.g. `$?`); for complex scripts "
-                "**write_file** a `.py` then `python ...`. Quote paths with spaces. **Timeout** capped at **600** s."
-            )
-        return (
-            "- **Actual run_shell executor (this host)**: **Unavailable** — neither Git Bash nor PowerShell was found; "
-            "`run_shell` will fail until one is installed."
-        )
-
+            if is_en:
+                return (f"- **run_shell executor (this host)**: **PowerShell** — `{ps}`; use PowerShell syntax, "
+                        "not Bash `&&`/`||`; `$` expands inside double quotes; timeout 600 s. "
+                        "(Details: `sugar-agent-manual` → references/03-tools.md)")
+            return (f"- **run_shell 执行器（本机）**：**PowerShell** — `{ps}`；用 PowerShell 语法，不要用 Bash 的 "
+                    "`&&`/`||`；双引号里的 `$` 会被展开；超时 600 秒。"
+                    "（细节见 `sugar-agent-manual` → references/03-tools.md）")
+        if is_en:
+            return ("- **run_shell executor (this host)**: **Unavailable** — neither Git Bash nor PowerShell was "
+                    "found; `run_shell` fails until one is installed.")
+        return ("- **run_shell 执行器（本机）**：**不可用** — 未找到 Git Bash 或 PowerShell；"
+                "安装其中之一前 `run_shell` 会失败。")
     if _posix_use_bash_shell():
         b = shutil.which("bash") or "bash"
-        return (
-            f"- **Actual run_shell executor (this host)**: **bash** — `{b}` (`bash -lc` / `-c` + `eval` + `shlex.quote`). "
-            "Do **not** assume all POSIX utilities exist; use **Python** if missing. **Timeout** capped at **600** s."
-        )
+        if is_en:
+            return (f"- **run_shell executor (this host)**: **bash** — `{b}`; do not assume every POSIX utility "
+                    "exists; timeout 600 s. (Details: `sugar-agent-manual` → references/03-tools.md)")
+        return (f"- **run_shell 执行器（本机）**：**bash** — `{b}`；不要假设所有 POSIX 工具都存在；超时 600 秒。"
+                "（细节见 `sugar-agent-manual` → references/03-tools.md）")
     shp = shutil.which("sh") or "/bin/sh"
-    return (
-        f"- **Actual run_shell executor (this host)**: **sh** — `{shp}` (`sh -c` + `eval`; bash not used or "
-        "`RUN_SHELL_USE_BASH=0`). **Timeout** capped at **600** s."
-    )
+    if is_en:
+        return (f"- **run_shell executor (this host)**: **sh** — `{shp}`; timeout 600 s. "
+                "(Details: `sugar-agent-manual` → references/03-tools.md)")
+    return (f"- **run_shell 执行器（本机）**：**sh** — `{shp}`；超时 600 秒。"
+            "（细节见 `sugar-agent-manual` → references/03-tools.md）")
 
 
 def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
@@ -4559,7 +4565,10 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "show_user",
-        "Present content or notify the user while continuing work. Companion to ask_user: does not wait for an answer; ask_user is for required choices. Kinds webpage, text, image, file and plugin open the details sidebar; notice shows a dismissible top banner; settings opens a specific settings tab without saving changes; notification requests a native system notification, including when the webpage is closed. History/replayed events never repeat these automatic actions. Notification delivery uses only the enabled desktop-notifications provider and returns requested/unavailable/failed/unknown; do not claim the user read it. Do not use it for every progress update.",
+        "Show reviewable content in the details sidebar (webpage/text/image/file/plugin), a top notice, a "
+        "settings tab, or a system notification, without waiting for an answer. Use it for output worth "
+        "seeing, not every progress update; success does not mean the user saw it or logged in. Kind "
+        "limits: sugar-agent-manual -> references/03-tools.md.",
         {
             "kind": {"type": "string", "enum": ["webpage", "text", "image", "file", "plugin", "notice", "settings", "notification"]},
             "title": {"type": "string", "maxLength": 100, "description": "Short user-facing title explaining what is being shown."},
@@ -4581,9 +4590,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "ask_user",
-        "Pause the current run and ask the user one to four structured questions when an answer is genuinely required to continue. Use companion show_user to display content without waiting for an answer. "
-        "Use repository and environment evidence first. Call ask_user as the only tool in the assistant turn; do not batch it with any other tool. "
-        "Put the recommended option first and mark it in the label. The UI automatically provides an Other free-text choice, so never add an Other option yourself.",
+        "Ask 1-4 structured questions when an answer is required to continue; it must be the only tool "
+        "call in the turn. Put the recommended option first; the UI adds an Other choice. Use show_user "
+        "for content that needs no answer. Check repository/environment evidence first.",
         {
             "questions": {
                 "type": "array",
@@ -4650,7 +4659,7 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "ls",
-        "List a directory (virtual `/` = workspace or an accessible OS path). Shows size; directory names end with /. Line counts are opt-in because calculating them opens every recognized text file.",
+        "List a directory (virtual `/` = workspace). Shows sizes; directory names end with /.",
         {
             "path": {"type": "string", "description": "Directory to list; default /. Reuse exact paths returned by tools instead of guessing path components."},
             "include_line_counts": {
@@ -4677,8 +4686,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "grep",
-        "Search text in files. Default mode=regex (supports |, ., *, +, ?, [], (), ^, $); use mode=fixed when you need to match literal text containing regex metacharacters. "
-        "Path can be work area (default /) or an OS-absolute file/dir. Search the narrowest known source directory; avoid recursive repository-root searches when a relevant subtree is already known. Results stop as soon as max_results or the output byte cap is reached.",
+        "Search file contents: regex by default, mode=fixed for literal text. Scope to the smallest known "
+        "directory; avoid repository-root recursion. Results stop at max_results or the output byte cap.",
         {
             "pattern": {"type": "string"},
             "path": {"type": "string", "description": "File or directory to search; default /. Reuse an exact tool-returned path; do not guess or abbreviate components."},
@@ -4695,13 +4704,10 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "read_file",
-        "Read a text file by line range, or view an image file (PNG/JPEG/WebP/GIF/BMP) directly — images are returned "
-        "visually and larger ones are downscaled automatically (do not install image libraries or write converters); "
-        "line-range parameters are ignored for images. Viewing an on-disk image is a normal in-context call of this "
-        "tool; a model profile that does not declare image input gets an explanatory error instead. "
-        "Text: virtual `/` under the workspace or an allowed OS-absolute path; use start_line plus line_count (default 200); legacy end_line remains accepted internally. "
-        "Do not treat PDF/PPTX/spreadsheets/other binary as plain text—convert or probe with code first. "
-        "Reuse exact paths returned by ls/glob/grep; do not guess path components.",
+        "Read a text file by line range (start_line + line_count, default 200) or view an image "
+        "(PNG/JPEG/WebP/GIF/BMP; large images downscaled, line params ignored). Paths: virtual `/` or "
+        "absolute. Convert PDF/PPTX/spreadsheets with code rather than reading them as text. Reuse exact "
+        "paths from ls/glob/grep.",
         {
             "path": {"type": "string", "description": "File path (virtual / or OS absolute)."},
             "start_line": {
@@ -4720,10 +4726,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "write_file",
-        "Write UTF-8 text under WORK_DIR (virtual `/` maps to workspace root). "
-        "Omit path to write AGENT_DEFAULT_WRITE_FILENAME (default output.txt). "
-        "Otherwise use a relative path or `/segment` under WORK_DIR, or an absolute path already under WORK_DIR. "
-        "Set temporary=true for throwaway scripts or intermediate files: the host redirects the name to the current run's scratch under global WORK_DIR/TempOutput, returns its actual absolute path, and removes it after execution. Use that returned path in subsequent commands.",
+        "Write UTF-8 text under WORK_DIR (virtual `/` = workspace root; omit path -> output.txt). "
+        "temporary=true writes to TempOutput scratch, returns the real absolute path, and removes it "
+        "after the run - use that path afterwards.",
         {
             "path": {
                 "type": "string",
@@ -4742,16 +4747,11 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "apply_patch",
-        "Preferred tool for ordinary text-file modifications; use it instead of constructing file rewrites through run_shell. "
-        "It accepts exactly one argument named `patch`; there are no `before`, `after`, `path`, `search`, or `replace` arguments. "
-        "The patch string uses Codex patch syntax for one or more files. The tool has no built-in workspace containment limit: "
-        "relative paths resolve from the runtime WORK_DIR and may use `..`, while native absolute paths (e.g. "
-        "`D:/repo/src/a.py` or an absolute path returned by read_file) are allowed. In restricted permission modes, the central "
-        "policy may prompt an approval card so the user can authorize the target directory "
-        "before the change is applied. Read the target immediately before editing and copy exact existing lines into each update "
-        "hunk. All file sections are validated before writing; stale, missing, malformed, or ambiguous context fails atomically "
-        "without partial edits. If an update fails, re-read the reported file and rebuild the hunk from its current contents "
-        "instead of retrying the same patch.",
+        "Edit text files with a Codex-style patch: exactly one argument `patch`, one or more file "
+        "sections. Read the target first and copy exact context lines; malformed, stale or ambiguous "
+        "hunks fail atomically without partial writes - re-read and rebuild the hunk. Paths resolve from "
+        "WORK_DIR; absolute paths are allowed after approval. Prefer this over rewriting files through "
+        "run_shell.",
         {
             "patch": {
                 "type": "string",
@@ -4783,11 +4783,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "delete_file",
-        "Soft-delete (move under WORK_DIR/.trash): "
-        "a file or directory under the workspace (virtual `/` under WORK_DIR). "
-        "Blocked: anything under `sessions/`, `skills/`, or `.trash/` (recycle). "
-        "If total size exceeds TRASH_SIZE_WARN_MB (default 500MB), the tool refuses and does not move anything—user must delete manually. "
-        "Use for cleaning temp clones etc.; shell `rm -rf` / `rmdir /s` are blocked by run_shell safety rules. ",
+        "Soft-delete a file or directory by moving it to WORK_DIR/.trash. Refuses sessions/, skills/ and "
+        ".trash/, and refuses when the batch exceeds TRASH_SIZE_WARN_MB. Shell rm -rf / rmdir are "
+        "blocked.",
         {
             "path": {
                 "type": "string",
@@ -4803,20 +4801,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "run_shell",
-        "Execute a shell command on this host. **Syntax and backend follow the Environment line `Actual run_shell executor (this host)`** "
-        "(Git Bash vs PowerShell vs sh). Default cwd is WORK_DIR unless `workdir` is set. "
-        "`timeout_ms` is capped at **600000** ms. Bash uses a login shell by default; set `login=false` when startup profiles are unnecessary. "
-        "In 请求批准/替我审批 modes, workspace commands run automatically while external paths, network access, "
-        "destructive operations, and dynamically constructed code are routed through the central approval policy. "
-        "Quote paths with spaces. "
-        "Agent backend/tray PIDs and lifecycle scripts are protected: broad Python process termination is rejected, "
-        "while terminating an explicitly selected unrelated PID remains allowed. Restart Agent only through the external platform tray or agentctl/RUN script. "
-        "Virtual `/folder` under restriction means under the workspace root, not the OS root; avoid `cd /` expecting the workspace on Windows. "
-        "Use write_file(temporary=true) and then execute its returned absolute path for throwaway scripts; long `python -c` payloads also use runtime scratch under global WORK_DIR/TempOutput. TEMP, TMP and TMPDIR point to that scratch; keep intermediate outputs there and requested deliverables in the project. "
-        "Do not assume POSIX utilities exist on Windows—use Python when unsure. Binary-heavy output may be truncated or summarized. "
-        "Set run_in_background=true to return a job_id immediately; use job_output/job_list/job_kill afterward. "
-        "With execution-tools enabled, an authorized session command still running at timeout_ms is promoted to a background job. "
-        "Use the canonical parameters command, workdir, timeout_ms, and login; do not send legacy args, working_dir, or timeout.",
+        "Run a shell command with this host's executor (see `## Environment`), cwd=WORK_DIR unless "
+        "workdir is set; timeout <=600000 ms. Use run_in_background=true for long jobs (read with "
+        "job_output). Outside-workspace paths, network and destructive commands go through approval; "
+        "Agent lifecycle processes are protected. Write complex scripts with write_file(temporary=true) "
+        "and run the returned path. Syntax, quoting and terminal details: sugar-agent-manual -> "
+        "references/03-tools.md.",
         {
             "command": {"type": "string", "description": "Complete shell command line."},
             "workdir": {"type": "string", "description": "Directory under workspace (relative to workspace root, or absolute). Omit for workspace root. '.' means workspace root."},
@@ -4834,12 +4824,9 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "history_context",
-        "Search or read durable conversation history. Results are clean semantic text: storage metadata is hidden by default. "
-        "Use scope=current first for facts from this session; "
-        "use scope=global only when the user asks about another or any prior session. Search returns stable refs "
-        "from compressed archives and events.jsonl; pass one ref to action=read for the exact bounded record. "
-        "This is the preferred way to recover context that may have been compacted. Set include_source=true only "
-        "when raw-file follow-up is necessary.",
+        "Search or read durable conversation history (compressed archives and events). Default "
+        "scope=current; use global only for other sessions. Search returns refs; pass one to action=read. "
+        "include_source=true only when raw-file inspection is required.",
         {
             "action": {
                 "type": "string",
@@ -4890,8 +4877,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "context_manage",
-        "Session context: mode compact summarizes and trims model history into the active runtime context. "
-        "mode edit_key_context rewrites the active context summary according to edit_instruction (add/remove/fix key facts, errors, lessons, user rules).",
+        "Manage session context: compact summarizes and trims history; edit_key_context rewrites the "
+        "active summary per edit_instruction.",
         {
             "mode": {
                 "type": "string",
@@ -4913,31 +4900,12 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     ),
     _openai_function_schema(
         "task",
-        "Delegate a bounded independent task to an isolated subagent, or manage an existing one. "
-        "Use delegation when a subtask has a clear deliverable and can run independently; do not use it for a trivial "
-        "step or when the parent must perform the work itself. A subagent does not receive parent chat or tool history, "
-        "so every start/resume prompt must be a self-contained handoff. Foreground start/resume waits for the final result; "
-        "background mode returns an ID immediately. Never use resume to poll or collect an existing result. "
-        "Reading images the current model can see is a parent-side job: use `read_file` in-context when the current "
-        "profile declares image input. When it does not, delegate the image instead: pass local paths or remote image "
-        "URLs through file_attachments (it quotes local image paths automatically), and if the prompt itself references "
-        "images, wrap each exact local image path in double quotes so it is detected reliably. Media is routed by the "
-        "selected profile's effective input modalities: an image-capable profile receives image_url content prepared "
-        "from durable attachments, while a text-only profile receives deterministic omission text and cannot inspect "
-        "the image itself. "
-        "When the user wants details of a subagent's execution process, ask that same existing subagent directly: resume the "
-        "relevant resumable direct child in the foreground with focused questions and obtain its complete first-hand account. "
-        "Do not infer process details from its final summary, and do not treat status or collect as a complete execution record. "
-        "Reuse existing subagents before creating new ones: when a similar task may already have been delegated, call status "
-        "without resume, then collect its result or resume that same direct child with a genuine follow-up. Use start only when "
-        "no suitable subagent exists, the objective or scope is materially different, or deliberate independent parallelism is required. "
-        "Do not create a duplicate merely because an existing subagent finished, needs clarification, or needs a correction. "
-        "Parallel subagents must have independent, non-overlapping scopes; do not let them concurrently modify the same files or state. "
-        "The parent remains responsible for inspecting evidence and changes, verifying results, deduplicating findings, resolving conflicts, "
-        "and synthesizing the final answer instead of forwarding subagent output uncritically. "
-        "Common patterns: use foreground explore for one read-only investigation; foreground generalPurpose for one implementation; "
-        "several background explore runs followed by status/collect for independent parallel reviews; best-of-n-runner for genuinely "
-        "different candidate solutions; readonly=true for strict local inspection; and resume with one ID only for a real follow-up.",
+        "Delegate a bounded, self-contained subtask to an isolated subagent, or manage an existing one. "
+        "Start/resume with a self-contained handoff (objective, paths, constraints, acceptance); never "
+        "assume it sees this chat. Foreground waits for the result; background returns an id. Reuse an "
+        "existing subagent before starting a new one; resume only for a real follow-up, never to poll. "
+        "The parent verifies evidence and synthesizes the answer. Modes, media and worktree details: "
+        "sugar-agent-manual -> references/03-tools.md.",
         {
             "action": {
                 "type": "string",

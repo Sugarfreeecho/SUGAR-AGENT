@@ -422,16 +422,12 @@ def test_task_schema_uses_action_discriminator():
         "switch_model",
         "worktree",
     ]
-    assert "Never use resume to poll" in schema["description"]
-    assert "ask that same existing subagent directly" in schema["description"]
-    assert "do not treat status or collect as a complete execution record" in schema["description"]
-    assert "Reuse existing subagents before creating new ones" in schema["description"]
-    assert "Do not create a duplicate" in schema["description"]
-    assert "independent, non-overlapping scopes" in schema["description"]
-    assert "verifying results, deduplicating findings, resolving conflicts" in schema["description"]
-    assert "foreground explore for one read-only investigation" in schema["description"]
-    assert "several background explore runs followed by status/collect" in schema["description"]
-    assert "best-of-n-runner for genuinely different candidate solutions" in schema["description"]
+    # The description stays short and defers the playbook to the skill reference.
+    assert len(schema["description"]) <= 600
+    assert "self-contained handoff" in schema["description"]
+    assert "never to poll" in schema["description"]
+    assert "Reuse an existing subagent before starting a new one" in schema["description"]
+    assert "sugar-agent-manual" in schema["description"]
     assert "requires resume ID and non-empty prompt" in props["action"]["description"]
     assert "complete first-hand account" in props["action"]["description"]
     assert "status: non-blocking state only, not execution details" in props["action"]["description"]
@@ -448,11 +444,14 @@ def test_task_schema_uses_action_discriminator():
     assert "model_profile_id" in props
     assert "omit by default" in props["model_profile_id"]["description"]
     assert "low-cost/high-concurrency batch work" in props["model_profile_id"]["description"]
-    assert "do not send legacy args, working_dir, or timeout" in next(
+    run_shell_description = next(
         row["function"]["description"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
         if row["function"]["name"] == "run_shell"
     )
-    assert "Preferred tool for ordinary text-file modifications" in next(
+    assert len(run_shell_description) <= 600
+    assert "timeout <=600000 ms" in run_shell_description
+    assert "sugar-agent-manual" in run_shell_description
+    assert "Prefer this over rewriting files through run_shell" in next(
         row["function"]["description"] for row in agent_tools.OPENAI_TOOL_DEFINITIONS
         if row["function"]["name"] == "apply_patch"
     )
@@ -473,13 +472,13 @@ def test_system_prompt_keeps_cross_tool_rules_without_repeating_tool_schemas():
     prompt = (APP / "prompt.md").read_text(encoding="utf-8")
 
     assert "先读后写" in prompt
-    assert "写入或编辑后要做必要验证" in prompt
-    assert "未征得用户同意不要擅自 `pip install`" in prompt
-    assert "无依赖的只读工具按并发上限并行" in prompt
-    assert "优先复用 `ls`、`glob`、`grep`、`read_file` 已返回的完整路径" in prompt
-    assert "最小源码目录" in prompt
-    assert "不得猜测未知参数" in prompt
-    assert "创建以任务名命名的子目录" in prompt
+    assert "写入或编辑后运行相关命令" in prompt
+    assert "未经用户同意不 `pip install`" in prompt
+    assert "只读工具并行" in prompt
+    assert "复用 `ls`/`glob`/`grep`/`read_file` 返回的完整路径" in prompt
+    assert "已知最小目录" in prompt
+    assert "不猜参数" in prompt
+    assert "多文件先建任务子目录" in prompt
     assert "grep` 默认 `mode=regex" not in prompt
     assert "*** Begin Patch" not in prompt
     assert "不要生成旧参数" not in prompt
@@ -498,9 +497,9 @@ def test_search_and_listing_schemas_expose_fast_defaults():
     grep_props = grep_schema["parameters"]["properties"]
     assert grep_props["include_hidden"]["default"] is False
     assert grep_props["include_ignored"]["default"] is False
-    assert "narrowest known source directory" in grep_schema["description"]
+    assert "smallest known directory" in grep_schema["description"]
     assert "exact tool-returned path" in grep_props["path"]["description"]
-    assert "opt-in" in functions["ls"]["description"]
+    assert "defaults false" in functions["ls"]["parameters"]["properties"]["include_line_counts"]["description"]
     assert "defaults false" in functions["ls"]["parameters"]["properties"]["include_line_counts"]["description"]
 
 
@@ -527,9 +526,9 @@ def test_apply_patch_schema_explains_update_context_without_fake_before_paramete
     patch_description = properties["patch"]["description"]
 
     assert set(properties) == {"patch"}
-    assert "there are no `before`, `after`" in description
-    assert "Read the target immediately before editing" in description
-    assert "re-read the reported file and rebuild the hunk" in description
+    assert "exactly one argument `patch`" in description
+    assert "Read the target first and copy exact context lines" in description
+    assert "re-read and rebuild the hunk" in description
     assert "plain `@@` hunk header (never `*** @@`)" in patch_description
     assert "space for an unchanged existing line" in patch_description
     assert "at least one space- or minus-prefixed existing line" in patch_description

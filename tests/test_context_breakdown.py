@@ -89,11 +89,11 @@ def test_history_breakdown_prices_static_segments_plus_key_context(monkeypatch):
     import agent_tools
     from agent_harness import SystemMessage
 
-    monkeypatch.setattr(agent_loop, "build_env_static", lambda _sid=None: "environment block")
+    monkeypatch.setattr(agent_loop, "build_env_static", lambda _sid=None, **_kwargs: "environment block")
     monkeypatch.setattr(
         agent_loop,
         "build_static_system_segments",
-        lambda catalog, env, language="zh-CN": ["identity", "tool contract"],
+        lambda catalog, env, language="zh-CN", **_kwargs: ["identity", "tool contract"],
     )
     monkeypatch.setattr(agent_loop, "key_context_body_for_system_prompt", lambda text: text)
     monkeypatch.setattr(agent_tools, "get_skills_catalog", lambda: "")

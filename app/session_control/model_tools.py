@@ -45,18 +45,16 @@ def _definition(name, description, properties):
 
 
 TOOL_DEFINITIONS = [
-    _definition("scheduled_tasks", "Query durable scheduled tasks (定时任务) created by this chat/caller: list, get details, or execution history. "
-        "These are the same tasks shown in Settings > Scheduled tasks. Read a task's revision before modifying it with manage_scheduled_task.", {
+    _definition("scheduled_tasks", "List, read, or inspect execution history of scheduled tasks; read a task's revision before "
+                                   "updating it.", {
         "action": {"type": "string", "enum": list(READ_ACTIONS)},
         "id": {"type": "string", "minLength": 1, "description": "Required for get/history; use the task ID returned by create/list."},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum history entries; default 20."},
     }),
-    _definition("manage_scheduled_task", "Create or manage a backend-owned scheduled task (定时任务). Use when the user asks for a reminder, recurring work, or future agent action; "
-        "do not create unsolicited schedules. Tasks appear in Settings > Scheduled tasks and survive closing chat. "
-        "create requires name, instructions and trigger. Default target is this chat; new_chat creates a new chat each run in this workspace. "
-        "update/pause/resume/delete require id and expected_revision from scheduled_tasks. run enqueues one manual execution without changing the normal schedule. "
-        "Never report completion from an acceptance receipt. Runtime overrides cannot expand the caller's tools, budgets or authorization. "
-        "After creation, show_user(kind='settings', section='schedules') can open the task page if useful.", {
+    _definition("manage_scheduled_task", "Create or manage a scheduled task (定时任务); read existing ones with scheduled_tasks. create needs "
+                                         "name/instructions/trigger; update/pause/resume/delete need id + expected_revision. Default "
+                                         "target is this chat; new_chat starts a fresh chat per run. Never create unsolicited schedules or "
+                                         "report completion from an acceptance receipt.", {
         "action": {"type": "string", "enum": list(WRITE_ACTIONS)},
         "id": {"type": "string", "minLength": 1},
         "expected_revision": {"type": "integer", "minimum": 0},

@@ -54,7 +54,9 @@ def workspace_tool_definitions() -> list[dict]:
         policy=ToolExecutionPolicy(effect="control", early_stream_safe=False), owner="core.workspace")
     return [{"type": "function", "function": {
         "name": "switch_work_dir",
-        "description": "Switch this conversation's working directory after the user approves the exact target. Use an existing absolute directory. Subsequent file, shell, MCP and subagent calls use the new root; history and attachments stay in shared storage. Existing terminals/jobs keep their original cwd. Do not use shell cd to change the session root.",
+        "description": "Switch this session's working directory after approval; the target must be an existing absolute "
+                       "directory. The new root applies to file/shell/MCP/subagent calls; terminals and jobs keep their "
+                       "cwd. Never use shell cd for this.",
         "parameters": {"type": "object", "properties": {
             "work_dir": {"type": "string", "description": "Existing absolute directory"},
             "reason": {"type": "string", "description": "Why this task needs the directory switch"}},

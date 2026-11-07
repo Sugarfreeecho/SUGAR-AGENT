@@ -160,7 +160,8 @@ def bridge_definitions() -> list[dict]:
                            "additionalProperties": False}}}
     name = {"type": "string", "description": "Exact name returned by tool_search."}
     return [
-        definition("tool_search", "Find enabled external tools by task keywords. Use select:name1,name2 for exact names or +term for required words. Returns names and summaries; use tool_describe to obtain the complete schema before calling.",
+        definition("tool_search", "Find enabled external tools by keywords (`select:name` or `+term`); then use tool_describe for "
+                                  "the schema.",
                    {"query": {"type": "string"}, "max_results": {"type": "integer", "minimum": 1, "maximum": 50}}, ["query"]),
         definition("tool_describe", "Get the full input schema of an enabled deferred tool. Then invoke it through tool_call.", {"name": name}, ["name"]),
         definition("tool_call", "Invoke an enabled deferred tool using its exact name and arguments matching tool_describe. The target tool's normal permissions and approvals apply. Cannot invoke these bridge tools.",

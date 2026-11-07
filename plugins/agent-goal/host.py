@@ -141,7 +141,9 @@ def tool_definitions(context, plugin):
         ),
         _definition(
             "update_goal",
-            "Use status=continue to resume an existing paused or blocked goal, like the play button, when the user asks to resume or a reported blocker has been resolved. Respect user-requested pauses; resume a manually paused goal only when the user asks. Supply additional_budget only when explicitly authorized by the user. Use completed to request independent Judge verification after the objective is achieved, or blocked to report a genuinely repeated blocker. Judge done moves the goal to human review; Judge continue keeps it active.",
+            "continue resumes a paused or blocked goal (only when the user asks); additional_budget only with "
+            "explicit authorization. completed requests Judge verification; blocked reports a repeated "
+            "blocker. Judge done moves the goal to human review.",
             {
                 "status": {"type": "string", "enum": ["completed", "blocked", "continue"]},
                 "reason": {"type": "string", "description": "Concrete verification evidence, repeated blocker reason, or why the goal can now continue."},

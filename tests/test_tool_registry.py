@@ -543,7 +543,7 @@ def test_static_segments_revalidate_serves_stale_and_rebuilds(monkeypatch):
 
     monkeypatch.setattr(agent_loop, "build_static_system_segments", lambda *a, **k: ["seg-v2"])
     monkeypatch.setattr(agent_loop, "get_skills_catalog", lambda: "skills")
-    monkeypatch.setattr(agent_loop, "build_env_static", lambda sid=None: "env")
+    monkeypatch.setattr(agent_loop, "build_env_static", lambda sid=None, **_kwargs: "env")
     monkeypatch.setattr(
         agent_loop,
         "_build_static_segments_for_session",
