@@ -100,6 +100,10 @@ function applySessionEvent(event, opts) {
         }
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
+        // A terminal boundary ends "wait for this run to finish". Without this
+        // the queued entry keeps deferUntilRunEnd forever and its Send now
+        // button stays disabled whenever the run is still reported active.
+        if (typeof releaseFollowupRunEndDeferral === 'function') releaseFollowupRunEndDeferral(sessionId);
         const resultStatus = (type === 'run_interrupted' || type === 'run_failed')
             ? 'failed' : event.result_status;
         const goalContinues = !resultStatus && type === 'run_finished'

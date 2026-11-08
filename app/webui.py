@@ -237,6 +237,19 @@ _REACT_RECOVERY_RETRY_SECONDS = max(
     5.0,
     float(os.getenv("REACT_RECOVERY_RETRY_SECONDS", "30")),
 )
+# A restart makes its own lifecycle record block the session until it reaches a
+# terminal phase. The startup scan runs before mark_ready(), so the first
+# reservation attempts legitimately lose to that record. Retry on a short
+# backoff instead of dropping the recovered run and waiting for a UI visit.
+_REACT_RECOVERY_RESERVE_BACKOFF_SEC = (
+    1.0, 3.0, 6.0, 10.0, 15.0, 20.0, 30.0, 30.0, 30.0, 30.0,
+)
+# Slow safety net for interruptions that the startup passes could not drain.
+# 0 disables the patrol; the startup passes still run.
+_REACT_RECOVERY_PATROL_SECONDS = max(
+    0.0,
+    float(os.getenv("REACT_RECOVERY_PATROL_SECONDS", "60")),
+)
 _RUNTIME_SYNC_CANCEL = threading.Event()
 _RUNTIME_SYNC_SLEEP_SEC = float(os.getenv("RUNTIME_SYNC_QUEUE_SLEEP_SEC", "0.2"))
 _RUNTIME_AUTO_MIGRATION_SCAN_STARTED = False
@@ -1080,7 +1093,18 @@ async def _run_react_recovery_background(session_id: str) -> None:
         return
     started_at = time.perf_counter()
     recovery_run_id = "react-recovery-" + uuid.uuid4().hex
-    start_token = await _reserve_session_chat_start_off_loop(sid, recovery_run_id) or ""
+    # A durable restart record and the previous run's heartbeat both outlive the
+    # crash for a few seconds. Neither is a live writer, but admission cannot
+    # prove that at once, so wait it out rather than abandoning the session
+    # until someone opens it in the UI.
+    start_token = ""
+    for wait_for in _REACT_RECOVERY_RESERVE_BACKOFF_SEC:
+        start_token = await _reserve_session_chat_start_off_loop(sid, recovery_run_id) or ""
+        if start_token:
+            break
+        if not await asyncio.to_thread(_runtime_v2_auto_resume_pending, sid):
+            break
+        await asyncio.sleep(wait_for)
     if not start_token:
         logger.info("ReAct recovery reservation unavailable: session=%s", sid)
         return
@@ -1233,6 +1257,17 @@ async def _run_startup_recovery_passes() -> None:
         if remaining > 0:
             await asyncio.sleep(remaining)
         await recover_interrupted_react_sessions()
+    # Both passes can still lose the reservation to a slow restart record or a
+    # long tool that only just released its session. Keep a slow safety net so
+    # an interrupted run resumes without waiting for someone to open the page.
+    while _REACT_RECOVERY_PATROL_SECONDS > 0:
+        await asyncio.sleep(_REACT_RECOVERY_PATROL_SECONDS)
+        try:
+            await recover_interrupted_react_sessions()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Periodic ReAct recovery scan failed", exc_info=True)
 
 
 async def start_react_recovery_runner() -> bool:
@@ -6934,7 +6969,12 @@ async def chat(
             return stop_event.is_set() or should_stop(sid_)
 
         def put_from_worker(item) -> None:
-            if client_disconnected:
+            # The terminal sentinel must survive a disconnected client: it is
+            # what lets the generator exit and release the chat-start
+            # reservation. Dropping it left the session marked "starting" until
+            # the 300s stale sweep, so new messages queued as pending for
+            # minutes after the run had already finished.
+            if client_disconnected and item is not None:
                 return
             try:
                 main_loop.call_soon_threadsafe(event_queue.put_nowait, item)
@@ -10992,7 +11032,6 @@ async def start_webui_lifecycle() -> None:
     _warm_ui_caches()
     initialize_ui_attention_notifications()
     await _warm_runtime_checkpoint_workers()
-    await start_react_recovery_runner()
     from agent_subagent_notifications import start_runner as start_subagent_notification_runner
     await start_subagent_notification_runner(session_manager)
     # Tokenizer JSON loading cost 621 ms on the first request in production.
@@ -11066,6 +11105,10 @@ async def start_webui_lifecycle() -> None:
     global _prompt_build_warmup_task
     _prompt_build_warmup_task = asyncio.create_task(_warm_first_request_task())
     lifecycle.mark_ready()
+    # Recovery admission is gated by the lifecycle record, so the scan must
+    # start only after this instance reports ready. Starting it earlier made
+    # every startup attempt lose the reservation to its own restart record.
+    await start_react_recovery_runner()
 
 
 async def refresh_web_plugin_lifecycle() -> None:

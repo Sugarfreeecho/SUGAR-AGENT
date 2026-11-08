@@ -7349,6 +7349,10 @@ function applySessionEvent(event, opts) {
         }
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
+        // A terminal boundary ends "wait for this run to finish". Without this
+        // the queued entry keeps deferUntilRunEnd forever and its Send now
+        // button stays disabled whenever the run is still reported active.
+        if (typeof releaseFollowupRunEndDeferral === 'function') releaseFollowupRunEndDeferral(sessionId);
         const resultStatus = (type === 'run_interrupted' || type === 'run_failed')
             ? 'failed' : event.result_status;
         const goalContinues = !resultStatus && type === 'run_finished'
@@ -32926,6 +32930,35 @@ function markFollowupQueueManualOnly(sessionId) {
     q.forEach(function (item) {
         if (item) item.awaitingRunEnd = false;
     });
+    persistFollowupQueue(sid);
+    renderFollowupQueue(sid);
+}
+
+/**
+ * 终止边界解除「等本轮结束」限制。
+ * deferUntilRunEnd 只在有待回答问题入队时置真，此前没有任何清除路径：
+ * 该问题解决后条目仍带着这个标记，而「立即发送」在 run 仍被判为活跃时
+ * 会因它被禁用，表现为点了没反应、消息一直停在 pending。
+ * 有未回答问题时保持限制，其余情况在 run 结束时放开。
+ */
+function releaseFollowupRunEndDeferral(sessionId) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    if (typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length) return;
+    var q = getFollowupQueue(sid);
+    var changed = false;
+    q.forEach(function (item) {
+        if (!item) return;
+        if (item.deferUntilRunEnd) {
+            item.deferUntilRunEnd = false;
+            changed = true;
+        }
+        if (item.deferForHumanQuestion) {
+            item.deferForHumanQuestion = false;
+            changed = true;
+        }
+    });
+    if (!changed) return;
     persistFollowupQueue(sid);
     renderFollowupQueue(sid);
 }
