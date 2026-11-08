@@ -4,6 +4,7 @@ import copy
 from typing import Iterable, Optional
 
 from .event_schema import RuntimeEvent
+from .json_patch import apply_patch
 from .legacy_compat import normalize_legacy_optional_event
 from .versions import PROJECTOR_VERSION
 
@@ -461,28 +462,12 @@ class RuntimeProjector:
         patch = payload.get("patch")
         if "value" not in payload and isinstance(patch, list):
             value = copy.deepcopy(current.get("value")) if isinstance(current, dict) else None
-            for operation in patch:
-                if not isinstance(operation, dict):
-                    return
-                op = str(operation.get("op") or "").strip().lower()
-                path = str(operation.get("path") or "")
-                if path == "":
-                    if op == "remove":
-                        value = None
-                    elif op in {"add", "replace"} and "value" in operation:
-                        value = copy.deepcopy(operation.get("value"))
-                    else:
-                        return
-                    continue
-                if not path.startswith("/") or "/" in path[1:] or not isinstance(value, dict):
-                    return
-                key = path[1:].replace("~1", "/").replace("~0", "~")
-                if op == "remove":
-                    value.pop(key, None)
-                elif op in {"add", "replace"} and "value" in operation:
-                    value[key] = copy.deepcopy(operation.get("value"))
-                else:
-                    return
+            # Full JSON Patch support, including ``/-`` appends, so a growing
+            # array is written as one small operation instead of a full replace.
+            try:
+                value = apply_patch(value, patch)
+            except ValueError:
+                return
         plugin_state[namespace] = {
             "revision": revision,
             "value": value,
@@ -805,21 +790,60 @@ class RuntimeProjector:
                 self._strip_row_responses_continuation(row) for row in rows[:keep_count]
             ]
         else:
-            try:
-                drop_prefix_count = max(0, int(payload.get("drop_prefix_count")))
-            except (TypeError, ValueError):
-                return
-            replacement = payload.get("replacement_prefix")
-            if not isinstance(replacement, list) or drop_prefix_count > len(rows):
-                return
-            replacement_rows = self._model_message_items_to_rows(
-                replacement, event, marker="compacted_index"
-            )
-            retained = [
-                self._strip_row_responses_continuation(row)
-                for row in rows[drop_prefix_count:]
-            ]
-            snapshot["raw_model_messages"] = replacement_rows + retained
+            if "replacement_middle" in payload or "keep_head" in payload:
+                # Incremental compaction: keep a shared head and tail, replace
+                # only the changed middle. ``drop_prefix_count`` alone used to
+                # carry the whole new prefix, which rewrote the full history on
+                # every tail edit.
+                try:
+                    head_count = max(0, int(payload.get("keep_head") or 0))
+                    tail_count = max(0, int(payload.get("keep_tail") or 0))
+                except (TypeError, ValueError):
+                    return
+                middle = payload.get("replacement_middle")
+                if not isinstance(middle, list):
+                    return
+                if head_count + tail_count > len(rows):
+                    return
+                middle_rows = self._model_message_items_to_rows(
+                    middle, event, marker="compacted_index"
+                )
+                # Head rows belong to the rewritten prefix: stamp them with this
+                # event exactly as a full-prefix compaction would, so a later
+                # visible-range truncate judges the whole snapshot consistently.
+                head = []
+                for index, row in enumerate(rows[:head_count]):
+                    stamped = self._strip_row_responses_continuation(row)
+                    stamped["seq"] = event.seq
+                    stamped["timestamp"] = event.timestamp
+                    stamped["run_id"] = event.run_id
+                    stamped["replaced_by_seq"] = event.seq
+                    stamped["compacted_index"] = index
+                    head.append(stamped)
+                for offset, row in enumerate(middle_rows):
+                    row["compacted_index"] = head_count + offset
+                tail = (
+                    [self._strip_row_responses_continuation(row) for row in rows[len(rows) - tail_count:]]
+                    if tail_count
+                    else []
+                )
+                snapshot["raw_model_messages"] = head + middle_rows + tail
+            else:
+                try:
+                    drop_prefix_count = max(0, int(payload.get("drop_prefix_count")))
+                except (TypeError, ValueError):
+                    return
+                replacement = payload.get("replacement_prefix")
+                if not isinstance(replacement, list) or drop_prefix_count > len(rows):
+                    return
+                replacement_rows = self._model_message_items_to_rows(
+                    replacement, event, marker="compacted_index"
+                )
+                retained = [
+                    self._strip_row_responses_continuation(row)
+                    for row in rows[drop_prefix_count:]
+                ]
+                snapshot["raw_model_messages"] = replacement_rows + retained
         if "summary" in payload:
             snapshot["context"]["summary"] = {
                 "summary": str(payload.get("summary") or ""),
@@ -958,9 +982,36 @@ class RuntimeProjector:
             "seq": event.seq,
             "timestamp": event.timestamp,
             "type": event.type,
-            "payload": dict(event.payload or {}),
+            "payload": RuntimeProjector._history_op_payload(event),
         }
         snapshot["history_ops"].append(row)
+
+    # A model-history rewrite already stores its full message list in
+    # ``raw_model_messages`` (and the same bytes in events.jsonl). Copying it a
+    # third time into ``history_ops`` made snapshots grow with the square of the
+    # session length: one archived session held 251 MiB of duplicated prefixes.
+    # Consumers only need the type, the sequence number and a few scalar fields,
+    # so the payload is reduced to that summary.
+    _HISTORY_OP_PAYLOAD_DROP_KEYS = {
+        "model_prefix_compacted": ("replacement_prefix", "replacement_middle", "messages"),
+        "model_history_replaced": ("messages",),
+        "visible_range_changed": (
+            "restore_model_messages",
+            "restore_extensions",
+        ),
+    }
+
+    @classmethod
+    def _history_op_payload(cls, event: RuntimeEvent) -> dict:
+        payload = dict(event.payload or {})
+        drop_keys = cls._HISTORY_OP_PAYLOAD_DROP_KEYS.get(event.type)
+        if not drop_keys:
+            return payload
+        for key in drop_keys:
+            value = payload.pop(key, None)
+            if isinstance(value, list):
+                payload.setdefault(f"{key}_count", len(value))
+        return payload
 
     @staticmethod
     def _mark_context_tokens_stale(snapshot: dict, reason: str, changed_at_seq: int) -> None:

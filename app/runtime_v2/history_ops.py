@@ -806,14 +806,21 @@ class RuntimeHistoryOps:
                 event_type = "model_messages_appended"
                 payload["messages"] = target[len(current):]
             else:
-                suffix_count = 0
-                limit = min(len(current), len(target))
-                while suffix_count < limit and current[-1 - suffix_count] == target[-1 - suffix_count]:
-                    suffix_count += 1
-                if suffix_count > 0:
+                head_count, tail_count = self._common_head_tail(current, target)
+                if head_count or tail_count:
+                    # Only the changed middle is a fact. Storing the whole new
+                    # prefix made every tail edit rewrite the entire history:
+                    # one archived session carried 206 full prefixes (246 MiB)
+                    # of which 95% repeated the previous event verbatim.
                     event_type = "model_prefix_compacted"
-                    payload["drop_prefix_count"] = len(current) - suffix_count
-                    payload["replacement_prefix"] = target[:len(target) - suffix_count]
+                    payload["keep_head"] = head_count
+                    payload["keep_tail"] = tail_count
+                    payload["replacement_middle"] = target[
+                        head_count:len(target) - tail_count
+                    ]
+                    # Retained for audit/back-compat tooling; the projector uses
+                    # keep_head/keep_tail when they are present.
+                    payload["drop_prefix_count"] = head_count
                 elif allow_full_replace:
                     event_type = "model_history_replaced"
                     payload["messages"] = target
@@ -1186,6 +1193,25 @@ class RuntimeHistoryOps:
     def _source_model_message_dicts_at_seq(self, source_session_id: str, branch_from_seq: int) -> list[dict]:
         snapshot = self._source_snapshot_at_seq(source_session_id, branch_from_seq)
         return self._model_message_dicts_from_snapshot(snapshot)
+
+    @staticmethod
+    def _common_head_tail(current: list[dict], target: list[dict]) -> tuple[int, int]:
+        """Longest unchanged head and tail between the current and target history.
+
+        A tail *edit* (a re-generated final answer, a rewritten tool result)
+        previously fell through to a full ``model_history_replaced`` because the
+        suffix differ. Comparing both ends keeps the write proportional to the
+        messages that actually changed.
+        """
+        limit = min(len(current), len(target))
+        head = 0
+        while head < limit and current[head] == target[head]:
+            head += 1
+        tail = 0
+        remaining = limit - head
+        while tail < remaining and current[-1 - tail] == target[-1 - tail]:
+            tail += 1
+        return head, tail
 
     def _model_message_dicts_from_snapshot(self, snapshot: dict) -> list[dict]:
         from .model_projection import strip_responses_continuation_from_message

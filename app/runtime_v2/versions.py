@@ -7,7 +7,9 @@ event log.
 """
 
 EVENT_SCHEMA_VERSION = 1
-PROJECTOR_VERSION = 10
+# 11: history_ops keep only scalar summaries for model rewrites, and
+# model_prefix_compacted replays keep_head/keep_tail deltas.
+PROJECTOR_VERSION = 11
 UI_PROJECTION_INDEX_VERSION = 8
 UI_ROW_PROJECTION_VERSION = 3
 EXECUTION_RECOVERY_VERSION = 1

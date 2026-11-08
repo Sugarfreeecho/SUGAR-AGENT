@@ -9,6 +9,8 @@ from typing import Any, Callable, Iterable, Optional
 from agent_local_timing import local_timed
 
 from .event_log import SessionEventLog
+from .json_patch import apply_patch as _apply_json_patch
+from .json_patch import top_level_patch as _build_top_level_patch
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
 
@@ -127,24 +129,12 @@ class SessionExtensionStateStore:
 
     @staticmethod
     def _top_level_patch(before: Any, after: Any) -> list[dict]:
-        if not isinstance(before, dict) or not isinstance(after, dict):
-            return [{"op": "replace", "path": "", "value": copy.deepcopy(after)}]
-        operations: list[dict] = []
-        for key in sorted(set(before) - set(after)):
-            pointer = str(key).replace("~", "~0").replace("/", "~1")
-            operations.append({"op": "remove", "path": f"/{pointer}"})
-        for key in sorted(after):
-            if key in before and before.get(key) == after.get(key):
-                continue
-            pointer = str(key).replace("~", "~0").replace("/", "~1")
-            operations.append(
-                {
-                    "op": "replace" if key in before else "add",
-                    "path": f"/{pointer}",
-                    "value": copy.deepcopy(after.get(key)),
-                }
-            )
-        return operations
+        """Diff two namespace values into top-level JSON Patch operations.
+
+        Appended list items use ``/-`` so a growing counter array (goal usage
+        ids) writes only the new ids instead of the whole array each time.
+        """
+        return _build_top_level_patch(before, after)
 
     def get(self, session_id: str, plugin_id: str, namespace: str) -> dict:
         sid = self._ensure_session(session_id)
@@ -386,66 +376,10 @@ class SessionExtensionStateStore:
 
     @classmethod
     def _apply_patch_operation(cls, document: Any, operation: dict) -> Any:
-        if not isinstance(operation, dict):
-            raise ExtensionStateError("patch operation must be an object")
-        op = str(operation.get("op") or "").strip().lower()
-        path = str(operation.get("path") or "")
-        if op not in {"add", "replace", "remove"}:
-            raise ExtensionStateError(f"unsupported patch operation: {op}")
-        if path == "":
-            if op == "remove":
-                return None
-            if "value" not in operation:
-                raise ExtensionStateError(f"{op} requires value")
-            return copy.deepcopy(operation.get("value"))
-        if not path.startswith("/"):
-            raise ExtensionStateError("patch path must be a JSON Pointer")
-        tokens = [part.replace("~1", "/").replace("~0", "~") for part in path[1:].split("/")]
-        root = copy.deepcopy(document)
-        parent = root
-        for token in tokens[:-1]:
-            if isinstance(parent, dict) and token in parent:
-                parent = parent[token]
-            elif isinstance(parent, list):
-                try:
-                    parent = parent[int(token)]
-                except (ValueError, IndexError) as exc:
-                    raise ExtensionStateError(f"patch path does not exist: {path}") from exc
-            else:
-                raise ExtensionStateError(f"patch path does not exist: {path}")
-        leaf = tokens[-1]
-        if isinstance(parent, dict):
-            exists = leaf in parent
-            if op in {"replace", "remove"} and not exists:
-                raise ExtensionStateError(f"patch path does not exist: {path}")
-            if op == "remove":
-                parent.pop(leaf)
-            else:
-                if "value" not in operation:
-                    raise ExtensionStateError(f"{op} requires value")
-                parent[leaf] = copy.deepcopy(operation.get("value"))
-            return root
-        if isinstance(parent, list):
-            if leaf == "-" and op == "add":
-                parent.append(copy.deepcopy(operation.get("value")))
-                return root
-            try:
-                index = int(leaf)
-            except ValueError as exc:
-                raise ExtensionStateError(f"invalid list index in patch path: {path}") from exc
-            if op == "add":
-                if index < 0 or index > len(parent):
-                    raise ExtensionStateError(f"patch path does not exist: {path}")
-                parent.insert(index, copy.deepcopy(operation.get("value")))
-            elif 0 <= index < len(parent):
-                if op == "remove":
-                    parent.pop(index)
-                else:
-                    parent[index] = copy.deepcopy(operation.get("value"))
-            else:
-                raise ExtensionStateError(f"patch path does not exist: {path}")
-            return root
-        raise ExtensionStateError(f"patch parent is not a container: {path}")
+        try:
+            return _apply_json_patch(document, [operation])
+        except ValueError as exc:
+            raise ExtensionStateError(str(exc)) from exc
 
 
 __all__ = [
