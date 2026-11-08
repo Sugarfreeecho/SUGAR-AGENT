@@ -13,6 +13,15 @@ if str(ROOT) not in sys.path:
 from app.runtime_v2 import RuntimeV2LogCompactionService
 
 
+def _root_sessions(sessions_dir: Path, min_bytes: int) -> list[str]:
+    session_ids = []
+    for child in sessions_dir.iterdir() if sessions_dir.exists() else []:
+        event_path = child / "events.jsonl"
+        if child.is_dir() and event_path.is_file() and event_path.stat().st_size >= min_bytes:
+            session_ids.append(child.name)
+    return session_ids
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Safely compact inactive Runtime V2 event logs.")
     parser.add_argument("sessions_dir", type=Path)
@@ -21,15 +30,21 @@ def main() -> int:
     parser.add_argument("--min-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--no-backup", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--subagents",
+        action="store_true",
+        help="also compact finished subagent logs of each selected session",
+    )
+    parser.add_argument(
+        "--prune-derived",
+        action="store_true",
+        help="drop rebuildable checkpoints (execution_recovery.chk) of idle sessions",
+    )
     args = parser.parse_args()
 
     session_ids = list(dict.fromkeys(str(value) for value in args.session_ids if str(value)))
     if args.all:
-        threshold = max(0, int(args.min_bytes))
-        for child in args.sessions_dir.iterdir() if args.sessions_dir.exists() else []:
-            event_path = child / "events.jsonl"
-            if child.is_dir() and event_path.is_file() and event_path.stat().st_size >= threshold:
-                session_ids.append(child.name)
+        session_ids.extend(_root_sessions(args.sessions_dir, max(0, int(args.min_bytes))))
         session_ids = list(dict.fromkeys(session_ids))
     if not session_ids:
         parser.error("provide at least one session_id or use --all")
@@ -49,6 +64,16 @@ def main() -> int:
         else:
             result = {"session_id": session_id, **result}
         print(json.dumps(result, ensure_ascii=False))
+        if args.subagents:
+            for row in service.compact_subagents(session_id, keep_backup=not args.no_backup):
+                if row.get("error"):
+                    failed = True
+                print(json.dumps(row, ensure_ascii=False))
+        if args.prune_derived:
+            print(json.dumps(
+                {"session_id": session_id, **service.prune_derived(session_id)},
+                ensure_ascii=False,
+            ))
     return 1 if failed else 0
 
 

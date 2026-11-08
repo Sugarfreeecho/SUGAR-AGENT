@@ -120,30 +120,159 @@ class RuntimeV2LogCompactionService:
             raise RuntimeV2LogCompactionError("session has an active run")
         if snapshot.get("pending_interactions") or snapshot.get("pending_approvals"):
             raise RuntimeV2LogCompactionError("session has pending human interaction")
-        if any(event.type == "history_branch_created" for event in events):
-            raise RuntimeV2LogCompactionError("branched sessions are not compacted automatically")
+        # A *child* branch keeps a ``history_branch_created`` row describing
+        # where it forked from. That row is what makes this session a branch,
+        # not what makes it a branch source: compacting it only folds its own
+        # history and leaves the parent untouched. Refusing here blocked every
+        # forked conversation from ever being compacted.
         if self._is_referenced_by_branch(session_id):
             raise RuntimeV2LogCompactionError("session is referenced by a branch")
 
-    def _is_referenced_by_branch(self, session_id: str) -> bool:
-        target = str(session_id)
-        for event_path in self.sessions_dir.rglob("events.jsonl"):
-            if event_path == self.event_log.event_path(session_id):
+    # ------------------------------------------------------------------
+    # Subagent logs
+    # ------------------------------------------------------------------
+    def subagent_roots(self, parent_session_id: str) -> list[Path]:
+        """Return every subagent log root that belongs to one parent session."""
+        parent_dir = Path(self.sessions_dir) / parent_session_id / "subagents"
+        if not parent_dir.is_dir():
+            return []
+        return [child for child in sorted(parent_dir.iterdir()) if (child / "events.jsonl").is_file()]
+
+    def compact_subagents(
+        self,
+        parent_session_id: str,
+        *,
+        keep_backup: bool = False,
+        only_terminal: bool = True,
+    ) -> list[dict]:
+        """Compact finished subagent logs.
+
+        Each subagent keeps its own event log under
+        ``<parent>/subagents/<agent_id>/``.  They are never touched by the root
+        session sweep, yet in one archived session they accounted for 76 MiB of
+        events.  A finished subagent log is append-only history: its task is
+        over, so the same offline compaction rules apply.
+        """
+        results: list[dict] = []
+        for agent_dir in self.subagent_roots(parent_session_id):
+            agent_id = agent_dir.name
+            try:
+                if only_terminal and not self._subagent_is_terminal(agent_dir):
+                    results.append({
+                        "session_id": f"{parent_session_id}/subagents/{agent_id}",
+                        "compacted": False,
+                        "reason": "active",
+                    })
+                    continue
+                # A subagent log lives directly at ``<agent_dir>/events.jsonl``,
+                # so the agent dir *is* the session dir: pass its parent as the
+                # sessions root and the directory name as the session id.
+                service = RuntimeV2LogCompactionService(
+                    agent_dir.parent,
+                    path_resolver=None,
+                )
+                result = service.compact(agent_id, keep_backup=keep_backup, force=False)
+                results.append({"session_id": f"{parent_session_id}/subagents/{agent_id}", **result})
+            except Exception as exc:  # keep one bad subagent from stopping the sweep
+                logger.warning("subagent_compaction_failed parent=%s agent=%s", parent_session_id, agent_id, exc_info=True)
+                results.append({
+                    "session_id": f"{parent_session_id}/subagents/{agent_id}",
+                    "compacted": False,
+                    "error": str(exc),
+                })
+        return results
+
+    @staticmethod
+    def _subagent_is_terminal(agent_dir: Path) -> bool:
+        """A subagent is compactable once its metadata reports a terminal state."""
+        meta_path = agent_dir / "metadata.json"
+        try:
+            with meta_path.open("r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(meta, dict):
+            return False
+        status = str(
+            meta.get("subagent_run_status") or meta.get("status") or ""
+        ).strip().lower()
+        if status not in {"finished", "failed", "interrupted", "completed", "cancelled", "stopped"}:
+            return False
+        # ``compact`` re-checks the projection for active runs; this is only a
+        # cheap pre-filter so a live subagent is never even opened for rewrite.
+        return bool(meta.get("subagent_run_finished_at") or meta.get("archived"))
+
+    def prune_derived(self, session_id: str) -> dict:
+        """Delete rebuildable side files of an idle session.
+
+        ``execution_recovery.chk`` is a coalesced cache of the execution
+        journal: it is rebuilt from ``events.jsonl`` on the next run, so an idle
+        session does not need to keep it on disk. One archived session carried
+        14 MiB there plus 22 MiB across its subagents.
+        """
+        removed: list[str] = []
+        freed = 0
+        session_dir = Path(self.sessions_dir) / session_id
+        try:
+            snapshot = self.snapshots.read(session_id)
+        except Exception:
+            snapshot = {}
+        if snapshot.get("active_runs") or snapshot.get("pending_interactions") or snapshot.get("pending_approvals"):
+            return {"pruned": [], "bytes_freed": 0, "skipped": "session is active"}
+        targets = [session_dir / "snapshots" / "execution_recovery.chk"]
+        sub_root = session_dir / "subagents"
+        if sub_root.is_dir():
+            targets.extend(sorted(sub_root.glob("*/snapshots/execution_recovery.chk")))
+        for path in targets:
+            if not path.is_file():
                 continue
             try:
+                size = path.stat().st_size
+                path.unlink()
+            except OSError:
+                continue
+            removed.append(str(path.relative_to(session_dir)))
+            freed += size
+        return {"pruned": removed, "bytes_freed": freed}
+
+    def _is_referenced_by_branch(self, session_id: str) -> bool:
+        target = str(session_id)
+        return target in self._branch_sources()
+
+    def _branch_sources(self) -> set[str]:
+        """Every session id that some other session branched from.
+
+        Built once per service instance. A full ``rglob`` per session made a
+        batch sweep quadratic — 17 GiB of logs re-read once per session — and
+        branch references can only come from a root session log, never from a
+        subagent log.
+        """
+        cached = getattr(self, "_branch_source_cache", None)
+        if cached is not None:
+            return cached
+        sources: set[str] = set()
+        for event_path in self.sessions_dir.glob("*/events.jsonl"):
+            try:
+                if event_path.stat().st_size < 200:
+                    continue
                 with event_path.open("r", encoding="utf-8") as fh:
                     for line in fh:
-                        if target not in line or "history_branch_created" not in line:
+                        if "history_branch_created" not in line:
                             continue
-                        data = json.loads(line)
+                        try:
+                            data = json.loads(line)
+                        except ValueError:
+                            continue
                         if data.get("type") != "history_branch_created":
                             continue
                         payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
-                        if str(payload.get("source_session_id") or "") == target:
-                            return True
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                        source = str(payload.get("source_session_id") or "").strip()
+                        if source:
+                            sources.add(source)
+            except (OSError, TypeError):
                 continue
-        return False
+        self._branch_source_cache = sources
+        return sources
 
     @staticmethod
     def _baseline_snapshot(snapshot: dict) -> dict:

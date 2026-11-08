@@ -8799,7 +8799,35 @@ async def import_session_upload(request: Request):
 async def archive_session(session_id: str, archived: bool = Form(...)):
     session_manager.set_session_archived(session_id, archived)
     state_revision = _invalidate_sessions_state_cache()
+    if archived:
+        # Archiving is the last write a session normally receives. Compact it
+        # now, in the background, so an abandoned conversation cannot keep a
+        # multi-hundred-megabyte event log and snapshot forever.
+        asyncio.create_task(run_in_threadpool(_compact_archived_session, session_id))
     return JSONResponse(content={"status": "ok", "state_revision": state_revision})
+
+
+def _compact_archived_session(session_id: str) -> dict:
+    """Best-effort offline compaction of one archived session.
+
+    Never raises: archiving must succeed even when the log is still busy (an
+    active run, a pending interaction, or a branch source). The event log stays
+    authoritative, so a skipped compaction is only a missed space saving.
+    """
+    try:
+        from runtime_v2 import RuntimeV2LogCompactionService
+
+        service = RuntimeV2LogCompactionService(
+            Path(session_manager.repository.sessions_dir).resolve()
+        )
+        result = service.compact(session_id, keep_backup=False)
+        if result.get("compacted"):
+            service.compact_subagents(session_id, keep_backup=False)
+            service.prune_derived(session_id)
+        return result
+    except Exception:
+        logger.warning("archived_session_compaction_failed session=%s", session_id, exc_info=True)
+        return {"compacted": False, "reason": "error"}
 
 
 @fastapi_app.put("/sessions/{session_id}/pin")

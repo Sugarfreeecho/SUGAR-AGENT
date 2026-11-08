@@ -1812,6 +1812,18 @@ class FileChangeReviewStore:
                     self._remove_baseline(baseline)
                     index["baselines"].pop(key, None)
                     changed = True
+            # A superseded or interrupted run leaves its own baseline behind and
+            # never reaches this method with that run id, so those zips were
+            # never reclaimed: one workspace accumulated 2.8 GiB of them, up to
+            # 922 MiB for a single full-tree snapshot.
+            for key, baseline in list(index["baselines"].items()):
+                if self._baseline_in_use(index, key) or not isinstance(baseline, dict):
+                    continue
+                if str(baseline.get("run_id") or "") == wanted:
+                    continue
+                self._remove_baseline(baseline)
+                index["baselines"].pop(key, None)
+                changed = True
             if changed:
                 self._save(index)
             self._gc_blobs(index)

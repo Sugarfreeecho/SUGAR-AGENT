@@ -6892,6 +6892,21 @@ class SessionManager:
                 meta["truncate_backups"] = backups[-20:]
                 meta["last_truncate_backup"] = rel
                 self._save_metadata_unlocked(sid, meta)
+            # The metadata list was capped at 20 entries, but the directories
+            # themselves were never removed: one session kept a 195 MiB backup
+            # from months earlier. Prune directories that fell out of the list.
+            keep = set(backups[-20:])
+            root = sess / "truncate_backups"
+            for child in root.iterdir() if root.is_dir() else []:
+                if not child.is_dir():
+                    continue
+                rel_child = str(child.relative_to(sess)).replace("\\", "/")
+                if rel_child in keep:
+                    continue
+                try:
+                    shutil.rmtree(child)
+                except OSError:
+                    continue
             logger.info(
                 "truncate backup created: session=%s before_index=%s events=%s dir=%s",
                 sid,
