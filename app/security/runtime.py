@@ -109,10 +109,44 @@ _CREDENTIAL_EXPORT_COMMAND = re.compile(
     r")|"
     r"\b(?:cmdkey|credential\s*manager|security\s+find-generic-password)\b"
 )
+# Statement boundaries for delete detection.
+#
+# A newline ends a statement in PowerShell and POSIX shells, and ``{`` opens a
+# block that usually contains a statement. Without them, a perfectly ordinary
+# cleanup written as
+#
+#     Set-Location "D:\..."
+#     Remove-Item -Recurse -Force _pristine_check
+#
+# or inside ``if(Test-Path $p){ Remove-Item ... }`` was *not* recognised as a
+# deletion. That mattered twice over: it stayed a forced red approval even for
+# targets inside the workspace (which should be an ordinary yellow deletion),
+# and the recorded reason was the vague "destructive command".
+_STATEMENT_SEPARATOR = r"(?:^|[;&|\n{])\s*"
 _DELETE_COMMAND = re.compile(
-    r"(?i)(?:^|[;&|])\s*(?:rm|rmdir|del|erase|remove-item)\b|"
+    r"(?im)" + _STATEMENT_SEPARATOR + r"(?:rm|rmdir|del|erase|remove-item|git\s+rm)\b|"
     r"\b(?:os\.(?:remove|unlink)|shutil\.rmtree|pathlib\.[^\r\n]*\.unlink)\s*\("
 )
+
+
+def _delete_label(command: str) -> str:
+    """Name the delete verb so a plain deletion is still explainable."""
+    low = str(command or "").lower()
+    if "remove-item" in low:
+        return "删除 Remove-Item"
+    if "shutil.rmtree" in low:
+        return "递归删除目录 shutil.rmtree"
+    if re.search(r"\bgit\s+rm\b", low):
+        return "删除 git rm"
+    if re.search(r"\brmdir\b", low):
+        return "删除目录 rmdir"
+    if re.search(r"\bdel\b|\berase\b", low):
+        return "删除 del/erase"
+    if re.search(r"\brm\b", low):
+        return "删除 rm"
+    if re.search(r"os\.(?:remove|unlink)|\.unlink\s*\(", low):
+        return "删除文件 os.remove/unlink"
+    return "删除操作"
 
 
 def security_store() -> SecurityStore:
@@ -356,6 +390,8 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 _has_non_delete_dangerous_pattern,
                 _is_dangerous,
                 _text_mentions_sensitive_tool_resource,
+                _danger_scan_text,
+                dangerous_matches,
             )
             try:
                 from session_authorized_dirs import get_authorized_dirs_for_session
@@ -418,8 +454,15 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                             external = True
                     except Exception:
                         external = True
-            deletion = bool(_DELETE_COMMAND.search(command))
-            destructive = bool(_is_dangerous(command) or deletion)
+            # Match against the same data-stripped view as the red-line
+            # patterns: a grep for "RMDir" or a tool description that mentions
+            # "rm -rf" is text, not a deletion.
+            deletion = bool(_DELETE_COMMAND.search(_danger_scan_text(command)))
+            # ``dangerous_matches`` also names *which* red-line pattern hit, so
+            # the approval record can explain the block instead of only saying
+            # "destructive command".
+            danger_hits = dangerous_matches(command)
+            destructive = bool(danger_hits or deletion)
             workspace_delete = bool(
                 deletion
                 and not external
@@ -443,7 +486,14 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             credential_export = False
             credential_read = False
             policy_change = False
+            danger_hits = []
         policy_change = policy_change or bool(_POLICY_TAMPER.search(command))
+        if deletion and not danger_hits:
+            # Plain deletions (Remove-Item -Force, shutil.rmtree, ...) hit no
+            # "dangerous pattern", but the approval still has to say what it is.
+            danger_hits = [{"kind": "delete.command", "label": _delete_label(command), "matched": ""}]
+        danger_kinds = [hit["kind"] for hit in danger_hits]
+        danger_labels = [hit["label"] for hit in danger_hits]
         return CapabilityRequest.create(
             action="process.exec",
             resource=command,
@@ -458,6 +508,11 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 "destructive": destructive,
                 "deletion": deletion,
                 "workspace_delete": workspace_delete,
+                # Persisted with the approval so a blocked call is explainable
+                # later: which red line matched, and in what words.
+                "destructive_kinds": danger_kinds,
+                "destructive_labels": danger_labels,
+                "destructive_summary": "、".join(danger_labels),
                 "workdir": workdir_val,
                 "effective_workdir": str(exec_base) if exec_base is not None else "",
                 "credential_export": credential_export,

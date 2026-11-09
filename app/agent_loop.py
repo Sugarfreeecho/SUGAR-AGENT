@@ -4929,6 +4929,12 @@ def _security_approval_spec(
         except Exception:
             rule_info = {}
     required_dirs = list(decision.constraints.get("required_dirs") or metadata.get("required_dirs") or [])
+    # Which red line actually matched (e.g. "递归强制删除 Remove-Item -Recurse
+    # -Force"). Recorded so the card and the durable approval both explain the
+    # block instead of repeating the generic "Destructive command" line.
+    destructive_labels = [str(item) for item in (metadata.get("destructive_labels") or []) if str(item)]
+    destructive_kinds = [str(item) for item in (metadata.get("destructive_kinds") or []) if str(item)]
+    destructive_summary = "、".join(destructive_labels)
     external_grantable = (
         decision.rule_id in {"external.write", "delete.review", "process.external"}
         and not danger
@@ -4959,6 +4965,9 @@ def _security_approval_spec(
     def _format_dirs(dirs: list[str]) -> str:
         return ", ".join(dirs[:3]) + (f" 等{len(dirs)}个目录" if len(dirs) > 3 else "")
     dir_hint = _format_dirs(required_dirs) if external_grantable and required_dirs else ""
+    consequence = _DANGER_APPROVAL_CONSEQUENCES.get(decision.rule_id, "") if danger else ""
+    if danger and destructive_summary:
+        consequence = f"命中规则：{destructive_summary}。" + consequence
     return {
         "title": (
             f"是否授权目录 {dir_hint}？"
@@ -4968,13 +4977,19 @@ def _security_approval_spec(
         "subtitle": (
             f"该操作需访问未授权目录 {dir_hint}。本次允许仅对当前工具调用有效；会话授权可由分支/子Agent继承。授权目录及子目录的普通读写和 Shell 可自动放行，删除、联网等操作仍按权限策略审批；同级或上层目录仍需单独授权。"
             if external_grantable
-            else decision.reason
+            else (
+                f"拦截原因：{destructive_summary}（{decision.reason}）"
+                if danger and destructive_summary
+                else decision.reason
+            )
         ),
         "message": preview,
-        "consequence": _DANGER_APPROVAL_CONSEQUENCES.get(decision.rule_id) if danger else "",
+        "consequence": consequence,
         "brief": preview[:180],
         "request_digest": decision.request_digest,
         "rule_id": decision.rule_id,
+        "destructive_summary": destructive_summary,
+        "destructive_kinds": destructive_kinds,
         # "始终允许同类操作" is only offered when a durable rule pattern can
         # actually be generated (Claude Code alignment: no suggestion, no
         # "don't ask again" button).
@@ -6839,6 +6854,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "enforcement_level": str(override_spec.get("enforcement_level") or ""),
                                         "enforcement_reason": str(override_spec.get("enforcement_reason") or ""),
                                         "grant_scope": str(override_spec.get("grant_scope") or ""),
+                                        "rule_id": sec_decision.rule_id,
+                                        "destructive_summary": str(
+                                            override_spec.get("destructive_summary") or ""
+                                        ),
+                                        "destructive_kinds": list(
+                                            override_spec.get("destructive_kinds") or []
+                                        ),
                                         "auto_review_override": True,
                                         "rejection_reason_suggestion": str(
                                             review.reason or ""
@@ -6866,6 +6888,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "security_request_digest": sec_decision.request_digest,
                                         "security_grant_digest": str(override_spec.get("security_grant_digest") or ""),
                                         "security_rule_id": sec_decision.rule_id,
+                                        "rule_id": sec_decision.rule_id,
+                                        "destructive_summary": str(
+                                            override_spec.get("destructive_summary") or ""
+                                        ),
+                                        "destructive_kinds": list(
+                                            override_spec.get("destructive_kinds") or []
+                                        ),
                                         # The override window offers the same
                                         # "始终允许同类操作" choice as a normal
                                         # approval whenever a durable rule can
@@ -6993,6 +7022,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "enforcement_level": str(spec.get("enforcement_level") or ""),
                                         "enforcement_reason": str(spec.get("enforcement_reason") or ""),
                                         "grant_scope": str(spec.get("grant_scope") or ""),
+                                        "rule_id": sec_decision.rule_id,
+                                        "destructive_summary": str(
+                                            spec.get("destructive_summary") or ""
+                                        ),
+                                        "destructive_kinds": list(
+                                            spec.get("destructive_kinds") or []
+                                        ),
                                         "required_dirs": list(spec.get("required_dirs") or []),
                                         "required_dirs_hint": str(spec.get("required_dirs_hint") or ""),
                                     },
@@ -7017,6 +7053,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "external_workspace_grantable": bool(spec.get("external_workspace_grantable", False)),
                                         "security_grant_digest": str(spec.get("security_grant_digest") or ""),
                                         "security_rule_id": sec_decision.rule_id,
+                                        "rule_id": sec_decision.rule_id,
+                                        "destructive_summary": str(
+                                            spec.get("destructive_summary") or ""
+                                        ),
+                                        "destructive_kinds": list(
+                                            spec.get("destructive_kinds") or []
+                                        ),
                                         "allow_always_available": bool(
                                             spec.get("allow_always_available", False)
                                         ),

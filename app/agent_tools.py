@@ -550,39 +550,102 @@ def _sensitive_tool_resource_error(action: str = "access") -> str:
     return f"Error: {action} denied for protected resource ***"
 
 
-DELETION_DANGEROUS_PATTERNS = [
-    r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
-    r"\bdel\s+/[fq]\b",              # del /f, del /q (Windows)
-    r"\brmdir\s+/s\b",               # rmdir /s
-    r"\bremove-item\b[^\r\n;&|]*(?:-recurse[^\r\n;&|]*-force|-force[^\r\n;&|]*-recurse)\b",
-]
+# Each red-line pattern carries a stable id and a short human label. The id is
+# persisted with the approval request so a blocked call can be explained later
+# ("recursive force delete" vs "disk format") instead of only saying
+# "destructive command".
+DELETION_DANGEROUS_SPECS = (
+    ("delete.rm_recursive", "递归删除 rm -r/-rf", r"\brm\s+-[rf]{1,2}\b"),
+    ("delete.del_force", "强制删除 del /f 或 /q", r"\bdel\s+/[fq]\b"),
+    ("delete.rmdir_recursive", "递归删除目录 rmdir /s", r"\brmdir\s+/s\b"),
+    (
+        "delete.remove_item_recursive_force",
+        "递归强制删除 Remove-Item -Recurse -Force",
+        r"\bremove-item\b[^\r\n;&|]*(?:-recurse[^\r\n;&|]*-force|-force[^\r\n;&|]*-recurse)\b",
+    ),
+)
 
-NON_DELETE_DANGEROUS_PATTERNS = [
-    r"(?:^|[;&|]\s*)format(?:\.exe)?\b(?![-])",       # format (exclude PowerShell Format-List/Table/Custom etc.)
-    r"\b(mkfs|diskpart)\b",          # disk operations
-    r"\bdd\s+if=",                   # dd
-    r">\s*/dev/sd",                  # write to disk
-    r"\b(shutdown|reboot|poweroff)\b",  # system power
-    r"\b(stop-computer|restart-computer|logoff|tsdiscon)\b",  # Windows session/system power
-    r"\bdisable-netadapter\b",          # disconnect the host network
-    r"\bnetsh\s+interface\b.*\b(?:disable|disabled)\b",
-    r":\(\)\s*\{.*\};\s*:",          # fork bomb
-]
+NON_DELETE_DANGEROUS_SPECS = (
+    # ``format`` must start a statement; PowerShell Format-List/Table/Custom
+    # start with a dash and are excluded.
+    ("disk.format", "格式化磁盘 format", r"(?:^|[;&|\n{]\s*)format(?:\.exe)?\b(?![-])"),
+    ("disk.partition", "分区/磁盘操作 mkfs 或 diskpart", r"\b(mkfs|diskpart)\b"),
+    ("disk.dd", "裸写磁盘 dd", r"\bdd\s+if="),
+    ("disk.raw_device_write", "写入磁盘设备", r">\s*/dev/sd"),
+    # ``(?<!\.)`` keeps ``server.shutdown()`` in inline Python from looking
+    # like the system power command; ``(?!\s*\()`` rejects bare method calls.
+    (
+        "system.power",
+        "关机/重启 shutdown/reboot/poweroff",
+        r"(?<![.\w])(?:shutdown|reboot|poweroff)(?:\.exe)?\b(?!\s*\()",
+    ),
+    (
+        "system.session_end",
+        "关机/注销 stop-computer/restart-computer/logoff",
+        r"\b(stop-computer|restart-computer|logoff|tsdiscon)\b",
+    ),
+    ("network.adapter_off", "禁用网卡", r"\bdisable-netadapter\b"),
+    ("network.netsh_off", "禁用网卡 netsh", r"\bnetsh\s+interface\b.*\b(?:disable|disabled)\b"),
+    ("shell.fork_bomb", "fork bomb", r":\(\)\s*\{.*\};\s*:"),
+)
+
+DELETION_DANGEROUS_PATTERNS = [spec[2] for spec in DELETION_DANGEROUS_SPECS]
+NON_DELETE_DANGEROUS_PATTERNS = [spec[2] for spec in NON_DELETE_DANGEROUS_SPECS]
 DANGEROUS_PATTERNS = DELETION_DANGEROUS_PATTERNS + NON_DELETE_DANGEROUS_PATTERNS
+
+# ``-Pattern``/grep arguments are search text, not commands: a grep for
+# "RMDir" must not look like a deletion. Here-string bodies are kept (they are
+# usually piped into an interpreter), but string literals inside them are data.
+_SEARCH_ARGUMENT_RE = re.compile(
+    r"(?is)(-pattern|-filter|-include|-exclude|\bgrep(?:\.exe)?|\bselect-string|\brg)\s+"
+    r"(['\"])(?:\\.|(?!\2).)*\2"
+)
+_HERESTRING_RE = re.compile(r"(?s)@(['\"])(.*?)\1@")
+_INNER_STRING_RE = re.compile(r"(['\"])(?:\\.|(?!\1).)*\1")
+
+
+def _danger_scan_text(command: str) -> str:
+    """Return the text to match red-line patterns against.
+
+    Only provably-data regions are removed, so this can never hide a command
+    that would actually run: search-pattern arguments and the quoted literals
+    nested inside a here-string body (the body itself is preserved).
+    """
+    text = str(command or "")
+    if not text:
+        return ""
+    # Keep the flag, drop its argument: the flag itself is never dangerous.
+    text = _SEARCH_ARGUMENT_RE.sub(r"\1 ", text)
+
+    def _strip_inner(match: "re.Match[str]") -> str:
+        quote, body = match.group(1), match.group(2)
+        return f"@{quote}{_INNER_STRING_RE.sub('', body)}{quote}@"
+
+    return _HERESTRING_RE.sub(_strip_inner, text)
+
+
+def dangerous_matches(command: str) -> list[dict]:
+    """Return every red-line pattern the command hits, with id and label."""
+    text = _danger_scan_text(command).lower()
+    if not text:
+        return []
+    hits: list[dict] = []
+    for kind, label, pattern in DELETION_DANGEROUS_SPECS + NON_DELETE_DANGEROUS_SPECS:
+        match = re.search(pattern, text)
+        if match:
+            hits.append({"kind": kind, "label": label, "matched": match.group(0)[:120]})
+    return hits
+
 
 def _is_dangerous(command: str) -> bool:
     """检测命令是否包含会造成破坏性系统影响的模式。"""
-    lower_cmd = command.lower()
-    for pat in DANGEROUS_PATTERNS:
-        if re.search(pat, lower_cmd):
-            return True
-    return False
+    return bool(dangerous_matches(command))
 
 
 def _has_non_delete_dangerous_pattern(command: str) -> bool:
     """Return whether a command has a red-line danger beyond file deletion."""
-    lower_cmd = str(command or "").lower()
-    return any(re.search(pattern, lower_cmd) for pattern in NON_DELETE_DANGEROUS_PATTERNS)
+    text = _danger_scan_text(command).lower()
+    return any(re.search(pattern, text) for pattern in NON_DELETE_DANGEROUS_PATTERNS)
 
 
 def _safe_process_termination_guidance() -> str:

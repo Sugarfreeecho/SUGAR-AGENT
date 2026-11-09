@@ -60,6 +60,14 @@ def _intercept_reason_for_request(request: CapabilityRequest | None) -> str:
     if meta.get("credential_read"):
         return "命中凭据读取规则（credential_read / _CREDENTIAL_READ_COMMAND），通过 shell 读取敏感文件，需审批"
     if meta.get("destructive"):
+        labels = [str(item) for item in (meta.get("destructive_labels") or []) if str(item)]
+        if labels:
+            scope = (
+                "工作区内"
+                if meta.get("workspace_delete")
+                else ("工作区外" if meta.get("external_workspace") else "作用域未识别")
+            )
+            return f"命中破坏性命令规则 process.destructive：{'、'.join(labels)}（{scope}）"
         if meta.get("workspace_delete"):
             return "命中工作区删除（process.workspace_delete），需普通确认"
         if meta.get("deletion"):

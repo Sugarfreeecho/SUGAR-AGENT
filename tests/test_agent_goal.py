@@ -109,8 +109,17 @@ class GoalManagerTests(unittest.TestCase):
             self.assertNotIn("objective", str(event.payload))
         first_paths = {row["path"] for row in usage_events[0].payload["patch"]}
         second_paths = {row["path"] for row in usage_events[1].payload["patch"]}
-        self.assertIn("/accounted_usage_ids", first_paths)
-        self.assertIn("/accounted_run_ids", second_paths)
+        # Appended arrays are written as ``/<key>/-`` so the whole id list is
+        # not re-sent on every LLM request; both forms are valid for this test,
+        # which only cares that the accounting fields are present and compact.
+        self.assertTrue(
+            any(path.startswith("/accounted_usage_ids") for path in first_paths),
+            first_paths,
+        )
+        self.assertTrue(
+            any(path.startswith("/accounted_run_ids") for path in second_paths),
+            second_paths,
+        )
 
         snapshot_path = Path(self.tmp.name) / "compact-goal" / "snapshots" / "latest.json"
         snapshot_path.unlink()
