@@ -56,6 +56,27 @@ def rule_of(record: dict) -> str:
     return str(record.get("security_rule_id") or record.get("rule_id") or "").strip()
 
 
+# Mirrors FORCED_APPROVAL_RULES in app/security/policy.py. Approvals recorded
+# before ``approval_level`` existed (roughly before 2026-08) keep only the
+# policy rule id, so their severity is inferred with the same membership test
+# the card used at the time.
+FORCED_APPROVAL_RULES = frozenset({"process.destructive", "session.workspace_switch"})
+
+
+def approval_level(record: dict) -> str:
+    """Card severity; inferred from the rule id when the field is absent."""
+    level = str(record.get("approval_level") or "").strip().lower()
+    if level:
+        return level
+    if rule_of(record) in FORCED_APPROVAL_RULES:
+        return "danger(inferred)"
+    return "unknown"
+
+
+def is_red(record: dict) -> bool:
+    return approval_level(record).startswith("danger")
+
+
 def bucket(record: dict) -> str:
     rule = rule_of(record).lower()
     text = " ".join(
@@ -195,7 +216,7 @@ def from_legacy(session_dir: Path, since: str):
             if isinstance(item, list):
                 stack.extend(item)
             elif isinstance(item, dict):
-                if item.get("approval_level") and item.get("approval_id"):
+                if item.get("approval_id") and (item.get("approval_level") or item.get("security_rule_id")):
                     ts = str(item.get("created_at") or item.get("timestamp") or "")
                     if not ts or ts[:10] >= since:
                         yield ts, item.get("seq"), dict(item)
@@ -206,6 +227,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("sessions_dir", type=Path)
     ap.add_argument("--since", default="2026-10-01")
+    ap.add_argument("--until", default="", help="inclusive upper bound (YYYY-MM-DD)")
     ap.add_argument("--json-out", type=Path)
     args = ap.parse_args()
 
@@ -220,13 +242,15 @@ def main() -> int:
 
     def absorb(scope: str, session_label: str, records):
         for ts, seq, rec in records:
+            if args.until and ts and ts[:10] > args.until:
+                continue
             sources[scope] += 1
-            level = str(rec.get("approval_level") or "unknown")
+            level = approval_level(rec)
             levels[level] += 1
             aid = str(rec.get("approval_id") or "")
             if aid:
                 all_ids.add(aid)
-            if level != "danger":
+            if not level.startswith("danger"):
                 continue
             outcome = classify(rec)
             red_outcome[outcome] += 1
@@ -276,6 +300,7 @@ def main() -> int:
 
     print(json.dumps({
         "since": args.since,
+        "until": args.until or None,
         "approval_records_seen": dict(sources),
         "distinct_approval_ids": len(all_ids),
         "by_level": dict(levels),
