@@ -368,9 +368,13 @@ button, input, select, textarea { font-family: var(--sans);
 .app {
     display: flex; height: 100%; width: 100%; position: relative; z-index: 1;
     /* The collapsed right dock parks its 460px surface just past the viewport
-       edge; without this the html element stays scrollable to the right and the
-       whole page can drift horizontally while content streams in. */
-    overflow: hidden;
+       edge. Clip it without creating a scroll range: `hidden` alone still lets
+       a PageUp in the composer (whose textarea has no scroll range) scroll the
+       nearest scroller, which slides the parked surface into view and drags
+       the whole shell left. `clip` crops the same area but cannot be scrolled,
+       so paging keys can never move the shell. */
+    overflow: hidden; /* fallback for engines without `overflow: clip` */
+    overflow: clip;
 }
 
 /* ═══════════════════════════════════════
