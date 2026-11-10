@@ -526,6 +526,137 @@ function imageExportCanvasToBlob(canvas) {
     });
 }
 
+/* Final 卡片导出：把「真实渲染出来的颜色」和「屏幕上实际占位的尺寸」固化到克隆节点。
+   html2canvas 只认它自己解析到的样式：克隆文档里 CSS 变量 / color-mix 之类拿不到时，
+   文字会退回 UA 默认色（深色主题下就是黑字压在深底上，完全看不清）；图片则按原始
+   像素尺寸绘制，max-width 根本裁不住，于是导出图和卡片对不上。导出前逐节点写死颜色
+   与媒体尺寸，导出的图片才和当前看到的卡片一致。 */
+var EXPORT_COLOR_CANVAS = null;
+var EXPORT_COLOR_SENTINEL = '#010203';
+var EXPORT_BORDER_SIDES = [['top', 'Top'], ['right', 'Right'], ['bottom', 'Bottom'], ['left', 'Left']];
+
+function resolveImageExportColor(value) {
+    var raw = String(value == null ? '' : value).trim();
+    if (!raw || raw === 'transparent' || raw === 'none' || raw === 'currentcolor') return '';
+    if (/^rgba?\(/i.test(raw)) return raw;
+    try {
+        if (!EXPORT_COLOR_CANVAS) EXPORT_COLOR_CANVAS = document.createElement('canvas');
+        var canvas = EXPORT_COLOR_CANVAS;
+        canvas.width = 1;
+        canvas.height = 1;
+        var ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return '';
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = EXPORT_COLOR_SENTINEL;
+        ctx.fillStyle = raw;
+        /* fillStyle 赋值失败时会保留上一个值（哨兵色），据此判定这个颜色能不能用。 */
+        if (ctx.fillStyle === EXPORT_COLOR_SENTINEL && raw.toLowerCase() !== EXPORT_COLOR_SENTINEL) return '';
+        ctx.fillRect(0, 0, 1, 1);
+        var data = ctx.getImageData(0, 0, 1, 1).data;
+        if (!data[3]) return '';
+        var alpha = data[3];
+        if (alpha >= 255) return 'rgb(' + data[0] + ', ' + data[1] + ', ' + data[2] + ')';
+        return 'rgba(' + data[0] + ', ' + data[1] + ', ' + data[2] + ', ' + (alpha / 255).toFixed(3) + ')';
+    } catch (e) {
+        return '';
+    }
+}
+
+/* 图片/视频/SVG 按屏幕上实际尺寸写死，避免 html2canvas 用原始像素尺寸撑破卡片。 */
+function freezeImageExportMediaSize(source, node) {
+    var box = source.getBoundingClientRect();
+    var width = Math.round(box.width);
+    var height = Math.round(box.height);
+    if (width > 0 && height > 0) {
+        node.style.setProperty('width', width + 'px', 'important');
+        node.style.setProperty('height', height + 'px', 'important');
+        node.style.setProperty('min-width', '0', 'important');
+        node.style.setProperty('min-height', '0', 'important');
+        node.style.setProperty('max-width', 'none', 'important');
+        node.style.setProperty('max-height', 'none', 'important');
+        node.style.setProperty('aspect-ratio', 'auto', 'important');
+        node.style.setProperty('box-sizing', 'border-box', 'important');
+    }
+    var style = null;
+    try {
+        style = source.ownerDocument.defaultView.getComputedStyle(source);
+    } catch (e) {
+        style = null;
+    }
+    if (style && style.objectFit) node.style.setProperty('object-fit', style.objectFit, 'important');
+}
+
+function bakeImageExportSubtree(source, node) {
+    if (!source || !node || source.nodeType !== 1 || node.nodeType !== 1) return;
+    var style = null;
+    try {
+        style = source.ownerDocument.defaultView.getComputedStyle(source);
+    } catch (e) {
+        style = null;
+    }
+    if (style) {
+        var color = resolveImageExportColor(style.color);
+        if (color) node.style.setProperty('color', color, 'important');
+        var background = resolveImageExportColor(style.backgroundColor);
+        if (background) node.style.setProperty('background-color', background, 'important');
+        /* 字体也一起固化：克隆文档拿不到作者样式时，html2canvas 会退回 UA 默认字体，
+           导出的字重/字号/行高就和卡片对不上。 */
+        if (style.fontFamily) node.style.setProperty('font-family', style.fontFamily, 'important');
+        if (style.fontSize) node.style.setProperty('font-size', style.fontSize, 'important');
+        if (style.fontWeight) node.style.setProperty('font-weight', style.fontWeight, 'important');
+        if (style.fontStyle) node.style.setProperty('font-style', style.fontStyle, 'important');
+        if (style.lineHeight && style.lineHeight !== 'normal') {
+            node.style.setProperty('line-height', style.lineHeight, 'important');
+        }
+        /* 盒模型也固化：克隆文档丢了作者样式时，内边距/外边距/边框仍然和卡片一致。 */
+        ['padding', 'margin'].forEach(function (name) {
+            if (style[name]) node.style.setProperty(name, style[name], 'important');
+        });
+        if (style.borderRadius && style.borderRadius !== '0px') {
+            node.style.setProperty('border-radius', style.borderRadius, 'important');
+        }
+        if (style.boxSizing) node.style.setProperty('box-sizing', style.boxSizing, 'important');
+        if (style.letterSpacing && style.letterSpacing !== 'normal') {
+            node.style.setProperty('letter-spacing', style.letterSpacing, 'important');
+        }
+        if (style.textDecorationLine && style.textDecorationLine !== 'none') {
+            var decoration = resolveImageExportColor(style.textDecorationColor);
+            if (decoration) node.style.setProperty('text-decoration-color', decoration, 'important');
+        }
+        EXPORT_BORDER_SIDES.forEach(function (side) {
+            var width = parseFloat(style['border' + side[1] + 'Width']) || 0;
+            if (!width) return;
+            node.style.setProperty('border-' + side[0] + '-width', width + 'px', 'important');
+            node.style.setProperty('border-' + side[0] + '-style', style['border' + side[1] + 'Style'], 'important');
+            var borderColor = resolveImageExportColor(style['border' + side[1] + 'Color']);
+            if (borderColor) node.style.setProperty('border-' + side[0] + '-color', borderColor, 'important');
+        });
+        if (source.matches && source.matches('img, video, canvas, svg')) {
+            freezeImageExportMediaSize(source, node);
+        }
+    }
+    var sourceChildren = source.children;
+    var nodeChildren = node.children;
+    var count = Math.min(sourceChildren ? sourceChildren.length : 0, nodeChildren ? nodeChildren.length : 0);
+    for (var i = 0; i < count; i += 1) bakeImageExportSubtree(sourceChildren[i], nodeChildren[i]);
+}
+
+function bakeImageExportDocument(clonedDocument, exportId, original) {
+    if (!original) return;
+    var clone = clonedDocument.querySelector('[data-image-export-id="' + exportId + '"]');
+    if (!clone) return;
+    /* 克隆文档里的编辑器宽度/字号可能不同，卡片宽度先按屏幕上量到的值写死，
+       否则同样一句话在导出图里的换行会和卡片不一致。 */
+    var box = original.getBoundingClientRect();
+    if (box.width > 0) {
+        clone.style.setProperty('width', Math.ceil(box.width) + 'px', 'important');
+        clone.style.setProperty('min-width', '0', 'important');
+        clone.style.setProperty('max-width', 'none', 'important');
+        clone.style.setProperty('box-sizing', 'border-box', 'important');
+    }
+    bakeImageExportSubtree(original, clone);
+}
+
 function sanitizeImageExportDocument(clonedDocument, exportId) {
     var clone = clonedDocument.querySelector('[data-image-export-id="' + exportId + '"]');
     if (!clone) return;
@@ -559,13 +690,13 @@ async function saveMessageAsImage(wrap) {
     await new Promise(function (resolve) { requestAnimationFrame(resolve); });
 
     var rect = target.getBoundingClientRect();
-    var width = Math.max(1, Math.ceil(target.scrollWidth || rect.width));
-    var height = Math.max(1, Math.ceil(target.scrollHeight || rect.height));
-    var targetStyle = getComputedStyle(target);
-    var background = targetStyle.backgroundColor;
-    if (!background || background === 'rgba(0, 0, 0, 0)') {
-        background = getUiThemeCanvasBackground();
-    }
+    /* 用卡片当前可见宽度（border-box）而不是 scrollWidth：表格/图片在界面里是滚动裁剪的，
+       按 scrollWidth 导出会和看到的卡片对不上。 */
+    var width = Math.max(1, Math.ceil(Math.max(rect.width, target.clientWidth || 0)));
+    var height = Math.max(1, Math.ceil(Math.max(rect.height, target.scrollHeight || 0)));
+    /* 卡片自身背景多为半透明，直接当 backgroundColor 会让 PNG 带 alpha、在查看器里变暗。
+       统一用主题实色打底，卡片的半透明背景再叠上去，和屏幕上的一致。 */
+    var background = getUiThemeCanvasBackground();
     if (typeof globalThis.loadMyAgentHtml2Canvas !== 'function') {
         throw new Error('当前版本未加载图片导出组件');
     }
@@ -583,6 +714,9 @@ async function saveMessageAsImage(wrap) {
         imageTimeout: 12000,
         logging: false,
         removeContainer: true,
+        onclone: function (clonedDocument) {
+            bakeImageExportDocument(clonedDocument, exportId, target);
+        },
         ignoreElements: function (node) {
             return !!(node.matches && node.matches('button, .mermaid-download-btn, .mermaid-zoom-btn'));
         }
@@ -597,6 +731,7 @@ async function saveMessageAsImage(wrap) {
                 useCORS: false,
                 imageTimeout: 0,
                 onclone: function (clonedDocument) {
+                    bakeImageExportDocument(clonedDocument, exportId, target);
                     sanitizeImageExportDocument(clonedDocument, exportId);
                 }
             });
