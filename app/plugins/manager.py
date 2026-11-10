@@ -27,6 +27,7 @@ from .security import (
     PluginError,
     PluginSecurityError,
     PluginValidationError,
+    iter_safe_plugin_files,
     normalize_namespace,
     safe_plugin_path,
 )
@@ -250,14 +251,9 @@ class PluginManager:
                 configured_candidates = [configured]
             else:
                 configured_candidates = []
-                for item in configured.rglob("*"):
-                    safe_item = safe_plugin_path(plugin.root, item)
-                    if safe_item.is_file() and safe_item.suffix.lower() in {
-                        ".md",
-                        ".json",
-                        ".txt",
-                    }:
-                        configured_candidates.append(safe_item)
+                for item in iter_safe_plugin_files(configured):
+                    if item.suffix.lower() in {".md", ".json", ".txt"}:
+                        configured_candidates.append(item)
                 configured_candidates.sort(key=lambda item: item.as_posix())
                 if not configured_candidates:
                     configured_candidates = [configured]

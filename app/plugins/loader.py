@@ -23,6 +23,7 @@ from .security import (
     PluginSecurityError,
     PluginValidationError,
     is_path_within,
+    iter_safe_plugin_files,
     normalize_namespace,
     plugin_content_signature,
     safe_plugin_path,
@@ -1036,13 +1037,12 @@ def _safe_resource_files(root: Path, configured: Path, file_names: Optional[set[
             return [configured]
         return []
     found: List[Path] = []
-    for candidate in configured.rglob("*"):
-        safe = safe_plugin_path(root, candidate)
-        if not safe.is_file():
+    # Walk once and validate links only: re-resolving every file made big skill
+    # trees cost seconds on each plugin load.
+    for candidate in iter_safe_plugin_files(configured):
+        if file_names is not None and candidate.name not in file_names:
             continue
-        if file_names is not None and safe.name not in file_names:
-            continue
-        found.append(safe)
+        found.append(candidate)
     return sorted(set(found), key=lambda item: item.as_posix())
 
 
