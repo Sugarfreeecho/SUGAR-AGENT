@@ -9,6 +9,8 @@
 设计要点：
 * 状态写在 ``%LOCALAPPDATA%\\SugarAgent\\state\\power-mode.json``，托盘菜单据此显示勾选；
 * 单实例守护：命名互斥体保证同一时间只有一个 daemon；
+* 遮罩由 ``shield_window.ShieldWindow`` 在守护进程内直接创建（Win32），
+  实测比 ``powershell.exe + WinForms`` 快一个数量级；
 * autosleep 是一次性动作——触发睡眠后模式自动回落 ``none``，避免唤醒后立刻又睡；
 * 后端不可达时不睡眠（状态未知 ≠ 空闲）。
 """
@@ -25,6 +27,14 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+# The embedded interpreter does not always put the script directory on sys.path,
+# so make the sibling module importable however this file is started.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from shield_window import ShieldWindow  # noqa: E402
+
 MODE_NONE = "none"
 MODE_SHIELD = "shield"
 MODE_AWAKE = "awake"
@@ -32,7 +42,9 @@ MODE_AUTOSLEEP = "autosleep"
 MODES = (MODE_NONE, MODE_SHIELD, MODE_AWAKE, MODE_AUTOSLEEP)
 
 DEFAULT_IDLE_SECONDS = 180
-POLL_SECONDS = 2.0
+#: How long a non-shield mode may sleep between state checks. The shield itself
+#: pumps messages continuously, so this only bounds switching latency.
+POLL_SECONDS = 0.25
 STATUS_POLL_SECONDS = 5.0
 MUTEX_NAME = "SugarAgentPowerModes"
 ERROR_ALREADY_EXISTS = 183
@@ -40,9 +52,6 @@ ERROR_ALREADY_EXISTS = 183
 ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-SHIELD_SCRIPT = SCRIPT_DIR / "shield.ps1"
 
 
 def state_dir() -> Path:
@@ -71,12 +80,29 @@ def log(message: str) -> None:
         pass
 
 
+_state_cache: dict = {"mtime": None, "data": {}}
+
+
 def read_state() -> dict:
+    """Cached read: the daemon may call this tens of times per second."""
+
+    try:
+        stat = state_path().stat()
+    except OSError:
+        _state_cache["mtime"] = None
+        _state_cache["data"] = {}
+        return {}
+    if _state_cache["mtime"] == stat.st_mtime_ns:
+        return _state_cache["data"]
     try:
         data = json.loads(state_path().read_text(encoding="utf-8-sig"))
-        return data if isinstance(data, dict) else {}
     except (OSError, ValueError, UnicodeError):
-        return {}
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    _state_cache["mtime"] = stat.st_mtime_ns
+    _state_cache["data"] = data
+    return data
 
 
 def write_state(**updates) -> dict:
@@ -89,6 +115,7 @@ def write_state(**updates) -> dict:
         temp = target.with_suffix(".tmp")
         temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp, target)
+        _state_cache["mtime"] = None  # force a reload on next read
     except OSError as exc:
         log(f"state write failed: {exc}")
     return data
@@ -148,60 +175,28 @@ def sleep_now() -> bool:
         return False
 
 
-class ShieldProcess:
-    """Owns the optional full-screen overlay child process."""
-
-    def __init__(self) -> None:
-        self._proc: Optional[subprocess.Popen] = None
-        self._attempted = False
-
-    def running(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
-
-    def start(self) -> None:
-        # One start attempt per mode activation: a second attempt after the user
-        # dismissed the overlay would fight the user's key press.
-        if self.running() or self._attempted:
-            return
-        self._attempted = True
-        powershell = str(
-            Path(os.getenv("SystemRoot") or r"C:\Windows")
-            / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
-        )
-        try:
-            self._proc = subprocess.Popen(
-                [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass",
-                 "-WindowStyle", "Hidden", "-File", str(SHIELD_SCRIPT)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            log(f"shield started pid={self._proc.pid}")
-            write_state(shield_pid=self._proc.pid)
-        except Exception as exc:
-            log(f"shield start failed: {exc}")
-            self._proc = None
-
-    def stop(self) -> None:
-        proc, self._proc = self._proc, None
-        self._attempted = False
-        if proc is None:
-            return
-        try:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait(timeout=5)
-            log(f"shield stopped pid={proc.pid}")
-        except Exception as exc:
-            log(f"shield stop failed: {exc}")
-
-
 def _mutex_handle():
     kernel32 = ctypes.windll.kernel32
     handle = kernel32.CreateMutexW(None, True, MUTEX_NAME)
     already = kernel32.GetLastError() == ERROR_ALREADY_EXISTS
     return handle, already
+
+
+def _run_shield(shield: ShieldWindow) -> str:
+    """Pump the overlay until dismissal or a mode change; return the outcome."""
+
+    try:
+        shield.show()
+    except Exception as exc:
+        log(f"shield show failed: {exc}")
+        return "failed"
+    write_state(shield_pid=os.getpid())
+    log("shield shown")
+    while current_mode() == MODE_SHIELD:
+        if not shield.pump(0.03):
+            log("shield dismissed by user")
+            return "dismissed"
+    return "mode_changed"
 
 
 def run_daemon() -> int:
@@ -210,7 +205,7 @@ def run_daemon() -> int:
         log("daemon already running; exit")
         return 0
     log(f"daemon start pid={os.getpid()}")
-    shield = ShieldProcess()
+    shield = ShieldWindow()
     last_mode = ""
     idle_started: Optional[float] = None
     last_status_poll = 0.0
@@ -222,29 +217,27 @@ def run_daemon() -> int:
                 last_mode = mode
                 idle_started = None
             if mode == MODE_NONE:
-                shield.stop()
+                shield.close()
                 _set_thread_state(ES_CONTINUOUS)
                 break
             if mode == MODE_SHIELD:
                 _set_thread_state(ES_CONTINUOUS)
-                shield.start()
-                if not shield.running():
-                    # The overlay exits on any key press; fall back to no mode so
-                    # the tray checkmark tells the truth.
-                    log("shield exited; reset mode to none")
+                outcome = _run_shield(shield)
+                shield.close()
+                if outcome in {"dismissed", "failed"}:
+                    # Keep the tray checkmark honest: the overlay is gone.
                     write_state(mode=MODE_NONE)
                     break
-                time.sleep(POLL_SECONDS)
                 continue
             if mode == MODE_AWAKE:
-                shield.stop()
+                shield.close()
                 _set_thread_state(
                     ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
                 )
                 time.sleep(POLL_SECONDS)
                 continue
             # autosleep
-            shield.stop()
+            shield.close()
             _set_thread_state(ES_CONTINUOUS)
             now = time.monotonic()
             if now - last_status_poll >= STATUS_POLL_SECONDS:
@@ -268,7 +261,7 @@ def run_daemon() -> int:
                         idle_started = now
             time.sleep(POLL_SECONDS)
     finally:
-        shield.stop()
+        shield.close()
         _set_thread_state(ES_CONTINUOUS)
         log("daemon exit")
         try:

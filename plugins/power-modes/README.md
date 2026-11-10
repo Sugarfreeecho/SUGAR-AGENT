@@ -23,7 +23,7 @@ Windows 专属插件。三种**互斥**模式，从 Agent 托盘图标右键 →
 
 `scripts/power_modes.py` 是一个单实例守护进程（命名互斥体 `SugarAgentPowerModes`）：
 
-- **护屏**：拉起 `scripts/shield.ps1` 全屏遮罩；遮罩被任意按键/鼠标移动或点击关闭后，守护进程把模式回落为 `none`，托盘勾选随之消失
+- **护屏**：守护进程用 `scripts/shield_window.py` 直接创建 Win32 全屏窗口（无 PowerShell、无 WinForms）。窗口被任意按键/鼠标移动超 60 px/点击关闭后，模式回落 `none`，托盘勾选随之消失
 - **常亮**：`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)`
 - **任务完成后睡眠**：每 5 秒查询 `http://127.0.0.1:<port>/api/runtime-status` 的 `active_run_count`；连续 `idle_seconds`（默认 180）为 0 后调用 `powrprof.SetSuspendState(False, False, False)` 进入睡眠。后端不可达时视为"状态未知"，**不睡眠**
 - 触发睡眠后模式自动回落 `none`，避免唤醒后又立刻睡
@@ -50,9 +50,22 @@ Windows 专属插件。三种**互斥**模式，从 Agent 托盘图标右键 →
 
 ## 边界
 
-- 只在本机 Windows 上验证；遮罩依赖 System.Windows.Forms，需要可交互桌面会话
+- 只在本机 Windows 上验证；遮罩是原生 Win32 窗口，需要可交互桌面会话
 - 合盖仍按电源计划进入睡眠，模式不拦截硬件事件
 - 「任务完成后睡眠」只看 Agent 的运行中任务数，不判断你本人是否还在用电脑；不想要就提前切回「退出模式」
+
+## 响应时延
+
+早期版本用 `powershell.exe -File shield.ps1`（WinForms），本机 PowerShell 冷启动就要 3.55 s，加上 WinForms 共约 4.4 s，端到端实测 6.4 s。
+
+改成守护进程内直接建 Win32 窗口后：
+
+| 场景 | 从触发到屏幕变黑 |
+|---|---|
+| 守护进程已在运行（切模式） | 0.32 s |
+| 无守护进程（冷启动） | 0.42 s |
+
+窗口本身创建耗时 44–52 ms，其余是 `pythonw` 启动与状态轮询（0.25 s 一次）。
 
 ## 与 `app/runtime_power.py` 的分工
 
