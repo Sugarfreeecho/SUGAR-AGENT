@@ -1162,6 +1162,7 @@ class RuntimeUiProjection:
         legacy_loader: Optional[Callable[[], Iterable[dict]]] = None,
         diagnostics: Optional[dict] = None,
         include_user_turns: bool = False,
+        align_to_turn: bool = False,
     ) -> dict:
         recent_key = None
         if not include_user_turns and legacy_loader is None and before_index is None and after_index is None and target_index is None and turns is not None:
@@ -1179,6 +1180,7 @@ class RuntimeUiProjection:
                 target_index=target_index, turns=turns, event_budget=event_budget,
                 diagnostics=diagnostics,
                 include_user_turns=include_user_turns,
+                align_to_turn=align_to_turn,
             )
             if indexed is not None:
                 if recent_key is not None:
@@ -1208,6 +1210,7 @@ class RuntimeUiProjection:
             target_index=target_index,
             turns=turns,
             event_budget=event_budget,
+            align_to_turn=align_to_turn,
         )
 
     def _read_indexed_ui_page(self, session_id: str, *, diagnostics: Optional[dict] = None,
@@ -1230,6 +1233,10 @@ class RuntimeUiProjection:
         page = self._page_events(
             [{"type": "user" if pos in users else ""} for pos in range(total)], **options
         )
+        if diagnostics is not None and page.get("turn_aligned"):
+            diagnostics.update(turn_aligned=True,
+                               requested_range_start=page.get("requested_range_start"),
+                               aligned_range_start=page.get("range_start"))
         if include_user_turns and isinstance(index.get("user_turns"), list):
             # Capture the TOC from the very same immutable index generation.
             # A live append after page reading must not trigger another full
@@ -1822,6 +1829,7 @@ class RuntimeUiProjection:
         target_index: Optional[int] = None,
         turns: Optional[int] = None,
         event_budget: Optional[int] = None,
+        align_to_turn: bool = False,
     ) -> dict:
         total = len(events)
         user_indices = [
@@ -1905,7 +1913,24 @@ class RuntimeUiProjection:
             }
 
         end = total if before_index is None else max(0, min(int(before_index), total))
-        start = max(0, end - lim)
+        requested_start = max(0, end - lim)
+        start = requested_start
+        if align_to_turn and start > 0 and start not in user_indices:
+            # The initial screen is a bounded tail window. When the cut lands
+            # inside a turn, the owning user bubble sits just before the
+            # window while its final/process rows remain visible, so the
+            # reader sees an answer with no question. Prefer the next user row
+            # inside the window (a complete following turn, without loading a
+            # whole earlier session); otherwise move back to the owning user
+            # row and keep that whole turn even when it exceeds the event cap.
+            # Callers that do not request alignment keep the exact cursor.
+            next_users = [index for index in user_indices if start < index < end]
+            if next_users:
+                start = next_users[0]
+            else:
+                before_users = [index for index in user_indices if index < start]
+                if before_users:
+                    start = before_users[-1]
         return {
             "events": events[start:end],
             "total": total,
@@ -1913,4 +1938,6 @@ class RuntimeUiProjection:
             "range_end": end,
             "has_older": start > 0,
             "has_newer": end < total,
+            "requested_range_start": requested_start,
+            "turn_aligned": start != requested_start,
         }

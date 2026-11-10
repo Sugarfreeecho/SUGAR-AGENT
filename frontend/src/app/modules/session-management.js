@@ -2345,6 +2345,44 @@ async function fetchSessionHistoryJSON(url, signal, loadingTrace) {
     }
 }
 
+/**
+ * Older servers (or a window that still lands mid-turn) can return process
+ * rows and a final card without the user bubble that owns them. Walk backwards
+ * a bounded number of pages until the replay starts at a user message, then
+ * hydrate that merged range once. The normal aligned snapshot path returns a
+ * user row first and does not issue any extra request.
+ */
+async function backfillInitialTurnEvents(sessionId, events, pageMeta, signal, loadingTrace) {
+    var merged = Array.isArray(events) ? events : [];
+    if (!pageMeta || !pageMeta.has_older || !merged.length) return merged;
+    var startsAtUser = function () {
+        return !!(merged[0] && merged[0].type === 'user');
+    };
+    var guard = 0;
+    while (!startsAtUser() && pageMeta.has_older && guard < 4) {
+        var before = Number(pageMeta.range_start) || 0;
+        if (before <= 0) break;
+        var url = '/sessions/' + encodeURIComponent(sessionId)
+            + '/messages?limit=200&align_to_turn=1&before_index=' + encodeURIComponent(String(before))
+            + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
+        var result;
+        try {
+            result = await fetchSessionHistoryJSON(url, signal, loadingTrace);
+        } catch (error) {
+            break;
+        }
+        var older = result && result.data;
+        if (!result.response || !result.response.ok || !older || !Array.isArray(older.events)) break;
+        if (!older.events.length || Number(older.range_end) !== before) break;
+        merged = older.events.concat(merged);
+        pageMeta.range_start = Number(older.range_start) || 0;
+        pageMeta.has_older = !!older.has_older;
+        if (Number.isFinite(Number(older.total))) pageMeta.total = Number(older.total);
+        guard += 1;
+    }
+    return merged;
+}
+
 async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     const loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined'
         ? (initialSessionHistoryPrefetch && initialSessionHistoryPrefetch.sessionId === sessionId
@@ -2519,6 +2557,12 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
         } else {
             events = [];
+        }
+        if (!opts.full && pageMeta && !pageMeta.manual_history && events.length) {
+            events = await backfillInitialTurnEvents(
+                sessionId, events, pageMeta, loadController.signal, loadingTrace
+            );
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         }
         beginMessageReplay(sessionId, pageMeta || {
             total: events.length,

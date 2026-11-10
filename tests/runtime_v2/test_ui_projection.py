@@ -465,6 +465,70 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(page["events"][1]["content"], "process 0")
             self.assertEqual(page["events"][-1]["content"], "dense answer")
 
+    def test_tail_window_can_align_back_to_the_owning_user_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "older"})
+            mirror.mirror_ui_event("s1", {"type": "status", "content": "older process"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "older answer"})
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "dense"})
+            for index in range(300):
+                mirror.mirror_ui_event("s1", {"type": "status", "content": f"process {index}"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "dense answer"})
+            projection = RuntimeUiProjection(tmp)
+
+            # Default tail paging is unchanged: it still returns a raw window.
+            raw_tail = projection.read_ui_page("s1", limit=200)
+            self.assertGreater(raw_tail["range_start"], 3)
+            self.assertFalse(raw_tail["turn_aligned"])
+            self.assertFalse(any(event["type"] == "user" for event in raw_tail["events"]))
+
+            # Initial-screen callers can ask for the owning user row; the
+            # dense turn is kept whole even though it exceeds the 200 cap.
+            page = projection.read_ui_page("s1", limit=200, align_to_turn=True)
+            self.assertEqual(page["range_start"], 3)
+            self.assertTrue(page["turn_aligned"])
+            self.assertEqual(page["requested_range_start"], 105)
+            self.assertEqual(len(page["events"]), 302)
+            self.assertEqual(page["events"][0]["content"], "dense")
+            self.assertEqual(page["events"][-1]["content"], "dense answer")
+
+            # A window already starting at a user row must not rewind another turn.
+            whole = projection.read_ui_page("s1", limit=1000, align_to_turn=True)
+            self.assertEqual(whole["range_start"], 0)
+            self.assertFalse(whole["turn_aligned"])
+
+    def test_tail_window_prefers_the_next_user_row_when_one_is_in_view(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "older"})
+            for index in range(140):
+                mirror.mirror_ui_event("s1", {"type": "status", "content": f"older {index}"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "older answer"})
+            mirror.mirror_ui_event("s1", {"type": "user", "content": "next"})
+            for index in range(100):
+                mirror.mirror_ui_event("s1", {"type": "status", "content": f"next {index}"})
+            mirror.mirror_ui_event("s1", {"type": "final", "content": "next answer"})
+            projection = RuntimeUiProjection(tmp)
+
+            raw_tail = projection.read_ui_page("s1", limit=200)
+            self.assertEqual(raw_tail["range_start"], 44)
+            self.assertIn("older answer", [event["content"] for event in raw_tail["events"]])
+
+            page = projection.read_ui_page("s1", limit=200, align_to_turn=True)
+            self.assertEqual(page["range_start"], 142)
+            self.assertTrue(page["turn_aligned"])
+            self.assertEqual(page["events"][0]["content"], "next")
+            self.assertEqual(page["events"][-1]["content"], "next answer")
+            self.assertEqual(len(page["events"]), 102)
+
+            # Older-page requests can opt into the same alignment; the
+            # returned range still ends exactly at the requested cursor.
+            older = projection.read_ui_page("s1", limit=100, before_index=142, align_to_turn=True)
+            self.assertEqual(older["range_start"], 0)
+            self.assertEqual(older["range_end"], 142)
+            self.assertEqual(older["events"][0]["content"], "older")
+
     def test_pages_by_turns_backfill_when_runtime_projection_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             projection = RuntimeUiProjection(tmp)

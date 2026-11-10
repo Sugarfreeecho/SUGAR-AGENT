@@ -216,11 +216,16 @@ def test_bounded_log_reader_defers_partial_trailing_fact(tmp_path):
     assert [row.seq for row in log.read_after_seq("s", 1)] == [2]
 
 
-def test_initial_tail_caps_a_single_dense_turn_without_losing_older_cursors(tmp_path, monkeypatch):
+def test_initial_tail_keeps_a_dense_turn_whole_and_preserves_older_cursors(tmp_path, monkeypatch):
     import runtime_v2
     import webui
     from tests.test_webui_messages import _NoLegacyUiSessionManager
-    events = [{'type': 'user', 'content': 'long work'}]
+    events = [
+        {'type': 'user', 'content': 'older work'},
+        {'type': 'status', 'content': 'older process'},
+        {'type': 'final', 'content': 'older done'},
+        {'type': 'user', 'content': 'long work'},
+    ]
     events += [{'type': 'status', 'content': str(i)} for i in range(1200)]
     events += [{'type': 'final', 'content': 'done'}]
     SessionEventLog(tmp_path).append('s', 'runtime_snapshot_compacted', {'ui_events': events})
@@ -233,14 +238,22 @@ def test_initial_tail_caps_a_single_dense_turn_without_losing_older_cursors(tmp_
     ))
     assert response.status_code == 200
     page = json.loads(response.body)['messages']
-    assert len(page['events']) == 200 and page['events'][-1]['type'] == 'final'
+    # The cut lands inside the dense turn: keep that whole turn (1202 rows)
+    # instead of returning an answer without its user question.
+    assert page['range_start'] == 3
+    assert len(page['events']) == 1202
+    assert page['events'][0]['type'] == 'user' and page['events'][0]['content'] == 'long work'
+    assert page['events'][-1]['type'] == 'final'
+    assert page['turn_aligned'] is True
     assert page['event_limited_tail'] and page['has_older']
     projection = RuntimeUiProjection(tmp_path)
     older = projection.read_ui_page('s', limit=200, before_index=page['range_start'])
-    assert older['range_end'] == page['range_start'] and len(older['events']) == 200
-    assert older['range_start'] < page['range_start']
-    # Explicit whole-turn callers retain their original complete-conversation contract.
-    assert len(projection.read_ui_page('s', turns=1, event_budget=500)['events']) == len(events)
+    assert older['range_end'] == page['range_start'] and len(older['events']) == 3
+    assert older['range_start'] == 0
+    # Explicit whole-turn callers retain their original complete-turn contract.
+    last_turn = projection.read_ui_page('s', turns=1, event_budget=500)
+    assert len(last_turn['events']) == 1202
+    assert last_turn['events'][0]['content'] == 'long work'
 
 
 def test_bounded_tail_keeps_current_uncommitted_execution_started_before_window(tmp_path):

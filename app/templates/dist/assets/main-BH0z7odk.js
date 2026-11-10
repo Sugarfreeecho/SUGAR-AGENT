@@ -9606,2158 +9606,2160 @@ function settleSmoothTraceHeightAnimations(root) {
         cancelSmoothTraceLayoutAnimation(row);
     });
 }
-`,As=`/**
- * 上下文拆解卡（对齐 DSH token-meter 的 ContextMeter 面板）：
- * 标题行「上下文已用 24.7%」+ 右侧「~24.5k / 128k」，一条按构成分色的占比条，
- * 下方三行图例（系统提示词 / 工具定义 / 对话消息）。条的总长永远等于精确占比，
- * 分段只按启发式构成分配宽度。
- *
- * 只有"有数值 / 没数值"两种状态：有数值就恒为这张卡（拿不到三段时退回单色整条并
- * 隐藏图例，同时补一次取三段的请求），没数值才退回原来的纯文字提示。会话打开时
- * 快照先写入的旧检查点可能还没有三段，若那时改回纯文字提示，用户就会在同一处看到
- * 两种浮窗来回切换 —— 这正是要避免的。三条泳道的键与后端 breakdown 一致。
- */
-var CTX_BREAKDOWN_LANES = [
-    { key: 'system_tokens', lane: 'system' },
-    { key: 'tools_tokens', lane: 'tools' },
-    { key: 'message_tokens', lane: 'messages' },
-];
-/* 悬停展开的迟滞：足够长到划过标题栏时不闪，远短于通用提示的 500ms（那是纯文字提示）。 */
-var CTX_CARD_HOVER_DELAY_MS = 180;
-/* 有数值但还没有三段时，读到的说明行要讲清"分段为什么还没出来"。 */
-var CTX_CARD_NOTE_WITH_LANES = '分母为压缩摘要阈值；构成按本地估算';
-var CTX_CARD_NOTE_WITHOUT_LANES = '分母为压缩摘要阈值；构成待本次请求估算后补齐';
-var ctxCardOpenTimer = null;
-/* 有数值即可展开卡片（是否含三段只决定图例与分段颜色，不决定卡片是否存在）。 */
-var ctxCardReady = false;
-/* 每个会话只补取一次三段，避免请求风暴；拿到三段后清除，值再次退化时可以再补。 */
-var contextBreakdownRefetchTried = Object.create(null);
-
-function contextBreakdownOrNull(raw) {
-    if (!raw || typeof raw !== 'object') return null;
-    var parts = {};
-    for (var i = 0; i < CTX_BREAKDOWN_LANES.length; i += 1) {
-        var value = Number(raw[CTX_BREAKDOWN_LANES[i].key]);
-        if (!Number.isFinite(value) || value < 0) return null;
-        parts[CTX_BREAKDOWN_LANES[i].key] = value;
-    }
-    ['deferred_tools_count', 'deferred_tools_tokens', 'saved_tools_tokens'].forEach(function (key) {
-        var value = Number(raw[key]);
-        if (Number.isFinite(value) && value >= 0) parts[key] = value;
-    });
-    return parts;
-}
-
-function closeContextBreakdownCard() {
-    if (ctxCardOpenTimer) {
-        clearTimeout(ctxCardOpenTimer);
-        ctxCardOpenTimer = null;
-    }
-    var card = document.getElementById('ctx-breakdown');
-    if (card) {
-        card.hidden = true;
-        card.setAttribute('aria-hidden', 'true');
-    }
-}
-
-function openContextBreakdownCard() {
-    if (ctxCardOpenTimer) {
-        clearTimeout(ctxCardOpenTimer);
-        ctxCardOpenTimer = null;
-    }
-    var card = document.getElementById('ctx-breakdown');
-    if (!card || !ctxCardReady) return;
-    card.hidden = false;
-    card.setAttribute('aria-hidden', 'false');
-}
-
-/**
- * A value stored without the three lanes (an older checkpoint read straight from
- * the history snapshot) would leave the legend permanently empty, because the
- * meter's own refresh is rate-limited to one request per session per few seconds
- * and nothing else re-asks. Ask once, bypassing that freshness window.
- */
-function ensureContextBreakdownForCurrentSession(breakdown) {
-    var sid = String(currentSessionId || '');
-    if (!sid) return;
-    if (contextBreakdownOrNull(breakdown)) {
-        delete contextBreakdownRefetchTried[sid];
-        return;
-    }
-    if (contextBreakdownRefetchTried[sid]) return;
-    if (contextTokenInFlightBySession[sid]) return;
-    requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-            // 标记只在"补取真的发起"时消费（见 refreshContextTokensFromServer）。若此刻
-            // 恰有在途请求，那次请求落地后仍会带着同一个缺三段的数值回到这里重排一次，
-            // 因此这里提前登记会把唯一机会浪费在一次不会发出的请求上。
-            var latest = selectContextTokens(sid);
-            if (latest && contextBreakdownOrNull(latest.breakdown)) {
-                delete contextBreakdownRefetchTried[sid];
-                return;
-            }
-            refreshContextTokensFromServer(sid, null, true);
-        });
-    });
-}
-
-/** 卡片内容：占比条分段宽度按构成比例分配，行值按同一份构成标注 ~。 */
-function renderContextBreakdownCard(card, pctDisp, estimated, threshold, breakdown) {
-    if (!card) return;
-    var widthPct = Math.max(0, Math.min(100, pctDisp));
-    var pctEl = card.querySelector('.ctx-card-pct');
-    var figuresEl = card.querySelector('.ctx-card-figures');
-    var barEl = card.querySelector('.ctx-card-bar');
-    var rowsEl = card.querySelector('.ctx-card-rows');
-    if (pctEl) pctEl.textContent = pctDisp + '%';
-    if (figuresEl) {
-        figuresEl.textContent = '~' + formatTokenCompact(estimated) + ' / ' + formatTokenCompact(threshold);
-    }
-    var total = breakdown
-        ? (breakdown.system_tokens + breakdown.tools_tokens + breakdown.message_tokens)
-        : 0;
-    var segments = [];
-    if (!breakdown || total <= 0) {
-        segments.push('<span class="ctx-card-seg" style="width:' + widthPct + '%"></span>');
-    } else {
-        CTX_BREAKDOWN_LANES.forEach(function (lane) {
-            var width = widthPct * breakdown[lane.key] / total;
-            if (!(width > 0)) return;
-            segments.push(
-                '<span class="ctx-card-seg ctx-lane-' + lane.lane + '" style="width:' + width.toFixed(3) + '%"></span>'
-            );
-        });
-    }
-    if (barEl) barEl.innerHTML = segments.join('');
-    if (rowsEl) {
-        rowsEl.hidden = !breakdown;
-        if (breakdown) {
-            Array.prototype.forEach.call(rowsEl.querySelectorAll('[data-lane]'), function (valueEl) {
-                var laneKey = valueEl.getAttribute('data-lane');
-                valueEl.textContent = '~' + formatTokenCompact(breakdown[laneKey]);
-            });
-        }
-    }
-    var noteEl = card.querySelector('.ctx-card-note');
-    if (noteEl) {
-        noteEl.textContent = breakdown ? CTX_CARD_NOTE_WITH_LANES : CTX_CARD_NOTE_WITHOUT_LANES;
-        if (breakdown && breakdown.deferred_tools_count > 0) {
-            noteEl.textContent += '；已延迟 ' + breakdown.deferred_tools_count +
-                ' 个工具，本轮工具定义节省约 ' + formatTokenCompact(breakdown.saved_tools_tokens || 0) + ' tokens';
-        }
-    }
-}
-
-function bindContextBreakdownHover(el) {
-    if (!el || el._ctxCardHoverBound) return;
-    el._ctxCardHoverBound = true;
-    el.addEventListener('mouseenter', function () {
-        if (!ctxCardReady) return;
-        if (ctxCardOpenTimer) clearTimeout(ctxCardOpenTimer);
-        ctxCardOpenTimer = setTimeout(function () {
-            ctxCardOpenTimer = null;
-            openContextBreakdownCard();
-        }, CTX_CARD_HOVER_DELAY_MS);
-    });
-    // 卡片是触发器的子节点，指针移入卡片不会触发 mouseleave；离开整块才收起。
-    el.addEventListener('mouseleave', closeContextBreakdownCard);
-    document.addEventListener('keydown', function (ev) {
-        if (ev.key === 'Escape') closeContextBreakdownCard();
-    });
-}
-
-function formatTokenCompact(n) {
-    if (n == null || !Number.isFinite(Number(n))) return '—';
-    const x = Math.max(0, Math.round(Number(n)));
-    if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
-    if (x >= 10000) return (x / 1000).toFixed(x % 1000 === 0 ? 0 : 1).replace(/\\.0$/, '') + 'k';
-    if (x >= 1000) return (x / 1000).toFixed(1).replace(/\\.0$/, '') + 'k';
-    return String(x);
-}
-
-function setContextTokenLabel(estimated, threshold, breakdown) {
-    const el = document.getElementById('ctx-tokens');
-    if (!el) return;
-    const label = el.querySelector('.ctx-label');
-    const fill = el.querySelector('.ctx-fill');
-    const pctEl = el.querySelector('.ctx-pct');
-    const t = (threshold != null && Number(threshold) > 0) ? Number(threshold) : defaultCtxThreshold;
-    const n = (estimated != null && Number(estimated) >= 0) ? Math.round(Number(estimated)) : null;
-    if (n == null) {
-        if (label) label.textContent = '— / —';
-        if (pctEl) pctEl.textContent = '';
-        if (fill) fill.style.width = '0%';
-        el.classList.remove('is-warn', 'is-bad');
-        ctxCardReady = false;
-        closeContextBreakdownCard();
-        el.setAttribute('data-ui-tip', '预估上下文 token：选择会话并加载或发送消息后显示。分母为压缩摘要阈值。');
-        bindUiHoverTip(el);
-        return;
-    }
-    const pct = (n / t) * 100;
-    const pctDisp = (Math.round(pct * 10) / 10);
-    if (label) label.textContent = formatTokenCompact(n) + ' / ' + formatTokenCompact(t);
-    if (pctEl) pctEl.textContent = pctDisp + '%';
-    if (fill) fill.style.width = Math.min(100, pct) + '%';
-    el.classList.remove('is-warn', 'is-bad');
-    if (pct >= 100) el.classList.add('is-bad');
-    else if (pct >= 80) el.classList.add('is-warn');
-    const card = el.querySelector('#ctx-breakdown');
-    const parts = contextBreakdownOrNull(breakdown);
-    renderContextBreakdownCard(card, pctDisp, n, t, parts);
-    // 有数值就恒为拆解卡；三段只决定图例与分段颜色（缺口由下面的一次补取填上）。
-    ctxCardReady = true;
-    bindContextBreakdownHover(el);
-    ensureContextBreakdownForCurrentSession(parts);
-    // 拆解卡接管说明职责；同一元素上不再挂纯文字提示，避免两种浮窗叠加。
-    el.removeAttribute('data-ui-tip');
-    if (typeof hideUiHoverTooltip === 'function') hideUiHoverTooltip();
-}
-
-let contextTokenRequestSeq = 0;
-const contextTokenInFlightBySession = Object.create(null);
-const CONTEXT_TOKEN_CACHE_TTL_MS = 3000;
-
-async function refreshContextTokensFromServer(sid, seq, force) {
-    if (!sid) return;
-    const cached = selectContextTokens(sid);
-    // \`\`force\`\` 只给"有值但缺三段"的补取用：它绕开新鲜度窗口，仍受在途去重约束。
-    if (!force && cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {
-        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold, cached.breakdown);
-        return;
-    }
-    if (contextTokenInFlightBySession[sid]) return;
-    contextTokenInFlightBySession[sid] = true;
-    const tokenVersion = typeof getContextTokenVersion === 'function' ? getContextTokenVersion(sid) : null;
-    // 补取机会在这里消费：只有真的发出去了才算用过，被在途请求挡下的那次不算。
-    if (force) contextBreakdownRefetchTried[sid] = true;
-    try {
-        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
-        const j = await r.json();
-        if (tokenVersion != null && tokenVersion !== getContextTokenVersion(sid)) return;
-        if (r.ok && j && j.ok && j.estimated != null && j.estimated >= 0) {
-            // Clear the in-flight mark BEFORE recording: applying a value without
-            // the three lanes is what schedules the one-shot lane refetch, and an
-            // in-flight mark that is still set would make that refetch look
-            // redundant — it would never happen, leaving the legend empty.
-            delete contextTokenInFlightBySession[sid];
-            // A session switch invalidates the paint, not the session's data.
-            // Keep successful refetches so returning within the cache TTL has lanes.
-            if (sid !== currentSessionId || (seq != null && seq !== contextTokenRequestSeq)) {
-                setContextTokensForSession(sid, j.estimated, j.threshold, j.breakdown,
-                    { stale: !!(j.stale || j.pending_recalculation) });
-                if (contextBreakdownOrNull(j.breakdown)) delete contextBreakdownRefetchTried[sid];
-                return;
-            }
-            if (j.stale || j.pending_recalculation) recordContextTokens(sid, j.estimated, j.threshold, j.breakdown, { stale: true });
-            else recordContextTokens(sid, j.estimated, j.threshold, j.breakdown);
-            return;
-        }
-    } catch (e) { /* ignore */ }
-    finally {
-        delete contextTokenInFlightBySession[sid];
-    }
-    applyContextTokenLabelForCurrentSession();
-}
-
-/** 在浏览器完成首帧绘制后再请求 context_tokens，避免与切换会话/新建会话的 DOM 抢主线程。 */
-function scheduleContextTokensAfterPaint(sid) {
-    if (!sid) return;
-    if (sid === currentSessionId) applyContextTokenLabelForCurrentSession();
-    const seq = ++contextTokenRequestSeq;
-    requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-            refreshContextTokensFromServer(sid, seq);
-        });
-    });
-}
-
-function recordContextTokens(sessionId, estimated, threshold, breakdown, options) {
-    if (!sessionId) return;
-    if (setContextTokensForSession(sessionId, estimated, threshold, breakdown, options) === false) return;
-    if (sessionId === currentSessionId) applyContextTokenLabelForCurrentSession();
-}
-
-function applyContextTokenLabelForCurrentSession() {
-    if (!currentSessionId) { setContextTokenLabel(null, null, null); return; }
-    const x = selectContextTokens(currentSessionId);
-    if (x) setContextTokenLabel(x.estimated, x.threshold, x.breakdown);
-    else setContextTokenLabel(null, null, null);
-}
-
-/** 主对话区跟到底 */
-function scrollChatToBottomIfFollow(runSessionId, opts) {
-    opts = opts || {};
-    if (shouldGateScrollByRunSession(null, runSessionId)) return;
-    if (!opts.force && !liveAutoFollow) return;
-    if (chatContainer) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-}
-
-function setScrollTopImmediate(el, y) {
-    if (!el) return;
-    var prev = el.style.scrollBehavior;
-    el.style.scrollBehavior = 'auto';
-    try {
-        el.scrollTop = y;
-    } finally {
-        // Restore synchronously so overlapping writes cannot restore each
-        // other's temporary style on later frames.
-        el.style.scrollBehavior = prev;
-    }
-}
-
-/** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */
-function getProcessBodyElForCurrentRun() {
-    var sid = currentSessionId;
-    var run = sid && getSessionRunState(sid);
-    if (!run || !run.ctx) return null;
-    var c = run.ctx;
-    if (c.currentProcessGroup && c.currentProcessGroup.isConnected) {
-        return c.currentProcessGroup.querySelector('.process-aggregate-body');
-    }
-    if (!c.stream) return null;
-    var agg = c.stream.querySelector('.process-aggregate:last-of-type');
-    return agg ? agg.querySelector('.process-aggregate-body') : null;
-}
-
-var STREAM_PROC_NEAR_BOTTOM_PX = 96;
-var STREAM_CHAT_NEAR_BOTTOM_PX = 72;
-
-function isSmoothStreamPortNearBottom(port, thresholdPx) {
-    if (!port) return false;
-    if (!isSmoothStreamActive()) return isNearBottom(port, thresholdPx);
-    if (smoothFollowController.isReaderDetached(port)) {
-        // An intentional upward gesture must win over the legacy broad
-        // near-bottom threshold. Re-arm only once the reader reaches the floor.
-        if (!isNearBottom(port, 2)) return false;
-        smoothFollowController.clearReaderDetached(port);
-    }
-    return smoothFollowController.isFollowing(port) || isNearBottom(port, thresholdPx);
-}
-
-/** 生成中时：对话区与当前执行过程区均在底部附近时才允许自动跟随流式滚动 */
-function refreshLiveAutoFollowPins() {
-    if (!chatContainer) return;
-    if (isSessionRunning(currentSessionId)) {
-        streamChatNearBottom = isSmoothStreamPortNearBottom(
-            chatContainer,
-            STREAM_CHAT_NEAR_BOTTOM_PX
-        );
-        var pb = getProcessBodyElForCurrentRun();
-        streamProcNearBottom = !pb || isSmoothStreamPortNearBottom(pb, STREAM_PROC_NEAR_BOTTOM_PX);
-        liveAutoFollow = streamChatNearBottom && streamProcNearBottom;
-    } else {
-        liveAutoFollow = isSmoothStreamPortNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);
-    }
-}
-
-function shouldGateScrollByRunSession(ctx, runSessionId) {
-    if (!runSessionId) return false;
-    return runSessionId !== currentSessionId;
-}
-
-function collectFeedChunkRootsFromCtx(ctx) {
-    var roots = [];
-    var seen = new Set();
-    function addRoot(root) {
-        if (!root || !root.isConnected || seen.has(root)) return;
-        seen.add(root);
-        roots.push(root);
-    }
-    if (ctx && ctx.stream && ctx.stream.isConnected) addRoot(ctx.stream);
-    return roots;
-}
-
-function queryFeedChunksInCtx(ctx, selector) {
-    var sel = selector || '.feed-chunk';
-    var out = [];
-    var seen = new Set();
-    collectFeedChunkRootsFromCtx(ctx).forEach(function (root) {
-        root.querySelectorAll(sel).forEach(function (ch) {
-            if (!seen.has(ch)) {
-                seen.add(ch);
-                out.push(ch);
-            }
-        });
-    });
-    return out;
-}
-
-function refreshFeedChunksInCtx(ctx, selector) {
-    queryFeedChunksInCtx(ctx, selector).forEach(function (ch) {
-        scheduleFeedChunkOverflowRefresh(ch);
-    });
-}
-
-function feedChunkCollapsedMax(chunk) {
-    var styles = getComputedStyle(chunk);
-    var line = parseFloat(styles.getPropertyValue('--line')) || 21.6;
-    var pad = parseFloat(styles.getPropertyValue('--scroller-pad-y')) || 4;
-    return line * 2.5 + pad * 2;
-}
-
-function measureFeedChunkScrollerHeight(sc, chunk) {
-    if (!sc) return 0;
-    var h = sc.scrollHeight;
-    if (h > 1) return h;
-    return h;
-}
-
-function scrollContentAreaIfFollow(ctx, runSessionId, channel) {
-    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
-    if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-    // Trace events and text wrapping share the same follow motion.
-    if (isSmoothStreamActive()) {
-        if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
-        followStreamProcessScroll(ctx, runSessionId, channel || 'row');
-        return;
-    }
-    if (!liveAutoFollow) return;
-    scrollProcessBodyToBottom(ctx, runSessionId);
-    scrollChatToBottomIfFollow(runSessionId, {});
-}
-
-/** 将当前步的执行框滚到底（流式增量主要长在这里，必须滚 procBody 而不是只滚对话区） */
-function scrollProcessBodyToBottom(ctx, runSessionId) {
-    if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-    if (!ctx || !ctx.stream) return;
-    var agg = (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected)
-        ? ctx.currentProcessGroup
-        : ctx.stream.querySelector('.process-aggregate:last-of-type');
-    if (agg) {
-        var procBody = agg.querySelector('.process-aggregate-body');
-        if (procBody) procBody.scrollTop = procBody.scrollHeight;
-    }
-}
-
-function followStreamProcessScroll(ctx, runSessionId, channel) {
-    // Keep the caller argument for the existing entry points; it no longer
-    // selects a motion profile in the unified follower.
-    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
-    if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-    if (
-        isSmoothStreamActive()
-        && typeof isHistorySmoothScrollActive === 'function'
-        && isHistorySmoothScrollActive()
-    ) return;
-    if (!liveAutoFollow) return;
-    if (isSmoothStreamActive()) {
-        if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-            && ctx.currentProcessGroup.classList.contains('is-collapsed')) {
-            ctx.currentProcessGroup.classList.remove('is-collapsed');
-            var smoothTop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
-            if (smoothTop) smoothTop.setAttribute('aria-expanded', 'true');
-        }
-        var smoothProcessBody = getProcessBodyElForCurrentRun();
-        var releaseMainFollow = function (port) {
-            if (port === chatContainer) streamChatNearBottom = false;
-            else streamProcNearBottom = false;
-            liveAutoFollow = false;
-            smoothFollowController.cancel(port === chatContainer ? smoothProcessBody : chatContainer);
-        };
-        if (smoothProcessBody) {
-            smoothFollowController.request(smoothProcessBody, {
-                onUnpin: releaseMainFollow,
-            });
-        }
-        if (chatContainer) {
-            smoothFollowController.request(chatContainer, {
-                onUnpin: releaseMainFollow,
-            });
-        }
-        if (!streamScrollFollowRaf) {
-            streamScrollFollowRaf = requestAnimationFrame(function () {
-                streamScrollFollowRaf = 0;
-                refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');
-                refreshLiveAutoFollowPins();
-            });
-        }
-        return;
-    }
-    if (streamScrollFollowRaf) return;
-    streamScrollFollowRaf = requestAnimationFrame(function () {
-        streamScrollFollowRaf = 0;
-        if (!liveAutoFollow) return;
-        if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
-            if (ctx.currentProcessGroup.classList.contains('is-collapsed')) {
-                ctx.currentProcessGroup.classList.remove('is-collapsed');
-                const topN = ctx.currentProcessGroup.querySelector('.process-aggregate-top');
-                if (topN) topN.setAttribute('aria-expanded', 'true');
-            }
-        }
-        scrollProcessBodyToBottom(ctx, runSessionId);
-        scrollChatToBottomIfFollow(runSessionId, {});
-        refreshLiveAutoFollowPins();
-    });
-}
-
-/** Finish without a long easing tail once no more stream content can arrive. */
-function finishStreamScrollIfFollow(ctx, runSessionId) {
-    if (isSmoothStreamActive()) {
-        if (shouldGateScrollByRunSession(ctx, runSessionId)) return;
-        if (!liveAutoFollow) return;
-        var processBody = getProcessBodyElForCurrentRun();
-        if (processBody) {
-            settleSmoothTraceHeightAnimations(processBody);
-            smoothFollowController.snapToBottom(processBody);
-        }
-        if (chatContainer) smoothFollowController.snapToBottom(chatContainer);
-        return;
-    }
-    scrollProcessBodyToBottom(ctx, runSessionId);
-    scrollChatToBottomIfFollow(runSessionId, {});
-}
-
-/** Final answer cards keep the legacy snap and must not race an active glide. */
-function cancelSmoothStreamFollowForFinal(ctx) {
-    if (!isSmoothStreamActive()) return;
-    if (ctx && ctx.stream === getVisibleChatStream()) {
-        smoothFollowController.cancel(chatContainer);
-    }
-    var processBody = null;
-    if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {
-        processBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
-    }
-    if (processBody) smoothFollowController.cancel(processBody);
-}
-
-/** Keep the native history-load animation isolated from the live follower. */
-function cancelSmoothStreamFollowForHistoryLoad() {
-    smoothFollowController.cancel(chatContainer);
-    var processBody = getProcessBodyElForCurrentRun();
-    if (processBody) smoothFollowController.cancel(processBody);
-}
-
-/** The shared viewport must not retain the previous session's animation. */
-function cancelSmoothStreamFollowForSessionSwitch() {
-    if (typeof streamScrollFollowRaf !== 'undefined' && streamScrollFollowRaf) {
-        cancelAnimationFrame(streamScrollFollowRaf);
-        streamScrollFollowRaf = 0;
-    }
-    smoothFollowController.reset(chatContainer);
-    var stream = getVisibleChatStream();
-    if (typeof cancelHistoryPrependViewport === 'function') cancelHistoryPrependViewport(stream);
-    if (stream) stream.querySelectorAll('.process-aggregate-body').forEach(function (port) {
-        smoothFollowController.reset(port);
-    });
-}
-
-function getVisibleChatStream() { return document.getElementById('chat-stream'); }
-
-function ensureVisibleChatStreamSlot() {
-    if (getVisibleChatStream() || !chatContainer) return;
-    const ns = document.createElement('div');
-    ns.className = 'chat-stream';
-    ns.id = 'chat-stream';
-    ns.setAttribute('aria-label', '消息');
-    chatContainer.appendChild(ns);
-}
-
-function emptyChatStreamKeepingStrip(streamEl) {
-    if (!streamEl) return;
-    if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(streamEl);
-    const strip = streamEl.querySelector('#history-load-sentinel');
-    Array.from(streamEl.children).forEach(function (ch) {
-        if (strip && ch === strip) return;
-        ch.remove();
-    });
-}
-
-function persistHistoryPagingToStream(streamEl, paging) {
-    if (!streamEl) return;
-    if (!paging || paging.sessionId !== currentSessionId) {
-        delete streamEl.dataset.historyPaging;
-        return;
-    }
-    streamEl.dataset.historyPaging = JSON.stringify({
-        sessionId: paging.sessionId,
-        total: Number(paging.total) || 0,
-        range_start: Number(paging.range_start) || 0,
-        range_end: Number(paging.range_end) || 0,
-        has_older: !!paging.has_older,
-        has_newer: !!paging.has_newer,
-        manual_history: !!paging.manual_history,
-        event_limited_tail: !!paging.event_limited_tail,
-    });
-}
-
-function restoreHistoryPagingFromStream(streamEl) {
-    if (!streamEl || !streamEl.dataset.historyPaging) return null;
-    try {
-        var raw = JSON.parse(streamEl.dataset.historyPaging);
-        if (!raw || raw.sessionId !== currentSessionId) return null;
-        return {
-            sessionId: raw.sessionId,
-            total: Number(raw.total) || 0,
-            range_start: Number(raw.range_start) || 0,
-            range_end: Number(raw.range_end) || 0,
-            has_older: !!raw.has_older,
-            has_newer: !!raw.has_newer,
-            manual_history: !!raw.manual_history,
-            event_limited_tail: !!raw.event_limited_tail,
-        };
-    } catch (_e) {
-        delete streamEl.dataset.historyPaging;
-        return null;
-    }
-}
-
-function setSessionHistoryPaging(paging) {
-    sessionHistoryPaging = paging || null;
-    persistHistoryPagingToStream(getVisibleChatStream(), sessionHistoryPaging);
-    updateHistorySentinelVisibility();
-}
-
-function ensureHistorySentinel(streamEl) {
-    if (!streamEl) return null;
-    var el = streamEl.querySelector('#history-load-sentinel');
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'history-load-sentinel';
-    el.className = 'history-load-sentinel';
-    el.hidden = true;
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'history-load-older-btn';
-    btn.textContent = '加载更早记录';
-    btn.addEventListener('click', function () { loadOlderHistoryChunk(); });
-    el.appendChild(btn);
-    streamEl.insertBefore(el, streamEl.firstChild);
-    return el;
-}
-
-var latestHistoryTailRestoreBySession = Object.create(null);
-
-function getSessionHistoryPaging(sessionId) {
-    var sid = String(sessionId || '');
-    if (!sid) return null;
-    var paging = sessionHistoryPaging;
-    var stream = getVisibleChatStream();
-    if ((!paging || paging.sessionId !== sid) && stream) {
-        paging = restoreHistoryPagingFromStream(stream);
-        if (paging) sessionHistoryPaging = paging;
-    }
-    return paging && paging.sessionId === sid ? paging : null;
-}
-
-function sessionHasLiveHistoryOwner(sessionId) {
-    var sid = String(sessionId || '');
-    return !!sid && (
-        isSessionRunning(sid)
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sid))
-    );
-}
-
-async function refreshSessionLiveHistoryOwner(sessionId) {
-    var sid = String(sessionId || '');
-    if (!sid || sessionHasLiveHistoryOwner(sid)) return !!sid;
-    if (typeof fetchSessionStreamActiveMap !== 'function') return sessionHasLiveHistoryOwner(sid);
-    var activeMap = await fetchSessionStreamActiveMap();
-    if (activeMap && Object.prototype.hasOwnProperty.call(activeMap, sid)) {
-        if (typeof applyServerStreamActiveMap === 'function') applyServerStreamActiveMap(activeMap);
-        if (activeMap[sid]) return true;
-    }
-    return sessionHasLiveHistoryOwner(sid);
-}
-
-async function ensureLatestHistoryTailForLiveAppend(sessionId) {
-    var sid = String(sessionId || '');
-    if (!sid || sid !== currentSessionId) return true;
-    var paging = getSessionHistoryPaging(sid);
-    if (!paging || !paging.has_newer) return true;
-    if (latestHistoryTailRestoreBySession[sid]) return latestHistoryTailRestoreBySession[sid];
-    var restore = (async function () {
-        var loaded = await loadSessionMessages(sid, 'bottom', {
-            useSnapshot: false,
-            preloadOlderIfShort: false,
-        });
-        if (sid !== currentSessionId) return true;
-        var current = getSessionHistoryPaging(sid);
-        return loaded === true && !(current && current.has_newer);
-    })();
-    latestHistoryTailRestoreBySession[sid] = restore;
-    try {
-        return await restore;
-    } finally {
-        if (latestHistoryTailRestoreBySession[sid] === restore) {
-            delete latestHistoryTailRestoreBySession[sid];
-        }
-    }
-}
-
-var HISTORY_AUTO_LOAD_TOP_PX = 32;
-
-/** 当前轮首屏保持轻量；读者主动翻阅后，允许继续自动向前分页。 */
-function enableHistoryAutoLoadForReader() {
-    var stream = getVisibleChatStream();
-    if (stream) stream._historyAutoLoadEnabled = true;
-}
-
-/** 滚到历史顶部附近时自动向前分页；按钮仍保留为加载状态提示和手动兜底。 */
-function maybeAutoLoadOlderHistory() {
-    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;
-    if (typeof sessionStore !== 'undefined' && sessionStore.ui && sessionStore.ui.loadingMessages) return;
-    var stream = getVisibleChatStream();
-    if (!stream || stream.hidden) return;
-    var paging = getSessionHistoryPaging(currentSessionId);
-    if (paging && paging.event_limited_tail && !stream._historyAutoLoadEnabled) return;
-    if (paging && paging.manual_history && !stream._historyAutoLoadEnabled
-        && sessionHasLiveHistoryOwner(currentSessionId)) return;
-    if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;
-    if (!chatContainer || chatContainer.scrollTop > HISTORY_AUTO_LOAD_TOP_PX) return;
-    void loadOlderHistoryChunk({ trigger: 'scroll-top' });
-}
-
-function updateHistorySentinelVisibility() {
-    var strip = document.getElementById('history-load-sentinel');
-    var btn = strip && strip.querySelector('.history-load-older-btn');
-    var ph = sessionHistoryPaging;
-    if (!strip || !btn) return;
-    if (!ph || !ph.has_older || ph.sessionId !== currentSessionId) {
-        strip.hidden = true;
-        btn.disabled = false;
-        btn.textContent = '加载更早记录';
-        return;
-    }
-    strip.hidden = false;
-    btn.disabled = historyOlderLoading;
-    btn.textContent = historyOlderLoading ? '加载中…' : '加载更早记录';
-}
-
-function resetSessionHistoryPaging() {
-    setSessionHistoryPaging(null);
-    var stream = getVisibleChatStream();
-    cancelHistoryPrependViewport(stream);
-    if (stream) {
-        delete stream._historyOlderLoadToken;
-        delete stream._historyAutoLoadEnabled;
-    }
-    historyOlderLoading = false;
-    updateHistorySentinelVisibility();
-}
-
-function cancelHistoryPrependViewport(stream) {
-    if (stream && stream._historyPrependViewport) stream._historyPrependViewport.stop();
-}
-
-/** 在插入前记录可见元素。总高度差会把下方的增长也算进去，元素锚点不会。 */
-function captureHistoryPrependViewport(stream, port, sid) {
-    if (!port || stream.parentNode !== port) return null;
-    cancelHistoryPrependViewport(stream);
-    var viewport = port.getBoundingClientRect();
-    var anchors = [];
-    function remember(node) {
-        var rect = node.getBoundingClientRect();
-        if (rect.height > 0 && rect.bottom > viewport.top) {
-            anchors.push({ node: node, offset: rect.top - viewport.top });
-            return true;
-        }
-        return false;
-    }
-    var children = Array.from(stream.children);
-    for (var i = 0; i < children.length && anchors.length < 3; i += 1) {
-        var child = children[i];
-        if (child.id === 'history-load-sentinel' || !remember(child)) continue;
-        // 相邻过程框合并可能移除外框，但其中的执行行会保留。
-        if (child.classList.contains('process-aggregate')) {
-            var rows = child.querySelectorAll('.feed-item');
-            for (var j = 0; j < rows.length; j += 1) {
-                if (remember(rows[j])) break;
-            }
-        }
-    }
-    return { stream: stream, port: port, sessionId: sid, anchors: anchors,
-        top: port.scrollTop, height: port.scrollHeight, lastTop: port.scrollTop };
-}
-
-function restoreHistoryPrependViewport(state) {
-    if (!state || state.sessionId !== currentSessionId
-        || state.stream !== getVisibleChatStream() || state.stream.parentNode !== state.port
-        || (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())) return false;
-    var port = state.port;
-    var delta = null;
-    for (var i = 0; i < state.anchors.length; i += 1) {
-        var anchor = state.anchors[i];
-        if (!state.stream.contains(anchor.node)) continue;
-        delta = anchor.node.getBoundingClientRect().top - port.getBoundingClientRect().top - anchor.offset;
-        break;
-    }
-    if (delta == null) delta = state.top + port.scrollHeight - state.height - port.scrollTop;
-    if (Math.abs(delta) > 0.5) setScrollTopImmediate(port, port.scrollTop + delta);
-    state.lastTop = port.scrollTop;
-    return true;
-}
-
-/** 补偿下一帧折叠测量和迟到的图片；读者再次操作或切换会话时立即退出。 */
-function settleHistoryPrependViewport(state) {
-    if (!state || !restoreHistoryPrependViewport(state)) return;
-    var stream = state.stream, port = state.port;
-    var observer = null, timer = 0, raf = 0, stopped = false;
-    var inputs = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
-    function stop() {
-        if (stopped) return;
-        stopped = true;
-        if (observer) observer.disconnect();
-        if (timer) clearTimeout(timer);
-        if (raf) cancelAnimationFrame(raf);
-        inputs.forEach(function (type) { port.removeEventListener(type, stop, true); });
-        port.removeEventListener('scroll', onScroll);
-        stream.removeEventListener('load', correct, true);
-        if (stream._historyPrependViewport === state) delete stream._historyPrependViewport;
-    }
-    function correct() {
-        if (stopped) return;
-        if (!restoreHistoryPrependViewport(state)) stop();
-    }
-    function onScroll() {
-        if (Math.abs(port.scrollTop - state.lastTop) > 1) stop();
-    }
-    state.stop = stop;
-    stream._historyPrependViewport = state;
-    inputs.forEach(function (type) { port.addEventListener(type, stop, { capture: true, passive: true }); });
-    port.addEventListener('scroll', onScroll, { passive: true });
-    stream.addEventListener('load', correct, true);
-    if (typeof ResizeObserver === 'function') {
-        observer = new ResizeObserver(correct);
-        observer.observe(stream);
-        observer.observe(port);
-    }
-    raf = requestAnimationFrame(function () {
-        correct();
-        if (!stopped) raf = requestAnimationFrame(correct);
-    });
-    timer = setTimeout(stop, 3000);
-}
-
-async function loadOlderHistoryChunk(opts) {
-    opts = opts || {};
-    var sid = currentSessionId;
-    var stream = getVisibleChatStream();
-    var ph = sessionHistoryPaging;
-    if ((!ph || ph.sessionId !== sid) && stream) {
-        ph = restoreHistoryPagingFromStream(stream);
-        if (ph) sessionHistoryPaging = ph;
-    }
-    if (!sid || !stream || !ph || ph.sessionId !== sid || !ph.has_older || historyOlderLoading) return;
-    historyOlderLoading = true;
-    var historyLoadToken = {};
-    stream._historyOlderLoadToken = historyLoadToken;
-    var prevReplaying = null;
-    updateHistorySentinelVisibility();
-    var cc = chatContainer;
-    var prependViewport = null;
-    var loadedOlder = false;
-    try {
-        var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));
-        var boundedTail = ph.event_limited_tail && !opts.turns;
-        var url = '/sessions/' + encodeURIComponent(sid)
-            + (boundedTail ? '/messages?limit=200' : '/messages?turns=' + encodeURIComponent(String(pageTurns)))
-            + '&before_index=' + ph.range_start
-            + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
-        var response = await fetchWithTimeout(url, {}, 30000);
-        var data = await response.json();
-        if (!response.ok || !data || typeof data !== 'object') return;
-        // 自动加载请求返回前可能已切换会话，旧页不能插入新的可见消息流。
-        if (sid !== currentSessionId || stream !== getVisibleChatStream()
-            || stream._historyOlderLoadToken !== historyLoadToken) return;
-        prevReplaying = replayingMessages;
-        replayingMessages = true;
-        var events = data.events;
-        if (!Array.isArray(events) || events.length === 0) {
-            setSessionHistoryPaging(Object.assign({}, ph, { has_older: !!data.has_older }));
-            return;
-        }
-        ensureHistorySentinel(stream);
-        var frag = document.createDocumentFragment();
-        var tmpCtx = newDomContext(frag);
-        tmpCtx.lastUserEventIndex = -1;
-        var rs = typeof data.range_start === 'number' ? data.range_start : 0;
-        for (var i = 0; i < events.length; i += 1) {
-            var ev = events[i];
-            if (ev && typeof ev === 'object' && ev.type) {
-                reduceAndRenderMessageEvent(tmpCtx, ev, {
-                    sessionId: sid,
-                    eventIndex: rs + i,
-                    source: 'history-older',
-                });
-            }
-        }
-        var sen = stream && stream.querySelector('#history-load-sentinel');
-        if (stream && frag.childNodes.length) {
-            // fetch 期间用户仍可能滚动，所以必须在真正插入前才记录视口。
-            prependViewport = captureHistoryPrependViewport(stream, cc, sid);
-            stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);
-            // The fragment was rendered with its own index. Rebuild the target
-            // stream once on the next lookup to include the prepended rows.
-            if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(stream);
-        }
-        loadedOlder = true;
-        if (typeof mergeAdjacentExecutionGroups === 'function') mergeAdjacentExecutionGroups(stream);
-        setSessionHistoryPaging({
-            sessionId: sid,
-            total: typeof data.total === 'number' ? data.total : ph.total,
-            range_start: typeof data.range_start === 'number' ? data.range_start : ph.range_start,
-            range_end: ph.range_end,
-            has_older: !!data.has_older,
-            has_newer: !!ph.has_newer,
-            manual_history: false,
-            event_limited_tail: !!boundedTail && !!data.has_older,
-        });
-    } catch (e) {
-        console.error('加载更早消息失败:', e);
-    } finally {
-        if (stream._historyOlderLoadToken === historyLoadToken) {
-            delete stream._historyOlderLoadToken;
-            if (sid === currentSessionId && stream === getVisibleChatStream()) {
-                historyOlderLoading = false;
-                updateHistorySentinelVisibility();
-            }
-        }
-        if (loadedOlder) {
-            bindExistingLogs(stream);
-            if (!opts.keepTocStable) rebuildToc();
-            scheduleTocActiveUpdate();
-        }
-        settleHistoryPrependViewport(prependViewport);
-        if (prevReplaying !== null) replayingMessages = prevReplaying;
-    }
-}
-
-function insertNewEmptyChatStream() { ensureVisibleChatStreamSlot(); }
-
-async function loadHistoryWindowAroundEventIndex(sessionId, eventIndex, opts) {
-    opts = opts || {};
-    var sid = String(sessionId || '');
-    var ei = Number(eventIndex);
-    if (!sid || !Number.isFinite(ei)) return false;
-    // A running session's ctx.stream is the append target for live SSE. Never
-    // replace that DOM with an isolated history window or subsequent output
-    // will be inserted in the middle of history. Older pages are prepended by
-    // scrollToUserTurnOrLoadOlder instead.
-    if (sessionHasLiveHistoryOwner(sid)) return false;
-    var prevReplaying = replayingMessages;
-    try {
-        var turns = Math.max(1, Math.min(Number(opts.turns) || 50, 50));
-        var url = '/sessions/' + encodeURIComponent(sid)
-            + '/messages?turns=' + encodeURIComponent(String(turns))
-            + '&target_index=' + encodeURIComponent(String(Math.floor(ei)));
-        var response = await fetch(url);
-        var data = await response.json().catch(function () { return null; });
-        if (!response.ok || !data || typeof data !== 'object' || !Array.isArray(data.events)) return false;
-        if (sid !== currentSessionId) return false;
-        // The run may have started while the target window request was in
-        // flight, or the local stream-active snapshot may have been stale.
-        // Revalidate against the server before mutating the live append owner.
-        if (await refreshSessionLiveHistoryOwner(sid)) return false;
-        if (sid !== currentSessionId) return false;
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        var stream = getVisibleChatStream();
-        if (!stream) return false;
-        emptyChatStreamKeepingStrip(stream);
-        var total = Number(data.total) || 0;
-        var rangeEnd = Number(data.range_end) || 0;
-        var pageMeta = {
-            total: total,
-            range_start: Number(data.range_start) || 0,
-            range_end: rangeEnd,
-            has_older: !!data.has_older,
-            has_newer: data.has_newer == null ? rangeEnd < total : !!data.has_newer,
-        };
-        beginMessageReplay(sid, pageMeta);
-        setSessionHistoryPaging({
-            sessionId: sid,
-            total: pageMeta.total,
-            range_start: pageMeta.range_start,
-            range_end: pageMeta.range_end,
-            has_older: !!pageMeta.has_older,
-            has_newer: !!pageMeta.has_newer,
-        });
-        ensureHistorySentinel(stream);
-        var ctx = newDomContext(stream);
-        ctx.lastUserEventIndex = -1;
-        replayingMessages = true;
-        for (var i = 0; i < data.events.length; i += 1) {
-            var ev = data.events[i];
-            if (ev && typeof ev === 'object' && ev.type) {
-                reduceAndRenderMessageEvent(ctx, ev, {
-                    sessionId: sid,
-                    eventIndex: pageMeta.range_start + i,
-                    source: 'history-target',
-                });
-            }
-        }
-        replayingMessages = prevReplaying;
-        bindExistingLogs(stream);
-        rebuildToc();
-        updateHistorySentinelVisibility();
-        return true;
-    } catch (e) {
-        replayingMessages = prevReplaying;
-        console.error('load target history window failed:', e);
-        return false;
-    }
-}
-
-const SESSION_STREAM_CACHE_LIMIT = 6;
-const cachedSessionStreamOrder = [];
-
-function cssEscapeIdent(value) {
-    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
-    return String(value || '').replace(/["\\\\]/g, '\\\\$&');
-}
-
-function cacheOrderTouch(sessionId) {
-    var sid = String(sessionId || '');
-    if (!sid) return;
-    var idx = cachedSessionStreamOrder.indexOf(sid);
-    if (idx >= 0) cachedSessionStreamOrder.splice(idx, 1);
-    cachedSessionStreamOrder.push(sid);
-}
-
-function discardCachedSessionStream(sessionId) {
-    var sid = String(sessionId || '');
-    if (!sid || !offscreenRoot) return;
-    var cached = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');
-    if (cached && cached.parentNode) cached.remove();
-    var idx = cachedSessionStreamOrder.indexOf(sid);
-    if (idx >= 0) cachedSessionStreamOrder.splice(idx, 1);
-}
-
-function trimCachedSessionStreams() {
-    if (!offscreenRoot) return;
-    while (cachedSessionStreamOrder.length > SESSION_STREAM_CACHE_LIMIT) {
-        var sid = cachedSessionStreamOrder.shift();
-        var cached = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');
-        if (cached && cached.parentNode) cached.remove();
-    }
-}
-
-function isCompleteLocalRunStream(sessionId, stream) {
-    var run = getSessionRunState(sessionId);
-    return !!(run && run.ctx && run.ctx.stream === stream
-        && stream && stream.dataset
-        && stream.dataset.partialBackgroundRun !== '1'
-        && stream.dataset.sessionLoadFailed !== '1'
-        // An observer stream is complete only after durable history hydration.
-        // A local submitted run already contains its optimistic first turn.
-        && (stream.dataset.sessionLoadOk === '1' || !run.reattached));
-}
-
-function stashVisibleStreamForSession(sessionId, opts) {
-    opts = opts || {};
-    var sid = String(sessionId || '');
-    if (!sid || !offscreenRoot) return false;
-    const el = getVisibleChatStream();
-    if (!el || !el.parentNode) return false;
-    /* A stream owned by this tab's active run is already the authoritative,
-       gap-free UI projection even when no history request was needed (notably
-       a newly-created session).  Certify it before moving it offscreen so a
-       same-page switch can restore the live DOM instead of fetching snapshot. */
-    if (opts.certifyLocalRun && isCompleteLocalRunStream(sid, el)) {
-        el.dataset.sessionLoadOk = '1';
-        delete el.dataset.sessionLoading;
-    }
-    if (!opts.force && el.dataset.sessionLoadOk !== '1') return false;
-    if (el.dataset.sessionLoadFailed === '1') return false;
-    var leavingRun = getSessionRunState(sid);
-    if (leavingRun && leavingRun.ctx && leavingRun.ctx.stream === el) {
-        if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(el);
-        flushLlmDeltaText(leavingRun.ctx);
-    }
-    discardCachedSessionStream(sid);
-    el.remove();
-    el.removeAttribute('id');
-    el.removeAttribute('aria-label');
-    el.classList.add('is-offscreen');
-    el.setAttribute('data-cache-session-id', sid);
-    offscreenRoot.appendChild(el);
-    cacheOrderTouch(sid);
-    trimCachedSessionStreams();
-    return true;
-}
-
-function prepareStashLeaving(leavingId) {
-    if (!leavingId) return;
-    if (isSessionRunning(leavingId)) {
-        stashVisibleStreamForSession(leavingId, { force: true, certifyLocalRun: true });
-        insertNewEmptyChatStream();
-    } else {
-        if (!stashVisibleStreamForSession(leavingId)) ensureVisibleChatStreamSlot();
-        insertNewEmptyChatStream();
-    }
-}
-
-function restoreStreamForRunningSession(enteringId) {
-    const run = getSessionRunState(enteringId);
-    if (!run || !run.ctx || !run.ctx.stream) return false;
-    const st = run.ctx.stream;
-    if (!st.parentNode) return false;
-    if (st.parentNode === chatContainer) return st.id === 'chat-stream';
-    if (offscreenRoot && st.parentNode !== offscreenRoot) return false;
-    const completeLocalRun = isCompleteLocalRunStream(enteringId, st);
-    if (st.dataset && (st.dataset.partialBackgroundRun === '1'
-        || (st.dataset.sessionLoadOk !== '1' && !completeLocalRun))) {
-        abortSessionRun(enteringId, 'reattach-incomplete-background');
-        if (st.parentNode) st.remove();
-        return false;
-    }
-    if (completeLocalRun && st.dataset.sessionLoadOk !== '1') {
-        st.dataset.sessionLoadOk = '1';
-        delete st.dataset.sessionLoading;
-    }
-    const cur = getVisibleChatStream();
-    if (cur && cur.parentNode === chatContainer) cur.remove();
-    st.classList.remove('is-offscreen');
-    st.removeAttribute('data-cache-session-id');
-    st.id = 'chat-stream';
-    st.setAttribute('aria-label', '消息');
-    chatContainer.appendChild(st);
-    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(st);
-    cacheOrderTouch(enteringId);
-    var restoredPaging = restoreHistoryPagingFromStream(st);
-    if (restoredPaging) sessionHistoryPaging = restoredPaging;
-    updateHistorySentinelVisibility();
-    bindExistingLogs(st);
-    return true;
-}
-
-function restoreCachedSessionStream(enteringId) {
-    var sid = String(enteringId || '');
-    if (!sid || !offscreenRoot) return false;
-    var st = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');
-    if (!st || !st.parentNode) return false;
-    if (st.dataset.sessionLoadOk !== '1' || st.dataset.sessionLoadFailed === '1') {
-        discardCachedSessionStream(sid);
-        return false;
-    }
-    const cur = getVisibleChatStream();
-    if (cur && cur.parentNode === chatContainer) cur.remove();
-    st.classList.remove('is-offscreen');
-    st.removeAttribute('data-cache-session-id');
-    st.id = 'chat-stream';
-    st.setAttribute('aria-label', '消息');
-    chatContainer.appendChild(st);
-    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(st);
-    cacheOrderTouch(sid);
-    var restoredPaging = restoreHistoryPagingFromStream(st);
-    if (restoredPaging) sessionHistoryPaging = restoredPaging;
-    updateHistorySentinelVisibility();
-    bindExistingLogs(st);
-    return true;
-}
-
-function scrollCurrentRunningProcessToBottom(sessionId) {
-    if (!sessionId || sessionId !== currentSessionId) return;
-    var run = getSessionRunState(sessionId);
-    var ctx = run && run.ctx;
-    var stream = ctx && ctx.stream && ctx.stream.isConnected ? ctx.stream : getVisibleChatStream();
-    if (!stream) return;
-    var agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-        ? ctx.currentProcessGroup
-        : null;
-    if (!agg) {
-        var runningAggs = stream.querySelectorAll('.process-aggregate.is-running');
-        agg = runningAggs.length ? runningAggs[runningAggs.length - 1] : null;
-    }
-    // A restored server-side run may not yet have rebuilt the local run
-    // context or the is-running class. Its last process block still owns the
-    // newest generated entries, so use it as the authoritative fallback.
-    if (!agg) {
-        var allAggs = stream.querySelectorAll('.process-aggregate');
-        agg = allAggs.length ? allAggs[allAggs.length - 1] : null;
-    }
-    if (!agg) return;
-    if (agg.classList.contains('is-collapsed')) {
-        agg.classList.remove('is-collapsed');
-        var top = agg.querySelector('.process-aggregate-top');
-        if (top) top.setAttribute('aria-expanded', 'true');
-    }
-    var viewports = [
-        agg.querySelector('.process-aggregate-body'),
-        agg.querySelector('.process-aggregate-brief'),
-    ].filter(function (el) { return !!el; });
-    function pinBottom() {
-        viewports.forEach(function (el) {
-            setScrollTopImmediate(el, el.scrollHeight);
-        });
-    }
-    requestAnimationFrame(function () {
-        pinBottom();
-        requestAnimationFrame(pinBottom);
-    });
-}
-
-function restoreCachedSessionScrollPosition(sessionId) {
-    if (!chatContainer || !sessionId) return;
-    if (sessionId !== currentSessionId) return;
-    var restoreEpoch = switchSessionEpoch;
-    var running = isSessionRunning(sessionId)
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));
-    var saved = (typeof getSavedScrollPosition === 'function') ? getSavedScrollPosition(sessionId) : null;
-    if (running) {
-        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-        scrollCurrentRunningProcessToBottom(sessionId);
-        streamChatNearBottom = true;
-        streamProcNearBottom = true;
-        liveAutoFollow = true;
-    } else if (saved !== null && Number.isFinite(Number(saved))) {
-        setScrollTopImmediate(chatContainer, Number(saved));
-    } else {
-        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-    }
-    refreshLiveAutoFollowPins();
-    scheduleTocActiveUpdate();
-    requestAnimationFrame(function () {
-        if (sessionId !== currentSessionId || restoreEpoch !== switchSessionEpoch) return;
-        if (running) {
-            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-            scrollCurrentRunningProcessToBottom(sessionId);
-        }
-        else if (saved !== null && Number.isFinite(Number(saved))) setScrollTopImmediate(chatContainer, Number(saved));
-        refreshLiveAutoFollowPins();
-        scheduleTocActiveUpdate();
-    });
-}
-
-function markVisibleSessionStreamLoadState(sessionId, state) {
-    var stream = getVisibleChatStream();
-    if (!stream) return;
-    stream.dataset.sessionId = String(sessionId || '');
-    if (state === 'ok') {
-        stream.dataset.sessionLoadOk = '1';
-        delete stream.dataset.sessionLoadFailed;
-        delete stream.dataset.sessionLoading;
-    } else if (state === 'failed') {
-        stream.dataset.sessionLoadFailed = '1';
-        delete stream.dataset.sessionLoadOk;
-        delete stream.dataset.sessionLoading;
-        discardCachedSessionStream(sessionId);
-    } else if (state === 'loading') {
-        stream.dataset.sessionLoading = '1';
-        delete stream.dataset.sessionLoadOk;
-        delete stream.dataset.sessionLoadFailed;
-    }
-}
-
-function appendLogVisible(msg, type) {
-    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-    const c = newDomContext(getVisibleChatStream());
-    appendLog(c, msg, type, currentSessionId);
-}
-
-function newLlmState() {
-    return {
-        llmStreamReasoningIter: null,
-        llmStreamResponseIter: null,
-        llmStreamReasoningScroller: null,
-        llmStreamResponseScroller: null,
-        llmDeltaLastSeq: null,
-        llmPendingReasoningDelta: '',
-        llmPendingResponseDelta: '',
-        llmDeltaFlushRaf: 0,
-        llmRevealLastTs: 0,
-        llmThinkTagMode: 'response',
-        llmThinkTagCarry: '',
-        llmThinkTagAllowLeading: true,
-    };
-}
-
-function newDomContext(streamEl) {
-    return {
-        stream: streamEl,
-        currentProcessGroup: null,
-        lastUserEventIndex: -1,
-        progressScrollers: {},
-        progressStream: {},
-        keyContextStreamFilter: { phase: 'seek', carry: '' },
-        runStartedAt: null,
-        reactGeneration: 0,
-        _seenStreamDeltaKeys: new Set(),
-        _toolStreamRenderState: {
-            draftRows: new Map(),
-            rowsById: new Map(),
-            pendingRows: new Map(),
-            flushRaf: 0,
-        },
-        llm: newLlmState(),
-    };
-}
-
-function resetKeyContextStreamFilter(ctx) {
-    if (ctx) ctx.keyContextStreamFilter = { phase: 'seek', carry: '' };
-}
-
-/** 要点流式输出：隐藏 <analysis>…</analysis>，仅展示 <summary> 内正文 */
-function extractKeyContextVisibleDelta(filter, delta) {
-    if (!filter) return String(delta || '');
-    filter.carry += String(delta || '');
-    var out = '';
-    var tagTail = 24;
-    while (filter.carry.length > 0) {
-        var lower = filter.carry.toLowerCase();
-        if (filter.phase === 'seek') {
-            var ai = lower.indexOf('<analysis');
-            var si = lower.indexOf('<summary');
-            if (ai >= 0 && (si < 0 || ai < si)) {
-                if (ai > 0) out += filter.carry.slice(0, ai);
-                filter.carry = filter.carry.slice(ai);
-                filter.phase = 'in_analysis';
-                continue;
-            }
-            if (si >= 0) {
-                if (si > 0) out += filter.carry.slice(0, si);
-                filter.carry = filter.carry.slice(si);
-                filter.phase = 'in_summary';
-                continue;
-            }
-            if (filter.carry.length > tagTail) {
-                var safe = filter.carry.length - tagTail;
-                out += filter.carry.slice(0, safe);
-                filter.carry = filter.carry.slice(safe);
-            }
-            break;
-        }
-        if (filter.phase === 'in_analysis') {
-            var ae = lower.indexOf('</analysis>');
-            if (ae >= 0) {
-                var aClose = filter.carry.slice(ae).match(/^<\\/analysis\\s*>/i);
-                var aLen = aClose ? aClose[0].length : 11;
-                filter.carry = filter.carry.slice(ae + aLen);
-                filter.phase = 'seek';
-                continue;
-            }
-            filter.carry = '';
-            break;
-        }
-        if (filter.phase === 'in_summary') {
-            var se = lower.indexOf('</summary>');
-            var chunk = se >= 0 ? filter.carry.slice(0, se) : filter.carry;
-            chunk = chunk.replace(/^<summary[^>]*>\\s*/i, '');
-            out += chunk;
-            if (se >= 0) {
-                var sClose = filter.carry.slice(se).match(/^<\\/summary\\s*>/i);
-                var sLen = sClose ? sClose[0].length : 10;
-                filter.carry = filter.carry.slice(se + sLen);
-                filter.phase = 'done';
-            } else {
-                filter.carry = '';
-            }
-            break;
-        }
-        if (filter.phase === 'done') {
-            filter.carry = '';
-            break;
-        }
-        break;
-    }
-    return out;
-}
-
-function appendKeyContextStreamDelta(ctx, delta, runSessionId, opts) {
-    if (!ctx || !delta) return;
-    if (!ctx.keyContextStreamFilter || (opts && opts.snapshot)) resetKeyContextStreamFilter(ctx);
-    var vis = extractKeyContextVisibleDelta(ctx.keyContextStreamFilter, delta);
-    if (vis) appendProgressStreamDelta(ctx, vis, 'key-context', runSessionId, opts);
-}
-
-function isSessionRunning(sessionId) {
-    return selectIsSessionRunning(sessionId);
-}
-
-function syncDisconnectedProcessGroups() {
-    sessionStore.runsBySession.forEach(function (run, sid) {
-        const c = run && run.ctx;
-        if (c && c.currentProcessGroup && !c.currentProcessGroup.isConnected) c.currentProcessGroup = null;
-    });
-}
-
-function finalizeLlmStreamChunks(ctx) {
-    if (ctx && typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(ctx.stream);
-    if (!ctx) return;
-    flushLlmDeltaText(ctx);
-    queryFeedChunksInCtx(ctx, '.feed-chunk.is-streaming').forEach(function (ch) {
-        ch.classList.remove('is-streaming');
-        var row = ch.closest ? ch.closest('.feed-item') : null;
-        if (row && row.classList.contains('feed--llm')) autoCollapseLlmReasoningRow(row);
-        scheduleFeedChunkOverflowRefresh(ch);
-    });
-    if (ctx.llm) {
-        const l = ctx.llm;
-        l.llmStreamReasoningIter = null;
-        l.llmStreamResponseIter = null;
-        l.llmStreamReasoningScroller = null;
-        l.llmStreamResponseScroller = null;
-        l.llmDeltaLastSeq = null;
-        l.llmRevealLastTs = 0;
-        l.llmThinkTagMode = 'response';
-        l.llmThinkTagCarry = '';
-        l.llmThinkTagAllowLeading = true;
-    }
-    var bodies = [];
-    if (ctx.currentProcessGroup) {
-        var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
-        if (mainBody) bodies.push(mainBody);
-    }
-    bodies.forEach(function (body) {
-        body.querySelectorAll('.feed-item.feed--llm, .feed-item.feed--llm2').forEach(function (el) {
-            var sc = el.querySelector('.feed-chunk-scroller');
-            var ch = el.querySelector('.feed-chunk');
-            if (sc) {
-                if (!sc._llmTextNode || sc._llmTextNode !== sc.firstChild
-                    || sc._llmRenderedText !== sc.textContent) {
-                    // 已经通过增量写入的节点保留原样，只规范化其他来源的首尾空白行。
-                    var norm = trimSurroundingBlankLines(typeof sc._llmRawText === 'string'
-                        ? sc._llmRawText : (sc.textContent || ''));
-                    sc.textContent = norm;
-                    sc._llmTextNode = sc.firstChild;
-                    sc._llmRenderedText = sc.textContent;
-                }
-                if (ch) {
-                    refreshFeedChunkOverflow(ch);
-                    requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });
-                }
-            }
-            if (!getFeedItemText(el).trim()) el.remove();
-        });
-    });
-}
-
-function discardLlmStreamChunks(ctx, ev) {
-    if (!ctx) return;
-    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(ctx.stream);
-    ev = ev || {};
-    if (ev.cleanup_scope === 'none') {
-        finalizeLlmStreamChunks(ctx);
-        return;
-    }
-    if (ctx.llm) {
-        const l = ctx.llm;
-        // Execution rows are durable and survive draft cleanup. Keep all text
-        // already received, then release their animation at the abort boundary.
-        if (l.llmExecutionReveals && l.llmExecutionReveals.size) flushExecutionLlmReveals(ctx, {});
-        if (l.llmDeltaFlushRaf) {
-            cancelAnimationFrame(l.llmDeltaFlushRaf);
-            l.llmDeltaFlushRaf = 0;
-        }
-        l.llmPendingReasoningDelta = '';
-        l.llmPendingResponseDelta = '';
-        l.llmStreamReasoningIter = null;
-        l.llmStreamResponseIter = null;
-        l.llmStreamReasoningScroller = null;
-        l.llmStreamResponseScroller = null;
-        l.llmDeltaLastSeq = null;
-        l.llmRevealLastTs = 0;
-        l.llmThinkTagMode = 'response';
-        l.llmThinkTagCarry = '';
-        l.llmThinkTagAllowLeading = true;
-    }
-    var bodies = [];
-    if (ctx.currentProcessGroup) {
-        var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');
-        if (mainBody) bodies.push(mainBody);
-    }
-    var reactIter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))
-        ? String(Math.max(1, Math.floor(Number(ev.react_iter))))
-        : '';
-    var runId = String((ev && (ev.run_id || ev.runId)) || '');
-    var hasScopedAbort = !!(reactIter || runId || (ev && ev.react_generation != null));
-    var reactGeneration = ev && ev.react_generation != null && Number.isFinite(Number(ev.react_generation))
-        ? String(Math.max(0, Math.floor(Number(ev.react_generation))))
-        : (hasScopedAbort ? String(reactGenerationForContext(ctx)) : null);
-    function matchesAbortScope(el) {
-        if (!el) return false;
-        if (reactIter && String(el.getAttribute('data-react-iter') || '') !== reactIter) return false;
-        if (reactGeneration !== null && String(el.getAttribute('data-react-generation') || '0') !== reactGeneration) return false;
-        var rowRunId = String(el.getAttribute('data-run-id') || '');
-        if (runId && rowRunId && rowRunId !== runId) return false;
-        return true;
-    }
-    bodies.forEach(function (body) {
-        body.querySelectorAll('.feed-item[data-llm-live-row="1"]').forEach(function (el) {
-            if (!matchesAbortScope(el)) return;
-            el.remove();
-        });
-        body.querySelectorAll(
-            '.feed-item.feed--tool[data-tool-draft-key], '
-            + '.feed-item.feed--tool[data-tool-pending="1"]'
-        ).forEach(function (el) {
-            if (matchesAbortScope(el)) el.remove();
-        });
-    });
-}
-
-/** Keep the full source for incremental appends and reconnect snapshot replacement. */
-function writeLlmStreamText(scroller, raw, part) {
-    if (!scroller) return;
-    scroller._llmRawText = String(raw || '');
-    var row = scroller.closest ? scroller.closest('.feed-item') : null;
-    /* 行还在做插入/高度动画（data-smooth-trace-layout-owned）时文字已经流入：动画的
-       裁切高度是「插入瞬间」的快照，继续裁切会把新文字切掉，并在动画结束时整行突然
-       跳高（窄栏实测裁切 289px、释放瞬间单帧跳 440px）。释放动画，让行高跟随内容。 */
-    if (row && row.hasAttribute && row.hasAttribute('data-smooth-trace-layout-owned')
-        && typeof cancelSmoothTraceLayoutAnimation === 'function') {
-        cancelSmoothTraceLayoutAnimation(row);
-    }
-    if (part === 'response' && row) row._processBriefRawText = scroller._llmRawText;
-    var displayed = trimSurroundingBlankLines(scroller._llmRawText);
-    var node = scroller.firstChild;
-    var previous = node && node === scroller._llmTextNode
-        ? scroller._llmRenderedText
-        : (scroller.textContent || '');
-    if (displayed !== previous) {
-        if (node && node === scroller.lastChild && node.nodeType === 3
-            && displayed.indexOf(previous) === 0) {
-            node.appendData(displayed.slice(previous.length));
-            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeAppends');
-        } else {
-            scroller.textContent = displayed;
-            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeReplacements');
-        }
-    }
-    scroller._llmTextNode = scroller.firstChild;
-    scroller._llmRenderedText = displayed;
-}
-
-function appendLlmRevealedText(scroller, segment, part) {
-    var row = scroller.closest ? scroller.closest('.feed-item') : null;
-    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText
-        : (part === 'response' && row && typeof row._processBriefRawText === 'string'
-            ? row._processBriefRawText : (scroller.textContent || ''));
-    writeLlmStreamText(scroller, head + segment, part);
-}
-
-function cancelExecutionLlmReveal(ctx, scroller) {
-    var l = ctx && ctx.llm;
-    if (!l || !l.llmExecutionReveals) return;
-    l.llmExecutionReveals.delete(scroller);
-    if (!l.llmExecutionReveals.size && !l.llmPendingReasoningDelta && !l.llmPendingResponseDelta) {
-        if (l.llmDeltaFlushRaf) cancelAnimationFrame(l.llmDeltaFlushRaf);
-        l.llmDeltaFlushRaf = 0;
-        l.llmRevealLastTs = 0;
-    }
-}
-
-function queueExecutionLlmReveal(ctx, scroller, text, part, sessionId) {
-    var l = ctx.llm;
-    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');
-    var target = String(text || '');
-    if (target === head || target.indexOf(head) !== 0) {
-        // A correction is a replacement, rather than an append to old text.
-        cancelExecutionLlmReveal(ctx, scroller);
-        writeLlmStreamText(scroller, target, part);
-        return;
-    }
-    if (!l.llmExecutionReveals) l.llmExecutionReveals = new Map();
-    // The record owns the complete text. Each row owns only its current reveal
-    // target, so repeated deliveries cannot append the same delta twice.
-    l.llmExecutionReveals.set(scroller, {text: target, part: part});
-    scheduleLlmDeltaFlush(ctx, sessionId);
-}
-
-function queueToolCallLlmReveal(ctx, scroller, tool, argumentsRaw, sessionId) {
-    var name = String(tool || ''), args = String(argumentsRaw || '');
-    var headName = scroller._llmToolName || '', headArgs = scroller._llmToolArgs || '';
-    if ((name === headName && args === headArgs)
-        || name.indexOf(headName) !== 0 || args.indexOf(headArgs) !== 0) {
-        cancelExecutionLlmReveal(ctx, scroller);
-        writeToolCallLlmText(scroller, name, args);
-        return;
-    }
-    var l = ctx.llm;
-    if (!l.llmExecutionReveals) l.llmExecutionReveals = new Map();
-    // Name and arguments are separate append streams. The generated status
-    // footer is presentation only and must never participate in the queue.
-    l.llmExecutionReveals.set(scroller, {part: 'tool', tool: name, argumentsRaw: args});
-    scheduleLlmDeltaFlush(ctx, sessionId);
-}
-
-function flushExecutionLlmReveals(ctx, opts) {
-    var pending = ctx.llm.llmExecutionReveals;
-    if (!pending) return 0;
-    var smooth = opts.smooth === true && isSmoothStreamActive();
-    var revealed = 0;
-    pending.forEach(function (state, scroller) {
-        if (!scroller || scroller.isConnected === false) { pending.delete(scroller); return; }
-        if (state.part === 'tool') {
-            var name = scroller._llmToolName || '', args = scroller._llmToolArgs || '';
-            var nameTail = state.tool.slice(name.length), argsTail = state.argumentsRaw.slice(args.length);
-            var tail = nameTail + argsTail;
-            var take = smooth
-                ? takeSmoothTextPrefix(tail, computeSmoothRevealCount(tail.length, opts.dtMs || 16.67))
-                : {segment: tail, rest: '', count: tail.length};
-            var nameLength = Math.min(nameTail.length, take.segment.length);
-            writeToolCallLlmText(scroller, name + take.segment.slice(0, nameLength),
-                args + take.segment.slice(nameLength));
-            revealed += take.count;
-            if (!take.rest) pending.delete(scroller);
-            return;
-        }
-        var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');
-        if (state.text.indexOf(head) !== 0) {
-            pending.delete(scroller);
-            return;
-        }
-        var tail = state.text.slice(head.length);
-        var take = smooth
-            ? takeSmoothTextPrefix(tail, computeSmoothRevealCount(tail.length, opts.dtMs || 16.67))
-            : {segment: tail, rest: '', count: tail.length};
-        if (take.segment) appendLlmRevealedText(scroller, take.segment, state.part);
-        revealed += take.count;
-        if (!take.rest) pending.delete(scroller);
-    });
-    return revealed;
-}
-
-function flushLlmDeltaText(ctx, opts) {
-    if (!ctx || !ctx.llm) return;
-    opts = opts || {};
-    const l = ctx.llm;
-    if (typeof flushThinkTagCarry === 'function') flushThinkTagCarry(ctx);
-    var smoothCommit = opts.smooth === true && isSmoothStreamActive();
-    if (!smoothCommit && l.llmDeltaFlushRaf) {
-        cancelAnimationFrame(l.llmDeltaFlushRaf);
-        l.llmDeltaFlushRaf = 0;
-    }
-    var revealedChars = 0;
-    if (l.llmPendingReasoningDelta && l.llmStreamReasoningScroller) {
-        var reasoningPending = String(l.llmPendingReasoningDelta || '');
-        var reasoningTake = smoothCommit
-            ? takeSmoothTextPrefix(
-                reasoningPending,
-                computeSmoothRevealCount(reasoningPending.length, opts.dtMs || 16.67)
-            )
-            : { segment: reasoningPending, rest: '', count: reasoningPending.length };
-        appendLlmRevealedText(l.llmStreamReasoningScroller, reasoningTake.segment, 'reasoning');
-        l.llmPendingReasoningDelta = reasoningTake.rest;
-        revealedChars += reasoningTake.count;
-    } else if (l.llmPendingReasoningDelta && !l.llmStreamReasoningScroller && !smoothCommit) {
-        l.llmPendingReasoningDelta = '';
-    }
-    if (l.llmPendingResponseDelta && l.llmStreamResponseScroller) {
-        var responsePending = String(l.llmPendingResponseDelta || '');
-        var responseTake = smoothCommit
-            ? takeSmoothTextPrefix(
-                responsePending,
-                computeSmoothRevealCount(responsePending.length, opts.dtMs || 16.67)
-            )
-            : { segment: responsePending, rest: '', count: responsePending.length };
-        appendLlmRevealedText(l.llmStreamResponseScroller, responseTake.segment, 'response');
-        l.llmPendingResponseDelta = responseTake.rest;
-        revealedChars += responseTake.count;
-    } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {
-        l.llmPendingResponseDelta = '';
-    }
-    if (l.llmExecutionReveals && l.llmExecutionReveals.size) {
-        revealedChars += flushExecutionLlmReveals(ctx, opts);
-    }
-    return revealedChars;
-}
-
-function scheduleLlmDeltaFlush(ctx, runSessionId) {
-    const l = ctx.llm;
-    if (!l || l.llmDeltaFlushRaf) return;
-    l.llmDeltaFlushRaf = requestAnimationFrame(function (now) {
-        l.llmDeltaFlushRaf = 0;
-        var flushStartedAt = performance.now();
-        if (!isSmoothStreamActive()) {
-            flushLlmDeltaText(ctx);
-            followStreamProcessScroll(ctx, runSessionId, 'text');
-            return;
-        }
-        var dtMs = l.llmRevealLastTs > 0
-            ? smoothStreamClamp(now - l.llmRevealLastTs, 1, 120)
-            : SMOOTH_STREAM_CONFIG.referenceFrameMs;
-        if (l.llmRevealLastTs > 0 && typeof uiPerformance !== 'undefined') {
-            uiPerformance.sample(runSessionId, 'stream.frameGap', now - l.llmRevealLastTs);
-        }
-        l.llmRevealLastTs = now;
-        var revealed = flushLlmDeltaText(ctx, { smooth: true, dtMs: dtMs }) || 0;
-        if (typeof uiPerformance !== 'undefined') {
-            uiPerformance.sample(runSessionId, 'stream.flush', performance.now() - flushStartedAt);
-            uiPerformance.count(runSessionId, 'stream.revealedCodePoints', revealed);
-        }
-        followStreamProcessScroll(ctx, runSessionId, 'text');
-        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta
-            || (l.llmExecutionReveals && l.llmExecutionReveals.size)) {
-            scheduleLlmDeltaFlush(ctx, runSessionId);
-        } else {
-            l.llmRevealLastTs = 0;
-        }
-    });
-}
-
-function resetLlmState(ctx) {
-    if (!ctx || !ctx.llm) return;
-    flushLlmDeltaText(ctx);
-    const l = ctx.llm;
-    l.llmStreamReasoningIter = null;
-    l.llmStreamResponseIter = null;
-    l.llmStreamReasoningScroller = null;
-    l.llmStreamResponseScroller = null;
-    l.llmDeltaLastSeq = null;
-    l.llmRevealLastTs = 0;
-    l.llmThinkTagMode = 'response';
-    l.llmThinkTagCarry = '';
-    l.llmThinkTagAllowLeading = true;
-}
-
-function showCopyFeedback() {
-    const t = document.getElementById('copy-toast');
-    if (!t) return;
-    t.classList.add('is-on');
-    if (t._copyTm) clearTimeout(t._copyTm);
-    t._copyTm = setTimeout(function () { t.classList.remove('is-on'); }, 1500);
-}
-
-function showOpenFileFeedback(msg) {
-    var t = document.getElementById('copy-toast');
-    if (!t) return;
-    var prev = t.getAttribute('data-default-msg') || t.textContent || '已复制';
-    if (!t.getAttribute('data-default-msg')) t.setAttribute('data-default-msg', prev);
-    t.textContent = msg || '已请求打开';
-    t.classList.add('is-on');
-    if (t._openFileTm) clearTimeout(t._openFileTm);
-    t._openFileTm = setTimeout(function () {
-        t.classList.remove('is-on');
-        t.textContent = t.getAttribute('data-default-msg') || '已复制';
-    }, 2200);
-}
-
-(function initWorkspaceFileOpenDelegation() {
-    if (document.body.dataset.workspaceFileOpenBound) return;
-    document.body.dataset.workspaceFileOpenBound = '1';
-    document.body.addEventListener('click', function (ev) {
-        var el = ev.target;
-        if (!el || !el.closest) return;
-        var a = el.closest('a.msg-link-workspace-open');
-        if (!a) return;
-        ev.preventDefault();
-        var rel = a.getAttribute('data-workspace-open') || '';
-        // The details column owns the file-open policy now: text files open
-        // inline there, everything else still goes to the system app. Older
-        // bundles without the dock keep the plain system-open path below.
-        if (rel && typeof globalThis !== 'undefined' && globalThis.MyAgentDock
-            && typeof globalThis.MyAgentDock.isTextPath === 'function'
-            && typeof globalThis.MyAgentDock.openPathSmart === 'function') {
-            if (globalThis.MyAgentDock.isTextPath(rel)) {
-                globalThis.MyAgentDock.openPathSmart(rel);
-                showOpenFileFeedback('已在详情栏打开');
-            } else {
-                globalThis.MyAgentDock.openPathSmart(rel);
-            }
-            return;
-        }
-        var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-        var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
-        openWorkspaceLocalPath(rel, false, controller ? { signal: controller.signal } : {})
-            .then(function (j) {
-                if (timer) clearTimeout(timer);
-                if (j && j.ok) showOpenFileFeedback('已调用系统打开文件');
-                else showOpenFileFeedback((j && j.error) ? ('无法打开：' + j.error) : '无法打开文件');
-            })
-            .catch(function () {
-                if (timer) clearTimeout(timer);
-                showOpenFileFeedback('无法连接服务');
-            });
-    });
-})();
-
-let rewriteUndoState = null;
-/** 改写待发送：仅在点击发送时调用截断；取消则丢弃 */
-let pendingRewriteTruncate = null;
-function hideRewriteUndoToast() {
-    const t = document.getElementById('rewrite-undo-toast');
-    if (t) {
-        t.classList.remove('is-on');
-        const btn = t.querySelector('.rewrite-undo-btn');
-        if (btn) btn.textContent = '撤销';
-    }
-    rewriteUndoState = null;
-}
-
-function smoothScrollBy(el, dy) {
-    if (!el || !dy) return;
-    const bMax = Math.max(0, el.scrollHeight - el.clientHeight);
-    const start = el.scrollTop;
-    const target = Math.max(0, Math.min(bMax, start + dy));
-    const dist = target - start;
-    if (Math.abs(dist) < 0.5) return;
-    const frames = 3;
-    let f = 0;
-    function step() {
-        f += 1;
-        const t = f / frames;
-        const ease = 1 - Math.pow(1 - t, 2);
-        el.scrollTop = start + dist * ease;
-        if (f < frames) requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
-}
-
-function isNearBottom(el, thresholdPx) {
-    if (!el) return true;
-    const th = (thresholdPx == null) ? 56 : thresholdPx;
-    return (el.scrollHeight - el.clientHeight - el.scrollTop) <= th;
-}
-
-async function getUiEventCount(sessionId, opts) {
-    opts = opts || {};
-    const sid = sessionId != null ? sessionId : currentSessionId;
-    if (!sid) return 0;
-    if (
-        opts.preferCache
-        && typeof uiEventCountCache !== 'undefined'
-        && typeof uiEventCountCache.has === 'function'
-        && uiEventCountCache.has(sid)
-        && (typeof uiEventCountCache.isFresh !== 'function' || uiEventCountCache.isFresh(sid, opts.maxAgeMs))
-    ) {
-        return uiEventCountCache.get(sid);
-    }
-    try {
-        const controller = new AbortController();
-        const externalSignal = opts.signal;
-        const abortFromExternal = function () { controller.abort(); };
-        if (externalSignal) {
-            if (externalSignal.aborted) controller.abort();
-            else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
-        }
-        const timer = setTimeout(function () { controller.abort(); }, Math.max(250, Number(opts.timeoutMs) || 5000));
-        let r;
-        try {
-            r = await fetch('/sessions/' + encodeURIComponent(sid) + '/messages/count', {
-                signal: controller.signal
-            });
-        } finally {
-            clearTimeout(timer);
-            if (externalSignal) externalSignal.removeEventListener('abort', abortFromExternal);
-        }
-        if (!r.ok) return 0;
-        const j = await r.json();
-        const count = (j && typeof j.count === 'number') ? j.count : 0;
-        if (typeof uiEventCountCache !== 'undefined') uiEventCountCache.updateFromServer(sid, count);
-        return count;
-    } catch (e) { return 0; }
-}
-
-function loadUnreadFromStorage() {
-    try {
-        const raw = localStorage.getItem(LS_SESSION_UNREAD);
-        if (!raw) return;
-        const arr = JSON.parse(raw);
-        if (!Array.isArray(arr)) return;
-        arr.forEach(function (id) { sessionUnreadComplete.add(String(id)); });
-    } catch (e) { /* ignore */ }
-}
-
-function persistSessionUnread() {
-    try {
-        localStorage.setItem(LS_SESSION_UNREAD, JSON.stringify([...sessionUnreadComplete]));
-    } catch (e) { /* ignore */ }
-}
-
-function stashInputDraft(sessionId) {
-    if (!messageInput) return;
-    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
-    draftBySession[draftKey] = messageInput.value;
-    persistInputDraft(sessionId, messageInput.value);
-}
-
-function restoreInputDraft(sessionId) {
-    if (!messageInput) return;
-    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
-    const v = Object.prototype.hasOwnProperty.call(draftBySession, draftKey)
-        ? draftBySession[draftKey]
-        : readStoredInputDraft(sessionId);
-    messageInput.value = v != null ? String(v) : '';
-    clearInputPathTokens();
-    restoreDraftPathTokens(sessionId, messageInput.value);
-    rewriteInputWorkspacePaths();
-    autoResizeTextarea();
-}
-
-function inputDraftStorageKey(sessionId) {
-    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
-    return LS_INPUT_DRAFT_PREFIX + draftKey;
-}
-
-/* 输入框里的绝对路径会被改写成 @基名 胶囊标签，真实路径只存在 inputPathTokenMap 里。
-   草稿落盘的是标签形式，不同时持久化标签→路径映射，刷新/切会话后标签就成了死文本，
-   再发送时真实路径会被吞掉。 */
-function inputDraftPathTokenStorageKey(sessionId) {
-    return inputDraftStorageKey(sessionId) + '::path-tokens';
-}
-
-/** 取出文本中仍被引用的 标签→真实路径 映射（只保留确实出现过的标签）。 */
-function collectDraftPathTokens(text) {
-    const source = String(text || '');
-    const out = Object.create(null);
-    if (!source || typeof inputPathTokenMap === 'undefined') return out;
-    Object.keys(inputPathTokenMap).forEach(function (label) {
-        if (label && source.indexOf(label) >= 0 && inputPathTokenMap[label]) {
-            out[label] = inputPathTokenMap[label];
-        }
-    });
-    return out;
-}
-
-function persistDraftPathTokens(sessionId, text) {
-    const key = inputDraftPathTokenStorageKey(sessionId);
-    let tokens = collectDraftPathTokens(text);
-    try {
-        if (String(sessionId || '') !== String(currentSessionId || '')) {
-            const stored = JSON.parse(localStorage.getItem(key) || 'null');
-            if (stored && typeof stored === 'object') {
-                tokens = Object.create(null);
-                Object.keys(stored).forEach(function (label) {
-                    if (String(text || '').indexOf(label) >= 0) tokens[label] = stored[label];
-                });
-            }
-        }
-        if (Object.keys(tokens).length) localStorage.setItem(key, JSON.stringify(tokens));
-        else localStorage.removeItem(key);
-    } catch (e) { /* ignore */ }
-}
-
-/** 恢复草稿前先重建标签映射，让草稿里的 @基名 胶囊重新可用（否则发送会丢路径）。 */
-function restoreDraftPathTokens(sessionId, text) {
-    const source = String(text || '');
-    if (!source || typeof inputPathTokenMap === 'undefined') return;
-    let stored = null;
-    try {
-        stored = JSON.parse(localStorage.getItem(inputDraftPathTokenStorageKey(sessionId)) || 'null');
-    } catch (e) {
-        stored = null;
-    }
-    if (!stored || typeof stored !== 'object') return;
-    Object.keys(stored).forEach(function (label) {
-        const path = String(stored[label] || '');
-        if (!label || !path || source.indexOf(label) < 0) return;
-        const existing = inputPathTokenMap[label];
-        if (existing && typeof normalizeInputPathTokenIdentity === 'function'
-            && normalizeInputPathTokenIdentity(existing) !== normalizeInputPathTokenIdentity(path)) return;
-        inputPathTokenMap[label] = path;
-    });
-}
-
-function persistInputDraft(sessionId, value) {
-    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
-    const text = String(value || '');
-    draftBySession[draftKey] = text;
-    try {
-        const key = inputDraftStorageKey(sessionId);
-        if (text) {
-            localStorage.setItem(key, text);
-            persistDraftPathTokens(sessionId, text);
-        } else {
-            localStorage.removeItem(key);
-            localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));
-        }
-    } catch (e) { /* ignore */ }
-    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
-}
-
-function readStoredInputDraft(sessionId) {
-    try {
-        return localStorage.getItem(inputDraftStorageKey(sessionId)) || '';
-    } catch (e) {
-        return '';
-    }
-}
-
-function removeStoredInputDraft(sessionId) {
-    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
-    delete draftBySession[draftKey];
-    try {
-        localStorage.removeItem(inputDraftStorageKey(sessionId));
-        localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));
-    } catch (e) { /* ignore */ }
-    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
-}
-
-function clearStreamPoll() {
-    if (streamPollTimer) {
-        clearInterval(streamPollTimer);
-        streamPollTimer = null;
-    }
-}
-
-function maybeStartStreamPollForSession(sid, opts) {
-    opts = opts || {};
-    clearStreamPoll();
-    if (!sid) return;
-    if (!isSessionRunning(sid)) return;
-    if (!getSessionRunState(sid) && typeof attachSessionEventStream === 'function') {
-        void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
-    }
-    let pollPending = false;
-    streamPollTimer = setInterval(function () {
-        if (pollPending) return;
-        pollPending = true;
-        (async function () {
-            try {
-            if (currentSessionId !== sid) {
-                clearStreamPoll();
-                return;
-            }
-            if (typeof reconcileRunStateFromServer === 'function') {
-                await reconcileRunStateFromServer({ silent: true });
-            }
-            const still = typeof isServerStreamActive === 'function'
-                ? isServerStreamActive(sid)
-                : isSessionRunning(sid);
-            if (!still) {
-                clearStreamPoll();
-                await loadSessions();
-                await ensureFinalVisibleAfterRunIfEnabled(sid, null, {});
-                syncSessionListIndicatorClasses();
-                setSendButtonState();
-                return;
-            }
-            if (currentSessionId === sid && document.visibilityState === 'visible') {
-                syncSessionListIndicatorClasses();
-                setSendButtonState();
-            }
-            } catch (error) {
-                console.warn('session stream poll failed:', error);
-            } finally {
-                pollPending = false;
-            }
-        })();
-    }, 15000);
-}
-
-async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {
-    opts = opts || {};
-    var ei = Number(eventIndex);
-    if (!Number.isFinite(ei)) return false;
-    var silent = !!opts.silent;
-    var scrollBehavior = opts.instant ? 'auto' : 'smooth';
-    var viewportOffset = Number(opts.viewportOffset);
-    var hasViewportOffset = Number.isFinite(viewportOffset);
-    var liveHistoryOwner = isSessionRunning(currentSessionId)
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(currentSessionId));
-    var allowFullReload = opts.allowFullReload !== false && !silent && !liveHistoryOwner;
-    var maxOlderLoads = Number.isFinite(Number(opts.maxOlderLoads))
-        ? Math.max(0, Number(opts.maxOlderLoads))
-        : 120;
-    function setTocJumpLoading(active) {
-        var list = document.getElementById('chat-toc-list');
-        var link = list && list.querySelector('a[data-event-index="' + ei + '"]');
-        if (!link) return;
-        link.classList.toggle('is-loading', !!active);
-        if (active) link.setAttribute('aria-busy', 'true');
-        else link.removeAttribute('aria-busy');
-    }
-    function findWrap() {
-        var stream = getVisibleChatStream();
-        if (!stream) return null;
-        return stream.querySelector('.msg-wrap--user[data-event-index="' + ei + '"]')
-            || stream.querySelector('#user-msg-' + ei);
-    }
-    function scrollToWrap(wrap) {
-        if (!wrap) return;
-        if (!hasViewportOffset || !chatContainer) {
-            wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });
-            return;
-        }
-        var viewportRect = chatContainer.getBoundingClientRect();
-        var wrapRect = wrap.getBoundingClientRect();
-        var maxTop = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);
-        var targetTop = chatContainer.scrollTop + wrapRect.top - viewportRect.top - viewportOffset;
-        targetTop = Math.max(0, Math.min(maxTop, targetTop));
-        if (scrollBehavior === 'smooth' && typeof chatContainer.scrollTo === 'function') {
-            chatContainer.scrollTo({ top: targetTop, behavior: 'smooth' });
-        } else {
-            setScrollTopImmediate(chatContainer, targetTop);
-        }
-    }
-    async function loadFullHistoryForTarget(sid) {
-        if (!allowFullReload) return;
-        if (sid !== currentSessionId || typeof loadSessionMessages !== 'function') return;
-        try {
-            await loadSessionMessages(sid, 'saved-or-bottom', { full: true });
-        } catch (e) {
-            console.error('reload full history for toc target failed:', e);
-        }
-    }
-    setTocJumpLoading(true);
-    try {
-        var wrap = findWrap();
-        if (wrap) {
-            scrollToWrap(wrap);
-            return true;
-        }
-        var sid = currentSessionId;
-        if (allowFullReload) {
-            var loadedTargetWindow = await loadHistoryWindowAroundEventIndex(sid, ei, { turns: 50 });
-            if (loadedTargetWindow && sid === currentSessionId) {
-                wrap = findWrap();
-                if (wrap) {
-                    scrollToWrap(wrap);
-                    return true;
-                }
-            }
-        }
-        var safety = 0;
-        var olderLoads = 0;
-        var pagingCoveredTarget = false;
-        while (sid === currentSessionId && safety < 120) {
-            safety += 1;
-            wrap = findWrap();
-            if (wrap) {
-                scrollToWrap(wrap);
-                return true;
-            }
-            var ph = sessionHistoryPaging;
-            if ((!ph || ph.sessionId !== sid) && getVisibleChatStream()) {
-                ph = restoreHistoryPagingFromStream(getVisibleChatStream());
-                if (ph) sessionHistoryPaging = ph;
-            }
-            if (!ph || ph.sessionId !== sid) {
-                await loadFullHistoryForTarget(sid);
-                break;
-            }
-            if (ei >= ph.range_start) {
-                pagingCoveredTarget = true;
-                break;
-            }
-            if (!ph.has_older) break;
-            if (olderLoads >= maxOlderLoads) break;
-            while (historyOlderLoading && currentSessionId === sid) {
-                await new Promise(function (r) { setTimeout(r, 40); });
-            }
-            olderLoads += 1;
-            await loadOlderHistoryChunk({ keepTocStable: true, turns: 50 });
-        }
-        wrap = findWrap();
-        if (wrap) {
-            scrollToWrap(wrap);
-            return true;
-        }
-        if (allowFullReload && sid === currentSessionId && pagingCoveredTarget) {
-            await loadFullHistoryForTarget(sid);
-            if (sid !== currentSessionId) return false;
-            wrap = findWrap();
-            if (wrap) {
-                wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });
-                return true;
-            }
-            rebuildToc();
-        }
-        if (wrap) wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });
-        else if (!silent) {
-            showUiAlert({
-                title: '无法定位该条',
-                message: '未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话」手动分页。',
-                showCancel: false,
-                confirmText: '知道了',
-            });
-        }
-        return !!wrap;
-    } finally {
-        setTocJumpLoading(false);
-    }
-}
+`,As=`/**\r
+ * 上下文拆解卡（对齐 DSH token-meter 的 ContextMeter 面板）：\r
+ * 标题行「上下文已用 24.7%」+ 右侧「~24.5k / 128k」，一条按构成分色的占比条，\r
+ * 下方三行图例（系统提示词 / 工具定义 / 对话消息）。条的总长永远等于精确占比，\r
+ * 分段只按启发式构成分配宽度。\r
+ *\r
+ * 只有"有数值 / 没数值"两种状态：有数值就恒为这张卡（拿不到三段时退回单色整条并\r
+ * 隐藏图例，同时补一次取三段的请求），没数值才退回原来的纯文字提示。会话打开时\r
+ * 快照先写入的旧检查点可能还没有三段，若那时改回纯文字提示，用户就会在同一处看到\r
+ * 两种浮窗来回切换 —— 这正是要避免的。三条泳道的键与后端 breakdown 一致。\r
+ */\r
+var CTX_BREAKDOWN_LANES = [\r
+    { key: 'system_tokens', lane: 'system' },\r
+    { key: 'tools_tokens', lane: 'tools' },\r
+    { key: 'message_tokens', lane: 'messages' },\r
+];\r
+/* 悬停展开的迟滞：足够长到划过标题栏时不闪，远短于通用提示的 500ms（那是纯文字提示）。 */\r
+var CTX_CARD_HOVER_DELAY_MS = 180;\r
+/* 有数值但还没有三段时，读到的说明行要讲清"分段为什么还没出来"。 */\r
+var CTX_CARD_NOTE_WITH_LANES = '分母为压缩摘要阈值；构成按本地估算';\r
+var CTX_CARD_NOTE_WITHOUT_LANES = '分母为压缩摘要阈值；构成待本次请求估算后补齐';\r
+var ctxCardOpenTimer = null;\r
+/* 有数值即可展开卡片（是否含三段只决定图例与分段颜色，不决定卡片是否存在）。 */\r
+var ctxCardReady = false;\r
+/* 每个会话只补取一次三段，避免请求风暴；拿到三段后清除，值再次退化时可以再补。 */\r
+var contextBreakdownRefetchTried = Object.create(null);\r
+\r
+function contextBreakdownOrNull(raw) {\r
+    if (!raw || typeof raw !== 'object') return null;\r
+    var parts = {};\r
+    for (var i = 0; i < CTX_BREAKDOWN_LANES.length; i += 1) {\r
+        var value = Number(raw[CTX_BREAKDOWN_LANES[i].key]);\r
+        if (!Number.isFinite(value) || value < 0) return null;\r
+        parts[CTX_BREAKDOWN_LANES[i].key] = value;\r
+    }\r
+    ['deferred_tools_count', 'deferred_tools_tokens', 'saved_tools_tokens'].forEach(function (key) {\r
+        var value = Number(raw[key]);\r
+        if (Number.isFinite(value) && value >= 0) parts[key] = value;\r
+    });\r
+    return parts;\r
+}\r
+\r
+function closeContextBreakdownCard() {\r
+    if (ctxCardOpenTimer) {\r
+        clearTimeout(ctxCardOpenTimer);\r
+        ctxCardOpenTimer = null;\r
+    }\r
+    var card = document.getElementById('ctx-breakdown');\r
+    if (card) {\r
+        card.hidden = true;\r
+        card.setAttribute('aria-hidden', 'true');\r
+    }\r
+}\r
+\r
+function openContextBreakdownCard() {\r
+    if (ctxCardOpenTimer) {\r
+        clearTimeout(ctxCardOpenTimer);\r
+        ctxCardOpenTimer = null;\r
+    }\r
+    var card = document.getElementById('ctx-breakdown');\r
+    if (!card || !ctxCardReady) return;\r
+    card.hidden = false;\r
+    card.setAttribute('aria-hidden', 'false');\r
+}\r
+\r
+/**\r
+ * A value stored without the three lanes (an older checkpoint read straight from\r
+ * the history snapshot) would leave the legend permanently empty, because the\r
+ * meter's own refresh is rate-limited to one request per session per few seconds\r
+ * and nothing else re-asks. Ask once, bypassing that freshness window.\r
+ */\r
+function ensureContextBreakdownForCurrentSession(breakdown) {\r
+    var sid = String(currentSessionId || '');\r
+    if (!sid) return;\r
+    if (contextBreakdownOrNull(breakdown)) {\r
+        delete contextBreakdownRefetchTried[sid];\r
+        return;\r
+    }\r
+    if (contextBreakdownRefetchTried[sid]) return;\r
+    if (contextTokenInFlightBySession[sid]) return;\r
+    requestAnimationFrame(function () {\r
+        requestAnimationFrame(function () {\r
+            // 标记只在"补取真的发起"时消费（见 refreshContextTokensFromServer）。若此刻\r
+            // 恰有在途请求，那次请求落地后仍会带着同一个缺三段的数值回到这里重排一次，\r
+            // 因此这里提前登记会把唯一机会浪费在一次不会发出的请求上。\r
+            var latest = selectContextTokens(sid);\r
+            if (latest && contextBreakdownOrNull(latest.breakdown)) {\r
+                delete contextBreakdownRefetchTried[sid];\r
+                return;\r
+            }\r
+            refreshContextTokensFromServer(sid, null, true);\r
+        });\r
+    });\r
+}\r
+\r
+/** 卡片内容：占比条分段宽度按构成比例分配，行值按同一份构成标注 ~。 */\r
+function renderContextBreakdownCard(card, pctDisp, estimated, threshold, breakdown) {\r
+    if (!card) return;\r
+    var widthPct = Math.max(0, Math.min(100, pctDisp));\r
+    var pctEl = card.querySelector('.ctx-card-pct');\r
+    var figuresEl = card.querySelector('.ctx-card-figures');\r
+    var barEl = card.querySelector('.ctx-card-bar');\r
+    var rowsEl = card.querySelector('.ctx-card-rows');\r
+    if (pctEl) pctEl.textContent = pctDisp + '%';\r
+    if (figuresEl) {\r
+        figuresEl.textContent = '~' + formatTokenCompact(estimated) + ' / ' + formatTokenCompact(threshold);\r
+    }\r
+    var total = breakdown\r
+        ? (breakdown.system_tokens + breakdown.tools_tokens + breakdown.message_tokens)\r
+        : 0;\r
+    var segments = [];\r
+    if (!breakdown || total <= 0) {\r
+        segments.push('<span class="ctx-card-seg" style="width:' + widthPct + '%"></span>');\r
+    } else {\r
+        CTX_BREAKDOWN_LANES.forEach(function (lane) {\r
+            var width = widthPct * breakdown[lane.key] / total;\r
+            if (!(width > 0)) return;\r
+            segments.push(\r
+                '<span class="ctx-card-seg ctx-lane-' + lane.lane + '" style="width:' + width.toFixed(3) + '%"></span>'\r
+            );\r
+        });\r
+    }\r
+    if (barEl) barEl.innerHTML = segments.join('');\r
+    if (rowsEl) {\r
+        rowsEl.hidden = !breakdown;\r
+        if (breakdown) {\r
+            Array.prototype.forEach.call(rowsEl.querySelectorAll('[data-lane]'), function (valueEl) {\r
+                var laneKey = valueEl.getAttribute('data-lane');\r
+                valueEl.textContent = '~' + formatTokenCompact(breakdown[laneKey]);\r
+            });\r
+        }\r
+    }\r
+    var noteEl = card.querySelector('.ctx-card-note');\r
+    if (noteEl) {\r
+        noteEl.textContent = breakdown ? CTX_CARD_NOTE_WITH_LANES : CTX_CARD_NOTE_WITHOUT_LANES;\r
+        if (breakdown && breakdown.deferred_tools_count > 0) {\r
+            noteEl.textContent += '；已延迟 ' + breakdown.deferred_tools_count +\r
+                ' 个工具，本轮工具定义节省约 ' + formatTokenCompact(breakdown.saved_tools_tokens || 0) + ' tokens';\r
+        }\r
+    }\r
+}\r
+\r
+function bindContextBreakdownHover(el) {\r
+    if (!el || el._ctxCardHoverBound) return;\r
+    el._ctxCardHoverBound = true;\r
+    el.addEventListener('mouseenter', function () {\r
+        if (!ctxCardReady) return;\r
+        if (ctxCardOpenTimer) clearTimeout(ctxCardOpenTimer);\r
+        ctxCardOpenTimer = setTimeout(function () {\r
+            ctxCardOpenTimer = null;\r
+            openContextBreakdownCard();\r
+        }, CTX_CARD_HOVER_DELAY_MS);\r
+    });\r
+    // 卡片是触发器的子节点，指针移入卡片不会触发 mouseleave；离开整块才收起。\r
+    el.addEventListener('mouseleave', closeContextBreakdownCard);\r
+    document.addEventListener('keydown', function (ev) {\r
+        if (ev.key === 'Escape') closeContextBreakdownCard();\r
+    });\r
+}\r
+\r
+function formatTokenCompact(n) {\r
+    if (n == null || !Number.isFinite(Number(n))) return '—';\r
+    const x = Math.max(0, Math.round(Number(n)));\r
+    if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';\r
+    if (x >= 10000) return (x / 1000).toFixed(x % 1000 === 0 ? 0 : 1).replace(/\\.0$/, '') + 'k';\r
+    if (x >= 1000) return (x / 1000).toFixed(1).replace(/\\.0$/, '') + 'k';\r
+    return String(x);\r
+}\r
+\r
+function setContextTokenLabel(estimated, threshold, breakdown) {\r
+    const el = document.getElementById('ctx-tokens');\r
+    if (!el) return;\r
+    const label = el.querySelector('.ctx-label');\r
+    const fill = el.querySelector('.ctx-fill');\r
+    const pctEl = el.querySelector('.ctx-pct');\r
+    const t = (threshold != null && Number(threshold) > 0) ? Number(threshold) : defaultCtxThreshold;\r
+    const n = (estimated != null && Number(estimated) >= 0) ? Math.round(Number(estimated)) : null;\r
+    if (n == null) {\r
+        if (label) label.textContent = '— / —';\r
+        if (pctEl) pctEl.textContent = '';\r
+        if (fill) fill.style.width = '0%';\r
+        el.classList.remove('is-warn', 'is-bad');\r
+        ctxCardReady = false;\r
+        closeContextBreakdownCard();\r
+        el.setAttribute('data-ui-tip', '预估上下文 token：选择会话并加载或发送消息后显示。分母为压缩摘要阈值。');\r
+        bindUiHoverTip(el);\r
+        return;\r
+    }\r
+    const pct = (n / t) * 100;\r
+    const pctDisp = (Math.round(pct * 10) / 10);\r
+    if (label) label.textContent = formatTokenCompact(n) + ' / ' + formatTokenCompact(t);\r
+    if (pctEl) pctEl.textContent = pctDisp + '%';\r
+    if (fill) fill.style.width = Math.min(100, pct) + '%';\r
+    el.classList.remove('is-warn', 'is-bad');\r
+    if (pct >= 100) el.classList.add('is-bad');\r
+    else if (pct >= 80) el.classList.add('is-warn');\r
+    const card = el.querySelector('#ctx-breakdown');\r
+    const parts = contextBreakdownOrNull(breakdown);\r
+    renderContextBreakdownCard(card, pctDisp, n, t, parts);\r
+    // 有数值就恒为拆解卡；三段只决定图例与分段颜色（缺口由下面的一次补取填上）。\r
+    ctxCardReady = true;\r
+    bindContextBreakdownHover(el);\r
+    ensureContextBreakdownForCurrentSession(parts);\r
+    // 拆解卡接管说明职责；同一元素上不再挂纯文字提示，避免两种浮窗叠加。\r
+    el.removeAttribute('data-ui-tip');\r
+    if (typeof hideUiHoverTooltip === 'function') hideUiHoverTooltip();\r
+}\r
+\r
+let contextTokenRequestSeq = 0;\r
+const contextTokenInFlightBySession = Object.create(null);\r
+const CONTEXT_TOKEN_CACHE_TTL_MS = 3000;\r
+\r
+async function refreshContextTokensFromServer(sid, seq, force) {\r
+    if (!sid) return;\r
+    const cached = selectContextTokens(sid);\r
+    // \`\`force\`\` 只给"有值但缺三段"的补取用：它绕开新鲜度窗口，仍受在途去重约束。\r
+    if (!force && cached && cached.updatedAt && (Date.now() - cached.updatedAt) < CONTEXT_TOKEN_CACHE_TTL_MS) {\r
+        if (sid === currentSessionId) setContextTokenLabel(cached.estimated, cached.threshold, cached.breakdown);\r
+        return;\r
+    }\r
+    if (contextTokenInFlightBySession[sid]) return;\r
+    contextTokenInFlightBySession[sid] = true;\r
+    const tokenVersion = typeof getContextTokenVersion === 'function' ? getContextTokenVersion(sid) : null;\r
+    // 补取机会在这里消费：只有真的发出去了才算用过，被在途请求挡下的那次不算。\r
+    if (force) contextBreakdownRefetchTried[sid] = true;\r
+    try {\r
+        const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');\r
+        const j = await r.json();\r
+        if (tokenVersion != null && tokenVersion !== getContextTokenVersion(sid)) return;\r
+        if (r.ok && j && j.ok && j.estimated != null && j.estimated >= 0) {\r
+            // Clear the in-flight mark BEFORE recording: applying a value without\r
+            // the three lanes is what schedules the one-shot lane refetch, and an\r
+            // in-flight mark that is still set would make that refetch look\r
+            // redundant — it would never happen, leaving the legend empty.\r
+            delete contextTokenInFlightBySession[sid];\r
+            // A session switch invalidates the paint, not the session's data.\r
+            // Keep successful refetches so returning within the cache TTL has lanes.\r
+            if (sid !== currentSessionId || (seq != null && seq !== contextTokenRequestSeq)) {\r
+                setContextTokensForSession(sid, j.estimated, j.threshold, j.breakdown,\r
+                    { stale: !!(j.stale || j.pending_recalculation) });\r
+                if (contextBreakdownOrNull(j.breakdown)) delete contextBreakdownRefetchTried[sid];\r
+                return;\r
+            }\r
+            if (j.stale || j.pending_recalculation) recordContextTokens(sid, j.estimated, j.threshold, j.breakdown, { stale: true });\r
+            else recordContextTokens(sid, j.estimated, j.threshold, j.breakdown);\r
+            return;\r
+        }\r
+    } catch (e) { /* ignore */ }\r
+    finally {\r
+        delete contextTokenInFlightBySession[sid];\r
+    }\r
+    applyContextTokenLabelForCurrentSession();\r
+}\r
+\r
+/** 在浏览器完成首帧绘制后再请求 context_tokens，避免与切换会话/新建会话的 DOM 抢主线程。 */\r
+function scheduleContextTokensAfterPaint(sid) {\r
+    if (!sid) return;\r
+    if (sid === currentSessionId) applyContextTokenLabelForCurrentSession();\r
+    const seq = ++contextTokenRequestSeq;\r
+    requestAnimationFrame(function () {\r
+        requestAnimationFrame(function () {\r
+            refreshContextTokensFromServer(sid, seq);\r
+        });\r
+    });\r
+}\r
+\r
+function recordContextTokens(sessionId, estimated, threshold, breakdown, options) {\r
+    if (!sessionId) return;\r
+    if (setContextTokensForSession(sessionId, estimated, threshold, breakdown, options) === false) return;\r
+    if (sessionId === currentSessionId) applyContextTokenLabelForCurrentSession();\r
+}\r
+\r
+function applyContextTokenLabelForCurrentSession() {\r
+    if (!currentSessionId) { setContextTokenLabel(null, null, null); return; }\r
+    const x = selectContextTokens(currentSessionId);\r
+    if (x) setContextTokenLabel(x.estimated, x.threshold, x.breakdown);\r
+    else setContextTokenLabel(null, null, null);\r
+}\r
+\r
+/** 主对话区跟到底 */\r
+function scrollChatToBottomIfFollow(runSessionId, opts) {\r
+    opts = opts || {};\r
+    if (shouldGateScrollByRunSession(null, runSessionId)) return;\r
+    if (!opts.force && !liveAutoFollow) return;\r
+    if (chatContainer) setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+}\r
+\r
+function setScrollTopImmediate(el, y) {\r
+    if (!el) return;\r
+    var prev = el.style.scrollBehavior;\r
+    el.style.scrollBehavior = 'auto';\r
+    try {\r
+        el.scrollTop = y;\r
+    } finally {\r
+        // Restore synchronously so overlapping writes cannot restore each\r
+        // other's temporary style on later frames.\r
+        el.style.scrollBehavior = prev;\r
+    }\r
+}\r
+\r
+/** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */\r
+function getProcessBodyElForCurrentRun() {\r
+    var sid = currentSessionId;\r
+    var run = sid && getSessionRunState(sid);\r
+    if (!run || !run.ctx) return null;\r
+    var c = run.ctx;\r
+    if (c.currentProcessGroup && c.currentProcessGroup.isConnected) {\r
+        return c.currentProcessGroup.querySelector('.process-aggregate-body');\r
+    }\r
+    if (!c.stream) return null;\r
+    var agg = c.stream.querySelector('.process-aggregate:last-of-type');\r
+    return agg ? agg.querySelector('.process-aggregate-body') : null;\r
+}\r
+\r
+var STREAM_PROC_NEAR_BOTTOM_PX = 96;\r
+var STREAM_CHAT_NEAR_BOTTOM_PX = 72;\r
+\r
+function isSmoothStreamPortNearBottom(port, thresholdPx) {\r
+    if (!port) return false;\r
+    if (!isSmoothStreamActive()) return isNearBottom(port, thresholdPx);\r
+    if (smoothFollowController.isReaderDetached(port)) {\r
+        // An intentional upward gesture must win over the legacy broad\r
+        // near-bottom threshold. Re-arm only once the reader reaches the floor.\r
+        if (!isNearBottom(port, 2)) return false;\r
+        smoothFollowController.clearReaderDetached(port);\r
+    }\r
+    return smoothFollowController.isFollowing(port) || isNearBottom(port, thresholdPx);\r
+}\r
+\r
+/** 生成中时：对话区与当前执行过程区均在底部附近时才允许自动跟随流式滚动 */\r
+function refreshLiveAutoFollowPins() {\r
+    if (!chatContainer) return;\r
+    if (isSessionRunning(currentSessionId)) {\r
+        streamChatNearBottom = isSmoothStreamPortNearBottom(\r
+            chatContainer,\r
+            STREAM_CHAT_NEAR_BOTTOM_PX\r
+        );\r
+        var pb = getProcessBodyElForCurrentRun();\r
+        streamProcNearBottom = !pb || isSmoothStreamPortNearBottom(pb, STREAM_PROC_NEAR_BOTTOM_PX);\r
+        liveAutoFollow = streamChatNearBottom && streamProcNearBottom;\r
+    } else {\r
+        liveAutoFollow = isSmoothStreamPortNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX);\r
+    }\r
+}\r
+\r
+function shouldGateScrollByRunSession(ctx, runSessionId) {\r
+    if (!runSessionId) return false;\r
+    return runSessionId !== currentSessionId;\r
+}\r
+\r
+function collectFeedChunkRootsFromCtx(ctx) {\r
+    var roots = [];\r
+    var seen = new Set();\r
+    function addRoot(root) {\r
+        if (!root || !root.isConnected || seen.has(root)) return;\r
+        seen.add(root);\r
+        roots.push(root);\r
+    }\r
+    if (ctx && ctx.stream && ctx.stream.isConnected) addRoot(ctx.stream);\r
+    return roots;\r
+}\r
+\r
+function queryFeedChunksInCtx(ctx, selector) {\r
+    var sel = selector || '.feed-chunk';\r
+    var out = [];\r
+    var seen = new Set();\r
+    collectFeedChunkRootsFromCtx(ctx).forEach(function (root) {\r
+        root.querySelectorAll(sel).forEach(function (ch) {\r
+            if (!seen.has(ch)) {\r
+                seen.add(ch);\r
+                out.push(ch);\r
+            }\r
+        });\r
+    });\r
+    return out;\r
+}\r
+\r
+function refreshFeedChunksInCtx(ctx, selector) {\r
+    queryFeedChunksInCtx(ctx, selector).forEach(function (ch) {\r
+        scheduleFeedChunkOverflowRefresh(ch);\r
+    });\r
+}\r
+\r
+function feedChunkCollapsedMax(chunk) {\r
+    var styles = getComputedStyle(chunk);\r
+    var line = parseFloat(styles.getPropertyValue('--line')) || 21.6;\r
+    var pad = parseFloat(styles.getPropertyValue('--scroller-pad-y')) || 4;\r
+    return line * 2.5 + pad * 2;\r
+}\r
+\r
+function measureFeedChunkScrollerHeight(sc, chunk) {\r
+    if (!sc) return 0;\r
+    var h = sc.scrollHeight;\r
+    if (h > 1) return h;\r
+    return h;\r
+}\r
+\r
+function scrollContentAreaIfFollow(ctx, runSessionId, channel) {\r
+    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;\r
+    if (shouldGateScrollByRunSession(ctx, runSessionId)) return;\r
+    // Trace events and text wrapping share the same follow motion.\r
+    if (isSmoothStreamActive()) {\r
+        if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;\r
+        followStreamProcessScroll(ctx, runSessionId, channel || 'row');\r
+        return;\r
+    }\r
+    if (!liveAutoFollow) return;\r
+    scrollProcessBodyToBottom(ctx, runSessionId);\r
+    scrollChatToBottomIfFollow(runSessionId, {});\r
+}\r
+\r
+/** 将当前步的执行框滚到底（流式增量主要长在这里，必须滚 procBody 而不是只滚对话区） */\r
+function scrollProcessBodyToBottom(ctx, runSessionId) {\r
+    if (shouldGateScrollByRunSession(ctx, runSessionId)) return;\r
+    if (!ctx || !ctx.stream) return;\r
+    var agg = (ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected)\r
+        ? ctx.currentProcessGroup\r
+        : ctx.stream.querySelector('.process-aggregate:last-of-type');\r
+    if (agg) {\r
+        var procBody = agg.querySelector('.process-aggregate-body');\r
+        if (procBody) procBody.scrollTop = procBody.scrollHeight;\r
+    }\r
+}\r
+\r
+function followStreamProcessScroll(ctx, runSessionId, channel) {\r
+    // Keep the caller argument for the existing entry points; it no longer\r
+    // selects a motion profile in the unified follower.\r
+    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;\r
+    if (shouldGateScrollByRunSession(ctx, runSessionId)) return;\r
+    if (\r
+        isSmoothStreamActive()\r
+        && typeof isHistorySmoothScrollActive === 'function'\r
+        && isHistorySmoothScrollActive()\r
+    ) return;\r
+    if (!liveAutoFollow) return;\r
+    if (isSmoothStreamActive()) {\r
+        if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
+            && ctx.currentProcessGroup.classList.contains('is-collapsed')) {\r
+            ctx.currentProcessGroup.classList.remove('is-collapsed');\r
+            var smoothTop = ctx.currentProcessGroup.querySelector('.process-aggregate-top');\r
+            if (smoothTop) smoothTop.setAttribute('aria-expanded', 'true');\r
+        }\r
+        var smoothProcessBody = getProcessBodyElForCurrentRun();\r
+        var releaseMainFollow = function (port) {\r
+            if (port === chatContainer) streamChatNearBottom = false;\r
+            else streamProcNearBottom = false;\r
+            liveAutoFollow = false;\r
+            smoothFollowController.cancel(port === chatContainer ? smoothProcessBody : chatContainer);\r
+        };\r
+        if (smoothProcessBody) {\r
+            smoothFollowController.request(smoothProcessBody, {\r
+                onUnpin: releaseMainFollow,\r
+            });\r
+        }\r
+        if (chatContainer) {\r
+            smoothFollowController.request(chatContainer, {\r
+                onUnpin: releaseMainFollow,\r
+            });\r
+        }\r
+        if (!streamScrollFollowRaf) {\r
+            streamScrollFollowRaf = requestAnimationFrame(function () {\r
+                streamScrollFollowRaf = 0;\r
+                refreshFeedChunksInCtx(ctx, '.feed-chunk.is-streaming');\r
+                refreshLiveAutoFollowPins();\r
+            });\r
+        }\r
+        return;\r
+    }\r
+    if (streamScrollFollowRaf) return;\r
+    streamScrollFollowRaf = requestAnimationFrame(function () {\r
+        streamScrollFollowRaf = 0;\r
+        if (!liveAutoFollow) return;\r
+        if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {\r
+            if (ctx.currentProcessGroup.classList.contains('is-collapsed')) {\r
+                ctx.currentProcessGroup.classList.remove('is-collapsed');\r
+                const topN = ctx.currentProcessGroup.querySelector('.process-aggregate-top');\r
+                if (topN) topN.setAttribute('aria-expanded', 'true');\r
+            }\r
+        }\r
+        scrollProcessBodyToBottom(ctx, runSessionId);\r
+        scrollChatToBottomIfFollow(runSessionId, {});\r
+        refreshLiveAutoFollowPins();\r
+    });\r
+}\r
+\r
+/** Finish without a long easing tail once no more stream content can arrive. */\r
+function finishStreamScrollIfFollow(ctx, runSessionId) {\r
+    if (isSmoothStreamActive()) {\r
+        if (shouldGateScrollByRunSession(ctx, runSessionId)) return;\r
+        if (!liveAutoFollow) return;\r
+        var processBody = getProcessBodyElForCurrentRun();\r
+        if (processBody) {\r
+            settleSmoothTraceHeightAnimations(processBody);\r
+            smoothFollowController.snapToBottom(processBody);\r
+        }\r
+        if (chatContainer) smoothFollowController.snapToBottom(chatContainer);\r
+        return;\r
+    }\r
+    scrollProcessBodyToBottom(ctx, runSessionId);\r
+    scrollChatToBottomIfFollow(runSessionId, {});\r
+}\r
+\r
+/** Final answer cards keep the legacy snap and must not race an active glide. */\r
+function cancelSmoothStreamFollowForFinal(ctx) {\r
+    if (!isSmoothStreamActive()) return;\r
+    if (ctx && ctx.stream === getVisibleChatStream()) {\r
+        smoothFollowController.cancel(chatContainer);\r
+    }\r
+    var processBody = null;\r
+    if (ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected) {\r
+        processBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');\r
+    }\r
+    if (processBody) smoothFollowController.cancel(processBody);\r
+}\r
+\r
+/** Keep the native history-load animation isolated from the live follower. */\r
+function cancelSmoothStreamFollowForHistoryLoad() {\r
+    smoothFollowController.cancel(chatContainer);\r
+    var processBody = getProcessBodyElForCurrentRun();\r
+    if (processBody) smoothFollowController.cancel(processBody);\r
+}\r
+\r
+/** The shared viewport must not retain the previous session's animation. */\r
+function cancelSmoothStreamFollowForSessionSwitch() {\r
+    if (typeof streamScrollFollowRaf !== 'undefined' && streamScrollFollowRaf) {\r
+        cancelAnimationFrame(streamScrollFollowRaf);\r
+        streamScrollFollowRaf = 0;\r
+    }\r
+    smoothFollowController.reset(chatContainer);\r
+    var stream = getVisibleChatStream();\r
+    if (typeof cancelHistoryPrependViewport === 'function') cancelHistoryPrependViewport(stream);\r
+    if (stream) stream.querySelectorAll('.process-aggregate-body').forEach(function (port) {\r
+        smoothFollowController.reset(port);\r
+    });\r
+}\r
+\r
+function getVisibleChatStream() { return document.getElementById('chat-stream'); }\r
+\r
+function ensureVisibleChatStreamSlot() {\r
+    if (getVisibleChatStream() || !chatContainer) return;\r
+    const ns = document.createElement('div');\r
+    ns.className = 'chat-stream';\r
+    ns.id = 'chat-stream';\r
+    ns.setAttribute('aria-label', '消息');\r
+    chatContainer.appendChild(ns);\r
+}\r
+\r
+function emptyChatStreamKeepingStrip(streamEl) {\r
+    if (!streamEl) return;\r
+    if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(streamEl);\r
+    const strip = streamEl.querySelector('#history-load-sentinel');\r
+    Array.from(streamEl.children).forEach(function (ch) {\r
+        if (strip && ch === strip) return;\r
+        ch.remove();\r
+    });\r
+}\r
+\r
+function persistHistoryPagingToStream(streamEl, paging) {\r
+    if (!streamEl) return;\r
+    if (!paging || paging.sessionId !== currentSessionId) {\r
+        delete streamEl.dataset.historyPaging;\r
+        return;\r
+    }\r
+    streamEl.dataset.historyPaging = JSON.stringify({\r
+        sessionId: paging.sessionId,\r
+        total: Number(paging.total) || 0,\r
+        range_start: Number(paging.range_start) || 0,\r
+        range_end: Number(paging.range_end) || 0,\r
+        has_older: !!paging.has_older,\r
+        has_newer: !!paging.has_newer,\r
+        manual_history: !!paging.manual_history,\r
+        event_limited_tail: !!paging.event_limited_tail,\r
+    });\r
+}\r
+\r
+function restoreHistoryPagingFromStream(streamEl) {\r
+    if (!streamEl || !streamEl.dataset.historyPaging) return null;\r
+    try {\r
+        var raw = JSON.parse(streamEl.dataset.historyPaging);\r
+        if (!raw || raw.sessionId !== currentSessionId) return null;\r
+        return {\r
+            sessionId: raw.sessionId,\r
+            total: Number(raw.total) || 0,\r
+            range_start: Number(raw.range_start) || 0,\r
+            range_end: Number(raw.range_end) || 0,\r
+            has_older: !!raw.has_older,\r
+            has_newer: !!raw.has_newer,\r
+            manual_history: !!raw.manual_history,\r
+            event_limited_tail: !!raw.event_limited_tail,\r
+        };\r
+    } catch (_e) {\r
+        delete streamEl.dataset.historyPaging;\r
+        return null;\r
+    }\r
+}\r
+\r
+function setSessionHistoryPaging(paging) {\r
+    sessionHistoryPaging = paging || null;\r
+    persistHistoryPagingToStream(getVisibleChatStream(), sessionHistoryPaging);\r
+    updateHistorySentinelVisibility();\r
+}\r
+\r
+function ensureHistorySentinel(streamEl) {\r
+    if (!streamEl) return null;\r
+    var el = streamEl.querySelector('#history-load-sentinel');\r
+    if (el) return el;\r
+    el = document.createElement('div');\r
+    el.id = 'history-load-sentinel';\r
+    el.className = 'history-load-sentinel';\r
+    el.hidden = true;\r
+    var btn = document.createElement('button');\r
+    btn.type = 'button';\r
+    btn.className = 'history-load-older-btn';\r
+    btn.textContent = '加载更早记录';\r
+    btn.addEventListener('click', function () { loadOlderHistoryChunk(); });\r
+    el.appendChild(btn);\r
+    streamEl.insertBefore(el, streamEl.firstChild);\r
+    return el;\r
+}\r
+\r
+var latestHistoryTailRestoreBySession = Object.create(null);\r
+\r
+function getSessionHistoryPaging(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    if (!sid) return null;\r
+    var paging = sessionHistoryPaging;\r
+    var stream = getVisibleChatStream();\r
+    if ((!paging || paging.sessionId !== sid) && stream) {\r
+        paging = restoreHistoryPagingFromStream(stream);\r
+        if (paging) sessionHistoryPaging = paging;\r
+    }\r
+    return paging && paging.sessionId === sid ? paging : null;\r
+}\r
+\r
+function sessionHasLiveHistoryOwner(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    return !!sid && (\r
+        isSessionRunning(sid)\r
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sid))\r
+    );\r
+}\r
+\r
+async function refreshSessionLiveHistoryOwner(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    if (!sid || sessionHasLiveHistoryOwner(sid)) return !!sid;\r
+    if (typeof fetchSessionStreamActiveMap !== 'function') return sessionHasLiveHistoryOwner(sid);\r
+    var activeMap = await fetchSessionStreamActiveMap();\r
+    if (activeMap && Object.prototype.hasOwnProperty.call(activeMap, sid)) {\r
+        if (typeof applyServerStreamActiveMap === 'function') applyServerStreamActiveMap(activeMap);\r
+        if (activeMap[sid]) return true;\r
+    }\r
+    return sessionHasLiveHistoryOwner(sid);\r
+}\r
+\r
+async function ensureLatestHistoryTailForLiveAppend(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    if (!sid || sid !== currentSessionId) return true;\r
+    var paging = getSessionHistoryPaging(sid);\r
+    if (!paging || !paging.has_newer) return true;\r
+    if (latestHistoryTailRestoreBySession[sid]) return latestHistoryTailRestoreBySession[sid];\r
+    var restore = (async function () {\r
+        var loaded = await loadSessionMessages(sid, 'bottom', {\r
+            useSnapshot: false,\r
+            preloadOlderIfShort: false,\r
+        });\r
+        if (sid !== currentSessionId) return true;\r
+        var current = getSessionHistoryPaging(sid);\r
+        return loaded === true && !(current && current.has_newer);\r
+    })();\r
+    latestHistoryTailRestoreBySession[sid] = restore;\r
+    try {\r
+        return await restore;\r
+    } finally {\r
+        if (latestHistoryTailRestoreBySession[sid] === restore) {\r
+            delete latestHistoryTailRestoreBySession[sid];\r
+        }\r
+    }\r
+}\r
+\r
+var HISTORY_AUTO_LOAD_TOP_PX = 32;\r
+\r
+/** 当前轮首屏保持轻量；读者主动翻阅后，允许继续自动向前分页。 */\r
+function enableHistoryAutoLoadForReader() {\r
+    var stream = getVisibleChatStream();\r
+    if (stream) stream._historyAutoLoadEnabled = true;\r
+}\r
+\r
+/** 滚到历史顶部附近时自动向前分页；按钮仍保留为加载状态提示和手动兜底。 */\r
+function maybeAutoLoadOlderHistory() {\r
+    if (typeof replayingMessages !== 'undefined' && replayingMessages) return;\r
+    if (typeof sessionStore !== 'undefined' && sessionStore.ui && sessionStore.ui.loadingMessages) return;\r
+    var stream = getVisibleChatStream();\r
+    if (!stream || stream.hidden) return;\r
+    var paging = getSessionHistoryPaging(currentSessionId);\r
+    if (paging && paging.event_limited_tail && !stream._historyAutoLoadEnabled) return;\r
+    if (paging && paging.manual_history && !stream._historyAutoLoadEnabled\r
+        && sessionHasLiveHistoryOwner(currentSessionId)) return;\r
+    if (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive()) return;\r
+    if (!chatContainer || chatContainer.scrollTop > HISTORY_AUTO_LOAD_TOP_PX) return;\r
+    void loadOlderHistoryChunk({ trigger: 'scroll-top' });\r
+}\r
+\r
+function updateHistorySentinelVisibility() {\r
+    var strip = document.getElementById('history-load-sentinel');\r
+    var btn = strip && strip.querySelector('.history-load-older-btn');\r
+    var ph = sessionHistoryPaging;\r
+    if (!strip || !btn) return;\r
+    if (!ph || !ph.has_older || ph.sessionId !== currentSessionId) {\r
+        strip.hidden = true;\r
+        btn.disabled = false;\r
+        btn.textContent = '加载更早记录';\r
+        return;\r
+    }\r
+    strip.hidden = false;\r
+    btn.disabled = historyOlderLoading;\r
+    btn.textContent = historyOlderLoading ? '加载中…' : '加载更早记录';\r
+}\r
+\r
+function resetSessionHistoryPaging() {\r
+    setSessionHistoryPaging(null);\r
+    var stream = getVisibleChatStream();\r
+    cancelHistoryPrependViewport(stream);\r
+    if (stream) {\r
+        delete stream._historyOlderLoadToken;\r
+        delete stream._historyAutoLoadEnabled;\r
+    }\r
+    historyOlderLoading = false;\r
+    updateHistorySentinelVisibility();\r
+}\r
+\r
+function cancelHistoryPrependViewport(stream) {\r
+    if (stream && stream._historyPrependViewport) stream._historyPrependViewport.stop();\r
+}\r
+\r
+/** 在插入前记录可见元素。总高度差会把下方的增长也算进去，元素锚点不会。 */\r
+function captureHistoryPrependViewport(stream, port, sid) {\r
+    if (!port || stream.parentNode !== port) return null;\r
+    cancelHistoryPrependViewport(stream);\r
+    var viewport = port.getBoundingClientRect();\r
+    var anchors = [];\r
+    function remember(node) {\r
+        var rect = node.getBoundingClientRect();\r
+        if (rect.height > 0 && rect.bottom > viewport.top) {\r
+            anchors.push({ node: node, offset: rect.top - viewport.top });\r
+            return true;\r
+        }\r
+        return false;\r
+    }\r
+    var children = Array.from(stream.children);\r
+    for (var i = 0; i < children.length && anchors.length < 3; i += 1) {\r
+        var child = children[i];\r
+        if (child.id === 'history-load-sentinel' || !remember(child)) continue;\r
+        // 相邻过程框合并可能移除外框，但其中的执行行会保留。\r
+        if (child.classList.contains('process-aggregate')) {\r
+            var rows = child.querySelectorAll('.feed-item');\r
+            for (var j = 0; j < rows.length; j += 1) {\r
+                if (remember(rows[j])) break;\r
+            }\r
+        }\r
+    }\r
+    return { stream: stream, port: port, sessionId: sid, anchors: anchors,\r
+        top: port.scrollTop, height: port.scrollHeight, lastTop: port.scrollTop };\r
+}\r
+\r
+function restoreHistoryPrependViewport(state) {\r
+    if (!state || state.sessionId !== currentSessionId\r
+        || state.stream !== getVisibleChatStream() || state.stream.parentNode !== state.port\r
+        || (typeof isHistorySmoothScrollActive === 'function' && isHistorySmoothScrollActive())) return false;\r
+    var port = state.port;\r
+    var delta = null;\r
+    for (var i = 0; i < state.anchors.length; i += 1) {\r
+        var anchor = state.anchors[i];\r
+        if (!state.stream.contains(anchor.node)) continue;\r
+        delta = anchor.node.getBoundingClientRect().top - port.getBoundingClientRect().top - anchor.offset;\r
+        break;\r
+    }\r
+    if (delta == null) delta = state.top + port.scrollHeight - state.height - port.scrollTop;\r
+    if (Math.abs(delta) > 0.5) setScrollTopImmediate(port, port.scrollTop + delta);\r
+    state.lastTop = port.scrollTop;\r
+    return true;\r
+}\r
+\r
+/** 补偿下一帧折叠测量和迟到的图片；读者再次操作或切换会话时立即退出。 */\r
+function settleHistoryPrependViewport(state) {\r
+    if (!state || !restoreHistoryPrependViewport(state)) return;\r
+    var stream = state.stream, port = state.port;\r
+    var observer = null, timer = 0, raf = 0, stopped = false;\r
+    var inputs = ['wheel', 'touchstart', 'pointerdown', 'keydown'];\r
+    function stop() {\r
+        if (stopped) return;\r
+        stopped = true;\r
+        if (observer) observer.disconnect();\r
+        if (timer) clearTimeout(timer);\r
+        if (raf) cancelAnimationFrame(raf);\r
+        inputs.forEach(function (type) { port.removeEventListener(type, stop, true); });\r
+        port.removeEventListener('scroll', onScroll);\r
+        stream.removeEventListener('load', correct, true);\r
+        if (stream._historyPrependViewport === state) delete stream._historyPrependViewport;\r
+    }\r
+    function correct() {\r
+        if (stopped) return;\r
+        if (!restoreHistoryPrependViewport(state)) stop();\r
+    }\r
+    function onScroll() {\r
+        if (Math.abs(port.scrollTop - state.lastTop) > 1) stop();\r
+    }\r
+    state.stop = stop;\r
+    stream._historyPrependViewport = state;\r
+    inputs.forEach(function (type) { port.addEventListener(type, stop, { capture: true, passive: true }); });\r
+    port.addEventListener('scroll', onScroll, { passive: true });\r
+    stream.addEventListener('load', correct, true);\r
+    if (typeof ResizeObserver === 'function') {\r
+        observer = new ResizeObserver(correct);\r
+        observer.observe(stream);\r
+        observer.observe(port);\r
+    }\r
+    raf = requestAnimationFrame(function () {\r
+        correct();\r
+        if (!stopped) raf = requestAnimationFrame(correct);\r
+    });\r
+    timer = setTimeout(stop, 3000);\r
+}\r
+\r
+async function loadOlderHistoryChunk(opts) {\r
+    opts = opts || {};\r
+    var sid = currentSessionId;\r
+    var stream = getVisibleChatStream();\r
+    var ph = sessionHistoryPaging;\r
+    if ((!ph || ph.sessionId !== sid) && stream) {\r
+        ph = restoreHistoryPagingFromStream(stream);\r
+        if (ph) sessionHistoryPaging = ph;\r
+    }\r
+    if (!sid || !stream || !ph || ph.sessionId !== sid || !ph.has_older || historyOlderLoading) return;\r
+    historyOlderLoading = true;\r
+    var historyLoadToken = {};\r
+    stream._historyOlderLoadToken = historyLoadToken;\r
+    var prevReplaying = null;\r
+    updateHistorySentinelVisibility();\r
+    var cc = chatContainer;\r
+    var prependViewport = null;\r
+    var loadedOlder = false;\r
+    try {\r
+        var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));\r
+        var boundedTail = ph.event_limited_tail && !opts.turns;\r
+        var url = '/sessions/' + encodeURIComponent(sid)\r
+            + (boundedTail\r
+                ? '/messages?limit=200&align_to_turn=1'\r
+                : '/messages?turns=' + encodeURIComponent(String(pageTurns)))\r
+            + '&before_index=' + ph.range_start\r
+            + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));\r
+        var response = await fetchWithTimeout(url, {}, 30000);\r
+        var data = await response.json();\r
+        if (!response.ok || !data || typeof data !== 'object') return;\r
+        // 自动加载请求返回前可能已切换会话，旧页不能插入新的可见消息流。\r
+        if (sid !== currentSessionId || stream !== getVisibleChatStream()\r
+            || stream._historyOlderLoadToken !== historyLoadToken) return;\r
+        prevReplaying = replayingMessages;\r
+        replayingMessages = true;\r
+        var events = data.events;\r
+        if (!Array.isArray(events) || events.length === 0) {\r
+            setSessionHistoryPaging(Object.assign({}, ph, { has_older: !!data.has_older }));\r
+            return;\r
+        }\r
+        ensureHistorySentinel(stream);\r
+        var frag = document.createDocumentFragment();\r
+        var tmpCtx = newDomContext(frag);\r
+        tmpCtx.lastUserEventIndex = -1;\r
+        var rs = typeof data.range_start === 'number' ? data.range_start : 0;\r
+        for (var i = 0; i < events.length; i += 1) {\r
+            var ev = events[i];\r
+            if (ev && typeof ev === 'object' && ev.type) {\r
+                reduceAndRenderMessageEvent(tmpCtx, ev, {\r
+                    sessionId: sid,\r
+                    eventIndex: rs + i,\r
+                    source: 'history-older',\r
+                });\r
+            }\r
+        }\r
+        var sen = stream && stream.querySelector('#history-load-sentinel');\r
+        if (stream && frag.childNodes.length) {\r
+            // fetch 期间用户仍可能滚动，所以必须在真正插入前才记录视口。\r
+            prependViewport = captureHistoryPrependViewport(stream, cc, sid);\r
+            stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);\r
+            // The fragment was rendered with its own index. Rebuild the target\r
+            // stream once on the next lookup to include the prepended rows.\r
+            if (typeof invalidateExecutionRowIndex === 'function') invalidateExecutionRowIndex(stream);\r
+        }\r
+        loadedOlder = true;\r
+        if (typeof mergeAdjacentExecutionGroups === 'function') mergeAdjacentExecutionGroups(stream);\r
+        setSessionHistoryPaging({\r
+            sessionId: sid,\r
+            total: typeof data.total === 'number' ? data.total : ph.total,\r
+            range_start: typeof data.range_start === 'number' ? data.range_start : ph.range_start,\r
+            range_end: ph.range_end,\r
+            has_older: !!data.has_older,\r
+            has_newer: !!ph.has_newer,\r
+            manual_history: false,\r
+            event_limited_tail: !!boundedTail && !!data.has_older,\r
+        });\r
+    } catch (e) {\r
+        console.error('加载更早消息失败:', e);\r
+    } finally {\r
+        if (stream._historyOlderLoadToken === historyLoadToken) {\r
+            delete stream._historyOlderLoadToken;\r
+            if (sid === currentSessionId && stream === getVisibleChatStream()) {\r
+                historyOlderLoading = false;\r
+                updateHistorySentinelVisibility();\r
+            }\r
+        }\r
+        if (loadedOlder) {\r
+            bindExistingLogs(stream);\r
+            if (!opts.keepTocStable) rebuildToc();\r
+            scheduleTocActiveUpdate();\r
+        }\r
+        settleHistoryPrependViewport(prependViewport);\r
+        if (prevReplaying !== null) replayingMessages = prevReplaying;\r
+    }\r
+}\r
+\r
+function insertNewEmptyChatStream() { ensureVisibleChatStreamSlot(); }\r
+\r
+async function loadHistoryWindowAroundEventIndex(sessionId, eventIndex, opts) {\r
+    opts = opts || {};\r
+    var sid = String(sessionId || '');\r
+    var ei = Number(eventIndex);\r
+    if (!sid || !Number.isFinite(ei)) return false;\r
+    // A running session's ctx.stream is the append target for live SSE. Never\r
+    // replace that DOM with an isolated history window or subsequent output\r
+    // will be inserted in the middle of history. Older pages are prepended by\r
+    // scrollToUserTurnOrLoadOlder instead.\r
+    if (sessionHasLiveHistoryOwner(sid)) return false;\r
+    var prevReplaying = replayingMessages;\r
+    try {\r
+        var turns = Math.max(1, Math.min(Number(opts.turns) || 50, 50));\r
+        var url = '/sessions/' + encodeURIComponent(sid)\r
+            + '/messages?turns=' + encodeURIComponent(String(turns))\r
+            + '&target_index=' + encodeURIComponent(String(Math.floor(ei)));\r
+        var response = await fetch(url);\r
+        var data = await response.json().catch(function () { return null; });\r
+        if (!response.ok || !data || typeof data !== 'object' || !Array.isArray(data.events)) return false;\r
+        if (sid !== currentSessionId) return false;\r
+        // The run may have started while the target window request was in\r
+        // flight, or the local stream-active snapshot may have been stale.\r
+        // Revalidate against the server before mutating the live append owner.\r
+        if (await refreshSessionLiveHistoryOwner(sid)) return false;\r
+        if (sid !== currentSessionId) return false;\r
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+        var stream = getVisibleChatStream();\r
+        if (!stream) return false;\r
+        emptyChatStreamKeepingStrip(stream);\r
+        var total = Number(data.total) || 0;\r
+        var rangeEnd = Number(data.range_end) || 0;\r
+        var pageMeta = {\r
+            total: total,\r
+            range_start: Number(data.range_start) || 0,\r
+            range_end: rangeEnd,\r
+            has_older: !!data.has_older,\r
+            has_newer: data.has_newer == null ? rangeEnd < total : !!data.has_newer,\r
+        };\r
+        beginMessageReplay(sid, pageMeta);\r
+        setSessionHistoryPaging({\r
+            sessionId: sid,\r
+            total: pageMeta.total,\r
+            range_start: pageMeta.range_start,\r
+            range_end: pageMeta.range_end,\r
+            has_older: !!pageMeta.has_older,\r
+            has_newer: !!pageMeta.has_newer,\r
+        });\r
+        ensureHistorySentinel(stream);\r
+        var ctx = newDomContext(stream);\r
+        ctx.lastUserEventIndex = -1;\r
+        replayingMessages = true;\r
+        for (var i = 0; i < data.events.length; i += 1) {\r
+            var ev = data.events[i];\r
+            if (ev && typeof ev === 'object' && ev.type) {\r
+                reduceAndRenderMessageEvent(ctx, ev, {\r
+                    sessionId: sid,\r
+                    eventIndex: pageMeta.range_start + i,\r
+                    source: 'history-target',\r
+                });\r
+            }\r
+        }\r
+        replayingMessages = prevReplaying;\r
+        bindExistingLogs(stream);\r
+        rebuildToc();\r
+        updateHistorySentinelVisibility();\r
+        return true;\r
+    } catch (e) {\r
+        replayingMessages = prevReplaying;\r
+        console.error('load target history window failed:', e);\r
+        return false;\r
+    }\r
+}\r
+\r
+const SESSION_STREAM_CACHE_LIMIT = 6;\r
+const cachedSessionStreamOrder = [];\r
+\r
+function cssEscapeIdent(value) {\r
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);\r
+    return String(value || '').replace(/["\\\\]/g, '\\\\$&');\r
+}\r
+\r
+function cacheOrderTouch(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    if (!sid) return;\r
+    var idx = cachedSessionStreamOrder.indexOf(sid);\r
+    if (idx >= 0) cachedSessionStreamOrder.splice(idx, 1);\r
+    cachedSessionStreamOrder.push(sid);\r
+}\r
+\r
+function discardCachedSessionStream(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    if (!sid || !offscreenRoot) return;\r
+    var cached = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');\r
+    if (cached && cached.parentNode) cached.remove();\r
+    var idx = cachedSessionStreamOrder.indexOf(sid);\r
+    if (idx >= 0) cachedSessionStreamOrder.splice(idx, 1);\r
+}\r
+\r
+function trimCachedSessionStreams() {\r
+    if (!offscreenRoot) return;\r
+    while (cachedSessionStreamOrder.length > SESSION_STREAM_CACHE_LIMIT) {\r
+        var sid = cachedSessionStreamOrder.shift();\r
+        var cached = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');\r
+        if (cached && cached.parentNode) cached.remove();\r
+    }\r
+}\r
+\r
+function isCompleteLocalRunStream(sessionId, stream) {\r
+    var run = getSessionRunState(sessionId);\r
+    return !!(run && run.ctx && run.ctx.stream === stream\r
+        && stream && stream.dataset\r
+        && stream.dataset.partialBackgroundRun !== '1'\r
+        && stream.dataset.sessionLoadFailed !== '1'\r
+        // An observer stream is complete only after durable history hydration.\r
+        // A local submitted run already contains its optimistic first turn.\r
+        && (stream.dataset.sessionLoadOk === '1' || !run.reattached));\r
+}\r
+\r
+function stashVisibleStreamForSession(sessionId, opts) {\r
+    opts = opts || {};\r
+    var sid = String(sessionId || '');\r
+    if (!sid || !offscreenRoot) return false;\r
+    const el = getVisibleChatStream();\r
+    if (!el || !el.parentNode) return false;\r
+    /* A stream owned by this tab's active run is already the authoritative,\r
+       gap-free UI projection even when no history request was needed (notably\r
+       a newly-created session).  Certify it before moving it offscreen so a\r
+       same-page switch can restore the live DOM instead of fetching snapshot. */\r
+    if (opts.certifyLocalRun && isCompleteLocalRunStream(sid, el)) {\r
+        el.dataset.sessionLoadOk = '1';\r
+        delete el.dataset.sessionLoading;\r
+    }\r
+    if (!opts.force && el.dataset.sessionLoadOk !== '1') return false;\r
+    if (el.dataset.sessionLoadFailed === '1') return false;\r
+    var leavingRun = getSessionRunState(sid);\r
+    if (leavingRun && leavingRun.ctx && leavingRun.ctx.stream === el) {\r
+        if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(el);\r
+        flushLlmDeltaText(leavingRun.ctx);\r
+    }\r
+    discardCachedSessionStream(sid);\r
+    el.remove();\r
+    el.removeAttribute('id');\r
+    el.removeAttribute('aria-label');\r
+    el.classList.add('is-offscreen');\r
+    el.setAttribute('data-cache-session-id', sid);\r
+    offscreenRoot.appendChild(el);\r
+    cacheOrderTouch(sid);\r
+    trimCachedSessionStreams();\r
+    return true;\r
+}\r
+\r
+function prepareStashLeaving(leavingId) {\r
+    if (!leavingId) return;\r
+    if (isSessionRunning(leavingId)) {\r
+        stashVisibleStreamForSession(leavingId, { force: true, certifyLocalRun: true });\r
+        insertNewEmptyChatStream();\r
+    } else {\r
+        if (!stashVisibleStreamForSession(leavingId)) ensureVisibleChatStreamSlot();\r
+        insertNewEmptyChatStream();\r
+    }\r
+}\r
+\r
+function restoreStreamForRunningSession(enteringId) {\r
+    const run = getSessionRunState(enteringId);\r
+    if (!run || !run.ctx || !run.ctx.stream) return false;\r
+    const st = run.ctx.stream;\r
+    if (!st.parentNode) return false;\r
+    if (st.parentNode === chatContainer) return st.id === 'chat-stream';\r
+    if (offscreenRoot && st.parentNode !== offscreenRoot) return false;\r
+    const completeLocalRun = isCompleteLocalRunStream(enteringId, st);\r
+    if (st.dataset && (st.dataset.partialBackgroundRun === '1'\r
+        || (st.dataset.sessionLoadOk !== '1' && !completeLocalRun))) {\r
+        abortSessionRun(enteringId, 'reattach-incomplete-background');\r
+        if (st.parentNode) st.remove();\r
+        return false;\r
+    }\r
+    if (completeLocalRun && st.dataset.sessionLoadOk !== '1') {\r
+        st.dataset.sessionLoadOk = '1';\r
+        delete st.dataset.sessionLoading;\r
+    }\r
+    const cur = getVisibleChatStream();\r
+    if (cur && cur.parentNode === chatContainer) cur.remove();\r
+    st.classList.remove('is-offscreen');\r
+    st.removeAttribute('data-cache-session-id');\r
+    st.id = 'chat-stream';\r
+    st.setAttribute('aria-label', '消息');\r
+    chatContainer.appendChild(st);\r
+    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(st);\r
+    cacheOrderTouch(enteringId);\r
+    var restoredPaging = restoreHistoryPagingFromStream(st);\r
+    if (restoredPaging) sessionHistoryPaging = restoredPaging;\r
+    updateHistorySentinelVisibility();\r
+    bindExistingLogs(st);\r
+    return true;\r
+}\r
+\r
+function restoreCachedSessionStream(enteringId) {\r
+    var sid = String(enteringId || '');\r
+    if (!sid || !offscreenRoot) return false;\r
+    var st = offscreenRoot.querySelector('.chat-stream[data-cache-session-id="' + cssEscapeIdent(sid) + '"]');\r
+    if (!st || !st.parentNode) return false;\r
+    if (st.dataset.sessionLoadOk !== '1' || st.dataset.sessionLoadFailed === '1') {\r
+        discardCachedSessionStream(sid);\r
+        return false;\r
+    }\r
+    const cur = getVisibleChatStream();\r
+    if (cur && cur.parentNode === chatContainer) cur.remove();\r
+    st.classList.remove('is-offscreen');\r
+    st.removeAttribute('data-cache-session-id');\r
+    st.id = 'chat-stream';\r
+    st.setAttribute('aria-label', '消息');\r
+    chatContainer.appendChild(st);\r
+    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(st);\r
+    cacheOrderTouch(sid);\r
+    var restoredPaging = restoreHistoryPagingFromStream(st);\r
+    if (restoredPaging) sessionHistoryPaging = restoredPaging;\r
+    updateHistorySentinelVisibility();\r
+    bindExistingLogs(st);\r
+    return true;\r
+}\r
+\r
+function scrollCurrentRunningProcessToBottom(sessionId) {\r
+    if (!sessionId || sessionId !== currentSessionId) return;\r
+    var run = getSessionRunState(sessionId);\r
+    var ctx = run && run.ctx;\r
+    var stream = ctx && ctx.stream && ctx.stream.isConnected ? ctx.stream : getVisibleChatStream();\r
+    if (!stream) return;\r
+    var agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
+        ? ctx.currentProcessGroup\r
+        : null;\r
+    if (!agg) {\r
+        var runningAggs = stream.querySelectorAll('.process-aggregate.is-running');\r
+        agg = runningAggs.length ? runningAggs[runningAggs.length - 1] : null;\r
+    }\r
+    // A restored server-side run may not yet have rebuilt the local run\r
+    // context or the is-running class. Its last process block still owns the\r
+    // newest generated entries, so use it as the authoritative fallback.\r
+    if (!agg) {\r
+        var allAggs = stream.querySelectorAll('.process-aggregate');\r
+        agg = allAggs.length ? allAggs[allAggs.length - 1] : null;\r
+    }\r
+    if (!agg) return;\r
+    if (agg.classList.contains('is-collapsed')) {\r
+        agg.classList.remove('is-collapsed');\r
+        var top = agg.querySelector('.process-aggregate-top');\r
+        if (top) top.setAttribute('aria-expanded', 'true');\r
+    }\r
+    var viewports = [\r
+        agg.querySelector('.process-aggregate-body'),\r
+        agg.querySelector('.process-aggregate-brief'),\r
+    ].filter(function (el) { return !!el; });\r
+    function pinBottom() {\r
+        viewports.forEach(function (el) {\r
+            setScrollTopImmediate(el, el.scrollHeight);\r
+        });\r
+    }\r
+    requestAnimationFrame(function () {\r
+        pinBottom();\r
+        requestAnimationFrame(pinBottom);\r
+    });\r
+}\r
+\r
+function restoreCachedSessionScrollPosition(sessionId) {\r
+    if (!chatContainer || !sessionId) return;\r
+    if (sessionId !== currentSessionId) return;\r
+    var restoreEpoch = switchSessionEpoch;\r
+    var running = isSessionRunning(sessionId)\r
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId));\r
+    var saved = (typeof getSavedScrollPosition === 'function') ? getSavedScrollPosition(sessionId) : null;\r
+    if (running) {\r
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+        scrollCurrentRunningProcessToBottom(sessionId);\r
+        streamChatNearBottom = true;\r
+        streamProcNearBottom = true;\r
+        liveAutoFollow = true;\r
+    } else if (saved !== null && Number.isFinite(Number(saved))) {\r
+        setScrollTopImmediate(chatContainer, Number(saved));\r
+    } else {\r
+        setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+    }\r
+    refreshLiveAutoFollowPins();\r
+    scheduleTocActiveUpdate();\r
+    requestAnimationFrame(function () {\r
+        if (sessionId !== currentSessionId || restoreEpoch !== switchSessionEpoch) return;\r
+        if (running) {\r
+            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+            scrollCurrentRunningProcessToBottom(sessionId);\r
+        }\r
+        else if (saved !== null && Number.isFinite(Number(saved))) setScrollTopImmediate(chatContainer, Number(saved));\r
+        refreshLiveAutoFollowPins();\r
+        scheduleTocActiveUpdate();\r
+    });\r
+}\r
+\r
+function markVisibleSessionStreamLoadState(sessionId, state) {\r
+    var stream = getVisibleChatStream();\r
+    if (!stream) return;\r
+    stream.dataset.sessionId = String(sessionId || '');\r
+    if (state === 'ok') {\r
+        stream.dataset.sessionLoadOk = '1';\r
+        delete stream.dataset.sessionLoadFailed;\r
+        delete stream.dataset.sessionLoading;\r
+    } else if (state === 'failed') {\r
+        stream.dataset.sessionLoadFailed = '1';\r
+        delete stream.dataset.sessionLoadOk;\r
+        delete stream.dataset.sessionLoading;\r
+        discardCachedSessionStream(sessionId);\r
+    } else if (state === 'loading') {\r
+        stream.dataset.sessionLoading = '1';\r
+        delete stream.dataset.sessionLoadOk;\r
+        delete stream.dataset.sessionLoadFailed;\r
+    }\r
+}\r
+\r
+function appendLogVisible(msg, type) {\r
+    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+    const c = newDomContext(getVisibleChatStream());\r
+    appendLog(c, msg, type, currentSessionId);\r
+}\r
+\r
+function newLlmState() {\r
+    return {\r
+        llmStreamReasoningIter: null,\r
+        llmStreamResponseIter: null,\r
+        llmStreamReasoningScroller: null,\r
+        llmStreamResponseScroller: null,\r
+        llmDeltaLastSeq: null,\r
+        llmPendingReasoningDelta: '',\r
+        llmPendingResponseDelta: '',\r
+        llmDeltaFlushRaf: 0,\r
+        llmRevealLastTs: 0,\r
+        llmThinkTagMode: 'response',\r
+        llmThinkTagCarry: '',\r
+        llmThinkTagAllowLeading: true,\r
+    };\r
+}\r
+\r
+function newDomContext(streamEl) {\r
+    return {\r
+        stream: streamEl,\r
+        currentProcessGroup: null,\r
+        lastUserEventIndex: -1,\r
+        progressScrollers: {},\r
+        progressStream: {},\r
+        keyContextStreamFilter: { phase: 'seek', carry: '' },\r
+        runStartedAt: null,\r
+        reactGeneration: 0,\r
+        _seenStreamDeltaKeys: new Set(),\r
+        _toolStreamRenderState: {\r
+            draftRows: new Map(),\r
+            rowsById: new Map(),\r
+            pendingRows: new Map(),\r
+            flushRaf: 0,\r
+        },\r
+        llm: newLlmState(),\r
+    };\r
+}\r
+\r
+function resetKeyContextStreamFilter(ctx) {\r
+    if (ctx) ctx.keyContextStreamFilter = { phase: 'seek', carry: '' };\r
+}\r
+\r
+/** 要点流式输出：隐藏 <analysis>…</analysis>，仅展示 <summary> 内正文 */\r
+function extractKeyContextVisibleDelta(filter, delta) {\r
+    if (!filter) return String(delta || '');\r
+    filter.carry += String(delta || '');\r
+    var out = '';\r
+    var tagTail = 24;\r
+    while (filter.carry.length > 0) {\r
+        var lower = filter.carry.toLowerCase();\r
+        if (filter.phase === 'seek') {\r
+            var ai = lower.indexOf('<analysis');\r
+            var si = lower.indexOf('<summary');\r
+            if (ai >= 0 && (si < 0 || ai < si)) {\r
+                if (ai > 0) out += filter.carry.slice(0, ai);\r
+                filter.carry = filter.carry.slice(ai);\r
+                filter.phase = 'in_analysis';\r
+                continue;\r
+            }\r
+            if (si >= 0) {\r
+                if (si > 0) out += filter.carry.slice(0, si);\r
+                filter.carry = filter.carry.slice(si);\r
+                filter.phase = 'in_summary';\r
+                continue;\r
+            }\r
+            if (filter.carry.length > tagTail) {\r
+                var safe = filter.carry.length - tagTail;\r
+                out += filter.carry.slice(0, safe);\r
+                filter.carry = filter.carry.slice(safe);\r
+            }\r
+            break;\r
+        }\r
+        if (filter.phase === 'in_analysis') {\r
+            var ae = lower.indexOf('</analysis>');\r
+            if (ae >= 0) {\r
+                var aClose = filter.carry.slice(ae).match(/^<\\/analysis\\s*>/i);\r
+                var aLen = aClose ? aClose[0].length : 11;\r
+                filter.carry = filter.carry.slice(ae + aLen);\r
+                filter.phase = 'seek';\r
+                continue;\r
+            }\r
+            filter.carry = '';\r
+            break;\r
+        }\r
+        if (filter.phase === 'in_summary') {\r
+            var se = lower.indexOf('</summary>');\r
+            var chunk = se >= 0 ? filter.carry.slice(0, se) : filter.carry;\r
+            chunk = chunk.replace(/^<summary[^>]*>\\s*/i, '');\r
+            out += chunk;\r
+            if (se >= 0) {\r
+                var sClose = filter.carry.slice(se).match(/^<\\/summary\\s*>/i);\r
+                var sLen = sClose ? sClose[0].length : 10;\r
+                filter.carry = filter.carry.slice(se + sLen);\r
+                filter.phase = 'done';\r
+            } else {\r
+                filter.carry = '';\r
+            }\r
+            break;\r
+        }\r
+        if (filter.phase === 'done') {\r
+            filter.carry = '';\r
+            break;\r
+        }\r
+        break;\r
+    }\r
+    return out;\r
+}\r
+\r
+function appendKeyContextStreamDelta(ctx, delta, runSessionId, opts) {\r
+    if (!ctx || !delta) return;\r
+    if (!ctx.keyContextStreamFilter || (opts && opts.snapshot)) resetKeyContextStreamFilter(ctx);\r
+    var vis = extractKeyContextVisibleDelta(ctx.keyContextStreamFilter, delta);\r
+    if (vis) appendProgressStreamDelta(ctx, vis, 'key-context', runSessionId, opts);\r
+}\r
+\r
+function isSessionRunning(sessionId) {\r
+    return selectIsSessionRunning(sessionId);\r
+}\r
+\r
+function syncDisconnectedProcessGroups() {\r
+    sessionStore.runsBySession.forEach(function (run, sid) {\r
+        const c = run && run.ctx;\r
+        if (c && c.currentProcessGroup && !c.currentProcessGroup.isConnected) c.currentProcessGroup = null;\r
+    });\r
+}\r
+\r
+function finalizeLlmStreamChunks(ctx) {\r
+    if (ctx && typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(ctx.stream);\r
+    if (!ctx) return;\r
+    flushLlmDeltaText(ctx);\r
+    queryFeedChunksInCtx(ctx, '.feed-chunk.is-streaming').forEach(function (ch) {\r
+        ch.classList.remove('is-streaming');\r
+        var row = ch.closest ? ch.closest('.feed-item') : null;\r
+        if (row && row.classList.contains('feed--llm')) autoCollapseLlmReasoningRow(row);\r
+        scheduleFeedChunkOverflowRefresh(ch);\r
+    });\r
+    if (ctx.llm) {\r
+        const l = ctx.llm;\r
+        l.llmStreamReasoningIter = null;\r
+        l.llmStreamResponseIter = null;\r
+        l.llmStreamReasoningScroller = null;\r
+        l.llmStreamResponseScroller = null;\r
+        l.llmDeltaLastSeq = null;\r
+        l.llmRevealLastTs = 0;\r
+        l.llmThinkTagMode = 'response';\r
+        l.llmThinkTagCarry = '';\r
+        l.llmThinkTagAllowLeading = true;\r
+    }\r
+    var bodies = [];\r
+    if (ctx.currentProcessGroup) {\r
+        var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');\r
+        if (mainBody) bodies.push(mainBody);\r
+    }\r
+    bodies.forEach(function (body) {\r
+        body.querySelectorAll('.feed-item.feed--llm, .feed-item.feed--llm2').forEach(function (el) {\r
+            var sc = el.querySelector('.feed-chunk-scroller');\r
+            var ch = el.querySelector('.feed-chunk');\r
+            if (sc) {\r
+                if (!sc._llmTextNode || sc._llmTextNode !== sc.firstChild\r
+                    || sc._llmRenderedText !== sc.textContent) {\r
+                    // 已经通过增量写入的节点保留原样，只规范化其他来源的首尾空白行。\r
+                    var norm = trimSurroundingBlankLines(typeof sc._llmRawText === 'string'\r
+                        ? sc._llmRawText : (sc.textContent || ''));\r
+                    sc.textContent = norm;\r
+                    sc._llmTextNode = sc.firstChild;\r
+                    sc._llmRenderedText = sc.textContent;\r
+                }\r
+                if (ch) {\r
+                    refreshFeedChunkOverflow(ch);\r
+                    requestAnimationFrame(function () { refreshFeedChunkOverflow(ch); });\r
+                }\r
+            }\r
+            if (!getFeedItemText(el).trim()) el.remove();\r
+        });\r
+    });\r
+}\r
+\r
+function discardLlmStreamChunks(ctx, ev) {\r
+    if (!ctx) return;\r
+    if (typeof flushPendingExecutionRenders === 'function') flushPendingExecutionRenders(ctx.stream);\r
+    ev = ev || {};\r
+    if (ev.cleanup_scope === 'none') {\r
+        finalizeLlmStreamChunks(ctx);\r
+        return;\r
+    }\r
+    if (ctx.llm) {\r
+        const l = ctx.llm;\r
+        // Execution rows are durable and survive draft cleanup. Keep all text\r
+        // already received, then release their animation at the abort boundary.\r
+        if (l.llmExecutionReveals && l.llmExecutionReveals.size) flushExecutionLlmReveals(ctx, {});\r
+        if (l.llmDeltaFlushRaf) {\r
+            cancelAnimationFrame(l.llmDeltaFlushRaf);\r
+            l.llmDeltaFlushRaf = 0;\r
+        }\r
+        l.llmPendingReasoningDelta = '';\r
+        l.llmPendingResponseDelta = '';\r
+        l.llmStreamReasoningIter = null;\r
+        l.llmStreamResponseIter = null;\r
+        l.llmStreamReasoningScroller = null;\r
+        l.llmStreamResponseScroller = null;\r
+        l.llmDeltaLastSeq = null;\r
+        l.llmRevealLastTs = 0;\r
+        l.llmThinkTagMode = 'response';\r
+        l.llmThinkTagCarry = '';\r
+        l.llmThinkTagAllowLeading = true;\r
+    }\r
+    var bodies = [];\r
+    if (ctx.currentProcessGroup) {\r
+        var mainBody = ctx.currentProcessGroup.querySelector('.process-aggregate-body');\r
+        if (mainBody) bodies.push(mainBody);\r
+    }\r
+    var reactIter = ev && ev.react_iter != null && Number.isFinite(Number(ev.react_iter))\r
+        ? String(Math.max(1, Math.floor(Number(ev.react_iter))))\r
+        : '';\r
+    var runId = String((ev && (ev.run_id || ev.runId)) || '');\r
+    var hasScopedAbort = !!(reactIter || runId || (ev && ev.react_generation != null));\r
+    var reactGeneration = ev && ev.react_generation != null && Number.isFinite(Number(ev.react_generation))\r
+        ? String(Math.max(0, Math.floor(Number(ev.react_generation))))\r
+        : (hasScopedAbort ? String(reactGenerationForContext(ctx)) : null);\r
+    function matchesAbortScope(el) {\r
+        if (!el) return false;\r
+        if (reactIter && String(el.getAttribute('data-react-iter') || '') !== reactIter) return false;\r
+        if (reactGeneration !== null && String(el.getAttribute('data-react-generation') || '0') !== reactGeneration) return false;\r
+        var rowRunId = String(el.getAttribute('data-run-id') || '');\r
+        if (runId && rowRunId && rowRunId !== runId) return false;\r
+        return true;\r
+    }\r
+    bodies.forEach(function (body) {\r
+        body.querySelectorAll('.feed-item[data-llm-live-row="1"]').forEach(function (el) {\r
+            if (!matchesAbortScope(el)) return;\r
+            el.remove();\r
+        });\r
+        body.querySelectorAll(\r
+            '.feed-item.feed--tool[data-tool-draft-key], '\r
+            + '.feed-item.feed--tool[data-tool-pending="1"]'\r
+        ).forEach(function (el) {\r
+            if (matchesAbortScope(el)) el.remove();\r
+        });\r
+    });\r
+}\r
+\r
+/** Keep the full source for incremental appends and reconnect snapshot replacement. */\r
+function writeLlmStreamText(scroller, raw, part) {\r
+    if (!scroller) return;\r
+    scroller._llmRawText = String(raw || '');\r
+    var row = scroller.closest ? scroller.closest('.feed-item') : null;\r
+    /* 行还在做插入/高度动画（data-smooth-trace-layout-owned）时文字已经流入：动画的\r
+       裁切高度是「插入瞬间」的快照，继续裁切会把新文字切掉，并在动画结束时整行突然\r
+       跳高（窄栏实测裁切 289px、释放瞬间单帧跳 440px）。释放动画，让行高跟随内容。 */\r
+    if (row && row.hasAttribute && row.hasAttribute('data-smooth-trace-layout-owned')\r
+        && typeof cancelSmoothTraceLayoutAnimation === 'function') {\r
+        cancelSmoothTraceLayoutAnimation(row);\r
+    }\r
+    if (part === 'response' && row) row._processBriefRawText = scroller._llmRawText;\r
+    var displayed = trimSurroundingBlankLines(scroller._llmRawText);\r
+    var node = scroller.firstChild;\r
+    var previous = node && node === scroller._llmTextNode\r
+        ? scroller._llmRenderedText\r
+        : (scroller.textContent || '');\r
+    if (displayed !== previous) {\r
+        if (node && node === scroller.lastChild && node.nodeType === 3\r
+            && displayed.indexOf(previous) === 0) {\r
+            node.appendData(displayed.slice(previous.length));\r
+            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeAppends');\r
+        } else {\r
+            scroller.textContent = displayed;\r
+            if (typeof uiPerformance !== 'undefined') uiPerformance.count(currentSessionId, 'text.nodeReplacements');\r
+        }\r
+    }\r
+    scroller._llmTextNode = scroller.firstChild;\r
+    scroller._llmRenderedText = displayed;\r
+}\r
+\r
+function appendLlmRevealedText(scroller, segment, part) {\r
+    var row = scroller.closest ? scroller.closest('.feed-item') : null;\r
+    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText\r
+        : (part === 'response' && row && typeof row._processBriefRawText === 'string'\r
+            ? row._processBriefRawText : (scroller.textContent || ''));\r
+    writeLlmStreamText(scroller, head + segment, part);\r
+}\r
+\r
+function cancelExecutionLlmReveal(ctx, scroller) {\r
+    var l = ctx && ctx.llm;\r
+    if (!l || !l.llmExecutionReveals) return;\r
+    l.llmExecutionReveals.delete(scroller);\r
+    if (!l.llmExecutionReveals.size && !l.llmPendingReasoningDelta && !l.llmPendingResponseDelta) {\r
+        if (l.llmDeltaFlushRaf) cancelAnimationFrame(l.llmDeltaFlushRaf);\r
+        l.llmDeltaFlushRaf = 0;\r
+        l.llmRevealLastTs = 0;\r
+    }\r
+}\r
+\r
+function queueExecutionLlmReveal(ctx, scroller, text, part, sessionId) {\r
+    var l = ctx.llm;\r
+    var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');\r
+    var target = String(text || '');\r
+    if (target === head || target.indexOf(head) !== 0) {\r
+        // A correction is a replacement, rather than an append to old text.\r
+        cancelExecutionLlmReveal(ctx, scroller);\r
+        writeLlmStreamText(scroller, target, part);\r
+        return;\r
+    }\r
+    if (!l.llmExecutionReveals) l.llmExecutionReveals = new Map();\r
+    // The record owns the complete text. Each row owns only its current reveal\r
+    // target, so repeated deliveries cannot append the same delta twice.\r
+    l.llmExecutionReveals.set(scroller, {text: target, part: part});\r
+    scheduleLlmDeltaFlush(ctx, sessionId);\r
+}\r
+\r
+function queueToolCallLlmReveal(ctx, scroller, tool, argumentsRaw, sessionId) {\r
+    var name = String(tool || ''), args = String(argumentsRaw || '');\r
+    var headName = scroller._llmToolName || '', headArgs = scroller._llmToolArgs || '';\r
+    if ((name === headName && args === headArgs)\r
+        || name.indexOf(headName) !== 0 || args.indexOf(headArgs) !== 0) {\r
+        cancelExecutionLlmReveal(ctx, scroller);\r
+        writeToolCallLlmText(scroller, name, args);\r
+        return;\r
+    }\r
+    var l = ctx.llm;\r
+    if (!l.llmExecutionReveals) l.llmExecutionReveals = new Map();\r
+    // Name and arguments are separate append streams. The generated status\r
+    // footer is presentation only and must never participate in the queue.\r
+    l.llmExecutionReveals.set(scroller, {part: 'tool', tool: name, argumentsRaw: args});\r
+    scheduleLlmDeltaFlush(ctx, sessionId);\r
+}\r
+\r
+function flushExecutionLlmReveals(ctx, opts) {\r
+    var pending = ctx.llm.llmExecutionReveals;\r
+    if (!pending) return 0;\r
+    var smooth = opts.smooth === true && isSmoothStreamActive();\r
+    var revealed = 0;\r
+    pending.forEach(function (state, scroller) {\r
+        if (!scroller || scroller.isConnected === false) { pending.delete(scroller); return; }\r
+        if (state.part === 'tool') {\r
+            var name = scroller._llmToolName || '', args = scroller._llmToolArgs || '';\r
+            var nameTail = state.tool.slice(name.length), argsTail = state.argumentsRaw.slice(args.length);\r
+            var tail = nameTail + argsTail;\r
+            var take = smooth\r
+                ? takeSmoothTextPrefix(tail, computeSmoothRevealCount(tail.length, opts.dtMs || 16.67))\r
+                : {segment: tail, rest: '', count: tail.length};\r
+            var nameLength = Math.min(nameTail.length, take.segment.length);\r
+            writeToolCallLlmText(scroller, name + take.segment.slice(0, nameLength),\r
+                args + take.segment.slice(nameLength));\r
+            revealed += take.count;\r
+            if (!take.rest) pending.delete(scroller);\r
+            return;\r
+        }\r
+        var head = typeof scroller._llmRawText === 'string' ? scroller._llmRawText : (scroller.textContent || '');\r
+        if (state.text.indexOf(head) !== 0) {\r
+            pending.delete(scroller);\r
+            return;\r
+        }\r
+        var tail = state.text.slice(head.length);\r
+        var take = smooth\r
+            ? takeSmoothTextPrefix(tail, computeSmoothRevealCount(tail.length, opts.dtMs || 16.67))\r
+            : {segment: tail, rest: '', count: tail.length};\r
+        if (take.segment) appendLlmRevealedText(scroller, take.segment, state.part);\r
+        revealed += take.count;\r
+        if (!take.rest) pending.delete(scroller);\r
+    });\r
+    return revealed;\r
+}\r
+\r
+function flushLlmDeltaText(ctx, opts) {\r
+    if (!ctx || !ctx.llm) return;\r
+    opts = opts || {};\r
+    const l = ctx.llm;\r
+    if (typeof flushThinkTagCarry === 'function') flushThinkTagCarry(ctx);\r
+    var smoothCommit = opts.smooth === true && isSmoothStreamActive();\r
+    if (!smoothCommit && l.llmDeltaFlushRaf) {\r
+        cancelAnimationFrame(l.llmDeltaFlushRaf);\r
+        l.llmDeltaFlushRaf = 0;\r
+    }\r
+    var revealedChars = 0;\r
+    if (l.llmPendingReasoningDelta && l.llmStreamReasoningScroller) {\r
+        var reasoningPending = String(l.llmPendingReasoningDelta || '');\r
+        var reasoningTake = smoothCommit\r
+            ? takeSmoothTextPrefix(\r
+                reasoningPending,\r
+                computeSmoothRevealCount(reasoningPending.length, opts.dtMs || 16.67)\r
+            )\r
+            : { segment: reasoningPending, rest: '', count: reasoningPending.length };\r
+        appendLlmRevealedText(l.llmStreamReasoningScroller, reasoningTake.segment, 'reasoning');\r
+        l.llmPendingReasoningDelta = reasoningTake.rest;\r
+        revealedChars += reasoningTake.count;\r
+    } else if (l.llmPendingReasoningDelta && !l.llmStreamReasoningScroller && !smoothCommit) {\r
+        l.llmPendingReasoningDelta = '';\r
+    }\r
+    if (l.llmPendingResponseDelta && l.llmStreamResponseScroller) {\r
+        var responsePending = String(l.llmPendingResponseDelta || '');\r
+        var responseTake = smoothCommit\r
+            ? takeSmoothTextPrefix(\r
+                responsePending,\r
+                computeSmoothRevealCount(responsePending.length, opts.dtMs || 16.67)\r
+            )\r
+            : { segment: responsePending, rest: '', count: responsePending.length };\r
+        appendLlmRevealedText(l.llmStreamResponseScroller, responseTake.segment, 'response');\r
+        l.llmPendingResponseDelta = responseTake.rest;\r
+        revealedChars += responseTake.count;\r
+    } else if (l.llmPendingResponseDelta && !l.llmStreamResponseScroller && !smoothCommit) {\r
+        l.llmPendingResponseDelta = '';\r
+    }\r
+    if (l.llmExecutionReveals && l.llmExecutionReveals.size) {\r
+        revealedChars += flushExecutionLlmReveals(ctx, opts);\r
+    }\r
+    return revealedChars;\r
+}\r
+\r
+function scheduleLlmDeltaFlush(ctx, runSessionId) {\r
+    const l = ctx.llm;\r
+    if (!l || l.llmDeltaFlushRaf) return;\r
+    l.llmDeltaFlushRaf = requestAnimationFrame(function (now) {\r
+        l.llmDeltaFlushRaf = 0;\r
+        var flushStartedAt = performance.now();\r
+        if (!isSmoothStreamActive()) {\r
+            flushLlmDeltaText(ctx);\r
+            followStreamProcessScroll(ctx, runSessionId, 'text');\r
+            return;\r
+        }\r
+        var dtMs = l.llmRevealLastTs > 0\r
+            ? smoothStreamClamp(now - l.llmRevealLastTs, 1, 120)\r
+            : SMOOTH_STREAM_CONFIG.referenceFrameMs;\r
+        if (l.llmRevealLastTs > 0 && typeof uiPerformance !== 'undefined') {\r
+            uiPerformance.sample(runSessionId, 'stream.frameGap', now - l.llmRevealLastTs);\r
+        }\r
+        l.llmRevealLastTs = now;\r
+        var revealed = flushLlmDeltaText(ctx, { smooth: true, dtMs: dtMs }) || 0;\r
+        if (typeof uiPerformance !== 'undefined') {\r
+            uiPerformance.sample(runSessionId, 'stream.flush', performance.now() - flushStartedAt);\r
+            uiPerformance.count(runSessionId, 'stream.revealedCodePoints', revealed);\r
+        }\r
+        followStreamProcessScroll(ctx, runSessionId, 'text');\r
+        if (l.llmPendingReasoningDelta || l.llmPendingResponseDelta\r
+            || (l.llmExecutionReveals && l.llmExecutionReveals.size)) {\r
+            scheduleLlmDeltaFlush(ctx, runSessionId);\r
+        } else {\r
+            l.llmRevealLastTs = 0;\r
+        }\r
+    });\r
+}\r
+\r
+function resetLlmState(ctx) {\r
+    if (!ctx || !ctx.llm) return;\r
+    flushLlmDeltaText(ctx);\r
+    const l = ctx.llm;\r
+    l.llmStreamReasoningIter = null;\r
+    l.llmStreamResponseIter = null;\r
+    l.llmStreamReasoningScroller = null;\r
+    l.llmStreamResponseScroller = null;\r
+    l.llmDeltaLastSeq = null;\r
+    l.llmRevealLastTs = 0;\r
+    l.llmThinkTagMode = 'response';\r
+    l.llmThinkTagCarry = '';\r
+    l.llmThinkTagAllowLeading = true;\r
+}\r
+\r
+function showCopyFeedback() {\r
+    const t = document.getElementById('copy-toast');\r
+    if (!t) return;\r
+    t.classList.add('is-on');\r
+    if (t._copyTm) clearTimeout(t._copyTm);\r
+    t._copyTm = setTimeout(function () { t.classList.remove('is-on'); }, 1500);\r
+}\r
+\r
+function showOpenFileFeedback(msg) {\r
+    var t = document.getElementById('copy-toast');\r
+    if (!t) return;\r
+    var prev = t.getAttribute('data-default-msg') || t.textContent || '已复制';\r
+    if (!t.getAttribute('data-default-msg')) t.setAttribute('data-default-msg', prev);\r
+    t.textContent = msg || '已请求打开';\r
+    t.classList.add('is-on');\r
+    if (t._openFileTm) clearTimeout(t._openFileTm);\r
+    t._openFileTm = setTimeout(function () {\r
+        t.classList.remove('is-on');\r
+        t.textContent = t.getAttribute('data-default-msg') || '已复制';\r
+    }, 2200);\r
+}\r
+\r
+(function initWorkspaceFileOpenDelegation() {\r
+    if (document.body.dataset.workspaceFileOpenBound) return;\r
+    document.body.dataset.workspaceFileOpenBound = '1';\r
+    document.body.addEventListener('click', function (ev) {\r
+        var el = ev.target;\r
+        if (!el || !el.closest) return;\r
+        var a = el.closest('a.msg-link-workspace-open');\r
+        if (!a) return;\r
+        ev.preventDefault();\r
+        var rel = a.getAttribute('data-workspace-open') || '';\r
+        // The details column owns the file-open policy now: text files open\r
+        // inline there, everything else still goes to the system app. Older\r
+        // bundles without the dock keep the plain system-open path below.\r
+        if (rel && typeof globalThis !== 'undefined' && globalThis.MyAgentDock\r
+            && typeof globalThis.MyAgentDock.isTextPath === 'function'\r
+            && typeof globalThis.MyAgentDock.openPathSmart === 'function') {\r
+            if (globalThis.MyAgentDock.isTextPath(rel)) {\r
+                globalThis.MyAgentDock.openPathSmart(rel);\r
+                showOpenFileFeedback('已在详情栏打开');\r
+            } else {\r
+                globalThis.MyAgentDock.openPathSmart(rel);\r
+            }\r
+            return;\r
+        }\r
+        var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;\r
+        var timer = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;\r
+        openWorkspaceLocalPath(rel, false, controller ? { signal: controller.signal } : {})\r
+            .then(function (j) {\r
+                if (timer) clearTimeout(timer);\r
+                if (j && j.ok) showOpenFileFeedback('已调用系统打开文件');\r
+                else showOpenFileFeedback((j && j.error) ? ('无法打开：' + j.error) : '无法打开文件');\r
+            })\r
+            .catch(function () {\r
+                if (timer) clearTimeout(timer);\r
+                showOpenFileFeedback('无法连接服务');\r
+            });\r
+    });\r
+})();\r
+\r
+let rewriteUndoState = null;\r
+/** 改写待发送：仅在点击发送时调用截断；取消则丢弃 */\r
+let pendingRewriteTruncate = null;\r
+function hideRewriteUndoToast() {\r
+    const t = document.getElementById('rewrite-undo-toast');\r
+    if (t) {\r
+        t.classList.remove('is-on');\r
+        const btn = t.querySelector('.rewrite-undo-btn');\r
+        if (btn) btn.textContent = '撤销';\r
+    }\r
+    rewriteUndoState = null;\r
+}\r
+\r
+function smoothScrollBy(el, dy) {\r
+    if (!el || !dy) return;\r
+    const bMax = Math.max(0, el.scrollHeight - el.clientHeight);\r
+    const start = el.scrollTop;\r
+    const target = Math.max(0, Math.min(bMax, start + dy));\r
+    const dist = target - start;\r
+    if (Math.abs(dist) < 0.5) return;\r
+    const frames = 3;\r
+    let f = 0;\r
+    function step() {\r
+        f += 1;\r
+        const t = f / frames;\r
+        const ease = 1 - Math.pow(1 - t, 2);\r
+        el.scrollTop = start + dist * ease;\r
+        if (f < frames) requestAnimationFrame(step);\r
+    }\r
+    requestAnimationFrame(step);\r
+}\r
+\r
+function isNearBottom(el, thresholdPx) {\r
+    if (!el) return true;\r
+    const th = (thresholdPx == null) ? 56 : thresholdPx;\r
+    return (el.scrollHeight - el.clientHeight - el.scrollTop) <= th;\r
+}\r
+\r
+async function getUiEventCount(sessionId, opts) {\r
+    opts = opts || {};\r
+    const sid = sessionId != null ? sessionId : currentSessionId;\r
+    if (!sid) return 0;\r
+    if (\r
+        opts.preferCache\r
+        && typeof uiEventCountCache !== 'undefined'\r
+        && typeof uiEventCountCache.has === 'function'\r
+        && uiEventCountCache.has(sid)\r
+        && (typeof uiEventCountCache.isFresh !== 'function' || uiEventCountCache.isFresh(sid, opts.maxAgeMs))\r
+    ) {\r
+        return uiEventCountCache.get(sid);\r
+    }\r
+    try {\r
+        const controller = new AbortController();\r
+        const externalSignal = opts.signal;\r
+        const abortFromExternal = function () { controller.abort(); };\r
+        if (externalSignal) {\r
+            if (externalSignal.aborted) controller.abort();\r
+            else externalSignal.addEventListener('abort', abortFromExternal, { once: true });\r
+        }\r
+        const timer = setTimeout(function () { controller.abort(); }, Math.max(250, Number(opts.timeoutMs) || 5000));\r
+        let r;\r
+        try {\r
+            r = await fetch('/sessions/' + encodeURIComponent(sid) + '/messages/count', {\r
+                signal: controller.signal\r
+            });\r
+        } finally {\r
+            clearTimeout(timer);\r
+            if (externalSignal) externalSignal.removeEventListener('abort', abortFromExternal);\r
+        }\r
+        if (!r.ok) return 0;\r
+        const j = await r.json();\r
+        const count = (j && typeof j.count === 'number') ? j.count : 0;\r
+        if (typeof uiEventCountCache !== 'undefined') uiEventCountCache.updateFromServer(sid, count);\r
+        return count;\r
+    } catch (e) { return 0; }\r
+}\r
+\r
+function loadUnreadFromStorage() {\r
+    try {\r
+        const raw = localStorage.getItem(LS_SESSION_UNREAD);\r
+        if (!raw) return;\r
+        const arr = JSON.parse(raw);\r
+        if (!Array.isArray(arr)) return;\r
+        arr.forEach(function (id) { sessionUnreadComplete.add(String(id)); });\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+function persistSessionUnread() {\r
+    try {\r
+        localStorage.setItem(LS_SESSION_UNREAD, JSON.stringify([...sessionUnreadComplete]));\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+function stashInputDraft(sessionId) {\r
+    if (!messageInput) return;\r
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;\r
+    draftBySession[draftKey] = messageInput.value;\r
+    persistInputDraft(sessionId, messageInput.value);\r
+}\r
+\r
+function restoreInputDraft(sessionId) {\r
+    if (!messageInput) return;\r
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;\r
+    const v = Object.prototype.hasOwnProperty.call(draftBySession, draftKey)\r
+        ? draftBySession[draftKey]\r
+        : readStoredInputDraft(sessionId);\r
+    messageInput.value = v != null ? String(v) : '';\r
+    clearInputPathTokens();\r
+    restoreDraftPathTokens(sessionId, messageInput.value);\r
+    rewriteInputWorkspacePaths();\r
+    autoResizeTextarea();\r
+}\r
+\r
+function inputDraftStorageKey(sessionId) {\r
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;\r
+    return LS_INPUT_DRAFT_PREFIX + draftKey;\r
+}\r
+\r
+/* 输入框里的绝对路径会被改写成 @基名 胶囊标签，真实路径只存在 inputPathTokenMap 里。\r
+   草稿落盘的是标签形式，不同时持久化标签→路径映射，刷新/切会话后标签就成了死文本，\r
+   再发送时真实路径会被吞掉。 */\r
+function inputDraftPathTokenStorageKey(sessionId) {\r
+    return inputDraftStorageKey(sessionId) + '::path-tokens';\r
+}\r
+\r
+/** 取出文本中仍被引用的 标签→真实路径 映射（只保留确实出现过的标签）。 */\r
+function collectDraftPathTokens(text) {\r
+    const source = String(text || '');\r
+    const out = Object.create(null);\r
+    if (!source || typeof inputPathTokenMap === 'undefined') return out;\r
+    Object.keys(inputPathTokenMap).forEach(function (label) {\r
+        if (label && source.indexOf(label) >= 0 && inputPathTokenMap[label]) {\r
+            out[label] = inputPathTokenMap[label];\r
+        }\r
+    });\r
+    return out;\r
+}\r
+\r
+function persistDraftPathTokens(sessionId, text) {\r
+    const key = inputDraftPathTokenStorageKey(sessionId);\r
+    let tokens = collectDraftPathTokens(text);\r
+    try {\r
+        if (String(sessionId || '') !== String(currentSessionId || '')) {\r
+            const stored = JSON.parse(localStorage.getItem(key) || 'null');\r
+            if (stored && typeof stored === 'object') {\r
+                tokens = Object.create(null);\r
+                Object.keys(stored).forEach(function (label) {\r
+                    if (String(text || '').indexOf(label) >= 0) tokens[label] = stored[label];\r
+                });\r
+            }\r
+        }\r
+        if (Object.keys(tokens).length) localStorage.setItem(key, JSON.stringify(tokens));\r
+        else localStorage.removeItem(key);\r
+    } catch (e) { /* ignore */ }\r
+}\r
+\r
+/** 恢复草稿前先重建标签映射，让草稿里的 @基名 胶囊重新可用（否则发送会丢路径）。 */\r
+function restoreDraftPathTokens(sessionId, text) {\r
+    const source = String(text || '');\r
+    if (!source || typeof inputPathTokenMap === 'undefined') return;\r
+    let stored = null;\r
+    try {\r
+        stored = JSON.parse(localStorage.getItem(inputDraftPathTokenStorageKey(sessionId)) || 'null');\r
+    } catch (e) {\r
+        stored = null;\r
+    }\r
+    if (!stored || typeof stored !== 'object') return;\r
+    Object.keys(stored).forEach(function (label) {\r
+        const path = String(stored[label] || '');\r
+        if (!label || !path || source.indexOf(label) < 0) return;\r
+        const existing = inputPathTokenMap[label];\r
+        if (existing && typeof normalizeInputPathTokenIdentity === 'function'\r
+            && normalizeInputPathTokenIdentity(existing) !== normalizeInputPathTokenIdentity(path)) return;\r
+        inputPathTokenMap[label] = path;\r
+    });\r
+}\r
+\r
+function persistInputDraft(sessionId, value) {\r
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;\r
+    const text = String(value || '');\r
+    draftBySession[draftKey] = text;\r
+    try {\r
+        const key = inputDraftStorageKey(sessionId);\r
+        if (text) {\r
+            localStorage.setItem(key, text);\r
+            persistDraftPathTokens(sessionId, text);\r
+        } else {\r
+            localStorage.removeItem(key);\r
+            localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));\r
+        }\r
+    } catch (e) { /* ignore */ }\r
+    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);\r
+}\r
+\r
+function readStoredInputDraft(sessionId) {\r
+    try {\r
+        return localStorage.getItem(inputDraftStorageKey(sessionId)) || '';\r
+    } catch (e) {\r
+        return '';\r
+    }\r
+}\r
+\r
+function removeStoredInputDraft(sessionId) {\r
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;\r
+    delete draftBySession[draftKey];\r
+    try {\r
+        localStorage.removeItem(inputDraftStorageKey(sessionId));\r
+        localStorage.removeItem(inputDraftPathTokenStorageKey(sessionId));\r
+    } catch (e) { /* ignore */ }\r
+    if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);\r
+}\r
+\r
+function clearStreamPoll() {\r
+    if (streamPollTimer) {\r
+        clearInterval(streamPollTimer);\r
+        streamPollTimer = null;\r
+    }\r
+}\r
+\r
+function maybeStartStreamPollForSession(sid, opts) {\r
+    opts = opts || {};\r
+    clearStreamPoll();\r
+    if (!sid) return;\r
+    if (!isSessionRunning(sid)) return;\r
+    if (!getSessionRunState(sid) && typeof attachSessionEventStream === 'function') {\r
+        void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });\r
+    }\r
+    let pollPending = false;\r
+    streamPollTimer = setInterval(function () {\r
+        if (pollPending) return;\r
+        pollPending = true;\r
+        (async function () {\r
+            try {\r
+            if (currentSessionId !== sid) {\r
+                clearStreamPoll();\r
+                return;\r
+            }\r
+            if (typeof reconcileRunStateFromServer === 'function') {\r
+                await reconcileRunStateFromServer({ silent: true });\r
+            }\r
+            const still = typeof isServerStreamActive === 'function'\r
+                ? isServerStreamActive(sid)\r
+                : isSessionRunning(sid);\r
+            if (!still) {\r
+                clearStreamPoll();\r
+                await loadSessions();\r
+                await ensureFinalVisibleAfterRunIfEnabled(sid, null, {});\r
+                syncSessionListIndicatorClasses();\r
+                setSendButtonState();\r
+                return;\r
+            }\r
+            if (currentSessionId === sid && document.visibilityState === 'visible') {\r
+                syncSessionListIndicatorClasses();\r
+                setSendButtonState();\r
+            }\r
+            } catch (error) {\r
+                console.warn('session stream poll failed:', error);\r
+            } finally {\r
+                pollPending = false;\r
+            }\r
+        })();\r
+    }, 15000);\r
+}\r
+\r
+async function scrollToUserTurnOrLoadOlder(eventIndex, opts) {\r
+    opts = opts || {};\r
+    var ei = Number(eventIndex);\r
+    if (!Number.isFinite(ei)) return false;\r
+    var silent = !!opts.silent;\r
+    var scrollBehavior = opts.instant ? 'auto' : 'smooth';\r
+    var viewportOffset = Number(opts.viewportOffset);\r
+    var hasViewportOffset = Number.isFinite(viewportOffset);\r
+    var liveHistoryOwner = isSessionRunning(currentSessionId)\r
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(currentSessionId));\r
+    var allowFullReload = opts.allowFullReload !== false && !silent && !liveHistoryOwner;\r
+    var maxOlderLoads = Number.isFinite(Number(opts.maxOlderLoads))\r
+        ? Math.max(0, Number(opts.maxOlderLoads))\r
+        : 120;\r
+    function setTocJumpLoading(active) {\r
+        var list = document.getElementById('chat-toc-list');\r
+        var link = list && list.querySelector('a[data-event-index="' + ei + '"]');\r
+        if (!link) return;\r
+        link.classList.toggle('is-loading', !!active);\r
+        if (active) link.setAttribute('aria-busy', 'true');\r
+        else link.removeAttribute('aria-busy');\r
+    }\r
+    function findWrap() {\r
+        var stream = getVisibleChatStream();\r
+        if (!stream) return null;\r
+        return stream.querySelector('.msg-wrap--user[data-event-index="' + ei + '"]')\r
+            || stream.querySelector('#user-msg-' + ei);\r
+    }\r
+    function scrollToWrap(wrap) {\r
+        if (!wrap) return;\r
+        if (!hasViewportOffset || !chatContainer) {\r
+            wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });\r
+            return;\r
+        }\r
+        var viewportRect = chatContainer.getBoundingClientRect();\r
+        var wrapRect = wrap.getBoundingClientRect();\r
+        var maxTop = Math.max(0, chatContainer.scrollHeight - chatContainer.clientHeight);\r
+        var targetTop = chatContainer.scrollTop + wrapRect.top - viewportRect.top - viewportOffset;\r
+        targetTop = Math.max(0, Math.min(maxTop, targetTop));\r
+        if (scrollBehavior === 'smooth' && typeof chatContainer.scrollTo === 'function') {\r
+            chatContainer.scrollTo({ top: targetTop, behavior: 'smooth' });\r
+        } else {\r
+            setScrollTopImmediate(chatContainer, targetTop);\r
+        }\r
+    }\r
+    async function loadFullHistoryForTarget(sid) {\r
+        if (!allowFullReload) return;\r
+        if (sid !== currentSessionId || typeof loadSessionMessages !== 'function') return;\r
+        try {\r
+            await loadSessionMessages(sid, 'saved-or-bottom', { full: true });\r
+        } catch (e) {\r
+            console.error('reload full history for toc target failed:', e);\r
+        }\r
+    }\r
+    setTocJumpLoading(true);\r
+    try {\r
+        var wrap = findWrap();\r
+        if (wrap) {\r
+            scrollToWrap(wrap);\r
+            return true;\r
+        }\r
+        var sid = currentSessionId;\r
+        if (allowFullReload) {\r
+            var loadedTargetWindow = await loadHistoryWindowAroundEventIndex(sid, ei, { turns: 50 });\r
+            if (loadedTargetWindow && sid === currentSessionId) {\r
+                wrap = findWrap();\r
+                if (wrap) {\r
+                    scrollToWrap(wrap);\r
+                    return true;\r
+                }\r
+            }\r
+        }\r
+        var safety = 0;\r
+        var olderLoads = 0;\r
+        var pagingCoveredTarget = false;\r
+        while (sid === currentSessionId && safety < 120) {\r
+            safety += 1;\r
+            wrap = findWrap();\r
+            if (wrap) {\r
+                scrollToWrap(wrap);\r
+                return true;\r
+            }\r
+            var ph = sessionHistoryPaging;\r
+            if ((!ph || ph.sessionId !== sid) && getVisibleChatStream()) {\r
+                ph = restoreHistoryPagingFromStream(getVisibleChatStream());\r
+                if (ph) sessionHistoryPaging = ph;\r
+            }\r
+            if (!ph || ph.sessionId !== sid) {\r
+                await loadFullHistoryForTarget(sid);\r
+                break;\r
+            }\r
+            if (ei >= ph.range_start) {\r
+                pagingCoveredTarget = true;\r
+                break;\r
+            }\r
+            if (!ph.has_older) break;\r
+            if (olderLoads >= maxOlderLoads) break;\r
+            while (historyOlderLoading && currentSessionId === sid) {\r
+                await new Promise(function (r) { setTimeout(r, 40); });\r
+            }\r
+            olderLoads += 1;\r
+            await loadOlderHistoryChunk({ keepTocStable: true, turns: 50 });\r
+        }\r
+        wrap = findWrap();\r
+        if (wrap) {\r
+            scrollToWrap(wrap);\r
+            return true;\r
+        }\r
+        if (allowFullReload && sid === currentSessionId && pagingCoveredTarget) {\r
+            await loadFullHistoryForTarget(sid);\r
+            if (sid !== currentSessionId) return false;\r
+            wrap = findWrap();\r
+            if (wrap) {\r
+                wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });\r
+                return true;\r
+            }\r
+            rebuildToc();\r
+        }\r
+        if (wrap) wrap.scrollIntoView({ behavior: scrollBehavior, block: 'start' });\r
+        else if (!silent) {\r
+            showUiAlert({\r
+                title: '无法定位该条',\r
+                message: '未能加载到对应的用户提问（可能索引不一致）。可刷新页面或使用「更早 ' + HISTORY_DIALOGUES_PER_PAGE + ' 轮对话」手动分页。',\r
+                showCancel: false,\r
+                confirmText: '知道了',\r
+            });\r
+        }\r
+        return !!wrap;\r
+    } finally {\r
+        setTocJumpLoading(false);\r
+    }\r
+}\r
 `,_s=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
@@ -24756,4456 +24758,4500 @@ function renderEvent(ctx, event, eventIndex, runSessionId, renderOptions) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,Us=`\uFEFFfunction setSendButtonState() {
-    syncMessageInputPlaceholder();
-    sendBtn.disabled = false;
-    const uploadBusy = isChatFileUploadBusy();
-    const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
-    const newSessionCreating = !currentSessionId && materializeNewSessionQueue;
-    if (uploadBusy) {
-        sendBtn.textContent = '上传中';
-        sendBtn.classList.remove('is-stop');
-        sendBtn.classList.remove('is-followup');
-        sendBtn.disabled = true;
-        return;
-    }
-    if (newSessionCreating && !newSessionPreflight) {
-        sendBtn.textContent = '创建中';
-        sendBtn.classList.remove('is-stop');
-        sendBtn.classList.remove('is-followup');
-        sendBtn.disabled = true;
-        return;
-    }
-    if (isSessionRunning(currentSessionId) || newSessionPreflight) {
-        const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);
-        const suppressFollowup = !!(run && run.suppressFollowupButton);
-        const hasDraft = (typeof inputHasSendableText === 'function')
-            ? inputHasSendableText()
-            : !!(messageInput && String(messageInput.value || '').trim());
-        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);
-        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';
-        sendBtn.classList.add('is-stop');
-        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);
-    } else {
-        sendBtn.textContent = '发送';
-        sendBtn.classList.remove('is-stop');
-        sendBtn.classList.remove('is-followup');
-        sendBtn.disabled = false;
-    }
-}
-
-const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';
-const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';
-const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送刚加入或第一条待发送任务';
-
-function syncMessageInputPlaceholder() {
-    if (!messageInput) return;
-    var queue = currentSessionId && typeof getFollowupQueue === 'function'
-        ? getFollowupQueue(currentSessionId)
-        : [];
-    var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));
-    var value = queue.some(function (item) { return item && !item.status; })
-        ? MESSAGE_INPUT_PLACEHOLDER_QUEUED
-        : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);
-    messageInput.placeholder = typeof translateUiString === 'function'
-        ? translateUiString(value)
-        : value;
-}
-
-function isChatFileUploadBusy() {
-    return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');
-}
-
-document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);
-document.addEventListener('myagent:language-change', function () {
-    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
-});
-
-async function requestInterrupt(sessionId, runId, reason) {
-    if (!sessionId) return;
-    try {
-        await fetch('/sessions/' + sessionId + '/interrupt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),
-        });
-    }
-    catch (e) { /* ignore */ }
-}
-
-function pauseCurrentRun() {
-    if (!currentSessionId) {
-        if (optimisticNewSessionRun) {
-            markRunAbortReason(optimisticNewSessionRun, 'user');
-            try { optimisticNewSessionRun.controller.abort(); } catch (e) { /* ignore */ }
-            optimisticNewSessionRun = null;
-            setSendButtonState();
-        }
-        return;
-    }
-    const run = getSessionRunState(currentSessionId);
-    const sid = currentSessionId;
-    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
-    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');
-    if (typeof markFollowupQueueManualOnly === 'function') markFollowupQueueManualOnly(sid);
-    suppressSessionServerStreamActive(sid);
-    if (!run) {
-        setSendButtonState();
-        syncSessionListIndicatorClasses();
-        renderSessionListIfChanged(false);
-        void requestInterrupt(sid, runId, 'user_button');
-        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
-        return;
-    }
-    const ctx = run.ctx;
-    const reachedServer = run.submitted !== false;
-    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立即反映「已停止」状态；
-       后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应卡顿。*/
-    abortSessionRun(sid, 'user');
-    setSendButtonState();
-    syncSessionListIndicatorClasses();
-    renderSessionListIfChanged(false);
-    appendLog(ctx, '已请求停止当前任务', 'status', sid);
-    sealProcessGroup(ctx);
-    if (reachedServer) void requestInterrupt(sid, runId, 'user_button');
-    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);
-}
-
-function showLoading() {
-    resetSessionHistoryPaging();
-    clearTocForSessionLoad();
-    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-    const vs = getVisibleChatStream();
-    if (vs) emptyChatStreamKeepingStrip(vs);
-    const box = document.createElement('div');
-    box.className = 'skeleton';
-    box.id = 'chat-loading';
-    box.setAttribute('role', 'status');
-    box.innerHTML = ''
-        + '<div class="skeleton-page" aria-hidden="true">'
-        + '<div class="skeleton-mast"><span></span><span></span></div>'
-        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'
-        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'
-        + '</div><div class="skeleton-copy">加载中...</div>';
-    box.setAttribute('data-ui-tip', '加载会话');
-    bindUiHoverTip(box);
-    (getVisibleChatStream() || chatContainer).appendChild(box);
-    scrollToBottom();
-}
-
-function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
-
-function sessionHasUnsentDraft(sessionId) {
-    if (!sessionId) return false;
-    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)
-        ? draftBySession[sessionId]
-        : readStoredInputDraft(sessionId);
-    return !!String(draft || '').trim();
-}
-
-function syncSessionDraftBadge(itemDiv, sessionId) {
-    if (!itemDiv || !sessionId) return;
-    var badge = itemDiv.querySelector('.session-draft-badge');
-    if (!badge) return;
-    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);
-    badge.hidden = !visible;
-    itemDiv.classList.toggle('has-unsent-draft', visible);
-}
-
-/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */
-function syncSessionDraftBadges(sessionId) {
-    if (!sessionsList) return;
-    var targetId = sessionId ? String(sessionId) : '';
-    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
-        var sid = String(div.dataset.sessionId || '');
-        if (!sid || (targetId && sid !== targetId)) return;
-        syncSessionDraftBadge(div, sid);
-    });
-}
-
-/** 同步行内高频动作（置顶）的按下态与文案；状态变了也不重建行。 */
-function syncSessionRowQuickActions(itemDiv, sessionId) {
-    var btn = itemDiv && itemDiv.querySelector ? itemDiv.querySelector('[data-session-pin]') : null;
-    if (!btn) return;
-    var sess = findSessionForActions(sessionId, null);
-    var pinned = !!(sess && sess.pinned);
-    var label = pinned ? '取消置顶' : '置顶会话';
-    btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
-    btn.setAttribute('data-ui-tip', label);
-    btn.classList.toggle('is-on', pinned);
-}
-
-/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */
-function applySessionItemIndicators(itemDiv, sessionId, opts) {
-    opts = opts || {};
-    if (!itemDiv || !sessionId) return;
-    syncSessionDraftBadge(itemDiv, sessionId);
-    syncSessionRowQuickActions(itemDiv, sessionId);
-    itemDiv.classList.remove('is-generating', 'is-finalizing', 'is-background-running', 'is-unread-result', 'is-unread-failed');
-    var nameEl = itemDiv.querySelector('.session-name');
-    if (nameEl) nameEl.removeAttribute('data-ui-tip');
-    var sess = sessionStore.get(sessionId);
-    var localUnreadResult = sessionUnreadComplete.has(sessionId);
-    var isSelectedSession = String(sessionId) === String(currentSessionId || '');
-    var failed = !!(sess && sess.unread_result_status === 'failed');
-    var hasUnreadResult = failed || (!isSelectedSession && (sess ? !!sess.unread_result : localUnreadResult));
-    var running = isSessionRunning(sessionId);
-    var backgroundRunning = sessionHasBackgroundWork(sess);
-    var finalizing = running && sessionStore.isRunFinalizing(sessionId);
-    if (running) {
-        itemDiv.classList.add(finalizing ? 'is-finalizing' : 'is-generating');
-        // A retry shows the current running state while retaining the failure
-        // record. Successful queued results can still show a pulsing green dot.
-        var hasUnreadSuccess = hasUnreadResult && !failed && !backgroundRunning;
-        if (hasUnreadSuccess) {
-            itemDiv.classList.add('is-unread-result');
-        }
-        if (nameEl) {
-            nameEl.setAttribute(
-                'data-ui-tip',
-                hasUnreadSuccess
-                    ? '已有任务完成，当前任务仍在处理'
-                    : (finalizing ? '回复已生成，正在收尾' : '生成中')
-            );
-        }
-    } else if (backgroundRunning) {
-        itemDiv.classList.add('is-background-running');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', '后台任务仍在运行');
-    } else {
-        if (!hasUnreadResult) return;
-        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');
-        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');
-    }
-    if (nameEl) bindUiHoverTip(nameEl);
-}
-
-/** 子代理在对话区打开时，侧栏仍高亮它所属的根主会话。 */
-function sidebarHighlightedSessionId() {
-    var sid = String(currentSessionId || '');
-    if (typeof subagentAddressing !== 'undefined' && subagentAddressing
-        && typeof subagentAddressing.sidebarSessionId === 'function') {
-        return subagentAddressing.sidebarSessionId(sid);
-    }
-    return sid;
-}
-
-/** 指示器全量同步的本体（同步执行，读取的永远是最新状态）。 */
-function performSessionListIndicatorSync() {
-    if (!sessionsList) return;
-    var highlightedId = sidebarHighlightedSessionId();
-    sessionsList.querySelectorAll('.session-item').forEach(function (div) {
-        var el = div.querySelector('.session-name[data-id]');
-        if (!el) return;
-        var sid = el.getAttribute('data-id');
-        div.classList.toggle('active', !!sid && sid === highlightedId);
-        applySessionItemIndicators(div, sid);
-    });
-    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();
-}
-
-/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关。
- *  突发合并：同一帧内被多处（多为 SSE 高频分支）连续调用时只跑一次——幂等操作，合并后状态一致。 */
-var sessionIndicatorSyncQueued = false;
-function syncSessionListIndicatorClasses() {
-    if (sessionIndicatorSyncQueued) return;
-    sessionIndicatorSyncQueued = true;
-    var run = function () {
-        sessionIndicatorSyncQueued = false;
-        performSessionListIndicatorSync();
-    };
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-    else run();
-}
-
-function sessionSectionExpanded(key) {
-    try {
-        return localStorage.getItem(LS_SESSION_SECTION_PREFIX + key) !== '0';
-    } catch (e) {
-        return true;
-    }
-}
-function persistSessionSectionExpanded(key, expanded) {
-    try {
-        localStorage.setItem(LS_SESSION_SECTION_PREFIX + key, expanded ? '1' : '0');
-    } catch (e) { /* ignore */ }
-}
-function closeAllSessionMenus(event) {
-    // 旧写法把「点任意处都关掉所有侧栏弹层」当成兜底，于是弹层内部一点就没了
-    // （导入会话面板里的输入框 / 来源切换 / 拖拽区全都点不了）。现在：来自弹层内部的
-    // click 不再由这里收口——菜单项该关的自己关（视图选项、新建会话菜单都有显式
-    // setSidebarPopupOpen(popup,false)），无参调用（会话/分组动作后的收尾）仍全关。
-    var target = event && event.target;
-    document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {
-        if (target && w.contains(target)) return;
-        w.classList.remove('is-open');
-        var b = w.querySelector('.session-more-btn');
-        if (b) b.setAttribute('aria-expanded', 'false');
-    });
-    document.querySelectorAll('.sidebar-popup.is-open').forEach(function (p) {
-        if (target && p.contains(target)) return;
-        p.classList.remove('is-open');
-        var t = p.querySelector('[data-popup-trigger]');
-        if (t) t.setAttribute('aria-expanded', 'false');
-    });
-}
-(function bindSessionMenuDocumentCloserOnce() {
-    if (window.__myAgentSessionMenuCloser) return;
-    window.__myAgentSessionMenuCloser = true;
-    document.addEventListener('click', closeAllSessionMenus);
-})();
-
-/* ── 侧栏通用弹出菜单（视图选项 / 分组动作 / 会话行动作共用） ──────────────
-   结构：<div class="sidebar-popup" data-sidebar-popup>
-          <button data-popup-trigger aria-haspopup="menu" aria-expanded="false">…</button>
-          <div class="sidebar-popup-menu" role="menu">…</div></div>
-   行为对齐 DSH：Esc 关闭并把焦点还给触发按钮、外部 pointerdown 关闭、
-   ↑↓/Home/End 在菜单项之间走查。 */
-function sidebarPopupMenuItems(popup) {
-    if (!popup) return [];
-    return Array.prototype.slice.call(
-        popup.querySelectorAll('.sidebar-popup-menu [role="menuitem"]:not([disabled]), .sidebar-popup-menu [role="menuitemradio"]:not([disabled])')
-    );
-}
-
-function setSidebarPopupOpen(popup, open, opts) {
-    if (!popup) return;
-    var options = opts || {};
-    var trigger = popup.querySelector('[data-popup-trigger]');
-    var next = !!open;
-    if (next) {
-        // 同时只允许一个侧栏弹出层（含会话行菜单）。
-        document.querySelectorAll('.sidebar-popup.is-open').forEach(function (other) {
-            if (other !== popup) setSidebarPopupOpen(other, false);
-        });
-        document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {
-            w.classList.remove('is-open');
-            var b = w.querySelector('.session-more-btn');
-            if (b) b.setAttribute('aria-expanded', 'false');
-        });
-    }
-    popup.classList.toggle('is-open', next);
-    if (trigger) trigger.setAttribute('aria-expanded', next ? 'true' : 'false');
-    // 菜单展开期间抑制/撤掉悬停提示，避免提示框压住菜单投影。
-    if (next && typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();
-    if (next && options.focusFirst) {
-        var items = sidebarPopupMenuItems(popup);
-        if (items.length) requestAnimationFrame(function () { items[0].focus(); });
-    }
-    if (!next && options.returnFocus && trigger && typeof trigger.focus === 'function') {
-        try { trigger.focus(); } catch (e) { /* ignore */ }
-    }
-}
-
-/** 给一个 .sidebar-popup 绑定开关、键盘与外部关闭；items 变化时由调用方重建菜单内容。 */
-function bindSidebarPopup(popup) {
-    if (!popup || popup.dataset.popupBound === '1') return;
-    popup.dataset.popupBound = '1';
-    var trigger = popup.querySelector('[data-popup-trigger]');
-    if (!trigger) return;
-    if (typeof bindUiHoverTip === 'function') bindUiHoverTip(trigger);
-    trigger.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        var willOpen = !popup.classList.contains('is-open');
-        // e.detail === 0 表示键盘触发（Enter/Space）：打开后把焦点送给第一项。
-        setSidebarPopupOpen(popup, willOpen, { focusFirst: willOpen && e.detail === 0 });
-    });
-    popup.addEventListener('keydown', function (e) {
-        if (!popup.classList.contains('is-open')) return;
-        var items = sidebarPopupMenuItems(popup);
-        if (!items.length) return;
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            setSidebarPopupOpen(popup, false, { returnFocus: true });
-            return;
-        }
-        var idx = items.indexOf(document.activeElement);
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            items[idx < 0 ? 0 : (idx + 1) % items.length].focus();
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            items[idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length].focus();
-        } else if (e.key === 'Home') {
-            e.preventDefault();
-            items[0].focus();
-        } else if (e.key === 'End') {
-            e.preventDefault();
-            items[items.length - 1].focus();
-        }
-    });
-}
-
-// 全局只有一个 pointerdown 关闭器：弹出层随列表重绘频繁重建，逐元素挂 document 监听会累积泄漏。
-(function bindSidebarPopupDocumentCloserOnce() {
-    if (window.__myAgentSidebarPopupCloser) return;
-    window.__myAgentSidebarPopupCloser = true;
-    document.addEventListener('pointerdown', function (e) {
-        var open = document.querySelectorAll('.sidebar-popup.is-open, .session-more-wrap.is-open');
-        if (!open.length) return;
-        open.forEach(function (popup) {
-            if (popup.contains(e.target)) return;
-            if (popup.classList.contains('sidebar-popup')) setSidebarPopupOpen(popup, false);
-            else {
-                popup.classList.remove('is-open');
-                var b = popup.querySelector('.session-more-btn');
-                if (b) b.setAttribute('aria-expanded', 'false');
-            }
-        });
-    }, true);
-})();
-
-var SIDEBAR_ICON_SVG = {
-    search: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>',
-    sliders: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5v14M12 5v14M19 5v14"></path><circle cx="5" cy="14" r="2"></circle><circle cx="12" cy="9" r="2"></circle><circle cx="19" cy="15" r="2"></circle></svg>',
-    folderPlus: window.MyAgentIcons.svg('folder-plus'),
-    plus: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>',
-    dots: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>',
-    pin: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>',
-    close: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>',
-    chevron: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>',
-    check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
-    newChat: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="M12 8.6v6.8M8.6 12h6.8"></path></svg>',
-};
-
-(function bindSessionListDelegatedSwitcherOnce() {
-    if (!sessionsList || window.__myAgentSessionListSwitcher) return;
-    window.__myAgentSessionListSwitcher = true;
-    // 指针刚进入该行就点了图标（⋯ / 置顶）：那枚图标是 hover 之后才浮出的，
-    // 用户来不及"瞄准"它 —— 判定为"想点这一行"，拦下这次点击并切换会话。
-    // 行情景：行右侧正是相对时间的位置，用户点那里切会话时会撞上刚浮出的 ⋯。
-    // 真正想点图标的人（进入该行 ≥220ms 后才点）不受影响。
-    sessionsList.addEventListener('click', function (e) {
-        var iconTarget = e.target;
-        if (!iconTarget || !iconTarget.closest) return;
-        var icon = iconTarget.closest('.session-more-btn, [data-session-pin]');
-        if (!icon) return;
-        var iconRow = icon.closest('.session-item');
-        if (!iconRow || !sessionsList.contains(iconRow)) return;
-        var hoverAt = Number(iconRow.dataset.hoverAt || 0);
-        if (!hoverAt || Date.now() - hoverAt >= 220) return;
-        e.preventDefault();
-        e.stopPropagation();
-        var iconSid = iconRow.dataset.sessionId;
-        if (!iconSid) return;
-        if (iconSid === currentSessionId) {
-            clearSessionUnreadState(iconSid);
-        } else {
-            Promise.resolve(switchSession(iconSid)).catch(function (err) {
-                console.error('切换会话失败:', err);
-            });
-        }
-    }, true);
-    sessionsList.addEventListener('click', function (e) {
-        var target = e.target;
-        if (!target || !target.closest) return;
-        if (target.closest('button, .session-item-actions, .session-more-wrap, .session-more-menu, .sidebar-popup, input, textarea, a')) return;
-        if (target.isContentEditable) return;
-        var row = target.closest('.session-item');
-        if (!row || !sessionsList.contains(row)) return;
-        var sid = row.dataset.sessionId;
-        if (!sid) {
-            var nameEl = row.querySelector('.session-name[data-id]');
-            sid = nameEl ? nameEl.getAttribute('data-id') : '';
-        }
-        if (sid && sid === currentSessionId) {
-            clearSessionUnreadState(sid);
-        } else if (sid) {
-            Promise.resolve(switchSession(sid)).catch(function (err) {
-                console.error('切换会话失败:', err);
-            });
-        }
-    });
-})();
-
-function buildSessionMoreMenuMarkup() {
-    return '<div class="session-more-wrap">'
-        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
-        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
-        + '<div class="session-more-menu" role="menu">'
-        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
-        + '<button type="button" class="session-menu-todo" role="menuitem"></button>'
-        + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
-        + '<button type="button" class="session-menu-workdir" role="menuitem">切换工作区</button>'
-        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'
-        + '<div class="session-menu-separator" role="separator"></div>'
-        + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'
-        + '<button type="button" class="session-menu-delete" role="menuitem">删除会话</button>'
-        + '</div></div>';
-}
-
-function findSessionForActions(sessionId, fallback) {
-    var sid = String(sessionId || '');
-    var current = sessionStore.get(sid);
-    if (current) return current;
-    if (sessionStore.archivedLoaded) {
-        current = (sessionStore.archivedSessions || []).find(function (item) {
-            return item && String(item.id) === sid;
-        });
-    }
-    return current || fallback || null;
-}
-
-function syncSessionMenuLabels(wrap, sess) {
-    if (!wrap || !sess) return;
-    wrap._sessionMenuSession = sess;
-    var pin = wrap.querySelector('.session-menu-pin');
-    var todo = wrap.querySelector('.session-menu-todo');
-    var archive = wrap.querySelector('.session-menu-archive');
-    if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
-    if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';
-    if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
-    var exportButton = wrap.querySelector('.session-menu-export');
-    if (exportButton) {
-        var exporting = sessionExportsInFlight.has(String(sess.id));
-        exportButton.disabled = exporting;
-        exportButton.textContent = exporting ? '正在导出…' : '导出会话';
-    }
-}
-
-function beginSidebarMetadataMutation() {
-    // Invalidate list/archive loads already in flight. Direct reconciliation
-    // calls are independently fenced by sessionStore.shouldAcceptSnapshot().
-    sessionListLoadEpoch += 1;
-    archivedSessionsLoadEpoch += 1;
-    return sessionStore.beginMetadataMutation();
-}
-
-function commitSidebarMetadataMutation(token, responsePayload) {
-    sessionListLoadEpoch += 1;
-    archivedSessionsLoadEpoch += 1;
-    sessionStore.commitMetadataMutation(
-        token,
-        responsePayload && responsePayload.state_revision
-    );
-}
-
-function cancelSidebarMetadataMutation(token) {
-    sessionListLoadEpoch += 1;
-    archivedSessionsLoadEpoch += 1;
-    sessionStore.cancelMetadataMutation(token);
-}
-
-async function toggleSessionPinnedFromMenu(sess) {
-    const mutationToken = beginSidebarMetadataMutation();
-    let mutationCommitted = false;
-    let previous = null;
-    try {
-        const formData = new FormData();
-        const nextPinned = !sess.pinned;
-        previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });
-        formData.append('pinned', nextPinned ? 'true' : 'false');
-        const response = await fetchWithTimeout(
-            '/sessions/' + encodeURIComponent(sess.id) + '/pin',
-            { method: 'PUT', body: formData },
-            12000
-        );
-        if (!response.ok) {
-            throw new Error('pin failed: ' + response.status);
-        }
-        const responsePayload = await response.json().catch(function () { return null; });
-        commitSidebarMetadataMutation(mutationToken, responsePayload);
-        mutationCommitted = true;
-        await refreshSingleSessionRow(sess.id);
-    } catch (err) {
-        if (!mutationCommitted) {
-            cancelSidebarMetadataMutation(mutationToken);
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-        }
-        console.error('置顶失败', err);
-    }
-}
-
-async function toggleSessionTodoFromMenu(sess) {
-    const mutationToken = beginSidebarMetadataMutation();
-    let mutationCommitted = false;
-    let previous = null;
-    try {
-        const formData = new FormData();
-        const nextTodo = !sess.todo;
-        previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });
-        formData.append('todo', nextTodo ? 'true' : 'false');
-        const response = await fetchWithTimeout(
-            '/sessions/' + encodeURIComponent(sess.id) + '/todo',
-            { method: 'PUT', body: formData },
-            12000
-        );
-        if (!response.ok) {
-            throw new Error('todo failed: ' + response.status);
-        }
-        const responsePayload = await response.json().catch(function () { return null; });
-        commitSidebarMetadataMutation(mutationToken, responsePayload);
-        mutationCommitted = true;
-        await refreshSingleSessionRow(sess.id);
-    } catch (err) {
-        if (!mutationCommitted) {
-            cancelSidebarMetadataMutation(mutationToken);
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-        }
-        console.error('待办设置失败', err);
-    }
-}
-
-async function toggleSessionArchivedFromMenu(sess) {
-    const mutationToken = beginSidebarMetadataMutation();
-    let mutationCommitted = false;
-    let previous = null;
-    try {
-        const formData = new FormData();
-        const nextArchived = !sess.archived;
-        previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });
-        formData.append('archived', nextArchived ? 'true' : 'false');
-        const response = await fetchWithTimeout(
-            '/sessions/' + encodeURIComponent(sess.id) + '/archive',
-            { method: 'PUT', body: formData },
-            12000
-        );
-        if (!response.ok) {
-            throw new Error('archive failed: ' + response.status);
-        }
-        const responsePayload = await response.json().catch(function () { return null; });
-        commitSidebarMetadataMutation(mutationToken, responsePayload);
-        mutationCommitted = true;
-        await refreshSingleSessionRow(sess.id);
-        if (!nextArchived && sessionStore.archivedLoaded) {
-            await loadArchivedSessions({ background: true, refresh: true, forceRender: true });
-        }
-    } catch (err) {
-        if (!mutationCommitted) {
-            cancelSidebarMetadataMutation(mutationToken);
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-        }
-        console.error('归档失败', err);
-    }
-}
-
-async function changeSessionWorkDirFromMenu(sess) {
-    const picked = await pickNewSessionWorkDir(sess.effective_work_dir || sess.work_dir || '');
-    if (!picked) return;
-    const token = beginSidebarMetadataMutation();
-    let committed = false;
-    try {
-        const response = await fetchWithTimeout('/sessions/' + encodeURIComponent(sess.id) + '/work-dir', {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ work_dir: String(picked).trim() }),
-        }, 12000);
-        const payload = await response.json();
-        if (!response.ok || !payload.ok) throw new Error(payload.error || ('HTTP ' + response.status));
-        commitSidebarMetadataMutation(token, payload);
-        committed = true;
-        applyOptimisticSessionUpdate(sess.id, payload.session);
-        syncSessionWorkspaceUi(sess.id);
-    } catch (error) {
-        if (!committed) cancelSidebarMetadataMutation(token);
-        await openUiModal({ title: '工作区未切换', message: String(error.message || error),
-            confirmText: '知道了', cancelText: '' });
-    }
-}
-
-async function renameSessionFromMenu(sess) {
-    var requestedName = await openUiModal({
-        title: '重命名会话',
-        subtitle: '编辑会话名称',
-        message: '',
-        inputLabel: '会话名称',
-        inputValue: String(sess.name || ''),
-        inputMaxLength: 160,
-        inputRequired: true,
-        confirmText: '保存名称',
-        cancelText: '取消',
-    });
-    if (typeof requestedName !== 'string') return;
-    var newName = requestedName.trim().slice(0, 160);
-    if (!newName || newName === String(sess.name || '')) return;
-    const mutationToken = beginSidebarMetadataMutation();
-    let mutationCommitted = false;
-    const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });
-    if (currentSessionId === sess.id) updateSessionTitle();
-    try {
-        const formData = new FormData();
-        formData.append('name', newName);
-        const response = await fetchWithTimeout(
-            '/sessions/' + encodeURIComponent(sess.id) + '/name',
-            { method: 'PUT', body: formData },
-            12000
-        );
-        if (!response.ok) throw new Error('rename failed: ' + response.status);
-        const responsePayload = await response.json().catch(function () { return null; });
-        commitSidebarMetadataMutation(mutationToken, responsePayload);
-        mutationCommitted = true;
-        await refreshSingleSessionRow(sess.id);
-        if (currentSessionId === sess.id) updateSessionTitle();
-    } catch (err) {
-        console.error('重命名失败', err);
-        if (!mutationCommitted) {
-            cancelSidebarMetadataMutation(mutationToken);
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-        }
-        if (currentSessionId === sess.id) updateSessionTitle();
-    }
-}
-
-var sessionExportsInFlight = new Set();
-
-async function exportSessionFromMenu(sess) {
-    var sessionId = String(sess.id || '');
-    if (!sessionId || sessionExportsInFlight.has(sessionId)) return;
-    var confirmed = await openUiModal({
-        title: '导出会话',
-        subtitle: '下载会话文件',
-        message: '将会话「' + String(sess.name || '未命名') + '」对应的 session 文件夹压缩为 ZIP 并下载。',
-        confirmText: '确认导出',
-        cancelText: '取消',
-    });
-    if (!confirmed) return;
-    if (sessionExportsInFlight.has(sessionId)) return;
-    function syncExportMenus() {
-        document.querySelectorAll('.session-more-wrap').forEach(function (wrap) {
-            var menuSession = wrap._sessionMenuSession;
-            if (menuSession && String(menuSession.id) === sessionId) syncSessionMenuLabels(wrap, menuSession);
-        });
-    }
-    sessionExportsInFlight.add(sessionId);
-    syncExportMenus();
-    try {
-        // Read errors before starting a download: native downloads hide HTTP
-        // error bodies, and Electron otherwise appears to do nothing at all.
-        var response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/export', {
-            credentials: 'same-origin',
-            cache: 'no-store',
-        });
-        if (!response.ok) {
-            var payload = await response.json().catch(function () { return {}; });
-            throw new Error(payload.error || '导出请求失败（HTTP ' + response.status + '）');
-        }
-        if (response.redirected || (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/zip') {
-            throw new Error('服务器未返回会话 ZIP 文件，请刷新页面后重试。');
-        }
-        var blob = await response.blob();
-        if (!blob.size) throw new Error('导出文件为空，请重试。');
-        var downloadUrl = URL.createObjectURL(blob);
-        var link = document.createElement('a');
-        var filename = (response.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/i);
-        link.href = downloadUrl;
-        link.download = filename ? filename[1] : 'session-' + sessionId + '.zip';
-        link.hidden = true;
-        document.body.appendChild(link);
-        try {
-            link.click();
-        } finally {
-            link.remove();
-            // Give both Chromium and the desktop shell time to consume the URL.
-            setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 60000);
-        }
-    } catch (err) {
-        console.error('导出会话失败', err);
-        showUiAlert({
-            title: '导出失败',
-            message: String((err && err.message) || err || '无法导出该会话'),
-            variant: 'error',
-        });
-    } finally {
-        sessionExportsInFlight.delete(sessionId);
-        syncExportMenus();
-    }
-}
-
-async function deleteSessionFromMenu(sess, rowDiv) {
-    const okDel = await openUiModal({
-        title: '删除会话',
-        subtitle: '此操作不可恢复',
-        message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',
-        danger: true,
-        confirmText: '删除会话',
-        cancelText: '取消',
-    });
-    if (!okDel) return;
-    const wasArchivedLoaded = sessionStore.archivedLoaded;
-    const deletedSessionId = String(sess.id || '');
-    await removeDeletedSessionFromUi(sess, rowDiv);
-    void requestInterrupt(deletedSessionId, '', 'session_deleted');
-    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })
-        .then(function (resp) {
-            if (!resp.ok) throw new Error('delete failed: ' + resp.status);
-            releaseDeletedSessionDock(deletedSessionId);
-        })
-        .catch(function (err) {
-            console.error('删除会话失败:', err);
-            sessionStore.clearDeletedSessionTombstone(deletedSessionId);
-            void loadSessions({ skipArchivedRefresh: true });
-            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
-        });
-}
-
-function releaseDeletedSessionDock(sessionId) {
-    if (typeof dockRightPageHost !== 'undefined') dockRightPageHost?.releaseSession(sessionId);
-    if (typeof dockForgetSession === 'function') dockForgetSession(sessionId);
-}
-
-async function removeDeletedSessionFromUi(sess, rowDiv, opts) {
-    const wasArchivedLoaded = sessionStore.archivedLoaded;
-    const deletedSessionId = String(sess.id || '');
-    const nextSession = sessionStore.list().find(function (s) {
-        return s && s.id && String(s.id) !== deletedSessionId && !s.archived;
-    }) || null;
-    sessionStore.markDeletedSession(deletedSessionId);
-    if (wasArchivedLoaded && sess.archived) {
-        const archivedBeforeDelete = sessionStore.archivedSessions || [];
-        const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {
-            return s && String(s.id) === deletedSessionId;
-        });
-        sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {
-            return s && String(s.id) !== deletedSessionId;
-        }), {
-            visibleCount: Math.max(
-                0,
-                sessionStore.archivedVisibleCount
-                    - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)
-            ),
-            totalCount: Math.max(0, sessionStore.archivedCount - 1),
-        });
-        syncArchivedSessionStateFromStore();
-    }
-    renderSessionListIfChanged(true);
-    if (rowDiv && rowDiv.parentNode) rowDiv.remove();
-    sessionUnreadComplete.delete(deletedSessionId);
-    scheduleTitleGenerationRefresh(deletedSessionId, false);
-    persistSessionUnread();
-    delete draftBySession[deletedSessionId];
-    removeStoredInputDraft(deletedSessionId);
-    if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);
-    delete lastUserMessageBySession[deletedSessionId];
-    clearContextStateForSession(deletedSessionId);
-    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);
-    if (isSessionRunning(sess.id)) {
-        const r = abortSessionRun(sess.id, 'delete');
-        if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
-        setSendButtonState();
-        syncSessionListIndicatorClasses();
-    }
-    if (currentSessionId === deletedSessionId && !(opts && opts.deferSwitch)) {
-        if (nextSession) await switchSession(nextSession.id);
-        else await createNewSession();
-    }
-}
-
-function bindSessionActionMenu(wrap, getSession, rowDiv) {
-    if (!wrap || wrap.dataset.sessionMenuBound === '1') return;
-    wrap.dataset.sessionMenuBound = '1';
-    var moreBtn = wrap.querySelector('.session-more-btn');
-    if (moreBtn) {
-        bindUiHoverTip(moreBtn);
-        moreBtn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var wasOpen = wrap.classList.contains('is-open');
-            closeAllSessionMenus();
-            var sess = getSession();
-            if (!sess) return;
-            syncSessionMenuLabels(wrap, sess);
-            if (!wasOpen) {
-                wrap.classList.add('is-open');
-                moreBtn.setAttribute('aria-expanded', 'true');
-                // 打开后把焦点留在触发按钮上：↑↓/Esc 的键盘走查才有事件起点。
-                try { moreBtn.focus(); } catch (err) { /* ignore */ }
-                if (typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();
-            }
-        });
-    }
-    // DSH 对齐：Esc 关闭并把焦点还给触发按钮，↑↓/Home/End 在菜单项之间走查。
-    wrap.addEventListener('keydown', function (e) {
-        var menu = wrap.querySelector('.session-more-menu');
-        if (!menu || !wrap.classList.contains('is-open')) return;
-        var items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitem"]'));
-        if (!items.length) return;
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
-            wrap.classList.remove('is-open');
-            if (moreBtn) {
-                moreBtn.setAttribute('aria-expanded', 'false');
-                try { moreBtn.focus(); } catch (err) { /* ignore */ }
-            }
-            return;
-        }
-        var idx = items.indexOf(document.activeElement);
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            items[idx < 0 ? 0 : (idx + 1) % items.length].focus();
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            items[idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length].focus();
-        } else if (e.key === 'Home') {
-            e.preventDefault();
-            items[0].focus();
-        } else if (e.key === 'End') {
-            e.preventDefault();
-            items[items.length - 1].focus();
-        }
-    });
-    wrap.addEventListener('click', function (e) {
-        var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
-        if (!target || !wrap.contains(target)) return;
-        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
-            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
-                : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
-                    : target.classList.contains('session-menu-workdir') ? changeSessionWorkDirFromMenu
-                    : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
-                        : target.classList.contains('session-menu-export') ? exportSessionFromMenu
-                            : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu
-                                : null;
-        if (!handler) return;
-        e.stopPropagation();
-        closeAllSessionMenus();
-        var sess = getSession();
-        if (!sess) return;
-        Promise.resolve(handler(sess, rowDiv)).catch(function (err) {
-            console.error('会话菜单操作失败:', err);
-        });
-    });
-}
-
-var titlebarSessionMenuSnapshot = null;
-
-function getTitlebarSessionForActions(host, wrap) {
-    var sessionId = (host && host.dataset.sessionId) || currentSessionId;
-    return findSessionForActions(sessionId, wrap && wrap._sessionMenuSession)
-        || titlebarSessionMenuSnapshot;
-}
-
-function syncTitlebarSessionMenu(sess) {
-    var host = document.getElementById('breadcrumb-session-actions');
-    if (!host) return;
-    titlebarSessionMenuSnapshot = sess ? Object.assign({}, titlebarSessionMenuSnapshot || {}, sess) : null;
-    host.dataset.sessionId = titlebarSessionMenuSnapshot ? String(titlebarSessionMenuSnapshot.id || '') : '';
-    host.classList.toggle('hidden', !sess);
-    var wrap = host.querySelector('.session-more-wrap');
-    if (wrap && titlebarSessionMenuSnapshot) syncSessionMenuLabels(wrap, titlebarSessionMenuSnapshot);
-}
-
-(function mountTitlebarSessionMenu() {
-    var host = document.getElementById('breadcrumb-session-actions');
-    if (!host || host.dataset.sessionMenuMounted === '1') return;
-    host.dataset.sessionMenuMounted = '1';
-    host.innerHTML = buildSessionMoreMenuMarkup();
-    var wrap = host.querySelector('.session-more-wrap');
-    bindSessionActionMenu(wrap, function () {
-        return getTitlebarSessionForActions(host, wrap);
-    }, null);
-    syncTitlebarSessionMenu(currentSessionId ? findSessionForActions(currentSessionId, null) : null);
-})();
-
-/** 创建并绑定单条会话及其分区操作菜单。 */
-function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
-    const div = document.createElement('div');
-    div.className = 'session-item';
-    div.dataset.sessionId = sess.id || '';
-    // 记录指针进入本行的时刻（见上面的 capture 拦截）：用于区分"点这一行"与"点浮出的图标"。
-    div.addEventListener('mouseenter', function () {
-        div.dataset.hoverAt = String(Date.now());
-    });
-    if (sidebarHighlightedSessionId() === sess.id) div.classList.add('active');
-    if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;
-    if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
-    var displayName = typeof localizeSessionPlaceholderName === 'function'
-        ? localizeSessionPlaceholderName(sess.name)
-        : (sess.name || '');
-    div.innerHTML = '<div class="session-item-head">'
-        + '<div class="session-item-main">'
-        + '<div class="session-item-title-row">'
-        + '<span class="session-name" data-id="' + escapeHtml(String(sess.id || '')) + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'
-        + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
-        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
-        + '<span class="session-item-date"></span>'
-        // 置顶标记（DSH 同款）：行尾、相对时间之后的一枚 16px 图钉；hover 时与时间一起淡出，
-        // 把位置让给行内动作（置顶/⋯），避免同一位置出现两个图钉。
-        + '<span class="session-pin-mark" aria-label="置顶" title="置顶"' + (sess.pinned ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.pin + '</span>'
-        // 动作区与相对时间共用标题行的定位容器，避免被第二行摘要拉低。
-        + '<div class="session-item-actions">'
-        + '<button type="button" class="session-row-icon session-row-pin" data-session-pin aria-label="置顶会话" aria-pressed="false" data-ui-tip="置顶会话">'
-        + SIDEBAR_ICON_SVG.pin + '</button>'
-        + buildSessionMoreMenuMarkup()
-        + '</div>'
-        + '</div>'
-        + '<div class="session-last-query"></div>'
-        + '</div>'
-        + '</div>';
-    if (typeof updateHumanInteractionSessionBadge === 'function') {
-        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);
-    }
-    var wsLine = formatSessionListSubtitle(sess);
-    var wsEl = div.querySelector('.session-last-query');
-    if (wsEl) wsEl.textContent = wsLine;
-    var dateEl = div.querySelector('.session-item-date');
-    var dateLine = '';
-    if (dateEl) {
-        // 行列尾用相对时间（DSH 风格），完整时间仍在整行 tooltip 里。
-        // 活动时间戳落一份在 DOM 上：30 秒共享时钟据此做纯文本刷新（不动列表结构）。
-        var activityTs = typeof sessionActivityTimestampMs === 'function' ? sessionActivityTimestampMs(sess) : 0;
-        if (activityTs > 0) dateEl.setAttribute('data-activity-at', String(activityTs));
-        dateLine = typeof formatSessionListRelativeTime === 'function'
-            ? formatSessionListRelativeTime(sess)
-            : '';
-        dateEl.textContent = dateLine || '';
-    }
-    var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';
-    if (itemTip) {
-        div.setAttribute('data-ui-tip', itemTip);
-        bindUiHoverTip(div);
-    }
-    var moreWrap = div.querySelector('.session-more-wrap');
-    syncSessionMenuLabels(moreWrap, sess);
-    bindSessionActionMenu(moreWrap, function () {
-        return findSessionForActions(sess.id, sess);
-    }, div);
-    var pinBtn = div.querySelector('[data-session-pin]');
-    if (pinBtn) {
-        bindUiHoverTip(pinBtn);
-        pinBtn.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            var target = findSessionForActions(sess.id, sess);
-            if (!target) return;
-            Promise.resolve(toggleSessionPinnedFromMenu(target)).catch(function (err) {
-                console.error('置顶失败:', err);
-            });
-                // 点「置顶」按钮时也切换到该会话：行尾这个位置在原版里就是"点行切会话"的热区，
-                // 用户期望点这里能进入该会话（置顶动作照旧执行）。
-                if (String(sess.id) !== String(currentSessionId || '') && typeof switchSession === 'function') {
-                    Promise.resolve(switchSession(sess.id)).catch(function (err) {
-                        console.error('切换会话失败:', err);
-                    });
-                }
-        });
-    }
-    var nameEl = div.querySelector('.session-name');
-    if (nameEl) {
-        nameEl.addEventListener('dblclick', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            var current = findSessionForActions(sess.id, sess);
-            if (!current) return;
-            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {
-                console.error('双击重命名会话失败:', err);
-            });
-        });
-    }
-    applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
-    ensureSidebarTextTimesAutoRefresh();
-    return div;
-}
-
-/** 侧栏行时间自动刷新（学 DSH 的 relative-clock）：30 秒共享节拍（经统一节拍器）+ 聚焦/可见性即时补拍。
- *  只更新 .session-item-date 的文本，不触碰列表结构。 */
-function refreshSessionListTimes(root) {
-    var scope = root || document;
-    if (!scope || !scope.querySelectorAll) return;
-    if (typeof formatSessionListRelativeTimeFromTs !== 'function') return;
-    var now = Date.now();    // 一次采样：列表所有行共用同一 now（与 DSH 的行 props 传递方式一致）
-    scope.querySelectorAll('.session-item-date[data-activity-at]').forEach(function (el) {
-        var ts = Number(el.getAttribute('data-activity-at')) || 0;
-        var txt = ts > 0 ? formatSessionListRelativeTimeFromTs(ts, now) : '';
-        if (el.textContent !== txt) el.textContent = txt;
-    });
-}
-
-// ═══════════════════════════════════════════════════════════
-// 侧栏统一刷新节拍（学 DSH 的共享时钟思路）
-//   一个动态定时器驱动所有周期性刷新任务：任务各自带周期与可见性策略；
-//   「只在可见时有意义」的任务在窗口隐藏时整体跳过；恢复可见/聚焦时立即补拍。
-//   取代此前彼此独立的 5s / 30s / 60s 三个 setInterval。
-// ═══════════════════════════════════════════════════════════
-var sidebarRefreshTasks = [];
-var sidebarRefreshTimer = null;
-
-function registerSidebarRefreshTask(key, everyMs, run, opts) {
-    opts = opts || {};
-    if (!key || typeof run !== 'function') return;
-    var existing = sidebarRefreshTasks.find(function (t) { return t.key === key; });
-    if (existing) {
-        existing.everyMs = Math.max(1000, Number(everyMs) || 30000);
-        existing.run = run;
-        existing.runWhenHidden = !!opts.runWhenHidden;
-    } else {
-        // lastAt = 0：注册后的第一次到期判定即为「立即执行」（保留各任务"启动先跑一次"的旧语义）。
-        sidebarRefreshTasks.push({
-            key: key,
-            everyMs: Math.max(1000, Number(everyMs) || 30000),
-            run: run,
-            runWhenHidden: !!opts.runWhenHidden,
-            lastAt: 0,
-        });
-    }
-    scheduleSidebarRefreshTimer();
-}
-
-function scheduleSidebarRefreshTimer() {
-    if (sidebarRefreshTimer) { clearTimeout(sidebarRefreshTimer); sidebarRefreshTimer = null; }
-    var now = Date.now();
-    var nextIn = Infinity;
-    sidebarRefreshTasks.forEach(function (t) {
-        if (document.hidden && !t.runWhenHidden) return;
-        nextIn = Math.min(nextIn, Math.max(t.lastAt + t.everyMs - now, 0));
-    });
-    // 全部任务都被隐藏跳过时不再武装定时器，等 visibilitychange 重新校准。
-    if (!isFinite(nextIn)) return;
-    sidebarRefreshTimer = setTimeout(runSidebarRefreshDue, Math.max(nextIn, 16));
-}
-
-function runSidebarRefreshDue() {
-    sidebarRefreshTimer = null;
-    var now = Date.now();
-    sidebarRefreshTasks.forEach(function (t) {
-        if (document.hidden && !t.runWhenHidden) return;
-        if (now - t.lastAt < t.everyMs) return;
-        t.lastAt = now;
-        try { t.run(); } catch (e) { /* 单任务失败不影响其它任务 */ }
-    });
-    scheduleSidebarRefreshTimer();
-}
-
-/** 恢复可见 / 聚焦时立即补拍「可见才有意义」的任务（跳过常驻任务，避免聚焦触发额外网络请求）。 */
-function catchUpSidebarRefresh() {
-    var now = Date.now();
-    sidebarRefreshTasks.forEach(function (t) {
-        if (t.runWhenHidden || document.hidden) return;
-        t.lastAt = now;
-        try { t.run(); } catch (e) { /* ignore */ }
-    });
-    scheduleSidebarRefreshTimer();
-}
-
-document.addEventListener('visibilitychange', function () {
-    if (document.hidden) scheduleSidebarRefreshTimer();   // 隐藏：按隐藏策略重排
-    else catchUpSidebarRefresh();                          // 恢复可见：立即补拍
-});
-window.addEventListener('focus', catchUpSidebarRefresh);
-
-/** 只读调试句柄：用于自动化验证节拍统一与任务周期。 */
-window.__sidebarRefreshDebug = function () {
-    return sidebarRefreshTasks.map(function (t) {
-        return { key: t.key, everyMs: t.everyMs, runWhenHidden: t.runWhenHidden, lastAt: t.lastAt };
-    });
-};
-
-/** 两类时间文案（侧栏相对时间 + 消息绝对时间）共用一个 30 秒任务：
- *  同属分钟粒度、同属"只改文本"，分两个任务只是重复；合并后一拍完成、状态天然一致。 */
-function ensureSidebarTextTimesAutoRefresh() {
-    if (window.__sidebarTextTimesBound) return;
-    window.__sidebarTextTimesBound = true;
-    registerSidebarRefreshTask('text-times', 30000, function () {
-        refreshSessionListTimes();
-        if (typeof refreshUserMessageTimes === 'function') refreshUserMessageTimes(document);
-    }, { runWhenHidden: false });
-}
-
-const sessionTitleRefreshState = Object.create(null);
-
-function scheduleTitleGenerationRefresh(sessionId, pending) {
-    const sid = String(sessionId || '');
-    if (!sid) return;
-    let state = sessionTitleRefreshState[sid];
-    if (!pending) {
-        if (state && state.timer) clearTimeout(state.timer);
-        delete sessionTitleRefreshState[sid];
-        return;
-    }
-    if (!state) state = sessionTitleRefreshState[sid] = { attempts: 0, timer: null };
-    if (state.timer || state.attempts >= 60) return;
-    const delayMs = Math.min(10000, Math.round(1000 * Math.pow(1.45, state.attempts)));
-    state.timer = setTimeout(function () {
-        state.timer = null;
-        state.attempts += 1;
-        void refreshSingleSessionRow(sid);
-    }, delayMs);
-}
-
-const sessionNameRecheckState = Object.create(null);
-
-/**
- * run 结束后对「名字可能刚生成」的会话做有限复查（兜底）。
- *
- * 标题由服务端后台 worker 生成，前端只在 title_generation_pending 窗口内轮询；
- * 一旦本次 run 的收尾请求与「生成完成」擦肩而过（错过窗口），会话名会一直停留
- * 在旧值，直到用户手动切换会话。这里以 run 结束时的名字为基线短周期复查：
- * 名字一变立即停止；到上限（默认 30s）无变化也停止。
- */
-function scheduleSessionNameRecheck(sessionId, opts) {
-    const sid = String(sessionId || '');
-    if (!sid || !sessionsList) return;
-    const baseline = String((opts && opts.baseline) || '');
-    const maxAttempts = Math.max(1, Math.min(60, Number((opts && opts.maxAttempts) || 15)));
-    const delayMs = Math.max(600, Number((opts && opts.delayMs) || 2000));
-    let state = sessionNameRecheckState[sid];
-    if (!state) {
-        state = sessionNameRecheckState[sid] = { attempts: 0, timer: null, baseline: '', maxAttempts: maxAttempts, delayMs: delayMs };
-    }
-    if (baseline) state.baseline = baseline;
-    state.maxAttempts = maxAttempts;
-    state.delayMs = delayMs;
-    if (state.timer) return;
-    const tick = async function () {
-        state.timer = null;
-        state.attempts += 1;
-        await refreshSingleSessionRow(sid);
-        const live = sessionNameRecheckState[sid];
-        if (!live) return;
-        const session = sessionStore.get(sid);
-        const currentName = session ? String(session.name || '') : '';
-        if (currentName && live.baseline && currentName !== live.baseline) {
-            delete sessionNameRecheckState[sid];
-            return;
-        }
-        if (live.attempts >= live.maxAttempts) {
-            delete sessionNameRecheckState[sid];
-            return;
-        }
-        live.timer = setTimeout(tick, live.delayMs);
-    };
-    state.timer = setTimeout(tick, delayMs);
-}
-
-var sessionRowRefreshPromises = new Map();
-async function refreshSingleSessionRow(sessionId) {
-    if (sessionRowRefreshPromises.has(sessionId)) return sessionRowRefreshPromises.get(sessionId);
-    var promise = refreshSingleSessionRowInner(sessionId);
-    sessionRowRefreshPromises.set(sessionId, promise);
-    try { return await promise; }
-    finally { if (sessionRowRefreshPromises.get(sessionId) === promise) sessionRowRefreshPromises.delete(sessionId); }
-}
-
-async function refreshSingleSessionRowInner(sessionId) {
-    if (!sessionId || !sessionsList) return;
-    try {
-        const response = await fetch('/sessions/' + encodeURIComponent(sessionId));
-        if (!response.ok) return;
-        const sess = await response.json();
-        if (!sess || !sess.id) return;
-        scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);
-        if (sess.is_subagent) {
-            // Child details must be addressable without inserting a duplicate
-            // row into the root-session sidebar.
-            sessionStore.sessionsById.set(String(sess.id), sess);
-            setSessionServerStreamActive(sess.id, !!sess.stream_active);
-        } else {
-            applySessionPatch({
-                session: sess,
-                session_id: sess.id,
-            });
-        }
-        const appliedSession = sessionStore.get(sess.id) || sess;
-        sessionStore.applyActiveRunForSession(
-            sess.id,
-            sess.active_run || (sess.run_active ? {
-                session_id: sess.id,
-                run_active: true,
-                started_at: sess.run_started_at || null,
-            } : null)
-        );
-        if (appliedSession.unread_result) {
-            if (!sessionUnreadComplete.has(sess.id)) {
-                sessionUnreadComplete.add(sess.id);
-                persistSessionUnread();
-            }
-        } else if (sessionUnreadComplete.delete(sess.id)) {
-            persistSessionUnread();
-        }
-        if (sessionHasBackgroundWork(sess)) {
-            sessionUnreadComplete.delete(sess.id);
-            persistSessionUnread();
-        }
-        renderSessionListIfChanged(false);
-        if (!sess.is_subagent && typeof maybeAutoResumeInterruptedReact === 'function') {
-            maybeAutoResumeInterruptedReact(sessionId, sess);
-        }
-        return sess;
-    } catch (e) {
-        console.error('刷新会话摘要失败:', e);
-    }
-}
-
-let sessionListLoadEpoch = 0;
-let sessionListLoadPromise = null;
-let sessionListLayoutKey = '';
-let sessionListContentMap = null;
-let materializeNewSessionQueue = null;
-// 点“新会话”后立即启动的后台预取（服务端隐藏草稿会话）：{ sessionId, response, session }。
-// 页面内重复点击与刷新后重新进入草稿态都复用它，避免把会话文件创建算进首条消息的等待。
-let pendingNewSession = null;
-let prefetchNewSessionPromise = null;
-let prefetchNewSessionWorkDir = null;
-const PENDING_NEW_SESSION_KEY = 'myagent-pending-new-session-id';
-// 下一个新会话要用的工作目录（绝对路径）。由「在新工作目录新建会话」设置，
-// 随 POST /sessions 的 work_dir 字段提交；会话创建后即清空，回到全局默认目录。
-let newSessionWorkDir = '';
-let newSessionWorkDirRevision = 0;
-let archivedSessionsLoaded = false;
-let archivedSessionsCache = null;
-let archivedSessionsCount = 0;
-let archivedSessionsLoadEpoch = 0;
-
-function syncArchivedSessionStateFromStore() {
-    archivedSessionsLoaded = !!sessionStore.archivedLoaded;
-    archivedSessionsCache = sessionStore.archivedSessions;
-    archivedSessionsCount = sessionStore.archivedCount;
-}
-
-/** 渲染键拆两半（增量渲染的地基）：
- *  - 布局键：分组方式/筛选 + 实际渲染出的 (区块·分组·会话) 有序序列 + 归档计数类装饰。
- *    只在"结构或顺序"变化时改变（新建/删除/置顶/归档/排序变化 → 整表重建）。
- *  - 内容键：每会话的"可见字段"指纹（名字/待办/活动时间/预览/工作目录…）。
- *    纯内容变化可以只替换受影响的行，不再整表重建。 */
-function computeSessionListLayoutKey() {
-    const sections = selectSessionSections();
-    const query = (typeof getSessionListSearchQuery === 'function') ? getSessionListSearchQuery() : '';
-    const parts = [
-        'groupBy=' + (typeof getSessionGroupBy === 'function' ? getSessionGroupBy() : 'time'),
-        'q=' + query,
-        'archive=' + (typeof getSessionArchiveFilter === 'function' ? getSessionArchiveFilter() : 'show'),
-        'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),
-        'archivedCount=' + String(sessionStore.archivedCount || 0),
-        'archivedVisible=' + String(sessionStore.archivedVisibleCount || 0),
-        'searching=' + (query ? '1' : '0'),
-    ];
-    const pushIds = function (tag, list) {
-        if (!Array.isArray(list)) return;
-        for (let i = 0; i < list.length; i += 1) {
-            const s = list[i];
-            if (s && s.id) parts.push(tag + ':' + s.id);
-        }
-    };
-    pushIds('p', sections.pinned);
-    if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
-        sections.normalGroups.forEach(function (group) {
-            parts.push('g:' + String((group && group.key) || ''));
-            // 实际渲染出的行 = 配额截断后的集合；「显示更多」按钮存在与否也进键，
-            // 展开/收起时布局键变化 → 触发整表重建。
-            var vis = (group && group.isWorkDirGroup && typeof sessionGroupSessionsVisible === 'function')
-                ? sessionGroupSessionsVisible(group, { noLimit: !!query })
-                : { rows: (group && group.sessions) || [], hiddenCount: 0 };
-            pushIds('n', vis.rows);
-            if (vis.hiddenCount > 0) parts.push('of:' + String((group && group.key) || ''));
-        });
-    } else {
-        pushIds('n', sections.normal);
-    }
-    pushIds('a', sections.archived);
-    return parts.join('\\u001e');
-}
-
-function computeSessionListContentMap() {
-    const map = Object.create(null);
-    const stamp = function (s) {
-        if (!s || !s.id) return;
-        map[s.id] = [
-            s.name || '',
-            s.pinned ? 'p' : '',
-            s.todo ? 't' : '',
-            s.archived ? 'a' : '',
-            s.last_activity_at || s.updated_at || '',
-            s.last_user_preview || '',
-            s.work_dir || '',
-            s.work_dir_label || '',
-            s.work_dir_is_default ? 'd' : '',
-        ].join('\\u001f');
-    };
-    sessionStore.list().forEach(stamp);
-    sessionStore.archivedList().forEach(stamp);
-    return map;
-}
-
-function sessionContentMapsEqual(a, b) {
-    if (a === b) return true;
-    if (!a || !b) return false;
-    const keys = Object.keys(a);
-    if (keys.length !== Object.keys(b).length) return false;
-    for (let i = 0; i < keys.length; i += 1) {
-        if (a[keys[i]] !== b[keys[i]]) return false;
-    }
-    return true;
-}
-
-/** 内容级变化：只就地替换受影响的会话行（保序、保结构）。
- *  stream 映射按"实际渲染出的集合"构建，与整表渲染语义一致；
- *  行数过多（> 24）时退化为整表重建，避免逐行替换的调度开销得不偿失。 */
-function patchSessionListRows(ids) {
-    if (!sessionsList || !ids || !ids.length) return;
-    const sections = selectSessionSections();
-    const nextStreamMap = Object.create(null);
-    const collect = function (s) {
-        if (s && s.id) nextStreamMap[s.id] = !!s.stream_active;
-    };
-    (sections.pinned || []).forEach(collect);
-    if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
-        sections.normalGroups.forEach(function (g) {
-            // 与渲染/布局键一致：stream 映射只覆盖"实际渲染出的行"。
-            var rows = (g && g.isWorkDirGroup && typeof sessionGroupSessionsVisible === 'function')
-                ? sessionGroupSessionsVisible(g, {
-                    noLimit: !!(typeof getSessionListSearchQuery === 'function' && getSessionListSearchQuery())
-                }).rows
-                : ((g && g.sessions) || []);
-            rows.forEach(collect);
-        });
-    } else {
-        (sections.normal || []).forEach(collect);
-    }
-    (sections.archived || []).forEach(collect);
-
-    const allSessions = selectAllSessions();
-    const byId = Object.create(null);
-    allSessions.forEach(function (s) { if (s && s.id) byId[s.id] = s; });
-
-    let replaced = 0;
-    ids.forEach(function (id) {
-        const sess = byId[id];
-        if (!sess) return;
-        let node = null;
-        try {
-            node = sessionsList.querySelector('.session-item[data-session-id="' +
-                ((window.CSS && CSS.escape) ? CSS.escape(id) : id) + '"]');
-        } catch (e) { node = null; }
-        if (!node) return;
-        node.replaceWith(buildAndBindSessionRow(sess, allSessions, nextStreamMap));
-        replaced += 1;
-    });
-    applyServerStreamActiveMap(nextStreamMap);
-    if (replaced) {
-        normalizeTruncatedSessionNames(sessionsList);
-        if (typeof syncSessionListHead === 'function') {
-            syncSessionListHead(sections, { searching: !!getSessionListSearchQuery() });
-        }
-        syncSessionListIndicatorClasses();
-    }
-    renderSessionTitleFromStore();
-}
-
-function renderSessionListIfChanged(force) {
-    if (typeof sessionSearchState !== 'undefined' && sessionSearchState.dialog && sessionSearchState.q) {
-        observeSessionSearchStore();
-        renderSessionSearchResults();
-    }
-    const nextLayout = computeSessionListLayoutKey();
-    const nextContent = computeSessionListContentMap();
-    if (!force && nextLayout === sessionListLayoutKey && sessionContentMapsEqual(nextContent, sessionListContentMap)) {
-        syncSessionListIndicatorClasses();
-        renderSessionTitleFromStore();
-        return;
-    }
-    const layoutChanged = nextLayout !== sessionListLayoutKey;
-    const prevContent = sessionListContentMap;
-    sessionListLayoutKey = nextLayout;
-    sessionListContentMap = nextContent;
-
-    if (!force && !layoutChanged && prevContent) {
-        const changedIds = [];
-        for (const id in nextContent) {
-            if (prevContent[id] !== nextContent[id]) changedIds.push(id);
-        }
-        if (changedIds.length && changedIds.length <= 24) {
-            patchSessionListRows(changedIds);
-            return;
-        }
-    }
-
-    const nextStreamMap = renderSessionListFromStore();
-    applyServerStreamActiveMap(nextStreamMap);
-    renderSessionTitleFromStore();
-}
-
-function clearSessionListError() {
-    if (!sessionsList) return;
-    sessionsList.classList.remove('sessions-list--error');
-    if (sessionsList.dataset.loadError === '1') delete sessionsList.dataset.loadError;
-}
-
-function renderSessionListError(message) {
-    if (!sessionsList) return;
-    sessionListLayoutKey = '';
-    sessionListContentMap = null;
-    sessionsList.classList.add('sessions-list--error');
-    sessionsList.dataset.loadError = '1';
-    sessionsList.innerHTML = '';
-    const row = document.createElement('div');
-    row.className = 'session-list-error';
-    row.setAttribute('role', 'status');
-    row.textContent = message || '加载会话列表失败';
-    const retry = document.createElement('button');
-    retry.type = 'button';
-    retry.className = 'btn-small';
-    retry.textContent = '重试';
-    retry.addEventListener('click', function () {
-        resetSessionListRetry();
-        void loadSessions();
-    });
-    row.appendChild(retry);
-    sessionsList.appendChild(row);
-}
-
-function applyOptimisticSessionUpdate(sessionId, patch) {
-    const sid = String(sessionId || '');
-    const current = sessionStore.get(sid) || (sessionStore.archivedLoaded
-        ? (sessionStore.archivedSessions || []).find(function (session) {
-            return session && String(session.id) === sid;
-        })
-        : null);
-    if (!current) return null;
-    const prev = Object.assign({}, current);
-    const next = Object.assign({}, current, patch || {});
-    if (Object.prototype.hasOwnProperty.call(patch || {}, 'pinned')) {
-        next.pinned_at = next.pinned ? (next.pinned_at || new Date().toISOString()) : null;
-    }
-    sessionStore.upsert(next);
-    if (prev.archived || next.archived) {
-        if (sessionStore.archivedLoaded) {
-            const archivedList = (sessionStore.archivedSessions || []).slice();
-            const archivedIndex = archivedList.findIndex(function (s) {
-                return s && String(s.id) === sid;
-            });
-            let visibleCount = sessionStore.archivedVisibleCount;
-            let totalCount = sessionStore.archivedCount;
-            if (prev.archived && next.archived) {
-                if (archivedIndex >= 0) archivedList[archivedIndex] = next;
-            } else if (prev.archived) {
-                if (archivedIndex >= 0) archivedList.splice(archivedIndex, 1);
-                if (archivedIndex >= 0 && archivedIndex < visibleCount) visibleCount -= 1;
-                totalCount = Math.max(0, totalCount - 1);
-            } else if (next.archived) {
-                archivedList.unshift(next);
-                visibleCount += 1;
-                totalCount += 1;
-            }
-            sessionStore.setArchivedLoaded(archivedList, {
-                visibleCount: visibleCount,
-                totalCount: totalCount,
-            });
-            syncArchivedSessionStateFromStore();
-        } else if (!!prev.archived !== !!next.archived) {
-            sessionStore.setArchivedCount(Math.max(
-                0,
-                sessionStore.archivedCount + (next.archived ? 1 : -1)
-            ));
-        }
-    }
-    renderSessionListIfChanged(true);
-    return prev;
-}
-
-// Event count cache for optimistic UI updates.
-const uiEventCountCache = {
-    cache: new Map(),
-    maxAgeMs: 10000,
-
-    get(sessionId) {
-        var entry = this.cache.get(sessionId);
-        if (entry && typeof entry === 'object') return Number(entry.count) || 0;
-        return Number(entry) || 0;
-    },
-
-    has(sessionId) {
-        return this.cache.has(sessionId);
-    },
-
-    isFresh(sessionId, maxAgeMs) {
-        var entry = this.cache.get(sessionId);
-        if (!entry || typeof entry !== 'object') return false;
-        var age = Date.now() - Number(entry.updatedAt || 0);
-        var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;
-        return age >= 0 && age <= limit;
-    },
-
-    set(sessionId, count) {
-        this.cache.set(sessionId, {
-            count: Math.max(0, Number(count) || 0),
-            updatedAt: Date.now(),
-        });
-    },
-
-    increment(sessionId) {
-        const current = this.get(sessionId);
-        this.set(sessionId, current + 1);
-        return current + 1;
-    },
-
-    updateFromServer(sessionId, count) {
-        this.set(sessionId, count);
-    }
-};
-
-async function fetchSessionsStateSnapshot(opts) {
-    opts = opts || {};
-    const requestSeq = ++sessionStore.snapshotRequestSeq;
-    const humanEpochs = typeof captureHumanInteractionEpochs === 'function' ? captureHumanInteractionEpochs() : null;
-    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
-    if (typeof sessionLoadingDiagnostics !== 'undefined') {
-        const ownsTrace = !opts.loadingTrace;
-        const trace = opts.loadingTrace || sessionLoadingDiagnostics.start('', 'session_list');
-        let outcome = 'failed', failure = null;
-        try {
-            const result = await sessionLoadingDiagnostics.fetchJSON(trace, url, {}, 12000);
-            if (!result.response.ok || !result.data || !Array.isArray(result.data.sessions)) {
-                const error = new Error('invalid sessions state: ' + result.response.status);
-                error.uiLoadReason = result.response.ok ? 'invalid_payload' : 'http';
-                throw error;
-            }
-            outcome = 'success';
-            return Object.assign(result.data, {include_archived:!!opts.includeArchived, client_request_seq:requestSeq,
-                client_human_interaction_epochs:humanEpochs});
-        } catch (error) {
-            failure = error;
-            throw error;
-        } finally {
-            if (ownsTrace) sessionLoadingDiagnostics.end(trace, outcome, failure);
-        }
-    }
-    return fetchWithTimeout(url, {}, 12000, async function (response) {
-        if (!response.ok) throw new Error('sessions state failed: ' + response.status);
-        const snapshot = await response.json();
-        if (!snapshot || !Array.isArray(snapshot.sessions)) throw new Error('invalid sessions state response');
-        snapshot.include_archived = !!opts.includeArchived;
-        snapshot.client_request_seq = requestSeq;
-        snapshot.client_human_interaction_epochs = humanEpochs;
-        return snapshot;
-    });
-}
-
-function deriveSidebarRuntimeStatus() {
-    var busy = false;
-    sessionStore.runsBySession.forEach(function () { busy = true; });
-    if (!busy) {
-        sessionStore.activeRunInfoBySession.forEach(function (info) {
-            if (!info || info.run_active !== false) busy = true;
-        });
-    }
-    if (busy) return 'busy';
-    return 'online';
-}
-
-function updateSidebarRuntimeStatus(nextStatus) {
-    var footer = document.querySelector('.sidebar-runtime');
-    var status = document.getElementById('sidebar-runtime-status');
-    if (!footer || !status) return;
-    var state = nextStatus === false ? 'offline'
-        : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));
-    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';
-    footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');
-    footer.classList.add('is-' + state);
-    var labels = {
-        online: 'Runtime 在线',
-        busy: 'Runtime 繁忙',
-        waiting: 'Runtime 待处理',
-        alert: 'Runtime 告警',
-        offline: 'Runtime 离线'
-    };
-    setUiRuntimeText(status, labels[state]);
-    footer.dataset.runtimeStatus = state;
-}
-
-var runtimeStatusHeartbeatPending = false;
-var runtimeTakeoverBySession = Object.create(null);
-var lastUiActivationSeq = (function () {
-    // A reload in the same tab must not replay a notification target that was
-    // already consumed. A newly opened tab still picks up the latest request.
-    try { return Number(sessionStorage.getItem('myagent-ui-activation-seq')) || 0; } catch (e) { return 0; }
-})();
-function rememberUiActivationSeq(seq) {
-    lastUiActivationSeq = Number(seq) || 0;
-    try { sessionStorage.setItem('myagent-ui-activation-seq', String(lastUiActivationSeq)); } catch (e) { /* optional cache */ }
-}
-var initialDeepLinkSession = '';
-var pendingQuerySession = (function () {
-    // Deep link support: /?session=<id> selects that conversation once the
-    // session list is ready, then the parameter is stripped so a manual
-    // refresh does not yank the user back.
-    try {
-        var params = new URLSearchParams(window.location.search || '');
-        var sid = String(params.get('session') || '').trim();
-        if (sid && /^[A-Za-z0-9][A-Za-z0-9\\-]{0,63}$/.test(sid)) {
-            initialDeepLinkSession = sid;
-            params.delete('session');
-            var nextSearch = params.toString();
-            try {
-                window.history.replaceState(
-                    {}, '',
-                    window.location.pathname + (nextSearch ? '?' + nextSearch : '') + (window.location.hash || '')
-                );
-            } catch (e) { /* history may be unavailable */ }
-            return sid;
-        }
-    } catch (e) { /* ignore */ }
-    return '';
-})();
-
-/* 插件体检：设置页把诊断提示词放进 localStorage，主界面在新会话就绪后自动发送一次。 */
-function pluginDiagnosePromptKey(sessionId) {
-    return 'myagent.pluginDiagnosePrompt:' + sessionId;
-}
-
-function hasPluginDiagnosePrompt(sessionId) {
-    try { return !!localStorage.getItem(pluginDiagnosePromptKey(sessionId)); } catch (e) { return false; }
-}
-
-function maybeAutoSendPluginDiagnose(sessionId) {
-    var key = pluginDiagnosePromptKey(sessionId);
-    var text = '';
-    try {
-        text = localStorage.getItem(key) || '';
-        if (text) localStorage.removeItem(key);
-    } catch (e) { return; }
-    if (!text) return;
-    var input = document.getElementById('message-input');
-    if (input) {
-        input.value = text;
-        if (typeof syncComposerInputState === 'function') {
-            try { syncComposerInputState(); } catch (e) { /* ignore */ }
-        }
-    }
-    if (typeof sendMessage !== 'function') return;
-    try {
-        var pending = sendMessage({ message: text, sessionId: sessionId });
-        if (pending && typeof pending.catch === 'function') {
-            pending.catch(function (error) { console.warn('plugin diagnose autosend failed', error); });
-        }
-    } catch (error) {
-        console.warn('plugin diagnose autosend failed', error);
-    }
-}
-
-/* 设置中心（应用内 iframe）通过 postMessage 调这里，避免再开一个应用页。 */
-function openPluginDiagnoseSession(sessionId, prompt) {
-    var sid = String(sessionId || '').trim();
-    if (!sid) return;
-    if (prompt) {
-        try { localStorage.setItem(pluginDiagnosePromptKey(sid), String(prompt)); } catch (e) { /* ignore */ }
-    }
-    var run = function () { maybeAutoSendPluginDiagnose(sid); };
-    if (typeof switchSession === 'function' && sid !== currentSessionId) {
-        void Promise.resolve(switchSession(sid)).then(run).catch(run);
-    } else {
-        run();
-    }
-}
-try { window.myagentOpenPluginDiagnose = openPluginDiagnoseSession; } catch (e) { /* ignore */ }
-
-function maybeTakeOverActiveRuntimeSession(payload) {
-    var sid = String(currentSessionId || '').trim();
-    var activeIds = payload && Array.isArray(payload.active_session_ids)
-        ? payload.active_session_ids.map(function (value) { return String(value || '').trim(); })
-        : [];
-    if (!sid || activeIds.indexOf(sid) < 0) return;
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
-    if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
-    if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;
-    if (runtimeTakeoverBySession[sid]) return;
-
-    var task = (async function () {
-        try {
-            if (sid !== String(currentSessionId || '')) return;
-            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
-            if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;
-            // A heartbeat requested before run_finished may arrive afterwards.
-            // Reuse the detail refresh this takeover already performs, and let
-            // its identified run state decide whether there is work to attach.
-            const session = await refreshSingleSessionRow(sid);
-            if (!session || (!session.run_active && !session.stream_active)) return;
-            if (sid !== String(currentSessionId || '')) return;
-            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
-            if (getSessionRunState(sid) || !isServerStreamActive(sid)) return;
-            const activeInfo = sessionStore.getActiveRunInfo(sid) || {};
-            const runId = String(activeInfo.run_id || activeInfo.runId || '');
-            if (runId && sessionStore.isTerminalRun(sid, runId)) return;
-            if (typeof resetStreamReconnectState === 'function') resetStreamReconnectState(sid);
-            document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-                detail: { sessionId: sid, phase: 'runtime-takeover' },
-            }));
-            if (typeof attachSessionEventStream === 'function') {
-                await attachSessionEventStream(sid, { skipInitialLoad: true, force: true });
-            }
-        } catch (error) {
-            console.warn('自动接管服务端会话流失败:', error);
-        }
-    })();
-    runtimeTakeoverBySession[sid] = task;
-    void task.finally(function () {
-        if (runtimeTakeoverBySession[sid] === task) delete runtimeTakeoverBySession[sid];
-    });
-}
-
-async function refreshRuntimeStatus() {
-    if (runtimeStatusHeartbeatPending) return;
-    runtimeStatusHeartbeatPending = true;
-    try {
-        var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);
-        if (!response.ok) throw new Error('runtime status failed: ' + response.status);
-        var payload = await response.json();
-        updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);
-        maybeTakeOverActiveRuntimeSession(payload);
-        var activationSeq = Number(payload && payload.activation_seq) || 0;
-        // A backend restart resets the counter; keep the local cursor from
-        // suppressing the first activation of the new process.
-        if (activationSeq < lastUiActivationSeq) rememberUiActivationSeq(0);
-        if (activationSeq > lastUiActivationSeq) {
-            rememberUiActivationSeq(activationSeq);
-            try { window.focus(); } catch (e) { /* browser policy may reject focus */ }
-            var activationSession = String((payload && payload.activation_session) || '').trim();
-            var activationTarget = payload && payload.activation_target;
-            var activationDone = Promise.resolve();
-            if (activationSession && activationSession !== currentSessionId
-                    && typeof switchSession === 'function') {
-                activationDone = Promise.resolve(switchSession(activationSession)).catch(function (err) {
-                    /* session may be gone; do not open its plugin page in another chat */
-                    return false;
-                });
-            }
-            if (activationTarget && typeof applyUiActivationTarget === 'function') {
-                void activationDone.then(function (switched) {
-                    if (switched === false) return;
-                    applyUiActivationTarget(activationTarget, {
-                        sessionId: activationSession || currentSessionId,
-                    });
-                }).catch(function (err) { /* activation target is best effort */ });
-            }
-        }
-    } catch (error) {
-        updateSidebarRuntimeStatus(false);
-    } finally {
-        runtimeStatusHeartbeatPending = false;
-    }
-}
-
-function startRuntimeStatusHeartbeat() {
-    // 统一节拍：5 秒任务；窗口隐藏时仍需运行（要支持「服务端拉起窗口 / 自动接管」能力）。
-    registerSidebarRefreshTask('runtime-status', 5000, function () {
-        void refreshRuntimeStatus();
-    }, { runWhenHidden: true });
-}
-
-async function fetchWithTimeout(url, options, timeoutMs, consume) {
-    options = options || {};
-    const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
-    const controller = new AbortController();
-    const outerSignal = options.signal;
-    let abortReason = '';
-    const abortFromOuter = function () { if (!abortReason) abortReason = 'cancelled'; controller.abort(); };
-    if (outerSignal) {
-        if (outerSignal.aborted) abortFromOuter();
-        else outerSignal.addEventListener('abort', abortFromOuter, { once: true });
-    }
-    const timer = setTimeout(function () { if (!abortReason) abortReason = 'timeout'; controller.abort(); }, ms);
-    const nextOptions = Object.assign({}, options, { signal: controller.signal });
-    try {
-        const response = await fetch(url, nextOptions);
-        // Keep cancellation and the deadline alive while a JSON body is read.
-        return typeof consume === 'function' ? await consume(response) : response;
-    } catch (error) {
-        if (error && typeof error === 'object' && abortReason) {
-            error.uiLoadReason = abortReason;
-            error.uiLoadTimeoutMs = ms;
-        }
-        throw error;
-    } finally {
-        clearTimeout(timer);
-        if (outerSignal) outerSignal.removeEventListener('abort', abortFromOuter);
-    }
-}
-
-async function fetchArchivedSessionPage(offset, limit) {
-    const url = '/sessions?include_archived=true&archived_only=true&offset=' + String(offset)
-        + '&limit=' + String(limit);
-    const response = await fetchWithTimeout(url, {}, 15000);
-    if (!response.ok) throw new Error('archived sessions failed: ' + response.status);
-    const sessions = await response.json();
-    const countHeader = response.headers.get('X-Archived-Count');
-    const parsedCount = Number(countHeader);
-    return {
-        sessions: Array.isArray(sessions) ? sessions : [],
-        totalCount: Number.isFinite(parsedCount) && parsedCount >= 0
-            ? parsedCount
-            : Math.max(offset + (Array.isArray(sessions) ? sessions.length : 0), sessionStore.archivedCount),
-    };
-}
-
-function appendArchivedSessionPage(page, visibleCount) {
-    const combined = (sessionStore.archivedSessions || []).concat(page.sessions || []);
-    const seen = new Set();
-    const deduplicated = combined.filter(function (s) {
-        const sid = s && s.id ? String(s.id) : '';
-        if (!sid || seen.has(sid)) return false;
-        seen.add(sid);
-        return true;
-    });
-    sessionStore.setArchivedLoaded(deduplicated, {
-        visibleCount: visibleCount,
-        totalCount: page.totalCount,
-    });
-}
-
-async function prefetchNextArchivedPage(loadEpoch) {
-    const cachedCount = Array.isArray(sessionStore.archivedSessions)
-        ? sessionStore.archivedSessions.length
-        : 0;
-    const wantedCount = Math.min(
-        sessionStore.archivedCount,
-        sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
-    );
-    if (cachedCount >= wantedCount) return;
-    const page = await fetchArchivedSessionPage(cachedCount, wantedCount - cachedCount);
-    if (loadEpoch !== archivedSessionsLoadEpoch) return;
-    appendArchivedSessionPage(page, sessionStore.archivedVisibleCount);
-}
-
-async function loadArchivedSessions(opts) {
-    opts = opts || {};
-    const loadEpoch = ++archivedSessionsLoadEpoch;
-    try {
-        if (!sessionStore.archivedLoaded) {
-            const initialPage = await fetchArchivedSessionPage(0, ARCHIVED_SESSIONS_PAGE_SIZE * 2);
-            if (loadEpoch !== archivedSessionsLoadEpoch) return;
-            sessionStore.setArchivedLoaded(initialPage.sessions, {
-                visibleCount: ARCHIVED_SESSIONS_PAGE_SIZE,
-                totalCount: initialPage.totalCount,
-            });
-        } else if (opts.background || opts.refresh || !sessionStore.hasMoreArchivedSessions()) {
-            const refreshLimit = Math.max(
-                ARCHIVED_SESSIONS_PAGE_SIZE * 2,
-                sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE
-            );
-            const refreshedPage = await fetchArchivedSessionPage(0, refreshLimit);
-            if (loadEpoch !== archivedSessionsLoadEpoch) return;
-            sessionStore.setArchivedLoaded(refreshedPage.sessions, {
-                visibleCount: sessionStore.archivedVisibleCount,
-                totalCount: refreshedPage.totalCount,
-            });
-        } else {
-            if (sessionStore.revealNextArchivedPage() === 0) {
-                const cachedCount = Array.isArray(sessionStore.archivedSessions)
-                    ? sessionStore.archivedSessions.length
-                    : 0;
-                const nextPage = await fetchArchivedSessionPage(cachedCount, ARCHIVED_SESSIONS_PAGE_SIZE);
-                if (loadEpoch !== archivedSessionsLoadEpoch) return;
-                appendArchivedSessionPage(nextPage, sessionStore.archivedVisibleCount);
-                sessionStore.revealNextArchivedPage();
-            }
-            syncArchivedSessionStateFromStore();
-            renderSessionListIfChanged(true);
-            clearSessionListError();
-            try {
-                await prefetchNextArchivedPage(loadEpoch);
-            } catch (prefetchErr) {
-                console.error('预加载下一批归档目录失败:', prefetchErr);
-            }
-        }
-        if (loadEpoch !== archivedSessionsLoadEpoch) return;
-        syncArchivedSessionStateFromStore();
-        renderSessionListIfChanged(!!opts.forceRender);
-        clearSessionListError();
-    } catch (err) {
-        console.error('加载归档目录失败:', err);
-        if (!opts.background) throw err;
-    }
-}
-
-var sessionListChangeWatcherStarted = false;
-var sessionListChangeWatcherEpoch = 0;
-var sessionListChangeController = null;
-var sessionListChangeTimer = null;
-var sessionListChangeRevision = null;
-
-function startSessionListChangeWatcher() {
-    if (sessionListChangeWatcherStarted) return;
-    sessionListChangeWatcherStarted = true;
-    const epoch = ++sessionListChangeWatcherEpoch;
-    let revision = sessionListChangeRevision != null ? sessionListChangeRevision
-        : (Number(sessionStore.lastAppliedStateRevision) || 0);
-    const poll = async function () {
-        let delay = 0;
-        const controller = new AbortController();
-        sessionListChangeController = controller;
-        try {
-            const payload = await fetchWithTimeout('/sessions/changes?after_revision=' + revision,
-                { cache: 'no-store', signal: controller.signal }, 35000, async function (response) {
-                    if (!response.ok) throw new Error('session changes failed: ' + response.status);
-                    return response.json();
-                });
-            const next = Number(payload && payload.state_revision);
-            if (epoch !== sessionListChangeWatcherEpoch) return;
-            if (!Number.isFinite(next) || next <= 0) throw new Error('invalid session changes response');
-            // The existing long poll also carries committed terminal facts.
-            // Apply them before loading summaries so a lost SSE terminal never
-            // leaves a local reader or an old HTTP response owning the run.
-            if (typeof applySessionTerminalNotifications === 'function') {
-                applySessionTerminalNotifications(payload.terminal_events);
-            }
-            if (next !== Number(sessionStore.lastAppliedStateRevision)) {
-                // A request already in flight can predate this notification.
-                // Start a fresh one; its epoch prevents older results winning.
-                const loaded = await loadSessions({ background: true, force: true });
-                if (!loaded || Number(sessionStore.lastAppliedStateRevision) < next) {
-                    throw new Error('session changes snapshot not yet applied');
-                }
-            }
-            // A summary loaded above can already include a later revision.
-            // Only acknowledge notifications actually delivered by this poll;
-            // otherwise a terminal committed during that load is skipped.
-            revision = next;
-            sessionListChangeRevision = revision;
-        } catch (error) {
-            delay = 2000;
-        } finally {
-            if (sessionListChangeController === controller) sessionListChangeController = null;
-            if (sessionListChangeWatcherStarted && epoch === sessionListChangeWatcherEpoch) {
-                sessionListChangeTimer = setTimeout(poll, delay);
-            }
-        }
-    };
-    void poll();
-}
-
-function stopSessionListChangeWatcher() {
-    sessionListChangeWatcherStarted = false;
-    sessionListChangeWatcherEpoch += 1;
-    if (sessionListChangeController) sessionListChangeController.abort();
-    if (sessionListChangeTimer) clearTimeout(sessionListChangeTimer);
-    sessionListChangeTimer = null;
-}
-
-window.addEventListener('pagehide', stopSessionListChangeWatcher);
-window.addEventListener('pageshow', function (event) {
-    if (event.persisted) startSessionListChangeWatcher();
-});
-
-async function loadSessions(opts) {
-    opts = opts || {};
-    if (sessionListLoadPromise && !opts.force) return sessionListLoadPromise;
-    const pending = loadSessionsInner(opts);
-    sessionListLoadPromise = pending;
-    try {
-        return await pending;
-    } finally {
-        if (sessionListLoadPromise === pending) sessionListLoadPromise = null;
-    }
-}
-
-var sessionListRetryTimer = null;
-var sessionListRetryAttempts = 0;
-function resetSessionListRetry() {
-    if (sessionListRetryTimer) clearTimeout(sessionListRetryTimer);
-    sessionListRetryTimer = null;
-    sessionListRetryAttempts = 0;
-}
-
-function scheduleSessionListRetry() {
-    if (sessionListRetryTimer || sessionListRetryAttempts >= 3) return;
-    const delay = 1000 * Math.pow(2, sessionListRetryAttempts++);
-    sessionListRetryTimer = setTimeout(function () {
-        sessionListRetryTimer = null;
-        void loadSessions({ background: true });
-    }, delay);
-}
-
-async function loadSessionsInner(opts) {
-    const loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined' ? sessionLoadingDiagnostics.start('', 'session_list') : null;
-    let loadingOutcome = 'cancelled', loadingError = null;
-    const loadEpoch = ++sessionListLoadEpoch;
-    sessionStore.ui.loadingSessions = true;
-    try {
-        let allSessions;
-        let snapshot = null;
-
-        try {
-            snapshot = await fetchSessionsStateSnapshot({loadingTrace:loadingTrace});
-            if (loadEpoch !== sessionListLoadEpoch) return;
-            updateSidebarRuntimeStatus(true);
-            allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
-        } catch (stateErr) {
-            if (loadEpoch !== sessionListLoadEpoch) return false;
-            console.error('加载会话状态快照失败，回退至旧接口', stateErr);
-            const fallbackRequestSeq = ++sessionStore.snapshotRequestSeq;
-            const fallbackHumanEpochs = typeof captureHumanInteractionEpochs === 'function' ? captureHumanInteractionEpochs() : null;
-            if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'fallback');
-            const result = loadingTrace
-                ? await sessionLoadingDiagnostics.fetchJSON(loadingTrace, '/sessions', {}, 12000)
-                : await fetchWithTimeout('/sessions', {}, 12000, async function (response) {
-                if (!response.ok) throw new Error('sessions fallback failed: ' + response.status);
-                const sessions = await response.json();
-                if (!Array.isArray(sessions)) throw new Error('invalid sessions fallback response');
-                return { response: response, sessions: sessions };
-            });
-            const response = result.response;
-            if (!response.ok || !Array.isArray(result.data || result.sessions)) {
-                const error = new Error('invalid sessions fallback: ' + response.status);
-                error.uiLoadReason = response.ok ? 'invalid_payload' : 'http';
-                throw error;
-            }
-            const archivedCountHeader = response.headers.get('X-Archived-Count');
-            if (archivedCountHeader != null && archivedCountHeader !== '') {
-                const parsedArchivedCount = Number(archivedCountHeader);
-                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
-                    sessionStore.setArchivedCount(parsedArchivedCount);
-                    syncArchivedSessionStateFromStore();
-                }
-            }
-            const sessions = result.data || result.sessions;
-            if (loadEpoch !== sessionListLoadEpoch) return;
-            updateSidebarRuntimeStatus(true);
-            allSessions = Array.isArray(sessions) ? sessions : [];
-            snapshot = {
-                sessions: allSessions,
-                archived_count: archivedSessionsCount,
-                client_request_seq: fallbackRequestSeq,
-                client_human_interaction_epochs: fallbackHumanEpochs,
-            };
-        }
-        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'layout');
-        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
-        syncArchivedSessionStateFromStore();
-        allSessions = sessionStore.list();
-
-        const idSet = new Set();
-        for (let si = 0; si < allSessions.length; si += 1) {
-            if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);
-        }
-        [...sessionUnreadComplete].forEach(function (uid) {
-            if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);
-        });
-        persistSessionUnread();
-
-        if (pendingQuerySession) {
-            var queryTarget = pendingQuerySession;
-            pendingQuerySession = '';
-            var known = allSessions.some(function (s) { return s && s.id === queryTarget; });
-            var diagnosePrompt = hasPluginDiagnosePrompt(queryTarget);
-            if ((known || diagnosePrompt) && queryTarget !== currentSessionId && typeof switchSession === 'function') {
-                void Promise.resolve(switchSession(queryTarget)).then(function () {
-                    maybeAutoSendPluginDiagnose(queryTarget);
-                }).catch(function (err) { /* ignore */ });
-            } else if (queryTarget === currentSessionId) {
-                maybeAutoSendPluginDiagnose(queryTarget);
-            }
-        }
-
-        renderSessionListIfChanged(!!opts.forceRender);
-        clearSessionListError();
-        resetSessionListRetry();
-        if (typeof sessionsList !== 'undefined' && sessionsList && sessionsList.dataset) sessionsList.dataset.snapshotReady = '1';
-        sessionStore.ui.loadingSessions = false;
-        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {
-            void loadArchivedSessions({ background: true });
-        }
-        loadingOutcome = 'success';
-        return true;
-    } catch (error) {
-        loadingError = error;
-        if (loadEpoch !== sessionListLoadEpoch) return false;
-        loadingOutcome = 'failed';
-        sessionStore.ui.loadingSessions = false;
-        updateSidebarRuntimeStatus(false);
-        console.error('加载会话列表失败:', error);
-        if (sessionStore.list().length > 0) {
-            renderSessionListIfChanged(true);
-            clearSessionListError();
-        } else {
-            renderSessionListError('加载会话列表失败');
-        }
-        scheduleSessionListRetry();
-        return false;
-    } finally {
-        if (loadingTrace) sessionLoadingDiagnostics.end(loadingTrace, loadingOutcome, loadingError);
-    }
-}
-
-async function reconcileRunStateFromServer(opts) {
-    opts = opts || {};
-    const suppressedBeforeFetch = new Set();
-    if (opts.respectStopSuppress) {
-        sessionStore.sessionOrder.forEach(function (sid) {
-            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));
-        });
-        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {
-            suppressedBeforeFetch.add(String(currentSessionId));
-        }
-    }
-    let snapshot = null;
-    try {
-        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;
-        snapshot = await fetchSessionsStateSnapshot({
-            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),
-        });
-    } catch (e) {
-        updateSidebarRuntimeStatus(false);
-        if (!opts.silent) console.error('reconcile run state failed:', e);
-        return;
-    }
-    applySessionSnapshot(snapshot);
-    updateSidebarRuntimeStatus(true);
-    if (opts.respectStopSuppress) {
-        suppressedBeforeFetch.forEach(function (sid) {
-            if (isSessionStreamStopSuppressed(sid)) {
-                sessionStore.setStreamActive(sid, false);
-                const sess = sessionStore.get(sid);
-                if (sess) {
-                    sess.stream_active = false;
-                    sess.run_active = false;
-                    sess.run_started_at = null;
-                }
-                sessionStore.activeRunInfoBySession.delete(sid);
-            }
-        });
-    }
-    const active = new Set();
-    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
-        if (info && info.run_active === true) active.add(String(sid));
-    });
-    const localIds = [];
-    sessionStore.runsBySession.forEach(function (_run, sid) {
-        localIds.push(String(sid));
-    });
-    localIds.forEach(function (sid) {
-        if (!active.has(sid)) {
-            var run = getSessionRunState(sid);
-            // 本地仍在消费 SSE 且未见真终态时不得误杀：/sessions/state 轻快照有 5s TTL
-            // 且在“新一轮刚启动”的首步窗口可能瞬时报 inactive；15s reconcile 若此时
-            // abort/endRun 会收起过程框并 seal，导致后续增量无处渲染而“卡死”。
-            var streamAlive = !!(run && run.ctx && run.ctx.streamConsuming && run.ctx.terminalSeen !== true);
-            if (streamAlive) return;
-            var staleSubmittedStream = !!(
-                run && run.submitted && run.ctx && run.ctx.streamConsuming
-            );
-            if (run && (run.reattached || staleSubmittedStream || run.transportClosed)) {
-                abortSessionRun(sid, 'reconcile-finished');
-                if (run.ctx && typeof endRunForClient === 'function') {
-                    // A missing terminal SSE event must not leave the process
-                    // panel running after the server has already ended this run.
-                    endRunForClient(sid, run.ctx, {
-                        runId: run.runId,
-                        drainFollowup: false,
-                        syncFollowup: false,
-                        scroll: false,
-                        // 对账路径不是真终态：禁止折叠/封印过程框（渲染中的内容仍需收尾）。
-                        collapseProcess: false,
-                    });
-                }
-            }
-        }
-    });
-    if (currentSessionId && active.has(currentSessionId)) {
-        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};
-        const run = getSessionRunState(currentSessionId);
-        const ctx = run && run.ctx;
-        const recovery = executionRecoveryBySession.get(String(currentSessionId)) || {};
-        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
-            ? ctx.currentProcessGroup
-            : findExecutionProcessGroup(getVisibleChatStream(), recovery.processGroupId, info.run_id || info.runId);
-        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);
-    }
-    syncSessionListIndicatorClasses();
-    setSendButtonState();
-    renderSessionListIfChanged(false);
-}
-
-function showSessionLoadRetry(sessionId) {
-    var sid = String(sessionId || '');
-    var stream = getVisibleChatStream();
-    if (!sid || !stream) return;
-    if (stream.querySelector('.session-load-retry')) return;
-    var row = document.createElement('div');
-    row.className = 'feed-item feed--err session-load-retry';
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'history-load-older-btn';
-    btn.textContent = '重新加载';
-    btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
-        void switchSession(sid, { forceReload: true });
-    });
-    row.appendChild(btn);
-    stream.appendChild(row);
-}
-
-var sessionHistoryLoadController = null;
-var initialSessionHistoryPrefetch = null;
-
-function initialSessionHistoryUrl(sessionId) {
-    return '/sessions/' + encodeURIComponent(sessionId)
-        + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))
-        + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))
-        + '&include_aux=false&prefer_active_turn=true&tail_limit=200';
-}
-
-function prefetchInitialSessionHistory(sessionId) {
-    if (!sessionId || initialSessionHistoryPrefetch) return;
-    var controller = new AbortController();
-    var url = initialSessionHistoryUrl(sessionId);
-    var loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined' ? sessionLoadingDiagnostics.start(sessionId, 'history') : null;
-    if (loadingTrace) controller.signal.addEventListener('abort', function () {
-        sessionLoadingDiagnostics.end(loadingTrace, 'cancelled');
-    }, {once:true});
-    initialSessionHistoryPrefetch = {
-        sessionId: sessionId, url: url, controller: controller, startedAt: Date.now(),
-        loadingTrace: loadingTrace,
-        contextTokenVersion: typeof getContextTokenVersion === 'function' ? getContextTokenVersion(sessionId) : null,
-        // Store failures for the consumer too: do not turn one timeout into
-        // another full projection. Catch now to avoid an unhandled rejection.
-        promise: fetchSessionHistoryJSON(url, controller.signal, loadingTrace).catch(function (error) { return { error: error }; }),
-    };
-}
-
-async function fetchInitialSessionHistorySnapshot(sessionId, url, signal, loadingTrace) {
-    var entry = initialSessionHistoryPrefetch;
-    initialSessionHistoryPrefetch = null;
-    if (entry && entry.sessionId === sessionId && entry.url === url) {
-        var abort = function () { entry.controller.abort(); };
-        signal.addEventListener('abort', abort, { once: true });
-        if (signal.aborted) abort();
-        try {
-            var response = await entry.promise;
-            if (response && response.error) throw response.error;
-            return response;
-        } finally { signal.removeEventListener('abort', abort); }
-    } else if (entry) {
-        entry.controller.abort();
-        if (typeof sessionLoadingDiagnostics !== 'undefined') sessionLoadingDiagnostics.end(entry.loadingTrace, 'cancelled');
-    }
-    return fetchSessionHistoryJSON(url, signal, loadingTrace);
-}
-
-// Retry brief cold-server failures once. A timeout must not launch another
-// expensive projection, and switching sessions cancels the backoff as well.
-async function fetchSessionHistoryJSON(url, signal, loadingTrace) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-            const result = typeof sessionLoadingDiagnostics !== 'undefined'
-                ? await sessionLoadingDiagnostics.fetchJSON(loadingTrace, url, {signal:signal}, 30000, attempt + 1)
-                : await fetchWithTimeout(url, { signal: signal }, 30000, async function (response) {
-                return { response: response, data: await response.json().catch(function () { return null; }) };
-            });
-            if (attempt || [502, 503, 504].indexOf(result.response.status) < 0) return result;
-        } catch (error) {
-            if (attempt || (signal && signal.aborted) || error.name !== 'TypeError') throw error;
-        }
-        await new Promise(function (resolve, reject) {
-            const abort = function () {
-                clearTimeout(timer);
-                if (signal) signal.removeEventListener('abort', abort);
-                const error = new Error('History request cancelled');
-                error.name = 'AbortError';
-                reject(error);
-            };
-            const timer = setTimeout(function () {
-                if (signal) signal.removeEventListener('abort', abort);
-                resolve();
-            }, 400);
-            if (signal) {
-                if (signal.aborted) abort();
-                else signal.addEventListener('abort', abort, { once: true });
-            }
-        });
-    }
-}
-
-async function loadSessionMessages(sessionId, scrollBehavior, opts) {
-    const loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined'
-        ? (initialSessionHistoryPrefetch && initialSessionHistoryPrefetch.sessionId === sessionId
-            ? initialSessionHistoryPrefetch.loadingTrace : sessionLoadingDiagnostics.start(sessionId, 'history')) : null;
-    let loadingOutcome = 'cancelled', loadingError = null;
-    const contextTokenVersion = typeof getContextTokenVersion === 'function'
-        ? (initialSessionHistoryPrefetch && initialSessionHistoryPrefetch.sessionId === sessionId
-            ? initialSessionHistoryPrefetch.contextTokenVersion : getContextTokenVersion(sessionId)) : null;
-    const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)
-        ? performance.now()
-        : Date.now();
-    scrollBehavior = scrollBehavior || 'saved-or-bottom';
-    opts = opts || {};
-    const loadToken = ++messageLoadEpoch;
-    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();
-    const loadController = new AbortController();
-    sessionHistoryLoadController = loadController;
-    let historyHydrationStream = null;
-    const finishHistoryHydration = function () {
-        if (historyHydrationStream) {
-            if (loadToken === messageLoadEpoch || historyHydrationStream !== getVisibleChatStream()) {
-                historyHydrationStream.hidden = false;
-            }
-            historyHydrationStream = null;
-        }
-        if (loadToken !== messageLoadEpoch) return;
-        hideLoading();
-        if (typeof attachAllHumanInteractionCards === 'function') {
-            attachAllHumanInteractionCards(getVisibleChatStream());
-        }
-    };
-    sessionStore.ui.loadingMessages = true;
-    suppressTocDuringSessionLoad = true;
-    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {
-        cancelSmoothStreamFollowForHistoryLoad();
-    }
-    resetSessionHistoryPaging();
-    try {
-        let raw;
-        let snapshotTocTurns = null;
-        let historySource = 'messages';
-        let snapshotTiming = null;
-        let savedExecutions = [];
-        let manualHistory = false;
-        const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();
-        if (canUseSnapshot) {
-            const snapshotUrl = initialSessionHistoryUrl(sessionId);
-            for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {
-                const result = migrationAttempt === 0
-                    ? await fetchInitialSessionHistorySnapshot(sessionId, snapshotUrl, loadController.signal, loadingTrace)
-                    : await fetchSessionHistoryJSON(snapshotUrl, loadController.signal, loadingTrace);
-                const snapshotResp = result.response;
-                const snapshot = result.data;
-                if (snapshot && snapshot.migration_pending) {
-                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-                    if (migrationAttempt === 119) throw new Error('历史迁移尚未完成，请稍后重新加载');
-                    const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));
-                    await new Promise(function (resolve) { setTimeout(resolve, retryMs); });
-                    continue;
-                }
-                // Only an older server/runtime needs the compatibility route.
-                // Retrying the same projection on timeout doubles its work.
-                if ([404, 405, 409].indexOf(snapshotResp.status) >= 0) break;
-                if (!snapshotResp.ok || !snapshot || !snapshot.ok || !snapshot.messages) {
-                    const error = new Error('history snapshot failed: ' + snapshotResp.status);
-                    error.uiLoadReason = snapshotResp.ok ? 'invalid_payload' : 'http';
-                    throw error;
-                }
-                raw = snapshot.messages;
-                manualHistory = snapshot.history_mode === 'current_turn';
-                savedExecutions = Array.isArray(snapshot.execution_records) ? snapshot.execution_records : [];
-                executionRecoveryBySession.set(String(sessionId), {
-                    lastRuntimeSeq:Number(snapshot.last_runtime_seq || 0),
-                    revision:Number(snapshot.projection_revision || 0),
-                    projectionVersion:Number(snapshot.projection_version || 0),
-                    processGroupId:String(snapshot.process_group_id || ''),
-                });
-                executionRecordsBySession.set(String(sessionId), new Map());
-                historySource = 'history_snapshot';
-                snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'
-                    ? snapshot.timing
-                    : null;
-                if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {
-                    uiEventCountCache.updateFromServer(sessionId, snapshot.count);
-                }
-                if (Array.isArray(snapshot.user_turns)) {
-                    snapshotTocTurns = snapshot.user_turns;
-                    if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);
-                }
-                if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {
-                    recordContextTokens(
-                        sessionId,
-                        snapshot.context_tokens.estimated,
-                        snapshot.context_tokens.threshold,
-                        snapshot.context_tokens.breakdown,
-                        { expectedVersion: contextTokenVersion, stale: !!(snapshot.context_tokens.stale || snapshot.context_tokens.pending_recalculation) }
-                    );
-                }
-                if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
-                    const __snapActive = !!(snapshot.stream_active || snapshot.run_active);
-                    sessionStore.applyActiveRunForSession(
-                        sessionId,
-                        snapshot.active_run || (__snapActive ? {
-                            session_id: sessionId,
-                            run_active: true,
-                            started_at: snapshot.run_started_at || null,
-                            runtime_v2: snapshot.source === 'runtime_v2_snapshot',
-                        } : null)
-                    );
-                }
-                break;
-            }
-        }
-        if (!raw) {
-            manualHistory = !opts.full && !!(getSessionRunState(sessionId) || isServerStreamActive(sessionId));
-            let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
-            if (!opts.full) {
-                url += '?turns=' + (manualHistory ? 1 : HISTORY_DIALOGUES_PER_PAGE)
-                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
-            }
-            const result = await fetchSessionHistoryJSON(url, loadController.signal, loadingTrace);
-            if (!result.response.ok) {
-                const error = new Error('messages failed: ' + result.response.status);
-                error.uiLoadReason = 'http';
-                throw error;
-            }
-            raw = result.data;
-        }
-        if (!Array.isArray(raw) && !(raw && typeof raw === 'object' && Array.isArray(raw.events))) {
-            const error = new Error('Invalid history response');
-            error.uiLoadReason = 'invalid_payload';
-            throw error;
-        }
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;
-        replayingMessages = true;
-        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'hydrate');
-        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.fetch', elapsedSince(openSessionStartedAt));
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        const vis = getVisibleChatStream();
-        if (vis) {
-            const loader = document.getElementById('chat-loading');
-            if (loader && loader.parentNode === vis && chatContainer) {
-                chatContainer.insertBefore(loader, vis);
-            }
-            vis.hidden = true;
-            historyHydrationStream = vis;
-            emptyChatStreamKeepingStrip(vis);
-        }
-        else {
-            chatContainer.innerHTML = '';
-            ensureVisibleChatStreamSlot();
-        }
-        markVisibleSessionStreamLoadState(sessionId, 'loading');
-        let events;
-        let pageMeta = null;
-        if (Array.isArray(raw)) {
-            events = raw;
-        } else if (raw && typeof raw === 'object' && Array.isArray(raw.events)) {
-            events = raw.events;
-            const pageTotal = Number(raw.total) || 0;
-            const pageRangeEnd = Number(raw.range_end) || 0;
-            pageMeta = {
-                total: pageTotal,
-                range_start: Number(raw.range_start) || 0,
-                range_end: pageRangeEnd,
-                has_older: !!raw.has_older,
-                has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,
-                manual_history: manualHistory,
-                event_limited_tail: !!raw.event_limited_tail,
-            };
-            uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
-        } else {
-            events = [];
-        }
-        beginMessageReplay(sessionId, pageMeta || {
-            total: events.length,
-            range_start: 0,
-            range_end: events.length,
-        });
-        if (!opts.full && pageMeta) {
-            setSessionHistoryPaging({
-                sessionId: sessionId,
-                total: pageMeta.total,
-                range_start: pageMeta.range_start,
-                range_end: pageMeta.range_end,
-                has_older: !!pageMeta.has_older,
-                has_newer: !!pageMeta.has_newer,
-                manual_history: !!pageMeta.manual_history,
-                event_limited_tail: !!pageMeta.event_limited_tail,
-            });
-            ensureHistorySentinel(getVisibleChatStream());
-        }
-        if (events.length === 0) {
-            suppressTocDuringSessionLoad = false;
-            setWelcome();
-            finishHistoryHydration();
-            updateSessionTitle();
-            scheduleContextTokensAfterPaint(sessionId);
-            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-            markVisibleSessionStreamLoadState(sessionId, 'ok');
-            loadingOutcome = 'success';
-            logOpenSessionTiming(sessionId, {
-                source: historySource,
-                events: 0,
-                snapshotTiming: snapshotTiming,
-                totalMs: elapsedSince(openSessionStartedAt),
-            });
-            return true;
-        }
-        const loadCtx = newDomContext(getVisibleChatStream());
-        if (typeof seedRenderContextRunGenerations === 'function') {
-            seedRenderContextRunGenerations(loadCtx, events, savedExecutions);
-        }
-        const hydrationStartedAt = performance.now();
-        loadCtx.lastUserEventIndex = -1;
-        const indexBase = pageMeta ? pageMeta.range_start : 0;
-        let replaySliceStartedAt = performance.now();
-        let replayYieldCount = 0, replayYieldWaitMs = 0, replayMaxSliceMs = 0;
-        for (let evi = 0; evi < events.length; evi += 1) {
-            const ev = events[evi];
-            if (ev && typeof ev === 'object' && ev.type) {
-                reduceAndRenderMessageEvent(loadCtx, ev, {
-                    sessionId: sessionId,
-                    eventIndex: indexBase + evi,
-                    source: 'history',
-                });
-            }
-            if (evi + 1 < events.length && performance.now() - replaySliceStartedAt >= 12) {
-                replayMaxSliceMs = Math.max(replayMaxSliceMs, performance.now() - replaySliceStartedAt);
-                const yieldStartedAt = performance.now();
-                if (typeof MyAgentUiTasks !== 'undefined' && MyAgentUiTasks.yieldToMain) await MyAgentUiTasks.yieldToMain();
-                else await new Promise(function (resolve) { setTimeout(resolve, 0); });
-                replayYieldCount += 1;
-                replayYieldWaitMs += performance.now() - yieldStartedAt;
-                if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-                replaySliceStartedAt = performance.now();
-            }
-        }
-        savedExecutions.forEach(function (record) {
-            updateExecutionRecord(sessionId, record);
-            if (!record.ui_committed) renderExecutionRecord(loadCtx, record, sessionId);
-        });
-        mergeAdjacentExecutionGroups(loadCtx.stream);
-        if (typeof uiPerformance !== 'undefined') {
-            uiPerformance.sample(sessionId, 'history.maxReplaySlice', Math.max(replayMaxSliceMs, performance.now() - replaySliceStartedAt));
-            uiPerformance.sample(sessionId, 'history.yieldWait', replayYieldWaitMs);
-            uiPerformance.count(sessionId, 'history.yields', replayYieldCount);
-            uiPerformance.sample(sessionId, 'history.hydrate', performance.now() - hydrationStartedAt);
-            uiPerformance.count(sessionId, 'history.events', events.length);
-        }
-        var imageLayoutStartedAt = performance.now();
-        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'images');
-        var historyScrollBehavior = scrollBehavior;
-        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'bottom' || scrollBehavior === 'entry-bottom') && typeof prepareWorkspaceImageLayout === 'function') {
-            var imagePreparation = prepareWorkspaceImageLayout(getVisibleChatStream(), sessionId);
-            if (scrollBehavior === 'smooth-bottom') await imagePreparation;
-            else Promise.resolve(imagePreparation).catch(function () { /* Reserved frames keep history usable. */ });
-            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        }
-        var historyImagesReady = await waitForHistoryImageLayout(
-            sessionId,
-            scrollBehavior,
-            getVisibleChatStream()
-        );
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'entry-bottom') && !historyImagesReady) {
-            historyScrollBehavior = 'bottom';
-        }
-        if (typeof uiPerformance !== 'undefined') {
-            uiPerformance.sample(sessionId, 'history.images', performance.now() - imageLayoutStartedAt);
-            if (!historyImagesReady) uiPerformance.count(sessionId, 'history.imageFallbacks');
-        }
-        finishHistoryHydration();
-        if (!chatStreamHasConversationContent()) {
-            suppressTocDuringSessionLoad = false;
-            setWelcome();
-            updateSessionTitle();
-            scheduleContextTokensAfterPaint(sessionId);
-            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);
-            markVisibleSessionStreamLoadState(sessionId, 'ok');
-            loadingOutcome = 'success';
-            logOpenSessionTiming(sessionId, {
-                source: historySource,
-                events: events.length,
-                snapshotTiming: snapshotTiming,
-                totalMs: elapsedSince(openSessionStartedAt),
-            });
-            return true;
-        }
-        if (!manualHistory && !opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {
-            await loadOlderHistoryChunk({ keepTocStable: true });
-            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        }
-        if (historyLoadScrollsToBottom(sessionId, historyScrollBehavior)) {
-            tocScrollBottomOnNextBuild = true;
-        }
-        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'layout');
-        suppressTocDuringSessionLoad = false;
-        if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });
-        else if (!opts.tocAlreadyStarted) rebuildToc();
-        updateSessionTitle();
-        updateHistorySentinelVisibility();
-        bindExistingLogInteractions();
-        var historyScrollStartedAt = performance.now();
-        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'scroll');
-        // Entry motion starts after log geometry settles and does not gate
-        // history readiness or stream reattachment.
-        if (historyScrollBehavior === 'bottom' || historyScrollBehavior === 'entry-bottom') finalizeExistingLogLayout();
-        applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
-        var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);
-        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-        if (historyScrollBehavior !== 'bottom' && historyScrollBehavior !== 'entry-bottom') finalizeExistingLogLayout();
-        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);
-        if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {
-            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-            requestAnimationFrame(function () {
-                requestAnimationFrame(function () {
-                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
-                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);
-                });
-            });
-        }
-        scheduleTocActiveUpdate();
-        scheduleContextTokensAfterPaint(sessionId);
-        markVisibleSessionStreamLoadState(sessionId, 'ok');
-        loadingOutcome = 'success';
-        logOpenSessionTiming(sessionId, {
-            source: historySource,
-            events: events.length,
-            snapshotTiming: snapshotTiming,
-            totalMs: elapsedSince(openSessionStartedAt),
-        });
-        return true;
-    } catch (error) {
-        loadingError = error;
-        if (loadController.signal.aborted || loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;
-        loadingOutcome = 'failed';
-        console.error('加载会话消息失败:', error);
-        document.getElementById('chat-loading')?.remove();
-        appendLogVisible('加载历史消息失败', 'error-log');
-        markVisibleSessionStreamLoadState(sessionId, 'failed');
-        showSessionLoadRetry(sessionId);
-        return false;
-    } finally {
-        if (loadingTrace) sessionLoadingDiagnostics.end(loadingTrace, loadingOutcome, loadingError);
-        if (sessionHistoryLoadController === loadController) sessionHistoryLoadController = null;
-        finishHistoryHydration();
-        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
-        if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
-        if (loadToken === messageLoadEpoch) replayingMessages = false;
-    }
-}
-
-function chatStreamHasConversationContent() {
-    var stream = getVisibleChatStream();
-    if (!stream) return false;
-    return !!stream.querySelector('.msg-wrap, .process-aggregate, .human-interaction-card, .human-interaction-banner');
-}
-
-function elapsedSince(startedAt) {
-    var now = (typeof performance !== 'undefined' && performance.now)
-        ? performance.now()
-        : Date.now();
-    return Math.max(0, Math.round(now - Number(startedAt || now)));
-}
-
-function logOpenSessionTiming(sessionId, data) {
-    data = data || {};
-    var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};
-    var backendTotal = Number(timing.total || 0);
-    var frontendTotal = Number(data.totalMs || 0);
-    if (typeof uiPerformance !== 'undefined') {
-        uiPerformance.sample(sessionId, 'history.total', frontendTotal);
-        if (timing.total != null && Number.isFinite(Number(timing.total))) {
-            uiPerformance.sample(sessionId, 'history.backend', backendTotal);
-        }
-    }
-    if (frontendTotal < 500 && backendTotal < 500) return;
-    console.info(
-        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',
-        sessionId,
-        data.source || 'unknown',
-        frontendTotal,
-        Number(data.events || 0),
-        backendTotal,
-        Number(timing.read_page || 0),
-        Number(timing.count || 0),
-        Number(timing.user_turns || 0),
-        Number(timing.context_tokens || 0)
-    );
-}
-
-function beforeSessionMessageSnapshotAvailable() {
-    return true;
-}
-
-async function switchSession(sessionId, opts) {
-    if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);
-    opts = opts || {};
-    if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
-    // 子代理寻址：任何不是"由寻址栈驱动"的会话切换都退出寻址态
-    // （返回父会话时栈已先弹出，此处同样得到正确结果）。
-    if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {
-        var addressingTop = subagentAddressing.current();
-        if (!addressingTop || String(addressingTop.childSessionId || '') !== String(sessionId || '')) {
-            subagentAddressing.reset();
-        }
-    }
-    if (currentSessionId === sessionId && !opts.forceReload) {
-        const stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : null;
-        if (!(stream && stream.dataset && stream.dataset.sessionLoadFailed === '1')) {
-            clearSessionUnreadState(sessionId);
-            return true;
-        }
-        opts.forceReload = true;
-    }
-    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();
-    const switchStartedAt = performance.now();
-    if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
-    const switchToken = ++switchSessionEpoch;
-    // Cached restores do not start a new message request. Invalidate the old
-    // request here as well, including A -> B -> A switches during hydration.
-    messageLoadEpoch += 1;
-    sessionStore.ui.loadingMessages = false;
-    replayingMessages = false;
-    cancelSmoothStreamFollowForSessionSwitch();
-    // 子代理会话寻址：子会话在主对话区打开时，右侧扩展面板/历史面板保持与
-    // 主 Agent 一致（不清空、不收起），只有普通会话切换才重置这些面板。
-    var addressingChildSwitch = false;
-    if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {
-        var __addrTop = subagentAddressing.current();
-        addressingChildSwitch = !!__addrTop
-            && String(__addrTop.childSessionId || '') === String(sessionId || '');
-    }
-    suppressTocDuringSessionLoad = true;
-    if (!addressingChildSwitch) {
-        clearTocForSessionLoad();
-        clearOptionalPanelsForSessionLoad();
-    }
-    pendingRewriteTruncate = null;
-    hideRewriteUndoToast();
-    // A green-dot session represents an unread completed result. Opening it
-    // must land at the newest result, never at a stale reading anchor.
-    var sessionHadUnreadResult = !!(
-        (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)
-        || sessionUnreadComplete.has(sessionId)
-    );
-    // Startup prefetch is a fresh server read, including unread results. Do
-    // not abort it merely because local unread state was restored first.
-    // Cached DOM still gets discarded; explicit reloads still bypass prefetch.
-    var freshInitialPrefetch = !!(opts.initialLoad && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch
-        && initialSessionHistoryPrefetch.sessionId === sessionId);
-    if ((opts.forceReload || (sessionHadUnreadResult && !freshInitialPrefetch))
-        && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch) {
-        initialSessionHistoryPrefetch.controller.abort();
-        initialSessionHistoryPrefetch = null;
-    }
-    clearSessionUnreadState(sessionId);
-    const leaving = currentSessionId;
-    recentComposerQueuedFollowup = null;
-    saveChatScrollForSession(leaving);
-    stashInputDraft(leaving);
-    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);
-    prepareStashLeaving(leaving);
-    setCurrentSessionState(sessionId);
-    // Hold observer attachment until the addressed session's durable history
-    // has been restored (or its complete in-memory stream has been reused).
-    sessionStore.ui.loadingMessages = true;
-    // The session identity and its side-panel contents must cross the switch
-    // boundary together. Waiting for history requests leaves the previous
-    // session title or plan visible for a frame (and sometimes much longer on
-    // a cold load).
-    updateSessionTitle();
-    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
-    localStorage.setItem('lastSessionId', sessionId);
-    if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();
-    restoreInputDraft(sessionId);
-    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);
-    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
-    if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
-    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
-    if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);
-    syncSessionListIndicatorClasses();
-    // Refresh extension panels only after the new row owns the active marker;
-    // otherwise the projection request can render the session we just left.
-    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-        detail: { sessionId: sessionId },
-    }));
-    setSendButtonState();
-    // Restore/render immediately; authoritative runtime discovery runs alongside
-    // history instead of adding a fixed preflight delay to every recent session.
-    var sessionStateRefresh = refreshSingleSessionRow(sessionId);
-    void sessionStateRefresh.then(function (latest) {
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId || !latest) return;
-        if (restoredFromCache && latest.unread_result) {
-            void switchSession(sessionId, { forceReload: true });
-        } else if (latest.stream_active || latest.run_active) {
-            maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        }
-    });
-    if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) {
-        if (typeof uiPerformance !== 'undefined') uiPerformance.count(sessionId, 'switch.cancelled');
-        return false;
-    }
-    if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.prepare', performance.now() - switchStartedAt);
-    var restoredFromCache = false;
-    var restoredRunningStream = false;
-    var sessionHasActiveServerRun = !!(
-        isSessionRunning(sessionId)
-        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
-    );
-    if (!opts.forceReload && (
-        (restoredRunningStream = restoreStreamForRunningSession(sessionId))
-        || (!sessionHadUnreadResult
-            && !sessionHasActiveServerRun
-            && (restoredFromCache = restoreCachedSessionStream(sessionId)))
-    )) {
-        suppressTocDuringSessionLoad = false;
-        sessionStore.ui.loadingMessages = false;
-        hideLoading();
-        rebuildToc({ localOnly: true });
-        updateSessionTitle();
-        scheduleContextTokensAfterPaint(sessionId);
-        // Only a complete, idle stream restored from the in-memory cache may
-        // return to its prior reading position. A live run and a green-dot
-        // completion always open on their newest content.
-        var sessionIsRunningNow = !!(
-            restoredRunningStream
-            || isSessionRunning(sessionId)
-            || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))
-        );
-        if (restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow) {
-            restoreCachedSessionScrollPosition(sessionId);
-        } else {
-            streamChatNearBottom = true;
-            streamProcNearBottom = true;
-            liveAutoFollow = true;
-            scrollToBottom();
-            if (sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom === 'function') {
-                scrollCurrentRunningProcessToBottom(sessionId);
-            }
-        }
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: sessionId, phase: 'loaded' },
-        }));
-        setSendButtonState();
-        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId,
-            restoredRunningStream ? 'switch.live' : 'switch.cached', performance.now() - switchStartedAt);
-        return;
-    }
-    const vs = getVisibleChatStream();
-    resetSessionHistoryPaging();
-    if (vs) emptyChatStreamKeepingStrip(vs);
-    else {
-        chatContainer.innerHTML = '';
-        ensureVisibleChatStreamSlot();
-    }
-    showLoading();
-    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';
-    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);
-    return new Promise(function (resolve) {
-        setTimeout(async function () {
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
-        try {
-            // Cold history gets a bounded entry glide; cached streams restore
-            // their viewport above. Animation never gates load completion.
-            var initialScrollMode = 'entry-bottom';
-            var loadedOk = await loadSessionMessages(sessionId, initialScrollMode, {
-                preloadOlderIfShort: isServerStreamActive(sessionId),
-                allowDuringRun: addressingChildSwitch || isServerStreamActive(sessionId),
-                tocAlreadyStarted: tocAlreadyStarted,
-            });
-            if (!loadedOk) { resolve(false); return; }
-        } catch (error) {
-            console.error('切换会话加载失败:', error);
-            resolve(false);
-            return;
-        } finally {
-            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
-                hideLoading();
-                sessionStore.ui.loadingMessages = false;
-                suppressTocDuringSessionLoad = false;
-                replayingMessages = false;
-            }
-        }
-        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: sessionId, phase: 'loaded' },
-        }));
-        setSendButtonState();
-        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
-        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.loaded', performance.now() - switchStartedAt);
-        resolve(true);
-        }, 20);
-    });
-}
-
-async function createNewSession(targetWorkDir) {
-    if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);
-    if (typeof targetWorkDir === 'string') {
-        const requestedWorkDir = targetWorkDir.trim();
-        rememberNewSessionWorkDir(requestedWorkDir);
-        if (requestedWorkDir !== newSessionWorkDir) {
-            newSessionWorkDir = requestedWorkDir;
-            newSessionWorkDirRevision += 1;
-            clearPendingNewSession();
-        }
-        if (typeof syncWelcomeSessionDirectory === 'function') {
-            syncWelcomeSessionDirectory(null, requestedWorkDir);
-        }
-    }
-    const leavingSessionId = currentSessionId;
-    if (!leavingSessionId) {
-        setCurrentSessionState(null);
-        // 已在草稿态：复用（或继续）后台预取，不重复创建会话。
-        void ensurePrefetchedNewSession();
-        localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        const draftStream = getVisibleChatStream();
-        if (!draftStream || !draftStream.querySelector('.welcome')) setWelcome();
-        restoreInputDraft(null);
-        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(null);
-        updateSessionTitle();
-        syncSessionListIndicatorClasses();
-        setSendButtonState();
-        if (messageInput) messageInput.focus();
-        return null;
-    }
-
-    cancelSmoothStreamFollowForSessionSwitch();
-    saveChatScrollForSession(leavingSessionId);
-    stashInputDraft(leavingSessionId);
-    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leavingSessionId);
-    prepareStashLeaving(leavingSessionId);
-    clearOptionalPanelsForSessionLoad();
-    clearTocForSessionLoad();
-    switchSessionEpoch += 1;
-    messageLoadEpoch += 1;
-    setCurrentSessionState(null);
-    // 点“新会话”即开始后台物化：会话目录、元数据与索引在用户写首条消息之前落好，
-    // 发送时直接复用，不再把真实会话文件的创建算进首条消息的等待时间。
-    void ensurePrefetchedNewSession();
-    localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);
-    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-    setWelcome();
-    restoreInputDraft(null);
-    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(null);
-    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(null);
-    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(null);
-    updateSessionTitle();
-    syncSessionListIndicatorClasses();
-    replayingMessages = false;
-    hideLoading();
-    setSendButtonState();
-    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-        detail: { sessionId: null, phase: 'draft' },
-    }));
-    if (messageInput) messageInput.focus();
-    return null;
-}
-
-/* ── 新建会话：可选工作目录 ────────────────────────────────────────────────
-   菜单两项：在当前工作目录新建 / 在新工作目录新建（复用 MyAgentPathPicker 的原生目录
-   选择器）。选定的目录只作用于「下一个新会话」：草稿态会立刻按新目录重开隐藏草稿。
-   已有会话通过会话菜单的「切换工作区」直接修改。 */
-
-/** 目录选择器不可用（无原生对话框 / 无该 API）时的手填兜底；返回绝对路径或 null。 */
-function promptNewSessionWorkDirFallback(initial, reason) {
-    if (typeof openUiModal !== 'function') return Promise.resolve(null);
-    const detail = String(reason || '').trim();
-    return openUiModal({
-        title: '选择工作目录',
-        message: detail
-            ? ('系统目录选择器没能返回目录（' + detail + '）。请直接填写目标工作目录的绝对路径。')
-            : '无法打开系统目录选择器，请直接填写目标工作目录的绝对路径。',
-        inputLabel: '工作目录绝对路径',
-        inputValue: String(initial || ''),
-        inputPlaceholder: 'D:\\\\work\\\\my-project',
-        confirmText: '选择此目录',
-        cancelText: '取消',
-    }).then(function (value) {
-        return typeof value === 'string' ? value : null;
-    });
-}
-
-async function pickNewSessionWorkDir(initialDir) {
-    const initial = initialDir || activeSessionWorkDir()
-        || newSessionWorkDirTarget()
-        || ((typeof getActiveWorkDir === 'function') ? getActiveWorkDir() : '');
-    const picker = (typeof window !== 'undefined' && window.MyAgentPathPicker)
-        ? window.MyAgentPathPicker
-        : null;
-    let failure = '';
-    if (picker && typeof picker.pickPath === 'function') {
-        try {
-            const picked = await picker.pickPath('directory', initial, false);
-            if (picked) return String(picked);
-            return null; // 用户取消
-        } catch (error) {
-            failure = String((error && error.message) || error || '');
-            console.warn('目录选择器不可用，改为手填路径:', error);
-        }
-    }
-    return promptNewSessionWorkDirFallback(initial, failure);
-}
-
-/** 路径末级名字：\`D:\\work\\proj\` → \`proj\`（目录名优先于完整路径）。 */
-function workDirDisplayName(path) {
-    const parts = String(path || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean);
-    return parts.length ? parts[parts.length - 1] : String(path || '');
-}
-
-/** 路径比较用的规范形式（Windows 不区分大小写，去掉结尾分隔符）。 */
-function normalizeWorkDirIdentity(path) {
-    return String(path || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').toLowerCase();
-}
-
-/**
- * 「已经创建过的工作目录」：默认工作目录 + 各会话自己的工作目录。
- * 默认目录固定排第一（可以随时切回去），其余按最近活动倒序。
- */
-function listCreatedSessionWorkDirs() {
-    const defaultPath = String(
-        ((typeof window !== 'undefined' && window.__WORK_DIR__) || '')
-    ).trim();
-    const defaultEntry = {
-        key: '__default__',
-        label: '默认工作目录',
-        path: '',
-        absolutePath: defaultPath,
-        isDefault: true,
-        count: 0,
-        activityMs: 0,
-    };
-    const byKey = Object.create(null);
-    byKey[defaultEntry.key] = defaultEntry;
-    const out = [defaultEntry];
-    let sessions = [];
-    try { sessions = sessionStore.list(); } catch (error) { sessions = []; }
-    sessions.forEach(function (session) {
-        if (!session) return;
-        const path = String(session.work_dir || '').trim();
-        const isDefault = !!session.work_dir_is_default || !path;
-        const key = isDefault
-            ? '__default__'
-            : ('path:' + normalizeWorkDirIdentity(path));
-        let entry = byKey[key];
-        if (!entry) {
-            entry = {
-                key: key,
-                label: String(session.work_dir_label || '').trim() || workDirDisplayName(path),
-                path: path,
-                absolutePath: path,
-                isDefault: false,
-                count: 0,
-                activityMs: 0,
-            };
-            byKey[key] = entry;
-            out.push(entry);
-        }
-        entry.count += 1;
-        if (isDefault && !entry.absolutePath) entry.absolutePath = path;
-        const stamp = Date.parse(session.last_activity_at || session.updated_at || '');
-        if (Number.isFinite(stamp) && stamp > entry.activityMs) entry.activityMs = stamp;
-    });
-    const rest = out.slice(1).sort(function (a, b) {
-        if (b.activityMs !== a.activityMs) return b.activityMs - a.activityMs;
-        return 0;
-    });
-    return [out[0]].concat(rest);
-}
-
-/** 重新填充欢迎页「选择」下拉：当前生效的目录打勾。 */
-function renderWelcomeSessionDirectoryMenu(menu) {
-    if (!menu) return;
-    const selected = String(newSessionWorkDirTarget() || '');
-    const selectedId = normalizeWorkDirIdentity(selected);
-    menu.innerHTML = '';
-    listCreatedSessionWorkDirs().forEach(function (entry) {
-        const active = entry.isDefault
-            ? (!selectedId
-                || (!!entry.absolutePath
-                    && selectedId === normalizeWorkDirIdentity(entry.absolutePath)))
-            : (!!selectedId && selectedId === normalizeWorkDirIdentity(entry.path));
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'welcome-session-dir-item' + (active ? ' is-active' : '');
-        item.setAttribute('role', 'menuitemradio');
-        item.setAttribute('aria-checked', active ? 'true' : 'false');
-        // 空串 = 服务端全局默认目录。
-        item.setAttribute('data-welcome-session-workdir', entry.path || '');
-        const head = document.createElement('span');
-        head.className = 'welcome-session-dir-item-head';
-        const name = document.createElement('span');
-        name.className = 'welcome-session-dir-item-name';
-        name.textContent = entry.label;
-        const check = document.createElement('span');
-        check.className = 'welcome-session-dir-item-check';
-        check.innerHTML = SIDEBAR_ICON_SVG.check;
-        head.appendChild(name);
-        head.appendChild(check);
-        item.appendChild(head);
-        const pathNode = document.createElement('span');
-        pathNode.className = 'welcome-session-dir-item-path';
-        pathNode.textContent = entry.absolutePath || '';
-        pathNode.title = entry.absolutePath || '';
-        item.appendChild(pathNode);
-        menu.appendChild(item);
-    });
-    if (typeof translateUiNode === 'function') translateUiNode(menu);
-}
-
-/** 欢迎页卡片每次重建都要重新接线（按元素去重，不会重复绑定）。 */
-function bindWelcomeSessionDirectoryCard(card) {
-    if (!card) return;
-    const popup = card.querySelector('[data-welcome-session-directory-menu-wrap]');
-    if (!popup || popup.dataset.popupBound === '1') return;
-    bindSidebarPopup(popup);
-    const trigger = popup.querySelector('[data-popup-trigger]');
-    const menu = popup.querySelector('[data-welcome-session-directory-menu]');
-    if (trigger) {
-        // 展开前按当前会话列表重算条目（目录可能刚被新建 / 删除 / 改名）。
-        trigger.addEventListener('click', function () {
-            renderWelcomeSessionDirectoryMenu(menu);
-        });
-    }
-}
-
-(function bindWelcomeSessionDirectoryActionsOnce() {
-    if (typeof window === 'undefined' || window.__myAgentWelcomeSessionDirectoryBound) return;
-    window.__myAgentWelcomeSessionDirectoryBound = true;
-
-    // 「选择」下拉里挑一个已创建的工作目录。
-    document.addEventListener('click', async function (event) {
-        const item = event.target && event.target.closest
-            ? event.target.closest('[data-welcome-session-workdir]')
-            : null;
-        if (!item || currentSessionId) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const popup = item.closest('.sidebar-popup');
-        if (popup) setSidebarPopupOpen(popup, false);
-        const workDir = String(item.getAttribute('data-welcome-session-workdir') || '').trim();
-        try {
-            await applyNewSessionWorkDir(workDir);
-        } catch (error) {
-            console.error('切换会话工作目录失败:', error);
-        }
-    });
-
-    // 文件夹图标：系统「选择文件夹」对话框（原「选择 >」的行为）。
-    document.addEventListener('click', async function (event) {
-        const target = event.target && event.target.closest
-            ? event.target.closest('[data-welcome-session-directory-browse]')
-            : null;
-        if (!target || target.disabled || currentSessionId) return;
-        event.preventDefault();
-        event.stopPropagation();
-        target.disabled = true;
-        let selectedWorkDir = '';
-        try {
-            const picked = await pickNewSessionWorkDir();
-            const workDir = String(picked || '').trim();
-            if (!workDir || currentSessionId) return;
-            selectedWorkDir = workDir;
-            // Update the existing draft in place. Keep any text already typed in
-            // the composer; only its hidden server draft is recreated for this path.
-            await applyNewSessionWorkDir(workDir);
-        } catch (error) {
-            console.error('选择会话目录失败:', error);
-        } finally {
-            target.disabled = false;
-            if (typeof syncWelcomeSessionDirectory === 'function') {
-                syncWelcomeSessionDirectory(null, selectedWorkDir || undefined);
-            }
-        }
-    });
-})();
-
-/** 记下目标目录；草稿态下按新目录预取隐藏草稿，保持创建请求的版本隔离。 */
-function applyNewSessionWorkDir(workDir) {
-    const next = String(workDir || '').trim();
-    rememberNewSessionWorkDir(next);
-    if (next === newSessionWorkDir) return Promise.resolve(null);
-    newSessionWorkDir = next;
-    newSessionWorkDirRevision += 1;
-    const targetRevision = newSessionWorkDirRevision;
-    if (typeof syncWelcomeSessionDirectory === 'function') syncWelcomeSessionDirectory(null, next);
-    clearPendingNewSession();
-    const inFlight = prefetchNewSessionPromise
-        ? Promise.resolve(prefetchNewSessionPromise).catch(function () { return null; })
-        : Promise.resolve(null);
-    return inFlight.then(function () {
-        // The old request may have finished after clearPendingNewSession() and
-        // published a draft for its previous directory. ensurePrefetchedNewSession()
-        // checks the captured target before reusing or creating a draft.
-        if (currentSessionId) return null;
-        return ensurePrefetchedNewSession();
-    }).then(function (pending) {
-        if (targetRevision === newSessionWorkDirRevision
-                && next === newSessionWorkDirTarget()
-                && typeof syncWelcomeSessionDirectory === 'function') {
-            syncWelcomeSessionDirectory(null, next);
-        }
-        return pending;
-    });
-}
-
-/** 「在新工作目录新建会话」：选目录 → 记下 → 进入新会话草稿态。 */
-async function startNewSessionInFolder() {
-    const picked = await pickNewSessionWorkDir();
-    const dir = String(picked || '').trim();
-    if (!dir) return null;
-    return startNewSessionInDir(dir);
-}
-
-/** 在指定工作目录（空=服务端默认目录）里新建会话；各入口共用这一条链路。 */
-async function startNewSessionInDir(dir) {
-    const next = String(dir || '').trim();
-    await applyNewSessionWorkDir(next);
-    return createNewSession(next);
-}
-
-/** 当前会话（= 当前分组）的工作目录；没有会话（草稿态）时返回空串。 */
-function activeSessionWorkDir() {
-    const active = currentSessionId ? sessionStore.get(currentSessionId) : null;
-    return active ? String(active.effective_work_dir || active.subagent_work_dir || active.git_worktree_path || active.work_dir || '').trim() : '';
-}
-
-/** 主按钮与菜单「当前工作目录」：在当前会话的目录里新建（DSH 的当前工作区语义）。 */
-async function startNewSessionInCurrentDir() {
-    // Return to the unfinished draft, including its selected folder, after
-    // visiting a real session. Explicit folder/default menu choices still win.
-    if (!currentSessionId || pendingNewSession || prefetchNewSessionPromise
-            || readStoredPendingNewSession() || readStoredNewSessionWorkDir() !== null) {
-        return createNewSession();
-    }
-    return startNewSessionInDir(activeSessionWorkDir());
-}
-
-/** 菜单「在默认工作目录新建对话」：回到服务端全局默认目录，创建逻辑与主按钮一致。 */
-async function startNewSessionInDefaultDir() {
-    return startNewSessionInDir('');
-}
-
-// 刷新后重新进入草稿态时，草稿自身的工作目录来自服务端；把待用目录恢复成它，
-// 避免下一次 ensurePrefetchedNewSession 把仍然有效的草稿当成「目录不符」丢弃。
-(function restorePendingNewSessionWorkDirOnce() {
-    const selected = readStoredNewSessionWorkDir();
-    if (selected !== null) {
-        newSessionWorkDir = selected;
-        return;
-    }
-    const stored = readStoredPendingNewSession();
-    if (stored && typeof stored.work_dir === 'string' && stored.work_dir) {
-        newSessionWorkDir = stored.work_dir;
-    }
-})();
-
-/** 「新会话」右侧 ▾：当前目录 / 默认目录 / 新目录三条入口（开关与键盘走通用弹出层）。 */
-(function bindNewSessionMenuOnce() {
-    const menu = document.getElementById('new-session-menu');
-    const popup = document.getElementById('new-session-options');
-    if (!menu || !popup || window.__myAgentNewSessionMenuBound) return;
-    window.__myAgentNewSessionMenuBound = true;
-    bindSidebarPopup(popup);
-    menu.querySelectorAll('[data-new-session-scope]').forEach(function (item) {
-        item.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            setSidebarPopupOpen(popup, false);
-            const scope = String(item.getAttribute('data-new-session-scope') || '');
-            let task;
-            if (scope === 'new') task = startNewSessionInFolder();
-            else if (scope === 'default') task = startNewSessionInDefaultDir();
-            else task = startNewSessionInDir(activeSessionWorkDir() || newSessionWorkDirTarget());
-            Promise.resolve(task).catch(function (error) {
-                console.error('新建会话失败:', error);
-            });
-        });
-    });
-})();
-
-/* ── 工作目录分组头的 hover 动作：在该目录新建会话 / 目录更多操作 ────────── */
-
-/** 复制工作目录绝对路径到剪贴板（失败时回退到临时 textarea）。 */
-function copyWorkDirPath(path) {
-    var text = String(path || '');
-    if (!text) return;
-    var done = function () {
-        if (typeof showCopyFeedback === 'function') showCopyFeedback();
-    };
-    var fallback = function () {
-        try {
-            var ta = document.createElement('textarea');
-            ta.value = text;
-            ta.setAttribute('readonly', '1');
-            ta.style.position = 'fixed';
-            ta.style.left = '-9999px';
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            ta.remove();
-            done();
-        } catch (e) {
-            console.error('复制工作目录路径失败:', e);
-        }
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done).catch(fallback);
-    } else {
-        fallback();
-    }
-}
-
-/** 打开分组目录时不借用当前会话的相对路径上下文。 */
-function revealWorkDirInExplorer(path) {
-    var rel = String(path || '');
-    if (!rel) return;
-    openWorkspaceLocalPath(rel, true, { context: {} })
-        .then(function (data) {
-            if (typeof showOpenFileFeedback !== 'function') return;
-            if (data && data.ok) showOpenFileFeedback('已请求打开');
-            else showOpenFileFeedback((data && data.error) ? ('无法打开：' + data.error) : '无法打开文件');
-        })
-        .catch(function () {
-            if (typeof showOpenFileFeedback === 'function') showOpenFileFeedback('无法连接服务');
-        });
-}
-
-/** 工作目录重命名：只改侧栏显示名（localStorage 记忆，空名恢复为目录名），不动磁盘。 */
-async function renameWorkDirGroup(group, workDirPath) {
-    var current = String((group && group.title) || '');
-    var requested = await openUiModal({
-        title: '重命名工作目录',
-        subtitle: '只改侧栏显示的名称（留空恢复为目录名），不影响磁盘目录',
-        message: String(workDirPath || '') ? ('目录：' + String(workDirPath)) : '',
-        inputLabel: '显示名称',
-        inputValue: current,
-        inputMaxLength: 60,
-        inputRequired: false,
-        confirmText: '保存名称',
-        cancelText: '取消',
-    });
-    if (typeof requested !== 'string') return;
-    var next = requested.trim().slice(0, 60);
-    if (typeof setWorkDirCustomLabel === 'function') setWorkDirCustomLabel(group.key, next);
-    renderSessionListIfChanged(true);
-}
-
-/** 工作目录分组的拖拽排序（Pointer 事件；移动超过阈值才算拖拽，原地点击仍是折叠/展开）。
- *  顺序写入 localStorage（getWorkDirOrder/setWorkDirOrder），下次渲染按新顺序排布。 */
-function bindSessionGroupDrag(wrap, headRow, group) {
-    if (!wrap || !headRow || !group || !group.isWorkDirGroup) return;
-    if (headRow.dataset.groupDragBound === '1') return;
-    headRow.dataset.groupDragBound = '1';
-    var drag = null;
-    var suppressClickUntil = 0;
-    var DRAG_THRESHOLD_PX = 5;
-
-    // 拖拽结束后抑制紧随其后的 click（否则会顺带触发折叠开关）。
-    headRow.addEventListener('click', function (e) {
-        if (Date.now() < suppressClickUntil) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
-    }, true);
-
-    headRow.addEventListener('pointerdown', function (e) {
-        if (e.button !== 0) return;
-        var t = e.target;
-        if (t && t.closest && t.closest('.session-group-actions')) return;   // 动作区自己处理
-        drag = { pointerId: e.pointerId, startY: e.clientY, started: false, target: null, half: null };
-    });
-
-    function clearDropIndicators() {
-        document.querySelectorAll('.session-group.is-drop-before, .session-group.is-drop-after')
-            .forEach(function (el) { el.classList.remove('is-drop-before', 'is-drop-after'); });
-    }
-
-    function updateDropIndicator(clientY) {
-        clearDropIndicators();
-        drag.target = null;
-        drag.half = null;
-        var groups = document.querySelectorAll('.session-group');
-        for (var i = 0; i < groups.length; i += 1) {
-            var el = groups[i];
-            if (el === wrap) continue;
-            var r = el.getBoundingClientRect();
-            if (clientY < r.top || clientY > r.bottom) continue;
-            var half = clientY < (r.top + r.bottom) / 2 ? 'before' : 'after';
-            drag.target = el;
-            drag.half = half;
-            el.classList.add(half === 'before' ? 'is-drop-before' : 'is-drop-after');
-            return;
-        }
-    }
-
-    headRow.addEventListener('pointermove', function (e) {
-        if (!drag || e.pointerId !== drag.pointerId) return;
-        if (!drag.started) {
-            if (Math.abs(e.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
-            drag.started = true;
-            wrap.classList.add('is-dragging');
-            document.body.classList.add('session-group-drag-active');
-            try { headRow.setPointerCapture(drag.pointerId); } catch (err) { /* ignore */ }
-        }
-        e.preventDefault();
-        updateDropIndicator(e.clientY);
-    });
-
-    function finishDrag(e) {
-        if (!drag || e.pointerId !== drag.pointerId) return;
-        var started = drag.started;
-        var target = drag.target;
-        var half = drag.half;
-        drag = null;
-        wrap.classList.remove('is-dragging');
-        document.body.classList.remove('session-group-drag-active');
-        clearDropIndicators();
-        if (!started) return;
-        suppressClickUntil = Date.now() + 400;
-        if (!target) return;
-        // 以 DOM 顺序为基准重排（搜索态下只含可见组；未渲染的组按原相对顺序保留在后面）。
-        var domKeys = [];
-        document.querySelectorAll('.session-group').forEach(function (el) {
-            var key = el.dataset.groupKey;
-            if (key && key.indexOf('workdir:') === 0) {
-                domKeys.push(key);
-            }
-        });
-        var fromKey = wrap.dataset.groupKey;
-        var targetKey = target.dataset.groupKey;
-        var prevOrder = (typeof getWorkDirOrder === 'function') ? getWorkDirOrder() : [];
-        prevOrder.forEach(function (key) {
-            if (domKeys.indexOf(key) < 0) domKeys.push(key);
-        });
-        var fromIdx = domKeys.indexOf(fromKey);
-        if (fromIdx < 0) return;
-        domKeys.splice(fromIdx, 1);
-        var at = domKeys.indexOf(targetKey);
-        if (at < 0) return;
-        domKeys.splice(half === 'before' ? at : at + 1, 0, fromKey);
-        if (typeof setWorkDirOrder === 'function') setWorkDirOrder(domKeys);
-        renderSessionListIfChanged(false);
-    }
-    headRow.addEventListener('pointerup', finishDrag);
-    headRow.addEventListener('pointercancel', function (e) {
-        if (!drag || e.pointerId !== drag.pointerId) return;
-        drag = null;
-        wrap.classList.remove('is-dragging');
-        document.body.classList.remove('session-group-drag-active');
-        clearDropIndicators();
-    });
-}
-
-/** 所有分组提供会话管理；工作目录额外提供新建与路径操作。 */
-function buildSessionGroupActions(group, workDirPath) {
-    const actions = document.createElement('div');
-    actions.className = 'session-group-actions';
-    // 标题可能是自定义名（默认组也可改名），动作文案统一用当前显示名。
-    const name = String((group && group.title) || '');
-    const newLabel = '在“' + name + '”中新建会话';
-    const moreLabel = '“' + name + '”的更多操作';
-
-    const newBtn = document.createElement('button');
-    newBtn.type = 'button';
-    newBtn.className = 'session-row-icon session-group-icon';
-    newBtn.setAttribute('aria-label', newLabel);
-    newBtn.setAttribute('data-ui-tip', newLabel);
-    newBtn.innerHTML = SIDEBAR_ICON_SVG.plus;
-    bindUiHoverTip(newBtn);
-    newBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        Promise.resolve(startNewSessionInDir(workDirPath)).catch(function (err) {
-            console.error('在该工作目录中新建会话失败:', err);
-        });
-    });
-
-    const popup = document.createElement('div');
-    popup.className = 'sidebar-popup session-group-popup';
-    popup.setAttribute('data-sidebar-popup', '1');
-    popup.innerHTML = '<button type="button" class="session-row-icon session-group-icon" data-popup-trigger'
-        + ' aria-haspopup="menu" aria-expanded="false"'
-        + ' aria-label="' + escapeHtml(moreLabel) + '" data-ui-tip="' + escapeHtml(moreLabel) + '">'
-        + SIDEBAR_ICON_SVG.dots + '</button>'
-        + '<div class="sidebar-popup-menu session-group-menu" role="menu" aria-label="'
-        + escapeHtml(moreLabel) + '">'
-        + '<button type="button" role="menuitem" data-group-action="manage">会话管理</button>'
-        + (group.isWorkDirGroup ? '<div class="sidebar-popup-separator" role="separator"></div>'
-            + '<button type="button" role="menuitem" data-group-action="rename">重命名</button>'
-            + (workDirPath ? '<button type="button" role="menuitem" data-group-action="copy">复制路径</button>'
-                + '<button type="button" role="menuitem" data-group-action="reveal">在资源管理器打开</button>' : '') : '')
-        + '</div>';
-    bindSidebarPopup(popup);
-    popup.addEventListener('click', function (e) {
-        const item = (e.target && e.target.closest) ? e.target.closest('[data-group-action]') : null;
-        if (!item) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setSidebarPopupOpen(popup, false);
-        const action = item.getAttribute('data-group-action');
-        if (action === 'manage') openSessionGroupManager(group, popup.querySelector('[data-popup-trigger]'));
-        else if (action === 'copy') copyWorkDirPath(workDirPath);
-        else if (action === 'reveal') revealWorkDirInExplorer(workDirPath);
-        else if (action === 'rename') renameWorkDirGroup(group, workDirPath);
-    });
-
-    if (group.isWorkDirGroup && workDirPath) actions.appendChild(newBtn);
-    actions.appendChild(popup);
-    return actions;
-}
-
-/* ── 侧栏静态头：会话 / 工作区 + 搜索 + 视图选项 + 在新文件夹中新建 ──────── */
-
-function buildSessionViewMenuMarkup() {
-    function row(attr, value, text) {
-        return '<button type="button" role="menuitemradio" aria-checked="false" '
-            + attr + '="' + value + '">'
-            + '<span class="session-view-menu-text">' + text + '</span>'
-            + '<span class="session-view-menu-check" aria-hidden="true">' + SIDEBAR_ICON_SVG.check + '</span>'
-            + '</button>';
-    }
-    return '<button type="button" role="menuitem" data-session-advanced-search>高级搜索</button>'
-        + '<div class="sidebar-popup-separator" role="separator"></div>'
-        + '<div class="sidebar-popup-label" role="presentation">分组方式</div>'
-        + row('data-session-group-by', 'time', '按时间')
-        + row('data-session-group-by', 'workdir', '按工作目录')
-        + '<div class="sidebar-popup-separator" role="separator"></div>'
-        + '<div class="sidebar-popup-label" role="presentation">列表模式</div>'
-        + row('data-session-list-mode-option', 'compact', '紧凑')
-        + row('data-session-list-mode-option', 'detailed', '详细')
-        + '<div class="sidebar-popup-separator" role="separator"></div>'
-        + '<div class="sidebar-popup-label" role="presentation">筛选会话</div>'
-        + row('data-session-archive-filter', 'hide', '隐藏已归档')
-        + row('data-session-archive-filter', 'show', '全部')
-        + row('data-session-archive-filter', 'only', '仅已归档');
-}
-
-/** 让视图选项菜单的对勾与当前状态（分组方式 / 列表模式 / 归档筛选）一致。 */
-function syncSessionViewMenu() {
-    const menu = document.getElementById('session-view-menu');
-    if (!menu) return;
-    const groupBy = (typeof getSessionGroupBy === 'function') ? getSessionGroupBy() : 'time';
-    const listMode = (typeof getStoredSessionListMode === 'function') ? getStoredSessionListMode() : 'detailed';
-    const archiveFilter = (typeof getSessionArchiveFilter === 'function') ? getSessionArchiveFilter() : 'show';
-    const mark = function (selector, attr, value) {
-        menu.querySelectorAll(selector).forEach(function (btn) {
-            const on = String(btn.getAttribute(attr)) === String(value);
-            btn.classList.toggle('is-active', on);
-            if (btn.getAttribute('role') === 'menuitemradio') {
-                btn.setAttribute('aria-checked', on ? 'true' : 'false');
-            }
-        });
-    };
-    mark('[data-session-group-by]', 'data-session-group-by', groupBy);
-    mark('[data-session-list-mode-option]', 'data-session-list-mode-option', listMode);
-    mark('[data-session-archive-filter]', 'data-session-archive-filter', archiveFilter);
-}
-
-/** 切换归档筛选（show=显示归档区段，历史行为；hide=不渲染；only=只看归档）。 */
-function applySessionArchiveFilter(filter) {
-    const next = (typeof setSessionArchiveFilter === 'function') ? setSessionArchiveFilter(filter) : filter;
-    syncSessionViewMenu();
-    if (next === 'only' && !sessionStore.archivedLoaded) {
-        void loadArchivedSessions({ background: true, forceRender: true });
-    }
-    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
-}
-
-function setSessionSearchExpanded(expanded, opts) {
-    const head = document.getElementById('session-list-head');
-    const box = document.getElementById('session-search-box');
-    const btn = document.getElementById('session-search-btn');
-    const input = document.getElementById('session-search-input');
-    if (!head || !box || !btn) return;
-    const next = !!expanded;
-    head.classList.toggle('is-searching', next);
-    box.hidden = !next;
-    btn.setAttribute('aria-expanded', next ? 'true' : 'false');
-    if (next && typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();
-    if (next) {
-        if (input) {
-            input.focus();
-            if (opts && opts.selectInput) input.select();
-        }
-    } else if (input) {
-        input.value = '';
-        if (getSessionListSearchQuery()) applySessionListSearch('');
-    }
-}
-
-function applySessionListSearch(value) {
-    setSessionListSearchQuery(value);
-    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);
-}
-
-/** 收起/展开「会话（工作区）」区段；标题在侧栏静态头里，被折叠的区段体仍在列表内。 */
-function toggleSessionListHeadCollapse() {
-    const next = !sessionSectionExpanded('normal');
-    persistSessionSectionExpanded('normal', next);
-    const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;
-    if (sec) sec.classList.toggle('is-collapsed', !next);
-    syncSessionListHead(null, {});
-}
-
-/** 每次列表重绘后同步静态头：标题（会话 / 工作区）、计数、折叠态、视图选项对勾。 */
-function syncSessionListHead(sections, opts) {
-    const head = document.getElementById('session-list-head');
-    if (!head) return;
-    const options = opts || {};
-    const labelEl = document.getElementById('session-head-label');
-    if (labelEl) {
-        const workDirGrouping = (typeof getSessionGroupBy === 'function') && getSessionGroupBy() === 'workdir';
-        labelEl.textContent = workDirGrouping ? '工作区' : '会话';
-    }
-    const countEl = document.getElementById('session-head-count');
-    if (countEl && sections) countEl.textContent = String((sections.normal || []).length);
-    if (options.searching !== undefined) {
-        const head2 = document.getElementById('session-list-head');
-        if (head2) head2.classList.toggle('is-filtering', !!options.searching);
-    }
-    const expanded = sessionSectionExpanded('normal');
-    const toggle = document.getElementById('session-head-toggle');
-    if (toggle) {
-        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-        toggle.classList.toggle('is-collapsed', !expanded);
-    }
-    const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;
-    if (sec) sec.classList.toggle('is-collapsed', !expanded);
-    syncSessionViewMenu();
-}
-
-/* 索引重建完成后直接重载；新页面会读取权威列表，无需在旧页面重复构建。 */
-var sessionRefreshInFlight = false;
-
-/**
- * 侧栏刷新：按会话目录重建内存索引和 sessions.json，再重载页面读取列表。
- * 桌面端也通过此入口完成整页刷新；重建失败时保留当前页面并允许重试。
- */
-async function refreshSessionListAndPage(btn) {
-    if (sessionRefreshInFlight) return;
-    sessionRefreshInFlight = true;
-    if (btn) {
-        btn.disabled = true;
-        btn.classList.add('is-busy');
-        btn.setAttribute('aria-busy', 'true');
-    }
-    try {
-        var repair = await fetchWithTimeout('/sessions/index/repair', {
-            method: 'POST',
-            credentials: 'same-origin',
-        }, 120000, async function (response) {
-            return { response: response, data: await response.json().catch(function () { return {}; }) };
-        });
-        var response = repair.response;
-        var result = repair.data;
-        if (!response.ok || result.ok !== true) {
-            throw new Error(result.error || '重建会话索引失败（HTTP ' + response.status + '）');
-        }
-        window.location.reload();
-    } catch (err) {
-        console.error('重建会话索引失败:', err);
-        showUiAlert({
-            title: '刷新失败',
-            message: err && err.name === 'AbortError' ? '重建会话索引超时，请稍后重试。'
-                : String((err && err.message) || err || '无法重建会话索引'),
-            variant: 'error',
-        });
-    } finally {
-        sessionRefreshInFlight = false;
-        if (btn) {
-            btn.disabled = false;
-            btn.classList.remove('is-busy');
-            btn.removeAttribute('aria-busy');
-        }
-    }
-}
-
-/* ── 导入会话（列表头「文件夹+」按钮）───────────────────────────────────────
-   还原「导出会话」产生的 zip（会话目录名 = 原会话 id，内含 events.jsonl 等），
-   四条途径：压缩包（浏览）/ 文件夹（浏览）/ 手输或粘贴路径 / 直接拖进面板或按钮。
-   落点：POST /api/sessions/import（本机路径）· /api/sessions/import-upload（浏览器拖入）。
-   后端沿用原会话 id；仅当 id 已被占用时换新 id 并改写会话自有引用（标记为副本）。 */
-var SESSION_IMPORT_ARCHIVE_EXT = /\\.(zip|tar|tar\\.gz|tgz|tar\\.bz2|tbz2|tar\\.xz|txz)$/i;
-var SESSION_IMPORT_MAX_FILES = 5000;
-var SESSION_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
-
-function buildSessionImportMarkup() {
-    return ''
-        + '<div class="session-import-head">'
-        +   '<span class="session-import-title">导入会话</span>'
-        +   '<span class="session-import-hint">还原「导出会话」下载的 zip，或整个会话文件夹</span>'
-        + '</div>'
-        + '<div class="session-import-kinds" role="tablist" aria-label="导入来源">'
-        +   '<button type="button" class="session-import-kind is-active" role="tab" aria-selected="true" data-import-kind="zip">压缩包</button>'
-        +   '<button type="button" class="session-import-kind" role="tab" aria-selected="false" data-import-kind="dir">文件夹</button>'
-        + '</div>'
-        + '<div class="session-import-path-row">'
-        +   '<input class="session-import-input" type="text" data-import-path aria-label="会话路径" placeholder="D:\\\\downloads\\\\session-xxxx.zip" autocomplete="off" spellcheck="false" maxlength="4096">'
-        +   '<button type="button" class="session-import-browse" data-import-browse>浏览…</button>'
-        + '</div>'
-        + '<div class="session-import-drop" data-import-drop>把会话 zip 或会话文件夹拖到这里（可多个）</div>'
-        + '<p class="session-import-status" data-import-status role="status" aria-live="polite" hidden></p>'
-        + '<div class="session-import-actions">'
-        +   '<button type="button" class="session-import-submit" data-import-submit>导入</button>'
-        + '</div>';
-}
-
-function sessionImportPlaceholder(kind) {
-    return kind === 'dir' ? 'D:\\\\sessions\\\\<会话目录>' : 'D:\\\\downloads\\\\session-xxxx.zip';
-}
-
-/** 与设置中心 package_import.js 同一套取数方式：目录用 webkitGetAsEntry 递归，压缩包取单文件。
-    批量：每个目录 / 每个压缩包各算一个包，零散文件合成一个包。 */
-async function collectDroppedSessionPackages(dataTransfer) {
-    var items = Array.prototype.slice.call((dataTransfer && dataTransfer.items) || []).filter(function (item) {
-        return item.kind === 'file';
-    });
-    var entries = items.map(function (item) { return item.webkitGetAsEntry ? item.webkitGetAsEntry() : null; });
-    var fallback = Array.prototype.slice.call((dataTransfer && dataTransfer.files) || []);
-    var bytes = 0;
-    function budget(size, count) {
-        bytes += size;
-        if (count > SESSION_IMPORT_MAX_FILES || bytes > SESSION_IMPORT_MAX_BYTES) {
-            throw new Error('目录最多 5000 个文件，总大小不能超过 200 MB');
-        }
-    }
-    function add(sink, file, path) {
-        budget(file.size, sink.files.length + 1);
-        sink.files.push({ file: file, path: path });
-    }
-    async function walk(entry, prefix, depth, sink) {
-        if (depth > 40) throw new Error('目录层级过深');
-        var path = prefix + entry.name;
-        if (entry.isFile) {
-            var file = await new Promise(function (resolve, reject) { entry.file(resolve, reject); });
-            add(sink, file, path);
-            return;
-        }
-        if (!entry.isDirectory) return;
-        var reader = entry.createReader();
-        for (;;) {
-            var children = await new Promise(function (resolve, reject) { reader.readEntries(resolve, reject); });
-            if (!children.length) return;
-            for (var i = 0; i < children.length; i += 1) await walk(children[i], path + '/', depth + 1, sink);
-        }
-    }
-    if (entries.length && entries.every(Boolean)) {
-        var packages = [];
-        var loose = { kind: 'dir', files: [] };
-        for (var index = 0; index < entries.length; index += 1) {
-            var entry = entries[index];
-            if (entry.isDirectory) {
-                var dirSink = { kind: 'dir', files: [] };
-                await walk(entry, '', 0, dirSink);
-                packages.push(dirSink);
-            } else if (SESSION_IMPORT_ARCHIVE_EXT.test(entry.name)) {
-                var zipSink = { kind: 'zip', files: [] };
-                await walk(entry, '', 0, zipSink);
-                packages.push(zipSink);
-            } else {
-                await walk(entry, '', 0, loose);
-            }
-        }
-        if (loose.files.length) packages.push(loose);
-        return packages;
-    }
-    var archives = fallback.filter(function (file) {
-        return SESSION_IMPORT_ARCHIVE_EXT.test(file.webkitRelativePath || file.name);
-    });
-    var rest = fallback.filter(function (file) { return archives.indexOf(file) < 0; });
-    var out = archives.map(function (file) {
-        var sink = { kind: 'zip', files: [] };
-        add(sink, file, file.name);
-        return sink;
-    });
-    if (rest.length) {
-        var restSink = { kind: 'dir', files: [] };
-        rest.forEach(function (file) { add(restSink, file, file.webkitRelativePath || file.name); });
-        out.push(restSink);
-    }
-    return out;
-}
-
-function mountSessionImportOnce() {
-    var popup = document.getElementById('session-import');
-    var menu = document.getElementById('session-import-menu');
-    if (!popup || !menu || popup.dataset.importMounted === '1') return;
-    popup.dataset.importMounted = '1';
-    menu.innerHTML = buildSessionImportMarkup();
-    bindSidebarPopup(popup);
-
-    var kind = 'zip';
-    var busy = false;
-    var input = menu.querySelector('[data-import-path]');
-    var statusLine = menu.querySelector('[data-import-status]');
-    var submit = menu.querySelector('[data-import-submit]');
-    var browse = menu.querySelector('[data-import-browse]');
-    var drop = menu.querySelector('[data-import-drop]');
-
-    function setStatus(text, isError) {
-        if (!statusLine) return;
-        statusLine.textContent = text || '';
-        statusLine.hidden = !text;
-        statusLine.classList.toggle('is-error', !!isError);
-    }
-
-    function setKind(next) {
-        kind = next === 'dir' ? 'dir' : 'zip';
-        Array.prototype.forEach.call(menu.querySelectorAll('[data-import-kind]'), function (button) {
-            var active = button.getAttribute('data-import-kind') === kind;
-            button.classList.toggle('is-active', active);
-            button.setAttribute('aria-selected', active ? 'true' : 'false');
-        });
-        if (input) input.placeholder = sessionImportPlaceholder(kind);
-        setStatus('');
-    }
-
-    function setBusy(next) {
-        busy = !!next;
-        popup.setAttribute('aria-busy', busy ? 'true' : 'false');
-        Array.prototype.forEach.call(menu.querySelectorAll('button, input'), function (control) {
-            control.disabled = busy;
-        });
-    }
-
-    /** 汇总一批导入结果：刷新列表、单个成功时切过去、一次弹窗说明成败。 */
-    async function finishImportBatch(imported, failed) {
-        var ok = Array.isArray(imported) ? imported : [];
-        var bad = Array.isArray(failed) ? failed : [];
-        if (!ok.length && bad.length) {
-            var only = bad.length === 1 ? bad[0].error : '全部失败：' + bad.map(function (item) { return item.error; }).join('；');
-            throw new Error(only);
-        }
-        setStatus('');
-        setSidebarPopupOpen(popup, false);
-        if (input) input.value = '';
-        try {
-            await loadSessions({ force: true });
-            if (ok.length === 1 && ok[0].id) await switchSession(ok[0].id);
-        } catch (err) {
-            console.error('导入后刷新会话列表失败', err);
-        }
-        var lines = [];
-        lines.push(ok.length === 1
-            ? '会话「' + String(ok[0].name || '未命名') + '」已导入。'
-            : '已导入 ' + ok.length + ' 个会话。');
-        var remapped = ok.filter(function (item) { return item && item.remapped; }).length;
-        if (remapped) lines.push(remapped + ' 个因原 id 被占用，已换新 id 作为副本导入。');
-        var attachments = ok.reduce(function (sum, item) { return sum + ((item && item.attachments) || 0); }, 0);
-        if (attachments) lines.push('已同时还原 ' + attachments + ' 张图片附件。');
-        if (bad.length) {
-            lines.push('失败 ' + bad.length + ' 个：' + bad.map(function (item) {
-                return String(item.source || '') + '（' + String(item.error || '') + '）';
-            }).join('；'));
-        }
-        showUiAlert({
-            title: bad.length ? '部分导入完成' : '已导入会话',
-            message: lines.join(''),
-            variant: bad.length ? 'error' : 'info',
-        });
-    }
-
-    async function importFromPath() {
-        var raw = input ? String(input.value || '') : '';
-        var sources = String(raw).split(/[\\r\\n;]+/).map(function (item) { return item.trim(); }).filter(Boolean);
-        if (!sources.length) {
-            setStatus(kind === 'dir' ? '请填写会话文件夹路径' : '请填写会话压缩包路径', true);
-            if (input) input.focus();
-            return;
-        }
-        if (sources.length > 1) setStatus('正在导入 ' + sources.length + ' 个会话…');
-        var response = await fetch('/api/sessions/import', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sources: sources, kind: kind }),
-        });
-        var result = await response.json().catch(function () { return {}; });
-        if (!response.ok || !result.ok) throw new Error(result.error || '导入失败');
-        await finishImportBatch(result.imported, result.failed);
-    }
-
-    async function importFromDrop(dataTransfer) {
-        var packages = await collectDroppedSessionPackages(dataTransfer);
-        if (!packages.length) throw new Error('没有可导入的文件');
-        var bad = null;
-        for (var i = 0; i < packages.length; i += 1) {
-            var pack = packages[i];
-            if (pack.kind === 'zip' && (pack.files.length !== 1 || !SESSION_IMPORT_ARCHIVE_EXT.test(pack.files[0].path))) {
-                bad = pack;
-                break;
-            }
-        }
-        if (bad) throw new Error('请拖入会话导出的 ZIP / TAR 压缩包，或整个会话文件夹');
-        var imported = [];
-        var failed = [];
-        for (var index = 0; index < packages.length; index += 1) {
-            var item = packages[index];
-            setKind(item.kind);
-            setStatus(packages.length > 1
-                ? '正在导入会话…（' + (index + 1) + '/' + packages.length + '）'
-                : '正在导入会话…');
-            try {
-                var form = new FormData();
-                form.append('kind', item.kind);
-                item.files.forEach(function (entry) { form.append('files', entry.file, entry.path); });
-                var response = await fetch('/api/sessions/import-upload', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    body: form,
-                });
-                var result = await response.json().catch(function () { return {}; });
-                if (!response.ok || !result.ok) throw new Error(result.error || '导入失败');
-                imported.push(result.session);
-            } catch (error) {
-                failed.push({
-                    source: (item.files[0] && item.files[0].path) || '',
-                    error: String((error && error.message) || error || '导入失败'),
-                });
-            }
-        }
-        await finishImportBatch(imported, failed);
-    }
-
-    async function runImport(task) {
-        if (busy) return;
-        setBusy(true);
-        setStatus('正在导入会话…');
-        try {
-            await task();
-        } catch (error) {
-            setStatus(String((error && error.message) || error || '导入失败'), true);
-            showUiAlert({
-                title: '导入失败',
-                message: String((error && error.message) || error || '无法导入该会话'),
-                variant: 'error',
-            });
-        } finally {
-            setBusy(false);
-        }
-    }
-
-    Array.prototype.forEach.call(menu.querySelectorAll('[data-import-kind]'), function (button) {
-        button.addEventListener('click', function () {
-            if (busy) return;
-            setKind(button.getAttribute('data-import-kind'));
-        });
-    });
-    if (submit) {
-        submit.addEventListener('click', function () { runImport(importFromPath); });
-    }
-    if (input) {
-        input.addEventListener('keydown', function (event) {
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            event.stopPropagation();
-            runImport(importFromPath);
-        });
-    }
-    if (browse) {
-        browse.addEventListener('click', async function () {
-            if (busy) return;
-            var picker = typeof window !== 'undefined' ? window.MyAgentPathPicker : null;
-            if (!picker || typeof picker.pickPath !== 'function') {
-                setStatus('当前环境不支持系统文件选择框，请直接粘贴路径或拖入', true);
-                return;
-            }
-            try {
-                var chosen = await picker.pickPath(kind === 'dir' ? 'directory' : 'file', input ? input.value : '', true);
-                if (Array.isArray(chosen) && !chosen.length) return;
-                if (!chosen) return;
-                if (input) {
-                    // <input> 会吃掉换行：多选结果用「; 」拼接，导入时按 [\\r\\n;] 再拆开
-                    input.value = Array.isArray(chosen) ? chosen.join('; ') : chosen;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-                setStatus('');
-            } catch (error) {
-                setStatus(String((error && error.message) || error || '无法打开选择对话框'), true);
-            }
-        });
-    }
-    // 拖拽：整个弹出层（含收起状态的按钮）都收，面板内高亮提示。
-    function hasDraggedFiles(event) {
-        return !!(event.dataTransfer && Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') >= 0);
-    }
-    popup.addEventListener('dragover', function (event) {
-        if (!hasDraggedFiles(event)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.dataTransfer) event.dataTransfer.dropEffect = busy ? 'none' : 'copy';
-        popup.classList.add('is-dragover');
-    });
-    popup.addEventListener('dragleave', function (event) {
-        if (!popup.contains(event.relatedTarget)) popup.classList.remove('is-dragover');
-    });
-    popup.addEventListener('drop', function (event) {
-        if (!hasDraggedFiles(event)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        popup.classList.remove('is-dragover');
-        runImport(function () { return importFromDrop(event.dataTransfer); });
-    });
-    popup.addEventListener('keydown', function (event) {
-        if (event.key !== 'Escape' || !popup.classList.contains('is-open')) return;
-        event.preventDefault();
-        event.stopPropagation();
-        setSidebarPopupOpen(popup, false, { returnFocus: true });
-    });
-}
-
-(function mountSessionListHeadOnce() {
-    const head = document.getElementById('session-list-head');
-    if (!head || head.dataset.headMounted === '1') return;
-    head.dataset.headMounted = '1';
-
-    const viewMenu = document.getElementById('session-view-menu');
-    if (viewMenu) viewMenu.innerHTML = buildSessionViewMenuMarkup();
-    const viewPopup = document.getElementById('session-view-options');
-    if (viewPopup) {
-        bindSidebarPopup(viewPopup);
-        viewPopup.addEventListener('click', function (e) {
-            const item = (e.target && e.target.closest) ? e.target.closest('[role="menuitemradio"], [data-session-advanced-search]') : null;
-            if (!item) return;
-            e.preventDefault();
-            e.stopPropagation();
-            setSidebarPopupOpen(viewPopup, false);
-            if (item.hasAttribute('data-session-advanced-search')) {
-                openAdvancedSessionSearch(getSessionListSearchQuery(), viewPopup.querySelector('[data-popup-trigger]'));
-                return;
-            }
-            const groupBy = item.getAttribute('data-session-group-by');
-            const listMode = item.getAttribute('data-session-list-mode-option');
-            const archive = item.getAttribute('data-session-archive-filter');
-            if (groupBy && typeof applySessionGroupBy === 'function') applySessionGroupBy(groupBy, true);
-            else if (listMode && typeof applySessionListMode === 'function') applySessionListMode(listMode, true);
-            else if (archive) applySessionArchiveFilter(archive);
-            syncSessionViewMenu();
-        });
-    }
-    mountSessionImportOnce();
-
-    const toggle = document.getElementById('session-head-toggle');
-    if (toggle) {
-        toggle.addEventListener('click', function (e) {
-            e.preventDefault();
-            toggleSessionListHeadCollapse();
-        });
-    }
-
-    const searchBox = document.getElementById('session-search-box');
-    const searchInput = document.getElementById('session-search-input');
-    if (typeof initSessionSearchControls === 'function') initSessionSearchControls(head);
-
-    // 第三个按钮已由「在新文件夹中新建会话」改为「刷新会话列表和页面」（见 refreshSessionListAndPage）。
-    const refreshBtn = document.getElementById('session-refresh-btn');
-    if (refreshBtn) {
-        bindUiHoverTip(refreshBtn);
-        refreshBtn.addEventListener('click', function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            refreshSessionListAndPage(refreshBtn);
-        });
-    }
-    if (searchBox && searchInput) searchBox.hidden = true;
-    syncSessionViewMenu();
-    syncSessionListHead(null, {});
-})();
-
-async function materializeNewSession() {
-    if (currentSessionId) return currentSessionId;
-    if (materializeNewSessionQueue) return materializeNewSessionQueue;
-    materializeNewSessionQueue = Promise.resolve()
-        .then(function () { return materializeNewSessionInner(); })
-        .finally(function () {
-            materializeNewSessionQueue = null;
-        });
-    return materializeNewSessionQueue;
-}
-
-function collectNewSessionCreateOptions(targetWorkDir) {
-    const createOptions = {};
-    if (typeof newSessionModelProfileId === 'function') {
-        const modelProfileId = newSessionModelProfileId();
-        if (modelProfileId) createOptions.model_profile_id = modelProfileId;
-    }
-    if (typeof newSessionReasoningEffort === 'function') {
-        const effort = newSessionReasoningEffort();
-        if (effort) createOptions.reasoning_effort = effort;
-    }
-    if (typeof selectedNewSessionPermissionMode === 'function') {
-        const permissionMode = selectedNewSessionPermissionMode();
-        if (permissionMode) createOptions.permission_mode = permissionMode;
-    }
-    // 创建时指定初始工作目录（POST /sessions 的可选 work_dir）。
-    const workDir = (typeof targetWorkDir === 'string')
-        ? targetWorkDir.trim()
-        : newSessionWorkDirTarget();
-    if (workDir) createOptions.work_dir = workDir;
-    return createOptions;
-}
-
-/** 当前待用的新会话工作目录；空串表示用服务端全局默认目录。 */
-function newSessionWorkDirTarget() {
-    return String(newSessionWorkDir || '').trim();
-}
-
-function rememberNewSessionWorkDir(workDir) {
-    try { sessionStorage.setItem('myagent-new-session-work-dir', String(workDir || '').trim()); } catch (error) { /* unavailable */ }
-}
-
-function readStoredNewSessionWorkDir() {
-    try { return sessionStorage.getItem('myagent-new-session-work-dir'); } catch (error) { return null; }
-}
-
-function readStoredPendingNewSession() {
-    try {
-        // Keep one pending server draft per tab. sessionStorage survives reloads
-        // without letting two tabs send independent first turns to the same ID.
-        let raw = sessionStorage.getItem(PENDING_NEW_SESSION_KEY);
-        if (!raw) {
-            // One-time handoff for drafts created by the earlier build, which
-            // stored this pointer in localStorage shared by all tabs.
-            raw = localStorage.getItem(PENDING_NEW_SESSION_KEY);
-            if (raw) {
-                sessionStorage.setItem(PENDING_NEW_SESSION_KEY, raw);
-                localStorage.removeItem(PENDING_NEW_SESSION_KEY);
-            }
-        }
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && parsed.session_id) return parsed;
-    } catch (error) { /* 旧格式或存储不可用：按未预取处理 */ }
-    return null;
-}
-
-function writeStoredPendingNewSession(sessionId, data, workDir) {
-    try {
-        if (!sessionId) {
-            sessionStorage.removeItem(PENDING_NEW_SESSION_KEY);
-            return;
-        }
-        sessionStorage.setItem(PENDING_NEW_SESSION_KEY, JSON.stringify({
-            session_id: String(sessionId),
-            model_profile_id: (data && data.model_profile_id) || '',
-            permission_mode: (data && data.permission_status && data.permission_status.mode) || '',
-            // 记录草稿用的是哪个工作目录：刷新后重新进入草稿态时据此判断能否复用。
-            work_dir: String(workDir || '').trim(),
-        }));
-    } catch (error) { /* 存储不可用时退化为页面内复用 */ }
-}
-
-function clearPendingNewSession() {
-    pendingNewSession = null;
-    writeStoredPendingNewSession('');
-}
-
-function sessionWorkDirMatchesTarget(session, targetWorkDir) {
-    const actual = String(session && session.work_dir || '').trim();
-    const defaultWorkDir = (typeof window !== 'undefined') ? window.__WORK_DIR__ : '';
-    const expected = String(targetWorkDir || defaultWorkDir || '').trim();
-    if (!actual || !expected) return false;
-    function normalize(path) {
-        const windowsPath = /^[a-z]:[\\\\/]/i.test(path) || path.indexOf('\\\\') >= 0;
-        const normalized = path.replace(/\\\\/g, '/').replace(/\\/+$/, '');
-        return windowsPath ? normalized.toLowerCase() : normalized;
-    }
-    return normalize(actual) === normalize(expected);
-}
-
-/**
- * 后台预取：创建隐藏草稿会话（服务端 metadata.draft，首条 user 事件落盘后才进入列表）。
- * 页面内多次点击“新会话”复用同一份；刷新后重新进入草稿态时按记录的会话 ID 复用。
- */
-function ensurePrefetchedNewSession() {
-    if (currentSessionId) return Promise.resolve(null);
-    const targetWorkDir = newSessionWorkDirTarget();
-    if (pendingNewSession) {
-        if (String(pendingNewSession.workDir || '') === targetWorkDir) {
-            return Promise.resolve(pendingNewSession);
-        }
-        clearPendingNewSession();
-    }
-    if (prefetchNewSessionPromise) {
-        if (String(prefetchNewSessionWorkDir || '') === targetWorkDir) {
-            return prefetchNewSessionPromise;
-        }
-        return Promise.resolve(prefetchNewSessionPromise).catch(function () { return null; }).then(function () {
-            if (currentSessionId) return null;
-            return ensurePrefetchedNewSession();
-        });
-    }
-    const targetRevision = newSessionWorkDirRevision;
-    const promise = Promise.resolve()
-        .then(function () { return prefetchNewSessionInner(targetWorkDir, targetRevision); })
-        .catch(function (error) {
-            console.warn('新会话后台预取失败，发送时回退为即时创建:', error);
-            clearPendingNewSession();
-            return null;
-        })
-        .finally(function () {
-            if (prefetchNewSessionPromise === promise) {
-                prefetchNewSessionPromise = null;
-                prefetchNewSessionWorkDir = null;
-            }
-        });
-    prefetchNewSessionWorkDir = targetWorkDir;
-    prefetchNewSessionPromise = promise;
-    return promise;
-}
-
-async function prefetchNewSessionInner(targetWorkDir, targetRevision) {
-    const prefetchStartedAt = performance.now();
-    const requestIsCurrent = function () {
-        return targetRevision === newSessionWorkDirRevision
-            && targetWorkDir === newSessionWorkDirTarget();
-    };
-    let stored = readStoredPendingNewSession();
-    // 用户刚换了目标工作目录：丢弃旧目标的预取引用，避免复用过期的创建请求。
-    if (stored && String(stored.work_dir || '') !== targetWorkDir) {
-        writeStoredPendingNewSession('');
-        stored = null;
-    }
-    if (stored) {
-        try {
-            const response = await fetch('/sessions/' + encodeURIComponent(stored.session_id), { cache: 'no-store' });
-            if (response.ok) {
-                const sess = await response.json();
-                if (sess && sess.id && sess.draft
-                        && sessionWorkDirMatchesTarget(sess, targetWorkDir)
-                        && requestIsCurrent()) {
-                    pendingNewSession = {
-                        sessionId: String(sess.id),
-                        workDir: targetWorkDir,
-                        response: {
-                            model_profile_id: stored.model_profile_id || '',
-                            permission_status: stored.permission_mode ? { mode: stored.permission_mode } : null,
-                        },
-                        session: sess,
-                    };
-                    return pendingNewSession;
-                }
-            }
-        } catch (error) { /* 校验失败则重新预取 */ }
-        writeStoredPendingNewSession('');
-    }
-    if (!requestIsCurrent()) return null;
-    const createOptions = collectNewSessionCreateOptions(targetWorkDir);
-    const response = await fetch('/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({ prefetch: true }, createOptions)),
-    });
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    const data = await response.json();
-    if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
-    // A directory switch can happen while POST /sessions is in flight. Do not
-    // let the stale response become the pending draft for the newly selected path.
-    if (!requestIsCurrent() || !sessionWorkDirMatchesTarget(data.session, targetWorkDir)) return null;
-    pendingNewSession = {
-        sessionId: String(data.session_id),
-        workDir: targetWorkDir,
-        response: data,
-        session: data.session || null,
-    };
-    writeStoredPendingNewSession(pendingNewSession.sessionId, data, targetWorkDir);
-    if (typeof uiPerformance !== 'undefined') {
-        uiPerformance.sample(pendingNewSession.sessionId, 'session.prefetch', performance.now() - prefetchStartedAt);
-    }
-    return pendingNewSession;
-}
-
-async function applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, createResponse) {
-    const tasks = [];
-    if (createOptions.reasoning_effort && createResponse.reasoning_effort !== createOptions.reasoning_effort) {
-        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/reasoning_effort', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-            body: JSON.stringify({ reasoning_effort: createOptions.reasoning_effort }),
-        }).then(async function (response) {
-            const data = await response.json();
-            if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度应用失败');
-        }));
-    }
-    if (createOptions.model_profile_id
-        && String(createResponse.model_profile_id || '') !== String(createOptions.model_profile_id)) {
-        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/model_profile', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ profile_id: createOptions.model_profile_id }),
-        }).then(async function (response) {
-            const data = await response.json();
-            if (!response.ok || !data || !data.ok) {
-                throw new Error((data && data.error) || '模型配置应用失败');
-            }
-        }));
-    }
-    if (createOptions.permission_mode
-        && (!createResponse.permission_status
-            || String(createResponse.permission_status.mode || '') !== String(createOptions.permission_mode))) {
-        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/permissions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ mode: createOptions.permission_mode }),
-        }).then(async function (response) {
-            const data = await response.json();
-            if (!response.ok || !data || !data.ok) {
-                throw new Error((data && data.error) || '权限等级应用失败');
-            }
-            createResponse.permission_status = data;
-        }));
-    }
-    if (tasks.length) await Promise.all(tasks);
-}
-
-async function materializeNewSessionInner() {
-    const draftEpoch = switchSessionEpoch;
-    const createStartedAt = performance.now();
-    let createdSessionId = '';
-    try {
-        const createOptions = collectNewSessionCreateOptions();
-        // 优先复用点“新会话”时启动的后台预取（可能仍在途）；预取失败或超时才回退到
-        // 发送时创建，保证这条路径永远可用。
-        const prefetched = await ensurePrefetchedNewSession();
-        let sessionId = prefetched && prefetched.sessionId ? String(prefetched.sessionId) : '';
-        let data = prefetched && prefetched.response ? prefetched.response : null;
-        if (!sessionId) {
-            const response = await fetch('/sessions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(createOptions),
-            });
-            if (!response.ok) throw new Error('HTTP ' + response.status);
-            data = await response.json();
-            if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
-            sessionId = String(data.session_id);
-        }
-        clearPendingNewSession();
-        // 这次选定的工作目录已被本会话消费；下一次「新建对话」回到全局默认目录。
-        newSessionWorkDir = '';
-        try { sessionStorage.removeItem('myagent-new-session-work-dir'); } catch (error) { /* unavailable */ }
-        createdSessionId = sessionId;
-        const session = (data && data.session)
-            || (prefetched && prefetched.session)
-            || { id: sessionId, name: '新会话' };
-        sessionStore.protectFromSnapshots(session);
-
-        const ownsDraft = !currentSessionId && switchSessionEpoch === draftEpoch;
-        const draftText = ownsDraft && messageInput
-            ? messageInput.value
-            : readStoredInputDraft(null);
-        persistInputDraft(sessionId, draftText);
-        if (window.MyAgentPathPicker && typeof window.MyAgentPathPicker.moveChatSession === 'function') {
-            window.MyAgentPathPicker.moveChatSession(messageInput, null, sessionId);
-        }
-        removeStoredInputDraft(null);
-
-        if (ownsDraft) {
-            setCurrentSessionState(sessionId);
-            if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
-            localStorage.setItem('lastSessionId', sessionId);
-            // Do not restore the composer here: it is already the live source
-            // of truth and restoring an older value causes the visible blink.
-            if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
-            if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
-        }
-        syncArchivedSessionStateFromStore();
-        renderSessionListIfChanged(false);
-        await applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data || {});
-        if (typeof commitNewSessionModelProfile === 'function') {
-            commitNewSessionModelProfile(sessionId);
-        }
-        if (typeof commitNewSessionReasoningEffort === 'function') commitNewSessionReasoningEffort(sessionId);
-        if (typeof commitNewSessionPermissionMode === 'function') {
-            commitNewSessionPermissionMode(data.permission_status || null);
-        }
-        if (ownsDraft && typeof refreshModelProfileSelector === 'function') {
-            refreshModelProfileSelector(sessionId);
-        }
-        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: sessionId, phase: 'created' },
-        }));
-        if (typeof uiPerformance !== 'undefined') {
-            uiPerformance.sample(sessionId, 'session.create', performance.now() - createStartedAt);
-        }
-        return sessionId;
-    } catch (error) {
-        console.error('创建新会话失败', error);
-        if (createdSessionId) {
-            appendLogVisible('新会话配置应用失败，请重新选择模型或权限后再发送', 'error-log');
-        } else if (!currentSessionId && switchSessionEpoch === draftEpoch) {
-            appendLogVisible('创建新会话失败，请重试发送', 'error-log');
-        }
-        return null;
-    }
-}
+`,Us=`\uFEFFfunction setSendButtonState() {\r
+    syncMessageInputPlaceholder();\r
+    sendBtn.disabled = false;\r
+    const uploadBusy = isChatFileUploadBusy();\r
+    const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;\r
+    const newSessionCreating = !currentSessionId && materializeNewSessionQueue;\r
+    if (uploadBusy) {\r
+        sendBtn.textContent = '上传中';\r
+        sendBtn.classList.remove('is-stop');\r
+        sendBtn.classList.remove('is-followup');\r
+        sendBtn.disabled = true;\r
+        return;\r
+    }\r
+    if (newSessionCreating && !newSessionPreflight) {\r
+        sendBtn.textContent = '创建中';\r
+        sendBtn.classList.remove('is-stop');\r
+        sendBtn.classList.remove('is-followup');\r
+        sendBtn.disabled = true;\r
+        return;\r
+    }\r
+    if (isSessionRunning(currentSessionId) || newSessionPreflight) {\r
+        const run = newSessionPreflight || (typeof getSessionRunState === 'function' ? getSessionRunState(currentSessionId) : null);\r
+        const suppressFollowup = !!(run && run.suppressFollowupButton);\r
+        const hasDraft = (typeof inputHasSendableText === 'function')\r
+            ? inputHasSendableText()\r
+            : !!(messageInput && String(messageInput.value || '').trim());\r
+        const followupEnabled = (typeof isMyAgentFeatureEnabled === 'function') && isMyAgentFeatureEnabled('followupRestart', false);\r
+        sendBtn.innerHTML = (followupEnabled && hasDraft && !suppressFollowup) ? '追问' : '停止 <span class="loader" aria-hidden="true"></span>';\r
+        sendBtn.classList.add('is-stop');\r
+        sendBtn.classList.toggle('is-followup', followupEnabled && hasDraft && !suppressFollowup);\r
+    } else {\r
+        sendBtn.textContent = '发送';\r
+        sendBtn.classList.remove('is-stop');\r
+        sendBtn.classList.remove('is-followup');\r
+        sendBtn.disabled = false;\r
+    }\r
+}\r
+\r
+const MESSAGE_INPUT_PLACEHOLDER_DEFAULT = '说说你想做什么…（Enter 发送 · Shift/Ctrl/Cmd + Enter 换行）';\r
+const MESSAGE_INPUT_PLACEHOLDER_RUNNING = 'Agent运行中，输入后续任务';\r
+const MESSAGE_INPUT_PLACEHOLDER_QUEUED = '按 Enter 发送刚加入或第一条待发送任务';\r
+\r
+function syncMessageInputPlaceholder() {\r
+    if (!messageInput) return;\r
+    var queue = currentSessionId && typeof getFollowupQueue === 'function'\r
+        ? getFollowupQueue(currentSessionId)\r
+        : [];\r
+    var running = !!(optimisticNewSessionRun || isSessionRunning(currentSessionId));\r
+    var value = queue.some(function (item) { return item && !item.status; })\r
+        ? MESSAGE_INPUT_PLACEHOLDER_QUEUED\r
+        : (running ? MESSAGE_INPUT_PLACEHOLDER_RUNNING : MESSAGE_INPUT_PLACEHOLDER_DEFAULT);\r
+    messageInput.placeholder = typeof translateUiString === 'function'\r
+        ? translateUiString(value)\r
+        : value;\r
+}\r
+\r
+function isChatFileUploadBusy() {\r
+    return !!(messageInput && messageInput.dataset.fileUploadBusy === '1');\r
+}\r
+\r
+document.addEventListener('myagent:language-change', syncMessageInputPlaceholder);\r
+document.addEventListener('myagent:language-change', function () {\r
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);\r
+});\r
+\r
+async function requestInterrupt(sessionId, runId, reason) {\r
+    if (!sessionId) return;\r
+    try {\r
+        await fetch('/sessions/' + sessionId + '/interrupt', {\r
+            method: 'POST',\r
+            headers: { 'Content-Type': 'application/json' },\r
+            body: JSON.stringify({ run_id: runId || '', reason: reason || '' }),\r
+        });\r
+    }\r
+    catch (e) { /* ignore */ }\r
+}\r
+\r
+function pauseCurrentRun() {\r
+    if (!currentSessionId) {\r
+        if (optimisticNewSessionRun) {\r
+            markRunAbortReason(optimisticNewSessionRun, 'user');\r
+            try { optimisticNewSessionRun.controller.abort(); } catch (e) { /* ignore */ }\r
+            optimisticNewSessionRun = null;\r
+            setSendButtonState();\r
+        }\r
+        return;\r
+    }\r
+    const run = getSessionRunState(currentSessionId);\r
+    const sid = currentSessionId;\r
+    const activeInfo = sessionStore.getActiveRunInfo(sid) || {};\r
+    const runId = run && run.runId ? run.runId : (activeInfo.run_id || activeInfo.runId || '');\r
+    if (typeof markFollowupQueueManualOnly === 'function') markFollowupQueueManualOnly(sid);\r
+    suppressSessionServerStreamActive(sid);\r
+    if (!run) {\r
+        setSendButtonState();\r
+        syncSessionListIndicatorClasses();\r
+        renderSessionListIfChanged(false);\r
+        void requestInterrupt(sid, runId, 'user_button');\r
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);\r
+        return;\r
+    }\r
+    const ctx = run.ctx;\r
+    const reachedServer = run.submitted !== false;\r
+    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立即反映「已停止」状态；\r
+       后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应卡顿。*/\r
+    abortSessionRun(sid, 'user');\r
+    setSendButtonState();\r
+    syncSessionListIndicatorClasses();\r
+    renderSessionListIfChanged(false);\r
+    appendLog(ctx, '已请求停止当前任务', 'status', sid);\r
+    sealProcessGroup(ctx);\r
+    if (reachedServer) void requestInterrupt(sid, runId, 'user_button');\r
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true, respectStopSuppress: true }); }, 3000);\r
+}\r
+\r
+function showLoading() {\r
+    resetSessionHistoryPaging();\r
+    clearTocForSessionLoad();\r
+    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+    const vs = getVisibleChatStream();\r
+    if (vs) emptyChatStreamKeepingStrip(vs);\r
+    const box = document.createElement('div');\r
+    box.className = 'skeleton';\r
+    box.id = 'chat-loading';\r
+    box.setAttribute('role', 'status');\r
+    box.innerHTML = ''\r
+        + '<div class="skeleton-page" aria-hidden="true">'\r
+        + '<div class="skeleton-mast"><span></span><span></span></div>'\r
+        + '<div class="skeleton-hero"><div class="skeleton-image"></div><div class="skeleton-column"><span></span><span></span><span></span><span></span></div></div>'\r
+        + '<div class="skeleton-grid"><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div><div><span></span><span></span><span></span></div></div>'\r
+        + '</div><div class="skeleton-copy">加载中...</div>';\r
+    box.setAttribute('data-ui-tip', '加载会话');\r
+    bindUiHoverTip(box);\r
+    (getVisibleChatStream() || chatContainer).appendChild(box);\r
+    scrollToBottom();\r
+}\r
+\r
+function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }\r
+\r
+function sessionHasUnsentDraft(sessionId) {\r
+    if (!sessionId) return false;\r
+    var draft = Object.prototype.hasOwnProperty.call(draftBySession, sessionId)\r
+        ? draftBySession[sessionId]\r
+        : readStoredInputDraft(sessionId);\r
+    return !!String(draft || '').trim();\r
+}\r
+\r
+function syncSessionDraftBadge(itemDiv, sessionId) {\r
+    if (!itemDiv || !sessionId) return;\r
+    var badge = itemDiv.querySelector('.session-draft-badge');\r
+    if (!badge) return;\r
+    var visible = String(sessionId) !== String(currentSessionId || '') && sessionHasUnsentDraft(sessionId);\r
+    badge.hidden = !visible;\r
+    itemDiv.classList.toggle('has-unsent-draft', visible);\r
+}\r
+\r
+/** 只同步草稿标签，不重绘会话列表；传入 sessionId 时仅更新对应行。 */\r
+function syncSessionDraftBadges(sessionId) {\r
+    if (!sessionsList) return;\r
+    var targetId = sessionId ? String(sessionId) : '';\r
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {\r
+        var sid = String(div.dataset.sessionId || '');\r
+        if (!sid || (targetId && sid !== targetId)) return;\r
+        syncSessionDraftBadge(div, sid);\r
+    });\r
+}\r
+\r
+/** 同步行内高频动作（置顶）的按下态与文案；状态变了也不重建行。 */\r
+function syncSessionRowQuickActions(itemDiv, sessionId) {\r
+    var btn = itemDiv && itemDiv.querySelector ? itemDiv.querySelector('[data-session-pin]') : null;\r
+    if (!btn) return;\r
+    var sess = findSessionForActions(sessionId, null);\r
+    var pinned = !!(sess && sess.pinned);\r
+    var label = pinned ? '取消置顶' : '置顶会话';\r
+    btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');\r
+    btn.setAttribute('data-ui-tip', label);\r
+    btn.classList.toggle('is-on', pinned);\r
+}\r
+\r
+/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新红点、绿点 */\r
+function applySessionItemIndicators(itemDiv, sessionId, opts) {\r
+    opts = opts || {};\r
+    if (!itemDiv || !sessionId) return;\r
+    syncSessionDraftBadge(itemDiv, sessionId);\r
+    syncSessionRowQuickActions(itemDiv, sessionId);\r
+    itemDiv.classList.remove('is-generating', 'is-finalizing', 'is-background-running', 'is-unread-result', 'is-unread-failed');\r
+    var nameEl = itemDiv.querySelector('.session-name');\r
+    if (nameEl) nameEl.removeAttribute('data-ui-tip');\r
+    var sess = sessionStore.get(sessionId);\r
+    var localUnreadResult = sessionUnreadComplete.has(sessionId);\r
+    var isSelectedSession = String(sessionId) === String(currentSessionId || '');\r
+    var failed = !!(sess && sess.unread_result_status === 'failed');\r
+    var hasUnreadResult = failed || (!isSelectedSession && (sess ? !!sess.unread_result : localUnreadResult));\r
+    var running = isSessionRunning(sessionId);\r
+    var backgroundRunning = sessionHasBackgroundWork(sess);\r
+    var finalizing = running && sessionStore.isRunFinalizing(sessionId);\r
+    if (running) {\r
+        itemDiv.classList.add(finalizing ? 'is-finalizing' : 'is-generating');\r
+        // A retry shows the current running state while retaining the failure\r
+        // record. Successful queued results can still show a pulsing green dot.\r
+        var hasUnreadSuccess = hasUnreadResult && !failed && !backgroundRunning;\r
+        if (hasUnreadSuccess) {\r
+            itemDiv.classList.add('is-unread-result');\r
+        }\r
+        if (nameEl) {\r
+            nameEl.setAttribute(\r
+                'data-ui-tip',\r
+                hasUnreadSuccess\r
+                    ? '已有任务完成，当前任务仍在处理'\r
+                    : (finalizing ? '回复已生成，正在收尾' : '生成中')\r
+            );\r
+        }\r
+    } else if (backgroundRunning) {\r
+        itemDiv.classList.add('is-background-running');\r
+        if (nameEl) nameEl.setAttribute('data-ui-tip', '后台任务仍在运行');\r
+    } else {\r
+        if (!hasUnreadResult) return;\r
+        itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result');\r
+        if (nameEl) nameEl.setAttribute('data-ui-tip', failed ? '任务失败，点击查看' : '有新回复，点击查看');\r
+    }\r
+    if (nameEl) bindUiHoverTip(nameEl);\r
+}\r
+\r
+/** 子代理在对话区打开时，侧栏仍高亮它所属的根主会话。 */\r
+function sidebarHighlightedSessionId() {\r
+    var sid = String(currentSessionId || '');\r
+    if (typeof subagentAddressing !== 'undefined' && subagentAddressing\r
+        && typeof subagentAddressing.sidebarSessionId === 'function') {\r
+        return subagentAddressing.sidebarSessionId(sid);\r
+    }\r
+    return sid;\r
+}\r
+\r
+/** 指示器全量同步的本体（同步执行，读取的永远是最新状态）。 */\r
+function performSessionListIndicatorSync() {\r
+    if (!sessionsList) return;\r
+    var highlightedId = sidebarHighlightedSessionId();\r
+    sessionsList.querySelectorAll('.session-item').forEach(function (div) {\r
+        var el = div.querySelector('.session-name[data-id]');\r
+        if (!el) return;\r
+        var sid = el.getAttribute('data-id');\r
+        div.classList.toggle('active', !!sid && sid === highlightedId);\r
+        applySessionItemIndicators(div, sid);\r
+    });\r
+    if (typeof updateAllHumanInteractionSessionBadges === 'function') updateAllHumanInteractionSessionBadges();\r
+}\r
+\r
+/** 立即刷新侧栏全部指示点与当前选中项；不依赖 loadSessions 网络回流，与是否切换会话无关。\r
+ *  突发合并：同一帧内被多处（多为 SSE 高频分支）连续调用时只跑一次——幂等操作，合并后状态一致。 */\r
+var sessionIndicatorSyncQueued = false;\r
+function syncSessionListIndicatorClasses() {\r
+    if (sessionIndicatorSyncQueued) return;\r
+    sessionIndicatorSyncQueued = true;\r
+    var run = function () {\r
+        sessionIndicatorSyncQueued = false;\r
+        performSessionListIndicatorSync();\r
+    };\r
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);\r
+    else run();\r
+}\r
+\r
+function sessionSectionExpanded(key) {\r
+    try {\r
+        return localStorage.getItem(LS_SESSION_SECTION_PREFIX + key) !== '0';\r
+    } catch (e) {\r
+        return true;\r
+    }\r
+}\r
+function persistSessionSectionExpanded(key, expanded) {\r
+    try {\r
+        localStorage.setItem(LS_SESSION_SECTION_PREFIX + key, expanded ? '1' : '0');\r
+    } catch (e) { /* ignore */ }\r
+}\r
+function closeAllSessionMenus(event) {\r
+    // 旧写法把「点任意处都关掉所有侧栏弹层」当成兜底，于是弹层内部一点就没了\r
+    // （导入会话面板里的输入框 / 来源切换 / 拖拽区全都点不了）。现在：来自弹层内部的\r
+    // click 不再由这里收口——菜单项该关的自己关（视图选项、新建会话菜单都有显式\r
+    // setSidebarPopupOpen(popup,false)），无参调用（会话/分组动作后的收尾）仍全关。\r
+    var target = event && event.target;\r
+    document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {\r
+        if (target && w.contains(target)) return;\r
+        w.classList.remove('is-open');\r
+        var b = w.querySelector('.session-more-btn');\r
+        if (b) b.setAttribute('aria-expanded', 'false');\r
+    });\r
+    document.querySelectorAll('.sidebar-popup.is-open').forEach(function (p) {\r
+        if (target && p.contains(target)) return;\r
+        p.classList.remove('is-open');\r
+        var t = p.querySelector('[data-popup-trigger]');\r
+        if (t) t.setAttribute('aria-expanded', 'false');\r
+    });\r
+}\r
+(function bindSessionMenuDocumentCloserOnce() {\r
+    if (window.__myAgentSessionMenuCloser) return;\r
+    window.__myAgentSessionMenuCloser = true;\r
+    document.addEventListener('click', closeAllSessionMenus);\r
+})();\r
+\r
+/* ── 侧栏通用弹出菜单（视图选项 / 分组动作 / 会话行动作共用） ──────────────\r
+   结构：<div class="sidebar-popup" data-sidebar-popup>\r
+          <button data-popup-trigger aria-haspopup="menu" aria-expanded="false">…</button>\r
+          <div class="sidebar-popup-menu" role="menu">…</div></div>\r
+   行为对齐 DSH：Esc 关闭并把焦点还给触发按钮、外部 pointerdown 关闭、\r
+   ↑↓/Home/End 在菜单项之间走查。 */\r
+function sidebarPopupMenuItems(popup) {\r
+    if (!popup) return [];\r
+    return Array.prototype.slice.call(\r
+        popup.querySelectorAll('.sidebar-popup-menu [role="menuitem"]:not([disabled]), .sidebar-popup-menu [role="menuitemradio"]:not([disabled])')\r
+    );\r
+}\r
+\r
+function setSidebarPopupOpen(popup, open, opts) {\r
+    if (!popup) return;\r
+    var options = opts || {};\r
+    var trigger = popup.querySelector('[data-popup-trigger]');\r
+    var next = !!open;\r
+    if (next) {\r
+        // 同时只允许一个侧栏弹出层（含会话行菜单）。\r
+        document.querySelectorAll('.sidebar-popup.is-open').forEach(function (other) {\r
+            if (other !== popup) setSidebarPopupOpen(other, false);\r
+        });\r
+        document.querySelectorAll('.session-more-wrap.is-open').forEach(function (w) {\r
+            w.classList.remove('is-open');\r
+            var b = w.querySelector('.session-more-btn');\r
+            if (b) b.setAttribute('aria-expanded', 'false');\r
+        });\r
+    }\r
+    popup.classList.toggle('is-open', next);\r
+    if (trigger) trigger.setAttribute('aria-expanded', next ? 'true' : 'false');\r
+    // 菜单展开期间抑制/撤掉悬停提示，避免提示框压住菜单投影。\r
+    if (next && typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();\r
+    if (next && options.focusFirst) {\r
+        var items = sidebarPopupMenuItems(popup);\r
+        if (items.length) requestAnimationFrame(function () { items[0].focus(); });\r
+    }\r
+    if (!next && options.returnFocus && trigger && typeof trigger.focus === 'function') {\r
+        try { trigger.focus(); } catch (e) { /* ignore */ }\r
+    }\r
+}\r
+\r
+/** 给一个 .sidebar-popup 绑定开关、键盘与外部关闭；items 变化时由调用方重建菜单内容。 */\r
+function bindSidebarPopup(popup) {\r
+    if (!popup || popup.dataset.popupBound === '1') return;\r
+    popup.dataset.popupBound = '1';\r
+    var trigger = popup.querySelector('[data-popup-trigger]');\r
+    if (!trigger) return;\r
+    if (typeof bindUiHoverTip === 'function') bindUiHoverTip(trigger);\r
+    trigger.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        e.stopPropagation();\r
+        var willOpen = !popup.classList.contains('is-open');\r
+        // e.detail === 0 表示键盘触发（Enter/Space）：打开后把焦点送给第一项。\r
+        setSidebarPopupOpen(popup, willOpen, { focusFirst: willOpen && e.detail === 0 });\r
+    });\r
+    popup.addEventListener('keydown', function (e) {\r
+        if (!popup.classList.contains('is-open')) return;\r
+        var items = sidebarPopupMenuItems(popup);\r
+        if (!items.length) return;\r
+        if (e.key === 'Escape') {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            setSidebarPopupOpen(popup, false, { returnFocus: true });\r
+            return;\r
+        }\r
+        var idx = items.indexOf(document.activeElement);\r
+        if (e.key === 'ArrowDown') {\r
+            e.preventDefault();\r
+            items[idx < 0 ? 0 : (idx + 1) % items.length].focus();\r
+        } else if (e.key === 'ArrowUp') {\r
+            e.preventDefault();\r
+            items[idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length].focus();\r
+        } else if (e.key === 'Home') {\r
+            e.preventDefault();\r
+            items[0].focus();\r
+        } else if (e.key === 'End') {\r
+            e.preventDefault();\r
+            items[items.length - 1].focus();\r
+        }\r
+    });\r
+}\r
+\r
+// 全局只有一个 pointerdown 关闭器：弹出层随列表重绘频繁重建，逐元素挂 document 监听会累积泄漏。\r
+(function bindSidebarPopupDocumentCloserOnce() {\r
+    if (window.__myAgentSidebarPopupCloser) return;\r
+    window.__myAgentSidebarPopupCloser = true;\r
+    document.addEventListener('pointerdown', function (e) {\r
+        var open = document.querySelectorAll('.sidebar-popup.is-open, .session-more-wrap.is-open');\r
+        if (!open.length) return;\r
+        open.forEach(function (popup) {\r
+            if (popup.contains(e.target)) return;\r
+            if (popup.classList.contains('sidebar-popup')) setSidebarPopupOpen(popup, false);\r
+            else {\r
+                popup.classList.remove('is-open');\r
+                var b = popup.querySelector('.session-more-btn');\r
+                if (b) b.setAttribute('aria-expanded', 'false');\r
+            }\r
+        });\r
+    }, true);\r
+})();\r
+\r
+var SIDEBAR_ICON_SVG = {\r
+    search: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>',\r
+    sliders: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5v14M12 5v14M19 5v14"></path><circle cx="5" cy="14" r="2"></circle><circle cx="12" cy="9" r="2"></circle><circle cx="19" cy="15" r="2"></circle></svg>',\r
+    folderPlus: window.MyAgentIcons.svg('folder-plus'),\r
+    plus: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>',\r
+    dots: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>',\r
+    pin: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>',\r
+    close: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>',\r
+    chevron: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>',\r
+    check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',\r
+    newChat: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.2"></circle><path d="M12 8.6v6.8M8.6 12h6.8"></path></svg>',\r
+};\r
+\r
+(function bindSessionListDelegatedSwitcherOnce() {\r
+    if (!sessionsList || window.__myAgentSessionListSwitcher) return;\r
+    window.__myAgentSessionListSwitcher = true;\r
+    // 指针刚进入该行就点了图标（⋯ / 置顶）：那枚图标是 hover 之后才浮出的，\r
+    // 用户来不及"瞄准"它 —— 判定为"想点这一行"，拦下这次点击并切换会话。\r
+    // 行情景：行右侧正是相对时间的位置，用户点那里切会话时会撞上刚浮出的 ⋯。\r
+    // 真正想点图标的人（进入该行 ≥220ms 后才点）不受影响。\r
+    sessionsList.addEventListener('click', function (e) {\r
+        var iconTarget = e.target;\r
+        if (!iconTarget || !iconTarget.closest) return;\r
+        var icon = iconTarget.closest('.session-more-btn, [data-session-pin]');\r
+        if (!icon) return;\r
+        var iconRow = icon.closest('.session-item');\r
+        if (!iconRow || !sessionsList.contains(iconRow)) return;\r
+        var hoverAt = Number(iconRow.dataset.hoverAt || 0);\r
+        if (!hoverAt || Date.now() - hoverAt >= 220) return;\r
+        e.preventDefault();\r
+        e.stopPropagation();\r
+        var iconSid = iconRow.dataset.sessionId;\r
+        if (!iconSid) return;\r
+        if (iconSid === currentSessionId) {\r
+            clearSessionUnreadState(iconSid);\r
+        } else {\r
+            Promise.resolve(switchSession(iconSid)).catch(function (err) {\r
+                console.error('切换会话失败:', err);\r
+            });\r
+        }\r
+    }, true);\r
+    sessionsList.addEventListener('click', function (e) {\r
+        var target = e.target;\r
+        if (!target || !target.closest) return;\r
+        if (target.closest('button, .session-item-actions, .session-more-wrap, .session-more-menu, .sidebar-popup, input, textarea, a')) return;\r
+        if (target.isContentEditable) return;\r
+        var row = target.closest('.session-item');\r
+        if (!row || !sessionsList.contains(row)) return;\r
+        var sid = row.dataset.sessionId;\r
+        if (!sid) {\r
+            var nameEl = row.querySelector('.session-name[data-id]');\r
+            sid = nameEl ? nameEl.getAttribute('data-id') : '';\r
+        }\r
+        if (sid && sid === currentSessionId) {\r
+            clearSessionUnreadState(sid);\r
+        } else if (sid) {\r
+            Promise.resolve(switchSession(sid)).catch(function (err) {\r
+                console.error('切换会话失败:', err);\r
+            });\r
+        }\r
+    });\r
+})();\r
+\r
+function buildSessionMoreMenuMarkup() {\r
+    return '<div class="session-more-wrap">'\r
+        + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'\r
+        + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'\r
+        + '<div class="session-more-menu" role="menu">'\r
+        + '<button type="button" class="session-menu-pin" role="menuitem"></button>'\r
+        + '<button type="button" class="session-menu-todo" role="menuitem"></button>'\r
+        + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'\r
+        + '<button type="button" class="session-menu-workdir" role="menuitem">切换工作区</button>'\r
+        + '<button type="button" class="session-menu-archive" role="menuitem"></button>'\r
+        + '<div class="session-menu-separator" role="separator"></div>'\r
+        + '<button type="button" class="session-menu-export" role="menuitem">导出会话</button>'\r
+        + '<button type="button" class="session-menu-delete" role="menuitem">删除会话</button>'\r
+        + '</div></div>';\r
+}\r
+\r
+function findSessionForActions(sessionId, fallback) {\r
+    var sid = String(sessionId || '');\r
+    var current = sessionStore.get(sid);\r
+    if (current) return current;\r
+    if (sessionStore.archivedLoaded) {\r
+        current = (sessionStore.archivedSessions || []).find(function (item) {\r
+            return item && String(item.id) === sid;\r
+        });\r
+    }\r
+    return current || fallback || null;\r
+}\r
+\r
+function syncSessionMenuLabels(wrap, sess) {\r
+    if (!wrap || !sess) return;\r
+    wrap._sessionMenuSession = sess;\r
+    var pin = wrap.querySelector('.session-menu-pin');\r
+    var todo = wrap.querySelector('.session-menu-todo');\r
+    var archive = wrap.querySelector('.session-menu-archive');\r
+    if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';\r
+    if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';\r
+    if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';\r
+    var exportButton = wrap.querySelector('.session-menu-export');\r
+    if (exportButton) {\r
+        var exporting = sessionExportsInFlight.has(String(sess.id));\r
+        exportButton.disabled = exporting;\r
+        exportButton.textContent = exporting ? '正在导出…' : '导出会话';\r
+    }\r
+}\r
+\r
+function beginSidebarMetadataMutation() {\r
+    // Invalidate list/archive loads already in flight. Direct reconciliation\r
+    // calls are independently fenced by sessionStore.shouldAcceptSnapshot().\r
+    sessionListLoadEpoch += 1;\r
+    archivedSessionsLoadEpoch += 1;\r
+    return sessionStore.beginMetadataMutation();\r
+}\r
+\r
+function commitSidebarMetadataMutation(token, responsePayload) {\r
+    sessionListLoadEpoch += 1;\r
+    archivedSessionsLoadEpoch += 1;\r
+    sessionStore.commitMetadataMutation(\r
+        token,\r
+        responsePayload && responsePayload.state_revision\r
+    );\r
+}\r
+\r
+function cancelSidebarMetadataMutation(token) {\r
+    sessionListLoadEpoch += 1;\r
+    archivedSessionsLoadEpoch += 1;\r
+    sessionStore.cancelMetadataMutation(token);\r
+}\r
+\r
+async function toggleSessionPinnedFromMenu(sess) {\r
+    const mutationToken = beginSidebarMetadataMutation();\r
+    let mutationCommitted = false;\r
+    let previous = null;\r
+    try {\r
+        const formData = new FormData();\r
+        const nextPinned = !sess.pinned;\r
+        previous = applyOptimisticSessionUpdate(sess.id, { pinned: nextPinned });\r
+        formData.append('pinned', nextPinned ? 'true' : 'false');\r
+        const response = await fetchWithTimeout(\r
+            '/sessions/' + encodeURIComponent(sess.id) + '/pin',\r
+            { method: 'PUT', body: formData },\r
+            12000\r
+        );\r
+        if (!response.ok) {\r
+            throw new Error('pin failed: ' + response.status);\r
+        }\r
+        const responsePayload = await response.json().catch(function () { return null; });\r
+        commitSidebarMetadataMutation(mutationToken, responsePayload);\r
+        mutationCommitted = true;\r
+        await refreshSingleSessionRow(sess.id);\r
+    } catch (err) {\r
+        if (!mutationCommitted) {\r
+            cancelSidebarMetadataMutation(mutationToken);\r
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+        }\r
+        console.error('置顶失败', err);\r
+    }\r
+}\r
+\r
+async function toggleSessionTodoFromMenu(sess) {\r
+    const mutationToken = beginSidebarMetadataMutation();\r
+    let mutationCommitted = false;\r
+    let previous = null;\r
+    try {\r
+        const formData = new FormData();\r
+        const nextTodo = !sess.todo;\r
+        previous = applyOptimisticSessionUpdate(sess.id, { todo: nextTodo });\r
+        formData.append('todo', nextTodo ? 'true' : 'false');\r
+        const response = await fetchWithTimeout(\r
+            '/sessions/' + encodeURIComponent(sess.id) + '/todo',\r
+            { method: 'PUT', body: formData },\r
+            12000\r
+        );\r
+        if (!response.ok) {\r
+            throw new Error('todo failed: ' + response.status);\r
+        }\r
+        const responsePayload = await response.json().catch(function () { return null; });\r
+        commitSidebarMetadataMutation(mutationToken, responsePayload);\r
+        mutationCommitted = true;\r
+        await refreshSingleSessionRow(sess.id);\r
+    } catch (err) {\r
+        if (!mutationCommitted) {\r
+            cancelSidebarMetadataMutation(mutationToken);\r
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+        }\r
+        console.error('待办设置失败', err);\r
+    }\r
+}\r
+\r
+async function toggleSessionArchivedFromMenu(sess) {\r
+    const mutationToken = beginSidebarMetadataMutation();\r
+    let mutationCommitted = false;\r
+    let previous = null;\r
+    try {\r
+        const formData = new FormData();\r
+        const nextArchived = !sess.archived;\r
+        previous = applyOptimisticSessionUpdate(sess.id, { archived: nextArchived });\r
+        formData.append('archived', nextArchived ? 'true' : 'false');\r
+        const response = await fetchWithTimeout(\r
+            '/sessions/' + encodeURIComponent(sess.id) + '/archive',\r
+            { method: 'PUT', body: formData },\r
+            12000\r
+        );\r
+        if (!response.ok) {\r
+            throw new Error('archive failed: ' + response.status);\r
+        }\r
+        const responsePayload = await response.json().catch(function () { return null; });\r
+        commitSidebarMetadataMutation(mutationToken, responsePayload);\r
+        mutationCommitted = true;\r
+        await refreshSingleSessionRow(sess.id);\r
+        if (!nextArchived && sessionStore.archivedLoaded) {\r
+            await loadArchivedSessions({ background: true, refresh: true, forceRender: true });\r
+        }\r
+    } catch (err) {\r
+        if (!mutationCommitted) {\r
+            cancelSidebarMetadataMutation(mutationToken);\r
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+        }\r
+        console.error('归档失败', err);\r
+    }\r
+}\r
+\r
+async function changeSessionWorkDirFromMenu(sess) {\r
+    const picked = await pickNewSessionWorkDir(sess.effective_work_dir || sess.work_dir || '');\r
+    if (!picked) return;\r
+    const token = beginSidebarMetadataMutation();\r
+    let committed = false;\r
+    try {\r
+        const response = await fetchWithTimeout('/sessions/' + encodeURIComponent(sess.id) + '/work-dir', {\r
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },\r
+            body: JSON.stringify({ work_dir: String(picked).trim() }),\r
+        }, 12000);\r
+        const payload = await response.json();\r
+        if (!response.ok || !payload.ok) throw new Error(payload.error || ('HTTP ' + response.status));\r
+        commitSidebarMetadataMutation(token, payload);\r
+        committed = true;\r
+        applyOptimisticSessionUpdate(sess.id, payload.session);\r
+        syncSessionWorkspaceUi(sess.id);\r
+    } catch (error) {\r
+        if (!committed) cancelSidebarMetadataMutation(token);\r
+        await openUiModal({ title: '工作区未切换', message: String(error.message || error),\r
+            confirmText: '知道了', cancelText: '' });\r
+    }\r
+}\r
+\r
+async function renameSessionFromMenu(sess) {\r
+    var requestedName = await openUiModal({\r
+        title: '重命名会话',\r
+        subtitle: '编辑会话名称',\r
+        message: '',\r
+        inputLabel: '会话名称',\r
+        inputValue: String(sess.name || ''),\r
+        inputMaxLength: 160,\r
+        inputRequired: true,\r
+        confirmText: '保存名称',\r
+        cancelText: '取消',\r
+    });\r
+    if (typeof requestedName !== 'string') return;\r
+    var newName = requestedName.trim().slice(0, 160);\r
+    if (!newName || newName === String(sess.name || '')) return;\r
+    const mutationToken = beginSidebarMetadataMutation();\r
+    let mutationCommitted = false;\r
+    const previous = applyOptimisticSessionUpdate(sess.id, { name: newName });\r
+    if (currentSessionId === sess.id) updateSessionTitle();\r
+    try {\r
+        const formData = new FormData();\r
+        formData.append('name', newName);\r
+        const response = await fetchWithTimeout(\r
+            '/sessions/' + encodeURIComponent(sess.id) + '/name',\r
+            { method: 'PUT', body: formData },\r
+            12000\r
+        );\r
+        if (!response.ok) throw new Error('rename failed: ' + response.status);\r
+        const responsePayload = await response.json().catch(function () { return null; });\r
+        commitSidebarMetadataMutation(mutationToken, responsePayload);\r
+        mutationCommitted = true;\r
+        await refreshSingleSessionRow(sess.id);\r
+        if (currentSessionId === sess.id) updateSessionTitle();\r
+    } catch (err) {\r
+        console.error('重命名失败', err);\r
+        if (!mutationCommitted) {\r
+            cancelSidebarMetadataMutation(mutationToken);\r
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);\r
+        }\r
+        if (currentSessionId === sess.id) updateSessionTitle();\r
+    }\r
+}\r
+\r
+var sessionExportsInFlight = new Set();\r
+\r
+async function exportSessionFromMenu(sess) {\r
+    var sessionId = String(sess.id || '');\r
+    if (!sessionId || sessionExportsInFlight.has(sessionId)) return;\r
+    var confirmed = await openUiModal({\r
+        title: '导出会话',\r
+        subtitle: '下载会话文件',\r
+        message: '将会话「' + String(sess.name || '未命名') + '」对应的 session 文件夹压缩为 ZIP 并下载。',\r
+        confirmText: '确认导出',\r
+        cancelText: '取消',\r
+    });\r
+    if (!confirmed) return;\r
+    if (sessionExportsInFlight.has(sessionId)) return;\r
+    function syncExportMenus() {\r
+        document.querySelectorAll('.session-more-wrap').forEach(function (wrap) {\r
+            var menuSession = wrap._sessionMenuSession;\r
+            if (menuSession && String(menuSession.id) === sessionId) syncSessionMenuLabels(wrap, menuSession);\r
+        });\r
+    }\r
+    sessionExportsInFlight.add(sessionId);\r
+    syncExportMenus();\r
+    try {\r
+        // Read errors before starting a download: native downloads hide HTTP\r
+        // error bodies, and Electron otherwise appears to do nothing at all.\r
+        var response = await fetch('/sessions/' + encodeURIComponent(sess.id) + '/export', {\r
+            credentials: 'same-origin',\r
+            cache: 'no-store',\r
+        });\r
+        if (!response.ok) {\r
+            var payload = await response.json().catch(function () { return {}; });\r
+            throw new Error(payload.error || '导出请求失败（HTTP ' + response.status + '）');\r
+        }\r
+        if (response.redirected || (response.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/zip') {\r
+            throw new Error('服务器未返回会话 ZIP 文件，请刷新页面后重试。');\r
+        }\r
+        var blob = await response.blob();\r
+        if (!blob.size) throw new Error('导出文件为空，请重试。');\r
+        var downloadUrl = URL.createObjectURL(blob);\r
+        var link = document.createElement('a');\r
+        var filename = (response.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/i);\r
+        link.href = downloadUrl;\r
+        link.download = filename ? filename[1] : 'session-' + sessionId + '.zip';\r
+        link.hidden = true;\r
+        document.body.appendChild(link);\r
+        try {\r
+            link.click();\r
+        } finally {\r
+            link.remove();\r
+            // Give both Chromium and the desktop shell time to consume the URL.\r
+            setTimeout(function () { URL.revokeObjectURL(downloadUrl); }, 60000);\r
+        }\r
+    } catch (err) {\r
+        console.error('导出会话失败', err);\r
+        showUiAlert({\r
+            title: '导出失败',\r
+            message: String((err && err.message) || err || '无法导出该会话'),\r
+            variant: 'error',\r
+        });\r
+    } finally {\r
+        sessionExportsInFlight.delete(sessionId);\r
+        syncExportMenus();\r
+    }\r
+}\r
+\r
+async function deleteSessionFromMenu(sess, rowDiv) {\r
+    const okDel = await openUiModal({\r
+        title: '删除会话',\r
+        subtitle: '此操作不可恢复',\r
+        message: '确定删除会话「' + String(sess.name || '未命名') + '」吗？其中的消息与记录将被移除。',\r
+        danger: true,\r
+        confirmText: '删除会话',\r
+        cancelText: '取消',\r
+    });\r
+    if (!okDel) return;\r
+    const wasArchivedLoaded = sessionStore.archivedLoaded;\r
+    const deletedSessionId = String(sess.id || '');\r
+    await removeDeletedSessionFromUi(sess, rowDiv);\r
+    void requestInterrupt(deletedSessionId, '', 'session_deleted');\r
+    void fetch('/sessions/' + encodeURIComponent(deletedSessionId), { method: 'DELETE' })\r
+        .then(function (resp) {\r
+            if (!resp.ok) throw new Error('delete failed: ' + resp.status);\r
+            releaseDeletedSessionDock(deletedSessionId);\r
+        })\r
+        .catch(function (err) {\r
+            console.error('删除会话失败:', err);\r
+            sessionStore.clearDeletedSessionTombstone(deletedSessionId);\r
+            void loadSessions({ skipArchivedRefresh: true });\r
+            if (wasArchivedLoaded) void loadArchivedSessions({ background: true });\r
+        });\r
+}\r
+\r
+function releaseDeletedSessionDock(sessionId) {\r
+    if (typeof dockRightPageHost !== 'undefined') dockRightPageHost?.releaseSession(sessionId);\r
+    if (typeof dockForgetSession === 'function') dockForgetSession(sessionId);\r
+}\r
+\r
+async function removeDeletedSessionFromUi(sess, rowDiv, opts) {\r
+    const wasArchivedLoaded = sessionStore.archivedLoaded;\r
+    const deletedSessionId = String(sess.id || '');\r
+    const nextSession = sessionStore.list().find(function (s) {\r
+        return s && s.id && String(s.id) !== deletedSessionId && !s.archived;\r
+    }) || null;\r
+    sessionStore.markDeletedSession(deletedSessionId);\r
+    if (wasArchivedLoaded && sess.archived) {\r
+        const archivedBeforeDelete = sessionStore.archivedSessions || [];\r
+        const deletedArchiveIndex = archivedBeforeDelete.findIndex(function (s) {\r
+            return s && String(s.id) === deletedSessionId;\r
+        });\r
+        sessionStore.setArchivedLoaded(archivedBeforeDelete.filter(function (s) {\r
+            return s && String(s.id) !== deletedSessionId;\r
+        }), {\r
+            visibleCount: Math.max(\r
+                0,\r
+                sessionStore.archivedVisibleCount\r
+                    - (deletedArchiveIndex >= 0 && deletedArchiveIndex < sessionStore.archivedVisibleCount ? 1 : 0)\r
+            ),\r
+            totalCount: Math.max(0, sessionStore.archivedCount - 1),\r
+        });\r
+        syncArchivedSessionStateFromStore();\r
+    }\r
+    renderSessionListIfChanged(true);\r
+    if (rowDiv && rowDiv.parentNode) rowDiv.remove();\r
+    sessionUnreadComplete.delete(deletedSessionId);\r
+    scheduleTitleGenerationRefresh(deletedSessionId, false);\r
+    persistSessionUnread();\r
+    delete draftBySession[deletedSessionId];\r
+    removeStoredInputDraft(deletedSessionId);\r
+    if (typeof removeStoredFollowupQueue === 'function') removeStoredFollowupQueue(deletedSessionId);\r
+    delete lastUserMessageBySession[deletedSessionId];\r
+    clearContextStateForSession(deletedSessionId);\r
+    if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(deletedSessionId);\r
+    if (isSessionRunning(sess.id)) {\r
+        const r = abortSessionRun(sess.id, 'delete');\r
+        if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();\r
+        setSendButtonState();\r
+        syncSessionListIndicatorClasses();\r
+    }\r
+    if (currentSessionId === deletedSessionId && !(opts && opts.deferSwitch)) {\r
+        if (nextSession) await switchSession(nextSession.id);\r
+        else await createNewSession();\r
+    }\r
+}\r
+\r
+function bindSessionActionMenu(wrap, getSession, rowDiv) {\r
+    if (!wrap || wrap.dataset.sessionMenuBound === '1') return;\r
+    wrap.dataset.sessionMenuBound = '1';\r
+    var moreBtn = wrap.querySelector('.session-more-btn');\r
+    if (moreBtn) {\r
+        bindUiHoverTip(moreBtn);\r
+        moreBtn.addEventListener('click', function (e) {\r
+            e.stopPropagation();\r
+            var wasOpen = wrap.classList.contains('is-open');\r
+            closeAllSessionMenus();\r
+            var sess = getSession();\r
+            if (!sess) return;\r
+            syncSessionMenuLabels(wrap, sess);\r
+            if (!wasOpen) {\r
+                wrap.classList.add('is-open');\r
+                moreBtn.setAttribute('aria-expanded', 'true');\r
+                // 打开后把焦点留在触发按钮上：↑↓/Esc 的键盘走查才有事件起点。\r
+                try { moreBtn.focus(); } catch (err) { /* ignore */ }\r
+                if (typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();\r
+            }\r
+        });\r
+    }\r
+    // DSH 对齐：Esc 关闭并把焦点还给触发按钮，↑↓/Home/End 在菜单项之间走查。\r
+    wrap.addEventListener('keydown', function (e) {\r
+        var menu = wrap.querySelector('.session-more-menu');\r
+        if (!menu || !wrap.classList.contains('is-open')) return;\r
+        var items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitem"]'));\r
+        if (!items.length) return;\r
+        if (e.key === 'Escape') {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            wrap.classList.remove('is-open');\r
+            if (moreBtn) {\r
+                moreBtn.setAttribute('aria-expanded', 'false');\r
+                try { moreBtn.focus(); } catch (err) { /* ignore */ }\r
+            }\r
+            return;\r
+        }\r
+        var idx = items.indexOf(document.activeElement);\r
+        if (e.key === 'ArrowDown') {\r
+            e.preventDefault();\r
+            items[idx < 0 ? 0 : (idx + 1) % items.length].focus();\r
+        } else if (e.key === 'ArrowUp') {\r
+            e.preventDefault();\r
+            items[idx < 0 ? items.length - 1 : (idx - 1 + items.length) % items.length].focus();\r
+        } else if (e.key === 'Home') {\r
+            e.preventDefault();\r
+            items[0].focus();\r
+        } else if (e.key === 'End') {\r
+            e.preventDefault();\r
+            items[items.length - 1].focus();\r
+        }\r
+    });\r
+    wrap.addEventListener('click', function (e) {\r
+        var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;\r
+        if (!target || !wrap.contains(target)) return;\r
+        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu\r
+            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu\r
+                : target.classList.contains('session-menu-rename') ? renameSessionFromMenu\r
+                    : target.classList.contains('session-menu-workdir') ? changeSessionWorkDirFromMenu\r
+                    : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu\r
+                        : target.classList.contains('session-menu-export') ? exportSessionFromMenu\r
+                            : target.classList.contains('session-menu-delete') ? deleteSessionFromMenu\r
+                                : null;\r
+        if (!handler) return;\r
+        e.stopPropagation();\r
+        closeAllSessionMenus();\r
+        var sess = getSession();\r
+        if (!sess) return;\r
+        Promise.resolve(handler(sess, rowDiv)).catch(function (err) {\r
+            console.error('会话菜单操作失败:', err);\r
+        });\r
+    });\r
+}\r
+\r
+var titlebarSessionMenuSnapshot = null;\r
+\r
+function getTitlebarSessionForActions(host, wrap) {\r
+    var sessionId = (host && host.dataset.sessionId) || currentSessionId;\r
+    return findSessionForActions(sessionId, wrap && wrap._sessionMenuSession)\r
+        || titlebarSessionMenuSnapshot;\r
+}\r
+\r
+function syncTitlebarSessionMenu(sess) {\r
+    var host = document.getElementById('breadcrumb-session-actions');\r
+    if (!host) return;\r
+    titlebarSessionMenuSnapshot = sess ? Object.assign({}, titlebarSessionMenuSnapshot || {}, sess) : null;\r
+    host.dataset.sessionId = titlebarSessionMenuSnapshot ? String(titlebarSessionMenuSnapshot.id || '') : '';\r
+    host.classList.toggle('hidden', !sess);\r
+    var wrap = host.querySelector('.session-more-wrap');\r
+    if (wrap && titlebarSessionMenuSnapshot) syncSessionMenuLabels(wrap, titlebarSessionMenuSnapshot);\r
+}\r
+\r
+(function mountTitlebarSessionMenu() {\r
+    var host = document.getElementById('breadcrumb-session-actions');\r
+    if (!host || host.dataset.sessionMenuMounted === '1') return;\r
+    host.dataset.sessionMenuMounted = '1';\r
+    host.innerHTML = buildSessionMoreMenuMarkup();\r
+    var wrap = host.querySelector('.session-more-wrap');\r
+    bindSessionActionMenu(wrap, function () {\r
+        return getTitlebarSessionForActions(host, wrap);\r
+    }, null);\r
+    syncTitlebarSessionMenu(currentSessionId ? findSessionForActions(currentSessionId, null) : null);\r
+})();\r
+\r
+/** 创建并绑定单条会话及其分区操作菜单。 */\r
+function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {\r
+    const div = document.createElement('div');\r
+    div.className = 'session-item';\r
+    div.dataset.sessionId = sess.id || '';\r
+    // 记录指针进入本行的时刻（见上面的 capture 拦截）：用于区分"点这一行"与"点浮出的图标"。\r
+    div.addEventListener('mouseenter', function () {\r
+        div.dataset.hoverAt = String(Date.now());\r
+    });\r
+    if (sidebarHighlightedSessionId() === sess.id) div.classList.add('active');\r
+    if (sess.id) nextStreamMap[sess.id] = !!sess.stream_active;\r
+    if (sess.id) scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);\r
+    var displayName = typeof localizeSessionPlaceholderName === 'function'\r
+        ? localizeSessionPlaceholderName(sess.name)\r
+        : (sess.name || '');\r
+    div.innerHTML = '<div class="session-item-head">'\r
+        + '<div class="session-item-main">'\r
+        + '<div class="session-item-title-row">'\r
+        + '<span class="session-name" data-id="' + escapeHtml(String(sess.id || '')) + '" data-original="' + escapeHtml(sess.name) + '">' + escapeHtml(displayName) + '</span>'\r
+        + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'\r
+        + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'\r
+        + '<span class="session-item-date"></span>'\r
+        // 置顶标记（DSH 同款）：行尾、相对时间之后的一枚 16px 图钉；hover 时与时间一起淡出，\r
+        // 把位置让给行内动作（置顶/⋯），避免同一位置出现两个图钉。\r
+        + '<span class="session-pin-mark" aria-label="置顶" title="置顶"' + (sess.pinned ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.pin + '</span>'\r
+        // 动作区与相对时间共用标题行的定位容器，避免被第二行摘要拉低。\r
+        + '<div class="session-item-actions">'\r
+        + '<button type="button" class="session-row-icon session-row-pin" data-session-pin aria-label="置顶会话" aria-pressed="false" data-ui-tip="置顶会话">'\r
+        + SIDEBAR_ICON_SVG.pin + '</button>'\r
+        + buildSessionMoreMenuMarkup()\r
+        + '</div>'\r
+        + '</div>'\r
+        + '<div class="session-last-query"></div>'\r
+        + '</div>'\r
+        + '</div>';\r
+    if (typeof updateHumanInteractionSessionBadge === 'function') {\r
+        setTimeout(function () { updateHumanInteractionSessionBadge(sess.id); }, 0);\r
+    }\r
+    var wsLine = formatSessionListSubtitle(sess);\r
+    var wsEl = div.querySelector('.session-last-query');\r
+    if (wsEl) wsEl.textContent = wsLine;\r
+    var dateEl = div.querySelector('.session-item-date');\r
+    var dateLine = '';\r
+    if (dateEl) {\r
+        // 行列尾用相对时间（DSH 风格），完整时间仍在整行 tooltip 里。\r
+        // 活动时间戳落一份在 DOM 上：30 秒共享时钟据此做纯文本刷新（不动列表结构）。\r
+        var activityTs = typeof sessionActivityTimestampMs === 'function' ? sessionActivityTimestampMs(sess) : 0;\r
+        if (activityTs > 0) dateEl.setAttribute('data-activity-at', String(activityTs));\r
+        dateLine = typeof formatSessionListRelativeTime === 'function'\r
+            ? formatSessionListRelativeTime(sess)\r
+            : '';\r
+        dateEl.textContent = dateLine || '';\r
+    }\r
+    var itemTip = typeof buildSessionItemTooltip === 'function' ? buildSessionItemTooltip(sess) : '';\r
+    if (itemTip) {\r
+        div.setAttribute('data-ui-tip', itemTip);\r
+        bindUiHoverTip(div);\r
+    }\r
+    var moreWrap = div.querySelector('.session-more-wrap');\r
+    syncSessionMenuLabels(moreWrap, sess);\r
+    bindSessionActionMenu(moreWrap, function () {\r
+        return findSessionForActions(sess.id, sess);\r
+    }, div);\r
+    var pinBtn = div.querySelector('[data-session-pin]');\r
+    if (pinBtn) {\r
+        bindUiHoverTip(pinBtn);\r
+        pinBtn.addEventListener('click', function (e) {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            var target = findSessionForActions(sess.id, sess);\r
+            if (!target) return;\r
+            Promise.resolve(toggleSessionPinnedFromMenu(target)).catch(function (err) {\r
+                console.error('置顶失败:', err);\r
+            });\r
+                // 点「置顶」按钮时也切换到该会话：行尾这个位置在原版里就是"点行切会话"的热区，\r
+                // 用户期望点这里能进入该会话（置顶动作照旧执行）。\r
+                if (String(sess.id) !== String(currentSessionId || '') && typeof switchSession === 'function') {\r
+                    Promise.resolve(switchSession(sess.id)).catch(function (err) {\r
+                        console.error('切换会话失败:', err);\r
+                    });\r
+                }\r
+        });\r
+    }\r
+    var nameEl = div.querySelector('.session-name');\r
+    if (nameEl) {\r
+        nameEl.addEventListener('dblclick', function (e) {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            var current = findSessionForActions(sess.id, sess);\r
+            if (!current) return;\r
+            Promise.resolve(renameSessionFromMenu(current)).catch(function (err) {\r
+                console.error('双击重命名会话失败:', err);\r
+            });\r
+        });\r
+    }\r
+    applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });\r
+    ensureSidebarTextTimesAutoRefresh();\r
+    return div;\r
+}\r
+\r
+/** 侧栏行时间自动刷新（学 DSH 的 relative-clock）：30 秒共享节拍（经统一节拍器）+ 聚焦/可见性即时补拍。\r
+ *  只更新 .session-item-date 的文本，不触碰列表结构。 */\r
+function refreshSessionListTimes(root) {\r
+    var scope = root || document;\r
+    if (!scope || !scope.querySelectorAll) return;\r
+    if (typeof formatSessionListRelativeTimeFromTs !== 'function') return;\r
+    var now = Date.now();    // 一次采样：列表所有行共用同一 now（与 DSH 的行 props 传递方式一致）\r
+    scope.querySelectorAll('.session-item-date[data-activity-at]').forEach(function (el) {\r
+        var ts = Number(el.getAttribute('data-activity-at')) || 0;\r
+        var txt = ts > 0 ? formatSessionListRelativeTimeFromTs(ts, now) : '';\r
+        if (el.textContent !== txt) el.textContent = txt;\r
+    });\r
+}\r
+\r
+// ═══════════════════════════════════════════════════════════\r
+// 侧栏统一刷新节拍（学 DSH 的共享时钟思路）\r
+//   一个动态定时器驱动所有周期性刷新任务：任务各自带周期与可见性策略；\r
+//   「只在可见时有意义」的任务在窗口隐藏时整体跳过；恢复可见/聚焦时立即补拍。\r
+//   取代此前彼此独立的 5s / 30s / 60s 三个 setInterval。\r
+// ═══════════════════════════════════════════════════════════\r
+var sidebarRefreshTasks = [];\r
+var sidebarRefreshTimer = null;\r
+\r
+function registerSidebarRefreshTask(key, everyMs, run, opts) {\r
+    opts = opts || {};\r
+    if (!key || typeof run !== 'function') return;\r
+    var existing = sidebarRefreshTasks.find(function (t) { return t.key === key; });\r
+    if (existing) {\r
+        existing.everyMs = Math.max(1000, Number(everyMs) || 30000);\r
+        existing.run = run;\r
+        existing.runWhenHidden = !!opts.runWhenHidden;\r
+    } else {\r
+        // lastAt = 0：注册后的第一次到期判定即为「立即执行」（保留各任务"启动先跑一次"的旧语义）。\r
+        sidebarRefreshTasks.push({\r
+            key: key,\r
+            everyMs: Math.max(1000, Number(everyMs) || 30000),\r
+            run: run,\r
+            runWhenHidden: !!opts.runWhenHidden,\r
+            lastAt: 0,\r
+        });\r
+    }\r
+    scheduleSidebarRefreshTimer();\r
+}\r
+\r
+function scheduleSidebarRefreshTimer() {\r
+    if (sidebarRefreshTimer) { clearTimeout(sidebarRefreshTimer); sidebarRefreshTimer = null; }\r
+    var now = Date.now();\r
+    var nextIn = Infinity;\r
+    sidebarRefreshTasks.forEach(function (t) {\r
+        if (document.hidden && !t.runWhenHidden) return;\r
+        nextIn = Math.min(nextIn, Math.max(t.lastAt + t.everyMs - now, 0));\r
+    });\r
+    // 全部任务都被隐藏跳过时不再武装定时器，等 visibilitychange 重新校准。\r
+    if (!isFinite(nextIn)) return;\r
+    sidebarRefreshTimer = setTimeout(runSidebarRefreshDue, Math.max(nextIn, 16));\r
+}\r
+\r
+function runSidebarRefreshDue() {\r
+    sidebarRefreshTimer = null;\r
+    var now = Date.now();\r
+    sidebarRefreshTasks.forEach(function (t) {\r
+        if (document.hidden && !t.runWhenHidden) return;\r
+        if (now - t.lastAt < t.everyMs) return;\r
+        t.lastAt = now;\r
+        try { t.run(); } catch (e) { /* 单任务失败不影响其它任务 */ }\r
+    });\r
+    scheduleSidebarRefreshTimer();\r
+}\r
+\r
+/** 恢复可见 / 聚焦时立即补拍「可见才有意义」的任务（跳过常驻任务，避免聚焦触发额外网络请求）。 */\r
+function catchUpSidebarRefresh() {\r
+    var now = Date.now();\r
+    sidebarRefreshTasks.forEach(function (t) {\r
+        if (t.runWhenHidden || document.hidden) return;\r
+        t.lastAt = now;\r
+        try { t.run(); } catch (e) { /* ignore */ }\r
+    });\r
+    scheduleSidebarRefreshTimer();\r
+}\r
+\r
+document.addEventListener('visibilitychange', function () {\r
+    if (document.hidden) scheduleSidebarRefreshTimer();   // 隐藏：按隐藏策略重排\r
+    else catchUpSidebarRefresh();                          // 恢复可见：立即补拍\r
+});\r
+window.addEventListener('focus', catchUpSidebarRefresh);\r
+\r
+/** 只读调试句柄：用于自动化验证节拍统一与任务周期。 */\r
+window.__sidebarRefreshDebug = function () {\r
+    return sidebarRefreshTasks.map(function (t) {\r
+        return { key: t.key, everyMs: t.everyMs, runWhenHidden: t.runWhenHidden, lastAt: t.lastAt };\r
+    });\r
+};\r
+\r
+/** 两类时间文案（侧栏相对时间 + 消息绝对时间）共用一个 30 秒任务：\r
+ *  同属分钟粒度、同属"只改文本"，分两个任务只是重复；合并后一拍完成、状态天然一致。 */\r
+function ensureSidebarTextTimesAutoRefresh() {\r
+    if (window.__sidebarTextTimesBound) return;\r
+    window.__sidebarTextTimesBound = true;\r
+    registerSidebarRefreshTask('text-times', 30000, function () {\r
+        refreshSessionListTimes();\r
+        if (typeof refreshUserMessageTimes === 'function') refreshUserMessageTimes(document);\r
+    }, { runWhenHidden: false });\r
+}\r
+\r
+const sessionTitleRefreshState = Object.create(null);\r
+\r
+function scheduleTitleGenerationRefresh(sessionId, pending) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid) return;\r
+    let state = sessionTitleRefreshState[sid];\r
+    if (!pending) {\r
+        if (state && state.timer) clearTimeout(state.timer);\r
+        delete sessionTitleRefreshState[sid];\r
+        return;\r
+    }\r
+    if (!state) state = sessionTitleRefreshState[sid] = { attempts: 0, timer: null };\r
+    if (state.timer || state.attempts >= 60) return;\r
+    const delayMs = Math.min(10000, Math.round(1000 * Math.pow(1.45, state.attempts)));\r
+    state.timer = setTimeout(function () {\r
+        state.timer = null;\r
+        state.attempts += 1;\r
+        void refreshSingleSessionRow(sid);\r
+    }, delayMs);\r
+}\r
+\r
+const sessionNameRecheckState = Object.create(null);\r
+\r
+/**\r
+ * run 结束后对「名字可能刚生成」的会话做有限复查（兜底）。\r
+ *\r
+ * 标题由服务端后台 worker 生成，前端只在 title_generation_pending 窗口内轮询；\r
+ * 一旦本次 run 的收尾请求与「生成完成」擦肩而过（错过窗口），会话名会一直停留\r
+ * 在旧值，直到用户手动切换会话。这里以 run 结束时的名字为基线短周期复查：\r
+ * 名字一变立即停止；到上限（默认 30s）无变化也停止。\r
+ */\r
+function scheduleSessionNameRecheck(sessionId, opts) {\r
+    const sid = String(sessionId || '');\r
+    if (!sid || !sessionsList) return;\r
+    const baseline = String((opts && opts.baseline) || '');\r
+    const maxAttempts = Math.max(1, Math.min(60, Number((opts && opts.maxAttempts) || 15)));\r
+    const delayMs = Math.max(600, Number((opts && opts.delayMs) || 2000));\r
+    let state = sessionNameRecheckState[sid];\r
+    if (!state) {\r
+        state = sessionNameRecheckState[sid] = { attempts: 0, timer: null, baseline: '', maxAttempts: maxAttempts, delayMs: delayMs };\r
+    }\r
+    if (baseline) state.baseline = baseline;\r
+    state.maxAttempts = maxAttempts;\r
+    state.delayMs = delayMs;\r
+    if (state.timer) return;\r
+    const tick = async function () {\r
+        state.timer = null;\r
+        state.attempts += 1;\r
+        await refreshSingleSessionRow(sid);\r
+        const live = sessionNameRecheckState[sid];\r
+        if (!live) return;\r
+        const session = sessionStore.get(sid);\r
+        const currentName = session ? String(session.name || '') : '';\r
+        if (currentName && live.baseline && currentName !== live.baseline) {\r
+            delete sessionNameRecheckState[sid];\r
+            return;\r
+        }\r
+        if (live.attempts >= live.maxAttempts) {\r
+            delete sessionNameRecheckState[sid];\r
+            return;\r
+        }\r
+        live.timer = setTimeout(tick, live.delayMs);\r
+    };\r
+    state.timer = setTimeout(tick, delayMs);\r
+}\r
+\r
+var sessionRowRefreshPromises = new Map();\r
+async function refreshSingleSessionRow(sessionId) {\r
+    if (sessionRowRefreshPromises.has(sessionId)) return sessionRowRefreshPromises.get(sessionId);\r
+    var promise = refreshSingleSessionRowInner(sessionId);\r
+    sessionRowRefreshPromises.set(sessionId, promise);\r
+    try { return await promise; }\r
+    finally { if (sessionRowRefreshPromises.get(sessionId) === promise) sessionRowRefreshPromises.delete(sessionId); }\r
+}\r
+\r
+async function refreshSingleSessionRowInner(sessionId) {\r
+    if (!sessionId || !sessionsList) return;\r
+    try {\r
+        const response = await fetch('/sessions/' + encodeURIComponent(sessionId));\r
+        if (!response.ok) return;\r
+        const sess = await response.json();\r
+        if (!sess || !sess.id) return;\r
+        scheduleTitleGenerationRefresh(sess.id, !!sess.title_generation_pending);\r
+        if (sess.is_subagent) {\r
+            // Child details must be addressable without inserting a duplicate\r
+            // row into the root-session sidebar.\r
+            sessionStore.sessionsById.set(String(sess.id), sess);\r
+            setSessionServerStreamActive(sess.id, !!sess.stream_active);\r
+        } else {\r
+            applySessionPatch({\r
+                session: sess,\r
+                session_id: sess.id,\r
+            });\r
+        }\r
+        const appliedSession = sessionStore.get(sess.id) || sess;\r
+        sessionStore.applyActiveRunForSession(\r
+            sess.id,\r
+            sess.active_run || (sess.run_active ? {\r
+                session_id: sess.id,\r
+                run_active: true,\r
+                started_at: sess.run_started_at || null,\r
+            } : null)\r
+        );\r
+        if (appliedSession.unread_result) {\r
+            if (!sessionUnreadComplete.has(sess.id)) {\r
+                sessionUnreadComplete.add(sess.id);\r
+                persistSessionUnread();\r
+            }\r
+        } else if (sessionUnreadComplete.delete(sess.id)) {\r
+            persistSessionUnread();\r
+        }\r
+        if (sessionHasBackgroundWork(sess)) {\r
+            sessionUnreadComplete.delete(sess.id);\r
+            persistSessionUnread();\r
+        }\r
+        renderSessionListIfChanged(false);\r
+        if (!sess.is_subagent && typeof maybeAutoResumeInterruptedReact === 'function') {\r
+            maybeAutoResumeInterruptedReact(sessionId, sess);\r
+        }\r
+        return sess;\r
+    } catch (e) {\r
+        console.error('刷新会话摘要失败:', e);\r
+    }\r
+}\r
+\r
+let sessionListLoadEpoch = 0;\r
+let sessionListLoadPromise = null;\r
+let sessionListLayoutKey = '';\r
+let sessionListContentMap = null;\r
+let materializeNewSessionQueue = null;\r
+// 点“新会话”后立即启动的后台预取（服务端隐藏草稿会话）：{ sessionId, response, session }。\r
+// 页面内重复点击与刷新后重新进入草稿态都复用它，避免把会话文件创建算进首条消息的等待。\r
+let pendingNewSession = null;\r
+let prefetchNewSessionPromise = null;\r
+let prefetchNewSessionWorkDir = null;\r
+const PENDING_NEW_SESSION_KEY = 'myagent-pending-new-session-id';\r
+// 下一个新会话要用的工作目录（绝对路径）。由「在新工作目录新建会话」设置，\r
+// 随 POST /sessions 的 work_dir 字段提交；会话创建后即清空，回到全局默认目录。\r
+let newSessionWorkDir = '';\r
+let newSessionWorkDirRevision = 0;\r
+let archivedSessionsLoaded = false;\r
+let archivedSessionsCache = null;\r
+let archivedSessionsCount = 0;\r
+let archivedSessionsLoadEpoch = 0;\r
+\r
+function syncArchivedSessionStateFromStore() {\r
+    archivedSessionsLoaded = !!sessionStore.archivedLoaded;\r
+    archivedSessionsCache = sessionStore.archivedSessions;\r
+    archivedSessionsCount = sessionStore.archivedCount;\r
+}\r
+\r
+/** 渲染键拆两半（增量渲染的地基）：\r
+ *  - 布局键：分组方式/筛选 + 实际渲染出的 (区块·分组·会话) 有序序列 + 归档计数类装饰。\r
+ *    只在"结构或顺序"变化时改变（新建/删除/置顶/归档/排序变化 → 整表重建）。\r
+ *  - 内容键：每会话的"可见字段"指纹（名字/待办/活动时间/预览/工作目录…）。\r
+ *    纯内容变化可以只替换受影响的行，不再整表重建。 */\r
+function computeSessionListLayoutKey() {\r
+    const sections = selectSessionSections();\r
+    const query = (typeof getSessionListSearchQuery === 'function') ? getSessionListSearchQuery() : '';\r
+    const parts = [\r
+        'groupBy=' + (typeof getSessionGroupBy === 'function' ? getSessionGroupBy() : 'time'),\r
+        'q=' + query,\r
+        'archive=' + (typeof getSessionArchiveFilter === 'function' ? getSessionArchiveFilter() : 'show'),\r
+        'archivedLoaded=' + (sessionStore.archivedLoaded ? '1' : '0'),\r
+        'archivedCount=' + String(sessionStore.archivedCount || 0),\r
+        'archivedVisible=' + String(sessionStore.archivedVisibleCount || 0),\r
+        'searching=' + (query ? '1' : '0'),\r
+    ];\r
+    const pushIds = function (tag, list) {\r
+        if (!Array.isArray(list)) return;\r
+        for (let i = 0; i < list.length; i += 1) {\r
+            const s = list[i];\r
+            if (s && s.id) parts.push(tag + ':' + s.id);\r
+        }\r
+    };\r
+    pushIds('p', sections.pinned);\r
+    if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {\r
+        sections.normalGroups.forEach(function (group) {\r
+            parts.push('g:' + String((group && group.key) || ''));\r
+            // 实际渲染出的行 = 配额截断后的集合；「显示更多」按钮存在与否也进键，\r
+            // 展开/收起时布局键变化 → 触发整表重建。\r
+            var vis = (group && group.isWorkDirGroup && typeof sessionGroupSessionsVisible === 'function')\r
+                ? sessionGroupSessionsVisible(group, { noLimit: !!query })\r
+                : { rows: (group && group.sessions) || [], hiddenCount: 0 };\r
+            pushIds('n', vis.rows);\r
+            if (vis.hiddenCount > 0) parts.push('of:' + String((group && group.key) || ''));\r
+        });\r
+    } else {\r
+        pushIds('n', sections.normal);\r
+    }\r
+    pushIds('a', sections.archived);\r
+    return parts.join('\\u001e');\r
+}\r
+\r
+function computeSessionListContentMap() {\r
+    const map = Object.create(null);\r
+    const stamp = function (s) {\r
+        if (!s || !s.id) return;\r
+        map[s.id] = [\r
+            s.name || '',\r
+            s.pinned ? 'p' : '',\r
+            s.todo ? 't' : '',\r
+            s.archived ? 'a' : '',\r
+            s.last_activity_at || s.updated_at || '',\r
+            s.last_user_preview || '',\r
+            s.work_dir || '',\r
+            s.work_dir_label || '',\r
+            s.work_dir_is_default ? 'd' : '',\r
+        ].join('\\u001f');\r
+    };\r
+    sessionStore.list().forEach(stamp);\r
+    sessionStore.archivedList().forEach(stamp);\r
+    return map;\r
+}\r
+\r
+function sessionContentMapsEqual(a, b) {\r
+    if (a === b) return true;\r
+    if (!a || !b) return false;\r
+    const keys = Object.keys(a);\r
+    if (keys.length !== Object.keys(b).length) return false;\r
+    for (let i = 0; i < keys.length; i += 1) {\r
+        if (a[keys[i]] !== b[keys[i]]) return false;\r
+    }\r
+    return true;\r
+}\r
+\r
+/** 内容级变化：只就地替换受影响的会话行（保序、保结构）。\r
+ *  stream 映射按"实际渲染出的集合"构建，与整表渲染语义一致；\r
+ *  行数过多（> 24）时退化为整表重建，避免逐行替换的调度开销得不偿失。 */\r
+function patchSessionListRows(ids) {\r
+    if (!sessionsList || !ids || !ids.length) return;\r
+    const sections = selectSessionSections();\r
+    const nextStreamMap = Object.create(null);\r
+    const collect = function (s) {\r
+        if (s && s.id) nextStreamMap[s.id] = !!s.stream_active;\r
+    };\r
+    (sections.pinned || []).forEach(collect);\r
+    if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {\r
+        sections.normalGroups.forEach(function (g) {\r
+            // 与渲染/布局键一致：stream 映射只覆盖"实际渲染出的行"。\r
+            var rows = (g && g.isWorkDirGroup && typeof sessionGroupSessionsVisible === 'function')\r
+                ? sessionGroupSessionsVisible(g, {\r
+                    noLimit: !!(typeof getSessionListSearchQuery === 'function' && getSessionListSearchQuery())\r
+                }).rows\r
+                : ((g && g.sessions) || []);\r
+            rows.forEach(collect);\r
+        });\r
+    } else {\r
+        (sections.normal || []).forEach(collect);\r
+    }\r
+    (sections.archived || []).forEach(collect);\r
+\r
+    const allSessions = selectAllSessions();\r
+    const byId = Object.create(null);\r
+    allSessions.forEach(function (s) { if (s && s.id) byId[s.id] = s; });\r
+\r
+    let replaced = 0;\r
+    ids.forEach(function (id) {\r
+        const sess = byId[id];\r
+        if (!sess) return;\r
+        let node = null;\r
+        try {\r
+            node = sessionsList.querySelector('.session-item[data-session-id="' +\r
+                ((window.CSS && CSS.escape) ? CSS.escape(id) : id) + '"]');\r
+        } catch (e) { node = null; }\r
+        if (!node) return;\r
+        node.replaceWith(buildAndBindSessionRow(sess, allSessions, nextStreamMap));\r
+        replaced += 1;\r
+    });\r
+    applyServerStreamActiveMap(nextStreamMap);\r
+    if (replaced) {\r
+        normalizeTruncatedSessionNames(sessionsList);\r
+        if (typeof syncSessionListHead === 'function') {\r
+            syncSessionListHead(sections, { searching: !!getSessionListSearchQuery() });\r
+        }\r
+        syncSessionListIndicatorClasses();\r
+    }\r
+    renderSessionTitleFromStore();\r
+}\r
+\r
+function renderSessionListIfChanged(force) {\r
+    if (typeof sessionSearchState !== 'undefined' && sessionSearchState.dialog && sessionSearchState.q) {\r
+        observeSessionSearchStore();\r
+        renderSessionSearchResults();\r
+    }\r
+    const nextLayout = computeSessionListLayoutKey();\r
+    const nextContent = computeSessionListContentMap();\r
+    if (!force && nextLayout === sessionListLayoutKey && sessionContentMapsEqual(nextContent, sessionListContentMap)) {\r
+        syncSessionListIndicatorClasses();\r
+        renderSessionTitleFromStore();\r
+        return;\r
+    }\r
+    const layoutChanged = nextLayout !== sessionListLayoutKey;\r
+    const prevContent = sessionListContentMap;\r
+    sessionListLayoutKey = nextLayout;\r
+    sessionListContentMap = nextContent;\r
+\r
+    if (!force && !layoutChanged && prevContent) {\r
+        const changedIds = [];\r
+        for (const id in nextContent) {\r
+            if (prevContent[id] !== nextContent[id]) changedIds.push(id);\r
+        }\r
+        if (changedIds.length && changedIds.length <= 24) {\r
+            patchSessionListRows(changedIds);\r
+            return;\r
+        }\r
+    }\r
+\r
+    const nextStreamMap = renderSessionListFromStore();\r
+    applyServerStreamActiveMap(nextStreamMap);\r
+    renderSessionTitleFromStore();\r
+}\r
+\r
+function clearSessionListError() {\r
+    if (!sessionsList) return;\r
+    sessionsList.classList.remove('sessions-list--error');\r
+    if (sessionsList.dataset.loadError === '1') delete sessionsList.dataset.loadError;\r
+}\r
+\r
+function renderSessionListError(message) {\r
+    if (!sessionsList) return;\r
+    sessionListLayoutKey = '';\r
+    sessionListContentMap = null;\r
+    sessionsList.classList.add('sessions-list--error');\r
+    sessionsList.dataset.loadError = '1';\r
+    sessionsList.innerHTML = '';\r
+    const row = document.createElement('div');\r
+    row.className = 'session-list-error';\r
+    row.setAttribute('role', 'status');\r
+    row.textContent = message || '加载会话列表失败';\r
+    const retry = document.createElement('button');\r
+    retry.type = 'button';\r
+    retry.className = 'btn-small';\r
+    retry.textContent = '重试';\r
+    retry.addEventListener('click', function () {\r
+        resetSessionListRetry();\r
+        void loadSessions();\r
+    });\r
+    row.appendChild(retry);\r
+    sessionsList.appendChild(row);\r
+}\r
+\r
+function applyOptimisticSessionUpdate(sessionId, patch) {\r
+    const sid = String(sessionId || '');\r
+    const current = sessionStore.get(sid) || (sessionStore.archivedLoaded\r
+        ? (sessionStore.archivedSessions || []).find(function (session) {\r
+            return session && String(session.id) === sid;\r
+        })\r
+        : null);\r
+    if (!current) return null;\r
+    const prev = Object.assign({}, current);\r
+    const next = Object.assign({}, current, patch || {});\r
+    if (Object.prototype.hasOwnProperty.call(patch || {}, 'pinned')) {\r
+        next.pinned_at = next.pinned ? (next.pinned_at || new Date().toISOString()) : null;\r
+    }\r
+    sessionStore.upsert(next);\r
+    if (prev.archived || next.archived) {\r
+        if (sessionStore.archivedLoaded) {\r
+            const archivedList = (sessionStore.archivedSessions || []).slice();\r
+            const archivedIndex = archivedList.findIndex(function (s) {\r
+                return s && String(s.id) === sid;\r
+            });\r
+            let visibleCount = sessionStore.archivedVisibleCount;\r
+            let totalCount = sessionStore.archivedCount;\r
+            if (prev.archived && next.archived) {\r
+                if (archivedIndex >= 0) archivedList[archivedIndex] = next;\r
+            } else if (prev.archived) {\r
+                if (archivedIndex >= 0) archivedList.splice(archivedIndex, 1);\r
+                if (archivedIndex >= 0 && archivedIndex < visibleCount) visibleCount -= 1;\r
+                totalCount = Math.max(0, totalCount - 1);\r
+            } else if (next.archived) {\r
+                archivedList.unshift(next);\r
+                visibleCount += 1;\r
+                totalCount += 1;\r
+            }\r
+            sessionStore.setArchivedLoaded(archivedList, {\r
+                visibleCount: visibleCount,\r
+                totalCount: totalCount,\r
+            });\r
+            syncArchivedSessionStateFromStore();\r
+        } else if (!!prev.archived !== !!next.archived) {\r
+            sessionStore.setArchivedCount(Math.max(\r
+                0,\r
+                sessionStore.archivedCount + (next.archived ? 1 : -1)\r
+            ));\r
+        }\r
+    }\r
+    renderSessionListIfChanged(true);\r
+    return prev;\r
+}\r
+\r
+// Event count cache for optimistic UI updates.\r
+const uiEventCountCache = {\r
+    cache: new Map(),\r
+    maxAgeMs: 10000,\r
+\r
+    get(sessionId) {\r
+        var entry = this.cache.get(sessionId);\r
+        if (entry && typeof entry === 'object') return Number(entry.count) || 0;\r
+        return Number(entry) || 0;\r
+    },\r
+\r
+    has(sessionId) {\r
+        return this.cache.has(sessionId);\r
+    },\r
+\r
+    isFresh(sessionId, maxAgeMs) {\r
+        var entry = this.cache.get(sessionId);\r
+        if (!entry || typeof entry !== 'object') return false;\r
+        var age = Date.now() - Number(entry.updatedAt || 0);\r
+        var limit = Number(maxAgeMs) > 0 ? Number(maxAgeMs) : this.maxAgeMs;\r
+        return age >= 0 && age <= limit;\r
+    },\r
+\r
+    set(sessionId, count) {\r
+        this.cache.set(sessionId, {\r
+            count: Math.max(0, Number(count) || 0),\r
+            updatedAt: Date.now(),\r
+        });\r
+    },\r
+\r
+    increment(sessionId) {\r
+        const current = this.get(sessionId);\r
+        this.set(sessionId, current + 1);\r
+        return current + 1;\r
+    },\r
+\r
+    updateFromServer(sessionId, count) {\r
+        this.set(sessionId, count);\r
+    }\r
+};\r
+\r
+async function fetchSessionsStateSnapshot(opts) {\r
+    opts = opts || {};\r
+    const requestSeq = ++sessionStore.snapshotRequestSeq;\r
+    const humanEpochs = typeof captureHumanInteractionEpochs === 'function' ? captureHumanInteractionEpochs() : null;\r
+    const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');\r
+    if (typeof sessionLoadingDiagnostics !== 'undefined') {\r
+        const ownsTrace = !opts.loadingTrace;\r
+        const trace = opts.loadingTrace || sessionLoadingDiagnostics.start('', 'session_list');\r
+        let outcome = 'failed', failure = null;\r
+        try {\r
+            const result = await sessionLoadingDiagnostics.fetchJSON(trace, url, {}, 12000);\r
+            if (!result.response.ok || !result.data || !Array.isArray(result.data.sessions)) {\r
+                const error = new Error('invalid sessions state: ' + result.response.status);\r
+                error.uiLoadReason = result.response.ok ? 'invalid_payload' : 'http';\r
+                throw error;\r
+            }\r
+            outcome = 'success';\r
+            return Object.assign(result.data, {include_archived:!!opts.includeArchived, client_request_seq:requestSeq,\r
+                client_human_interaction_epochs:humanEpochs});\r
+        } catch (error) {\r
+            failure = error;\r
+            throw error;\r
+        } finally {\r
+            if (ownsTrace) sessionLoadingDiagnostics.end(trace, outcome, failure);\r
+        }\r
+    }\r
+    return fetchWithTimeout(url, {}, 12000, async function (response) {\r
+        if (!response.ok) throw new Error('sessions state failed: ' + response.status);\r
+        const snapshot = await response.json();\r
+        if (!snapshot || !Array.isArray(snapshot.sessions)) throw new Error('invalid sessions state response');\r
+        snapshot.include_archived = !!opts.includeArchived;\r
+        snapshot.client_request_seq = requestSeq;\r
+        snapshot.client_human_interaction_epochs = humanEpochs;\r
+        return snapshot;\r
+    });\r
+}\r
+\r
+function deriveSidebarRuntimeStatus() {\r
+    var busy = false;\r
+    sessionStore.runsBySession.forEach(function () { busy = true; });\r
+    if (!busy) {\r
+        sessionStore.activeRunInfoBySession.forEach(function (info) {\r
+            if (!info || info.run_active !== false) busy = true;\r
+        });\r
+    }\r
+    if (busy) return 'busy';\r
+    return 'online';\r
+}\r
+\r
+function updateSidebarRuntimeStatus(nextStatus) {\r
+    var footer = document.querySelector('.sidebar-runtime');\r
+    var status = document.getElementById('sidebar-runtime-status');\r
+    if (!footer || !status) return;\r
+    var state = nextStatus === false ? 'offline'\r
+        : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));\r
+    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';\r
+    footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');\r
+    footer.classList.add('is-' + state);\r
+    var labels = {\r
+        online: 'Runtime 在线',\r
+        busy: 'Runtime 繁忙',\r
+        waiting: 'Runtime 待处理',\r
+        alert: 'Runtime 告警',\r
+        offline: 'Runtime 离线'\r
+    };\r
+    setUiRuntimeText(status, labels[state]);\r
+    footer.dataset.runtimeStatus = state;\r
+}\r
+\r
+var runtimeStatusHeartbeatPending = false;\r
+var runtimeTakeoverBySession = Object.create(null);\r
+var lastUiActivationSeq = (function () {\r
+    // A reload in the same tab must not replay a notification target that was\r
+    // already consumed. A newly opened tab still picks up the latest request.\r
+    try { return Number(sessionStorage.getItem('myagent-ui-activation-seq')) || 0; } catch (e) { return 0; }\r
+})();\r
+function rememberUiActivationSeq(seq) {\r
+    lastUiActivationSeq = Number(seq) || 0;\r
+    try { sessionStorage.setItem('myagent-ui-activation-seq', String(lastUiActivationSeq)); } catch (e) { /* optional cache */ }\r
+}\r
+var initialDeepLinkSession = '';\r
+var pendingQuerySession = (function () {\r
+    // Deep link support: /?session=<id> selects that conversation once the\r
+    // session list is ready, then the parameter is stripped so a manual\r
+    // refresh does not yank the user back.\r
+    try {\r
+        var params = new URLSearchParams(window.location.search || '');\r
+        var sid = String(params.get('session') || '').trim();\r
+        if (sid && /^[A-Za-z0-9][A-Za-z0-9\\-]{0,63}$/.test(sid)) {\r
+            initialDeepLinkSession = sid;\r
+            params.delete('session');\r
+            var nextSearch = params.toString();\r
+            try {\r
+                window.history.replaceState(\r
+                    {}, '',\r
+                    window.location.pathname + (nextSearch ? '?' + nextSearch : '') + (window.location.hash || '')\r
+                );\r
+            } catch (e) { /* history may be unavailable */ }\r
+            return sid;\r
+        }\r
+    } catch (e) { /* ignore */ }\r
+    return '';\r
+})();\r
+\r
+/* 插件体检：设置页把诊断提示词放进 localStorage，主界面在新会话就绪后自动发送一次。 */\r
+function pluginDiagnosePromptKey(sessionId) {\r
+    return 'myagent.pluginDiagnosePrompt:' + sessionId;\r
+}\r
+\r
+function hasPluginDiagnosePrompt(sessionId) {\r
+    try { return !!localStorage.getItem(pluginDiagnosePromptKey(sessionId)); } catch (e) { return false; }\r
+}\r
+\r
+function maybeAutoSendPluginDiagnose(sessionId) {\r
+    var key = pluginDiagnosePromptKey(sessionId);\r
+    var text = '';\r
+    try {\r
+        text = localStorage.getItem(key) || '';\r
+        if (text) localStorage.removeItem(key);\r
+    } catch (e) { return; }\r
+    if (!text) return;\r
+    var input = document.getElementById('message-input');\r
+    if (input) {\r
+        input.value = text;\r
+        if (typeof syncComposerInputState === 'function') {\r
+            try { syncComposerInputState(); } catch (e) { /* ignore */ }\r
+        }\r
+    }\r
+    if (typeof sendMessage !== 'function') return;\r
+    try {\r
+        var pending = sendMessage({ message: text, sessionId: sessionId });\r
+        if (pending && typeof pending.catch === 'function') {\r
+            pending.catch(function (error) { console.warn('plugin diagnose autosend failed', error); });\r
+        }\r
+    } catch (error) {\r
+        console.warn('plugin diagnose autosend failed', error);\r
+    }\r
+}\r
+\r
+/* 设置中心（应用内 iframe）通过 postMessage 调这里，避免再开一个应用页。 */\r
+function openPluginDiagnoseSession(sessionId, prompt) {\r
+    var sid = String(sessionId || '').trim();\r
+    if (!sid) return;\r
+    if (prompt) {\r
+        try { localStorage.setItem(pluginDiagnosePromptKey(sid), String(prompt)); } catch (e) { /* ignore */ }\r
+    }\r
+    var run = function () { maybeAutoSendPluginDiagnose(sid); };\r
+    if (typeof switchSession === 'function' && sid !== currentSessionId) {\r
+        void Promise.resolve(switchSession(sid)).then(run).catch(run);\r
+    } else {\r
+        run();\r
+    }\r
+}\r
+try { window.myagentOpenPluginDiagnose = openPluginDiagnoseSession; } catch (e) { /* ignore */ }\r
+\r
+function maybeTakeOverActiveRuntimeSession(payload) {\r
+    var sid = String(currentSessionId || '').trim();\r
+    var activeIds = payload && Array.isArray(payload.active_session_ids)\r
+        ? payload.active_session_ids.map(function (value) { return String(value || '').trim(); })\r
+        : [];\r
+    if (!sid || activeIds.indexOf(sid) < 0) return;\r
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;\r
+    if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;\r
+    if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;\r
+    if (runtimeTakeoverBySession[sid]) return;\r
+\r
+    var task = (async function () {\r
+        try {\r
+            if (sid !== String(currentSessionId || '')) return;\r
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;\r
+            if (typeof getSessionRunState === 'function' && getSessionRunState(sid)) return;\r
+            // A heartbeat requested before run_finished may arrive afterwards.\r
+            // Reuse the detail refresh this takeover already performs, and let\r
+            // its identified run state decide whether there is work to attach.\r
+            const session = await refreshSingleSessionRow(sid);\r
+            if (!session || (!session.run_active && !session.stream_active)) return;\r
+            if (sid !== String(currentSessionId || '')) return;\r
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;\r
+            if (getSessionRunState(sid) || !isServerStreamActive(sid)) return;\r
+            const activeInfo = sessionStore.getActiveRunInfo(sid) || {};\r
+            const runId = String(activeInfo.run_id || activeInfo.runId || '');\r
+            if (runId && sessionStore.isTerminalRun(sid, runId)) return;\r
+            if (typeof resetStreamReconnectState === 'function') resetStreamReconnectState(sid);\r
+            document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+                detail: { sessionId: sid, phase: 'runtime-takeover' },\r
+            }));\r
+            if (typeof attachSessionEventStream === 'function') {\r
+                await attachSessionEventStream(sid, { skipInitialLoad: true, force: true });\r
+            }\r
+        } catch (error) {\r
+            console.warn('自动接管服务端会话流失败:', error);\r
+        }\r
+    })();\r
+    runtimeTakeoverBySession[sid] = task;\r
+    void task.finally(function () {\r
+        if (runtimeTakeoverBySession[sid] === task) delete runtimeTakeoverBySession[sid];\r
+    });\r
+}\r
+\r
+async function refreshRuntimeStatus() {\r
+    if (runtimeStatusHeartbeatPending) return;\r
+    runtimeStatusHeartbeatPending = true;\r
+    try {\r
+        var response = await fetchWithTimeout('/api/runtime-status', { cache: 'no-store' }, 5000);\r
+        if (!response.ok) throw new Error('runtime status failed: ' + response.status);\r
+        var payload = await response.json();\r
+        updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);\r
+        maybeTakeOverActiveRuntimeSession(payload);\r
+        var activationSeq = Number(payload && payload.activation_seq) || 0;\r
+        // A backend restart resets the counter; keep the local cursor from\r
+        // suppressing the first activation of the new process.\r
+        if (activationSeq < lastUiActivationSeq) rememberUiActivationSeq(0);\r
+        if (activationSeq > lastUiActivationSeq) {\r
+            rememberUiActivationSeq(activationSeq);\r
+            try { window.focus(); } catch (e) { /* browser policy may reject focus */ }\r
+            var activationSession = String((payload && payload.activation_session) || '').trim();\r
+            var activationTarget = payload && payload.activation_target;\r
+            var activationDone = Promise.resolve();\r
+            if (activationSession && activationSession !== currentSessionId\r
+                    && typeof switchSession === 'function') {\r
+                activationDone = Promise.resolve(switchSession(activationSession)).catch(function (err) {\r
+                    /* session may be gone; do not open its plugin page in another chat */\r
+                    return false;\r
+                });\r
+            }\r
+            if (activationTarget && typeof applyUiActivationTarget === 'function') {\r
+                void activationDone.then(function (switched) {\r
+                    if (switched === false) return;\r
+                    applyUiActivationTarget(activationTarget, {\r
+                        sessionId: activationSession || currentSessionId,\r
+                    });\r
+                }).catch(function (err) { /* activation target is best effort */ });\r
+            }\r
+        }\r
+    } catch (error) {\r
+        updateSidebarRuntimeStatus(false);\r
+    } finally {\r
+        runtimeStatusHeartbeatPending = false;\r
+    }\r
+}\r
+\r
+function startRuntimeStatusHeartbeat() {\r
+    // 统一节拍：5 秒任务；窗口隐藏时仍需运行（要支持「服务端拉起窗口 / 自动接管」能力）。\r
+    registerSidebarRefreshTask('runtime-status', 5000, function () {\r
+        void refreshRuntimeStatus();\r
+    }, { runWhenHidden: true });\r
+}\r
+\r
+async function fetchWithTimeout(url, options, timeoutMs, consume) {\r
+    options = options || {};\r
+    const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;\r
+    const controller = new AbortController();\r
+    const outerSignal = options.signal;\r
+    let abortReason = '';\r
+    const abortFromOuter = function () { if (!abortReason) abortReason = 'cancelled'; controller.abort(); };\r
+    if (outerSignal) {\r
+        if (outerSignal.aborted) abortFromOuter();\r
+        else outerSignal.addEventListener('abort', abortFromOuter, { once: true });\r
+    }\r
+    const timer = setTimeout(function () { if (!abortReason) abortReason = 'timeout'; controller.abort(); }, ms);\r
+    const nextOptions = Object.assign({}, options, { signal: controller.signal });\r
+    try {\r
+        const response = await fetch(url, nextOptions);\r
+        // Keep cancellation and the deadline alive while a JSON body is read.\r
+        return typeof consume === 'function' ? await consume(response) : response;\r
+    } catch (error) {\r
+        if (error && typeof error === 'object' && abortReason) {\r
+            error.uiLoadReason = abortReason;\r
+            error.uiLoadTimeoutMs = ms;\r
+        }\r
+        throw error;\r
+    } finally {\r
+        clearTimeout(timer);\r
+        if (outerSignal) outerSignal.removeEventListener('abort', abortFromOuter);\r
+    }\r
+}\r
+\r
+async function fetchArchivedSessionPage(offset, limit) {\r
+    const url = '/sessions?include_archived=true&archived_only=true&offset=' + String(offset)\r
+        + '&limit=' + String(limit);\r
+    const response = await fetchWithTimeout(url, {}, 15000);\r
+    if (!response.ok) throw new Error('archived sessions failed: ' + response.status);\r
+    const sessions = await response.json();\r
+    const countHeader = response.headers.get('X-Archived-Count');\r
+    const parsedCount = Number(countHeader);\r
+    return {\r
+        sessions: Array.isArray(sessions) ? sessions : [],\r
+        totalCount: Number.isFinite(parsedCount) && parsedCount >= 0\r
+            ? parsedCount\r
+            : Math.max(offset + (Array.isArray(sessions) ? sessions.length : 0), sessionStore.archivedCount),\r
+    };\r
+}\r
+\r
+function appendArchivedSessionPage(page, visibleCount) {\r
+    const combined = (sessionStore.archivedSessions || []).concat(page.sessions || []);\r
+    const seen = new Set();\r
+    const deduplicated = combined.filter(function (s) {\r
+        const sid = s && s.id ? String(s.id) : '';\r
+        if (!sid || seen.has(sid)) return false;\r
+        seen.add(sid);\r
+        return true;\r
+    });\r
+    sessionStore.setArchivedLoaded(deduplicated, {\r
+        visibleCount: visibleCount,\r
+        totalCount: page.totalCount,\r
+    });\r
+}\r
+\r
+async function prefetchNextArchivedPage(loadEpoch) {\r
+    const cachedCount = Array.isArray(sessionStore.archivedSessions)\r
+        ? sessionStore.archivedSessions.length\r
+        : 0;\r
+    const wantedCount = Math.min(\r
+        sessionStore.archivedCount,\r
+        sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE\r
+    );\r
+    if (cachedCount >= wantedCount) return;\r
+    const page = await fetchArchivedSessionPage(cachedCount, wantedCount - cachedCount);\r
+    if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+    appendArchivedSessionPage(page, sessionStore.archivedVisibleCount);\r
+}\r
+\r
+async function loadArchivedSessions(opts) {\r
+    opts = opts || {};\r
+    const loadEpoch = ++archivedSessionsLoadEpoch;\r
+    try {\r
+        if (!sessionStore.archivedLoaded) {\r
+            const initialPage = await fetchArchivedSessionPage(0, ARCHIVED_SESSIONS_PAGE_SIZE * 2);\r
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+            sessionStore.setArchivedLoaded(initialPage.sessions, {\r
+                visibleCount: ARCHIVED_SESSIONS_PAGE_SIZE,\r
+                totalCount: initialPage.totalCount,\r
+            });\r
+        } else if (opts.background || opts.refresh || !sessionStore.hasMoreArchivedSessions()) {\r
+            const refreshLimit = Math.max(\r
+                ARCHIVED_SESSIONS_PAGE_SIZE * 2,\r
+                sessionStore.archivedVisibleCount + ARCHIVED_SESSIONS_PAGE_SIZE\r
+            );\r
+            const refreshedPage = await fetchArchivedSessionPage(0, refreshLimit);\r
+            if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+            sessionStore.setArchivedLoaded(refreshedPage.sessions, {\r
+                visibleCount: sessionStore.archivedVisibleCount,\r
+                totalCount: refreshedPage.totalCount,\r
+            });\r
+        } else {\r
+            if (sessionStore.revealNextArchivedPage() === 0) {\r
+                const cachedCount = Array.isArray(sessionStore.archivedSessions)\r
+                    ? sessionStore.archivedSessions.length\r
+                    : 0;\r
+                const nextPage = await fetchArchivedSessionPage(cachedCount, ARCHIVED_SESSIONS_PAGE_SIZE);\r
+                if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+                appendArchivedSessionPage(nextPage, sessionStore.archivedVisibleCount);\r
+                sessionStore.revealNextArchivedPage();\r
+            }\r
+            syncArchivedSessionStateFromStore();\r
+            renderSessionListIfChanged(true);\r
+            clearSessionListError();\r
+            try {\r
+                await prefetchNextArchivedPage(loadEpoch);\r
+            } catch (prefetchErr) {\r
+                console.error('预加载下一批归档目录失败:', prefetchErr);\r
+            }\r
+        }\r
+        if (loadEpoch !== archivedSessionsLoadEpoch) return;\r
+        syncArchivedSessionStateFromStore();\r
+        renderSessionListIfChanged(!!opts.forceRender);\r
+        clearSessionListError();\r
+    } catch (err) {\r
+        console.error('加载归档目录失败:', err);\r
+        if (!opts.background) throw err;\r
+    }\r
+}\r
+\r
+var sessionListChangeWatcherStarted = false;\r
+var sessionListChangeWatcherEpoch = 0;\r
+var sessionListChangeController = null;\r
+var sessionListChangeTimer = null;\r
+var sessionListChangeRevision = null;\r
+\r
+function startSessionListChangeWatcher() {\r
+    if (sessionListChangeWatcherStarted) return;\r
+    sessionListChangeWatcherStarted = true;\r
+    const epoch = ++sessionListChangeWatcherEpoch;\r
+    let revision = sessionListChangeRevision != null ? sessionListChangeRevision\r
+        : (Number(sessionStore.lastAppliedStateRevision) || 0);\r
+    const poll = async function () {\r
+        let delay = 0;\r
+        const controller = new AbortController();\r
+        sessionListChangeController = controller;\r
+        try {\r
+            const payload = await fetchWithTimeout('/sessions/changes?after_revision=' + revision,\r
+                { cache: 'no-store', signal: controller.signal }, 35000, async function (response) {\r
+                    if (!response.ok) throw new Error('session changes failed: ' + response.status);\r
+                    return response.json();\r
+                });\r
+            const next = Number(payload && payload.state_revision);\r
+            if (epoch !== sessionListChangeWatcherEpoch) return;\r
+            if (!Number.isFinite(next) || next <= 0) throw new Error('invalid session changes response');\r
+            // The existing long poll also carries committed terminal facts.\r
+            // Apply them before loading summaries so a lost SSE terminal never\r
+            // leaves a local reader or an old HTTP response owning the run.\r
+            if (typeof applySessionTerminalNotifications === 'function') {\r
+                applySessionTerminalNotifications(payload.terminal_events);\r
+            }\r
+            if (next !== Number(sessionStore.lastAppliedStateRevision)) {\r
+                // A request already in flight can predate this notification.\r
+                // Start a fresh one; its epoch prevents older results winning.\r
+                const loaded = await loadSessions({ background: true, force: true });\r
+                if (!loaded || Number(sessionStore.lastAppliedStateRevision) < next) {\r
+                    throw new Error('session changes snapshot not yet applied');\r
+                }\r
+            }\r
+            // A summary loaded above can already include a later revision.\r
+            // Only acknowledge notifications actually delivered by this poll;\r
+            // otherwise a terminal committed during that load is skipped.\r
+            revision = next;\r
+            sessionListChangeRevision = revision;\r
+        } catch (error) {\r
+            delay = 2000;\r
+        } finally {\r
+            if (sessionListChangeController === controller) sessionListChangeController = null;\r
+            if (sessionListChangeWatcherStarted && epoch === sessionListChangeWatcherEpoch) {\r
+                sessionListChangeTimer = setTimeout(poll, delay);\r
+            }\r
+        }\r
+    };\r
+    void poll();\r
+}\r
+\r
+function stopSessionListChangeWatcher() {\r
+    sessionListChangeWatcherStarted = false;\r
+    sessionListChangeWatcherEpoch += 1;\r
+    if (sessionListChangeController) sessionListChangeController.abort();\r
+    if (sessionListChangeTimer) clearTimeout(sessionListChangeTimer);\r
+    sessionListChangeTimer = null;\r
+}\r
+\r
+window.addEventListener('pagehide', stopSessionListChangeWatcher);\r
+window.addEventListener('pageshow', function (event) {\r
+    if (event.persisted) startSessionListChangeWatcher();\r
+});\r
+\r
+async function loadSessions(opts) {\r
+    opts = opts || {};\r
+    if (sessionListLoadPromise && !opts.force) return sessionListLoadPromise;\r
+    const pending = loadSessionsInner(opts);\r
+    sessionListLoadPromise = pending;\r
+    try {\r
+        return await pending;\r
+    } finally {\r
+        if (sessionListLoadPromise === pending) sessionListLoadPromise = null;\r
+    }\r
+}\r
+\r
+var sessionListRetryTimer = null;\r
+var sessionListRetryAttempts = 0;\r
+function resetSessionListRetry() {\r
+    if (sessionListRetryTimer) clearTimeout(sessionListRetryTimer);\r
+    sessionListRetryTimer = null;\r
+    sessionListRetryAttempts = 0;\r
+}\r
+\r
+function scheduleSessionListRetry() {\r
+    if (sessionListRetryTimer || sessionListRetryAttempts >= 3) return;\r
+    const delay = 1000 * Math.pow(2, sessionListRetryAttempts++);\r
+    sessionListRetryTimer = setTimeout(function () {\r
+        sessionListRetryTimer = null;\r
+        void loadSessions({ background: true });\r
+    }, delay);\r
+}\r
+\r
+async function loadSessionsInner(opts) {\r
+    const loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined' ? sessionLoadingDiagnostics.start('', 'session_list') : null;\r
+    let loadingOutcome = 'cancelled', loadingError = null;\r
+    const loadEpoch = ++sessionListLoadEpoch;\r
+    sessionStore.ui.loadingSessions = true;\r
+    try {\r
+        let allSessions;\r
+        let snapshot = null;\r
+\r
+        try {\r
+            snapshot = await fetchSessionsStateSnapshot({loadingTrace:loadingTrace});\r
+            if (loadEpoch !== sessionListLoadEpoch) return;\r
+            updateSidebarRuntimeStatus(true);\r
+            allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];\r
+        } catch (stateErr) {\r
+            if (loadEpoch !== sessionListLoadEpoch) return false;\r
+            console.error('加载会话状态快照失败，回退至旧接口', stateErr);\r
+            const fallbackRequestSeq = ++sessionStore.snapshotRequestSeq;\r
+            const fallbackHumanEpochs = typeof captureHumanInteractionEpochs === 'function' ? captureHumanInteractionEpochs() : null;\r
+            if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'fallback');\r
+            const result = loadingTrace\r
+                ? await sessionLoadingDiagnostics.fetchJSON(loadingTrace, '/sessions', {}, 12000)\r
+                : await fetchWithTimeout('/sessions', {}, 12000, async function (response) {\r
+                if (!response.ok) throw new Error('sessions fallback failed: ' + response.status);\r
+                const sessions = await response.json();\r
+                if (!Array.isArray(sessions)) throw new Error('invalid sessions fallback response');\r
+                return { response: response, sessions: sessions };\r
+            });\r
+            const response = result.response;\r
+            if (!response.ok || !Array.isArray(result.data || result.sessions)) {\r
+                const error = new Error('invalid sessions fallback: ' + response.status);\r
+                error.uiLoadReason = response.ok ? 'invalid_payload' : 'http';\r
+                throw error;\r
+            }\r
+            const archivedCountHeader = response.headers.get('X-Archived-Count');\r
+            if (archivedCountHeader != null && archivedCountHeader !== '') {\r
+                const parsedArchivedCount = Number(archivedCountHeader);\r
+                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {\r
+                    sessionStore.setArchivedCount(parsedArchivedCount);\r
+                    syncArchivedSessionStateFromStore();\r
+                }\r
+            }\r
+            const sessions = result.data || result.sessions;\r
+            if (loadEpoch !== sessionListLoadEpoch) return;\r
+            updateSidebarRuntimeStatus(true);\r
+            allSessions = Array.isArray(sessions) ? sessions : [];\r
+            snapshot = {\r
+                sessions: allSessions,\r
+                archived_count: archivedSessionsCount,\r
+                client_request_seq: fallbackRequestSeq,\r
+                client_human_interaction_epochs: fallbackHumanEpochs,\r
+            };\r
+        }\r
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'layout');\r
+        applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });\r
+        syncArchivedSessionStateFromStore();\r
+        allSessions = sessionStore.list();\r
+\r
+        const idSet = new Set();\r
+        for (let si = 0; si < allSessions.length; si += 1) {\r
+            if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);\r
+        }\r
+        [...sessionUnreadComplete].forEach(function (uid) {\r
+            if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);\r
+        });\r
+        persistSessionUnread();\r
+\r
+        if (pendingQuerySession) {\r
+            var queryTarget = pendingQuerySession;\r
+            pendingQuerySession = '';\r
+            var known = allSessions.some(function (s) { return s && s.id === queryTarget; });\r
+            var diagnosePrompt = hasPluginDiagnosePrompt(queryTarget);\r
+            if ((known || diagnosePrompt) && queryTarget !== currentSessionId && typeof switchSession === 'function') {\r
+                void Promise.resolve(switchSession(queryTarget)).then(function () {\r
+                    maybeAutoSendPluginDiagnose(queryTarget);\r
+                }).catch(function (err) { /* ignore */ });\r
+            } else if (queryTarget === currentSessionId) {\r
+                maybeAutoSendPluginDiagnose(queryTarget);\r
+            }\r
+        }\r
+\r
+        renderSessionListIfChanged(!!opts.forceRender);\r
+        clearSessionListError();\r
+        resetSessionListRetry();\r
+        if (typeof sessionsList !== 'undefined' && sessionsList && sessionsList.dataset) sessionsList.dataset.snapshotReady = '1';\r
+        sessionStore.ui.loadingSessions = false;\r
+        if (opts.refreshArchived && !opts.skipArchivedRefresh && sessionStore.archivedLoaded) {\r
+            void loadArchivedSessions({ background: true });\r
+        }\r
+        loadingOutcome = 'success';\r
+        return true;\r
+    } catch (error) {\r
+        loadingError = error;\r
+        if (loadEpoch !== sessionListLoadEpoch) return false;\r
+        loadingOutcome = 'failed';\r
+        sessionStore.ui.loadingSessions = false;\r
+        updateSidebarRuntimeStatus(false);\r
+        console.error('加载会话列表失败:', error);\r
+        if (sessionStore.list().length > 0) {\r
+            renderSessionListIfChanged(true);\r
+            clearSessionListError();\r
+        } else {\r
+            renderSessionListError('加载会话列表失败');\r
+        }\r
+        scheduleSessionListRetry();\r
+        return false;\r
+    } finally {\r
+        if (loadingTrace) sessionLoadingDiagnostics.end(loadingTrace, loadingOutcome, loadingError);\r
+    }\r
+}\r
+\r
+async function reconcileRunStateFromServer(opts) {\r
+    opts = opts || {};\r
+    const suppressedBeforeFetch = new Set();\r
+    if (opts.respectStopSuppress) {\r
+        sessionStore.sessionOrder.forEach(function (sid) {\r
+            if (isSessionStreamStopSuppressed(sid)) suppressedBeforeFetch.add(String(sid));\r
+        });\r
+        if (currentSessionId && isSessionStreamStopSuppressed(currentSessionId)) {\r
+            suppressedBeforeFetch.add(String(currentSessionId));\r
+        }\r
+    }\r
+    let snapshot = null;\r
+    try {\r
+        const cur = currentSessionId ? sessionStore.get(currentSessionId) : null;\r
+        snapshot = await fetchSessionsStateSnapshot({\r
+            includeArchived: !!(sessionStore.archivedLoaded || (cur && cur.archived)),\r
+        });\r
+    } catch (e) {\r
+        updateSidebarRuntimeStatus(false);\r
+        if (!opts.silent) console.error('reconcile run state failed:', e);\r
+        return;\r
+    }\r
+    applySessionSnapshot(snapshot);\r
+    updateSidebarRuntimeStatus(true);\r
+    if (opts.respectStopSuppress) {\r
+        suppressedBeforeFetch.forEach(function (sid) {\r
+            if (isSessionStreamStopSuppressed(sid)) {\r
+                sessionStore.setStreamActive(sid, false);\r
+                const sess = sessionStore.get(sid);\r
+                if (sess) {\r
+                    sess.stream_active = false;\r
+                    sess.run_active = false;\r
+                    sess.run_started_at = null;\r
+                }\r
+                sessionStore.activeRunInfoBySession.delete(sid);\r
+            }\r
+        });\r
+    }\r
+    const active = new Set();\r
+    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {\r
+        if (info && info.run_active === true) active.add(String(sid));\r
+    });\r
+    const localIds = [];\r
+    sessionStore.runsBySession.forEach(function (_run, sid) {\r
+        localIds.push(String(sid));\r
+    });\r
+    localIds.forEach(function (sid) {\r
+        if (!active.has(sid)) {\r
+            var run = getSessionRunState(sid);\r
+            // 本地仍在消费 SSE 且未见真终态时不得误杀：/sessions/state 轻快照有 5s TTL\r
+            // 且在“新一轮刚启动”的首步窗口可能瞬时报 inactive；15s reconcile 若此时\r
+            // abort/endRun 会收起过程框并 seal，导致后续增量无处渲染而“卡死”。\r
+            var streamAlive = !!(run && run.ctx && run.ctx.streamConsuming && run.ctx.terminalSeen !== true);\r
+            if (streamAlive) return;\r
+            var staleSubmittedStream = !!(\r
+                run && run.submitted && run.ctx && run.ctx.streamConsuming\r
+            );\r
+            if (run && (run.reattached || staleSubmittedStream || run.transportClosed)) {\r
+                abortSessionRun(sid, 'reconcile-finished');\r
+                if (run.ctx && typeof endRunForClient === 'function') {\r
+                    // A missing terminal SSE event must not leave the process\r
+                    // panel running after the server has already ended this run.\r
+                    endRunForClient(sid, run.ctx, {\r
+                        runId: run.runId,\r
+                        drainFollowup: false,\r
+                        syncFollowup: false,\r
+                        scroll: false,\r
+                        // 对账路径不是真终态：禁止折叠/封印过程框（渲染中的内容仍需收尾）。\r
+                        collapseProcess: false,\r
+                    });\r
+                }\r
+            }\r
+        }\r
+    });\r
+    if (currentSessionId && active.has(currentSessionId)) {\r
+        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};\r
+        const run = getSessionRunState(currentSessionId);\r
+        const ctx = run && run.ctx;\r
+        const recovery = executionRecoveryBySession.get(String(currentSessionId)) || {};\r
+        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected\r
+            ? ctx.currentProcessGroup\r
+            : findExecutionProcessGroup(getVisibleChatStream(), recovery.processGroupId, info.run_id || info.runId);\r
+        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);\r
+    }\r
+    syncSessionListIndicatorClasses();\r
+    setSendButtonState();\r
+    renderSessionListIfChanged(false);\r
+}\r
+\r
+function showSessionLoadRetry(sessionId) {\r
+    var sid = String(sessionId || '');\r
+    var stream = getVisibleChatStream();\r
+    if (!sid || !stream) return;\r
+    if (stream.querySelector('.session-load-retry')) return;\r
+    var row = document.createElement('div');\r
+    row.className = 'feed-item feed--err session-load-retry';\r
+    var btn = document.createElement('button');\r
+    btn.type = 'button';\r
+    btn.className = 'history-load-older-btn';\r
+    btn.textContent = '重新加载';\r
+    btn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);\r
+        void switchSession(sid, { forceReload: true });\r
+    });\r
+    row.appendChild(btn);\r
+    stream.appendChild(row);\r
+}\r
+\r
+var sessionHistoryLoadController = null;\r
+var initialSessionHistoryPrefetch = null;\r
+\r
+function initialSessionHistoryUrl(sessionId) {\r
+    return '/sessions/' + encodeURIComponent(sessionId)\r
+        + '/history_snapshot?turns=' + encodeURIComponent(String(HISTORY_DIALOGUES_PER_PAGE))\r
+        + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET))\r
+        + '&include_aux=false&prefer_active_turn=true&tail_limit=200';\r
+}\r
+\r
+function prefetchInitialSessionHistory(sessionId) {\r
+    if (!sessionId || initialSessionHistoryPrefetch) return;\r
+    var controller = new AbortController();\r
+    var url = initialSessionHistoryUrl(sessionId);\r
+    var loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined' ? sessionLoadingDiagnostics.start(sessionId, 'history') : null;\r
+    if (loadingTrace) controller.signal.addEventListener('abort', function () {\r
+        sessionLoadingDiagnostics.end(loadingTrace, 'cancelled');\r
+    }, {once:true});\r
+    initialSessionHistoryPrefetch = {\r
+        sessionId: sessionId, url: url, controller: controller, startedAt: Date.now(),\r
+        loadingTrace: loadingTrace,\r
+        contextTokenVersion: typeof getContextTokenVersion === 'function' ? getContextTokenVersion(sessionId) : null,\r
+        // Store failures for the consumer too: do not turn one timeout into\r
+        // another full projection. Catch now to avoid an unhandled rejection.\r
+        promise: fetchSessionHistoryJSON(url, controller.signal, loadingTrace).catch(function (error) { return { error: error }; }),\r
+    };\r
+}\r
+\r
+async function fetchInitialSessionHistorySnapshot(sessionId, url, signal, loadingTrace) {\r
+    var entry = initialSessionHistoryPrefetch;\r
+    initialSessionHistoryPrefetch = null;\r
+    if (entry && entry.sessionId === sessionId && entry.url === url) {\r
+        var abort = function () { entry.controller.abort(); };\r
+        signal.addEventListener('abort', abort, { once: true });\r
+        if (signal.aborted) abort();\r
+        try {\r
+            var response = await entry.promise;\r
+            if (response && response.error) throw response.error;\r
+            return response;\r
+        } finally { signal.removeEventListener('abort', abort); }\r
+    } else if (entry) {\r
+        entry.controller.abort();\r
+        if (typeof sessionLoadingDiagnostics !== 'undefined') sessionLoadingDiagnostics.end(entry.loadingTrace, 'cancelled');\r
+    }\r
+    return fetchSessionHistoryJSON(url, signal, loadingTrace);\r
+}\r
+\r
+// Retry brief cold-server failures once. A timeout must not launch another\r
+// expensive projection, and switching sessions cancels the backoff as well.\r
+async function fetchSessionHistoryJSON(url, signal, loadingTrace) {\r
+    for (let attempt = 0; attempt < 2; attempt += 1) {\r
+        try {\r
+            const result = typeof sessionLoadingDiagnostics !== 'undefined'\r
+                ? await sessionLoadingDiagnostics.fetchJSON(loadingTrace, url, {signal:signal}, 30000, attempt + 1)\r
+                : await fetchWithTimeout(url, { signal: signal }, 30000, async function (response) {\r
+                return { response: response, data: await response.json().catch(function () { return null; }) };\r
+            });\r
+            if (attempt || [502, 503, 504].indexOf(result.response.status) < 0) return result;\r
+        } catch (error) {\r
+            if (attempt || (signal && signal.aborted) || error.name !== 'TypeError') throw error;\r
+        }\r
+        await new Promise(function (resolve, reject) {\r
+            const abort = function () {\r
+                clearTimeout(timer);\r
+                if (signal) signal.removeEventListener('abort', abort);\r
+                const error = new Error('History request cancelled');\r
+                error.name = 'AbortError';\r
+                reject(error);\r
+            };\r
+            const timer = setTimeout(function () {\r
+                if (signal) signal.removeEventListener('abort', abort);\r
+                resolve();\r
+            }, 400);\r
+            if (signal) {\r
+                if (signal.aborted) abort();\r
+                else signal.addEventListener('abort', abort, { once: true });\r
+            }\r
+        });\r
+    }\r
+}\r
+\r
+/**\r
+ * Older servers (or a window that still lands mid-turn) can return process\r
+ * rows and a final card without the user bubble that owns them. Walk backwards\r
+ * a bounded number of pages until the replay starts at a user message, then\r
+ * hydrate that merged range once. The normal aligned snapshot path returns a\r
+ * user row first and does not issue any extra request.\r
+ */\r
+async function backfillInitialTurnEvents(sessionId, events, pageMeta, signal, loadingTrace) {\r
+    var merged = Array.isArray(events) ? events : [];\r
+    if (!pageMeta || !pageMeta.has_older || !merged.length) return merged;\r
+    var startsAtUser = function () {\r
+        return !!(merged[0] && merged[0].type === 'user');\r
+    };\r
+    var guard = 0;\r
+    while (!startsAtUser() && pageMeta.has_older && guard < 4) {\r
+        var before = Number(pageMeta.range_start) || 0;\r
+        if (before <= 0) break;\r
+        var url = '/sessions/' + encodeURIComponent(sessionId)\r
+            + '/messages?limit=200&align_to_turn=1&before_index=' + encodeURIComponent(String(before))\r
+            + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));\r
+        var result;\r
+        try {\r
+            result = await fetchSessionHistoryJSON(url, signal, loadingTrace);\r
+        } catch (error) {\r
+            break;\r
+        }\r
+        var older = result && result.data;\r
+        if (!result.response || !result.response.ok || !older || !Array.isArray(older.events)) break;\r
+        if (!older.events.length || Number(older.range_end) !== before) break;\r
+        merged = older.events.concat(merged);\r
+        pageMeta.range_start = Number(older.range_start) || 0;\r
+        pageMeta.has_older = !!older.has_older;\r
+        if (Number.isFinite(Number(older.total))) pageMeta.total = Number(older.total);\r
+        guard += 1;\r
+    }\r
+    return merged;\r
+}\r
+\r
+async function loadSessionMessages(sessionId, scrollBehavior, opts) {\r
+    const loadingTrace = typeof sessionLoadingDiagnostics !== 'undefined'\r
+        ? (initialSessionHistoryPrefetch && initialSessionHistoryPrefetch.sessionId === sessionId\r
+            ? initialSessionHistoryPrefetch.loadingTrace : sessionLoadingDiagnostics.start(sessionId, 'history')) : null;\r
+    let loadingOutcome = 'cancelled', loadingError = null;\r
+    const contextTokenVersion = typeof getContextTokenVersion === 'function'\r
+        ? (initialSessionHistoryPrefetch && initialSessionHistoryPrefetch.sessionId === sessionId\r
+            ? initialSessionHistoryPrefetch.contextTokenVersion : getContextTokenVersion(sessionId)) : null;\r
+    const openSessionStartedAt = (typeof performance !== 'undefined' && performance.now)\r
+        ? performance.now()\r
+        : Date.now();\r
+    scrollBehavior = scrollBehavior || 'saved-or-bottom';\r
+    opts = opts || {};\r
+    const loadToken = ++messageLoadEpoch;\r
+    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();\r
+    const loadController = new AbortController();\r
+    sessionHistoryLoadController = loadController;\r
+    let historyHydrationStream = null;\r
+    const finishHistoryHydration = function () {\r
+        if (historyHydrationStream) {\r
+            if (loadToken === messageLoadEpoch || historyHydrationStream !== getVisibleChatStream()) {\r
+                historyHydrationStream.hidden = false;\r
+            }\r
+            historyHydrationStream = null;\r
+        }\r
+        if (loadToken !== messageLoadEpoch) return;\r
+        hideLoading();\r
+        if (typeof attachAllHumanInteractionCards === 'function') {\r
+            attachAllHumanInteractionCards(getVisibleChatStream());\r
+        }\r
+    };\r
+    sessionStore.ui.loadingMessages = true;\r
+    suppressTocDuringSessionLoad = true;\r
+    if (typeof cancelSmoothStreamFollowForHistoryLoad === 'function') {\r
+        cancelSmoothStreamFollowForHistoryLoad();\r
+    }\r
+    resetSessionHistoryPaging();\r
+    try {\r
+        let raw;\r
+        let snapshotTocTurns = null;\r
+        let historySource = 'messages';\r
+        let snapshotTiming = null;\r
+        let savedExecutions = [];\r
+        let manualHistory = false;\r
+        const canUseSnapshot = !opts.full && opts.useSnapshot !== false && beforeSessionMessageSnapshotAvailable();\r
+        if (canUseSnapshot) {\r
+            const snapshotUrl = initialSessionHistoryUrl(sessionId);\r
+            for (let migrationAttempt = 0; migrationAttempt < 120; migrationAttempt += 1) {\r
+                const result = migrationAttempt === 0\r
+                    ? await fetchInitialSessionHistorySnapshot(sessionId, snapshotUrl, loadController.signal, loadingTrace)\r
+                    : await fetchSessionHistoryJSON(snapshotUrl, loadController.signal, loadingTrace);\r
+                const snapshotResp = result.response;\r
+                const snapshot = result.data;\r
+                if (snapshot && snapshot.migration_pending) {\r
+                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+                    if (migrationAttempt === 119) throw new Error('历史迁移尚未完成，请稍后重新加载');\r
+                    const retryMs = Math.max(100, Math.min(Number(snapshot.retry_after_ms) || 250, 1000));\r
+                    await new Promise(function (resolve) { setTimeout(resolve, retryMs); });\r
+                    continue;\r
+                }\r
+                // Only an older server/runtime needs the compatibility route.\r
+                // Retrying the same projection on timeout doubles its work.\r
+                if ([404, 405, 409].indexOf(snapshotResp.status) >= 0) break;\r
+                if (!snapshotResp.ok || !snapshot || !snapshot.ok || !snapshot.messages) {\r
+                    const error = new Error('history snapshot failed: ' + snapshotResp.status);\r
+                    error.uiLoadReason = snapshotResp.ok ? 'invalid_payload' : 'http';\r
+                    throw error;\r
+                }\r
+                raw = snapshot.messages;\r
+                manualHistory = snapshot.history_mode === 'current_turn';\r
+                savedExecutions = Array.isArray(snapshot.execution_records) ? snapshot.execution_records : [];\r
+                executionRecoveryBySession.set(String(sessionId), {\r
+                    lastRuntimeSeq:Number(snapshot.last_runtime_seq || 0),\r
+                    revision:Number(snapshot.projection_revision || 0),\r
+                    projectionVersion:Number(snapshot.projection_version || 0),\r
+                    processGroupId:String(snapshot.process_group_id || ''),\r
+                });\r
+                executionRecordsBySession.set(String(sessionId), new Map());\r
+                historySource = 'history_snapshot';\r
+                snapshotTiming = snapshot.timing && typeof snapshot.timing === 'object'\r
+                    ? snapshot.timing\r
+                    : null;\r
+                if (typeof uiEventCountCache !== 'undefined' && typeof snapshot.count === 'number') {\r
+                    uiEventCountCache.updateFromServer(sessionId, snapshot.count);\r
+                }\r
+                if (Array.isArray(snapshot.user_turns)) {\r
+                    snapshotTocTurns = snapshot.user_turns;\r
+                    if (typeof setTocTurnsForSession === 'function') setTocTurnsForSession(sessionId, snapshot.user_turns);\r
+                }\r
+                if (snapshot.context_tokens && snapshot.context_tokens.estimated != null) {\r
+                    recordContextTokens(\r
+                        sessionId,\r
+                        snapshot.context_tokens.estimated,\r
+                        snapshot.context_tokens.threshold,\r
+                        snapshot.context_tokens.breakdown,\r
+                        { expectedVersion: contextTokenVersion, stale: !!(snapshot.context_tokens.stale || snapshot.context_tokens.pending_recalculation) }\r
+                    );\r
+                }\r
+                if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {\r
+                    const __snapActive = !!(snapshot.stream_active || snapshot.run_active);\r
+                    sessionStore.applyActiveRunForSession(\r
+                        sessionId,\r
+                        snapshot.active_run || (__snapActive ? {\r
+                            session_id: sessionId,\r
+                            run_active: true,\r
+                            started_at: snapshot.run_started_at || null,\r
+                            runtime_v2: snapshot.source === 'runtime_v2_snapshot',\r
+                        } : null)\r
+                    );\r
+                }\r
+                break;\r
+            }\r
+        }\r
+        if (!raw) {\r
+            manualHistory = !opts.full && !!(getSessionRunState(sessionId) || isServerStreamActive(sessionId));\r
+            let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';\r
+            if (!opts.full) {\r
+                url += '?turns=' + (manualHistory ? 1 : HISTORY_DIALOGUES_PER_PAGE)\r
+                    + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));\r
+            }\r
+            const result = await fetchSessionHistoryJSON(url, loadController.signal, loadingTrace);\r
+            if (!result.response.ok) {\r
+                const error = new Error('messages failed: ' + result.response.status);\r
+                error.uiLoadReason = 'http';\r
+                throw error;\r
+            }\r
+            raw = result.data;\r
+        }\r
+        if (!Array.isArray(raw) && !(raw && typeof raw === 'object' && Array.isArray(raw.events))) {\r
+            const error = new Error('Invalid history response');\r
+            error.uiLoadReason = 'invalid_payload';\r
+            throw error;\r
+        }\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        if (getSessionRunState(sessionId) && !opts.allowDuringRun) return;\r
+        replayingMessages = true;\r
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'hydrate');\r
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.fetch', elapsedSince(openSessionStartedAt));\r
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+        const vis = getVisibleChatStream();\r
+        if (vis) {\r
+            const loader = document.getElementById('chat-loading');\r
+            if (loader && loader.parentNode === vis && chatContainer) {\r
+                chatContainer.insertBefore(loader, vis);\r
+            }\r
+            vis.hidden = true;\r
+            historyHydrationStream = vis;\r
+            emptyChatStreamKeepingStrip(vis);\r
+        }\r
+        else {\r
+            chatContainer.innerHTML = '';\r
+            ensureVisibleChatStreamSlot();\r
+        }\r
+        markVisibleSessionStreamLoadState(sessionId, 'loading');\r
+        let events;\r
+        let pageMeta = null;\r
+        if (Array.isArray(raw)) {\r
+            events = raw;\r
+        } else if (raw && typeof raw === 'object' && Array.isArray(raw.events)) {\r
+            events = raw.events;\r
+            const pageTotal = Number(raw.total) || 0;\r
+            const pageRangeEnd = Number(raw.range_end) || 0;\r
+            pageMeta = {\r
+                total: pageTotal,\r
+                range_start: Number(raw.range_start) || 0,\r
+                range_end: pageRangeEnd,\r
+                has_older: !!raw.has_older,\r
+                has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,\r
+                manual_history: manualHistory,\r
+                event_limited_tail: !!raw.event_limited_tail,\r
+            };\r
+            uiEventCountCache.updateFromServer(sessionId, pageMeta.total);\r
+        } else {\r
+            events = [];\r
+        }\r
+        if (!opts.full && pageMeta && !pageMeta.manual_history && events.length) {\r
+            events = await backfillInitialTurnEvents(\r
+                sessionId, events, pageMeta, loadController.signal, loadingTrace\r
+            );\r
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        }\r
+        beginMessageReplay(sessionId, pageMeta || {\r
+            total: events.length,\r
+            range_start: 0,\r
+            range_end: events.length,\r
+        });\r
+        if (!opts.full && pageMeta) {\r
+            setSessionHistoryPaging({\r
+                sessionId: sessionId,\r
+                total: pageMeta.total,\r
+                range_start: pageMeta.range_start,\r
+                range_end: pageMeta.range_end,\r
+                has_older: !!pageMeta.has_older,\r
+                has_newer: !!pageMeta.has_newer,\r
+                manual_history: !!pageMeta.manual_history,\r
+                event_limited_tail: !!pageMeta.event_limited_tail,\r
+            });\r
+            ensureHistorySentinel(getVisibleChatStream());\r
+        }\r
+        if (events.length === 0) {\r
+            suppressTocDuringSessionLoad = false;\r
+            setWelcome();\r
+            finishHistoryHydration();\r
+            updateSessionTitle();\r
+            scheduleContextTokensAfterPaint(sessionId);\r
+            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
+            markVisibleSessionStreamLoadState(sessionId, 'ok');\r
+            loadingOutcome = 'success';\r
+            logOpenSessionTiming(sessionId, {\r
+                source: historySource,\r
+                events: 0,\r
+                snapshotTiming: snapshotTiming,\r
+                totalMs: elapsedSince(openSessionStartedAt),\r
+            });\r
+            return true;\r
+        }\r
+        const loadCtx = newDomContext(getVisibleChatStream());\r
+        if (typeof seedRenderContextRunGenerations === 'function') {\r
+            seedRenderContextRunGenerations(loadCtx, events, savedExecutions);\r
+        }\r
+        const hydrationStartedAt = performance.now();\r
+        loadCtx.lastUserEventIndex = -1;\r
+        const indexBase = pageMeta ? pageMeta.range_start : 0;\r
+        let replaySliceStartedAt = performance.now();\r
+        let replayYieldCount = 0, replayYieldWaitMs = 0, replayMaxSliceMs = 0;\r
+        for (let evi = 0; evi < events.length; evi += 1) {\r
+            const ev = events[evi];\r
+            if (ev && typeof ev === 'object' && ev.type) {\r
+                reduceAndRenderMessageEvent(loadCtx, ev, {\r
+                    sessionId: sessionId,\r
+                    eventIndex: indexBase + evi,\r
+                    source: 'history',\r
+                });\r
+            }\r
+            if (evi + 1 < events.length && performance.now() - replaySliceStartedAt >= 12) {\r
+                replayMaxSliceMs = Math.max(replayMaxSliceMs, performance.now() - replaySliceStartedAt);\r
+                const yieldStartedAt = performance.now();\r
+                if (typeof MyAgentUiTasks !== 'undefined' && MyAgentUiTasks.yieldToMain) await MyAgentUiTasks.yieldToMain();\r
+                else await new Promise(function (resolve) { setTimeout(resolve, 0); });\r
+                replayYieldCount += 1;\r
+                replayYieldWaitMs += performance.now() - yieldStartedAt;\r
+                if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+                replaySliceStartedAt = performance.now();\r
+            }\r
+        }\r
+        savedExecutions.forEach(function (record) {\r
+            updateExecutionRecord(sessionId, record);\r
+            if (!record.ui_committed) renderExecutionRecord(loadCtx, record, sessionId);\r
+        });\r
+        mergeAdjacentExecutionGroups(loadCtx.stream);\r
+        if (typeof uiPerformance !== 'undefined') {\r
+            uiPerformance.sample(sessionId, 'history.maxReplaySlice', Math.max(replayMaxSliceMs, performance.now() - replaySliceStartedAt));\r
+            uiPerformance.sample(sessionId, 'history.yieldWait', replayYieldWaitMs);\r
+            uiPerformance.count(sessionId, 'history.yields', replayYieldCount);\r
+            uiPerformance.sample(sessionId, 'history.hydrate', performance.now() - hydrationStartedAt);\r
+            uiPerformance.count(sessionId, 'history.events', events.length);\r
+        }\r
+        var imageLayoutStartedAt = performance.now();\r
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'images');\r
+        var historyScrollBehavior = scrollBehavior;\r
+        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'bottom' || scrollBehavior === 'entry-bottom') && typeof prepareWorkspaceImageLayout === 'function') {\r
+            var imagePreparation = prepareWorkspaceImageLayout(getVisibleChatStream(), sessionId);\r
+            if (scrollBehavior === 'smooth-bottom') await imagePreparation;\r
+            else Promise.resolve(imagePreparation).catch(function () { /* Reserved frames keep history usable. */ });\r
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        }\r
+        var historyImagesReady = await waitForHistoryImageLayout(\r
+            sessionId,\r
+            scrollBehavior,\r
+            getVisibleChatStream()\r
+        );\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        if ((scrollBehavior === 'smooth-bottom' || scrollBehavior === 'entry-bottom') && !historyImagesReady) {\r
+            historyScrollBehavior = 'bottom';\r
+        }\r
+        if (typeof uiPerformance !== 'undefined') {\r
+            uiPerformance.sample(sessionId, 'history.images', performance.now() - imageLayoutStartedAt);\r
+            if (!historyImagesReady) uiPerformance.count(sessionId, 'history.imageFallbacks');\r
+        }\r
+        finishHistoryHydration();\r
+        if (!chatStreamHasConversationContent()) {\r
+            suppressTocDuringSessionLoad = false;\r
+            setWelcome();\r
+            updateSessionTitle();\r
+            scheduleContextTokensAfterPaint(sessionId);\r
+            applyChatScrollAfterHistoryLoad(sessionId, scrollBehavior);\r
+            markVisibleSessionStreamLoadState(sessionId, 'ok');\r
+            loadingOutcome = 'success';\r
+            logOpenSessionTiming(sessionId, {\r
+                source: historySource,\r
+                events: events.length,\r
+                snapshotTiming: snapshotTiming,\r
+                totalMs: elapsedSince(openSessionStartedAt),\r
+            });\r
+            return true;\r
+        }\r
+        if (!manualHistory && !opts.full && opts.preloadOlderIfShort && pageMeta && pageMeta.has_older && events.length <= 2) {\r
+            await loadOlderHistoryChunk({ keepTocStable: true });\r
+            if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        }\r
+        if (historyLoadScrollsToBottom(sessionId, historyScrollBehavior)) {\r
+            tocScrollBottomOnNextBuild = true;\r
+        }\r
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'layout');\r
+        suppressTocDuringSessionLoad = false;\r
+        if (snapshotTocTurns) rebuildToc({ turns: snapshotTocTurns });\r
+        else if (!opts.tocAlreadyStarted) rebuildToc();\r
+        updateSessionTitle();\r
+        updateHistorySentinelVisibility();\r
+        bindExistingLogInteractions();\r
+        var historyScrollStartedAt = performance.now();\r
+        if (loadingTrace) sessionLoadingDiagnostics.phase(loadingTrace, 'scroll');\r
+        // Entry motion starts after log geometry settles and does not gate\r
+        // history readiness or stream reattachment.\r
+        if (historyScrollBehavior === 'bottom' || historyScrollBehavior === 'entry-bottom') finalizeExistingLogLayout();\r
+        applyChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);\r
+        var initialSmoothReachedBottom = await waitForChatScrollAfterHistoryLoad(sessionId, historyScrollBehavior);\r
+        if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+        if (historyScrollBehavior !== 'bottom' && historyScrollBehavior !== 'entry-bottom') finalizeExistingLogLayout();\r
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'history.scroll', performance.now() - historyScrollStartedAt);\r
+        if (historyScrollBehavior === 'smooth-bottom' && initialSmoothReachedBottom) {\r
+            setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+            requestAnimationFrame(function () {\r
+                requestAnimationFrame(function () {\r
+                    if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;\r
+                    setScrollTopImmediate(chatContainer, chatContainer.scrollHeight);\r
+                });\r
+            });\r
+        }\r
+        scheduleTocActiveUpdate();\r
+        scheduleContextTokensAfterPaint(sessionId);\r
+        markVisibleSessionStreamLoadState(sessionId, 'ok');\r
+        loadingOutcome = 'success';\r
+        logOpenSessionTiming(sessionId, {\r
+            source: historySource,\r
+            events: events.length,\r
+            snapshotTiming: snapshotTiming,\r
+            totalMs: elapsedSince(openSessionStartedAt),\r
+        });\r
+        return true;\r
+    } catch (error) {\r
+        loadingError = error;\r
+        if (loadController.signal.aborted || loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return false;\r
+        loadingOutcome = 'failed';\r
+        console.error('加载会话消息失败:', error);\r
+        document.getElementById('chat-loading')?.remove();\r
+        appendLogVisible('加载历史消息失败', 'error-log');\r
+        markVisibleSessionStreamLoadState(sessionId, 'failed');\r
+        showSessionLoadRetry(sessionId);\r
+        return false;\r
+    } finally {\r
+        if (loadingTrace) sessionLoadingDiagnostics.end(loadingTrace, loadingOutcome, loadingError);\r
+        if (sessionHistoryLoadController === loadController) sessionHistoryLoadController = null;\r
+        finishHistoryHydration();\r
+        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;\r
+        if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;\r
+        if (loadToken === messageLoadEpoch) replayingMessages = false;\r
+    }\r
+}\r
+\r
+function chatStreamHasConversationContent() {\r
+    var stream = getVisibleChatStream();\r
+    if (!stream) return false;\r
+    return !!stream.querySelector('.msg-wrap, .process-aggregate, .human-interaction-card, .human-interaction-banner');\r
+}\r
+\r
+function elapsedSince(startedAt) {\r
+    var now = (typeof performance !== 'undefined' && performance.now)\r
+        ? performance.now()\r
+        : Date.now();\r
+    return Math.max(0, Math.round(now - Number(startedAt || now)));\r
+}\r
+\r
+function logOpenSessionTiming(sessionId, data) {\r
+    data = data || {};\r
+    var timing = data.snapshotTiming && typeof data.snapshotTiming === 'object' ? data.snapshotTiming : {};\r
+    var backendTotal = Number(timing.total || 0);\r
+    var frontendTotal = Number(data.totalMs || 0);\r
+    if (typeof uiPerformance !== 'undefined') {\r
+        uiPerformance.sample(sessionId, 'history.total', frontendTotal);\r
+        if (timing.total != null && Number.isFinite(Number(timing.total))) {\r
+            uiPerformance.sample(sessionId, 'history.backend', backendTotal);\r
+        }\r
+    }\r
+    if (frontendTotal < 500 && backendTotal < 500) return;\r
+    console.info(\r
+        'open_session_timing session=%s source=%s total=%sms events=%s backend_total=%sms read_page=%sms count=%sms user_turns=%sms context_tokens=%sms',\r
+        sessionId,\r
+        data.source || 'unknown',\r
+        frontendTotal,\r
+        Number(data.events || 0),\r
+        backendTotal,\r
+        Number(timing.read_page || 0),\r
+        Number(timing.count || 0),\r
+        Number(timing.user_turns || 0),\r
+        Number(timing.context_tokens || 0)\r
+    );\r
+}\r
+\r
+function beforeSessionMessageSnapshotAvailable() {\r
+    return true;\r
+}\r
+\r
+async function switchSession(sessionId, opts) {\r
+    if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);\r
+    opts = opts || {};\r
+    if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();\r
+    // 子代理寻址：任何不是"由寻址栈驱动"的会话切换都退出寻址态\r
+    // （返回父会话时栈已先弹出，此处同样得到正确结果）。\r
+    if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {\r
+        var addressingTop = subagentAddressing.current();\r
+        if (!addressingTop || String(addressingTop.childSessionId || '') !== String(sessionId || '')) {\r
+            subagentAddressing.reset();\r
+        }\r
+    }\r
+    if (currentSessionId === sessionId && !opts.forceReload) {\r
+        const stream = typeof getVisibleChatStream === 'function' ? getVisibleChatStream() : null;\r
+        if (!(stream && stream.dataset && stream.dataset.sessionLoadFailed === '1')) {\r
+            clearSessionUnreadState(sessionId);\r
+            return true;\r
+        }\r
+        opts.forceReload = true;\r
+    }\r
+    if (typeof sessionHistoryLoadController !== 'undefined' && sessionHistoryLoadController) sessionHistoryLoadController.abort();\r
+    const switchStartedAt = performance.now();\r
+    if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);\r
+    const switchToken = ++switchSessionEpoch;\r
+    // Cached restores do not start a new message request. Invalidate the old\r
+    // request here as well, including A -> B -> A switches during hydration.\r
+    messageLoadEpoch += 1;\r
+    sessionStore.ui.loadingMessages = false;\r
+    replayingMessages = false;\r
+    cancelSmoothStreamFollowForSessionSwitch();\r
+    // 子代理会话寻址：子会话在主对话区打开时，右侧扩展面板/历史面板保持与\r
+    // 主 Agent 一致（不清空、不收起），只有普通会话切换才重置这些面板。\r
+    var addressingChildSwitch = false;\r
+    if (typeof subagentAddressing !== 'undefined' && subagentAddressing) {\r
+        var __addrTop = subagentAddressing.current();\r
+        addressingChildSwitch = !!__addrTop\r
+            && String(__addrTop.childSessionId || '') === String(sessionId || '');\r
+    }\r
+    suppressTocDuringSessionLoad = true;\r
+    if (!addressingChildSwitch) {\r
+        clearTocForSessionLoad();\r
+        clearOptionalPanelsForSessionLoad();\r
+    }\r
+    pendingRewriteTruncate = null;\r
+    hideRewriteUndoToast();\r
+    // A green-dot session represents an unread completed result. Opening it\r
+    // must land at the newest result, never at a stale reading anchor.\r
+    var sessionHadUnreadResult = !!(\r
+        (sessionStore.get(sessionId) && sessionStore.get(sessionId).unread_result)\r
+        || sessionUnreadComplete.has(sessionId)\r
+    );\r
+    // Startup prefetch is a fresh server read, including unread results. Do\r
+    // not abort it merely because local unread state was restored first.\r
+    // Cached DOM still gets discarded; explicit reloads still bypass prefetch.\r
+    var freshInitialPrefetch = !!(opts.initialLoad && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch\r
+        && initialSessionHistoryPrefetch.sessionId === sessionId);\r
+    if ((opts.forceReload || (sessionHadUnreadResult && !freshInitialPrefetch))\r
+        && typeof initialSessionHistoryPrefetch !== 'undefined' && initialSessionHistoryPrefetch) {\r
+        initialSessionHistoryPrefetch.controller.abort();\r
+        initialSessionHistoryPrefetch = null;\r
+    }\r
+    clearSessionUnreadState(sessionId);\r
+    const leaving = currentSessionId;\r
+    recentComposerQueuedFollowup = null;\r
+    saveChatScrollForSession(leaving);\r
+    stashInputDraft(leaving);\r
+    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leaving);\r
+    prepareStashLeaving(leaving);\r
+    setCurrentSessionState(sessionId);\r
+    // Hold observer attachment until the addressed session's durable history\r
+    // has been restored (or its complete in-memory stream has been reused).\r
+    sessionStore.ui.loadingMessages = true;\r
+    // The session identity and its side-panel contents must cross the switch\r
+    // boundary together. Waiting for history requests leaves the previous\r
+    // session title or plan visible for a frame (and sometimes much longer on\r
+    // a cold load).\r
+    updateSessionTitle();\r
+    if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);\r
+    localStorage.setItem('lastSessionId', sessionId);\r
+    if (typeof applyContextTokenLabelForCurrentSession === 'function') applyContextTokenLabelForCurrentSession();\r
+    restoreInputDraft(sessionId);\r
+    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(sessionId);\r
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);\r
+    if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);\r
+    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);\r
+    if (typeof refreshHumanInteractions === 'function') void refreshHumanInteractions(sessionId);\r
+    syncSessionListIndicatorClasses();\r
+    // Refresh extension panels only after the new row owns the active marker;\r
+    // otherwise the projection request can render the session we just left.\r
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+        detail: { sessionId: sessionId },\r
+    }));\r
+    setSendButtonState();\r
+    // Restore/render immediately; authoritative runtime discovery runs alongside\r
+    // history instead of adding a fixed preflight delay to every recent session.\r
+    var sessionStateRefresh = refreshSingleSessionRow(sessionId);\r
+    void sessionStateRefresh.then(function (latest) {\r
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId || !latest) return;\r
+        if (restoredFromCache && latest.unread_result) {\r
+            void switchSession(sessionId, { forceReload: true });\r
+        } else if (latest.stream_active || latest.run_active) {\r
+            maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
+        }\r
+    });\r
+    if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) {\r
+        if (typeof uiPerformance !== 'undefined') uiPerformance.count(sessionId, 'switch.cancelled');\r
+        return false;\r
+    }\r
+    if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.prepare', performance.now() - switchStartedAt);\r
+    var restoredFromCache = false;\r
+    var restoredRunningStream = false;\r
+    var sessionHasActiveServerRun = !!(\r
+        isSessionRunning(sessionId)\r
+        || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))\r
+    );\r
+    if (!opts.forceReload && (\r
+        (restoredRunningStream = restoreStreamForRunningSession(sessionId))\r
+        || (!sessionHadUnreadResult\r
+            && !sessionHasActiveServerRun\r
+            && (restoredFromCache = restoreCachedSessionStream(sessionId)))\r
+    )) {\r
+        suppressTocDuringSessionLoad = false;\r
+        sessionStore.ui.loadingMessages = false;\r
+        hideLoading();\r
+        rebuildToc({ localOnly: true });\r
+        updateSessionTitle();\r
+        scheduleContextTokensAfterPaint(sessionId);\r
+        // Only a complete, idle stream restored from the in-memory cache may\r
+        // return to its prior reading position. A live run and a green-dot\r
+        // completion always open on their newest content.\r
+        var sessionIsRunningNow = !!(\r
+            restoredRunningStream\r
+            || isSessionRunning(sessionId)\r
+            || (typeof isServerStreamActive === 'function' && isServerStreamActive(sessionId))\r
+        );\r
+        if (restoredFromCache && !sessionHadUnreadResult && !sessionIsRunningNow) {\r
+            restoreCachedSessionScrollPosition(sessionId);\r
+        } else {\r
+            streamChatNearBottom = true;\r
+            streamProcNearBottom = true;\r
+            liveAutoFollow = true;\r
+            scrollToBottom();\r
+            if (sessionIsRunningNow && typeof scrollCurrentRunningProcessToBottom === 'function') {\r
+                scrollCurrentRunningProcessToBottom(sessionId);\r
+            }\r
+        }\r
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;\r
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+            detail: { sessionId: sessionId, phase: 'loaded' },\r
+        }));\r
+        setSendButtonState();\r
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId,\r
+            restoredRunningStream ? 'switch.live' : 'switch.cached', performance.now() - switchStartedAt);\r
+        return;\r
+    }\r
+    const vs = getVisibleChatStream();\r
+    resetSessionHistoryPaging();\r
+    if (vs) emptyChatStreamKeepingStrip(vs);\r
+    else {\r
+        chatContainer.innerHTML = '';\r
+        ensureVisibleChatStreamSlot();\r
+    }\r
+    showLoading();\r
+    const tocAlreadyStarted = opts.useSnapshot === false && typeof startTocForSessionLoad === 'function';\r
+    if (tocAlreadyStarted) startTocForSessionLoad(sessionId);\r
+    return new Promise(function (resolve) {\r
+        setTimeout(async function () {\r
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }\r
+        try {\r
+            // Cold history gets a bounded entry glide; cached streams restore\r
+            // their viewport above. Animation never gates load completion.\r
+            var initialScrollMode = 'entry-bottom';\r
+            var loadedOk = await loadSessionMessages(sessionId, initialScrollMode, {\r
+                preloadOlderIfShort: isServerStreamActive(sessionId),\r
+                allowDuringRun: addressingChildSwitch || isServerStreamActive(sessionId),\r
+                tocAlreadyStarted: tocAlreadyStarted,\r
+            });\r
+            if (!loadedOk) { resolve(false); return; }\r
+        } catch (error) {\r
+            console.error('切换会话加载失败:', error);\r
+            resolve(false);\r
+            return;\r
+        } finally {\r
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {\r
+                hideLoading();\r
+                sessionStore.ui.loadingMessages = false;\r
+                suppressTocDuringSessionLoad = false;\r
+                replayingMessages = false;\r
+            }\r
+        }\r
+        if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) { resolve(false); return; }\r
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+            detail: { sessionId: sessionId, phase: 'loaded' },\r
+        }));\r
+        setSendButtonState();\r
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });\r
+        if (typeof uiPerformance !== 'undefined') uiPerformance.sample(sessionId, 'switch.loaded', performance.now() - switchStartedAt);\r
+        resolve(true);\r
+        }, 20);\r
+    });\r
+}\r
+\r
+async function createNewSession(targetWorkDir) {\r
+    if (globalThis.MyAgentContextMenu) globalThis.MyAgentContextMenu.close(false);\r
+    if (typeof targetWorkDir === 'string') {\r
+        const requestedWorkDir = targetWorkDir.trim();\r
+        rememberNewSessionWorkDir(requestedWorkDir);\r
+        if (requestedWorkDir !== newSessionWorkDir) {\r
+            newSessionWorkDir = requestedWorkDir;\r
+            newSessionWorkDirRevision += 1;\r
+            clearPendingNewSession();\r
+        }\r
+        if (typeof syncWelcomeSessionDirectory === 'function') {\r
+            syncWelcomeSessionDirectory(null, requestedWorkDir);\r
+        }\r
+    }\r
+    const leavingSessionId = currentSessionId;\r
+    if (!leavingSessionId) {\r
+        setCurrentSessionState(null);\r
+        // 已在草稿态：复用（或继续）后台预取，不重复创建会话。\r
+        void ensurePrefetchedNewSession();\r
+        localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);\r
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+        const draftStream = getVisibleChatStream();\r
+        if (!draftStream || !draftStream.querySelector('.welcome')) setWelcome();\r
+        restoreInputDraft(null);\r
+        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(null);\r
+        updateSessionTitle();\r
+        syncSessionListIndicatorClasses();\r
+        setSendButtonState();\r
+        if (messageInput) messageInput.focus();\r
+        return null;\r
+    }\r
+\r
+    cancelSmoothStreamFollowForSessionSwitch();\r
+    saveChatScrollForSession(leavingSessionId);\r
+    stashInputDraft(leavingSessionId);\r
+    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leavingSessionId);\r
+    prepareStashLeaving(leavingSessionId);\r
+    clearOptionalPanelsForSessionLoad();\r
+    clearTocForSessionLoad();\r
+    switchSessionEpoch += 1;\r
+    messageLoadEpoch += 1;\r
+    setCurrentSessionState(null);\r
+    // 点“新会话”即开始后台物化：会话目录、元数据与索引在用户写首条消息之前落好，\r
+    // 发送时直接复用，不再把真实会话文件的创建算进首条消息的等待时间。\r
+    void ensurePrefetchedNewSession();\r
+    localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);\r
+    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();\r
+    setWelcome();\r
+    restoreInputDraft(null);\r
+    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(null);\r
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(null);\r
+    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(null);\r
+    updateSessionTitle();\r
+    syncSessionListIndicatorClasses();\r
+    replayingMessages = false;\r
+    hideLoading();\r
+    setSendButtonState();\r
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+        detail: { sessionId: null, phase: 'draft' },\r
+    }));\r
+    if (messageInput) messageInput.focus();\r
+    return null;\r
+}\r
+\r
+/* ── 新建会话：可选工作目录 ────────────────────────────────────────────────\r
+   菜单两项：在当前工作目录新建 / 在新工作目录新建（复用 MyAgentPathPicker 的原生目录\r
+   选择器）。选定的目录只作用于「下一个新会话」：草稿态会立刻按新目录重开隐藏草稿。\r
+   已有会话通过会话菜单的「切换工作区」直接修改。 */\r
+\r
+/** 目录选择器不可用（无原生对话框 / 无该 API）时的手填兜底；返回绝对路径或 null。 */\r
+function promptNewSessionWorkDirFallback(initial, reason) {\r
+    if (typeof openUiModal !== 'function') return Promise.resolve(null);\r
+    const detail = String(reason || '').trim();\r
+    return openUiModal({\r
+        title: '选择工作目录',\r
+        message: detail\r
+            ? ('系统目录选择器没能返回目录（' + detail + '）。请直接填写目标工作目录的绝对路径。')\r
+            : '无法打开系统目录选择器，请直接填写目标工作目录的绝对路径。',\r
+        inputLabel: '工作目录绝对路径',\r
+        inputValue: String(initial || ''),\r
+        inputPlaceholder: 'D:\\\\work\\\\my-project',\r
+        confirmText: '选择此目录',\r
+        cancelText: '取消',\r
+    }).then(function (value) {\r
+        return typeof value === 'string' ? value : null;\r
+    });\r
+}\r
+\r
+async function pickNewSessionWorkDir(initialDir) {\r
+    const initial = initialDir || activeSessionWorkDir()\r
+        || newSessionWorkDirTarget()\r
+        || ((typeof getActiveWorkDir === 'function') ? getActiveWorkDir() : '');\r
+    const picker = (typeof window !== 'undefined' && window.MyAgentPathPicker)\r
+        ? window.MyAgentPathPicker\r
+        : null;\r
+    let failure = '';\r
+    if (picker && typeof picker.pickPath === 'function') {\r
+        try {\r
+            const picked = await picker.pickPath('directory', initial, false);\r
+            if (picked) return String(picked);\r
+            return null; // 用户取消\r
+        } catch (error) {\r
+            failure = String((error && error.message) || error || '');\r
+            console.warn('目录选择器不可用，改为手填路径:', error);\r
+        }\r
+    }\r
+    return promptNewSessionWorkDirFallback(initial, failure);\r
+}\r
+\r
+/** 路径末级名字：\`D:\\work\\proj\` → \`proj\`（目录名优先于完整路径）。 */\r
+function workDirDisplayName(path) {\r
+    const parts = String(path || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').split('/').filter(Boolean);\r
+    return parts.length ? parts[parts.length - 1] : String(path || '');\r
+}\r
+\r
+/** 路径比较用的规范形式（Windows 不区分大小写，去掉结尾分隔符）。 */\r
+function normalizeWorkDirIdentity(path) {\r
+    return String(path || '').replace(/\\\\/g, '/').replace(/\\/+$/, '').toLowerCase();\r
+}\r
+\r
+/**\r
+ * 「已经创建过的工作目录」：默认工作目录 + 各会话自己的工作目录。\r
+ * 默认目录固定排第一（可以随时切回去），其余按最近活动倒序。\r
+ */\r
+function listCreatedSessionWorkDirs() {\r
+    const defaultPath = String(\r
+        ((typeof window !== 'undefined' && window.__WORK_DIR__) || '')\r
+    ).trim();\r
+    const defaultEntry = {\r
+        key: '__default__',\r
+        label: '默认工作目录',\r
+        path: '',\r
+        absolutePath: defaultPath,\r
+        isDefault: true,\r
+        count: 0,\r
+        activityMs: 0,\r
+    };\r
+    const byKey = Object.create(null);\r
+    byKey[defaultEntry.key] = defaultEntry;\r
+    const out = [defaultEntry];\r
+    let sessions = [];\r
+    try { sessions = sessionStore.list(); } catch (error) { sessions = []; }\r
+    sessions.forEach(function (session) {\r
+        if (!session) return;\r
+        const path = String(session.work_dir || '').trim();\r
+        const isDefault = !!session.work_dir_is_default || !path;\r
+        const key = isDefault\r
+            ? '__default__'\r
+            : ('path:' + normalizeWorkDirIdentity(path));\r
+        let entry = byKey[key];\r
+        if (!entry) {\r
+            entry = {\r
+                key: key,\r
+                label: String(session.work_dir_label || '').trim() || workDirDisplayName(path),\r
+                path: path,\r
+                absolutePath: path,\r
+                isDefault: false,\r
+                count: 0,\r
+                activityMs: 0,\r
+            };\r
+            byKey[key] = entry;\r
+            out.push(entry);\r
+        }\r
+        entry.count += 1;\r
+        if (isDefault && !entry.absolutePath) entry.absolutePath = path;\r
+        const stamp = Date.parse(session.last_activity_at || session.updated_at || '');\r
+        if (Number.isFinite(stamp) && stamp > entry.activityMs) entry.activityMs = stamp;\r
+    });\r
+    const rest = out.slice(1).sort(function (a, b) {\r
+        if (b.activityMs !== a.activityMs) return b.activityMs - a.activityMs;\r
+        return 0;\r
+    });\r
+    return [out[0]].concat(rest);\r
+}\r
+\r
+/** 重新填充欢迎页「选择」下拉：当前生效的目录打勾。 */\r
+function renderWelcomeSessionDirectoryMenu(menu) {\r
+    if (!menu) return;\r
+    const selected = String(newSessionWorkDirTarget() || '');\r
+    const selectedId = normalizeWorkDirIdentity(selected);\r
+    menu.innerHTML = '';\r
+    listCreatedSessionWorkDirs().forEach(function (entry) {\r
+        const active = entry.isDefault\r
+            ? (!selectedId\r
+                || (!!entry.absolutePath\r
+                    && selectedId === normalizeWorkDirIdentity(entry.absolutePath)))\r
+            : (!!selectedId && selectedId === normalizeWorkDirIdentity(entry.path));\r
+        const item = document.createElement('button');\r
+        item.type = 'button';\r
+        item.className = 'welcome-session-dir-item' + (active ? ' is-active' : '');\r
+        item.setAttribute('role', 'menuitemradio');\r
+        item.setAttribute('aria-checked', active ? 'true' : 'false');\r
+        // 空串 = 服务端全局默认目录。\r
+        item.setAttribute('data-welcome-session-workdir', entry.path || '');\r
+        const head = document.createElement('span');\r
+        head.className = 'welcome-session-dir-item-head';\r
+        const name = document.createElement('span');\r
+        name.className = 'welcome-session-dir-item-name';\r
+        name.textContent = entry.label;\r
+        const check = document.createElement('span');\r
+        check.className = 'welcome-session-dir-item-check';\r
+        check.innerHTML = SIDEBAR_ICON_SVG.check;\r
+        head.appendChild(name);\r
+        head.appendChild(check);\r
+        item.appendChild(head);\r
+        const pathNode = document.createElement('span');\r
+        pathNode.className = 'welcome-session-dir-item-path';\r
+        pathNode.textContent = entry.absolutePath || '';\r
+        pathNode.title = entry.absolutePath || '';\r
+        item.appendChild(pathNode);\r
+        menu.appendChild(item);\r
+    });\r
+    if (typeof translateUiNode === 'function') translateUiNode(menu);\r
+}\r
+\r
+/** 欢迎页卡片每次重建都要重新接线（按元素去重，不会重复绑定）。 */\r
+function bindWelcomeSessionDirectoryCard(card) {\r
+    if (!card) return;\r
+    const popup = card.querySelector('[data-welcome-session-directory-menu-wrap]');\r
+    if (!popup || popup.dataset.popupBound === '1') return;\r
+    bindSidebarPopup(popup);\r
+    const trigger = popup.querySelector('[data-popup-trigger]');\r
+    const menu = popup.querySelector('[data-welcome-session-directory-menu]');\r
+    if (trigger) {\r
+        // 展开前按当前会话列表重算条目（目录可能刚被新建 / 删除 / 改名）。\r
+        trigger.addEventListener('click', function () {\r
+            renderWelcomeSessionDirectoryMenu(menu);\r
+        });\r
+    }\r
+}\r
+\r
+(function bindWelcomeSessionDirectoryActionsOnce() {\r
+    if (typeof window === 'undefined' || window.__myAgentWelcomeSessionDirectoryBound) return;\r
+    window.__myAgentWelcomeSessionDirectoryBound = true;\r
+\r
+    // 「选择」下拉里挑一个已创建的工作目录。\r
+    document.addEventListener('click', async function (event) {\r
+        const item = event.target && event.target.closest\r
+            ? event.target.closest('[data-welcome-session-workdir]')\r
+            : null;\r
+        if (!item || currentSessionId) return;\r
+        event.preventDefault();\r
+        event.stopPropagation();\r
+        const popup = item.closest('.sidebar-popup');\r
+        if (popup) setSidebarPopupOpen(popup, false);\r
+        const workDir = String(item.getAttribute('data-welcome-session-workdir') || '').trim();\r
+        try {\r
+            await applyNewSessionWorkDir(workDir);\r
+        } catch (error) {\r
+            console.error('切换会话工作目录失败:', error);\r
+        }\r
+    });\r
+\r
+    // 文件夹图标：系统「选择文件夹」对话框（原「选择 >」的行为）。\r
+    document.addEventListener('click', async function (event) {\r
+        const target = event.target && event.target.closest\r
+            ? event.target.closest('[data-welcome-session-directory-browse]')\r
+            : null;\r
+        if (!target || target.disabled || currentSessionId) return;\r
+        event.preventDefault();\r
+        event.stopPropagation();\r
+        target.disabled = true;\r
+        let selectedWorkDir = '';\r
+        try {\r
+            const picked = await pickNewSessionWorkDir();\r
+            const workDir = String(picked || '').trim();\r
+            if (!workDir || currentSessionId) return;\r
+            selectedWorkDir = workDir;\r
+            // Update the existing draft in place. Keep any text already typed in\r
+            // the composer; only its hidden server draft is recreated for this path.\r
+            await applyNewSessionWorkDir(workDir);\r
+        } catch (error) {\r
+            console.error('选择会话目录失败:', error);\r
+        } finally {\r
+            target.disabled = false;\r
+            if (typeof syncWelcomeSessionDirectory === 'function') {\r
+                syncWelcomeSessionDirectory(null, selectedWorkDir || undefined);\r
+            }\r
+        }\r
+    });\r
+})();\r
+\r
+/** 记下目标目录；草稿态下按新目录预取隐藏草稿，保持创建请求的版本隔离。 */\r
+function applyNewSessionWorkDir(workDir) {\r
+    const next = String(workDir || '').trim();\r
+    rememberNewSessionWorkDir(next);\r
+    if (next === newSessionWorkDir) return Promise.resolve(null);\r
+    newSessionWorkDir = next;\r
+    newSessionWorkDirRevision += 1;\r
+    const targetRevision = newSessionWorkDirRevision;\r
+    if (typeof syncWelcomeSessionDirectory === 'function') syncWelcomeSessionDirectory(null, next);\r
+    clearPendingNewSession();\r
+    const inFlight = prefetchNewSessionPromise\r
+        ? Promise.resolve(prefetchNewSessionPromise).catch(function () { return null; })\r
+        : Promise.resolve(null);\r
+    return inFlight.then(function () {\r
+        // The old request may have finished after clearPendingNewSession() and\r
+        // published a draft for its previous directory. ensurePrefetchedNewSession()\r
+        // checks the captured target before reusing or creating a draft.\r
+        if (currentSessionId) return null;\r
+        return ensurePrefetchedNewSession();\r
+    }).then(function (pending) {\r
+        if (targetRevision === newSessionWorkDirRevision\r
+                && next === newSessionWorkDirTarget()\r
+                && typeof syncWelcomeSessionDirectory === 'function') {\r
+            syncWelcomeSessionDirectory(null, next);\r
+        }\r
+        return pending;\r
+    });\r
+}\r
+\r
+/** 「在新工作目录新建会话」：选目录 → 记下 → 进入新会话草稿态。 */\r
+async function startNewSessionInFolder() {\r
+    const picked = await pickNewSessionWorkDir();\r
+    const dir = String(picked || '').trim();\r
+    if (!dir) return null;\r
+    return startNewSessionInDir(dir);\r
+}\r
+\r
+/** 在指定工作目录（空=服务端默认目录）里新建会话；各入口共用这一条链路。 */\r
+async function startNewSessionInDir(dir) {\r
+    const next = String(dir || '').trim();\r
+    await applyNewSessionWorkDir(next);\r
+    return createNewSession(next);\r
+}\r
+\r
+/** 当前会话（= 当前分组）的工作目录；没有会话（草稿态）时返回空串。 */\r
+function activeSessionWorkDir() {\r
+    const active = currentSessionId ? sessionStore.get(currentSessionId) : null;\r
+    return active ? String(active.effective_work_dir || active.subagent_work_dir || active.git_worktree_path || active.work_dir || '').trim() : '';\r
+}\r
+\r
+/** 主按钮与菜单「当前工作目录」：在当前会话的目录里新建（DSH 的当前工作区语义）。 */\r
+async function startNewSessionInCurrentDir() {\r
+    // Return to the unfinished draft, including its selected folder, after\r
+    // visiting a real session. Explicit folder/default menu choices still win.\r
+    if (!currentSessionId || pendingNewSession || prefetchNewSessionPromise\r
+            || readStoredPendingNewSession() || readStoredNewSessionWorkDir() !== null) {\r
+        return createNewSession();\r
+    }\r
+    return startNewSessionInDir(activeSessionWorkDir());\r
+}\r
+\r
+/** 菜单「在默认工作目录新建对话」：回到服务端全局默认目录，创建逻辑与主按钮一致。 */\r
+async function startNewSessionInDefaultDir() {\r
+    return startNewSessionInDir('');\r
+}\r
+\r
+// 刷新后重新进入草稿态时，草稿自身的工作目录来自服务端；把待用目录恢复成它，\r
+// 避免下一次 ensurePrefetchedNewSession 把仍然有效的草稿当成「目录不符」丢弃。\r
+(function restorePendingNewSessionWorkDirOnce() {\r
+    const selected = readStoredNewSessionWorkDir();\r
+    if (selected !== null) {\r
+        newSessionWorkDir = selected;\r
+        return;\r
+    }\r
+    const stored = readStoredPendingNewSession();\r
+    if (stored && typeof stored.work_dir === 'string' && stored.work_dir) {\r
+        newSessionWorkDir = stored.work_dir;\r
+    }\r
+})();\r
+\r
+/** 「新会话」右侧 ▾：当前目录 / 默认目录 / 新目录三条入口（开关与键盘走通用弹出层）。 */\r
+(function bindNewSessionMenuOnce() {\r
+    const menu = document.getElementById('new-session-menu');\r
+    const popup = document.getElementById('new-session-options');\r
+    if (!menu || !popup || window.__myAgentNewSessionMenuBound) return;\r
+    window.__myAgentNewSessionMenuBound = true;\r
+    bindSidebarPopup(popup);\r
+    menu.querySelectorAll('[data-new-session-scope]').forEach(function (item) {\r
+        item.addEventListener('click', function (e) {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            setSidebarPopupOpen(popup, false);\r
+            const scope = String(item.getAttribute('data-new-session-scope') || '');\r
+            let task;\r
+            if (scope === 'new') task = startNewSessionInFolder();\r
+            else if (scope === 'default') task = startNewSessionInDefaultDir();\r
+            else task = startNewSessionInDir(activeSessionWorkDir() || newSessionWorkDirTarget());\r
+            Promise.resolve(task).catch(function (error) {\r
+                console.error('新建会话失败:', error);\r
+            });\r
+        });\r
+    });\r
+})();\r
+\r
+/* ── 工作目录分组头的 hover 动作：在该目录新建会话 / 目录更多操作 ────────── */\r
+\r
+/** 复制工作目录绝对路径到剪贴板（失败时回退到临时 textarea）。 */\r
+function copyWorkDirPath(path) {\r
+    var text = String(path || '');\r
+    if (!text) return;\r
+    var done = function () {\r
+        if (typeof showCopyFeedback === 'function') showCopyFeedback();\r
+    };\r
+    var fallback = function () {\r
+        try {\r
+            var ta = document.createElement('textarea');\r
+            ta.value = text;\r
+            ta.setAttribute('readonly', '1');\r
+            ta.style.position = 'fixed';\r
+            ta.style.left = '-9999px';\r
+            document.body.appendChild(ta);\r
+            ta.select();\r
+            document.execCommand('copy');\r
+            ta.remove();\r
+            done();\r
+        } catch (e) {\r
+            console.error('复制工作目录路径失败:', e);\r
+        }\r
+    };\r
+    if (navigator.clipboard && navigator.clipboard.writeText) {\r
+        navigator.clipboard.writeText(text).then(done).catch(fallback);\r
+    } else {\r
+        fallback();\r
+    }\r
+}\r
+\r
+/** 打开分组目录时不借用当前会话的相对路径上下文。 */\r
+function revealWorkDirInExplorer(path) {\r
+    var rel = String(path || '');\r
+    if (!rel) return;\r
+    openWorkspaceLocalPath(rel, true, { context: {} })\r
+        .then(function (data) {\r
+            if (typeof showOpenFileFeedback !== 'function') return;\r
+            if (data && data.ok) showOpenFileFeedback('已请求打开');\r
+            else showOpenFileFeedback((data && data.error) ? ('无法打开：' + data.error) : '无法打开文件');\r
+        })\r
+        .catch(function () {\r
+            if (typeof showOpenFileFeedback === 'function') showOpenFileFeedback('无法连接服务');\r
+        });\r
+}\r
+\r
+/** 工作目录重命名：只改侧栏显示名（localStorage 记忆，空名恢复为目录名），不动磁盘。 */\r
+async function renameWorkDirGroup(group, workDirPath) {\r
+    var current = String((group && group.title) || '');\r
+    var requested = await openUiModal({\r
+        title: '重命名工作目录',\r
+        subtitle: '只改侧栏显示的名称（留空恢复为目录名），不影响磁盘目录',\r
+        message: String(workDirPath || '') ? ('目录：' + String(workDirPath)) : '',\r
+        inputLabel: '显示名称',\r
+        inputValue: current,\r
+        inputMaxLength: 60,\r
+        inputRequired: false,\r
+        confirmText: '保存名称',\r
+        cancelText: '取消',\r
+    });\r
+    if (typeof requested !== 'string') return;\r
+    var next = requested.trim().slice(0, 60);\r
+    if (typeof setWorkDirCustomLabel === 'function') setWorkDirCustomLabel(group.key, next);\r
+    renderSessionListIfChanged(true);\r
+}\r
+\r
+/** 工作目录分组的拖拽排序（Pointer 事件；移动超过阈值才算拖拽，原地点击仍是折叠/展开）。\r
+ *  顺序写入 localStorage（getWorkDirOrder/setWorkDirOrder），下次渲染按新顺序排布。 */\r
+function bindSessionGroupDrag(wrap, headRow, group) {\r
+    if (!wrap || !headRow || !group || !group.isWorkDirGroup) return;\r
+    if (headRow.dataset.groupDragBound === '1') return;\r
+    headRow.dataset.groupDragBound = '1';\r
+    var drag = null;\r
+    var suppressClickUntil = 0;\r
+    var DRAG_THRESHOLD_PX = 5;\r
+\r
+    // 拖拽结束后抑制紧随其后的 click（否则会顺带触发折叠开关）。\r
+    headRow.addEventListener('click', function (e) {\r
+        if (Date.now() < suppressClickUntil) {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+        }\r
+    }, true);\r
+\r
+    headRow.addEventListener('pointerdown', function (e) {\r
+        if (e.button !== 0) return;\r
+        var t = e.target;\r
+        if (t && t.closest && t.closest('.session-group-actions')) return;   // 动作区自己处理\r
+        drag = { pointerId: e.pointerId, startY: e.clientY, started: false, target: null, half: null };\r
+    });\r
+\r
+    function clearDropIndicators() {\r
+        document.querySelectorAll('.session-group.is-drop-before, .session-group.is-drop-after')\r
+            .forEach(function (el) { el.classList.remove('is-drop-before', 'is-drop-after'); });\r
+    }\r
+\r
+    function updateDropIndicator(clientY) {\r
+        clearDropIndicators();\r
+        drag.target = null;\r
+        drag.half = null;\r
+        var groups = document.querySelectorAll('.session-group');\r
+        for (var i = 0; i < groups.length; i += 1) {\r
+            var el = groups[i];\r
+            if (el === wrap) continue;\r
+            var r = el.getBoundingClientRect();\r
+            if (clientY < r.top || clientY > r.bottom) continue;\r
+            var half = clientY < (r.top + r.bottom) / 2 ? 'before' : 'after';\r
+            drag.target = el;\r
+            drag.half = half;\r
+            el.classList.add(half === 'before' ? 'is-drop-before' : 'is-drop-after');\r
+            return;\r
+        }\r
+    }\r
+\r
+    headRow.addEventListener('pointermove', function (e) {\r
+        if (!drag || e.pointerId !== drag.pointerId) return;\r
+        if (!drag.started) {\r
+            if (Math.abs(e.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;\r
+            drag.started = true;\r
+            wrap.classList.add('is-dragging');\r
+            document.body.classList.add('session-group-drag-active');\r
+            try { headRow.setPointerCapture(drag.pointerId); } catch (err) { /* ignore */ }\r
+        }\r
+        e.preventDefault();\r
+        updateDropIndicator(e.clientY);\r
+    });\r
+\r
+    function finishDrag(e) {\r
+        if (!drag || e.pointerId !== drag.pointerId) return;\r
+        var started = drag.started;\r
+        var target = drag.target;\r
+        var half = drag.half;\r
+        drag = null;\r
+        wrap.classList.remove('is-dragging');\r
+        document.body.classList.remove('session-group-drag-active');\r
+        clearDropIndicators();\r
+        if (!started) return;\r
+        suppressClickUntil = Date.now() + 400;\r
+        if (!target) return;\r
+        // 以 DOM 顺序为基准重排（搜索态下只含可见组；未渲染的组按原相对顺序保留在后面）。\r
+        var domKeys = [];\r
+        document.querySelectorAll('.session-group').forEach(function (el) {\r
+            var key = el.dataset.groupKey;\r
+            if (key && key.indexOf('workdir:') === 0) {\r
+                domKeys.push(key);\r
+            }\r
+        });\r
+        var fromKey = wrap.dataset.groupKey;\r
+        var targetKey = target.dataset.groupKey;\r
+        var prevOrder = (typeof getWorkDirOrder === 'function') ? getWorkDirOrder() : [];\r
+        prevOrder.forEach(function (key) {\r
+            if (domKeys.indexOf(key) < 0) domKeys.push(key);\r
+        });\r
+        var fromIdx = domKeys.indexOf(fromKey);\r
+        if (fromIdx < 0) return;\r
+        domKeys.splice(fromIdx, 1);\r
+        var at = domKeys.indexOf(targetKey);\r
+        if (at < 0) return;\r
+        domKeys.splice(half === 'before' ? at : at + 1, 0, fromKey);\r
+        if (typeof setWorkDirOrder === 'function') setWorkDirOrder(domKeys);\r
+        renderSessionListIfChanged(false);\r
+    }\r
+    headRow.addEventListener('pointerup', finishDrag);\r
+    headRow.addEventListener('pointercancel', function (e) {\r
+        if (!drag || e.pointerId !== drag.pointerId) return;\r
+        drag = null;\r
+        wrap.classList.remove('is-dragging');\r
+        document.body.classList.remove('session-group-drag-active');\r
+        clearDropIndicators();\r
+    });\r
+}\r
+\r
+/** 所有分组提供会话管理；工作目录额外提供新建与路径操作。 */\r
+function buildSessionGroupActions(group, workDirPath) {\r
+    const actions = document.createElement('div');\r
+    actions.className = 'session-group-actions';\r
+    // 标题可能是自定义名（默认组也可改名），动作文案统一用当前显示名。\r
+    const name = String((group && group.title) || '');\r
+    const newLabel = '在“' + name + '”中新建会话';\r
+    const moreLabel = '“' + name + '”的更多操作';\r
+\r
+    const newBtn = document.createElement('button');\r
+    newBtn.type = 'button';\r
+    newBtn.className = 'session-row-icon session-group-icon';\r
+    newBtn.setAttribute('aria-label', newLabel);\r
+    newBtn.setAttribute('data-ui-tip', newLabel);\r
+    newBtn.innerHTML = SIDEBAR_ICON_SVG.plus;\r
+    bindUiHoverTip(newBtn);\r
+    newBtn.addEventListener('click', function (e) {\r
+        e.preventDefault();\r
+        e.stopPropagation();\r
+        Promise.resolve(startNewSessionInDir(workDirPath)).catch(function (err) {\r
+            console.error('在该工作目录中新建会话失败:', err);\r
+        });\r
+    });\r
+\r
+    const popup = document.createElement('div');\r
+    popup.className = 'sidebar-popup session-group-popup';\r
+    popup.setAttribute('data-sidebar-popup', '1');\r
+    popup.innerHTML = '<button type="button" class="session-row-icon session-group-icon" data-popup-trigger'\r
+        + ' aria-haspopup="menu" aria-expanded="false"'\r
+        + ' aria-label="' + escapeHtml(moreLabel) + '" data-ui-tip="' + escapeHtml(moreLabel) + '">'\r
+        + SIDEBAR_ICON_SVG.dots + '</button>'\r
+        + '<div class="sidebar-popup-menu session-group-menu" role="menu" aria-label="'\r
+        + escapeHtml(moreLabel) + '">'\r
+        + '<button type="button" role="menuitem" data-group-action="manage">会话管理</button>'\r
+        + (group.isWorkDirGroup ? '<div class="sidebar-popup-separator" role="separator"></div>'\r
+            + '<button type="button" role="menuitem" data-group-action="rename">重命名</button>'\r
+            + (workDirPath ? '<button type="button" role="menuitem" data-group-action="copy">复制路径</button>'\r
+                + '<button type="button" role="menuitem" data-group-action="reveal">在资源管理器打开</button>' : '') : '')\r
+        + '</div>';\r
+    bindSidebarPopup(popup);\r
+    popup.addEventListener('click', function (e) {\r
+        const item = (e.target && e.target.closest) ? e.target.closest('[data-group-action]') : null;\r
+        if (!item) return;\r
+        e.preventDefault();\r
+        e.stopPropagation();\r
+        setSidebarPopupOpen(popup, false);\r
+        const action = item.getAttribute('data-group-action');\r
+        if (action === 'manage') openSessionGroupManager(group, popup.querySelector('[data-popup-trigger]'));\r
+        else if (action === 'copy') copyWorkDirPath(workDirPath);\r
+        else if (action === 'reveal') revealWorkDirInExplorer(workDirPath);\r
+        else if (action === 'rename') renameWorkDirGroup(group, workDirPath);\r
+    });\r
+\r
+    if (group.isWorkDirGroup && workDirPath) actions.appendChild(newBtn);\r
+    actions.appendChild(popup);\r
+    return actions;\r
+}\r
+\r
+/* ── 侧栏静态头：会话 / 工作区 + 搜索 + 视图选项 + 在新文件夹中新建 ──────── */\r
+\r
+function buildSessionViewMenuMarkup() {\r
+    function row(attr, value, text) {\r
+        return '<button type="button" role="menuitemradio" aria-checked="false" '\r
+            + attr + '="' + value + '">'\r
+            + '<span class="session-view-menu-text">' + text + '</span>'\r
+            + '<span class="session-view-menu-check" aria-hidden="true">' + SIDEBAR_ICON_SVG.check + '</span>'\r
+            + '</button>';\r
+    }\r
+    return '<button type="button" role="menuitem" data-session-advanced-search>高级搜索</button>'\r
+        + '<div class="sidebar-popup-separator" role="separator"></div>'\r
+        + '<div class="sidebar-popup-label" role="presentation">分组方式</div>'\r
+        + row('data-session-group-by', 'time', '按时间')\r
+        + row('data-session-group-by', 'workdir', '按工作目录')\r
+        + '<div class="sidebar-popup-separator" role="separator"></div>'\r
+        + '<div class="sidebar-popup-label" role="presentation">列表模式</div>'\r
+        + row('data-session-list-mode-option', 'compact', '紧凑')\r
+        + row('data-session-list-mode-option', 'detailed', '详细')\r
+        + '<div class="sidebar-popup-separator" role="separator"></div>'\r
+        + '<div class="sidebar-popup-label" role="presentation">筛选会话</div>'\r
+        + row('data-session-archive-filter', 'hide', '隐藏已归档')\r
+        + row('data-session-archive-filter', 'show', '全部')\r
+        + row('data-session-archive-filter', 'only', '仅已归档');\r
+}\r
+\r
+/** 让视图选项菜单的对勾与当前状态（分组方式 / 列表模式 / 归档筛选）一致。 */\r
+function syncSessionViewMenu() {\r
+    const menu = document.getElementById('session-view-menu');\r
+    if (!menu) return;\r
+    const groupBy = (typeof getSessionGroupBy === 'function') ? getSessionGroupBy() : 'time';\r
+    const listMode = (typeof getStoredSessionListMode === 'function') ? getStoredSessionListMode() : 'detailed';\r
+    const archiveFilter = (typeof getSessionArchiveFilter === 'function') ? getSessionArchiveFilter() : 'show';\r
+    const mark = function (selector, attr, value) {\r
+        menu.querySelectorAll(selector).forEach(function (btn) {\r
+            const on = String(btn.getAttribute(attr)) === String(value);\r
+            btn.classList.toggle('is-active', on);\r
+            if (btn.getAttribute('role') === 'menuitemradio') {\r
+                btn.setAttribute('aria-checked', on ? 'true' : 'false');\r
+            }\r
+        });\r
+    };\r
+    mark('[data-session-group-by]', 'data-session-group-by', groupBy);\r
+    mark('[data-session-list-mode-option]', 'data-session-list-mode-option', listMode);\r
+    mark('[data-session-archive-filter]', 'data-session-archive-filter', archiveFilter);\r
+}\r
+\r
+/** 切换归档筛选（show=显示归档区段，历史行为；hide=不渲染；only=只看归档）。 */\r
+function applySessionArchiveFilter(filter) {\r
+    const next = (typeof setSessionArchiveFilter === 'function') ? setSessionArchiveFilter(filter) : filter;\r
+    syncSessionViewMenu();\r
+    if (next === 'only' && !sessionStore.archivedLoaded) {\r
+        void loadArchivedSessions({ background: true, forceRender: true });\r
+    }\r
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);\r
+}\r
+\r
+function setSessionSearchExpanded(expanded, opts) {\r
+    const head = document.getElementById('session-list-head');\r
+    const box = document.getElementById('session-search-box');\r
+    const btn = document.getElementById('session-search-btn');\r
+    const input = document.getElementById('session-search-input');\r
+    if (!head || !box || !btn) return;\r
+    const next = !!expanded;\r
+    head.classList.toggle('is-searching', next);\r
+    box.hidden = !next;\r
+    btn.setAttribute('aria-expanded', next ? 'true' : 'false');\r
+    if (next && typeof hideUiHoverTipsNow === 'function') hideUiHoverTipsNow();\r
+    if (next) {\r
+        if (input) {\r
+            input.focus();\r
+            if (opts && opts.selectInput) input.select();\r
+        }\r
+    } else if (input) {\r
+        input.value = '';\r
+        if (getSessionListSearchQuery()) applySessionListSearch('');\r
+    }\r
+}\r
+\r
+function applySessionListSearch(value) {\r
+    setSessionListSearchQuery(value);\r
+    if (typeof renderSessionListIfChanged === 'function') renderSessionListIfChanged(true);\r
+}\r
+\r
+/** 收起/展开「会话（工作区）」区段；标题在侧栏静态头里，被折叠的区段体仍在列表内。 */\r
+function toggleSessionListHeadCollapse() {\r
+    const next = !sessionSectionExpanded('normal');\r
+    persistSessionSectionExpanded('normal', next);\r
+    const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;\r
+    if (sec) sec.classList.toggle('is-collapsed', !next);\r
+    syncSessionListHead(null, {});\r
+}\r
+\r
+/** 每次列表重绘后同步静态头：标题（会话 / 工作区）、计数、折叠态、视图选项对勾。 */\r
+function syncSessionListHead(sections, opts) {\r
+    const head = document.getElementById('session-list-head');\r
+    if (!head) return;\r
+    const options = opts || {};\r
+    const labelEl = document.getElementById('session-head-label');\r
+    if (labelEl) {\r
+        const workDirGrouping = (typeof getSessionGroupBy === 'function') && getSessionGroupBy() === 'workdir';\r
+        labelEl.textContent = workDirGrouping ? '工作区' : '会话';\r
+    }\r
+    const countEl = document.getElementById('session-head-count');\r
+    if (countEl && sections) countEl.textContent = String((sections.normal || []).length);\r
+    if (options.searching !== undefined) {\r
+        const head2 = document.getElementById('session-list-head');\r
+        if (head2) head2.classList.toggle('is-filtering', !!options.searching);\r
+    }\r
+    const expanded = sessionSectionExpanded('normal');\r
+    const toggle = document.getElementById('session-head-toggle');\r
+    if (toggle) {\r
+        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');\r
+        toggle.classList.toggle('is-collapsed', !expanded);\r
+    }\r
+    const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;\r
+    if (sec) sec.classList.toggle('is-collapsed', !expanded);\r
+    syncSessionViewMenu();\r
+}\r
+\r
+/* 索引重建完成后直接重载；新页面会读取权威列表，无需在旧页面重复构建。 */\r
+var sessionRefreshInFlight = false;\r
+\r
+/**\r
+ * 侧栏刷新：按会话目录重建内存索引和 sessions.json，再重载页面读取列表。\r
+ * 桌面端也通过此入口完成整页刷新；重建失败时保留当前页面并允许重试。\r
+ */\r
+async function refreshSessionListAndPage(btn) {\r
+    if (sessionRefreshInFlight) return;\r
+    sessionRefreshInFlight = true;\r
+    if (btn) {\r
+        btn.disabled = true;\r
+        btn.classList.add('is-busy');\r
+        btn.setAttribute('aria-busy', 'true');\r
+    }\r
+    try {\r
+        var repair = await fetchWithTimeout('/sessions/index/repair', {\r
+            method: 'POST',\r
+            credentials: 'same-origin',\r
+        }, 120000, async function (response) {\r
+            return { response: response, data: await response.json().catch(function () { return {}; }) };\r
+        });\r
+        var response = repair.response;\r
+        var result = repair.data;\r
+        if (!response.ok || result.ok !== true) {\r
+            throw new Error(result.error || '重建会话索引失败（HTTP ' + response.status + '）');\r
+        }\r
+        window.location.reload();\r
+    } catch (err) {\r
+        console.error('重建会话索引失败:', err);\r
+        showUiAlert({\r
+            title: '刷新失败',\r
+            message: err && err.name === 'AbortError' ? '重建会话索引超时，请稍后重试。'\r
+                : String((err && err.message) || err || '无法重建会话索引'),\r
+            variant: 'error',\r
+        });\r
+    } finally {\r
+        sessionRefreshInFlight = false;\r
+        if (btn) {\r
+            btn.disabled = false;\r
+            btn.classList.remove('is-busy');\r
+            btn.removeAttribute('aria-busy');\r
+        }\r
+    }\r
+}\r
+\r
+/* ── 导入会话（列表头「文件夹+」按钮）───────────────────────────────────────\r
+   还原「导出会话」产生的 zip（会话目录名 = 原会话 id，内含 events.jsonl 等），\r
+   四条途径：压缩包（浏览）/ 文件夹（浏览）/ 手输或粘贴路径 / 直接拖进面板或按钮。\r
+   落点：POST /api/sessions/import（本机路径）· /api/sessions/import-upload（浏览器拖入）。\r
+   后端沿用原会话 id；仅当 id 已被占用时换新 id 并改写会话自有引用（标记为副本）。 */\r
+var SESSION_IMPORT_ARCHIVE_EXT = /\\.(zip|tar|tar\\.gz|tgz|tar\\.bz2|tbz2|tar\\.xz|txz)$/i;\r
+var SESSION_IMPORT_MAX_FILES = 5000;\r
+var SESSION_IMPORT_MAX_BYTES = 200 * 1024 * 1024;\r
+\r
+function buildSessionImportMarkup() {\r
+    return ''\r
+        + '<div class="session-import-head">'\r
+        +   '<span class="session-import-title">导入会话</span>'\r
+        +   '<span class="session-import-hint">还原「导出会话」下载的 zip，或整个会话文件夹</span>'\r
+        + '</div>'\r
+        + '<div class="session-import-kinds" role="tablist" aria-label="导入来源">'\r
+        +   '<button type="button" class="session-import-kind is-active" role="tab" aria-selected="true" data-import-kind="zip">压缩包</button>'\r
+        +   '<button type="button" class="session-import-kind" role="tab" aria-selected="false" data-import-kind="dir">文件夹</button>'\r
+        + '</div>'\r
+        + '<div class="session-import-path-row">'\r
+        +   '<input class="session-import-input" type="text" data-import-path aria-label="会话路径" placeholder="D:\\\\downloads\\\\session-xxxx.zip" autocomplete="off" spellcheck="false" maxlength="4096">'\r
+        +   '<button type="button" class="session-import-browse" data-import-browse>浏览…</button>'\r
+        + '</div>'\r
+        + '<div class="session-import-drop" data-import-drop>把会话 zip 或会话文件夹拖到这里（可多个）</div>'\r
+        + '<p class="session-import-status" data-import-status role="status" aria-live="polite" hidden></p>'\r
+        + '<div class="session-import-actions">'\r
+        +   '<button type="button" class="session-import-submit" data-import-submit>导入</button>'\r
+        + '</div>';\r
+}\r
+\r
+function sessionImportPlaceholder(kind) {\r
+    return kind === 'dir' ? 'D:\\\\sessions\\\\<会话目录>' : 'D:\\\\downloads\\\\session-xxxx.zip';\r
+}\r
+\r
+/** 与设置中心 package_import.js 同一套取数方式：目录用 webkitGetAsEntry 递归，压缩包取单文件。\r
+    批量：每个目录 / 每个压缩包各算一个包，零散文件合成一个包。 */\r
+async function collectDroppedSessionPackages(dataTransfer) {\r
+    var items = Array.prototype.slice.call((dataTransfer && dataTransfer.items) || []).filter(function (item) {\r
+        return item.kind === 'file';\r
+    });\r
+    var entries = items.map(function (item) { return item.webkitGetAsEntry ? item.webkitGetAsEntry() : null; });\r
+    var fallback = Array.prototype.slice.call((dataTransfer && dataTransfer.files) || []);\r
+    var bytes = 0;\r
+    function budget(size, count) {\r
+        bytes += size;\r
+        if (count > SESSION_IMPORT_MAX_FILES || bytes > SESSION_IMPORT_MAX_BYTES) {\r
+            throw new Error('目录最多 5000 个文件，总大小不能超过 200 MB');\r
+        }\r
+    }\r
+    function add(sink, file, path) {\r
+        budget(file.size, sink.files.length + 1);\r
+        sink.files.push({ file: file, path: path });\r
+    }\r
+    async function walk(entry, prefix, depth, sink) {\r
+        if (depth > 40) throw new Error('目录层级过深');\r
+        var path = prefix + entry.name;\r
+        if (entry.isFile) {\r
+            var file = await new Promise(function (resolve, reject) { entry.file(resolve, reject); });\r
+            add(sink, file, path);\r
+            return;\r
+        }\r
+        if (!entry.isDirectory) return;\r
+        var reader = entry.createReader();\r
+        for (;;) {\r
+            var children = await new Promise(function (resolve, reject) { reader.readEntries(resolve, reject); });\r
+            if (!children.length) return;\r
+            for (var i = 0; i < children.length; i += 1) await walk(children[i], path + '/', depth + 1, sink);\r
+        }\r
+    }\r
+    if (entries.length && entries.every(Boolean)) {\r
+        var packages = [];\r
+        var loose = { kind: 'dir', files: [] };\r
+        for (var index = 0; index < entries.length; index += 1) {\r
+            var entry = entries[index];\r
+            if (entry.isDirectory) {\r
+                var dirSink = { kind: 'dir', files: [] };\r
+                await walk(entry, '', 0, dirSink);\r
+                packages.push(dirSink);\r
+            } else if (SESSION_IMPORT_ARCHIVE_EXT.test(entry.name)) {\r
+                var zipSink = { kind: 'zip', files: [] };\r
+                await walk(entry, '', 0, zipSink);\r
+                packages.push(zipSink);\r
+            } else {\r
+                await walk(entry, '', 0, loose);\r
+            }\r
+        }\r
+        if (loose.files.length) packages.push(loose);\r
+        return packages;\r
+    }\r
+    var archives = fallback.filter(function (file) {\r
+        return SESSION_IMPORT_ARCHIVE_EXT.test(file.webkitRelativePath || file.name);\r
+    });\r
+    var rest = fallback.filter(function (file) { return archives.indexOf(file) < 0; });\r
+    var out = archives.map(function (file) {\r
+        var sink = { kind: 'zip', files: [] };\r
+        add(sink, file, file.name);\r
+        return sink;\r
+    });\r
+    if (rest.length) {\r
+        var restSink = { kind: 'dir', files: [] };\r
+        rest.forEach(function (file) { add(restSink, file, file.webkitRelativePath || file.name); });\r
+        out.push(restSink);\r
+    }\r
+    return out;\r
+}\r
+\r
+function mountSessionImportOnce() {\r
+    var popup = document.getElementById('session-import');\r
+    var menu = document.getElementById('session-import-menu');\r
+    if (!popup || !menu || popup.dataset.importMounted === '1') return;\r
+    popup.dataset.importMounted = '1';\r
+    menu.innerHTML = buildSessionImportMarkup();\r
+    bindSidebarPopup(popup);\r
+\r
+    var kind = 'zip';\r
+    var busy = false;\r
+    var input = menu.querySelector('[data-import-path]');\r
+    var statusLine = menu.querySelector('[data-import-status]');\r
+    var submit = menu.querySelector('[data-import-submit]');\r
+    var browse = menu.querySelector('[data-import-browse]');\r
+    var drop = menu.querySelector('[data-import-drop]');\r
+\r
+    function setStatus(text, isError) {\r
+        if (!statusLine) return;\r
+        statusLine.textContent = text || '';\r
+        statusLine.hidden = !text;\r
+        statusLine.classList.toggle('is-error', !!isError);\r
+    }\r
+\r
+    function setKind(next) {\r
+        kind = next === 'dir' ? 'dir' : 'zip';\r
+        Array.prototype.forEach.call(menu.querySelectorAll('[data-import-kind]'), function (button) {\r
+            var active = button.getAttribute('data-import-kind') === kind;\r
+            button.classList.toggle('is-active', active);\r
+            button.setAttribute('aria-selected', active ? 'true' : 'false');\r
+        });\r
+        if (input) input.placeholder = sessionImportPlaceholder(kind);\r
+        setStatus('');\r
+    }\r
+\r
+    function setBusy(next) {\r
+        busy = !!next;\r
+        popup.setAttribute('aria-busy', busy ? 'true' : 'false');\r
+        Array.prototype.forEach.call(menu.querySelectorAll('button, input'), function (control) {\r
+            control.disabled = busy;\r
+        });\r
+    }\r
+\r
+    /** 汇总一批导入结果：刷新列表、单个成功时切过去、一次弹窗说明成败。 */\r
+    async function finishImportBatch(imported, failed) {\r
+        var ok = Array.isArray(imported) ? imported : [];\r
+        var bad = Array.isArray(failed) ? failed : [];\r
+        if (!ok.length && bad.length) {\r
+            var only = bad.length === 1 ? bad[0].error : '全部失败：' + bad.map(function (item) { return item.error; }).join('；');\r
+            throw new Error(only);\r
+        }\r
+        setStatus('');\r
+        setSidebarPopupOpen(popup, false);\r
+        if (input) input.value = '';\r
+        try {\r
+            await loadSessions({ force: true });\r
+            if (ok.length === 1 && ok[0].id) await switchSession(ok[0].id);\r
+        } catch (err) {\r
+            console.error('导入后刷新会话列表失败', err);\r
+        }\r
+        var lines = [];\r
+        lines.push(ok.length === 1\r
+            ? '会话「' + String(ok[0].name || '未命名') + '」已导入。'\r
+            : '已导入 ' + ok.length + ' 个会话。');\r
+        var remapped = ok.filter(function (item) { return item && item.remapped; }).length;\r
+        if (remapped) lines.push(remapped + ' 个因原 id 被占用，已换新 id 作为副本导入。');\r
+        var attachments = ok.reduce(function (sum, item) { return sum + ((item && item.attachments) || 0); }, 0);\r
+        if (attachments) lines.push('已同时还原 ' + attachments + ' 张图片附件。');\r
+        if (bad.length) {\r
+            lines.push('失败 ' + bad.length + ' 个：' + bad.map(function (item) {\r
+                return String(item.source || '') + '（' + String(item.error || '') + '）';\r
+            }).join('；'));\r
+        }\r
+        showUiAlert({\r
+            title: bad.length ? '部分导入完成' : '已导入会话',\r
+            message: lines.join(''),\r
+            variant: bad.length ? 'error' : 'info',\r
+        });\r
+    }\r
+\r
+    async function importFromPath() {\r
+        var raw = input ? String(input.value || '') : '';\r
+        var sources = String(raw).split(/[\\r\\n;]+/).map(function (item) { return item.trim(); }).filter(Boolean);\r
+        if (!sources.length) {\r
+            setStatus(kind === 'dir' ? '请填写会话文件夹路径' : '请填写会话压缩包路径', true);\r
+            if (input) input.focus();\r
+            return;\r
+        }\r
+        if (sources.length > 1) setStatus('正在导入 ' + sources.length + ' 个会话…');\r
+        var response = await fetch('/api/sessions/import', {\r
+            method: 'POST',\r
+            credentials: 'same-origin',\r
+            headers: { 'Content-Type': 'application/json' },\r
+            body: JSON.stringify({ sources: sources, kind: kind }),\r
+        });\r
+        var result = await response.json().catch(function () { return {}; });\r
+        if (!response.ok || !result.ok) throw new Error(result.error || '导入失败');\r
+        await finishImportBatch(result.imported, result.failed);\r
+    }\r
+\r
+    async function importFromDrop(dataTransfer) {\r
+        var packages = await collectDroppedSessionPackages(dataTransfer);\r
+        if (!packages.length) throw new Error('没有可导入的文件');\r
+        var bad = null;\r
+        for (var i = 0; i < packages.length; i += 1) {\r
+            var pack = packages[i];\r
+            if (pack.kind === 'zip' && (pack.files.length !== 1 || !SESSION_IMPORT_ARCHIVE_EXT.test(pack.files[0].path))) {\r
+                bad = pack;\r
+                break;\r
+            }\r
+        }\r
+        if (bad) throw new Error('请拖入会话导出的 ZIP / TAR 压缩包，或整个会话文件夹');\r
+        var imported = [];\r
+        var failed = [];\r
+        for (var index = 0; index < packages.length; index += 1) {\r
+            var item = packages[index];\r
+            setKind(item.kind);\r
+            setStatus(packages.length > 1\r
+                ? '正在导入会话…（' + (index + 1) + '/' + packages.length + '）'\r
+                : '正在导入会话…');\r
+            try {\r
+                var form = new FormData();\r
+                form.append('kind', item.kind);\r
+                item.files.forEach(function (entry) { form.append('files', entry.file, entry.path); });\r
+                var response = await fetch('/api/sessions/import-upload', {\r
+                    method: 'POST',\r
+                    credentials: 'same-origin',\r
+                    body: form,\r
+                });\r
+                var result = await response.json().catch(function () { return {}; });\r
+                if (!response.ok || !result.ok) throw new Error(result.error || '导入失败');\r
+                imported.push(result.session);\r
+            } catch (error) {\r
+                failed.push({\r
+                    source: (item.files[0] && item.files[0].path) || '',\r
+                    error: String((error && error.message) || error || '导入失败'),\r
+                });\r
+            }\r
+        }\r
+        await finishImportBatch(imported, failed);\r
+    }\r
+\r
+    async function runImport(task) {\r
+        if (busy) return;\r
+        setBusy(true);\r
+        setStatus('正在导入会话…');\r
+        try {\r
+            await task();\r
+        } catch (error) {\r
+            setStatus(String((error && error.message) || error || '导入失败'), true);\r
+            showUiAlert({\r
+                title: '导入失败',\r
+                message: String((error && error.message) || error || '无法导入该会话'),\r
+                variant: 'error',\r
+            });\r
+        } finally {\r
+            setBusy(false);\r
+        }\r
+    }\r
+\r
+    Array.prototype.forEach.call(menu.querySelectorAll('[data-import-kind]'), function (button) {\r
+        button.addEventListener('click', function () {\r
+            if (busy) return;\r
+            setKind(button.getAttribute('data-import-kind'));\r
+        });\r
+    });\r
+    if (submit) {\r
+        submit.addEventListener('click', function () { runImport(importFromPath); });\r
+    }\r
+    if (input) {\r
+        input.addEventListener('keydown', function (event) {\r
+            if (event.key !== 'Enter') return;\r
+            event.preventDefault();\r
+            event.stopPropagation();\r
+            runImport(importFromPath);\r
+        });\r
+    }\r
+    if (browse) {\r
+        browse.addEventListener('click', async function () {\r
+            if (busy) return;\r
+            var picker = typeof window !== 'undefined' ? window.MyAgentPathPicker : null;\r
+            if (!picker || typeof picker.pickPath !== 'function') {\r
+                setStatus('当前环境不支持系统文件选择框，请直接粘贴路径或拖入', true);\r
+                return;\r
+            }\r
+            try {\r
+                var chosen = await picker.pickPath(kind === 'dir' ? 'directory' : 'file', input ? input.value : '', true);\r
+                if (Array.isArray(chosen) && !chosen.length) return;\r
+                if (!chosen) return;\r
+                if (input) {\r
+                    // <input> 会吃掉换行：多选结果用「; 」拼接，导入时按 [\\r\\n;] 再拆开\r
+                    input.value = Array.isArray(chosen) ? chosen.join('; ') : chosen;\r
+                    input.dispatchEvent(new Event('input', { bubbles: true }));\r
+                }\r
+                setStatus('');\r
+            } catch (error) {\r
+                setStatus(String((error && error.message) || error || '无法打开选择对话框'), true);\r
+            }\r
+        });\r
+    }\r
+    // 拖拽：整个弹出层（含收起状态的按钮）都收，面板内高亮提示。\r
+    function hasDraggedFiles(event) {\r
+        return !!(event.dataTransfer && Array.prototype.indexOf.call(event.dataTransfer.types || [], 'Files') >= 0);\r
+    }\r
+    popup.addEventListener('dragover', function (event) {\r
+        if (!hasDraggedFiles(event)) return;\r
+        event.preventDefault();\r
+        event.stopPropagation();\r
+        if (event.dataTransfer) event.dataTransfer.dropEffect = busy ? 'none' : 'copy';\r
+        popup.classList.add('is-dragover');\r
+    });\r
+    popup.addEventListener('dragleave', function (event) {\r
+        if (!popup.contains(event.relatedTarget)) popup.classList.remove('is-dragover');\r
+    });\r
+    popup.addEventListener('drop', function (event) {\r
+        if (!hasDraggedFiles(event)) return;\r
+        event.preventDefault();\r
+        event.stopPropagation();\r
+        popup.classList.remove('is-dragover');\r
+        runImport(function () { return importFromDrop(event.dataTransfer); });\r
+    });\r
+    popup.addEventListener('keydown', function (event) {\r
+        if (event.key !== 'Escape' || !popup.classList.contains('is-open')) return;\r
+        event.preventDefault();\r
+        event.stopPropagation();\r
+        setSidebarPopupOpen(popup, false, { returnFocus: true });\r
+    });\r
+}\r
+\r
+(function mountSessionListHeadOnce() {\r
+    const head = document.getElementById('session-list-head');\r
+    if (!head || head.dataset.headMounted === '1') return;\r
+    head.dataset.headMounted = '1';\r
+\r
+    const viewMenu = document.getElementById('session-view-menu');\r
+    if (viewMenu) viewMenu.innerHTML = buildSessionViewMenuMarkup();\r
+    const viewPopup = document.getElementById('session-view-options');\r
+    if (viewPopup) {\r
+        bindSidebarPopup(viewPopup);\r
+        viewPopup.addEventListener('click', function (e) {\r
+            const item = (e.target && e.target.closest) ? e.target.closest('[role="menuitemradio"], [data-session-advanced-search]') : null;\r
+            if (!item) return;\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            setSidebarPopupOpen(viewPopup, false);\r
+            if (item.hasAttribute('data-session-advanced-search')) {\r
+                openAdvancedSessionSearch(getSessionListSearchQuery(), viewPopup.querySelector('[data-popup-trigger]'));\r
+                return;\r
+            }\r
+            const groupBy = item.getAttribute('data-session-group-by');\r
+            const listMode = item.getAttribute('data-session-list-mode-option');\r
+            const archive = item.getAttribute('data-session-archive-filter');\r
+            if (groupBy && typeof applySessionGroupBy === 'function') applySessionGroupBy(groupBy, true);\r
+            else if (listMode && typeof applySessionListMode === 'function') applySessionListMode(listMode, true);\r
+            else if (archive) applySessionArchiveFilter(archive);\r
+            syncSessionViewMenu();\r
+        });\r
+    }\r
+    mountSessionImportOnce();\r
+\r
+    const toggle = document.getElementById('session-head-toggle');\r
+    if (toggle) {\r
+        toggle.addEventListener('click', function (e) {\r
+            e.preventDefault();\r
+            toggleSessionListHeadCollapse();\r
+        });\r
+    }\r
+\r
+    const searchBox = document.getElementById('session-search-box');\r
+    const searchInput = document.getElementById('session-search-input');\r
+    if (typeof initSessionSearchControls === 'function') initSessionSearchControls(head);\r
+\r
+    // 第三个按钮已由「在新文件夹中新建会话」改为「刷新会话列表和页面」（见 refreshSessionListAndPage）。\r
+    const refreshBtn = document.getElementById('session-refresh-btn');\r
+    if (refreshBtn) {\r
+        bindUiHoverTip(refreshBtn);\r
+        refreshBtn.addEventListener('click', function (e) {\r
+            e.preventDefault();\r
+            e.stopPropagation();\r
+            refreshSessionListAndPage(refreshBtn);\r
+        });\r
+    }\r
+    if (searchBox && searchInput) searchBox.hidden = true;\r
+    syncSessionViewMenu();\r
+    syncSessionListHead(null, {});\r
+})();\r
+\r
+async function materializeNewSession() {\r
+    if (currentSessionId) return currentSessionId;\r
+    if (materializeNewSessionQueue) return materializeNewSessionQueue;\r
+    materializeNewSessionQueue = Promise.resolve()\r
+        .then(function () { return materializeNewSessionInner(); })\r
+        .finally(function () {\r
+            materializeNewSessionQueue = null;\r
+        });\r
+    return materializeNewSessionQueue;\r
+}\r
+\r
+function collectNewSessionCreateOptions(targetWorkDir) {\r
+    const createOptions = {};\r
+    if (typeof newSessionModelProfileId === 'function') {\r
+        const modelProfileId = newSessionModelProfileId();\r
+        if (modelProfileId) createOptions.model_profile_id = modelProfileId;\r
+    }\r
+    if (typeof newSessionReasoningEffort === 'function') {\r
+        const effort = newSessionReasoningEffort();\r
+        if (effort) createOptions.reasoning_effort = effort;\r
+    }\r
+    if (typeof selectedNewSessionPermissionMode === 'function') {\r
+        const permissionMode = selectedNewSessionPermissionMode();\r
+        if (permissionMode) createOptions.permission_mode = permissionMode;\r
+    }\r
+    // 创建时指定初始工作目录（POST /sessions 的可选 work_dir）。\r
+    const workDir = (typeof targetWorkDir === 'string')\r
+        ? targetWorkDir.trim()\r
+        : newSessionWorkDirTarget();\r
+    if (workDir) createOptions.work_dir = workDir;\r
+    return createOptions;\r
+}\r
+\r
+/** 当前待用的新会话工作目录；空串表示用服务端全局默认目录。 */\r
+function newSessionWorkDirTarget() {\r
+    return String(newSessionWorkDir || '').trim();\r
+}\r
+\r
+function rememberNewSessionWorkDir(workDir) {\r
+    try { sessionStorage.setItem('myagent-new-session-work-dir', String(workDir || '').trim()); } catch (error) { /* unavailable */ }\r
+}\r
+\r
+function readStoredNewSessionWorkDir() {\r
+    try { return sessionStorage.getItem('myagent-new-session-work-dir'); } catch (error) { return null; }\r
+}\r
+\r
+function readStoredPendingNewSession() {\r
+    try {\r
+        // Keep one pending server draft per tab. sessionStorage survives reloads\r
+        // without letting two tabs send independent first turns to the same ID.\r
+        let raw = sessionStorage.getItem(PENDING_NEW_SESSION_KEY);\r
+        if (!raw) {\r
+            // One-time handoff for drafts created by the earlier build, which\r
+            // stored this pointer in localStorage shared by all tabs.\r
+            raw = localStorage.getItem(PENDING_NEW_SESSION_KEY);\r
+            if (raw) {\r
+                sessionStorage.setItem(PENDING_NEW_SESSION_KEY, raw);\r
+                localStorage.removeItem(PENDING_NEW_SESSION_KEY);\r
+            }\r
+        }\r
+        if (!raw) return null;\r
+        const parsed = JSON.parse(raw);\r
+        if (parsed && typeof parsed === 'object' && parsed.session_id) return parsed;\r
+    } catch (error) { /* 旧格式或存储不可用：按未预取处理 */ }\r
+    return null;\r
+}\r
+\r
+function writeStoredPendingNewSession(sessionId, data, workDir) {\r
+    try {\r
+        if (!sessionId) {\r
+            sessionStorage.removeItem(PENDING_NEW_SESSION_KEY);\r
+            return;\r
+        }\r
+        sessionStorage.setItem(PENDING_NEW_SESSION_KEY, JSON.stringify({\r
+            session_id: String(sessionId),\r
+            model_profile_id: (data && data.model_profile_id) || '',\r
+            permission_mode: (data && data.permission_status && data.permission_status.mode) || '',\r
+            // 记录草稿用的是哪个工作目录：刷新后重新进入草稿态时据此判断能否复用。\r
+            work_dir: String(workDir || '').trim(),\r
+        }));\r
+    } catch (error) { /* 存储不可用时退化为页面内复用 */ }\r
+}\r
+\r
+function clearPendingNewSession() {\r
+    pendingNewSession = null;\r
+    writeStoredPendingNewSession('');\r
+}\r
+\r
+function sessionWorkDirMatchesTarget(session, targetWorkDir) {\r
+    const actual = String(session && session.work_dir || '').trim();\r
+    const defaultWorkDir = (typeof window !== 'undefined') ? window.__WORK_DIR__ : '';\r
+    const expected = String(targetWorkDir || defaultWorkDir || '').trim();\r
+    if (!actual || !expected) return false;\r
+    function normalize(path) {\r
+        const windowsPath = /^[a-z]:[\\\\/]/i.test(path) || path.indexOf('\\\\') >= 0;\r
+        const normalized = path.replace(/\\\\/g, '/').replace(/\\/+$/, '');\r
+        return windowsPath ? normalized.toLowerCase() : normalized;\r
+    }\r
+    return normalize(actual) === normalize(expected);\r
+}\r
+\r
+/**\r
+ * 后台预取：创建隐藏草稿会话（服务端 metadata.draft，首条 user 事件落盘后才进入列表）。\r
+ * 页面内多次点击“新会话”复用同一份；刷新后重新进入草稿态时按记录的会话 ID 复用。\r
+ */\r
+function ensurePrefetchedNewSession() {\r
+    if (currentSessionId) return Promise.resolve(null);\r
+    const targetWorkDir = newSessionWorkDirTarget();\r
+    if (pendingNewSession) {\r
+        if (String(pendingNewSession.workDir || '') === targetWorkDir) {\r
+            return Promise.resolve(pendingNewSession);\r
+        }\r
+        clearPendingNewSession();\r
+    }\r
+    if (prefetchNewSessionPromise) {\r
+        if (String(prefetchNewSessionWorkDir || '') === targetWorkDir) {\r
+            return prefetchNewSessionPromise;\r
+        }\r
+        return Promise.resolve(prefetchNewSessionPromise).catch(function () { return null; }).then(function () {\r
+            if (currentSessionId) return null;\r
+            return ensurePrefetchedNewSession();\r
+        });\r
+    }\r
+    const targetRevision = newSessionWorkDirRevision;\r
+    const promise = Promise.resolve()\r
+        .then(function () { return prefetchNewSessionInner(targetWorkDir, targetRevision); })\r
+        .catch(function (error) {\r
+            console.warn('新会话后台预取失败，发送时回退为即时创建:', error);\r
+            clearPendingNewSession();\r
+            return null;\r
+        })\r
+        .finally(function () {\r
+            if (prefetchNewSessionPromise === promise) {\r
+                prefetchNewSessionPromise = null;\r
+                prefetchNewSessionWorkDir = null;\r
+            }\r
+        });\r
+    prefetchNewSessionWorkDir = targetWorkDir;\r
+    prefetchNewSessionPromise = promise;\r
+    return promise;\r
+}\r
+\r
+async function prefetchNewSessionInner(targetWorkDir, targetRevision) {\r
+    const prefetchStartedAt = performance.now();\r
+    const requestIsCurrent = function () {\r
+        return targetRevision === newSessionWorkDirRevision\r
+            && targetWorkDir === newSessionWorkDirTarget();\r
+    };\r
+    let stored = readStoredPendingNewSession();\r
+    // 用户刚换了目标工作目录：丢弃旧目标的预取引用，避免复用过期的创建请求。\r
+    if (stored && String(stored.work_dir || '') !== targetWorkDir) {\r
+        writeStoredPendingNewSession('');\r
+        stored = null;\r
+    }\r
+    if (stored) {\r
+        try {\r
+            const response = await fetch('/sessions/' + encodeURIComponent(stored.session_id), { cache: 'no-store' });\r
+            if (response.ok) {\r
+                const sess = await response.json();\r
+                if (sess && sess.id && sess.draft\r
+                        && sessionWorkDirMatchesTarget(sess, targetWorkDir)\r
+                        && requestIsCurrent()) {\r
+                    pendingNewSession = {\r
+                        sessionId: String(sess.id),\r
+                        workDir: targetWorkDir,\r
+                        response: {\r
+                            model_profile_id: stored.model_profile_id || '',\r
+                            permission_status: stored.permission_mode ? { mode: stored.permission_mode } : null,\r
+                        },\r
+                        session: sess,\r
+                    };\r
+                    return pendingNewSession;\r
+                }\r
+            }\r
+        } catch (error) { /* 校验失败则重新预取 */ }\r
+        writeStoredPendingNewSession('');\r
+    }\r
+    if (!requestIsCurrent()) return null;\r
+    const createOptions = collectNewSessionCreateOptions(targetWorkDir);\r
+    const response = await fetch('/sessions', {\r
+        method: 'POST',\r
+        headers: { 'Content-Type': 'application/json' },\r
+        body: JSON.stringify(Object.assign({ prefetch: true }, createOptions)),\r
+    });\r
+    if (!response.ok) throw new Error('HTTP ' + response.status);\r
+    const data = await response.json();\r
+    if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');\r
+    // A directory switch can happen while POST /sessions is in flight. Do not\r
+    // let the stale response become the pending draft for the newly selected path.\r
+    if (!requestIsCurrent() || !sessionWorkDirMatchesTarget(data.session, targetWorkDir)) return null;\r
+    pendingNewSession = {\r
+        sessionId: String(data.session_id),\r
+        workDir: targetWorkDir,\r
+        response: data,\r
+        session: data.session || null,\r
+    };\r
+    writeStoredPendingNewSession(pendingNewSession.sessionId, data, targetWorkDir);\r
+    if (typeof uiPerformance !== 'undefined') {\r
+        uiPerformance.sample(pendingNewSession.sessionId, 'session.prefetch', performance.now() - prefetchStartedAt);\r
+    }\r
+    return pendingNewSession;\r
+}\r
+\r
+async function applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, createResponse) {\r
+    const tasks = [];\r
+    if (createOptions.reasoning_effort && createResponse.reasoning_effort !== createOptions.reasoning_effort) {\r
+        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/reasoning_effort', {\r
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',\r
+            body: JSON.stringify({ reasoning_effort: createOptions.reasoning_effort }),\r
+        }).then(async function (response) {\r
+            const data = await response.json();\r
+            if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度应用失败');\r
+        }));\r
+    }\r
+    if (createOptions.model_profile_id\r
+        && String(createResponse.model_profile_id || '') !== String(createOptions.model_profile_id)) {\r
+        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/model_profile', {\r
+            method: 'POST',\r
+            headers: { 'Content-Type': 'application/json' },\r
+            credentials: 'same-origin',\r
+            body: JSON.stringify({ profile_id: createOptions.model_profile_id }),\r
+        }).then(async function (response) {\r
+            const data = await response.json();\r
+            if (!response.ok || !data || !data.ok) {\r
+                throw new Error((data && data.error) || '模型配置应用失败');\r
+            }\r
+        }));\r
+    }\r
+    if (createOptions.permission_mode\r
+        && (!createResponse.permission_status\r
+            || String(createResponse.permission_status.mode || '') !== String(createOptions.permission_mode))) {\r
+        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/permissions', {\r
+            method: 'POST',\r
+            headers: { 'Content-Type': 'application/json' },\r
+            credentials: 'same-origin',\r
+            body: JSON.stringify({ mode: createOptions.permission_mode }),\r
+        }).then(async function (response) {\r
+            const data = await response.json();\r
+            if (!response.ok || !data || !data.ok) {\r
+                throw new Error((data && data.error) || '权限等级应用失败');\r
+            }\r
+            createResponse.permission_status = data;\r
+        }));\r
+    }\r
+    if (tasks.length) await Promise.all(tasks);\r
+}\r
+\r
+async function materializeNewSessionInner() {\r
+    const draftEpoch = switchSessionEpoch;\r
+    const createStartedAt = performance.now();\r
+    let createdSessionId = '';\r
+    try {\r
+        const createOptions = collectNewSessionCreateOptions();\r
+        // 优先复用点“新会话”时启动的后台预取（可能仍在途）；预取失败或超时才回退到\r
+        // 发送时创建，保证这条路径永远可用。\r
+        const prefetched = await ensurePrefetchedNewSession();\r
+        let sessionId = prefetched && prefetched.sessionId ? String(prefetched.sessionId) : '';\r
+        let data = prefetched && prefetched.response ? prefetched.response : null;\r
+        if (!sessionId) {\r
+            const response = await fetch('/sessions', {\r
+                method: 'POST',\r
+                headers: { 'Content-Type': 'application/json' },\r
+                body: JSON.stringify(createOptions),\r
+            });\r
+            if (!response.ok) throw new Error('HTTP ' + response.status);\r
+            data = await response.json();\r
+            if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');\r
+            sessionId = String(data.session_id);\r
+        }\r
+        clearPendingNewSession();\r
+        // 这次选定的工作目录已被本会话消费；下一次「新建对话」回到全局默认目录。\r
+        newSessionWorkDir = '';\r
+        try { sessionStorage.removeItem('myagent-new-session-work-dir'); } catch (error) { /* unavailable */ }\r
+        createdSessionId = sessionId;\r
+        const session = (data && data.session)\r
+            || (prefetched && prefetched.session)\r
+            || { id: sessionId, name: '新会话' };\r
+        sessionStore.protectFromSnapshots(session);\r
+\r
+        const ownsDraft = !currentSessionId && switchSessionEpoch === draftEpoch;\r
+        const draftText = ownsDraft && messageInput\r
+            ? messageInput.value\r
+            : readStoredInputDraft(null);\r
+        persistInputDraft(sessionId, draftText);\r
+        if (window.MyAgentPathPicker && typeof window.MyAgentPathPicker.moveChatSession === 'function') {\r
+            window.MyAgentPathPicker.moveChatSession(messageInput, null, sessionId);\r
+        }\r
+        removeStoredInputDraft(null);\r
+\r
+        if (ownsDraft) {\r
+            setCurrentSessionState(sessionId);\r
+            if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);\r
+            localStorage.setItem('lastSessionId', sessionId);\r
+            // Do not restore the composer here: it is already the live source\r
+            // of truth and restoring an older value causes the visible blink.\r
+            if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);\r
+            if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);\r
+        }\r
+        syncArchivedSessionStateFromStore();\r
+        renderSessionListIfChanged(false);\r
+        await applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data || {});\r
+        if (typeof commitNewSessionModelProfile === 'function') {\r
+            commitNewSessionModelProfile(sessionId);\r
+        }\r
+        if (typeof commitNewSessionReasoningEffort === 'function') commitNewSessionReasoningEffort(sessionId);\r
+        if (typeof commitNewSessionPermissionMode === 'function') {\r
+            commitNewSessionPermissionMode(data.permission_status || null);\r
+        }\r
+        if (ownsDraft && typeof refreshModelProfileSelector === 'function') {\r
+            refreshModelProfileSelector(sessionId);\r
+        }\r
+        document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {\r
+            detail: { sessionId: sessionId, phase: 'created' },\r
+        }));\r
+        if (typeof uiPerformance !== 'undefined') {\r
+            uiPerformance.sample(sessionId, 'session.create', performance.now() - createStartedAt);\r
+        }\r
+        return sessionId;\r
+    } catch (error) {\r
+        console.error('创建新会话失败', error);\r
+        if (createdSessionId) {\r
+            appendLogVisible('新会话配置应用失败，请重新选择模型或权限后再发送', 'error-log');\r
+        } else if (!currentSessionId && switchSessionEpoch === draftEpoch) {\r
+            appendLogVisible('创建新会话失败，请重试发送', 'error-log');\r
+        }\r
+        return null;\r
+    }\r
+}\r
 `,Hs=`/* Full-text search lives in a dialog, separate from the sidebar's local filter. */
 var sessionSearchState = {
     epoch: 0, q: '', scope: 'all', tools: false, composing: false,

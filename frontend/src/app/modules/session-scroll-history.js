@@ -843,7 +843,9 @@ async function loadOlderHistoryChunk(opts) {
         var pageTurns = Math.max(1, Math.min(Number(opts.turns) || HISTORY_DIALOGUES_PER_PAGE, 50));
         var boundedTail = ph.event_limited_tail && !opts.turns;
         var url = '/sessions/' + encodeURIComponent(sid)
-            + (boundedTail ? '/messages?limit=200' : '/messages?turns=' + encodeURIComponent(String(pageTurns)))
+            + (boundedTail
+                ? '/messages?limit=200&align_to_turn=1'
+                : '/messages?turns=' + encodeURIComponent(String(pageTurns)))
             + '&before_index=' + ph.range_start
             + '&event_budget=' + encodeURIComponent(String(HISTORY_EVENT_BUDGET));
         var response = await fetchWithTimeout(url, {}, 30000);

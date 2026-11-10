@@ -7443,6 +7443,7 @@ async def get_session_messages(
     target_index: Optional[int] = Query(None, ge=0),
     turns: Optional[int] = Query(None, ge=1, le=50),
     event_budget: Optional[int] = Query(None, ge=50, le=5000),
+    align_to_turn: bool = Query(False),
 ):
     """
     与 SSE 同源：默认返回完整 ui_events 数组（兼容旧前端）。
@@ -7538,6 +7539,7 @@ async def get_session_messages(
                 target_index=target_index_value,
                 turns=tv,
                 event_budget=event_budget_value,
+                align_to_turn=align_to_turn,
             )
             elapsed_ms = int((_time.perf_counter() - t0) * 1000)
             if elapsed_ms >= 500:
@@ -7689,6 +7691,7 @@ async def get_session_history_snapshot(
                 event_budget=event_budget_value,
                 diagnostics=page_diagnostics,
                 include_user_turns=True,
+                align_to_turn=tail_limit_value is not None,
             )
             if tail_limit_value is not None:
                 page["event_limited_tail"] = bool(page.get("has_older"))

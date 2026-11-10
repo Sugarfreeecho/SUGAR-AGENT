@@ -97,7 +97,7 @@ async function main() {
     HISTORY_DIALOGUES_PER_PAGE: 5, HISTORY_EVENT_BUDGET: 500, chatContainer: null,
     getVisibleChatStream: () => olderStream, updateHistorySentinelVisibility() {},
     fetchWithTimeout: url => {
-      assert(url.includes('/messages?limit=200&before_index=5'), 'dense turns continue in bounded event windows');
+      assert(url.includes('/messages?limit=200&align_to_turn=1&before_index=5'), 'dense turns continue in bounded event windows');
       return new Promise(resolve => { resolveOlder = resolve; });
     },
   });
@@ -165,6 +165,39 @@ async function main() {
   assert(!duplicateA.classList.contains('is-running') && !duplicateB.classList.contains('is-running'));
   assert.equal(duplicateB.dataset.procEndedAt, '20', 'all duplicate timers must stop on completion');
   assert(otherRun.classList.contains('is-running'), 'sealing must respect process ownership');
+
+  const backfillRequests = [];
+  const backfillContext = vm.createContext({
+    Array, Number, String, encodeURIComponent, HISTORY_EVENT_BUDGET: 500,
+    fetchSessionHistoryJSON: async url => {
+      backfillRequests.push(url);
+      if (url.includes('before_index=300')) {
+        return { response: { ok: true }, data: {
+          events: [{ type: 'status', content: 'p1' }, { type: 'user', content: 'u1' }],
+          range_start: 250, range_end: 300, has_older: true, total: 500,
+        } };
+      }
+      return { response: { ok: true }, data: {
+        events: [{ type: 'user', content: 'u0' }, { type: 'status', content: 'p0' }],
+        range_start: 200, range_end: 250, has_older: true, total: 500,
+      } };
+    },
+  });
+  vm.runInContext(section(management, 'async function backfillInitialTurnEvents', 'async function loadSessionMessages'), backfillContext);
+  const backfillMeta = { range_start: 300, has_older: true, total: 500 };
+  const backfilled = await backfillContext.backfillInitialTurnEvents(
+    's', [{ type: 'final', content: 'a1' }], backfillMeta, null, null
+  );
+  assert.equal(backfillRequests.length, 2, 'mid-turn windows walk backwards until a user row starts the page');
+  assert(backfillRequests[0].includes('/messages?limit=200&align_to_turn=1&before_index=300'));
+  assert.deepEqual(backfilled.map(event => event.content), ['u0', 'p0', 'p1', 'u1', 'a1']);
+  assert.equal(backfillMeta.range_start, 200);
+  assert.equal(backfillMeta.has_older, true);
+  const alreadyAtUser = await backfillContext.backfillInitialTurnEvents(
+    's', [{ type: 'user', content: 'u1' }], { range_start: 300, has_older: true, total: 500 }, null, null
+  );
+  assert.equal(backfillRequests.length, 2, 'a page already starting at a user row issues no extra request');
+  assert.deepEqual(alreadyAtUser.map(event => event.content), ['u1']);
   process.stdout.write('session loading runtime checks passed\n');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
