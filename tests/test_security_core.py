@@ -1370,10 +1370,14 @@ def test_workdir_relative_parent_paths_inside_workspace_stay_yellow(
     assert forced_approval_for(decision) is False
 
 
-def test_workdir_relative_parent_paths_outside_workspace_stay_forced(
+def test_workdir_relative_parent_paths_outside_workspace_are_ordinary_deletes(
     tmp_path, monkeypatch
 ):
-    """按 workdir 基准解析后仍然逃出 workspace 的删除保持强制单次审批。"""
+    """按 workdir 基准解析后逃出 workspace 的删除是普通审批，不是红色强制。
+
+    删除一个具体文件属于能从预览判断范围的操作；它仍要审批，但允许单次
+    授权或授权目录，不再走「危险命令」红色通道。
+    """
     workspace = tmp_path / "workspace"
     (workspace / "skills" / "archify").mkdir(parents=True)
     _isolated_security_store(tmp_path, monkeypatch)
@@ -1390,8 +1394,9 @@ def test_workdir_relative_parent_paths_outside_workspace_stay_forced(
 
     assert request.metadata["external_workspace"] is True
     assert request.metadata["workspace_delete"] is False
-    assert decision.rule_id == "process.destructive"
-    assert forced_approval_for(decision) is True
+    assert decision.outcome == DecisionOutcome.ASK
+    assert decision.rule_id == "delete.review"
+    assert forced_approval_for(decision) is False
 
 
 def test_readonly_git_scope_is_not_external_through_authorize(
@@ -1443,7 +1448,7 @@ def test_full_access_does_not_prompt_for_workspace_delete(tmp_path, monkeypatch)
     assert file_delete.rule_id == "preset.full_access"
 
 
-def test_shell_delete_outside_workspace_stays_forced(tmp_path):
+def test_shell_delete_outside_workspace_is_ordinary_approval(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = (tmp_path / "outside" / "old-output").resolve()
@@ -1458,8 +1463,80 @@ def test_shell_delete_outside_workspace_stays_forced(tmp_path):
     )
     assert request.metadata["external_workspace"] is True
     assert request.metadata["workspace_delete"] is False
+    assert decision.rule_id == "delete.review"
+    assert forced_approval_for(decision) is False
+
+
+def test_delete_of_home_or_drive_root_stays_forced(tmp_path):
+    """删家目录、家目录父级或磁盘根仍走红色强制审批。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    home = Path.home().resolve()
+    for target in (home, home.parent, Path(workspace.anchor or "/")):
+        request = classify_tool(
+            "run_shell",
+            {"command": f'Remove-Item -Recurse -Force "{target}"'},
+            workspace,
+        )
+        decision = PolicyEngine(workspace).decide(
+            request,
+            PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+        )
+        assert request.metadata["deletion"] is True, target
+        assert decision.rule_id == "process.destructive", target
+        assert forced_approval_for(decision) is True, target
+
+
+def test_delete_of_system_tree_stays_forced(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = Path(workspace.anchor or "/") / "Windows" / "System32" / "drivers"
+    request = classify_tool(
+        "run_shell",
+        {"command": f'Remove-Item -Recurse -Force "{target}"'},
+        workspace,
+    )
+    decision = PolicyEngine(workspace).decide(
+        request,
+        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+    )
+    assert request.metadata["deletion_targets"], "系统目录必须被记为删除目标"
     assert decision.rule_id == "process.destructive"
     assert forced_approval_for(decision) is True
+
+
+def test_deletion_never_suggests_a_command_prefix_rule(tmp_path):
+    """删除不提供「始终允许同类」的 rm:* 规则，否则一次授权放行任意删除。"""
+    from security.policy import suggest_rule_pattern
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    request = classify_tool("run_shell", {"command": "rm -rf build"}, workspace)
+    assert suggest_rule_pattern(request, workspace) is None
+
+
+@pytest.mark.parametrize("command", [
+    "git status --porcelain -- app/security/policy.py",
+    "git diff --stat -- app/security/policy.py",
+    "grep -rn permission_mode app/security",
+    'Get-Content "app/security/policy.py"',
+    "git log -1 --oneline -- app/security/runtime.py",
+])
+def test_inspecting_policy_paths_is_not_tampering(command, tmp_path):
+    """只读地提到策略路径不算篡改：拦截的是修改，不是查看。"""
+    request = classify_tool("run_shell", {"command": command}, tmp_path)
+    assert request.metadata["policy_change"] is False, command
+
+
+@pytest.mark.parametrize("command", [
+    'Set-Content "app/security/policy.py" -Value $x',
+    'Remove-Item -Force "app/security/policy.py"',
+    'git status --porcelain -- app/security/policy.py > out.txt',
+    'python -c "open(\'app/security/policy.py\',\'w\').write(\'x\')"',
+])
+def test_writing_to_policy_paths_is_tampering(command, tmp_path):
+    request = classify_tool("run_shell", {"command": command}, tmp_path)
+    assert request.metadata["policy_change"] is True, command
 
 
 def test_workspace_delete_compounded_with_non_delete_danger_stays_forced(tmp_path):

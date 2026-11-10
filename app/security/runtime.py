@@ -60,6 +60,21 @@ _POLICY_TAMPER = re.compile(
     r"disable[^\r\n]*(?:security|approval|firewall|defender)|"
     r"set-mppreference|add-mppreference)"
 )
+# The tamper red line is about *changing* the controls, not about naming them.
+# "git status -- app/security/policy.py" and "grep permission_mode app" were
+# denied as policy tampering even though they only read. A command that starts
+# as an inspection and never redirects, pipes, or invokes a writer is exempt.
+_READONLY_INSPECTION = re.compile(
+    r"(?is)^\s*(?:git\s+(?:status|diff|log|show|ls-files|grep|rev-parse|blame|cat-file)"
+    r"|rg|ag|grep|findstr|select-string|cat|type|more|less|head|tail|wc"
+    r"|get-content|get-childitem|get-item|test-path|dir|ls|tree)\b"
+)
+_READONLY_ESCAPE = re.compile(
+    r"(?i)(?:>>?|\||;|&&|\|\||\$\(|`|\brm\b|\bdel\b|\berase\b|remove-item|"
+    r"set-content|add-content|out-file|copy-item|move-item|new-item|rename-item|"
+    r"set-itemproperty|invoke-expression|\biex\b|\bpython\b|\bnode\b|"
+    r"\bpowershell\b|\bcmd\b|\bwsl\b|\btee\b)"
+)
 # Reading credential-bearing files is treated as an ordinary read: allowed
 # inside the workspace, approval-required outside. Only *export* remains an
 # unconditional denial (copy out, upload, network send, credential-store dump).
@@ -147,6 +162,52 @@ def _delete_label(command: str) -> str:
     if re.search(r"os\.(?:remove|unlink)|\.unlink\s*\(", low):
         return "删除文件 os.remove/unlink"
     return "删除操作"
+
+
+# Path-ish tokens inside one statement: double-quoted, single-quoted, or bare.
+_PATH_TOKEN = re.compile(r"""(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s"'`;|&]+))""")
+_STATEMENT_SPLIT = re.compile(r"(?:\r?\n|;|&&|\|\||\|)")
+
+
+def _delete_targets_text(command: str) -> list[str]:
+    """Return the path tokens that a delete statement actually acts on.
+
+    Every outside path in a command is *not* a delete target: a command may
+    ``Remove-Item`` a flag file and then start ``C:\\Windows\\System32\\OpenSSH\\
+    ssh.exe``. Only tokens inside a statement that carries a delete verb count,
+    so an unrelated executable or a ``Resolve-Path`` argument cannot turn an
+    ordinary cleanup into a red "system tree" deletion.
+    """
+
+    targets: list[str] = []
+    for statement in _STATEMENT_SPLIT.split(str(command or "")):
+        if not _DELETE_COMMAND.search(statement):
+            continue
+        for double, single, bare in _PATH_TOKEN.findall(statement):
+            token = (double or single or bare).strip()
+            if not token or token.startswith("-"):
+                continue
+            # Variables and env indirection cannot be resolved here; they are
+            # neither proof of a system target nor of a safe one.
+            if token[0] in "$%~" or "%" in token:
+                continue
+            if any(sep in token for sep in ("\\", "/", ":", ".")) or token.startswith("*"):
+                targets.append(token)
+    return targets
+
+
+def _policy_tamper_match(command: str) -> str:
+    """Return the matched control path, unless the command only inspects it."""
+
+    text = str(command or "")
+    if not text:
+        return ""
+    match = _POLICY_TAMPER.search(text)
+    if not match:
+        return ""
+    if _READONLY_INSPECTION.search(text) and not _READONLY_ESCAPE.search(text):
+        return ""
+    return match.group(0)
 
 
 def security_store() -> SecurityStore:
@@ -458,6 +519,19 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             # patterns: a grep for "RMDir" or a tool description that mentions
             # "rm -rf" is text, not a deletion.
             deletion = bool(_DELETE_COMMAND.search(_danger_scan_text(command)))
+            # Which paths the delete statement itself acts on, resolved. The
+            # policy uses them to tell "delete C:\Windows" apart from "delete my
+            # temp dir"; unrelated paths elsewhere in the command are ignored.
+            deletion_targets: list[str] = []
+            if deletion:
+                for token in _delete_targets_text(_danger_scan_text(command)):
+                    try:
+                        deletion_targets.append(
+                            str(_resolve_shell_token_for_workspace_restrict(
+                                token, workspace, base=exec_base))
+                        )
+                    except Exception:
+                        continue
             # ``dangerous_matches`` also names *which* red-line pattern hit, so
             # the approval record can explain the block instead of only saying
             # "destructive command".
@@ -482,12 +556,13 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             external = True
             destructive = False
             deletion = False
+            deletion_targets = []
             workspace_delete = False
             credential_export = False
             credential_read = False
             policy_change = False
             danger_hits = []
-        policy_change = policy_change or bool(_POLICY_TAMPER.search(command))
+        policy_change = policy_change or bool(_policy_tamper_match(command))
         if deletion and not danger_hits:
             # Plain deletions (Remove-Item -Force, shutil.rmtree, ...) hit no
             # "dangerous pattern", but the approval still has to say what it is.
@@ -507,6 +582,7 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
                 "external_workspace": external,
                 "destructive": destructive,
                 "deletion": deletion,
+                "deletion_targets": deletion_targets,
                 "workspace_delete": workspace_delete,
                 # Persisted with the approval so a blocked call is explainable
                 # later: which red line matched, and in what words.

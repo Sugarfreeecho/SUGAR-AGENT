@@ -71,6 +71,79 @@ _DANGEROUS_ALLOW_PREFIXES = frozenset(
 FORCED_APPROVAL_RULES = frozenset({"process.destructive", "session.workspace_switch"})
 
 
+def deletion_only_destructive(request: "CapabilityRequest") -> bool:
+    """Return whether the only red line is file deletion.
+
+    ``Remove-Item``/``rm``/``shutil.rmtree`` on a specific path is an ordinary
+    file operation whose blast radius the preview already shows. Real system
+    red lines (``format``, ``diskpart``, ``dd``, ``shutdown``/``reboot``,
+    netadapter disable, fork bomb) keep the forced red approval even when the
+    same command also deletes something.
+    """
+
+    kinds = [str(kind) for kind in (request.metadata.get("destructive_kinds") or [])]
+    return (
+        bool(request.metadata.get("deletion"))
+        and bool(kinds)
+        and all(kind.startswith("delete.") for kind in kinds)
+    )
+
+
+# Deleting a whole system tree is not "an ordinary file": the blast radius is
+# the operating system, and no directory grant should ever make it routine.
+_PROTECTED_DELETE_TREES = (
+    "c:\\windows",
+    "c:\\program files",
+    "c:\\program files (x86)",
+    "c:\\programdata",
+    "c:\\$recycle.bin",
+    "/etc",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/var",
+    "/boot",
+    "/system",
+    "/library",
+    "/applications",
+)
+
+
+def deletion_hits_protected_target(request: "CapabilityRequest") -> bool:
+    """Return whether a deletion targets a root or a system tree.
+
+    ``remove-item -recurse -force C:\\Windows`` deletes a specific path, so it
+    looks like an ordinary deletion, but the path is the operating system. Those
+    targets keep the forced red approval.
+    """
+
+    targets = [str(item) for item in (request.metadata.get("deletion_targets") or [])]
+    if not targets:
+        return False
+    try:
+        home = Path.home().resolve()
+    except Exception:
+        home = None
+    for raw in targets:
+        try:
+            candidate = Path(raw).resolve()
+        except Exception:
+            # Unresolvable targets never reach here (variables are filtered out
+            # when the target list is built); if one slips through it proves
+            # nothing, so it does not by itself justify the red lane.
+            continue
+        if candidate.parent == candidate:
+            return True  # drive root ("C:\\") or filesystem root ("/")
+        text = str(candidate).lower().rstrip("\\/")
+        for tree in _PROTECTED_DELETE_TREES:
+            if text == tree or text.startswith(tree + "\\") or text.startswith(tree + "/"):
+                return True
+        if home is not None and (candidate == home or candidate == home.parent):
+            return True
+    return False
+
+
 def canonical_path(raw: object, workspace: Path) -> Path:
     text = str(raw or "").strip()
     if not text or text == "/":
@@ -326,6 +399,12 @@ def suggest_rule_pattern(
         # future data transmission with different arguments.
         if egress_intent in {"upload", "unknown", "interactive"}:
             return None
+        if request.metadata.get("deletion"):
+            # A "rm:*" prefix rule would authorize every later deletion,
+            # including ones outside the workspace, with none of the evidence
+            # the approval card shows. Deletions are approved per call or
+            # through a directory grant, never as a command-prefix rule.
+            return None
         prefix = safe_command_prefix(request.resource)
         if prefix is None:
             return None
@@ -520,8 +599,13 @@ class PolicyEngine:
                     "process.policy_change",
                     "Security policy or Agent controller tampering is denied.",
                 )
-            if request.metadata.get("destructive") and not request.metadata.get(
-                "workspace_delete"
+            ordinary_deletion = deletion_only_destructive(
+                request
+            ) and not deletion_hits_protected_target(request)
+            if (
+                request.metadata.get("destructive")
+                and not request.metadata.get("workspace_delete")
+                and not ordinary_deletion
             ):
                 return result(
                     DecisionOutcome.ASK,
@@ -667,6 +751,21 @@ class PolicyEngine:
                     DecisionOutcome.ASK,
                     "process.workspace_delete",
                     "Deleting content inside the authorized directories requires ordinary approval.",
+                )
+            if request.metadata.get("deletion") and request.metadata.get(
+                "external_workspace"
+            ):
+                # A plain file deletion outside the authorized directories is a
+                # scope question, not a system-destroying command. Keep it in
+                # the ordinary approval lane: allow once, or grant the
+                # directory, instead of the red "danger" dialog every time.
+                return result(
+                    DecisionOutcome.ASK,
+                    "delete.review",
+                    "Deleting content outside the authorized directories requires approval.",
+                    required_dirs=request.metadata.get("required_dirs") or [],
+                    outside_authorized=True,
+                    outside_workspace=True,
                 )
             if _DYNAMIC_SHELL.search(request.resource):
                 return result(DecisionOutcome.ASK, "process.dynamic", "Dynamically constructed shell code requires review.")

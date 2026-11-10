@@ -18,7 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "app"))
-from security.runtime import classify_tool  # noqa: E402
+from security.models import PERMISSION_PRESETS, PermissionMode  # noqa: E402
+from security.policy import PolicyEngine  # noqa: E402
+from security.runtime import classify_tool, forced_approval_for  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "audit_red_approvals", ROOT / "scripts" / "audit_red_approvals.py"
@@ -93,17 +95,35 @@ def collect(sessions_dir: Path, since: str, until: str = "") -> list[dict]:
                 continue
             seen.add(aid)
             command = extract_command(str(rec.get("message") or ""))
+            workspace = session_workspace(label, sessions_dir)
             try:
-                meta = (
-                    dict(classify_tool("run_shell", {"command": command},
-                                       session_workspace(label, sessions_dir)).metadata or {})
-                    if command else {}
+                request = (
+                    classify_tool("run_shell", {"command": command}, workspace)
+                    if command
+                    else None
                 )
+                meta = dict(request.metadata or {}) if request else {}
             except Exception:  # noqa: BLE001 - a bad record must not stop the sweep
+                request = None
                 meta = {}
+            # Replay through the policy engine, not the raw metadata flags: the
+            # question is "would this still be a forced red approval today",
+            # and only the engine knows which rule ids are forced.
+            rule_id = ""
+            forced = False
+            if request is not None:
+                try:
+                    decision = PolicyEngine(workspace).decide(
+                        request,
+                        PERMISSION_PRESETS[PermissionMode.ASK_FOR_APPROVAL],
+                    )
+                    rule_id = str(decision.rule_id or "")
+                    forced = forced_approval_for(decision)
+                except Exception:  # noqa: BLE001
+                    rule_id, forced = "", False
             rows.append({
                 "session": label[:8], "timestamp": ts, "approval_id": aid,
-                "command": command, "meta": meta,
+                "command": command, "meta": meta, "rule_id": rule_id, "forced": forced,
             })
     return rows
 
@@ -122,19 +142,17 @@ def main() -> int:
     rows = collect(sessions_dir, args.since, args.until)
 
     unparsed = [r for r in rows if not r["meta"]]
-    false_positive = [r for r in rows if r["meta"] and not r["meta"].get("destructive")]
-    downgraded = [r for r in rows
-                  if r["meta"].get("destructive") and r["meta"].get("workspace_delete")]
-    still_red = [r for r in rows
-                 if r["meta"].get("destructive") and not r["meta"].get("workspace_delete")]
+    still_red = [r for r in rows if r["meta"] and r["forced"]]
+    downgraded = [r for r in rows if r["meta"] and not r["forced"] and r["rule_id"]]
+    false_positive = [r for r in rows if r["meta"] and not r["rule_id"]]
 
     window = f"since {args.since}" + (f" until {args.until}" if args.until else "")
     print(f"{window} | sessions {sessions_dir}")
     print(f"distinct red approvals: {len(rows)}")
     print()
-    print(f"  仍为红色（工作区外 / 系统级）      : {len(still_red)}")
-    print(f"  降级为黄色（工作区内删除）          : {len(downgraded)}")
-    print(f"  不再是审批（误报，已非 destructive）: {len(false_positive)}")
+    print(f"  仍为红色（系统级 / 根目录）        : {len(still_red)}")
+    print(f"  降级为普通审批（黄色）              : {len(downgraded)}")
+    print(f"  不再需要审批（误报 / 已放行）      : {len(false_positive)}")
     print(f"  命令无法解析（卡片文本被截断）      : {len(unparsed)}")
     print()
     print("仍为红色的命中类别:")
