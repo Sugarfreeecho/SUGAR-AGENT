@@ -53,6 +53,7 @@ const UI_TRANSLATIONS_EN = {
     '如需帮助或反馈，请联系GitHub @sugarfreeecho': 'For help or feedback, contact @sugarfreeecho on GitHub.',
     '运行诊断': 'Diagnostics',
     '更多操作': 'More actions', '更多': 'More', '删除': 'Delete', '置顶': 'Pin', '取消置顶': 'Unpin',
+    '收藏会话': 'Add to favorites', '取消收藏': 'Remove from favorites', '已收藏': 'Favorited', '收藏夹': 'Favorites',
     '归档': 'Archive', '取消归档': 'Unarchive', '删除会话': 'Delete session', '此操作不可恢复': 'This action cannot be undone',
     '未命名': 'Untitled', '重新加载': 'Reload', '加载中...': 'Loading...', '加载中…': 'Loading…',
     '生成中': 'Generating', '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
@@ -122,7 +123,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
 });
 Object.assign(UI_TRANSLATIONS_EN, {
     // Session navigation and lifecycle
-    '置顶目录': 'Pinned', '归档目录': 'Archived', '刷新归档目录': 'Refresh archived sessions',
+    '置顶目录': 'Pinned', '收藏夹': 'Favorites', '归档目录': 'Archived', '刷新归档目录': 'Refresh archived sessions',
     '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '今天': 'Today', '昨天': 'Yesterday', '近7天': 'Last 7 days',
     '近三天': 'Last 3 days', '近半月': 'Last 15 days', '近一月': 'Last 30 days',
     '近14天': 'Last 14 days', '加载会话': 'Load session', '加载会话列表失败': 'Failed to load sessions',
@@ -298,7 +299,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
     'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
     '原因：': 'Reason: ', '找不到可保存的 Final 卡片': 'No Final card is available to save', '操作失败': 'Operation failed', '确认': 'Confirm',
-    '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '待办设置失败': 'Failed to update todo status', '重命名失败': 'Rename failed',
+    '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '收藏失败': 'Failed to favorite', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '待办设置失败': 'Failed to update todo status', '重命名失败': 'Rename failed',
     '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: ',
     '置顶会话': 'Pin session', '设为待办': 'Mark as todo', '取消待办': 'Remove todo', '待办': 'Todo', '待审核': 'Pending review', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
     '编辑会话名称': 'Edit the session name', '会话名称': 'Session name', '保存名称': 'Save name',
@@ -587,6 +588,7 @@ function translateUiString(value) {
         .replace(/^加载更早(?:消息|记录)失败：?(.+)$/g, 'Failed to load earlier messages: $1')
         .replace(/^预加载下一批归档目录失败：?(.+)$/g, 'Failed to preload the next archived sessions: $1')
         .replace(/^重命名失败：?(.+)$/g, 'Rename failed: $1')
+        .replace(/^收藏失败：?(.+)$/g, 'Failed to favorite: $1')
         .replace(/^归档失败：?(.+)$/g, 'Archive failed: $1')
         .replace(/^置顶失败：?(.+)$/g, 'Pin failed: $1')
         .replace(/^问题 (\d+)$/g, 'Question $1')

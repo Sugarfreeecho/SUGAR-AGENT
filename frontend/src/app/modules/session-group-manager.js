@@ -2,7 +2,9 @@
 var sessionGroupManager = null;
 
 function sessionGroupManagerMembers(group) {
-    var sessions = selectAllSessions().filter(function (s) { return s && !s.archived && !s.draft; });
+    // 收藏会话在一级目录「收藏夹」里，不再参与常规时间 / 工作目录分组；
+    // 分组管理弹窗的成员列表必须与侧栏可见分组一致。
+    var sessions = selectAllSessions().filter(function (s) { return s && !s.archived && !s.draft && !s.favorite; });
     var groups = group.isWorkDirGroup ? selectNormalSessionWorkDirGroups(sessions) : selectNormalSessionTimeGroups(sessions);
     var current = groups.find(function (g) { return g.key === group.key; });
     return current ? current.sessions.slice() : [];

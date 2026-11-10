@@ -75,7 +75,7 @@ class SessionControlService:
             return None
         if deleted or not meta.get("is_subagent") or not meta.get("parent_session_id"):
             return None
-        fields = ("name", "created_at", "updated_at", "pinned", "archived", "is_subagent", "parent_session_id", "subagent_description", "subagent_type")
+        fields = ("name", "created_at", "updated_at", "pinned", "favorite", "archived", "is_subagent", "parent_session_id", "subagent_description", "subagent_type")
         return {"id": sid, **{key: meta[key] for key in fields if key in meta}}
 
     def authorize(self, principal, method, params):
@@ -550,10 +550,10 @@ class SessionControlService:
         if method == "session.update":
             if any(field in p for field in ("model_profile_id", "reasoning_effort")):
                 self.authorize(principal, "session.config.update", p)
-            unknown = set(p) - {"session_id", "name", "pinned", "todo", "work_dir", "model_profile_id", "reasoning_effort"}
+            unknown = set(p) - {"session_id", "name", "pinned", "favorite", "todo", "work_dir", "model_profile_id", "reasoning_effort"}
             if unknown:
                 raise ControlError("invalid_params", "Unsupported session fields")
-            for key, func in (("name", self.manager.set_session_name), ("pinned", self.manager.set_session_pinned), ("todo", self.manager.set_session_todo)):
+            for key, func in (("name", self.manager.set_session_name), ("pinned", self.manager.set_session_pinned), ("favorite", self.manager.set_session_favorite), ("todo", self.manager.set_session_todo)):
                 if key in p:
                     await asyncio.to_thread(func, sid, p[key])
             if "work_dir" in p:

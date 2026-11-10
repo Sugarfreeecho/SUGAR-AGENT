@@ -44,6 +44,8 @@
     --space-bg2: #181825;
     /* 玻璃表层：主区较亮；侧栏/标题/输入区略深；控件再略提亮 */
     --surface-glass: rgba(22, 22, 36, 0.96);
+
+
     --surface-glass2: rgba(40, 40, 60, 0.94);
     --surface-glass3: rgba(62, 63, 86, 0.78);
     /* 边框 */
@@ -153,6 +155,8 @@
     --space-bg: #e4e9f2;
     --space-bg2: #dce1ec;
     --surface-glass: rgba(255, 255, 255, 0.93);
+
+
     --surface-glass2: rgba(255, 255, 255, 0.98);
     --surface-glass3: rgba(242, 245, 250, 0.98);
     --border-glass: rgba(0, 0, 0, 0.09);
@@ -211,6 +215,8 @@
     --space-bg: #151517;
     --space-bg2: #0f1115;
     --surface-glass: rgba(27, 27, 28, 0.97);
+
+
     --surface-glass2: rgba(44, 44, 46, 0.98);
     --surface-glass3: rgba(53, 54, 56, 0.96);
     --border-glass: rgba(255, 255, 255, 0.06);
@@ -589,7 +595,11 @@ button, input, select, textarea { font-family: var(--sans);
     transition: color 0.16s;
 }
 .session-list-head-toggle:hover, .session-list-head-toggle:focus-visible { color: var(--text-secondary); }
-.session-list-head-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-list-head-label {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    /* 静态头会显示「收藏夹 / 工作区」这类 3 字目录名；去掉标题字距，给末字留出 1px 余量。 */
+    letter-spacing: 0;
+}
 .session-list-head-count {
     flex: 0 0 auto; font-size: 0.7rem; font-weight: 400;
     color: var(--text-subtle);
@@ -976,14 +986,17 @@ button, input, select, textarea { font-family: var(--sans);
     font-size: var(--ui-text-xs);
     line-height: 1.45;
 }
-.session-section { margin-bottom: 0.35rem; }
+.session-section { margin-bottom: 0.63rem; }
+.session-section:last-child { margin-bottom: 0.35rem; }
 /* 一级目录（归档目录）：排版与侧栏列表头（会话 / 工作区）完全一致
    —— 弱化灰标题 + 计数胶囊 + 箭头，不用卡片底色；
    二级目录（今天 / 近7天 / 工作目录名）继续用 .session-time-group-title 的小字号。 */
 .session-section-toggle {
     /* 左/右内缩与列表头对齐（列表本身已有 ~7px 内边距，这里补齐到 ≈16px 起点）；
        计数与箭头紧跟标题（与列表头"会话 [4] ⌄"同构），不再用 space-between 推到最右。 */
-    width: calc(100% - 0.4rem); margin: 0.28rem 0.2rem 0.12rem;
+    /* 顶部不留外边距：吸顶时不再先上移 0.28rem 才停住；分区之间的间距改由
+       .session-section 的 margin-bottom 承担（0.35 + 0.28 = 0.63rem）。 */
+    width: calc(100% - 0.4rem); margin: 0 0.2rem 0.12rem;
     padding: 0.1rem 0.2rem 0.1rem 0.05rem;
     display: flex; align-items: center; justify-content: flex-start; gap: 0.4rem;
     background: none; border: 0; border-radius: 6px;
@@ -996,6 +1009,13 @@ button, input, select, textarea { font-family: var(--sans);
 }
 .session-section-toggle:hover {
     color: var(--text-secondary);
+}
+/* 一级目录标题滚到列表顶部后，由顶部静态头接管显示（见 session-management.js
+   的 updateSessionDirectorySpy）；这里只把原分区标题隐掉，避免被列表顶部裁成半截。 */
+.session-section-toggle.is-scrolled-under {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 /* flex: 0 1 auto —— 与列表头同构：标题只占自身宽度，计数/箭头紧随其后
    （若是 flex:1，标题会撑满整行把胶囊推到行尾） */
@@ -1304,6 +1324,19 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .session-item:hover .session-pin-mark,
 .session-item:focus-within .session-pin-mark,
 .session-item:has(.session-more-wrap.is-open) .session-pin-mark { opacity: 0; }
+/* 收藏标记：与置顶图钉同排同规格；收藏夹会话行尾的星标。 */
+.session-favorite-mark {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-left: 0.35rem;
+    color: var(--amber-accent, #f9e2af);
+    transition: opacity 0.16s var(--ease-out-expo);
+}
+.session-favorite-mark svg { width: 1rem; height: 1rem; display: block; }
+.session-favorite-mark[hidden] { display: none; }
+.session-item:hover .session-favorite-mark,
+.session-item:focus-within .session-favorite-mark,
+.session-item:has(.session-more-wrap.is-open) .session-favorite-mark { opacity: 0; }
 .plugin-session-badges {
     display: inline-flex; align-items: center; gap: 0.2rem;
     flex: 0 1 auto; min-width: 0; margin-left: 0.4rem;

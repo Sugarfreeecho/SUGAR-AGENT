@@ -405,6 +405,7 @@ var SIDEBAR_ICON_SVG = {
     plus: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>',
     dots: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>',
     pin: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>',
+    star: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3.6 2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.7-5.2 2.7 1-5.9L3.5 9.8l5.9-.9z"></path></svg>',
     close: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>',
     chevron: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>',
     check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
@@ -466,6 +467,7 @@ function buildSessionMoreMenuMarkup() {
         + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
         + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
         + '<div class="session-more-menu" role="menu">'
+        + '<button type="button" class="session-menu-favorite" role="menuitem"></button>'
         + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
         + '<button type="button" class="session-menu-todo" role="menuitem"></button>'
         + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
@@ -492,9 +494,11 @@ function findSessionForActions(sessionId, fallback) {
 function syncSessionMenuLabels(wrap, sess) {
     if (!wrap || !sess) return;
     wrap._sessionMenuSession = sess;
+    var favorite = wrap.querySelector('.session-menu-favorite');
     var pin = wrap.querySelector('.session-menu-pin');
     var todo = wrap.querySelector('.session-menu-todo');
     var archive = wrap.querySelector('.session-menu-archive');
+    if (favorite) favorite.textContent = sess.favorite ? '取消收藏' : '收藏会话';
     if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
     if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';
     if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
@@ -556,6 +560,43 @@ async function toggleSessionPinnedFromMenu(sess) {
             if (previous) applyOptimisticSessionUpdate(sess.id, previous);
         }
         console.error('置顶失败', err);
+    }
+}
+
+async function toggleSessionFavoritedFromMenu(sess) {
+    const mutationToken = beginSidebarMetadataMutation();
+    let mutationCommitted = false;
+    let previous = null;
+    const hadAnyFavorite = sessionStore.list().some(function (item) {
+        return item && item.favorite && !item.archived;
+    });
+    try {
+        const formData = new FormData();
+        const nextFavorite = !sess.favorite;
+        previous = applyOptimisticSessionUpdate(sess.id, { favorite: nextFavorite });
+        formData.append('favorite', nextFavorite ? 'true' : 'false');
+        const response = await fetchWithTimeout(
+            '/sessions/' + encodeURIComponent(sess.id) + '/favorite',
+            { method: 'PUT', body: formData },
+            12000
+        );
+        if (!response.ok) {
+            throw new Error('favorite failed: ' + response.status);
+        }
+        const responsePayload = await response.json().catch(function () { return null; });
+        commitSidebarMetadataMutation(mutationToken, responsePayload);
+        mutationCommitted = true;
+        // 第一次收藏时自动展开收藏夹，否则会话会从原分组消失、用户看不到它去了哪里。
+        if (nextFavorite && !hadAnyFavorite && !sess.archived) {
+            persistSessionSectionExpanded('favorites', true);
+        }
+        await refreshSingleSessionRow(sess.id);
+    } catch (err) {
+        if (!mutationCommitted) {
+            cancelSidebarMetadataMutation(mutationToken);
+            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
+        }
+        console.error('收藏失败', err);
     }
 }
 
@@ -888,8 +929,9 @@ function bindSessionActionMenu(wrap, getSession, rowDiv) {
     wrap.addEventListener('click', function (e) {
         var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
         if (!target || !wrap.contains(target)) return;
-        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
-            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
+        var handler = target.classList.contains('session-menu-favorite') ? toggleSessionFavoritedFromMenu
+            : target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
+                : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
                 : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
                     : target.classList.contains('session-menu-workdir') ? changeSessionWorkDirFromMenu
                     : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
@@ -959,6 +1001,8 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
         + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
+        // 收藏标记：与置顶标记同排、同规格；hover 时一起淡出，把位置让给行内动作。
+        + '<span class="session-favorite-mark" aria-label="已收藏" title="已收藏"' + (sess.favorite ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.star + '</span>'
         // 置顶标记（DSH 同款）：行尾、相对时间之后的一枚 16px 图钉；hover 时与时间一起淡出，
         // 把位置让给行内动作（置顶/⋯），避免同一位置出现两个图钉。
         + '<span class="session-pin-mark" aria-label="置顶" title="置顶"' + (sess.pinned ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.pin + '</span>'
@@ -1317,6 +1361,7 @@ function computeSessionListLayoutKey() {
         }
     };
     pushIds('p', sections.pinned);
+    pushIds('f', sections.favorites);
     if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
         sections.normalGroups.forEach(function (group) {
             parts.push('g:' + String((group && group.key) || ''));
@@ -1342,6 +1387,7 @@ function computeSessionListContentMap() {
         map[s.id] = [
             s.name || '',
             s.pinned ? 'p' : '',
+            s.favorite ? 'f' : '',
             s.todo ? 't' : '',
             s.archived ? 'a' : '',
             s.last_activity_at || s.updated_at || '',
@@ -1378,6 +1424,7 @@ function patchSessionListRows(ids) {
         if (s && s.id) nextStreamMap[s.id] = !!s.stream_active;
     };
     (sections.pinned || []).forEach(collect);
+    (sections.favorites || []).forEach(collect);
     if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
         sections.normalGroups.forEach(function (g) {
             // 与渲染/布局键一致：stream 映射只覆盖"实际渲染出的行"。
@@ -3692,12 +3739,124 @@ function applySessionListSearch(value) {
 
 /** 收起/展开「会话（工作区）」区段；标题在侧栏静态头里，被折叠的区段体仍在列表内。 */
 function toggleSessionListHeadCollapse() {
+    const activeKey = (typeof activeSessionDirectoryKey === 'string' && activeSessionDirectoryKey)
+        ? activeSessionDirectoryKey
+        : 'normal';
+    if (activeKey !== 'normal') {
+        // 静态头现在代表当前一级目录（会话 / 收藏夹 / 归档目录）：点击它折叠/展开当前目录。
+        const activeSection = sessionsList
+            ? sessionsList.querySelector('.session-section[data-section="' + activeKey + '"]')
+            : null;
+        const activeToggle = activeSection ? activeSection.querySelector('.session-section-toggle') : null;
+        if (activeToggle) {
+            activeToggle.click();
+            if (typeof updateSessionDirectorySpy === 'function') updateSessionDirectorySpy();
+            return;
+        }
+    }
     const next = !sessionSectionExpanded('normal');
     persistSessionSectionExpanded('normal', next);
     const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;
     if (sec) sec.classList.toggle('is-collapsed', !next);
     syncSessionListHead(null, {});
 }
+
+/** 当前滚动到列表顶部的一级目录（normal / favorites / archived）。 */
+var activeSessionDirectoryKey = 'normal';
+var sessionDirectorySpyQueued = false;
+
+function sessionDirectoryInfo(key) {
+    if (key === 'normal') {
+        const sections = typeof selectSessionSections === 'function' ? selectSessionSections() : { normal: [] };
+        const workDirGrouping = (typeof getSessionGroupBy === 'function') && getSessionGroupBy() === 'workdir';
+        return {
+            title: workDirGrouping ? '工作区' : '会话',
+            count: String((sections.normal || []).length),
+            collapsed: !sessionSectionExpanded('normal'),
+        };
+    }
+    if (!sessionsList) return null;
+    const sec = sessionsList.querySelector('.session-section[data-section="' + key + '"]');
+    if (!sec) return null;
+    const toggle = sec.querySelector('.session-section-toggle');
+    const count = toggle ? toggle.querySelector('.session-section-count') : null;
+    // 静态头右侧还有计数、箭头与四个动作图标，宽度有限；收藏夹 / 归档目录用两字短名，
+    // 完整名称仍保留在分区标题与 aria-label 里。
+    const title = key === 'archived' ? '归档' : '收藏';
+    return {
+        title: title,
+        fullTitle: key === 'archived' ? '归档目录' : '收藏夹',
+        count: count ? String(count.textContent || '') : '',
+        collapsed: sec.classList.contains('is-collapsed'),
+    };
+}
+
+/** 侧栏静态头作为唯一固定的一级目录标题：滚到收藏夹 / 归档目录时切换标题，
+    同时把原分区标题隐掉，避免它被列表顶部裁成半截或与静态头叠在一起。 */
+function updateSessionDirectorySpy() {
+    if (!sessionsList) return;
+    const listTop = sessionsList.getBoundingClientRect().top;
+    const threshold = listTop + 4;
+    let active = 'normal';
+    ['favorites', 'archived'].forEach(function (key) {
+        const sec = sessionsList.querySelector('.session-section[data-section="' + key + '"]');
+        if (!sec) return;
+        const toggle = sec.querySelector('.session-section-toggle');
+        if (!toggle) return;
+        const under = toggle.getBoundingClientRect().top <= threshold;
+        toggle.classList.toggle('is-scrolled-under', under);
+        if (under) active = key;
+    });
+    activeSessionDirectoryKey = active;
+    const head = document.getElementById('session-list-head');
+    const labelEl = document.getElementById('session-head-label');
+    const countEl = document.getElementById('session-head-count');
+    const toggle = document.getElementById('session-head-toggle');
+    if (active === 'normal') {
+        // 常规列表的标题/计数由 syncSessionListHead 维护；滚动时只恢复缓存值，
+        // 避免每帧重算 selectSessionSections（138 个会话时会拖慢滚动）。
+        if (head) {
+            if (labelEl && head.dataset.normalLabel) labelEl.textContent = head.dataset.normalLabel;
+            if (countEl && head.dataset.normalCount) countEl.textContent = head.dataset.normalCount;
+        }
+        const expanded = sessionSectionExpanded('normal');
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            toggle.classList.toggle('is-collapsed', !expanded);
+            toggle.setAttribute('aria-label', '会话列表');
+            toggle.setAttribute('data-ui-tip', '折叠或展开列表');
+        }
+        return;
+    }
+    const info = sessionDirectoryInfo(active);
+    if (!info) return;
+    if (labelEl) labelEl.textContent = info.title;
+    if (countEl) countEl.textContent = info.count;
+    if (toggle) {
+        toggle.setAttribute('aria-expanded', info.collapsed ? 'false' : 'true');
+        toggle.classList.toggle('is-collapsed', info.collapsed);
+        const fullTitle = info.fullTitle || info.title;
+        toggle.setAttribute('aria-label', fullTitle + '列表');
+        toggle.setAttribute('data-ui-tip', (info.collapsed ? '展开' : '折叠') + fullTitle);
+    }
+}
+
+function scheduleSessionDirectorySpy() {
+    if (sessionDirectorySpyQueued) return;
+    sessionDirectorySpyQueued = true;
+    const run = function () {
+        sessionDirectorySpyQueued = false;
+        updateSessionDirectorySpy();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else setTimeout(run, 0);
+}
+
+(function bindSessionDirectorySpyOnce() {
+    if (!sessionsList || window.__myAgentSessionDirectorySpy) return;
+    window.__myAgentSessionDirectorySpy = true;
+    sessionsList.addEventListener('scroll', scheduleSessionDirectorySpy, { passive: true });
+})();
 
 /** 每次列表重绘后同步静态头：标题（会话 / 工作区）、计数、折叠态、视图选项对勾。 */
 function syncSessionListHead(sections, opts) {
@@ -3711,6 +3870,8 @@ function syncSessionListHead(sections, opts) {
     }
     const countEl = document.getElementById('session-head-count');
     if (countEl && sections) countEl.textContent = String((sections.normal || []).length);
+    if (labelEl && labelEl.textContent) head.dataset.normalLabel = labelEl.textContent;
+    if (countEl && sections && countEl.textContent) head.dataset.normalCount = countEl.textContent;
     if (options.searching !== undefined) {
         const head2 = document.getElementById('session-list-head');
         if (head2) head2.classList.toggle('is-filtering', !!options.searching);
@@ -3724,6 +3885,7 @@ function syncSessionListHead(sections, opts) {
     const sec = sessionsList ? sessionsList.querySelector('.session-section[data-section="normal"]') : null;
     if (sec) sec.classList.toggle('is-collapsed', !expanded);
     syncSessionViewMenu();
+    updateSessionDirectorySpy();
 }
 
 /* 索引重建完成后直接重载；新页面会读取权威列表，无需在旧页面重复构建。 */

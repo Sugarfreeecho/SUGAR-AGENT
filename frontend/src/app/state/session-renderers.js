@@ -35,7 +35,7 @@ function renderSessionListFromStore() {
         sessionsList.appendChild(sec);
 
         // 「会话目录」的标题与三个图标在侧栏静态头（session-list-head）里，不再进滚动列表；
-        // 置顶 / 归档仍保留列表内的折叠头。
+        // 收藏夹 / 归档仍保留列表内的折叠头。
         if (!options.headless) {
             var toggle = document.createElement('button');
             toggle.type = 'button';
@@ -55,6 +55,7 @@ function renderSessionListFromStore() {
                 var isExpanded = !sec.classList.contains('is-collapsed');
                 persistSessionSectionExpanded(sectionKey, isExpanded);
                 toggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+                if (typeof updateSessionDirectorySpy === 'function') updateSessionDirectorySpy();
             });
             sec.insertBefore(toggle, body);
         }
@@ -64,6 +65,8 @@ function renderSessionListFromStore() {
     if (sections.showNormalSection !== false) {
         appendSection('normal', '会话目录', sections.normal, { headless: true });
     }
+    // 收藏夹是一级目录：与「会话目录」「归档目录」同级，放在两者之间。
+    if (sections.showFavoritesSection !== false) appendSection('favorites', '收藏夹', sections.favorites);
     if (sections.showArchivedSection !== false) appendSection('archived', '归档目录', sections.archived);
     if (searching && !sessionsList.children.length) {
         var empty = document.createElement('div');

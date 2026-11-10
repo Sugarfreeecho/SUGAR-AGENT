@@ -4537,6 +4537,7 @@ async def create_session(req: Request = None):
         "last_activity_at": (metadata or {}).get("updated_at") or (metadata or {}).get("created_at"),
         "archived": bool((metadata or {}).get("archived", False)),
         "pinned": bool((metadata or {}).get("pinned", False)),
+        "favorite": bool((metadata or {}).get("favorite", False)),
         "todo": bool((metadata or {}).get("todo", False)),
         "pinned_at": (metadata or {}).get("pinned_at") if (metadata or {}).get("pinned") else None,
         "model_profile_id": (metadata or {}).get("model_profile_id") or "",
@@ -8858,6 +8859,13 @@ async def pin_session(session_id: str, pinned: bool = Form(...)):
     return JSONResponse(content={"status": "ok", "state_revision": state_revision})
 
 
+@fastapi_app.put("/sessions/{session_id}/favorite")
+async def favorite_session(session_id: str, favorite: bool = Form(...)):
+    session_manager.set_session_favorite(session_id, favorite)
+    state_revision = _invalidate_sessions_state_cache()
+    return JSONResponse(content={"status": "ok", "state_revision": state_revision})
+
+
 @fastapi_app.put("/sessions/{session_id}/todo")
 async def todo_session(session_id: str, todo: bool = Form(...)):
     session_manager.set_session_todo(session_id, todo)
@@ -11069,20 +11077,36 @@ async def start_webui_lifecycle() -> None:
     """Start Web UI services shared by the default and production lifespans."""
     from runtime_lifecycle import configure
     lifecycle = configure(session_manager)
-    await _session_control_application.start()
+
+    async def _step(label, func, *args, **kwargs):
+        """Time one startup phase so a regression is visible in the log."""
+        started_at = time.perf_counter()
+        result = func(*args, **kwargs)
+        if asyncio.iscoroutine(result) or isinstance(result, asyncio.Future):
+            result = await result
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        if elapsed_ms >= 100:
+            logger.info("startup_step %s ms=%d", label, int(elapsed_ms))
+        return result
+
+    await _step("session_control", _session_control_application.start)
     # Shared by button, remote-control and plugin get_or_create_session calls.
     # Refills run on a worker so filesystem latency cannot block event ingress.
     session_manager.start_session_draft_reserve()
     from runtime_files import cleanup_stale_scratch
     try:
-        await asyncio.to_thread(cleanup_stale_scratch, WORK_DIR)
+        await _step(
+            "scratch_recovery", asyncio.to_thread, cleanup_stale_scratch, WORK_DIR
+        )
     except OSError:
         logger.warning("Startup scratch recovery deferred", exc_info=True)
-    _warm_ui_caches()
-    initialize_ui_attention_notifications()
-    await _warm_runtime_checkpoint_workers()
+    await _step("ui_caches", _warm_ui_caches)
+    await _step("attention_notifications", initialize_ui_attention_notifications)
+    await _step("checkpoint_workers", _warm_runtime_checkpoint_workers)
     from agent_subagent_notifications import start_runner as start_subagent_notification_runner
-    await start_subagent_notification_runner(session_manager)
+    await _step(
+        "subagent_notifications", start_subagent_notification_runner, session_manager
+    )
     # Tokenizer JSON loading cost 621 ms on the first request in production.
     # Start it immediately in a worker thread; the loader lock makes racing with
     # an early user request safe and avoids parsing the vocabulary twice.
@@ -11101,9 +11125,16 @@ async def start_webui_lifecycle() -> None:
         from agent_extensions import start_plugin_background_services
         from plugins.host import start_bundled_host_extensions
 
-        await start_plugin_background_services()
-        await start_bundled_host_extensions(
-            load_plugins(force=True).plugins,
+        await _step("plugin_background_services", start_plugin_background_services)
+        # Plugin discovery reads plugin trees; keep it off the event loop so a
+        # cold signature pass cannot stall HTTP startup and its first loads. The
+        # import-time pass above already forced a fresh scan in this process.
+        loaded_plugins = await _step(
+            "plugin_load", asyncio.to_thread, load_plugins
+        )
+        await _step(
+            "host_extensions", start_bundled_host_extensions,
+            loaded_plugins.plugins,
             {"session_manager": session_manager, "project_root": PROJECT_ROOT, "work_dir": WORK_DIR, "app": fastapi_app},
         )
     except Exception:

@@ -3636,19 +3636,24 @@ def _classify_session_log_line(raw: bytes) -> Tuple[str, Optional[float]]:
     return "activity", ts
 
 
-def _session_log_activity_timestamp(log_path: Path, fallback: float) -> Optional[float]:
+def _session_log_activity_timestamp(
+    log_path: Path, fallback: float
+) -> Tuple[Optional[float], bool]:
     """Runtime V2 事件日志里最后一条「对话活动」的时间戳。
 
     返回 ``fallback``：日志不可读/不可解析（沿用文件 mtime 的旧口径）；
     返回 ``None``：扫到的部分只有控制类事件（调用方保留已存的活动时间，不把这次
     追加当成会话活动）。
+
+    第二个返回值表示这次结果可否写进活动缓存：读失败时不能缓存，否则一次瞬时
+    故障会被当成长期结论。
     """
     try:
         size = log_path.stat().st_size
     except OSError:
-        return fallback
+        return fallback, False
     if size <= 0:
-        return None
+        return None, True
     try:
         with open(log_path, "rb") as stream:
             position = int(size)
@@ -3659,20 +3664,33 @@ def _session_log_activity_timestamp(log_path: Path, fallback: float) -> Optional
                 position -= step
                 scanned += step
                 stream.seek(position)
-                pending = stream.read(step) + pending
+                chunk = stream.read(step)
+                pending = chunk + pending
+                # A chunk without a line break only extends one partial line.
+                # Splitting it anyway made huge single-line logs quadratic.
+                if b"\n" not in chunk:
+                    continue
                 lines = pending.split(b"\n")
                 pending = lines.pop(0) if position > 0 else b""
                 for raw in reversed(lines):
                     verdict, value = _classify_session_log_line(raw)
                     if verdict == "activity":
-                        return value
+                        return value, True
                     if verdict == "unreadable":
-                        return fallback
+                        # A parse failure repeats for unchanged bytes, so the
+                        # answer is settled and safe to cache.
+                        return fallback, True
             if position > 0:
-                return fallback
-            return None
+                return fallback, True
+            if pending:
+                verdict, value = _classify_session_log_line(pending)
+                if verdict == "activity":
+                    return value, True
+                if verdict == "unreadable":
+                    return fallback, True
+            return None, True
     except OSError:
-        return fallback
+        return fallback, False
 
 
 # Todo 计划 Markdown 标题（独立落盘 todo_plan.md；兼容旧 key_context 内嵌）
@@ -3993,7 +4011,7 @@ class SessionManager:
     def refresh_sessions_index_from_disk(self) -> None:
         """根据 sessions 目录内存在的会话文件夹重建索引（sessions.json），磁盘与 metadata 为准。"""
         by_id: Dict[str, dict] = {}
-        activity_cache = getattr(self, "_index_activity_cache", {})
+        activity_cache = self._load_activity_cache()
         next_activity_cache = {}
         sub_idx = self._load_subagent_index()
         runtime_v2_primary = self._runtime_v2_primary()
@@ -4074,11 +4092,21 @@ class SessionManager:
                         cached_activity = activity_cache.get(sid)
                         if cached_activity and cached_activity[0] == activity_signature:
                             activity_ts = cached_activity[1]
+                            cacheable = True  # carry the entry forward unchanged
                         else:
-                            activity_ts = _session_log_activity_timestamp(activity_path, activity_ts)
-                        # A fallback to mtime can mean a transient read failure;
-                        # recheck it next time rather than caching that failure.
-                        if activity_ts is None or activity_ts != activity_stat.st_mtime:
+                            scanned = _session_log_activity_timestamp(
+                                activity_path, activity_ts
+                            )
+                            if isinstance(scanned, tuple):
+                                activity_ts, cacheable = scanned
+                            else:
+                                # Older/patched scanners return a bare value and
+                                # cannot vouch for it; never cache those.
+                                activity_ts, cacheable = scanned, False
+                        # Cache every settled answer, including the common case
+                        # where activity equals the file mtime; a read failure is
+                        # not cacheable and gets rechecked next time.
+                        if cacheable:
                             next_activity_cache[sid] = (activity_signature, activity_ts)
                 if activity_ts is not None and activity_ts > self._iso_ts(updated_at):
                     updated_at = datetime.fromtimestamp(
@@ -4087,6 +4115,7 @@ class SessionManager:
                     ).isoformat().replace("+00:00", "Z")
                 archived = bool(meta.get("archived", False))
                 pinned = bool(meta.get("pinned", False))
+                favorite = bool(meta.get("favorite", False))
                 todo = bool(meta.get("todo", False))
                 goal_review_pending = bool(meta.get("goal_review_pending", False))
                 pinned_at = meta.get("pinned_at")
@@ -4099,6 +4128,7 @@ class SessionManager:
                     "updated_at": updated_at,
                     "archived": archived,
                     "pinned": pinned,
+                    "favorite": favorite,
                     "todo": todo,
                     "goal_review_pending": goal_review_pending,
                     "pinned_at": pinned_at if pinned else None,
@@ -4117,7 +4147,10 @@ class SessionManager:
                 by_id[sid] = entry
         except FileNotFoundError:
             pass
+        previous_activity_cache = getattr(self, "_index_activity_cache", None)
         self._index_activity_cache = next_activity_cache
+        if next_activity_cache != previous_activity_cache:
+            self._save_activity_cache(next_activity_cache)
         self.index = sorted(
             by_id.values(),
             key=lambda e: str(e.get("updated_at") or e.get("created_at") or ""),
@@ -4139,6 +4172,58 @@ class SessionManager:
                     self.index = []
             else:
                 self.index = []
+
+    def _activity_cache_path(self) -> Path:
+        """Persisted view of per-session log scan results.
+
+        Rebuilding the index used to read up to 4 MB from the tail of every
+        session log on each start (490 logs / ~1.5 GB scanned, 23 s observed).
+        The signature of each log makes the rescan incremental.
+        """
+
+        return self.index_file.with_name("sessions_activity_cache.json")
+
+    def _load_activity_cache(self) -> Dict[str, Tuple[tuple, Optional[float]]]:
+        rows: Dict[str, Tuple[tuple, Optional[float]]] = {}
+        try:
+            raw = json.loads(self._activity_cache_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = None
+        stored = raw.get("sessions") if isinstance(raw, dict) else None
+        if isinstance(stored, dict):
+            for sid, row in stored.items():
+                if not isinstance(row, list) or len(row) != 6:
+                    continue
+                signature = tuple(row[:5])
+                value = row[5]
+                if not all(isinstance(item, int) for item in signature):
+                    continue
+                if value is not None and not isinstance(value, (int, float)):
+                    continue
+                rows[str(sid)] = (signature, None if value is None else float(value))
+        # An in-memory result from this process wins over the file: it may have
+        # been refreshed after the file was written.
+        rows.update(getattr(self, "_index_activity_cache", {}) or {})
+        return rows
+
+    def _save_activity_cache(self, cache: Dict[str, Tuple[tuple, Optional[float]]]) -> None:
+        payload = {
+            "version": 1,
+            "sessions": {
+                sid: [*list(signature), value]
+                for sid, (signature, value) in cache.items()
+            },
+        }
+        path = self._activity_cache_path()
+        try:
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            os.replace(temporary, path)
+        except OSError:
+            logger.debug("Unable to persist session activity cache", exc_info=True)
 
     def _save_index(self):
         with self._lock:
@@ -6478,6 +6563,7 @@ class SessionManager:
         meta["updated_at"] = now_iso
         meta["archived"] = False
         meta["pinned"] = False
+        meta["favorite"] = False
         meta["todo"] = False
         meta["goal_review_pending"] = False
         meta.pop("pinned_at", None)
@@ -6511,6 +6597,7 @@ class SessionManager:
             "updated_at": now_iso,
             "archived": False,
             "pinned": False,
+            "favorite": False,
             "todo": False,
             "goal_review_pending": False,
             "pinned_at": None,
@@ -6655,6 +6742,7 @@ class SessionManager:
                 "updated_at": now_iso,
                 "archived": False,
                 "pinned": False,
+                "favorite": False,
                 "todo": False,
                 "goal_review_pending": False,
                 "pinned_at": None,
@@ -7145,6 +7233,7 @@ class SessionManager:
             "updated_at": now_iso,
             "archived": False,
             "pinned": False,
+            "favorite": False,
             "todo": False,
             "goal_review_pending": False,
             "is_subagent": True,
@@ -7524,6 +7613,7 @@ class SessionManager:
             "updated_at": now_iso,
             "archived": False,
             "pinned": False,
+            "favorite": False,
             "todo": False,
             "goal_review_pending": False,
             # WORK_DIR is already normalized by _env_path() during startup.
@@ -7586,6 +7676,7 @@ class SessionManager:
             "updated_at": metadata.get("updated_at") or metadata["created_at"],
             "archived": bool(metadata.get("archived", False)),
             "pinned": bool(metadata.get("pinned", False)),
+            "favorite": bool(metadata.get("favorite", False)),
             "todo": bool(metadata.get("todo", False)),
             "goal_review_pending": bool(metadata.get("goal_review_pending", False)),
             "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
@@ -7712,6 +7803,8 @@ class SessionManager:
                         sess["archived"] = bool(metadata["archived"])
                     if "pinned" in metadata:
                         sess["pinned"] = bool(metadata["pinned"])
+                    if "favorite" in metadata:
+                        sess["favorite"] = bool(metadata["favorite"])
                     if "todo" in metadata:
                         sess["todo"] = bool(metadata["todo"])
                     if "goal_review_pending" in metadata:
@@ -7746,6 +7839,8 @@ class SessionManager:
                         sess["archived"] = bool(metadata["archived"])
                     if "pinned" in metadata:
                         sess["pinned"] = bool(metadata["pinned"])
+                    if "favorite" in metadata:
+                        sess["favorite"] = bool(metadata["favorite"])
                     if "todo" in metadata:
                         sess["todo"] = bool(metadata["todo"])
                     if "goal_review_pending" in metadata:
@@ -7863,6 +7958,7 @@ class SessionManager:
         d = dict(base)
         d.setdefault("archived", False)
         d.setdefault("pinned", False)
+        d["favorite"] = bool(d.get("favorite", False))
         d["todo"] = bool(d.get("todo", False))
         d["goal_review_pending"] = bool(d.get("goal_review_pending", False))
         d["unread_result"] = bool(d.get("unread_result", False))
@@ -7957,7 +8053,7 @@ class SessionManager:
         changed = False
         for sess in list(self.index):
             sid = str(sess.get("id") or "").strip()
-            if not sid or sess.get("archived") or sess.get("pinned"):
+            if not sid or sess.get("archived") or sess.get("pinned") or sess.get("favorite"):
                 continue
             row = self._session_entry_with_activity(dict(sess))
             activity_ts = self._iso_ts(row.get("last_activity_at") or row.get("updated_at") or row.get("created_at"))
@@ -8073,7 +8169,7 @@ class SessionManager:
         }
         if metadata.get("unread_result_run_id"):
             entry["unread_result_run_id"] = metadata["unread_result_run_id"]
-        for field in ("archived", "pinned", "todo", "goal_review_pending", "draft", "unread_result"):
+        for field in ("archived", "pinned", "favorite", "todo", "goal_review_pending", "draft", "unread_result"):
             entry[field] = bool(metadata.get(field, False))
         with self._lock:
             previous = self.index
@@ -8136,6 +8232,32 @@ class SessionManager:
             return
         self._save_index()
         self._notify_session_state_changed(session_id, {"pinned", "pinned_at"})
+
+    def set_session_favorite(self, session_id: str, favorite: bool) -> None:
+        """收藏 / 取消收藏会话。
+
+        收藏只影响侧栏归属与自动归档：收藏的会话不会被 ``_auto_archive_stale_sessions``
+        自动移入归档目录（与置顶同样待遇），但仍允许用户手动归档。
+        """
+        meta_path = self._get_metadata_path(session_id)
+        if not meta_path.exists():
+            self.refresh_sessions_index_from_disk()
+            return
+        with self._session_metadata_lock(session_id):
+            metadata = self._load_metadata_unlocked(session_id)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["favorite"] = bool(favorite)
+            self._save_metadata_unlocked(session_id, metadata)
+        for sess in self.index:
+            if sess.get("id") == session_id:
+                sess["favorite"] = bool(favorite)
+                break
+        else:
+            self.refresh_sessions_index_from_disk()
+            return
+        self._save_index()
+        self._notify_session_state_changed(session_id, {"favorite"})
 
     def set_session_todo(self, session_id: str, todo: bool) -> None:
         """切换侧栏「待办」标记。

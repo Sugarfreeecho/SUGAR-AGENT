@@ -321,10 +321,17 @@ function selectSessionsMatchingSearch(list) {
 
 function selectSessionSections() {
     const normalList = [];
+    const favoriteList = [];
     const allSessions = selectAllSessions();
     for (let i = 0; i < allSessions.length; i += 1) {
         const s = allSessions[i];
         if (!s || !s.id || !!s.archived) continue;
+        // 收藏夹是一级目录（与会话 / 归档目录同级）：收藏的会话只出现在收藏夹，
+        // 不再重复落进时间 / 工作目录分组；取消收藏后回到常规会话列表。
+        if (s.favorite) {
+            favoriteList.push(s);
+            continue;
+        }
         // 置顶不再单独成区：置顶会话留在它自己的时间 / 工作目录分组里。
         // 服务端排序本来就是"置顶优先"，所以它们在各自组内自然排在最前
         // —— 即"工作目录模式下没有专门的置顶目录，只在每个项目内置顶"。
@@ -334,12 +341,14 @@ function selectSessionSections() {
     return {
         // 兼容旧调用方：置顶区已取消（渲染层不会再单独成区）。
         pinned: [],
+        favorites: selectSessionsMatchingSearch(favoriteList),
         normal: selectSessionsMatchingSearch(normalList),
         normalGroups: selectNormalSessionGroups(selectSessionsMatchingSearch(normalList)),
         archived: archiveFilter === 'hide' ? [] : selectSessionsMatchingSearch(selectArchivedSessions()),
         // 'only' 时只渲染归档区段；'hide' 连归档区段入口一起隐藏。
         archiveFilter: archiveFilter,
         showPinnedSection: false,
+        showFavoritesSection: archiveFilter !== 'only',
         showNormalSection: archiveFilter !== 'only',
         showArchivedSection: archiveFilter !== 'hide',
     };
