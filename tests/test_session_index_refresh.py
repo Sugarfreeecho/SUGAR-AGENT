@@ -72,6 +72,59 @@ def test_activity_scan_read_failure_is_not_cached(monkeypatch, tmp_path):
     assert manager._index_activity_cache == {}
 
 
+def test_control_append_behind_oversized_line_keeps_stored_activity(monkeypatch, tmp_path):
+    """尾部追加控制事件时，不能因为超长快照行读不完就退回 mtime。"""
+    import agent_harness
+    monkeypatch.setattr(agent_harness.SessionManager, '_runtime_v2_primary', lambda _: True)
+    sid = str(uuid.uuid4())
+    directory = tmp_path/'sessions'/sid
+    directory.mkdir(parents=True)
+    (directory/'metadata.json').write_text(json.dumps({'name': 'valid', 'created_at': '2025-01-01T00:00:00Z'}), encoding='utf8')
+    log = directory/'events.jsonl'
+    # 1) 真实的对话活动：2025-06-01
+    head = json.dumps({'seq': 1, 'type': 'message_user', 'timestamp': '2025-06-01T00:00:00Z'})
+    # 2) Runtime V2 的整份快照压成单行，体积超过 4MB 回溯预算
+    giant = json.dumps({'seq': 2, 'type': 'runtime_snapshot_compacted',
+                        'timestamp': '2025-06-02T00:00:00Z', 'payload': {'blob': 'x' * (5 * 1024 * 1024)}})
+    # 3) 之后只有控制类事件（执行面板同步），不应算作对话活动
+    control = '\n'.join(json.dumps({'seq': 3 + i, 'type': 'extension_state_changed',
+                                    'timestamp': '2026-09-09T00:00:00Z'}) for i in range(3))
+    log.write_text(f'{head}\n{giant}\n{control}\n', encoding='utf8')
+
+    fallback = datetime.now().timestamp()
+    value, cacheable = agent_harness._session_log_activity_timestamp(log, fallback)
+    assert value is None, '预算在超长行内耗尽时必须报告“未知”，不能把 mtime 当活动'
+    assert cacheable is True
+
+    manager = agent_harness.SessionManager(directory.parent, tmp_path/'sessions.json')
+    manager.refresh_sessions_index_from_disk()
+    assert manager.index[0]['updated_at'].startswith('2025-01-01'), '没有真实对话活动时应保留已存时间'
+    assert manager._index_activity_cache[sid][1] is None, '“未知”结果按签名缓存，避免每次刷新重扫 4MB'
+
+
+def test_activity_cache_discards_mtime_fallback_conclusions(tmp_path):
+    """旧缓存里“活动时间 == 文件 mtime”的条目必须丢弃并重算。"""
+    import agent_harness
+    sessions = tmp_path/'sessions'
+    sessions.mkdir()
+    manager = agent_harness.SessionManager(sessions, tmp_path/'sessions.json')
+    kept = str(uuid.uuid4())
+    dropped = str(uuid.uuid4())
+    kept_sig = [1, 2, 3, 1_700_000_000_000_000_000, 4]
+    dropped_sig = [1, 2, 3, 1_800_000_000_123_456_789, 4]
+    (tmp_path/'sessions_activity_cache.json').write_text(json.dumps({
+        'version': 1,
+        'sessions': {
+            kept: [*kept_sig, 1_600_000_000.0],
+            dropped: [*dropped_sig, dropped_sig[3] / 1e9],
+        },
+    }), encoding='utf8')
+
+    rows = manager._load_activity_cache()
+    assert kept in rows, '与 mtime 不同的结论是真实扫描结果，必须保留'
+    assert dropped not in rows, 'mtime 兜底结论必须失效，否则修正后的口径永远不生效'
+
+
 def test_refresh_button_waits_for_index_rebuild():
     result = subprocess.run(
         ["node", "--test", str(ROOT / "tests/js/session_refresh_runtime.cjs")],

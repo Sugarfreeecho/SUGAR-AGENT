@@ -564,14 +564,16 @@ def test_agent_loop_wires_hooks_before_safety_approval_and_across_lifecycles():
             ROOT / "plugins/agent-goal/runtime.py",
         )
     )
-    wrapper = source.split("async def execute_one(tool_call):", 1)[1].split(
+    wrapper = source.split(
+        "async def _execute_one_impl(tool_call, state, emit, background_marker):", 1
+    )[1].split(
         "# ---------- 2.6 调用 LLM", 1
     )[0]
-    core = source.split("async def _execute_one_core(tool_call):", 1)[1].split(
-        "async def execute_one(tool_call):", 1
+    core = source.split("async def _execute_one_core(tool_call, state, emit):", 1)[1].split(
+        "async def execute_one(", 1
     )[0]
 
-    assert wrapper.index('"PreToolUse"') < wrapper.index("_execute_one_core(call)")
+    assert wrapper.index('"PreToolUse"') < wrapper.index("_execute_one_core(call")
     assert 'call["args"] = tool_args' in wrapper
     assert 'call["_hook_approval_spec"]' in wrapper
     assert 'hook_approval_spec = tool_call.get("_hook_approval_spec")' in core

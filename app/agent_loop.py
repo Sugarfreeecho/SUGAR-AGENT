@@ -151,6 +151,7 @@ from agent_tokenizer import (
     build_context_breakdown,
 )
 import agent_mcp
+import background_tools
 import cpu_pressure
 import execution_metrics
 from runtime_observability import capture_workspace_state, diff_workspace_states
@@ -1202,6 +1203,10 @@ def _state_run_has_write_fence(state: State) -> bool:
 def _state_interrupt_requested(state: State) -> bool:
     """Return an interrupt only when it targets this exact run."""
 
+    if isinstance(state, dict) and state.get("_background_tool"):
+        # A detached tool outlives the run that started it; a later stop of
+        # the foreground run must not kill work that already left it.
+        return False
     sid = str(state.get("session_id") or "").strip()
     run_id = str(state.get("_runtime_v2_run_id") or "").strip()
     return bool(sid and session_manager.is_interrupt_requested(sid, run_id))
@@ -3663,6 +3668,9 @@ def _steer_control_from_state(state: State) -> Optional[_SteerRunControl]:
 
 def _steer_requested(state: State) -> bool:
     sid = str(state.get("session_id") or "").strip() if isinstance(state, dict) else ""
+    if isinstance(state, dict) and state.get("_background_tool"):
+        # New steers belong to the successor run, never to background work.
+        return False
     control = _steer_control_from_state(state)
     # Append-mode steers are deliberately invisible to interruption polling.
     # They are claimed only at a completed ReAct boundary, after any tool
@@ -3732,6 +3740,11 @@ async def _emit_steer_abort_event(
         ),
         "ephemeral": True,
     }
+    moved = background_tools.background_ids(str(state.get("session_id") or ""))
+    if moved:
+        # Do not close a call that already left the foreground run; its own
+        # completion event owns the final status.
+        event["preserve_tool_call_ids"] = sorted(moved)
     react_iter = state.get("_current_react_iter")
     try:
         if react_iter is not None:
@@ -3782,6 +3795,8 @@ async def _await_steerable(
     poll_sec: float = 0.05,
     defer_steer: bool = False,
     cancel_on_parent: bool = False,
+    background: Optional[Any] = None,
+    cancel_on_steer: bool = True,
 ):
     try:
         await _raise_if_steer_requested(state, emit, stage)
@@ -3791,6 +3806,10 @@ async def _await_steerable(
             close_fn()
         raise
     task = asyncio.ensure_future(awaitable)
+    scope = background if isinstance(background, background_tools.ExecutionScope) else None
+    passthrough = background if isinstance(background, dict) else None
+    if scope is not None:
+        scope.task = task
     if defer_steer:
         # Serialized write tools may have irreversible side effects. Once they
         # have started, preserve their real result and apply the steer at the
@@ -3812,9 +3831,37 @@ async def _await_steerable(
             done, _ = await asyncio.wait({task}, timeout=poll_sec)
             if task in done:
                 return task.result()
+            if passthrough is not None:
+                # The inner invocation never aborts itself: it only reports the
+                # request so the dispatching scope can hand the call over.
+                if _steer_requested(state):
+                    passthrough["marker"]["detach_requested"] = True
+                continue
+            if scope is not None and _steer_requested(state):
+                if scope.marker.get("executing") and not task.done():
+                    sid = str(state.get("session_id") or "").strip()
+                    tool_id = str((scope.tool_call or {}).get("id") or "")
+                    owned = _register_background_tool(state, scope, task)
+                    if owned or background_tools.is_backgrounded(sid, tool_id):
+                        scope.detach()
+                        await _announce_background_tool(state, emit, scope)
+                        await _emit_steer_abort_event(state, emit, stage)
+                        raise _SteerRestartRequested()
             await _raise_if_steer_requested(state, emit, stage)
     except (asyncio.CancelledError, _SteerRestartRequested) as exc:
         if isinstance(exc, asyncio.CancelledError) and not cancel_on_parent:
+            if scope is not None and scope.detached and not task.done():
+                task.add_done_callback(_discard_task_result)
+            raise
+        if scope is not None and scope.detached:
+            # The call was already handed over (e.g. by the stream loop);
+            # leave the detached task running.
+            if not task.done():
+                task.add_done_callback(_discard_task_result)
+            raise
+        if isinstance(exc, _SteerRestartRequested) and not cancel_on_steer:
+            if not task.done():
+                task.add_done_callback(_discard_task_result)
             raise
         if not task.done():
             task.add_done_callback(_discard_task_result)
@@ -3823,6 +3870,60 @@ async def _await_steerable(
             # process state. A cancellation-resistant tool stays unknown.
             await asyncio.wait({task}, timeout=5)
         raise
+
+
+def _register_background_tool(state: State, scope: Any, task: Any) -> bool:
+    """Own a started tool call that the foreground run is leaving behind."""
+    sid = str(state.get("session_id") or "").strip()
+    if not sid:
+        return False
+    tool_id = str((scope.tool_call or {}).get("id") or "")
+    run_id = str(state.get("_runtime_v2_run_id") or "")
+    anchor: Dict[str, Any] = {}
+    try:
+        from runtime_v2.execution_journal import ExecutionJournal
+
+        anchor = ExecutionJournal(
+            session_manager.sessions_dir,
+            getattr(session_manager, "_resolve_session_path", None),
+        ).anchor(sid, tool_id, run_id)
+    except Exception:
+        anchor = {}
+    try:
+        return background_tools.register(
+            session_id=sid,
+            run_id=run_id,
+            session_dir=_active_session_path(sid),
+            scope=scope,
+            task=task,
+            build_event=_tool_result_sse_event,
+            anchor=anchor,
+        )
+    except Exception:
+        logger.warning("tool could not be moved to background session=%s", sid,
+                       exc_info=True)
+        return False
+
+
+async def _announce_background_tool(
+    state: State,
+    emit: Optional[Callable[[Dict[str, Any]], Any]],
+    scope: Any,
+) -> None:
+    name = str((scope.tool_call or {}).get("name") or "工具")
+    try:
+        await _push_stream_event(
+            state,
+            {
+                "type": "status",
+                "content": f"{name} 已转入后台继续执行，完成后补发结果。",
+                "tool_call_id": str((scope.tool_call or {}).get("id") or ""),
+                "background_execution": True,
+            },
+            emit=emit,
+        )
+    except Exception:
+        logger.debug("background tool announcement failed", exc_info=True)
 
 
 def _model_tool_definition_name(definition: Any) -> str:
@@ -4433,8 +4534,12 @@ def _rollback_steer_partial_turn(state: State) -> None:
     work_messages = list(state.get("work_messages", []))
     from runtime_v2.execution_journal import close_unfinished_calls
     records = _execution_recovery_snapshot(state["session_id"])["execution_records"]
-    llm_history, llm_added = close_unfinished_calls(llm_history, records)
-    work_messages, work_added = close_unfinished_calls(work_messages, records)
+    sid = str(state["session_id"] or "")
+    moved_ids = background_tools.background_ids(sid)
+    llm_history, llm_added = close_unfinished_calls(
+        llm_history, records, background_ids=moved_ids)
+    work_messages, work_added = close_unfinished_calls(
+        work_messages, records, background_ids=moved_ids)
     if not llm_added and not work_added:
         return
     state["llm_history"] = llm_history
@@ -4446,7 +4551,13 @@ def _rollback_steer_partial_turn(state: State) -> None:
         "type": "tool_call", "tool_call_id": result.tool_call_id,
         "tool": by_id.get(result.tool_call_id, {}).get("tool", "tool"),
         "args": by_id.get(result.tool_call_id, {}).get("args", {}),
-        "result": result.content, "execution_status": "interrupted",
+        "result": result.content,
+        "execution_status": (
+            "background"
+            if background_tools.is_backgrounded(sid, str(result.tool_call_id or ""))
+            else "interrupted"
+        ),
+        "background_execution": background_tools.is_backgrounded(sid, str(result.tool_call_id or "")),
         "react_iter": by_id.get(result.tool_call_id, {}).get("react_iter"),
         "execution_id": by_id.get(result.tool_call_id, {}).get("execution_id"),
         "stream_seq": by_id.get(result.tool_call_id, {}).get("stream_seq"),
@@ -5807,8 +5918,36 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             )
         return False
 
+    def _inject_pending_background_tool_notes() -> bool:
+        """Expose results of tools that outlived the run that started them."""
+        session_dir = _active_session_path(state["session_id"])
+        if not background_tools.pending_exists(session_dir):
+            return False
+        rows = background_tools.claim_notes(state["session_id"], session_dir)
+        if not rows:
+            return False
+        try:
+            note = SystemMessage(
+                content="[后台工具已完成]\n" + "\n".join(background_tools.note_lines(rows))
+            )
+            llm_history.append(note)
+            work_messages.append(note)
+            state["llm_history"] = llm_history
+            state["work_messages"] = work_messages
+            _persist_state_with_model_append(state, note)
+            return True
+        except Exception:
+            background_tools.restore_notes(session_dir, rows)
+            raise
+
+    def _inject_pending_notes(*, current_run_only: bool = False) -> bool:
+        background_changed = _inject_pending_background_tool_notes()
+        subagent_changed = _inject_pending_subagent_notes(
+            current_run_only=current_run_only)
+        return bool(background_changed or subagent_changed)
+
     _t_initial_inject = time.perf_counter()
-    _inject_pending_subagent_notes()
+    _inject_pending_notes()
     logger.info(
         "react_init subagent_claim_done session=%s ms=%s",
         state.get("session_id"),
@@ -5821,7 +5960,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # batch tail. Complete their durable review obligation before the
             # next planning request, while its original execution scope remains.
             workflow_pause_reason, notices_changed = await _prepare_react_iteration(
-                state, emit, _inject_pending_subagent_notes)
+                state, emit, _inject_pending_notes)
             if workflow_pause_reason:
                 final_content = workflow_pause_reason
                 break
@@ -6645,13 +6784,19 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             # workspace sweep is coalesced until this iteration's batch boundary.
             state['_change_review_batch_active'] = True
 
-            async def _execute_one_core(tool_call):
+            async def _execute_one_core(tool_call, state, emit):
                 call_stream_seq = tool_call.get("_execution_stream_seq", llm_stream_seq)
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
                 tool_id = tool_call["id"]
                 tool_call_index = tool_call.get("index")
                 tool_descriptor = tool_registry.resolve(tool_name)
+                background_marker = tool_call.get("_background_marker") or {}
+
+                def _steer_may_interrupt() -> bool:
+                    """A steer hands an eligible call over instead of killing it."""
+                    return not bool(background_marker)
+
                 execution_name = tool_descriptor.execution_name if tool_descriptor else tool_name
                 from session_control.integration import consume_tool_budget
                 try:
@@ -7201,6 +7346,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         return _blocked_tool_result(tool_name, tool_args, tool_id, str(exc))
                 # Run the final steer check before announcing that execution started.
                 await _raise_if_steer_requested(state, emit, "tool")
+                if background_marker:
+                    # From here on the call has started: a steer moves it to
+                    # the background and the successor run continues instead.
+                    background_marker["executing"] = True
                 await _push_stream_event(state, {
                     "type": "tool_execution_state", "ephemeral": True,
                     "tool_call_id": tool_id, "tool_call_index": tool_call_index,
@@ -7300,7 +7449,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             "interaction_interrupt_check": lambda: (
                                 not _state_run_has_write_fence(state)
                                 or _state_interrupt_requested(state)
-                                or _steer_requested(state)
+                                or (_steer_may_interrupt() and _steer_requested(state))
                             ),
                             "run_interrupt_check": lambda: (
                                 not _state_run_has_write_fence(state)
@@ -7325,7 +7474,11 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             ),
                             "session_meta": session_meta,
                             "await_steerable": lambda awaitable, stage: _await_steerable(
-                                state, awaitable, emit, stage
+                                state, awaitable, emit, stage,
+                                background=(
+                                    {"marker": background_marker, "passthrough": True}
+                                    if background_marker else None
+                                ),
                             ),
                             "should_propagate_exception": lambda exc: isinstance(
                                 exc, _SteerRestartRequested
@@ -7374,6 +7527,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             ),
                             emit,
                             "tool_mcp",
+                            background=(
+                                {"marker": background_marker, "passthrough": True}
+                                if background_marker else None
+                            ),
                         )
                         outcome = result if isinstance(result, ToolOutcome) else ToolOutcome.completed(result)
                         change_review_tool_failed = outcome.kind is ToolOutcomeKind.FAILED
@@ -7431,13 +7588,17 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 run_id=str(state.get("_runtime_v2_run_id") or ""),
                                 cancellation_id=str(tool_id or ""),
                                 should_cancel=lambda: (
-                                    _steer_requested(state)
+                                    (_steer_may_interrupt() and _steer_requested(state))
                                     or _state_interrupt_requested(state)
                                 ),
                                 publish_event=_publish_plugin_extension_event,
                             ),
                             emit,
                             "tool_plugin",
+                            background=(
+                                {"marker": background_marker, "passthrough": True}
+                                if background_marker else None
+                            ),
                         )
                         outcome = ToolOutcome.completed(result)
                     except _SteerRestartRequested:
@@ -7490,7 +7651,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             return bool(
                                 not _state_run_has_write_fence(state)
                                 or _state_interrupt_requested(state)
-                                or _steer_requested(state)
+                                or (_steer_may_interrupt() and _steer_requested(state))
                             )
 
                         async def _emit_run_shell_output(
@@ -7671,10 +7832,20 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 return _attach_change_review(response, change_review_changes)
 
 
-            async def execute_one(tool_call):
+            async def execute_one(tool_call, scope=None):
                 """Execute a closed tool call through the Hook lifecycle."""
 
+                if scope is not None:
+                    return await _execute_one_impl(
+                        tool_call, scope.state, scope.emit, scope.marker)
+                return await _execute_one_impl(tool_call, state, emit, None)
+
+            async def _execute_one_impl(tool_call, state, emit, background_marker):
+                """Body of ``execute_one``; state/emit may be an isolated scope."""
+
                 call = dict(tool_call or {})
+                if background_marker is not None:
+                    call["_background_marker"] = background_marker
                 call["_execution_stream_seq"] = llm_stream_seq
                 call_react_iter = int(iter_count)
                 tool_name = str(call.get("name") or "")
@@ -7859,7 +8030,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 observed_tool_started = time.perf_counter()
                 from session_authorized_dirs import tool_directory_authorization_scope
                 with tool_directory_authorization_scope(state["session_id"]):
-                    result = await _execute_one_core(call)
+                    result = await _execute_one_core(call, state, emit)
                 # Every backend (native, plugin, MCP, host) passes this boundary.
                 # Keep the following workspace audit and result commit in the gap.
                 state["_last_tool_returned_perf"] = time.perf_counter()
@@ -8112,6 +8283,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
             early_tool_acc: Dict[int, Dict[str, str]] = {}
             early_tool_tasks: Dict[int, asyncio.Task] = {}
             early_tool_results: Dict[int, Any] = {}
+            early_tool_scopes: Dict[int, Any] = {}
             early_ordered_tool_lock = asyncio.Lock()
             # 定时器：检测 reasoning/content 停止
             thinking_timer_task = None
@@ -8149,6 +8321,47 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     return None
                 return {"name": name, "args": args if isinstance(args, dict) else {}, "id": tid, "index": int(idx)}
 
+            def _background_eligible(tool_call: Dict[str, Any]) -> bool:
+                """Whether a started call may outlive the foreground run.
+
+                Interaction tools (ask_user), process/history control tools
+                (context_manage, request_restart, tool_call) and serialized
+                irreversible writes keep the original interrupt semantics.
+                """
+                try:
+                    name = str((tool_call or {}).get("name") or "").strip()
+                    if not name or name in BATCH_BARRIER_TOOL_NAMES:
+                        return False
+                    descriptor = (
+                        tool_search.call_descriptor(tool_registry, tool_call)
+                        or tool_registry.resolve(name)
+                    )
+                    if descriptor is not None and (
+                        bool(getattr(descriptor, "interactive", False))
+                        or str(getattr(descriptor, "effect", "") or "") == "control"
+                    ):
+                        return False
+                    policy = _tool_steer_policy(name, descriptor)
+                    return policy["interruptibility"] != "non_interruptible"
+                except Exception:
+                    logger.debug("background eligibility unknown", exc_info=True)
+                    return False
+
+            def _background_scope_for(tool_call: Dict[str, Any]):
+                if not _background_eligible(tool_call):
+                    return None
+                try:
+                    return background_tools.execution_scope(
+                        state,
+                        emit,
+                        tool_call=tool_call,
+                        react_iter=int(iter_count),
+                        stream_seq=state.get("_active_stream_seq"),
+                    )
+                except Exception:
+                    logger.debug("background scope unavailable", exc_info=True)
+                    return None
+
             async def _run_early_tool_call(idx: int, tc: Dict[str, Any]) -> Any:
                 try:
                     async def execute_closed_call() -> Any:
@@ -8156,12 +8369,15 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             str(tc.get("name") or ""),
                             tool_search.call_descriptor(tool_registry, tc),
                         )
+                        scope = _background_scope_for(tc)
+                        early_tool_scopes[int(idx)] = scope
                         return await _await_steerable(
                             state,
-                            execute_one(tc),
+                            execute_one(tc, scope),
                             emit,
                             "tool",
                             defer_steer=policy["interruptibility"] == "non_interruptible",
+                            background=scope,
                         )
 
                     early_descriptor = tool_search.call_descriptor(tool_registry, tc)
@@ -8748,6 +8964,20 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             _tc = _early_tool_call_from_acc(_idx)
                             _name = str((_tc or {}).get("name") or "")
                             _policy = _tool_steer_policy(_name, tool_registry.resolve(_name))
+                            _scope = early_tool_scopes.get(_idx)
+                            _scope_task = getattr(_scope, "task", None) if _scope is not None else None
+                            if _scope is not None and _scope.marker.get("executing") and _scope_task is not None:
+                                # The call already started: hand it over instead
+                                # of killing it with the interrupted stream.
+                                _sid = str(state.get("session_id") or "")
+                                _tool_id = str((_scope.tool_call or {}).get("id") or "")
+                                _owned = _register_background_tool(state, _scope, _scope_task)
+                                if _owned or background_tools.is_backgrounded(_sid, _tool_id):
+                                    _scope.detach()
+                                    _task.add_done_callback(_discard_task_result)
+                                    _task.cancel()
+                                    await asyncio.wait({_task}, timeout=5)
+                                    continue
                             if _policy["interruptibility"] == "non_interruptible":
                                 await _task
                             else:
@@ -8765,11 +8995,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             from runtime_v2.execution_journal import interrupted_tool_text
                             _records = _execution_recovery_snapshot(state["session_id"])["execution_records"]
                             _record = next((row for row in _records if row.get("tool_call_id") == _tc["id"]), None)
-                            _text = interrupted_tool_text(_record)
+                            _moved = background_tools.is_backgrounded(
+                                str(state.get("session_id") or ""), str(_tc.get("id") or ""))
+                            _text = interrupted_tool_text(_record, background=_moved)
                             _res = {"type": "tool", "tool_id": _tc["id"], "tool_name": _tc["name"],
                                     "tool_args": _tc["args"], "tool_call_index": _idx, "result": _text,
                                     "tool_detail_ui": _text, "tool_detail_llm": _text,
-                                    "execution_status": "interrupted"}
+                                    "execution_status": "background" if _moved else "interrupted"}
                         if isinstance(_res, dict) and _res.get("type") == "tool" and _tc:
                             completed_early_tool_calls.append(_tc)
                             completed_early_tool_results.append(_res)
@@ -9813,13 +10045,21 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         early_task = _early_task_for(call)
                         try:
                             if early_task is not None:
-                                return await _await_steerable(state, early_task, emit, "tool")
+                                # The early execution already carries its own
+                                # scope, so step aside instead of cancelling it
+                                # before it can hand itself over.
+                                return await _await_steerable(
+                                    state, early_task, emit, "tool",
+                                    cancel_on_steer=not _background_eligible(call),
+                                )
+                            scope = _background_scope_for(call)
                             return await _await_steerable(
                                 state,
-                                execute_one(call),
+                                execute_one(call, scope),
                                 emit,
                                 "tool",
                                 defer_steer=defer_steer,
+                                background=scope,
                             )
                         except (_SteerRestartRequested, asyncio.CancelledError):
                             raise
@@ -9839,7 +10079,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         async with read_semaphore:
                             if bool(getattr(descriptor, "pressure_limited", False)):
                                 async with pressure_semaphore:
+                                    read_started.add(position)
                                     return position, await run_single(call, catch_errors=True)
+                            read_started.add(position)
                             return position, await run_single(call, catch_errors=True)
 
                     async def run_serial(call: Dict[str, Any]) -> Any:
@@ -9857,6 +10099,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         )
 
                     pending_reads: Dict[int, asyncio.Task] = {}
+                    read_started: set[int] = set()
                     serial_calls: List[Tuple[int, Dict[str, Any]]] = []
                     gate: Optional[asyncio.Event] = None
                     for position, call in enumerate(calls):
@@ -9872,6 +10115,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     cursor = 0
                     active_position: Optional[int] = None
                     active_task: Optional[asyncio.Task] = None
+                    steer_restart = False
                     try:
                         while pending_reads or cursor < len(serial_calls) or active_task is not None:
                             if active_task is None:
@@ -9942,7 +10186,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         barrier.set()
                             if failures:
                                 raise failures[0]
-                    except (_SteerRestartRequested, asyncio.CancelledError):
+                    except (_SteerRestartRequested, asyncio.CancelledError) as _batch_stop:
+                        steer_restart = isinstance(_batch_stop, _SteerRestartRequested)
                         if active_task is not None and not active_task.done():
                             # In-flight serialized side effects settle through
                             # their own steer policy; never cancel them here.
@@ -9952,9 +10197,13 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 pass
                         raise
                     finally:
-                        for read_task in pending_reads.values():
-                            if not read_task.done():
-                                read_task.add_done_callback(_discard_task_result)
+                        for read_position, read_task in pending_reads.items():
+                            if read_task.done():
+                                continue
+                            read_task.add_done_callback(_discard_task_result)
+                            # Started reads hand themselves over on a steer;
+                            # unstarted ones and real cancellations still stop.
+                            if not steer_restart or read_position not in read_started:
                                 read_task.cancel()
                     return [results[position] for position in sorted(results)]
 

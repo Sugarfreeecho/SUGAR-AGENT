@@ -3642,8 +3642,8 @@ def _session_log_activity_timestamp(
     """Runtime V2 事件日志里最后一条「对话活动」的时间戳。
 
     返回 ``fallback``：日志不可读/不可解析（沿用文件 mtime 的旧口径）；
-    返回 ``None``：扫到的部分只有控制类事件（调用方保留已存的活动时间，不把这次
-    追加当成会话活动）。
+    返回 ``None``：扫到的部分只有控制类事件，或回溯预算在一条超长行内耗尽
+    （调用方保留已存的活动时间，不把这次追加当成会话活动）。
 
     第二个返回值表示这次结果可否写进活动缓存：读失败时不能缓存，否则一次瞬时
     故障会被当成长期结论。
@@ -3681,7 +3681,13 @@ def _session_log_activity_timestamp(
                         # answer is settled and safe to cache.
                         return fallback, True
             if position > 0:
-                return fallback, True
+                # 预算耗尽在一条超长行内部：Runtime V2 的
+                # ``runtime_snapshot_compacted`` 会把整份快照压成单行（可达
+                # 数十 MB），回溯时无法在预算内读到该行的行首。此时更新的
+                # 记录已逐一判定为控制事件，这次追加不代表对话活动，因此报
+                # “未知”，让调用方保留已存的活动时间，而不是退回文件 mtime
+                # ——mtime 就是刚才追加的时刻，会把几天前的会话顶成“刚刚活跃”。
+                return None, True
             if pending:
                 verdict, value = _classify_session_log_line(pending)
                 if verdict == "activity":
@@ -4201,6 +4207,15 @@ class SessionManager:
                 if value is not None and not isinstance(value, (int, float)):
                     continue
                 rows[str(sid)] = (signature, None if value is None else float(value))
+        # v1 热缓存会把“尾部超长行耗尽回溯预算”的兜底值（文件 mtime）当成活动
+        # 时间存下来，且签名不变就一直命中，无法自愈。这种条目的值与 mtime_ns
+        # 完全一致（真实事件时间戳由事件自身携带，不会与写入时刻精确相同），
+        # 丢弃后由扫描按修正后的口径重算。
+        for sid in [
+            key for key, (signature, value) in rows.items()
+            if value is not None and abs(value - signature[3] / 1e9) < 1e-6
+        ]:
+            rows.pop(sid, None)
         # An in-memory result from this process wins over the file: it may have
         # been refreshed after the file was written.
         rows.update(getattr(self, "_index_activity_cache", {}) or {})

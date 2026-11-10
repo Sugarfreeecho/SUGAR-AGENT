@@ -785,7 +785,9 @@ def test_tool_pending_switches_generated_draft_to_executing():
 
     assert "await _emit_tool_pending_sse(" in agent_loop
     assert "tool_descriptor.emit_pending" in agent_loop
-    wrapper = agent_loop.split("async def execute_one(tool_call):", 1)[1].split(
+    wrapper = agent_loop.split(
+        "async def _execute_one_impl(tool_call, state, emit, background_marker):", 1
+    )[1].split(
         "# ---------- 2.6 调用 LLM ----------", 1
     )[0]
     resolve_at = wrapper.index("tool_descriptor = tool_registry.resolve(tool_name)")

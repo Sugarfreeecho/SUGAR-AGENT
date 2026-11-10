@@ -55,6 +55,8 @@ def _scope(parallel_safe=True):
         "_await_steerable": await_tool,
         "_raise_if_steer_requested": no_steer,
         "_tool_steer_policy": lambda *args: {"interruptibility": "safe"},
+        "_background_scope_for": lambda call: None,
+        "early_tool_scopes": {},
     }
 
 
@@ -85,7 +87,7 @@ async def scenario():
     early_sizes, final_sizes = [], []
     for final_size in (2, 1):
 {textwrap.indent(setup, '        ')}
-        async def execute_one(call):
+        async def execute_one(call, scope=None):
             await asyncio.sleep(0)
             return {ast.unparse(batch_expr)}
 {textwrap.indent(functions, '        ')}
@@ -117,7 +119,7 @@ def test_unexpected_tool_error_keeps_call_id_through_checkpoint(execution_path):
                  _state_interrupt_requested=lambda state: False)
     committed, emitted = [], []
 
-    async def execute_one(call):
+    async def execute_one(call, scope=None):
         await asyncio.sleep(0)
         raise RuntimeError("host setup failed")
 
@@ -181,7 +183,7 @@ def test_early_tool_control_interrupts_are_not_converted_to_failures(error_type)
     scope = _scope()
     scope.update(early_tool_results={}, early_ordered_tool_lock=asyncio.Lock())
 
-    async def execute_one(call):
+    async def execute_one(call, scope=None):
         raise error_type()
 
     scope["execute_one"] = execute_one
@@ -229,7 +231,7 @@ def test_read_only_tools_run_parallel_with_serial_tools():
     release_shell = asyncio.Event()
     read_finished = asyncio.Event()
 
-    async def execute_one(call):
+    async def execute_one(call, scope=None):
         if call["name"] == "run_shell":
             shell_started.set()
             await release_shell.wait()

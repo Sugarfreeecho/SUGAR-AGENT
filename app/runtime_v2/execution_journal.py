@@ -406,8 +406,16 @@ class ExecutionJournal:
                         if "duration_ms" in span:
                             self._append(session_id, state, {"execution_id": row["execution_id"], **span}, run)
             if kind in {"llm_stream_aborted", "run_interrupted", "run_failed"}:
+                # Calls handed to the background keep their running status so
+                # their real completion can still be recorded later.
+                preserved = {
+                    str(item) for item in (event.get("preserve_tool_call_ids") or ())
+                    if str(item or "")
+                }
                 for row in list(state["records"].values()):
                     if row.get("run_id") == run and row.get("status") not in TERMINAL:
+                        if str(row.get("tool_call_id") or "") in preserved:
+                            continue
                         if event.get("reason") in {"output_length", "truncated_after_closed_tool_call", "transport_after_closed_tool_call"} and row.get("status") != "generating":
                             continue
                         self._append(session_id, state, {
@@ -600,9 +608,21 @@ class ExecutionJournal:
                 "content": str(state.get("_output_continuation") or ""), "updated_at": now_iso()}, run_id)
 
 
-def interrupted_tool_text(record: dict | None, *, reason="user_steer") -> str:
+def interrupted_tool_text(record: dict | None, *, reason="user_steer", background=False) -> str:
     row = record or {}
     executed = bool(row.get("executed"))
+    if background:
+        # The call was not cancelled: it keeps running outside the foreground
+        # run and reports its real result as a separate background record.
+        lines = [
+            "工具调用已转入后台继续执行（用户追问优先开启新一轮）。",
+            "这不是失败：工具仍在运行，完成后结果会作为后台工具记录补发。",
+        ]
+        if executed:
+            lines.append("工具已确认开始执行。")
+        if row.get("output"):
+            lines.extend(["已收到的输出：", str(row["output"])])
+        return "\n".join(lines)
     lines = ["工具调用已被用户追问打断。" if reason == "user_steer" else "工具调用在运行恢复前未完成。",
              "工具已开始执行；仅以下输出和进度已确认。" if executed else "工具尚未开始执行。"]
     if executed:
@@ -615,9 +635,11 @@ def interrupted_tool_text(record: dict | None, *, reason="user_steer") -> str:
     return "\n".join(lines)
 
 
-def close_unfinished_calls(messages: list, records: list, *, reason="user_steer") -> tuple[list, list]:
+def close_unfinished_calls(messages: list, records: list, *, reason="user_steer",
+                           background_ids=()) -> tuple[list, list]:
     from agent_messages import AssistantMessage, ToolMessage
     by_id = {r.get("tool_call_id"): r for r in records if r.get("tool_call_id")}
+    background = {str(item) for item in (background_ids or ()) if str(item or "")}
     out, added = [], []
     i = 0
     while i < len(messages):
@@ -635,7 +657,8 @@ def close_unfinished_calls(messages: list, records: list, *, reason="user_steer"
             identity = str(call.get("id") or "")
             if identity and identity not in seen:
                 record = by_id.get(identity)
-                text = (record or {}).get("result") or interrupted_tool_text(record, reason=reason)
+                text = (record or {}).get("result") or interrupted_tool_text(
+                    record, reason=reason, background=identity in background)
                 result = ToolMessage(content=text, tool_call_id=identity)
                 results.append(result)
                 added.append(result)
