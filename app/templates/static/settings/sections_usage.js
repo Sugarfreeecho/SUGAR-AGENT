@@ -90,6 +90,91 @@
       : Number(row.input || 0) + Number(row.output || 0);
   }
 
+  // 选中的范围：日模式就是当天，周模式是那一列 7 天（和柱子／weekSummary 的口径一致）。
+  function pickedRange() {
+    if (!heatDay) return null;
+    if (heatMode !== 'weekly') return { from: heatDay, to: heatDay, days: [heatDay] };
+    const end = new Date(heatDay + 'T00:00:00');
+    const days = [];
+    for (let index = 6; index >= 0; index -= 1) {
+      const date = new Date(end);
+      date.setDate(end.getDate() - index);
+      days.push(isoDay(date));
+    }
+    return { from: days[0], to: heatDay, days };
+  }
+
+  const byTokens = (a, b) => (b.input + b.output) - (a.input + a.output) || b.requests - a.requests;
+
+  /* 选中日/周后，把按天明细加总成本期的模型、配置与会话行。
+     全部在本地算：点格子不再请求后端，和会话表的检索／排序是同一套思路。 */
+  function scopeStats(data) {
+    const range = pickedRange();
+    if (!range) return null;
+    const byDay = new Map((data.days || []).map((row) => [row.day, row]));
+    const models = new Map();
+    const profiles = new Map();
+    const sessions = new Map();
+    const mergeModel = (bucket, key, row) => {
+      let target = bucket.get(key);
+      if (!target) {
+        target = { model: key, input: 0, output: 0, requests: 0, ttftSum: 0, ttftN: 0,
+          genMs: 0, genOut: 0, speedN: 0, other: !!row.other };
+        bucket.set(key, target);
+      }
+      target.input += Number(row.input || 0);
+      target.output += Number(row.output || 0);
+      target.requests += Number(row.requests || 0);
+      // 后端给的是每天的平均首字，跨天要按样本数加权。
+      const samples = Number(row.ttftSamples || 0);
+      if (samples > 0 && row.ttftMs) {
+        target.ttftSum += Number(row.ttftMs) * samples;
+        target.ttftN += samples;
+      }
+      // 生成速度是「生成输出 ÷ 生成秒数」，跨天要把分子分母分别加总。
+      target.genMs += Number(row.genMs || 0);
+      target.genOut += Number(row.genOut || 0);
+      target.speedN += Number(row.speedSamples || 0);
+    };
+    range.days.forEach((key) => {
+      const row = byDay.get(key);
+      if (!row) return;
+      (row.models || []).forEach((item) => mergeModel(models, item.model, item));
+      (row.profiles || []).forEach((item) => mergeModel(profiles, item.model, item));
+      (row.sessions || []).forEach((item) => {
+        let target = sessions.get(item.id);
+        if (!target) {
+          target = { id: item.id, name: item.name || String(item.id || '').slice(0, 8),
+            input: 0, output: 0, requests: 0, lastAt: '' };
+          sessions.set(item.id, target);
+        }
+        target.input += Number(item.input || 0);
+        target.output += Number(item.output || 0);
+        target.requests += Number(item.requests || 0);
+        if (String(item.lastAt || '') > target.lastAt) target.lastAt = item.lastAt;
+      });
+    });
+    const finish = (bucket) => Array.from(bucket.values()).map((row) => ({
+      model: row.model, input: row.input, output: row.output, requests: row.requests,
+      ttftMs: row.ttftN ? Math.round(row.ttftSum / row.ttftN) : null,
+      tokensPerSec: row.genMs > 0 ? Math.round((row.genOut / (row.genMs / 1000)) * 10) / 10 : null,
+      speedSamples: row.speedN,
+      other: row.other,
+    }));
+    return {
+      range,
+      models: finish(models).sort(byTokens),
+      profiles: finish(profiles).sort((a, b) => (a.other ? 1 : 0) - (b.other ? 1 : 0) || byTokens(a, b)),
+      sessions: Array.from(sessions.values()).sort(byTokens),
+    };
+  }
+
+  function scopeLabel(scope) {
+    return scope.range.from === scope.range.to
+      ? scope.range.to
+      : scope.range.from.slice(5) + ' ~ ' + scope.range.to.slice(5);
+  }
+
   function table(head, rows) {
     if (!rows.length) return W.empty(t('暂无数据。', 'No data.'));
     return '<table class="st-usage-table"><thead><tr>' +
@@ -202,8 +287,8 @@
           closePick() + '</div>';
       })()
       : '<div class="st-heat-day">' + (heatMode === 'weekly'
-        ? t('点柱子看当周明细', 'Click a bar for the week')
-        : t('点格子看当天明细', 'Click a cell for the day')) + '</div>';
+        ? t('点柱子筛选当周明细', 'Click a bar to filter the week')
+        : t('点格子筛选当天明细', 'Click a cell to filter the day')) + '</div>';
 
     // 每周只有 52 个点，颜色深浅表达不了量级，改用柱高更直观。
     const chart = heatMode === 'weekly'
@@ -218,7 +303,7 @@
 
   function closePick() {
     return ' <button type="button" class="st-btn sm text" data-act="usage-heat-day" data-day="">' +
-      t('收起', 'Close') + '</button>';
+      t('清除筛选', 'Clear filter') + '</button>';
   }
 
   // 周明细：把选中那一列（7 天）加起来。
@@ -275,15 +360,21 @@
       if (!value) return '—';
       return value >= 1000 ? (value / 1000).toFixed(1) + 's' : Math.round(value) + 'ms';
     };
+    const speed = (row) => (row.tokensPerSec == null || !row.speedSamples
+      ? '—'
+      : Number(row.tokensPerSec).toFixed(1) + ' tok/s');
     return table(
       [firstLabel || t('模型', 'Model'), t('请求', 'Reqs'), t('输入', 'Input'), t('输出', 'Output'),
-        t('平均首字', 'First token')],
+        t('平均首字', 'First token'), t('速度', 'Speed')],
       (models || []).map((row) =>
         '<tr><td title="' + esc(row.model) + '">' + esc(row.other ? t('其他', 'Other') : row.model) + '</td>' +
         '<td>' + num(row.requests) + '</td>' +
         '<td>' + compact(row.input) + '</td>' +
         '<td>' + compact(row.output) + '</td>' +
-        '<td>' + esc(ttft(row.ttftMs)) + '</td></tr>')
+        '<td>' + esc(ttft(row.ttftMs)) + '</td>' +
+        '<td title="' + esc(row.speedSamples
+          ? t('基于 ' + num(row.speedSamples) + ' 次请求', 'over ' + num(row.speedSamples) + ' requests')
+          : '') + '">' + esc(speed(row)) + '</td></tr>')
     );
   }
 
@@ -406,21 +497,36 @@
   }
 
   function body(data) {
-    const models = data.models || [];
-    const modelRows = modelMode === 'profile' ? (data.profiles || []) : models;
-    const modelTotal = modelMode === 'profile' ? Number(data.profilesTotal || 0) : Number(data.modelsTotal || 0);
+    const scope = scopeStats(data);
+    const scopeHint = scope
+      ? t('已筛选 ' + scopeLabel(scope) + ' · ', 'Filtered ' + scopeLabel(scope) + ' · ')
+      : '';
+    const models = scope ? scope.models : (data.models || []);
+    const modelAll = modelMode === 'profile' ? (scope ? scope.profiles : (data.profiles || [])) : models;
+    const modelRows = modelAll.slice(0, 40);
+    const modelTotal = scope
+      ? modelAll.length
+      : (modelMode === 'profile' ? Number(data.profilesTotal || 0) : Number(data.modelsTotal || 0));
     const modelSeg = '<div class="st-usage-seg sm">' +
       [['model', t('按模型名', 'By model')], ['profile', t('按配置', 'By profile')]].map(([key, label]) =>
         '<button type="button" data-act="usage-model-mode" data-mode="' + key + '"' +
         (modelMode === key ? ' class="on"' : '') + '>' + esc(label) + '</button>').join('') + '</div>';
-    const sessions = data.sessions || [];
+    const sessions = scope ? scope.sessions : (data.sessions || []);
     const subagents = Number((data.totals || {}).subagents || 0);
     const subNote = subagents > 0
-      ? t('，另有 ' + subagents + ' 个子代理已计入总量', '; ' + subagents + ' subagents counted in the totals')
+      ? (scope
+        ? t('；子代理用量已计入本期模型统计', '; subagent usage is in the period totals')
+        : t('，另有 ' + subagents + ' 个子代理已计入总量', '; ' + subagents + ' subagents counted in the totals'))
       : '';
     const countNote = (shown, total, zh, en) => (shown >= total
       ? t('共 ' + total + ' ' + zh, 'All ' + total + ' ' + en)
       : t('共 ' + total + ' ' + zh + '，显示前 ' + shown + ' 个', 'Top ' + shown + ' of ' + total + ' ' + en));
+    const modelHint = scopeHint + countNote(modelRows.length, modelTotal,
+      modelMode === 'profile' ? '个配置' : '个模型', modelMode === 'profile' ? 'profiles' : 'models');
+    const sessionTotal = scope ? sessions.length : data.sessionsTotal;
+    const sessionHint = scopeHint + (sessionAll
+      ? t('共 ' + num(sessionTotal) + ' 个会话，已全部展开', 'All ' + num(sessionTotal) + ' sessions')
+      : countNote(30, sessionTotal, '个会话', 'sessions')) + subNote;
     const sessionBar = '<div class="st-usage-sess-bar">' +
       '<input type="search" class="st-input sm" data-usage-session-search placeholder="' +
       esc(t('搜索会话名或 ID', 'Search name or ID')) + '" aria-label="' + esc(t('搜索会话', 'Search sessions')) + '">' +
@@ -432,29 +538,28 @@
         : '') + '</div>';
     return digest(data) +
       W.card(t('Token 活动', 'Token activity'),
-        t('近 52 周，点开看明细', 'Last 52 weeks; click for details'),
+        t('近 52 周，点格子筛选下方统计', 'Last 52 weeks; click to filter the tables below'),
         heatGrid(data.days) + speedLine(data.totals), heatControls()) +
       '<div class="st-usage-two">' +
         W.card(t('按模型', 'By model'),
-          countNote(modelRows.length, modelTotal, modelMode === 'profile' ? '个配置' : '个模型',
-            modelMode === 'profile' ? 'profiles' : 'models'),
+          modelHint,
           '<div class="st-usage-model-scroll">' +
           modelTable(modelRows, modelMode === 'profile' ? t('模型配置', 'Profile') : t('模型', 'Model')) +
           '</div>', modelSeg) +
         W.card(t('按会话', 'By session'),
-          (sessionAll
-            ? t('共 ' + num(data.sessionsTotal) + ' 个会话，已全部展开', 'All ' + num(data.sessionsTotal) + ' sessions')
-            : countNote(30, data.sessionsTotal, '个会话', 'sessions')) + subNote,
+          sessionHint,
           sessionBar + sessionTable(sessions)) +
       '</div>' +
       W.note(t(
         '数据来自本机各会话的 <span class="st-mono">execution_metrics.json</span>，只统计有 usage 回包的成功请求；' +
         '子代理会话（<span class="st-mono">subagents/</span>）的用量已计入总量，但不单独列在会话表里；' +
         '「按配置」按当前模型配置归类，不在配置里的记作「(未标注)」；' +
+        '「速度」为首字之后到生成结束的输出 tokens ÷ 生成秒数，没有生成时长样本的请求不计入；' +
         '不同模型的自报口径可能不同，跨模型相加只作趋势参考。',
         'Aggregated from local <span class="st-mono">execution_metrics.json</span>; only requests that returned usage are counted. ' +
         'Subagent sessions under <span class="st-mono">subagents/</span> are included in the totals but not listed as sessions. ' +
         '"By profile" groups models by the current profile config; models outside any profile count as "(unlabeled)". ' +
+        '"Speed" is output tokens after the first token divided by generation seconds; requests without generation timing are excluded. ' +
         'Providers report tokens differently, so cross-model sums are a trend indicator only.') +
         ' · ' + t('统计于 ', 'Built ') + esc(String(data.generatedAt || '').replace('T', ' ').replace('Z', '')) +
         ' <button type="button" class="st-btn sm text" data-act="usage-refresh">' + t('重新统计', 'Rebuild') + '</button>');

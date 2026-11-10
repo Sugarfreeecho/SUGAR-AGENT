@@ -13,7 +13,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,13 +21,15 @@ import ijson
 
 logger = logging.getLogger(__name__)
 
-# 4：模型桶多了首字延迟两格，老缓存的桶长度对不上，必须重建。
-CACHE_VERSION = 4
+# 6：模型桶多了生成时长/生成输出，模型表要显示 tok/s，老缓存的桶长度对不上。
+CACHE_VERSION = 6
 CACHE_TTL_SEC = 20.0
 MAX_DAYS = 730
 MAX_MODELS = 40
 # 会话表在前端默认只显示 30 行，但检索要能覆盖全部会话，所以整份带上（约 45KB）。
 MAX_SESSIONS = 400
+# 热力图最多点到 52 周；更早的日期没人会点，不带明细，免得载荷无限长。
+DAY_DETAIL_DAYS = 371
 UNKNOWN_MODEL = "(未标注)"
 # 「按配置」里没落到任何档案的桶。单独起名并始终排在末尾，免得混在中间像是个配置。
 OTHER_PROFILE = "其他"
@@ -68,20 +70,40 @@ def _local_day(value: Any) -> str:
     return stamp.astimezone().strftime("%Y-%m-%d")
 
 
-def _add(bucket: Dict[str, List[int]], key: str, prompt: int, completion: int, ttft: int = 0) -> None:
-    """桶结构固定为 [输入, 输出, 请求数, 首字累计, 首字样本数]，天桶只用前三格。"""
+def _add(
+    bucket: Dict[str, List[int]],
+    key: str,
+    prompt: int,
+    completion: int,
+    ttft: int = 0,
+    generation: int = 0,
+) -> None:
+    """桶结构固定为 [输入, 输出, 请求数, 首字累计, 首字样本数, 生成毫秒, 生成输出, 生成样本数]。"""
     row = bucket.get(key)
     if row is None:
-        bucket[key] = [prompt, completion, 1, ttft if ttft > 0 else 0, 1 if ttft > 0 else 0]
+        bucket[key] = [
+            prompt,
+            completion,
+            1,
+            ttft if ttft > 0 else 0,
+            1 if ttft > 0 else 0,
+            generation if generation > 0 else 0,
+            completion if generation > 0 else 0,
+            1 if generation > 0 else 0,
+        ]
         return
     row[0] += prompt
     row[1] += completion
     row[2] += 1
-    if len(row) < 5:
-        row.extend([0, 0])
+    if len(row) < 8:
+        row.extend([0] * (8 - len(row)))
     if ttft > 0:
         row[3] += ttft
         row[4] += 1
+    if generation > 0:
+        row[5] += generation
+        row[6] += completion
+        row[7] += 1
 
 
 def _request_ttft(request: dict, usage: dict) -> int:
@@ -136,6 +158,8 @@ def _aggregate_requests(requests) -> dict:
     """Keep only one request in memory; reject the whole result on parse errors."""
     days: Dict[str, List[int]] = {}
     models: Dict[str, List[int]] = {}
+    day_models: Dict[str, Dict[str, List[int]]] = {}
+    day_last: Dict[str, str] = {}
     total = [0, 0, 0]
     cache_hit = cache_miss = reasoning = 0
     ttft_sum = ttft_n = gen_sum = gen_out = gen_n = 0
@@ -152,12 +176,18 @@ def _aggregate_requests(requests) -> dict:
         if prompt <= 0 and completion <= 0:
             continue
         model = str(usage.get("model") or request.get("model") or "").strip() or UNKNOWN_MODEL
-        day = _local_day(request.get("started_at"))
+        started = str(request.get("started_at") or "")
+        day = _local_day(started)
         ttft = _request_ttft(request, usage)
-        # 首字延迟也按模型分桶，模型表才能显示「平均首 token」。
-        _add(models, model, prompt, completion, ttft)
+        generation = _request_generation_ms(request)
+        # 首字延迟与生成时长都按模型分桶，模型表才能显示「平均首 token」和 tok/s。
+        _add(models, model, prompt, completion, ttft, generation)
         if day:
             _add(days, day, prompt, completion)
+            # 点热力图某天时，下半页的模型/会话表只用这份按天明细重算，不再回后端。
+            _add(day_models.setdefault(day, {}), model, prompt, completion, ttft, generation)
+            if started > day_last.get(day, ""):
+                day_last[day] = started
         total[0] += prompt
         total[1] += completion
         total[2] += 1
@@ -167,17 +197,17 @@ def _aggregate_requests(requests) -> dict:
         if ttft > 0:
             ttft_sum += ttft
             ttft_n += 1
-        generation = _request_generation_ms(request)
         if generation > 0:
             gen_sum += generation
             gen_out += completion
             gen_n += 1
-        started = str(request.get("started_at") or "")
         if started > last_at:
             last_at = started
 
     return {
         "days": days,
+        "day_models": day_models,
+        "day_last": day_last,
         "models": models,
         "totals": total,
         "cache_hit": cache_hit,
@@ -273,6 +303,96 @@ def _build(sessions_dir: Path, cache_path: Optional[Path]) -> dict:
     return data
 
 
+def _merge_bucket(target: List[int], bucket) -> None:
+    """把 [输入, 输出, 请求数, 首字累计, 首字样本数, 生成毫秒, 生成输出, 生成样本数] 累加进 target。"""
+    for index in range(min(3, len(bucket))):
+        target[index] += _int(bucket[index])
+    if len(bucket) > 4:
+        if len(target) < 5:
+            target.extend([0] * (5 - len(target)))
+        target[3] += _int(bucket[3])
+        target[4] += _int(bucket[4])
+    if len(bucket) > 7:
+        if len(target) < 8:
+            target.extend([0] * (8 - len(target)))
+        target[5] += _int(bucket[5])
+        target[6] += _int(bucket[6])
+        target[7] += _int(bucket[7])
+
+
+def _profile_label(model: str, mapping: Dict[str, str]) -> str:
+    """用量里的 model 名 → 设置里的档案名；精确匹配不上才退到尾段。"""
+    label = mapping.get(model)
+    if label:
+        return label
+    # 用量里常见「供应商/模型」，档案只写模型名：精确匹配不上时再退化到尾段。
+    # 反过来不行——尾段当别名提前塞进映射，会把别名真正的主人顶掉。
+    tail = model.rsplit("/", 1)[-1]
+    if tail and tail != model:
+        label = mapping.get(tail)
+    return label or OTHER_PROFILE
+
+
+def _speed(value: List[int]) -> tuple:
+    """生成毫秒 / 生成输出 / 样本数 / tok/s；没有生成时长样本时为 None。"""
+    gen_ms = _int(value[5]) if len(value) > 5 else 0
+    gen_out = _int(value[6]) if len(value) > 6 else 0
+    samples = _int(value[7]) if len(value) > 7 else 0
+    return gen_ms, gen_out, samples, (round(gen_out / (gen_ms / 1000.0), 1) if gen_ms > 0 else None)
+
+
+def _model_rows(models: Dict[str, List[int]], detail: bool = False) -> List[dict]:
+    rows = []
+    for key, value in models.items():
+        samples = _int(value[4]) if len(value) > 4 else 0
+        gen_ms, gen_out, speed_samples, tokens_per_sec = _speed(value)
+        row = {
+            "model": key,
+            "input": _int(value[0]),
+            "output": _int(value[1]),
+            "requests": _int(value[2]),
+            "ttftMs": round(value[3] / samples) if samples else None,
+            "ttftSamples": samples,
+            "tokensPerSec": tokens_per_sec,
+            "speedSamples": speed_samples,
+        }
+        if detail:
+            # 按天明细带上分子/分母，前端跨天合并时能精确回算，而不是拿平均值再平均。
+            row["genMs"] = gen_ms
+            row["genOut"] = gen_out
+        rows.append(row)
+    rows.sort(key=lambda item: (item["input"] + item["output"], item["requests"]), reverse=True)
+    return rows
+
+
+def _profile_rows(models: Dict[str, List[int]], mapping: Dict[str, str], detail: bool = False) -> List[dict]:
+    """「按模型配置」：把同一档案的不同 model 别名合到一起。"""
+    by_profile: Dict[str, List[int]] = {}
+    for key, value in models.items():
+        _merge_bucket(by_profile.setdefault(_profile_label(key, mapping), [0, 0, 0, 0, 0]), value)
+    rows = []
+    for key, value in by_profile.items():
+        samples = _int(value[4])
+        gen_ms, gen_out, speed_samples, tokens_per_sec = _speed(value)
+        row = {
+            "model": key,
+            "input": value[0],
+            "output": value[1],
+            "requests": value[2],
+            "ttftMs": round(value[3] / samples) if samples else None,
+            "tokensPerSec": tokens_per_sec,
+            "speedSamples": speed_samples,
+            "other": key == OTHER_PROFILE,
+        }
+        if detail:
+            row["genMs"] = gen_ms
+            row["genOut"] = gen_out
+        rows.append(row)
+    # 其他永远垫底，不用跟真配置抢位置。
+    rows.sort(key=lambda item: (item["other"], -(item["input"] + item["output"]), -item["requests"]))
+    return rows
+
+
 def _compose(
     cache: dict,
     names: Optional[Dict[str, str]] = None,
@@ -280,31 +400,40 @@ def _compose(
 ) -> dict:
     """把每文件汇总合成一份给前端的小载荷。"""
     names = names or {}
+    profile_names = profile_names or {}
     files = cache.get("files") if isinstance(cache.get("files"), dict) else {}
 
     days: Dict[str, List[int]] = {}
     models: Dict[str, List[int]] = {}
+    day_models: Dict[str, Dict[str, List[int]]] = {}
+    day_sessions: Dict[str, List[dict]] = {}
     totals = [0, 0, 0]
     cache_hit = cache_miss = reasoning = 0
     ttft_sum = ttft_n = gen_sum = gen_out = gen_n = 0
     last_at = ""
 
-    for row in files.values():
+    for session_id, row in files.items():
         if not isinstance(row, dict):
             continue
         for key, bucket in (row.get("days") or {}).items():
-            target = days.setdefault(key, [0, 0, 0])
-            target[0] += _int(bucket[0])
-            target[1] += _int(bucket[1])
-            target[2] += _int(bucket[2])
+            _merge_bucket(days.setdefault(key, [0, 0, 0]), bucket)
+            if row.get("kind") != "subagent":
+                # 子代理不列进会话表，和全局会话表的口径保持一致。
+                day_last = row.get("day_last") if isinstance(row.get("day_last"), dict) else {}
+                day_sessions.setdefault(key, []).append({
+                    "id": session_id,
+                    "name": str(names.get(session_id) or session_id[:8]),
+                    "input": _int(bucket[0]),
+                    "output": _int(bucket[1]),
+                    "requests": _int(bucket[2]),
+                    "lastAt": str(day_last.get(key) or ""),
+                })
+        for key, buckets in (row.get("day_models") or {}).items():
+            target_day = day_models.setdefault(key, {})
+            for model, bucket in buckets.items():
+                _merge_bucket(target_day.setdefault(model, [0, 0, 0, 0, 0]), bucket)
         for key, bucket in (row.get("models") or {}).items():
-            target = models.setdefault(key, [0, 0, 0, 0, 0])
-            target[0] += _int(bucket[0])
-            target[1] += _int(bucket[1])
-            target[2] += _int(bucket[2])
-            if len(bucket) > 4:
-                target[3] += _int(bucket[3])
-                target[4] += _int(bucket[4])
+            _merge_bucket(models.setdefault(key, [0, 0, 0, 0, 0]), bucket)
         bucket = row.get("totals") or [0, 0, 0]
         totals[0] += _int(bucket[0])
         totals[1] += _int(bucket[1])
@@ -319,45 +448,25 @@ def _compose(
         gen_n += _int(row.get("gen_n"))
         last_at = max(last_at, str(row.get("last_at") or ""))
 
-    day_rows = [
-        {"day": key, "input": value[0], "output": value[1], "requests": value[2]}
-        for key, value in sorted(days.items())
-    ][-MAX_DAYS:]
+    # 热力图点得到的日期（近 52 周）附带当天明细，前端选日/周时在本地聚合。
+    detail_cutoff = (datetime.now() - timedelta(days=DAY_DETAIL_DAYS)).strftime("%Y-%m-%d")
+    day_rows = []
+    for key, value in sorted(days.items()):
+        entry = {"day": key, "input": value[0], "output": value[1], "requests": value[2]}
+        if key >= detail_cutoff:
+            bucket = day_models.get(key) or {}
+            entry["models"] = _model_rows(bucket, detail=True)[:MAX_MODELS]
+            entry["profiles"] = _profile_rows(bucket, profile_names, detail=True)[:MAX_MODELS]
+            entry["sessions"] = sorted(
+                day_sessions.get(key) or [],
+                key=lambda item: (item["input"] + item["output"], item["requests"]),
+                reverse=True,
+            )[:MAX_SESSIONS]
+        day_rows.append(entry)
+    day_rows = day_rows[-MAX_DAYS:]
 
-    def _avg_ttft(bucket) -> Optional[int]:
-        return round(bucket[3] / bucket[4]) if len(bucket) > 4 and bucket[4] else None
-
-    model_rows = [
-        {"model": key, "input": value[0], "output": value[1], "requests": value[2], "ttftMs": _avg_ttft(value)}
-        for key, value in models.items()
-    ]
-    model_rows.sort(key=lambda item: (item["input"] + item["output"], item["requests"]), reverse=True)
-
-    # 「按模型配置」：拿设置里的 model → 档案名做映射，把同一档案的不同 model 别名合到一起。
-    # 请求里没有记录当时用的档案，所以这是按当前配置反推，改过配置的历史数据会跟当时不一致。
-    by_profile: Dict[str, List[int]] = {}
-    for key, value in models.items():
-        label = (profile_names or {}).get(key)
-        if not label:
-            # 用量里常见「供应商/模型」，档案只写模型名：精确匹配不上时再退化到尾段。
-            # 反过来不行——尾段当别名提前塞进映射，会把别名真正的主人顶掉。
-            tail = key.rsplit("/", 1)[-1]
-            if tail and tail != key:
-                label = (profile_names or {}).get(tail)
-        label = label or OTHER_PROFILE
-        target = by_profile.setdefault(label, [0, 0, 0, 0, 0])
-        for index in range(3):
-            target[index] += _int(value[index])
-        if len(value) > 4:
-            target[3] += _int(value[3])
-            target[4] += _int(value[4])
-    profile_rows = [
-        {"model": key, "input": value[0], "output": value[1], "requests": value[2], "ttftMs": _avg_ttft(value),
-         "other": key == OTHER_PROFILE}
-        for key, value in by_profile.items()
-    ]
-    # 其他永远垫底，不用跟真配置抢位置。
-    profile_rows.sort(key=lambda item: (item["other"], -(item["input"] + item["output"]), -item["requests"]))
+    model_rows = _model_rows(models)
+    profile_rows = _profile_rows(models, profile_names)
 
     session_rows = []
     main_sessions = sub_sessions = 0

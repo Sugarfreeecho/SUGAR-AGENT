@@ -99,14 +99,39 @@ def settings_page(browser_page):
                        "ttftMs": 640, "ttftSamples": 3, "tokensPerSec": 152.2, "speedSamples": 3,
                        "lastAt": "2026-10-21T10:00:00Z"},
             "days": [
-                {"day": _day(2), "input": 1000, "output": 10, "requests": 1},
-                {"day": _day(1), "input": 10, "output": 100, "requests": 1},
-                {"day": _day(0), "input": 790, "output": 70, "requests": 1},
+                {"day": _day(2), "input": 1000, "output": 10, "requests": 1,
+                 "models": [{"model": "model-a", "input": 1000, "output": 10, "requests": 1,
+                             "ttftMs": 640, "ttftSamples": 1,
+                             "genMs": 1000, "genOut": 10, "speedSamples": 1}],
+                 "profiles": [{"model": "Fixture config", "input": 1000, "output": 10, "requests": 1,
+                               "ttftMs": 640, "ttftSamples": 1,
+                               "genMs": 1000, "genOut": 10, "speedSamples": 1}],
+                 "sessions": [{"id": "s1", "name": "Demo", "input": 1000, "output": 10,
+                               "requests": 1, "lastAt": "2026-10-21T10:00:00Z"}]},
+                {"day": _day(1), "input": 10, "output": 100, "requests": 1,
+                 "models": [{"model": "model-a", "input": 10, "output": 100, "requests": 1,
+                             "ttftMs": 640, "ttftSamples": 1,
+                             "genMs": 1000, "genOut": 100, "speedSamples": 1}],
+                 "profiles": [{"model": "Fixture config", "input": 10, "output": 100, "requests": 1,
+                               "ttftMs": 640, "ttftSamples": 1,
+                               "genMs": 1000, "genOut": 100, "speedSamples": 1}],
+                 "sessions": [{"id": "s1", "name": "Demo", "input": 10, "output": 100,
+                               "requests": 1, "lastAt": "2026-10-21T10:00:00Z"}]},
+                {"day": _day(0), "input": 790, "output": 70, "requests": 1,
+                 "models": [{"model": "model-a", "input": 790, "output": 70, "requests": 1,
+                             "ttftMs": 640, "ttftSamples": 1,
+                             "genMs": 1000, "genOut": 70, "speedSamples": 1}],
+                 "profiles": [{"model": "Fixture config", "input": 790, "output": 70, "requests": 1,
+                               "ttftMs": 640, "ttftSamples": 1,
+                               "genMs": 1000, "genOut": 70, "speedSamples": 1}],
+                 "sessions": [{"id": "s1", "name": "Demo", "input": 790, "output": 70,
+                               "requests": 1, "lastAt": "2026-10-21T10:00:00Z"}]},
             ],
-            "models": [{"model": "model-a", "input": 1500, "output": 150, "requests": 2, "ttftMs": 640}],
+            "models": [{"model": "model-a", "input": 1500, "output": 150, "requests": 2,
+                        "ttftMs": 640, "tokensPerSec": 20.0, "speedSamples": 3}],
             "modelsTotal": 2,
             "profiles": [{"model": "Fixture config", "input": 1500, "output": 150,
-                          "requests": 2, "ttftMs": 640}],
+                          "requests": 2, "ttftMs": 640, "tokensPerSec": 20.0, "speedSamples": 3}],
             "profilesTotal": 1,
             "sessions": [{"id": "s1", "name": "Demo", "input": 1500, "output": 150,
                           "requests": 2, "lastAt": "2026-10-21T10:00:00Z"}],
@@ -696,6 +721,93 @@ def test_usage_section_lists_all_sessions_with_search(settings_page):
     assert page.locator('[data-usage-session-count]').inner_text() == "1 / 35"
 
 
+def test_usage_section_filters_models_and_sessions_by_picked_day(settings_page):
+    """点热力图某天/某周：下面两张表只统计选中的范围，再点一次恢复全量。"""
+    page, requests = settings_page
+
+    def day_row(day, model, sid, name, input_tokens, output_tokens):
+        return {"day": day, "input": input_tokens, "output": output_tokens, "requests": 1,
+                "models": [{"model": model, "input": input_tokens, "output": output_tokens,
+                            "requests": 1, "ttftMs": 300, "ttftSamples": 1,
+                            "genMs": 1000, "genOut": output_tokens, "speedSamples": 1}],
+                "profiles": [{"model": "Config " + model, "input": input_tokens,
+                              "output": output_tokens, "requests": 1, "ttftMs": 300, "ttftSamples": 1,
+                              "genMs": 1000, "genOut": output_tokens, "speedSamples": 1}],
+                "sessions": [{"id": sid, "name": name, "input": input_tokens,
+                              "output": output_tokens, "requests": 1, "lastAt": day + "T10:00:00Z"}]}
+
+    # 热力图按「周日 → 周六」分列，选中的那一周要能整周加总。
+    anchor = date.today() - timedelta(days=2)
+    week_end = anchor + timedelta(days=(5 - anchor.weekday()) % 7)
+    week_start = week_end - timedelta(days=6)
+    payload = {"ok": True, "data": {
+        "ready": True, "generatedAt": "2026-10-21T10:00:00Z", "parsed": 3, "reused": 0,
+        "totals": {"tokens": 1800, "input": 1500, "output": 300, "requests": 3, "sessions": 2,
+                   "models": 2, "cacheHit": 0, "cacheMiss": 0, "reasoning": 0, "subagents": 1},
+        "days": [
+            day_row(week_start.isoformat(), "model-a", "s1", "Alpha", 1000, 10),
+            day_row((week_start + timedelta(days=1)).isoformat(), "model-b", "s2", "Beta", 400, 200),
+            day_row((week_start + timedelta(days=2)).isoformat(), "model-a", "s1", "Alpha", 100, 90),
+        ],
+        "models": [
+            {"model": "model-a", "input": 1100, "output": 100, "requests": 2, "ttftMs": 300,
+             "tokensPerSec": 20.0, "speedSamples": 2},
+            {"model": "model-b", "input": 400, "output": 200, "requests": 1, "ttftMs": 300,
+             "tokensPerSec": 15.0, "speedSamples": 1},
+        ], "modelsTotal": 2,
+        "profiles": [
+            {"model": "Config model-a", "input": 1100, "output": 100, "requests": 2, "ttftMs": 300,
+             "tokensPerSec": 20.0, "speedSamples": 2},
+            {"model": "Config model-b", "input": 400, "output": 200, "requests": 1, "ttftMs": 300,
+             "tokensPerSec": 15.0, "speedSamples": 1},
+        ], "profilesTotal": 2,
+        "sessions": [
+            {"id": "s1", "name": "Alpha", "input": 1100, "output": 100, "requests": 2,
+             "lastAt": week_start.isoformat() + "T10:00:00Z"},
+            {"id": "s2", "name": "Beta", "input": 400, "output": 200, "requests": 1,
+             "lastAt": (week_start + timedelta(days=1)).isoformat() + "T10:00:00Z"},
+        ], "sessionsTotal": 2,
+    }}
+    page.route("**/api/usage-stats*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(payload)))
+    page.evaluate("MyAgentSettings.showSection('usage',{force:true})")
+    page.locator('tr[data-act="usage-session"]').first.wait_for()
+    model_text = lambda: page.locator(".st-usage-model-scroll").inner_text()
+    session_text = lambda: page.locator("[data-usage-sessions]").inner_text()
+
+    page.locator('.st-heat-cell[data-day="%s"]' % week_start.isoformat()).click()
+    page.wait_for_timeout(80)
+    assert "model-a" in model_text() and "model-b" not in model_text(), "模型表只剩当天的模型"
+    assert "10.0 tok/s" in model_text(), "当天 10 个输出 token / 1 秒"
+    assert "Alpha" in session_text() and "Beta" not in session_text(), "会话表只剩当天的会话"
+    assert "已筛选 " + week_start.isoformat() in page.locator("#st-body").inner_text()
+    assert page.locator("[data-usage-session-count]").inner_text() == "1"
+
+    page.locator('[data-act="usage-model-mode"][data-mode="profile"]').click()
+    page.wait_for_timeout(80)
+    assert "Config model-a" in model_text() and "Config model-b" not in model_text(), "按配置也跟随筛选"
+    page.locator('[data-act="usage-model-mode"][data-mode="model"]').click()
+    page.wait_for_timeout(80)
+
+    # 同一格再点一次＝取消筛选。
+    page.locator('.st-heat-cell[data-day="%s"]' % week_start.isoformat()).click()
+    page.wait_for_timeout(80)
+    assert "model-b" in model_text() and "Beta" in session_text()
+    assert "已筛选" not in page.locator("#st-body").inner_text()
+
+    # 周模式：点柱子按整周（7 天）合计。
+    page.locator('[data-act="usage-heat-mode"][data-mode="weekly"]').click()
+    page.wait_for_timeout(80)
+    page.locator('.st-week-bars i[data-day="%s"]' % week_end.isoformat()).click()
+    page.wait_for_timeout(80)
+    body = page.locator("#st-body").inner_text()
+    assert "已筛选" in body and " ~ " in body
+    assert "model-a" in model_text() and "model-b" in model_text(), "整周的模型都在"
+    assert "50.0 tok/s" in model_text(), "整周按生成 token/秒数加总：(10+90) / 2s"
+    assert "200.0 tok/s" in model_text(), "200 个输出 token / 1 秒"
+    assert "Alpha" in session_text() and "Beta" in session_text(), "整周的会话都在"
+
+
 def test_usage_section_sorts_sessions_by_header(settings_page):
     """点「请求/输入/输出/最近」表头排序：降序 → 升序 → 回到默认顺序。"""
     page, requests = settings_page
@@ -749,6 +861,12 @@ def test_usage_section_models_card_shows_ttft_and_switches_to_profiles(settings_
     head = scroll.locator("thead").inner_text()
     assert "平均首字" in head
     assert "640ms" in scroll.inner_text(), "首字延迟按毫秒/秒格式化"
+    assert "速度" in head and "20.0 tok/s" in scroll.inner_text(), "模型表带生成速度"
+    overflow = page.evaluate("""() => {
+        const el = document.querySelector('.st-usage-model-scroll');
+        return el.scrollWidth - el.clientWidth;
+    }""")
+    assert overflow <= 1, "加了速度列后表格不能横向溢出"
     style = page.evaluate("""() => {
         const s = getComputedStyle(document.querySelector('.st-usage-model-scroll'));
         return {max: s.maxHeight, overflow: s.overflowY};

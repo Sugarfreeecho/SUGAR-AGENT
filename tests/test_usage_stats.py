@@ -62,9 +62,11 @@ def _subagent(root: Path, parent_id: str, sub_id: str, requests):
     return path
 
 
-def _request_with_ttft(started_at, model, prompt, completion, ttft):
+def _request_with_ttft(started_at, model, prompt, completion, ttft, generation=0):
     row = _request(started_at, model, prompt, completion)
     row["phases"] = {"first_token": {"total_ms": ttft}}
+    if generation:
+        row["phases"]["llm_output"] = {"total_ms": generation}
     return row
 
 
@@ -173,6 +175,46 @@ def test_usage_stats_buckets_by_local_day_and_model(tmp_path, monkeypatch):
         .strftime("%Y-%m-%d")
     )
     assert data["days"][0]["day"] == expected
+
+
+def test_usage_stats_exposes_per_day_models_and_sessions_for_heatmap_filtering(tmp_path):
+    """点热力图某天/某周时，前端要靠 days[].models/sessions 只刷新下半页。"""
+    usage_stats.reset()
+    root = tmp_path / "sessions"
+    _session(root, "s1", [
+        _request_with_ttft("2026-03-10T12:00:00.000000Z", "vendor/model-a", 100, 10, 400, 1000),
+        _request_with_ttft("2026-03-11T12:00:00.000000Z", "model-b", 50, 5, 200, 200),
+    ])
+    _session(root, "s2", [_request("2026-03-11T13:00:00.000000Z", "model-b", 30, 3)])
+    _subagent(root, "s1", "sub-1", [_request("2026-03-11T14:00:00.000000Z", "model-b", 7, 1)])
+    _session(root, "s3", [_request("2024-01-05T12:00:00.000000Z", "old-model", 5, 1)])
+
+    data = usage_stats.snapshot(
+        root, tmp_path / "cache.json", profiles={"vendor/model-a": "Config A"}, background=False,
+    )
+    days = {row["day"]: row for row in data["days"]}
+    first = days[usage_stats._local_day("2026-03-10T12:00:00Z")]
+    second = days[usage_stats._local_day("2026-03-11T12:00:00Z")]
+
+    assert [(row["model"], row["requests"]) for row in first["models"]] == [("vendor/model-a", 1)]
+    assert first["models"][0]["ttftMs"] == 400 and first["models"][0]["ttftSamples"] == 1
+    assert first["models"][0]["tokensPerSec"] == 10.0, "10 个输出 token / 1 秒"
+    assert first["models"][0]["genMs"] == 1000 and first["models"][0]["genOut"] == 10
+    assert first["models"][0]["speedSamples"] == 1
+    assert [row["model"] for row in first["profiles"]] == ["Config A"]
+    assert first["profiles"][0]["tokensPerSec"] == 10.0
+    assert [(row["id"], row["requests"]) for row in first["sessions"]] == [("s1", 1)]
+
+    assert [row["id"] for row in second["sessions"]] == ["s1", "s2"], "按 token 排，子代理不进会话表"
+    assert second["sessions"][0]["lastAt"].startswith("2026-03-11")
+    by_model = {row["model"]: row for row in second["models"]}
+    assert by_model["model-b"]["requests"] == 3, "子代理的请求计入模型统计"
+    assert by_model["model-b"]["tokensPerSec"] == 25.0, "5 个输出 token / 0.2 秒；无计时的不进样本"
+    assert by_model["model-b"]["speedSamples"] == 1
+    assert [row["model"] for row in second["profiles"]] == ["其他"]
+
+    old = days[usage_stats._local_day("2024-01-05T12:00:00Z")]
+    assert "models" not in old and "sessions" not in old, "52 周以外的日期不带明细"
 
 
 def test_usage_stats_reuses_unchanged_files(tmp_path):
@@ -306,12 +348,17 @@ def test_usage_stats_reports_first_token_and_throughput(tmp_path):
         ],
     )
 
-    totals = usage_stats.snapshot(root, background=False)["totals"]
+    data = usage_stats.snapshot(root, background=False)
+    totals = data["totals"]
 
     assert totals["ttftSamples"] == 2, "没有计时的请求不计入速度样本"
     assert totals["speedSamples"] == 2
     assert totals["ttftMs"] == 2500
     assert totals["tokensPerSec"] == 30.0, "(100+200) tokens / 10s"
+    assert data["models"][0]["tokensPerSec"] == 30.0, "模型表也按生成时长单独算一遍"
+    assert data["models"][0]["speedSamples"] == 2
+    assert data["days"][0]["models"][0]["genMs"] == 10000
+    assert data["days"][0]["models"][0]["genOut"] == 300
 
 
 def test_usage_stats_serves_stale_numbers_while_rebuilding(tmp_path, monkeypatch):
